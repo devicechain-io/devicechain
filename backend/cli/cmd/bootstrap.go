@@ -28,6 +28,7 @@ var (
 	bootstrapGrafanaSSO      bool
 	bootstrapDev             bool
 	bootstrapCompact         bool
+	bootstrapHA              bool
 	bootstrapEnableAreas     []string
 	bootstrapLwm2mIdentities string
 )
@@ -185,6 +186,26 @@ var bootstrapCmd = &cobra.Command{
 			fmt.Printf("compact mode: %s\n", bootstrap.CompactSummary())
 		}
 
+		// --ha names a TOPOLOGY, and unlike --dev/--compact there is nothing to
+		// expand: the two levers it sets live in the pipeline, in one struct, for
+		// exactly the reason that they must not be settable apart. What is echoed
+		// here is what an operator would otherwise have to infer from two files in
+		// two tools.
+		if bootstrapHA {
+			fmt.Printf("ha mode: %s\n", bootstrap.HaSummary(true))
+			// --compact --ha is allowed: compact is a SIZING preset and HA is a
+			// topology, so they are orthogonal — a 3-node cluster of small nodes is a
+			// real deployment. But the published compact footprint is measured on a
+			// single-node default, and HA adds two more NATS servers each with their
+			// own volume, so the number stops describing the instance. Noted rather
+			// than refused, matching how --enable-area is handled: the same reasoning
+			// that REJECTS --compact --profile full applies with less force here,
+			// because unlike an extra profile this adds no DeviceChain services.
+			if bootstrapCompact {
+				fmt.Println("note: --ha adds two more NATS servers and their volumes; the printed compact footprint is measured single-node and is a floor, not the total")
+			}
+		}
+
 		// Parse + validate --lwm2m-identities up front (a short PSK or a missing tenancy
 		// field must fail here, not as a ten-minute helm-timeout when lwm2m-ingest
 		// crash-loops on a bad credential). An empty flag yields no identities.
@@ -248,6 +269,7 @@ var bootstrapCmd = &cobra.Command{
 			NoMonitoring:  bootstrapNoMonitoring,
 			GrafanaSSO:    bootstrapGrafanaSSO,
 			Compact:       bootstrapCompact,
+			HA:            bootstrapHA,
 			EnableAreas:   enableAreas,
 		}
 
@@ -272,6 +294,7 @@ var bootstrapCmd = &cobra.Command{
 			NoMonitoring:    opts.NoMonitoring,
 			GrafanaSSO:      opts.GrafanaSSO,
 			Compact:         opts.Compact,
+			HA:              opts.HA,
 			EnableAreas:     opts.EnableAreas,
 			EnabledAreas:    enabledAreas,
 			Lwm2mIdentities: lwm2mIdentities,
@@ -298,6 +321,7 @@ func init() {
 	bootstrapCmd.Flags().BoolVar(&bootstrapDev, "dev", false, "local-developer preset: --build --host localhost --no-tls --yes (a zero-config http://localhost/ bring-up); rejects contradictory flags. Compose with --grafana-sso for local SSO")
 
 	bootstrapCmd.Flags().BoolVar(&bootstrapCompact, "compact", false, "small-footprint preset: lowered JetStream/KV ceilings with the smaller volumes they permit, lowered scheduling requests, and no monitoring stack. Keeps --profile default (it does not change which services run); rejects a conflicting --profile")
+	bootstrapCmd.Flags().BoolVar(&bootstrapHA, "ha", false, "ADR-020 messaging HA: a 3-node NATS RAFT cluster spread one server per node, with every JetStream stream and KV bucket replicated across it. Sets BOTH halves (the OpenTofu server count and the chart's streamReplicas) from one value, and refuses to install if the cluster cannot host the topology. Needs at least 3 schedulable nodes. Does NOT replicate Postgres/TimescaleDB (see ADR-028) and does not change how many services run")
 	bootstrapCmd.Flags().StringSliceVar(&bootstrapEnableAreas, "enable-area", nil, "additionally deploy a functional area on TOP of the profile (repeatable, e.g. --enable-area lwm2m-ingest --enable-area sparkplug-ingest). Composes with --compact; validated against the area catalog (unknown area or unmet hard dependency fails before any cluster spin-up)")
 	bootstrapCmd.Flags().StringVar(&bootstrapLwm2mIdentities, "lwm2m-identities", "", "path to a JSON file of LwM2M DTLS-PSK credentials to provision: [{identity, psk(base64), tenant, externalId, deviceTypeToken, autoRegister}]. Renders the PSKs into a chart-owned Secret and binds each to lwm2m-ingest; implies --enable-area lwm2m-ingest. Validated up front (short PSK / missing tenancy fails before any cluster). Re-running bootstrap WITHOUT this flag removes the provisioned credentials")
 

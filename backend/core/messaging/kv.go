@@ -68,16 +68,22 @@ func (nmgr *NatsManager) KeyValueStore(logical, bucket string, ttl time.Duration
 	}
 	if existing, err := nmgr.js.KeyValue(bucket); err == nil {
 		nmgr.reconcileKvBucket(bucket, maxBytes, kv.TierFor(logical))
+		nmgr.trackKvBucket(bucket)
 		return existing, nil
 	} else if !errors.Is(err, nats.ErrBucketNotFound) {
 		return nil, err
 	}
-	return nmgr.js.CreateKeyValue(&nats.KeyValueConfig{
+	created, err := nmgr.js.CreateKeyValue(&nats.KeyValueConfig{
 		Bucket:   bucket,
 		TTL:      ttl,
 		MaxBytes: maxBytes,
-		Replicas: nmgr.streamReplicas(),
+		Replicas: nmgr.effectiveStreamReplicas(),
 	})
+	if err != nil {
+		return nil, err
+	}
+	nmgr.trackKvBucket(bucket)
+	return created, nil
 }
 
 // reconcileKvBucket applies the ceiling to a bucket that already exists.
@@ -118,6 +124,33 @@ func (nmgr *NatsManager) reconcileKvBucket(bucket string, maxBytes int64, tier k
 	if err != nil {
 		log.Warn().Err(err).Str("bucket", bucket).
 			Msg("Could not read KV bucket config to apply its disk ceiling; it stays as-is until the next startup")
+		return
+	}
+	// The replica factor is reconciled UPWARD, and it is why this function matters
+	// beyond disk. A bucket's replication is otherwise set once, at creation, and
+	// never revisited — so an instance that turns on HA replicates the buckets it
+	// creates AFTERWARDS and silently leaves every existing one single-replica.
+	// dc_leases is the acute case: it is the ADR-070 fence substrate, so an unlifted
+	// dc_leases means the lease deciding which pod may write lives on exactly one
+	// node. Losing that node does not merely lose the lease, it blocks every
+	// standby's Acquire — the failover the fence exists to make safe cannot happen.
+	//
+	// It runs FIRST, and that ordering is load-bearing rather than incidental. The
+	// State-tier shrink refusal below returns early, and dc_leases is a State bucket
+	// — so reconciling replicas after that guard would make an over-ceiling
+	// dc_leases permanently unreplicable, which is exactly the bucket that can least
+	// afford it. A bucket being too full to safely bound says nothing about whether
+	// it should be replicated. It is also a separate UpdateStream for the reasons
+	// given in reconcileStreamReplicas, which both paths now share.
+	nmgr.reconcileStreamReplicas(stream, info.Config)
+
+	// Re-read: the replica reconcile above may have updated the stream, and applying
+	// a ceiling from a stale config would revert it.
+	info, err = nmgr.js.StreamInfo(stream)
+	if err != nil {
+		log.Warn().Err(err).Str("bucket", bucket).
+			Msg("Could not re-read KV bucket config after the replica reconcile; its disk ceiling " +
+				"stays as-is until the next startup")
 		return
 	}
 	if info.Config.MaxBytes == maxBytes {

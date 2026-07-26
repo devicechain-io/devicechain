@@ -49,6 +49,7 @@ func newTestManager(t *testing.T) (*NatsManager, func()) {
 	}
 	nmgr := &NatsManager{
 		Microservice: &core.Microservice{InstanceId: "test", FunctionalArea: "area"},
+		nc:           nc,
 		js:           js,
 	}
 	return nmgr, func() {

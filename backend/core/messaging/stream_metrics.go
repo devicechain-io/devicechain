@@ -36,6 +36,46 @@ type streamMetrics struct {
 	limitBytes *prometheus.GaugeVec
 	usedMsgs   *prometheus.GaugeVec
 	limitMsgs  *prometheus.GaugeVec
+
+	// The replication triple (ADR-020 A0). These exist because every other check
+	// that an instance is highly available is made at INSTALL time — a rendered
+	// value, a tofu plan, a preflight — and install-time checks go stale by
+	// construction. That staleness is the entire bug A0 closes: replication used to
+	// be applied only at stream creation, so a cluster could carry a correct-looking
+	// config and single-replica streams indefinitely with nothing to say so.
+	//
+	// An HA claim is therefore asserted from BROKER STATE, never from config.
+	// desired is what the operator asked for; actual is what JetStream reports; and
+	// peersCurrent is the one that survives contact with reality — a stream can
+	// report Replicas:3 while two of its peers are stale or offline, which is not
+	// replication, it is a label. Alert on desired != actual, and on
+	// peersCurrent < actual.
+	replicasDesired *prometheus.GaugeVec
+	replicasActual  *prometheus.GaugeVec
+	peersCurrent    *prometheus.GaugeVec
+
+	// brokerClustered is the fourth number, and without it the other three cannot
+	// see the very state A0 exists to close.
+	//
+	// The triple above is (config, stream state, peer health). All three read 1 on a
+	// healthy single-node install — and all three ALSO read 1 on a 3-node RAFT
+	// cluster whose streams were every one of them created single-replica. Those two
+	// worlds are bit-identical in the metrics, and they are the two worlds A0 is
+	// about: one is correct and cheap, the other pays for three servers, three
+	// volumes and a quorum round-trip to store exactly one copy of everything and
+	// survive exactly zero node losses.
+	//
+	// Nothing else catches it either. The clamp only degrades a factor the broker
+	// cannot satisfy, so it is silent in this direction; dcctl's preflight only
+	// asserts servers >= replicas, which holds; and the shipped chart default is
+	// streamReplicas: 1, so this is what a `tofu apply -var ha=true` followed by a
+	// plain `helm install` produces — the supported direct-use path.
+	//
+	// So the broker's own topology has to be exported, not just the streams'. 1 when
+	// the connected server reports a cluster name, 0 otherwise. Clustered AND
+	// desired == 1 is the false-HA state, stated as an alertable fact.
+	brokerClustered prometheus.Gauge
+
 	// warned tracks whether a stream is currently above the near-full threshold, so
 	// the warning fires once on the way up (and an info once on the way back down)
 	// rather than every sample. Accessed only from the single sampler goroutine.
@@ -48,21 +88,107 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 		limitBytes: ms.NewGaugeVec("jetstream_stream_limit_bytes", "Configured MaxBytes ceiling for a JetStream stream.", []string{"stream"}),
 		usedMsgs:   ms.NewGaugeVec("jetstream_stream_used_messages", "Current message count in a JetStream stream.", []string{"stream"}),
 		limitMsgs:  ms.NewGaugeVec("jetstream_stream_limit_messages", "Configured MaxMsgs ceiling for a JetStream stream.", []string{"stream"}),
-		warned:     map[string]bool{},
+		replicasDesired: ms.NewGaugeVec("jetstream_replicas_desired",
+			"Replica count this instance is configured for (instance.config.infrastructure.nats.streamReplicas).",
+			[]string{"stream"}),
+		replicasActual: ms.NewGaugeVec("jetstream_replicas_actual",
+			"Replica count JetStream reports for this stream or KV bucket.", []string{"stream"}),
+		peersCurrent: ms.NewGaugeVec("jetstream_peers_current",
+			"RAFT peers currently caught up and online for this stream or KV bucket, including the leader. "+
+				"Below jetstream_replicas_actual means the stream is labelled replicated but is not.",
+			[]string{"stream"}),
+		brokerClustered: ms.NewGauge("jetstream_broker_clustered",
+			"1 when the connected NATS server reports a cluster, 0 otherwise. Paired with "+
+				"jetstream_replicas_desired == 1 this is the false-HA state: a replicated broker "+
+				"storing one copy of everything.", nil),
+		warned: map[string]bool{},
 	}
 }
 
-// sample polls each stream once and updates its gauges, emitting an edge-triggered
-// warning when a stream crosses the near-full threshold. A per-stream StreamInfo
-// error is logged at debug and skipped (a transient broker hiccup should not spam
-// or stall the sampler).
-func (m *streamMetrics) sample(js nats.JetStreamContext, names []string) {
+// sampleReplication records the replication triple for one stream or KV bucket.
+// Split out because KV buckets get ONLY this, not the fill gauges — see sample.
+func (m *streamMetrics) sampleReplication(name string, info *nats.StreamInfo, desired int) {
+	actual := info.Config.Replicas
+	if actual < 1 {
+		actual = 1
+	}
+	m.replicasDesired.WithLabelValues(name).Set(float64(desired))
+	m.replicasActual.WithLabelValues(name).Set(float64(actual))
+	m.peersCurrent.WithLabelValues(name).Set(float64(currentPeers(info)))
+}
+
+// forgetReplication drops a stream's replication series when it cannot be read.
+//
+// Leaving the last healthy values in place would be worse than reporting nothing:
+// the alerting condition is peersCurrent < replicasActual, so a pod that can no
+// longer reach the JetStream API would keep exporting a scrapable, plausible,
+// stale "everything is fine" — and the one condition that would have fired can
+// never fire while the thing it watches is unreachable. Absence of a series is
+// detectable (Prometheus `absent()`, a stale-series alert); a frozen series is not.
+func (m *streamMetrics) forgetReplication(name string) {
+	m.replicasDesired.DeleteLabelValues(name)
+	m.replicasActual.DeleteLabelValues(name)
+	m.peersCurrent.DeleteLabelValues(name)
+}
+
+// currentPeers counts the RAFT peers that are caught up AND online, including the
+// leader.
+//
+// The leader is counted from the Leader field rather than from the Replicas slice,
+// because JetStream reports the OTHER peers there — a 3-replica stream lists two.
+// An unclustered broker reports no cluster block at all, and there the single
+// server holding the stream is the one current peer.
+func currentPeers(info *nats.StreamInfo) int {
+	if info.Cluster == nil {
+		return 1
+	}
+	n := 0
+	if info.Cluster.Leader != "" {
+		n++
+	}
+	for _, p := range info.Cluster.Replicas {
+		if p.Current && !p.Offline {
+			n++
+		}
+	}
+	return n
+}
+
+// sample polls each stream and KV bucket once and updates its gauges, emitting an
+// edge-triggered warning when a stream crosses the near-full threshold. A
+// per-stream StreamInfo error is logged at debug and skipped (a transient broker
+// hiccup should not spam or stall the sampler).
+//
+// Buckets deliberately get the replication triple and NOT the fill gauges, even
+// though a KV bucket is a stream and its fill is just as real. The reason is the
+// alert built on those gauges: EventProcessingStreamNearFull selects
+// `max by (stream)` over every stream a service reports, with no name filter. A
+// Cache bucket is created DiscardNew and is SUPPOSED to sit near its ceiling —
+// that is a bounded cache working correctly, not a backlog — so folding buckets
+// into the fill gauges would fire a warning-severity alert as designed behaviour.
+// Bucket disk is already accounted for up front by the ADR-023 reservation, which
+// is the right place for it. Replication is different: it is a correctness
+// property, it is the same property for a bucket as for a stream, and for
+// dc_leases it is the one that decides whether failover works at all.
+func (m *streamMetrics) sample(js nats.JetStreamContext, names, buckets []string, desired int, clustered bool) {
+	m.brokerClustered.Set(boolGauge(clustered))
+	for _, name := range buckets {
+		info, err := js.StreamInfo(name)
+		if err != nil {
+			log.Debug().Err(err).Str("bucket", name).Msg("KV bucket replication sample failed")
+			m.forgetReplication(name)
+			continue
+		}
+		m.sampleReplication(name, info, desired)
+	}
 	for _, name := range names {
 		info, err := js.StreamInfo(name)
 		if err != nil {
 			log.Debug().Err(err).Str("stream", name).Msg("Stream utilization sample failed")
+			m.forgetReplication(name)
 			continue
 		}
+		m.sampleReplication(name, info, desired)
 		m.usedBytes.WithLabelValues(name).Set(float64(info.State.Bytes))
 		m.usedMsgs.WithLabelValues(name).Set(float64(info.State.Msgs))
 		m.limitBytes.WithLabelValues(name).Set(float64(info.Config.MaxBytes))
@@ -82,6 +208,14 @@ func (m *streamMetrics) sample(js nats.JetStreamContext, names []string) {
 				Msg("JetStream stream utilization recovered below the near-full threshold")
 		}
 	}
+}
+
+// boolGauge renders a bool as the 1/0 a Prometheus gauge carries.
+func boolGauge(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // streamFillRatio returns the higher of the stream's byte- and message-fill

@@ -91,6 +91,25 @@ type Stream struct {
 	// ShapeTenant and ShapeTenantDevice it also appears in the subject; for
 	// ShapeDeviceEvents it does not (see Shape).
 	Suffix string
+	// Areas are the functional areas that CREATE this stream — every area with a
+	// writer or a reader on it. A stream comes into existence when the first such
+	// service ensures it, so on a deployment running none of them the stream simply
+	// does not exist.
+	//
+	// This exists for the ADR-020 A0 replication check, which has to distinguish
+	// "this stream is missing because something is wrong" from "this stream is
+	// missing because nothing that makes it is deployed". Without the distinction
+	// the check reports a failure on every install of the `default` profile, which
+	// runs neither outbound-connectors nor the opt-in ingest areas — and a check
+	// that is red on a healthy system is a check somebody switches off.
+	//
+	// DRIFT IS BENIGN HERE, which is worth stating so the list is not treated as
+	// more load-bearing than it is. It governs only whether a stream's ABSENCE is a
+	// failure. Replication of a stream that does exist is asserted by a prefix
+	// sweep that consults none of this, so an area missing from a list costs at
+	// most one presence requirement and never a silent pass on an
+	// under-replicated stream.
+	Areas []string
 	// Tier selects the disk ceiling. Anything riding the device path is Hot.
 	Tier Tier
 	// Shape decides the subject the stream captures and that producers publish to.
@@ -193,27 +212,34 @@ const (
 // deviceEventsCaptureMaxBytesCap caps DeviceEventsCapture below the Hot tier
 // ceiling, because taking the Hot ceiling in full does not fit the disk budget.
 //
-// The arithmetic, at the shipped defaults: the declared streams reserve 8 GiB
-// (7 Hot x 1 GiB + 8 Cold x 128 MiB), the MQTT gateway stores 384 MiB and the KV
-// buckets 768 MiB, against a 10 GiB max_file_store — leaving 896 MiB over a
-// headroom floor of 512 MiB, so only 384 MiB is actually free. Every ceiling is
-// reserved UP FRONT, so an uncapped capture stream does not merely overcommit, it
-// crashloops every stream-creating service at upgrade with "insufficient storage
-// resources available".
+// The arithmetic, at the shipped defaults: the declared streams reserve 8448 MiB
+// (7 Hot x 1 GiB + 8 Cold x 128 MiB + this capped capture stream), the MQTT
+// gateway stores 384 MiB and the KV buckets 896 MiB (4 State x 128 + 6 Cache x 64)
+// — 9.5 GiB reserved against the 14 GiB max_file_store a 16Gi PV yields. Every
+// ceiling is reserved UP FRONT, so an uncapped capture stream does not merely
+// overcommit, it crashloops every stream-creating service at upgrade with
+// "insufficient storage resources available".
 //
-// 256 MiB rather than the whole 384: at ~250 B per raw device publish it buys
-// roughly an hour of capture at 250 events/s, which is a real outage-recovery
-// envelope, and it leaves the headroom floor with slack rather than sitting
-// exactly on it.
+// 256 MiB: at ~250 B per raw device publish it buys roughly an hour of capture at
+// 250 events/s, which is a real outage-recovery envelope.
+//
+// READ THE NUMBER ABOVE BEFORE REUSING THIS REASONING. This cap was chosen when
+// the PV was 12Gi, whose 10 GiB ceiling left 512 MiB over the headroom floor —
+// i.e. nothing, so 256 MiB was as much as could be taken. The PV moved to 16Gi
+// (ADR-020 A0) precisely because a budget with no slack makes every new stream a
+// deploy-time landmine, and there is now 4.5 GiB unreserved. So the cap is no
+// longer pinned by the budget: if it proves tight, it can simply be raised. What
+// it is still pinned by is being a CAP rather than an absolute — see below.
 //
 // Being a CAP is what keeps this honest under --compact, whose Hot ceiling is
 // 64 MiB against a 2Gi volume: there the tier binds and this number never applies.
 // An absolute 256 MiB would have overrun the compact budget outright — it did,
 // which is how the cap semantics were arrived at rather than assumed.
 //
-// If it proves tight at the default size, the space to take is $MQTT_msgs: 256 MiB
-// reserved for a gateway store that stops buffering telemetry entirely once
-// nothing subscribes to it over MQTT (ADR-030 slice I7).
+// If it proves tight at the default size the PV now has room outright, but the
+// cheaper space to take first is still $MQTT_msgs: 256 MiB reserved for a gateway
+// store that stops buffering telemetry entirely once nothing subscribes to it
+// over MQTT (ADR-030 slice I7).
 const deviceEventsCaptureMaxBytesCap = 256 << 20
 
 // DeadLetter returns the dead-letter suffix derived from a base suffix.
@@ -277,26 +303,26 @@ var All = []Stream{
 	// IS NOT NULL" — and alternate ids are optional and usually absent, so it
 	// backstops only the events that carry one. Widening the window trades memory
 	// for a longer covered outage; it does not remove the residual.
-	{Suffix: InboundEvents, Tier: Hot, DuplicateWindowSeconds: 1800,
+	{Suffix: InboundEvents, Areas: []string{"device-management", "event-sources", "lwm2m-ingest", "sparkplug-ingest"}, Tier: Hot, DuplicateWindowSeconds: 1800,
 		Why: "raw device telemetry — the primary ingest path"},
-	{Suffix: ResolvedEvents, Tier: Hot, Why: "every ingested event after resolution; fans out to four consumers"},
+	{Suffix: ResolvedEvents, Areas: []string{"device-management", "device-state", "event-management", "event-processing"}, Tier: Hot, Why: "every ingested event after resolution; fans out to four consumers"},
 
 	// One message per detection, and a subscribe-able product in its own right
 	// (ADR-037): clients live-subscribe by tenant like any other event feed.
-	{Suffix: DerivedEvents, Tier: Hot, Why: "DETECT output — scales with rule firings against device traffic"},
+	{Suffix: DerivedEvents, Areas: []string{"event-processing"}, Tier: Hot, Why: "DETECT output — scales with rule firings against device traffic"},
 
 	// Emitted post-commit when a numeric platform-set attribute (ADR-012 scope
 	// SHARED/SERVER, DOUBLE/LONG) is upserted or deleted, so a DYNAMIC detection
 	// threshold can read the device's own attribute instead of a compile-time
 	// literal. At-most-once; consumer keeps a durable projection.
-	{Suffix: DeviceAttribute, Tier: Hot, Why: "attribute set/delete per device — scales with fleet size"},
+	{Suffix: DeviceAttribute, Areas: []string{"device-management", "event-processing"}, Tier: Hot, Why: "attribute set/delete per device — scales with fleet size"},
 
 	// PER-DEVICE: the concrete subject carries the target device's token as a
 	// final segment so the broker grant can confine a device to its own commands.
 	// event-sources also has to recognize this suffix — to tell command traffic
 	// from device telemetry — which is the case that first motivated centralizing
 	// these names: a second literal is how the two drift apart.
-	{Suffix: DeviceCommands, Tier: Hot, Shape: ShapeTenantDevice, Why: "outbound commands — scale with fleet size"},
+	{Suffix: DeviceCommands, Areas: []string{"command-delivery", "lwm2m-ingest"}, Tier: Hot, Shape: ShapeTenantDevice, Why: "outbound commands — scale with fleet size"},
 
 	// ADR-030 amendment. The durable capture of raw device telemetry, and the
 	// reason the gateway is no longer an MQTT client: the broker writes a device's
@@ -309,13 +335,13 @@ var All = []Stream{
 	// Nothing in the platform publishes here; the producer is the device. Writers
 	// are refused (messaging.WriteMessages) rather than allowed to publish to a
 	// subject that matches no stream.
-	{Suffix: DeviceEventsCapture, Tier: Hot, Shape: ShapeDeviceEvents,
+	{Suffix: DeviceEventsCapture, Areas: []string{"event-sources"}, Tier: Hot, Shape: ShapeDeviceEvents,
 		MaxBytesCap: deviceEventsCaptureMaxBytesCap,
 		Why:         "raw device publishes, captured before PUBACK — the ingest durability floor"},
 
 	// Deliberately NOT per-device: every device publishes to the one subject a
 	// single consumer reads, and a response names its command by token.
-	{Suffix: CommandResponses, Tier: Hot, Why: "device replies to commands — scale with fleet size"},
+	{Suffix: CommandResponses, Areas: []string{"command-delivery", "event-sources", "lwm2m-ingest"}, Tier: Hot, Why: "device replies to commands — scale with fleet size"},
 
 	// One message per fired httpCall/publish action. The stream is auto-provisioned
 	// when event-processing creates the writer, so publishing is safe before the
@@ -323,29 +349,29 @@ var All = []Stream{
 	// CAVEAT: a DETECT replay after outbound-connectors deploys re-publishes
 	// detections as NEW messages the consumer will run — a stale OccurredTime is
 	// the consumer's drop/flag signal.
-	{Suffix: ConnectorDispatch, Tier: Hot, Why: "REACT outbound dispatch — scales with rule firings"},
+	{Suffix: ConnectorDispatch, Areas: []string{"event-processing", "outbound-connectors"}, Tier: Hot, Why: "REACT outbound dispatch — scales with rule firings"},
 
 	// ---- Control plane (Cold): volume cannot scale with device count ----
 
 	// Emitted post-commit on profile publish, carrying the ENABLED rules frozen
 	// into the new version, keyed on profile-version token. At-most-once.
-	{Suffix: DetectionRulesPublished, Tier: Cold, Why: "a rule publish — a human authoring action"},
+	{Suffix: DetectionRulesPublished, Areas: []string{"device-management", "event-processing"}, Tier: Cold, Why: "a rule publish — a human authoring action"},
 
 	// Emitted post-commit when a device is created or re-typed, naming the device
 	// and the stable profile token its type adopts, so DETECT can arm absence for
 	// a device that has NEVER reported (the dead-man roster). Removal rides the
 	// entity-deleted fact rather than this one. At-most-once.
-	{Suffix: DeviceRoster, Tier: Cold, Why: "roster projection updates"},
+	{Suffix: DeviceRoster, Areas: []string{"device-management", "event-processing"}, Tier: Cold, Why: "roster projection updates"},
 
 	// ADR-044. Emitted when an edge entity (device, customer, area, asset, and
 	// their groups) is deleted, so cross-service reference holders — such as
 	// event-management's event_anchors — can reconcile dangling references.
 	// At-least-once and idempotent.
-	{Suffix: EntityDeleted, Tier: Cold, Why: "entity lifecycle fan-out"},
+	{Suffix: EntityDeleted, Areas: []string{"device-management", "event-management", "event-processing"}, Tier: Cold, Why: "entity lifecycle fan-out"},
 
 	// ADR-041, re-emitted on each alarm transition. The substrate for graphql-ws
 	// subscriptions (ADR-037) and for notifications (ADR-017).
-	{Suffix: AlarmEvents, Tier: Cold, Why: "alarm state changes, not raw telemetry"},
+	{Suffix: AlarmEvents, Areas: []string{"device-management", "notification-management"}, Tier: Cold, Why: "alarm state changes, not raw telemetry"},
 
 	// ADR-051 5c / ADR-054, carrying a JSON RaiseAlarmRequest. AT-LEAST-once, and
 	// safe as such: ApplyAlarmContributorEdge (ADR-057) is an idempotent
@@ -353,11 +379,11 @@ var All = []Stream{
 	// monotonic decision timestamp. Since the ADR-057 cutover retired the
 	// measurement evaluator this is the SOLE alarm-raise path — there is no peer
 	// to double-raise against.
-	{Suffix: RaiseAlarm, Tier: Cold, Why: "REACT alarm requests"},
+	{Suffix: RaiseAlarm, Areas: []string{"device-management", "event-processing"}, Tier: Cold, Why: "REACT alarm requests"},
 
-	{Suffix: FailedDecode, Tier: Cold, Why: "error path — near zero in steady state; see the spike caveat below"},
-	{Suffix: FailedEvents, Tier: Cold, Why: "error path — near zero in steady state; see the spike caveat below"},
-	{Suffix: ConnectorDispatchDead, Tier: Cold, Why: "terminal dead-letter sink (ADR-060 SD-2)"},
+	{Suffix: FailedDecode, Areas: []string{"event-sources"}, Tier: Cold, Why: "error path — near zero in steady state; see the spike caveat below"},
+	{Suffix: FailedEvents, Areas: []string{"device-management", "event-management"}, Tier: Cold, Why: "error path — near zero in steady state; see the spike caveat below"},
+	{Suffix: ConnectorDispatchDead, Areas: []string{"outbound-connectors"}, Tier: Cold, Why: "terminal dead-letter sink (ADR-060 SD-2)"},
 }
 
 // CAVEAT on the error-path streams (FailedDecode / FailedEvents): these are

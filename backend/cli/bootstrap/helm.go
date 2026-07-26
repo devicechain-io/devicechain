@@ -120,6 +120,13 @@ func helmValues(st *State) map[string]interface{} {
 			natsVals[k] = v
 		}
 	}
+	// The Helm half of the HA topology, merged for the same reason. Unconditional,
+	// like its OpenTofu counterpart in infraVars: rendering streamReplicas even at 1
+	// keeps both halves sourced from the one haTopology on every path, so they
+	// cannot drift when HA is turned back OFF either. See haTopology.
+	for k, v := range haFor(st.HA).natsValues() {
+		natsVals[k] = v
+	}
 	infraVals := map[string]interface{}{}
 	if len(natsVals) > 0 {
 		infraVals["nats"] = natsVals

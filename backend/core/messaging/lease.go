@@ -80,7 +80,7 @@ type DistributedLease struct {
 // unenforceable fencing window. We fail closed on that instead: a divergent TTL is
 // a loud startup error, not a silent misconfiguration.
 func (nmgr *NatsManager) NewDistributedLease(ttl time.Duration) (*DistributedLease, error) {
-	bucket := sanitizeName(fmt.Sprintf("%s_%s", nmgr.Microservice.InstanceId, leaseBucket))
+	bucket := LeaseBucketName(nmgr.Microservice.InstanceId)
 	store, err := nmgr.KeyValueStore(leaseBucket, bucket, ttl)
 	if err != nil {
 		return nil, err

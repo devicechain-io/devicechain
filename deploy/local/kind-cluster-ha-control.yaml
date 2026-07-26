@@ -1,0 +1,53 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The NEGATIVE CONTROL cluster for the ADR-020 A0 validation rig
+# (hack/ha-rig.sh control).
+#
+# A deliberately ordinary single-node cluster: one node, no --ha, so every stream
+# and KV bucket on its broker is single-replica. The rig runs the SAME verifier
+# against it demanding R3 and requires the check to FAIL. If it passes, the
+# verifier is not detecting the state it exists to detect, and the R3 result from
+# the rig cluster proves nothing.
+#
+# WHY THIS IS NOT JUST kind-cluster.yaml
+#
+# Two reasons, and neither is cosmetic:
+#
+#   1. kind-cluster.yaml carries a top-level `name: devicechain`, which takes
+#      precedence over --name. dcctl strips that field before creating a cluster
+#      for exactly this reason; a shell script has no such luxury.
+#   2. It binds host ports 80, 443 and 1883. A developer running the rig almost
+#      certainly already has a local cluster holding those, so creating a second
+#      one from that file fails on a port collision — with an error about ports
+#      that says nothing about the rig.
+#
+# There are no extraPortMappings here at all. Nothing needs them: the verifier
+# reaches the broker through a port-forward it opens itself, and this cluster
+# exists to be checked, not to be used.
+apiVersion: kind.x-k8s.io/v1alpha4
+kind: Cluster
+name: devicechain-ha-control
+
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."localhost:5000"]
+      endpoint = ["http://kind-registry:5000"]
+
+nodes:
+  # ONE node. That is the whole point — with a single node the NATS cluster is a
+  # single server, and there is nowhere for a second replica to live.
+  - role: control-plane
+    # ingress-ready=true is REQUIRED even though nothing here uses the ingress.
+    # The infrastructure apply installs ingress-nginx unconditionally, and its
+    # controller carries a nodeSelector on this label — without it the pod sits
+    # Pending forever and the apply fails on a Helm wait timeout that reads as a
+    # resource problem ("context deadline exceeded") rather than as a missing
+    # label. Dropped once, when the port mappings this normally accompanies were
+    # removed, and it cost a full bring-up to diagnose.
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"

@@ -106,11 +106,40 @@ type NatsManager struct {
 	// streamNames is the set of streams this service has ensured (deduped), guarded
 	// by streamMu because SubscribeLive can ensure a stream at runtime while the
 	// metrics sampler reads the set. The sampler polls each for fill (ADR-023).
+	// bucketNames is the parallel set of KV buckets, held separately because they
+	// get replication metrics only (streamMetrics.sample explains why).
 	streamMu    sync.Mutex
 	streamNames []string
+	bucketNames []string
 	metrics     *streamMetrics
 	stopSampler chan struct{}
 	samplerWg   sync.WaitGroup
+
+	// shuttingDown distinguishes a connection we closed from one that died.
+	//
+	// The ClosedHandler cannot tell them apart on its own — nc.LastError() is nil
+	// for both a deliberate Close and several terminal states — and the difference
+	// decides the log LEVEL. A closed connection during shutdown is the expected end
+	// of a pod's life; the same event at any other time means the service is
+	// permanently mute and needs a restart. Emitting the second message for the
+	// first case puts an ERROR reading "the process must be restarted" into the logs
+	// of every service on every rolling update, node drain and scale-down, which is
+	// precisely how the one loud signal here stops meaning anything.
+	//
+	// Atomic because the handler runs on the client's callback goroutine while
+	// ExecuteStop/ExecuteTerminate run on the lifecycle goroutine.
+	shuttingDown atomic.Bool
+
+	// warnedClamp edge-triggers the replica-clamp warning. Touched only from the
+	// single sampler goroutine, like streamMetrics.warned.
+	warnedClamp bool
+
+	// connectedServer remembers the broker URL, because the disconnect callback
+	// cannot ask for it. nats.Conn.ConnectedUrl() returns "" for any status other
+	// than CONNECTED, and by the time DisconnectErrHandler runs the status has
+	// already flipped — so reading it there yields an empty string every time,
+	// which is exactly the field an operator needs to know WHICH server was lost.
+	connectedServer atomic.Value
 }
 
 // NewNatsManager creates a new NATS manager. oncreate is invoked on Start to
@@ -142,15 +171,167 @@ func (nmgr *NatsManager) NatsUrl() string {
 	return fmt.Sprintf("nats://%s:%d", cfg.Hostname, cfg.Port)
 }
 
-// streamReplicas returns the configured JetStream replica count (defaulting to
-// 1 when unset) so a single-node dev cluster and an HA cluster (ADR-018) share
-// one code path.
-func (nmgr *NatsManager) streamReplicas() int {
+// desiredStreamReplicas returns the CONFIGURED JetStream replica count (defaulting
+// to 1 when unset) — what the operator asked for, which is not necessarily what the
+// broker can deliver. Callers creating or reconciling a stream or bucket want
+// effectiveStreamReplicas instead.
+func (nmgr *NatsManager) desiredStreamReplicas() int {
 	r := int(nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.StreamReplicas)
 	if r < 1 {
 		return 1
 	}
 	return r
+}
+
+// effectiveStreamReplicas is the replica count actually used to create and
+// reconcile streams and KV buckets: the configured count, clamped to what the
+// connected broker can satisfy.
+//
+// The clamp exists because the two halves of an HA deployment live in different
+// tools and can therefore disagree. streamReplicas is a helm-rendered instance-config
+// value; whether JetStream is CLUSTERED at all is an infrastructure property of the
+// NATS StatefulSet (tofu var.ha / nats_cluster_replicas). Nothing structurally
+// prevents an operator — or a partial edit, or a values file copied between
+// instances — from raising one without the other.
+//
+// What makes that worth code rather than a comment is the failure it produces.
+// Asking an UNCLUSTERED broker for more than one replica is not a degraded
+// configuration that limps: nats-server rejects every stream creation outright
+// (JSStreamReplicasNotSupportedErr), which RetryInfraConnect converts into a
+// crashloop. That would take down every stream-creating area AND user-management,
+// which is KV-only and is therefore auth and JWKS for the entire platform — a
+// total outage, caused by a single number being too high in a document nobody
+// re-read. The blast radius is wildly out of proportion to the mistake.
+//
+// So the runtime posture here is deliberately NOT the fail-closed one used for
+// config elsewhere: clamp, and shout. Availability is preserved, and the thing
+// that is refused is the CLAIM of high availability, not the platform.
+//
+// Be precise about what does and does not catch this earlier, because the lenient
+// posture is only defensible if something else is strict. dcctl DOES run the
+// config's own Validate against the rendered chart before installing
+// (bootstrap/helm.go, validateRenderedInstanceConfig), which rejects a replica
+// count that is even or above the server maximum. But that is everything decidable
+// from the config DOCUMENT, and this mismatch is not in the document — it is
+// between the document and the broker. dcctl closes that gap for its own path:
+// `--ha` sets both halves from one value, and a preflight between the infra apply
+// and the helm install compares this replica factor against the server count the
+// infrastructure actually reported (bootstrap/ha.go). What it cannot cover is a
+// chart installed by hand, or against a broker dcctl did not provision — so this
+// clamp and the desired-vs-actual gauges remain the last line, and they are the
+// only line for a direct `helm install`.
+//
+// Note the limitation, because it decides what a green startup here does and does
+// not prove: this reads clustered-NESS, not peer count. A 3-node cluster running
+// on one surviving node reports a cluster name and passes this check, then fails
+// the creation with JSClusterNoPeersError. That case is handled at the create/update
+// call site, which treats a replica-only failure as non-fatal. Neither is a
+// substitute for asserting replication from StreamInfo against a running cluster
+// (the A0 Check A suite) — a service that starts clean has not demonstrated that
+// anything is replicated.
+func (nmgr *NatsManager) effectiveStreamReplicas() int {
+	return clampReplicas(nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
+}
+
+// clampReplicas is the clamp arithmetic, split out from the connection state so the
+// decision table can be tested without a broker while brokerIsClustered is tested
+// against real ones.
+func clampReplicas(desired int, clustered bool) int {
+	if desired <= 1 || clustered {
+		return desired
+	}
+	return 1
+}
+
+// brokerIsClustered reports whether the broker this manager is connected to RIGHT
+// NOW is part of a cluster.
+//
+// WHERE THE SAFETY ACTUALLY COMES FROM, because an earlier version of this
+// comment got it wrong: it is ConnectedClusterName() itself, which returns "" for
+// a nil receiver AND for any status other than CONNECTED. The explicit
+// nil/IsConnected gate below is therefore REDUNDANT — deleting it changes no
+// behaviour and no test — and it is kept only as belt-and-braces against a future
+// nats.go relaxing that guarantee. What is load-bearing is that this is read LIVE
+// on every call rather than cached, and getting THAT wrong is a regression
+// rather than a missed improvement. Under nats.RetryOnFailedConnect — which
+// ExecuteInitialize sets — nats.Connect returns a non-nil connection and a NIL
+// error even when no broker is reachable: it hands back a stub in RECONNECTING
+// state and dials in the background. ConnectedClusterName reports "" for any
+// status other than CONNECTED. So a probe taken once at connect cannot distinguish
+// "this broker is not clustered" from "I have not reached the broker yet", and on
+// any ordinary bring-up where a pod starts before NATS is accepting connections —
+// a helm upgrade rolling the NATS StatefulSet alongside the Deployments, a node
+// drain, a cold start — it answers the second question with the first answer.
+// This package already documents that library behaviour, in
+// lifecycle_durability_test.go.
+//
+// Caching the answer would then pin an entire process to a false negative, and
+// every stream and bucket it creates — dc_leases included — would be single-replica
+// on a perfectly healthy three-node cluster, while the warning sent the operator to
+// the one lever they had already set correctly. That is precisely the false-HA state
+// this workstream exists to eliminate, reintroduced by the code meant to close it.
+//
+// Reading live instead is self-correcting and needs no invalidation: the create and
+// reconcile paths that consume it either run while connected, or fail on the broker
+// call and are retried, and the retry re-evaluates. It also handles the reverse
+// order — raising streamReplicas before scaling the NATS cluster — without a
+// reconnect hook, because the next pod roll simply reads the truth.
+func (nmgr *NatsManager) brokerIsClustered() bool {
+	if nmgr.nc == nil || !nmgr.nc.IsConnected() {
+		return false
+	}
+	return nmgr.nc.ConnectedClusterName() != ""
+}
+
+// reportReplicaClamp logs the desired-vs-effective mismatch once at connect, naming
+// BOTH levers. Naming both is the whole value of the message: the operator who sees
+// it has set one of them, and the fix is always the other one — a message that
+// named only the config key would send them to the file they already edited.
+// reportReplicaClamp shouts once if the configured replica factor is being
+// clamped away, i.e. this instance thinks it is HA and is not.
+//
+// 🔴 IT MUST NOT RUN AT CONNECT TIME. Under RetryOnFailedConnect, nats.Connect
+// returns a non-nil connection and a nil error while it is still dialling, and
+// nc.JetStream() does no I/O — so at the end of ExecuteInitialize IsConnected()
+// is routinely false. brokerIsClustered() then reads false for a broker that is
+// merely NOT YET REACHABLE, and a correctly configured 3-node instance gets told
+// its broker is not clustered and it is not highly available, pointing the
+// operator at the one lever they already set right.
+//
+// That is the SAME false-negative the clamp itself was fixed for, one layer over:
+// a cold start where NATS and the services race, a node drain, a helm upgrade
+// that rolls the NATS StatefulSet alongside the Deployments. So it is called from
+// the metrics sampler instead, which runs after oncreate and therefore after the
+// connection has been used, and which re-evaluates on every tick — so the message
+// also stops once the situation is fixed, rather than being a one-shot at boot.
+//
+// warnedClamp keeps it edge-triggered: once per transition into the clamped
+// state, not every 30 seconds.
+func (nmgr *NatsManager) reportReplicaClamp() {
+	desired := nmgr.desiredStreamReplicas()
+	effective := nmgr.effectiveStreamReplicas()
+	if desired == effective {
+		if nmgr.warnedClamp {
+			nmgr.warnedClamp = false
+			log.Info().Int("replicas", desired).
+				Msg("The broker now satisfies the configured JetStream replica factor; " +
+					"streams and buckets created from here are replicated as configured. " +
+					"Anything created while clamped stays at one replica until a restart " +
+					"reconciles it upward")
+		}
+		return
+	}
+	if nmgr.warnedClamp {
+		return
+	}
+	nmgr.warnedClamp = true
+	log.Warn().Int("desired", desired).Int("effective", effective).
+		Msg("This instance is configured for replicated JetStream streams and KV buckets but the broker is " +
+			"NOT clustered, so every stream and bucket is being created UNREPLICATED. This instance is not " +
+			"highly available. Both halves must be raised together: " +
+			"instance.config.infrastructure.nats.streamReplicas (helm) sets the replica count, and tofu " +
+			"var.ha / nats_cluster_replicas sizes the NATS server cluster that makes it possible. " +
+			"Streams are being created at 1 replica rather than failing, so the platform stays up")
 }
 
 // streamBounds are the platform ceilings applied to every per-suffix stream
@@ -240,6 +421,45 @@ func applyStreamDuplicateWindow(cfg *nats.StreamConfig, window time.Duration) bo
 	return true
 }
 
+// applyStreamReplicas reconciles a stream's replica factor UPWARD only, reporting
+// whether it changed and whether a downward change was refused.
+//
+// Upward is the direction that fixes things and the only one a starting pod is
+// entitled to take. Without it, replication is set at CREATE time and nowhere else,
+// which produces the asymmetry this file has been bitten by twice already: a fresh
+// install comes up correctly replicated while every existing cluster silently keeps
+// the single-replica streams it was born with, looking healthy and reporting
+// nothing. An HA migration that only works on clusters that did not need it is not
+// an HA migration.
+//
+// Downward is refused, and that refusal is doing real work rather than being
+// conservative for its own sake. nats-server executes a scale-down with no safety
+// check at all: it drops RAFT peers and remaps every durable consumer's group. The
+// actor requesting it here would be a pod that just started, acting on config it
+// happens to have been handed — and the ordinary mechanism that hands a pod older
+// config is `helm rollback`, which an operator reaches for to make things SAFER.
+// Rolling back an unrelated bad release must not quietly de-replicate the platform
+// as a side effect. Scale-down stays a deliberate operator action (`nats stream
+// update`), not something inferred from a deployment artifact.
+//
+// A 0 in an existing config means "unspecified", which JetStream treats as 1; it is
+// normalized so an old stream created before the field was set is seen as the single
+// replica it actually is, rather than as an incomparable zero.
+func applyStreamReplicas(cfg *nats.StreamConfig, desired int) (changed, refusedDownward bool) {
+	current := cfg.Replicas
+	if current < 1 {
+		current = 1
+	}
+	if desired == current {
+		return false, false
+	}
+	if desired < current {
+		return false, true
+	}
+	cfg.Replicas = desired
+	return true, false
+}
+
 // ensureStream creates the per-suffix stream if it does not already exist, and
 // reconciles its size ceilings and subjects if it does. The stream captures every
 // tenant's subjects for the suffix, so a single stream backs both the scoped
@@ -270,15 +490,29 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 		info, err := nmgr.js.StreamInfo(name)
 		if err == nil {
 			// The stream exists — an older build (or an earlier ceiling) may have left
-			// it unbounded, so reconcile the size limits in place. UpdateStream touches
-			// only the byte/msg ceilings on the existing config, leaving subjects,
-			// storage, retention and replicas untouched. It is idempotent: concurrent
-			// pods compute the same desired bounds, so no advisory lock is needed.
-			// Config is the source of truth: an out-of-band tune (e.g. a raised
-			// MaxBytes set via the nats CLI) is intentionally reverted to the config
-			// value on the next restart — and shrinking a ceiling below current usage
-			// makes DiscardOld immediately evict the overflow. Change the bound via
-			// config, not out-of-band, to avoid that.
+			// it unbounded, so reconcile in place. UpdateStream touches the byte/msg
+			// ceilings, the captured subjects, the dedup window and the replica factor
+			// on the existing config, leaving storage and retention untouched. Config
+			// is the source of truth: an out-of-band tune (e.g. a raised MaxBytes set
+			// via the nats CLI) is intentionally reverted to the config value on the
+			// next restart — and shrinking a ceiling below current usage makes
+			// DiscardOld immediately evict the overflow. Change the bound via config,
+			// not out-of-band, to avoid that.
+			//
+			// On concurrency: the bounds, subject and window reconciles are idempotent
+			// by construction — every pod computes the same desired value from the same
+			// shared config, so concurrent updates converge and no advisory lock is
+			// needed. The replica reconcile is NOT obviously in that class, because a
+			// replica change is a RAFT peer-set reconfiguration rather than a config
+			// write, and up to four services ensure some of these streams. It is left
+			// unlocked deliberately and provisionally: the only lock available here is
+			// the KV-backed DistributedLock, and taking it from inside the reconcile
+			// path is not possible — NewDistributedLock calls KeyValueStore, which
+			// calls reconcileKvBucket, which is this same path. Whether concurrent
+			// upward updates need coordination at all is unmeasured; it is what A0's
+			// Check C exists to settle, by rolling every service simultaneously during
+			// the lift. If that shows contention, the coordination has to come from
+			// somewhere outside this call path.
 			cfg := info.Config
 			boundsChanged := applyStreamBounds(&cfg, bounds)
 			subjectsChanged := applyStreamSubjects(&cfg, subjects)
@@ -293,6 +527,38 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 					Dur("duplicateWindow", cfg.Duplicates).Bool("duplicateWindowChanged", dupChanged).
 					Msg("Reconciled JetStream stream configuration")
 			}
+			// The replica factor is reconciled as its OWN update, and a failure here is
+			// warned rather than returned. Two reasons, and both are about not letting
+			// an availability improvement cause an availability regression.
+			//
+			// First, this is the one field whose update can fail for a reason that is
+			// transient and expected during exactly the operation A0 enables: scaling
+			// the NATS cluster and raising streamReplicas are two separate acts, so
+			// mid-scale the broker reports a cluster name (so the clamp passes) while
+			// having too few peers to place the new replicas, and rejects with
+			// JSClusterNoPeersError. Returning that error would burn RetryInfraConnect
+			// and then crashloop every stream-ensuring service until the cluster is
+			// whole — turning a partially-completed HA rollout into an outage, which is
+			// the opposite of the point. The KV path already treats the identical
+			// failure as warn-and-continue.
+			//
+			// Second, fusing it into the update above would let a failed replica lift
+			// block a subject or ceiling reconcile that would have succeeded on its own.
+			// Those reconciles fix data-path correctness (a stream that captures the
+			// wrong subjects drops messages); replication is a durability improvement
+			// that can wait for the next restart. The lower-stakes change must not be
+			// able to veto the higher-stakes one.
+			//
+			// 🔴 PASS cfg, NOT info.Config. cfg is the POST-update configuration;
+			// info.Config is the snapshot taken before the update above. Because the
+			// replica reconcile issues its own UpdateStream from whatever config it is
+			// handed, passing the stale one writes the OLD ceilings and subjects back
+			// over the reconcile that just succeeded — silently, and after its success
+			// has already been logged. That is worse than the veto this split exists to
+			// prevent: a veto at least leaves the stream alone. The KV path avoids the
+			// same hazard by re-reading StreamInfo (kv.go); here the fresh config is
+			// already in hand.
+			nmgr.reconcileStreamReplicas(name, cfg)
 			return nil
 		} else if !errors.Is(err, nats.ErrStreamNotFound) {
 			return err
@@ -304,7 +570,7 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 			Retention: nats.LimitsPolicy,
 			Discard:   nats.DiscardOld,
 			MaxAge:    streamMaxAge,
-			Replicas:  nmgr.streamReplicas(),
+			Replicas:  nmgr.effectiveStreamReplicas(),
 		}
 		applyStreamBounds(cfg, bounds)
 		applyStreamDuplicateWindow(cfg, dupWindow)
@@ -321,6 +587,46 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 	}
 	nmgr.trackStream(name)
 	return name, nil
+}
+
+// reconcileStreamReplicas applies the replica factor to an existing stream as an
+// isolated, best-effort update. Shared by ensureStream and reconcileKvBucket so a
+// bucket and a message stream cannot drift apart in how they handle the same
+// operation — they are the same object to JetStream, and the KV path had the
+// lenient posture first.
+func (nmgr *NatsManager) reconcileStreamReplicas(name string, current nats.StreamConfig) {
+	desired := nmgr.desiredStreamReplicas()
+	effective := nmgr.effectiveStreamReplicas()
+	cfg := current
+	changed, refusedDownward := applyStreamReplicas(&cfg, effective)
+	if refusedDownward {
+		// Log BOTH numbers. Logging only the clamped one under the name "configured"
+		// is actively harmful here: when the clamp is engaged, an existing correctly
+		// replicated stream reports "you configured 1" — which is false — attached to
+		// advice to scale it down, which would de-replicate a healthy cluster.
+		log.Warn().Str("stream", name).Int("current", current.Replicas).
+			Int("configured", desired).Int("effective", effective).
+			Msg("Stream or bucket has MORE replicas than this instance is configured for; leaving it " +
+				"alone. A starting pod does not de-replicate — that drops RAFT peers and remaps every " +
+				"durable consumer, and the usual way a pod is handed older config is a rollback of some " +
+				"unrelated release. If `effective` is below `configured` the broker simply is not " +
+				"clustered right now and nothing should be scaled down. Otherwise scale down " +
+				"deliberately with `nats stream update`")
+		return
+	}
+	if !changed {
+		return
+	}
+	if _, err := nmgr.js.UpdateStream(&cfg); err != nil {
+		log.Warn().Err(err).Str("stream", name).Int("from", current.Replicas).Int("to", effective).
+			Msg("Could not raise the replica factor; it stays as-is until the next startup. This is " +
+				"expected while the NATS cluster is still scaling — the broker reports a cluster but " +
+				"cannot yet place the new replicas. The jetstream_replicas_desired/actual gauges will " +
+				"disagree until it succeeds")
+		return
+	}
+	log.Info().Str("stream", name).Int("from", current.Replicas).Int("to", effective).
+		Msg("Raised the replica factor on an existing stream or bucket")
 }
 
 // trackStream records a stream this service has ensured, so the metrics sampler
@@ -344,21 +650,50 @@ func (nmgr *NatsManager) trackedStreams() []string {
 	return append([]string(nil), nmgr.streamNames...)
 }
 
-// runStreamMetrics samples every ensured stream's fill on a fixed cadence until
-// stopped, so the size ceilings' DiscardOld eviction is observable rather than
-// silent (ADR-023). It re-snapshots the tracked set each tick to pick up any stream
-// a runtime SubscribeLive ensured after startup.
+// trackKvBucket records a KV bucket this service has opened, by the name of the
+// stream backing it, so the sampler can report its replication.
+//
+// Buckets are tracked separately from streams rather than added to streamNames
+// because the two get different metrics — see streamMetrics.sample for why folding
+// them together would turn a correctly-working bounded cache into a firing alert.
+func (nmgr *NatsManager) trackKvBucket(bucket string) {
+	name := kvStreamPrefix + bucket
+	nmgr.streamMu.Lock()
+	defer nmgr.streamMu.Unlock()
+	for _, n := range nmgr.bucketNames {
+		if n == name {
+			return
+		}
+	}
+	nmgr.bucketNames = append(nmgr.bucketNames, name)
+}
+
+// trackedBuckets returns a snapshot of the opened KV bucket stream names.
+func (nmgr *NatsManager) trackedBuckets() []string {
+	nmgr.streamMu.Lock()
+	defer nmgr.streamMu.Unlock()
+	return append([]string(nil), nmgr.bucketNames...)
+}
+
+// runStreamMetrics samples every ensured stream's fill, and every stream's and
+// bucket's replication, on a fixed cadence until stopped — so both the ceilings'
+// DiscardOld eviction (ADR-023) and a stream that is not actually replicated
+// (ADR-020 A0) are observable rather than silent. It re-snapshots the tracked sets
+// each tick to pick up anything a runtime SubscribeLive ensured after startup.
 func (nmgr *NatsManager) runStreamMetrics() {
 	defer nmgr.samplerWg.Done()
 	ticker := time.NewTicker(streamMetricsSampleInterval)
 	defer ticker.Stop()
-	nmgr.metrics.sample(nmgr.js, nmgr.trackedStreams()) // seed promptly, don't wait a full interval
+	// Seed promptly, don't wait a full interval.
+	nmgr.reportReplicaClamp()
+	nmgr.metrics.sample(nmgr.js, nmgr.trackedStreams(), nmgr.trackedBuckets(), nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
 	for {
 		select {
 		case <-nmgr.stopSampler:
 			return
 		case <-ticker.C:
-			nmgr.metrics.sample(nmgr.js, nmgr.trackedStreams())
+			nmgr.reportReplicaClamp()
+			nmgr.metrics.sample(nmgr.js, nmgr.trackedStreams(), nmgr.trackedBuckets(), nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
 		}
 	}
 }
@@ -1084,6 +1419,102 @@ func (nmgr *NatsManager) Initialize(ctx context.Context) error {
 	return nmgr.lifecycle.Initialize(ctx)
 }
 
+// connectionEventHandlers logs the client's connection lifecycle.
+//
+// Without these, a broker outage is COMPLETELY SILENT on the client side. The
+// options above are MaxReconnects(-1) and RetryOnFailedConnect(true) — deliberate,
+// and right, because a service that dies when the broker blinks is worse than one
+// that waits — but their combined effect is that the library absorbs every
+// disconnect, retries forever, and says nothing. A service can sit unable to
+// publish for an hour while its logs show only the silence of a service with
+// nothing to do, which are indistinguishable.
+//
+// That gap widens with ADR-020 A0 rather than closing: the point of a 3-node
+// cluster is to survive losing a node, and surviving it means clients disconnect
+// and reconnect somewhere else. Those are the events that say whether failover
+// happened at all, how long it took, and — via ConnectedUrl — whether the client
+// actually landed on a different server or is looping against the same one.
+//
+// Logs, not metrics, and deliberately: what makes these useful is the WHICH and
+// the WHY (which server, which error), and a counter cannot carry either. The
+// broker-side counterpart is the prometheus-nats-exporter (nats_prom_exporter),
+// which reports the same events from the server's view; a disconnect visible in
+// one and not the other localizes the fault to the network between them.
+func (nmgr *NatsManager) connectionEventHandlers() []nats.Option {
+	area := nmgr.Microservice.FunctionalArea
+	return []nats.Option{
+		// The error is NON-nil for everything that actually loses a broker — io.EOF,
+		// connection reset, a stale connection — and nil only when the client itself
+		// closed. Lame-duck is NOT the nil case: the server announces it, then closes
+		// the socket, and the read loop surfaces io.EOF like any other drop. (An
+		// earlier version of this comment had that backwards.) Logged at warn either
+		// way: the client is not connected, which is the fact that matters.
+		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
+			log.Warn().Str("area", area).Err(err).Str("server", nmgr.lastConnectedServer()).
+				Msg("Disconnected from NATS; retrying indefinitely (MaxReconnects is unlimited). " +
+					"Publishes are buffered up to the client's pending limit and then fail; " +
+					"consumers stop receiving until the connection is restored")
+		}),
+		// The recovery, and the one that carries the interesting datum: which server
+		// the client came back on. In a clustered broker a reconnect to a DIFFERENT
+		// URL is failover working; repeated reconnects to the SAME one are a flapping
+		// server rather than a node loss, and the two want opposite responses.
+		// The FIRST successful connect does not come through ReconnectHandler.
+		//
+		// Under RetryOnFailedConnect the client fires ConnectedCB for the initial
+		// attach and ReconnectedCB only afterwards — so without this handler, a
+		// service that starts while the broker is down logs nothing at all when the
+		// broker finally arrives. That is precisely the silence these handlers exist
+		// to end, in the one case (a cold start of the whole instance, where NATS and
+		// the services race) that A0's own rollout makes routine.
+		nats.ConnectHandler(func(nc *nats.Conn) {
+			nmgr.connectedServer.Store(nc.ConnectedUrl())
+			log.Info().Str("area", area).Str("server", nc.ConnectedUrl()).
+				Str("cluster", nc.ConnectedClusterName()).
+				Msg("Connected to NATS")
+		}),
+		nats.ReconnectHandler(func(nc *nats.Conn) {
+			nmgr.connectedServer.Store(nc.ConnectedUrl())
+			log.Info().Str("area", area).Str("server", nc.ConnectedUrl()).
+				Str("cluster", nc.ConnectedClusterName()).
+				Msg("Reconnected to NATS. Durable consumers resume from their last ack; " +
+					"anything the client had buffered while disconnected has been flushed")
+		}),
+		// Terminal. Unlimited reconnects do not make this unreachable: besides an
+		// explicit Close, the client ABORTS the retry loop on a repeated
+		// authorization error (nats.go sets `ar` on the second identical auth
+		// failure unless IgnoreAuthErrorAbort), and an unparsed server -ERR closes
+		// outright. A rotated or revoked broker credential is therefore an ordinary
+		// route here, not an exotic one — which is worth knowing, because it is the
+		// case where "restart the process" is the wrong advice and "fix the
+		// credential" is the right one.
+		//
+		// Logged at ERROR when it was not asked for: the connection will not come
+		// back on its own and every publish and subscription on it is dead. It is the
+		// one connection event that is not self-healing, which is exactly why it must
+		// not share a level with the two above.
+		nats.ClosedHandler(func(nc *nats.Conn) {
+			if nmgr.shuttingDown.Load() {
+				log.Info().Str("area", area).Msg("NATS connection closed during shutdown")
+				return
+			}
+			log.Error().Str("area", area).Err(nc.LastError()).
+				Msg("NATS connection CLOSED permanently and NOT as part of a shutdown; it will not " +
+					"reconnect. This service is now mute: no publishes, no deliveries, and no " +
+					"further retries. The process must be restarted")
+		}),
+	}
+}
+
+// lastConnectedServer returns the broker URL last known to be connected, or the
+// configured URL if none has been observed yet.
+func (nmgr *NatsManager) lastConnectedServer() string {
+	if v, ok := nmgr.connectedServer.Load().(string); ok && v != "" {
+		return v
+	}
+	return nmgr.NatsUrl()
+}
+
 // ExecuteInitialize connects to NATS and obtains a JetStream context.
 func (nmgr *NatsManager) ExecuteInitialize(context.Context) error {
 	url := nmgr.NatsUrl()
@@ -1093,6 +1524,7 @@ func (nmgr *NatsManager) ExecuteInitialize(context.Context) error {
 		nats.MaxReconnects(-1),
 		nats.RetryOnFailedConnect(true),
 	}
+	opts = append(opts, nmgr.connectionEventHandlers()...)
 	// When the broker terminates TLS (ADR-025) every client must dial over TLS or
 	// the handshake on the TLS-required port fails; verify the server against the
 	// CA threaded into the instance config.
@@ -1113,6 +1545,42 @@ func (nmgr *NatsManager) ExecuteInitialize(context.Context) error {
 	if err != nil {
 		return err
 	}
+	// 🔴 nats.Connect HAS NOT NECESSARILY CONNECTED YET.
+	//
+	// RetryOnFailedConnect(true) — set above so a service starting before the
+	// broker keeps trying instead of crashlooping — makes Connect return a non-nil
+	// conn and a NIL ERROR while it is still dialling. The conn is usable in the
+	// sense that publishes queue, so nothing here fails; what breaks is everything
+	// that reads CONNECTION-DERIVED state, because nats.go returns the zero value
+	// for all of it unless the status is CONNECTED.
+	//
+	// That is not a theoretical hazard. It has now bitten twice:
+	//
+	//   - brokerIsClustered() cached "not clustered" from a still-dialling
+	//     connection, which clamped every replica factor to 1 on a healthy HA
+	//     cluster (fixed by reading it live, but the root cause was here);
+	//   - KeyValueStore fails outright, because js.KeyValue consults
+	//     ConnectedServerVersion() — empty unless CONNECTED — and reports
+	//     "nats: key-value requires at least server version 2.6.2" against a
+	//     2.14 server. Observed on a live cluster: device-management crashlooped
+	//     every restart with an error blaming the server's version.
+	//
+	// The second one is the reason this waits rather than each call site guarding
+	// itself. ensureStream is wrapped in RetryInfraConnect and survives; the KV
+	// path is not, so a service whose first act is to create a bucket dies. Making
+	// initialization mean "connected" fixes both, and every future reader of
+	// connection state, in one place — and it makes the log line below true, which
+	// it was not.
+	//
+	// Bounded, and a timeout is NOT fatal: the retry loop inside nats.go keeps
+	// running, the connection handlers log the arrival, and the caller's own
+	// RetryInfraConnect wrappers still apply. Failing startup here would trade a
+	// confusing error for an outage.
+	if err := waitForConnected(nc, connectWaitTimeout); err != nil {
+		log.Warn().Err(err).Str("url", url).Msg(
+			"NATS connection is not established yet; continuing to retry in the background. " +
+				"Components that read connection state during initialization may degrade until it lands")
+	}
 	js, err := nc.JetStream()
 	if err != nil {
 		nc.Close()
@@ -1120,8 +1588,33 @@ func (nmgr *NatsManager) ExecuteInitialize(context.Context) error {
 	}
 	nmgr.nc = nc
 	nmgr.js = js
+	nmgr.connectedServer.Store(nc.ConnectedUrl())
 	log.Info().Msg(fmt.Sprintf("Verified connectivity to NATS at '%s'", url))
 	return nil
+}
+
+// connectWaitTimeout bounds how long initialization waits for the connection to
+// actually be established. Generous, because the thing being waited on is a
+// broker that may still be starting, and every second here is cheaper than a
+// crashloop; bounded, because a service that never comes up is worse than one
+// that comes up degraded and says so.
+const connectWaitTimeout = 30 * time.Second
+
+// waitForConnected blocks until the connection reports CONNECTED, or the timeout
+// elapses. It polls rather than using a handler because the connection may
+// ALREADY be connected by the time we get here — the common case — and a
+// handler-based wait would miss the event that already happened.
+func waitForConnected(nc *nats.Conn, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		if nc.IsConnected() {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("still %s after %s", nc.Status(), timeout)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // Start component.
@@ -1156,6 +1649,9 @@ func (nmgr *NatsManager) Stop(ctx context.Context) error {
 // connection. The sampler is stopped first (before Drain) so it is not mid-
 // StreamInfo when the connection closes.
 func (nmgr *NatsManager) ExecuteStop(context.Context) error {
+	// Before anything that can close the connection: Drain below fires the
+	// ClosedHandler, and it must know this was asked for.
+	nmgr.shuttingDown.Store(true)
 	if nmgr.stopSampler != nil {
 		close(nmgr.stopSampler)
 		nmgr.samplerWg.Wait()
@@ -1187,6 +1683,7 @@ func (nmgr *NatsManager) Terminate(ctx context.Context) error {
 
 // ExecuteTerminate closes the NATS connection.
 func (nmgr *NatsManager) ExecuteTerminate(context.Context) error {
+	nmgr.shuttingDown.Store(true)
 	if nmgr.nc != nil && !nmgr.nc.IsClosed() {
 		nmgr.nc.Close()
 	}

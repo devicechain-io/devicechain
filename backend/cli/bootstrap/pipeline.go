@@ -75,6 +75,8 @@ type State struct {
 	GrafanaSSO bool
 	// Compact applies the small-footprint preset (compactSizing). See Options.
 	Compact bool
+	// HA applies the ADR-020 messaging topology (haTopology). See Options.
+	HA bool
 	// EnableAreas is the raw extra areas requested via --enable-area (the delta over
 	// the profile), kept for an honest access-report label. EnabledAreas is the
 	// resolved+validated explicit set (profile ∪ extras), or nil when no extra area

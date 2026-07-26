@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 
 	assets "github.com/devicechain-io/dc-deploy"
 	"github.com/hashicorp/terraform-exec/tfexec"
@@ -44,6 +45,13 @@ func applyInfra(ctx context.Context, st *State) error {
 
 	if err := tf.Init(ctx); err != nil {
 		return fmt.Errorf("tofu init: %w", err)
+	}
+
+	// Refuse to shrink a broker cluster that is already carrying replicated data.
+	// Reads the CURRENT state, so it must run after Init and before Apply — this is
+	// the only point where both the applied topology and the requested one are known.
+	if err := checkHaNotTornDown(ctx, st, tf); err != nil {
+		return err
 	}
 
 	opts := make([]tfexec.ApplyOption, 0, 16)
@@ -83,6 +91,18 @@ func applyInfra(ctx context.Context, st *State) error {
 		}
 		st.Values["natsCA"] = ca
 	}
+	// The NATS server count the infrastructure ACTUALLY provisioned (ADR-020 A0).
+	// Read back rather than assumed so the Helm step can refuse a replica factor the
+	// broker cannot host — see checkBrokerHostsReplication for why reading reality
+	// rather than our own request is the entire value of this. A decode failure is
+	// non-fatal: this feeds a guard, and an unreadable output should not fail a
+	// bring-up that is otherwise fine (the guard treats absence as "cannot tell").
+	if meta, ok := outputs["nats_cluster_replicas"]; ok {
+		var servers int
+		if err := json.Unmarshal(meta.Value, &servers); err == nil && servers > 0 {
+			st.Values[natsClusterReplicasKey] = strconv.Itoa(servers)
+		}
+	}
 	// Grafana access (when monitoring was installed): stash the namespace/service so
 	// the report step can print a port-forward hint. Null when --no-monitoring.
 	if meta, ok := outputs["grafana_service"]; ok {
@@ -109,6 +129,12 @@ func applyInfra(ctx context.Context, st *State) error {
 // only means something if it reads the vars the apply actually passes.
 func infraVars(st *State) []string {
 	vars := []string{"kubeconfig_context=" + st.KubeContext}
+	// The OpenTofu half of the HA topology. Emitted UNCONDITIONALLY, including for
+	// the single-node case, so the two halves are rendered from one value on every
+	// path rather than only when the flag is set — a conditional here would leave
+	// the disagreement reachable again by the narrow route of turning HA off on an
+	// instance that had it on. See haTopology.
+	vars = append(vars, haFor(st.HA).infraVars()...)
 	// On a kind/minikube node, ingress-nginx must bind the node's 80/443 via
 	// hostPort; a LoadBalancer stays <pending> and times out the apply. The
 	// monitoring stack likewise runs in its slim profile (emptyDir TSDB, smaller
@@ -153,6 +179,14 @@ func infraVars(st *State) []string {
 			"nats_jetstream_storage="+compact.JetStreamStorage,
 			"postgres_storage="+compact.PostgresStorage,
 			"timescale_storage="+compact.TimescaleStorage,
+			// Drop the prometheus-nats-exporter sidecar. It is a whole extra
+			// container per NATS pod, and what it publishes is BROKER-side cluster
+			// health — route state, RAFT peer health — which is information about a
+			// topology compact does not have: compact runs one NATS server, so there
+			// are no routes and no RAFT. The platform's own replication gauges are
+			// exported by the services either way, so nothing that speaks about
+			// stream replication is lost here.
+			"nats_prom_exporter=false",
 		)
 		// cert-manager exists to issue the ingress certificate. Dropping it is only
 		// safe because compact serves plain HTTP; an instance that still terminates

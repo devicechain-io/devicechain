@@ -17,8 +17,24 @@ import (
 type NatsConfiguration struct {
 	Hostname string
 	Port     uint32
-	// StreamReplicas is the JetStream replica count for created streams
-	// (1 for single-node dev; raise to 3 for the HA topology in ADR-018).
+	// StreamReplicas is the JetStream replica count for created streams AND for
+	// every KV bucket (core/messaging kv.go reads this same value — there is no
+	// separate KV lever). 1 for single-node dev; 3 for the ADR-020 HA topology.
+	//
+	// This value is HALF of a pair and cannot be raised on its own. The broker must
+	// already be clustered, which is the deployment's other lever (tofu var.ha /
+	// nats_cluster_replicas sizing the NATS server StatefulSet). Raising this one
+	// against an unclustered broker is not a degraded configuration, it is a hard
+	// server error on every stream and bucket creation — see effectiveStreamReplicas
+	// in core/messaging, which clamps to what the broker can actually do so a
+	// mismatched pair degrades loudly instead of crashlooping the platform.
+	// This half is rendered by helm and the other by tofu, so nothing in either tool
+	// can see both. `dcctl bootstrap --ha` sets them from ONE value (haTopology) and
+	// preflights the broker's actual server count against this one before installing,
+	// which is the supported way to raise it. Setting this key BY HAND is still a
+	// two-step change across two tools, and getting only one step done is the
+	// expected mistake — which is what the clamp above and the desired-vs-actual
+	// gauges exist to make loud rather than silent.
 	StreamReplicas uint32
 	// StreamMaxBytes / StreamMaxMsgs bound the on-disk size and message count of
 	// each per-suffix JetStream stream (ADR-023): a PER-STREAM platform ceiling so a
@@ -585,6 +601,50 @@ func (c *InstanceConfiguration) Validate() error {
 	}
 	if err := c.Infrastructure.Nats.validateTierOrdering(); err != nil {
 		return err
+	}
+	if err := c.Infrastructure.Nats.validateStreamReplicas(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// StreamMaxReplicas is the largest replica count JetStream accepts for a stream.
+// It is the server's own hard limit (nats-server StreamMaxReplicas), restated here
+// so a value it would reject is refused at config load with a sentence, rather
+// than at the first stream creation with a broker error code.
+const StreamMaxReplicas = 5
+
+// validateStreamReplicas rejects a replica count that cannot describe a quorum.
+//
+// Two rules, and only the first is obvious. Above StreamMaxReplicas JetStream
+// simply refuses the stream. An EVEN count is worse, because JetStream accepts it
+// and it looks like more redundancy than the odd number below it while providing
+// strictly less: RAFT needs a majority, so 2 replicas tolerate zero failures (a
+// majority of 2 is 2) exactly like 1 replica, while costing twice the disk and a
+// quorum round-trip on every publish. 4 tolerates one failure, the same as 3. An
+// operator who writes 2 has bought the entire cost of replication and none of its
+// benefit, which is precisely the class of silent non-HA this whole workstream
+// exists to make unrepresentable.
+//
+// Zero is not rejected: it means "unset", and ApplyDefaults floors it to 1 before
+// this runs. Validating it here would fail a config that omits the key entirely.
+func (c *NatsConfiguration) validateStreamReplicas() error {
+	r := c.StreamReplicas
+	if r == 0 {
+		return nil
+	}
+	if r > StreamMaxReplicas {
+		return fmt.Errorf("infrastructure.nats.streamReplicas is %d, above the JetStream maximum of %d",
+			r, StreamMaxReplicas)
+	}
+	if r%2 == 0 {
+		// tolerated = r - majority, where majority = r/2+1. For 2 that is 0 (the same
+		// as no replication at all); for 4 it is 1 (the same as 3).
+		tolerated := r - (r/2 + 1)
+		return fmt.Errorf("infrastructure.nats.streamReplicas is %d; it must be ODD. RAFT needs a majority, "+
+			"so %d replicas tolerate %d node failure(s) — no better than %d — while costing the extra disk "+
+			"and a quorum round-trip on every write. Use %d or %d",
+			r, r, tolerated, r-1, r-1, r+1)
 	}
 	return nil
 }

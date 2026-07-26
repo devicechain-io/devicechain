@@ -1,0 +1,74 @@
+{{/*
+PodMonitor for the NATS broker's prometheus-nats-exporter sidecar (ADR-020 A0).
+
+WHY THIS LIVES IN THE CHART AND NOT IN OPENTOFU, where the broker itself is
+provisioned: a PodMonitor is a Prometheus Operator CRD. The OpenTofu root installs
+NATS and the monitoring stack as two Helm releases that run in PARALLEL, so a
+PodMonitor rendered by the NATS module would fail the apply on any cluster where
+the operator's CRDs have not landed yet — which includes every fresh bring-up, and
+nondeterministically, which is the worst way for it to fail. Serializing NATS
+behind the whole monitoring stack to fix that would cost every apply the wait. The
+chart installs AFTER the infrastructure apply completes, so here the CRDs exist by
+construction. The sidecar itself is turned on in OpenTofu (nats_prom_exporter).
+
+WHAT IT ADDS over the platform's own replication gauges: those are exported by the
+services and describe the STREAMS — desired vs actual replica counts, current RAFT
+peers per stream. This describes the SERVERS carrying them: routes, cluster state,
+JetStream RAFT health, from the broker's own view. The distinction matters because
+a cluster that has lost a route keeps reporting healthy streams for as long as the
+existing leaders hold, so the stream-side view goes bad later than the server-side
+one — and on a broker that is not clustered at all, the stream gauges are the only
+half that says anything, since there is no cluster to be unhealthy.
+
+It selects pods in the NATS namespace, which is derived from the broker hostname
+the services are configured with (infrastructure.nats.hostname, e.g.
+"dc-nats.dc-system") — the same value everything else in this instance dials, so
+the monitor cannot end up pointed at a different broker than the one in use.
+
+Harmless when the exporter is off: `port` names a CONTAINER port, so with no
+prom-exporter container the operator generates no targets at all, rather than a
+permanently-down one.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.natsPodMonitor }}
+{{- $host := .Values.instance.config.infrastructure.nats.hostname | required "instance.config.infrastructure.nats.hostname is required to render the NATS PodMonitor; set metrics.natsPodMonitor=false if this instance uses a broker it does not name" }}
+{{- $parts := splitList "." $host }}
+{{- $release := index $parts 0 }}
+{{- $natsNamespace := .Values.instance.id }}
+{{- if gt (len $parts) 1 }}
+{{- $natsNamespace = index $parts 1 }}
+{{- end }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: nats-broker
+  namespace: {{ .Values.instance.id }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  # The broker usually runs OUTSIDE this instance's namespace (dc-system by
+  # default), which is why this is a cross-namespace selector. Prometheus is
+  # configured to select monitors cluster-wide (podMonitorSelectorNilUsesHelmValues
+  # is false in the monitoring module), so no release label is needed here.
+  namespaceSelector:
+    matchNames:
+      - {{ $natsNamespace | quote }}
+  selector:
+    matchLabels:
+      # Quoted, both here and in namespaceSelector above: a broker addressed by IP
+      # (infrastructure.nats.hostname: 10.0.0.5 — a legitimate external/managed
+      # broker) splits to "10", which YAML reads as an INTEGER, and the PodMonitor
+      # schema requires strings. The whole chart install then fails on a type error
+      # rather than the "silently absent metrics" this template otherwise degrades
+      # to, and the documented escape hatch is only discoverable afterwards.
+      #
+      # The nats chart's own pod labels. Same coupling as the MQTT NodePort Service
+      # in modules/nats: a future chart that relabels its pods leaves this selecting
+      # nothing, and the symptom is silently absent metrics rather than an error.
+      app.kubernetes.io/name: nats
+      app.kubernetes.io/instance: {{ $release | quote }}
+      app.kubernetes.io/component: nats
+  podMetricsEndpoints:
+    # The exporter's container port name, from the nats chart's promExporter block.
+    - port: prom-metrics
+      path: /metrics
+{{- end }}

@@ -1,0 +1,173 @@
+{{/*
+Alerting rules for JetStream replication (ADR-020 A0).
+
+These exist because every OTHER assurance that an instance is highly available is
+made at install time — a rendered helm value, a tofu plan, a dcctl preflight — and
+install-time assurances go stale by construction. That staleness IS the bug A0
+closes: the replica factor used to be applied only when a stream or bucket was
+created, so a cluster could carry correct-looking configuration and single-replica
+streams indefinitely, with nothing anywhere to say so, right up until the node loss
+it was supposed to survive.
+
+So these alert on BROKER STATE, never on configuration. The gauges come from
+core/messaging/stream_metrics.go and are exported by every area that touches
+JetStream, so the expressions match on __name__ across subsystems rather than
+naming one area — an instance is only as replicated as its least replicated stream,
+and the area that owns that stream is not knowable here.
+
+Same operator assumption and gating as the event-processing rules.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts }}
+{{- $ns := .Values.instance.id }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: jetstream-replication
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.jetstream-replication
+      rules:
+        # The false-HA alert. An instance asked for replication and is not getting
+        # it — the two halves of the toggle disagree (helm streamReplicas raised
+        # without the NATS cluster being scaled, or a lift that has not completed).
+        # Grouped by (stream, job, namespace), not by stream alone. Folding the area
+        # away meant a page could not say WHICH service saw the low value, and the
+        # cross-area min/max absorbed a single misconfigured area entirely. Per-job
+        # grouping also makes a mid-rollout pod harmless: it compares its own
+        # desired against its own actual rather than against another pod's.
+        - alert: JetStreamNotReplicatedAsConfigured
+          expr: |
+            max by (stream, job, namespace) (
+              {__name__=~"devicechain_.+_jetstream_replicas_desired", namespace="{{ $ns }}"}
+            )
+            >
+            min by (stream, job, namespace) (
+              {__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}"}
+            )
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "JetStream stream or bucket is not replicated as configured"
+            description: >-
+              {{ "{{ $labels.stream }}" }} has fewer replicas than this instance is configured for.
+              This instance is NOT highly available for that stream. Both halves of the toggle must
+              agree: instance.config.infrastructure.nats.streamReplicas sets the replica count, and
+              the NATS server cluster (tofu var.ha / nats_cluster_replicas) must be large enough to
+              host it. NOTE this does NOT clear on its own once peers arrive: the replica lift runs
+              only when a service starts and ensures its streams, and a lift that failed mid-scale
+              (JSClusterNoPeersError) is warned and not retried. Once the cluster is whole, restart
+              the affected Deployments to re-run the lift.
+        # Labelled replicated, but not actually replicated. A stream reporting
+        # Replicas:3 whose peers are stale or offline has the cost of replication
+        # and none of the protection, and this is the single most likely way a
+        # merely-plumbed cluster passes a naive check.
+        - alert: JetStreamReplicaPeersDegraded
+          expr: |
+            min by (stream, job, namespace) (
+              {__name__=~"devicechain_.+_jetstream_peers_current", namespace="{{ $ns }}"}
+            )
+            <
+            max by (stream, job, namespace) (
+              {__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}"}
+            )
+          # 20m, and longer than the alert above rather than shorter. This is the
+          # one that sees RAFT CATCH-UP: an in-place lift flips Config.Replicas
+          # immediately (so the config alert clears at once) and then copies the
+          # data, during which the new followers are legitimately not Current. On a
+          # populated hot stream that copy is not quick, and a 10m window turned a
+          # correctly-progressing lift into a page.
+          for: 20m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "JetStream replica peers are not current"
+            description: >-
+              {{ "{{ $labels.stream }}" }} reports more replicas than it has current, online RAFT
+              peers. It is labelled replicated but is not: losing the leader may lose data or
+              availability. Check NATS pod health and placement — three replicas across pods that
+              share one node survive zero node losses.
+        # The fence substrate, called out by name and at higher severity.
+        #
+        # min by (stream, job, namespace), matching the two rules above — and the
+        # `min` in particular. An earlier version took `max` across areas, which
+        # folded in the FORGIVING direction: one area reporting the lease bucket at
+        # one replica while another reported three left the critical alert silent.
+        # That is the same cross-area masking the other two rules were regrouped to
+        # remove, and it survived on the one rule where a miss matters most.
+        #
+        # The `< 3` is a literal rather than a comparison against desired, and that
+        # is deliberate: three peers is a real quorum, so a five-replica instance
+        # whose lease bucket sits at three is not in danger. It does mean this rule
+        # alone will not notice that case — JetStreamNotReplicatedAsConfigured
+        # catches it at warning severity, which is the right level for it.
+        # dc_leases decides which pod is allowed to write (ADR-070). Single-replica,
+        # it is not merely a lost lease on node failure — it blocks every standby's
+        # Acquire, so the failover the fence exists to make safe cannot happen.
+        - alert: JetStreamLeaseBucketNotReplicated
+          expr: |
+            min by (stream, job, namespace) (
+              {__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}", stream=~"KV_.*dc_leases"}
+            ) < 3
+            and on()
+            max (
+              {__name__=~"devicechain_.+_jetstream_replicas_desired", namespace="{{ $ns }}"}
+            ) > 1
+          for: 15m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "The ADR-070 lease bucket is not replicated"
+            description: >-
+              {{ "{{ $labels.stream }}" }} holds the partition-ownership leases that decide which
+              pod may write. On an instance configured for HA it must be replicated: at one replica,
+              losing its node does not just lose the leases, it blocks every standby's Acquire and
+              the lease-fenced failover cannot happen at all. Do not claim lease-fenced HA while
+              this is firing.
+        # The one the other three CANNOT see.
+        #
+        # desired/actual/peers all read 1 on a healthy single-node install — and all
+        # three ALSO read 1 on a 3-node cluster whose every stream was created
+        # single-replica. Those series are bit-identical, so no rule built on them
+        # can tell a correct small instance from one paying for three servers, three
+        # volumes and a quorum round-trip to store one copy of everything. That
+        # second state is the literal thing ADR-020 A0 exists to close, and it is
+        # what `tofu apply -var ha=true` followed by a plain `helm install` produces,
+        # because the chart ships streamReplicas: 1.
+        #
+        # So this compares the BROKER's topology against the instance's config,
+        # which is the one comparison the replication triple cannot express.
+        # Warning, not critical: nothing is broken or at risk of loss — the instance
+        # is simply not getting what it is paying for, and the fix is a config
+        # change rather than an incident.
+        - alert: JetStreamClusterUnused
+          expr: |
+            max (
+              {__name__=~"devicechain_.+_jetstream_broker_clustered", namespace="{{ $ns }}"}
+            ) == 1
+            and on()
+            max (
+              {__name__=~"devicechain_.+_jetstream_replicas_desired", namespace="{{ $ns }}"}
+            ) == 1
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "The NATS broker is clustered but nothing on it is replicated"
+            description: >-
+              This instance is connected to a CLUSTERED NATS broker while every stream and KV
+              bucket is configured for a single replica, so it is paying for a multi-server
+              cluster and surviving zero node losses. Both halves of the toggle have to move
+              together: the server count is OpenTofu's (var.ha / nats_cluster_replicas) and the
+              replica factor is the chart's
+              (instance.config.infrastructure.nats.streamReplicas). `dcctl bootstrap --ha` sets
+              both from one value. If the single-server topology is what you intended, scale the
+              NATS cluster back down rather than leaving it running unused.
+{{- end }}

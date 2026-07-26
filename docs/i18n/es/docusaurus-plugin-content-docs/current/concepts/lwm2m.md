@@ -27,7 +27,11 @@ Cada dispositivo se vincula a su inquilino mediante su **identidad PSK DTLS aute
 
 ## Alta disponibilidad
 
-Una única réplica sirve el endpoint CoAP a la vez, elegida mediante un lease (arrendamiento); un standby toma el control en caso de fallo. Como un dispositivo en modo cola puede permanecer en silencio durante largos períodos por diseño, el nuevo líder reconstruye la presencia a partir de la proyección durable y el tiempo de vida de registro de cada dispositivo en lugar de sondear — de modo que una toma de control no marca falsamente como fuera de línea a dispositivos dormidos.
+Una única réplica sirve el endpoint CoAP a la vez, sostenida por un arrendamiento (lease) de propiedad con vallado. Los dispositivos se conectan **hacia dentro** a un único socket UDP enlazado, así que esto no es una opción de ajuste: una segunda réplica compartiendo el Service recibiría — y descartaría — silenciosamente una parte de los datagramas. Solo quien mantiene el arrendamiento enlaza el socket; el despliegue se niega a renderizar más de una réplica.
+
+Lo que aporta el arrendamiento es que **el reemplazo es seguro y automático**. Un pod de reemplazo no enlaza nada hasta haber adquirido el arrendamiento, de modo que nunca hay dos procesos enlazados al endpoint a la vez. Como un dispositivo en modo cola puede permanecer en silencio durante largos períodos por diseño, el nuevo líder reconstruye entonces la presencia a partir de la proyección durable y el tiempo de vida de registro de cada dispositivo en lugar de sondear — de modo que un relevo no marca falsamente como fuera de línea a dispositivos dormidos.
+
+La recuperación es automática pero no instantánea: tarda lo que el pod de reemplazo necesite para planificarse y enlazar, más hasta 30 segundos de la ventana de vallado del arrendamiento. Los datagramas enviados durante esa ventana se pierden, lo que en LwM2M es normalmente invisible — los mensajes CoAP confirmables se retransmiten y los recursos observados se reanudan en la siguiente notificación.
 
 :::note Estado
 La ingesta LwM2M está disponible como servicio opcional (opt-in) sobre CoAP/UDP con DTLS-PSK. Impulsa la [presencia de dispositivo](./device-presence.md) autoritativa, ingiere los recursos observados como mediciones, y envía comandos Read/Write/Execute y actualizaciones de firmware en sentido descendente (downlink) (con retención y drenaje durables para dispositivos dormidos). El alcance de la disponibilidad general (GA) son las credenciales PSK (X.509 / clave pública sin procesar y un servidor Bootstrap están planeados).

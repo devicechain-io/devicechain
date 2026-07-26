@@ -222,7 +222,7 @@ func TestCompactReservationFitsItsSmallerVolume(t *testing.T) {
 	// nothing in this repo measures what $MQTT_sess costs per connected session or
 	// what a durable consumer's ack state costs, so no floor here can be honestly
 	// called sized. What it does is fail if a future change eats the margin, which
-	// at the default 12Gi would go unnoticed and at 2Gi would not. C3 replaces it
+	// at the default 16Gi would go unnoticed and at 2Gi would not. C3 replaces it
 	// with a measured number, or explains why the measurement was not worth it.
 	const minHeadroom int64 = 192 << 20
 	if headroom := ceiling - reserved; headroom < minHeadroom {

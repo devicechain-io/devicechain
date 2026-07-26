@@ -59,6 +59,22 @@ instance:
       nats:
         hostname: dc-nats.dc-system
         port: 4222
+        # How many copies JetStream keeps of every stream and KV bucket (ADR-020 A0).
+        # ODD, and at most 5 — the services reject an even value at startup, because
+        # RAFT commits on a majority so an even count tolerates no more failures than
+        # the odd one below it while costing the extra disk and a wider quorum.
+        #
+        # THIS IS HALF A TOGGLE, and the other half is not in this file. It is the NATS
+        # SERVER COUNT, provisioned by OpenTofu (nats_cluster_replicas / var.ha), and a
+        # stream cannot be replicated wider than the cluster hosting it. `dcctl bootstrap
+        # --ha` sets both from one value and refuses an install where they disagree.
+        # Raising this key BY HAND against a single-server broker does not fail: the
+        # services clamp to 1 and log it, because crashlooping the platform over a
+        # deployment mismatch is worse — so the instance comes up looking configured for
+        # HA and is not. What says so is devicechain_*_jetstream_replicas_desired vs
+        # _actual, and the JetStreamNotReplicatedAsConfigured alert built on them.
+        #
+        # Leaving it at 1 is correct for a single-node broker and is the shipped default.
         streamReplicas: 1
         # Per-stream JetStream size ceilings (ADR-023): a per-stream platform bound
         # so a producer flood or a wedged consumer cannot grow one stream without
@@ -80,13 +96,21 @@ instance:
         # additionally caps itself below that bound (256 MiB), so the platform streams
         # reserve 8.25 GiB rather than 9. The MQTT gateway's own streams, bounded at
         # startup because nats-server creates them unlimited, add 384 MiB for
-        # ~8.6 GiB total. The KV buckets (device caches, locks, refresh tokens,
-        # OAuth codes) are bounded too and reserve a further 768 MiB, for ~9.4 GiB —
-        # which fits the 12Gi JetStream PV, whose max_file_store ceiling is 10Gi,
-        # leaving ~640 MiB genuinely unreserved. Note that ceiling
-        # floors 90% of the PV's MAGNITUDE and reattaches the unit
-        # (floor(12 * 0.9) = 10 → "10Gi"), so it is 10Gi and not 10.8 GiB — the
-        # difference is 819 MiB of headroom that does not exist.
+        # 8.625 GiB total. The KV buckets (device caches, locks, refresh tokens,
+        # OAuth codes) are bounded too — 4 State buckets at 128 MiB + 6 Cache buckets
+        # at 64 MiB — and reserve a further 896 MiB, for exactly 9.5 GiB reserved.
+        # That fits the 16Gi JetStream PV, whose max_file_store ceiling is 14Gi,
+        # leaving 4.5 GiB genuinely unreserved. Note that ceiling floors 90% of the
+        # PV's MAGNITUDE and reattaches the unit (floor(16 * 0.9) = 14 → "14Gi"), so
+        # it is 14Gi and not 14.4 GiB — the difference is 409 MiB of headroom that
+        # does not exist.
+        #
+        # The PV was 12Gi, which also "fit" — at a 10Gi ceiling, with 512 MiB left
+        # over, which is EXACTLY the floor the budget test asserts. At that size the
+        # platform could not add one more stream or one more KV bucket without moving
+        # the PV first, and the way it would find out is the crashloop above, on
+        # someone's fresh install, rather than a failing test. The reservation is
+        # per-NODE, so this is not multiplied by an HA cluster's replica factor.
         #
         # streamMaxBytesCold must stay <= streamMaxBytes: lowering only the hot bound
         # (e.g. for a small-footprint deploy) inverts the two and makes control-plane
@@ -318,6 +342,18 @@ metrics:
   # rules. Requires the Prometheus Operator CRDs (same as enabled). Ignored when
   # metrics.enabled is false.
   alerts: true
+  # natsPodMonitor renders a PodMonitor scraping the NATS broker's own
+  # prometheus-nats-exporter sidecar (ADR-020 A0) — BROKER-side cluster health
+  # (routes, JetStream RAFT), complementing the per-stream replication gauges the
+  # services export. It targets the namespace named in
+  # instance.config.infrastructure.nats.hostname, so it follows the broker this
+  # instance actually dials. Safe to leave on when the sidecar is not deployed
+  # (OpenTofu's nats_prom_exporter=false, which the compact preset sets): `port`
+  # names a container port, so the operator generates no targets rather than a
+  # permanently-down one. Set false for a broker this chart should not monitor —
+  # e.g. a managed/shared NATS outside the operator's reach. Ignored when
+  # metrics.enabled is false.
+  natsPodMonitor: true
 
 # Kubernetes volume wiring for the FILESYSTEM object store (ADR-058), i.e. when
 # instance.config.infrastructure.blob.backend is "filesystem". The filesystem backend
@@ -690,12 +726,17 @@ functionalAreas:
     #
     # It is a STATEFUL single-owner service (ADR-069 / ADR-070): a Sparkplug Host owns
     # per-node alias/seq/session state, so two instances would each see half the
-    # traffic and publish a duplicate STATE. Until the ADR-070 fenced lease lands (SP4)
-    # it MUST run as ONE instance — so it deploys with strategy Recreate (a rollout
-    # stops the old pod before starting the new one, avoiding two concurrent Host
-    # Applications) and stays at replicas:1. Do NOT raise replicas past 1 until the
-    # lease-elected failover lands (a Recreate with 2 replicas runs two permanent
-    # Hosts; the template fails the render), mirroring event-processing above.
+    # traffic and publish a duplicate STATE. It runs as ONE instance — strategy
+    # Recreate (a rollout stops the old pod before starting the new one, avoiding two
+    # concurrent Host Applications) at replicas:1.
+    #
+    # The ADR-070 fenced lease HAS landed (SP4) and does not change that. The lease
+    # makes REPLACEMENT safe — a new pod cannot serve until it holds the lease, so
+    # there is never a window with two Hosts on the broker — it does not make a warm
+    # standby correct. Single ownership here is a correctness property of the
+    # Sparkplug Host, not a limitation waiting on a feature. Do NOT raise replicas
+    # past 1 (a Recreate with 2 replicas runs two permanent Hosts; the template fails
+    # the render), mirroring event-processing above.
     replicas: 1
     strategy: Recreate
     config: {}
@@ -734,9 +775,11 @@ functionalAreas:
     # bound socket, so — unlike an outbound client — it cannot warm-standby (a Service
     # would spray datagrams across replicas, and a standby would drop half). GA is ONE
     # serving replica; it deploys strategy Recreate + replicas:1 (a rollout stops the old
-    # binder before the new one binds). Do NOT raise replicas past 1 until the ADR-070
-    # fenced lease lands. L1 adds the /rd registration + presence handlers and exposes the
-    # device-facing CoAPS port below.
+    # binder before the new one binds). The ADR-070 fenced lease HAS landed and gates
+    # SERVING — only the leader binds the socket — which makes replacement safe but does
+    # NOT make a second replica useful: a standby that also bound the socket would
+    # silently receive and drop the share of datagrams the Service sprayed at it. Do NOT
+    # raise replicas past 1 (the template fails the render).
     replicas: 1
     strategy: Recreate
     # The device-facing CoAPS port is UDP (CoAP over DTLS), so it is declared with an

@@ -105,15 +105,20 @@ func TestApplyDefaultsStreamBounds(t *testing.T) {
 //
 // max_file_store is NOT a plain 90% of the PV. The module splits the size into
 // magnitude and unit, floors 90% of the MAGNITUDE, and reattaches the unit
-// (js_max_file_store in deploy/opentofu/modules/nats/main.tf), so a 12Gi PV
-// yields floor(12 * 0.9) = 10 → "10Gi" — verified against a live cluster, which
-// reports max_file_store 10Gi against a 12Gi PVC.
+// (js_max_file_store in deploy/opentofu/modules/nats/main.tf), so a 16Gi PV
+// yields floor(16 * 0.9) = 14 → "14Gi". Verified against a live cluster at the
+// previous size, which reported max_file_store 10Gi against a 12Gi PVC.
 //
-// Modelling it as an exact 90% (10.8 GiB) overstates the real ceiling by 819 MiB.
+// Modelling it as an exact 90% (14.4 GiB) overstates the real ceiling by 409 MiB.
 // Against an inflated ceiling a future increase could pass here while leaving a
-// fresh install 819 MiB less real headroom than the floor below claims to enforce
-// — which, against that floor, is most of it. Integer division floors exactly as
-// the module does.
+// fresh install less real headroom than the floor below claims to enforce.
+// Integer division floors exactly as the module does.
+//
+// It is PER NODE. An HA cluster provisions this volume on every server and each
+// holds one replica of the same reservation, so nothing here multiplies by the
+// replica factor — see the ADR-020 A0 note in modules/nats/main.tf for the one
+// place where a replica multiply WOULD apply (account-level quotas, which is why
+// the APP account is deliberately left on dynamic limits).
 //
 // These tests guard the reservation against a budget they RESTATE. The pvGi below
 // is a copy of the OpenTofu default, so shrinking the real volume does not fail
@@ -123,7 +128,7 @@ func TestApplyDefaultsStreamBounds(t *testing.T) {
 // one pins the arithmetic on values core/config computes for itself, that one
 // pins the seam between the two halves of the deployment.
 const (
-	pvGi               = 12
+	pvGi               = 16
 	pvBytes      int64 = pvGi << 30
 	maxFileStore int64 = (pvGi * 9 / 10) << 30
 )
@@ -169,6 +174,16 @@ func TestStreamReservationFitsBudget(t *testing.T) {
 // counted in `reserved`, and what remains covers only genuinely unaccounted
 // things. Trading a larger floor over an unbounded consumer for a smaller one
 // over a bounded set is the entire point of the exercise.
+//
+// READ THE MARGIN BEFORE TRUSTING THIS AS AN EARLY WARNING. The floor is sized
+// for the unaccounted consumers named below, which do not grow with the PV — so
+// when the PV moved to 16Gi (ADR-020 A0) the slack above the floor went from
+// 0 to 4.5 GiB. That was the POINT of the bump: at 12Gi the remainder was 512 MiB,
+// i.e. exactly this floor, so the budget had no room for one more stream and the
+// way anyone would find out was a crashloop on a fresh install. But it does mean
+// this test is now a guard against a LARGE reservation increase, not a tripwire
+// that trips as the budget fills. If you are asking "how close are we?", compute
+// maxFileStore - reserved and look at it; do not infer it from this passing.
 func TestBudgetLeavesHeadroomForUnaccountedStreams(t *testing.T) {
 	cfg := &InstanceConfiguration{}
 	cfg.ApplyDefaults()
@@ -445,6 +460,56 @@ func TestValidateRejectsInvertedTierCeilings(t *testing.T) {
 					"which of the two numbers to change", err, tc.want)
 			}
 		})
+	}
+}
+
+// A replica count that cannot describe a quorum is refused at config load, with a
+// message that says which way to move. The even values are the interesting ones:
+// JetStream accepts them, so nothing downstream would ever report that 2 replicas
+// buy the cost of replication and none of its fault tolerance.
+func TestValidateRejectsNonQuorumReplicaCounts(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		replicas uint32
+		want     string
+	}{
+		{"two tolerates no failures", 2, "ODD"},
+		{"four is no better than three", 4, "ODD"},
+		{"six is above the maximum", 6, "maximum"},
+		{"seven is above the maximum", 7, "maximum"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := NewDefaultInstanceConfiguration()
+			cfg.ApplyDefaults()
+			cfg.Infrastructure.Nats.StreamReplicas = tc.replicas
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("streamReplicas=%d validated cleanly; an operator would pay for "+
+					"replication and get less fault tolerance than they think", tc.replicas)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q does not contain %q, so it does not tell an operator what to do",
+					err, tc.want)
+			}
+			if !strings.Contains(err.Error(), "streamReplicas") {
+				t.Errorf("error %q does not name the key being rejected", err)
+			}
+		})
+	}
+}
+
+// The counterweight: every count that CAN describe a quorum must pass untouched,
+// including 0 (which means "unset" — ApplyDefaults floors it to 1, and validating
+// it here would reject any config that simply omits the key).
+func TestValidateAcceptsQuorumReplicaCounts(t *testing.T) {
+	for _, replicas := range []uint32{0, 1, 3, 5} {
+		cfg := NewDefaultInstanceConfiguration()
+		cfg.ApplyDefaults()
+		cfg.Infrastructure.Nats.StreamReplicas = replicas
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("streamReplicas=%d was rejected (%v); a guard that fails a valid "+
+				"topology is worse than the one it replaces", replicas, err)
+		}
 	}
 }
 

@@ -88,9 +88,10 @@
       "properties": {
         "enabled": { "type": "boolean" },
         "grafanaDashboards": { "type": "boolean" },
-        "alerts": { "type": "boolean" }
+        "alerts": { "type": "boolean" },
+        "natsPodMonitor": { "type": "boolean" }
       },
-      "description": "Prometheus scrape integration. enabled renders a ServiceMonitor per area (scraping /metrics on the graphql port); requires the Prometheus Operator CRDs. grafanaDashboards renders the event-processing ops dashboard ConfigMap for the Grafana sidecar; alerts renders a PrometheusRule with the DETECT+REACT alerting rules."
+      "description": "Prometheus scrape integration. enabled renders a ServiceMonitor per area (scraping /metrics on the graphql port); requires the Prometheus Operator CRDs. grafanaDashboards renders the event-processing ops dashboard ConfigMap for the Grafana sidecar; alerts renders PrometheusRules with the DETECT+REACT and JetStream-replication alerting rules; natsPodMonitor renders a PodMonitor for the NATS broker's prometheus-nats-exporter sidecar (ADR-020 A0), targeting the namespace named in instance.config.infrastructure.nats.hostname."
     },
     "replicas": { "type": "integer", "minimum": 0 },
     "rollingUpdate": {

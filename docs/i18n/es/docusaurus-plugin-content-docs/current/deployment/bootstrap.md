@@ -98,6 +98,7 @@ extraen las imágenes —la canalización, el chart y el operador son idénticos
 | `--host <name>` | Host de ingress en el que exponer la instancia (por defecto `devicechain.local`). Usa `localhost` en un clúster local para llegar a la consola **sin editar `/etc/hosts`**. |
 | `--no-tls` | Sirve HTTP simple en lugar de un certificado autofirmado. Con `--host localhost`, un `http://localhost/` sin configuración adicional (sin advertencia de certificado). |
 | `--compact` | Preajuste de huella pequeña —ver más abajo. |
+| `--ha` | Alta disponibilidad de mensajería —ver más abajo. Requiere al menos **3 nodos planificables**. |
 | `--dry-run` | Imprime lo que haría cada paso sin cambiar nada. |
 | `--skip-preflight` | Omite las comprobaciones de entorno. |
 
@@ -150,6 +151,59 @@ misma operación aplicada a una instancia en ejecución.
 consola en `http://localhost/` —sin entrada en el archivo hosts y sin advertencia
 de certificado.
 :::
+
+### `--ha` {#ha}
+
+Ejecuta el broker de mensajería como un clúster RAFT de 3 nodos, un servidor por nodo, con
+**cada stream de JetStream y cada bucket KV replicados a lo largo del clúster**. La
+instancia sobrevive entonces a la pérdida de cualquier nodo sin perder mensajes, sesiones
+de dispositivo ni estado en vivo.
+
+```bash
+dcctl bootstrap local mi-instancia --ha
+```
+
+Ambas mitades se establecen a partir de ese único flag, y ese es justamente su propósito.
+El tamaño del broker es infraestructura (OpenTofu); el factor de réplica por stream es
+configuración de la instancia (Helm). Viven en herramientas distintas, ninguna de las
+cuales puede ver a la otra, y elevar solo la primera es el modo de fallo que este flag
+existe para evitar: un clúster de tres nodos cuyos streams siguen siendo de una sola
+réplica cuesta el triple de cómputo, informa tres pares saludables y no sobrevive a nada.
+
+:::caution Sobrevive exactamente a la pérdida de UN nodo
+Tres servidores confirman por mayoría, de modo que dos siguen siendo quórum y uno no.
+Perder un segundo nodo —incluido perder uno por una actualización continua de nodos
+mientras otro ya está caído— detiene las escrituras hasta que un nodo regrese. Planifica
+el mantenimiento de un nodo a la vez. Sobrevivir a dos pérdidas simultáneas requiere un
+clúster de 5 servidores, que hoy no es una topología soportada.
+:::
+
+**Tres nodos planificables, no tres nodos.** Los servidores llevan una restricción dura de
+antiafinidad, así que si el clúster no puede colocar uno por nodo el excedente queda en
+`Pending` en lugar de duplicarse: réplicas colocadas en el mismo nodo costarían lo que
+cuesta la replicación sin proteger de nada. `dcctl` cuenta los nodos planificables y
+rechaza la operación antes de aprovisionar nada. En un clúster `kind` local esto significa
+**tres workers**: kind solo elimina el taint del plano de control en un clúster de un solo
+nodo, de modo que un plano de control más dos workers es un clúster de tres nodos con dos
+nodos utilizables.
+
+**Lo que no hace.** Replica únicamente la capa de *mensajería*. Postgres y TimescaleDB
+siguen siendo de instancia única, y el número de réplicas de servicio no cambia.
+
+#### Cómo verificarlo {#verifying-it}
+
+Una afirmación de alta disponibilidad vale solo lo que el broker realmente sostiene, así
+que compruébalo ahí y no en la configuración renderizada:
+
+```bash
+dcctl ha verify --instance mi-instancia
+```
+
+Esto lee el broker en vivo y verifica que cada stream, bucket KV y consumidor durable
+lleva el factor de réplica declarado **con todos los pares al día**, y que los tres
+servidores están en tres nodos distintos. Termina con código distinto de cero si algo se
+queda corto, e imprime qué examinó para que un resultado correcto sobre un conjunto vacío
+no se confunda con un éxito real.
 
 ## Después del arranque inicial
 
