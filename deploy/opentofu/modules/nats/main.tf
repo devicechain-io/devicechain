@@ -751,6 +751,7 @@ output "ha_topology" {
     clustered            = local.clustered
     mqtt_stream_replicas = local.mqtt_stream_replicas
     route_tls_verified   = var.enable_tls && local.clustered
+    contradictory        = var.ha && var.cluster_replicas == 1
     spread_constraints   = local.spread_constraints
   }
 }

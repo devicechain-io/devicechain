@@ -224,9 +224,13 @@ func schedulableShortfall(ha haTopology, nodes []corev1.Node) error {
 // predates the output, which is a legitimate upgrade path, and refusing there
 // would break instances that are fine. It is only checked when it is present and
 // disagrees.
+// It runs on a DRY RUN too. The comparison is pure — it reads a value already in
+// State — so there is nothing to be cautious about, and "these two levers
+// disagree" is exactly what a dry run is for. It is also what lets the wiring be
+// tested without the un-guarded path falling through to a real Helm install.
 func checkBrokerHostsReplication(st *State) error {
 	ha := haFor(st.HA)
-	if !ha.Replicated() || st.DryRun {
+	if !ha.Replicated() {
 		return nil
 	}
 	raw, ok := st.Values[natsClusterReplicasKey]

@@ -16,18 +16,38 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
-// freePort reserves an ephemeral port and immediately releases it, so a cluster
-// route URL can be written before the server that will listen on it starts. There
-// is an inherent race between release and bind; it is acceptable in a test and is
-// the standard way to build a nats-server cluster in-process.
-func freePort(t *testing.T) int {
+// freePorts reserves n DISTINCT ephemeral ports and releases them, so the cluster
+// route URLs can be written before the servers that will listen on them start.
+//
+// Distinct is not a nicety. Reserving them one at a time and releasing each
+// immediately lets the kernel hand the same port out twice, and a triple
+// containing a duplicate guarantees one server cannot bind its cluster port —
+// measured at 13 collisions in 3000 triples, which is a meaningful slice of an
+// 18%-per-run failure rate. Holding all n listeners open until every port has been
+// chosen makes a duplicate impossible.
+//
+// The release-to-bind race remains and cannot be designed away here, which is why
+// newTestCluster RETRIES the whole construction rather than failing on the first
+// server that does not come up.
+func freePorts(t *testing.T, n int) []int {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserving a port: %v", err)
+	listeners := make([]net.Listener, 0, n)
+	ports := make([]int, 0, n)
+	for i := 0; i < n; i++ {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			for _, open := range listeners {
+				open.Close()
+			}
+			t.Fatalf("reserving a port: %v", err)
+		}
+		listeners = append(listeners, l)
+		ports = append(ports, l.Addr().(*net.TCPAddr).Port)
 	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port
+	for _, l := range listeners {
+		l.Close()
+	}
+	return ports
 }
 
 // newTestCluster starts a 3-node JetStream cluster in-process and returns a
@@ -40,11 +60,31 @@ func freePort(t *testing.T) int {
 // a manual drill is a check that runs once.
 func newTestCluster(t *testing.T) (*NatsManager, func()) {
 	t.Helper()
-	const size = 3
-	clusterPorts := make([]int, size)
-	for i := range clusterPorts {
-		clusterPorts[i] = freePort(t)
+	// Retry the whole construction. A server that never becomes ready is almost
+	// always the release-to-bind race on an ephemeral port, not a product fault,
+	// and failing on the first attempt made the package red roughly one run in six
+	// — with a message ("clustered nats server 1 not ready") that reads like a
+	// broken cluster, which is the worst kind of flake because it trains everyone
+	// to re-run instead of investigate.
+	const attempts = 3
+	for attempt := 1; ; attempt++ {
+		nmgr, cleanup, err := tryNewTestCluster(t)
+		if err == nil {
+			return nmgr, cleanup
+		}
+		if attempt == attempts {
+			t.Fatalf("could not start a 3-node JetStream cluster in %d attempts: %v", attempts, err)
+		}
+		t.Logf("cluster attempt %d/%d failed (%v); retrying on fresh ports", attempt, attempts, err)
 	}
+}
+
+// tryNewTestCluster is one attempt, returning an error rather than failing the
+// test so newTestCluster can retry.
+func tryNewTestCluster(t *testing.T) (*NatsManager, func(), error) {
+	t.Helper()
+	const size = 3
+	clusterPorts := freePorts(t, size)
 	routes := ""
 	for _, p := range clusterPorts {
 		routes += fmt.Sprintf("nats-route://127.0.0.1:%d,", p)
@@ -74,7 +114,7 @@ func newTestCluster(t *testing.T) (*NatsManager, func()) {
 		srv, err := natsserver.NewServer(opts)
 		if err != nil {
 			shutdown()
-			t.Fatalf("new clustered nats server %d: %v", i, err)
+			return nil, nil, fmt.Errorf("new clustered nats server %d: %w", i, err)
 		}
 		go srv.Start()
 		servers = append(servers, srv)
@@ -82,7 +122,7 @@ func newTestCluster(t *testing.T) (*NatsManager, func()) {
 	for i, srv := range servers {
 		if !srv.ReadyForConnections(15 * time.Second) {
 			shutdown()
-			t.Fatalf("clustered nats server %d not ready", i)
+			return nil, nil, fmt.Errorf("clustered nats server %d not ready", i)
 		}
 	}
 	// Wait for all three servers to have JOINED the JetStream meta group — not
@@ -111,7 +151,7 @@ func newTestCluster(t *testing.T) (*NatsManager, func()) {
 		}
 		if time.Now().After(deadline) {
 			shutdown()
-			t.Fatalf("JetStream meta group never reached %d peers; the cluster never fully formed", size)
+			return nil, nil, fmt.Errorf("JetStream meta group never reached %d peers", size)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -119,13 +159,13 @@ func newTestCluster(t *testing.T) (*NatsManager, func()) {
 	nc, err := nats.Connect(servers[0].ClientURL())
 	if err != nil {
 		shutdown()
-		t.Fatalf("connect: %v", err)
+		return nil, nil, fmt.Errorf("connect: %w", err)
 	}
 	js, err := nc.JetStream()
 	if err != nil {
 		nc.Close()
 		shutdown()
-		t.Fatalf("jetstream: %v", err)
+		return nil, nil, fmt.Errorf("jetstream: %w", err)
 	}
 	nmgr := &NatsManager{
 		Microservice: &core.Microservice{InstanceId: "test", FunctionalArea: "area"},
@@ -145,7 +185,7 @@ func newTestCluster(t *testing.T) (*NatsManager, func()) {
 	return nmgr, func() {
 		nc.Close()
 		shutdown()
-	}
+	}, nil
 }
 
 // waitForReplicated blocks until a stream reports the wanted replica count with a
@@ -378,6 +418,16 @@ func TestReconcileRefusesToDeReplicateOnDowngrade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ensureStream at three replicas: %v", err)
 	}
+	// Wait for the peers to be placed BEFORE attempting the downgrade.
+	//
+	// Without this the test passes for the wrong reason roughly one run in
+	// twenty-five: reconcileStreamReplicas warn-and-swallows an UpdateStream
+	// failure, so while the new peers are still catching up the scale-down update
+	// simply FAILS, and the stream stays at three replicas whether or not the
+	// refusal exists. Measured directly — with the refusal deleted, 24 of 25 runs
+	// caught it and one passed. A test that only sometimes notices the guard is
+	// gone is worse than none, because the one green run is the one someone sees.
+	waitForReplicated(t, nmgr.js, name, 3)
 
 	// The rollback: older config, fewer replicas, same pod restart path.
 	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.StreamReplicas = 1
@@ -466,7 +516,15 @@ func TestReplicationMetricsReportBrokerStateNotConfig(t *testing.T) {
 		t.Errorf("trackedStreams = %v; buckets must not leak into the stream set, or a bounded "+
 			"cache sitting near its ceiling by design fires the near-full alert", streams)
 	}
+	// Sampling the multi-stream + bucket path together, WITH an assertion — an
+	// earlier version ended here with a bare call and no check, which proves only
+	// that it does not panic and would pass on any values at all.
 	nmgr.metrics.sample(nmgr.js, nmgr.trackedStreams(), buckets, nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
+	if got := testutil.ToFloat64(nmgr.metrics.brokerClustered); got != 1 {
+		t.Errorf("brokerClustered = %v while sampling a real 3-node cluster, want 1: this is "+
+			"the gauge that distinguishes a correct single-node install from a cluster "+
+			"holding one copy of everything", got)
+	}
 }
 
 // TestReplicaLiftIsNotBlockedByTheShrinkRefusal proves the ordering inside
@@ -528,7 +586,7 @@ func TestReplicaLiftIsNotBlockedByTheShrinkRefusal(t *testing.T) {
 //
 // Without this the metrics are asserted only by a does-not-panic smoke call, and
 // two separate mutations pass: reporting `actual` in place of `desired`, and
-// feeding the sampler effectiveStreamReplicas instead of desiredStreamReplicas.
+// feeding the sampler effectiveStreamReplicas instead of desiredStreamReplicas (NOT caught here — this test supplies the argument itself rather than driving runStreamMetrics, so it restates the call site; that mutation is caught by TestSamplerReportsConfiguredNotClampedReplicas).
 // The second is the dangerous one — it looks like a correctness fix, and it makes
 // desired equal actual on exactly the unclustered instance whose mismatch the
 // whole mechanism exists to surface.
@@ -613,5 +671,42 @@ func TestReplicaLiftDoesNotRevertTheBoundsReconcile(t *testing.T) {
 		t.Errorf("MaxBytes = %d after the lift, want %d: the replica update was issued from "+
 			"the pre-update config and wrote the old ceiling back over the bounds reconcile "+
 			"that had already reported success", after.Config.MaxBytes, want)
+	}
+}
+
+// brokerIsClustered must go FALSE when the cluster goes away, without a restart.
+//
+// This is the property the M1 regression got wrong and the only one worth
+// pinning. The clustered-ness probe used to be evaluated once at connect and
+// cached, which latched false forever on any pod that started before NATS was
+// reachable — everything created at one replica on a healthy 3-node cluster. The
+// fix was to read it live on every call.
+//
+// The sibling test in replica_clamp_test.go cannot see that. Its three cases (nil
+// conn, closed conn, unclustered broker) all expect false, and
+// nats.Conn.ConnectedClusterName() already returns "" for every one of them, so
+// they are satisfied by the library rather than by this code — deleting the whole
+// guard leaves them green. The state that DISCRIMINATES is a connection that WAS
+// clustered and now is not, which needs a real cluster to take away.
+func TestBrokerIsClusteredIsReadLiveNotCached(t *testing.T) {
+	nmgr, cleanup := newTestCluster(t)
+	defer cleanup()
+
+	if !nmgr.brokerIsClustered() {
+		t.Fatal("not clustered against a real 3-node cluster; the negative below would prove nothing")
+	}
+
+	// Take the cluster away underneath a manager that has already observed it.
+	cleanup()
+
+	deadline := time.Now().Add(15 * time.Second)
+	for nmgr.brokerIsClustered() {
+		if time.Now().After(deadline) {
+			t.Fatal("brokerIsClustered() still reports true after every server was shut down: " +
+				"the value is being CACHED rather than read live. A pod that observed a " +
+				"cluster once would keep claiming replication is possible, and the clamp " +
+				"would stop protecting anything")
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }

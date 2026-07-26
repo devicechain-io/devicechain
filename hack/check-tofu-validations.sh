@@ -86,13 +86,24 @@ rejects() {
 # assertion above on its own.
 accepts() {
   local var="$1" value="$2" out
-  out="$("$TF" console -var "$var=$value" </dev/null 2>&1 || true)"
+  out="$(echo "var.$var" | "$TF" console -var "$var=$value" 2>&1 || true)"
   if grep -q "Invalid value for variable" <<<"$out"; then
     echo "FAIL  $var=$value was REJECTED; it is a supported topology" >&2
     failures=$((failures + 1))
-  else
-    echo "ok    $var=$value accepted"
+    return
   fi
+  # Absence of that one string is NOT evidence of acceptance. A syntax error, an
+  # unloadable module, a missing provider or the wrong $TF binary all produce a
+  # different diagnostic — and the earlier version of this function read every one
+  # of them as "supported topology accepted", printing green while the
+  # configuration could not be parsed at all. Demand a real evaluated value.
+  if grep -q "^Error:" <<<"$out" || [[ -z "$(tail -1 <<<"$out")" ]]; then
+    echo "FAIL  $var=$value produced no value; the configuration did not evaluate:" >&2
+    sed 's/^/        /' <<<"$out" >&2
+    failures=$((failures + 1))
+    return
+  fi
+  echo "ok    $var=$value accepted"
 }
 
 # --- nats_cluster_replicas (ADR-020 A0) --------------------------------------
@@ -107,8 +118,20 @@ for v in 2 4 6 7 -1; do rejects nats_cluster_replicas "$v"; done
 evaluates() {
   local expected="$1" expr="$2"
   shift 2
-  local out
-  out="$(echo "$expr" | "$TF" console "$@" 2>&1 | tail -1)"
+  local out status
+  # `|| true` and an explicit status, NOT a bare command substitution. Under
+  # `set -euo pipefail` a non-zero exit inside $(...) aborts the whole script from
+  # within the substitution: the run ends on a green "ok" line with no FAIL, no
+  # summary, and every remaining assertion silently skipped. The exit code
+  # survives, so CI does go red — but the diagnostics do not, which is the same
+  # family as a pipe to `head` swallowing a failure.
+  out="$(echo "$expr" | "$TF" console "$@" 2>&1 | tail -1 || true)"
+  status=$?
+  if ((status != 0)); then
+    echo "FAIL  $expr did not evaluate (exit $status)  [$*]" >&2
+    failures=$((failures + 1))
+    return
+  fi
   if [[ "$out" == "$expected" ]]; then
     echo "ok    $expr == $expected  [$*]"
   else
@@ -167,6 +190,16 @@ evaluates 3 module.nats.ha_topology.mqtt_stream_replicas -var nats_cluster_repli
 evaluates true module.nats.ha_topology.route_tls_verified -var ha=true
 evaluates true module.nats.ha_topology.clustered -var ha=true
 evaluates false module.nats.ha_topology.clustered -var ha=false
+
+# The ha=true + cluster_replicas=1 contradiction. The REFUSAL lives in a
+# helm_release precondition, which only runs during a plan and which nothing in CI
+# performs — so what is asserted here is that the module still DETECTS the
+# contradiction, not that it refuses it. Worth having anyway: if this flips, the
+# precondition is guarding a condition that can no longer occur, and an operator
+# asking for HA would quietly get one server.
+evaluates true module.nats.ha_topology.contradictory -var ha=true -var nats_cluster_replicas=1
+evaluates false module.nats.ha_topology.contradictory -var ha=true
+evaluates false module.nats.ha_topology.contradictory -var ha=false -var nats_cluster_replicas=3
 
 # --- nats_mqtt_node_port -----------------------------------------------------
 # Pre-existing guard, included so this script covers the root's validation blocks

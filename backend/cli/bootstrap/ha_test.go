@@ -353,3 +353,32 @@ func TestInfraApplySkipsTheNodeGuardWithoutHa(t *testing.T) {
 		t.Fatalf("a non-HA bootstrap tripped the node guard: %v", err)
 	}
 }
+
+// The broker-capability preflight is only worth having if the step runs it.
+//
+// Its sibling checkHaNodeCapacity got this seam test; this one did not, and the
+// guard could be deleted from stepHelmInstall with the whole suite green —
+// TestBrokerCapabilityPreflight calls the pure function directly and never goes
+// through the step. A correct check nothing calls looks exactly like a correct
+// check.
+//
+// DryRun is set so that removing the guard makes the step return cleanly rather
+// than attempting a real Helm install against a cluster that is not there.
+func TestHelmInstallConsultsTheBrokerPreflight(t *testing.T) {
+	st := haState(true)
+	st.DryRun = true
+	st.Values["namespace"] = "dctest"
+	// What applyInfra would have read back from a single-server broker.
+	st.Values[natsClusterReplicasKey] = "1"
+
+	err := stepHelmInstall(t.Context(), st)
+	if err == nil {
+		t.Fatal("stepHelmInstall proceeded with a replica factor the applied broker cannot " +
+			"host: the services would fail stream creation after helm reported success")
+	}
+	for _, want := range []string{"nats_cluster_replicas", "streamReplicas"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q: %v", want, err)
+		}
+	}
+}

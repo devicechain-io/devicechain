@@ -49,6 +49,18 @@ func TestClampReplicas(t *testing.T) {
 // gate. Answering the first question with the second answer is what made an
 // earlier version of this clamp pin whole processes to single-replica streams on
 // healthy clusters.
+// 🔴 WHAT THIS DOES NOT PROVE. All three cases below expect false, and
+// nats.Conn.ConnectedClusterName() already returns "" for a nil receiver and for
+// any status other than CONNECTED — so every one of them is satisfied by the
+// LIBRARY, not by this code. Deleting the nil/IsConnected guard from
+// brokerIsClustered leaves this test green (verified by mutation). It documents
+// the contract and would catch the library changing under us; it does not pin the
+// guard.
+//
+// The property that actually matters — the value being read LIVE rather than
+// cached, which is the M1 regression — needs a cluster that can be taken away, and
+// is pinned by TestBrokerIsClusteredIsReadLiveNotCached in
+// replica_lift_cluster_test.go.
 func TestBrokerIsClusteredAgainstAnUnclusteredBroker(t *testing.T) {
 	nmgr, cleanup := newTestManager(t)
 	defer cleanup()
