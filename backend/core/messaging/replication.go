@@ -12,6 +12,32 @@ import (
 	"github.com/devicechain-io/dc-microservice/streams"
 )
 
+// leaseHolderAreas are the functional areas that take an ADR-070 partition lease,
+// and therefore the ones whose presence causes the dc_leases bucket to exist at
+// all. Nothing else creates it.
+//
+// This is why the bucket's ABSENCE is not automatically a defect: a deployment
+// running none of these has no fence substrate because it has nothing to fence.
+// It is also worth reading as a statement of fact about the platform — on a
+// `default` profile, which runs neither of these, the ADR-070 lease bucket does
+// not exist, and any alert defined on its replication has no series to evaluate.
+var leaseHolderAreas = []string{"lwm2m-ingest", "sparkplug-ingest"}
+
+// leaseHolderDeployed reports whether the lease bucket must exist. Unknown areas
+// resolve to REQUIRED, matching streamIsDeployed: a caller that cannot see the
+// deployment gets the strict check.
+func leaseHolderDeployed(deployedAreas []string) bool {
+	if len(deployedAreas) == 0 {
+		return true
+	}
+	for _, a := range leaseHolderAreas {
+		if slices.Contains(deployedAreas, a) {
+			return true
+		}
+	}
+	return false
+}
+
 // streamIsDeployed reports whether any area that creates this stream is running.
 //
 // A nil area set means "unknown", and unknown resolves to REQUIRED — see
@@ -105,10 +131,11 @@ var mqttStreamNames = []string{
 // check, not the most forgiving one.
 func ReplicationExpectation(instanceId string, replicas int, deployedAreas []string) replication.Expectation {
 	exp := replication.Expectation{
-		Replicas:    replicas,
-		MqttStreams: append([]string(nil), mqttStreamNames...),
-		LeaseBucket: KvStreamName(LeaseBucketName(instanceId)),
-		RequirePods: replicas,
+		Replicas:            replicas,
+		MqttStreams:         append([]string(nil), mqttStreamNames...),
+		LeaseBucket:         KvStreamName(LeaseBucketName(instanceId)),
+		LeaseBucketRequired: leaseHolderDeployed(deployedAreas),
+		RequirePods:         replicas,
 		Prefixes: []string{
 			sanitizeName(instanceId) + "_",
 			KvStreamName(sanitizeName(instanceId) + "_"),

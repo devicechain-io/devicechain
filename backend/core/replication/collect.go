@@ -71,6 +71,10 @@ func Collect(js nats.JetStreamContext, exp Expectation) (Snapshot, error) {
 				Name:   ci.Name,
 				Leader: leaderOf(ci.Cluster),
 				Peers:  peersOf(ci.Cluster),
+				// An empty Durable is what an EPHEMERAL consumer reports. Collected
+				// anyway rather than filtered here, so the decision about what an
+				// ephemeral means lives in Verify where it is tested.
+				Durable: ci.Config.Durable != "",
 			})
 		}
 	}

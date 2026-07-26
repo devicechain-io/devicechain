@@ -19,6 +19,7 @@ func testExpectation(replicas int) Expectation {
 		Replicas:            replicas,
 		Streams:             []string{"i_inbound-events", "i_resolved-events"},
 		LeaseBucket:         "KV_i_dc_leases",
+		LeaseBucketRequired: true,
 		StateBuckets:        []string{"KV_i_dc_locks", "KV_dc_refresh_tokens"},
 		CacheBucketSuffixes: []string{"_device-by-token"},
 		MqttStreams:         []string{"$MQTT_sess", "$MQTT_msgs"},
@@ -48,6 +49,7 @@ func healthy(exp Expectation) Snapshot {
 	snap.Consumers = []Consumer{{
 		Stream: "i_inbound-events", Name: "i_event-sources_inbound-events",
 		Leader: leaderFor(exp.Replicas), Peers: currentPeers(exp.Replicas),
+		Durable: true,
 	}}
 	for i := 0; i < exp.RequirePods; i++ {
 		snap.Pods = append(snap.Pods, Pod{
@@ -273,6 +275,101 @@ func TestConsumerThatDidNotRemapFails(t *testing.T) {
 	snap.Consumers[0].Peers = nil
 	rep := Verify(snap, exp)
 	mustFail(t, rep, "A3", "did not follow its stream to 3 replicas")
+}
+
+// TestEphemeralConsumersAreNotJudged is the case the first live rig run produced.
+//
+// nats-server creates its OWN ephemeral consumers on its own MQTT streams — one
+// per server on $MQTT_rmsgs — and an ephemeral is single-replica by design: it is
+// bound to one client connection and dies with it, so replicating it across a
+// RAFT group would be meaningless. Judging them reported a correctly replicated
+// 3-node cluster as broken.
+func TestEphemeralConsumersAreNotJudged(t *testing.T) {
+	exp := testExpectation(3)
+	snap := healthy(exp)
+	snap.Consumers = append(snap.Consumers, Consumer{
+		Stream: "$MQTT_rmsgs", Name: "$MQTT_rmsgs_DRbkehHZ4DL1w0wI1yprvE",
+		Leader: "n1", Peers: nil, Durable: false,
+	})
+	rep := Verify(snap, exp)
+	if !rep.OK() {
+		t.Fatalf("an ephemeral consumer is R1 by design and must not fail the check:\n%s",
+			rep.Format())
+	}
+}
+
+// TestAllConsumersEphemeralIsAFinding is the counterweight. Skipping ephemerals
+// is right; skipping every consumer there is and reporting a pass is the vacuity
+// this package exists to prevent, and without this the exemption above is a hole
+// exactly the size of the A3 axis.
+func TestAllConsumersEphemeralIsAFinding(t *testing.T) {
+	exp := testExpectation(3)
+	snap := healthy(exp)
+	for i := range snap.Consumers {
+		snap.Consumers[i].Durable = false
+	}
+	rep := Verify(snap, exp)
+	mustFail(t, rep, "A3", "NONE was durable")
+}
+
+// TestDurableConsumerCountExcludesEphemerals keeps the printed count honest: a
+// report claiming 17 consumers examined when 16 were ephemeral overstates what
+// it did.
+func TestDurableConsumerCountExcludesEphemerals(t *testing.T) {
+	exp := testExpectation(3)
+	snap := healthy(exp)
+	snap.Consumers = append(snap.Consumers, Consumer{
+		Stream: "$MQTT_rmsgs", Name: "eph", Leader: "n1", Durable: false,
+	})
+	if got := Verify(snap, exp).Checked.Consumers; got != 1 {
+		t.Fatalf("expected 1 durable consumer counted; got %d", got)
+	}
+}
+
+// --- A2: the lease bucket when nothing takes a lease -------------------------
+
+// TestAbsentLeaseBucketIsReportedAsNotCheckedWhenNoHolderIsDeployed covers the
+// live finding that a `default` profile has no ADR-070 lease holder at all, so
+// the bucket does not exist.
+//
+// Requiring it would make the check red on a healthy install. Silently dropping
+// the assertion would remove the highest-consequence object in the suite without
+// saying so. The third option — check it when present, and SAY when it could not
+// be checked — is the only one that is both green on a healthy system and honest
+// about what it did.
+func TestAbsentLeaseBucketIsReportedAsNotCheckedWhenNoHolderIsDeployed(t *testing.T) {
+	exp := testExpectation(3)
+	exp.LeaseBucketRequired = false
+	snap := healthy(exp)
+	snap.Objects = dropObject(snap.Objects, exp.LeaseBucket)
+
+	rep := Verify(snap, exp)
+	if !rep.OK() {
+		t.Fatalf("an absent lease bucket with no deployed holder must not fail:\n%s", rep.Format())
+	}
+	if len(rep.Skipped) == 0 {
+		t.Fatal("the A2 axis was not exercised and the report does not say so; an " +
+			"assertion that did not run must never be indistinguishable from one that passed")
+	}
+	if !strings.Contains(rep.Format(), "NOT CHECKED") {
+		t.Fatalf("the skipped axis must be printed:\n%s", rep.Format())
+	}
+}
+
+// TestPresentLeaseBucketIsCheckedEvenWhenNotRequired is what stops the exemption
+// above becoming a blanket exemption: if the bucket exists, something took a
+// lease, and its replication matters regardless of what the area list said.
+func TestPresentLeaseBucketIsCheckedEvenWhenNotRequired(t *testing.T) {
+	exp := testExpectation(3)
+	exp.LeaseBucketRequired = false
+	snap := healthy(exp)
+	setObject(t, snap.Objects, exp.LeaseBucket, func(o *Object) {
+		o.Replicas = 1
+		o.Leader = ""
+		o.Peers = nil
+	})
+	rep := Verify(snap, exp)
+	mustFail(t, rep, "A2", "want 3")
 }
 
 // --- A5: placement -----------------------------------------------------------

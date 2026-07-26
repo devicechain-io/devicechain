@@ -80,6 +80,16 @@ type Consumer struct {
 	Name   string
 	Leader string
 	Peers  []Peer
+	// Durable distinguishes a platform durable from an EPHEMERAL consumer, and the
+	// replication check turns on it.
+	//
+	// An ephemeral consumer is single-replica BY DESIGN: it is bound to one client
+	// connection and dies with it, so replicating it across a RAFT group would be
+	// meaningless. nats-server creates its own ephemerals on its own MQTT streams —
+	// one per server on $MQTT_rmsgs, for instance — and a sweep that judged them
+	// reported every healthy HA cluster as broken. Found on the first live run of
+	// the 3-node rig.
+	Durable bool
 }
 
 // Pod is one broker pod and the node it was scheduled onto.
@@ -133,6 +143,16 @@ type Expectation struct {
 	// that skipped it (a name built wrong, a collection path that filtered it) would
 	// report success having never looked.
 	LeaseBucket string
+	// LeaseBucketRequired states whether the lease bucket must EXIST.
+	//
+	// It only exists once something takes a lease, and the only lease holders are
+	// Class-3 operators (ADR-070) that not every deployment runs. Requiring it
+	// unconditionally makes the check red on a healthy install; dropping the
+	// assertion when it is absent makes the check silently stop covering the
+	// highest-consequence object in it. So the bucket is ALWAYS checked when
+	// present, required only when a holder is deployed, and a run that could not
+	// exercise it SAYS SO — see Report.Skipped.
+	LeaseBucketRequired bool
 	// StateBuckets are the other KV backing streams required present by name.
 	StateBuckets []string
 	// CacheBucketSuffixes are the per-area cache buckets, matched by suffix because
@@ -190,6 +210,13 @@ type Report struct {
 	Replicas int
 	// Findings is every failed assertion. Empty means the claim holds.
 	Findings []Finding
+	// Skipped names each axis that could not be exercised, and why.
+	//
+	// An assertion that did not run is not the same as one that passed, and the
+	// difference is invisible unless it is printed. Silently dropping an axis
+	// because its object is absent is how a suite quietly narrows to nothing while
+	// still reporting PASS.
+	Skipped []string
 	// Checked counts what was actually examined, per axis. These are printed
 	// whether or not the run passed, because a green run over zero objects is the
 	// failure mode that produced A0 and it is indistinguishable from a real pass
@@ -236,7 +263,6 @@ func Verify(snap Snapshot, exp Expectation) Report {
 		byName[o.Name] = o
 	}
 	rep.Checked.Objects = len(snap.Objects)
-	rep.Checked.Consumers = len(snap.Consumers)
 	rep.Checked.Pods = len(snap.Pods)
 	for _, o := range snap.Objects {
 		if strings.HasPrefix(o.Name, kvStreamPrefix) {
@@ -271,9 +297,19 @@ func Verify(snap Snapshot, exp Expectation) Report {
 		})
 	}
 	if exp.LeaseBucket != "" {
-		required = append(required, namedRole{
-			name: exp.LeaseBucket, check: "A2", role: "ADR-070 lease bucket",
-		})
+		_, present := byName[exp.LeaseBucket]
+		switch {
+		case exp.LeaseBucketRequired || present:
+			required = append(required, namedRole{
+				name: exp.LeaseBucket, check: "A2", role: "ADR-070 lease bucket",
+			})
+		default:
+			rep.Skipped = append(rep.Skipped, fmt.Sprintf(
+				"A2: the ADR-070 lease bucket (%s) does not exist and no deployed area "+
+					"takes a lease, so the fence substrate's replication was NOT checked. "+
+					"Note this also means the JetStreamLeaseBucketNotReplicated alert has "+
+					"no series to evaluate on this instance", exp.LeaseBucket))
+		}
 	}
 	for _, r := range required {
 		o, ok := byName[r.name]
@@ -324,11 +360,25 @@ func Verify(snap Snapshot, exp Expectation) Report {
 	}
 
 	// --- A3: durable consumers ------------------------------------------------
+	durables := 0
 	for _, c := range snap.Consumers {
+		if !c.Durable {
+			// Ephemeral: R1 by design. See Consumer.Durable.
+			continue
+		}
+		durables++
 		if why := consumerReplicated(c, exp.Replicas); why != "" {
 			add("A3", c.Stream+"/"+c.Name, "durable consumer %s", why)
 		}
 	}
+	if len(snap.Consumers) > 0 && durables == 0 {
+		// Consumers were observed and every one was ephemeral. Not obviously wrong,
+		// but it means the A3 axis judged nothing while looking like it ran — which
+		// is the state this package exists to make visible rather than tolerate.
+		add("A3", "", "%d consumer(s) were observed and NONE was durable, so the "+
+			"consumer replication check judged nothing", len(snap.Consumers))
+	}
+	rep.Checked.Consumers = durables
 
 	// --- A5: physical placement ----------------------------------------------
 	if exp.RequirePods > 0 {
@@ -498,6 +548,9 @@ func (r Report) Format() string {
 		"%d KV bucket(s)), %d durable consumer(s), %d broker pod(s) on %d node(s)\n",
 		r.Replicas, r.Checked.Objects, r.Checked.Streams, r.Checked.Buckets,
 		r.Checked.Consumers, r.Checked.Pods, r.Checked.Nodes)
+	for _, s := range r.Skipped {
+		fmt.Fprintf(&b, "  NOT CHECKED — %s\n", s)
+	}
 	if r.OK() {
 		b.WriteString("PASS — every object holds the declared replica factor with all peers current.\n")
 		return b.String()

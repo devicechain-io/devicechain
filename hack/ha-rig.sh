@@ -49,13 +49,25 @@ instance="${DC_INSTANCE:-harig}"
 control_instance="${DC_CONTROL_INSTANCE:-hactl}"
 dcctl="$repo_root/backend/cli/build/dcctl"
 
-# Image source. The rig defaults to the published images so a run does not also
-# depend on a working local build chain; DC_BUILD=1 switches to --build for
-# testing the checked-out tree.
-if [[ "${DC_BUILD:-0}" == "1" ]]; then
-  image_args=(--build)
+# Image source: HEAD, built from source, BY DEFAULT.
+#
+# The first draft defaulted to the published release so a run would not also
+# depend on a working build chain. That was wrong, and the first live run showed
+# why: the checker is built from the working tree and its expectations come from
+# HEAD's stream inventory, while v0.8.5 predates the ADR-030 capture stream. The
+# check duly reported harig_device-events-capture MISSING — a finding about
+# version skew wearing the costume of a replication defect, and it cost real time
+# to run down.
+#
+# A validation rig has to test the code under test. DC_VERSION=<tag> deliberately
+# checks a published release instead, which is a different and also useful run —
+# just never the default, because the confound is invisible in the output.
+if [[ -n "${DC_VERSION:-}" ]]; then
+  image_args=(--version "$DC_VERSION")
+  say "checking PUBLISHED images $DC_VERSION — note the checker is built from the
+working tree, so any stream added since that tag will read as MISSING"
 else
-  image_args=(--version "${DC_VERSION:-v0.8.5}")
+  image_args=(--build)
 fi
 
 say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
