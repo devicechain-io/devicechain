@@ -158,9 +158,16 @@ cmd_control() {
   "$dcctl" ha verify --instance "$control_instance" \
     --kube-context "kind-$control_cluster" --probe-mqtt \
     --replicas 3 --expect-fail \
-    || fail "THE NEGATIVE CONTROL DID NOT HOLD. A single-replica instance passed an R3
-check, so the verifier is not detecting the state it exists to detect and CHECK A
-above proves nothing. Do not record an HA result from this run."
+    || fail "THE NEGATIVE CONTROL DID NOT HOLD, or could not run — READ THE OUTPUT ABOVE,
+because those are different results and this exit status cannot tell them apart.
+
+  'NEGATIVE CONTROL FAILED: this instance PASSED a check it was expected to fail'
+      is the catastrophic one: the verifier does not detect the state it exists to
+      detect, so CHECK A proves nothing and no HA result may be recorded from this run.
+
+  anything else (a connection error, a missing Secret, a probe failure) means the
+      control did not RUN. That is inconclusive, not a pass and not a failure — fix it
+      and re-run rather than reading it either way."
   say "NEGATIVE CONTROL HELD"
 }
 
