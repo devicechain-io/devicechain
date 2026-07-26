@@ -134,7 +134,7 @@ cmd_verify() {
 cmd_control() {
   need kind; need kubectl
   build_dcctl
-  create_cluster "$control_cluster" "$repo_root/deploy/local/kind-cluster.yaml"
+  create_cluster "$control_cluster" "$repo_root/deploy/local/kind-cluster-ha-control.yaml"
 
   say "bootstrapping the negative control (no --ha, single node)"
   "$dcctl" bootstrap local "$control_instance" --yes \
