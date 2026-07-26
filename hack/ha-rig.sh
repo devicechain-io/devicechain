@@ -141,8 +141,20 @@ cmd_control() {
   build_dcctl
   create_cluster "$control_cluster" "$repo_root/deploy/local/kind-cluster-ha-control.yaml"
 
+  # --compact, and it does NOT weaken the control.
+  #
+  # It lowers JetStream/KV ceilings and volume sizes and drops the monitoring stack
+  # and cert-manager. None of that touches a replica factor, which is the only
+  # thing under test here — and it removes the two slowest, most network-dependent
+  # components of the bring-up. Three separate runs of this rig were lost to
+  # transient failures downloading them (an npm reset, an IPv6 route to
+  # charts.jetstack.io), each costing a full bring-up to discover.
+  #
+  # It does NOT change which services run — that stays on --profile — so the
+  # control still exercises the same 10 functional areas creating the same streams
+  # and buckets as the HA side.
   say "bootstrapping the negative control (no --ha, single node)"
-  "$dcctl" bootstrap local "$control_instance" --yes \
+  "$dcctl" bootstrap local "$control_instance" --yes --compact \
     --kube-context "kind-$control_cluster" --host localhost --no-tls \
     "${image_args[@]}"
 
