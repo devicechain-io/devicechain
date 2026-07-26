@@ -183,11 +183,30 @@ func VerifyReplication(ctx context.Context, opts HaVerifyOptions) (replication.R
 		return replication.Verify(snap, exp), nil
 	}
 
-	rep, err = attempt()
-	if err != nil || rep.OK() || opts.Settle <= 0 {
+	return settleUntilOK(ctx, attempt, opts.Settle)
+}
+
+// settleUntilOK runs attempt until it passes, the window expires, or the context
+// ends. Split out from the cluster plumbing above because its THREE exits are
+// where this can be quietly wrong, and only one of them is obvious:
+//
+//	pass          -> return it, immediately
+//	expired, red  -> return the LAST REPORT, every finding intact
+//	expired, erroring -> return the ERROR, never the stale report
+//
+// The third is the one that matters. If collection was failing when the window
+// ran out, the report in hand describes the broker as it was before whatever went
+// wrong, and returning it presents a transport failure as a replication verdict.
+// That is the difference between "this instance is not replicated" and "we could
+// not find out" — and a drill that records the first when the second is true has
+// recorded a fiction.
+func settleUntilOK(ctx context.Context, attempt func() (replication.Report, error), settle time.Duration) (replication.Report, error) {
+	rep, err := attempt()
+	if err != nil || rep.OK() || settle <= 0 {
 		return rep, err
 	}
-	deadline := time.Now().Add(opts.Settle)
+	deadline := time.Now().Add(settle)
+	var lastErr error
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
@@ -196,22 +215,30 @@ func VerifyReplication(ctx context.Context, opts HaVerifyOptions) (replication.R
 		}
 		next, err := attempt()
 		if err != nil {
-			// A collection error mid-settle is not a verdict either way. Keep the last
-			// real report rather than replacing it with a transport problem.
+			// One collection error is tolerated: the last real report is kept rather
+			// than replaced by a transient transport problem.
+			lastErr = err
 			continue
 		}
+		lastErr = nil
 		rep = next
 		if rep.OK() {
 			return rep, nil
 		}
+	}
+	if lastErr != nil {
+		return replication.Report{}, fmt.Errorf("the check could not complete: the "+
+			"settle window expired while collection was failing, so the last report is "+
+			"stale and is NOT being reported as a verdict: %w", lastErr)
 	}
 	return rep, nil
 }
 
 // settleInterval paces the re-check. Long enough not to hammer the broker's
 // JetStream API with a full stream listing, short enough that a drill is not
-// waiting on the poll.
-const settleInterval = 5 * time.Second
+// waiting on the poll. A var rather than a const so the tests can run the loop at
+// speed instead of asserting its three exits over half a minute of real time.
+var settleInterval = 5 * time.Second
 
 // deployedInstanceConfig reads the instance configuration out of the Secret the
 // pods mount at /etc/dci-config/instance.
