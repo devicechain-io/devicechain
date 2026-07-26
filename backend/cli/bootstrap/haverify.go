@@ -50,6 +50,20 @@ type HaVerifyOptions struct {
 	// worth more than the convenience. On a validation rig it is exactly right —
 	// see mqttProbe.
 	ProbeMqtt bool
+	// Settle is how long to keep re-checking while assertions are failing.
+	//
+	// Not leniency, and the distinction is the whole reason it is bounded. Raising a
+	// replica factor is a RAFT peer-set reconfiguration followed by the new peers
+	// catching up: for a real interval the object reports its new count while its
+	// peers are NOT current, and a consumer group is created on its stream's leader
+	// and remapped afterwards. Both are legitimately transient, and a check run one
+	// second after a rollout that treated them as failures would be wrong far more
+	// often than it was right.
+	//
+	// What it never does is turn a failure into a pass. The loop returns the moment
+	// everything holds, and on expiry it returns the LAST report — every finding
+	// intact — rather than a summary of how close it got.
+	Settle time.Duration
 	// Timeout bounds the whole check.
 	Timeout time.Duration
 }
@@ -152,13 +166,52 @@ func VerifyReplication(ctx context.Context, opts HaVerifyOptions) (replication.R
 		return rep, err
 	}
 	exp := messaging.ReplicationExpectation(opts.InstanceId, declared, areas)
-	snap, err := replication.Collect(js, exp)
-	if err != nil {
+
+	// One collect+verify attempt, over a connection and a pod listing that are
+	// re-read each time: a settling cluster is one where the pods are also still
+	// arriving.
+	attempt := func() (replication.Report, error) {
+		snap, err := replication.Collect(js, exp)
+		if err != nil {
+			return replication.Report{}, err
+		}
+		fresh, err := natsPods(ctx, typed)
+		if err != nil {
+			return replication.Report{}, err
+		}
+		snap.Pods = placedPods(fresh)
+		return replication.Verify(snap, exp), nil
+	}
+
+	rep, err = attempt()
+	if err != nil || rep.OK() || opts.Settle <= 0 {
 		return rep, err
 	}
-	snap.Pods = placedPods(pods)
-	return replication.Verify(snap, exp), nil
+	deadline := time.Now().Add(opts.Settle)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return rep, ctx.Err()
+		case <-time.After(settleInterval):
+		}
+		next, err := attempt()
+		if err != nil {
+			// A collection error mid-settle is not a verdict either way. Keep the last
+			// real report rather than replacing it with a transport problem.
+			continue
+		}
+		rep = next
+		if rep.OK() {
+			return rep, nil
+		}
+	}
+	return rep, nil
 }
+
+// settleInterval paces the re-check. Long enough not to hammer the broker's
+// JetStream API with a full stream listing, short enough that a drill is not
+// waiting on the poll.
+const settleInterval = 5 * time.Second
 
 // deployedInstanceConfig reads the instance configuration out of the Secret the
 // pods mount at /etc/dci-config/instance.

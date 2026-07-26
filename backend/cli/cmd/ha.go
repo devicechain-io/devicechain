@@ -21,6 +21,7 @@ var (
 	haTimeout     time.Duration
 	haExpectFail  bool
 	haProbeMqtt   bool
+	haSettle      time.Duration
 )
 
 var haCmd = &cobra.Command{
@@ -61,6 +62,7 @@ single-node instance and requires it to report failures:
 			Replicas:    haReplicas,
 			NatsUrl:     haNatsUrl,
 			ProbeMqtt:   haProbeMqtt,
+			Settle:      haSettle,
 			Timeout:     haTimeout,
 		})
 		if err != nil {
@@ -103,7 +105,11 @@ func init() {
 		"override the declared replica factor (default: read from the instance's deployed configuration)")
 	haVerifyCmd.Flags().StringVar(&haNatsUrl, "nats-url", "",
 		"dial this NATS URL instead of opening a port-forward")
-	haVerifyCmd.Flags().DurationVar(&haTimeout, "timeout", 2*time.Minute,
+	haVerifyCmd.Flags().DurationVar(&haSettle, "settle", 90*time.Second,
+		"keep re-checking for this long while assertions fail, for the interval in which a "+
+			"RAFT peer set is reconfiguring or a consumer group is remapping. Never turns a "+
+			"failure into a pass: on expiry the LAST report is returned in full. 0 disables it")
+	haVerifyCmd.Flags().DurationVar(&haTimeout, "timeout", 5*time.Minute,
 		"bound the whole check")
 	haVerifyCmd.Flags().BoolVar(&haExpectFail, "expect-fail", false,
 		"invert the exit status: succeed only if the check FAILS (the negative control)")

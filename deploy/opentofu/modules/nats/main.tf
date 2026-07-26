@@ -396,16 +396,54 @@ locals {
   }
   tls_secret_name       = "${var.release_name}-tls"
   tls_ca_configmap_name = "${var.release_name}-ca"
+  # 🔴 THE ROUTE LISTENER DOES NOT USE THE CLIENT NAMES, and getting this wrong
+  # does not degrade the cluster — it prevents one from forming at all.
+  #
+  # Clients reach the broker through the ClusterIP Service (dc-nats.dc-system).
+  # The servers reach EACH OTHER by POD name through the chart's headless
+  # Service — dc-nats-1.dc-nats-headless — because a route has to address one
+  # specific peer, which a load-balanced Service name cannot do. With route TLS
+  # verification on (which is the point: without it any pod that can reach 6222
+  # joins the cluster as a peer and reads every account), each server verifies the
+  # name it dialled against its peer's certificate. A leaf carrying only the
+  # client names fails EVERY route handshake:
+  #
+  #   TLS route handshake error: x509: certificate is valid for dc-nats,
+  #   dc-nats.dc-system, ... not dc-nats-1.dc-nats-headless
+  #
+  # and the result is three isolated servers that never elect a JetStream meta
+  # leader. Not a degraded HA cluster — no cluster. Every stream creation then
+  # fails or falls back to a single replica on whichever server got it.
+  #
+  # This shipped once. It is invisible to `tofu validate`, to helm lint, to the
+  # rendered ha_topology output (which correctly reported route_tls_verified =
+  # true — the configuration WAS right, the certificate was not), and to every
+  # single-node install, which never opens a route at all. The 3-node rig
+  # (hack/ha-rig.sh) is what caught it, which is the argument for the rig.
+  route_dns_names = local.clustered ? flatten([
+    for i in range(local.cluster_replicas) : [
+      # All four resolution depths: a server dials the peer address the chart
+      # wrote into its routes, and which of these that is depends on the chart's
+      # own templating, not on us. Naming all four costs nothing and removes the
+      # dependency.
+      "${var.release_name}-${i}.${var.release_name}-headless",
+      "${var.release_name}-${i}.${var.release_name}-headless.${var.namespace}",
+      "${var.release_name}-${i}.${var.release_name}-headless.${var.namespace}.svc",
+      "${var.release_name}-${i}.${var.release_name}-headless.${var.namespace}.svc.cluster.local",
+    ]
+  ]) : []
+
   # SANs cover every in-cluster name a client dials the broker by: the short
   # Service name, the namespaced name (what services + the MQTT source use), and
-  # the fully-qualified forms. localhost covers in-pod tooling (nats-box).
-  server_dns_names = [
+  # the fully-qualified forms. localhost covers in-pod tooling (nats-box). Plus,
+  # when clustered, the per-pod route names above.
+  server_dns_names = concat([
     var.release_name,
     "${var.release_name}.${var.namespace}",
     "${var.release_name}.${var.namespace}.svc",
     "${var.release_name}.${var.namespace}.svc.cluster.local",
     "localhost",
-  ]
+  ], local.route_dns_names)
 
   # Base chart values (TLS material + listeners). config.merge (broker-auth) is
   # added conditionally below.
@@ -753,6 +791,13 @@ output "ha_topology" {
     route_tls_verified   = var.enable_tls && local.clustered
     contradictory        = var.ha && var.cluster_replicas == 1
     spread_constraints   = local.spread_constraints
+    # The names the server certificate is issued for. Exposed because route TLS
+    # being ENABLED and route TLS actually WORKING are different facts, and the
+    # difference cost a working cluster once: route_tls_verified read true while
+    # every route handshake failed on a certificate that did not name the peers.
+    # A config-level assertion could not see it; this is what makes the SANs
+    # assertable without a cluster.
+    server_dns_names = local.server_dns_names
   }
 }
 

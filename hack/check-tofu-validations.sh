@@ -191,6 +191,32 @@ evaluates true module.nats.ha_topology.route_tls_verified -var ha=true
 evaluates true module.nats.ha_topology.clustered -var ha=true
 evaluates false module.nats.ha_topology.clustered -var ha=false
 
+# ROUTE TLS BEING ON AND ROUTE TLS WORKING ARE DIFFERENT FACTS, and the gap
+# between them cost a working cluster. The assertion above passed — the
+# configuration was right — while every route handshake failed, because the
+# server certificate was issued only for the names CLIENTS dial. Servers reach
+# each other by POD name through the headless Service (dc-nats-1.dc-nats-headless),
+# which a load-balanced Service name cannot address, so with verification on the
+# peers rejected each other and no cluster formed at all. Three isolated servers,
+# no JetStream meta leader.
+#
+# Nothing saw it: not `tofu validate`, not helm lint, not the ha_topology output,
+# and not any single-node install, which never opens a route. Only the live 3-node
+# rig did. These lines are what move it back into a gate that runs on every PR.
+evaluates true 'alltrue([for i in range(3) : contains(module.nats.ha_topology.server_dns_names, "dc-nats-${i}.dc-nats-headless")])' -var ha=true
+evaluates true 'alltrue([for i in range(3) : contains(module.nats.ha_topology.server_dns_names, "dc-nats-${i}.dc-nats-headless.dc-system.svc.cluster.local")])' -var ha=true
+# Scaled explicitly: a 5-server cluster needs five peers named, and a SAN list
+# built for three would leave servers 3 and 4 unable to join.
+evaluates true 'alltrue([for i in range(5) : contains(module.nats.ha_topology.server_dns_names, "dc-nats-${i}.dc-nats-headless")])' -var nats_cluster_replicas=5
+# The counterweight: an unclustered broker opens no route, so it gets no route
+# names. Without this the assertions above are satisfied by naming every possible
+# pod unconditionally, which would be a certificate promising peers that do not
+# exist.
+evaluates false 'contains(module.nats.ha_topology.server_dns_names, "dc-nats-0.dc-nats-headless")' -var ha=false
+# And the client names survive. A route-name change that dropped them would break
+# every service connection instead — the same failure, pointed the other way.
+evaluates true 'contains(module.nats.ha_topology.server_dns_names, "dc-nats.dc-system")' -var ha=true
+
 # The ha=true + cluster_replicas=1 contradiction. The REFUSAL lives in a
 # helm_release precondition, which only runs during a plan and which nothing in CI
 # performs — so what is asserted here is that the module still DETECTS the

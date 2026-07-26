@@ -137,6 +137,12 @@ cmd_control() {
   say "NEGATIVE CONTROL — the same check, against an instance that is NOT replicated"
   # --replicas 3 states the claim the instance does not hold. --expect-fail
   # inverts the exit status: this command succeeds only when the verifier FAILS.
+  #
+  # The settle loop is deliberately LEFT ON here even though a failure is what we
+  # want. It re-checks for its full window, which means the control gives this
+  # instance every chance to look replicated before the run is recorded as a
+  # negative control that held — and removes the one explanation that would
+  # otherwise weaken the result, that the check simply ran too early.
   "$dcctl" ha verify --instance "$control_instance" \
     --kube-context "kind-$control_cluster" --probe-mqtt \
     --replicas 3 --expect-fail \
