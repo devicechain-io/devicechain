@@ -1,0 +1,33 @@
+{
+  "name": "@devicechain/brand",
+  "version": "0.0.1",
+  "description": "Canonical DeviceChain brand tokens, plus the generated per-consumer stylesheets.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "sideEffects": [
+    "./css/*.css"
+  ],
+  "exports": {
+    "./tokens.json": "./tokens.json",
+    "./tokens": "./tokens.generated.json",
+    "./css/brand.css": "./css/brand.css",
+    "./css/shadcn.css": "./css/shadcn.css",
+    "./css/infima.css": "./css/infima.css"
+  },
+  "files": [
+    "css",
+    "tokens.json",
+    "tokens.generated.json",
+    "tools",
+    "README.md"
+  ],
+  "scripts": {
+    "generate": "node tools/generate.mjs",
+    "check:generated": "node tools/generate.mjs --check",
+    "verify": "node tools/verify.mjs",
+    "build": "node tools/generate.mjs --check"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

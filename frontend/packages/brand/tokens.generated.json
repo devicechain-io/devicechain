@@ -1,0 +1,57 @@
+{
+  "flat": {
+    "core.primary": "#208cb7",
+    "core.primaryBright": "#24a3d6",
+    "core.primaryDeep": "#1f425e",
+    "core.primaryPale": "#9aceec",
+    "surface.bg": "#0b1620",
+    "surface.bgDeep": "#060b11",
+    "surface.ink": "#e8f1f6",
+    "surface.ink2": "#b6ccd8",
+    "surface.muted": "#8aa6b6",
+    "accents.aqua": "#2fd6d0",
+    "accents.violet": "#7c6cf5",
+    "accents.magenta": "#e8489b",
+    "accents.amber": "#f5a524",
+    "type.sans": "ui-sans-serif, system-ui, -apple-system, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
+    "type.mono": "ui-monospace, \"SF Mono\", \"DejaVu Sans Mono\", \"Liberation Mono\", Menlo, Consolas, monospace"
+  },
+  "derived": {
+    "primary": {
+      "hex": "#208cb7",
+      "hsl": {
+        "h": 197.1,
+        "s": 70.2,
+        "l": 42.2
+      },
+      "shadcn": "197.1 70.2% 42.2%"
+    },
+    "primaryBright": {
+      "hex": "#24a3d6",
+      "hsl": {
+        "h": 197.2,
+        "s": 71.2,
+        "l": 49
+      },
+      "shadcn": "197.2 71.2% 49%"
+    },
+    "primaryDeep": {
+      "hex": "#1f425e",
+      "hsl": {
+        "h": 206.7,
+        "s": 50.4,
+        "l": 24.5
+      },
+      "shadcn": "206.7 50.4% 24.5%"
+    },
+    "primaryPale": {
+      "hex": "#9aceec",
+      "hsl": {
+        "h": 202,
+        "s": 68.3,
+        "l": 76.5
+      },
+      "shadcn": "202 68.3% 76.5%"
+    }
+  }
+}
