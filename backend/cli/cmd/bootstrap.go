@@ -62,7 +62,7 @@ type devModeResolution struct {
 // contradicts the preset rather than silently overriding it, so --dev can never mask
 // a mistake (e.g. a real --host that would otherwise be quietly discarded). `changed`
 // reports whether the user set a given flag explicitly (cmd.Flags().Changed).
-func resolveDevMode(changed func(string) bool, host string, noTLS, build, noEscrow bool) (devModeResolution, error) {
+func resolveDevMode(changed func(string) bool, host string, noTLS, build, noEscrow, restoring bool) (devModeResolution, error) {
 	if changed("host") && host != "localhost" {
 		return devModeResolution{}, fmt.Errorf("--dev pins --host to localhost; remove the conflicting --host %q (or drop --dev)", host)
 	}
@@ -75,6 +75,13 @@ func resolveDevMode(changed func(string) bool, host string, noTLS, build, noEscr
 	res := devModeResolution{Build: true, Host: "localhost", NoTLS: true, Yes: true, NoEscrow: true}
 	if changed("no-escrow") {
 		res.NoEscrow = noEscrow
+	}
+	// A restore writes no artifact, so there is nothing for --no-escrow to suppress
+	// and setting it would only manufacture a contradiction the operator never typed
+	// — they asked for --dev and --restore-root-key, and would be told those two
+	// flags they did not use are incompatible.
+	if restoring {
+		res.NoEscrow = false
 	}
 	return res, nil
 }
@@ -185,17 +192,22 @@ var bootstrapCmd = &cobra.Command{
 		// flags) before anything else runs, so preflight and the pipeline see the
 		// resolved values.
 		if bootstrapDev {
-			res, err := resolveDevMode(cmd.Flags().Changed, bootstrapHost, bootstrapNoTLS, bootstrapBuild, bootstrapNoEscrow)
+			res, err := resolveDevMode(cmd.Flags().Changed, bootstrapHost, bootstrapNoTLS,
+				bootstrapBuild, bootstrapNoEscrow, bootstrapRestoreRootKey != "")
 			if err != nil {
 				return err
 			}
 			bootstrapBuild, bootstrapHost, bootstrapNoTLS, bootstrapAssumeYes = res.Build, res.Host, res.NoTLS, res.Yes
 			bootstrapNoEscrow = res.NoEscrow
-			// Echo what was actually settled, not what the preset usually settles:
-			// --dev --no-escrow=false keeps the escrow, and a banner that claimed
-			// otherwise would be the one line an operator trusts over the truth.
+			// Echo what was actually settled, not what the preset usually settles.
+			// --dev --no-escrow=false keeps the escrow and --dev --restore-root-key
+			// never suppressed one, and in both cases the banner used to announce
+			// --no-escrow anyway — the one line an operator would trust over the truth.
 			escrowNote := "--no-escrow"
-			if !res.NoEscrow {
+			switch {
+			case bootstrapRestoreRootKey != "":
+				escrowNote = "(restoring the root key)"
+			case !res.NoEscrow:
 				escrowNote = "(escrow kept)"
 			}
 			fmt.Println("dev mode: --build --host localhost --no-tls --yes " + escrowNote)
@@ -294,6 +306,7 @@ var bootstrapCmd = &cobra.Command{
 			PassphraseFile: bootstrapEscrowPassFile,
 			NoEscrow:       bootstrapNoEscrow,
 			RestoreFile:    bootstrapRestoreRootKey,
+			DryRun:         bootstrapDryRun,
 		})
 		if err != nil {
 			return err

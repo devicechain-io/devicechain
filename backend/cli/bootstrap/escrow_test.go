@@ -4,7 +4,10 @@
 package bootstrap
 
 import (
+	"bytes"
+	"context"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -226,8 +229,15 @@ func TestEmptyPassphraseEnvIsRefusedRatherThanIgnored(t *testing.T) {
 	if err == nil {
 		t.Fatal("an empty $" + EscrowPassphraseEnv + " was ignored instead of refused")
 	}
-	if !strings.Contains(err.Error(), EscrowPassphraseEnv) {
-		t.Errorf("error %q does not name the variable that is set but empty", err)
+	// Assert the DISTINGUISHING phrase, not the variable name.
+	//
+	// The fall-through this test forbids ends at the "no passphrase and no terminal"
+	// error, whose text also names the variable — so an assertion on the name alone
+	// was satisfied by the exact behaviour the test exists to prevent. Review proved
+	// it: swapping LookupEnv for Getenv left this green.
+	if !strings.Contains(err.Error(), "set but empty") {
+		t.Errorf("error %q does not distinguish an empty variable from an absent one, so it would "+
+			"also pass if the empty value silently fell through to the next source", err)
 	}
 }
 
@@ -375,8 +385,21 @@ func TestWriteEscrowRefusesToOverwriteAnExistingArtifact(t *testing.T) {
 	if err == nil {
 		t.Fatal("WriteEscrow overwrote an existing escrow artifact")
 	}
-	if !strings.Contains(err.Error(), "--escrow-file") {
-		t.Errorf("error %q does not name the flag that resolves it", err)
+	// The refusal has to describe the file it is protecting ACCURATELY. The first
+	// version asserted that any bytes at this path were "the only copy of ITS root
+	// key" — which is false in the commonest way to get here, a bootstrap that failed
+	// after step 1 and left an artifact for a cluster that was never built. It then
+	// sent the operator hunting for an instance that never existed.
+	//
+	// So: name the key it actually holds, and name the flag that REUSES it, since a
+	// retry after a failed bootstrap almost always wants exactly that key.
+	for _, want := range []string{"--restore-root-key", "escrow show"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %s, so it names no way forward:\n%v", want, err)
+		}
+	}
+	if !strings.Contains(err.Error(), "281a2419") {
+		t.Errorf("error does not identify WHICH key the blocking artifact holds:\n%v", err)
 	}
 	after, err := os.ReadFile(path)
 	if err != nil {
@@ -415,13 +438,29 @@ func TestNoEscrowPlanWritesNothing(t *testing.T) {
 	}
 }
 
-// The zero EscrowPlan must be inert. State is constructed in many places that have
-// no opinion about escrow, and a zero value that meant "write one" would send them
-// all at an empty path.
-func TestZeroPlanIsInert(t *testing.T) {
-	var plan EscrowPlan
-	if plan.Path != "" {
-		t.Fatal("the zero EscrowPlan carries a path")
+// The zero EscrowPlan must be inert THROUGH THE PIPELINE. State is constructed in a
+// dozen tests with no opinion about escrow, and a zero value that meant "write one"
+// would send every one of them at an empty path.
+//
+// Asserted by running the step, not by reading the struct back: the first version of
+// this test was `var plan EscrowPlan; if plan.Path != ""`, which restates Go's zero
+// value for a string and cannot fail under any mutation of this package.
+func TestZeroPlanWritesNothingThroughTheStep(t *testing.T) {
+	home := fakeHome(t)
+	st := &State{Instance: "prod", BuildImages: true, DryRun: true, Values: map[string]string{}}
+
+	if err := stepRenderConfig(t.Context(), st); err != nil {
+		t.Fatalf("stepRenderConfig: %v", err)
+	}
+	if st.Values["secretsRootKey"] == "" {
+		t.Fatal("no root key was established at all")
+	}
+	entries, err := os.ReadDir(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("a zero escrow plan wrote %d entries into the home directory", len(entries))
 	}
 }
 
@@ -623,6 +662,11 @@ func captureStdout(t *testing.T, fn func()) string {
 		t.Fatal(err)
 	}
 	orig := os.Stdout
+	// Deferred, not restored inline: fn may call t.Fatalf, which is a runtime.Goexit,
+	// and an inline restore is then never reached — leaving os.Stdout pointed at this
+	// pipe for the rest of the test binary. One failing assertion would swallow every
+	// later test's output and present as a confusing cascade.
+	defer func() { os.Stdout = orig }()
 	os.Stdout = w
 	done := make(chan string, 1)
 	go func() {
@@ -631,7 +675,6 @@ func captureStdout(t *testing.T, fn func()) string {
 		done <- sb.String()
 	}()
 	fn()
-	os.Stdout = orig
 	w.Close()
 	out := <-done
 	r.Close()
@@ -654,6 +697,101 @@ func TestDryRunWritesNoEscrowArtifact(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("--dry-run wrote an escrow artifact at %s", path)
+	}
+}
+
+// --dry-run must not demand a passphrase, because it writes nothing.
+//
+// The first version resolved the plan unconditionally, so a script running
+// `bootstrap --dry-run` as a validation step hard-failed with "no escrow passphrase
+// and no terminal", and an operator at a terminal was prompted — twice, ignoring
+// --yes — for the real escrow passphrase by a run that then discarded it. Training
+// someone to type that into a no-op is its own harm.
+func TestDryRunDoesNotDemandAPassphrase(t *testing.T) {
+	fakeHome(t)
+	clearEscrowEnv(t)
+	noTerminal(t) // fails the test loudly if anything tries to prompt
+
+	plan, err := ResolveEscrowPlan("prod", EscrowFlags{DryRun: true})
+	if err != nil {
+		t.Fatalf("a dry run demanded an escrow passphrase: %v", err)
+	}
+	if plan.Path == "" {
+		t.Error("a dry run resolved no path, so it cannot report what a real run would write")
+	}
+	if plan.Passphrase != "" {
+		t.Error("a dry run acquired a passphrase it has no use for")
+	}
+}
+
+// A restore under --dry-run parses the artifact but does not open it — same rule.
+func TestDryRunRestoreDoesNotDemandAPassphrase(t *testing.T) {
+	fakeHome(t)
+	clearEscrowEnv(t)
+	noTerminal(t)
+	path := filepath.Join(t.TempDir(), "prod.escrow")
+	if err := WriteEscrow(EscrowPlan{Path: path, Passphrase: "pw"}, testRootKey, "prod", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := ResolveEscrowPlan("prod", EscrowFlags{RestoreFile: path, DryRun: true})
+	if err != nil {
+		t.Fatalf("a dry-run restore demanded a passphrase: %v", err)
+	}
+	if plan.RestoredFrom != path {
+		t.Errorf("RestoredFrom = %q, want %q", plan.RestoredFrom, path)
+	}
+	if plan.RestoredRootKey != "" {
+		t.Error("a dry run decrypted the artifact; it should only have parsed it")
+	}
+}
+
+// A dry run must predict what the real run does. Reporting a clean plan for a
+// bootstrap that dies at step 1 is the same class of lie as the summary bug: the
+// operator's only preview of the run says it will work when it will not.
+func TestDryRunNoticesAnArtifactThatWouldBlockTheRealRun(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "prod.escrow")
+	if err := WriteEscrow(EscrowPlan{Path: path, Passphrase: "pw"}, testRootKey, "prod", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	st := &State{
+		Instance:    "prod",
+		DryRun:      true,
+		BuildImages: true,
+		Escrow:      EscrowPlan{Path: path},
+		Values:      map[string]string{},
+	}
+
+	out := captureStdout(t, func() {
+		if err := stepRenderConfig(t.Context(), st); err != nil {
+			t.Fatalf("stepRenderConfig: %v", err)
+		}
+	})
+	if !strings.Contains(out, "already exists") {
+		t.Fatalf("the dry run predicted a clean bootstrap that would in fact stop at step 1:\n%s", out)
+	}
+}
+
+// Flag combinations that ask for two different things are refused rather than
+// silently resolved.
+//
+// --dev sets --no-escrow implicitly, and --no-escrow used to discard --escrow-file
+// and --escrow-passphrase-file without a word — including a passphrase file that did
+// not exist, which was never even opened. That contradicts how every other --dev
+// interaction works: the preset refuses a contradictory flag precisely so it cannot
+// mask a mistake.
+func TestContradictoryEscrowFlagsAreRefused(t *testing.T) {
+	for name, f := range map[string]EscrowFlags{
+		"--no-escrow with --escrow-file":            {NoEscrow: true, File: "/tmp/x.escrow"},
+		"--no-escrow with --escrow-passphrase-file": {NoEscrow: true, PassphraseFile: "/tmp/pass"},
+		"--no-escrow with --restore-root-key":       {NoEscrow: true, RestoreFile: "/tmp/x.escrow"},
+		"--restore-root-key with --escrow-file":     {RestoreFile: "/tmp/in.escrow", File: "/tmp/out.escrow"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ResolveEscrowPlan("prod", f); err == nil {
+				t.Fatalf("%s was accepted; one of the two flags is being silently discarded", name)
+			}
+		})
 	}
 }
 
@@ -704,6 +842,53 @@ func TestRestoreOfAMissingFileFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("a restore from a nonexistent artifact produced a plan")
 	}
+	// The error must be about the FILE. With noTerminal active, "no passphrase and no
+	// terminal" would also satisfy a bare err != nil — and would mean the artifact is
+	// only read after a passphrase has been demanded, which is the wrong order: a
+	// typo'd path should be reported before anyone is asked for a secret.
+	if !strings.Contains(err.Error(), "no such file") {
+		t.Errorf("error %q is not about the missing artifact; the file is being read after the "+
+			"passphrase is demanded rather than before", err)
+	}
+}
+
+// A relative --escrow-file must be resolved against the working directory, not
+// stored as typed. Nothing else in the suite passes a relative path, so the
+// filepath.Abs call had no coverage at all.
+func TestARelativeEscrowPathIsMadeAbsolute(t *testing.T) {
+	fakeHome(t)
+
+	got, err := resolveEscrowPath("prod", filepath.Join("relative", "prod.escrow"))
+	if err != nil {
+		t.Fatalf("resolveEscrowPath: %v", err)
+	}
+	if !filepath.IsAbs(got) {
+		t.Fatalf("resolveEscrowPath returned %q, which is still relative; where the artifact lands "+
+			"would then depend on the working directory at write time", got)
+	}
+}
+
+// A symlinked path whose TARGET is inside the instance state directory must be
+// refused too. The guard is described as a refusal, and a check that can be stepped
+// around with a symlink is advisory.
+func TestASymlinkIntoTheStateDirectoryIsAlsoRefused(t *testing.T) {
+	fakeHome(t)
+	root, err := instanceRoot("prod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "innocent")
+	if err := os.Symlink(root, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if _, err := resolveEscrowPath("prod", filepath.Join(link, "k.escrow")); err == nil {
+		t.Fatal("a symlink whose target is the instance state directory was accepted; " +
+			"dcctl destroy would delete the artifact anyway")
+	}
 }
 
 // --restore-root-key and --escrow-file ask for opposite things; honouring one
@@ -724,6 +909,277 @@ func TestRestoreCombinedWithEscrowFileIsRefused(t *testing.T) {
 	// rather than about a missing input file.
 	if strings.Contains(err.Error(), "no such file") {
 		t.Errorf("the combination was not checked before the read: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// A re-run must not rotate the key out from under a live instance
+// ---------------------------------------------------------------------------
+
+// withExistingInstance makes the deployed-instance lookup return a fixed answer.
+func withExistingInstance(t *testing.T, key string, err error) {
+	t.Helper()
+	orig := lookupExistingRootKey
+	t.Cleanup(func() { lookupExistingRootKey = orig })
+	lookupExistingRootKey = func(context.Context, string, string) (string, error) {
+		return key, err
+	}
+}
+
+// THE test for the most destructive bug in this area, and it predates the escrow
+// work entirely.
+//
+// stepRenderConfig minted a fresh root key on every non-restore run, and helmInstall
+// UPGRADES an existing release with that value — so re-running `dcctl bootstrap`
+// against a live instance rewrote the KEK and made every secret it had stored
+// permanently undecryptable. Silently, on a run that reported success, of a pipeline
+// that documents itself as idempotent and that the docs tell operators to re-run to
+// change the host.
+func TestRerunReusesTheDeployedRootKey(t *testing.T) {
+	const deployed = "3q2+796tvu/erb7v3q2+796tvu/erb7v3q0="
+	withExistingInstance(t, deployed, nil)
+	st := &State{Instance: "prod", BuildImages: true, Values: map[string]string{}}
+
+	if err := stepRenderConfig(t.Context(), st); err != nil {
+		t.Fatalf("stepRenderConfig: %v", err)
+	}
+	if got := st.Values["secretsRootKey"]; got != deployed {
+		t.Fatalf("a re-run configured the instance with a NEW root key (%q, want the deployed %q).\n"+
+			"helm upgrades the release with this value, so every secret the instance has stored "+
+			"would become permanently undecryptable.", got, deployed)
+	}
+}
+
+// A fresh install still mints, so the reuse branch cannot have swallowed the normal
+// path.
+func TestAFreshInstallStillMintsAKey(t *testing.T) {
+	withExistingInstance(t, "", nil)
+	st := &State{Instance: "prod", BuildImages: true, Values: map[string]string{}}
+
+	if err := stepRenderConfig(t.Context(), st); err != nil {
+		t.Fatalf("stepRenderConfig: %v", err)
+	}
+	raw, err := base64.StdEncoding.DecodeString(st.Values["secretsRootKey"])
+	if err != nil || len(raw) != 32 {
+		t.Fatalf("no fresh 256-bit key was minted: %q (%v)", st.Values["secretsRootKey"], err)
+	}
+}
+
+// "I could not tell whether the instance exists" must STOP the run, not mint.
+//
+// Minting is the destructive branch, so it must never be the fallback for an
+// unknown. EnsureCluster has already run by this point, so an unreachable API here
+// is an anomaly worth halting for rather than guessing past.
+func TestBootstrapStopsWhenItCannotTellIfTheInstanceExists(t *testing.T) {
+	withExistingInstance(t, "", fmt.Errorf("connection refused"))
+	st := &State{Instance: "prod", BuildImages: true, Values: map[string]string{}}
+
+	err := stepRenderConfig(t.Context(), st)
+	if err == nil {
+		t.Fatal("bootstrap continued after failing to determine whether the instance already " +
+			"exists; if it does, it just had its root key rotated out from under it")
+	}
+	if st.Values["secretsRootKey"] != "" {
+		t.Error("a root key was established despite the lookup failing")
+	}
+}
+
+// The same rule at the source: only a genuine NotFound may be read as "no instance".
+func TestExistingRootKeyFailsClosedWhenItCannotTell(t *testing.T) {
+	// A kubeconfig that names a server nothing is listening on: reachable config,
+	// unreachable API — which is exactly the "cannot tell" case, as distinct from a
+	// NotFound.
+	dir := t.TempDir()
+	kubeconfig := filepath.Join(dir, "config")
+	const cfg = `apiVersion: v1
+kind: Config
+clusters:
+- name: dead
+  cluster:
+    server: https://127.0.0.1:1
+contexts:
+- name: dead
+  context: {cluster: dead, user: dead}
+current-context: dead
+users:
+- name: dead
+  user: {token: x}
+`
+	if err := os.WriteFile(kubeconfig, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KUBECONFIG", kubeconfig)
+
+	// Bounded, because client-go's default retry/backoff against an unreachable
+	// endpoint takes tens of seconds and this test only needs the first refusal.
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+
+	key, err := ExistingRootKey(ctx, "dead", "prod")
+	if err == nil {
+		t.Fatal("an unreachable API was reported as 'no such instance', which is the branch that " +
+			"mints a new key over a live one")
+	}
+	if key != "" {
+		t.Errorf("a key was returned alongside the error: %q", key)
+	}
+}
+
+// ReconcileEscrow is what a re-run does instead of refusing. Each branch tells the
+// operator something different, and one of them is a refusal.
+func TestReconcileEscrowOnARerun(t *testing.T) {
+	t.Run("an artifact holding the running key is verified, not rewritten", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "prod.escrow")
+		plan := EscrowPlan{Path: path, Passphrase: "pw"}
+		if err := WriteEscrow(plan, testRootKey, "prod", time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+		before, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		outcome, err := ReconcileEscrow(plan, testRootKey, "prod", time.Now().UTC())
+		if err != nil {
+			t.Fatalf("a re-run over a correct escrow failed: %v", err)
+		}
+		if outcome != "verified" {
+			t.Errorf("outcome = %q, want verified", outcome)
+		}
+		after, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(after) != string(before) {
+			t.Error("the artifact was rewritten; a re-run must leave a correct escrow alone")
+		}
+	})
+
+	t.Run("an orphaned artifact is refused, not silently left in place", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "prod.escrow")
+		plan := EscrowPlan{Path: path, Passphrase: "pw"}
+		// Escrowed for one key; the instance is now running a different one.
+		if err := WriteEscrow(plan, testRootKey, "prod", time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+		other := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
+
+		_, err := ReconcileEscrow(plan, other, "prod", time.Now().UTC())
+		if err == nil {
+			t.Fatal("a re-run accepted an escrow artifact that does not hold the instance's key; " +
+				"the operator would keep a file they believe is their recovery path and is not")
+		}
+		if !strings.Contains(err.Error(), "orphan") {
+			t.Errorf("error %q does not say the artifact is orphaned", err)
+		}
+	})
+
+	t.Run("a missing artifact is written, so an instance can gain an escrow later", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "prod.escrow")
+		plan := EscrowPlan{Path: path, Passphrase: "pw"}
+
+		outcome, err := ReconcileEscrow(plan, testRootKey, "prod", time.Now().UTC())
+		if err != nil {
+			t.Fatalf("ReconcileEscrow: %v", err)
+		}
+		if outcome != "written" {
+			t.Errorf("outcome = %q, want written", outcome)
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("no artifact was written: %v", err)
+		}
+	})
+}
+
+// WriteEscrow must leave nothing behind that blocks its own retry.
+//
+// A partial write used to leave a zero-length stub at the destination, and the
+// overwrite guard then refused every subsequent attempt while calling the stub "the
+// only copy of ITS root key" — a message that was false, about a file dcctl's own
+// reader could not parse. A single full disk bricked that instance name permanently.
+func TestAPartialArtifactDoesNotBlockItsOwnReplacement(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "prod.escrow")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := WriteEscrow(EscrowPlan{Path: path, Passphrase: "pw"}, testRootKey, "prod", time.Now().UTC())
+	if err == nil {
+		t.Skip("an empty stub is now overwritten outright, which also resolves this")
+	}
+	// It still refuses — but it must describe what is actually there, and tell the
+	// operator how to get out of it.
+	if strings.Contains(err.Error(), "only copy") {
+		t.Errorf("the refusal calls an unreadable stub the only copy of a root key:\n%v", err)
+	}
+	if !strings.Contains(err.Error(), "Move it aside") {
+		t.Errorf("the refusal names no way forward:\n%v", err)
+	}
+}
+
+// A successful write leaves the artifact and nothing else.
+func TestAWrittenArtifactLeavesNoTemporaryFiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "prod.escrow")
+	if err := WriteEscrow(EscrowPlan{Path: path, Passphrase: "pw"}, testRootKey, "prod", time.Now().UTC()); err != nil {
+		t.Fatalf("WriteEscrow: %v", err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("a temporary file survived the write: %s", e.Name())
+		}
+	}
+}
+
+// An artifact that does not open must never be published, and bootstrap must not
+// continue past it.
+//
+// The condition is unreachable by ordinary means — the artifact is encoded and
+// immediately re-read by the same code — which is exactly why the check is here and
+// why the test needs a seam to reach it. It guards against a defect in the FORMAT,
+// and the format has had precisely that defect: a header whose bytes did not survive
+// the round trip produced a file that verified in memory and opened from disk never.
+//
+// (Found by mutation: the first version of this test passed with the whole
+// verification deleted, because it only ever exercised artifacts that were fine.)
+func TestAnArtifactThatDoesNotOpenIsNeverPublished(t *testing.T) {
+	orig := encodeArtifact
+	t.Cleanup(func() { encodeArtifact = orig })
+	encodeArtifact = func(a *escrow.Artifact) ([]byte, error) {
+		raw, err := a.Encode()
+		if err != nil {
+			return nil, err
+		}
+		// Corrupt the sealed body while leaving a perfectly well-formed file: this is
+		// what a format-level round-trip defect looks like from here.
+		return bytes.Replace(raw, []byte("eyJoZHIi"), []byte("eyJoZHJk"), 1), nil
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "prod.escrow")
+	err := WriteEscrow(EscrowPlan{Path: path, Passphrase: "pw"}, testRootKey, "prod", time.Now().UTC())
+	if err == nil {
+		t.Fatal("WriteEscrow accepted an artifact that cannot be opened; bootstrap would go on to " +
+			"build an instance whose only escrow opens nothing")
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Errorf("the unopenable artifact was published to %s anyway; the overwrite guard would then "+
+			"refuse every retry", path)
+	}
+	entries, readErr := os.ReadDir(dir)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("the failed write left a temporary file behind: %s", e.Name())
+		}
 	}
 }
 
@@ -789,6 +1245,95 @@ func TestDestroyRemovesEverythingWhenThereIsNoEscrow(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("%s survived a teardown with no escrow artifact in it", dir)
+	}
+}
+
+// The spare rule matches the spellings an operator actually produces, not just the
+// exact suffix dcctl writes.
+//
+// A directory called `backups.escrow` used to be descended into and emptied, because
+// the switch asked "is it a directory?" before "is it escrow material?". And the
+// realistic hand-made names — an encrypted copy, a dated backup, a plainly-named
+// key file — were all deleted, while the function's own doc claimed to exist for
+// exactly those.
+func TestDestroySparesEscrowMaterialWhateverItIsCalled(t *testing.T) {
+	dir := t.TempDir()
+	mk := func(rel string, isDir bool) string {
+		p := filepath.Join(dir, rel)
+		if isDir {
+			if err := os.MkdirAll(p, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(p, "inner.txt"), []byte("x"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return filepath.Join(p, "inner.txt")
+		}
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	survive := []string{
+		mk("backups.escrow", true),           // a DIRECTORY of escrow material
+		mk("prod-rootkey.escrow.gpg", false), // encrypted copy
+		mk("prod.escrow.bak", false),         // dated backup
+		mk("rootkey.txt", false),             // plainly named
+		mk("ROOT-KEY-COPY", false),           // shouted
+	}
+	doomed := mk("tofu/terraform.tfstate", false)
+
+	kept, err := removeStatePreservingEscrow(dir)
+	if err != nil {
+		t.Fatalf("removeStatePreservingEscrow: %v", err)
+	}
+	for _, p := range survive {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s was deleted: %v", p, err)
+		}
+	}
+	if _, err := os.Stat(doomed); !os.IsNotExist(err) {
+		t.Errorf("ordinary state survived: %v", err)
+	}
+	if len(kept) == 0 {
+		t.Error("nothing was reported as kept, so the operator is told none of this survived")
+	}
+}
+
+// A failure part-way through must still name what it spared. A half-removed tree is
+// exactly when an operator needs to know what is left in it, and reporting only on
+// the success path meant the failure case said nothing at all.
+func TestDestroyReportsWhatItSparedEvenWhenItFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: an unreadable directory cannot be simulated")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "prod-rootkey"+EscrowFileExt), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	locked := filepath.Join(dir, "zz-locked")
+	if err := os.MkdirAll(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "f"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o755) })
+
+	kept, err := removeStatePreservingEscrow(dir)
+	if err == nil {
+		t.Skip("the walk succeeded despite the unreadable directory; nothing to assert")
+	}
+	if len(kept) == 0 {
+		t.Fatal("the walk failed and reported nothing spared, so the surviving escrow artifact " +
+			"is invisible to the operator staring at a half-destroyed instance")
 	}
 }
 

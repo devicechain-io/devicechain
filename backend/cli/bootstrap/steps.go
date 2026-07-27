@@ -88,6 +88,9 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 
 	doing(fmt.Sprintf("rendering config for instance %q (profile %q)", st.Instance, st.Profile))
 
+	// Collected and printed once the step's progress line is closed. See done() below.
+	var notes []string
+
 	// Generate a DB password regardless of dry-run so the value is reproducible
 	// within a run; we just never persist/apply it under dry-run.
 	password, err := randomSecret(24)
@@ -132,15 +135,42 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// recovery path the key instead comes FROM an escrow artifact, so that a fresh
 	// cluster can read a restored database rather than rehydrating ciphertext
 	// nothing alive can open.
+	//
+	// The three cases are decided here rather than anywhere downstream, because two
+	// of them are irreversible and one of them used to be silent.
 	secretsRootKey := st.Escrow.RestoredRootKey
-	if secretsRootKey != "" {
-		fmt.Printf("  %s %s\n",
-			color.WhiteString("root key:"),
-			color.GreenString("restored from %s", st.Escrow.RestoredFrom))
-	} else {
+	reused := false
+	switch {
+	case secretsRootKey != "":
+		// Recovery: the key comes from the artifact.
+		notes = append(notes, fmt.Sprintf("root key restored from %s", st.Escrow.RestoredFrom))
+
+	case st.DryRun:
+		// Nothing is deployed and nothing will be, so there is no instance to consult.
 		secretsRootKey, err = randomKeyBase64(32)
 		if err != nil {
 			return fail("minting secrets root key", err)
+		}
+
+	default:
+		// A RE-RUN MUST NOT MINT. helmInstall upgrades an existing release with
+		// whatever is in this value, so minting here would rewrite the KEK of a live
+		// instance and make every secret it has stored permanently undecryptable —
+		// silently, on a run that reports success, of a pipeline that documents itself
+		// as idempotent. See ExistingRootKey, which fails closed rather than guessing.
+		existing, lookupErr := lookupExistingRootKey(ctx, st.KubeContext, st.Instance)
+		if lookupErr != nil {
+			return fail("checking for an existing instance", lookupErr)
+		}
+		if existing != "" {
+			secretsRootKey = existing
+			reused = true
+			notes = append(notes, "root key reused from the running instance")
+		} else {
+			secretsRootKey, err = randomKeyBase64(32)
+			if err != nil {
+				return fail("minting secrets root key", err)
+			}
 		}
 	}
 	st.Values["secretsRootKey"] = secretsRootKey
@@ -150,9 +180,25 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// must not go on to build an instance around a key with no second copy — the
 	// resulting cluster would look perfectly healthy and be unrecoverable.
 	if st.Escrow.Path != "" {
-		if st.DryRun {
-			wouldDo("write the root-key escrow artifact to " + st.Escrow.Path)
-		} else {
+		switch {
+		case st.DryRun:
+			// A dry run must predict the same outcome the real run produces, so it
+			// checks the destination rather than assuming it is free. Reporting a clean
+			// plan for a run that dies at step 1 is the defect this whole line exists
+			// to avoid.
+			if _, statErr := os.Stat(st.Escrow.Path); statErr == nil {
+				notes = append(notes, fmt.Sprintf(
+					"an escrow artifact already exists at %s; a real run would stop here", st.Escrow.Path))
+			} else {
+				notes = append(notes, "would write the root-key escrow to "+st.Escrow.Path)
+			}
+		case reused:
+			outcome, recErr := ReconcileEscrow(st.Escrow, secretsRootKey, st.Instance, time.Now().UTC())
+			if recErr != nil {
+				return fail("reconciling the root-key escrow", recErr)
+			}
+			notes = append(notes, "root-key escrow "+outcome)
+		default:
 			if err := WriteEscrow(st.Escrow, secretsRootKey, st.Instance, time.Now().UTC()); err != nil {
 				return fail("escrowing the secret-store root key", err)
 			}
@@ -248,6 +294,11 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	st.Values["imageVersion"] = st.ImageVersion
 	st.Values["imageSource"] = imageSource
 	done()
+	// Printed AFTER done(), because doing() leaves its line unterminated and anything
+	// written before the matching done() lands in the middle of it.
+	for _, n := range notes {
+		fmt.Printf("  %s\n", color.WhiteString(n))
+	}
 	return nil
 }
 

@@ -35,6 +35,7 @@
 package escrow
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -49,6 +50,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/argon2"
+	"golang.org/x/text/unicode/norm"
 )
 
 const (
@@ -70,6 +72,12 @@ const (
 	RootKeySize = 32
 
 	saltSize = 16
+
+	// maxKDFMemory and maxKDFTime bound the cost parameters an artifact may ask this
+	// build to spend. See validateParams: the floor stops a downgrade attack, the
+	// ceiling stops a damaged file from turning recovery into an unbounded allocation.
+	maxKDFMemory = 4 * 1024 * 1024 // KiB, i.e. 4 GiB — 64x the default
+	maxKDFTime   = 64
 )
 
 // fingerprintDomain domain-separates the root-key fingerprint so the digest can
@@ -129,10 +137,31 @@ type header struct {
 	Nonce       []byte    `json:"nonce"`
 }
 
-// artifactJSON is the wire form: the header plus the ciphertext.
+// artifactJSON is the wire form: the header, kept as its LITERAL BYTES, plus the
+// ciphertext.
+//
+// The header is a json.RawMessage rather than a struct on purpose, and it is the
+// single most important decision in this file. The AAD must be the exact byte string
+// that was sealed. An earlier version re-derived it by marshalling a struct parsed
+// back out of the file, which is only sound if marshal→unmarshal→marshal is a fixed
+// point for every field — and it is not:
+//
+//   - encoding/json escapes invalid UTF-8 as the six characters � on the way
+//     out, and re-emits it as raw bytes on the way back, so one bad byte in an
+//     instance name produced an artifact that verified in memory and was
+//     PERMANENTLY unopenable from disk.
+//   - the same header marshals to different bytes under encoding/json and under
+//     GOEXPERIMENT=jsonv2. Whether a file written today opens in five years would
+//     have depended on which JSON implementation the future build happened to ship,
+//     which is precisely the promise this format exists to make.
+//
+// Capturing the bytes removes the entire class rather than either instance of it. It
+// also means a duplicated or reordered key fails authentication instead of quietly
+// last-winning, and it lets a future format version be opened by a build that can no
+// longer construct that version's header struct.
 type artifactJSON struct {
-	header
-	Ciphertext []byte `json:"ct"`
+	Header     json.RawMessage `json:"hdr"`
+	Ciphertext []byte          `json:"ct"`
 }
 
 // Artifact is one escrowed root key.
@@ -143,8 +172,11 @@ type Artifact struct {
 	Cipher      string
 	Fingerprint string
 
-	nonce      []byte
-	ciphertext []byte
+	// headerBytes is the exact AAD: what Wrap sealed, or what Decode read. Never
+	// reconstructed. See artifactJSON.
+	headerBytes []byte
+	nonce       []byte
+	ciphertext  []byte
 }
 
 // Fingerprint is a domain-separated digest of a root key, safe to store and print
@@ -217,9 +249,12 @@ func Wrap(rootKey []byte, passphrase string, instance string, params KDFParams, 
 		return nil, fmt.Errorf("escrow: generate nonce: %w", err)
 	}
 
-	aad, err := json.Marshal(h)
+	// These bytes are the AAD, AND they are what Encode writes. There is exactly one
+	// marshal of the header in this package's write path, and every later read uses
+	// the bytes rather than re-deriving them. See artifactJSON.
+	aad, err := marshalHeader(h)
 	if err != nil {
-		return nil, fmt.Errorf("escrow: canonicalize header: %w", err)
+		return nil, err
 	}
 	ct := gcm.Seal(nil, h.Nonce, rootKey, aad)
 
@@ -229,9 +264,29 @@ func Wrap(rootKey []byte, passphrase string, instance string, params KDFParams, 
 		KDF:         h.KDF,
 		Cipher:      h.Cipher,
 		Fingerprint: h.Fingerprint,
+		headerBytes: aad,
 		nonce:       h.Nonce,
 		ciphertext:  ct,
 	}, nil
+}
+
+// marshalHeader renders a header to its canonical compact bytes.
+//
+// Compacted explicitly even though json.Marshal already emits compact output, so
+// that this and the decode side are visibly the same normalization. Compact removes
+// insignificant whitespace and touches nothing inside a string literal, which is
+// what lets a file survive being reflowed by a mail client while any change to an
+// actual value still breaks authentication.
+func marshalHeader(h header) ([]byte, error) {
+	raw, err := json.Marshal(h)
+	if err != nil {
+		return nil, fmt.Errorf("escrow: encode header: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, raw); err != nil {
+		return nil, fmt.Errorf("escrow: canonicalize header: %w", err)
+	}
+	return buf.Bytes(), nil
 }
 
 // Open decrypts an artifact and returns the root key.
@@ -267,19 +322,13 @@ func Open(a *Artifact, passphrase string) ([]byte, error) {
 		return nil, fmt.Errorf("escrow: artifact salt is %d bytes, want at least %d; the file is malformed", len(a.KDF.Salt), saltSize)
 	}
 
-	h := header{
-		Version:     Version,
-		Instance:    a.Instance,
-		Created:     a.Created,
-		KDF:         a.KDF,
-		Cipher:      a.Cipher,
-		Fingerprint: a.Fingerprint,
-		Nonce:       a.nonce,
+	// The AAD is the bytes this artifact was built from — sealed by Wrap, or read
+	// verbatim by Decode — never a reconstruction. See artifactJSON for what
+	// reconstructing them cost.
+	if len(a.headerBytes) == 0 {
+		return nil, fmt.Errorf("escrow: artifact carries no header bytes; it was not produced by Wrap or Decode")
 	}
-	aad, err := json.Marshal(h)
-	if err != nil {
-		return nil, fmt.Errorf("escrow: canonicalize header: %w", err)
-	}
+	aad := a.headerBytes
 
 	key := derive(passphrase, a.KDF)
 	defer zero(key)
@@ -327,16 +376,11 @@ func (a *Artifact) Matches(rootKey []byte) bool {
 // reach. Only the base64 block is authoritative; the preamble is a rendering, and
 // Decode ignores it entirely.
 func (a *Artifact) Encode() ([]byte, error) {
+	if len(a.headerBytes) == 0 {
+		return nil, fmt.Errorf("escrow: artifact carries no header bytes; it was not produced by Wrap or Decode")
+	}
 	body, err := json.Marshal(artifactJSON{
-		header: header{
-			Version:     Version,
-			Instance:    a.Instance,
-			Created:     a.Created,
-			KDF:         a.KDF,
-			Cipher:      a.Cipher,
-			Fingerprint: a.Fingerprint,
-			Nonce:       a.nonce,
-		},
+		Header:     json.RawMessage(a.headerBytes),
 		Ciphertext: a.ciphertext,
 	})
 	if err != nil {
@@ -382,34 +426,92 @@ func Decode(raw []byte) (*Artifact, error) {
 		return nil, fmt.Errorf("escrow: artifact body is not valid base64: %w", err)
 	}
 
-	// DisallowUnknownFields so an artifact carrying a field this build does not know
-	// about is a clear parse error. Without it the field would be dropped, the
-	// re-marshalled AAD would differ, and the failure would surface as "wrong
-	// passphrase" — pointing the operator at the one thing that was not wrong.
-	dec := json.NewDecoder(strings.NewReader(string(decoded)))
-	dec.DisallowUnknownFields()
 	var aj artifactJSON
-	if err := dec.Decode(&aj); err != nil {
+	if err := strictUnmarshal(decoded, &aj); err != nil {
 		return nil, fmt.Errorf("escrow: artifact body is not a valid escrow document: %w", err)
 	}
-
-	// Version is checked before anything else can fail, so a future-format artifact
-	// says so instead of masquerading as a bad passphrase.
-	if aj.Version != Version {
-		return nil, fmt.Errorf("escrow: artifact is format version %d, this build understands version %d", aj.Version, Version)
+	if len(aj.Header) == 0 {
+		return nil, fmt.Errorf("escrow: artifact carries no header")
 	}
 	if len(aj.Ciphertext) == 0 {
 		return nil, fmt.Errorf("escrow: artifact carries no ciphertext")
 	}
+	// Normalize whitespace only. These are the AAD, so nothing inside a string
+	// literal may be touched — see marshalHeader.
+	var hdrBuf bytes.Buffer
+	if err := json.Compact(&hdrBuf, aj.Header); err != nil {
+		return nil, fmt.Errorf("escrow: artifact header is not valid JSON: %w", err)
+	}
+	headerBytes := hdrBuf.Bytes()
+
+	// The VERSION is read before anything stricter runs, because everything stricter
+	// is version-specific. Reading it with a tolerant probe is the point: a v2
+	// artifact necessarily carries fields this build has never heard of, so a strict
+	// decode would reject it as malformed and never reach the version check at all —
+	// which is what the previous ordering did, reporting a perfectly good future file
+	// as a corrupt one.
+	var probe struct {
+		Version *int `json:"v"`
+	}
+	if err := json.Unmarshal(headerBytes, &probe); err != nil || probe.Version == nil {
+		return nil, fmt.Errorf("escrow: artifact header has no format version; this does not look like a DeviceChain root-key escrow")
+	}
+	if *probe.Version != Version {
+		return nil, fmt.Errorf("escrow: artifact is format version %d, this build understands version %d", *probe.Version, Version)
+	}
+
+	var h header
+	if err := strictUnmarshal(headerBytes, &h); err != nil {
+		return nil, fmt.Errorf("escrow: artifact header is not a valid version %d header: %w", Version, err)
+	}
+	// Named absences, because every one of these decodes cleanly as a zero value and
+	// then fails at the AEAD as "wrong passphrase, or the artifact has been altered"
+	// — sending an operator mid-recovery to re-check the one thing that was fine.
+	for _, missing := range []struct {
+		absent bool
+		field  string
+	}{
+		{h.Instance == "", "instance"},
+		{h.Created.IsZero(), "created"},
+		{h.Cipher == "", "cipher"},
+		{h.Fingerprint == "", "fp"},
+		{len(h.Nonce) == 0, "nonce"},
+		{h.KDF.Alg == "", "kdf.alg"},
+	} {
+		if missing.absent {
+			return nil, fmt.Errorf("escrow: artifact header is missing %q; the file is malformed or truncated", missing.field)
+		}
+	}
+
 	return &Artifact{
-		Instance:    aj.Instance,
-		Created:     aj.Created,
-		KDF:         aj.KDF,
-		Cipher:      aj.Cipher,
-		Fingerprint: aj.Fingerprint,
-		nonce:       aj.Nonce,
+		Instance:    h.Instance,
+		Created:     h.Created,
+		KDF:         h.KDF,
+		Cipher:      h.Cipher,
+		Fingerprint: h.Fingerprint,
+		headerBytes: headerBytes,
+		nonce:       h.Nonce,
 		ciphertext:  aj.Ciphertext,
 	}, nil
+}
+
+// strictUnmarshal decodes exactly one JSON value, rejecting unknown fields and any
+// trailing content.
+//
+// DisallowUnknownFields so a field this build does not know about is a clear parse
+// error rather than a silent drop. Trailing content is refused too: without that, a
+// document with a second concatenated object parses as the first and ignores the
+// rest.
+func strictUnmarshal(data []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return err
+	}
+	if dec.More() {
+		return fmt.Errorf("unexpected trailing content after the JSON document")
+	}
+	return nil
 }
 
 // extractBlock pulls the base64 body out of the delimited block.
@@ -422,6 +524,16 @@ func extractBlock(s string) (string, error) {
 	end := strings.Index(rest, endLine)
 	if end < 0 {
 		return "", fmt.Errorf("escrow: no %q line found; the file is truncated", endLine)
+	}
+	// Two blocks in one file is refused rather than silently resolved to the first.
+	//
+	// Concatenating a rotated escrow onto the old one, to "keep them together", is a
+	// natural thing to do and produces a file that opens — returning the STALE key,
+	// with nothing to indicate it. Whoever hits that is mid-recovery and has no way
+	// to tell the two keys apart by looking.
+	if strings.Contains(rest[end+len(endLine):], beginLine) {
+		return "", fmt.Errorf("escrow: the file contains more than one root-key escrow block; " +
+			"split them into separate files so it is unambiguous which key you are recovering")
 	}
 	var b strings.Builder
 	for _, line := range strings.Split(rest[:end], "\n") {
@@ -455,11 +567,33 @@ func validateParams(p KDFParams) error {
 	if p.Threads < 1 {
 		return fmt.Errorf("escrow: KDF parallelism is %d, want at least 1", p.Threads)
 	}
+	// A CEILING as well as a floor, because these parameters travel inside the file
+	// and argon2 allocates Memory KiB up front. One corrupted byte in the recorded
+	// cost turns `m` into billions and the recovery tool into an unbounded allocation
+	// — an OOM kill or a hang, at the exact moment an operator needs a legible error
+	// about a damaged file. The bound is far above any honest setting: the default is
+	// 64 MiB and this permits 4 GiB.
+	if p.Memory > maxKDFMemory {
+		return fmt.Errorf("escrow: KDF memory cost is %d KiB, above the %d KiB ceiling; "+
+			"the artifact is damaged, or was written by something that is not DeviceChain", p.Memory, maxKDFMemory)
+	}
+	if p.Time > maxKDFTime {
+		return fmt.Errorf("escrow: KDF time cost is %d, above the %d ceiling; "+
+			"the artifact is damaged, or was written by something that is not DeviceChain", p.Time, maxKDFTime)
+	}
 	return nil
 }
 
+// derive turns a passphrase into the KEK.
+//
+// The passphrase is NFC-normalized first. "café" typed on macOS (NFC, U+00E9) and on
+// Linux (NFD, e + U+0301) are visually identical, byte-different, and would derive
+// different keys — so an artifact written on one machine could not be opened on the
+// other, reporting only "wrong passphrase" to someone whose passphrase is correct.
+// For a file explicitly designed to be opened years later, possibly by a different
+// person on different hardware, that is a permanent-loss path with no diagnostic.
 func derive(passphrase string, p KDFParams) []byte {
-	return argon2.IDKey([]byte(passphrase), p.Salt, p.Time, p.Memory, p.Threads, RootKeySize)
+	return argon2.IDKey([]byte(norm.NFC.String(passphrase)), p.Salt, p.Time, p.Memory, p.Threads, RootKeySize)
 }
 
 func newGCM(key []byte) (cipher.AEAD, error) {
