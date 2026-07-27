@@ -14,19 +14,27 @@ import (
 // install was already doing, and it cannot be used to smuggle extra connection
 // parameters into the DSN.
 
-// An unset sslMode must keep the historical posture EXACTLY. If this test ever
-// has to change, it is because someone altered the TLS posture of every existing
-// install, which is a decision, not a refactor.
-func TestAnUnsetSslModeKeepsTheHistoricalPosture(t *testing.T) {
+// An unset sslMode must resolve to `prefer`.
+//
+// This is pinned against a LITERAL, not against DefaultSslMode — comparing the
+// constant to itself holds for whatever value it is changed to, which is
+// precisely how a silent posture change would get through. If this test has to
+// change, someone is altering the TLS posture of every install that has not
+// opted in, and that should require editing an assertion that says so.
+//
+// `prefer` and not `disable`: the URL builders always behaved this way via pgx's
+// default, and briefly unifying everything on `disable` silently downgraded the
+// database-creation connection. See DefaultSslMode's comment.
+func TestAnUnsetSslModeResolvesToPrefer(t *testing.T) {
 	got, err := resolveSslMode("")
 	if err != nil {
 		t.Fatalf("resolveSslMode(\"\"): %v", err)
 	}
-	// Asserted against the literal, not against DefaultSslMode — comparing the
-	// constant to itself would hold for any value it were changed to.
-	if got != "disable" {
-		t.Errorf("an unset sslMode resolved to %q, want %q — this silently changes "+
-			"the TLS posture of every install that has not opted in", got, "disable")
+	if got != "prefer" {
+		t.Errorf("an unset sslMode resolved to %q, want %q.\n"+
+			"  %q negotiates TLS when the server offers it and falls back when it does not;\n"+
+			"  %q would silently stop encrypting the connection that creates databases.",
+			got, "prefer", "prefer", "disable")
 	}
 }
 

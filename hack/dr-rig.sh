@@ -207,10 +207,23 @@ root_key() { cfg_get '.infrastructure.secrets.rootKey'; }
 # instead, and this lookup would find nothing while the service name is unchanged
 # — so the rig would break on a topology change that is invisible from here.
 #
-# The service is the thing both topologies actually agree on: today it selects
-# the only pod, and under CNPG the operator re-points it at whichever pod is
-# primary. Resolving through it also means the dump always runs on the PRIMARY,
-# which is the only place it is correct to run once replicas exist.
+# The service is the thing both topologies actually agree on. Under A2 the CNPG
+# Cluster declares a `managed.services.additional` entry with `selectorType: rw`
+# and this exact name, so the operator keeps it pointed at the primary. That was
+# verified on a real CNPG 1.30 cluster: it is a genuine ClusterIP Service WITH
+# EndpointSlices (an ExternalName alias would have none, and this lookup would
+# find nothing), its selector is identical to CNPG's own `-rw` service, and it
+# followed a promotion in about three seconds.
+#
+# 🔴 What this does NOT give us today: the primary. The current OpenTofu service
+# is HEADLESS and selects every pod carrying the module's label. At `replicas =
+# 1` that is the only pod, so the lookup is correct — but EndpointSlice ordering
+# is not stable, so the moment that module grows a replica this would dump from
+# an ARBITRARY instance. A dump taken off a lagging standby is missing the
+# drill's seeded row, and the rig would report that as a missing row rather than
+# as a bad backup source: a destroyed drill result blamed on the wrong thing.
+# The primary-tracking property arrives with the A2 alias; until then it is the
+# single-replica topology, not this function, that makes the dump correct.
 #
 # EndpointSlice, not the older Endpoints API, which is deprecated. Only READY
 # endpoints count: a terminating or unready pod has a name but cannot serve a
@@ -221,10 +234,20 @@ pg_pod() {
     -l "kubernetes.io/service-name=dc-postgresql" -o json)" ||
     fail "could not list endpointslices for the dc-postgresql service"
 
+  # `|| fail` is load-bearing. pg_pod is only ever called as `pod="$(pg_pod)"`,
+  # and bash suppresses errexit for the whole dynamic extent of a command
+  # substitution — so a jq blow-up here does NOT abort, it yields an empty
+  # string, which the refusal below then reports as "no READY pod". That is the
+  # same misdiagnosis cfg_get's scar comment was written about: a parse failure
+  # wearing the costume of an absent object.
+  #
+  # `.conditions.ready != false` rather than `== true`: the EndpointSlice API
+  # says a nil `ready` must be interpreted as ready.
   pod="$(printf '%s' "$slices" |
     jq -r 'first(.items[].endpoints[]
-             | select(.conditions.ready == true)
-             | .targetRef.name // empty)')"
+             | select(.conditions.ready != false)
+             | .targetRef.name // empty)')" ||
+    fail "could not parse the endpointslices for dc-postgresql (jq failed)"
 
   # Same refusal as cfg_get: an empty answer here is a broken instance, not a
   # pod named "". Say which of the two it is, because they are fixed differently.

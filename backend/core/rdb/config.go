@@ -31,11 +31,32 @@ type PostgresConfig struct {
 	SslMode string `json:"sslMode"`
 }
 
-// DefaultSslMode preserves the historical hard-coded behaviour. Changing this
-// constant changes the posture of every install that has not set `sslMode`,
-// which is exactly the kind of silent change this field exists to avoid — so
-// treat it as a decision, not a default to tidy.
-const DefaultSslMode = "disable"
+// DefaultSslMode is `prefer`, and that is a decision rather than an inherited
+// value — there was no single historical behaviour to inherit.
+//
+// Before this knob existed the three connection builders on this hop disagreed:
+// the per-database DSN hard-coded `sslmode=disable`, while the root and
+// instance-database URLs omitted it entirely and so got pgx's own default of
+// `prefer` (pgconn/config.go: `if sslmode == "" { sslmode = "prefer" }`). An
+// earlier version of this change unified them on `disable` and described that
+// as "no install's posture moves". That was wrong, and in the dangerous
+// direction: it SILENTLY DOWNGRADED the connection that creates databases —
+// the one carrying the superuser password — from opportunistic TLS to none. On
+// a server enforcing TLS (`rds.force_ssl=1`, an `hostssl`-only `pg_hba`) that
+// connection stops being refused-with-TLS and starts being refused outright, so
+// a working install fails to bootstrap on upgrade. Caught by adversarial
+// review, reproduced against the pgx module.
+//
+// `prefer` is the safe unification: it preserves the URL builders' behaviour
+// exactly, and it moves the DSN from `disable` to `prefer`, which negotiates
+// TLS when the server offers it and falls back to plaintext when it does not.
+// So it cannot break a plaintext-only server (our own OpenTofu Postgres ships
+// `ssl = off`), and it stops silently downgrading a TLS-capable one.
+//
+// It is deliberately NOT `require`: that would be a real behaviour change with
+// a real failure mode, and turning encryption ON for everyone is a decision for
+// the A2 deployment work, not a side effect of making the value configurable.
+const DefaultSslMode = "prefer"
 
 // validSslModes is libpq's set. It is an ALLOW-LIST rather than a
 // pass-it-through, for two reasons that both matter:

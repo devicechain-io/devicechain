@@ -84,15 +84,30 @@ func (rdb *RdbManager) assurePostgresDatabase(pgconfig *PostgresConfig) error {
 	return nil
 }
 
-// Compute non-database connection URL for querying/creating database.
-func (rdb *RdbManager) computePostgresInstanceDatabaseUrl(pg *PostgresConfig) string {
-	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s", pg.Username, pg.Password, pg.Hostname, pg.Port, rdb.Microservice.InstanceId)
+// Compute connection URL for the instance database, used to create the
+// functional-area schema.
+//
+// This is the THIRD connection builder on this hop, and it was the one missed
+// when sslMode was introduced — found by a vacuity audit, not by reading the
+// diff. All three now resolve the same configured value, which is the whole
+// point: a TLS posture that applies to two of three connections is not a
+// posture, it is a coin toss whose outcome depends on which function ran.
+func (rdb *RdbManager) computePostgresInstanceDatabaseUrl(pg *PostgresConfig) (string, error) {
+	sslMode, err := resolveSslMode(pg.SslMode)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
+		pg.Username, pg.Password, pg.Hostname, pg.Port, rdb.Microservice.InstanceId, sslMode), nil
 }
 
 // Assure that functional area schema is created before connecting to it.
 func (rdb *RdbManager) assurePostgresSchema(pgconfig *PostgresConfig) error {
 	log.Info().Str("schema", rdb.Microservice.FunctionalArea).Msg("Verifying that schema exists.")
-	url := rdb.computePostgresInstanceDatabaseUrl(pgconfig)
+	url, err := rdb.computePostgresInstanceDatabaseUrl(pgconfig)
+	if err != nil {
+		return err
+	}
 	conn, err := pgx.Connect(context.Background(), url)
 	if err != nil {
 		return err
