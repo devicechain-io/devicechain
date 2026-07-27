@@ -17,18 +17,33 @@ import (
 )
 
 // Compute non-database connection URL for querying/creating database.
-func (rdb *RdbManager) computePostgresRootUrl(pgconfig *PostgresConfig) string {
+//
+// This carries the SAME sslMode as the per-database DSN, which it previously did
+// not: the URL form omitted sslmode entirely, so libpq/pgx applied its own
+// default of `prefer` while the DSN form hard-coded `disable`. Two different TLS
+// postures on the same hop, decided by which function happened to build the
+// string — and the weaker one was the one used for the connection that CREATES
+// databases (ADR-020 A2.1).
+func (rdb *RdbManager) computePostgresRootUrl(pgconfig *PostgresConfig) (string, error) {
+	sslMode, err := resolveSslMode(pgconfig.SslMode)
+	if err != nil {
+		return "", err
+	}
 	config := rdb.InstanceConfig
 	hostname := fmt.Sprintf("%v", config.Configuration["hostname"])
 	port := fmt.Sprintf("%v", config.Configuration["port"])
 	username := fmt.Sprintf("%v", config.Configuration["username"])
 	password := fmt.Sprintf("%v", config.Configuration["password"])
-	return fmt.Sprintf("postgres://%s:%s@%s:%s/postgres", username, password, hostname, port)
+	return fmt.Sprintf("postgres://%s:%s@%s:%s/postgres?sslmode=%s",
+		username, password, hostname, port, sslMode), nil
 }
 
 // Assure that database is created before connecting to it.
 func (rdb *RdbManager) assurePostgresDatabase(pgconfig *PostgresConfig) error {
-	url := rdb.computePostgresRootUrl(pgconfig)
+	url, err := rdb.computePostgresRootUrl(pgconfig)
+	if err != nil {
+		return err
+	}
 	// Log the connection coordinates but never the URL — it embeds the password (C1).
 	log.Info().Str("database", rdb.Microservice.InstanceId).
 		Str("host", pgconfig.Hostname).Int32("port", pgconfig.Port).
@@ -114,8 +129,15 @@ func (rdb *RdbManager) assurePostgresSchema(pgconfig *PostgresConfig) error {
 	return nil
 }
 
-// Compute DSN for connecting to database.
-func (rdb *RdbManager) computePostgresDsn(pg *PostgresConfig) string {
+// Compute DSN for connecting to database. Returns an error rather than a
+// best-effort DSN when sslMode is unusable: a bad TLS posture must stop the
+// service at startup, not be silently downgraded into one that happens to
+// connect.
+func (rdb *RdbManager) computePostgresDsn(pg *PostgresConfig) (string, error) {
+	sslMode, err := resolveSslMode(pg.SslMode)
+	if err != nil {
+		return "", err
+	}
 	// Pin search_path to this service's functional-area schema (then public) so
 	// that EVERY statement on the connection — not just GORM model operations,
 	// which are schema-qualified by the NamingStrategy TablePrefix — resolves into
@@ -125,13 +147,15 @@ func (rdb *RdbManager) computePostgresDsn(pg *PostgresConfig) string {
 	// not exist — so a migration against a fresh database fails with
 	// "relation does not exist". `public` stays on the path so extension functions
 	// installed there (TimescaleDB's create_hypertable, etc.) remain resolvable.
-	dsn := fmt.Sprintf("user=%s password=%s host=%s dbname=%s port=%d sslmode=disable search_path=%s,public",
-		pg.Username, pg.Password, pg.Hostname, rdb.Microservice.InstanceId, pg.Port, rdb.Microservice.FunctionalArea)
+	dsn := fmt.Sprintf("user=%s password=%s host=%s dbname=%s port=%d sslmode=%s search_path=%s,public",
+		pg.Username, pg.Password, pg.Hostname, rdb.Microservice.InstanceId, pg.Port, sslMode, rdb.Microservice.FunctionalArea)
 	// Never log the password (C1): emit only the non-sensitive connection
 	// coordinates. PostgresConfig.Password is treated as redacted everywhere.
+	// sslMode is logged deliberately: "is this link encrypted" is the kind of
+	// question that should be answerable from a pod's logs.
 	log.Info().Str("username", pg.Username).Str("hostname", pg.Hostname).
-		Int32("port", pg.Port).Msg("Initializing database connectivity")
-	return dsn
+		Int32("port", pg.Port).Str("ssl_mode", sslMode).Msg("Initializing database connectivity")
+	return dsn, nil
 }
 
 // Boostrap a postgres database/schema.
@@ -169,7 +193,13 @@ func (rdb *RdbManager) initializePostgres(ctx context.Context) error {
 	}
 
 	// Connect to database using params from instance configuration (also retried).
-	dsn := rdb.computePostgresDsn(pgconf)
+	// Note this is deliberately NOT inside the retry: an invalid sslMode is a
+	// config verdict, and retrying it just turns a clear startup error into a
+	// crash-loop that reads like the database is unreachable.
+	dsn, err := rdb.computePostgresDsn(pgconf)
+	if err != nil {
+		return err
+	}
 	var db *gorm.DB
 	if err := core.RetryInfraConnect(ctx, "postgres", func(context.Context) error {
 		var oerr error

@@ -198,9 +198,43 @@ root_key() { cfg_get '.infrastructure.secrets.rootKey'; }
 # pg_pod finds the relational Postgres pod. The dump and the restore run INSIDE
 # it, so the rig needs no Postgres client on the host — only the drill's own
 # verify needs a port-forward.
+#
+# It resolves the pod through the `dc-postgresql` SERVICE rather than through a
+# pod label, and that is deliberate (ADR-020 A2.1). The label this used to select
+# on — `app.kubernetes.io/name=dc-postgresql` — is authored by the OpenTofu
+# module that provisions today's single-node StatefulSet. Under the A2 topology
+# the store becomes a CloudNativePG Cluster whose pods carry `cnpg.io/*` labels
+# instead, and this lookup would find nothing while the service name is unchanged
+# — so the rig would break on a topology change that is invisible from here.
+#
+# The service is the thing both topologies actually agree on: today it selects
+# the only pod, and under CNPG the operator re-points it at whichever pod is
+# primary. Resolving through it also means the dump always runs on the PRIMARY,
+# which is the only place it is correct to run once replicas exist.
+#
+# EndpointSlice, not the older Endpoints API, which is deprecated. Only READY
+# endpoints count: a terminating or unready pod has a name but cannot serve a
+# dump, and picking one would fail later and further away.
 pg_pod() {
-  kubectl --context "$kube_context" -n dc-system get pods \
-    -l app.kubernetes.io/name=dc-postgresql -o jsonpath='{.items[0].metadata.name}'
+  local slices pod
+  slices="$(kubectl --context "$kube_context" -n dc-system get endpointslices \
+    -l "kubernetes.io/service-name=dc-postgresql" -o json)" ||
+    fail "could not list endpointslices for the dc-postgresql service"
+
+  pod="$(printf '%s' "$slices" |
+    jq -r 'first(.items[].endpoints[]
+             | select(.conditions.ready == true)
+             | .targetRef.name // empty)')"
+
+  # Same refusal as cfg_get: an empty answer here is a broken instance, not a
+  # pod named "". Say which of the two it is, because they are fixed differently.
+  if [[ -z "$pod" || "$pod" == "null" ]]; then
+    fail "no READY pod backs the dc-postgresql service in dc-system.$(
+      printf '\n  endpointslices found: %s' \
+        "$(printf '%s' "$slices" | jq -r '.items | length')"
+    )"
+  fi
+  printf '%s' "$pod"
 }
 
 # wait_for_api blocks until the instance's ingress actually routes to a live
