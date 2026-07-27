@@ -28,10 +28,15 @@ esac
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TOOL_DIR="$ROOT/backend/tools/migrationdiff"
-GOLDEN_DIR="$TOOL_DIR/golden"
+GOLDEN_DIR="${MDIFF_GOLDEN_DIR:-$TOOL_DIR/golden}"
 
 CONTAINER="${MDIFF_CONTAINER:-dc-mdiff}"
-IMAGE="${MDIFF_IMAGE:-timescale/timescaledb:latest-pg16}"
+# Pinned by DIGEST, not by the `latest-pg16` tag it resolves to. Goldens are
+# version-sensitive, and `latest-pg16` is a moving tag: the day Timescale
+# republishes it, `verify` starts failing on every PR for a reason that has
+# nothing to do with the PR. The digest below is the image the goldens were
+# captured against (TimescaleDB 2.28.3 / PostgreSQL 16).
+IMAGE="${MDIFF_IMAGE:-timescale/timescaledb:latest-pg16@sha256:61f891691050da6032023c01ea885730eeeba06b7c17b403e7d0b9c49c37dfe9}"
 # MDIFF_PORT pins the host port for local debugging; unset (the default, and CI) lets
 # Docker assign a free ephemeral port on loopback. A hardcoded host port is fragile in
 # CI — the throwaway container failed to start with "address already in use" on
@@ -52,25 +57,66 @@ else
   PUBLISH="127.0.0.1::5432" # empty middle field → Docker picks a free ephemeral port
 fi
 
-echo "==> Starting throwaway TimescaleDB ($IMAGE) as $CONTAINER"
-docker run -d --name "$CONTAINER" \
-  -e POSTGRES_PASSWORD="$PASSWORD" \
-  -p "$PUBLISH" \
-  "$IMAGE" >/dev/null
+# How to start the image. Two image families are in play during the ADR-020 A2
+# migration to CloudNativePG, and they boot in incompatible ways:
+#
+#   entrypoint (default) — `timescale/timescaledb`, which inherits the official
+#     postgres image's docker-entrypoint: it reads POSTGRES_PASSWORD, runs initdb
+#     itself and starts the server. This is what deploy/opentofu ships today.
+#
+#   operand — a CloudNativePG operand image (deploy/images/timescaledb, ADR-020
+#     A2.6). It has NO entrypoint at all and its CMD is `bash`, because in
+#     production CNPG's instance manager does the initdb. Started the default way
+#     it would run a shell, exit, and leave this harness waiting on a server that
+#     was never going to arrive.
+LAUNCH="${MDIFF_LAUNCH:-entrypoint}"
 
-# Discover the host port Docker actually bound (the ephemeral one, or the pinned one).
-# `docker port <c> 5432/tcp` prints e.g. "127.0.0.1:49153"; take the port after the colon.
-HOST_PORT="$(docker port "$CONTAINER" 5432/tcp | head -n1 | sed 's/.*://')"
-[ -n "$HOST_PORT" ] || { echo "could not determine the container's published port" >&2; docker logs "$CONTAINER" | tail -20 >&2; exit 1; }
-echo "==> Postgres published on 127.0.0.1:$HOST_PORT"
+# Guard: `snapshot` against a non-default server would overwrite the committed
+# goldens with dumps from a DIFFERENT PostgreSQL/TimescaleDB, and the result
+# looks exactly like a legitimate refresh — a diff full of plausible schema
+# changes, committed by someone who ran the documented command. Require an
+# explicit destination instead.
+if [ "$MODE" = "snapshot" ] && [ "$LAUNCH" != "entrypoint" ] && [ -z "${MDIFF_GOLDEN_DIR:-}" ]; then
+  echo "refusing to snapshot into the committed goldens from launch=$LAUNCH." >&2
+  echo "The goldens belong to the default image; a snapshot from another server" >&2
+  echo "would silently replace them. Set MDIFF_GOLDEN_DIR to a scratch directory," >&2
+  echo "or run with the default launch mode." >&2
+  exit 2
+fi
 
-echo -n "==> Waiting for Postgres to accept connections"
-for _ in $(seq 1 60); do
-  if docker exec "$CONTAINER" pg_isready -U postgres >/dev/null 2>&1; then ok=1; break; fi
-  echo -n "."; sleep 1
-done
-echo
-[ "${ok:-}" = 1 ] || { echo "Postgres did not become ready" >&2; docker logs "$CONTAINER" | tail -20 >&2; exit 1; }
+echo "==> Starting throwaway TimescaleDB ($IMAGE, launch=$LAUNCH) as $CONTAINER"
+case "$LAUNCH" in
+  entrypoint)
+    docker run -d --name "$CONTAINER" \
+      -e POSTGRES_PASSWORD="$PASSWORD" \
+      -p "$PUBLISH" \
+      "$IMAGE" >/dev/null
+
+    # Discover the host port Docker actually bound (the ephemeral one, or the pinned one).
+    # `docker port <c> 5432/tcp` prints e.g. "127.0.0.1:49153"; take the port after the colon.
+    HOST_PORT="$(docker port "$CONTAINER" 5432/tcp | head -n1 | sed 's/.*://')"
+    [ -n "$HOST_PORT" ] || { echo "could not determine the container's published port" >&2; docker logs "$CONTAINER" | tail -20 >&2; exit 1; }
+    echo "==> Postgres published on 127.0.0.1:$HOST_PORT"
+
+    echo -n "==> Waiting for Postgres to accept connections"
+    for _ in $(seq 1 60); do
+      if docker exec "$CONTAINER" pg_isready -U postgres >/dev/null 2>&1; then ok=1; break; fi
+      echo -n "."; sleep 1
+    done
+    echo
+    [ "${ok:-}" = 1 ] || { echo "Postgres did not become ready" >&2; docker logs "$CONTAINER" | tail -20 >&2; exit 1; }
+    ;;
+  operand)
+    # shellcheck source=../deploy/images/timescaledb/standalone.sh
+    . "$ROOT/deploy/images/timescaledb/standalone.sh"
+    HOST_PORT="$(dc_operand_start "$IMAGE" "$CONTAINER" "$PUBLISH")"
+    echo "==> Postgres published on 127.0.0.1:$HOST_PORT"
+    ;;
+  *)
+    echo "unknown MDIFF_LAUNCH='$LAUNCH' (expected 'entrypoint' or 'operand')" >&2
+    exit 2
+    ;;
+esac
 
 echo "==> Running migrationdiff (mode=$MODE)"
 cd "$TOOL_DIR"
