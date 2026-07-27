@@ -31,6 +31,16 @@ El arranque inicial se ejecuta como una canalización (pipeline) ordenada e
 **idempotente** —volver a ejecutarlo converge al mismo estado y te indica qué paso
 falló si alguno lo hace:
 
+:::warning Excepción única: instancias creadas antes de que la base de datos pasara a CloudNativePG
+La base de datos relacional pasó de ser un StatefulSet a un clúster de CloudNativePG, y no
+existe una actualización en sitio: el directorio de datos de un StatefulSet no puede ser
+adoptado por el operador. En una instancia creada antes de ese cambio, volver a ejecutar el
+arranque inicial **se niega** en lugar de converger, y te indica cómo volcar los datos o
+descartarlos deliberadamente. Esa negativa es justamente el objetivo: sin ella la base de
+datos antigua se eliminaría y una nueva, vacía, ocuparía el mismo nombre de host, dejando una
+instancia que parece perfectamente sana y no tiene ningún dato.
+:::
+
 1. **Renderizar la configuración** — resuelve el id de la instancia, el namespace,
    el perfil y todas las credenciales generadas: el material de autenticación del
    bróker (la contraseña de servicio compartida y la clave del emisor del callout),

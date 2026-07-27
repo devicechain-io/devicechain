@@ -319,6 +319,21 @@ evaluates 3 'var.postgres_instances != 0 ? var.postgres_instances : (var.ha ? 3 
 evaluates 1 'var.postgres_instances != 0 ? var.postgres_instances : (var.ha ? 3 : 1)' -var ha=false
 evaluates 1 'var.postgres_instances != 0 ? var.postgres_instances : (var.ha ? 3 : 1)' -var ha=true -var postgres_instances=1
 
+# The SECOND derivation — whether synchronous replication is actually IN FORCE.
+#
+# This one is asymmetric, which is why it needs its own assertions rather than
+# riding on the instance count above. Break the derivation toward ON and the
+# chart's `fail` catches it loudly (the CI helm step covers exactly that). Break
+# it toward OFF and a `--ha` install runs ASYNCHRONOUSLY behind three healthy
+# pods and a green apply — the false-HA shape — with nothing in CI to notice.
+#
+# `synchronous_enforced` reports what is in force rather than what was asked
+# for, which is what makes it the database sibling of ha_topology.contradictory.
+# These three lines are what stop it from being decorative.
+evaluates true 'module.cnpg_rdb.synchronous_enforced' -var ha=true
+evaluates false 'module.cnpg_rdb.synchronous_enforced' -var ha=false
+evaluates false 'module.cnpg_rdb.synchronous_enforced' -var ha=true -var postgres_instances=1
+
 if ((failures > 0)); then
   echo >&2
   echo "$failures validation assertion(s) failed." >&2

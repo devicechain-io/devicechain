@@ -28,6 +28,15 @@ cluster creation are planned follow-ups — see [Prerequisites](#prerequisites).
 The bootstrap runs as an ordered, **idempotent** pipeline — re-running it converges
 to the same state and tells you which step failed if one does:
 
+:::warning One-time exception: instances created before the database moved to CloudNativePG
+The relational database changed from a StatefulSet to a CloudNativePG cluster, and there is
+no in-place upgrade — a StatefulSet's data directory cannot be adopted by the operator. On an
+instance created before that change, re-running the bootstrap **refuses** rather than
+converging, and tells you how to dump the data or discard it deliberately. That refusal is
+the point: without it the old database would be removed and a new, empty one would take over
+the same hostname, leaving an instance that looks perfectly healthy and has no data in it.
+:::
+
 1. **Render configuration** — resolve the instance id, namespace, profile, and every
    generated credential: the broker-auth material (the shared service password and
    the callout issuer key), the cross-service auth secret, and the **secret-store

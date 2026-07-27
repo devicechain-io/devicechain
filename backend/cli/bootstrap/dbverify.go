@@ -315,14 +315,26 @@ func collectAndVerifyDatabase(
 	return rep, nil
 }
 
-// verifyAliasService asserts the DNS contract: the alias exists, CNPG owns its
-// selector, and it resolves to the CURRENT primary.
+// verifyAliasService asserts the DNS contract: the alias exists, is OWNED by the
+// Cluster, carries the operator's own selector, and resolves to the CURRENT
+// primary.
 //
-// The selector comparison is against the operator's own <cluster>-rw Service
-// rather than against a literal we write down. A hand-rolled Service of the
-// right name would satisfy a literal check while not being maintained by the
-// operator — so it would stop following the primary on the first failover, which
-// is precisely the property under test.
+// The ownership check is the one that is easy to leave out and hard to replace.
+// An earlier version compared only selectors, on the theory that a hand-rolled
+// Service "would stop following the primary on the first failover" — that is
+// FALSE, and worth recording because it sounds right. The selector is
+// label-based (`cnpg.io/instanceRole: primary`) and CNPG relabels the POD on
+// promotion, so any Service carrying that selector follows the primary perfectly
+// well, operator-managed or not.
+//
+// What is genuinely lost with an unmanaged Service is the SERVER CERTIFICATE:
+// only names CNPG knows about are added to the cert's SANs, so an impostor alias
+// works today over `sslmode=disable` and breaks the moment anyone asks for
+// `verify-full`. That failure is invisible until the day TLS is tightened, which
+// is exactly the kind of latent break worth an assertion now.
+//
+// So both are checked: the ownerReference (is this the operator's Service?) and
+// the selector (does it point where the operator's points?).
 func verifyAliasService(
 	ctx context.Context,
 	typed *kubernetes.Clientset,
@@ -346,8 +358,26 @@ func verifyAliasService(
 	}
 	if fmt.Sprint(alias.Spec.Selector) != fmt.Sprint(rw.Spec.Selector) {
 		add("B4", opts.AliasService, "its selector %v does not match %s-rw's %v, so it "+
-			"is not the operator-maintained primary alias and will not follow a failover",
-			alias.Spec.Selector, opts.ClusterName, rw.Spec.Selector)
+			"does not point at the primary", alias.Spec.Selector, opts.ClusterName,
+			rw.Spec.Selector)
+	}
+
+	// Owned by this Cluster, i.e. actually a managed service. A hand-rolled
+	// Service with the right selector DOES follow the primary — so this is not
+	// about failover. It is about the server certificate: only names the operator
+	// knows about reach the cert's SANs, so an unmanaged alias works over
+	// sslmode=disable and fails the day anyone asks for verify-full.
+	managed := false
+	for _, o := range alias.OwnerReferences {
+		if o.Kind == "Cluster" && o.Name == opts.ClusterName {
+			managed = true
+		}
+	}
+	if !managed {
+		add("B4", opts.AliasService, "it is not owned by Cluster %s, so it is not an "+
+			"operator-managed service. It may still route correctly today, but its name "+
+			"is absent from the server certificate's SANs, so TLS verification against "+
+			"this hostname cannot succeed", opts.ClusterName)
 	}
 
 	// And that it actually points at the primary right now.
@@ -373,8 +403,12 @@ func verifyAliasService(
 	}
 }
 
-// verifyPostgresState asks PostgreSQL what it is actually doing, through the
-// alias Service's own endpoint and with the app credentials every service uses.
+// verifyPostgresState asks PostgreSQL what it is actually doing, with the app
+// credentials every service uses.
+//
+// It port-forwards to the current primary POD by name, not through the alias
+// Service — client-go's port-forwarding is pod-based. So this does not exercise
+// the DNS contract; verifyAliasService does that, against the Kubernetes API.
 func verifyPostgresState(
 	ctx context.Context,
 	restCfg *rest.Config,
@@ -386,10 +420,30 @@ func verifyPostgresState(
 	requireSync bool,
 	syncNumber int,
 ) error {
+	// 🔴 A SKIPPED AXIS IS NOT A PASS, and OK() cannot see Skipped — it counts
+	// findings only. So when the caller DEMANDED synchronous replication, being
+	// unable to ask PostgreSQL has to be a finding, or the report goes green
+	// having verified nothing about the property it was asked to verify.
+	//
+	// This is not hypothetical. A Cluster created by `bootstrap.recovery` — which
+	// is exactly what A2.5's restore drill produces — has no `initdb` block at
+	// all, so `database` and `secretName` are both empty. Without this, B5/B6/B7
+	// and B8 would all silently vanish on a restored cluster and CHECK B would
+	// pass with `--require-synchronous` set, because only B3 reads the spec.
+	skip := func(why string) {
+		if opts.RequireSynchronous {
+			add("B6", opts.ClusterName, "synchronous replication was REQUIRED but could "+
+				"not be verified against the running server: %s. This is a finding rather "+
+				"than a skipped check because a report that examined nothing must not be "+
+				"green", why)
+			return
+		}
+		rep.Skipped = append(rep.Skipped, "the PostgreSQL state checks ("+why+")")
+	}
+
 	primary, _, _ := unstructured.NestedString(cl.Object, "status", "currentPrimary")
 	if primary == "" {
-		rep.Skipped = append(rep.Skipped,
-			"the PostgreSQL state checks (the Cluster reports no current primary)")
+		skip("the Cluster reports no current primary")
 		return nil
 	}
 	database, _, _ := unstructured.NestedString(cl.Object,
@@ -397,8 +451,8 @@ func verifyPostgresState(
 	secretName, _, _ := unstructured.NestedString(cl.Object,
 		"spec", "bootstrap", "initdb", "secret", "name")
 	if database == "" || secretName == "" {
-		rep.Skipped = append(rep.Skipped,
-			"the PostgreSQL state checks (the Cluster does not name a bootstrap database and credentials Secret)")
+		skip("the Cluster does not name a bootstrap database and credentials Secret, " +
+			"which is normal for a cluster restored via bootstrap.recovery")
 		return nil
 	}
 

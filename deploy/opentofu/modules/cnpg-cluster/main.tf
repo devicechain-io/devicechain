@@ -171,9 +171,28 @@ variable "parameters" {
 }
 
 variable "resources" {
-  description = "Resource requests/limits for the Postgres instances."
+  description = <<-EOT
+    Resource requests/limits for the Postgres instances.
+
+    🔴 The default is REQUESTS, not empty, and that matters more than it looks.
+    An empty value yields a pod with no requests at all — QoS class BestEffort —
+    which makes the database the FIRST thing the kubelet evicts under node
+    memory pressure. The StatefulSet this replaced requested 100m/256Mi, so
+    leaving this empty would have been a silent regression in exactly the
+    configuration least able to absorb it: `--compact`, which exists for small
+    nodes and is what the HA rig's control instance runs.
+
+    Requests without limits is deliberate, matching the operator module: a CPU
+    limit on a database turns load into throttling, and a memory limit turns a
+    large query into an OOMKill.
+  EOT
   type        = any
-  default     = {}
+  default = {
+    requests = {
+      cpu    = "100m"
+      memory = "256Mi"
+    }
+  }
 }
 
 locals {
@@ -262,11 +281,32 @@ resource "helm_release" "cluster" {
     }
   })]
 
-  # Waits for the Cluster's pods to be Ready. That matters more here than for a
-  # normal release: the Helm step that follows this apply starts eleven services
-  # which all immediately CREATE DATABASE, and a database that is not yet
-  # accepting connections turns into eleven crashlooping pods.
+  # 🔴 `wait` DOES NOT WAIT FOR THE DATABASE, and an earlier version of this
+  # comment claimed it did. The release manifest contains exactly one object —
+  # the Cluster custom resource. The pods, PVCs and Services are created by the
+  # OPERATOR and owned by the Cluster, so they are not in the release, and Helm's
+  # readiness checker has no case for an arbitrary custom resource: it reports
+  # ready the moment the CR is accepted. The timeout below therefore bounds the
+  # apply, not the database.
+  #
+  # What actually covers the gap today is the Helm step that follows, which waits
+  # on the eleven service Deployments with its own 10-minute timeout — and those
+  # cannot become ready until the database accepts connections. That is real, but
+  # it is downstream and incidental, so it is written here rather than assumed.
   timeout = 900
+
+  # Databases outlive the deployment, so refuse a naive destroy. The StatefulSet
+  # this replaced carried the same guard and it must not be lost in the move: the
+  # Cluster OWNS its PersistentVolumeClaims, so deleting this release garbage-
+  # collects the data volumes — a sharper edge than the old topology had, where
+  # the PVC survived the StatefulSet.
+  #
+  # 🔴 This protects the resource while it is IN THE CONFIGURATION. It does NOT
+  # protect it from being removed from the configuration — see the cutover guard
+  # in the root, and the reason it had to exist.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 output "host" {

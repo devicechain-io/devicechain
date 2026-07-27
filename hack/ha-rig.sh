@@ -159,8 +159,14 @@ cmd_verify() {
   # the API server prunes it silently, so a one-character slip in the chart
   # template produces a Cluster whose spec asks for nothing, three healthy pods,
   # and asynchronous replication. A spec-derived check reads that spec and agrees.
+  #
+  # --instances 3 is STATED here, not left to default. Without it the expected
+  # count is read from the same Cluster spec the check is judging, so B1/B2/B7
+  # compare the spec against itself and pass trivially. The flag's own help text
+  # warns about this, and it was originally wired only on the negative control —
+  # which is the half where it is easier to remember and less valuable.
   say "CHECK B — asserting the DATABASE replication claim from live PostgreSQL state"
-  "$dcctl" ha verify-db --cluster dc-rdb --require-synchronous \
+  "$dcctl" ha verify-db --cluster dc-rdb --instances 3 --require-synchronous \
     --kube-context "kind-$ha_cluster" \
     || fail "the relational database does not hold the replication it declares (see the findings above)"
   say "CHECK B PASSED"
@@ -240,6 +246,28 @@ The same reading applies as for the broker control above: a PASS where a failure
 expected means CHECK B proves nothing, while a connection or lookup error means the
 control never ran and the result is inconclusive."
   say "NEGATIVE CONTROL HELD (database)"
+
+  # A SECOND database control, isolating the synchronous axis — and it is not
+  # redundant with the one above, which is over-determined.
+  #
+  # `--instances 3` against a single-instance store fails on B1, B2, B3, B6, B7
+  # and B8 all at once. So that control would still "hold" if every
+  # RequireSynchronous code path were deleted: B1/B2/B7 carry it on their own.
+  # A regression that killed only the synchronous checks would leave the rig
+  # green in both directions, which is the failure mode this whole rig exists to
+  # make impossible.
+  #
+  # Stating the store's ACTUAL instance count removes B1/B2/B7 from the picture,
+  # so this can only pass if B3/B6/B8 — the synchronous assertions themselves —
+  # still fire. Verified to produce exactly those three and nothing else.
+  say "NEGATIVE CONTROL — isolating the SYNCHRONOUS axis, so it cannot rot behind the count checks"
+  "$dcctl" ha verify-db --cluster dc-rdb --instances 1 --require-synchronous \
+    --kube-context "kind-$control_cluster" --expect-fail \
+    || fail "THE SYNCHRONOUS-AXIS CONTROL DID NOT HOLD. Read the output above: if the store
+PASSED, then the synchronous assertions (B3/B6/B8) are no longer detecting an asynchronous
+database, and CHECK B's synchronous half proves nothing even though the topology control
+above may still be holding on the instance-count assertions."
+  say "NEGATIVE CONTROL HELD (synchronous axis)"
 }
 
 cmd_down() {

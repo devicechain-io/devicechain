@@ -104,9 +104,20 @@ spec:
   # platform never uses -- every service connects as the app owner.
   enableSuperuserAccess: {{ .Values.enableSuperuserAccess }}
 
-  # A PodDisruptionBudget so a node drain cannot take the quorum with it. This
-  # is A3's concern; it costs nothing to have it correct from the start.
-  enablePDB: true
+  # A PodDisruptionBudget so a node drain cannot take the quorum with it — but
+  # ONLY above one instance.
+  #
+  # 🔴 It does NOT "cost nothing to have on from the start", which is what an
+  # earlier version of this comment claimed. At `instances: 1` CNPG emits a PDB
+  # with minAvailable=1 over a single pod, so ALLOWED DISRUPTIONS is 0 and
+  # `kubectl drain` on that node blocks forever. Since decision D4 makes one
+  # instance the default topology for every non-HA install, that is the COMMON
+  # case, and the operation it breaks is the one you most need during a node
+  # upgrade. CNPG's own guidance is to disable the PDB for single-instance
+  # clusters.
+  #
+  # Above one instance the budget is doing real work and stays on.
+  enablePDB: {{ gt $instances 1 }}
 
   storage:
     size: {{ required "cnpg-cluster: .Values.storage.size is required" .Values.storage.size }}
@@ -176,7 +187,9 @@ spec:
         createdb: true
         inRoles:
           # pg_monitor, so the HA verifier can see replication state through the
-          # SAME credentials and the SAME alias Service every service uses.
+          # SAME credentials every service uses. (It connects to the primary pod
+          # directly, not through the alias — the alias is checked separately,
+          # against the Kubernetes API.)
           #
           # 🔴 This is not convenience, it is what makes the check honest, and
           # the alternative was measured. Without it `pg_stat_replication`
