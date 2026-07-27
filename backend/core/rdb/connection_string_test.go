@@ -12,104 +12,187 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// These exist because a vacuity audit found that the sslMode knob was pinned
-// only at the pure function. Reverting EITHER connection-string builder to a
-// hardcoded `sslmode=disable` left the entire core module green — an operator
-// could set `verify-full`, every test would pass, and every service would speak
-// plaintext. The tests below assert the CALL SITES, which is where the value
-// either arrives or silently does not.
+// These assert the CALL SITES, and they assert them by handing the built string
+// to pgconn's OWN parser — the same code that will consume it at runtime.
 //
-// The same audit found a third builder that had been missed entirely
-// (computePostgresInstanceDatabaseUrl). That is why the last test in this file
-// enumerates the SET of builders rather than checking the three we know about:
-// fixing the instance is worth one bug, testing the set is worth the next one.
+// That choice is the point. An earlier version of this file checked
+// `strings.Contains(dsn, "sslmode=require")`, which is a restatement of the
+// formatting rather than a test of the meaning: it passed for a DSN whose
+// password had silently redirected the connection to a unix socket, and it broke
+// the moment values started being quoted even though the DSN got strictly more
+// correct. Asking the real parser what a string MEANS cannot be fooled by either.
+//
+// The adversarial values below are not hypothetical — every one of them was
+// found by review against the fmt.Sprintf implementation this replaced.
 
-// rdbFixture builds the minimum RdbManager needed to render a connection
-// string. It deliberately uses values that would be VISIBLE if they landed in
-// the wrong slot of the URL.
-func rdbFixture(t *testing.T, sslMode string) (*RdbManager, *PostgresConfig) {
+func rdbFixture(t *testing.T, pg *PostgresConfig) *RdbManager {
 	t.Helper()
-	pg := &PostgresConfig{
-		Hostname: "dc-postgresql.dc-system",
-		Port:     5432,
-		Username: "devicechain",
-		Password: "devicechain",
-		SslMode:  sslMode,
-	}
 	return &RdbManager{
 		Microservice: &core.Microservice{
 			InstanceId:     "prod",
 			FunctionalArea: "device-management",
 		},
 		InstanceConfig: config.DatastoreConfiguration{
-			Configuration: map[string]interface{}{
-				"hostname": pg.Hostname,
-				"port":     pg.Port,
-				"username": pg.Username,
-				"password": pg.Password,
-			},
+			Configuration: map[string]interface{}{},
 		},
-	}, pg
-}
-
-// connectionStringBuilders is the set under test. A builder added to
-// postgres.go and not added here is caught by
-// TestEveryConnectionStringBuilderIsCovered below.
-type connectionStringBuilder struct {
-	// fn is the name as it appears in the source, which is how the coverage
-	// guard correlates this table with the file.
-	fn    string
-	build func(*RdbManager, *PostgresConfig) (string, error)
-}
-
-func connectionStringBuilders() []connectionStringBuilder {
-	return []connectionStringBuilder{
-		{"computePostgresDsn", (*RdbManager).computePostgresDsn},
-		{"computePostgresRootUrl", (*RdbManager).computePostgresRootUrl},
-		{"computePostgresInstanceDatabaseUrl", (*RdbManager).computePostgresInstanceDatabaseUrl},
 	}
 }
 
-// The mutation that survived the original commit: hardcode the mode in the
-// builder and leave resolveSslMode perfectly tested. Every builder must carry
-// the CONFIGURED value, and `disable` is deliberately not the value asserted —
-// asserting the default would pass against a hardcoded default.
+func basePg(sslMode string) *PostgresConfig {
+	return &PostgresConfig{
+		Hostname: "dc-postgresql.dc-system",
+		Port:     5432,
+		Username: "devicechain",
+		Password: "devicechain",
+		SslMode:  sslMode,
+	}
+}
+
+type builder struct {
+	fn    string
+	build func(*RdbManager, *PostgresConfig) (string, error)
+	// db is the database this builder is expected to target.
+	db string
+}
+
+func builders() []builder {
+	return []builder{
+		{"computePostgresDsn", (*RdbManager).computePostgresDsn, "prod"},
+		{"computePostgresRootUrl", (*RdbManager).computePostgresRootUrl, "postgres"},
+		{"computePostgresInstanceDatabaseUrl", (*RdbManager).computePostgresInstanceDatabaseUrl, "prod"},
+	}
+}
+
+// parse hands the string to pgconn and returns what it actually resolved to.
+func parse(t *testing.T, connString string) *pgconn.Config {
+	t.Helper()
+	cfg, err := pgconn.ParseConfig(connString)
+	if err != nil {
+		t.Fatalf("pgconn could not parse the connection string we produced: %v", err)
+	}
+	return cfg
+}
+
+// Every builder must carry the configured mode, and pgconn must AGREE about what
+// it means — TLS actually configured for require/verify-full, actually absent for
+// disable. Asserting the substring would pass for a string pgconn rejects.
 func TestEveryBuilderCarriesTheConfiguredSslMode(t *testing.T) {
-	for _, b := range connectionStringBuilders() {
+	for _, b := range builders() {
 		t.Run(b.fn, func(t *testing.T) {
-			for _, mode := range []string{"require", "verify-full", "disable"} {
-				mgr, pg := rdbFixture(t, mode)
-				got, err := b.build(mgr, pg)
+			for _, tc := range []struct {
+				mode   string
+				wantTL bool
+			}{
+				{"disable", false},
+				{"require", true},
+				{"verify-full", true},
+				{"prefer", true}, // prefer configures TLS with a plaintext fallback
+			} {
+				got, err := b.build(rdbFixture(t, nil), basePg(tc.mode))
 				if err != nil {
-					t.Fatalf("%s(%q): %v", b.fn, mode, err)
+					t.Fatalf("%s(%q): %v", b.fn, tc.mode, err)
 				}
-				if !strings.Contains(got, "sslmode="+mode) {
-					t.Errorf("%s did not carry the configured sslMode %q.\n  got: %s\n"+
-						"  An operator setting this would get a different TLS posture than they asked for.",
-						b.fn, mode, redactForTest(got))
-				}
-				// A builder that appended a SECOND sslmode would "contain" the
-				// right one while libpq used the last. Count, don't just find.
-				if n := strings.Count(got, "sslmode="); n != 1 {
-					t.Errorf("%s emitted %d sslmode parameters, want exactly 1: %s",
-						b.fn, n, redactForTest(got))
+				cfg := parse(t, got)
+				if hasTLS := cfg.TLSConfig != nil; hasTLS != tc.wantTL {
+					t.Errorf("%s with sslMode=%q resolved to TLSConfig!=nil == %v, want %v.\n"+
+						"  The operator asked for %q and pgconn understood something else.",
+						b.fn, tc.mode, hasTLS, tc.wantTL, tc.mode)
 				}
 			}
 		})
 	}
 }
 
-// The fail-closed contract, asserted at the builders rather than at
-// resolveSslMode. Swallowing the error here turns a config verdict into a
-// silent plaintext downgrade, which is the failure this whole knob exists to
-// make impossible.
+// The coordinates must survive the round trip unchanged. This is what catches a
+// value that has become syntax: a password containing a space used to leave
+// `host` unset, so pgconn silently fell back to a unix socket and the service
+// dialled itself.
+func TestEveryBuilderRoundTripsHostileValues(t *testing.T) {
+	hostile := []struct {
+		name, password string
+	}{
+		{"a space", "hunter 2"},
+		{"empty", ""},
+		{"a percent escape that must stay literal", "p%41ss"},
+		{"a single quote", "it's"},
+		{"a backslash", `back\slash`},
+		{"an at sign", "p@ss"},
+		{"a slash", "p/ss"},
+		{"a question mark", "p?ss"},
+		{"a hash", "p#ss"},
+		{"an equals and a space, i.e. an injection attempt", "x= y sslmode=disable"},
+	}
+	for _, b := range builders() {
+		for _, h := range hostile {
+			t.Run(b.fn+"/"+h.name, func(t *testing.T) {
+				pg := basePg("require")
+				pg.Password = h.password
+				got, err := b.build(rdbFixture(t, nil), pg)
+				if err != nil {
+					t.Fatalf("%s: %v", b.fn, err)
+				}
+				cfg := parse(t, got)
+
+				if cfg.Password != h.password {
+					t.Errorf("%s mangled the password: got %q, want %q.\n"+
+						"  The root and per-database connections would then authenticate differently.",
+						b.fn, cfg.Password, h.password)
+				}
+				if cfg.Host != "dc-postgresql.dc-system" {
+					t.Errorf("%s lost the host: got %q.\n"+
+						"  A host of \"/tmp\" means the value became syntax and pgconn fell back to a unix socket.",
+						b.fn, cfg.Host)
+				}
+				if cfg.Port != 5432 {
+					t.Errorf("%s lost the port: got %d", b.fn, cfg.Port)
+				}
+				if cfg.Database != b.db {
+					t.Errorf("%s targeted database %q, want %q", b.fn, cfg.Database, b.db)
+				}
+				// The injection case must not have turned TLS off.
+				if cfg.TLSConfig == nil {
+					t.Errorf("%s: sslMode=require did not survive a password of %q — TLS is off",
+						b.fn, h.password)
+				}
+			})
+		}
+	}
+}
+
+// The trailing-position defect: `search_path` is emitted last, so a functional
+// area carrying its own keywords used to be able to append an sslmode that WON,
+// because libpq takes the last occurrence.
+func TestATrailingRuntimeParameterCannotOverrideSslMode(t *testing.T) {
+	mgr := rdbFixture(t, nil)
+	mgr.Microservice.FunctionalArea = "usermgmt sslmode=disable search_path=usermgmt"
+	mgr.Microservice.InstanceId = "prod sslrootcert=/tmp/attacker.crt"
+
+	got, err := mgr.computePostgresDsn(basePg("verify-full"))
+	if err != nil {
+		t.Fatalf("computePostgresDsn: %v", err)
+	}
+	cfg := parse(t, got)
+
+	if cfg.TLSConfig == nil {
+		t.Errorf("a hostile functional area turned off TLS.\n  rendered: %s", redactForTest(got))
+	}
+	if cfg.Database != "prod sslrootcert=/tmp/attacker.crt" {
+		t.Errorf("the instance id leaked out of its value slot: database=%q", cfg.Database)
+	}
+	if cfg.Host != "dc-postgresql.dc-system" {
+		t.Errorf("the connection was redirected to %q", cfg.Host)
+	}
+}
+
+// Fail closed at the builders, not only in resolveSslMode.
 func TestEveryBuilderFailsClosedOnAnUnusableSslMode(t *testing.T) {
-	for _, b := range connectionStringBuilders() {
+	for _, b := range builders() {
 		t.Run(b.fn, func(t *testing.T) {
-			mgr, pg := rdbFixture(t, "disable sslrootcert=/tmp/attacker.crt")
-			got, err := b.build(mgr, pg)
+			pg := basePg("disable sslrootcert=/tmp/attacker.crt")
+			got, err := b.build(rdbFixture(t, nil), pg)
 			if err == nil {
 				t.Fatalf("%s accepted an injecting sslMode and returned: %s", b.fn, redactForTest(got))
 			}
@@ -122,72 +205,69 @@ func TestEveryBuilderFailsClosedOnAnUnusableSslMode(t *testing.T) {
 
 // 🔑 Test the SET, not the members.
 //
-// The sslMode omission that shipped was not a mistake in a builder — it was a
-// builder nobody remembered existed. This parses postgres.go, finds every
-// function whose body constructs something that looks like a Postgres
-// connection string, and requires it to be in the table above. A fourth builder
-// therefore fails this test until someone decides whether it needs the mode,
-// rather than silently inheriting libpq's default.
+// The sslMode omission that shipped was a builder nobody remembered existed.
+// This scans the files where connection strings are constructed and requires
+// every function that builds one to be in the table above.
 func TestEveryConnectionStringBuilderIsCovered(t *testing.T) {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "postgres.go", nil, 0)
-	if err != nil {
-		t.Fatalf("parsing postgres.go: %v", err)
-	}
-
 	covered := map[string]bool{}
-	for _, b := range connectionStringBuilders() {
+	for _, b := range builders() {
 		covered[b.fn] = true
 	}
+	// The low-level helpers in connstring.go are the escaping primitives, not
+	// per-connection builders; they are exercised by the round-trip tests above.
+	covered["postgresURL"] = true
+	covered["postgresKeywordDSN"] = true
 
 	var found []string
-	ast.Inspect(file, func(n ast.Node) bool {
-		fn, ok := n.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
-			return true
+	for _, src := range []string{"postgres.go", "connstring.go"} {
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, src, nil, 0)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", src, err)
 		}
-		// A connection string here is any literal carrying the postgres URL
-		// scheme or libpq's keyword form.
-		builds := false
-		ast.Inspect(fn.Body, func(inner ast.Node) bool {
-			lit, ok := inner.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
+		ast.Inspect(file, func(n ast.Node) bool {
+			fn, ok := n.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
 				return true
 			}
-			if strings.Contains(lit.Value, "postgres://") ||
-				(strings.Contains(lit.Value, "host=") && strings.Contains(lit.Value, "dbname=")) {
-				builds = true
-				return false
+			builds := false
+			ast.Inspect(fn.Body, func(inner ast.Node) bool {
+				lit, ok := inner.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					return true
+				}
+				v := lit.Value
+				if strings.Contains(v, "postgres://") || strings.Contains(v, "postgres") && strings.Contains(v, "://") ||
+					strings.Contains(v, "sslmode=") || strings.Contains(v, "dbname=") {
+					builds = true
+					return false
+				}
+				return true
+			})
+			if builds {
+				found = append(found, fn.Name.Name)
 			}
 			return true
 		})
-		if builds {
-			found = append(found, fn.Name.Name)
-		}
-		return true
-	})
-
-	// Positive control: if the scan finds nothing, it is broken, not clean.
-	// Without this the test would pass loudest exactly when it stopped working.
-	if len(found) == 0 {
-		t.Fatal("the scan found NO connection-string builders in postgres.go, so it is not measuring anything")
 	}
-	t.Logf("connection-string builders found in postgres.go: %v", found)
+
+	// Positive control: an empty scan is a broken test, not a clean one. This
+	// fired for real when the string literals moved into connstring.go.
+	if len(found) == 0 {
+		t.Fatal("the scan found NO connection-string builders, so it is not measuring anything")
+	}
+	t.Logf("connection-string builders found: %v", found)
 
 	for _, name := range found {
 		if !covered[name] {
-			t.Errorf("%s builds a Postgres connection string but is not in connectionStringBuilders().\n"+
-				"  Add it there (so the sslMode assertions cover it) or, if it genuinely must not carry\n"+
-				"  sslMode, say why in a comment and add it to the table anyway with that expectation.\n"+
-				"  A builder that quietly omits sslMode gets libpq's default, which is how the TLS\n"+
-				"  posture came to differ across three connections on the same hop.", name)
+			t.Errorf("%s builds a Postgres connection string but is not covered.\n"+
+				"  Add it to builders() so the sslMode and round-trip assertions reach it.\n"+
+				"  A builder that quietly omits sslMode inherits pgx's default, which is how the\n"+
+				"  TLS posture came to differ across three connections on the same hop.", name)
 		}
 	}
 }
 
-// redactForTest keeps the password out of failure output. The fixture's
-// password is not a secret, but the habit is: these strings are printed on
-// failure and failure output travels.
 func redactForTest(connectionString string) string {
-	return strings.ReplaceAll(connectionString, "devicechain:devicechain", "devicechain:REDACTED")
+	return strings.ReplaceAll(connectionString, "devicechain", "REDACTED")
 }

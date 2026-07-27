@@ -24,18 +24,15 @@ import (
 // postures on the same hop, decided by which function happened to build the
 // string — and the weaker one was the one used for the connection that CREATES
 // databases (ADR-020 A2.1).
-func (rdb *RdbManager) computePostgresRootUrl(pgconfig *PostgresConfig) (string, error) {
-	sslMode, err := resolveSslMode(pgconfig.SslMode)
+func (rdb *RdbManager) computePostgresRootUrl(pg *PostgresConfig) (string, error) {
+	sslMode, err := resolveSslMode(pg.SslMode)
 	if err != nil {
 		return "", err
 	}
-	config := rdb.InstanceConfig
-	hostname := fmt.Sprintf("%v", config.Configuration["hostname"])
-	port := fmt.Sprintf("%v", config.Configuration["port"])
-	username := fmt.Sprintf("%v", config.Configuration["username"])
-	password := fmt.Sprintf("%v", config.Configuration["password"])
-	return fmt.Sprintf("postgres://%s:%s@%s:%s/postgres?sslmode=%s",
-		username, password, hostname, port, sslMode), nil
+	// Read from the typed config rather than re-deriving from the raw map: the
+	// map path formatted every value with %v, so a port that arrived as a float
+	// rendered as "5432" or "5432.000000" depending on how the JSON was decoded.
+	return postgresURL(pg.Username, pg.Password, pg.Hostname, pg.Port, "postgres", sslMode), nil
 }
 
 // Assure that database is created before connecting to it.
@@ -97,8 +94,8 @@ func (rdb *RdbManager) computePostgresInstanceDatabaseUrl(pg *PostgresConfig) (s
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
-		pg.Username, pg.Password, pg.Hostname, pg.Port, rdb.Microservice.InstanceId, sslMode), nil
+	return postgresURL(pg.Username, pg.Password, pg.Hostname, pg.Port,
+		rdb.Microservice.InstanceId, sslMode), nil
 }
 
 // Assure that functional area schema is created before connecting to it.
@@ -162,8 +159,9 @@ func (rdb *RdbManager) computePostgresDsn(pg *PostgresConfig) (string, error) {
 	// not exist — so a migration against a fresh database fails with
 	// "relation does not exist". `public` stays on the path so extension functions
 	// installed there (TimescaleDB's create_hypertable, etc.) remain resolvable.
-	dsn := fmt.Sprintf("user=%s password=%s host=%s dbname=%s port=%d sslmode=%s search_path=%s,public",
-		pg.Username, pg.Password, pg.Hostname, rdb.Microservice.InstanceId, pg.Port, sslMode, rdb.Microservice.FunctionalArea)
+	dsn := postgresKeywordDSN(pg.Username, pg.Password, pg.Hostname, pg.Port,
+		rdb.Microservice.InstanceId, sslMode,
+		map[string]string{"search_path": rdb.Microservice.FunctionalArea + ",public"})
 	// Never log the password (C1): emit only the non-sensitive connection
 	// coordinates. PostgresConfig.Password is treated as redacted everywhere.
 	// sslMode is logged deliberately: "is this link encrypted" is the kind of

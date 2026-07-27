@@ -99,15 +99,42 @@ func resolveSslMode(configured string) (string, error) {
 }
 
 // Use json marshaling to convert between generic config and strongly-typed.
+//
+// This is the ONLY place the datastore config is turned into something typed, so
+// it is where both fail-closed rules land (ADR-020 A2.1, both found by review):
+//
+//  1. Unknown keys are REJECTED. Previously a plain Unmarshal silently discarded
+//     them, so `ssl_mode` or `sslmodee` — or a key indented one level too far —
+//     left the posture at its default while the operator believed they had
+//     changed it. Silently ignoring a key someone deliberately wrote is the
+//     fail-OPEN half of a fail-closed house rule, and it is precisely the shape
+//     the graphql-go fork exists to fix one layer up.
+//  2. sslMode is validated HERE, not only at the point of use. It used to be
+//     checked inside the connection builders, and `computePostgresRootUrl` is
+//     called from within `RetryInfraConnect` — so a typo produced 30 attempts
+//     over ~58 seconds and 29 "infrastructure dependency not ready" warnings
+//     before surfacing, i.e. a config verdict wearing the costume of an
+//     unreachable database. This function runs once, before any retry, so the
+//     verdict arrives immediately and says what is actually wrong.
 func convertToPostgresConfig(rdb config.DatastoreConfiguration) (*PostgresConfig, error) {
 	bytes, err := json.Marshal(rdb.Configuration)
 	if err != nil {
 		return nil, err
 	}
 	pgconf := &PostgresConfig{}
-	err = json.Unmarshal(bytes, pgconf)
+	decoder := json.NewDecoder(strings.NewReader(string(bytes)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(pgconf); err != nil {
+		return nil, fmt.Errorf("invalid database configuration: %w", err)
+	}
+
+	// Normalise as well as validate, so every later reader sees the resolved
+	// value and no caller can reach a different conclusion about the posture.
+	mode, err := resolveSslMode(pgconf.SslMode)
 	if err != nil {
 		return nil, err
 	}
+	pgconf.SslMode = mode
+
 	return pgconf, nil
 }

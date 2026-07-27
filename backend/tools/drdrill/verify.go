@@ -12,9 +12,11 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-microservice/userclient"
 	"gorm.io/driver/postgres"
@@ -36,6 +38,7 @@ type verifyOptions struct {
 	user     string
 	password string
 	database string
+	sslMode  string
 
 	server string
 	scheme string
@@ -51,6 +54,11 @@ func runVerify(ctx context.Context, argv []string) error {
 	fs.StringVar(&o.user, "db-user", "devicechain", "Postgres user")
 	fs.StringVar(&o.password, "db-password", "", "Postgres password (or set PGPASSWORD)")
 	fs.StringVar(&o.database, "db-name", "", "instance database name (defaults to the receipt's instance)")
+	// Defaults to `prefer`, matching core/rdb: negotiate TLS when the store
+	// offers it, fall back when it does not. Hard-coding `disable` here meant the
+	// drill could not reach a TLS-requiring store at all — i.e. it failed exactly
+	// where proving recoverability matters most.
+	fs.StringVar(&o.sslMode, "db-sslmode", "prefer", "libpq sslmode for the database connection")
 	fs.StringVar(&o.server, "server", "localhost", "instance ingress host the API is reachable on")
 	fs.StringVar(&o.scheme, "scheme", "http", "http or https for the API check")
 	if err := fs.Parse(argv); err != nil {
@@ -295,8 +303,24 @@ func loadRootKey(path string) ([]byte, error) {
 // which schema is read — getting it wrong would report "not found" and look like
 // a failed restore.
 func openInstanceDB(ctx context.Context, o verifyOptions, schema string) (_ *gorm.DB, err error) {
-	dsn := fmt.Sprintf("user=%s password=%s host=%s dbname=%s port=%d sslmode=disable",
-		o.user, o.password, o.host, o.database, o.port)
+	// sslmode comes from the flag, and the values are QUOTED (ADR-020 A2.1).
+	//
+	// Both matter for an instrument whose whole job is proving recoverability.
+	// Hard-coding `disable` meant that the moment a store required TLS, the drill
+	// could not connect to the deployment where recoverability matters most — it
+	// would report a failed restore for a database that had restored perfectly.
+	// And an unquoted password containing a space parses as a runtime parameter
+	// rather than a password, which leaves no host and sends libpq to a unix
+	// socket inside this process's own container: the drill would then blame the
+	// restore for a connection it mis-assembled itself.
+	dsn := strings.Join([]string{
+		"user=" + rdb.QuoteDSNValue(o.user),
+		"password=" + rdb.QuoteDSNValue(o.password),
+		"host=" + rdb.QuoteDSNValue(o.host),
+		"dbname=" + rdb.QuoteDSNValue(o.database),
+		"port=" + rdb.QuoteDSNValue(strconv.Itoa(o.port)),
+		"sslmode=" + rdb.QuoteDSNValue(o.sslMode),
+	}, " ")
 	db, err := gorm.Open(postgres.New(postgres.Config{DSN: dsn}), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
