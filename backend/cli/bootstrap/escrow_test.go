@@ -568,6 +568,14 @@ func TestRenderConfigUsesTheRestoredRootKey(t *testing.T) {
 // holds a different key is indistinguishable from a correct one until a restore,
 // which is the same class of silent failure as writing no file at all.
 func TestBootstrapWritesTheEscrowArtifact(t *testing.T) {
+	// Stub the deployed-instance lookup. Without it this test reaches the REAL
+	// one, and then its result depends on the machine: a developer box with a
+	// kubeconfig gets a NotFound and passes, while CI has no kubeconfig at all,
+	// gets "no configuration has been provided", and fails closed — correctly,
+	// since minting on a "cannot tell" is the destructive branch. A test about
+	// writing an artifact should not be asking a cluster anything.
+	withExistingInstance(t, "", nil)
+
 	path := filepath.Join(t.TempDir(), "prod.escrow")
 	st := &State{
 		Instance:    "prod",
