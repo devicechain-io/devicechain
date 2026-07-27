@@ -14,6 +14,7 @@
     "lint": "eslint 'src/**/*.{ts,tsx}'"
   },
   "dependencies": {
+    "@devicechain/brand": "*",
     "@devicechain/client": "*",
     "@devicechain/dashboards": "*",
     "@devicechain/widgets": "*",

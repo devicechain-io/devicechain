@@ -87,24 +87,27 @@ function shadcnCss() {
       ' * because shadcn composes them as `hsl(var(--primary) / <alpha>)` — wrapping\n' +
       ' * them here would silently break every alpha variant.\n' +
       ' *\n' +
-      ' * This file covers the BRAND-DERIVED tokens only. The console owns the rest\n' +
-      ' * of its shadcn scale (card, popover, chart-*, sidebar-*); import this first\n' +
-      ' * and let those follow.'
+      ' * Scope: every token whose value is DETERMINED BY the brand blue — the blue\n' +
+      ' * itself wherever shadcn names it, plus the foreground that has to read on\n' +
+      ' * top of it. A consumer keeps ownership of everything else in its scale\n' +
+      ' * (background, card, popover, chart-*, and the non-primary sidebar-*).'
   );
-  out += ':root {\n';
-  out += `  --primary: ${hexToShadcnTriple(core.primary.value)};\n`;
-  out += '  --primary-foreground: 0 0% 100%;\n';
-  out += `  --ring: ${hexToShadcnTriple(core.primary.value)};\n`;
-  out += `  --sidebar-primary: ${hexToShadcnTriple(core.primary.value)};\n`;
-  out += `  --sidebar-ring: ${hexToShadcnTriple(core.primary.value)};\n`;
-  out += '}\n\n';
-  out += '.dark {\n';
-  out += `  --primary: ${hexToShadcnTriple(core.primaryBright.value)};\n`;
-  out += '  --primary-foreground: 0 0% 100%;\n';
-  out += `  --ring: ${hexToShadcnTriple(core.primaryBright.value)};\n`;
-  out += `  --sidebar-primary: ${hexToShadcnTriple(core.primaryBright.value)};\n`;
-  out += `  --sidebar-ring: ${hexToShadcnTriple(core.primaryBright.value)};\n`;
-  out += '}\n';
+  const block = (sel, hex) => {
+    const t = hexToShadcnTriple(hex);
+    return (
+      `${sel} {\n` +
+      `  --primary: ${t};\n` +
+      '  --primary-foreground: 0 0% 100%;\n' +
+      `  --ring: ${t};\n` +
+      `  --sidebar-primary: ${t};\n` +
+      '  --sidebar-primary-foreground: 0 0% 100%;\n' +
+      `  --sidebar-ring: ${t};\n` +
+      '}\n'
+    );
+  };
+  out += block(':root', core.primary.value);
+  out += '\n';
+  out += block('.dark', core.primaryBright.value);
   return out;
 }
 

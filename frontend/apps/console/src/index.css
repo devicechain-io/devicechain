@@ -4,6 +4,16 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
+/* The brand blue, in every shadcn token whose value it determines: --primary,
+ * --ring, --sidebar-primary and their foregrounds. GENERATED from tokens.json —
+ * see frontend/packages/brand. Do not re-declare these below; a hand-written
+ * copy is exactly the drift that package exists to remove.
+ *
+ * `layer(base)` is load-bearing. An UNLAYERED declaration outranks every layered
+ * one regardless of source order, so a plain @import here would quietly outrank
+ * the whole block below instead of merging into it. */
+@import '@devicechain/brand/css/shadcn.css' layer(base);
+
 @custom-variant dark (&:is(.dark *));
 
 /*
@@ -11,8 +21,8 @@
  *
  * Light: white bg, near-black text, zinc-100/200 surfaces
  * Dark:  zinc-950 bg, zinc-100 text, zinc-800/900 surfaces
- * Primary is the DeviceChain brand blue (#208cb7), lifted slightly in dark mode
- * for contrast; destructive (red-600) is shared across modes.
+ * Primary is the DeviceChain brand blue, imported above; destructive (red-600)
+ * is shared across modes.
  */
 @layer base {
   :root {
@@ -31,10 +41,6 @@
 
     --popover: 0 0% 100%;
     --popover-foreground: 240 10% 3.9%;
-
-    /* Brand blue (logo "CHAIN" / cube), sampled from the brandmark #208cb7. */
-    --primary: 197 71% 42%;
-    --primary-foreground: 0 0% 100%;
 
     --secondary: 240 4.8% 95.9%;
     --secondary-foreground: 240 5.9% 10%;
@@ -59,7 +65,6 @@
 
     --border: 240 5.9% 90%;
     --input: 240 5.9% 90%;
-    --ring: 197 71% 42%;
 
     --chart-1: 220 70% 50%;
     --chart-2: 160 60% 45%;
@@ -69,12 +74,9 @@
 
     --sidebar-background: 0 0% 98%;
     --sidebar-foreground: 240 5.3% 26.1%;
-    --sidebar-primary: 197 71% 42%;
-    --sidebar-primary-foreground: 0 0% 100%;
     --sidebar-accent: 240 4.8% 95.9%;
     --sidebar-accent-foreground: 240 5.9% 10%;
     --sidebar-border: 240 5.9% 90%;
-    --sidebar-ring: 197 71% 42%;
   }
 
   .dark {
@@ -95,10 +97,6 @@
      * so it reads as elevated rather than blending into the card behind it. */
     --popover: 210 24% 15%;
     --popover-foreground: 210 16% 96%;
-
-    /* Brand blue, lifted for dark-mode contrast. */
-    --primary: 197 71% 49%;
-    --primary-foreground: 0 0% 100%;
 
     --secondary: 210 20% 16%;
     --secondary-foreground: 210 16% 96%;
@@ -122,7 +120,6 @@
 
     --border: 210 20% 17%;
     --input: 210 22% 26%;
-    --ring: 197 71% 49%;
 
     --chart-1: 220 70% 50%;
     --chart-2: 160 60% 45%;
@@ -134,12 +131,9 @@
      * panel without a gradient. */
     --sidebar-background: 210 34% 8%;
     --sidebar-foreground: 210 16% 96%;
-    --sidebar-primary: 197 71% 42%;
-    --sidebar-primary-foreground: 0 0% 100%;
     --sidebar-accent: 210 20% 16%;
     --sidebar-accent-foreground: 210 16% 96%;
     --sidebar-border: 210 20% 17%;
-    --sidebar-ring: 197 71% 49%;
   }
 }
 

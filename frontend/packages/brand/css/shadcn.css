@@ -8,9 +8,10 @@
  * because shadcn composes them as `hsl(var(--primary) / <alpha>)` — wrapping
  * them here would silently break every alpha variant.
  *
- * This file covers the BRAND-DERIVED tokens only. The console owns the rest
- * of its shadcn scale (card, popover, chart-*, sidebar-*); import this first
- * and let those follow.
+ * Scope: every token whose value is DETERMINED BY the brand blue — the blue
+ * itself wherever shadcn names it, plus the foreground that has to read on
+ * top of it. A consumer keeps ownership of everything else in its scale
+ * (background, card, popover, chart-*, and the non-primary sidebar-*).
  */
 
 :root {
@@ -18,6 +19,7 @@
   --primary-foreground: 0 0% 100%;
   --ring: 197.1 70.2% 42.2%;
   --sidebar-primary: 197.1 70.2% 42.2%;
+  --sidebar-primary-foreground: 0 0% 100%;
   --sidebar-ring: 197.1 70.2% 42.2%;
 }
 
@@ -26,5 +28,6 @@
   --primary-foreground: 0 0% 100%;
   --ring: 197.2 71.2% 49%;
   --sidebar-primary: 197.2 71.2% 49%;
+  --sidebar-primary-foreground: 0 0% 100%;
   --sidebar-ring: 197.2 71.2% 49%;
 }
