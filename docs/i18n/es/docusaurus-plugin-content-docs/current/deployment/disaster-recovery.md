@@ -34,7 +34,7 @@ Dos consecuencias que conviene planificar:
 - **Calendarios distintos.** Los datos de núcleo son pequeños y cambian cuando alguien
   cambia algo, así que piden copias completas frecuentes y baratas. Los datos de
   eventos son volumen, casi siempre de anexado, y ya están sujetos a una política de
-  retención ([ADR-026](../concepts/architecture.md)) — respaldar fragmentos que el
+  retención ([ciclo de vida de los datos](../concepts/architecture.md)) — respaldar fragmentos que el
   reconciliador de ciclo de vida está a punto de eliminar es almacenamiento
   desperdiciado.
 - **Objetivos de recuperación distintos.** Restaurar solo los datos de núcleo le
@@ -54,7 +54,7 @@ Todos los secretos que DeviceChain almacena por usted —credenciales de conecto
 salida, contraseñas SMTP, claves de proveedores de IA— se cifran en reposo con una
 clave de datos por secreto, y cada una de esas claves de datos va envuelta por una
 única **clave raíz** de la instancia (la KEK; véase
-[ADR-059](../concepts/architecture.md)).
+[Arquitectura](../concepts/architecture.md)).
 
 Esa clave raíz vive en el Secret de Kubernetes de la instancia, es decir, vive en
 **etcd**, y ninguna copia de seguridad de bases de datos contiene etcd. Una copia de

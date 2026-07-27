@@ -8,7 +8,7 @@ title: Conexión de un dispositivo
 Los dispositivos se conectan a DeviceChain mediante **MQTT** (servido directamente por el servidor MQTT integrado de NATS en el puerto 1883 — sin broker independiente) o **HTTP**. Ambos transportes alimentan el mismo pipeline de decodificación → resolución → persistencia, por lo que el cuerpo del evento JSON es idéntico entre ambos.
 
 :::note Estado
-La ingesta por MQTT y HTTP están disponibles. **Las conexiones se protegen a nivel del broker (ADR-025):** los listeners de MQTT/NATS son **TLS**, y un auth-callout de NATS autentica cada conexión y la vincula a subjects por inquilino, de modo que un dispositivo solo puede publicar o suscribirse dentro de su propio inquilino. La autenticación del dispositivo también se aplica **por evento** mediante credencial, y el modo de autenticación de dispositivo predeterminado es **`required`** — por lo que se espera una credencial tanto en la conexión como en el evento. Consulte [Credenciales de dispositivo](./device-credentials.md). Aún están planificados transportes adicionales (CoAP, WebSocket) y el flujo completo de aprovisionamiento/reclamación de autoservicio.
+La ingesta por MQTT y HTTP están disponibles. **Las conexiones se protegen a nivel del broker:** los listeners de MQTT/NATS son **TLS**, y un auth-callout de NATS autentica cada conexión y la vincula a subjects por inquilino, de modo que un dispositivo solo puede publicar o suscribirse dentro de su propio inquilino. La autenticación del dispositivo también se aplica **por evento** mediante credencial, y el modo de autenticación de dispositivo predeterminado es **`required`** — por lo que se espera una credencial tanto en la conexión como en el evento. Consulte [Credenciales de dispositivo](./device-credentials.md). Aún están planificados transportes adicionales (CoAP, WebSocket) y el flujo completo de aprovisionamiento/reclamación de autoservicio.
 :::
 
 ## El cuerpo del evento
@@ -27,14 +27,14 @@ Todo evento entrante — sobre cualquier transporte — es un objeto JSON:
 
 - `device` — el token estable del dispositivo.
 - `eventType` — `Measurement`, `Location` o `Alert` (también `NewRelationship`).
-- `credentialType` / `credentialId` — la credencial que presenta el dispositivo (ADR-014). `MQTT_BASIC` además incluye `credentialSecret`. Omita esto solo cuando el modo de autenticación de dispositivo de la instancia esté configurado como `disabled` u `optional`; el **valor predeterminado es `required`**, por lo que se espera una credencial.
+- `credentialType` / `credentialId` — la credencial que presenta el dispositivo. `MQTT_BASIC` además incluye `credentialSecret`. Omita esto solo cuando el modo de autenticación de dispositivo de la instancia esté configurado como `disabled` u `optional`; el **valor predeterminado es `required`**, por lo que se espera una credencial.
 - `payload` — la forma depende de `eventType`; los valores de medición son cadenas de texto.
 
 ## MQTT
 
 Un topic de MQTT se asigna directamente a un subject de NATS, de modo que una publicación en `{instanceId}/{tenant}/devices/{token}/events` es consumida por `event-sources` como el subject `{instanceId}.{tenant}.devices.{token}.events`. Un dispositivo está autorizado a publicar únicamente en el topic de eventos de **sí mismo** y ningún otro, y el `{token}` en el topic debe coincidir con el `device` en el cuerpo — un evento que dice provenir de un dispositivo distinto es rechazado. El primer segmento es el **id de instancia** (el `instance.id` que desplegó, p. ej. `devicechain`): namespacea el plano de dispositivos para que las instancias que comparten un broker nunca se crucen, y una credencial de dispositivo solo está autorizada para el árbol de subjects de su propia instancia.
 
-El listener es **TLS** y la conexión está **autenticada por el broker** (ADR-025): conéctese por TLS con la CA de la instancia y presente la credencial del dispositivo como nombre de usuario MQTT **`{tenant}:{credentialId}`** y contraseña. Publique el cuerpo del evento en el topic de eventos de su dispositivo:
+El listener es **TLS** y la conexión está **autenticada por el broker**: conéctese por TLS con la CA de la instancia y presente la credencial del dispositivo como nombre de usuario MQTT **`{tenant}:{credentialId}`** y contraseña. Publique el cuerpo del evento en el topic de eventos de su dispositivo:
 
 ```bash
 mosquitto_pub \

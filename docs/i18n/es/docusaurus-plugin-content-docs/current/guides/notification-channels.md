@@ -5,7 +5,7 @@ title: Configuración de Canales de Notificación
 
 # Configuración de Canales de Notificación
 
-Cuando la etapa REACT de una regla de detección levanta una **alarma**, el subsistema de notificaciones la lleva la última milla — hasta una **persona** (ADR-017). Una **política** por inquilino enruta las alarmas por severidad a **canales** configurados (correo electrónico por SMTP, o un webhook), con limitación de frecuencia (throttling) y **escalado** de alarmas no reconocidas. Esta ruta de máquina a humano está deliberadamente separada de los **[conectores de salida](../concepts/outbound-connectors.md)** de máquina a máquina: los conectores llevan payloads a *sistemas*; las notificaciones llevan alertas a *personas*, con destinatarios y enrutamiento por severidad. Consulta [Procesamiento de Eventos y Alarmas](../concepts/event-processing.md) para saber cómo se levantan las alarmas en primer lugar.
+Cuando la etapa REACT de una regla de detección levanta una **alarma**, el subsistema de notificaciones la lleva la última milla — hasta una **persona**. Una **política** por inquilino enruta las alarmas por severidad a **canales** configurados (correo electrónico por SMTP, o un webhook), con limitación de frecuencia (throttling) y **escalado** de alarmas no reconocidas. Esta ruta de máquina a humano está deliberadamente separada de los **[conectores de salida](../concepts/outbound-connectors.md)** de máquina a máquina: los conectores llevan payloads a *sistemas*; las notificaciones llevan alertas a *personas*, con destinatarios y enrutamiento por severidad. Consulta [Procesamiento de Eventos y Alarmas](../concepts/event-processing.md) para saber cómo se levantan las alarmas en primer lugar.
 
 :::note Estado
 Disponible. Los canales y las políticas se gestionan a través de la API GraphQL de notification-management. La lectura requiere la autoridad `notification:read`; crear o modificar cualquier cosa requiere `notification:write`.
@@ -18,7 +18,7 @@ Un **canal** es un endpoint de entrega configurado por el inquilino: una instanc
 Un canal divide su configuración en dos:
 
 - **`config`** — la configuración de conexión no secreta, como un documento JSON (host/puerto/from de SMTP; URL/método/encabezados del webhook).
-- **`secret`** — la credencial (la contraseña de SMTP, un token de autenticación del webhook). Se almacena en el **almacén de secretos** cifrado por sobre (envelope-encrypted) de la plataforma (ADR-059) y es de **solo escritura**: la envías al crear, y nunca se devuelve al leer. El canal solo expone un booleano `hasSecret`.
+- **`secret`** — la credencial (la contraseña de SMTP, un token de autenticación del webhook). Se almacena en el **almacén de secretos** cifrado por sobre (envelope-encrypted) de la plataforma y es de **solo escritura**: la envías al crear, y nunca se devuelve al leer. El canal solo expone un booleano `hasSecret`.
 
 En una **actualización**, un secreto `null` deja el secreto existente sin cambios (nunca necesitas reenviarlo), un valor no nulo lo reemplaza, y una cadena vacía lo borra.
 

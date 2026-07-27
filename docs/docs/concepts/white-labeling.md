@@ -5,7 +5,7 @@ title: White-Labeling & Branding
 
 # White-Labeling & Branding
 
-DeviceChain lets a tenant present the console under its own brand: a **logo**, a **color palette**, and a **product title** replace the DeviceChain defaults throughout the tenant's console session. White-labeling is part of the open-source core — there is no separate edition for it — so an operator can run one instance and let each customer tenant see *their* brand (ADR-038).
+DeviceChain lets a tenant present the console under its own brand: a **logo**, a **color palette**, and a **product title** replace the DeviceChain defaults throughout the tenant's console session. White-labeling is part of the open-source core — there is no separate edition for it — so an operator can run one instance and let each customer tenant see *their* brand.
 
 :::note Status
 Available: the branding cascade (tenant → operator default → built-in floor), the console **Branding** editor, per-field inheritance, and logo storage via the object store or an inline/external reference. Planned (Phase 3): a per-tenant **login-screen skin**, **favicon**, and **custom-domain → tenant branding** resolution — until then the login page shows the operator's brand, since no tenant is known before sign-in.
@@ -37,7 +37,7 @@ Because the console themes entirely through design tokens, the palette is one wr
 
 A logo is an opaque **reference**, resolved three ways:
 
-- **Uploaded** — stored in the [object store](./object-storage.md) (ADR-058) and streamed back through an authorizing per-tenant proxy path, never a public URL.
+- **Uploaded** — stored in the [object store](./object-storage.md) and streamed back through an authorizing per-tenant proxy path, never a public URL.
 - **Inline** — a bounded `data:` URI (≤ 256 KB) kept directly on the branding record, for zero-infrastructure installs.
 - **External URL** — an `https://` asset the tenant hosts itself.
 

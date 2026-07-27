@@ -29,7 +29,7 @@ When you use the Describe door, the service runs a **bounded compile-and-repair 
 
 AI is **operator-registered, instance-scoped** configuration — not something a tenant brings. An operator registers one or more **AI providers** on the admin plane (`/admin/ai-providers`), each with a kind, an endpoint, a model, and an **API key**.
 
-The API key is a **write-only secret handle** ([secret store](./architecture.md), ADR-059): it is sealed on write, resolved server-internally at inference time, and **never returned** — the read side of a provider exposes only whether a key is set (`hasSecret`), never the value. The provider detail view is organized as **Basic / Connection / Test** tabs, and a **Test** action probes connectivity without exposing the key.
+The API key is a **write-only secret handle** ([secret store](./architecture.md)): it is sealed on write, resolved server-internally at inference time, and **never returned** — the read side of a provider exposes only whether a key is set (`hasSecret`), never the value. The provider detail view is organized as **Basic / Connection / Test** tabs, and a **Test** action probes connectivity without exposing the key.
 
 External-model use is **per-tenant opt-in and fail-closed**: a tenant must consent before any external inference runs on its behalf, and inference **fails closed** on any gap in the chain — no consent, no provider, a disabled provider, or no key all resolve to "no inference," never to a silent fallback.
 

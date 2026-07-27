@@ -10,8 +10,7 @@ un **logotipo**, una **paleta de colores** y un **título de producto** reemplaz
 los valores por defecto de DeviceChain durante toda la sesión de consola del
 inquilino. La marca blanca (white-labeling) es parte del núcleo de código abierto
 —no existe una edición separada para ello— así que un operador puede ejecutar una
-sola instancia y dejar que cada inquilino cliente vea *su propia* marca
-(ADR-038).
+sola instancia y dejar que cada inquilino cliente vea *su propia* marca.
 
 :::note Estado
 Disponible: la cascada de identidad de marca (inquilino → valor por defecto del
@@ -66,8 +65,7 @@ marginal frente a una paleta adecuada.)
 
 Un logotipo es una **referencia** opaca, resuelta de tres maneras:
 
-- **Subido** — almacenado en el [almacén de objetos](./object-storage.md)
-  (ADR-058) y transmitido de vuelta a través de una ruta proxy autorizadora por
+- **Subido** — almacenado en el [almacén de objetos](./object-storage.md) y transmitido de vuelta a través de una ruta proxy autorizadora por
   inquilino, nunca una URL pública.
 - **En línea (inline)** — un `data:` URI acotado (≤ 256 KB) mantenido
   directamente en el registro de identidad de marca, para instalaciones sin
