@@ -213,9 +213,26 @@ incendio.
 ## Volver a ejecutar bootstrap sobre una instancia en uso
 
 `dcctl bootstrap` es idempotente, y volver a ejecutarlo sobre una instancia existente
-**reutiliza la clave raíz de esa instancia** en lugar de acuñar una nueva. Si no puede
-determinar si la instancia existe, se detiene en vez de suponer: acuñar sería la
-respuesta destructiva.
+**reutiliza todas las credenciales que esa instancia ya está usando** en lugar de
+acuñar nuevas. Eso abarca la clave raíz del almacén de secretos, la contraseña de
+servicio de NATS, la clave del emisor del callout y el secreto de autenticación entre
+servicios. Si no puede determinar si la instancia existe, se detiene en vez de suponer:
+acuñar sería la respuesta destructiva.
+
+Por qué importa difiere según la credencial. Reescribir la clave raíz vuelve
+permanentemente ilegible todo secreto almacenado. Reescribir las credenciales del
+bróker es recuperable pero disruptivo: el bróker y los servicios se actualizan por
+mecanismos distintos y en momentos distintos, así que unas credenciales nuevas abren
+una ventana en la que un lado rechaza al otro, y los pods que arrancan dentro de ella
+no llegan a conectarse al bróker.
+
+:::note Una excepción
+El secreto de cliente OAuth de Grafana (`--grafana-sso`) se sigue reacuñando en cada
+ejecución, porque su texto en claro vive en la configuración de Grafana y no en la
+configuración de la instancia. Ambas mitades se reescriben en la misma ejecución, así
+que el efecto es una breve ventana de inicios de sesión fallidos en Grafana durante el
+despliegue.
+:::
 
 En una nueva ejecución también reconcilia el depósito:
 

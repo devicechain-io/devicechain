@@ -18,6 +18,7 @@ import (
 
 	apply "github.com/devicechain-io/dc-k8s/apply"
 	dck8s "github.com/devicechain-io/dc-k8s/config"
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/fatih/color"
 	"golang.org/x/crypto/bcrypt"
@@ -92,37 +93,92 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// Collected and printed once the step's progress line is closed. See done() below.
 	var notes []string
 
-	// Generate a DB password regardless of dry-run so the value is reproducible
-	// within a run; we just never persist/apply it under dry-run.
-	password, err := randomSecret(24)
-	if err != nil {
-		return fail("generating db password", err)
+	// ASK THE CLUSTER WHAT THIS INSTANCE IS ALREADY RUNNING, ONCE, BEFORE MINTING
+	// ANYTHING.
+	//
+	// Every credential below is generated, and a re-run that generates a fresh one
+	// does not "update" a live instance — it rotates a secret out from under it. So
+	// the one question that governs all of them is asked here, in one place: is there
+	// an instance, and what is it holding? A credential added to this step later
+	// should reuse `deployed` the same way, which is the point of hoisting it.
+	//
+	// Skipped under --dry-run, which deploys nothing and so cannot damage anything;
+	// it mints throwaway values purely so the rendered plan is complete.
+	//
+	// Note this is a lookup, not a guard: a nil result means "fresh install, mint
+	// everything", and an ERROR means we could not tell — which fails the run rather
+	// than guessing, because guessing wrong is the destructive direction. See
+	// DeployedInstanceConfig.
+	var (
+		deployed *config.InstanceConfiguration
+		err      error
+	)
+	if !st.DryRun {
+		deployed, err = lookupDeployedInstance(ctx, st.KubeContext, st.Instance)
+		if err != nil {
+			return fail("checking for an existing instance", err)
+		}
 	}
 
-	// Mint the NATS broker-auth credentials (ADR-025): the callout issuer nkey and
-	// the shared service password. These can't be generated declaratively (nkeys
-	// aren't a TF primitive), so dcctl mints them here and threads the public
-	// issuer + bcrypt password hash into the NATS config (applyInfra) and the seed +
-	// plaintext password into the services' instance config (helmInstall) — one
-	// mint, both sides, so the hash and the plaintext it verifies can't drift.
-	creds, err := natsauth.GenerateCredentials()
-	if err != nil {
-		return fail("minting NATS auth credentials", err)
+	// The NATS broker-auth credentials (ADR-025): the callout issuer nkey and the
+	// shared service password. These can't be generated declaratively (nkeys aren't a
+	// TF primitive), so dcctl mints them here and threads the public issuer + bcrypt
+	// password hash into the NATS config (applyInfra) and the seed + plaintext
+	// password into the services' instance config (helmInstall) — one mint, both
+	// sides, so the hash and the plaintext it verifies can't drift.
+	//
+	// A RE-RUN MUST NOT MINT. The two sides of that pair are updated by different
+	// mechanisms with different timing — the broker picks up its ConfigMap when its
+	// reloader sidecar sees the projected file change, the services get theirs when
+	// Helm rolls the pods — so fresh credentials mean an interval in which the broker
+	// enforces one password and the pods present another. Every pod that starts in
+	// that interval dies on `nats: Authorization Violation`, which is enough to fail
+	// the Helm step of the very run that caused it, and enough to leave device
+	// connects rejected while the callout responder signs with a seed the broker no
+	// longer trusts. It is silent, delayed, and detached from its cause.
+	var creds natsauth.Credentials
+	switch {
+	case deployed != nil:
+		creds, err = natsauth.CredentialsFromDeployed(
+			deployed.Infrastructure.Nats.Auth.CalloutIssuerSeed,
+			deployed.Infrastructure.Nats.Auth.Password)
+		if err != nil {
+			return fail("reusing the running instance's NATS auth credentials", err)
+		}
+		notes = append(notes, "NATS broker credentials reused from the running instance")
+	default:
+		creds, err = natsauth.GenerateCredentials()
+		if err != nil {
+			return fail("minting NATS auth credentials", err)
+		}
 	}
 	st.Values["natsCalloutIssuerPublic"] = creds.IssuerPublic
 	st.Values["natsCalloutIssuerSeed"] = creds.IssuerSeed
 	st.Values["natsServicePassword"] = creds.ServicePassword
 	st.Values["natsServicePasswordBcrypt"] = creds.ServicePasswordBcrypt
 
-	// Mint the shared service secret (ADR-044 amendment) backing the synchronous
+	// The shared service secret (ADR-044 amendment) backing the synchronous
 	// cross-service call primitive: a caller presents it to user-management's mint
 	// endpoint for a short-lived service token. Threaded into every service's
 	// instance config (helmInstall); user-management compares the presented value
 	// against its copy. One secret, all services — the same trusted-boundary
 	// tradeoff the NATS service credential above makes.
-	serviceSecret, err := randomSecret(32)
-	if err != nil {
-		return fail("minting service auth secret", err)
+	//
+	// Reused on a re-run for the same reason, with a narrower blast radius: every
+	// service reads it from the one Secret and Helm rolls them together, so the
+	// exposure is the rollout itself — a caller that has already restarted presenting
+	// the new secret to a user-management that has not. That is a spell of failing
+	// cross-service calls, not a broken instance, but it is still a rotation nobody
+	// asked for.
+	serviceSecret := ""
+	if deployed != nil {
+		serviceSecret = deployed.Infrastructure.ServiceAuth.Secret
+	}
+	if serviceSecret == "" {
+		serviceSecret, err = randomSecret(32)
+		if err != nil {
+			return fail("minting service auth secret", err)
+		}
 	}
 	st.Values["serviceAuthSecret"] = serviceSecret
 
@@ -155,37 +211,26 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		// costs nothing. Where it does exist, only an artifact carrying the key it is
 		// already running is a no-op, and that case is worth allowing: re-running a
 		// restore is exactly as ordinary as re-running a bootstrap.
-		if err := refuseRestoreOverADifferentKey(ctx, st, secretsRootKey); err != nil {
+		if err := refuseRestoreOverADifferentKey(st, deployed, secretsRootKey); err != nil {
 			return fail("restoring the root key", err)
 		}
 		notes = append(notes, fmt.Sprintf("root key restored from %s", st.Escrow.RestoredFrom))
 
-	case st.DryRun:
-		// Nothing is deployed and nothing will be, so there is no instance to consult.
-		secretsRootKey, err = randomKeyBase64(32)
-		if err != nil {
-			return fail("minting secrets root key", err)
-		}
-
-	default:
+	case deployed != nil && deployed.Infrastructure.Secrets.RootKey != "":
 		// A RE-RUN MUST NOT MINT. helmInstall upgrades an existing release with
 		// whatever is in this value, so minting here would rewrite the KEK of a live
 		// instance and make every secret it has stored permanently undecryptable —
 		// silently, on a run that reports success, of a pipeline that documents itself
-		// as idempotent. See ExistingRootKey, which fails closed rather than guessing.
-		existing, lookupErr := lookupExistingRootKey(ctx, st.KubeContext, st.Instance)
-		if lookupErr != nil {
-			return fail("checking for an existing instance", lookupErr)
-		}
-		if existing != "" {
-			secretsRootKey = existing
-			reused = true
-			notes = append(notes, "root key reused from the running instance")
-		} else {
-			secretsRootKey, err = randomKeyBase64(32)
-			if err != nil {
-				return fail("minting secrets root key", err)
-			}
+		// as idempotent. The lookup that answers this failed closed above, so reaching
+		// here on a live instance without its key is not possible by accident.
+		secretsRootKey = deployed.Infrastructure.Secrets.RootKey
+		reused = true
+		notes = append(notes, "root key reused from the running instance")
+
+	default:
+		secretsRootKey, err = randomKeyBase64(32)
+		if err != nil {
+			return fail("minting secrets root key", err)
 		}
 	}
 	st.Values["secretsRootKey"] = secretsRootKey
@@ -225,6 +270,18 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// tofu module) and the bcrypt hash is seeded into user-management (helmInstall), so
 	// the two can't drift. Skipped (with a note) when SSO was requested but the issuer
 	// would be invalid — http on a non-localhost host.
+	//
+	// THIS IS THE ONE GENERATED CREDENTIAL ABOVE THAT A RE-RUN STILL ROTATES, and it
+	// is left that way on purpose rather than overlooked. The reuse the rest of this
+	// step does works because the value is in DeviceChain's own instance config, which
+	// dcctl can read back; this one is not. The cleartext goes only into the Grafana
+	// subchart's envRenderSecret and user-management stores only its hash, so
+	// recovering it would mean depending on an upstream chart's secret-naming
+	// convention — a worse failure mode than what it fixes. The blast radius is also
+	// different in kind: both halves are written by the same run, so a rotation costs
+	// a window of failing logins during the rollout rather than a broker that rejects
+	// every service. Closing it properly means giving the secret a home dcctl owns,
+	// which is a design change, not a reuse. Tracked on the roadmap with this slice.
 	if st.GrafanaSSO && st.NoMonitoring {
 		fmt.Println(color.YellowString("  Grafana SSO skipped: it needs the monitoring stack, which --no-monitoring disables."))
 	}
@@ -304,7 +361,13 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		scheme = "http"
 	}
 	st.Values["scheme"] = scheme
-	st.Values["dbPassword"] = password
+	// NOTE: there is deliberately no generated database password here. One used to be
+	// minted and stashed in Values on every run, and nothing ever read it — the
+	// relational Postgres takes its credentials from the OpenTofu `postgres_password`
+	// variable, which is stable across applies. It was removed rather than wired up:
+	// it looked like a rotating credential in the audit of this step (which is how it
+	// was found) while being dead weight, and a value nothing consumes is not the
+	// place to introduce database credential management.
 	st.Values["imageRegistry"] = st.ImageRegistry
 	st.Values["imageVersion"] = st.ImageVersion
 	st.Values["imageSource"] = imageSource
@@ -736,18 +799,16 @@ func randomKeyBase64(nbytes int) (string, error) {
 // string compare would treat a difference in padding or encoding as a different
 // key and refuse a legitimate re-run; comparing bytes asks the question actually
 // being asked.
-func refuseRestoreOverADifferentKey(ctx context.Context, st *State, restoredKeyBase64 string) error {
-	if st.DryRun {
-		// Nothing is deployed and nothing will be, so there is no instance to put
-		// at risk — and a dry run must not require a reachable cluster.
-		return nil
-	}
-	existing, err := lookupExistingRootKey(ctx, st.KubeContext, st.Instance)
-	if err != nil {
-		return err
-	}
-	if existing == "" {
+// deployed is what the caller's single lookup already returned: nil when the
+// instance is not there, and nil under --dry-run, which deploys nothing and so has
+// nothing to put at risk (and must not require a reachable cluster).
+func refuseRestoreOverADifferentKey(st *State, deployed *config.InstanceConfiguration, restoredKeyBase64 string) error {
+	if deployed == nil {
 		return nil // the ordinary recovery: the instance is not there yet
+	}
+	existing := deployed.Infrastructure.Secrets.RootKey
+	if existing == "" {
+		return nil
 	}
 
 	existingKey, err := base64.StdEncoding.DecodeString(existing)

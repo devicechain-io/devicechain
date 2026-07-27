@@ -28,10 +28,14 @@ cluster creation are planned follow-ups — see [Prerequisites](#prerequisites).
 The bootstrap runs as an ordered, **idempotent** pipeline — re-running it converges
 to the same state and tells you which step failed if one does:
 
-1. **Render configuration** — resolve the instance id, namespace, profile, a
-   generated database password, and the **secret-store root key**: minted on a first
-   install and escrowed to an encrypted file you keep, or reused as-is when the
-   instance already exists. See [Disaster Recovery](./disaster-recovery.md).
+1. **Render configuration** — resolve the instance id, namespace, profile, and every
+   generated credential: the broker-auth material (the shared service password and
+   the callout issuer key), the cross-service auth secret, and the **secret-store
+   root key**. All of them are minted on a first install and **reused as-is when the
+   instance already exists** — the pipeline asks the cluster what the instance is
+   running before it generates anything, and stops rather than guessing if it cannot
+   tell. The root key is additionally escrowed to an encrypted file you keep; see
+   [Disaster Recovery](./disaster-recovery.md).
 2. **Apply infrastructure** — `tofu apply` the embedded OpenTofu config (NATS,
    PostgreSQL, TimescaleDB, NGINX ingress, cert-manager) via
    [terraform-exec](https://github.com/hashicorp/terraform-exec). State is kept in

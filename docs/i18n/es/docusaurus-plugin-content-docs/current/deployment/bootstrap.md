@@ -32,7 +32,14 @@ El arranque inicial se ejecuta como una canalización (pipeline) ordenada e
 falló si alguno lo hace:
 
 1. **Renderizar la configuración** — resuelve el id de la instancia, el namespace,
-   el perfil y una contraseña de base de datos generada.
+   el perfil y todas las credenciales generadas: el material de autenticación del
+   bróker (la contraseña de servicio compartida y la clave del emisor del callout),
+   el secreto de autenticación entre servicios y la **clave raíz del almacén de
+   secretos**. Todas se acuñan en la primera instalación y **se reutilizan tal cual
+   cuando la instancia ya existe**: el pipeline le pregunta al clúster qué está
+   ejecutando la instancia antes de generar nada, y se detiene en vez de suponer si
+   no puede determinarlo. Además, la clave raíz se deposita en un archivo cifrado que
+   tú conservas; consulta [Recuperación ante desastres](./disaster-recovery.md).
 2. **Aplicar la infraestructura** — ejecuta `tofu apply` sobre la configuración de
    OpenTofu incrustada (NATS, PostgreSQL, TimescaleDB, ingress de NGINX,
    cert-manager) vía [terraform-exec](https://github.com/hashicorp/terraform-exec).
