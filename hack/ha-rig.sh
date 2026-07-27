@@ -49,6 +49,17 @@ instance="${DC_INSTANCE:-harig}"
 control_instance="${DC_CONTROL_INSTANCE:-hactl}"
 dcctl="$repo_root/backend/cli/build/dcctl"
 
+# The output helpers are defined HERE, above their first use. The DC_VERSION
+# branch below calls say(), and a function defined later in the file does not
+# exist yet when top-level code runs: under `set -e` that path died on
+# "say: command not found" before the rig printed anything at all.
+say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
+fail() { printf '\n\033[1;31mFAIL: %s\033[0m\n' "$*" >&2; exit 1; }
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || fail "$1 is required but not on PATH"
+}
+
 # Image source: HEAD, built from source, BY DEFAULT.
 #
 # The first draft defaulted to the published release so a run would not also
@@ -69,13 +80,6 @@ working tree, so any stream added since that tag will read as MISSING"
 else
   image_args=(--build)
 fi
-
-say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
-fail() { printf '\n\033[1;31mFAIL: %s\033[0m\n' "$*" >&2; exit 1; }
-
-need() {
-  command -v "$1" >/dev/null 2>&1 || fail "$1 is required but not on PATH"
-}
 
 build_dcctl() {
   say "building dcctl"

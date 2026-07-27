@@ -227,8 +227,15 @@ Para inspeccionar la instancia en ejecución:
 kubectl --context <kube-context> get pods -n my-instance
 ```
 
-Carga datos de ejemplo en una instancia en ejecución a través de la API con:
+Para explorar la consola con una flota en movimiento en lugar de una vacía,
+ejecute una **simulación**. `sim create` acuña una identidad y un tenant acotados
+en la instancia y escribe el archivo de handshake que el proceso `dc-simulator`
+lee al arrancar:
 
 ```bash
-dcctl seed construction --server localhost --instance my-instance
+dcctl sim create demo --instance my-instance --server localhost
 ```
+
+El simulador inyecta entonces telemetría y alarmas por el mismo cable de
+dispositivo que usa el hardware real — véase [Probarlo con datos
+simulados](../intro.md#probarlo-con-datos-simulados).

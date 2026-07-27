@@ -984,6 +984,90 @@ func TestBootstrapStopsWhenItCannotTellIfTheInstanceExists(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// A RESTORE must not rotate the key out from under a live instance either
+// ---------------------------------------------------------------------------
+
+// restoreState builds a State on the recovery path, restoring the given key.
+func restoreState(key string) *State {
+	return &State{
+		Instance:    "prod",
+		BuildImages: true,
+		Escrow:      EscrowPlan{RestoredRootKey: key, RestoredFrom: "prod.escrow"},
+		Values:      map[string]string{},
+	}
+}
+
+// The re-run guard above was applied to the branch that MINTS and left off the
+// branch that RESTORES, which reaches the same helm upgrade with the same
+// consequence. Point --restore-root-key at the wrong artifact, or at the right
+// artifact under the wrong instance name, and a live instance's KEK is rewritten
+// with something else — every secret it holds unreadable, no error, no undo.
+func TestARestoreRefusesToOverwriteALiveInstancesDifferentKey(t *testing.T) {
+	const deployed = "3q2+796tvu/erb7v3q2+796tvu/erb7v3q0="
+	withExistingInstance(t, deployed, nil)
+	st := restoreState(testRootKey) // a DIFFERENT key from the one deployed
+
+	err := stepRenderConfig(t.Context(), st)
+	if err == nil {
+		t.Fatal("a restore overwrote the root key of a live instance running a different one; " +
+			"every secret that instance had stored is now permanently unreadable")
+	}
+	// The operator has to be able to tell this from an ordinary failure, because the
+	// recovery action is specific: destroy first, or recover under another name.
+	for _, want := range []string{"DIFFERENT", "dcctl destroy", "prod.escrow"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q, so it does not tell the operator what to do:\n%v", want, err)
+		}
+	}
+	if st.Values["secretsRootKey"] != "" {
+		t.Error("a root key was established despite the refusal")
+	}
+}
+
+// Re-running a restore is as ordinary as re-running a bootstrap, so an artifact
+// carrying the key the instance is ALREADY running must not be refused. Without
+// this the guard would be indistinguishable from "restores are not idempotent".
+func TestARestoreOfTheKeyAlreadyDeployedIsAllowed(t *testing.T) {
+	withExistingInstance(t, testRootKey, nil)
+	st := restoreState(testRootKey)
+
+	if err := stepRenderConfig(t.Context(), st); err != nil {
+		t.Fatalf("re-running a restore against the instance it already recovered was refused: %v", err)
+	}
+	if got := st.Values["secretsRootKey"]; got != testRootKey {
+		t.Fatalf("the instance was configured with %q, not the restored key", got)
+	}
+}
+
+// The ordinary recovery — a cluster where the instance does not exist yet — must
+// still work, or the guard has broken the only path it was meant to protect.
+func TestARestoreIntoAFreshClusterIsUnaffected(t *testing.T) {
+	withExistingInstance(t, "", nil)
+	st := restoreState(testRootKey)
+
+	if err := stepRenderConfig(t.Context(), st); err != nil {
+		t.Fatalf("restoring into a cluster with no such instance was refused: %v", err)
+	}
+	if got := st.Values["secretsRootKey"]; got != testRootKey {
+		t.Fatalf("the instance was configured with %q, not the restored key", got)
+	}
+}
+
+// "Could not tell" must stop a restore for the same reason it stops a re-run:
+// overwriting on an unknown is the branch with no way back.
+func TestARestoreStopsWhenItCannotTellIfTheInstanceExists(t *testing.T) {
+	withExistingInstance(t, "", fmt.Errorf("connection refused"))
+	st := restoreState(testRootKey)
+
+	if err := stepRenderConfig(t.Context(), st); err == nil {
+		t.Fatal("a restore continued after failing to determine whether the instance already exists")
+	}
+	if st.Values["secretsRootKey"] != "" {
+		t.Error("a root key was established despite the lookup failing")
+	}
+}
+
 // The same rule at the source: only a genuine NotFound may be read as "no instance".
 func TestExistingRootKeyFailsClosedWhenItCannotTell(t *testing.T) {
 	// A kubeconfig that names a server nothing is listening on: reachable config,

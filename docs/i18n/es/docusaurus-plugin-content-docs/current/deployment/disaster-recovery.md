@@ -12,6 +12,42 @@ segunda en silencio.
 
 Esta página trata de la segunda.
 
+## Dos copias de seguridad, no una {#two-tiers}
+
+Los datos de una instancia residen en **dos servidores de base de datos distintos**,
+y conviene respaldarlos y restaurarlos como dos operaciones separadas, no como una:
+
+| | **Datos de núcleo** (PostgreSQL) | **Datos de eventos** (TimescaleDB) |
+|---|---|---|
+| Qué | Tenants, identidades, dispositivos, perfiles, reglas de detección, cuadros de mando, conectores, último estado conocido — **y todos los secretos almacenados** | Mediciones, histórico de eventos, agregados |
+| Tamaño | Megabytes; crece con la *configuración* de su flota | El volumen grande; crece con el tiempo |
+| Perderlos | La instancia no se puede reconstruir | Se pierde el histórico; la instancia sigue funcionando |
+| Necesita la clave raíz | **Sí** | No |
+
+No es una política impuesta sobre una única base de datos: es como la plataforma ya
+almacena las cosas. `event-management` es el único servicio que habla con TimescaleDB,
+y no habla con ningún otro almacén; todos los demás servicios viven íntegramente en el
+servidor relacional. No hay escrituras cruzadas que mantener consistentes entre ambos.
+
+Dos consecuencias que conviene planificar:
+
+- **Calendarios distintos.** Los datos de núcleo son pequeños y cambian cuando alguien
+  cambia algo, así que piden copias completas frecuentes y baratas. Los datos de
+  eventos son volumen, casi siempre de anexado, y ya están sujetos a una política de
+  retención ([ADR-026](../concepts/architecture.md)) — respaldar fragmentos que el
+  reconciliador de ciclo de vida está a punto de eliminar es almacenamiento
+  desperdiciado.
+- **Objetivos de recuperación distintos.** Restaurar solo los datos de núcleo le
+  devuelve una instancia *operativa*: los dispositivos se reconectan, las reglas de
+  detección se ejecutan, los comandos se despachan, los secretos se descifran.
+  Restaurar los datos de eventos rellena el histórico. Una instancia sin sus datos de
+  eventos está degradada —widgets de histórico vacíos—, no caída, de modo que ambas
+  mitades pueden tener objetivos de tiempo de recuperación genuinamente distintos.
+
+**La clave raíz solo condiciona la mitad de núcleo.** Los datos de eventos no
+contienen texto cifrado, así que una restauración de TimescaleDB no necesita nada de
+esta página. Todo lo que sigue trata de los datos de núcleo.
+
 ## Por qué la clave raíz necesita su propio procedimiento
 
 Todos los secretos que DeviceChain almacena por usted —credenciales de conectores de
@@ -21,9 +57,9 @@ clave de datos por secreto, y cada una de esas claves de datos va envuelta por u
 [ADR-059](../concepts/architecture.md)).
 
 Esa clave raíz vive en el Secret de Kubernetes de la instancia, es decir, vive en
-**etcd**. Nada de lo que DeviceChain respalda contiene etcd. Una copia de CNPG archiva
-el WAL de PostgreSQL; una copia de TimescaleDB cubre TimescaleDB. Ninguna contiene un
-solo byte de la clave.
+**etcd**, y ninguna copia de seguridad de bases de datos contiene etcd. Una copia de
+PostgreSQL archiva PostgreSQL; una copia de TimescaleDB cubre TimescaleDB. Ninguna
+contiene un solo byte de la clave.
 
 La consecuencia es un fallo que supera precisamente el simulacro que la mayoría de la
 gente hace:
@@ -117,10 +153,26 @@ Se le pedirá la frase de contraseña del artefacto (o puede proporcionarla con
 `--escrow-passphrase-file` / `DCCTL_ESCROW_PASSPHRASE`). La instancia nueva ejecuta
 ahora la *misma* clave raíz que la antigua.
 
-**2. Restaure las bases de datos** en esa instancia, con su procedimiento habitual de
-restauración de PostgreSQL y TimescaleDB.
+**2. Aquiete la instancia, restaure los datos de núcleo y vuelva a levantarla.** La
+instancia reconstruida ya ha arrancado y ha creado sus propios esquemas vacíos, así que
+restaurar por debajo de un servicio en marcha implica eliminar tablas que tiene
+abiertas y competir con sus migraciones. Escale primero las cargas de trabajo a cero:
 
-**3. Confirme que los secretos almacenados se descifran**: lea un objeto respaldado por
+```bash
+kubectl -n mi-instancia get deploy -o custom-columns=NAME:.metadata.name,R:.spec.replicas --no-headers
+kubectl -n mi-instancia scale deploy --all --replicas=0
+# ... restaure su copia de PostgreSQL en la base de datos de la instancia ...
+kubectl -n mi-instancia scale deploy/<nombre> --replicas=<n>   # según los valores anotados arriba
+kubectl -n mi-instancia wait --for=condition=available deploy --all --timeout=300s
+```
+
+Anote los recuentos de réplicas antes de escalar a cero en lugar de suponer `1`: un
+área escalada volvería más pequeña de lo que era.
+
+**3. Restaure los datos de eventos** por separado, en TimescaleDB, cuando convenga a su
+objetivo de tiempo de recuperación. El paso 4 no depende de ello.
+
+**4. Confirme que los secretos almacenados se descifran**: lea un objeto respaldado por
 un secreto (un conector de salida, un canal de notificación) desde la consola o la API.
 Una restauración que devuelve filas no es una prueba; un valor que se descifra sí lo es.
 

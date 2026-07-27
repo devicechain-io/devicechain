@@ -243,8 +243,14 @@ To inspect the running instance:
 kubectl --context <kube-context> get pods -n my-instance
 ```
 
-Load example data into a running instance over the API with:
+To explore the console against a moving fleet rather than an empty one, run a
+**simulation**. `sim create` mints a scoped identity and tenant on the instance
+and writes the handshake file the `dc-simulator` process reads to come up:
 
 ```bash
-dcctl seed construction --server localhost --instance my-instance
+dcctl sim create demo --instance my-instance --server localhost
 ```
+
+The simulator then drives telemetry and alarms in over the same device wire real
+hardware uses — see [Trying it with simulated
+data](../intro.md#trying-it-with-simulated-data).

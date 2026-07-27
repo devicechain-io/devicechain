@@ -6,6 +6,7 @@ package bootstrap
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -142,7 +143,21 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	reused := false
 	switch {
 	case secretsRootKey != "":
-		// Recovery: the key comes from the artifact.
+		// Recovery: the key comes from the artifact — and the rule the default
+		// branch below states applies here WORD FOR WORD. helmInstall upgrades an
+		// existing release with this value, so aiming a restore at an instance that
+		// is already alive under a different key rewrites its KEK and makes every
+		// secret it holds permanently undecryptable, silently, on a run that reports
+		// success. That is the same defect this switch was written to close; it was
+		// closed on the re-run path and left open on this one.
+		//
+		// A genuine recovery runs where the instance does not exist at all, so this
+		// costs nothing. Where it does exist, only an artifact carrying the key it is
+		// already running is a no-op, and that case is worth allowing: re-running a
+		// restore is exactly as ordinary as re-running a bootstrap.
+		if err := refuseRestoreOverADifferentKey(ctx, st, secretsRootKey); err != nil {
+			return fail("restoring the root key", err)
+		}
 		notes = append(notes, fmt.Sprintf("root key restored from %s", st.Escrow.RestoredFrom))
 
 	case st.DryRun:
@@ -704,6 +719,58 @@ func randomKeyBase64(nbytes int) (string, error) {
 		return "", err
 	}
 	return base64.StdEncoding.EncodeToString(b), nil
+}
+
+// refuseRestoreOverADifferentKey stops a recovery from overwriting the root key of
+// an instance that is already alive under a different one.
+//
+// The destructive case is not exotic: point --restore-root-key at the wrong
+// artifact, or at the right artifact but the wrong instance name, and the helm
+// upgrade rewrites the KEK of a running instance. Every secret it holds becomes
+// permanently unreadable, with no error at the time. There is no undo, so this
+// fails closed on anything it cannot establish — including not being able to tell
+// whether the instance exists, since "could not tell" plus "overwrite" is the one
+// combination with no recovery.
+//
+// Keys are compared DECODED. Both sides are base64 the platform produced, but a
+// string compare would treat a difference in padding or encoding as a different
+// key and refuse a legitimate re-run; comparing bytes asks the question actually
+// being asked.
+func refuseRestoreOverADifferentKey(ctx context.Context, st *State, restoredKeyBase64 string) error {
+	if st.DryRun {
+		// Nothing is deployed and nothing will be, so there is no instance to put
+		// at risk — and a dry run must not require a reachable cluster.
+		return nil
+	}
+	existing, err := lookupExistingRootKey(ctx, st.KubeContext, st.Instance)
+	if err != nil {
+		return err
+	}
+	if existing == "" {
+		return nil // the ordinary recovery: the instance is not there yet
+	}
+
+	existingKey, err := base64.StdEncoding.DecodeString(existing)
+	if err != nil {
+		return fmt.Errorf("instance %q is running a root key that is not valid base64, so it cannot be "+
+			"compared with the artifact's: %w", st.Instance, err)
+	}
+	restoredKey, err := base64.StdEncoding.DecodeString(restoredKeyBase64)
+	if err != nil {
+		return fmt.Errorf("the artifact's root key is not valid base64: %w", err)
+	}
+	if subtle.ConstantTimeCompare(existingKey, restoredKey) == 1 {
+		return nil // re-running a restore, which is as ordinary as re-running a bootstrap
+	}
+
+	return fmt.Errorf("instance %q is already running a DIFFERENT secret-store root key.\n"+
+		"Restoring %s over it would rewrite the KEK and make every secret that instance has "+
+		"stored permanently unreadable — connector credentials, SMTP passwords, AI provider keys — "+
+		"with no error at the time and no way back.\n"+
+		"If this IS the instance you meant to recover, it is already up: destroy it first "+
+		"(dcctl destroy %s) and bootstrap again from the artifact. If it is not, recover under a "+
+		"different instance name",
+		st.Instance, st.Escrow.RestoredFrom, st.Instance)
 }
 
 // registryPort extracts the port from an ImageRegistry like "localhost:5000".

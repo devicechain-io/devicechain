@@ -1,0 +1,55 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The cluster for the ADR-028 root-key restore drill (hack/dr-rig.sh).
+#
+# The rig creates this cluster THREE times over a full run — once for the
+# instance that gets destroyed, once for the restore, once for the negative
+# control — so it is deliberately the smallest thing that can run a real
+# instance: one node, and the drill deploys onto it with --compact.
+#
+# WHY THIS IS NOT JUST kind-cluster.yaml
+#
+# Same two reasons kind-cluster-ha-control.yaml gives, and they are worth
+# repeating because both are silent:
+#
+#   1. kind-cluster.yaml carries a top-level `name: devicechain`, and that field
+#      takes precedence over --name. A rig that passed --name would quietly build
+#      its instance on the developer's own cluster and then destroy it.
+#   2. It binds host ports 80, 443 and 1883, which a local cluster almost
+#      certainly already holds.
+#
+# UNLIKE the HA control cluster, this one DOES need the ingress from the host:
+# the drill writes its secret through the platform's public GraphQL API, which is
+# the whole reason the ciphertext under test is the real thing. So it maps the
+# ingress onto high ports that nothing else is expected to want, and the rig
+# points the drill at localhost:18080.
+apiVersion: kind.x-k8s.io/v1alpha4
+kind: Cluster
+name: devicechain-dr
+
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."localhost:5000"]
+      endpoint = ["http://kind-registry:5000"]
+
+nodes:
+  - role: control-plane
+    # ingress-ready=true is REQUIRED. The infrastructure apply installs
+    # ingress-nginx unconditionally and its controller carries a nodeSelector on
+    # this label; without it the pod sits Pending and the apply fails on a Helm
+    # wait timeout whose message says nothing about a missing label.
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      # No 1883: the drill never connects a device.
+      - containerPort: 80
+        hostPort: 18080
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 18443
+        protocol: TCP

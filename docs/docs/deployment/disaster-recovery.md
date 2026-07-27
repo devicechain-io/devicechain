@@ -11,6 +11,40 @@ first and silently omits the second.
 
 This page is about the second one.
 
+## Two backups, not one {#two-tiers}
+
+An instance's data sits on **two separate database servers**, and they are worth
+backing up and restoring as two separate operations rather than one:
+
+| | **Core data** (PostgreSQL) | **Event data** (TimescaleDB) |
+|---|---|---|
+| What | Tenants, identities, devices, profiles, detection rules, dashboards, connectors, last-known state — **and every stored secret** | Measurements, event history, rollups |
+| Size | Megabytes; it grows with your fleet's *configuration* | The volume tier; it grows with time |
+| Losing it | The instance cannot be rebuilt | History is gone; the instance still runs |
+| Needs the root key | **Yes** | No |
+
+This is not a policy imposed on one database — it is how the platform already
+stores things. `event-management` is the only service that talks to TimescaleDB, and
+it talks to nothing else; every other service lives entirely on the relational
+server. There are no cross-writes to keep consistent between them.
+
+Two consequences worth planning around:
+
+- **Different schedules.** Core data is small and changes when someone changes
+  something, so it wants frequent, cheap, whole-database backups. Event data is
+  bulk, append-mostly, and already under a retention policy
+  ([ADR-026](../concepts/architecture.md)) — backing up chunks the lifecycle
+  reconciler is about to drop is wasted storage.
+- **Different recovery targets.** Restoring core data alone gives you a *working*
+  instance: devices reconnect, detection rules run, commands dispatch, secrets
+  decrypt. Restoring event data backfills history into it. An instance missing its
+  event data is degraded — empty history widgets — not down, so the two halves can
+  carry genuinely different recovery-time targets.
+
+**The root key gates the core-data half only.** Event data holds no ciphertext, so a
+TimescaleDB restore needs nothing from this page. Everything below is about core
+data.
+
 ## Why the root key needs its own procedure
 
 Every secret DeviceChain stores on your behalf — outbound-connector credentials, SMTP
@@ -19,9 +53,9 @@ each of those data keys is wrapped by one instance-wide **root key** (the KEK, s
 [ADR-059](../concepts/architecture.md)).
 
 That root key lives in the instance's Kubernetes Secret, which means it lives in
-**etcd**. Nothing DeviceChain backs up contains etcd. A CNPG backup archives
-PostgreSQL WAL; a TimescaleDB backup covers TimescaleDB. Neither contains a single
-byte of the key.
+**etcd**, and no database backup contains etcd. A PostgreSQL backup archives
+PostgreSQL; a TimescaleDB backup covers TimescaleDB. Neither contains a single byte
+of the key.
 
 The consequence is a failure that passes the drill most people actually run:
 
@@ -114,10 +148,26 @@ You will be asked for the artifact's passphrase (or supply it with
 `--escrow-passphrase-file` / `DCCTL_ESCROW_PASSPHRASE`). The new instance now runs the
 *same* root key the old one did.
 
-**2. Restore the databases** into that instance, using your normal PostgreSQL and
-TimescaleDB restore procedure.
+**2. Quiesce the instance, restore core data, bring it back.** The rebuilt instance
+has already started and created its own empty schemas, so restoring underneath a
+running service means dropping tables it holds open and racing its migrations. Scale
+the workloads down first:
 
-**3. Confirm the stored secrets decrypt** — read back a secret-backed object (an
+```bash
+kubectl -n my-instance get deploy -o custom-columns=NAME:.metadata.name,R:.spec.replicas --no-headers
+kubectl -n my-instance scale deploy --all --replicas=0
+# ... restore your PostgreSQL backup into the instance database ...
+kubectl -n my-instance scale deploy/<name> --replicas=<n>   # per the counts recorded above
+kubectl -n my-instance wait --for=condition=available deploy --all --timeout=300s
+```
+
+Record the replica counts before scaling down rather than assuming `1` — a scaled-out
+area would come back smaller than it was.
+
+**3. Restore event data** separately, into TimescaleDB, whenever it suits your
+recovery-time target. Step 4 does not depend on it.
+
+**4. Confirm the stored secrets decrypt** — read back a secret-backed object (an
 outbound connector, a notification channel) through the console or the API. A restore
 that returns rows is not proof; a value that decrypts is.
 
