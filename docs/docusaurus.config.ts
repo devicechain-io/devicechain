@@ -13,8 +13,28 @@ const config: Config = {
   organizationName: 'devicechain-io',
   projectName: 'devicechain',
 
-  onBrokenLinks: 'warn',
-  onBrokenMarkdownLinks: 'warn',
+  // 🔴 `throw`, which is Docusaurus's own default, and the only setting that
+  // makes the build a GATE rather than a report.
+  //
+  // These were 'warn'. The docs are built on every pull request (Netlify's
+  // deploy-preview check), so it looked like broken links were covered — but a
+  // warning is printed into a build log nobody reads and the deploy goes green.
+  // The build ran; it just could not fail.
+  //
+  // This matters most for the translated tree: docs/i18n/es mirrors every
+  // English page, so a relative link fixed in one locale and typo'd in the
+  // other is the likeliest way to break a link here, and the least likely to be
+  // noticed by eye. Verified zero broken links across both locales when this was
+  // flipped, so it starts clean.
+  onBrokenLinks: 'throw',
+
+  markdown: {
+    hooks: {
+      // Moved from the top-level `onBrokenMarkdownLinks`, which is deprecated
+      // and removed in Docusaurus v4.
+      onBrokenMarkdownLinks: 'throw',
+    },
+  },
 
   i18n: {
     defaultLocale: 'en',
