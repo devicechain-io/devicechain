@@ -6,6 +6,11 @@
  *
  * Marketing + static-site vocabulary. Consumed by the public website and by
  * anything with no bundler: plain custom properties, hex values, no build step.
+ *
+ * This is the one output that is COPIED INTO ANOTHER REPOSITORY, so it names
+ * its source in full: frontend/packages/brand/tokens.json in the devicechain
+ * monorepo. Editing the copy is how the marketing site drifted onto a blue
+ * neither the console nor the docs used. Change tokens.json and re-sync.
  */
 
 :root {
@@ -17,7 +22,9 @@
 
   /* Surfaces + text. */
   --bg: #0b1620;
-  /* LOAD-BEARING: must equal the hex-field renderer's gl.clearColor. If they differ, distant fogged tiles read as a dark silhouette against a lighter sky instead of dissolving into it. */
+  /* LOAD-BEARING: must equal the hex-field renderer's gl.clearColor. If they
+     differ, distant fogged tiles read as a dark silhouette against a lighter
+     sky instead of dissolving into it. */
   --bg-deep: #060b11;
   --ink: #e8f1f6;
   --ink-2: #b6ccd8;
