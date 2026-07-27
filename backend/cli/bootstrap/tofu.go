@@ -162,6 +162,15 @@ func infraVars(st *State) []string {
 	if st.NoMonitoring {
 		vars = append(vars, "enable_monitoring=false")
 	}
+	// The CloudNativePG operator is likewise default-on (ADR-020 A2, decision D4:
+	// one storage shape, HA or not). --no-cnpg is the escape hatch for a cluster that
+	// already runs it — Helm refuses to adopt objects another installer created, so
+	// on such a cluster the apply fails with an ownership error that no other flag
+	// gets past. Skipping the operator necessarily skips the backup plugin: the
+	// plugin is an extension of an operator that would not be there.
+	if st.NoCNPG {
+		vars = append(vars, "enable_cnpg=false", "enable_database_backups=false")
+	}
 	// The compact preset's volumes (compactSizing). The JetStream PV is DERIVED from
 	// the stream ceilings helmInstall states, not chosen alongside them: every
 	// per-stream ceiling is reserved UP FRONT at stream creation, so a volume smaller

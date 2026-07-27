@@ -71,6 +71,9 @@ type State struct {
 	// NoMonitoring skips the kube-prometheus-stack install in the infra apply
 	// (default-on, like Postgres/Timescale). See Options for the rationale.
 	NoMonitoring bool
+	// NoCNPG skips the CloudNativePG operator + backup plugin in the infra apply
+	// (default-on, ADR-020 A2). See Options for the rationale.
+	NoCNPG bool
 	// GrafanaSSO wires Grafana login to DeviceChain SSO (ADR-047). See Options.
 	GrafanaSSO bool
 	// Compact applies the small-footprint preset (compactSizing). See Options.

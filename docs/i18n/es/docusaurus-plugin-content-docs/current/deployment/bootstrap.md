@@ -61,7 +61,11 @@ puede desviarse de un despliegue de producción.
 
 ## Prerrequisitos {#prerequisites}
 
-- **Un clúster de Kubernetes y un kube-context** que apunte a él. Para el
+- **Un clúster de Kubernetes, versión 1.29 o más reciente**, y un kube-context que
+  apunte a él. El mínimo proviene de los charts de CloudNativePG, que se niegan a
+  instalarse por debajo de esa versión; `dcctl preflight` lo verifica por
+  adelantado, porque de lo contrario el fallo aparece a mitad de un levantamiento
+  que ya ha escrito tu archivo de custodia (escrow) de la clave raíz. Para el
   proveedor `local` esto es un clúster local (kind / minikube / k3d /
   docker-desktop). `dcctl` autodetecta un contexto local; pasa
   `--kube-context <name>` para elegir uno explícitamente. (Hoy el proveedor
@@ -107,6 +111,7 @@ extraen las imágenes —la canalización, el chart y el operador son idénticos
 | `--no-tls` | Sirve HTTP simple en lugar de un certificado autofirmado. Con `--host localhost`, un `http://localhost/` sin configuración adicional (sin advertencia de certificado). |
 | `--compact` | Preajuste de huella pequeña —ver más abajo. |
 | `--ha` | Alta disponibilidad de mensajería —ver más abajo. Requiere al menos **3 nodos planificables**. |
+| `--no-cnpg` | Omite el operador CloudNativePG y el plugin de respaldo de base de datos. Para un clúster que **ya ejecuta CloudNativePG**: Helm no puede adoptar objetos creados por otro instalador, así que sin esta bandera el apply de infraestructura falla. |
 | `--dry-run` | Imprime lo que haría cada paso sin cambiar nada. |
 | `--skip-preflight` | Omite las comprobaciones de entorno. |
 
@@ -139,16 +144,24 @@ lo que emite el certificado. `--grafana-sso` necesita la pila de monitoreo donde
 vive Grafana, así que se rechaza a menos que la conserves con
 `--no-monitoring=false`.
 
-:::note Por qué `--no-tls` también descarta el plugin de respaldo
+:::note Por qué `--compact --no-tls` descarta el plugin de respaldo
 El plugin Barman Cloud emite sus propios certificados a través de cert-manager, así
 que descartar cert-manager descarta también el plugin. Volver a activar TLS
-(`--no-tls=false`) restablece ambos.
+(`--no-tls=false`) restablece ambos. Ten en cuenta que hacen falta *ambas* banderas:
+`--no-tls` por sí sola —como en el ejemplo de URL local más abajo— conserva
+cert-manager y por lo tanto conserva el plugin.
+
+El operador CloudNativePG en sí se instala en *todo* levantamiento, incluido el
+compacto —un Deployment que solicita 100m/128Mi, más sus CRDs—. Ese es un costo de
+huella que el modo compacto no evita, y es deliberado: el respaldo no es una función
+de alta disponibilidad, así que la capa de almacenamiento tiene una sola forma en
+todas partes.
 
 Esto hoy no afecta a ninguna base de datos: los dos almacenes siguen siendo
-StatefulSets simples y todavía nada usa el plugin. El operador y el plugin se
-instalan por adelantado, antes de la migración que trasladará los almacenes sobre
-ellos; a partir de ese momento esto marcará la diferencia entre una instancia que
-puede recuperar a un punto en el tiempo y una que no.
+StatefulSets simples y todavía nada usa el operador ni el plugin. Ambos se instalan
+por adelantado, antes de la migración que trasladará los almacenes sobre ellos; a
+partir de ese momento esto marcará la diferencia entre una instancia que puede
+recuperar a un punto en el tiempo y una que no.
 :::
 
 :::caution Los tamaños de volumen son un presupuesto de tiempo, no de capacidad

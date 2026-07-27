@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"os/exec"
@@ -200,6 +201,95 @@ func (d *doctor) checkKubeContexts() {
 	}
 }
 
+// ---- kube server version ----------------------------------------------------
+
+// minKubeMajor/minKubeMinor is the API-server floor the infrastructure apply
+// requires. It comes from the CloudNativePG charts, which both declare
+// `kubeVersion: '>=1.29.0-0'` — helm refuses the release outright below that.
+//
+// This is worth a preflight check specifically because of WHEN it would otherwise
+// bite: the infra apply is step 2 of bootstrap, so the failure lands after the
+// instance credentials and the root-key escrow file have already been written.
+// Finding it here costs a second.
+const (
+	minKubeMajor = 1
+	minKubeMinor = 29
+)
+
+func (d *doctor) checkKubeServerVersion() {
+	section("Kubernetes server version", "🧩")
+
+	out := run("kubectl", "version", "-o", "json")
+	if out == "" {
+		// Not a failure. The local provider is allowed to run before a cluster
+		// exists, and an unreachable server is already reported by the context
+		// check above; claiming a version problem here would be a false verdict.
+		d.info("no reachable cluster — skipping (requires Kubernetes " +
+			fmt.Sprintf("%d.%d", minKubeMajor, minKubeMinor) + " or newer)")
+		return
+	}
+
+	var v struct {
+		ServerVersion struct {
+			Major      string `json:"major"`
+			Minor      string `json:"minor"`
+			GitVersion string `json:"gitVersion"`
+		} `json:"serverVersion"`
+	}
+	if err := json.Unmarshal([]byte(out), &v); err != nil || v.ServerVersion.Major == "" {
+		d.warn("could not read the Kubernetes server version",
+			fmt.Sprintf("DeviceChain requires %d.%d or newer (the CloudNativePG charts refuse older)", minKubeMajor, minKubeMinor))
+		return
+	}
+
+	ok, err := kubeVersionMeetsFloor(v.ServerVersion.Major, v.ServerVersion.Minor)
+	if err != nil {
+		d.warn("unparseable Kubernetes server version: "+v.ServerVersion.GitVersion,
+			fmt.Sprintf("DeviceChain requires %d.%d or newer", minKubeMajor, minKubeMinor))
+		return
+	}
+
+	shown := v.ServerVersion.GitVersion
+	if shown == "" {
+		shown = v.ServerVersion.Major + "." + v.ServerVersion.Minor
+	}
+	if ok {
+		d.pass("kubernetes server " + shown)
+		return
+	}
+	d.fail(fmt.Sprintf("kubernetes server %s is below the %d.%d floor", shown, minKubeMajor, minKubeMinor),
+		"the CloudNativePG charts declare kubeVersion >=1.29.0-0 and helm refuses the release, "+
+			"which would fail the infra apply AFTER the root-key escrow has been written — upgrade the cluster")
+}
+
+// kubeVersionMeetsFloor compares a reported server version against the floor.
+//
+// Split out of the check so the REJECTING path can be tested: the only cluster to
+// hand is far above the floor, so exercising checkKubeServerVersion against it
+// proves the parse works and says nothing about the comparison. A version gate
+// that never rejects is indistinguishable from no gate.
+func kubeVersionMeetsFloor(rawMajor, rawMinor string) (bool, error) {
+	// Managed distributions report minor as "29+" / "30+", so keep the digits.
+	major, err := strconv.Atoi(digitsOnly(rawMajor))
+	if err != nil {
+		return false, fmt.Errorf("major %q: %w", rawMajor, err)
+	}
+	minor, err := strconv.Atoi(digitsOnly(rawMinor))
+	if err != nil {
+		return false, fmt.Errorf("minor %q: %w", rawMinor, err)
+	}
+	return major > minKubeMajor || (major == minKubeMajor && minor >= minKubeMinor), nil
+}
+
+// digitsOnly keeps the leading digits of a version component, so "29+" reads as 29.
+func digitsOnly(s string) string {
+	end := 0
+	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
+		end++
+	}
+	return s[:end]
+}
+
 // ---- summary ---------------------------------------------------------------
 
 func (d *doctor) summary() {
@@ -225,6 +315,7 @@ func runDoctor(provider string) *doctor {
 	checkSystem(d, dockerRoot) // platform-specific (cgroup/inotify/disk/WSL)
 	d.checkPorts()
 	d.checkKubeContexts()
+	d.checkKubeServerVersion()
 	d.summary()
 	return d
 }

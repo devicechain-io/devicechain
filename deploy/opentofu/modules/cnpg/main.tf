@@ -82,7 +82,29 @@ variable "plugin_chart_version" {
 }
 
 variable "enable_pod_monitor" {
-  description = "Create the operator's PodMonitor. Requires the Prometheus Operator CRDs, so this is gated on the monitoring stack being installed — turning it on without them fails the release."
+  description = <<-EOT
+    Create the operator's PodMonitor.
+
+    🔴 OFF, and NOT derived from whether the monitoring stack is installed. That
+    derivation was tried and is wrong in both directions, which is why this reads
+    as a plain opt-in:
+
+      - It does not order anything. `enable_monitoring` is a variable READ, and a
+        variable read creates no dependency edge — `terraform graph` puts this
+        module in the first wave while kube-prometheus-stack is still installing,
+        so a fresh apply fails nondeterministically on `no matches for kind
+        "PodMonitor"`. This root already learned that lesson for NATS; see the
+        last bullet of "Notes & scope boundaries" in the root README, which is why
+        the NATS PodMonitor is rendered by the Helm chart and not here.
+      - It gets the other case backwards too. `enable_monitoring=false` documents
+        "the cluster ALREADY has the Prometheus Operator", which is exactly a
+        cluster where the CRDs exist and scraping would work — so deriving from it
+        silently leaves the operator unscraped precisely where it could be
+        scraped.
+
+    Turn it on deliberately, against a cluster already carrying the Prometheus
+    Operator CRDs.
+  EOT
   type        = bool
   default     = false
 }

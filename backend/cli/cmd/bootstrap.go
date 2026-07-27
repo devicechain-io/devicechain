@@ -25,6 +25,7 @@ var (
 	bootstrapHost            string
 	bootstrapNoTLS           bool
 	bootstrapNoMonitoring    bool
+	bootstrapNoCNPG          bool
 	bootstrapGrafanaSSO      bool
 	bootstrapDev             bool
 	bootstrapCompact         bool
@@ -324,6 +325,7 @@ var bootstrapCmd = &cobra.Command{
 			IngressHost:   bootstrapHost,
 			NoTLS:         bootstrapNoTLS,
 			NoMonitoring:  bootstrapNoMonitoring,
+			NoCNPG:        bootstrapNoCNPG,
 			GrafanaSSO:    bootstrapGrafanaSSO,
 			Compact:       bootstrapCompact,
 			HA:            bootstrapHA,
@@ -349,6 +351,7 @@ var bootstrapCmd = &cobra.Command{
 			IngressHost:     opts.IngressHost,
 			NoTLS:           opts.NoTLS,
 			NoMonitoring:    opts.NoMonitoring,
+			NoCNPG:          opts.NoCNPG,
 			GrafanaSSO:      opts.GrafanaSSO,
 			Compact:         opts.Compact,
 			HA:              opts.HA,
@@ -375,6 +378,7 @@ func init() {
 	bootstrapCmd.Flags().StringVar(&bootstrapHost, "host", "", "ingress host to expose the instance on (default devicechain.local; use 'localhost' for a local cluster to skip the /etc/hosts edit)")
 	bootstrapCmd.Flags().BoolVar(&bootstrapNoTLS, "no-tls", false, "serve plain HTTP instead of a self-signed cert (with --host localhost, a zero-config http://localhost/)")
 	bootstrapCmd.Flags().BoolVar(&bootstrapNoMonitoring, "no-monitoring", false, "skip the monitoring stack (Prometheus/Grafana) AND the chart's ServiceMonitors/alerts — for a minimal install or a cluster where you wire metrics separately")
+	bootstrapCmd.Flags().BoolVar(&bootstrapNoCNPG, "no-cnpg", false, "skip the CloudNativePG operator and the database backup plugin — for a cluster that ALREADY runs CNPG, since Helm cannot adopt objects another installer created")
 	bootstrapCmd.Flags().BoolVar(&bootstrapGrafanaSSO, "grafana-sso", false, "wire Grafana login to DeviceChain SSO (ADR-047), operator/superuser-tier only; enables the OAuth AS (needs https, or --host localhost --no-tls for local http)")
 	bootstrapCmd.Flags().BoolVar(&bootstrapDev, "dev", false, "local-developer preset: --build --host localhost --no-tls --yes (a zero-config http://localhost/ bring-up); rejects contradictory flags. Compose with --grafana-sso for local SSO")
 

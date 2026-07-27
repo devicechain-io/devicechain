@@ -76,7 +76,12 @@ module "cnpg" {
   operator_chart_version = var.cnpg_chart_version
   plugin_chart_version   = var.cnpg_plugin_chart_version
   enable_backup_plugin   = var.enable_database_backups
-  enable_pod_monitor     = var.enable_monitoring
+
+  # enable_pod_monitor is deliberately NOT passed, so it stays off. It was briefly
+  # wired to var.enable_monitoring; that is wrong twice over — a variable read
+  # orders nothing, so the release races kube-prometheus-stack's CRDs on a fresh
+  # apply, and enable_monitoring=false means "the cluster already HAS the operator",
+  # which is the case where scraping would have worked. See the variable's own docs.
 
   # The plugin's chart renders an Issuer and two Certificates, so cert-manager's
   # CRDs must be present AND its webhook serving before this runs. Ordering alone
