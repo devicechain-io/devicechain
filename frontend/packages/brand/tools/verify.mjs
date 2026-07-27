@@ -74,6 +74,10 @@ function compare(where, label, actual, expected, note) {
   const css = read(rel);
   if (!css) {
     console.warn(`skip: ${rel} not found`);
+  } else if (/@import\s+['"]@devicechain\/brand\/css\/shadcn\.css['"]/.test(css)) {
+    // A MIGRATED consumer declares nothing — it imports. See the docs branch
+    // below for why an un-special-cased scan here is worse than useless.
+    console.log(`ok: ${rel} imports the generated triples — nothing to compare`);
   } else {
     // The :root block is light mode; .dark carries the lifted values.
     const light = declared(css, 'primary', ':root');
