@@ -1,32 +1,23 @@
 /**
  * DeviceChain docs theme overrides.
  *
- * Kept in step with the brand: primary is the brandmark blue #208cb7 (the console's
- * hsl(197 71% 42%)), and dark mode uses the same navy canvas as devicechain.io.
- * If the brand changes, update the console (source of truth), then the marketing
- * site (devicechain-website/brand.css), then this file.
+ * The brand primary and its Infima ramp are NO LONGER DECLARED HERE. They come
+ * from @devicechain/brand, which holds the canonical values and generates this
+ * ramp by scaling lightness in HSL from the single brandmark blue. Change the
+ * colour in frontend/packages/brand/tokens.json and regenerate; do not paste
+ * hex back into this file.
+ *
+ * What this file still owns: the docs-specific surfaces (navy canvas, code
+ * backgrounds) and the "devicechain.io treatment" glows below.
  */
+@import '@devicechain/brand/css/infima.css';
+
 :root {
-  --ifm-color-primary: #208cb7;
-  --ifm-color-primary-dark: #1c7fa6;
-  --ifm-color-primary-darker: #1b789d;
-  --ifm-color-primary-darkest: #166483;
-  --ifm-color-primary-light: #2299c9;
-  --ifm-color-primary-lighter: #23a0d1;
-  --ifm-color-primary-lightest: #36aedd;
   --ifm-code-font-size: 95%;
   --docusaurus-highlighted-code-line-bg: rgba(32, 140, 183, 0.1);
 }
 
 [data-theme='dark'] {
-  --ifm-color-primary: #24a3d6;
-  --ifm-color-primary-dark: #208cb7;
-  --ifm-color-primary-darker: #1c7fa6;
-  --ifm-color-primary-darkest: #166483;
-  --ifm-color-primary-light: #36aedd;
-  --ifm-color-primary-lighter: #59bce3;
-  --ifm-color-primary-lightest: #8ed1ec;
-
   /* Navy canvas matching the devicechain.io landing page. */
   --ifm-background-color: #0b1620;
   --ifm-background-surface-color: #10202e;
