@@ -42,7 +42,8 @@ falló si alguno lo hace:
    tú conservas; consulta [Recuperación ante desastres](./disaster-recovery.md).
 2. **Aplicar la infraestructura** — ejecuta `tofu apply` sobre la configuración de
    OpenTofu incrustada (NATS, PostgreSQL, TimescaleDB, ingress de NGINX,
-   cert-manager) vía [terraform-exec](https://github.com/hashicorp/terraform-exec).
+   cert-manager, el operador CloudNativePG y su plugin de respaldo Barman Cloud)
+   vía [terraform-exec](https://github.com/hashicorp/terraform-exec).
    El estado se guarda en `~/.devicechain/<instance>/infra`, de modo que las
    ejecuciones posteriores son incrementales.
 3. **Instalar el núcleo (core)** — renderiza el operador (CRDs + RBAC +
@@ -122,7 +123,8 @@ añadir un eje de ajuste propio:
   produce throttling, ninguno de los cuales reduce nada realmente;
 - sin la pila de monitoreo, el mayor consumidor individual;
 - sin cert-manager, ya que con TLS desactivado nada necesita que se emita un
-  certificado (mantener TLS conserva también cert-manager —ver más abajo).
+  certificado (mantener TLS conserva también cert-manager —ver más abajo), y en
+  consecuencia sin el plugin de respaldo de base de datos.
 
 **No** cambia qué servicios se ejecutan —eso se controla en `--profile`, donde
 queda nombrado y visible. Un perfil *más grande* que `default` —hoy solo
@@ -136,6 +138,18 @@ compactas siguen aplicándose. Mantener TLS también conserva cert-manager, que 
 lo que emite el certificado. `--grafana-sso` necesita la pila de monitoreo donde
 vive Grafana, así que se rechaza a menos que la conserves con
 `--no-monitoring=false`.
+
+:::note Por qué `--no-tls` también descarta el plugin de respaldo
+El plugin Barman Cloud emite sus propios certificados a través de cert-manager, así
+que descartar cert-manager descarta también el plugin. Volver a activar TLS
+(`--no-tls=false`) restablece ambos.
+
+Esto hoy no afecta a ninguna base de datos: los dos almacenes siguen siendo
+StatefulSets simples y todavía nada usa el plugin. El operador y el plugin se
+instalan por adelantado, antes de la migración que trasladará los almacenes sobre
+ellos; a partir de ese momento esto marcará la diferencia entre una instancia que
+puede recuperar a un punto en el tiempo y una que no.
+:::
 
 :::caution Los tamaños de volumen son un presupuesto de tiempo, no de capacidad
 El volumen de JetStream se deriva: los techos por-stream se reservan por

@@ -62,6 +62,35 @@ module "timescaledb" {
   depends_on = [module.namespace]
 }
 
+# CloudNativePG — the operator that will own both database stores (ADR-020 A2).
+# Installs the operator + CRDs and, when backups are enabled, the Barman Cloud
+# plugin. It creates no Cluster resources yet; A2.3/A2.4 move `rdb` and `tsdb`
+# onto it. Installed on non-HA installs too (decision D4) — backup is not an HA
+# feature, and one storage shape means HA is an `instances` count rather than a
+# migration.
+module "cnpg" {
+  source = "./modules/cnpg"
+  count  = var.enable_cnpg ? 1 : 0
+
+  namespace              = var.cnpg_namespace
+  operator_chart_version = var.cnpg_chart_version
+  plugin_chart_version   = var.cnpg_plugin_chart_version
+  enable_backup_plugin   = var.enable_database_backups
+  enable_pod_monitor     = var.enable_monitoring
+
+  # The plugin's chart renders an Issuer and two Certificates, so cert-manager's
+  # CRDs must be present AND its webhook serving before this runs. Ordering alone
+  # is not enough when cert-manager is installed in this same apply, which is why
+  # this depends on the module rather than merely being written after it — the
+  # cert-manager helm_release waits for its own rollout (including the chart's
+  # startupapicheck), so depending on it is depending on readiness.
+  #
+  # When enable_cert_manager is false the dependency is an empty list and this
+  # ordering does nothing. That case is handled at the caller: dcctl turns
+  # enable_database_backups off on the one path that drops cert-manager.
+  depends_on = [module.cert_manager]
+}
+
 # NGINX ingress controller — the L7 entry point fronting the GraphQL/HTTP surface
 # (ADR-002). The Ingress resource itself is rendered by the Helm chart.
 module "ingress_nginx" {

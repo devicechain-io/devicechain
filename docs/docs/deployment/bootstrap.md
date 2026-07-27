@@ -37,7 +37,8 @@ to the same state and tells you which step failed if one does:
    tell. The root key is additionally escrowed to an encrypted file you keep; see
    [Disaster Recovery](./disaster-recovery.md).
 2. **Apply infrastructure** — `tofu apply` the embedded OpenTofu config (NATS,
-   PostgreSQL, TimescaleDB, NGINX ingress, cert-manager) via
+   PostgreSQL, TimescaleDB, NGINX ingress, cert-manager, the CloudNativePG
+   operator and its Barman Cloud backup plugin) via
    [terraform-exec](https://github.com/hashicorp/terraform-exec). State is kept in
    `~/.devicechain/<instance>/infra`, so subsequent runs are incremental.
 3. **Install core** — render the operator (CRDs + RBAC + controller) and apply it
@@ -145,7 +146,7 @@ tuning axis of its own:
   the CPU limit throttles, neither of which shrinks anything;
 - no monitoring stack, the single largest consumer;
 - no cert-manager, since with TLS off nothing needs a certificate issued (keep TLS and
-  cert-manager stays — see below).
+  cert-manager stays — see below), and consequently no database backup plugin.
 
 It does **not** change which services run — that stays on `--profile`, where it is named
 and visible. A profile *larger* than `default` — today only `full` — is rejected: the
@@ -157,6 +158,17 @@ Both TLS and monitoring can be kept: an explicit `--no-tls=false` or `--no-monit
 is honoured, and every other compact lever still applies. Keeping TLS also keeps
 cert-manager, which is what issues the certificate. `--grafana-sso` needs the monitoring
 stack Grafana lives in, so it is rejected unless you keep it with `--no-monitoring=false`.
+
+:::note Why `--no-tls` also drops the backup plugin
+The Barman Cloud plugin issues its own certificates through cert-manager, so dropping
+cert-manager drops the plugin with it. Turning TLS back on (`--no-tls=false`) restores
+both.
+
+This has no effect on any database today: the two stores are still plain StatefulSets
+and nothing uses the plugin yet. The operator and plugin are installed ahead of the
+migration that moves the stores onto them, at which point this becomes the difference
+between an instance that can recover to a point in time and one that cannot.
+:::
 
 :::caution Volume sizes are a time budget, not a capacity budget
 The JetStream volume is derived: the per-stream ceilings are reserved up front, so it is

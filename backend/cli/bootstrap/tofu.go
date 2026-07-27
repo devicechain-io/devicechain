@@ -197,7 +197,25 @@ func infraVars(st *State) []string {
 		// issued — quieter, and worse. Keyed on NoTLS rather than on Compact so
 		// `--compact --no-tls=false` keeps a working cert either way.
 		if st.NoTLS {
-			vars = append(vars, "enable_cert_manager=false")
+			vars = append(vars,
+				"enable_cert_manager=false",
+				// 🔴 SAME APPEND, DELIBERATELY. The Barman Cloud plugin (ADR-020 A2 /
+				// ADR-028) renders a cert-manager Issuer and two Certificates, so it
+				// inherits the failure above exactly: without the CRDs the release
+				// fails outright and takes the whole bootstrap with it. These two vars
+				// are emitted from one statement rather than two so that a later edit
+				// cannot re-enable one without seeing the other — the same
+				// by-construction shape the A8 credential fix landed on, and the
+				// alternative is a coupling that exists only in a comment.
+				//
+				// The consequence is real and is the accepted trade, not an oversight:
+				// `--compact --no-tls` gets the CNPG operator and NO point-in-time
+				// recovery. Compact is the footprint preset, cert-manager is three more
+				// workloads, and PITR additionally needs object storage; an install
+				// that wants backups should not be asking for the smallest possible
+				// one. TestDisablingCertManagerAlsoDisablesDatabaseBackups pins it.
+				"enable_database_backups=false",
+			)
 		}
 	}
 	// Broker authentication (ADR-025): enable auth callout on NATS and pass the
