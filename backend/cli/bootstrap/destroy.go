@@ -88,12 +88,35 @@ func destroyEverything(ctx context.Context, provider Provider, opts DestroyOptio
 	// The cluster is gone, so its persisted tofu state now points at nothing —
 	// remove the whole per-instance state directory.
 	doing(fmt.Sprintf("removing local state (~/.devicechain/%s)", opts.Instance))
+	var keptEscrow []string
+	var removeErr error
 	if dir, err := instanceRoot(opts.Instance); err == nil {
-		if err := os.RemoveAll(dir); err != nil {
-			return fail("removing local state", err)
-		}
+		keptEscrow, removeErr = removeStatePreservingEscrow(dir)
+	}
+	// Anything spared is named BEFORE the error is returned. A partially removed tree
+	// is exactly when an operator needs to know what survived in it, and reporting
+	// only on the success path meant the failure case said nothing.
+	for _, p := range keptEscrow {
+		fmt.Println(color.YellowString("  kept root-key escrow %s — the cluster is gone but this still opens its database backups", p))
+	}
+	if removeErr != nil {
+		return fail("removing local state", removeErr)
 	}
 	done()
+
+	// The artifact dcctl actually wrote lives OUTSIDE this tree by design, so the
+	// walk above never sees it. Naming it here is the point: destroy is the one
+	// command that knows the instance is gone, and an operator who is told nothing
+	// will hit the "already exists" refusal on their next bootstrap of the same name
+	// with no idea where the file came from.
+	if p, err := DefaultEscrowPath(opts.Instance); err == nil {
+		if _, err := os.Stat(p); err == nil {
+			fmt.Println(color.YellowString(
+				"  the root-key escrow for %q is still at %s — it is not part of the cluster and was not removed.\n"+
+					"  Keep it for as long as you keep any backup of this instance's databases; delete it only when those are gone.",
+				opts.Instance, p))
+		}
+	}
 
 	if opts.PurgeRegistry {
 		doing("removing local image registry container")

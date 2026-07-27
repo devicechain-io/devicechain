@@ -27,6 +27,7 @@ use (
 	./backend/services/sparkplug-ingest
 	./backend/services/user-management
 	./backend/sims/dc-simulator
+	./backend/tools/drdrill
 	./backend/tools/migrationdiff
 	./deploy
 )

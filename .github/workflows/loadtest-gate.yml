@@ -214,9 +214,17 @@ jobs:
           # rather than a bare `rc=$?` -- otherwise a failed bring-up aborts the script
           # before `end`/`elapsed_s` are recorded, and the summary loses the very number
           # this job exists to measure (how long it ran before dying = timeout vs crash).
+          # DCCTL_ESCROW_PASSPHRASE rather than --no-escrow, deliberately. This
+          # instance is as disposable as they come, so opting out would be defensible
+          # -- but bootstrap now escrows the secret-store root key BY DEFAULT and this
+          # is the only place in CI that runs a real bring-up, so opting out would
+          # leave the default path with no live coverage at all. The value is a
+          # throwaway: the artifact dies with the runner, and the point is that the
+          # write happens and the bring-up still works, not that the file is secret.
           start=$(date +%s)
           rc=0
           # shellcheck disable=SC2086
+          DCCTL_ESCROW_PASSPHRASE=loadtest-gate-throwaway \
           "$RUNNER_TEMP/dcctl" bootstrap local devicechain \
             --compact --host localhost -y $preflight $imgargs || rc=$?
           end=$(date +%s)

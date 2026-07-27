@@ -6,6 +6,7 @@ package bootstrap
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -88,6 +89,9 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 
 	doing(fmt.Sprintf("rendering config for instance %q (profile %q)", st.Instance, st.Profile))
 
+	// Collected and printed once the step's progress line is closed. See done() below.
+	var notes []string
+
 	// Generate a DB password regardless of dry-run so the value is reproducible
 	// within a run; we just never persist/apply it under dry-run.
 	password, err := randomSecret(24)
@@ -122,16 +126,99 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	}
 	st.Values["serviceAuthSecret"] = serviceSecret
 
-	// Mint the instance secret-store root key (ADR-059): a base64-encoded 256-bit
-	// KEK that wraps every per-secret DEK, threaded into every service's instance
-	// config (helmInstall). Generated once here so the whole instance shares one
-	// KEK; losing it loses every stored secret, so the rendered K8s Secret must be
-	// backed up (see the DR note in the deploy docs).
-	secretsRootKey, err := randomKeyBase64(32)
-	if err != nil {
-		return fail("minting secrets root key", err)
+	// Establish the instance secret-store root key (ADR-059): a base64-encoded
+	// 256-bit KEK that wraps every per-secret DEK, threaded into every service's
+	// instance config (helmInstall). One key for the whole instance.
+	//
+	// Normally minted fresh here and escrowed to a file the operator keeps, because
+	// the K8s Secret this ends up in lives in etcd and etcd is in no backup the
+	// platform takes — see escrow.go for what that costs at restore time. On the
+	// recovery path the key instead comes FROM an escrow artifact, so that a fresh
+	// cluster can read a restored database rather than rehydrating ciphertext
+	// nothing alive can open.
+	//
+	// The three cases are decided here rather than anywhere downstream, because two
+	// of them are irreversible and one of them used to be silent.
+	secretsRootKey := st.Escrow.RestoredRootKey
+	reused := false
+	switch {
+	case secretsRootKey != "":
+		// Recovery: the key comes from the artifact — and the rule the default
+		// branch below states applies here WORD FOR WORD. helmInstall upgrades an
+		// existing release with this value, so aiming a restore at an instance that
+		// is already alive under a different key rewrites its KEK and makes every
+		// secret it holds permanently undecryptable, silently, on a run that reports
+		// success. That is the same defect this switch was written to close; it was
+		// closed on the re-run path and left open on this one.
+		//
+		// A genuine recovery runs where the instance does not exist at all, so this
+		// costs nothing. Where it does exist, only an artifact carrying the key it is
+		// already running is a no-op, and that case is worth allowing: re-running a
+		// restore is exactly as ordinary as re-running a bootstrap.
+		if err := refuseRestoreOverADifferentKey(ctx, st, secretsRootKey); err != nil {
+			return fail("restoring the root key", err)
+		}
+		notes = append(notes, fmt.Sprintf("root key restored from %s", st.Escrow.RestoredFrom))
+
+	case st.DryRun:
+		// Nothing is deployed and nothing will be, so there is no instance to consult.
+		secretsRootKey, err = randomKeyBase64(32)
+		if err != nil {
+			return fail("minting secrets root key", err)
+		}
+
+	default:
+		// A RE-RUN MUST NOT MINT. helmInstall upgrades an existing release with
+		// whatever is in this value, so minting here would rewrite the KEK of a live
+		// instance and make every secret it has stored permanently undecryptable —
+		// silently, on a run that reports success, of a pipeline that documents itself
+		// as idempotent. See ExistingRootKey, which fails closed rather than guessing.
+		existing, lookupErr := lookupExistingRootKey(ctx, st.KubeContext, st.Instance)
+		if lookupErr != nil {
+			return fail("checking for an existing instance", lookupErr)
+		}
+		if existing != "" {
+			secretsRootKey = existing
+			reused = true
+			notes = append(notes, "root key reused from the running instance")
+		} else {
+			secretsRootKey, err = randomKeyBase64(32)
+			if err != nil {
+				return fail("minting secrets root key", err)
+			}
+		}
 	}
 	st.Values["secretsRootKey"] = secretsRootKey
+
+	// Escrow it BEFORE it is used for anything. The whole value of the artifact is
+	// that it exists for every instance that exists, so a run that cannot write one
+	// must not go on to build an instance around a key with no second copy — the
+	// resulting cluster would look perfectly healthy and be unrecoverable.
+	if st.Escrow.Path != "" {
+		switch {
+		case st.DryRun:
+			// A dry run must predict the same outcome the real run produces, so it
+			// checks the destination rather than assuming it is free. Reporting a clean
+			// plan for a run that dies at step 1 is the defect this whole line exists
+			// to avoid.
+			if _, statErr := os.Stat(st.Escrow.Path); statErr == nil {
+				notes = append(notes, fmt.Sprintf(
+					"an escrow artifact already exists at %s; a real run would stop here", st.Escrow.Path))
+			} else {
+				notes = append(notes, "would write the root-key escrow to "+st.Escrow.Path)
+			}
+		case reused:
+			outcome, recErr := ReconcileEscrow(st.Escrow, secretsRootKey, st.Instance, time.Now().UTC())
+			if recErr != nil {
+				return fail("reconciling the root-key escrow", recErr)
+			}
+			notes = append(notes, "root-key escrow "+outcome)
+		default:
+			if err := WriteEscrow(st.Escrow, secretsRootKey, st.Instance, time.Now().UTC()); err != nil {
+				return fail("escrowing the secret-store root key", err)
+			}
+		}
+	}
 
 	// Mint the Grafana OAuth client secret (ADR-047 SSO) when SSO is wired: one mint,
 	// both sides — the cleartext goes to Grafana's generic_oauth config (the monitoring
@@ -222,6 +309,11 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	st.Values["imageVersion"] = st.ImageVersion
 	st.Values["imageSource"] = imageSource
 	done()
+	// Printed AFTER done(), because doing() leaves its line unterminated and anything
+	// written before the matching done() lands in the middle of it.
+	for _, n := range notes {
+		fmt.Printf("  %s\n", color.WhiteString(n))
+	}
 	return nil
 }
 
@@ -555,6 +647,35 @@ func stepReport(ctx context.Context, st *State) error {
 			fmt.Printf("           %s\n", color.YellowString("dev-grade default password — override monitoring_grafana_admin_password, or enable SSO with --grafana-sso (ADR-047)"))
 		}
 	}
+	// The root-key escrow, printed here because this is the screen an operator
+	// actually reads. Every branch says something: the file to back up, the artifact
+	// a restore came from, or — for --no-escrow — that this instance's secrets die
+	// with its cluster. The last one is the whole reason the line is unconditional.
+	//
+	// Keyed on the PLAN, not on a value the write step leaves behind. Keying it on
+	// the side effect is what the first version did, and under --dry-run — where
+	// there is no side effect — the summary announced "none (--no-escrow)" for a run
+	// that had a passphrase, a path and every intention of escrowing. A line whose
+	// whole job is to tell an operator whether their key has a second copy must not
+	// be able to say no when the answer is yes. A failed write aborts the pipeline
+	// before this ever prints, so the plan is also the truth.
+	switch {
+	case st.Escrow.Path != "":
+		what := st.Escrow.Path
+		if st.DryRun {
+			what += "  (dry run — not written)"
+		}
+		fmt.Printf("  %s %s\n", color.WhiteString("Root-key escrow:"), color.GreenString(what))
+		fmt.Printf("                   %s\n", color.YellowString(
+			"copy this off the machine and store the passphrase separately — it is the ONLY copy of the key outside the cluster, and no database backup contains it"))
+	case st.Escrow.RestoredFrom != "":
+		fmt.Printf("  %s %s\n", color.WhiteString("Root-key escrow:"),
+			color.GreenString("restored from %s (that artifact remains the second copy)", st.Escrow.RestoredFrom))
+	default:
+		fmt.Printf("  %s %s\n", color.WhiteString("Root-key escrow:"), color.RedString("none (--no-escrow)"))
+		fmt.Printf("                   %s\n", color.YellowString(
+			"this instance's root key exists only inside the cluster; if the cluster is lost, every stored secret is permanently unreadable even with a database backup"))
+	}
 	if !st.DryRun {
 		host := st.Values["ingressHost"]
 		scheme := st.Values["scheme"]
@@ -598,6 +719,58 @@ func randomKeyBase64(nbytes int) (string, error) {
 		return "", err
 	}
 	return base64.StdEncoding.EncodeToString(b), nil
+}
+
+// refuseRestoreOverADifferentKey stops a recovery from overwriting the root key of
+// an instance that is already alive under a different one.
+//
+// The destructive case is not exotic: point --restore-root-key at the wrong
+// artifact, or at the right artifact but the wrong instance name, and the helm
+// upgrade rewrites the KEK of a running instance. Every secret it holds becomes
+// permanently unreadable, with no error at the time. There is no undo, so this
+// fails closed on anything it cannot establish — including not being able to tell
+// whether the instance exists, since "could not tell" plus "overwrite" is the one
+// combination with no recovery.
+//
+// Keys are compared DECODED. Both sides are base64 the platform produced, but a
+// string compare would treat a difference in padding or encoding as a different
+// key and refuse a legitimate re-run; comparing bytes asks the question actually
+// being asked.
+func refuseRestoreOverADifferentKey(ctx context.Context, st *State, restoredKeyBase64 string) error {
+	if st.DryRun {
+		// Nothing is deployed and nothing will be, so there is no instance to put
+		// at risk — and a dry run must not require a reachable cluster.
+		return nil
+	}
+	existing, err := lookupExistingRootKey(ctx, st.KubeContext, st.Instance)
+	if err != nil {
+		return err
+	}
+	if existing == "" {
+		return nil // the ordinary recovery: the instance is not there yet
+	}
+
+	existingKey, err := base64.StdEncoding.DecodeString(existing)
+	if err != nil {
+		return fmt.Errorf("instance %q is running a root key that is not valid base64, so it cannot be "+
+			"compared with the artifact's: %w", st.Instance, err)
+	}
+	restoredKey, err := base64.StdEncoding.DecodeString(restoredKeyBase64)
+	if err != nil {
+		return fmt.Errorf("the artifact's root key is not valid base64: %w", err)
+	}
+	if subtle.ConstantTimeCompare(existingKey, restoredKey) == 1 {
+		return nil // re-running a restore, which is as ordinary as re-running a bootstrap
+	}
+
+	return fmt.Errorf("instance %q is already running a DIFFERENT secret-store root key.\n"+
+		"Restoring %s over it would rewrite the KEK and make every secret that instance has "+
+		"stored permanently unreadable — connector credentials, SMTP passwords, AI provider keys — "+
+		"with no error at the time and no way back.\n"+
+		"If this IS the instance you meant to recover, it is already up: destroy it first "+
+		"(dcctl destroy %s) and bootstrap again from the artifact. If it is not, recover under a "+
+		"different instance name",
+		st.Instance, st.Escrow.RestoredFrom, st.Instance)
 }
 
 // registryPort extracts the port from an ImageRegistry like "localhost:5000".

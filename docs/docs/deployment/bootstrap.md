@@ -28,8 +28,10 @@ cluster creation are planned follow-ups — see [Prerequisites](#prerequisites).
 The bootstrap runs as an ordered, **idempotent** pipeline — re-running it converges
 to the same state and tells you which step failed if one does:
 
-1. **Render configuration** — resolve the instance id, namespace, profile, and a
-   generated database password.
+1. **Render configuration** — resolve the instance id, namespace, profile, a
+   generated database password, and the **secret-store root key**: minted on a first
+   install and escrowed to an encrypted file you keep, or reused as-is when the
+   instance already exists. See [Disaster Recovery](./disaster-recovery.md).
 2. **Apply infrastructure** — `tofu apply` the embedded OpenTofu config (NATS,
    PostgreSQL, TimescaleDB, NGINX ingress, cert-manager) via
    [terraform-exec](https://github.com/hashicorp/terraform-exec). State is kept in
@@ -94,6 +96,38 @@ pipeline, chart, and operator are identical.
 | `--ha` | Messaging high availability — see below. Needs at least **3 schedulable nodes**. |
 | `--dry-run` | Print what each step would do without changing anything. |
 | `--skip-preflight` | Skip the environment checks. |
+| `--escrow-passphrase-file <path>` | Read the root-key escrow passphrase from a file instead of prompting. See below. |
+| `--escrow-file <path>` | Write the escrow artifact somewhere other than `~/.devicechain/escrow/`. |
+| `--no-escrow` | Do **not** escrow the root key. For throwaway instances only; implied by `--dev`. |
+| `--restore-root-key <path>` | Disaster recovery: seed this instance's root key from an escrow artifact instead of minting one. |
+
+### The root-key escrow {#escrow}
+
+Bootstrap writes an encrypted copy of the instance's **secret-store root key** to
+`~/.devicechain/escrow/<instance>-rootkey.escrow`, sealed under a passphrase you
+choose. It will prompt for that passphrase, or take it from
+`--escrow-passphrase-file` or `DCCTL_ESCROW_PASSPHRASE`.
+
+This is on by default, and a non-interactive run with no passphrase **fails** rather
+than proceeding without one:
+
+```bash
+# automation
+DCCTL_ESCROW_PASSPHRASE="$(pass show devicechain/prod-escrow)" \
+  dcctl bootstrap local prod --yes
+
+# a throwaway instance
+dcctl bootstrap local scratch --dev
+```
+
+:::danger This file is not optional for anything you care about
+The root key encrypts every secret the instance stores, it lives only in the
+cluster's etcd, and **no DeviceChain backup contains etcd**. Without this file, a
+database backup restored to a new cluster rehydrates secrets that nothing can
+decrypt — with no error at restore time. [Disaster
+Recovery](./disaster-recovery.md) explains the whole procedure; read it before you
+need it.
+:::
 
 ### `--compact`
 
@@ -209,8 +243,14 @@ To inspect the running instance:
 kubectl --context <kube-context> get pods -n my-instance
 ```
 
-Load example data into a running instance over the API with:
+To explore the console against a moving fleet rather than an empty one, run a
+**simulation**. `sim create` mints a scoped identity and tenant on the instance
+and writes the handshake file the `dc-simulator` process reads to come up:
 
 ```bash
-dcctl seed construction --server localhost --instance my-instance
+dcctl sim create demo --instance my-instance --server localhost
 ```
+
+The simulator then drives telemetry and alarms in over the same device wire real
+hardware uses — see [Trying it with simulated
+data](../intro.md#trying-it-with-simulated-data).
