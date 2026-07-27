@@ -45,6 +45,14 @@ const config: Config = {
   ],
 
   themeConfig: {
+    // Dark by default, matching the console and the marketing site — the brand
+    // is a navy canvas and the light theme is the exception, not the baseline.
+    // respectPrefersColorScheme still lets a reader who has asked their OS for
+    // light get light, so this sets the default rather than forcing a theme.
+    colorMode: {
+      defaultMode: 'dark',
+      respectPrefersColorScheme: true,
+    },
     navbar: {
       title: 'DeviceChain',
       logo: {

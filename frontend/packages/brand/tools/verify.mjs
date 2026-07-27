@@ -89,20 +89,40 @@ function compare(where, label, actual, expected, note) {
   }
 }
 
-/* ── Docs: Infima hex ──────────────────────────────────────────────────── */
+/* ── Docs: Infima hex, base AND the full ramp ──────────────────────────── */
 {
   const rel = 'docs/src/css/custom.css';
   const css = read(rel);
   if (!css) {
     console.warn(`skip: ${rel} not found`);
+  } else if (/@import\s+['"]@devicechain\/brand\/css\/infima\.css['"]/.test(css)) {
+    // A MIGRATED consumer declares nothing — it imports. Without this branch the
+    // declaration scan below finds nothing and reports 14 "(not declared)"
+    // failures against a consumer that is in fact perfectly correct, which is
+    // the fastest way to teach everyone to ignore this script.
+    console.log(`ok: ${rel} imports the generated ramp — nothing to compare`);
   } else {
-    compare(rel, 'light --ifm-color-primary', declared(css, 'ifm-color-primary', ':root'), PRIMARY);
-    compare(
-      rel,
-      'dark --ifm-color-primary',
-      declared(css, 'ifm-color-primary', "[data-theme='dark']"),
-      BRIGHT
-    );
+    // Checking only the base colour is NOT enough, and assuming otherwise gave
+    // a false all-clear once already: the docs' base matched exactly while its
+    // hand-built DARK ramp differed by up to 45/255 on --ifm-color-primary-
+    // lightest. Infima renders links, hovers and admonitions out of the ramp,
+    // not the base, so the ramp is the part a reader actually sees.
+    const generated = readFileSync(join(ROOT, 'css/infima.css'), 'utf8');
+    const STEPS = ['', '-dark', '-darker', '-darkest', '-light', '-lighter', '-lightest'];
+    for (const [theme, selector] of [
+      ['light', ':root'],
+      ['dark', "[data-theme='dark']"],
+    ]) {
+      for (const step of STEPS) {
+        const prop = `ifm-color-primary${step}`;
+        compare(
+          rel,
+          `${theme} --${prop}`,
+          declared(css, prop, selector),
+          declared(generated, prop, selector)
+        );
+      }
+    }
   }
 }
 
