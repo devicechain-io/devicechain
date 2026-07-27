@@ -58,16 +58,34 @@ export function hexToShadcnTriple(hex) {
   return `${h} ${s}% ${l}%`;
 }
 
-/** Mix toward white (amount > 0) or black (amount < 0), amount in -1..1. */
-export function shade(hex, amount) {
-  const [r, g, b] = hexToRgb(hex);
-  const t = amount < 0 ? 0 : 255;
-  const p = Math.abs(amount);
-  const ch = (c) => Math.round((t - c) * p + c);
+/** HSL (deg, %, %) -> `#rrggbb`. */
+export function hslToHex(h, s, l) {
+  const sn = s / 100;
+  const ln = l / 100;
+  const k = (n) => (n + h / 30) % 12;
+  const a = sn * Math.min(ln, 1 - ln);
+  const f = (n) => ln - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  const to255 = (x) => Math.round(x * 255);
   return (
     '#' +
-    [ch(r), ch(g), ch(b)]
+    [to255(f(0)), to255(f(8)), to255(f(4))]
       .map((c) => c.toString(16).padStart(2, '0'))
       .join('')
   );
+}
+
+/**
+ * Scale a colour's LIGHTNESS by `factor`, preserving hue and saturation.
+ *
+ * This is how Infima's primary ramp is built, and getting it wrong is not
+ * subtle. The obvious implementation — linearly mixing toward white or black in
+ * RGB — adds white to all three channels equally, which DESATURATES. Measured
+ * against the docs site's existing ramp, a mix-to-white `lightest` came out at
+ * 51.5% saturation against the correct 71.1%: a visibly washed-out, greyer blue.
+ * Scaling lightness in HSL keeps the hue and the saturation exactly where they
+ * were and only moves the value up or down the ramp.
+ */
+export function scaleLightness(hex, factor) {
+  const { h, s, l } = hexToHsl(hex);
+  return hslToHex(h, s, Math.max(0, Math.min(100, l * factor)));
 }

@@ -23,7 +23,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { hexToHsl, hexToShadcnTriple, shade } from './color.mjs';
+import { hexToHsl, hexToShadcnTriple, scaleLightness } from './color.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
@@ -112,17 +112,22 @@ function shadcnCss() {
 
 function infimaCss() {
   const { core } = tokens;
-  // Infima wants a five-step ramp either side of primary. Generating it from one
-  // value is the point: the ratios below are Infima's own conventional steps, so
-  // the ramp can never drift out of order the way a hand-written one does.
+  // Infima wants a six-step ramp around primary, and it is built by scaling
+  // LIGHTNESS in HSL — hue and saturation are held constant. The factors below
+  // are Docusaurus's own conventional steps.
+  //
+  // Do not "simplify" this to an RGB mix toward white/black. That adds white to
+  // all three channels equally and therefore desaturates: checked against the
+  // docs site's existing ramp, a mix-to-white `lightest` landed at 51.5%
+  // saturation against the correct 71.1% — a visibly greyer, washed-out blue.
   const ramp = (base) => ({
-    darkest: shade(base, -0.3),
-    darker: shade(base, -0.2),
-    dark: shade(base, -0.1),
+    darkest: scaleLightness(base, 0.7),
+    darker: scaleLightness(base, 0.85),
+    dark: scaleLightness(base, 0.9),
     base,
-    light: shade(base, 0.1),
-    lighter: shade(base, 0.2),
-    lightest: shade(base, 0.3),
+    light: scaleLightness(base, 1.1),
+    lighter: scaleLightness(base, 1.15),
+    lightest: scaleLightness(base, 1.3),
   });
   const emit = (sel, base) => {
     const r = ramp(base);
