@@ -33,7 +33,7 @@ Two consequences worth planning around:
 - **Different schedules.** Core data is small and changes when someone changes
   something, so it wants frequent, cheap, whole-database backups. Event data is
   bulk, append-mostly, and already under a retention policy
-  ([ADR-026](../concepts/architecture.md)) — backing up chunks the lifecycle
+  ([data lifecycle](../concepts/architecture.md)) — backing up chunks the lifecycle
   reconciler is about to drop is wasted storage.
 - **Different recovery targets.** Restoring core data alone gives you a *working*
   instance: devices reconnect, detection rules run, commands dispatch, secrets
@@ -50,7 +50,7 @@ data.
 Every secret DeviceChain stores on your behalf — outbound-connector credentials, SMTP
 passwords, AI provider keys — is encrypted at rest under a per-secret data key, and
 each of those data keys is wrapped by one instance-wide **root key** (the KEK, see
-[ADR-059](../concepts/architecture.md)).
+[Architecture](../concepts/architecture.md)).
 
 That root key lives in the instance's Kubernetes Secret, which means it lives in
 **etcd**, and no database backup contains etcd. A PostgreSQL backup archives

@@ -1,0 +1,279 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Builds, gates and publishes the TimescaleDB operand image (ADR-020 A2.6) —
+# the PostgreSQL image the `tsdb` CloudNativePG cluster runs.
+#
+# It is deliberately NOT part of release.yml. The operand's version is a fact
+# about PostgreSQL and TimescaleDB, not about a DeviceChain release: tying the
+# two would either republish an unchanged database image on every tag, or make a
+# TimescaleDB security fix wait for one.
+#
+# 🔴 The published image contains TimescaleDB Community Edition, which is
+# TSL-licensed, NOT Apache-2.0. See NOTICE. The sources in this repository
+# (Dockerfile, scripts) are Apache-2.0 and contain no Timescale code; the
+# obligation attaches to the artifact this workflow pushes.
+
+name: operand-image
+
+on:
+  pull_request:
+    paths:
+      - 'deploy/images/timescaledb/**'
+      - '.github/workflows/operand-image.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/images/timescaledb/**'
+      - '.github/workflows/operand-image.yml'
+  # Rebuild on demand — a base-image CVE fix lands in the CNPG base without any
+  # change here, and the pins in versions.conf are what make that rebuild safe.
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Overwrite the tag if it already exists (needs a good reason)'
+        type: boolean
+        default: false
+
+# Read-only by default. `packages: write` is granted to the publish job ALONE:
+# every other job executes build.sh, the Dockerfile and smoke.sh from the branch
+# under test, and actions/checkout persists the token into .git/config with
+# whatever permissions the workflow holds. ci.yml is workflow-wide `contents:
+# read` for the same reason.
+permissions:
+  contents: read
+
+concurrency:
+  group: operand-image-${{ github.ref }}
+  # Never cancel a run that may be mid-push to the registry; cancelling a PR
+  # check is free. release.yml makes the same distinction.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/devicechain-io/postgresql-timescaledb
+  DIR: deploy/images/timescaledb
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # The compatibility gate. Runs first and on its own: it is seconds of work, and
+  # it is the check that prevents an image which builds perfectly and then kills
+  # the first replica of a live cluster during a rolling update.
+  # ---------------------------------------------------------------------------
+  compat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # 🔴 LOAD-BEARING. verify-compat.sh compares versions.conf against its
+          # previously committed value, so it needs history. At the default depth
+          # of 1 it cannot resolve any base ref — and rather than pass vacuously
+          # it hard-errors, which is why this is set and not a comment asking
+          # someone to remember.
+          #
+          # Depth 2 covers the fallback. The base refs passed below are usually
+          # already present (the PR merge commit's first parent; the push event's
+          # `before`), but `before` can be older than 2 commits on a multi-commit
+          # push, so fetch enough to reach it.
+          fetch-depth: 0
+
+      # Prove the gate can fail before trusting it to pass. Without this the
+      # step below is indistinguishable from `exit 0` on every commit that does
+      # not touch the version pin — which is nearly all of them. The self-test
+      # drives the whole script against a throwaway repository, not just its
+      # decision function: a regression that made the gate read the CURRENT file
+      # instead of the git one left every decision-function case green while the
+      # real gate waved a known-bad bump through.
+      - name: Compatibility gate self-test
+        run: ${{ env.DIR }}/verify-compat.sh --self-test
+
+      # 🔴 The base ref is the event's real base, not HEAD~1.
+      #
+      #   pull_request — the PR's merge base. HEAD~1 would also work here (the
+      #     merge commit's first parent IS the base tip), but naming it is
+      #     clearer than relying on that.
+      #   push — `github.event.before`, the tip BEFORE this push. HEAD~1 is
+      #     wrong for a multi-commit push: if the bad bump is in the first of
+      #     three commits, HEAD~1 already carries the new version and the gate
+      #     compares the bump against itself and passes.
+      - name: TimescaleDB compatibility gate
+        env:
+          DC_COMPAT_BASE_REF: >-
+            ${{ github.event_name == 'pull_request'
+                && github.event.pull_request.base.sha
+                || (github.event.before || 'HEAD~1') }}
+        run: ${{ env.DIR }}/verify-compat.sh
+
+  # ---------------------------------------------------------------------------
+  # Build for amd64 and run the functional gate against the real image.
+  # ---------------------------------------------------------------------------
+  smoke:
+    needs: compat
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Single-arch and loaded into the local daemon, because the point of this
+      # job is to RUN the thing. An arm64 image built under QEMU here could not
+      # be started to prove anything about itself; the multi-arch build happens
+      # in `publish`, gated on this passing.
+      #
+      # No setup-buildx-action here on purpose — its docker-container driver
+      # leaves the result in the build cache rather than the daemon, so the smoke
+      # step would fail to find an image that had just built successfully.
+      - name: Build (amd64, local)
+        run: ${{ env.DIR }}/build.sh operand:ci
+
+      # The Dockerfile's own final RUN already asserted the image's CONTENTS
+      # (every pinned .so present, TSL libraries present, default_version pinned)
+      # — a failure there fails the step above. This asserts its BEHAVIOUR:
+      # that a server starts and that continuous aggregates, retention and
+      # compression actually work.
+      - name: Functional smoke
+        run: DC_OPERAND_IMAGE=operand:ci ${{ env.DIR }}/smoke.sh
+
+      # The schema half of decision D1: the migration chain must still reproduce
+      # the committed goldens on PostgreSQL 17. Running it here — rather than
+      # only at the A2.4 cutover — means a migration that is fine on 16 and
+      # broken on 17 is caught by the PR that writes it.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      - name: Migration chain on PostgreSQL 17
+        env:
+          MDIFF_IMAGE: operand:ci
+          MDIFF_LAUNCH: operand
+          MDIFF_CONTAINER: dc-mdiff-operand
+        run: hack/migration-diff.sh verify
+
+  # ---------------------------------------------------------------------------
+  # Publish. Never on pull_request: a fork PR must not be able to push an image.
+  # ---------------------------------------------------------------------------
+  publish:
+    needs: smoke
+    # 🔴 Branch-restricted, not merely "not a pull request". workflow_dispatch
+    # offers every branch in the Actions UI, so `!= 'pull_request'` alone would
+    # let anyone iterating on a feature branch push the canonical tag from
+    # unreviewed code, having passed only that branch's own gates.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to ghcr
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tag
+        id: tag
+        run: |
+          set -a; . "${DIR}/versions.conf"; set +a
+
+          pg_minor="${PG_IMAGE##*:}"; pg_minor="${pg_minor%%-*}"
+          # A digest-pinned base would leave the hex here and produce a tag like
+          # `sha256...-ts2.28.3`. Fail loudly rather than publish that.
+          if ! printf '%s' "$pg_minor" | grep -qE '^[0-9]+\.[0-9]+$'; then
+            echo "::error::could not derive a PostgreSQL minor from PG_IMAGE='${PG_IMAGE}' (got '${pg_minor}')"
+            exit 1
+          fi
+
+          # The tag carries a REVISION as well as the versions. The versions
+          # alone do not determine the bits: the CNPG base is itself a moving
+          # tag, and workflow_dispatch exists precisely to rebuild when it moves.
+          # Without the revision, a CVE rebake republishes different content
+          # under an identical tag, and a CNPG cluster ends up running two builds
+          # at once — the exact failure this image was created to escape.
+          tag="${pg_minor}-ts${TIMESCALEDB_VERSION}-r${IMAGE_REVISION}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          {
+            echo "pg_image=$PG_IMAGE"
+            echo "pg_major=$PG_MAJOR"
+            echo "ts_version=$TIMESCALEDB_VERSION"
+            echo "compat=$TIMESCALEDB_COMPAT_VERSIONS"
+          } >> "$GITHUB_OUTPUT"
+          echo "Tag: ${IMAGE}:${tag}"
+
+      # Refuse to overwrite. A tag that already exists means either the revision
+      # was not bumped for a rebuild, or this is a re-run of a completed publish.
+      # Both deserve a human, so the override is an explicit dispatch input.
+      - name: Refuse to overwrite an existing tag
+        if: ${{ !inputs.force }}
+        run: |
+          token="$(curl -fsSL "https://ghcr.io/token?scope=repository:devicechain-io/postgresql-timescaledb:pull&service=ghcr.io" | jq -r .token)"
+          code="$(curl -sSL -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${token}" \
+            -H "Accept: application/vnd.oci.image.index.v1+json" \
+            -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+            "https://ghcr.io/v2/devicechain-io/postgresql-timescaledb/manifests/${{ steps.tag.outputs.tag }}")"
+          if [ "$code" = "200" ]; then
+            echo "::error::${IMAGE}:${{ steps.tag.outputs.tag }} already exists. Bump IMAGE_REVISION in ${DIR}/versions.conf, or re-run with force=true if you intend to replace it."
+            exit 1
+          fi
+          echo "Tag is free (registry returned ${code})."
+
+      - name: Build + push (amd64 + arm64)
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ env.DIR }}
+          file: ${{ env.DIR }}/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}
+          build-args: |
+            PG_IMAGE=${{ steps.tag.outputs.pg_image }}
+            PG_MAJOR=${{ steps.tag.outputs.pg_major }}
+            TIMESCALEDB_VERSION=${{ steps.tag.outputs.ts_version }}
+            TIMESCALEDB_COMPAT_VERSIONS=${{ steps.tag.outputs.compat }}
+
+      # Smoke the bits that actually shipped.
+      #
+      # The `smoke` job proved an image built from the same sources passes — not
+      # that THIS image does. They are two independent builds, and `apt-cache
+      # madison` plus the moving base tag both resolve at build time, so they can
+      # legitimately differ. Pulling the published digest back and running the
+      # same gate closes that gap for amd64.
+      #
+      # The arm64 half remains unexercised: nothing here can run it. That is a
+      # stated limit, not an oversight — see the README.
+      - name: Smoke the PUBLISHED image (amd64, by digest)
+        run: |
+          ref="${IMAGE}@${{ steps.push.outputs.digest }}"
+          echo "Pulling $ref"
+          docker pull --platform linux/amd64 -q "$ref"
+          DC_OPERAND_IMAGE="$ref" DC_OPERAND_CONTAINER=dc-operand-published "${DIR}/smoke.sh"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Operand image published"
+            echo ""
+            echo '```'
+            echo "${IMAGE}:${{ steps.tag.outputs.tag }}"
+            echo "${IMAGE}@${{ steps.push.outputs.digest }}"
+            echo '```'
+            echo ""
+            echo "PostgreSQL ${{ steps.tag.outputs.pg_major }}, TimescaleDB ${{ steps.tag.outputs.ts_version }}."
+            echo "Compatibility libraries: ${{ steps.tag.outputs.compat || '(none)' }}"
+            echo ""
+            echo "The published amd64 image was pulled back by digest and re-smoked; arm64 is built but never executed."
+            echo ""
+            echo "Pin the **digest** in the CNPG Cluster spec, not the tag."
+            echo ""
+            echo "Contains TimescaleDB Community Edition (TSL-licensed, not Apache-2.0) — see NOTICE."
+            echo ""
+            echo "> The in-cluster pull is anonymous, so this ghcr package must be **public**."
+            echo "> A newly created package defaults to private and will ImagePullBackOff until flipped once."
+          } >> "$GITHUB_STEP_SUMMARY"

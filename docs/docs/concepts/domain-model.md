@@ -28,7 +28,7 @@ Instead of binding a device to a single fixed `(customer, area, asset)` assignme
 
 The `Tracked` flag is central. When a device reports an event, the platform records **each** of the device's tracked relationships as an **anchor** on that event (an `(anchor_type, anchor_id)` entry in the event's anchor set). A device may hold **several** tracked relationships — a customer *and* an area *and* an asset — and the reading is then queryable by **every** one of them: "every temperature reading for Building 7" and "…for customer Acme" both find it. Anchors are captured at write time, so history stays put when a device is later reassigned.
 
-**Assignment organizes; it does not gate.** A device that is credentialed but not yet assigned still reports telemetry — its events resolve with a **null anchor** rather than being dropped. Assigning the device later gives its subsequent events a customer/area/asset anchor. (See [Managing device assignments](../guides/managing-assignments.md) and ADR-013.)
+**Assignment organizes; it does not gate.** A device that is credentialed but not yet assigned still reports telemetry — its events resolve with a **null anchor** rather than being dropped. Assigning the device later gives its subsequent events a customer/area/asset anchor. (See [Managing device assignments](../guides/managing-assignments.md).)
 
 ## Attributes vs. events
 

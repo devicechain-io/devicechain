@@ -1,7 +1,7 @@
 {
   "name": "@devicechain/widgets",
   "version": "0.0.1",
-  "description": "DeviceChain presentational dashboard widgets — time-series chart + gauge (Apache ECharts), latest card, table, label, image. Themed via CSS custom properties, no Tailwind leakage (ADR-039).",
+  "description": "DeviceChain presentational dashboard widgets — time-series chart + gauge (Apache ECharts), latest card, table, label, image. Themed via CSS custom properties, no Tailwind leakage.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./src/index.ts",

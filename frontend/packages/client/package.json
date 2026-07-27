@@ -1,7 +1,7 @@
 {
   "name": "@devicechain/client",
   "version": "0.0.1",
-  "description": "DeviceChain client SDK — two-tier auth, typed GraphQL operations, and graphql-ws subscriptions over the client wire (ADR-034/037).",
+  "description": "DeviceChain client SDK — two-tier auth, typed GraphQL operations, and graphql-ws subscriptions over the client wire.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./src/index.ts",

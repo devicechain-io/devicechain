@@ -5,7 +5,7 @@ title: Configuring Notification Channels
 
 # Configuring Notification Channels
 
-When a detection rule's REACT stage raises an **alarm**, the notification subsystem carries it the last mile — to a **person** (ADR-017). A per-tenant **policy** routes alarms by severity to configured **channels** (email over SMTP, or a webhook), with throttling and unacknowledged-alarm **escalation**. This machine-to-human path is deliberately separate from the machine-to-machine **[outbound connectors](../concepts/outbound-connectors.md)**: connectors carry payloads to *systems*; notifications carry alerts to *people*, with recipients and per-severity routing. See [Event Processing & Alarms](../concepts/event-processing.md) for how alarms are raised in the first place.
+When a detection rule's REACT stage raises an **alarm**, the notification subsystem carries it the last mile — to a **person**. A per-tenant **policy** routes alarms by severity to configured **channels** (email over SMTP, or a webhook), with throttling and unacknowledged-alarm **escalation**. This machine-to-human path is deliberately separate from the machine-to-machine **[outbound connectors](../concepts/outbound-connectors.md)**: connectors carry payloads to *systems*; notifications carry alerts to *people*, with recipients and per-severity routing. See [Event Processing & Alarms](../concepts/event-processing.md) for how alarms are raised in the first place.
 
 :::note Status
 Available. Channels and policies are managed over the notification-management GraphQL API. Reading requires the `notification:read` authority; creating or changing anything requires `notification:write`.
@@ -18,7 +18,7 @@ A **channel** is a tenant-configured delivery endpoint: an instance of a channel
 A channel splits its settings in two:
 
 - **`config`** — the non-secret connection settings, as a JSON document (SMTP host/port/from; webhook URL/method/headers).
-- **`secret`** — the credential (the SMTP password, a webhook auth token). It is stored in the platform's envelope-encrypted **secret store** (ADR-059) and is **write-only**: you submit it on create, and it is never returned on read. The channel exposes only a `hasSecret` boolean.
+- **`secret`** — the credential (the SMTP password, a webhook auth token). It is stored in the platform's envelope-encrypted **secret store** and is **write-only**: you submit it on create, and it is never returned on read. The channel exposes only a `hasSecret` boolean.
 
 On an **update**, a `null` secret leaves the existing secret unchanged (you never need to re-send it), a non-null value replaces it, and an empty string clears it.
 

@@ -75,6 +75,23 @@ _legacy/                      archived pre-migration SiteWhere code — NOT in t
 > maintainer checkouts, not in a public clone, so the paths below resolve only when that workspace is
 > linked. The durable architectural rationale is cited inline across the codebase as `ADR-0xx`.
 
+**🔴 Never cite an ADR in published documentation.** ADRs live in the private strategy repo, so a
+reader of the docs site cannot follow the reference — `(ADR-025)` is a dead citation dressed as a
+source, and it advertises a repo nobody outside can open. The line is not "is this file public?"
+(the whole repo is public) but **"does a reader of the published site see this?"**:
+
+| Where | ADR references |
+| --- | --- |
+| `docs/docs`, `docs/i18n`, `docs/blog`, `docs/src`, the website | ❌ never |
+| `frontend/packages/*/package.json` `description`/`keywords` — these publish to npmjs.com | ❌ never |
+| Console/dashboard **UI strings** (`src/i18n/locales/**`) | ❌ never |
+| Source comments, `hack/`, `deploy/`, READMEs, `docusaurus.config.ts` | ✅ expected — this is the convention above |
+
+Say the thing itself instead, or link to a public page: `secured at the broker (ADR-025)` →
+`secured at the broker`; `[ADR-026](../concepts/architecture.md)` →
+`[data lifecycle](../concepts/architecture.md)`. Enforced by `hack/check-docs-adr-refs.sh` in the
+`docs` CI job — and remember both locales, since `docs/i18n/es` mirrors every English page.
+
 Source-of-truth planning docs (maintainer-only) live under `.agent-os/product/`. Consult them before
 designing anything non-trivial; the codebase follows the ADRs.
 

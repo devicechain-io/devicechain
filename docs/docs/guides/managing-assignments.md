@@ -5,7 +5,7 @@ title: Managing Device Assignments
 
 # Managing Device Assignments
 
-An **assignment** relates a device to a **customer**, **area**, or **asset** so its telemetry carries organizational context. In DeviceChain an assignment is just a **tracked relationship** on the uniform entity graph (ADR-013) — there is no separate assignment record.
+An **assignment** relates a device to a **customer**, **area**, or **asset** so its telemetry carries organizational context. In DeviceChain an assignment is just a **tracked relationship** on the uniform entity graph — there is no separate assignment record.
 
 :::note Status
 Available. Assignments are managed from the device detail page's **Assignment** tab in the console, or over the device-management GraphQL API.
@@ -18,7 +18,7 @@ A device authenticates with a **credential**; assignment only **organizes** its 
 - A device that is registered and credentialed **reports telemetry immediately**, even with no assignment. Its events resolve with a **null anchor** — they still persist and still update the device's live state; they simply aren't attributed to a customer/area/asset yet.
 - **Assigning** the device later gives its subsequent events an **anchor**, so queries like "every reading for Building 7" find them.
 
-Unassigned devices are therefore never silently dropped — a change from earlier behavior (see ADR-013, addendum 2026-07-01).
+Unassigned devices are therefore never silently dropped — a change from earlier behavior.
 
 ## Every assignment is an anchor
 

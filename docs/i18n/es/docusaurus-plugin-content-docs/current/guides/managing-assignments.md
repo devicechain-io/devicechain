@@ -5,7 +5,7 @@ title: Gestión de asignaciones de dispositivos
 
 # Gestión de asignaciones de dispositivos
 
-Una **asignación** relaciona un dispositivo con un **cliente**, **área** o **activo** para que su telemetría lleve contexto organizativo. En DeviceChain, una asignación es simplemente una **relación rastreada** sobre el grafo de entidades uniforme (ADR-013) — no existe un registro de asignación independiente.
+Una **asignación** relaciona un dispositivo con un **cliente**, **área** o **activo** para que su telemetría lleve contexto organizativo. En DeviceChain, una asignación es simplemente una **relación rastreada** sobre el grafo de entidades uniforme — no existe un registro de asignación independiente.
 
 :::note Estado
 Disponible. Las asignaciones se gestionan desde la pestaña **Assignment** de la página de detalle del dispositivo en la consola, o mediante la API GraphQL de device-management.
@@ -18,7 +18,7 @@ Un dispositivo se autentica con una **credencial**; la asignación solo **organi
 - Un dispositivo que está registrado y provisto de credencial **reporta telemetría de inmediato**, incluso sin asignación. Sus eventos se resuelven con un **anclaje nulo** — igualmente se persisten y actualizan el estado en vivo del dispositivo; simplemente aún no se atribuyen a un cliente/área/activo.
 - **Asignar** el dispositivo posteriormente da a sus eventos subsiguientes un **anclaje**, de modo que consultas como "cada lectura del Edificio 7" los encuentran.
 
-Por lo tanto, los dispositivos sin asignar nunca se descartan silenciosamente — un cambio respecto al comportamiento anterior (consulte ADR-013, addendum 2026-07-01).
+Por lo tanto, los dispositivos sin asignar nunca se descartan silenciosamente — un cambio respecto al comportamiento anterior.
 
 ## Cada asignación es un anclaje
 

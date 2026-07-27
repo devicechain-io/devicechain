@@ -8,7 +8,7 @@ title: Dashboards
 DeviceChain includes an embeddable, version-controlled dashboard system for visualizing live device data. A dashboard is a **tenant-scoped resource** authored in the console and rendered from a portable JSON definition — the same definition can be embedded in any React app or opened in the standalone reference viewer.
 
 :::note Status
-Available: the canvas editor, the built-in widget set (telemetry, alarm, and command/control widgets), live subscriptions, **widget actions** (alarm ack/clear, send command — server-authorized), versioning (publish / rollback), synthetic preview, named slots + binding manifests, and export — plus the standalone `/dash` reference viewer. Planned: publishing the runtime packages to the public npm registry (they build in-repo today), richer datasource selectors (relationship-graph traversal, drill-down), per-breakpoint layout editing, and additional widgets. (ADR-039)
+Available: the canvas editor, the built-in widget set (telemetry, alarm, and command/control widgets), live subscriptions, **widget actions** (alarm ack/clear, send command — server-authorized), versioning (publish / rollback), synthetic preview, named slots + binding manifests, and export — plus the standalone `/dash` reference viewer. Planned: publishing the runtime packages to the public npm registry (they build in-repo today), richer datasource selectors (relationship-graph traversal, drill-down), per-breakpoint layout editing, and additional widgets.
 :::
 
 ## The canvas

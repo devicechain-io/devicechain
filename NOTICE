@@ -22,3 +22,54 @@ Bento and its transitively-registered output components are the MIT-licensed
 warpstreamlabs/bento fork (not the relicensed redpanda-data/connect). The MIT
 License is compatible with the Apache License, Version 2.0, under which
 DeviceChain is distributed.
+
+-------------------------------------------------------------------------------
+
+TimescaleDB (container image only, not source)
+
+DeviceChain publishes a PostgreSQL container image carrying the TimescaleDB
+extension, used by the time-series event store (ADR-004, ADR-020):
+
+  ghcr.io/devicechain-io/postgresql-timescaledb
+
+  TimescaleDB — https://github.com/timescale/timescaledb
+  Copyright (c) Timescale, Inc.
+  TimescaleDB Community Edition, licensed under the Timescale License (TSL).
+
+The TSL is a source-available license and is NOT an open source license. It is
+NOT compatible with the Apache License, Version 2.0, and this component is
+therefore not offered under Apache-2.0.
+
+Scope of this notice — what is and is not affected:
+
+  * The DeviceChain SOURCE in this repository remains Apache-2.0 in its
+    entirety. The files that produce the image (deploy/images/timescaledb/)
+    are DeviceChain's own Apache-2.0 sources and contain no Timescale code;
+    they install a published package. No DeviceChain source is a derivative
+    work of TimescaleDB.
+  * The obligation attaches to the published IMAGE, which redistributes
+    TimescaleDB in binary form. The TSL permits that redistribution. The image
+    carries, and its build asserts the presence of:
+
+      /usr/share/licenses/timescaledb/LICENSE-TIMESCALE
+          the full text of the Timescale License Agreement, fetched at build
+          time from the upstream tag matching the version installed.
+      /usr/share/licenses/timescaledb/copyright
+          the Debian package's DEP-5 per-file licence map. Note this file is
+          NOT the licence: its `Files: *` stanza names Apache-2.0 and its
+          `tsl/*` stanza only links to the Timescale License.
+
+    The image also carries an OCI description recording that it contains
+    TSL-licensed code.
+
+This is not a new dependency. DeviceChain has always run TimescaleDB Community
+Edition — the upstream `timescale/timescaledb` image is that same TSL build.
+Continuous aggregates, compression, retention policies and the background job
+scheduler are TSL-only features, and the data-lifecycle design (ADR-026) uses
+all four; the Apache-2 edition of TimescaleDB does not provide them.
+
+Operators and downstream distributors should note the TSL's principal
+restriction: TimescaleDB may not be used to offer a database-as-a-service, and
+DeviceChain must not expose the underlying Timescale instance to tenants as a
+general-purpose database service. DeviceChain uses it as an internal store
+behind its own APIs, which is the "value added product" use the TSL permits.

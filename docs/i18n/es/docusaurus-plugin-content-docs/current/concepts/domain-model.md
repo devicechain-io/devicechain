@@ -28,7 +28,7 @@ En lugar de vincular un dispositivo a una única asignación fija `(customer, ar
 
 El indicador `Tracked` es central. Cuando un dispositivo informa un evento, la plataforma registra **cada una** de las relaciones rastreadas del dispositivo como un **anclaje (anchor)** en ese evento (una entrada `(anchor_type, anchor_id)` en el conjunto de anclajes del evento). Un dispositivo puede tener **varias** relaciones rastreadas — un cliente *y* un área *y* un activo — y la lectura entonces se puede consultar por **cada una** de ellas: "cada lectura de temperatura del Edificio 7" y "…del cliente Acme" encuentran ambas esa lectura. Los anclajes se capturan en el momento de la escritura, de modo que el historial permanece intacto cuando un dispositivo se reasigna más tarde.
 
-**La asignación organiza; no bloquea.** Un dispositivo que tiene credenciales pero aún no está asignado sigue informando telemetría — sus eventos se resuelven con un **anclaje nulo** en lugar de descartarse. Asignar el dispositivo más tarde le da a sus eventos posteriores un anclaje de cliente/área/activo. (Ver [Gestión de asignaciones de dispositivos](../guides/managing-assignments.md) y ADR-013.)
+**La asignación organiza; no bloquea.** Un dispositivo que tiene credenciales pero aún no está asignado sigue informando telemetría — sus eventos se resuelven con un **anclaje nulo** en lugar de descartarse. Asignar el dispositivo más tarde le da a sus eventos posteriores un anclaje de cliente/área/activo. (Ver [Gestión de asignaciones de dispositivos](../guides/managing-assignments.md).)
 
 ## Atributos frente a eventos
 

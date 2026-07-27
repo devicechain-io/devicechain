@@ -5,7 +5,7 @@ title: Credenciales de dispositivo
 
 # Credenciales de dispositivo
 
-La **identidad** de un dispositivo (su token estable) se mantiene separada de sus **credenciales** — el material que presenta para autenticarse (ADR-014). Un dispositivo puede tener varias credenciales y rotarlas sin cambiar su identidad.
+La **identidad** de un dispositivo (su token estable) se mantiene separada de sus **credenciales** — el material que presenta para autenticarse. Un dispositivo puede tener varias credenciales y rotarlas sin cambiar su identidad.
 
 :::note Estado
 Disponible. Las credenciales se gestionan desde la pestaña **Credentials** de la página de detalle del dispositivo en la consola, o mediante la API GraphQL de device-management.
@@ -43,13 +43,13 @@ La plataforma resuelve la credencial al dispositivo que la posee y la verifica �
 
 - `disabled` — se confía en el token `device` autoafirmado (no se necesita credencial).
 - `optional` — una credencial presentada es autoritativa; sin una, se confía en el token del dispositivo.
-- `required` — se debe presentar una credencial válida o el evento se rechaza. **Este es el valor predeterminado** (ADR-025).
+- `required` — se debe presentar una credencial válida o el evento se rechaza. **Este es el valor predeterminado**.
 
 Cuando una credencial autentica, el dispositivo resuelto es autoritativo: un token `device` que nombra a un dispositivo *distinto* se rechaza, de modo que un dispositivo autenticado no puede suplantar a otro.
 
 ## Dos capas: la conexión y el evento
 
-La credencial anterior es la verificación **por evento**. Además, las **conexiones** MQTT/NATS se autentican en el propio broker (ADR-025):
+La credencial anterior es la verificación **por evento**. Además, las **conexiones** MQTT/NATS se autentican en el propio broker:
 
 - Los listeners de MQTT y NATS son **TLS** — un dispositivo se conecta por TLS con la CA de la instancia.
 - Un **auth-callout** de NATS autentica la conexión y la vincula a subjects por inquilino, de modo que un dispositivo solo puede publicar o suscribirse dentro de su propio inquilino. Para un dispositivo `MQTT_BASIC`, la conexión presenta el usuario MQTT **`{tenant}:{credentialId}`** y la contraseña de la credencial — la misma credencial que autentica sus eventos — de modo que un dispositivo que no puede autenticarse ni siquiera puede conectarse.
