@@ -49,6 +49,34 @@ func TestOpenTofuComplete(t *testing.T) {
 	}
 }
 
+// TestOpenTofuEmbedsNonTerraformModuleFiles pins something the embed globs make
+// easy to break and impossible to notice.
+//
+// Every file in the OpenTofu tree used to be a .tf, so "did the modules ship?"
+// and "did the .tf files ship?" were the same question. The cnpg-cluster module
+// (ADR-020 A2.3) breaks that: it carries a Helm chart, because a Cluster custom
+// resource cannot be a kubernetes_manifest without its CRD existing at plan
+// time. Those are .yaml files inside modules/.
+//
+// The `all:` prefix on the modules glob is what carries them. Narrow that glob
+// to *.tf — an entirely reasonable-looking tidy-up — and `go build` still
+// succeeds, every existing test still passes, and dcctl bootstrap fails on a
+// USER's machine with a Helm "chart not found" error, because the chart exists
+// in the repo and not in the binary. Nothing in a source checkout reproduces it.
+func TestOpenTofuEmbedsNonTerraformModuleFiles(t *testing.T) {
+	files := strings.Join(collect(t, OpenTofu()), " ")
+	for _, want := range []string{
+		"modules/cnpg-cluster/chart/Chart.yaml",
+		"modules/cnpg-cluster/chart/values.yaml",
+		"modules/cnpg-cluster/chart/templates/cluster.yaml",
+	} {
+		if !strings.Contains(files, want) {
+			t.Errorf("OpenTofu assets missing %q — the cnpg-cluster chart did not survive go:embed, "+
+				"so `dcctl bootstrap` would fail with a Helm chart-not-found error against a repo where the file is present", want)
+		}
+	}
+}
+
 // TestHelmChartComplete checks the chart is whole — in particular that the
 // _-prefixed named-template library survived go:embed (which skips _-prefixed
 // files unless the all: prefix is used).

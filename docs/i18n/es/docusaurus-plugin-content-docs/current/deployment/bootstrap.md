@@ -31,6 +31,16 @@ El arranque inicial se ejecuta como una canalización (pipeline) ordenada e
 **idempotente** —volver a ejecutarlo converge al mismo estado y te indica qué paso
 falló si alguno lo hace:
 
+:::warning Excepción única: instancias creadas antes de que la base de datos pasara a CloudNativePG
+La base de datos relacional pasó de ser un StatefulSet a un clúster de CloudNativePG, y no
+existe una actualización en sitio: el directorio de datos de un StatefulSet no puede ser
+adoptado por el operador. En una instancia creada antes de ese cambio, volver a ejecutar el
+arranque inicial **se niega** en lugar de converger, y te indica cómo volcar los datos o
+descartarlos deliberadamente. Esa negativa es justamente el objetivo: sin ella la base de
+datos antigua se eliminaría y una nueva, vacía, ocuparía el mismo nombre de host, dejando una
+instancia que parece perfectamente sana y no tiene ningún dato.
+:::
+
 1. **Renderizar la configuración** — resuelve el id de la instancia, el namespace,
    el perfil y todas las credenciales generadas: el material de autenticación del
    bróker (la contraseña de servicio compartida y la clave del emisor del callout),
@@ -157,11 +167,9 @@ huella que el modo compacto no evita, y es deliberado: el respaldo no es una fun
 de alta disponibilidad, así que la capa de almacenamiento tiene una sola forma en
 todas partes.
 
-Esto hoy no afecta a ninguna base de datos: los dos almacenes siguen siendo
-StatefulSets simples y todavía nada usa el operador ni el plugin. Ambos se instalan
-por adelantado, antes de la migración que trasladará los almacenes sobre ellos; a
-partir de ese momento esto marcará la diferencia entre una instancia que puede
-recuperar a un punto en el tiempo y una que no.
+El almacén relacional ya se ejecuta sobre el operador. El almacén de eventos
+(TimescaleDB) sigue siendo un StatefulSet simple y se migrará a continuación, así que
+en un arranque de hoy el operador gestiona una de las dos bases de datos.
 :::
 
 :::caution Los tamaños de volumen son un presupuesto de tiempo, no de capacidad
@@ -221,8 +229,27 @@ rechaza la operación antes de aprovisionar nada. En un clúster `kind` local es
 nodo, de modo que un plano de control más dos workers es un clúster de tres nodos con dos
 nodos utilizables.
 
-**Lo que no hace.** Replica únicamente la capa de *mensajería*. Postgres y TimescaleDB
-siguen siendo de instancia única, y el número de réplicas de servicio no cambia.
+**Lo que también hace.** Ejecuta la base de datos relacional como tres instancias con
+replicación síncrona, detrás del mismo nombre de host `dc-postgresql` que los clientes ya
+usan: ese nombre lo mantiene el operador y sigue a la instancia primaria a través de una
+conmutación por error, de modo que no cambia la configuración de ningún servicio.
+
+La replicación síncrona es lo que obliga a *tres* instancias en lugar de dos. Una réplica
+en espera debe confirmar cada escritura, así que con solo dos instancias la pérdida de
+cualquiera de ellas detiene todas las escrituras: peor disponibilidad que un solo nodo, a
+cambio de mayor durabilidad. Una tercera instancia permite perder una réplica sin que el
+clúster se quede sin réplica confirmadora.
+
+**Lo que no hace.** TimescaleDB sigue siendo de instancia única, así que el almacén de
+*eventos* no está replicado. El número de réplicas de servicio no cambia.
+
+:::caution Una escritura detenida queda confirmada, no rechazada
+Cuando no hay ninguna réplica en espera disponible, una escritura no falla: espera, y la
+fila ya se ha confirmado localmente. Un cliente que se rinda y reintente escribirá dos
+veces salvo que la operación sea idempotente. Ten en cuenta además que `statement_timeout`
+**no** acota esa espera, porque la espera ocurre después de la confirmación y no durante
+la sentencia.
+:::
 
 #### Cómo verificarlo {#verifying-it}
 

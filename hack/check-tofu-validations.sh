@@ -286,6 +286,54 @@ evaluates false module.nats.ha_topology.contradictory -var ha=false -var nats_cl
 for v in 0 30000 31883 32767; do accepts nats_mqtt_node_port "$v"; done
 for v in 1883 29999 32768; do rejects nats_mqtt_node_port "$v"; done
 
+# --- postgres_instances (ADR-020 A2.3) ---------------------------------------
+#
+# 0 derives from var.ha; 1 is the supported non-HA topology (decision D4); 3 is
+# the smallest synchronous one.
+#
+# 🔴 2 IS THE POINT OF THIS BLOCK, and it is refused for a reason that is not
+# obvious and is not the same as CloudNativePG's own rule. The operator's
+# admission webhook rejects only `number >= instances` — it accepts two
+# instances quite happily. But synchronous replication at two means one standby
+# must confirm every commit and there is exactly one standby: losing it stalls
+# every write, which is WORSE for availability than the single node it replaced.
+# Nothing upstream refuses that, so if this validation stops working, the
+# unsafe topology becomes reachable and looks like a reasonable middle setting.
+for v in 0 1 3 5; do accepts postgres_instances "$v"; done
+for v in 2 4 -1; do rejects postgres_instances "$v"; done
+
+# --- the derived database topology, across both levers -----------------------
+#
+# `postgres_instances != 0 ? postgres_instances : (ha ? 3 : 1)` decides how many
+# database instances exist, and the module then derives whether synchronous
+# replication is enabled AT ALL from that count. Both derivations are pinned
+# here because the failure they prevent is silent in the dangerous direction: a
+# topology that asked for synchronous replication and did not get enough
+# instances runs ASYNCHRONOUSLY, with healthy pods and a green apply.
+#
+# postgres_synchronous_enforced is therefore the database sibling of
+# ha_topology.contradictory — it reports what is in force, not what was asked
+# for, so an instance that quietly lost its durability guarantee is legible
+# from the root's own outputs rather than only from the cluster.
+evaluates 3 'var.postgres_instances != 0 ? var.postgres_instances : (var.ha ? 3 : 1)' -var ha=true
+evaluates 1 'var.postgres_instances != 0 ? var.postgres_instances : (var.ha ? 3 : 1)' -var ha=false
+evaluates 1 'var.postgres_instances != 0 ? var.postgres_instances : (var.ha ? 3 : 1)' -var ha=true -var postgres_instances=1
+
+# The SECOND derivation — whether synchronous replication is actually IN FORCE.
+#
+# This one is asymmetric, which is why it needs its own assertions rather than
+# riding on the instance count above. Break the derivation toward ON and the
+# chart's `fail` catches it loudly (the CI helm step covers exactly that). Break
+# it toward OFF and a `--ha` install runs ASYNCHRONOUSLY behind three healthy
+# pods and a green apply — the false-HA shape — with nothing in CI to notice.
+#
+# `synchronous_enforced` reports what is in force rather than what was asked
+# for, which is what makes it the database sibling of ha_topology.contradictory.
+# These three lines are what stop it from being decorative.
+evaluates true 'module.cnpg_rdb.synchronous_enforced' -var ha=true
+evaluates false 'module.cnpg_rdb.synchronous_enforced' -var ha=false
+evaluates false 'module.cnpg_rdb.synchronous_enforced' -var ha=true -var postgres_instances=1
+
 if ((failures > 0)); then
   echo >&2
   echo "$failures validation assertion(s) failed." >&2

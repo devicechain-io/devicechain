@@ -1,0 +1,11 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: v2
+name: dc-cnpg-cluster
+description: A DeviceChain database store as a CloudNativePG Cluster (ADR-020 A2).
+type: application
+# This chart is versioned with the repository, not independently: it is an
+# implementation detail of the cnpg-cluster OpenTofu module and is never
+# published. The version exists because Helm requires one.
+version: 0.1.0

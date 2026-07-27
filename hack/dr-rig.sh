@@ -361,9 +361,25 @@ take_backup() {
   # before discovering it could not make a new one.
   local tmp="$dump_file.partial"
   umask 077
+  # 🔴 `-U postgres`, and NO PGPASSWORD. Both halves changed when the relational
+  # store moved to CloudNativePG (ADR-020 A2.3), and the old form fails on the
+  # new topology for two independent reasons:
+  #
+  #   1. $POSTGRES_PASSWORD does not exist. It came from the old StatefulSet's
+  #      `env_from` on a Secret the CNPG pod does not mount, so it expanded to
+  #      the empty string.
+  #   2. The CNPG pod sets PGHOST=/controller/run, which forces the LOCAL SOCKET
+  #      regardless of what we pass — and pg_hba there is `peer`, so the
+  #      connection is authenticated by uid, not by password.
+  #
+  # The pod runs as uid 26 = postgres, so `-U postgres` authenticates by peer
+  # with no secret in the process table at all — which is also why this no longer
+  # needs $user. Dumping as the superuser is the right call for a restore drill
+  # regardless: it captures ownership faithfully instead of whatever the app role
+  # happens to be able to see.
   if ! kubectl --context "$kube_context" -n dc-system exec -i "$pod" -- \
-    sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$1" -d "$2" --clean --if-exists' \
-    _ "$user" "$instance" >"$tmp"; then
+    sh -c 'pg_dump -U postgres -d "$1" --clean --if-exists' \
+    _ "$instance" >"$tmp"; then
     rm -f "$tmp"
     fail "pg_dump failed; the previous backup (if any) is untouched"
   fi
@@ -543,9 +559,12 @@ migrations. Find what is stuck (kubectl -n $ns get pods) and re-run."
   user="$(db_user)"
   # ON_ERROR_STOP so a restore that half-worked is a failure here rather than a
   # confusing decrypt result three steps later.
+  # `-U postgres` with no password, for the reasons spelled out at the pg_dump
+  # call above: the CNPG pod has no $POSTGRES_PASSWORD and its PGHOST forces the
+  # peer-authenticated local socket.
   if ! kubectl --context "$kube_context" -n dc-system exec -i "$pod" -- \
-    sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$1" -d "$2" -v ON_ERROR_STOP=1 --quiet' \
-    _ "$user" "$instance" <"$dump_file"; then
+    sh -c 'psql -U postgres -d "$1" -v ON_ERROR_STOP=1 --quiet' \
+    _ "$instance" <"$dump_file"; then
     fail "the backup did not restore cleanly; nothing after this point would be evidence"
   fi
 

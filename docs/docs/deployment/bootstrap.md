@@ -28,6 +28,15 @@ cluster creation are planned follow-ups — see [Prerequisites](#prerequisites).
 The bootstrap runs as an ordered, **idempotent** pipeline — re-running it converges
 to the same state and tells you which step failed if one does:
 
+:::warning One-time exception: instances created before the database moved to CloudNativePG
+The relational database changed from a StatefulSet to a CloudNativePG cluster, and there is
+no in-place upgrade — a StatefulSet's data directory cannot be adopted by the operator. On an
+instance created before that change, re-running the bootstrap **refuses** rather than
+converging, and tells you how to dump the data or discard it deliberately. That refusal is
+the point: without it the old database would be removed and a new, empty one would take over
+the same hostname, leaving an instance that looks perfectly healthy and has no data in it.
+:::
+
 1. **Render configuration** — resolve the instance id, namespace, profile, and every
    generated credential: the broker-auth material (the shared service password and
    the callout issuer key), the cross-service auth secret, and the **secret-store
@@ -175,10 +184,9 @@ one Deployment requesting 100m/128Mi, plus its CRDs. That is a footprint cost co
 does not avoid, and it is deliberate: backup is not a high-availability feature, so the
 storage tier has one shape everywhere.
 
-This has no effect on any database today: the two stores are still plain StatefulSets
-and nothing uses the operator or the plugin yet. Both are installed ahead of the
-migration that moves the stores onto them, at which point this becomes the difference
-between an instance that can recover to a point in time and one that cannot.
+The relational store now runs on the operator. The event store (TimescaleDB) is still a
+plain StatefulSet and moves next, so on a bring-up today the operator owns one of the two
+databases.
 :::
 
 :::caution Volume sizes are a time budget, not a capacity budget
@@ -232,8 +240,25 @@ anything. On a local `kind` cluster this means **three workers**: kind only remo
 control-plane's taint on a single-node cluster, so a control plane plus two workers is a
 three-node cluster with two usable nodes.
 
-**What it does not do.** It replicates the *messaging* tier only. Postgres and TimescaleDB
-remain single-instance, and the number of service replicas is unchanged.
+**What it also does.** It runs the relational database as three instances with
+synchronous replication, behind the same `dc-postgresql` hostname clients already use —
+that hostname is maintained by the operator and follows the primary across a failover, so
+no service configuration changes.
+
+Synchronous replication is what forces *three* instances rather than two. One standby must
+confirm every commit, so with only two instances the loss of either one stalls every
+write: worse availability than a single node, in exchange for better durability. A third
+instance means a standby can be lost without the cluster losing its confirming replica.
+
+**What it does not do.** TimescaleDB remains single-instance, so the *event* store is not
+replicated. The number of service replicas is unchanged.
+
+:::caution A stalled write is committed, not rejected
+When no standby is available, a write does not fail — it waits, and the row is already
+committed locally. A client that gives up and retries will write twice unless the operation
+is idempotent. Note also that `statement_timeout` does **not** bound this wait, because the
+wait happens after the commit rather than during the statement.
+:::
 
 #### Verifying it {#verifying-it}
 

@@ -1,0 +1,87 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Defaults for the DeviceChain CNPG Cluster chart.
+#
+# 🔴 THE LOAD-BEARING FIELDS ARE DELIBERATELY NULL HERE. `required` in Helm
+# fires only when a value is null or empty, so giving these a default would
+# disarm every guard in templates/cluster.yaml -- a caller that forgot one
+# would silently get whatever this file happened to say. The OpenTofu module
+# supplies all of them on every path; leaving them unset here means a future
+# caller that does not gets a render error naming the field.
+#
+# What DOES carry a default is anything where a wrong value is visible (a size,
+# a resource request) or where the safe choice should not need restating.
+
+# Cluster object name. Also the prefix for CNPG's own -rw / -ro / -r Services,
+# which is why it must NOT be the legacy `dc-postgresql` name: that is the alias
+# below, and CNPG reserves <cluster>-<service> for itself.
+name: null
+
+imageName: null
+
+instances: null
+
+storage:
+  size: null
+  # Empty uses the cluster default StorageClass (often reclaimPolicy: Delete).
+  # For production durability point this at a Retain class.
+  storageClass: ""
+
+# A dedicated WAL volume. Off by default; it earns its keep once WAL archiving
+# is on, because archiving that stalls accumulates WAL until the volume fills
+# and stops Postgres -- a failure worth bounding to its own disk.
+walStorage:
+  enabled: false
+  size: null
+  storageClass: ""
+
+resources: {}
+
+# The alias Service that preserves the DNS contract -- the name every service,
+# the Helm values and the DR rig already point at.
+aliasServiceName: null
+
+# 🔴 hostname, not zone. A topologyKey no node carries makes the anti-affinity
+# term inert, which is how three instances end up on one node while every
+# pod-counting check reports healthy.
+topologyKey: kubernetes.io/hostname
+
+# CNPG's own default. The upstream chart sets this true; the platform never
+# connects as a superuser, so a superuser password would be a standing
+# credential with no consumer.
+enableSuperuserAccess: false
+
+synchronous:
+  # Off by default so a single-instance install is the safe path. At one
+  # instance there is no standby, and `number: 1` would stall every write
+  # forever -- the module derives this from the instance count rather than
+  # leaving it to a caller to remember.
+  enabled: false
+  method: any
+  number: 1
+  # `required` holds the write until a standby confirms; `preferred` self-heals
+  # to async when none is available. Which one is right is per-store and is
+  # argued in the module, not here.
+  dataDurability: required
+
+bootstrap:
+  database: null
+  owner: null
+  secretName: null
+  # Explicit, never inferred. The operand image carries no locale, so an
+  # unset encoding resolves to SQL_ASCII and every query later fails a
+  # client_encoding error that says nothing about initdb.
+  encoding: UTF8
+  localeCollate: C.utf8
+  localeCType: C.utf8
+  # SQL run against template1 at initdb, inherited by every database the app
+  # subsequently creates. Empty for a plain relational store.
+  postInitTemplateSQL: []
+
+# Postgres GUCs (spec.postgresql.parameters).
+parameters: {}
+
+# 🔴 A library named here and absent from the image makes Postgres refuse to
+# start, and CNPG cannot recover from it without hands.
+sharedPreloadLibraries: []

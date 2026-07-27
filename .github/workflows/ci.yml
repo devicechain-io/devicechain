@@ -431,6 +431,40 @@ jobs:
       - name: helm lint
         run: helm lint deploy/helm/devicechain
 
+      - name: cnpg-cluster chart
+        # The database-store chart (ADR-020 A2.3). It lives under the OpenTofu
+        # modules tree rather than in deploy/helm because it is an implementation
+        # detail of a module — a Cluster custom resource cannot be a
+        # kubernetes_manifest without its CRD existing at PLAN time, so a
+        # helm_release is how the resource gets created at all.
+        #
+        # Linted here rather than nowhere: it is a Helm chart, it ships inside
+        # dcctl, and until this step existed the ONLY thing that rendered it was a
+        # real bootstrap against a real cluster.
+        run: |
+          helm lint deploy/opentofu/modules/cnpg-cluster/chart \
+            --set name=dc-rdb --set imageName=example/pg:17 --set instances=3 \
+            --set aliasServiceName=dc-postgresql --set storage.size=8Gi \
+            --set bootstrap.database=devicechain --set bootstrap.owner=devicechain \
+            --set bootstrap.secretName=dc-rdb-app-credentials
+
+          # The guard that costs a third node, asserted rather than trusted.
+          # Synchronous replication at two instances turns any standby loss into a
+          # total write outage, and CloudNativePG's own webhook does NOT refuse it
+          # (it refuses only number >= instances). If this render ever succeeds,
+          # that topology has become reachable.
+          if helm template dc-rdb deploy/opentofu/modules/cnpg-cluster/chart \
+               --set name=dc-rdb --set imageName=example/pg:17 --set instances=2 \
+               --set aliasServiceName=dc-postgresql --set storage.size=8Gi \
+               --set bootstrap.database=devicechain --set bootstrap.owner=devicechain \
+               --set bootstrap.secretName=dc-rdb-app-credentials \
+               --set synchronous.enabled=true >/dev/null 2>&1; then
+            echo "FAIL: the chart rendered synchronous replication at 2 instances." >&2
+            echo "That topology stalls every write on the loss of a single standby." >&2
+            exit 1
+          fi
+          echo "ok: synchronous replication is refused below three instances"
+
       - name: profile workloads
         # Renders EVERY profile and pins the workloads each one produces.
         #
