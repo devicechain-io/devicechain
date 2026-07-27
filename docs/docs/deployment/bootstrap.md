@@ -37,7 +37,8 @@ to the same state and tells you which step failed if one does:
    tell. The root key is additionally escrowed to an encrypted file you keep; see
    [Disaster Recovery](./disaster-recovery.md).
 2. **Apply infrastructure** — `tofu apply` the embedded OpenTofu config (NATS,
-   PostgreSQL, TimescaleDB, NGINX ingress, cert-manager) via
+   PostgreSQL, TimescaleDB, NGINX ingress, cert-manager, the CloudNativePG
+   operator and its Barman Cloud backup plugin) via
    [terraform-exec](https://github.com/hashicorp/terraform-exec). State is kept in
    `~/.devicechain/<instance>/infra`, so subsequent runs are incremental.
 3. **Install core** — render the operator (CRDs + RBAC + controller) and apply it
@@ -54,7 +55,11 @@ production deploy.
 
 ## Prerequisites {#prerequisites}
 
-- **A Kubernetes cluster and a kube-context** pointing at it. For the `local`
+- **A Kubernetes cluster, version 1.29 or newer**, and a kube-context pointing at
+  it. The floor comes from the CloudNativePG charts, which refuse to install below
+  it; `dcctl preflight` checks it up front, because otherwise the failure lands
+  part-way through a bootstrap that has already written your root-key escrow file.
+  For the `local`
   provider this is a local cluster (kind / minikube / k3d / docker-desktop).
   `dcctl` auto-detects a local context; pass `--kube-context <name>` to choose one
   explicitly. (Today the `local` provider selects an existing context; creating the
@@ -98,6 +103,7 @@ pipeline, chart, and operator are identical.
 | `--no-tls` | Serve plain HTTP instead of a self-signed cert. With `--host localhost`, a zero-config `http://localhost/` (no cert warning). |
 | `--compact` | Small-footprint preset — see below. |
 | `--ha` | Messaging high availability — see below. Needs at least **3 schedulable nodes**. |
+| `--no-cnpg` | Skip the CloudNativePG operator and the database backup plugin. For a cluster that **already runs CloudNativePG**: Helm cannot adopt objects another installer created, so the infra apply fails without this. |
 | `--dry-run` | Print what each step would do without changing anything. |
 | `--skip-preflight` | Skip the environment checks. |
 | `--escrow-passphrase-file <path>` | Read the root-key escrow passphrase from a file instead of prompting. See below. |
@@ -145,7 +151,7 @@ tuning axis of its own:
   the CPU limit throttles, neither of which shrinks anything;
 - no monitoring stack, the single largest consumer;
 - no cert-manager, since with TLS off nothing needs a certificate issued (keep TLS and
-  cert-manager stays — see below).
+  cert-manager stays — see below), and consequently no database backup plugin.
 
 It does **not** change which services run — that stays on `--profile`, where it is named
 and visible. A profile *larger* than `default` — today only `full` — is rejected: the
@@ -157,6 +163,23 @@ Both TLS and monitoring can be kept: an explicit `--no-tls=false` or `--no-monit
 is honoured, and every other compact lever still applies. Keeping TLS also keeps
 cert-manager, which is what issues the certificate. `--grafana-sso` needs the monitoring
 stack Grafana lives in, so it is rejected unless you keep it with `--no-monitoring=false`.
+
+:::note Why `--compact --no-tls` drops the backup plugin
+The Barman Cloud plugin issues its own certificates through cert-manager, so dropping
+cert-manager drops the plugin with it. Turning TLS back on (`--no-tls=false`) restores
+both. Note it takes *both* flags: `--no-tls` on its own — as in the local-URL example
+below — keeps cert-manager and therefore keeps the plugin.
+
+The CloudNativePG operator itself is installed on *every* bring-up, compact included —
+one Deployment requesting 100m/128Mi, plus its CRDs. That is a footprint cost compact
+does not avoid, and it is deliberate: backup is not a high-availability feature, so the
+storage tier has one shape everywhere.
+
+This has no effect on any database today: the two stores are still plain StatefulSets
+and nothing uses the operator or the plugin yet. Both are installed ahead of the
+migration that moves the stores onto them, at which point this becomes the difference
+between an instance that can recover to a point in time and one that cannot.
+:::
 
 :::caution Volume sizes are a time budget, not a capacity budget
 The JetStream volume is derived: the per-stream ceilings are reserved up front, so it is

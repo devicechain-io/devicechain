@@ -33,6 +33,13 @@ type Options struct {
 	// (default-on). Set it when the cluster already has the Prometheus Operator, or
 	// to opt out of in-cluster metrics collection.
 	NoMonitoring bool
+	// NoCNPG skips installing the CloudNativePG operator and the Barman Cloud backup
+	// plugin (default-on, ADR-020 A2). Set it when the cluster ALREADY runs CNPG —
+	// which is not a corner case: the upstream `kubectl apply` manifest is the most
+	// common way to install it, and Helm cannot adopt objects it did not create, so
+	// without this flag such a cluster fails the infra apply with an ownership error
+	// and no way past it.
+	NoCNPG bool
 	// GrafanaSSO wires Grafana login to DeviceChain SSO (ADR-047): it enables the
 	// OAuth AS (sets the issuer), seeds a confidential Grafana client, and configures
 	// Grafana's generic_oauth + /grafana ingress — operator/superuser-tier only.

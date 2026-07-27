@@ -23,6 +23,30 @@ these modules, passing its cluster credentials to the providers.
 | NGINX ingress controller | `ingress-nginx` Helm chart | IngressClass `nginx` |
 | cert-manager (+ CRDs) | `cert-manager` Helm chart | namespace `cert-manager` |
 | Observability (Prometheus/Grafana/Alertmanager) | `kube-prometheus-stack` Helm chart | namespace `monitoring` |
+| CloudNativePG operator (+ CRDs) | `cloudnative-pg` Helm chart, pinned | namespace `cnpg-system` |
+| Barman Cloud backup plugin | `plugin-barman-cloud` Helm chart, pinned | namespace `cnpg-system` |
+
+**Both CNPG charts require Kubernetes ≥ 1.29** (`kubeVersion: '>=1.29.0-0'`), which is
+therefore the floor for this root as a whole.
+
+The CloudNativePG operator is installed on **every** apply, not only HA ones (ADR-020
+A2, decision D4): backup is not a high-availability feature, and one storage shape
+means HA becomes an instance count rather than a migration. It creates no `Cluster`
+resources yet — the two databases above are still StatefulSets — so today it and the
+plugin are inert machinery installed ahead of the slices that move the stores onto it.
+
+🔴 `enable_database_backups` requires `enable_cert_manager`, and the requirement is a
+hard one: the plugin's chart renders an Issuer and two Certificates, so with no
+cert-manager CRDs its release fails and takes the apply with it. If you set
+`enable_cert_manager = false` because the cluster *already has* cert-manager, leave
+backups on — the CRDs are what matter, not who installed them. If you set it false
+because there is no cert-manager at all, set `enable_database_backups = false` too.
+`dcctl` keeps the pair consistent on the one path where it drops cert-manager
+(`--compact --no-tls`); running `tofu` by hand, it is yours to keep consistent.
+
+`enable_cnpg = false` is the escape hatch for a cluster that already runs CNPG — Helm
+cannot adopt objects installed by the upstream `kubectl apply` manifest, so without it
+the apply fails with an ownership error. `dcctl bootstrap --no-cnpg` sets it.
 
 The ingress controller and cert-manager are the TLS/ingress *capability*; the
 per-instance **Ingress resource + cert Issuer** that route to the app Services are

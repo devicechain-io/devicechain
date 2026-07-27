@@ -281,6 +281,47 @@ variable "cert_manager_chart_version" {
   default     = ""
 }
 
+# --- CloudNativePG (database HA + backup, ADR-020 A2 / ADR-028) -----------------
+
+variable "enable_cnpg" {
+  description = "Install the CloudNativePG operator (+ CRDs). Default-on for every install, HA or not: backup is not an HA feature, and one storage shape means HA becomes an instance count rather than a migration (decision D4). Set false if the cluster already runs CNPG."
+  type        = bool
+  default     = true
+}
+
+variable "cnpg_namespace" {
+  description = "Namespace for the CloudNativePG operator and the backup plugin."
+  type        = string
+  default     = "cnpg-system"
+}
+
+variable "cnpg_chart_version" {
+  description = "cloudnative-pg chart version. Pinned by default — 0.29.0 ships operator 1.30.0, the version the A2 spike validated the DNS contract, failover timing and synchronous semantics against. Empty installs latest and gives that evidence up."
+  type        = string
+  default     = "0.29.0"
+}
+
+variable "cnpg_plugin_chart_version" {
+  description = "plugin-barman-cloud chart version. Pinned by default — 0.7.0 ships plugin v0.13.0. The plugin is 0.x and stands between the platform and its backups, so an unpinned minor is entitled to break the thing we least want broken."
+  type        = string
+  default     = "0.7.0"
+}
+
+variable "enable_database_backups" {
+  description = <<-EOT
+    Install the Barman Cloud plugin, which is what makes WAL archiving, scheduled
+    backups and PITR possible at all (ADR-028).
+
+    🔴 Requires cert-manager to be installed and READY — the plugin's chart
+    renders an Issuer and two Certificates, so it fails outright without the
+    CRDs. Turning this off yields an install with database HA and NO backups,
+    which is a real configuration (compact uses it) but must be a deliberate one:
+    the difference is invisible from the Cluster resources.
+  EOT
+  type        = bool
+  default     = true
+}
+
 # --- TimescaleDB (event hypertables, ADR-004) -----------------------------------
 
 variable "timescale_image" {

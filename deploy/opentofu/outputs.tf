@@ -65,3 +65,18 @@ output "grafana_service" {
   description = "Grafana ClusterIP Service name (null if monitoring not installed here). The bring-up prints a port-forward hint to it."
   value       = var.enable_monitoring ? module.monitoring[0].grafana_service : null
 }
+
+output "cnpg_namespace" {
+  description = "Namespace the CloudNativePG operator was installed into (null if not installed here)."
+  value       = var.enable_cnpg ? module.cnpg[0].namespace : null
+}
+
+# Read this rather than re-deriving it from the flags. An install with the operator
+# and no backup plugin has database HA and NO point-in-time recovery, and the two are
+# indistinguishable from the Cluster resources alone — which is exactly why this has
+# to be a value a caller can READ. The module exposed it from the start; for a while
+# nothing at the root did, so the safeguard existed only as a description.
+output "database_backups_enabled" {
+  description = "Whether the Barman Cloud plugin is installed, i.e. whether point-in-time recovery is possible at all (null if CNPG was not installed here)."
+  value       = var.enable_cnpg ? module.cnpg[0].backup_plugin_enabled : null
+}

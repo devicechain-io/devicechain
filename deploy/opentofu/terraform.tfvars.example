@@ -38,6 +38,25 @@
 # ingress_nginx_chart_version = "4.11.3"
 # cert_manager_chart_version  = "v1.16.2"
 
+# CloudNativePG — the operator that will own both database stores (ADR-020 A2), plus
+# the Barman Cloud plugin that provides WAL archiving and point-in-time recovery.
+# Default-on for EVERY install, HA or not: backup is not an HA feature. Both charts
+# require Kubernetes >= 1.29. Versions are pinned by default (see variables.tf).
+#
+# enable_database_backups REQUIRES cert-manager to be present — the plugin's chart
+# renders an Issuer and two Certificates, so with no cert-manager CRDs the apply
+# fails outright. Setting enable_cert_manager=false because the cluster ALREADY has
+# cert-manager is fine and backups keep working; setting it false because there is no
+# cert-manager at all means you must set enable_database_backups=false as well.
+#
+# Set enable_cnpg=false if the cluster already runs CloudNativePG — Helm cannot adopt
+# objects the upstream `kubectl apply` manifest created.
+# enable_cnpg               = true
+# enable_database_backups   = true
+# cnpg_namespace            = "cnpg-system"
+# cnpg_chart_version        = "0.29.0"
+# cnpg_plugin_chart_version = "0.7.0"
+
 # Observability (kube-prometheus-stack — Prometheus/Grafana/Alertmanager). Default-on.
 # Set enable_monitoring=false if the cluster already has the Prometheus Operator.
 # Local/kind should set monitoring_slim=true (emptyDir TSDB, smaller requests).
