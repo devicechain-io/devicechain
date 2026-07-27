@@ -206,9 +206,24 @@ fingerprint check is a smoke alarm, not a fire drill.
 ## Re-running bootstrap on a live instance
 
 `dcctl bootstrap` is idempotent, and re-running it against an existing instance
-**reuses that instance's existing root key** rather than minting a new one. If it
-cannot determine whether the instance exists, it stops rather than guessing — minting
-would be the destructive answer.
+**reuses every credential that instance is already running** rather than minting new
+ones. That covers the secret-store root key, the NATS service password, the callout
+issuer key and the cross-service auth secret. If it cannot determine whether the
+instance exists, it stops rather than guessing — minting would be the destructive
+answer.
+
+Why it matters differs by credential. Rewriting the root key makes every stored secret
+permanently unreadable. Rewriting the broker credentials is recoverable but disruptive:
+the broker and the services are updated by different mechanisms on different schedules,
+so fresh credentials open a window in which one side rejects the other, and pods that
+start inside it fail to reach the broker at all.
+
+:::note One exception
+The Grafana OAuth client secret (`--grafana-sso`) is still re-minted on every run,
+because its cleartext lives in Grafana's own configuration rather than in the instance
+config. Both halves are rewritten by the same run, so the effect is a brief window of
+failing Grafana logins during the rollout.
+:::
 
 On a re-run it also reconciles the escrow:
 

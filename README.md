@@ -190,7 +190,10 @@ dcctl destroy
 The bootstrap pipeline renders config → `tofu apply` (NATS + TimescaleDB + ingress)
 → installs the CRDs/operator → `helm install`s the instance → seeds the initial
 superuser → waits for readiness → reports the access URL — and is idempotent on
-re-run. It defaults to published images; pass `--build` for the from-source
+re-run: it reads back every credential the instance is already running (root key,
+broker auth, service auth) and reuses it rather than minting a replacement, and
+stops rather than guessing if it cannot tell whether the instance exists.
+It defaults to published images; pass `--build` for the from-source
 (ko → local registry) developer path. Building `dcctl` itself: `cd backend/cli &&
 make build`.
 

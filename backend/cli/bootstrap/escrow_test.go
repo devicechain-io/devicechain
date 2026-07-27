@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/devicechain-io/dc-microservice/secrets/escrow"
 )
 
@@ -924,14 +926,47 @@ func TestRestoreCombinedWithEscrowFileIsRefused(t *testing.T) {
 // A re-run must not rotate the key out from under a live instance
 // ---------------------------------------------------------------------------
 
-// withExistingInstance makes the deployed-instance lookup return a fixed answer.
+// withDeployedInstance makes the deployed-instance lookup return a fixed answer.
+// A nil cfg means no such instance — the fresh-install branch.
+func withDeployedInstance(t *testing.T, cfg *config.InstanceConfiguration, err error) {
+	t.Helper()
+	orig := lookupDeployedInstance
+	t.Cleanup(func() { lookupDeployedInstance = orig })
+	lookupDeployedInstance = func(context.Context, string, string) (*config.InstanceConfiguration, error) {
+		return cfg, err
+	}
+}
+
+// deployedWithRootKey is a plausible config for an instance that is already running:
+// the given root key, plus REAL broker credentials.
+//
+// Real ones matter — the reuse path derives the issuer public key from the seed, so
+// a placeholder seed would fail the run for a reason that has nothing to do with what
+// the caller is testing. Generating them the way bootstrap does keeps that honest.
+func deployedWithRootKey(t *testing.T, rootKey string) *config.InstanceConfiguration {
+	t.Helper()
+	creds, err := natsauth.GenerateCredentials()
+	if err != nil {
+		t.Fatalf("generating credentials for the fake deployed instance: %v", err)
+	}
+	cfg := &config.InstanceConfiguration{}
+	cfg.Infrastructure.Nats.Auth.User = natsauth.ServiceUser
+	cfg.Infrastructure.Nats.Auth.Password = creds.ServicePassword
+	cfg.Infrastructure.Nats.Auth.CalloutIssuerSeed = creds.IssuerSeed
+	cfg.Infrastructure.ServiceAuth.Secret = "deployed-service-auth-secret"
+	cfg.Infrastructure.Secrets.RootKey = rootKey
+	return cfg
+}
+
+// withExistingInstance is the root-key-centric shorthand the escrow tests use: an
+// empty key means no instance at all.
 func withExistingInstance(t *testing.T, key string, err error) {
 	t.Helper()
-	orig := lookupExistingRootKey
-	t.Cleanup(func() { lookupExistingRootKey = orig })
-	lookupExistingRootKey = func(context.Context, string, string) (string, error) {
-		return key, err
+	if key == "" {
+		withDeployedInstance(t, nil, err)
+		return
 	}
+	withDeployedInstance(t, deployedWithRootKey(t, key), err)
 }
 
 // THE test for the most destructive bug in this area, and it predates the escrow
@@ -1077,7 +1112,7 @@ func TestARestoreStopsWhenItCannotTellIfTheInstanceExists(t *testing.T) {
 }
 
 // The same rule at the source: only a genuine NotFound may be read as "no instance".
-func TestExistingRootKeyFailsClosedWhenItCannotTell(t *testing.T) {
+func TestDeployedInstanceConfigFailsClosedWhenItCannotTell(t *testing.T) {
 	// A kubeconfig that names a server nothing is listening on: reachable config,
 	// unreachable API — which is exactly the "cannot tell" case, as distinct from a
 	// NotFound.
@@ -1107,13 +1142,13 @@ users:
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 
-	key, err := ExistingRootKey(ctx, "dead", "prod")
+	got, err := DeployedInstanceConfig(ctx, "dead", "prod")
 	if err == nil {
 		t.Fatal("an unreachable API was reported as 'no such instance', which is the branch that " +
-			"mints a new key over a live one")
+			"mints fresh credentials over a live instance's")
 	}
-	if key != "" {
-		t.Errorf("a key was returned alongside the error: %q", key)
+	if got != nil {
+		t.Errorf("a configuration was returned alongside the error: %+v", got)
 	}
 }
 

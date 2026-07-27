@@ -144,11 +144,11 @@ var (
 	promptPassphrase = terminalPassphrase
 	stdinIsTerminal  = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
 
-	// lookupExistingRootKey is the seam stepRenderConfig uses to ask whether the
-	// instance already exists. Indirected because the branch behind it is the one
-	// that decides between "upgrade this instance" and "destroy every secret it has
-	// stored", and that decision must be testable without standing up a cluster.
-	lookupExistingRootKey = ExistingRootKey
+	// lookupDeployedInstance is the seam stepRenderConfig uses to ask what the
+	// instance is ALREADY running. Indirected because the branch behind it is the one
+	// that decides between "upgrade this instance" and "rotate every credential out
+	// from under it", and that decision must be testable without standing up a cluster.
+	lookupDeployedInstance = DeployedInstanceConfig
 
 	// encodeArtifact is the seam that makes the post-write verification testable.
 	//
@@ -555,49 +555,75 @@ func syncDir(dir string) {
 	_ = d.Sync()
 }
 
-// ExistingRootKey returns the base64 root key the named instance is ALREADY running,
-// or "" if no such instance exists in this cluster.
+// DeployedInstanceConfig returns the configuration the named instance is ALREADY
+// running, or nil if no such instance exists in this cluster.
 //
-// This is what stops `dcctl bootstrap` destroying an instance it is only meant to
-// update. stepRenderConfig used to mint a fresh key unconditionally, and helmInstall
-// upgrades an existing release with it — so a re-run rewrote the KEK and made every
-// secret the instance had stored permanently undecryptable, silently, on a run that
-// reported success. The pipeline documents itself as idempotent on re-run and the
-// docs advertise it that way, so this was reachable by following the instructions.
+// This is what stops `dcctl bootstrap` wrecking an instance it is only meant to
+// update. stepRenderConfig used to mint every generated credential unconditionally,
+// and helmInstall upgrades an existing release with them, so a re-run replaced the
+// live instance's secrets with fresh ones — on a pipeline that documents itself as
+// idempotent and that the docs tell operators to re-run (e.g. to change --host).
+// Two flavours of damage came out of that, and the second is why this returns the
+// whole document rather than one field:
+//
+//   - the secret-store root key was the KEK wrapping every stored secret, so
+//     rewriting it made all of them permanently undecryptable — silently, on a run
+//     that reported success.
+//   - the broker-auth material and the service-auth secret live on BOTH sides of a
+//     boundary that updates at different times (the NATS ConfigMap reloads when the
+//     kubelet gets round to projecting it; the services roll when Helm rolls them),
+//     so rotating them opens a window where one side rejects the other. That window
+//     is what fails a bootstrap re-run with `Authorization Violation`.
 //
 // It FAILS CLOSED. Only a NotFound — the instance genuinely is not there — is read
-// as "fresh install, mint a key". Any other error means we could not tell, and
+// as "fresh install, mint everything". Any other error means we could not tell, and
 // minting on a "could not tell" is exactly the destructive branch. EnsureCluster has
 // already run by this point, so the API being unreachable here is an anomaly worth
 // stopping for rather than guessing past.
-func ExistingRootKey(ctx context.Context, kubeContext, instanceId string) (string, error) {
+func DeployedInstanceConfig(ctx context.Context, kubeContext, instanceId string) (*config.InstanceConfiguration, error) {
 	restCfg, err := RestConfig(kubeContext)
 	if err != nil {
-		return "", fmt.Errorf("building kube config to check for an existing instance: %w", err)
+		return nil, fmt.Errorf("building kube config to check for an existing instance: %w", err)
 	}
 	typed, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	name := fmt.Sprintf("dci-%s-config", instanceId)
 	sec, err := typed.CoreV1().Secrets(instanceId).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return "", nil
+			return nil, nil
 		}
-		return "", fmt.Errorf("checking whether instance %q already exists (Secret %s/%s): %w. "+
-			"Refusing to continue: if the instance IS there, minting a fresh secret-store root key would "+
-			"make every secret it has stored permanently unreadable", instanceId, instanceId, name, err)
+		return nil, fmt.Errorf("checking whether instance %q already exists (Secret %s/%s): %w. "+
+			"Refusing to continue: if the instance IS there, minting fresh credentials would rotate them "+
+			"out from under it — making every stored secret unreadable and breaking broker auth for every "+
+			"pod that starts afterwards", instanceId, instanceId, name, err)
 	}
-	raw, ok := sec.Data["instance"]
-	if !ok {
-		return "", nil
+	return parseDeployedConfig(sec.Data["instance"], instanceId, name)
+}
+
+// parseDeployedConfig turns the config Secret's payload into the instance's
+// configuration. Split out so the two ways it can refuse are testable without a
+// cluster — they are the ways this whole lookup can be wrong about a LIVE instance,
+// which is the only direction that costs anything.
+//
+// The Secret being there at all means the instance is there, so an empty or
+// undecodable payload is a MALFORMED instance, not an absent one. Reading it as
+// absent would take the mint branch against something live. (It used to do exactly
+// that for an absent key; the blast radius was one key and is now every credential.)
+func parseDeployedConfig(raw []byte, instanceId, secretName string) (*config.InstanceConfiguration, error) {
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("instance %q has a configuration Secret (%s/%s) with no \"instance\" payload, "+
+			"so what it is running cannot be determined. Refusing to continue rather than treat it as a "+
+			"fresh install, which would rotate every credential out from under it. Inspect the Secret, or "+
+			"`dcctl destroy` the instance if it is not wanted", instanceId, instanceId, secretName)
 	}
 	cfg := &config.InstanceConfiguration{}
 	if err := json.Unmarshal(raw, cfg); err != nil {
-		return "", fmt.Errorf("decoding the configuration of the existing instance %q: %w", instanceId, err)
+		return nil, fmt.Errorf("decoding the configuration of the existing instance %q: %w", instanceId, err)
 	}
-	return cfg.Infrastructure.Secrets.RootKey, nil
+	return cfg, nil
 }
 
 // ReconcileEscrow settles the artifact for an instance whose root key already

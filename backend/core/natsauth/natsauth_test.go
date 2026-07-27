@@ -266,3 +266,70 @@ func TestDevicePermissionsRejectsUnsafeDeviceToken(t *testing.T) {
 		}
 	}
 }
+
+// CredentialsFromDeployed is the re-run path: an instance that already exists keeps
+// the credentials it is already authenticating with, rather than having fresh ones
+// rotated in underneath it (ADR-020/028 A8). The seed and the plaintext password are
+// the only two the instance config stores; the other half of each pair is rebuilt
+// here, and this is where "rebuilt" has to mean "identical to what the broker holds".
+func TestCredentialsFromDeployedRebuildsTheSamePair(t *testing.T) {
+	deployed, err := GenerateCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := CredentialsFromDeployed(deployed.IssuerSeed, deployed.ServicePassword)
+	if err != nil {
+		t.Fatalf("CredentialsFromDeployed: %v", err)
+	}
+
+	// The issuer public key must come back byte-identical: it is what the broker's
+	// auth_callout config already carries, so a different one means the responder is
+	// signing device JWTs the broker will not trust.
+	if got.IssuerPublic != deployed.IssuerPublic {
+		t.Errorf("issuer public = %q, want the deployed %q", got.IssuerPublic, deployed.IssuerPublic)
+	}
+	if got.IssuerSeed != deployed.IssuerSeed {
+		t.Errorf("issuer seed = %q, want it passed through unchanged", got.IssuerSeed)
+	}
+	if got.ServicePassword != deployed.ServicePassword {
+		t.Errorf("service password = %q, want it passed through unchanged", got.ServicePassword)
+	}
+
+	// The hash is deliberately NOT identical — bcrypt salts. What has to hold is that
+	// it verifies the same password, because that is the entire reason re-hashing is
+	// safe: the old hash and the new one accept the same plaintext, so there is no
+	// instant at which the broker and the services disagree.
+	if err := bcrypt.CompareHashAndPassword([]byte(got.ServicePasswordBcrypt), []byte(deployed.ServicePassword)); err != nil {
+		t.Errorf("the rebuilt hash does not verify the deployed password: %v", err)
+	}
+}
+
+// It must FAIL rather than fall back to minting, because falling back is exactly the
+// rotation it exists to prevent — and it would happen on the instance least able to
+// absorb it, one whose config is already incomplete.
+func TestCredentialsFromDeployedFailsClosed(t *testing.T) {
+	good, err := GenerateCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, seed, password string
+	}{
+		{"no seed", "", good.ServicePassword},
+		{"no password", good.IssuerSeed, ""},
+		{"neither", "", ""},
+		{"seed that is not an nkey", "not-an-nkey-seed", good.ServicePassword},
+		{"a public key where the seed should be", good.IssuerPublic, good.ServicePassword},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := CredentialsFromDeployed(tc.seed, tc.password)
+			if err == nil {
+				t.Fatalf("accepted unusable deployed credentials, returning %+v", got)
+			}
+			if got != (Credentials{}) {
+				t.Errorf("credentials were returned alongside the error: %+v", got)
+			}
+		})
+	}
+}

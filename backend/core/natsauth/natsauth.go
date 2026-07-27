@@ -110,6 +110,55 @@ func GenerateCredentials() (Credentials, error) {
 	}, nil
 }
 
+// CredentialsFromDeployed rebuilds the full credential set from the two secrets an
+// already-running instance carries in its config: the callout issuer SEED and the
+// PLAINTEXT service password. It is what a bootstrap RE-RUN uses instead of minting,
+// so an instance keeps the broker credentials it is already authenticating with.
+//
+// Only those two are stored, because only those two are secret — the other half of
+// each pair is derivable, and deriving it here is what keeps the "one mint, both
+// sides" invariant true on the re-run path as well:
+//
+//   - the issuer public key is derived from the seed, so it is byte-identical to
+//     what the broker config already holds. The broker's ConfigMap does not change
+//     and nothing reloads.
+//   - the password hash is RE-hashed, because bcrypt salts and so a hash of the same
+//     password is a different string every time. That does churn the broker config
+//     by one line per re-run, and it is safe precisely because the password did not
+//     change: the old hash and the new one verify the same plaintext, so there is no
+//     instant at which the two sides disagree. (Reading the deployed hash back
+//     instead would avoid the churn at the cost of parsing nats.conf and giving an
+//     ordinary re-run a new way to fail — a worse trade.)
+//
+// It FAILS CLOSED on either input being absent or unusable rather than falling back
+// to a mint, because a fallback would be the exact rotation this exists to prevent.
+func CredentialsFromDeployed(issuerSeed, servicePassword string) (Credentials, error) {
+	if issuerSeed == "" {
+		return Credentials{}, fmt.Errorf("the running instance carries no callout issuer seed")
+	}
+	if servicePassword == "" {
+		return Credentials{}, fmt.Errorf("the running instance carries no service password")
+	}
+	akp, err := nkeys.FromSeed([]byte(issuerSeed))
+	if err != nil {
+		return Credentials{}, fmt.Errorf("loading the running instance's issuer seed: %w", err)
+	}
+	pub, err := akp.PublicKey()
+	if err != nil {
+		return Credentials{}, fmt.Errorf("deriving the issuer public key from the running instance's seed: %w", err)
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(servicePassword), servicePasswordBcryptCost)
+	if err != nil {
+		return Credentials{}, fmt.Errorf("hashing the running instance's service password: %w", err)
+	}
+	return Credentials{
+		IssuerPublic:          pub,
+		IssuerSeed:            issuerSeed,
+		ServicePassword:       servicePassword,
+		ServicePasswordBcrypt: string(hash),
+	}, nil
+}
+
 // MqttDeliverySubject is the internal JetStream delivery subject the NATS MQTT
 // gateway subscribes a device to for QoS-1+ message delivery. A device's user
 // permission allow-list must include it or QoS-1 SUBSCRIBE (e.g. command
