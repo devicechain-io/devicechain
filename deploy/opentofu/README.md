@@ -18,8 +18,8 @@ these modules, passing its cluster credentials to the providers.
 |---|---|---|
 | Namespace | `kubernetes_namespace_v1` | `dc-system` |
 | NATS (JetStream + MQTT) | `nats` Helm chart | `dc-nats.dc-system:4222` / `:1883` |
-| Relational Postgres | StatefulSet + headless Service + Secret | `dc-postgresql.dc-system:5432` |
-| TimescaleDB | same generic module, Timescale image | `dc-timescaledb-single.dc-system:5432` |
+| Relational Postgres | `cnpg-cluster` module — a CloudNativePG `Cluster` (`dc-rdb`) | `dc-postgresql.dc-system:5432` |
+| TimescaleDB | `postgres` module — StatefulSet + headless Service + Secret | `dc-timescaledb-single.dc-system:5432` |
 | NGINX ingress controller | `ingress-nginx` Helm chart | IngressClass `nginx` |
 | cert-manager (+ CRDs) | `cert-manager` Helm chart | namespace `cert-manager` |
 | Observability (Prometheus/Grafana/Alertmanager) | `kube-prometheus-stack` Helm chart | namespace `monitoring` |
@@ -28,6 +28,30 @@ these modules, passing its cluster credentials to the providers.
 
 **Both CNPG charts require Kubernetes ≥ 1.29** (`kubeVersion: '>=1.29.0-0'`), which is
 therefore the floor for this root as a whole.
+
+### The two database stores are on different mechanisms right now
+
+That is a migration in progress, not an inconsistency to tidy up. `dc-rdb` moved to
+CloudNativePG; `dc-timescaledb-single` follows next and the generic `postgres` module
+stays until it does.
+
+Three things about the relational store are worth knowing before changing it:
+
+- **The Cluster is `dc-rdb`; clients still use `dc-postgresql`.** The second is a
+  *managed* alias Service whose selector CNPG maintains, so it follows the primary
+  across a failover (measured: 3 seconds). The names must differ because CNPG reserves
+  `<cluster>-rw`/`-ro`/`-r`. A hand-rolled Service of the same name would look identical
+  and would not follow anything — nor would its name appear in the server certificate's
+  SANs, which is what keeps `sslmode=verify-full` reachable later.
+- **`postgres_instances` is 1 or 3, never 2.** Synchronous replication needs a standby to
+  confirm every commit, so at two instances losing either one stalls all writes. CNPG's
+  own admission webhook does not refuse that topology — it refuses only `number >=
+  instances` — so the guard is ours, in the root variable and again in the chart.
+- **CNPG provisions declaratively; it does not *enforce* continuously.** Measured on a
+  probe cluster: a deleted alias Service is recreated, but a hand-edited selector is
+  never repaired, and a `CREATEDB` grant revoked by hand stays revoked. Treat the
+  operator's green status as a record of the last apply, not a live claim — which is why
+  `dcctl ha verify-db` reads PostgreSQL and the Kubernetes API rather than the CR status.
 
 The CloudNativePG operator is installed on **every** apply, not only HA ones (ADR-020
 A2, decision D4): backup is not a high-availability feature, and one storage shape

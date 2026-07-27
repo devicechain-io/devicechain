@@ -37,8 +37,25 @@ output "nats_tls_enabled" {
 }
 
 output "postgres_host" {
-  description = "Host:port of the relational Postgres."
-  value       = module.postgres.host
+  description = "Host:port of the relational Postgres — the managed alias Service, which CNPG keeps pointed at the current primary."
+  value       = module.cnpg_rdb.host
+}
+
+# The database half of the false-HA guard, and the exact sibling of
+# nats_cluster_replicas above. An install that ASKED for synchronous replication
+# but did not get enough instances runs asynchronously, with three healthy pods
+# and a green apply — indistinguishable from the real thing unless something
+# reads it back. So this reports what is ACTUALLY in force, not what was
+# requested, and the HA rig asserts against the live Cluster object rather than
+# against this value or the YAML that produced it.
+output "postgres_synchronous_enforced" {
+  description = "Whether the relational database is genuinely replicating synchronously. False on a single-instance install (correct — there is no standby to wait for), and false on any topology below the count synchronous replication requires."
+  value       = module.cnpg_rdb.synchronous_enforced
+}
+
+output "postgres_cluster_name" {
+  description = "The CloudNativePG Cluster object name for the relational store. Pods carry it as cnpg.io/cluster=<name>; prefer resolving through the alias Service, which is topology-independent."
+  value       = module.cnpg_rdb.cluster_name
 }
 
 output "timescaledb_host" {

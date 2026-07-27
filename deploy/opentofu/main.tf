@@ -29,20 +29,135 @@ module "nats" {
   depends_on = [module.namespace]
 }
 
-# Relational Postgres — the control-plane RDB (users, devices, relationships, …).
-module "postgres" {
-  source = "./modules/postgres"
+# 🔴 THE CUTOVER GUARD. Read this before touching anything below it.
+#
+# A2.3 replaced the relational store's StatefulSet with a CloudNativePG Cluster.
+# On a FRESH cluster that is unremarkable. On an EXISTING one it is a silent
+# data-abandonment bug, and the reason is a Terraform behaviour that is easy to
+# get exactly backwards:
+#
+#   `lifecycle { prevent_destroy = true }` protects a resource that is STILL IN
+#   THE CONFIGURATION. Delete the module block and the resource becomes an
+#   ORPHAN in state — and orphans are destroyed WITHOUT consulting a lifecycle
+#   block, because there is no longer a lifecycle block to consult.
+#
+# Measured against a copy of a real state file: the plan succeeds, exit 0, and
+# `module.postgres.kubernetes_stateful_set_v1.db` is marked for destruction. The
+# guard that exists precisely to stop this does not fire.
+#
+# What the operator would then get is the worst shape available: the StatefulSet
+# and its Service are destroyed, the PVC survives (its retention policy is
+# Retain, and it was never in Terraform state anyway because the StatefulSet's
+# volumeClaimTemplate created it), and a brand-new EMPTY Cluster takes over the
+# `dc-postgresql` name. The instance comes up green with every tenant, user,
+# device and relationship gone from the running system while still sitting on a
+# detached volume. Nothing anywhere reports a problem.
+#
+# There is no in-place upgrade to offer instead: a StatefulSet's PGDATA cannot
+# be adopted by CloudNativePG. The migration is a dump and restore, or — pre-GA,
+# and for local instances, usually the right answer — a rebuild.
+#
+# So this refuses, at PLAN time, before the destroy can be planned. It covers
+# `tofu apply` run directly as well as `dcctl bootstrap`, which is why it lives
+# here rather than only in the CLI.
+data "kubernetes_resources" "legacy_rdb_statefulset" {
+  api_version    = "apps/v1"
+  kind           = "StatefulSet"
+  namespace      = var.namespace
+  field_selector = "metadata.name=dc-postgresql"
+}
 
-  namespace     = var.namespace
-  name          = "dc-postgresql"
-  image         = var.postgres_image
-  database      = var.postgres_database
-  username      = var.postgres_username
-  password      = var.postgres_password
-  storage       = var.postgres_storage
-  storage_class = var.postgres_storage_class
+resource "terraform_data" "cutover_guard" {
+  input = length(data.kubernetes_resources.legacy_rdb_statefulset.objects)
 
-  depends_on = [module.namespace]
+  lifecycle {
+    precondition {
+      condition     = length(data.kubernetes_resources.legacy_rdb_statefulset.objects) == 0 || var.allow_legacy_rdb_removal
+      error_message = <<-EOT
+        This cluster still runs the OLD relational-database StatefulSet
+        (dc-postgresql in ${var.namespace}), and this configuration replaces it
+        with a CloudNativePG Cluster.
+
+        Applying as-is would DESTROY that StatefulSet and leave its data on an
+        orphaned PersistentVolumeClaim while a new, EMPTY database takes over the
+        same hostname. The instance would come up healthy and empty. Terraform's
+        prevent_destroy does NOT stop this, because removing a module block
+        orphans its resources and orphans are destroyed without consulting their
+        lifecycle rules.
+
+        There is no in-place upgrade: a StatefulSet's PGDATA cannot be adopted by
+        CloudNativePG.
+
+          To DISCARD the old data (local/dev instances, the usual case):
+
+            dcctl destroy <instance>     # or delete the cluster entirely
+            dcctl bootstrap ...          # rebuild on the new storage tier
+
+          To KEEP it, dump before cutting over:
+
+            kubectl -n ${var.namespace} exec dc-postgresql-0 -- \
+              pg_dumpall -U <user> > rdb.sql
+            # then remove the old objects, apply this configuration, and restore
+            # into the new Cluster through the dc-postgresql service.
+
+        Once the data is safe, set allow_legacy_rdb_removal = true to proceed.
+        Setting it is an assertion that you have handled the data — it is not a
+        migration, and nothing checks it for you.
+      EOT
+    }
+  }
+}
+
+# Relational Postgres — the control-plane RDB (users, devices, relationships, …),
+# as a CloudNativePG Cluster (ADR-020 A2.3).
+#
+# The Cluster object is `dc-rdb`; clients keep reaching it at `dc-postgresql`,
+# which CNPG creates as a MANAGED alias Service whose selector it maintains. The
+# two names must differ because CNPG reserves `<cluster>-rw`/`-ro`/`-r` for
+# itself. Measured: the alias's selector is byte-identical to `dc-rdb-rw`'s, and
+# it followed a primary failover in 3 seconds.
+#
+# 🔴 NOT gated on var.enable_cnpg. That flag means "do not INSTALL the operator",
+# and its documented use is a cluster that already runs one — where the CRDs
+# exist and this Cluster is exactly as creatable. Gating the store on it would
+# turn "the operator is already here" into "the platform has no relational
+# database", which is a much larger surprise than the flag advertises.
+module "cnpg_rdb" {
+  source = "./modules/cnpg-cluster"
+
+  namespace          = var.namespace
+  name               = "dc-rdb"
+  alias_service_name = "dc-postgresql"
+  image              = var.postgres_image
+  database           = var.postgres_database
+  username           = var.postgres_username
+  password           = var.postgres_password
+  storage            = var.postgres_storage
+  storage_class      = var.postgres_storage_class
+
+  # 3 under --ha, 1 otherwise, unless pinned explicitly. Both halves of the
+  # topology come from ONE value; see the postgres_instances variable for why 2
+  # is refused rather than merely discouraged.
+  instances = var.postgres_instances != 0 ? var.postgres_instances : (var.ha ? 3 : 1)
+
+  # `required` durability for this store specifically: it holds the audit
+  # journal and the control plane, RPO=0 is the point, and a write stall is a
+  # loud recoverable failure rather than silent loss. The event store takes
+  # `preferred` in A2.4 — that asymmetry is a decision, not an oversight.
+  #
+  # The module turns this off by construction below three instances, so a
+  # non-HA install does not inherit a setting that would wedge it.
+  synchronous     = true
+  data_durability = "required"
+
+  # The operator must exist before a Cluster referencing its CRDs is applied.
+  # depends_on on the module (not merely writing it later) is what makes this
+  # ordering rather than hope: the cnpg helm_release waits for its own rollout,
+  # so depending on it is depending on the CRDs being established.
+  #
+  # When enable_cnpg is false this is an empty list and orders nothing — correct,
+  # because that flag asserts the operator is already present.
+  depends_on = [module.namespace, module.cnpg]
 }
 
 # TimescaleDB — event hypertables (ADR-004). Same generic module, different image:

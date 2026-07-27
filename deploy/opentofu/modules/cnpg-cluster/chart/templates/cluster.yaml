@@ -1,0 +1,243 @@
+{{- /*
+Copyright The DeviceChain Authors
+SPDX-License-Identifier: Apache-2.0
+*/ -}}
+
+{{- /*
+A DeviceChain database store as a CloudNativePG Cluster.
+
+WHY THIS CHART EXISTS AT ALL, and why it is ours rather than cnpg/cluster.
+
+It exists because a `kubernetes_manifest` resource requires its CRD to be
+present at PLAN time, and the CNPG CRDs are installed by an earlier apply in
+the same run (A2.2). Helm renders and applies together, so a `helm_release`
+sidesteps that ordering trap entirely. The cert-manager module documents the
+same problem for the ingress Issuer.
+
+It is OURS because the upstream cnpg/cluster chart is an unversioned 0.x
+*values* API layered over a stable v1 Kubernetes API, and it fails open on the
+two fields this slice exists to set. Measured on chart 0.8.1: misspelling
+`cluster.services` or `cluster.roles` renders a Cluster with NO `managed:`
+block whatsoever and exits 0. The result deploys cleanly, the `dc-postgresql`
+alias never appears, every service dies on `permission denied to create
+database`, and nothing points back at the values file. (A typo under
+`cluster.postgresql` IS caught -- but only by a deprecation guard carrying a
+hardcoded allow-list, which is luck rather than design.)
+
+Its defaults are also wrong for us in a way that is specifically invisible:
+`affinity.topologyKey` defaults to `topology.kubernetes.io/zone`, and a node
+without that label simply does not participate in the anti-affinity term. On
+kind, on bare metal, and on any cluster that has not been zone-labelled, three
+instances land on one node and the HA is decorative. That is the A0 false-HA
+shape exactly, so we set `kubernetes.io/hostname` and make it a value.
+
+So: no translation layer. The values here ARE the Cluster spec, and the
+load-bearing ones are `required` so a missing value is a render error rather
+than a silently absent field.
+
+🔴 ONE THING THIS CANNOT PROTECT AGAINST, and the rig must: a field misspelled
+in THIS FILE is pruned silently on the way in. Measured both ways, because the
+two clients differ and only one of them is the path we use:
+
+  kubectl apply   REJECTS it -- `strict decoding error: unknown field
+                  "spec.postgresql.synchronus"`. Loud, immediate, unmissable.
+  helm install    ACCEPTS it. Exit 0, release deployed, and the created object
+                  has no `synchronous` block at all.
+
+This module applies through Helm. So a one-character slip in the block below
+yields three healthy pods replicating ASYNCHRONOUSLY, with `tofu apply` green
+and every pod-counting check agreeing. That is the false-HA shape A0 closed for
+the broker, reachable here by a typo.
+
+"The YAML we sent" is therefore not "the spec in the cluster", and no amount of
+care in this file changes that. The rig reads the load-bearing fields back from
+the live object -- see the `synchronous replication is configured` check in
+hack/ha-rig.sh, which asserts against the API server, not against this file.
+*/ -}}
+
+{{- $name := required "cnpg-cluster: .Values.name is required" .Values.name -}}
+{{- $instances := required "cnpg-cluster: .Values.instances is required" .Values.instances | int -}}
+{{- $owner := required "cnpg-cluster: .Values.bootstrap.owner is required" .Values.bootstrap.owner -}}
+
+{{- /*
+The instance-count invariant, enforced rather than documented.
+
+Synchronous replication with `number: N` needs N standbys present to accept a
+write. Tolerating the loss of one of them therefore needs N+1 standbys, i.e.
+N+2 instances. At N=1 that is three -- which is the fact the roadmap left out
+when it said "synchronous for rdb", and the reason this is a `fail` and not a
+comment. Two instances would convert ANY replica loss into a total write
+outage: strictly worse for availability than the single node it replaced,
+while being better for durability. That trade should never be entered by
+accident.
+
+This is NOT redundant with CloudNativePG's own admission webhook, though the
+two look similar and it is worth being precise about the gap. Measured: the
+webhook refuses `instances: 1` under `number: 1` with "the number of
+synchronous replicas must be less than the total number of instances" -- so it
+rejects the IMPOSSIBLE (a cluster that could never accept a write). It accepts
+two instances quite happily. This guard rejects the UNWISE, one step further
+out, and that step is the entire availability argument for the third node.
+*/ -}}
+{{- if .Values.synchronous.enabled -}}
+  {{- $need := add (.Values.synchronous.number | int) 2 -}}
+  {{- if lt $instances $need -}}
+    {{- fail (printf "cnpg-cluster %q: synchronous replication with number=%d requires at least %d instances (got %d). At fewer, losing a single standby stalls every write -- worse availability than one node, which is not a trade to make silently." $name (.Values.synchronous.number | int) $need $instances) -}}
+  {{- end -}}
+{{- end -}}
+
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ $name }}
+    app.kubernetes.io/component: database
+    app.kubernetes.io/managed-by: opentofu
+spec:
+  instances: {{ $instances }}
+  imageName: {{ required "cnpg-cluster: .Values.imageName is required" .Values.imageName }}
+
+  # CNPG's own default is false. The upstream chart flips it to true; we do not.
+  # A superuser whose password sits in a Secret is a standing credential the
+  # platform never uses -- every service connects as the app owner.
+  enableSuperuserAccess: {{ .Values.enableSuperuserAccess }}
+
+  # A PodDisruptionBudget so a node drain cannot take the quorum with it. This
+  # is A3's concern; it costs nothing to have it correct from the start.
+  enablePDB: true
+
+  storage:
+    size: {{ required "cnpg-cluster: .Values.storage.size is required" .Values.storage.size }}
+    {{- with .Values.storage.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+
+  {{- if .Values.walStorage.enabled }}
+  # A separate WAL volume. Worth it once archiving is on (A2.5): WAL that cannot
+  # be archived accumulates, and on a shared volume it fills the one the data is
+  # on and stops Postgres. On its own volume that failure is bounded.
+  walStorage:
+    size: {{ required "cnpg-cluster: .Values.walStorage.size is required when walStorage.enabled" .Values.walStorage.size }}
+    {{- with .Values.walStorage.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+  {{- end }}
+
+  {{- with .Values.resources }}
+  resources:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
+  # 🔴 hostname, NOT zone. See the header: a topologyKey no node carries makes
+  # the anti-affinity term inert, and three instances on one node look exactly
+  # like three instances on three nodes from every check that counts pods.
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: {{ .Values.topologyKey }}
+    # `required` at more than one instance: a soft rule that silently colocates
+    # is the false-HA failure this whole workstream exists to remove. At one
+    # instance there is nothing to spread, and `required` with a single pod on a
+    # single-node cluster would refuse to schedule at all.
+    podAntiAffinityType: {{ gt $instances 1 | ternary "required" "preferred" }}
+
+  postgresql:
+    {{- with .Values.sharedPreloadLibraries }}
+    # 🔴 A library named here that the image does not carry makes the server
+    # refuse to start, and CNPG cannot self-heal out of it -- it is an
+    # unrecoverable-without-hands state, not a degraded one.
+    shared_preload_libraries:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- if .Values.synchronous.enabled }}
+    synchronous:
+      method: {{ .Values.synchronous.method }}
+      number: {{ .Values.synchronous.number | int }}
+      dataDurability: {{ .Values.synchronous.dataDurability }}
+    {{- end }}
+    {{- with .Values.parameters }}
+    parameters:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+
+  managed:
+    roles:
+      # Coupling (a), closed. Every DeviceChain service issues `CREATE DATABASE
+      # <instanceId>` at startup (backend/core/rdb/postgres.go), and CNPG's app
+      # role has rolcreatedb = f. Measured on the spike: `CREATE DATABASE` as the
+      # app user returns `permission denied to create database`, so without this
+      # grant every service fails to start on a stock CNPG cluster. `CREATE
+      # SCHEMA` succeeds -- only the database half breaks, which is why the
+      # symptom is narrower than "nothing works" and easier to misread.
+      - name: {{ $owner }}
+        ensure: present
+        login: true
+        createdb: true
+        inRoles:
+          # pg_monitor, so the HA verifier can see replication state through the
+          # SAME credentials and the SAME alias Service every service uses.
+          #
+          # 🔴 This is not convenience, it is what makes the check honest, and
+          # the alternative was measured. Without it `pg_stat_replication`
+          # returns the right number of ROWS to the app user but NULLs
+          # `state`, `sync_state` and `client_addr` -- so `count(*) where
+          # sync_state in ('sync','quorum')` yields 0 with two perfectly
+          # healthy standbys. That is a check that fails when the cluster is
+          # fine and, far worse, one whose zero-standby PRECONDITION is
+          # satisfied instantly -- which would let the synchronous-stall
+          # negative control record a pass without the condition it is
+          # supposedly testing ever holding.
+          #
+          # pg_monitor is read-only and grants statistics visibility, not data
+          # access. This role already owns every database in the instance, so
+          # it widens observability rather than authority.
+          - pg_monitor
+    services:
+      additional:
+        # The DNS contract (§2). Services reach this store at a name baked into
+        # the config defaults, the Helm values, dcic-default.yaml, the loadtest
+        # self-test and the DR rig. CNPG maintains this Service's selector
+        # itself, so it follows the primary across a failover -- measured at ~3s
+        # on the spike.
+        #
+        # It must be a MANAGED service, not a hand-rolled one of the same name:
+        # only managed services are added to the server certificate's SANs, so
+        # this is also what keeps `sslmode=verify-full` reachable later.
+        - selectorType: rw
+          serviceTemplate:
+            metadata:
+              name: {{ required "cnpg-cluster: .Values.aliasServiceName is required" .Values.aliasServiceName }}
+
+  bootstrap:
+    initdb:
+      database: {{ required "cnpg-cluster: .Values.bootstrap.database is required" .Values.bootstrap.database }}
+      owner: {{ $owner }}
+      # Our own Secret, so the credentials stay the ones the caller configured.
+      # Left unset, CNPG generates a password and the DSN the Helm chart ships
+      # would no longer be able to log in.
+      secret:
+        name: {{ required "cnpg-cluster: .Values.bootstrap.secretName is required" .Values.bootstrap.secretName }}
+      # 🔴 EXPLICIT, because the operand image carries no locale. initdb with no
+      # --encoding infers one from LANG, and with no locale set at all that
+      # resolves to SQL_ASCII -- which does not fail here. It fails much later
+      # and somewhere else: pgx's simple protocol requires client_encoding=UTF8,
+      # so EVERY query returns an encoding error and the database looks broken
+      # rather than mis-initialised. Measured while building the operand image.
+      encoding: {{ .Values.bootstrap.encoding }}
+      localeCollate: {{ .Values.bootstrap.localeCollate }}
+      localeCType: {{ .Values.bootstrap.localeCType }}
+      {{- with .Values.bootstrap.postInitTemplateSQL }}
+      # Runs against template1, so every database the app subsequently CREATEs
+      # inherits it. This is the hook that carries the TimescaleDB extension
+      # (coupling (b)) -- NOT postInitApplicationSQL, which touches only the one
+      # bootstrap database and would leave every app-created database without
+      # the extension.
+      #
+      # 🔴 It is confined to initdb, so it does NOT run on a restore. A physical
+      # restore brings template1 back with the backup, so this survives -- but
+      # the property is inherited from the backup rather than declared, and the
+      # restore drill is what has to prove it.
+      postInitTemplateSQL:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

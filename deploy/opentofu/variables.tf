@@ -34,10 +34,16 @@ variable "ha" {
     Shorthand for the ADR-020 NATS topology: 3 NATS servers in a RAFT cluster,
     spread one-per-node, instead of 1. Defaults to single-node.
 
-    WHAT THIS DOES NOT DO, stated because the previous description promised it and
-    it was never true: it does not replicate the databases. Postgres and TimescaleDB
-    are single-instance StatefulSets in this root regardless — see ADR-028 for where
-    their durability actually comes from. It also does not, on its own, replicate
+    It ALSO now sets the relational database to 3 synchronously-replicated
+    CloudNativePG instances (ADR-020 A2.3) — see postgres_instances, and note
+    that synchronous replication is what forces the third instance rather than a
+    second.
+
+    WHAT THIS DOES NOT DO: it does not yet replicate TimescaleDB, which remains a
+    single-instance StatefulSet until A2.4 — so an instance with `ha = true` has a
+    replicated broker and control-plane database, and a single-node EVENT store.
+    See ADR-028 for where that store's durability comes from meanwhile. It also
+    does not, on its own, replicate
     the JetStream STREAMS: that is a per-stream replica factor in the services'
     config (instance.config.infrastructure.nats.streamReplicas), rendered by the
     DeviceChain Helm chart, which this root does not install. Both halves must be
@@ -191,9 +197,76 @@ variable "nats_mqtt_node_port" {
 # --- Relational Postgres (control-plane RDB) ------------------------------------
 
 variable "postgres_image" {
-  description = "Container image for the relational Postgres database."
+  description = <<-EOT
+    Operand image for the relational Postgres database (ADR-020 A2.3).
+
+    🔴 This must be a CloudNativePG OPERAND image, not a stock `postgres:` one.
+    CNPG's instance manager runs initdb and supervises the server itself, and it
+    expects the operand's layout (uid 26, PGDATA conventions, the barman client
+    tools on PATH). `postgres:16-alpine` — which this defaulted to while the
+    store was a plain StatefulSet — does not satisfy that.
+
+    PostgreSQL 17, matching the TimescaleDB operand image A2.6 builds, so both
+    stores sit on one major version.
+
+    This store is deliberately the STOCK image and not our TimescaleDB operand:
+    `rdb` holds the control plane and has no hypertables, so the extension would
+    be 36 MB of attack surface serving nothing.
+  EOT
   type        = string
-  default     = "postgres:16-alpine"
+  default     = "ghcr.io/cloudnative-pg/postgresql:17.10-standard-bookworm"
+}
+
+variable "allow_legacy_rdb_removal" {
+  description = <<-EOT
+    Proceed even though this cluster still runs the pre-A2.3 relational-database
+    StatefulSet (dc-postgresql).
+
+    🔴 This is an ASSERTION THAT YOU HAVE HANDLED THE DATA, not a migration.
+    Nothing verifies it. Setting it true and applying will destroy the old
+    StatefulSet and leave whatever was in it on an orphaned PersistentVolumeClaim
+    while a new, empty CloudNativePG Cluster takes over the same hostname — and
+    the instance will come up perfectly healthy in that state, which is what makes
+    the mistake expensive rather than obvious.
+
+    The guard exists because Terraform's own does not fire here: prevent_destroy
+    protects a resource that is still in the configuration, and removing a module
+    block orphans its resources instead — orphans are destroyed without consulting
+    a lifecycle block that no longer exists. Measured, not assumed.
+
+    Leave false unless you have dumped the data or are deliberately discarding it.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "postgres_instances" {
+  description = <<-EOT
+    Number of relational-database instances. 0 (default) derives it from var.ha —
+    3 when true, 1 when false.
+
+    🔴 1 OR 3, NEVER 2, and the middle is the whole reason this is not a plain
+    bool. Synchronous replication needs one standby to confirm every commit, so
+    at two instances losing EITHER one stalls every write — strictly worse for
+    availability than the single node it replaced, while being better for
+    durability. Three means a standby can go without the cluster losing its
+    synchronous candidate. The module derives synchronous replication from this
+    count, and the chart refuses to render the unsafe combination, so an
+    unattainable value fails at plan/render time rather than at 3am.
+
+    1 is a fully supported production topology (decision D4), not a degraded
+    one: CloudNativePG owns the store on every install so that backup and
+    point-in-time recovery exist independently of HA. At one instance there is
+    no standby, commits are a local fsync, and the latency is what the
+    StatefulSet gave.
+  EOT
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = contains([0, 1, 3, 5], var.postgres_instances)
+    error_message = "postgres_instances must be 0 (derive from var.ha), 1, 3, or 5. 2 is deliberately rejected: it makes any standby loss a total write outage."
+  }
 }
 
 variable "postgres_database" {

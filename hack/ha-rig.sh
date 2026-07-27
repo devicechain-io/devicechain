@@ -19,11 +19,23 @@
 # shown to fail.
 #
 #   hack/ha-rig.sh up        create the 4-node kind cluster and bootstrap --ha
-#   hack/ha-rig.sh verify    assert the HA claim from live broker state
-#   hack/ha-rig.sh control   THE NEGATIVE CONTROL: same check, non-HA instance,
-#                            required to FAIL
+#   hack/ha-rig.sh verify    assert the HA claim from live broker (A) and
+#                            relational-database (B) state
+#   hack/ha-rig.sh control   THE NEGATIVE CONTROLS: the same two checks against a
+#                            non-HA instance, both required to FAIL
 #   hack/ha-rig.sh all       up + verify + control
 #   hack/ha-rig.sh down      delete both clusters
+#
+# TWO CHECKS, TWO SUBSYSTEMS (ADR-020 A0 and A2.3):
+#
+#   CHECK A  the broker — JetStream streams, KV buckets, consumer groups, pods
+#   CHECK B  the relational database — CloudNativePG instance count, pod spread,
+#            the dc-postgresql alias Service, and PostgreSQL's own view of
+#            synchronous replication
+#
+# 🔴 CHECK B DOES NOT COVER TimescaleDB. The event store is still a
+# single-instance StatefulSet until A2.4, so a green run here means the broker
+# and the control-plane database are replicated — not that the instance is.
 #
 # `all` is the one worth running. `verify` on its own reports on a check whose
 # ability to fail has not been demonstrated in this session, which is the exact
@@ -133,6 +145,25 @@ cmd_verify() {
     --kube-context "kind-$ha_cluster" --probe-mqtt \
     || fail "the instance does not hold the replication it declares (see the findings above)"
   say "CHECK A PASSED"
+
+  # CHECK B — the DATABASE half of the same claim (ADR-020 A2.3).
+  #
+  # A separate command rather than more assertions inside `ha verify` because the
+  # two collect from different subsystems entirely: check A talks JetStream, this
+  # talks the Kubernetes API and PostgreSQL. What they share is the discipline —
+  # observed state only, vacuity guards, counts printed whether or not it passed,
+  # and a negative control below.
+  #
+  # --require-synchronous is stated here rather than read from the Cluster spec,
+  # and that is the whole point of the check. Helm accepts an unknown field and
+  # the API server prunes it silently, so a one-character slip in the chart
+  # template produces a Cluster whose spec asks for nothing, three healthy pods,
+  # and asynchronous replication. A spec-derived check reads that spec and agrees.
+  say "CHECK B — asserting the DATABASE replication claim from live PostgreSQL state"
+  "$dcctl" ha verify-db --cluster dc-rdb --require-synchronous \
+    --kube-context "kind-$ha_cluster" \
+    || fail "the relational database does not hold the replication it declares (see the findings above)"
+  say "CHECK B PASSED"
 }
 
 # cmd_control is the check on the check, and it is the reason this script exists
@@ -188,7 +219,27 @@ because those are different results and this exit status cannot tell them apart.
   anything else (a connection error, a missing Secret, a probe failure) means the
       control did not RUN. That is inconclusive, not a pass and not a failure — fix it
       and re-run rather than reading it either way."
-  say "NEGATIVE CONTROL HELD"
+  say "NEGATIVE CONTROL HELD (broker)"
+
+  # The same control for the database half. The control instance's store is a
+  # genuine single-instance CloudNativePG Cluster with no synchronous block —
+  # which is the SUPPORTED non-HA topology, not a broken one (decision D4). That
+  # is what makes it the right subject: it is a real deployment that must fail a
+  # three-instance synchronous claim.
+  #
+  # --instances 3 is load-bearing and easy to leave off. Without it the expected
+  # count is read from the live Cluster spec, so a single-instance store expects
+  # one instance, has one, and PASSES — a negative control that can never hold.
+  # Measured on a probe cluster before this was wired.
+  say "NEGATIVE CONTROL — the same database check, against a store that is NOT replicated"
+  "$dcctl" ha verify-db --cluster dc-rdb --instances 3 --require-synchronous \
+    --kube-context "kind-$control_cluster" --expect-fail \
+    || fail "THE DATABASE NEGATIVE CONTROL DID NOT HOLD, or could not run — READ THE OUTPUT
+ABOVE, because those are different results and this exit status cannot tell them apart.
+The same reading applies as for the broker control above: a PASS where a failure was
+expected means CHECK B proves nothing, while a connection or lookup error means the
+control never ran and the result is inconclusive."
+  say "NEGATIVE CONTROL HELD (database)"
 }
 
 cmd_down() {
@@ -210,9 +261,13 @@ case "${1:-all}" in
     cmd_up
     cmd_verify
     cmd_control
-    say "A0 CHECK A COMPLETE: the instance holds its declared replication, and the
-verifier was shown to reject an instance that does not. This is the evidence the
-HA claim rests on."
+    say "CHECKS A AND B COMPLETE: the instance holds its declared replication in
+BOTH the broker and the relational database, and each verifier was shown to reject
+an instance that does not. This is the evidence the HA claim rests on.
+
+WHAT IS STILL NOT COVERED, so this is not read as more than it is: TimescaleDB
+remains a single-instance StatefulSet until A2.4, so the EVENT store on this
+instance is not replicated and nothing here claims otherwise."
     ;;
   *) fail "unknown command ${1}; try up | verify | control | all | down" ;;
 esac
