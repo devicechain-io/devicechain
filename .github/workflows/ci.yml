@@ -305,6 +305,18 @@ jobs:
       - name: Test
         run: npm test
 
+      # Brand drift gate. `npm run build` already fails if a generated stylesheet
+      # is stale against tokens.json; this catches the other direction — a
+      # consumer that stops importing and hand-declares the brand blue again.
+      # That is not hypothetical: it is how the console, the dashboard and the
+      # marketing site each ended up on a DIFFERENT blue, and a comment saying
+      # "keep this in step" is what failed to stop it.
+      #
+      # The marketing site lives in another repo and is checked by hand with
+      # DC_WEBSITE=... — nothing here can see it.
+      - name: Brand token drift check
+        run: npm run verify -w @devicechain/brand
+
       - name: Build
         run: npm run build
 

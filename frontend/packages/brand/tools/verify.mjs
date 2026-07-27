@@ -68,29 +68,38 @@ function compare(where, label, actual, expected, note) {
   }
 }
 
-/* ── Console: shadcn triples ───────────────────────────────────────────── */
-{
-  const rel = 'frontend/apps/console/src/index.css';
+/* ── shadcn-triple consumers ───────────────────────────────────────────── */
+//
+// BOTH front-end apps, not just the console. Checking only the console was a
+// real hole: apps/dashboard/src/theme.css carries the same token contract (it
+// is what @devicechain/widgets reads, so a dashboard renders identically in
+// either host) and had drifted to the same wrong triple — unnoticed, because
+// nothing looked at it. A gate that covers one of two consumers mostly teaches
+// you to trust it.
+for (const rel of [
+  'frontend/apps/console/src/index.css',
+  'frontend/apps/dashboard/src/theme.css',
+]) {
   const css = read(rel);
   if (!css) {
     console.warn(`skip: ${rel} not found`);
-  } else if (/@import\s+['"]@devicechain\/brand\/css\/shadcn\.css['"]/.test(css)) {
+    continue;
+  }
+  if (/@import\s+['"]@devicechain\/brand\/css\/shadcn\.css['"]/.test(css)) {
     // A MIGRATED consumer declares nothing — it imports. See the docs branch
     // below for why an un-special-cased scan here is worse than useless.
     console.log(`ok: ${rel} imports the generated triples — nothing to compare`);
-  } else {
-    // The :root block is light mode; .dark carries the lifted values.
-    const light = declared(css, 'primary', ':root');
-    const dark = declared(css, 'primary', '.dark');
-    compare(
-      rel,
-      'light --primary',
-      light,
-      hexToShadcnTriple(PRIMARY),
-      `rounded triples do not round-trip: '197 71% 42%' renders #1f8cb7, not ${PRIMARY}`
-    );
-    compare(rel, 'dark --primary', dark, hexToShadcnTriple(BRIGHT));
+    continue;
   }
+  // The :root block is light mode; .dark carries the lifted values.
+  compare(
+    rel,
+    'light --primary',
+    declared(css, 'primary', ':root'),
+    hexToShadcnTriple(PRIMARY),
+    `rounded triples do not round-trip: '197 71% 42%' renders #1f8cb7, not ${PRIMARY}`
+  );
+  compare(rel, 'dark --primary', declared(css, 'primary', '.dark'), hexToShadcnTriple(BRIGHT));
 }
 
 /* ── Docs: Infima hex, base AND the full ramp ──────────────────────────── */

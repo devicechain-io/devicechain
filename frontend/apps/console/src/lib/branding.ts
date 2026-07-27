@@ -22,6 +22,13 @@ import type { TenantBranding } from '@/lib/api/user-management';
 // hexToHslChannels converts "#rrggbb" to the "H S% L%" channel string the tokens
 // expect. Returns null for anything that is not a 6-digit hex (defense in depth —
 // the server already validates, but a bad cached value must never inject CSS).
+//
+// Channels carry ONE DECIMAL, and that is not cosmetic. Rounding to integers does
+// not round-trip: the platform's own #208cb7 rounds to `197 71% 42%`, which renders
+// #1f8cb7 — a different colour from the one the tenant typed. It is the exact
+// defect @devicechain/brand was built to remove from OUR palette, and it applied
+// just as much to a tenant's. Kept deliberately in step with the rounding in
+// frontend/packages/brand/tools/color.mjs.
 export function hexToHslChannels(hex: string): string | null {
   const m = /^#([0-9a-fA-F]{6})$/.exec(hex.trim());
   if (!m) return null;
@@ -53,10 +60,8 @@ export function hexToHslChannels(hex: string): string | null {
     }
     h /= 6;
   }
-  const H = Math.round(h * 360);
-  const S = Math.round(s * 100);
-  const L = Math.round(l * 100);
-  return `${H} ${S}% ${L}%`;
+  const round1 = (n: number) => Math.round(n * 10) / 10;
+  return `${round1(h * 360)} ${round1(s * 100)}% ${round1(l * 100)}%`;
 }
 
 // The CSS variables a given branding field drives. Multiple vars per field so one

@@ -6,15 +6,23 @@
  * channels, e.g. `--card: 0 0% 100%`). Mirrors the console's token set so a
  * dashboard renders identically in either host. `:root` is light; `.dark` (set on
  * <html>) is dark — the widgets' chart-theme observer watches <html> for the swap.
+ *
+ * "Renders identically in either host" is the whole point of this file, and a
+ * hand-copied brand blue is precisely how that stops being true — this file had
+ * already drifted to a triple that renders #1f8cb7 rather than the brandmark's
+ * #208cb7. The brand-derived tokens come from the same generated stylesheet the
+ * console imports; do not re-declare them below.
+ *
+ * No `layer()` here, unlike the console: nothing in this file is layered, so the
+ * import and the block below share the same origin and source order decides.
  */
+@import '@devicechain/brand/css/shadcn.css';
 
 :root {
   --background: 0 0% 100%;
   --foreground: 240 10% 3.9%;
   --card: 0 0% 100%;
   --card-foreground: 240 10% 3.9%;
-  --primary: 197 71% 42%;
-  --primary-foreground: 0 0% 100%;
   --muted: 240 4.8% 95.9%;
   --muted-foreground: 240 3.8% 46.1%;
   --destructive: 0 72.2% 50.6%;
@@ -31,8 +39,6 @@
   --foreground: 210 16% 96%;
   --card: 210 24% 11%;
   --card-foreground: 210 16% 96%;
-  --primary: 197 71% 49%;
-  --primary-foreground: 0 0% 100%;
   --muted: 210 20% 16%;
   --muted-foreground: 210 12% 66%;
   --destructive: 0 72.2% 50.6%;

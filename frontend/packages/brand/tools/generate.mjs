@@ -40,11 +40,33 @@ const HEADER = (what) =>
 
 function brandCss() {
   const { core, surface, accents, type } = tokens;
+  // Notes are prose and some run long. Wrap them rather than emitting a 140-col
+  // line: this is the one generated file that gets COPIED INTO ANOTHER REPO and
+  // read there by someone with no access to tokens.json, so the comment is the
+  // only explanation they get.
+  const wrap = (text, indent) => {
+    const width = 76 - indent.length;
+    const lines = [];
+    let cur = '';
+    for (const w of text.split(/\s+/)) {
+      if (cur && (cur + ' ' + w).length > width) {
+        lines.push(cur);
+        cur = w;
+      } else cur = cur ? cur + ' ' + w : w;
+    }
+    if (cur) lines.push(cur);
+    return lines.map((l, i) => `${indent}${i === 0 ? '/* ' : '   '}${l}`).join('\n') + ' */\n';
+  };
   const line = (name, value, note) =>
-    (note ? `  /* ${note} */\n` : '') + `  --${name}: ${value};\n`;
+    (note ? wrap(note, '  ') : '') + `  --${name}: ${value};\n`;
   let out = HEADER(
     'Marketing + static-site vocabulary. Consumed by the public website and by\n' +
-      ' * anything with no bundler: plain custom properties, hex values, no build step.'
+      ' * anything with no bundler: plain custom properties, hex values, no build step.\n' +
+      ' *\n' +
+      ' * This is the one output that is COPIED INTO ANOTHER REPOSITORY, so it names\n' +
+      ' * its source in full: frontend/packages/brand/tokens.json in the devicechain\n' +
+      ' * monorepo. Editing the copy is how the marketing site drifted onto a blue\n' +
+      ' * neither the console nor the docs used. Change tokens.json and re-sync.'
   );
   out += ':root {\n';
   out += '  /* Core brand — sampled from the brandmark (branding/logo.svg). */\n';

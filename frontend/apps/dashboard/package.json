@@ -11,6 +11,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@devicechain/brand": "*",
     "@devicechain/client": "*",
     "@devicechain/dashboards": "*",
     "@devicechain/widgets": "*",
