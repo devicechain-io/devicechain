@@ -154,6 +154,21 @@ auth) are kept in a pluggable **secret store** — envelope-encrypted in Postgre
 under an instance root key by default, with external managers (Vault, cloud KMS)
 as drop-in backends — and are referenced by handle rather than stored in the clear.
 
+That root key lives in the instance's Kubernetes Secret, which means it lives in
+**etcd**, and no database backup contains etcd. So `dcctl bootstrap` writes an
+encrypted **escrow artifact** for it by default, sealed under a passphrase you
+choose, and `dcctl secrets escrow verify` checks it still matches the running key
+without needing that passphrase. Without it, a database backup restored into a new
+cluster rehydrates secrets that nothing can decrypt — with no error at restore
+time. See [Disaster Recovery](docs/docs/deployment/disaster-recovery.md).
+
+**High availability, stated precisely.** `dcctl bootstrap --ha` runs the message
+broker as a 3-node RAFT cluster with every JetStream stream and KV bucket
+replicated across it, and `dcctl ha verify` asserts that from live broker state
+rather than from the rendered configuration. It replicates the **messaging tier
+only** — PostgreSQL and TimescaleDB remain single-instance today, and database HA
+is in progress.
+
 ## Running locally
 
 `dcctl` — the platform CLI — bootstraps a complete instance with one command. It
@@ -273,6 +288,7 @@ backend/    Go monorepo (Go Workspaces)
               ai-inference, mcp
   k8s/        Kubernetes operator (controller-runtime)
   cli/        dcctl — instance bootstrap / destroy and admin tooling
+  tools/      maintainer-only Go tools (schema differ, disaster-recovery drill)
 frontend/   npm workspace — apps/console (React + TypeScript management console)
             + packages (client SDK, dashboard runtime, embeddable widgets)
 deploy/     Helm chart + OpenTofu modules

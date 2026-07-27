@@ -50,6 +50,11 @@ backend/
                               under the caller's own token — no service token, confused-deputy red line (ADR-047)
   k8s/                        controller-runtime operator (Instance CRD; tenants are control-plane DB rows, ADR-033)
   cli/                        dcctl — bootstrap/destroy + admin tooling
+  tools/                      maintainer-only Go tools, in the workspace but not shipped:
+    migrationdiff/            golden-schema differ behind `hack/migration-diff.sh` (CI gate)
+    drdrill/                  the ADR-028 restore drill's measuring instrument — seeds a secret
+                              through the real API, then proves it still decrypts after a
+                              restore into a cluster rebuilt from a root-key escrow artifact
 deploy/                       Helm chart (deploy/helm) + OpenTofu modules (deploy/opentofu)
 frontend/                     npm workspace (React 19 + Vite + Tailwind + shadcn/ui, client-preset codegen):
                               apps/console (authoring — canvas editor, versioning, synthetic preview, slot
@@ -57,7 +62,10 @@ frontend/                     npm workspace (React 19 + Vite + Tailwind + shadcn
                               external embedder with its own login) + packages/{client,dashboards,widgets}
                               (SDK, dashboard runtime + slot/binding-manifest model, ECharts widgets; ADR-039)
 docs/                         Docusaurus site
-hack/                         license header + dev scripts
+hack/                         license headers, dev scripts, and the two VALIDATION RIGS — `ha-rig.sh`
+                              (ADR-020 messaging HA) and `dr-rig.sh` (ADR-028 root-key restore).
+                              Both are manual, both need a real cluster, and both carry a NEGATIVE
+                              CONTROL: a check is worth nothing until it has been shown to fail
 _legacy/                      archived pre-migration SiteWhere code — NOT in the workspace, not built; do not edit
 ```
 
