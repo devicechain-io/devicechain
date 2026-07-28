@@ -145,11 +145,46 @@ accepts() {
   fi
   # Absence of that one string is NOT evidence of acceptance. A syntax error, an
   # unloadable module, a missing provider or the wrong $TF binary all produce a
-  # different diagnostic — and the earlier version of this function read every one
-  # of them as "supported topology accepted", printing green while the
-  # configuration could not be parsed at all. Demand a real evaluated value.
-  if grep -q "^Error:" <<<"$out" || [[ -z "$(tail -1 <<<"$out")" ]]; then
-    echo "FAIL  $var=$value produced no value; the configuration did not evaluate:" >&2
+  # different diagnostic — and the FIRST version of this function read every one of
+  # them as "supported topology accepted", printing green while the configuration
+  # could not be parsed at all. Demand a real evaluated value.
+  #
+  # 🔴 THE SECOND VERSION WAS ALSO DEAD, AND FOR A DUMBER REASON: it grepped
+  # `^Error:` and tested for an empty last line, and neither can ever match.
+  # Terraform/OpenTofu box-draw their diagnostics, so the line reads
+  # `│ Error: ...` behind an ANSI colour prefix — `^Error:` matches nothing — and
+  # the last line of a failed run is `\e[0m\e[0m`, which is not empty. Measured:
+  # against a root that does not parse, `grep -c '^Error:'` is 0 and the guard
+  # never fired, so 19 green `accepted` lines printed for a configuration
+  # Terraform could not load. Never assert on a diagnostic's shape without having
+  # watched the assertion fail on a real one.
+  #
+  # Two signals now, because neither covers the other — both measured against the
+  # real binary with an expression on stdin:
+  #
+  #   situation                          exit   last line   "Error:" (ANSI-stripped)
+  #   valid config, value accepted        0     the value   no
+  #   valid config, value rejected        0     the value   yes   (caught above)
+  #   root does not parse                 1     ANSI reset  yes
+  #   undeclared variable                 1     ANSI reset  yes
+  #   validation condition won't compile  0     the value   yes
+  #
+  # The last row is why the exit status alone is not enough, and it is the
+  # dangerous one: a validation block whose condition does not compile is
+  # SILENTLY IGNORED — console exits 0 and happily prints the value — so the
+  # variable has no guard at all while this function reports it accepted.
+  local plain
+  plain="$(sed 's/\x1b\[[0-9;]*m//g' <<<"$out")"
+  if ((tf_console_status != 0)) || grep -q "Error:" <<<"$plain"; then
+    echo "FAIL  $var=$value did not evaluate (exit $tf_console_status); the configuration" \
+      "did not load, or its validation block does not compile:" >&2
+    sed 's/^/        /' <<<"$out" >&2
+    failures=$((failures + 1))
+    return
+  fi
+  # The value itself, on the stripped output — a bare ANSI reset is not a value.
+  if [[ -z "$(tail -1 <<<"$plain")" ]]; then
+    echo "FAIL  $var=$value produced no value:" >&2
     sed 's/^/        /' <<<"$out" >&2
     failures=$((failures + 1))
     return
