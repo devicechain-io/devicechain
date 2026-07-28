@@ -440,11 +440,20 @@ evaluates 'tostring(null)' 'local.backup_credentials == null ? null : "set"' -va
 # 🔴 WHAT THIS CANNOT DO, stated plainly for the same reason the ha=true +
 # cluster_replicas=1 block above states it: the REFUSALS live in
 # terraform_data.restore_guard preconditions, which run during a PLAN, and no
-# per-PR gate performs one. So what is asserted below is that the root still
-# DETECTS each condition — the exact expressions the preconditions evaluate —
-# not that it refuses them. If one of these flips, the corresponding precondition
-# is guarding something that can no longer happen and an operator restoring an
-# instance would quietly get the broken shape instead of the message.
+# per-PR gate performs one. NONE of the four is checked here or anywhere else.
+#
+# An earlier version of this header said the section asserts "the root still
+# DETECTS each condition — the exact expressions the preconditions evaluate." That
+# was false, and provably so: deleting terraform_data.restore_guard in full left
+# every assertion below green. Restating a precondition's expression and asking
+# `tofu console` to evaluate it does not reach the precondition; it re-runs the
+# operators inside it. Those five assertions are gone — see the note further down.
+#
+# What is left is what this tool can honestly establish without a plan: that the
+# variable validations refuse what they claim to, and that the LOCALS the module
+# blocks are wired from take the shapes the chart expects. The refusals stay
+# unverified until hack/dr-rig.sh drives one against a live cluster and is turned
+# away.
 
 # A target with nothing to restore is a variable validation, so it IS refused in
 # CI. It matters because it is silent otherwise: recovery would replay the whole
@@ -476,23 +485,40 @@ evaluates '"2026-07-28 03:00:00+00"' 'local.rdb_restore.recovery_target["targetT
   -var restore_rdb_from=dc-rdb -var 'restore_rdb_target_time=2026-07-28 03:00:00+00'
 evaluates 'tomap({})' 'local.rdb_restore.recovery_target' -var restore_rdb_from=dc-rdb
 
-# THE WEDGE CONDITION — the precondition's own expression. A restored store that
-# archives back over the path it recovered from hangs in `Setting up primary`,
-# during a restore, and does not resume without editing the Cluster in place.
-# Both the collision AND the unset case must be detected: unset means "use the
-# cluster's own name", which is the same collision written differently.
-evaluates false 'var.backup_server_name_rdb != "" && var.backup_server_name_rdb != var.restore_rdb_from' -var restore_rdb_from=dc-rdb
-evaluates false 'var.backup_server_name_rdb != "" && var.backup_server_name_rdb != var.restore_rdb_from' -var restore_rdb_from=dc-rdb -var backup_server_name_rdb=dc-rdb
-evaluates true 'var.backup_server_name_rdb != "" && var.backup_server_name_rdb != var.restore_rdb_from' -var restore_rdb_from=dc-rdb -var backup_server_name_rdb=dc-rdb-restored
-evaluates false 'var.backup_server_name_tsdb != "" && var.backup_server_name_tsdb != var.restore_tsdb_from' -var restore_tsdb_from=dc-tsdb
-evaluates true 'var.backup_server_name_tsdb != "" && var.backup_server_name_tsdb != var.restore_tsdb_from' -var restore_tsdb_from=dc-tsdb -var backup_server_name_tsdb=dc-tsdb-restored
+# 🔴 THE WEDGE CONDITION IS NOT CHECKED HERE, AND FIVE ASSERTIONS THAT CLAIMED TO
+# CHECK IT HAVE BEEN DELETED.
+#
+# They restated the precondition's own expression and asked `tofu console` to
+# evaluate it:
+#
+#   evaluates false 'var.backup_server_name_rdb != "" && \
+#     var.backup_server_name_rdb != var.restore_rdb_from' -var restore_rdb_from=dc-rdb
+#
+# That references nothing this root declares beyond two variables, so it tests
+# that OpenTofu's `!=` operator works. Measured, not argued: deleting
+# `terraform_data.restore_guard` in full -- all four preconditions -- left the
+# whole script printing "All OpenTofu variable validations behave as declared."
+# The header above once claimed this section asserts "the root still DETECTS each
+# condition." It did not, and a check that passes against the feature's absence is
+# worse than no check, because it is counted.
+#
+# A precondition is only evaluated during a PLAN, and nothing in CI plans this
+# root (it needs credentials and a cluster). So the four preconditions at
+# main.tf's restore_guard are UNVERIFIED until hack/dr-rig.sh runs one live and
+# is shown to be refused. What survives below is what `tofu console` can honestly
+# reach: variable validations, and the locals the module blocks are wired from.
 
 # Restoring with backups off: there is no ObjectStore to read from, and the
 # cluster would come up EMPTY rather than failing — which during a rebuild looks
 # exactly like a restore that found nothing to bring back.
 evaluates false 'local.backups_on' -var restore_rdb_from=dc-rdb -var enable_database_backups=false
 
-# NOT ASSERTED HERE: the `database_restored_from` output dcctl reads back.
+# NOT ASSERTED HERE: the `database_restored_from` output — which, to be accurate
+# about what it is, NOTHING currently reads. dcctl consumes
+# database_backups_enabled and database_backup_survives_cluster_loss; this one was
+# written for the "what did the infrastructure do vs what did I ask for" question
+# and never wired to a consumer, so dcctl's own "recovering from archive %q" line
+# is printed from argv — the very thing the output exists to stop.
 # `tofu console` cannot address `output.*` at all — outputs exist in state, after
 # an apply — and the only way to check one from here is to restate its expression,
 # which is a second copy that stops matching the day the first one changes. The

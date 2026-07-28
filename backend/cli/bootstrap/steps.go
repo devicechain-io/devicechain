@@ -129,14 +129,29 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// a path holding no base backup — silently, on a green run. See
 	// resolveArchivePaths.
 	//
-	// The lookup is skipped under --dry-run for the same reason as the one above: a
-	// dry run deploys nothing, so the derived path it prints is a plan, not a change.
+	// 🔴 DONE UNDER --dry-run TOO, unlike the credential lookup above. That one is
+	// skipped because a dry run mints throwaway values it will never deploy; this
+	// one is a READ, and a dry run that skips it predicts the OPPOSITE of what the
+	// real run does. Both consumers were wrong without it: the "this restore will
+	// not run" warning — the single most valuable thing a rehearsal could surface —
+	// never fired, and a flagless dry run against an already-restored instance
+	// showed its archive path being REMOVED, a plan alarming enough to invite an
+	// operator to "fix" it.
+	//
+	// Best-effort here and fail-closed on a real run, which is the one asymmetry
+	// that is right: a dry run is often aimed at a cluster that does not exist yet,
+	// and failing it on an unreachable API server would break the rehearsal for the
+	// case it serves best. Acting on a wrong answer costs nothing when nothing is
+	// applied.
 	var live liveArchiveState
-	if !st.DryRun {
-		live, err = readLiveArchiveState(ctx, st.KubeContext)
-		if err != nil {
-			return fail("reading the database archive state", err)
-		}
+	live, err = readLiveArchiveState(ctx, st.KubeContext)
+	switch {
+	case err != nil && !st.DryRun:
+		return fail("reading the database archive state", err)
+	case err != nil:
+		live = liveArchiveState{}
+		notes = append(notes, fmt.Sprintf(
+			"could not read the database archive state (%v); the plan below assumes a fresh cluster", err))
 	}
 	paths := resolveArchivePaths(live, st.Restore, time.Now().UTC())
 	st.Values["backupServerNameRdb"] = paths.Rdb

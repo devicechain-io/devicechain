@@ -420,10 +420,13 @@ spec:
     🔴 postInitTemplateSQL does NOT run on this path, and that is correct rather
     than a gap: a physical restore brings template1 back with everything it
     carried, so the TimescaleDB extension arrives WITH the data instead of being
-    re-declared over it. But the property is inherited rather than asserted, and
-    an inherited property is one nobody notices losing -- so the restore drill in
-    hack/dr-rig.sh queries a hypertable after recovery rather than trusting this
-    comment.
+    re-declared over it.
+
+    🔴 NOTHING ASSERTS THIS. It is inherited from how physical recovery works,
+    not measured, and an earlier version of this comment claimed the restore
+    drill checked it -- the drill contains no such check and did not then. Read
+    it as a belief until hack/dr-rig.sh queries a hypertable after a recovery
+    and finds the extension and the data both present.
     */}}
     recovery:
       # Must match an externalClusters entry by name. See the block below for
@@ -500,9 +503,13 @@ spec:
   documentation says the ObjectStore must exist before recovery begins. In
   practice the gap is milliseconds and the operator has to create PVCs and
   schedule a job before it can ask the plugin for anything, so the ObjectStore
-  is there by the time it matters. "In practice" is not a guarantee, which is
-  why the restore drill builds a recovery release from nothing and watches it
-  reach a primary rather than assuming this is fine.
+  is there by the time it matters.
+
+  🔴 "In practice" is not a guarantee, and it is ALL that is behind this today:
+  no check anywhere builds a recovery release from nothing and watches it reach
+  a primary. An earlier version of this comment said the restore drill did.
+  It does not. Until it does, the ordering here rests on a race being wide
+  enough rather than on it being impossible.
   */}}
   externalClusters:
     - name: {{ $restore.sourceServerName }}

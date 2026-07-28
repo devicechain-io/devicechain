@@ -37,6 +37,10 @@ type RestoreFlags struct {
 	// destination — see DatabaseBackupsEnabled. Passed in rather than recomputed so
 	// there is one derivation of it in the CLI.
 	BackupsEnabled bool
+	// RootKeyRestored reports whether --restore-root-key is bringing the instance's
+	// secret-store KEK back from an escrow artifact. Restoring the RELATIONAL store
+	// without it is a silent, permanent data loss — see ResolveRestorePlan.
+	RootKeyRestored bool
 }
 
 // RestorePlan is the settled database-restore intent for one bootstrap run: which
@@ -105,6 +109,38 @@ func ResolveRestorePlan(f RestoreFlags) (RestorePlan, error) {
 		}
 	}
 
+	// A recovery target is a moment, and a moment with no timezone is a different
+	// moment on a different server.
+	//
+	// 🔴 THIS IS THE ONE THAT SUCCEEDS AND IS WRONG. PostgreSQL accepts
+	// "2026-07-27 13:59:00" and interprets it in the RECOVERING server's TimeZone,
+	// so a target meant as UTC silently becomes a target hours away — and recovery
+	// stops there, reports success, and hands back a database rewound to the wrong
+	// instant. Everything else on this path fails loudly; this one does not, and
+	// the whole reason an operator reaches for a target is that they know exactly
+	// which moment they need to stop before.
+	//
+	// RFC3339 is narrower than the OpenTofu variable accepts, deliberately: the var
+	// is a general lever for someone driving OpenTofu directly, and this is the
+	// operator surface, where an unambiguous instant is worth more than a permissive
+	// grammar.
+	for _, c := range []struct{ target, flag string }{
+		{plan.RdbTargetTime, "--restore-rdb-at"},
+		{plan.TsdbTargetTime, "--restore-tsdb-at"},
+	} {
+		if c.target == "" {
+			continue
+		}
+		if _, err := time.Parse(time.RFC3339, c.target); err != nil {
+			return RestorePlan{}, fmt.Errorf(
+				"%s %q is not an RFC3339 timestamp. It needs an explicit offset — "+
+					"2026-07-27T13:59:00Z, or 2026-07-27T09:59:00-04:00. Without one PostgreSQL "+
+					"reads it in the recovering server's own timezone, and recovery stops at a "+
+					"different moment than you named and reports success",
+				c.flag, c.target)
+		}
+	}
+
 	// Restoring needs the Barman Cloud plugin, and the flags that switch the backup
 	// destination off switch the RESTORE path off with it — the same plugin reads
 	// the archive that writes it. Without this the run proceeds, OpenTofu refuses at
@@ -115,6 +151,35 @@ func ResolveRestorePlan(f RestoreFlags) (RestorePlan, error) {
 				"run disables it: --no-cnpg skips the CloudNativePG operator the plugin extends, " +
 				"and --compact --no-tls drops cert-manager, which the plugin needs for its own " +
 				"Issuer and Certificates. Restore with neither (--compact WITH TLS keeps backups)")
+	}
+
+	// 🔴 A RESTORED RELATIONAL STORE IS UNREADABLE UNDER A FRESH ROOT KEY.
+	//
+	// Every secret the platform holds — connector credentials, SMTP passwords, AI
+	// provider key handles — is a per-secret DEK wrapped by the instance's
+	// secret-store root key. The ciphertext lives in the relational store and comes
+	// back with it; the key lives in a Kubernetes Secret, in etcd, which is in no
+	// backup the platform takes. Recovering the database without --restore-root-key
+	// mints a NEW key, and every one of those secrets becomes permanently
+	// undecryptable — on a bootstrap that reports success, with the loss surfacing
+	// later as connectors and notifications failing at first use, detached from the
+	// run that caused it.
+	//
+	// The flag help said "pair with --restore-root-key" and nothing enforced it,
+	// which is the same weight as a comment. It is knowable from argv, so it is
+	// refused from argv.
+	//
+	// The EVENT store is deliberately not covered: telemetry carries no wrapped
+	// secrets, so recovering it alone under a fresh key loses nothing.
+	if plan.RdbFrom != "" && !f.RootKeyRestored {
+		return RestorePlan{}, fmt.Errorf(
+			"--restore-rdb-from recovers the relational store, which holds every secret this "+
+				"instance has stored — each one encrypted under a secret-store root key that "+
+				"lives in the cluster and is in NO database backup. Without --restore-root-key "+
+				"this run mints a fresh key, and every restored secret becomes permanently "+
+				"unreadable on a bootstrap that reports success. Re-run with --restore-root-key "+
+				"<artifact>, or restore only the event store with --restore-tsdb-from %q",
+			plan.TsdbFrom)
 	}
 
 	return plan, nil
@@ -275,15 +340,31 @@ func resolveArchivePaths(live liveArchiveState, plan RestorePlan, now time.Time)
 		{live.Tsdb, plan.TsdbFrom, &out.Tsdb, TsdbClusterName},
 	} {
 		switch {
-		case s.from == "":
-			// No restore: whatever it is archiving under now, including "".
+		case s.live.Exists:
+			// 🔴 A CLUSTER THAT EXISTS KEEPS ITS PATH, unconditionally — including the
+			// empty one, which means "archiving under its own name". There is no case
+			// in which moving it is right: a restore cannot run against an existing
+			// Cluster at all (`spec.bootstrap` is CREATE-only), so the only thing a
+			// new path could do here is retarget a LIVE archiver.
+			//
+			// This branch keyed on Path rather than Exists in its first version, and
+			// the difference is the whole defect: an ordinary install renders no
+			// serverName, so Path is "" while the cluster is alive and archiving. A
+			// `--restore-rdb-from dc-rdb` against it — the obvious wrong guess, and
+			// what a half-followed runbook produces — fell through to the derived
+			// branch and emitted a fresh path for a running instance. The archive with
+			// the base backup would stop receiving WAL, and the prefix now receiving
+			// WAL would have no base backup until the next scheduled one: a window,
+			// up to a day wide, in which the database is restorable to no point at
+			// all. Green apply, no error, on the run that was trying to recover.
 			*s.target = s.live.Path
-		case s.live.Path != "" && s.live.Path != s.from:
-			// A restored instance being re-run, or re-restored. It already owns a path
-			// that is not the source; keep it.
-			*s.target = s.live.Path
-		default:
+		case s.from != "":
+			// The real restore: nothing is there, so this Cluster is about to be
+			// CREATED and needs a path of its own to archive into.
 			*s.target = RestoredArchivePath(s.from, now)
+		default:
+			// A fresh ordinary install. The Cluster's own name, i.e. no var at all.
+			*s.target = ""
 		}
 		if s.from != "" && s.live.Exists {
 			out.AlreadyLive = append(out.AlreadyLive, s.cluster)

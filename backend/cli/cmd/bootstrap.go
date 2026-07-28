@@ -330,6 +330,10 @@ var bootstrapCmd = &cobra.Command{
 			TsdbFrom:       bootstrapRestoreTsdbFrom,
 			TsdbTargetTime: bootstrapRestoreTsdbAt,
 			BackupsEnabled: bootstrap.DatabaseBackupsEnabled(bootstrapNoCNPG, bootstrapCompact, bootstrapNoTLS),
+			// Read off the SETTLED escrow plan rather than the raw flag: that is the
+			// value stepRenderConfig actually seeds the instance's root key from, so
+			// this refusal and the thing it protects cannot disagree.
+			RootKeyRestored: escrowPlan.RestoredRootKey != "",
 		})
 		if err != nil {
 			return err
