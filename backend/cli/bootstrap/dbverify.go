@@ -46,6 +46,26 @@ type DbVerifyOptions struct {
 	// fully asynchronous replication. Derived from the spec, this check would
 	// read that spec, conclude synchronous was never wanted, and pass.
 	RequireSynchronous bool
+	// Durability is the dataDurability the store is expected to declare, checked
+	// only when RequireSynchronous is set. Empty means "required".
+	//
+	// 🔴 This is a per-store expectation and must not be defaulted away. The
+	// relational store runs "required" because it holds the audit journal and a
+	// stall there is a loud recoverable failure. The event store runs
+	// "preferred", so a lost standby degrades it to asynchronous replication
+	// instead of applying backpressure to ingest. Hardcoding "required" — which
+	// this did while the relational store was the only Cluster — reports a
+	// correctly-configured event store as broken, and an assertion that is red on
+	// a working system is one that gets switched off.
+	Durability string
+	// TimescaleJobs turns on the background-job health checks (ADR-020 A2.4).
+	//
+	// Only meaningful against the event store: continuous aggregates, retention
+	// and compression are all TimescaleDB background jobs, and a database whose
+	// scheduler has stopped looks completely healthy from every other angle in
+	// this report — right instance count, right replication, right pod spread,
+	// and silently no longer aggregating.
+	TimescaleJobs bool
 	// Settle is how long to keep re-checking while assertions fail — the window
 	// in which a failover is completing or a standby is rejoining.
 	Settle time.Duration
@@ -73,6 +93,10 @@ type DbReport struct {
 	// Skipped names each axis that could not be exercised, and why. An assertion
 	// that did not run is not one that passed.
 	Skipped []string
+	// TimescaleJobsChecked records that the background-job axis was requested, so
+	// the report prints its counts. Without it a run with the checks OFF and a run
+	// that found zero jobs print the same thing.
+	TimescaleJobsChecked bool
 	// Checked counts what was actually examined. Printed whether or not the run
 	// passed: a green run over zero objects is the exact failure this workstream
 	// exists to remove, and it is indistinguishable from a real pass unless the
@@ -87,6 +111,11 @@ type DbCounts struct {
 	Nodes          int
 	Standbys       int
 	SyncStandbys   int
+	// TimescaleDatabases counts the databases found carrying the extension, and
+	// TimescaleJobs the background jobs examined across them. Both are printed
+	// because "no job is stuck" over zero jobs and over forty are the same word.
+	TimescaleDatabases int
+	TimescaleJobs      int
 }
 
 // OK reports whether every assertion held.
@@ -101,6 +130,10 @@ func (r DbReport) Format() string {
 		"%d standby(s) of which %d synchronous\n",
 		r.Checked.ReadyInstances, r.Checked.Pods, r.Checked.Nodes,
 		r.Checked.Standbys, r.Checked.SyncStandbys)
+	if r.TimescaleJobsChecked {
+		fmt.Fprintf(&b, "            %d background job(s) across %d TimescaleDB database(s)\n",
+			r.Checked.TimescaleJobs, r.Checked.TimescaleDatabases)
+	}
 	for _, s := range r.Skipped {
 		fmt.Fprintf(&b, "  SKIPPED: %s\n", s)
 	}
@@ -283,15 +316,19 @@ func collectAndVerifyDatabase(
 	syncNumber, _, _ := unstructured.NestedInt64(cl.Object,
 		"spec", "postgresql", "synchronous", "number")
 	if opts.RequireSynchronous {
+		wantDurability := opts.Durability
+		if wantDurability == "" {
+			wantDurability = "required"
+		}
 		switch {
 		case !hasSync:
 			add("B3", opts.ClusterName, "the Cluster spec carries NO synchronous "+
 				"replication block, so this store is replicating asynchronously. If the "+
 				"chart appears to set one, note that Helm accepts an unknown field and "+
 				"the API server prunes it silently — check the field NAMES")
-		case durability != "required":
-			add("B3", opts.ClusterName, "dataDurability is %q, not \"required\"; writes "+
-				"are not held for a standby", durability)
+		case durability != wantDurability:
+			add("B3", opts.ClusterName, "dataDurability is %q, expected %q for this "+
+				"store", durability, wantDurability)
 		}
 	}
 
@@ -431,14 +468,28 @@ func verifyPostgresState(
 	// and B8 would all silently vanish on a restored cluster and CHECK B would
 	// pass with `--require-synchronous` set, because only B3 reads the spec.
 	skip := func(why string) {
+		demanded := false
 		if opts.RequireSynchronous {
 			add("B6", opts.ClusterName, "synchronous replication was REQUIRED but could "+
 				"not be verified against the running server: %s. This is a finding rather "+
 				"than a skipped check because a report that examined nothing must not be "+
 				"green", why)
-			return
+			demanded = true
 		}
-		rep.Skipped = append(rep.Skipped, "the PostgreSQL state checks ("+why+")")
+		if opts.TimescaleJobs {
+			// Same rule, same reason. The background-job checks reach the server
+			// through this identical path, so every way of skipping out of it takes
+			// them with it — including the restored-cluster case, which is exactly
+			// where "have the aggregates resumed?" is the question being asked.
+			add("B9", opts.ClusterName, "background-job health was REQUESTED but could "+
+				"not be verified against the running server: %s. Reported as a finding "+
+				"because a restored cluster is precisely where this axis matters and "+
+				"precisely where it would otherwise vanish", why)
+			demanded = true
+		}
+		if !demanded {
+			rep.Skipped = append(rep.Skipped, "the PostgreSQL state checks ("+why+")")
+		}
 	}
 
 	primary, _, _ := unstructured.NestedString(cl.Object, "status", "currentPrimary")
@@ -544,5 +595,211 @@ func verifyPostgresState(
 				"being held at all", sync, need)
 		}
 	}
+
+	if opts.TimescaleJobs {
+		rep.TimescaleJobsChecked = true
+		if err := verifyTimescaleJobs(ctx, local, user, pass, opts, rep, add); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// timescaleTelemetryJob is excluded from the job-health checks below, and the
+// reason is measured rather than defensive.
+//
+// The Cluster sets `timescaledb.telemetry_level = off`. That stops the phone-home
+// but does NOT remove the job: measured on 2.28.3, `policy_telemetry` remains
+// present with `scheduled = true` while never being assigned a `next_start` and
+// never running. So on a correctly configured cluster it sits permanently in the
+// exact state B11 exists to catch.
+//
+// The Cluster also deletes it at initdb for this reason, which handles every
+// cluster built by the current configuration. This exclusion covers the ones
+// that are not: databases created before that change, and clusters arriving via
+// `bootstrap.recovery`, where postInitTemplateSQL does not run and template1
+// comes back from the backup as it was.
+const timescaleTelemetryJob = "policy_telemetry"
+
+// verifyTimescaleJobs asserts that TimescaleDB's background scheduler is alive
+// (ADR-020 A2.4).
+//
+// This is the highest-value check in the slice, because the failure it catches
+// is invisible to every other one. Continuous aggregates, retention and
+// compression are all background jobs. If the scheduler stops, the database
+// stays up, accepts reads and writes, replicates, fails over, passes B1 through
+// B8 — and quietly stops aggregating. The symptom surfaces days later as
+// dashboards that have gone flat, and by then the window it should have
+// aggregated is a manual backfill.
+//
+// Upstream timescale#9360 is the named instance: after a failover, jobs can
+// stick at `next_start = -infinity`, which is a value the scheduler will never
+// reach. Our operand image ships 2.28.3, above the 2.26.4 fix, so this asserts a
+// property we believe holds rather than working around a known break — which is
+// the right time to add an assertion, not after it breaks.
+//
+// 🔴 Jobs are PER-DATABASE, so this cannot just look at the one it connected to.
+// Every DeviceChain service creates its own database at startup, so the real
+// hypertables and the aggregate refresh job live in a database named after the
+// instance, and the bootstrap database is very likely empty of them. Checking
+// only the connection database would examine the one place the answer is
+// guaranteed to be boring.
+func verifyTimescaleJobs(
+	ctx context.Context,
+	localPort int,
+	user, pass string,
+	opts DbVerifyOptions,
+	rep *DbReport,
+	add func(check, object, format string, args ...any),
+) error {
+	connect := func(db string) (*pgx.Conn, error) {
+		return pgx.Connect(ctx, fmt.Sprintf("postgres://%s:%s@127.0.0.1:%d/%s?sslmode=disable",
+			user, pass, localPort, db))
+	}
+
+	admin, err := connect("postgres")
+	if err != nil {
+		return fmt.Errorf("connecting to enumerate databases: %w", err)
+	}
+	rows, err := admin.Query(ctx,
+		`select datname from pg_database
+		  where datallowconn and not datistemplate and datname <> 'postgres'
+		  order by datname`)
+	if err != nil {
+		admin.Close(ctx)
+		return fmt.Errorf("listing databases: %w", err)
+	}
+	var databases []string
+	for rows.Next() {
+		var d string
+		if err := rows.Scan(&d); err != nil {
+			rows.Close()
+			admin.Close(ctx)
+			return fmt.Errorf("scanning database list: %w", err)
+		}
+		databases = append(databases, d)
+	}
+	rows.Close()
+	admin.Close(ctx)
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("listing databases: %w", err)
+	}
+
+	for _, db := range databases {
+		conn, err := connect(db)
+		if err != nil {
+			// A database the app role cannot open is not this check's business.
+			rep.Skipped = append(rep.Skipped,
+				fmt.Sprintf("the background-job checks for database %q (%v)", db, err))
+			continue
+		}
+		err = verifyTimescaleJobsIn(ctx, conn, db, opts, rep, add)
+		conn.Close(ctx)
+		if err != nil {
+			return err
+		}
+	}
+
+	// 🔴 VACUITY. Everything above passes trivially when nothing carries the
+	// extension, and "no databases have TimescaleDB" is not a healthy event
+	// store — it is coupling (b) broken. The extension reaches each database by
+	// being present in template1 when the app creates it, and nothing in the
+	// codebase ever issues CREATE EXTENSION, so if template1 lost it every new
+	// database silently comes up without hypertable support.
+	if rep.Checked.TimescaleDatabases == 0 {
+		add("B9", opts.ClusterName, "no database on this server carries the timescaledb "+
+			"extension, so the background-job checks examined nothing. Every DeviceChain "+
+			"database inherits the extension from template1 at CREATE DATABASE time and "+
+			"nothing in the platform ever issues CREATE EXTENSION, so this means new "+
+			"databases are coming up without hypertable support")
+	}
+	return nil
+}
+
+// verifyTimescaleJobsIn runs the job assertions against one database.
+func verifyTimescaleJobsIn(
+	ctx context.Context,
+	conn *pgx.Conn,
+	db string,
+	opts DbVerifyOptions,
+	rep *DbReport,
+	add func(check, object, format string, args ...any),
+) error {
+	var hasExtension bool
+	if err := conn.QueryRow(ctx,
+		`select exists(select 1 from pg_extension where extname = 'timescaledb')`).
+		Scan(&hasExtension); err != nil {
+		return fmt.Errorf("checking for the timescaledb extension in %q: %w", db, err)
+	}
+	if !hasExtension {
+		return nil
+	}
+	rep.Checked.TimescaleDatabases++
+
+	// 🔴 `join ... using (job_id)`, never NATURAL JOIN. Measured: these two views
+	// also share `next_start`, `hypertable_schema` and `hypertable_name`, and the
+	// two `next_start` columns legitimately differ — so a natural join returns
+	// ZERO ROWS against a perfectly healthy cluster. That is the worst possible
+	// shape for this check, because an empty result is indistinguishable from
+	// "no jobs are broken". It cost a wasted failover measurement to find.
+	rows, err := conn.Query(ctx, `
+		select j.job_id,
+		       j.proc_name,
+		       j.scheduled,
+		       j.next_start is null                          as next_start_unset,
+		       coalesce(j.next_start = '-infinity', false)    as next_start_infinite,
+		       coalesce(s.last_run_status, '')                as last_run_status
+		  from timescaledb_information.jobs j
+		  left join timescaledb_information.job_stats s using (job_id)
+		 where j.proc_name <> $1
+		 order by j.job_id`, timescaleTelemetryJob)
+	if err != nil {
+		return fmt.Errorf("reading background jobs in %q: %w", db, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			id              int64
+			proc            string
+			scheduled       bool
+			unset, infinite bool
+			lastStatus      string
+		)
+		if err := rows.Scan(&id, &proc, &scheduled, &unset, &infinite, &lastStatus); err != nil {
+			return fmt.Errorf("scanning background jobs in %q: %w", db, err)
+		}
+		rep.Checked.TimescaleJobs++
+
+		switch {
+		case infinite:
+			// The timescale#9360 shape. `-infinity` is not "later", it is never:
+			// the scheduler compares against it and the job is dead while the
+			// database reports itself entirely healthy.
+			add("B10", fmt.Sprintf("%s/job %d (%s)", db, id, proc),
+				"next_start is -infinity, which the scheduler will never reach — this job "+
+					"is permanently stuck and the work it does (continuous aggregate "+
+					"refresh, retention, compression) has silently stopped")
+		case scheduled && unset:
+			// 🔴 A finding, but a SETTLE-ELIGIBLE one, and that distinction is the
+			// whole reason this check is usable.
+			//
+			// The A2 spike's first oracle called a NULL next_start BROKEN and
+			// false-alarmed during the seconds after a promotion — in the exact
+			// window the check exists for, which is how an oracle gets switched
+			// off. It is reported here as an ordinary finding precisely because
+			// the caller re-runs the whole verification for --settle before
+			// returning a verdict, so a value that has simply not been recomputed
+			// yet clears itself, and only one that persists past the window is
+			// reported.
+			add("B11", fmt.Sprintf("%s/job %d (%s)", db, id, proc),
+				"is scheduled but has no next_start, and still had none after the settle "+
+					"window — the scheduler is not assigning it a next run")
+		case lastStatus == "Failed":
+			add("B12", fmt.Sprintf("%s/job %d (%s)", db, id, proc),
+				"last run FAILED; the job is still scheduled, so this is a job that runs "+
+					"and errors rather than one that has stopped")
+		}
+	}
+	return rows.Err()
 }

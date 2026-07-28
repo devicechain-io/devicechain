@@ -99,6 +99,8 @@ var (
 	dbAliasService string
 	dbInstances    int
 	dbRequireSync  bool
+	dbDurability   string
+	dbTimescale    bool
 )
 
 var haVerifyDbCmd = &cobra.Command{
@@ -143,6 +145,8 @@ expected NOT to hold:
 			AliasService:       dbAliasService,
 			Instances:          dbInstances,
 			RequireSynchronous: dbRequireSync,
+			Durability:         dbDurability,
+			TimescaleJobs:      dbTimescale,
 			Settle:             haSettle,
 			Timeout:            haTimeout,
 		})
@@ -195,6 +199,17 @@ func init() {
 		"demand synchronous replication. Deliberately NOT derived from the Cluster spec: "+
 			"a pruned or misspelled field leaves a spec that asks for nothing, which a "+
 			"spec-derived check would happily confirm")
+	haVerifyDbCmd.Flags().StringVar(&dbDurability, "durability", "",
+		"the dataDurability this store is expected to declare, checked only with "+
+			"--require-synchronous. Empty means \"required\". The event store runs "+
+			"\"preferred\" so a lost standby degrades it to asynchronous replication "+
+			"instead of applying backpressure to ingest, so checking it against "+
+			"\"required\" would report a correct configuration as broken")
+	haVerifyDbCmd.Flags().BoolVar(&dbTimescale, "timescale-jobs", false,
+		"also assert TimescaleDB background-job health across every database on the "+
+			"server. Continuous aggregates, retention and compression are all background "+
+			"jobs: if the scheduler stops, the database stays up, replicates, fails over "+
+			"and passes every other check here while silently no longer aggregating")
 	haVerifyDbCmd.Flags().DurationVar(&haSettle, "settle", 90*time.Second,
 		"keep re-checking for this long while assertions fail, for the interval in which "+
 			"a failover is completing or a standby rejoining. Never turns a failure into a "+
