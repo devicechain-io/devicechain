@@ -166,7 +166,7 @@ fi
 # which is otherwise invisible, and the coverage control at the bottom only counts
 # blocks in the root.
 rejects() {
-  local var="$1" value="$2" by="$1" plain
+  local var="$1" value="$2" by="$1" plain want
   shift 2
   if [[ "${1:-}" == "--by" ]]; then
     by="$2"
@@ -186,11 +186,20 @@ rejects() {
   # 🔴 REFUSED BY *THIS* VARIABLE'S BLOCK. A diagnostic quoting some other variable
   # means the guard under test never ran — its neighbour's did, on input meant for
   # this one — so the value here is unguarded while the line reads green.
-  # Two forms because the diagnostic's shape depends on where the block lives: a
-  # root variable's own block is headed `variable "x" {`, while a module's quotes
-  # the offending value as `var.x is <v>` under the module call. Both name the
-  # guard; neither appears for a refusal that came from somewhere else.
-  if ! grep -q "variable \"$by\" {\|var\.$by is " <<<"$plain"; then
+  # 🔴 THE HEADER LINE, NOT THE VALUE CONTEXT. A diagnostic quotes the block it
+  # came from as `variable "x" {`, and separately lists EVERY variable that
+  # block's condition referenced under the `├──` rule — so `restore_rdb_target_time`'s
+  # refusal prints `var.restore_rdb_from is ""` too. Matching on that context would
+  # attribute a neighbour's refusal to whichever variable it happened to mention,
+  # which is the precise failure this check exists to catch. Only the header is
+  # evidence about WHICH guard fired.
+  #
+  # The value form is kept for --by alone, where the guard lives in a module and
+  # the diagnostic is headed by the module CALL rather than by a variable block.
+  # That form is weaker, and it is confined to the one case that needs it.
+  want="variable \"$by\" {"
+  [[ "$by" == "$var" ]] || want="var.$by is "
+  if ! grep -qF -- "$want" <<<"$plain"; then
     echo "FAIL  $var=$value was refused, but not by $by's validation block:" >&2
     sed 's/^/        /' <<<"$plain" >&2
     failures=$((failures + 1))
@@ -723,12 +732,27 @@ fi
 # cannot see. With no `rejects`, a condition hard-wired to `true` is a guard that
 # guards nothing. With no `accepts`, a condition hard-wired to `false` refuses every
 # apply — including the shipped topology.
-guarded="$(awk '/^variable "/ { v = $2; gsub(/"/, "", v) } /^  validation \{/ { print v }' \
-  "$tofu_dir/variables.tf" | sort -u)"
+#
+# Read EVERY root .tf file, not just variables.tf, and cross-check the count. A
+# parser is the wrong place to be lenient: anything it fails to match is silently
+# EXEMPTED from the requirement, which is the same green-for-nothing shape one
+# level up. So the blocks it attributes to a variable are counted against the raw
+# number of `validation {` blocks in the same files, and a mismatch is a failure
+# naming the parser rather than a quietly smaller coverage set.
+guarded="$(awk '/^variable "/ { v = $2; gsub(/"/, "", v) } /^[[:space:]]*validation[[:space:]]*\{/ { if (v != "") print v }' \
+  "$tofu_dir"/*.tf | sort -u)"
+attributed="$(awk '/^variable "/ { v = $2 } /^[[:space:]]*validation[[:space:]]*\{/ { if (v != "") n++ } END { print n + 0 }' \
+  "$tofu_dir"/*.tf)"
+declared="$(grep -hcE '^[[:space:]]*validation[[:space:]]*\{' "$tofu_dir"/*.tf | paste -sd+ | bc)"
 if [[ -z "$guarded" ]]; then
   # The control's own control: a parser that matches nothing reports full coverage.
-  echo "FAIL  found no validation blocks in variables.tf — the coverage check below is" \
-    "reading nothing, so it cannot fail. Fix the parser." >&2
+  echo "FAIL  found no validation blocks in the root .tf files — the coverage check below" \
+    "is reading nothing, so it cannot fail. Fix the parser." >&2
+  failures=$((failures + 1))
+elif [[ "$attributed" != "$declared" ]]; then
+  echo "FAIL  the root declares $declared validation block(s) but only $attributed could be" \
+    "attributed to a variable. The rest are exempt from the coverage requirement below" \
+    "without anything saying so — fix the parser rather than the count." >&2
   failures=$((failures + 1))
 fi
 covered=0

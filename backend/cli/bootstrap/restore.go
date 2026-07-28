@@ -281,30 +281,51 @@ func clusterArchivePath(ctx context.Context, dyn dynamic.Interface, namespace, n
 			"retarget its WAL archive at a path with no base backup in it", namespace, name, err)
 	}
 	out := clusterArchiveState{Exists: true}
+
+	// 🔴 MALFORMED IS NOT ABSENT — the rule for every read below, without
+	// exception, and it is the whole reason this function has error returns at all.
+	//
+	// An unreadable archiver spec reports Exists=true with an empty Path, and empty
+	// does not mean "unknown" here: it means "archiving under its own name", the
+	// default every ordinary install has. So the next re-run emits no serverName
+	// and retargets this cluster's LIVE WAL archiver at a prefix holding no base
+	// backup. That is the same direction the Get above refuses to guess in.
+	//
+	// The rule was first applied to two of the five reads in this function and not
+	// to the other three, which is worse than not having applied it: the comments
+	// said the spec was checked while `name`, `isWALArchiver` and the entry type
+	// were still being read with `_, _` and skipped on error — landing on the same
+	// destructive default by a route the guards did not cover. One helper now, so
+	// there is one statement of the rule rather than five chances to forget it.
+	unreadable := func(field string, err error) (clusterArchiveState, error) {
+		return clusterArchiveState{}, fmt.Errorf("reading %s of Cluster %s/%s: %w. Refusing "+
+			"to continue: an unreadable archiver spec is not an absent one, and reading it "+
+			"as 'archiving under its own name' would retarget this cluster's WAL archive at "+
+			"a path with no base backup in it", field, namespace, name, err)
+	}
+
+	// This read in particular used to fold its error in with the empty case —
+	// `if err != nil || len(plugins) == 0` — which looks fail-closed and is not:
+	// NestedSlice hands back a nil slice on error, so the error branch was
+	// unreachable and both cases returned the same answer.
 	plugins, _, err := unstructured.NestedSlice(cl.Object, "spec", "plugins")
-	// 🔴 MALFORMED IS NOT ABSENT. This read used to fold the error in with the
-	// empty case — `if err != nil || len(plugins) == 0` — which looks fail-closed
-	// and is not: NestedSlice hands back a nil slice on error, so the error branch
-	// was unreachable and a Cluster whose spec.plugins is not a list reported
-	// Exists=true with an empty path. That reads as "archiving under its own name",
-	// the default, so the next re-run emits no serverName and retargets a live
-	// archiver at a prefix with no base backup in it. The same direction the Get
-	// above refuses to guess in.
 	if err != nil {
-		return clusterArchiveState{}, fmt.Errorf("reading spec.plugins of Cluster %s/%s: %w. "+
-			"Refusing to continue: reading a malformed plugin list as 'archiving nowhere' "+
-			"would retarget this cluster's WAL archive at a path with no base backup",
-			namespace, name, err)
+		return unreadable("spec.plugins", err)
 	}
 	if len(plugins) == 0 {
 		return out, nil
 	}
-	for _, p := range plugins {
+	for i, p := range plugins {
 		plug, ok := p.(map[string]any)
 		if !ok {
-			continue
+			return unreadable(fmt.Sprintf("spec.plugins[%d]", i),
+				fmt.Errorf("the entry is %T, not an object", p))
 		}
-		if n, _, _ := unstructured.NestedString(plug, "name"); n != barmanPluginName {
+		n, _, err := unstructured.NestedString(plug, "name")
+		if err != nil {
+			return unreadable(fmt.Sprintf("spec.plugins[%d].name", i), err)
+		}
+		if n != barmanPluginName {
 			continue
 		}
 		// The ARCHIVER, specifically — the entry naming the path this cluster OWNS.
@@ -318,16 +339,17 @@ func clusterArchivePath(ctx context.Context, dyn dynamic.Interface, namespace, n
 		// came first — handing back an archive this cluster does not own and
 		// retargeting a live archiver at it. isWALArchiver is the field that
 		// actually carries the distinction, so match on it rather than on position.
-		if isArchiver, _, _ := unstructured.NestedBool(plug, "isWALArchiver"); !isArchiver {
+		isArchiver, _, err := unstructured.NestedBool(plug, "isWALArchiver")
+		if err != nil {
+			return unreadable(fmt.Sprintf("spec.plugins[%d].isWALArchiver", i), err)
+		}
+		if !isArchiver {
 			continue
 		}
-		// Same rule as spec.plugins above, on the field that actually carries the
-		// answer: a serverName that is not a string is unreadable, not empty.
+		// The field that actually carries the answer.
 		path, _, err := unstructured.NestedString(plug, "parameters", "serverName")
 		if err != nil {
-			return clusterArchiveState{}, fmt.Errorf("reading the archiver serverName of "+
-				"Cluster %s/%s: %w. Refusing to continue rather than read it as the default path",
-				namespace, name, err)
+			return unreadable(fmt.Sprintf("spec.plugins[%d].parameters.serverName", i), err)
 		}
 		out.Path = path
 		return out, nil

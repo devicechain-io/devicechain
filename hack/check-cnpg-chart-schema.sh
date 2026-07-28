@@ -264,18 +264,38 @@ import glob, os, re, sys
 
 chart, tripped = sys.argv[1], sys.argv[2:]
 
-guards = []
-for path in sorted(glob.glob(os.path.join(chart, "templates", "*.yaml"))):
+guards, seen = [], 0
+# Every template, at any depth and any extension -- a guard in a .tpl or a
+# subdirectory is still a guard, and an extractor that cannot see it EXEMPTS it.
+for path in sorted(glob.glob(os.path.join(chart, "templates", "**", "*"), recursive=True)):
+    if not os.path.isfile(path):
+        continue
     text = open(path).read()
+    # Count `fail` as a template ACTION only. These templates carry long prose
+    # explaining why each guard is a `fail` and not a warning, and counting that
+    # prose would make the control fire on documentation -- which trains people to
+    # "fix" it by loosening the count, i.e. by removing the control.
+    code = re.sub(r"\{\{-?\s*/\*.*?\*/\s*-?\}\}", "", text, flags=re.S)  # Helm comments
+    code = "\n".join(ln for ln in code.split("\n") if not ln.lstrip().startswith("#"))
+    seen += len(re.findall(r"\bfail\b", code))
     # The message literal, with \" handled: several guards quote a cron example.
     for m in re.finditer(r'fail \(?printf?\s*"((?:[^"\\]|\\.)*)"', text):
-        guards.append((os.path.basename(path), m.group(1)))
+        guards.append((os.path.relpath(path, chart), m.group(1)))
 
-# The control's own control: an extractor that matches nothing reports full
-# coverage over an empty set, which is the failure this whole file is about.
+# The control's own control, in both directions. An extractor that matches
+# nothing reports full coverage over an empty set -- and one that matches only
+# SOME guard forms silently exempts the rest, which is the same failure wearing a
+# smaller number. So the messages it extracted are counted against every `fail`
+# token in the same files.
 if not guards:
     sys.exit("found no `fail` guards in the chart templates -- the coverage check "
              "below is reading nothing, so it cannot fail. Fix the extractor.")
+if seen != len(guards):
+    sys.exit("the templates contain %d `fail` token(s) but only %d could be read as a "
+             "guard message. The rest are exempt from the coverage requirement below "
+             "with nothing saying so -- a guard written `fail \"literal\"`, built from a "
+             "variable, or reached through an include is invisible here. Fix the "
+             "extractor rather than the count." % (seen, len(guards)))
 
 missing = [(f, g) for f, g in guards if not any(w in g for w in tripped)]
 for f, g in missing:

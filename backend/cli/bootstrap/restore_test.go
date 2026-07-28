@@ -438,14 +438,30 @@ func TestArchivePathTreatsAMissingCNPGCRDAsNothingThere(t *testing.T) {
 // archiving under its own name". That answer is the destructive one: the next
 // re-run emits no serverName and retargets a live archiver at a prefix with no base
 // backup in it.
+// ALL FIVE READS, not the two that were guarded first. Guarding some of them is
+// worse than guarding none: the comments claimed the spec was checked while
+// `name`, `isWALArchiver` and the entry's own type were still read with `_, _` and
+// SKIPPED on error — reaching the same destructive default by a route the guards
+// did not cover, under a comment saying they did.
 func TestArchivePathFailsOnAnUnreadableArchiverSpec(t *testing.T) {
-	for name, spec := range map[string]map[string]any{
-		"spec.plugins is not a list": {"plugins": "barman-cloud.cloudnative-pg.io"},
-		"serverName is not a string": {"plugins": []any{map[string]any{
+	archiver := func(over map[string]any) map[string]any {
+		plug := map[string]any{
 			"name":          barmanPluginName,
 			"isWALArchiver": true,
-			"parameters":    map[string]any{"serverName": int64(2026)},
-		}}},
+			"parameters":    map[string]any{"serverName": "dc-rdb-owned"},
+		}
+		for k, v := range over {
+			plug[k] = v
+		}
+		return plug
+	}
+	for name, spec := range map[string]map[string]any{
+		"spec.plugins is not a list":     {"plugins": "barman-cloud.cloudnative-pg.io"},
+		"an entry is not an object":      {"plugins": []any{"barman-cloud.cloudnative-pg.io"}},
+		"name is not a string":           {"plugins": []any{archiver(map[string]any{"name": int64(7)})}},
+		"isWALArchiver is not a boolean": {"plugins": []any{archiver(map[string]any{"isWALArchiver": "true"})}},
+		"serverName is not a string": {"plugins": []any{archiver(
+			map[string]any{"parameters": map[string]any{"serverName": int64(2026)}})}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cl := &unstructured.Unstructured{Object: map[string]any{
