@@ -121,6 +121,36 @@ render_case() {
   printf '%s' "$work/$name.yaml"
 }
 
+# Which `fail` guards this run actually tripped, for the coverage control below.
+tripped=()
+
+# refuses <case> <expected message fragment> <helm args...> — the render must FAIL,
+# and it must fail with the named guard's own message.
+#
+# 🔴 EVERY CASE ABOVE IS A POSITIVE ONE, and render_case aborts the script if a
+# render fails — so until this existed, not one of the chart's `fail` guards had
+# ever been executed. They are the chart's whole defence against configurations
+# that apply cleanly and are wrong at runtime (a restore archiving over its own
+# source, a five-field schedule that computes no next run), and an inverted
+# condition or an `if` that no longer fires would leave every gate green.
+#
+# The message fragment is not decoration. A refusal only says something about the
+# case if it came from the guard under test: several of these configurations are
+# invalid in more than one way, and a render refused by a NEIGHBOURING guard would
+# otherwise read as proof of a guard that has stopped firing entirely.
+refuses() {
+  local name="$1" want="$2"
+  shift 2
+  if helm template dc-store "$chart" "$@" >"$work/$name.yaml" 2>"$work/$name.err"; then
+    fail "the $name case RENDERED. This configuration is supposed to be refused at render time; it now reaches a cluster."
+  fi
+  if ! grep -qF -- "$want" "$work/$name.err"; then
+    fail "the $name case was refused, but not by the guard under test (wanted a message containing: $want):$(printf '\n%s' "$(cat "$work/$name.err")")"
+  fi
+  tripped+=("$want")
+  say "  refused: $name"
+}
+
 base=(
   --set name=dc-store
   --set imageName=ghcr.io/example/postgres:17
@@ -178,6 +208,84 @@ rendered+=("$(render_case restore-pitr "${base[@]}" --set instances=3 --set sync
   --set restore.recoveryTarget.targetTime='2026-07-28 03:00:00+00' \
   --set restore.recoveryTarget.targetTLI=latest \
   --set restore.recoveryTargetImmediate=true)")
+
+# --- the configurations the chart must REFUSE ---------------------------------
+say "checking the render-time guards"
+
+# CloudNativePG owns these role names. Connecting as one of them means the
+# platform is running as the superuser rather than as an application.
+refuses reserved-owner "which CloudNativePG reserves for its own use" \
+  "${base[@]}" --set instances=1 --set bootstrap.owner=postgres
+
+# Two instances under synchronous replication: one standby, so losing it stalls
+# every write. Worse availability than a single node, bought with a second node.
+refuses sync-too-few-instances "requires at least" \
+  "${base[@]}" --set instances=2 --set synchronous.enabled=true
+
+# A restore with no source. There is no safe inference — the cluster's own name
+# points at an empty path on a fresh install, and at the WRONG database if it
+# happens to collide.
+refuses restore-without-source "restore.sourceServerName is unset" \
+  "${base[@]}" --set instances=1 "${backup[@]}" --set restore.enabled=true
+
+# A restore with nowhere to read from: no ObjectStore named, and none rendered
+# because this release archives nowhere.
+refuses restore-without-store "no restore.objectStoreName" \
+  "${base[@]}" --set instances=1 \
+  --set restore.enabled=true --set restore.sourceServerName=dc-store
+
+# 🔴 THE WEDGE, both halves. A restored cluster that archives must own a path
+# that is not the one it recovered from — unset means "my own name", which is the
+# same collision written differently. CloudNativePG does not fail this cleanly:
+# it sits in `Setting up primary` with its WAL going nowhere, during a recovery.
+refuses restore-archiving-under-its-own-name "but backup.serverName is unset" \
+  "${base[@]}" --set instances=1 "${backup[@]}" \
+  --set restore.enabled=true --set restore.sourceServerName=dc-store
+refuses restore-archiving-over-its-source "and restore.sourceServerName are both" \
+  "${base[@]}" --set instances=1 "${backup[@]}" --set backup.serverName=dc-store \
+  --set restore.enabled=true --set restore.sourceServerName=dc-store
+
+# An ObjectStore missing its destination renders successfully and then fails every
+# archive attempt — which stops nothing and crashes nothing. It just means this
+# store is not being backed up.
+refuses backup-without-destination "fails every archive attempt" \
+  "${base[@]}" --set instances=1 --set backup.enabled=true
+
+# A five-field schedule is accepted by the API, creates the object, computes no
+# next run, and takes no backup — on a cluster that reads healthy.
+refuses five-field-schedule "CloudNativePG schedules take SIX" \
+  "${base[@]}" --set instances=1 "${backup[@]}" --set backup.schedule='0 3 * * *'
+
+# COVERAGE: every `fail` in the templates must have been tripped by a case above.
+# A guard nothing exercises is indistinguishable from one that has stopped firing,
+# and this is the only thing in the repo that renders these templates at all.
+python3 - "$chart" "${tripped[@]}" <<'PY'
+import glob, os, re, sys
+
+chart, tripped = sys.argv[1], sys.argv[2:]
+
+guards = []
+for path in sorted(glob.glob(os.path.join(chart, "templates", "*.yaml"))):
+    text = open(path).read()
+    # The message literal, with \" handled: several guards quote a cron example.
+    for m in re.finditer(r'fail \(?printf?\s*"((?:[^"\\]|\\.)*)"', text):
+        guards.append((os.path.basename(path), m.group(1)))
+
+# The control's own control: an extractor that matches nothing reports full
+# coverage over an empty set, which is the failure this whole file is about.
+if not guards:
+    sys.exit("found no `fail` guards in the chart templates -- the coverage check "
+             "below is reading nothing, so it cannot fail. Fix the extractor.")
+
+missing = [(f, g) for f, g in guards if not any(w in g for w in tripped)]
+for f, g in missing:
+    sys.stderr.write("UNTRIPPED GUARD in %s: %s...\n" % (f, g[:140]))
+if missing:
+    sys.exit("%d of %d render-time guard(s) are never exercised. Nothing else in this "
+             "repo renders these templates, so an inverted condition or an `if` that no "
+             "longer fires would ship green." % (len(missing), len(guards)))
+print("  all %d render-time guard(s) exercised" % len(guards))
+PY
 
 say "checking $(( ${#rendered[@]} )) rendered configurations"
 
