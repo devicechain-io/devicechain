@@ -297,6 +297,33 @@ locals {
   # to log in. So the caller's configured credentials are preserved by handing
   # CNPG a Secret rather than by reading one back.
   credentials_secret = "${var.name}-app-credentials"
+
+  # 🔴 ONE DEFINITION, READ BY BOTH THE CHART VALUES AND synchronous_enforced.
+  #
+  # This used to be written twice — the same expression in the `synchronous`
+  # values block and again in the output — which made the output a second copy
+  # rather than a report. A measured mutation of the values side (synchronous
+  # replication silently OFF on a --ha install, so every write commits without a
+  # standby having it) left the output reading `true` and every
+  # hack/check-tofu-validations.sh assertion green: an assertion that reads a
+  # duplicate is checking the duplicate against itself.
+  #
+  # Consumed by reference below, so the same mutation now moves the output too.
+  synchronous_enforced = var.synchronous && var.instances >= var.synchronous_number + 2
+
+  # The two components of the archive path, named once so `reported` below can
+  # compose the destination out of what the chart is ACTUALLY handed rather than
+  # re-deriving it from the variables. A restore aims at that string; if the
+  # report and the reality can disagree, it aims at a path no WAL was written to.
+  #
+  # 🔴 THE RAW server_name IS WHAT GOES TO THE CHART, empty string and all. Do
+  # not "helpfully" resolve it to the cluster name here: an unset serverName
+  # renders NO plugin parameter, CNPG then defaults it to the cluster name, and
+  # the chart's restore guard keys on exactly that emptiness to refuse a restored
+  # cluster that would archive under an undecided path. Resolving it early would
+  # make that guard unreachable while every render still looked right.
+  backup_bucket      = var.backup == null ? null : var.backup.bucket
+  backup_server_name = var.backup == null ? null : var.backup.server_name
 }
 
 resource "kubernetes_secret_v1" "app" {
@@ -321,28 +348,13 @@ resource "kubernetes_secret_v1" "app" {
   }
 }
 
-resource "helm_release" "cluster" {
-  name      = var.name
-  namespace = var.namespace
-  chart     = "${path.module}/chart"
-
-  # The Secret must exist before initdb reads it. This is an explicit edge
-  # rather than an inferred one: the values below reference the Secret by NAME
-  # (a string), and a string carries no dependency.
-  depends_on = [kubernetes_secret_v1.app]
-
-  # 🔴 TWO documents, not one map with a conditional `backup` key inside it.
-  #
-  # A `var.backup == null ? {...} : {...}` inside the map does not type-check:
-  # both branches of a conditional must have the SAME object type, so the
-  # "backups off" branch would have to restate all fifteen backup fields with
-  # empty values. That is not merely verbose — it is a second, silent copy of the
-  # backup schema that no longer fails when the real one gains a field.
-  #
-  # Helm merges later values documents over earlier ones, so an absent second
-  # document leaves the chart's own `backup.enabled: false` default in force.
-  # Backups off is then the chart saying so, not this file re-deriving it.
-  values = concat([yamlencode({
+locals {
+  # 🔴 THE VALUES LIVE IN A LOCAL, NOT INLINE IN THE RESOURCE, so the outputs can
+  # READ THEM BACK. See `reported` below: an output that re-derives what it
+  # reports is a copy, and the CI harness asserting on it is then checking the
+  # copy against itself. A local is the only place both the resource and an
+  # output can reach.
+  base_values = {
     name                   = var.name
     imageName              = var.image
     instances              = var.instances
@@ -370,7 +382,7 @@ resource "helm_release" "cluster" {
     # this is belt and braces on the one setting whose failure mode is a
     # permanently wedged database.
     synchronous = {
-      enabled        = var.synchronous && var.instances >= var.synchronous_number + 2
+      enabled        = local.synchronous_enforced
       method         = "any"
       number         = var.synchronous_number
       dataDurability = var.data_durability
@@ -385,46 +397,102 @@ resource "helm_release" "cluster" {
       localeCType         = "C.utf8"
       postInitTemplateSQL = var.post_init_template_sql
     }
+  }
 
-    })],
-    var.backup == null ? [] : [yamlencode({
-      backup = {
-        enabled            = true
-        bucket             = var.backup.bucket
-        endpointURL        = var.backup.endpoint_url
-        credentialsSecret  = var.backup.credentials_secret
-        accessKeyIdKey     = var.backup.access_key_id_key
-        secretAccessKeyKey = var.backup.secret_access_key_key
-        serverName         = var.backup.server_name
-        archiveTimeout     = var.backup.archive_timeout
-        schedule           = var.backup.schedule
-        retentionPolicy    = var.backup.retention_policy
-        walCompression     = "gzip"
-        dataCompression    = "gzip"
-        walMaxParallel     = var.backup.wal_max_parallel
-        dataJobs           = var.backup.data_jobs
-        endpointCASecret   = var.backup.endpoint_ca == null ? {} : var.backup.endpoint_ca
-        sidecarResources = {
-          requests = {
-            cpu    = var.backup.sidecar_resources.cpu
-            memory = var.backup.sidecar_resources.memory
-          }
+  backup_values = var.backup == null ? null : {
+    backup = {
+      enabled            = true
+      bucket             = local.backup_bucket
+      endpointURL        = var.backup.endpoint_url
+      credentialsSecret  = var.backup.credentials_secret
+      accessKeyIdKey     = var.backup.access_key_id_key
+      secretAccessKeyKey = var.backup.secret_access_key_key
+      serverName         = local.backup_server_name
+      archiveTimeout     = var.backup.archive_timeout
+      schedule           = var.backup.schedule
+      retentionPolicy    = var.backup.retention_policy
+      walCompression     = "gzip"
+      dataCompression    = "gzip"
+      walMaxParallel     = var.backup.wal_max_parallel
+      dataJobs           = var.backup.data_jobs
+      endpointCASecret   = var.backup.endpoint_ca == null ? {} : var.backup.endpoint_ca
+      sidecarResources = {
+        requests = {
+          cpu    = var.backup.sidecar_resources.cpu
+          memory = var.backup.sidecar_resources.memory
         }
       }
-    })],
-    # A THIRD document, for the same reason as the second: a conditional inside
-    # the map would have to restate the whole restore schema on the "normal
-    # install" branch, and that copy stops failing the day the real one grows a
-    # field. Absent, the chart's own `restore.enabled: false` stands.
-    var.restore == null ? [] : [yamlencode({
-      restore = {
-        enabled                 = true
-        sourceServerName        = var.restore.source_server_name
-        objectStoreName         = var.restore.object_store_name
-        recoveryTarget          = var.restore.recovery_target
-        recoveryTargetImmediate = var.restore.recovery_target_immediate
-      }
-    })]
+    }
+  }
+
+  restore_values = var.restore == null ? null : {
+    restore = {
+      enabled                 = true
+      sourceServerName        = var.restore.source_server_name
+      objectStoreName         = var.restore.object_store_name
+      recoveryTarget          = var.restore.recovery_target
+      recoveryTargetImmediate = var.restore.recovery_target_immediate
+    }
+  }
+
+  # --- What the outputs report -------------------------------------------------
+  #
+  # 🔴 READ BACK OUT OF THE VALUES ABOVE, NOT RE-DERIVED FROM THE VARIABLES.
+  #
+  # Both of these used to restate their expression a second time in the output
+  # block. That made the output a copy of the values rather than a report of
+  # them, and hack/check-tofu-validations.sh asserts against the output.
+  # Measured: setting `synchronous.enabled = false` in the values -- a `--ha`
+  # install whose every write commits with no standby holding it, the database
+  # face of the false-HA trap ADR-020 A0 closed for the broker -- left
+  # `synchronous_enforced` reading `true` and the whole harness green. Pointing
+  # the same bucket at the wrong path was silent for the same reason, and that
+  # one decides whether a restore finds anything at all.
+  #
+  # The direction matters and is easy to get backwards: the derivations feed the
+  # values, the values feed this. Nothing here feeds back, so there is no cycle
+  # -- and a mutation of what Helm is handed now moves the assertion.
+  reported = {
+    synchronous_enforced = local.base_values.synchronous.enabled
+    # tostring() pins the TYPE, not the value. Inside an object constructor a
+    # bare `null` branch is a null of no particular type, and `tofu console`
+    # prints that as `null` where a null string prints as `tostring(null)` --
+    # so without this the harness's "backups off => no destination" assertion
+    # fails on a spelling difference rather than on the fact it is checking.
+    backup_destination = tostring(local.backup_values == null ? null : format(
+      "s3://%s/%s",
+      local.backup_values.backup.bucket,
+      local.backup_values.backup.serverName != "" ? local.backup_values.backup.serverName : local.base_values.name,
+    ))
+  }
+}
+
+resource "helm_release" "cluster" {
+  name      = var.name
+  namespace = var.namespace
+  chart     = "${path.module}/chart"
+
+  # The Secret must exist before initdb reads it. This is an explicit edge
+  # rather than an inferred one: the values below reference the Secret by NAME
+  # (a string), and a string carries no dependency.
+  depends_on = [kubernetes_secret_v1.app]
+
+  # 🔴 TWO documents, not one map with a conditional `backup` key inside it.
+  #
+  # A `var.backup == null ? {...} : {...}` inside the map does not type-check:
+  # both branches of a conditional must have the SAME object type, so the
+  # "backups off" branch would have to restate all fifteen backup fields with
+  # empty values. That is not merely verbose — it is a second, silent copy of the
+  # backup schema that no longer fails when the real one gains a field.
+  #
+  # Helm merges later values documents over earlier ones, so an absent second
+  # document leaves the chart's own `backup.enabled: false` default in force.
+  # Backups off is then the chart saying so, not this file re-deriving it. A
+  # THIRD document carries the restore block, for the same reason.
+  values = concat(
+    [yamlencode(local.base_values)],
+    local.backup_values == null ? [] : [yamlencode(local.backup_values)],
+    local.restore_values == null ? [] : [yamlencode(local.restore_values)],
   )
 
   # 🔴 `wait` DOES NOT WAIT FOR THE DATABASE, and an earlier version of this
@@ -499,10 +567,10 @@ output "cluster_name" {
 
 output "backup_destination" {
   description = "Where this store's WAL and base backups actually go, or null if it has none. Read this rather than re-deriving it from the flags -- a store whose backup block was dropped is indistinguishable from one that has it, right up until a restore is attempted."
-  value       = var.backup == null ? null : "s3://${var.backup.bucket}/${var.backup.server_name != "" ? var.backup.server_name : var.name}"
+  value       = local.reported.backup_destination
 }
 
 output "synchronous_enforced" {
   description = "Whether synchronous replication is ACTUALLY in force, after the instance-count derivation. Read this rather than re-deriving it from the flags: an install that asked for synchronous and did not get enough instances runs asynchronously, and the difference is invisible from the Cluster resources alone -- which is the false-HA shape A0 closed for the broker."
-  value       = var.synchronous && var.instances >= var.synchronous_number + 2
+  value       = local.reported.synchronous_enforced
 }

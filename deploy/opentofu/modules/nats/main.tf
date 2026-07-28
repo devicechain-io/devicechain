@@ -261,6 +261,27 @@ locals {
   cluster_replicas = var.cluster_replicas > 0 ? var.cluster_replicas : (var.ha ? 3 : 1)
   clustered        = local.cluster_replicas > 1
 
+  # 🔴 ONE DEFINITION, READ BY BOTH THE CHART VALUES AND ha_topology. These two
+  # are not conveniences — they are the difference between an assertion and a
+  # decoration.
+  #
+  # The rule the hard way: an output that RESTATES an expression is a second
+  # copy, and a CI check reading that output is checking the copy against itself.
+  # Both of these used to be written out twice — `var.enable_tls &&
+  # local.clustered` at the cluster tls block and again in the output; `var.ha &&
+  # var.cluster_replicas == 1` in the precondition and again in the output. A
+  # measured mutation of the values side (route TLS off on a clustered broker,
+  # leaving port 6222 open to unverified peers, which is the exact hole A0
+  # closed) left the output reading `route_tls_verified = true` and every
+  # hack/check-tofu-validations.sh assertion green. The check could not fail,
+  # because nothing downstream of the mutation was being read.
+  #
+  # Consumed by reference below, so the same mutation now moves the output too.
+  # spread_constraints and server_dns_names were already built this way; these
+  # are the two that were not.
+  route_tls_verified = var.enable_tls && local.clustered
+  contradictory      = var.ha && var.cluster_replicas == 1
+
   # Replication for the MQTT gateway's OWN streams ($MQTT_sess, $MQTT_msgs,
   # $MQTT_qos2in, $MQTT_out) — nats-server's `mqtt { stream_replicas }`.
   #
@@ -523,8 +544,8 @@ locals {
         # `verify` key on the cluster tls block; it passes merge straight into the
         # generated nats-server tls{} stanza.
         tls = {
-          enabled    = var.enable_tls && local.clustered
-          secretName = var.enable_tls && local.clustered ? local.tls_secret_name : null
+          enabled    = local.route_tls_verified
+          secretName = local.route_tls_verified ? local.tls_secret_name : null
           merge = {
             verify = true
           }
@@ -546,6 +567,41 @@ locals {
   chart_values_encoded = var.enable_auth ? yamlencode(merge(local.chart_values, {
     config = merge(local.chart_values.config, { merge = local.auth_merge_content })
   })) : yamlencode(local.chart_values)
+
+  # --- What ha_topology reports -----------------------------------------------
+  #
+  # 🔴 READ BACK OUT OF chart_values, NOT RE-DERIVED FROM THE VARIABLES. This
+  # direction is the whole point, and getting it backwards produced a check that
+  # could not fail.
+  #
+  # ha_topology used to compute each of these a second time from var.ha /
+  # var.enable_tls / local.clustered. That made it a COPY of the values above,
+  # not a report of them, and hack/check-tofu-validations.sh asserts against the
+  # output. Measured: setting `cluster.tls.enabled = false` in chart_values — a
+  # clustered broker with route port 6222 open in plaintext to any unverified
+  # peer, which is precisely the hole ADR-020 A0 closed — left
+  # route_tls_verified reading `true` and the whole harness green. Same for
+  # dropping stream_replicas to 1 and for cluster.replicas.
+  #
+  # Reading the map back means the assertions are downstream of the mutation:
+  # edit the value Helm is handed and the output moves with it. The values feed
+  # this local; this local feeds nothing back, so there is no cycle.
+  #
+  # route_tls_verified is a conjunction of THREE fields because all three are
+  # required for the property it names, and each has failed independently in
+  # review: clustering on (else there is no route port and the claim is vacuous),
+  # TLS on the route listener (encryption), and verify (mutual authentication —
+  # without it the listener accepts any peer, and a route peer bypasses the auth
+  # callout entirely).
+  reported = {
+    cluster_replicas     = local.chart_values.config.cluster.replicas
+    clustered            = local.chart_values.config.cluster.enabled
+    mqtt_stream_replicas = local.chart_values.config.mqtt.merge.stream_replicas
+    spread_constraints   = local.chart_values.podTemplate.topologySpreadConstraints
+    route_tls_verified = (local.chart_values.config.cluster.enabled
+      && local.chart_values.config.cluster.tls.enabled
+    && local.chart_values.config.cluster.tls.merge.verify)
+  }
 }
 
 # --- TLS material (ADR-025) --------------------------------------------------
@@ -693,7 +749,7 @@ resource "helm_release" "nats" {
     # ha=false is NOT a contradiction — it is the explicit-topology path, and the
     # cluster is enabled on the count, not the flag.
     precondition {
-      condition     = !(var.ha && var.cluster_replicas == 1)
+      condition     = !local.contradictory
       error_message = "nats ha=true with cluster_replicas=1 is contradictory: ha asks for the ADR-020 3-node RAFT topology and cluster_replicas pins a single server. Drop cluster_replicas to let ha choose (0 = derive), or set ha=false if a single server is what you want."
     }
   }
@@ -785,12 +841,16 @@ output "ca_pem" {
 output "ha_topology" {
   description = "The resolved HA topology: server count, whether clustering is on, the MQTT gateway's replica factor, whether route TLS is mutually verified, and the pod spread constraints. Verified in CI; safe to print."
   value = {
-    cluster_replicas     = local.cluster_replicas
-    clustered            = local.clustered
-    mqtt_stream_replicas = local.mqtt_stream_replicas
-    route_tls_verified   = var.enable_tls && local.clustered
-    contradictory        = var.ha && var.cluster_replicas == 1
-    spread_constraints   = local.spread_constraints
+    cluster_replicas     = local.reported.cluster_replicas
+    clustered            = local.reported.clustered
+    mqtt_stream_replicas = local.reported.mqtt_stream_replicas
+    route_tls_verified   = local.reported.route_tls_verified
+    spread_constraints   = local.reported.spread_constraints
+    # The ONE field here that is not a read-back, because it has no chart value
+    # to read: it reports a contradiction in what was ASKED for, which the
+    # precondition below refuses. Shared with that precondition through
+    # local.contradictory so the two cannot drift apart.
+    contradictory = local.contradictory
     # The names the server certificate is issued for. Exposed because route TLS
     # being ENABLED and route TLS actually WORKING are different facts, and the
     # difference cost a working cluster once: route_tls_verified read true while
@@ -803,7 +863,7 @@ output "ha_topology" {
 
 output "cluster_replicas" {
   description = "Number of NATS servers provisioned. This is the CEILING on the per-stream replica factor the services may ask for (instance.config.infrastructure.nats.streamReplicas, a Helm value this module does not set): a stream cannot be replicated wider than the cluster hosting it. dcctl's preflight reads this to refuse an install whose two halves disagree, instead of letting it come up looking replicated."
-  value       = local.cluster_replicas
+  value       = local.reported.cluster_replicas
 }
 
 output "tls_enabled" {

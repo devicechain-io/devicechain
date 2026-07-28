@@ -276,6 +276,12 @@ evaluates 3 module.nats.ha_topology.mqtt_stream_replicas -var nats_cluster_repli
 # mutual verification any pod that can reach it joins the cluster as a peer and
 # reads every account, bypassing the auth callout.
 evaluates true module.nats.ha_topology.route_tls_verified -var ha=true
+# Both counterweights, because a single `true` is satisfied by an output hard-wired
+# to true. An unclustered broker opens NO route, so "route TLS verified" must be
+# false there rather than vacuously true — and with TLS off it must be false on a
+# clustered one, which is the state that actually leaves 6222 in the clear.
+evaluates false module.nats.ha_topology.route_tls_verified -var ha=false
+evaluates false module.nats.ha_topology.route_tls_verified -var ha=true -var nats_enable_tls=false
 evaluates true module.nats.ha_topology.clustered -var ha=true
 evaluates false module.nats.ha_topology.clustered -var ha=false
 
