@@ -36,15 +36,33 @@
 # that reads as a guarantee while the guarantee is absent. Better to archive
 # somewhere real and be honest about that somewhere's limits.
 #
-# WHY MINIO, AND THE LICENSE NOTE
+# WHY MINIO, THE LICENSE, AND THE MAINTENANCE STATUS
 #
 # It is the reference object store in the Barman Cloud plugin's own documentation,
-# so it is the best-tested target for the exact code path that matters here. Note
-# the MinIO server is AGPL-3.0 while DeviceChain is Apache-2.0: we REFERENCE an
-# upstream image and never build, modify or redistribute it, so nothing here
-# affects DeviceChain's own licensing. Anyone who would rather not run an AGPL
-# component at all sets `backup_destination = "external"` and points at their own
-# storage — which is the recommended production configuration regardless.
+# so it is the best-tested target for the exact code path that matters here. That
+# is the whole reason it is still the choice, and it survives both of the things
+# below — but both need stating, because each is easy to get wrong in a different
+# direction.
+#
+# LICENSE. The MinIO server is AGPL-3.0 while DeviceChain is Apache-2.0, and this
+# does NOT affect DeviceChain's own licensing: we REFERENCE an upstream image and
+# never build, modify or redistribute it, and the platform reaches it over the S3
+# HTTP API, so there is no combined work at any point. What it DOES affect is the
+# adopter, because this is the DEFAULT — a stock bootstrap plants an AGPL server
+# in their cluster. Enterprise procurement frequently bans AGPL outright without
+# distinguishing modified from unmodified, so the fact is stated in the deployment
+# docs where an adopter will actually meet it, not only in this comment.
+# `backup_destination = "external"` is the opt-out, and is the recommended
+# production configuration regardless.
+#
+# MAINTENANCE. Community MinIO entered maintenance mode in December 2025 and the
+# repository was archived read-only in April 2026; development continues only in
+# the commercial AIStor product. The consequence lands on the pin below, which is
+# now terminal rather than a version we periodically move — see the `image`
+# variable. Replacing MinIO outright is post-GA work and is gated on
+# `hack/dr-rig.sh`, because swapping to an S3 implementation the Barman plugin has
+# never been tested against trades a licensing problem for a restore-correctness
+# problem, and that is strictly the worse of the two.
 
 terraform {
   required_providers {
@@ -75,6 +93,17 @@ variable "image" {
     to stay readable, and the failure mode of a bad object-store upgrade is not
     an outage -- it is backups that stop being written while everything reports
     healthy.
+
+    🔴 That pin is now TERMINAL, which is not the situation it was written for.
+    The reasoning above assumed a release stream we were declining to follow
+    automatically; community MinIO is archived, so there is no newer release to
+    move to at all. This tag will accrue unpatched CVEs indefinitely, in a
+    component sitting on the backup path in every default install.
+
+    🔴 Nothing will tell you when that happens. A container tag in a Tofu
+    variable default is invisible to Dependabot -- the same blind spot the
+    graphql-go fork carries -- so a MinIO advisory raises no alert in this
+    repository. Re-check it by hand when reviewing storage-layer CVEs.
   EOT
   type        = string
   default     = "quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"

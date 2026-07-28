@@ -81,7 +81,7 @@ now arrive together.
 
 | `backup_destination` | What you get |
 | --- | --- |
-| `in-cluster` (default) | A single-replica MinIO in the instance's namespace, two buckets, WAL archiving and a daily base backup for each store. |
+| `in-cluster` (default) | A single-replica MinIO (**AGPL-3.0**, see below) in the instance's namespace, two buckets, WAL archiving and a daily base backup for each store. |
 | `external` | The same archiving, pointed at `backup_endpoint_url` with `backup_access_key` / `backup_secret_key`. Nothing is provisioned in-cluster. |
 
 🔴 **An in-cluster destination is not off-site backup.** It shares the cluster's failure
@@ -92,6 +92,16 @@ cluster is healthy and the *data* is wrong. It also means the restore drill exer
 same code path production uses. For real disaster recovery, point `backup_destination` at
 storage outside the cluster. The `database_backup_survives_cluster_loss` output states
 which of the two an instance has, so nothing downstream has to infer it.
+
+🔴 **The in-cluster store is MinIO, which is AGPL-3.0 and no longer maintained upstream.**
+Neither fact changes DeviceChain's own Apache-2.0 licensing — the image is referenced, never
+built, modified or redistributed, and the platform reaches it over the S3 HTTP API — but
+both are yours to accept, because `in-cluster` is the **default**: a stock bootstrap puts an
+AGPL server in your cluster. If your organisation does not permit AGPL components, set
+`backup_destination = "external"`. Community MinIO also entered maintenance mode in December
+2025 and was archived in April 2026, so the pinned image receives no further security
+patches; `external` avoids that too, which is one more reason it is the recommended
+production configuration.
 
 There is deliberately **no** value meaning "backups on, destination none". That state —
 plugin installed, flag reading `true`, nothing archived — is the one this configuration
