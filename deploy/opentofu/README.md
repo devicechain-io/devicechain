@@ -187,3 +187,22 @@ fast-follow.
   that scrapes it is rendered by the DeviceChain Helm chart, not here — it is an
   Operator CRD, and this root installs NATS and the monitoring stack in parallel,
   so rendering one here would fail a fresh apply nondeterministically.
+- **A fresh apply can lose a race with the CloudNativePG admission webhook, and a
+  bare `tofu apply` does not retry it.** The operator's Helm release returns when
+  its Deployment is Ready, which is not the instant the API server can *call* its
+  webhook — so the `Cluster` creates that follow can be refused with
+  `failed calling webhook "mcluster.cnpg.io": ... connect: connection refused`.
+  It is a race, so it is intermittent; measured once in two cold `--compact` runs.
+  Nothing here can order it correctly — `depends_on` cannot express "the webhook
+  answers", and no Terraform resource retries admission.
+
+  Two things follow. The Cluster releases set `atomic = true`, so a lost race
+  rolls itself back and leaves **no residue**: without it the failed create was
+  tainted, the next plan wanted to replace it, and `prevent_destroy` refused —
+  wedging the root permanently against every later apply. With it, **re-running
+  the apply is safe and is the fix**. And `dcctl bootstrap` does that re-run for
+  you: it recognises this one error class, waits for the API server to actually
+  admit a `Cluster` (a server-side dry-run create — the only probe that travels
+  the API server's own network path, and therefore the only one that works the
+  same on kind, EKS and GKE), then applies once more. A direct tofu user gets the
+  rollback but not the retry, and should simply run `tofu apply` again.

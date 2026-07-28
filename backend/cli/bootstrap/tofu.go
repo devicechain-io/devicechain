@@ -59,7 +59,35 @@ func applyInfra(ctx context.Context, st *State) error {
 		opts = append(opts, tfexec.Var(v))
 	}
 	if err := tf.Apply(ctx, opts...); err != nil {
-		return fmt.Errorf("tofu apply: %w", err)
+		// The ONE failure this retries: the API server could not call the CNPG
+		// admission webhook, so the database Cluster releases were refused (and,
+		// thanks to atomic, rolled back leaving nothing behind). See
+		// cnpgadmission.go for why the gate lives here rather than in the tofu
+		// root, and why the probe is a server-side dry-run create.
+		//
+		// Everything else is returned untouched. A retry that hides a real error
+		// is worse than the race it was written for.
+		if !isCNPGWebhookUnavailable(err.Error()) {
+			return fmt.Errorf("tofu apply: %w", err)
+		}
+		reportCNPGAdmissionWait()
+		if werr := waitForCNPGAdmission(ctx, st.KubeContext, cnpgAdmissionTimeout); werr != nil {
+			return fmt.Errorf("tofu apply failed because the CloudNativePG admission webhook "+
+				"was unreachable, and it did not recover: %w (original apply error: %v)", werr, err)
+		}
+		// Once, not in a loop. The probe has proved the API server can admit a
+		// Cluster, so a second failure of the same kind is not a race and must
+		// surface rather than be retried around.
+		if retryErr := tf.Apply(ctx, opts...); retryErr != nil {
+			// Both errors, deliberately. The retry can fail for a reason the first
+			// attempt caused rather than shared — a refused UPDATE leaves Helm
+			// rolling back through the same dead webhook, and the release can land
+			// in pending-rollback, whose "another operation is in progress" says
+			// nothing about the webhook. Dropping the original would leave the
+			// operator holding the second error and none of the story.
+			return fmt.Errorf("tofu apply, retried after waiting on the CloudNativePG "+
+				"admission webhook: %w (the apply that triggered the wait failed with: %v)", retryErr, err)
+		}
 	}
 
 	// Read the NATS TLS material back out (ADR-025): the broker terminates TLS and
