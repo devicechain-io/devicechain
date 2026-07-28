@@ -141,3 +141,27 @@ output "database_backup_survives_cluster_loss" {
   EOT
   value       = local.backups_on ? var.backup_destination == "external" : null
 }
+
+output "database_restored_from" {
+  description = <<-EOT
+    Which stores this apply RECOVERED from an archive, and from which serverName.
+    Null per store on a normal install.
+
+    Read this rather than re-deriving it from the restore variables. A restore is
+    the one operation where "what did I actually ask for" and "what did the
+    infrastructure do" are most likely to differ and least likely to be checked:
+    CloudNativePG reads `spec.bootstrap` only when it CREATES a Cluster, so a
+    restore aimed at a store that already exists is expected to change nothing at
+    all — no error, no restore, a green apply. An operator reading the variables
+    back would see the restore they asked for either way.
+
+    🔴 This still reports INTENT, not outcome. It says the recovery bootstrap was
+    rendered, not that any data came back. Nothing in an apply can tell you that;
+    hack/dr-rig.sh reads a row out of the restored database, which is the only
+    form of that answer worth having.
+  EOT
+  value = {
+    rdb  = local.rdb_restore == null ? null : local.rdb_restore.source_server_name
+    tsdb = local.tsdb_restore == null ? null : local.tsdb_restore.source_server_name
+  }
+}

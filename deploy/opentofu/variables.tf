@@ -521,6 +521,75 @@ variable "backup_schedule" {
   default     = "0 0 3 * * *"
 }
 
+# ---------------------------------------------------------------------------
+# restore (ADR-028, ADR-020 A2.5)
+#
+# 🔴 THESE ARE REBUILD-TIME LEVERS, NOT REPAIR LEVERS. `spec.bootstrap` is read
+# when CloudNativePG CREATES a Cluster, so pointing one of these at a store that
+# already exists is expected to do nothing whatsoever — no error, no restore, a
+# green apply. The procedure is: lose (or deliberately destroy) the instance,
+# then rebuild it with these set. hack/dr-rig.sh rehearses exactly that.
+#
+# One pair per store rather than a single switch, because the two stores keep
+# independent WAL timelines and are genuinely restored separately: an event
+# store rewound to yesterday does not mean the control plane should be, and
+# rewinding it anyway discards every tenant, device and rule created since.
+# ---------------------------------------------------------------------------
+
+variable "restore_rdb_from" {
+  description = <<-EOT
+    Recover the RELATIONAL store from this serverName (the folder inside
+    backup_bucket_rdb) instead of initialising an empty one. Empty is a normal
+    install.
+
+    🔴 Setting this REQUIRES backup_server_name_rdb, set to something else.
+    CloudNativePG refuses to archive into a non-empty archive, so a restored
+    cluster pointed back at the path it recovered from comes up and then hangs
+    in `Setting up primary` with its WAL going nowhere. The root guard below
+    refuses the combination at PLAN time rather than letting an operator find it
+    mid-incident.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "restore_tsdb_from" {
+  description = "Recover the EVENT store from this serverName instead of initialising an empty one. Same rules as restore_rdb_from, including the mandatory distinct backup_server_name_tsdb."
+  type        = string
+  default     = ""
+}
+
+variable "restore_rdb_target_time" {
+  description = <<-EOT
+    Point-in-time recovery target for the relational store: an RFC3339 or
+    PostgreSQL timestamp. Empty replays the entire archive, which is what a
+    hardware-loss restore wants.
+
+    Set this for the OTHER kind of disaster — the one where the data was
+    destroyed correctly, by a bad migration or a mistaken delete, and the goal
+    is the state just before it. Recovery stops at the target, so pick a moment
+    strictly before the damage.
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.restore_rdb_target_time == "" || var.restore_rdb_from != ""
+    error_message = "restore_rdb_target_time is set but restore_rdb_from is empty, so nothing is being restored and the target would be silently ignored. Set restore_rdb_from, or drop the target."
+  }
+}
+
+variable "restore_tsdb_target_time" {
+  description = "Point-in-time recovery target for the event store. Empty replays the entire archive. See restore_rdb_target_time."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.restore_tsdb_target_time == "" || var.restore_tsdb_from != ""
+    error_message = "restore_tsdb_target_time is set but restore_tsdb_from is empty, so nothing is being restored and the target would be silently ignored. Set restore_tsdb_from, or drop the target."
+  }
+}
+
 variable "backup_retention" {
   description = <<-EOT
     Recovery WINDOW to keep, e.g. "7d". Not a backup count: this guarantees the

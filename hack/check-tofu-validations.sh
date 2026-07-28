@@ -429,6 +429,76 @@ evaluates '"MINIO_ROOT_USER"' 'local.backup_credentials.access_key'
 evaluates '"ACCESS_KEY_ID"' 'local.backup_credentials.access_key' -var backup_destination=external -var backup_endpoint_url=https://s3.example.com
 evaluates 'tostring(null)' 'local.backup_credentials == null ? null : "set"' -var enable_database_backups=false
 
+# --- restore (ADR-028, ADR-020 A2.5c) ----------------------------------------
+#
+# A restore is a rebuild-time lever, and the whole reason it needs a gate here is
+# that its failure modes are QUIET. CloudNativePG reads `spec.bootstrap` only
+# when it CREATES a Cluster, so most ways of getting this wrong produce a green
+# apply and a cluster that either came up empty or is wedged part-way through
+# coming up — neither of which is an apply error anybody sees.
+#
+# 🔴 WHAT THIS CANNOT DO, stated plainly for the same reason the ha=true +
+# cluster_replicas=1 block above states it: the REFUSALS live in
+# terraform_data.restore_guard preconditions, which run during a PLAN, and no
+# per-PR gate performs one. So what is asserted below is that the root still
+# DETECTS each condition — the exact expressions the preconditions evaluate —
+# not that it refuses them. If one of these flips, the corresponding precondition
+# is guarding something that can no longer happen and an operator restoring an
+# instance would quietly get the broken shape instead of the message.
+
+# A target with nothing to restore is a variable validation, so it IS refused in
+# CI. It matters because it is silent otherwise: recovery would replay the whole
+# archive and the operator would believe they had stopped before the bad delete.
+accepts restore_rdb_target_time ""
+rejects restore_rdb_target_time "2026-07-28 03:00:00+00"
+rejects restore_tsdb_target_time "2026-07-28 03:00:00+00"
+
+# The per-store objects the modules actually receive. Null on a normal install —
+# and this is the assertion that fails if a future edit makes "restore" a flag
+# rather than an absent object, which would hand the chart a half-populated
+# restore block on every ordinary bootstrap.
+evaluates 'tostring(null)' 'local.rdb_restore == null ? null : "set"'
+evaluates 'tostring(null)' 'local.tsdb_restore == null ? null : "set"'
+evaluates '"dc-rdb"' 'local.rdb_restore.source_server_name' -var restore_rdb_from=dc-rdb
+evaluates 'tostring(null)' 'local.tsdb_restore == null ? null : "set"' -var restore_rdb_from=dc-rdb
+evaluates '"dc-tsdb"' 'local.tsdb_restore.source_server_name' -var restore_tsdb_from=dc-tsdb
+
+# 🔴 ONE STORE AT A TIME IS THE NORMAL CASE, and the pair above is what proves
+# the two levers are independent. A restore wired to a single shared switch
+# would rewind the control plane every time somebody recovered the event store,
+# discarding every tenant, device and rule created since — a data-loss bug
+# committed while restoring from data loss.
+
+# The point-in-time target reaches the module as CNPG's own camelCase field.
+# Spelled wrongly it is pruned by the API server and the recovery silently
+# replays everything: a PITR that restores the damage it was run to undo.
+evaluates '"2026-07-28 03:00:00+00"' 'local.rdb_restore.recovery_target["targetTime"]' \
+  -var restore_rdb_from=dc-rdb -var 'restore_rdb_target_time=2026-07-28 03:00:00+00'
+evaluates 'tomap({})' 'local.rdb_restore.recovery_target' -var restore_rdb_from=dc-rdb
+
+# THE WEDGE CONDITION — the precondition's own expression. A restored store that
+# archives back over the path it recovered from hangs in `Setting up primary`,
+# during a restore, and does not resume without editing the Cluster in place.
+# Both the collision AND the unset case must be detected: unset means "use the
+# cluster's own name", which is the same collision written differently.
+evaluates false 'var.backup_server_name_rdb != "" && var.backup_server_name_rdb != var.restore_rdb_from' -var restore_rdb_from=dc-rdb
+evaluates false 'var.backup_server_name_rdb != "" && var.backup_server_name_rdb != var.restore_rdb_from' -var restore_rdb_from=dc-rdb -var backup_server_name_rdb=dc-rdb
+evaluates true 'var.backup_server_name_rdb != "" && var.backup_server_name_rdb != var.restore_rdb_from' -var restore_rdb_from=dc-rdb -var backup_server_name_rdb=dc-rdb-restored
+evaluates false 'var.backup_server_name_tsdb != "" && var.backup_server_name_tsdb != var.restore_tsdb_from' -var restore_tsdb_from=dc-tsdb
+evaluates true 'var.backup_server_name_tsdb != "" && var.backup_server_name_tsdb != var.restore_tsdb_from' -var restore_tsdb_from=dc-tsdb -var backup_server_name_tsdb=dc-tsdb-restored
+
+# Restoring with backups off: there is no ObjectStore to read from, and the
+# cluster would come up EMPTY rather than failing — which during a rebuild looks
+# exactly like a restore that found nothing to bring back.
+evaluates false 'local.backups_on' -var restore_rdb_from=dc-rdb -var enable_database_backups=false
+
+# NOT ASSERTED HERE: the `database_restored_from` output dcctl reads back.
+# `tofu console` cannot address `output.*` at all — outputs exist in state, after
+# an apply — and the only way to check one from here is to restate its expression,
+# which is a second copy that stops matching the day the first one changes. The
+# local it projects is asserted above instead, which is the thing that could
+# actually be wrong; the projection is a null check on it.
+
 # --- the operand image tag is a SECOND COPY, and nothing links it to its source
 #
 # deploy/images/timescaledb/versions.conf is the single source of truth for the

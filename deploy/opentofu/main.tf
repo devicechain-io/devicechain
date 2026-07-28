@@ -157,6 +157,37 @@ locals {
     # rate is control-plane traffic and does not need it.
     wal_max_parallel = 4
   } : null
+
+  # The two per-store RESTORE configurations (ADR-028, ADR-020 A2.5). Null is a
+  # normal install; non-null recovers that store from the archive instead of
+  # initialising it empty.
+  #
+  # 🔴 PER STORE, NEVER ONE SWITCH FOR BOTH. The relational store and the event
+  # store have independent WAL timelines and independent archives, so "restore
+  # the database" is not a single operation and a shared point-in-time target
+  # would be a coincidence rather than a guarantee. They are also genuinely
+  # restored separately in practice: losing the event store to a bad retention
+  # change does not mean the control plane needs rewinding, and rewinding it
+  # anyway would discard every tenant, device and rule created since.
+  #
+  # 🔴 A RESTORE ONLY TAKES EFFECT ON A CLUSTER THAT DOES NOT YET EXIST.
+  # `spec.bootstrap` is read when CloudNativePG CREATES the Cluster; setting
+  # these against a live instance is expected to change nothing at all, quietly.
+  # That is not yet measured — hack/dr-rig.sh is what will settle it — so treat
+  # it as the reason this is a rebuild-time lever and not a repair one.
+  rdb_restore = var.restore_rdb_from == "" ? null : {
+    source_server_name = var.restore_rdb_from
+    recovery_target = var.restore_rdb_target_time == "" ? {} : {
+      targetTime = var.restore_rdb_target_time
+    }
+  }
+
+  tsdb_restore = var.restore_tsdb_from == "" ? null : {
+    source_server_name = var.restore_tsdb_from
+    recovery_target = var.restore_tsdb_target_time == "" ? {} : {
+      targetTime = var.restore_tsdb_target_time
+    }
+  }
 }
 
 # 🔴 A missing namespace returns ZERO objects rather than erroring, which is the
@@ -398,6 +429,96 @@ resource "terraform_data" "backup_destination_guard" {
   }
 }
 
+# THE RESTORE GUARD (ADR-028, ADR-020 A2.5).
+#
+# The cnpg-cluster chart refuses these combinations too, and that is not
+# redundant — it is deliberately doubled, because WHEN each one fires is the
+# whole point. A chart `fail` surfaces during `helm_release` APPLY: the operator
+# has already created a cluster, already run the infrastructure apply, and is
+# some minutes into a rebuild before anything says the restore was
+# mis-specified. A root precondition fires at PLAN, before a single object is
+# created, which is the difference between a typo and a restart of the
+# procedure.
+#
+# The audience is an operator working an incident against a runbook. Everything
+# below is therefore refused with a message that says what to set, not what is
+# wrong.
+resource "terraform_data" "restore_guard" {
+  count = local.rdb_restore == null && local.tsdb_restore == null ? 0 : 1
+
+  input = "${var.restore_rdb_from}|${var.restore_tsdb_from}"
+
+  lifecycle {
+    precondition {
+      condition     = local.backups_on
+      error_message = <<-EOT
+        A restore was requested while database backups are off.
+
+        There is no ObjectStore to read from: enable_database_backups is false,
+        or enable_cnpg is. Nothing would be recovered, and the cluster would come
+        up EMPTY rather than failing — which during a rebuild looks exactly like
+        a restore that found no data to bring back.
+
+        Set enable_database_backups = true (and enable_cnpg = true) with the
+        bucket and endpoint the backup was written to.
+      EOT
+    }
+
+    # 🔴 The wedge, refused before it can happen. Verified in CloudNativePG's
+    # own recovery documentation: a cluster that archives into a non-empty
+    # archive is stopped by a safety check and sits in `Setting up primary` with
+    # the pod logging that the archive is not empty. It does not fail the apply
+    # and it does not resume without editing the Cluster in place.
+    precondition {
+      condition     = local.rdb_restore == null || (var.backup_server_name_rdb != "" && var.backup_server_name_rdb != var.restore_rdb_from)
+      error_message = <<-EOT
+        Restoring the relational store needs backup_server_name_rdb set to a
+        path of its OWN, different from restore_rdb_from.
+
+        A recovered cluster keeps archiving. CloudNativePG refuses to archive
+        into an archive that already has data in it, so a restored store pointed
+        back at the path it recovered from comes up and then HANGS in `Setting up
+        primary` — not an apply failure, a wedged database, discovered while
+        restoring.
+
+        Unset is the same collision: it means "use the cluster's own name".
+
+        Set backup_server_name_rdb to something like "${var.restore_rdb_from}-restored".
+      EOT
+    }
+
+    precondition {
+      condition     = local.tsdb_restore == null || (var.backup_server_name_tsdb != "" && var.backup_server_name_tsdb != var.restore_tsdb_from)
+      error_message = <<-EOT
+        Restoring the event store needs backup_server_name_tsdb set to a path of
+        its OWN, different from restore_tsdb_from. See the relational store's
+        message above — the failure is a database wedged in `Setting up primary`
+        during a restore, not an apply error.
+
+        Set backup_server_name_tsdb to something like "${var.restore_tsdb_from}-restored".
+      EOT
+    }
+
+    # The two stores have separate archives under separate buckets, so the same
+    # serverName means two different things and is not a collision. Restoring
+    # one from the OTHER's path is, and it is an easy line to copy wrongly in a
+    # runbook: it would bring the event store back holding the control plane's
+    # data, or the reverse, and the first symptom is services failing on tables
+    # that are not there.
+    precondition {
+      condition     = local.rdb_restore == null || local.tsdb_restore == null || var.backup_bucket_rdb != var.backup_bucket_tsdb
+      error_message = <<-EOT
+        Both stores are being restored and backup_bucket_rdb equals
+        backup_bucket_tsdb.
+
+        Two stores sharing one bucket are not two restore domains, and their
+        serverNames are the only thing keeping their archives apart. Give each
+        store its own bucket.
+      EOT
+    }
+  }
+}
+
 # Relational Postgres — the control-plane RDB (users, devices, relationships, …),
 # as a CloudNativePG Cluster (ADR-020 A2.3).
 #
@@ -445,6 +566,11 @@ module "cnpg_rdb" {
   # reports through its backup_destination output rather than leaving the caller
   # to re-derive it from the flags.
   backup = local.rdb_backup
+
+  # Null on every normal install. Non-null recovers this store from the archive
+  # instead of initialising it, and only takes effect on a Cluster that does not
+  # yet exist — see the restore variables and terraform_data.restore_guard.
+  restore = local.rdb_restore
 
   # The operator must exist before a Cluster referencing its CRDs is applied.
   # depends_on on the module (not merely writing it later) is what makes this
@@ -503,7 +629,8 @@ module "cnpg_tsdb" {
   # without touching the control plane. The root key gates the CORE half only, so
   # a core-restore-alone yields an operational instance and an event-restore-
   # alone yields history — two operations, deliberately, because they are.
-  backup = local.tsdb_backup
+  backup  = local.tsdb_backup
+  restore = local.tsdb_restore
 
   # 🔴 BOTH of these are load-bearing, and each was found by building the operand
   # image rather than by reading anything.
