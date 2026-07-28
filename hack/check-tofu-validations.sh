@@ -26,18 +26,31 @@
 # validation fails, so the check is on the emitted diagnostic, not the exit code.
 #
 # WHAT IT DOES AND DOES NOT DISTINGUISH — established by mutation, not assumed.
-# nats_cluster_replicas is guarded TWICE: once on the root variable and again on
-# modules/nats's own, so a direct consumer of the module is covered too. This
-# script asserts what the ROOT ENTRY POINT does with a value, and does not care
-# which block refuses it — gutting the root's condition alone leaves every
-# assertion here passing, because the module's then fires (checked: the diagnostic
-# moves from variables.tf to modules/nats/main.tf). Gutting BOTH fails it.
 #
-# That is deliberate rather than a gap: what an operator experiences is whether
-# `tofu apply -var nats_cluster_replicas=4` is refused, not which file refused it.
-# But do not read a pass here as evidence that a particular block is correct. If
-# you change one of the two, change it knowing this script cannot tell you that
-# you broke it — only that you broke both.
+# A refusal is only evidence about the value under test if it is ATTRIBUTED to it.
+# The first version of `rejects` asked only whether the string "Invalid value for
+# variable" appeared anywhere in the diagnostic, and that is a check that cannot
+# fail the moment any SHIPPED DEFAULT stops satisfying its own validation: the run
+# is then refused before the supplied value matters, so every rejects line here goes
+# green having evaluated nothing. Hence the baseline control below — the defaults
+# must load clean — and an attribution check: the diagnostic must name the variable
+# under test.
+#
+# What attribution does NOT have to catch, measured rather than assumed: a condition
+# that tests some OTHER variable instead of its own is refused by OpenTofu outright
+# ("the condition for variable X must refer to var.X in order to test incoming
+# values"), so the pure cross-wire cannot be written. The reachable version is a
+# block that tests its own value against the WRONG neighbour — restore_tsdb_target_time
+# checking restore_rdb_from — and that one is caught by the ACCEPTS counterweight,
+# not by attribution: it refuses the real recovery it is supposed to permit.
+#
+# The cost of naming it: nats_cluster_replicas is guarded TWICE, once on the root
+# variable and again on modules/nats's own, and this now pins the ROOT block
+# specifically — gutting it fails here even though the module's block still refuses
+# the apply. That is the right trade (an operator's experience is unchanged, but a
+# maintainer editing one of two guards now hears about it), and it leaves the
+# module's own block covered by nothing. Testing that one needs a root pointed at
+# the module; it is a real gap, named rather than papered over.
 #
 # Usage:
 #   hack/check-tofu-validations.sh
@@ -114,29 +127,87 @@ timed_out() {
   return 0
 }
 
-# rejects <variable> <value> — the value must trip a validation block.
+# Which variables this run actually exercised, in each direction. Recorded as the
+# assertions run rather than listed by hand, so the coverage control at the bottom
+# cannot drift away from what the script does. See it for why both halves matter.
+rejected_vars=()
+accepted_vars=()
+
+# THE CONTROL EVERY `rejects` BELOW STANDS ON: the root must LOAD CLEAN at its
+# shipped defaults.
+#
+# `rejects` reads a validation diagnostic as evidence that the value it supplied was
+# refused. If a shipped default ever stops satisfying its own validation, that
+# diagnostic is emitted on every invocation regardless of the value — and every
+# assertion in this file goes green while testing nothing at all. It is also a real
+# failure in its own right: a default that fails validation makes a bare `tofu apply`
+# impossible.
+tf_console "1"
+if timed_out "the defaults baseline"; then
+  :
+elif grep -q "Invalid value for variable" <<<"$tf_console_out"; then
+  echo "FAIL  the root does not load at its own defaults — a shipped default fails its" \
+    "validation. Until that is fixed every 'rejected' line below is vacuous: the" \
+    "diagnostic they match on is emitted whatever value is supplied." >&2
+  sed 's/^/        /' <<<"$tf_console_out" >&2
+  failures=$((failures + 1))
+else
+  echo "ok    the root loads clean at its shipped defaults"
+fi
+
+# rejects <variable> <value> [--by <name>] [extra -var args...] — the value must trip
+# a validation block, and the diagnostic must name <variable> as the one that refused
+# it.
+#
+# --by names a DIFFERENT variable when the guard lives downstream: a root variable
+# passed straight into a module whose own variable carries the validation. Writing
+# it out is the point — it is the difference between "the root declares this
+# variable's grammar" and "the root declares no grammar and the module happens to",
+# which is otherwise invisible, and the coverage control at the bottom only counts
+# blocks in the root.
 rejects() {
-  local var="$1" value="$2" out
+  local var="$1" value="$2" by="$1" plain
+  shift 2
+  if [[ "${1:-}" == "--by" ]]; then
+    by="$2"
+    shift 2
+  fi
   # Empty stdin, closed immediately: a rejection is emitted while loading the
   # variables, before the console would read an expression.
-  tf_console "" -var "$var=$value"
+  tf_console "" -var "$var=$value" "$@"
   timed_out "$var=$value" && return
-  out="$tf_console_out"
-  if grep -q "Invalid value for variable" <<<"$out"; then
-    echo "ok    $var=$value rejected"
-  else
-    echo "FAIL  $var=$value was ACCEPTED; no validation block on this path covers it" >&2
+  rejected_vars+=("$var")
+  plain="$(sed 's/\x1b\[[0-9;]*m//g' <<<"$tf_console_out")"
+  if ! grep -q "Invalid value for variable" <<<"$plain"; then
+    echo "FAIL  $var=$value was ACCEPTED; no validation block on this path covers it  [$*]" >&2
     failures=$((failures + 1))
+    return
   fi
+  # 🔴 REFUSED BY *THIS* VARIABLE'S BLOCK. A diagnostic quoting some other variable
+  # means the guard under test never ran — its neighbour's did, on input meant for
+  # this one — so the value here is unguarded while the line reads green.
+  # Two forms because the diagnostic's shape depends on where the block lives: a
+  # root variable's own block is headed `variable "x" {`, while a module's quotes
+  # the offending value as `var.x is <v>` under the module call. Both name the
+  # guard; neither appears for a refusal that came from somewhere else.
+  if ! grep -q "variable \"$by\" {\|var\.$by is " <<<"$plain"; then
+    echo "FAIL  $var=$value was refused, but not by $by's validation block:" >&2
+    sed 's/^/        /' <<<"$plain" >&2
+    failures=$((failures + 1))
+    return
+  fi
+  echo "ok    $var=$value rejected  [$*]"
 }
 
-# accepts <variable> <value> — the counterweight. A validation that rejects
-# everything is not a guard, it is an outage, and it would pass every "rejects"
-# assertion above on its own.
+# accepts <variable> <value> [extra -var args...] — the counterweight. A validation
+# that rejects everything is not a guard, it is an outage, and it would pass every
+# "rejects" assertion above on its own.
 accepts() {
   local var="$1" value="$2" out
-  tf_console "var.$var" -var "$var=$value"
+  shift 2
+  tf_console "var.$var" -var "$var=$value" "$@"
   timed_out "$var=$value" && return
+  accepted_vars+=("$var")
   out="$tf_console_out"
   if grep -q "Invalid value for variable" <<<"$out"; then
     echo "FAIL  $var=$value was REJECTED; it is a supported topology" >&2
@@ -325,7 +396,12 @@ evaluates false module.nats.ha_topology.contradictory -var ha=false -var nats_cl
 # Pre-existing guard, included so this script covers the root's validation blocks
 # rather than only the newest one.
 for v in 0 30000 31883 32767; do accepts nats_mqtt_node_port "$v"; done
-for v in 1883 29999 32768; do rejects nats_mqtt_node_port "$v"; done
+# --by: this is the one variable in the root that declares NO grammar of its own —
+# the refusal comes from modules/nats's mqtt_node_port block, which the root feeds
+# directly. Worth naming rather than hiding: an operator reading variables.tf sees
+# no constraint on nats_mqtt_node_port, and the day the module stops taking it
+# straight through, this line is what says the root never guarded it.
+for v in 1883 29999 32768; do rejects nats_mqtt_node_port "$v" --by mqtt_node_port; done
 
 # --- postgres_instances (ADR-020 A2.3) ---------------------------------------
 #
@@ -499,9 +575,15 @@ evaluates 'tostring(null)' 'local.backup_credentials == null ? null : "set"' -va
 # A target with nothing to restore is a variable validation, so it IS refused in
 # CI. It matters because it is silent otherwise: recovery would replay the whole
 # archive and the operator would believe they had stopped before the bad delete.
-accepts restore_rdb_target_time ""
 rejects restore_rdb_target_time "2026-07-28 03:00:00+00"
 rejects restore_tsdb_target_time "2026-07-28 03:00:00+00"
+# 🔴 THE COUNTERWEIGHT, AND IT HAS TO SET A SOURCE. `accepts <target> ""` — the only
+# acceptance these two blocks had — passes against a condition hard-wired to reject
+# every non-empty target, because the empty string IS the default and the guard is
+# then never asked anything. What has to keep working is the real recovery: a target
+# WITH the source it names. The event store's block had no acceptance at all.
+accepts restore_rdb_target_time "2026-07-28 03:00:00+00" -var restore_rdb_from=dc-rdb
+accepts restore_tsdb_target_time "2026-07-26 01:02:03+00" -var restore_tsdb_from=dc-tsdb
 
 # The per-store objects the modules actually receive. Null on a normal install —
 # and this is the assertion that fails if a future edit makes "restore" a flag
@@ -627,6 +709,45 @@ else
   # exits 1, and `set -e` kills the script right here — losing the summary below.
   failures=$((failures + 1))
 fi
+
+# --- coverage: every validation block the root declares must be exercised -------
+#
+# 🔴 THE ASSERTION THAT KEEPS THIS FILE HONEST AS THE ROOT GROWS. `tofu validate`
+# never runs a validation block, so a new one is dead configuration until something
+# supplies a non-default value — and this script is the only thing that does. Five
+# of the six blocks in variables.tf had never been executed by anything when this
+# control was added: they could have been inverted, or referencing the wrong
+# variable, through every gate the repo runs.
+#
+# BOTH directions are required per variable, because each catches a block the other
+# cannot see. With no `rejects`, a condition hard-wired to `true` is a guard that
+# guards nothing. With no `accepts`, a condition hard-wired to `false` refuses every
+# apply — including the shipped topology.
+guarded="$(awk '/^variable "/ { v = $2; gsub(/"/, "", v) } /^  validation \{/ { print v }' \
+  "$tofu_dir/variables.tf" | sort -u)"
+if [[ -z "$guarded" ]]; then
+  # The control's own control: a parser that matches nothing reports full coverage.
+  echo "FAIL  found no validation blocks in variables.tf — the coverage check below is" \
+    "reading nothing, so it cannot fail. Fix the parser." >&2
+  failures=$((failures + 1))
+fi
+covered=0
+while read -r v; do
+  [[ -n "$v" ]] || continue
+  r=""; a=""
+  printf '%s\n' "${rejected_vars[@]}" | grep -qx -- "$v" || r="no rejects"
+  printf '%s\n' "${accepted_vars[@]}" | grep -qx -- "$v" || a="no accepts"
+  if [[ -n "$r" || -n "$a" ]]; then
+    echo "FAIL  variable \"$v\" declares a validation block that this run never exercised" \
+      "(${r:-ok}, ${a:-ok}). Nothing else in this repo evaluates it: \`tofu validate\`" \
+      "reads variables at their defaults, so the block could be inverted or reference" \
+      "the wrong variable and every gate would stay green." >&2
+    failures=$((failures + 1))
+    continue
+  fi
+  covered=$((covered + 1))
+done <<<"$guarded"
+echo "ok    all $covered validated variable(s) exercised in both directions"
 
 if ((failures > 0)); then
   echo >&2
