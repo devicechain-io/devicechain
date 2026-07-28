@@ -104,14 +104,41 @@ The product/strategy narrative docs can be reconciled with the `/sync-product-do
 
 ## Build, test, and lint (these are the CI gates — run before committing)
 
-Go (from the repo root; the workspace resolves all modules — no vendor step):
+Go — **run these with a MODULE as the working directory, not the repo root.** CI does exactly
+that (`working-directory: ${{ matrix.module }}` on every Go step), and the root is not a Go
+module, so the root-level forms do not do what they look like they do:
+
+- `go build ./...` from the root **fails outright** — `pattern ./...: directory prefix . does not
+  contain modules listed in go.work or their selected dependencies`. So does `./backend/...`:
+  a workspace pattern has to start inside a module, and there is no pattern that spans them all.
+- `gofmt -l .` from the root **prints 8 files** — all under `_legacy/`, the archived pre-migration
+  tree that is deliberately not maintained. A gate documented as "must print nothing" that never
+  prints nothing teaches you to ignore it, or to reformat an archive you were told not to edit.
 
 ```bash
+cd backend/core     # ...or whichever module you touched
 gofmt -l .          # must print nothing
 go build ./...
 go vet ./...
 go test ./...
 ```
+
+Full sweep before committing — the workspace enumerates its own modules, so this needs no list to
+keep in step with `go.work`. Note `gofmt -l` exits 0 even when it names files, which is why its
+output is tested rather than its status; dropping that turns the sweep into a gate that cannot fail:
+
+```bash
+for m in $(go list -m -f '{{.Dir}}'); do
+  ( cd "$m" || exit 1
+    fmt="$(gofmt -l .)"; [ -z "$fmt" ] || { echo "not gofmt-clean:"; echo "$fmt"; exit 1; }
+    go build ./... && go vet ./... && go test ./...
+  ) || echo "FAILED: $m"
+done
+```
+
+This sweep is a superset of the `go` CI job in one respect: `deploy` is a workspace module
+(`deploy/assets.go`), but CI's module discovery globs only `backend/{cli,core,k8s,edge/*,services/*,sims/*,tools/*}`,
+so nothing in CI builds, vets or tests it.
 
 Other areas:
 
