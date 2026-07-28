@@ -296,6 +296,33 @@ resource "helm_release" "cluster" {
   # it is downstream and incidental, so it is written here rather than assumed.
   timeout = 900
 
+  # 🔴 atomic IS LOAD-BEARING, and it is here because of prevent_destroy below —
+  # the two only make sense read together.
+  #
+  # Terraform taints a resource whose CREATE failed. The next plan therefore wants
+  # to REPLACE it, replacement is a destroy plus a create, and prevent_destroy
+  # refuses the destroy. The result is an instance that can never be bootstrapped
+  # again: every subsequent apply dies with "Instance cannot be destroyed", and the
+  # guard is protecting a database that does not exist and never held a byte.
+  # Neither `tofu untaint` nor a re-run recovers it, because Helm also refuses to
+  # upgrade a release with no deployed revision — the destroy Terraform wants IS
+  # the correct recovery, and the lifecycle block forbids exactly that. Recovery
+  # meant `helm uninstall` plus `tofu state rm`, which no operator will find.
+  #
+  # `atomic` removes the trap at its root rather than papering over it: Helm
+  # uninstalls a failed install itself, so the next refresh finds no release, drops
+  # the resource from state, and plans a clean create. The wedge cannot form.
+  #
+  # MEASURED, not reasoned (a server-side rejection injected into a throwaway
+  # release carrying the same prevent_destroy):
+  #   atomic = false → release "failed", state "tainted", next plan ERRORS
+  #   atomic = true  → release removed, state empty, next plan creates cleanly
+  #
+  # This is what makes a lost admission-webhook race (the operator's webhook is not
+  # routable the instant its Deployment reports ready) a re-runnable annoyance
+  # instead of a dead instance.
+  atomic = true
+
   # Databases outlive the deployment, so refuse a naive destroy. The StatefulSet
   # this replaced carried the same guard and it must not be lost in the move: the
   # Cluster OWNS its PersistentVolumeClaims, so deleting this release garbage-

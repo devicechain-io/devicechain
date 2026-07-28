@@ -152,9 +152,35 @@ resource "helm_release" "cnpg" {
     value = var.operator_resources.memory
   }
 
-  # Default wait=true is doing real work here and should not be turned off: the
-  # next slice creates Cluster resources, and it can only do that once the
-  # operator Deployment is Ready — which it cannot become without its CRDs.
+  # Default wait=true is doing real work here and should not be turned off: it
+  # waits for the operator Deployment to become Ready, which it cannot do without
+  # its CRDs, so the Cluster resources in the next slice find their type.
+  #
+  # 🔴 BUT DEPLOYMENT-READY IS NOT WEBHOOK-SERVING, and an earlier version of this
+  # comment claimed the ordering was therefore safe. It is not, and that belief is
+  # what produced the bug:
+  #
+  #   failed calling webhook "mcluster.cnpg.io": dial tcp <clusterIP>:443:
+  #   connect: connection refused
+  #
+  # Helm returns the instant the Deployment reports readyReplicas=1. The webhook's
+  # ClusterIP is not routable until the EndpointSlice is written AND every relevant
+  # kube-proxy has re-synced — including the one on the path the API SERVER uses,
+  # which is the only path that matters and is not a node we schedule onto (it is
+  # tainted on a multi-node cluster and does not exist in the customer's cluster at
+  # all on EKS/GKE). Measured: operator pod Ready at 02:24:38, both Cluster releases
+  # attempted at 02:24:38, refused.
+  #
+  # 🔑 The ordering LOOKED correct for months only because helm_release.barman_plugin
+  # below took ~22s and happened to sit in between. `--compact --no-tls` drops
+  # cert-manager, which drops the plugin, which drops the cover — so the guarantee
+  # was a side effect of an unrelated neighbour, not of anything stated here.
+  #
+  # There is no pure-provider way to order this correctly (no Terraform resource
+  # retries admission), so the fix is NOT here: `atomic = true` on the Cluster
+  # releases makes a lost race leave no residue, and dcctl waits for the API server
+  # to actually ADMIT a Cluster before re-attempting. Do not re-add an ordering
+  # claim to this comment — depends_on cannot express "the webhook answers".
   timeout = 600
 }
 
