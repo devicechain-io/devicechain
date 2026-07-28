@@ -301,6 +301,15 @@ var compactVolumeDecisions = map[string]string{
 	"nats_jetstream_storage": "", // sized; TestCompactReservationFitsItsSmallerVolume
 	"postgres_storage":       "", // sized
 	"timescale_storage":      "", // sized
+	// sized; TestCompactSizesTheBackupDestination checks the VALUE matches
+	// compactSizing, which this map only checks is passed at all.
+	//
+	// 🔑 It arrived in the infrastructure without compact asking for it: A2.5 made
+	// enable_database_backups provision a destination rather than only installing
+	// the plugin, so a compact install that keeps TLS now carries an object store.
+	// This map is what turned that from an invisible footprint change into a
+	// failing test, which is what it was written for.
+	"backup_object_store_storage": "",
 	"monitoring_prometheus_storage": "not sized: --compact removes the monitoring " +
 		"stack outright, so no Prometheus PVC is created. An operator who keeps " +
 		"monitoring with --no-monitoring=false has made that call explicitly and " +
@@ -544,6 +553,38 @@ func TestCompactDropsCertManagerOnlyWhenTLSIsOff(t *testing.T) {
 			"the certificate. With the chart's default self-signed issuer the install " +
 			"fails against a missing CRD; with an external issuer it succeeds and serves " +
 			"no cert at all")
+	}
+
+	// THE OTHER HALF OF THE SAME APPEND, and until now it was pinned by nothing.
+	//
+	// tofu.go emits `enable_cert_manager=false` and `enable_database_backups=false`
+	// from ONE statement, on purpose: the Barman Cloud plugin renders a cert-manager
+	// Issuer and two Certificates, so dropping cert-manager necessarily drops
+	// point-in-time recovery, and splitting the two appends would let a later edit
+	// re-enable one without seeing the other. That comment cited a test by name.
+	// The test did not exist — the citation was written and never followed — so the
+	// coupling it claimed to guarantee rested entirely on the two lines staying
+	// adjacent.
+	//
+	// 🔴 The failure it guards against is not an install error. Re-enable
+	// cert-manager here and the backup plugin comes back with no CRDs to render its
+	// Issuer against, which fails the apply loudly. Re-enable BACKUPS alone and the
+	// install succeeds: the plugin release fails, or renders against nothing, and
+	// what the operator gets is an instance that reports backups on and archives
+	// nowhere. That is the shape this whole slice exists to remove.
+	const backupsOff = "enable_database_backups=false"
+	if !slices.Contains(infraVars(compactState(true)), backupsOff) {
+		t.Error("--compact --no-tls dropped cert-manager but kept database backups on. " +
+			"The Barman Cloud plugin needs cert-manager to render its Issuer and " +
+			"Certificates, so this is an instance whose bootstrap report claims " +
+			"point-in-time recovery it cannot have. Both vars come from one append " +
+			"in tofu.go; keep them there")
+	}
+	if slices.Contains(infraVars(tlsOn), backupsOff) {
+		t.Error("--compact with TLS ON disabled database backups. cert-manager is " +
+			"installed on that path, so the backup plugin has everything it needs — " +
+			"this would silently cost every compact TLS install its point-in-time " +
+			"recovery, and hack/dr-rig.sh runs exactly that configuration")
 	}
 }
 

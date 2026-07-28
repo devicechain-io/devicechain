@@ -935,6 +935,30 @@ func withDeployedInstance(t *testing.T, cfg *config.InstanceConfiguration, err e
 	lookupDeployedInstance = func(context.Context, string, string) (*config.InstanceConfiguration, error) {
 		return cfg, err
 	}
+	// The OTHER thing stepRenderConfig asks the cluster: what the two database
+	// Clusters are already archiving under. Stubbed HERE, with this, because it
+	// answers the same question ("what is already deployed") and every caller of
+	// this helper drives stepRenderConfig.
+	//
+	// 🔴 Without it these tests reach a real API server. They stayed green on a
+	// developer's desk — where a kubeconfig exists and the Clusters do not — and
+	// failed in CI, where building the config is the first thing that errors. A test
+	// that only passes next to a cluster is testing the cluster.
+	// TestDeployedInstanceStubCoversBothClusterLookups is the standing check that
+	// this line is still here.
+	withArchiveState(t, liveArchiveState{}, nil)
+}
+
+// withArchiveState stubs what the two database Clusters are currently archiving
+// under. The zero state is a cluster where neither exists — the disaster case, and
+// the right default for a test that is not about backups.
+func withArchiveState(t *testing.T, live liveArchiveState, err error) {
+	t.Helper()
+	orig := readLiveArchiveState
+	t.Cleanup(func() { readLiveArchiveState = orig })
+	readLiveArchiveState = func(context.Context, string) (liveArchiveState, error) {
+		return live, err
+	}
 }
 
 // deployedWithRootKey is a plausible config for an instance that is already running:

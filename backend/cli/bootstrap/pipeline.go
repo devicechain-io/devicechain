@@ -109,7 +109,13 @@ type State struct {
 	// value writes nothing, which is what every test and every internal pipeline
 	// construction wants.
 	Escrow EscrowPlan
-	Values map[string]string
+	// Restore is the settled database-restore intent (ADR-028 / ADR-020 A2.5):
+	// which archive each store recovers FROM, and how far it replays. Resolved in
+	// the command layer for the same reason as Escrow — every way it can be wrong is
+	// knowable from argv, and an incident is the wrong time to learn it. The zero
+	// value is an ordinary install.
+	Restore RestorePlan
+	Values  map[string]string
 }
 
 // Step is a single named unit of bootstrap work.

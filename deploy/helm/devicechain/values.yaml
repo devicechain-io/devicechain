@@ -361,6 +361,37 @@ metrics:
   # metrics.enabled is false.
   natsPodMonitor: true
 
+  # databaseBackups renders the WAL-archiving and base-backup alerting rules
+  # (ADR-028, ADR-020 A2.5).
+  #
+  # 🔴 It must track whether the infrastructure ACTUALLY archives, which is an
+  # OpenTofu decision this chart cannot see. dcctl reads the
+  # `database_backups_enabled` output between the infra apply and this install and
+  # sets it; a hand-run `helm install` against an instance with backups off should
+  # set it false. Leaving it true there is not dangerous, only useless: with
+  # archive_mode off the series do not exist, so the rules load and can never
+  # fire — which is exactly the silent shape these alerts were written to avoid
+  # elsewhere, so it is worth getting right.
+  #
+  # Ignored when metrics.enabled or metrics.alerts is false.
+  databaseBackups: true
+
+  # The namespace the CloudNativePG Clusters run in, i.e. where
+  # cnpg_pg_stat_archiver_* and barman_cloud_cloudnative_pg_io_* are exported.
+  #
+  # It is NOT instance.id. The databases are infrastructure and live alongside the
+  # broker, so an alert scoped to the instance's own namespace would select
+  # nothing — a rule that loads, evaluates zero series, and never fires. This is
+  # the same value that appears inside
+  # instance.config.persistence.*.configuration.hostname, stated separately
+  # because a metric label is not parseable out of a DSN.
+  #
+  # Where several instances share one infrastructure namespace, each renders these
+  # rules against the same series and each gets its own alert. That is correct
+  # rather than duplicated: every one of those instances stops being recoverable
+  # when that archiver fails.
+  databaseNamespace: dc-system
+
 # Kubernetes volume wiring for the FILESYSTEM object store (ADR-058), i.e. when
 # instance.config.infrastructure.blob.backend is "filesystem". The filesystem backend
 # reads/writes blob.directory, and because the service pods run with a read-only root

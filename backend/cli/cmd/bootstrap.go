@@ -37,6 +37,10 @@ var (
 	bootstrapEscrowPassFile  string
 	bootstrapNoEscrow        bool
 	bootstrapRestoreRootKey  string
+	bootstrapRestoreRdbFrom  string
+	bootstrapRestoreRdbAt    string
+	bootstrapRestoreTsdbFrom string
+	bootstrapRestoreTsdbAt   string
 )
 
 // devModeResolution is the set of flag values the --dev preset settles on.
@@ -177,6 +181,35 @@ func resolveCompactMode(changed func(string) bool, profile string, noTLS, noMoni
 	return res, nil
 }
 
+// restoreFlagsFromArgv assembles the database-restore inputs from the parsed
+// flags and the already-settled escrow plan.
+//
+// Extracted from RunE so the wiring itself is testable. It is four string
+// copies and two derivations, which is exactly the kind of code that looks too
+// trivial to test and then transposes rdb and tsdb — a mistake with no symptom
+// at all until an operator recovers telemetry into the relational store's
+// timeline during an incident. The tests drive real argv through the real flag
+// set, so a rename on either side is a failure rather than a silent no-op.
+func restoreFlagsFromArgv(escrowPlan bootstrap.EscrowPlan) bootstrap.RestoreFlags {
+	return bootstrap.RestoreFlags{
+		RdbFrom:        bootstrapRestoreRdbFrom,
+		RdbTargetTime:  bootstrapRestoreRdbAt,
+		TsdbFrom:       bootstrapRestoreTsdbFrom,
+		TsdbTargetTime: bootstrapRestoreTsdbAt,
+		BackupsEnabled: bootstrap.DatabaseBackupsEnabled(bootstrapNoCNPG, bootstrapCompact, bootstrapNoTLS),
+		// Read off the SETTLED escrow plan rather than the raw flag, so this
+		// refusal and the thing it protects cannot disagree.
+		//
+		// 🔴 RestoringRootKey(), NOT RestoredRootKey != "". The key field is only
+		// populated once the artifact has actually been opened, which a DRY RUN
+		// deliberately never does — so keying on it refused
+		// `--dry-run --restore-rdb-from=X --restore-root-key=F` with a message
+		// telling the operator to pass --restore-root-key, which they had passed.
+		// A dry run is precisely how you rehearse a restore before you need it.
+		RootKeyRestored: escrowPlan.RestoringRootKey(),
+	}
+}
+
 // bootstrapCmd provisions a usable DeviceChain instance on a target provider.
 // It is a thin wrapper over the bootstrap engine package (ADR-032).
 var bootstrapCmd = &cobra.Command{
@@ -314,6 +347,17 @@ var bootstrapCmd = &cobra.Command{
 			return err
 		}
 
+		// Settle the database restore alongside it, and for the same reason: both
+		// failure modes here — a recovery target with nothing to recover, a restore on
+		// a run whose other flags disable the plugin that reads the archive — are
+		// knowable from argv, and an incident is the wrong time to learn either.
+		// Resolved AFTER the presets, so it sees the --compact/--dev values that decide
+		// whether this instance has a backup destination at all.
+		restorePlan, err := bootstrap.ResolveRestorePlan(restoreFlagsFromArgv(escrowPlan))
+		if err != nil {
+			return err
+		}
+
 		opts := bootstrap.Options{
 			Instance:             args[1],
 			KubeContext:          bootstrapKubeContext,
@@ -362,6 +406,7 @@ var bootstrapCmd = &cobra.Command{
 			EnabledAreas:         enabledAreas,
 			Lwm2mIdentities:      lwm2mIdentities,
 			Escrow:               escrowPlan,
+			Restore:              restorePlan,
 			Values:               map[string]string{},
 		}
 		return bootstrap.NewDefaultPipeline().Run(ctx, st)
@@ -400,6 +445,28 @@ func init() {
 	bootstrapCmd.Flags().StringVar(&bootstrapEscrowPassFile, "escrow-passphrase-file", "", "read the escrow passphrase from this file instead of $"+bootstrap.EscrowPassphraseEnv+" or an interactive prompt (trailing newline stripped)")
 	bootstrapCmd.Flags().BoolVar(&bootstrapNoEscrow, "no-escrow", false, "do NOT escrow the secret-store root key. The key then exists only inside the cluster: losing the cluster makes every stored secret permanently unreadable, even from a database backup, because no DeviceChain backup contains etcd. For throwaway instances only; implied by --dev")
 	bootstrapCmd.Flags().StringVar(&bootstrapRestoreRootKey, "restore-root-key", "", "disaster recovery: seed the instance's secret-store root key FROM this escrow artifact instead of minting a fresh one, so a rebuilt cluster can read secrets restored from a database backup. Needs the artifact's passphrase")
+
+	// Database restore (ADR-028 / ADR-020 A2.5). These are REBUILD-time levers, not
+	// repair levers — see RestorePlan. dcctl picks the path the recovered cluster
+	// archives INTO by itself, and it is deliberately not a flag: it must stay put
+	// across every later re-run, so it is read back off the live cluster rather than
+	// re-derived from argv.
+	bootstrapCmd.Flags().StringVar(&bootstrapRestoreRdbFrom, "restore-rdb-from", "",
+		"disaster recovery: recover the RELATIONAL store from this archive path (the serverName "+
+			"inside the backup bucket, e.g. dc-rdb) instead of initialising an empty database. "+
+			"🔴 Only takes effect when the cluster is CREATED — recover by destroying the instance "+
+			"and rebuilding it with this set, not by re-running against a live one. Pair with "+
+			"--restore-root-key, or the restored secrets cannot be decrypted")
+	bootstrapCmd.Flags().StringVar(&bootstrapRestoreRdbAt, "restore-rdb-at", "",
+		"stop the relational store's recovery at this RFC3339 timestamp instead of replaying the "+
+			"whole archive. For the disaster where the data was destroyed correctly — a bad migration, "+
+			"a mistaken delete — so pick a moment strictly before the damage. Needs --restore-rdb-from")
+	bootstrapCmd.Flags().StringVar(&bootstrapRestoreTsdbFrom, "restore-tsdb-from", "",
+		"disaster recovery: recover the EVENT store from this archive path (e.g. dc-tsdb). The two "+
+			"stores keep independent timelines and are restored separately: rewinding telemetry to "+
+			"yesterday does not mean the control plane should be rewound with it")
+	bootstrapCmd.Flags().StringVar(&bootstrapRestoreTsdbAt, "restore-tsdb-at", "",
+		"stop the event store's recovery at this RFC3339 timestamp. Needs --restore-tsdb-from")
 
 	rootCmd.AddCommand(bootstrapCmd)
 }

@@ -52,7 +52,8 @@ instancia que parece perfectamente sana y no tiene ningún dato.
    tú conservas; consulta [Recuperación ante desastres](./disaster-recovery.md).
 2. **Aplicar la infraestructura** — ejecuta `tofu apply` sobre la configuración de
    OpenTofu incrustada (NATS, PostgreSQL, TimescaleDB, ingress de NGINX,
-   cert-manager, el operador CloudNativePG y su plugin de respaldo Barman Cloud)
+   cert-manager, el operador CloudNativePG y su plugin de respaldo Barman Cloud,
+   y el almacén de objetos al que ese plugin archiva)
    vía [terraform-exec](https://github.com/hashicorp/terraform-exec).
    El estado se guarda en `~/.devicechain/<instance>/infra`, de modo que las
    ejecuciones posteriores son incrementales.
@@ -68,6 +69,29 @@ instancia que parece perfectamente sana y no tiene ningún dato.
 Dado que los artefactos incrustados son los *mismos* que distribuye la
 plataforma, una instancia arrancada de este modo ejercita el despliegue real —no
 puede desviarse de un despliegue de producción.
+
+:::info El destino de respaldo predeterminado es un componente AGPL
+Los respaldos de base de datos necesitan un destino y, de forma predeterminada, ese destino
+es un **MinIO** de una sola réplica en el namespace de tu instancia, para que un arranque
+estándar produzca una instancia cuyo log de escritura anticipada (WAL) se archive de verdad,
+en lugar de una que lleve un plugin de respaldo sin ningún sitio donde escribir.
+
+Dos cosas que conviene saber antes de aceptar ese valor predeterminado. MinIO se distribuye
+bajo licencia **AGPL-3.0**, y la edición comunitaria de MinIO entró en modo de mantenimiento
+en diciembre de 2025 y se archivó en abril de 2026, por lo que la imagen fijada no recibe más
+parches de seguridad. Ninguna de las dos cosas afecta a la licencia Apache-2.0 de la propia
+DeviceChain —la imagen se referencia, nunca se compila, modifica ni redistribuye, y la
+plataforma se comunica con ella mediante la API HTTP de S3—, pero el componente se ejecuta en
+*tu* clúster, y muchas organizaciones no permiten software AGPL con independencia de cómo se
+use.
+
+Apunta el destino de respaldo a un almacenamiento fuera del clúster para evitar ambas cosas.
+Esa es la configuración de producción recomendada de todos modos, por un motivo que nada
+tiene que ver con las licencias: un bucket dentro del clúster comparte su dominio de fallo,
+así que no puede constituir recuperación ante desastres. Consulta
+[Recuperación ante desastres](./disaster-recovery.md) y el `backup_destination` de la
+configuración de OpenTofu.
+:::
 
 ## Prerrequisitos {#prerequisites}
 

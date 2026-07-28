@@ -30,11 +30,12 @@ server. There are no cross-writes to keep consistent between them.
 
 Two consequences worth planning around:
 
-- **Different schedules.** Core data is small and changes when someone changes
-  something, so it wants frequent, cheap, whole-database backups. Event data is
-  bulk, append-mostly, and already under a retention policy
-  ([data lifecycle](../concepts/architecture.md)) — backing up chunks the lifecycle
-  reconciler is about to drop is wasted storage.
+- **Different schedules.** Both stores are archived the same way — a base backup plus
+  a continuous stream of write-ahead log — but they do not want the same base-backup
+  cadence or the same retention. Core data is small and changes when someone changes
+  something. Event data is bulk, append-mostly, and already under a retention policy
+  ([data lifecycle](../concepts/architecture.md)) — keeping base backups of chunks the
+  lifecycle reconciler is about to drop is paying twice to store the same rows.
 - **Different recovery targets.** Restoring core data alone gives you a *working*
   instance: devices reconnect, detection rules run, commands dispatch, secrets
   decrypt. Restoring event data backfills history into it. An instance missing its
@@ -134,42 +135,76 @@ you would miss.
 
 ## Recovering an instance {#recover}
 
-The order matters. Seed the key **first**, restore the data **second** — an instance
-built on the wrong key will write new secrets under it, and those become collateral
-damage when you fix the key afterwards.
+Recovery is **one command**, and it is a command that builds a new instance. The
+database is recovered from its archive as the cluster is created, before any service
+connects to it, seeded with the root key from your escrow artifact.
 
-**1. Rebuild the instance with the escrowed key.**
+That is why there is no "restore into the running instance" step here. There is no
+supported way to do that, deliberately: restoring underneath services that have
+already created their own schemas means dropping tables they hold open and racing
+their migrations. **Recover by rebuilding.**
 
-```bash
-dcctl bootstrap local my-instance --restore-root-key ~/backups/my-instance-rootkey.escrow
-```
-
-You will be asked for the artifact's passphrase (or supply it with
-`--escrow-passphrase-file` / `DCCTL_ESCROW_PASSPHRASE`). The new instance now runs the
-*same* root key the old one did.
-
-**2. Quiesce the instance, restore core data, bring it back.** The rebuilt instance
-has already started and created its own empty schemas, so restoring underneath a
-running service means dropping tables it holds open and racing its migrations. Scale
-the workloads down first:
+**1. Rebuild the instance, recovering the database and the key together.**
 
 ```bash
-kubectl -n my-instance get deploy -o custom-columns=NAME:.metadata.name,R:.spec.replicas --no-headers
-kubectl -n my-instance scale deploy --all --replicas=0
-# ... restore your PostgreSQL backup into the instance database ...
-kubectl -n my-instance scale deploy/<name> --replicas=<n>   # per the counts recorded above
-kubectl -n my-instance wait --for=condition=available deploy --all --timeout=300s
+dcctl bootstrap local my-instance \
+  --restore-root-key ~/backups/my-instance-rootkey.escrow \
+  --restore-rdb-from dc-rdb
 ```
 
-Record the replica counts before scaling down rather than assuming `1` — a scaled-out
-area would come back smaller than it was.
+`--restore-rdb-from` names the **archive path inside your backup bucket** — the
+`serverName` the old instance was writing under, `dc-rdb` unless you changed it. You
+will be asked for the artifact's passphrase (or supply it with
+`--escrow-passphrase-file` / `DCCTL_ESCROW_PASSPHRASE`).
 
-**3. Restore event data** separately, into TimescaleDB, whenever it suits your
-recovery-time target. Step 4 does not depend on it.
+Two things this command will not let you do:
+
+- **Recover data without the key.** `--restore-rdb-from` on its own is refused. It
+  would rehydrate every row and mint a *fresh* root key, so the restore would report
+  success and every stored secret would be permanently unreadable — the one failure
+  that is invisible at the moment it happens.
+- **Recover into a live instance.** The flag only takes effect when the database
+  cluster is *created*. Re-running it against an instance that already exists does
+  nothing at all, rather than half-working.
+
+The recovered instance immediately begins archiving under a **new** archive path of
+its own, so it cannot write over the archive it was just born from. The bootstrap
+summary prints the name it chose.
+
+**2. Roll back to a point in time instead**, if the disaster was that the data was
+destroyed *correctly* — a bad migration, a mistaken bulk delete. Add
+`--restore-rdb-at` with an RFC 3339 timestamp strictly before the damage:
+
+```bash
+dcctl bootstrap local my-instance \
+  --restore-root-key ~/backups/my-instance-rootkey.escrow \
+  --restore-rdb-from dc-rdb \
+  --restore-rdb-at 2026-03-14T09:15:00Z
+```
+
+**3. Restore event data** separately with `--restore-tsdb-from` (and optionally
+`--restore-tsdb-at`), whenever it suits your recovery-time target. The two stores
+keep independent timelines on purpose: rewinding telemetry to yesterday does not mean
+the control plane should be rewound with it. Step 4 does not depend on this.
 
 **4. Confirm the stored secrets decrypt** — read back a secret-backed object (an
 outbound connector, a notification channel) through the console or the API. A restore
 that returns rows is not proof; a value that decrypts is.
+
+:::caution The bootstrap finishing is not the database being ready
+`dcctl` reports success once the workloads are up, which can be before the recovering
+database has finished replaying its archive. If a recovery cannot reach its archive it
+sits waiting rather than failing, so check the database itself before you believe a
+restore:
+
+```bash
+kubectl -n dc-system get clusters.postgresql.cnpg.io
+```
+
+You are looking for `Cluster in healthy state`. A cluster stuck in `Setting up
+primary` has not recovered — most often the archive is unreachable, or
+`--restore-rdb-from` names a path that does not exist in the bucket.
+:::
 
 :::note Restoring under a different instance name
 Perfectly supported — the artifact records the name it was written for and `dcctl`

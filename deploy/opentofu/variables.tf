@@ -382,17 +382,285 @@ variable "cnpg_plugin_chart_version" {
 
 variable "enable_database_backups" {
   description = <<-EOT
-    Install the Barman Cloud plugin, which is what makes WAL archiving, scheduled
-    backups and PITR possible at all (ADR-028).
+    WAL archiving, scheduled base backups and PITR for both database stores
+    (ADR-028, ADR-020 A2.5). This is the master switch: it installs the Barman
+    Cloud plugin AND provisions the destination the plugin writes to.
 
     🔴 Requires cert-manager to be installed and READY — the plugin's chart
     renders an Issuer and two Certificates, so it fails outright without the
     CRDs. Turning this off yields an install with database HA and NO backups,
     which is a real configuration (compact uses it) but must be a deliberate one:
     the difference is invisible from the Cluster resources.
+
+    🔑 Until A2.5 this flag installed the PLUGIN and nothing else — no object
+    store, no ObjectStore resources, no ScheduledBackup — so `true` meant "point-
+    in-time recovery is possible in principle" while nothing was being archived
+    anywhere. It now means what it says. Where the backups LAND is
+    var.backup_destination, and an in-cluster destination is not off-site backup;
+    read that variable before believing an instance is recoverable.
   EOT
   type        = bool
   default     = true
+}
+
+variable "backup_destination" {
+  description = <<-EOT
+    Where database backups go when enable_database_backups is on.
+
+      in-cluster  Provision a single-replica MinIO in this cluster and archive to
+                  it. The default, so that a plain bootstrap produces an instance
+                  whose WAL is genuinely archived rather than one carrying a
+                  backup plugin with nowhere to put anything.
+
+      external    Archive to an S3-compatible endpoint you supply via
+                  backup_endpoint_url + backup_access_key/backup_secret_key. The
+                  recommended production configuration.
+
+    🔴 `in-cluster` IS NOT OFF-SITE BACKUP. It shares the cluster's failure
+    domain and, on a single-node install, the node's disk — lose the cluster and
+    the backups go with it. What it does buy is the recovery that is actually
+    needed most often: point-in-time recovery from an operator error, a bad
+    migration or a bad delete, where the cluster is fine and the data is wrong.
+    It also makes the restore drill exercise the same code path production uses.
+
+    There is deliberately no third value meaning "backups on, destination none".
+    That state is the one this slice exists to remove: a plugin installed, a flag
+    reading true, and nothing archived anywhere. Set enable_database_backups to
+    false instead, which is honest and is reported as such.
+  EOT
+  type        = string
+  default     = "in-cluster"
+
+  validation {
+    condition     = contains(["in-cluster", "external"], var.backup_destination)
+    error_message = "backup_destination must be \"in-cluster\" or \"external\"."
+  }
+}
+
+variable "backup_endpoint_url" {
+  description = <<-EOT
+    S3 endpoint for backup_destination = "external", e.g.
+    https://s3.eu-west-1.amazonaws.com or a MinIO/Ceph/R2 endpoint.
+
+    🔴 Required when the destination is external, and refused when it is
+    in-cluster — the in-cluster endpoint is an output of the object-store module,
+    and accepting an override would let the two disagree. An empty value is the
+    same string as "I forgot", so it is a validation error rather than a fallback
+    to AWS's default endpoint.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "backup_bucket_rdb" {
+  description = "Bucket for the relational store's backups. One bucket per store, never a shared bucket with two prefixes: two stores are two independent restore domains, and the core-data half is what the root-key escrow gates."
+  type        = string
+  default     = "devicechain-rdb"
+}
+
+variable "backup_bucket_tsdb" {
+  description = "Bucket for the event store's backups. Separate from the relational one so event data can be restored without touching the control plane, and vice versa."
+  type        = string
+  default     = "devicechain-tsdb"
+}
+
+variable "backup_access_key" {
+  description = "Access key for the backup destination. For the in-cluster store this is also the credential MinIO is provisioned with. Stable across applies rather than minted per run — a rotated object-store credential makes WAL archiving fail silently while the database keeps accepting writes."
+  type        = string
+  default     = "devicechain"
+}
+
+variable "backup_secret_key" {
+  description = "Secret key for the backup destination. Override for any deploy that is not a local one."
+  type        = string
+  default     = "devicechain"
+  sensitive   = true
+}
+
+variable "backup_server_name_rdb" {
+  description = <<-EOT
+    Path within the relational store's bucket. Empty means the Cluster's own name
+    (`dc-rdb`), which is right for every ordinary install.
+
+    🔴 A RESTORED CLUSTER MUST SET THIS, and it is exposed at the root precisely
+    so that a restore does not require editing module source during an incident.
+    CloudNativePG refuses to let a recovered cluster archive back over the path it
+    recovered from, and the refusal is not a clean error: the cluster stays in
+    `Setting up primary` indefinitely, logging `WAL archive check failed for
+    server ...: Expected empty archive`. It does not fail the apply — it hangs
+    half-built, which is a far worse thing to meet at 3am than a rejection.
+
+    Set it to something new (e.g. "dc-rdb-restored-2026-07-28") on the cluster you
+    recover INTO, so it starts a fresh timeline alongside the archive it read
+    rather than writing into it.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "backup_server_name_tsdb" {
+  description = "Path within the event store's bucket. Empty means the Cluster's own name (`dc-tsdb`). See backup_server_name_rdb — a restored cluster must set this, or it hangs in `Setting up primary` rather than failing."
+  type        = string
+  default     = ""
+}
+
+variable "backup_schedule" {
+  description = <<-EOT
+    Cron schedule for the recurring base backup, applied to both stores.
+
+    🔴 SIX FIELDS, NOT FIVE. CloudNativePG's cron carries a leading SECONDS
+    field, unlike a Kubernetes CronJob. A five-field entry is accepted by the API
+    and then never runs: the object exists, `kubectl get scheduledbackup` shows
+    it, and no backup is ever taken. The default below is 03:00 daily. The chart
+    counts the fields and refuses at render time.
+
+    Empty disables the recurring base backup while leaving WAL archiving on,
+    which is a destination that grows forever and restores nothing.
+  EOT
+  type        = string
+  default     = "0 0 3 * * *"
+}
+
+# ---------------------------------------------------------------------------
+# restore (ADR-028, ADR-020 A2.5)
+#
+# 🔴 THESE ARE REBUILD-TIME LEVERS, NOT REPAIR LEVERS. `spec.bootstrap` is read
+# when CloudNativePG CREATES a Cluster, so pointing one of these at a store that
+# already exists is expected to do nothing whatsoever — no error, no restore, a
+# green apply. The procedure is: lose (or deliberately destroy) the instance,
+# then rebuild it with these set. hack/dr-rig.sh rehearses exactly that.
+#
+# One pair per store rather than a single switch, because the two stores keep
+# independent WAL timelines and are genuinely restored separately: an event
+# store rewound to yesterday does not mean the control plane should be, and
+# rewinding it anyway discards every tenant, device and rule created since.
+# ---------------------------------------------------------------------------
+
+variable "restore_rdb_from" {
+  description = <<-EOT
+    Recover the RELATIONAL store from this serverName (the folder inside
+    backup_bucket_rdb) instead of initialising an empty one. Empty is a normal
+    install.
+
+    🔴 Setting this REQUIRES backup_server_name_rdb, set to something else.
+    CloudNativePG refuses to archive into a non-empty archive, so a restored
+    cluster pointed back at the path it recovered from comes up and then hangs
+    in `Setting up primary` with its WAL going nowhere. The root guard below
+    refuses the combination at PLAN time rather than letting an operator find it
+    mid-incident.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "restore_tsdb_from" {
+  description = "Recover the EVENT store from this serverName instead of initialising an empty one. Same rules as restore_rdb_from, including the mandatory distinct backup_server_name_tsdb."
+  type        = string
+  default     = ""
+}
+
+variable "restore_rdb_target_time" {
+  description = <<-EOT
+    Point-in-time recovery target for the relational store: an RFC3339 or
+    PostgreSQL timestamp. Empty replays the entire archive, which is what a
+    hardware-loss restore wants.
+
+    Set this for the OTHER kind of disaster — the one where the data was
+    destroyed correctly, by a bad migration or a mistaken delete, and the goal
+    is the state just before it. Recovery stops at the target, so pick a moment
+    strictly before the damage.
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.restore_rdb_target_time == "" || var.restore_rdb_from != ""
+    error_message = "restore_rdb_target_time is set but restore_rdb_from is empty, so nothing is being restored and the target would be silently ignored. Set restore_rdb_from, or drop the target."
+  }
+}
+
+variable "restore_tsdb_target_time" {
+  description = "Point-in-time recovery target for the event store. Empty replays the entire archive. See restore_rdb_target_time."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.restore_tsdb_target_time == "" || var.restore_tsdb_from != ""
+    error_message = "restore_tsdb_target_time is set but restore_tsdb_from is empty, so nothing is being restored and the target would be silently ignored. Set restore_tsdb_from, or drop the target."
+  }
+}
+
+variable "backup_retention" {
+  description = <<-EOT
+    Recovery WINDOW to keep, e.g. "7d". Not a backup count: this guarantees the
+    cluster stays restorable to any point in the window, so barman keeps the base
+    backup predating the window plus every WAL since. Empty disables pruning.
+
+    🔴 THIS AND backup_object_store_storage ARE ONE DECISION, and the first
+    version of this configuration shipped them as two. Every scheduled backup is
+    a FULL base backup, so a `Nd` window retains roughly `N+1` complete copies of
+    BOTH databases:
+
+        destination ≈ (retention_days + 1) × compressed(rdb + tsdb) + WAL
+
+    WAL is the cheap term and can be ignored: `archive_timeout` forces a segment
+    every 5 minutes, but a segment closed early is zero-filled past the switch
+    record and gzips to tens of KiB, so both stores together cost well under a
+    GiB per month. The base backups are the whole cost.
+
+    At the shipped 20Gi destination that budget is roughly 2.5 GiB of combined
+    compressed base backup — comfortable for a small-to-moderate instance at 7
+    days, and NOT comfortable at 30. A 30-day window was the original default and
+    it fills the shipped destination in about three weeks on an instance of any
+    real size, monotonically, because pruning removes nothing until backups start
+    ageing out of the window. What follows is the documented cascade: the
+    destination fills, archiving fails, WAL accumulates on the DATABASES' volumes,
+    and PostgreSQL stops.
+
+    So: raising this REQUIRES raising backup_object_store_storage with it. There
+    is no check that enforces it — the sizes depend on data nobody knows at plan
+    time — which is why it is stated here rather than assumed.
+  EOT
+  type        = string
+  default     = "7d"
+}
+
+variable "backup_object_store_storage" {
+  description = <<-EOT
+    Data volume for the in-cluster object store.
+
+    🔴 SIZE IT WITH backup_retention, NOT WITH THE DATABASE VOLUMES. Every
+    scheduled backup is a FULL base backup, so this holds roughly
+    `retention_days + 1` complete compressed copies of BOTH databases, plus the
+    WAL between them:
+
+        destination ≈ (retention_days + 1) × compressed(rdb + tsdb) + WAL
+
+    The default pairs 20Gi with a 7-day window, which budgets about 2.5 GiB of
+    combined compressed base backup. Raise BOTH together or neither: the
+    arithmetic is multiplicative in the retention window and no check can enforce
+    it, because the compressed size of a database is not knowable at plan time.
+
+    🔴 When it fills, archiving fails — and failed archiving does not stall
+    commits, it accumulates WAL on the DATABASES' own volumes until those fill and
+    PostgreSQL stops. A too-small destination takes the instance down by a route
+    that points nowhere near a bucket. BackupDestinationAlmostFull fires at 85% to
+    give warning, which is the only reason the failure is survivable.
+
+    🔴 Growing this later may not work in place. It is a PVC, so expansion needs a
+    StorageClass with allowVolumeExpansion — kind's default local-path has none,
+    and every provisioner refuses a SHRINK. That last one bites a real path:
+    re-running bootstrap on an existing instance with `--compact` asks for a
+    smaller value than the default and the apply fails.
+  EOT
+  type        = string
+  default     = "20Gi"
+}
+
+variable "backup_object_store_storage_class" {
+  description = "StorageClass for the in-cluster object store's volume. Empty uses the cluster default."
+  type        = string
+  default     = ""
 }
 
 # --- TimescaleDB (event hypertables, ADR-004) -----------------------------------
@@ -437,6 +705,27 @@ variable "timescale_instances" {
     condition     = contains([0, 1, 3, 5], var.timescale_instances)
     error_message = "timescale_instances must be 0 (derive from var.ha), 1, 3, or 5. 2 is deliberately rejected: it costs a node without tolerating a standby loss."
   }
+}
+
+variable "allow_backup_destination_removal" {
+  description = <<-EOT
+    Proceed even though this apply destroys an in-cluster backup destination that
+    currently holds backups.
+
+    🔴 An ASSERTION THAT YOU HAVE HANDLED THE BACKUPS, not a migration — the same
+    shape as allow_legacy_rdb_removal, and for the same reason Terraform's own
+    prevent_destroy does not cover it: the object store is conditional on
+    `enable_database_backups && backup_destination == "in-cluster"`, and dropping a
+    module's count to zero ORPHANS its resources, which are then destroyed without
+    consulting any lifecycle rule.
+
+    What is at risk is the entire recovery window for BOTH databases — every base
+    backup and every archived WAL segment, for the control plane and the event
+    history alike. Nothing here can tell a copied archive from an abandoned one,
+    so setting this is a claim only you can make.
+  EOT
+  type        = bool
+  default     = false
 }
 
 variable "allow_legacy_tsdb_removal" {

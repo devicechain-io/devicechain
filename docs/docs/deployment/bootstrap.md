@@ -47,7 +47,8 @@ the same hostname, leaving an instance that looks perfectly healthy and has no d
    [Disaster Recovery](./disaster-recovery.md).
 2. **Apply infrastructure** — `tofu apply` the embedded OpenTofu config (NATS,
    PostgreSQL, TimescaleDB, NGINX ingress, cert-manager, the CloudNativePG
-   operator and its Barman Cloud backup plugin) via
+   operator and its Barman Cloud backup plugin, and the object store the backup
+   plugin archives to) via
    [terraform-exec](https://github.com/hashicorp/terraform-exec). State is kept in
    `~/.devicechain/<instance>/infra`, so subsequent runs are incremental.
 3. **Install core** — render the operator (CRDs + RBAC + controller) and apply it
@@ -61,6 +62,26 @@ the same hostname, leaving an instance that looks perfectly healthy and has no d
 Because the embedded artifacts are the *same* ones the platform ships, a
 bootstrapped instance exercises the real deployment — it cannot drift from a
 production deploy.
+
+:::info The default backup destination is an AGPL component
+Database backups need somewhere to go, and by default that somewhere is a single-replica
+**MinIO** in your instance's namespace, so that a stock bootstrap produces an instance
+whose write-ahead log is genuinely being archived rather than one carrying a backup plugin
+with nowhere to put anything.
+
+Two things to know before you accept that default. MinIO is licensed **AGPL-3.0**, and
+community MinIO entered maintenance mode in December 2025 and was archived in April 2026,
+so the pinned image receives no further security patches. Neither affects DeviceChain's own
+Apache-2.0 licensing — the image is referenced, never built, modified or redistributed, and
+the platform reaches it over the S3 HTTP API — but the component does run in *your* cluster,
+and many organisations do not permit AGPL software regardless of how it is used.
+
+Point the backup destination at storage outside the cluster to avoid both. That is the
+recommended production configuration anyway, for a reason that has nothing to do with
+licensing: an in-cluster bucket shares the cluster's failure domain, so it cannot be
+disaster recovery. See [Disaster Recovery](./disaster-recovery.md) and the OpenTofu
+configuration's `backup_destination`.
+:::
 
 ## Prerequisites {#prerequisites}
 

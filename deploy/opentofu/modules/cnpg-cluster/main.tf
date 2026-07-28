@@ -196,6 +196,100 @@ variable "resources" {
   }
 }
 
+variable "backup" {
+  description = <<-EOT
+    WAL archiving + scheduled base backups for this store, via the Barman Cloud
+    plugin (ADR-028, ADR-020 A2.5). Null disables backup for this store.
+
+    🔴 A NULL HERE IS A STORE WITH NO BACKUPS, and that is invisible from
+    everything else about the Cluster. It runs, it replicates, it passes every
+    health check, and it cannot be restored to any point in time. The root
+    derives this from one flag for both stores so the two cannot end up in
+    different states, and the `backup_destination` output reports where each
+    store's backups actually land rather than restating the flag.
+
+    The object is all-or-nothing on purpose: the chart refuses a partially
+    populated destination rather than rendering an ObjectStore that fails every
+    archive attempt. See chart/templates/objectstore.yaml for why a half-set
+    destination is the dangerous case -- it does not stop writes and it does not
+    crash anything.
+
+    `server_name` is the path within the bucket, defaulting to the cluster name.
+    A RESTORED cluster must set it: CloudNativePG refuses to archive back over
+    the path it recovered from, so a recovery that keeps the old value comes up
+    with archiving permanently broken.
+  EOT
+
+  type = object({
+    bucket                = string
+    endpoint_url          = string
+    credentials_secret    = string
+    access_key_id_key     = string
+    secret_access_key_key = string
+
+    server_name = optional(string, "")
+
+    # Forces a WAL switch on an idle cluster, bounding the RPO to this interval
+    # rather than to "whenever a segment happens to fill". Also what makes the
+    # archive-lag alert meaningful instead of red on every quiet instance.
+    archive_timeout = optional(string, "5min")
+
+    schedule          = optional(string, "0 0 3 * * *")
+    retention_policy  = optional(string, "30d")
+    wal_max_parallel  = optional(number, 2)
+    data_jobs         = optional(number, 2)
+    endpoint_ca       = optional(object({ name = string, key = string }))
+    sidecar_resources = optional(object({ cpu = string, memory = string }), { cpu = "50m", memory = "128Mi" })
+  })
+
+  default = null
+}
+
+variable "restore" {
+  description = <<-EOT
+    Recover this store from an existing backup instead of initialising an empty
+    one (ADR-028, ADR-020 A2.5). Null is a normal install.
+
+    🔴 THIS IS THE HALF THAT MAKES `backup` MEAN SOMETHING. A destination nobody
+    has restored from is a destination nobody has shown to hold a restorable
+    database, and every archive metric reads the same either way. The chart
+    refuses the combinations that recover the wrong thing or wedge on the way
+    back up; hack/dr-rig.sh is what proves the path end to end.
+
+    `source_server_name` is the folder inside the bucket to read, and it has no
+    default on purpose: the only inference available is this cluster's own name,
+    which on a fresh install is an empty path that recovers nothing.
+
+    `object_store_name` defaults to the ObjectStore this module renders for its
+    own archiving, which is the normal case -- the bucket outlived the cluster.
+
+    🔴 A RESTORED STORE THAT ALSO ARCHIVES NEEDS ITS OWN `backup.server_name`,
+    and the chart will not render without one. CloudNativePG refuses to archive
+    into a non-empty archive, so a restored cluster pointed back at the path it
+    recovered from comes up and then hangs in `Setting up primary` -- during a
+    restore, which is the worst time to be reading pod logs.
+  EOT
+
+  type = object({
+    source_server_name = string
+    object_store_name  = optional(string, "")
+
+    # PostgreSQL recovery-target fields, camelCase, passed through as written.
+    # Empty replays the whole archive. A misspelling here is caught by
+    # hack/check-cnpg-chart-schema.sh against the real CRD rather than by this
+    # type -- the CRD is the only thing that knows the field names.
+    recovery_target = optional(map(string), {})
+
+    # `targetImmediate` is separate because it is the one recovery-target field
+    # that is a BOOLEAN. Inside the map above it would be the string "true",
+    # which the API server rejects against a boolean field -- so it gets its own
+    # typed lever rather than a footgun in a free-form map.
+    recovery_target_immediate = optional(bool, false)
+  })
+
+  default = null
+}
+
 locals {
   # The credentials Secret, in the shape CNPG's bootstrap expects
   # (kubernetes.io/basic-auth with username/password). Left unset, CNPG mints a
@@ -203,6 +297,33 @@ locals {
   # to log in. So the caller's configured credentials are preserved by handing
   # CNPG a Secret rather than by reading one back.
   credentials_secret = "${var.name}-app-credentials"
+
+  # 🔴 ONE DEFINITION, READ BY BOTH THE CHART VALUES AND synchronous_enforced.
+  #
+  # This used to be written twice — the same expression in the `synchronous`
+  # values block and again in the output — which made the output a second copy
+  # rather than a report. A measured mutation of the values side (synchronous
+  # replication silently OFF on a --ha install, so every write commits without a
+  # standby having it) left the output reading `true` and every
+  # hack/check-tofu-validations.sh assertion green: an assertion that reads a
+  # duplicate is checking the duplicate against itself.
+  #
+  # Consumed by reference below, so the same mutation now moves the output too.
+  synchronous_enforced = var.synchronous && var.instances >= var.synchronous_number + 2
+
+  # The two components of the archive path, named once so `reported` below can
+  # compose the destination out of what the chart is ACTUALLY handed rather than
+  # re-deriving it from the variables. A restore aims at that string; if the
+  # report and the reality can disagree, it aims at a path no WAL was written to.
+  #
+  # 🔴 THE RAW server_name IS WHAT GOES TO THE CHART, empty string and all. Do
+  # not "helpfully" resolve it to the cluster name here: an unset serverName
+  # renders NO plugin parameter, CNPG then defaults it to the cluster name, and
+  # the chart's restore guard keys on exactly that emptiness to refuse a restored
+  # cluster that would archive under an undecided path. Resolving it early would
+  # make that guard unreachable while every render still looked right.
+  backup_bucket      = var.backup == null ? null : var.backup.bucket
+  backup_server_name = var.backup == null ? null : var.backup.server_name
 }
 
 resource "kubernetes_secret_v1" "app" {
@@ -227,17 +348,13 @@ resource "kubernetes_secret_v1" "app" {
   }
 }
 
-resource "helm_release" "cluster" {
-  name      = var.name
-  namespace = var.namespace
-  chart     = "${path.module}/chart"
-
-  # The Secret must exist before initdb reads it. This is an explicit edge
-  # rather than an inferred one: the values below reference the Secret by NAME
-  # (a string), and a string carries no dependency.
-  depends_on = [kubernetes_secret_v1.app]
-
-  values = [yamlencode({
+locals {
+  # 🔴 THE VALUES LIVE IN A LOCAL, NOT INLINE IN THE RESOURCE, so the outputs can
+  # READ THEM BACK. See `reported` below: an output that re-derives what it
+  # reports is a copy, and the CI harness asserting on it is then checking the
+  # copy against itself. A local is the only place both the resource and an
+  # output can reach.
+  base_values = {
     name                   = var.name
     imageName              = var.image
     instances              = var.instances
@@ -265,7 +382,7 @@ resource "helm_release" "cluster" {
     # this is belt and braces on the one setting whose failure mode is a
     # permanently wedged database.
     synchronous = {
-      enabled        = var.synchronous && var.instances >= var.synchronous_number + 2
+      enabled        = local.synchronous_enforced
       method         = "any"
       number         = var.synchronous_number
       dataDurability = var.data_durability
@@ -280,7 +397,103 @@ resource "helm_release" "cluster" {
       localeCType         = "C.utf8"
       postInitTemplateSQL = var.post_init_template_sql
     }
-  })]
+  }
+
+  backup_values = var.backup == null ? null : {
+    backup = {
+      enabled            = true
+      bucket             = local.backup_bucket
+      endpointURL        = var.backup.endpoint_url
+      credentialsSecret  = var.backup.credentials_secret
+      accessKeyIdKey     = var.backup.access_key_id_key
+      secretAccessKeyKey = var.backup.secret_access_key_key
+      serverName         = local.backup_server_name
+      archiveTimeout     = var.backup.archive_timeout
+      schedule           = var.backup.schedule
+      retentionPolicy    = var.backup.retention_policy
+      walCompression     = "gzip"
+      dataCompression    = "gzip"
+      walMaxParallel     = var.backup.wal_max_parallel
+      dataJobs           = var.backup.data_jobs
+      endpointCASecret   = var.backup.endpoint_ca == null ? {} : var.backup.endpoint_ca
+      sidecarResources = {
+        requests = {
+          cpu    = var.backup.sidecar_resources.cpu
+          memory = var.backup.sidecar_resources.memory
+        }
+      }
+    }
+  }
+
+  restore_values = var.restore == null ? null : {
+    restore = {
+      enabled                 = true
+      sourceServerName        = var.restore.source_server_name
+      objectStoreName         = var.restore.object_store_name
+      recoveryTarget          = var.restore.recovery_target
+      recoveryTargetImmediate = var.restore.recovery_target_immediate
+    }
+  }
+
+  # --- What the outputs report -------------------------------------------------
+  #
+  # 🔴 READ BACK OUT OF THE VALUES ABOVE, NOT RE-DERIVED FROM THE VARIABLES.
+  #
+  # Both of these used to restate their expression a second time in the output
+  # block. That made the output a copy of the values rather than a report of
+  # them, and hack/check-tofu-validations.sh asserts against the output.
+  # Measured: setting `synchronous.enabled = false` in the values -- a `--ha`
+  # install whose every write commits with no standby holding it, the database
+  # face of the false-HA trap ADR-020 A0 closed for the broker -- left
+  # `synchronous_enforced` reading `true` and the whole harness green. Pointing
+  # the same bucket at the wrong path was silent for the same reason, and that
+  # one decides whether a restore finds anything at all.
+  #
+  # The direction matters and is easy to get backwards: the derivations feed the
+  # values, the values feed this. Nothing here feeds back, so there is no cycle
+  # -- and a mutation of what Helm is handed now moves the assertion.
+  reported = {
+    synchronous_enforced = local.base_values.synchronous.enabled
+    # tostring() pins the TYPE, not the value. Inside an object constructor a
+    # bare `null` branch is a null of no particular type, and `tofu console`
+    # prints that as `null` where a null string prints as `tostring(null)` --
+    # so without this the harness's "backups off => no destination" assertion
+    # fails on a spelling difference rather than on the fact it is checking.
+    backup_destination = tostring(local.backup_values == null ? null : format(
+      "s3://%s/%s",
+      local.backup_values.backup.bucket,
+      local.backup_values.backup.serverName != "" ? local.backup_values.backup.serverName : local.base_values.name,
+    ))
+  }
+}
+
+resource "helm_release" "cluster" {
+  name      = var.name
+  namespace = var.namespace
+  chart     = "${path.module}/chart"
+
+  # The Secret must exist before initdb reads it. This is an explicit edge
+  # rather than an inferred one: the values below reference the Secret by NAME
+  # (a string), and a string carries no dependency.
+  depends_on = [kubernetes_secret_v1.app]
+
+  # 🔴 TWO documents, not one map with a conditional `backup` key inside it.
+  #
+  # A `var.backup == null ? {...} : {...}` inside the map does not type-check:
+  # both branches of a conditional must have the SAME object type, so the
+  # "backups off" branch would have to restate all fifteen backup fields with
+  # empty values. That is not merely verbose — it is a second, silent copy of the
+  # backup schema that no longer fails when the real one gains a field.
+  #
+  # Helm merges later values documents over earlier ones, so an absent second
+  # document leaves the chart's own `backup.enabled: false` default in force.
+  # Backups off is then the chart saying so, not this file re-deriving it. A
+  # THIRD document carries the restore block, for the same reason.
+  values = concat(
+    [yamlencode(local.base_values)],
+    local.backup_values == null ? [] : [yamlencode(local.backup_values)],
+    local.restore_values == null ? [] : [yamlencode(local.restore_values)],
+  )
 
   # 🔴 `wait` DOES NOT WAIT FOR THE DATABASE, and an earlier version of this
   # comment claimed it did. The release manifest contains exactly one object —
@@ -352,7 +565,12 @@ output "cluster_name" {
   value       = var.name
 }
 
+output "backup_destination" {
+  description = "Where this store's WAL and base backups actually go, or null if it has none. Read this rather than re-deriving it from the flags -- a store whose backup block was dropped is indistinguishable from one that has it, right up until a restore is attempted."
+  value       = local.reported.backup_destination
+}
+
 output "synchronous_enforced" {
   description = "Whether synchronous replication is ACTUALLY in force, after the instance-count derivation. Read this rather than re-deriving it from the flags: an install that asked for synchronous and did not get enough instances runs asynchronously, and the difference is invisible from the Cluster resources alone -- which is the false-HA shape A0 closed for the broker."
-  value       = var.synchronous && var.instances >= var.synchronous_number + 2
+  value       = local.reported.synchronous_enforced
 }

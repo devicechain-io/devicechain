@@ -120,6 +120,66 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		}
 	}
 
+	// SETTLE THE ARCHIVE PATH EACH DATABASE OWNS, FROM WHAT IT IS ALREADY ARCHIVING
+	// UNDER — not from this run's flags (ADR-020 A2.5 / ADR-028).
+	//
+	// Same shape, same reason as the credentials above: the path is permanent
+	// configuration and --restore-* is a one-shot flag, so deriving it from the flag
+	// would let an ordinary flagless re-run retarget a LIVE cluster's WAL archive at
+	// a path holding no base backup — silently, on a green run. See
+	// resolveArchivePaths.
+	//
+	// 🔴 DONE UNDER --dry-run TOO, unlike the credential lookup above. That one is
+	// skipped because a dry run mints throwaway values it will never deploy; this
+	// one is a READ, and a dry run that skips it predicts the OPPOSITE of what the
+	// real run does. Both consumers were wrong without it: the "this restore will
+	// not run" warning — the single most valuable thing a rehearsal could surface —
+	// never fired, and a flagless dry run against an already-restored instance
+	// showed its archive path being REMOVED, a plan alarming enough to invite an
+	// operator to "fix" it.
+	//
+	// Best-effort here and fail-closed on a real run, which is the one asymmetry
+	// that is right: a dry run is often aimed at a cluster that does not exist yet,
+	// and failing it on an unreachable API server would break the rehearsal for the
+	// case it serves best. Acting on a wrong answer costs nothing when nothing is
+	// applied.
+	var live liveArchiveState
+	live, err = readLiveArchiveState(ctx, st.KubeContext)
+	switch {
+	case err != nil && !st.DryRun:
+		return fail("reading the database archive state", err)
+	case err != nil:
+		live = liveArchiveState{}
+		notes = append(notes, fmt.Sprintf(
+			"could not read the database archive state (%v); the plan below assumes a fresh cluster", err))
+	}
+	paths := resolveArchivePaths(live, st.Restore, time.Now().UTC())
+	st.Values["backupServerNameRdb"] = paths.Rdb
+	st.Values["backupServerNameTsdb"] = paths.Tsdb
+	if st.Restore.Active() {
+		for _, p := range []struct{ store, from, path string }{
+			{"relational store", st.Restore.RdbFrom, paths.Rdb},
+			{"event store", st.Restore.TsdbFrom, paths.Tsdb},
+		} {
+			if p.from != "" {
+				notes = append(notes, fmt.Sprintf(
+					"%s recovering from archive %q, and will archive under %q",
+					p.store, p.from, p.path))
+			}
+		}
+	}
+	// 🔴 A restore aimed at a store that already exists does NOTHING — CloudNativePG
+	// reads `spec.bootstrap` when it CREATES a Cluster. The apply is green, the
+	// operator is told a restore was requested, and no data moves. Say it here, out
+	// loud, because from the outside "it restored" and "it declined to restore" look
+	// identical.
+	for _, name := range paths.AlreadyLive {
+		fmt.Println(color.YellowString(
+			"  Cluster %s already exists, so its restore will NOT run: CloudNativePG reads "+
+				"spec.bootstrap only when it creates a cluster. Destroy the instance and rebuild "+
+				"it with the same flags to actually recover.", name))
+	}
+
 	// The NATS broker-auth credentials (ADR-025): the callout issuer nkey and the
 	// shared service password. These can't be generated declaratively (nkeys aren't a
 	// TF primitive), so dcctl mints them here and threads the public issuer + bcrypt
@@ -708,6 +768,53 @@ func stepReport(ctx context.Context, st *State) error {
 				color.WhiteString("Grafana:"),
 				color.GreenString("kubectl -n %s port-forward svc/%s 3000:80  → http://localhost:3000/  (admin / devicechain)", ns, svc))
 			fmt.Printf("           %s\n", color.YellowString("dev-grade default password — override monitoring_grafana_admin_password, or enable SSO with --grafana-sso (ADR-047)"))
+		}
+	}
+	// Database backups, printed here for exactly the reason the escrow line below
+	// is: this is the screen an operator actually reads, and every branch of it
+	// says something they need.
+	//
+	// 🔴 UNCONDITIONAL, and the branch that matters most is the DEFAULT one. The
+	// in-cluster destination is real backups — WAL archived continuously, a base
+	// backup taken on schedule — and it is not disaster recovery, because it dies
+	// with the cluster it lives in. Those two facts are easy to hold at once and
+	// almost impossible to infer, so the only honest thing is to say both.
+	//
+	// Before this existed, the only surfaces stating it were the OpenTofu README
+	// and terraform.tfvars.example. A `dcctl bootstrap` user reads neither.
+	switch {
+	case st.Values[databaseBackupsKey] != "true":
+		fmt.Printf("  %s %s\n",
+			color.WhiteString("Backups:"),
+			color.YellowString("NONE — this instance archives no WAL and takes no base backups, so it cannot be restored to any point in time"))
+	case st.Values[databaseBackupOffsiteKey] == "true":
+		fmt.Printf("  %s %s\n",
+			color.WhiteString("Backups:"),
+			color.GreenString("WAL archiving + scheduled base backups, to storage outside this cluster"))
+	default:
+		fmt.Printf("  %s %s\n",
+			color.WhiteString("Backups:"),
+			color.GreenString("WAL archiving + scheduled base backups, to an object store IN THIS CLUSTER"))
+		fmt.Printf("           %s\n",
+			color.YellowString("this is point-in-time recovery, NOT disaster recovery — the backups share the cluster's"))
+		fmt.Printf("           %s\n",
+			color.YellowString("failure domain and are lost with it. Set backup_destination=\"external\" for off-site."))
+	}
+	// The archive path each store OWNS — which is the INPUT to the next restore.
+	//
+	// Printed only when it is not the default, because that is exactly when an
+	// operator cannot work it out: after a recovery the paths are stamped names
+	// nobody chose, and `--restore-rdb-from dc-rdb` — the obvious guess — points at
+	// the archive of the instance that already died. Alongside it, the escrow line
+	// below completes the pair a restore actually needs.
+	if st.Values[databaseBackupsKey] == "true" {
+		for _, p := range []struct{ label, path string }{
+			{"Relational archive:", st.Values["backupServerNameRdb"]},
+			{"Event archive:", st.Values["backupServerNameTsdb"]},
+		} {
+			if p.path != "" {
+				fmt.Printf("  %s %s\n", color.WhiteString(p.label), color.GreenString(p.path))
+			}
 		}
 	}
 	// The root-key escrow, printed here because this is the screen an operator

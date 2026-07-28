@@ -65,6 +65,43 @@ synchronous:
   # argued in the module, not here.
   dataDurability: required
 
+# Recover this Cluster from an existing backup instead of initialising an empty
+# one (ADR-028, ADR-020 A2.5).
+#
+# 🔴 THIS IS THE OTHER HALF OF `backup`, AND WITHOUT IT THE FIRST HALF IS A
+# CLAIM RATHER THAN A CAPABILITY. A destination that has never been restored
+# from is a destination nobody has shown to contain a restorable database --
+# and the moment you find out is the incident.
+#
+# Off by default and it must stay that way: this is what a fresh install is.
+restore:
+  enabled: false
+
+  # The serverName (the folder within the bucket) the backup was written under.
+  # No default: a restore that did not say what it is restoring FROM is a
+  # restore that would silently pick this cluster's own name, which on a fresh
+  # install is an empty path, which recovers nothing and reports no error the
+  # operator would recognise.
+  sourceServerName: ""
+
+  # The ObjectStore holding that backup. Empty means the one this release
+  # renders for its own archiving (<name>-backup), which is the normal case: the
+  # bucket survived, the cluster did not.
+  objectStoreName: ""
+
+  # Point-in-time recovery. Empty replays every WAL in the archive (full
+  # recovery); set targetTime/backupID/targetLSN/... to stop earlier. The field
+  # names are PostgreSQL's, passed through as-is -- a misspelling here is caught
+  # by hack/check-cnpg-chart-schema.sh against the real CRD, not by this chart.
+  recoveryTarget: {}
+
+  # Stop as soon as the restore is CONSISTENT, without replaying the WAL that
+  # follows the base backup. Separate from the map above because it is the one
+  # recovery-target field that is a boolean, and the OpenTofu module can only
+  # carry the map as map(string) -- "true" against a boolean field is rejected by
+  # the API server, so it gets its own lever rather than a footgun.
+  recoveryTargetImmediate: false
+
 bootstrap:
   database: null
   owner: null
@@ -85,3 +122,91 @@ parameters: {}
 # 🔴 A library named here and absent from the image makes Postgres refuse to
 # start, and CNPG cannot recover from it without hands.
 sharedPreloadLibraries: []
+
+# WAL archiving + base backups via the Barman Cloud plugin.
+#
+# 🔴 OFF here, ON at the caller. The chart's default has to be the one that
+# renders against a cluster with no barman plugin and no object store, because a
+# chart that defaults to backup-enabled fails to render exactly where somebody is
+# trying to stand up a minimal store to debug something else. The OpenTofu module
+# supplies the whole block on every install where backups are on, and the
+# template refuses a HALF-supplied one -- so the failure mode this default could
+# have introduced (backups quietly configured against nothing) is unreachable.
+backup:
+  enabled: false
+
+  # The bucket for THIS store. One bucket per store, never a shared bucket with
+  # two prefixes: the point of two ObjectStores is two independent restore
+  # domains, and a shared bucket makes them one.
+  bucket: ""
+
+  # S3 endpoint. In-cluster this is the object-store module's Service; on a cloud
+  # it is the provider's endpoint, or empty for real AWS S3 -- which the template
+  # refuses, deliberately, because "the endpoint I forgot to set" and "AWS" are
+  # the same value and only one of them is ever intended here.
+  endpointURL: ""
+
+  # Secret holding the S3 credentials, and the keys within it. Supplied by the
+  # object-store module's outputs rather than restated, so the two cannot drift.
+  credentialsSecret: ""
+  accessKeyIdKey: ""
+  secretAccessKeyKey: ""
+
+  # A private CA for an HTTPS endpoint whose certificate the plugin sidecar does
+  # not already trust. {name, key} of a Secret or ConfigMap; empty for plain HTTP
+  # in-cluster or a publicly-rooted cloud endpoint.
+  endpointCASecret: {}
+
+  # Path within the bucket. Empty means the Cluster's own name, which is right
+  # for every install; a RESTORED cluster must set it, because CloudNativePG
+  # refuses to archive back over the path it recovered from.
+  serverName: ""
+
+  # 🔴 SIX FIELDS. CloudNativePG cron includes SECONDS, unlike Kubernetes
+  # CronJobs, and a five-field schedule is accepted by the API and then never
+  # runs. This is 03:00 daily. Empty disables the recurring base backup and
+  # leaves WAL archiving on, which is a destination that grows forever and
+  # restores nothing -- the template lets you do it; nothing recommends it.
+  schedule: "0 0 3 * * *"
+
+  # A recovery WINDOW: the cluster stays restorable to any point within it.
+  # Empty disables pruning entirely.
+  retentionPolicy: "30d"
+
+  # 🔴 Forces a WAL switch every interval, and it is what bounds the RPO on a
+  # QUIET instance. Postgres defaults to 0 (switch only when a segment fills), so
+  # a low-traffic instance can carry hours of unshipped WAL while every backup
+  # check reads green. It is also what makes "seconds since last archival" a
+  # usable alert instead of one that is red on every idle cluster.
+  #
+  # Move this and move the alert threshold in the chart's
+  # prometheusrule-database-backup.yaml with it.
+  archiveTimeout: 5min
+
+  walCompression: gzip
+  dataCompression: gzip
+
+  # Parallelism for WAL archiving. The event store produces WAL at telemetry
+  # rates, and an archiver that cannot keep up accumulates segments on the
+  # database's own volume until it fills.
+  walMaxParallel: 2
+
+  # Parallel upload jobs for a base backup.
+  dataJobs: 2
+
+  # The plugin runs a sidecar in every instance pod. Requests only, matching the
+  # database container: a memory limit here turns a large backup into an OOMKill
+  # of the process taking the backup.
+  #
+  # 🔴 256Mi rather than the 128Mi first shipped, and the reason is about the
+  # DATABASE pod rather than about the sidecar. This container gzips and uploads
+  # with `jobs` / `maxParallel` concurrency, inside the PostgreSQL pod, and the
+  # kubelet ranks a pod for eviction by its total usage above its total requests.
+  # So an under-requested backup sidecar does not get itself evicted — it drags
+  # the PRIMARY DATABASE up the eviction ranking during every backup. That is not
+  # the failure the "requests without limits" reasoning above is protecting
+  # against, and it is a worse one.
+  sidecarResources:
+    requests:
+      cpu: 50m
+      memory: 256Mi

@@ -162,7 +162,19 @@ func helmValues(st *State) map[string]interface{} {
 		// Prometheus Operator CRDs. The infra step installs kube-prometheus-stack by
 		// default (BEFORE this Helm step), so enable it — UNLESS --no-monitoring, where
 		// we install no operator and must not render CRs against absent CRDs.
-		"metrics": map[string]interface{}{"enabled": !st.NoMonitoring},
+		//
+		// databaseBackups gates the WAL-archiving alerts (ADR-028, ADR-020 A2.5) and
+		// comes from what the infrastructure REPORTED, not from a dcctl flag: with
+		// archiving off the cnpg_pg_stat_archiver_* series do not exist, so rendering
+		// those rules anyway yields four alerts that load, evaluate nothing, and never
+		// fire. databaseNamespace is where the database Clusters run — deliberately
+		// NOT instance.id, because an alert scoped to the instance's own namespace
+		// selects none of those series at all.
+		"metrics": map[string]interface{}{
+			"enabled":           !st.NoMonitoring,
+			"databaseBackups":   st.Values[databaseBackupsKey] == "true",
+			"databaseNamespace": databaseNamespaceFor(st),
+		},
 	}
 
 	// Deployment selection: normally the named profile (or "" → the chart's default).

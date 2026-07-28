@@ -11,7 +11,8 @@ answers the one question the rig cannot answer from the outside:
 
 ```
 drdrill seed   --instance <id> --receipt <path> [--server host[:port]]
-drdrill verify --receipt <path> --db-host ... --db-user ... [--skip-api]
+drdrill verify --receipt <path> --db-host ... --db-user ...
+drdrill decoy  --instance <id> --out <path>
 ```
 
 **`seed`** writes a secret through the platform's public GraphQL API: it creates a
@@ -40,6 +41,29 @@ purpose:
 It does not read the secret back through the platform because the platform has no
 such API by design (ADR-059: cleartext never crosses the API boundary), and
 inventing one for a drill would be a much worse trade than reading the store.
+
+**`decoy`** mints a well-formed escrow artifact holding a root key that is *not*
+the instance's — the wrong key the negative control recovers under. It exists
+because the control it replaces can no longer be expressed: `dcctl` refuses
+`--restore-rdb-from` without `--restore-root-key`, which is the guard against an
+operator silently losing every secret, and it takes "rebuild with `--no-escrow`"
+with it.
+
+The artifact comes out of `escrow.Wrap` — the same function `dcctl` calls, same
+KDF parameters, same passphrase — and is consumed by the same
+`--restore-root-key` path a real artifact takes, so the bootstrap cannot tell the
+two apart. Minting one through the shipped CLI instead would mean bootstrapping a
+throwaway instance purely to make it escrow a key, since there is no `dcctl
+secrets escrow create` — a third cluster for one control, which is enough friction
+that the control stops being run.
+
+What it does not stand in for is any claim that two real bootstraps mint
+*different* keys from each other; that belongs where the key generator lives. The
+claim under test here is the one that matters in an incident: given the right
+archive and the wrong key, does the platform hand over the plaintext?
+
+It refuses to overwrite an existing file (`O_EXCL`, mode `0600`). Pointing `--out`
+at the drill's real escrow artifact is the one mistake with no recovery.
 
 ## Exit codes are the interface
 
