@@ -153,6 +153,16 @@ func applyInfra(ctx context.Context, st *State) error {
 			st.Values[databaseBackupsKey] = "true"
 		}
 	}
+	// Whether those backups survive losing the cluster, which is a different
+	// question from whether they exist and the one an operator is most likely to
+	// get wrong. Null when backups are off; "false" for the default in-cluster
+	// destination.
+	if meta, ok := outputs["database_backup_survives_cluster_loss"]; ok {
+		var offsite bool
+		if err := json.Unmarshal(meta.Value, &offsite); err == nil {
+			st.Values[databaseBackupOffsiteKey] = strconv.FormatBool(offsite)
+		}
+	}
 	// The namespace the database Clusters run in, which is where their metrics are
 	// exported from. NOT the instance namespace — an alert scoped to the instance's
 	// own namespace selects no series at all.
@@ -184,8 +194,9 @@ func applyInfra(ctx context.Context, st *State) error {
 // against. Read back from the OpenTofu outputs rather than derived from dcctl's
 // own flags — the flags are what was asked for, and these are what exists.
 const (
-	databaseBackupsKey   = "databaseBackups"
-	databaseNamespaceKey = "databaseNamespace"
+	databaseBackupsKey       = "databaseBackups"
+	databaseNamespaceKey     = "databaseNamespace"
+	databaseBackupOffsiteKey = "databaseBackupOffsite"
 )
 
 // databaseNamespaceFor is where the database Clusters export their metrics from.

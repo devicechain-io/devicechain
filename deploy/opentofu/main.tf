@@ -129,6 +129,13 @@ locals {
     secret_access_key_key = local.backup_credentials.secret_key
     schedule              = var.backup_schedule
     retention_policy      = var.backup_retention
+
+    # Threaded from the root so a RESTORE is expressible without editing module
+    # source mid-incident. CloudNativePG refuses to let a recovered cluster
+    # archive back over the path it recovered from, and it refuses by hanging in
+    # `Setting up primary` rather than by failing — so the operator who needs this
+    # is the one least able to go looking for it.
+    server_name = var.backup_server_name_rdb
   } : null
 
   tsdb_backup = local.backups_on ? {
@@ -139,6 +146,7 @@ locals {
     secret_access_key_key = local.backup_credentials.secret_key
     schedule              = var.backup_schedule
     retention_policy      = var.backup_retention
+    server_name           = var.backup_server_name_tsdb
 
     # 🔴 Four parallel WAL uploads for the event store against the relational
     # store's two, and this asymmetry is the same judgement that gave the two
@@ -260,6 +268,85 @@ module "object_store" {
   storage_class = var.backup_object_store_storage_class
 
   depends_on = [module.namespace]
+}
+
+# 🔴 THE BACKUPS ARE THE LEAST-PROTECTED THING IN THIS CONFIGURATION, and this
+# guard is what fixes that.
+#
+# The database Clusters carry prevent_destroy because "databases outlive the
+# deployment". Until this existed, the thing that outlives the DATABASE carried
+# nothing: the object store is `count = local.backups_on && in-cluster`, so
+# anything that flips either half drops the count to zero and takes the PVC — and
+# on a default StorageClass with reclaimPolicy Delete, the retention window's
+# worth of backups — with it. No confirmation, no diff anyone would read as
+# destructive.
+#
+# The paths that do it are ordinary, not exotic:
+#   - enable_database_backups = false
+#   - backup_destination flipped to "external"
+#   - `dcctl bootstrap <existing-instance> --compact --no-tls`, which emits
+#     enable_database_backups=false on its own
+#
+# 🔴 AND prevent_destroy ON THE PVC WOULD NOT HELP, which is why this is a
+# precondition in the ROOT instead. Dropping a module's count to zero ORPHANS its
+# resources, and orphans are destroyed without consulting their lifecycle rules —
+# the same trap the legacy-StatefulSet cutover guard above exists for. A guard
+# that only fires while the resource is still in the configuration does not fire
+# on the one operation that removes it.
+data "kubernetes_resources" "object_store_pvc" {
+  api_version    = "v1"
+  kind           = "PersistentVolumeClaim"
+  namespace      = var.namespace
+  field_selector = "metadata.name=dc-object-store-data"
+}
+
+resource "terraform_data" "backup_removal_guard" {
+  # A missing namespace returns ZERO objects rather than erroring, which is what
+  # makes this safe on a fresh install: there is no namespace yet, the guard
+  # passes, and nothing is protected because nothing exists.
+  input = length(data.kubernetes_resources.object_store_pvc.objects)
+
+  lifecycle {
+    precondition {
+      condition = (
+        length(data.kubernetes_resources.object_store_pvc.objects) == 0 ||
+        (local.backups_on && var.backup_destination == "in-cluster") ||
+        var.allow_backup_destination_removal
+      )
+      error_message = <<-EOT
+        This cluster has an in-cluster backup destination holding real backups,
+        and this configuration removes it.
+
+        The object store's PersistentVolumeClaim (dc-object-store-data in
+        ${var.namespace}) is provisioned only while database backups are on AND
+        backup_destination is "in-cluster". This apply satisfies neither, so the
+        claim would be destroyed — and on a StorageClass whose reclaimPolicy is
+        Delete, which is the default nearly everywhere, its contents go with it.
+
+        That is every base backup and every archived WAL segment for BOTH
+        databases: the entire recovery window, for the control plane and the event
+        history alike.
+
+        Terraform's prevent_destroy does not stop this and cannot: dropping the
+        module's count to zero ORPHANS its resources, and orphans are destroyed
+        without consulting their lifecycle rules.
+
+        The usual ways to arrive here, none of which look destructive:
+
+          enable_database_backups = false
+          backup_destination      = "external"
+          dcctl bootstrap <instance> --compact --no-tls   (turns backups off)
+
+        If the backups are already safe elsewhere, or you do not want them:
+
+          allow_backup_destination_removal = true
+
+        Setting it asserts you have handled the backups. Nothing checks that for
+        you, and nothing can — this configuration cannot tell a copied archive
+        from an abandoned one.
+      EOT
+    }
+  }
 }
 
 # 🔴 A PLAN-TIME REFUSAL, not an apply-time one, and not a variable validation.

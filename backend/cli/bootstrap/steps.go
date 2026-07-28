@@ -710,6 +710,36 @@ func stepReport(ctx context.Context, st *State) error {
 			fmt.Printf("           %s\n", color.YellowString("dev-grade default password — override monitoring_grafana_admin_password, or enable SSO with --grafana-sso (ADR-047)"))
 		}
 	}
+	// Database backups, printed here for exactly the reason the escrow line below
+	// is: this is the screen an operator actually reads, and every branch of it
+	// says something they need.
+	//
+	// 🔴 UNCONDITIONAL, and the branch that matters most is the DEFAULT one. The
+	// in-cluster destination is real backups — WAL archived continuously, a base
+	// backup taken on schedule — and it is not disaster recovery, because it dies
+	// with the cluster it lives in. Those two facts are easy to hold at once and
+	// almost impossible to infer, so the only honest thing is to say both.
+	//
+	// Before this existed, the only surfaces stating it were the OpenTofu README
+	// and terraform.tfvars.example. A `dcctl bootstrap` user reads neither.
+	switch {
+	case st.Values[databaseBackupsKey] != "true":
+		fmt.Printf("  %s %s\n",
+			color.WhiteString("Backups:"),
+			color.YellowString("NONE — this instance archives no WAL and takes no base backups, so it cannot be restored to any point in time"))
+	case st.Values[databaseBackupOffsiteKey] == "true":
+		fmt.Printf("  %s %s\n",
+			color.WhiteString("Backups:"),
+			color.GreenString("WAL archiving + scheduled base backups, to storage outside this cluster"))
+	default:
+		fmt.Printf("  %s %s\n",
+			color.WhiteString("Backups:"),
+			color.GreenString("WAL archiving + scheduled base backups, to an object store IN THIS CLUSTER"))
+		fmt.Printf("           %s\n",
+			color.YellowString("this is point-in-time recovery, NOT disaster recovery — the backups share the cluster's"))
+		fmt.Printf("           %s\n",
+			color.YellowString("failure domain and are lost with it. Set backup_destination=\"external\" for off-site."))
+	}
 	// The root-key escrow, printed here because this is the screen an operator
 	// actually reads. Every branch says something: the file to back up, the artifact
 	// a restore came from, or — for --no-escrow — that this instance's secrets die

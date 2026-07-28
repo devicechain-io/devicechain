@@ -477,6 +477,33 @@ variable "backup_secret_key" {
   sensitive   = true
 }
 
+variable "backup_server_name_rdb" {
+  description = <<-EOT
+    Path within the relational store's bucket. Empty means the Cluster's own name
+    (`dc-rdb`), which is right for every ordinary install.
+
+    🔴 A RESTORED CLUSTER MUST SET THIS, and it is exposed at the root precisely
+    so that a restore does not require editing module source during an incident.
+    CloudNativePG refuses to let a recovered cluster archive back over the path it
+    recovered from, and the refusal is not a clean error: the cluster stays in
+    `Setting up primary` indefinitely, logging `WAL archive check failed for
+    server ...: Expected empty archive`. It does not fail the apply — it hangs
+    half-built, which is a far worse thing to meet at 3am than a rejection.
+
+    Set it to something new (e.g. "dc-rdb-restored-2026-07-28") on the cluster you
+    recover INTO, so it starts a fresh timeline alongside the archive it read
+    rather than writing into it.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "backup_server_name_tsdb" {
+  description = "Path within the event store's bucket. Empty means the Cluster's own name (`dc-tsdb`). See backup_server_name_rdb — a restored cluster must set this, or it hangs in `Setting up primary` rather than failing."
+  type        = string
+  default     = ""
+}
+
 variable "backup_schedule" {
   description = <<-EOT
     Cron schedule for the recurring base backup, applied to both stores.
@@ -495,13 +522,68 @@ variable "backup_schedule" {
 }
 
 variable "backup_retention" {
-  description = "Recovery WINDOW to keep, e.g. \"30d\". Not a backup count: this guarantees the cluster stays restorable to any point in the window, so barman keeps the base backup predating the window plus every WAL since. Empty disables pruning."
+  description = <<-EOT
+    Recovery WINDOW to keep, e.g. "7d". Not a backup count: this guarantees the
+    cluster stays restorable to any point in the window, so barman keeps the base
+    backup predating the window plus every WAL since. Empty disables pruning.
+
+    🔴 THIS AND backup_object_store_storage ARE ONE DECISION, and the first
+    version of this configuration shipped them as two. Every scheduled backup is
+    a FULL base backup, so a `Nd` window retains roughly `N+1` complete copies of
+    BOTH databases:
+
+        destination ≈ (retention_days + 1) × compressed(rdb + tsdb) + WAL
+
+    WAL is the cheap term and can be ignored: `archive_timeout` forces a segment
+    every 5 minutes, but a segment closed early is zero-filled past the switch
+    record and gzips to tens of KiB, so both stores together cost well under a
+    GiB per month. The base backups are the whole cost.
+
+    At the shipped 20Gi destination that budget is roughly 2.5 GiB of combined
+    compressed base backup — comfortable for a small-to-moderate instance at 7
+    days, and NOT comfortable at 30. A 30-day window was the original default and
+    it fills the shipped destination in about three weeks on an instance of any
+    real size, monotonically, because pruning removes nothing until backups start
+    ageing out of the window. What follows is the documented cascade: the
+    destination fills, archiving fails, WAL accumulates on the DATABASES' volumes,
+    and PostgreSQL stops.
+
+    So: raising this REQUIRES raising backup_object_store_storage with it. There
+    is no check that enforces it — the sizes depend on data nobody knows at plan
+    time — which is why it is stated here rather than assumed.
+  EOT
   type        = string
-  default     = "30d"
+  default     = "7d"
 }
 
 variable "backup_object_store_storage" {
-  description = "Data volume for the in-cluster object store. Holds a base backup plus every WAL segment since it, for the retention window, for BOTH stores. 🔴 When it fills, archiving fails — and failed archiving does not stall commits, it accumulates WAL on the databases' own volumes until those fill and Postgres stops. A too-small bucket takes the database down by a route that points nowhere near the bucket."
+  description = <<-EOT
+    Data volume for the in-cluster object store.
+
+    🔴 SIZE IT WITH backup_retention, NOT WITH THE DATABASE VOLUMES. Every
+    scheduled backup is a FULL base backup, so this holds roughly
+    `retention_days + 1` complete compressed copies of BOTH databases, plus the
+    WAL between them:
+
+        destination ≈ (retention_days + 1) × compressed(rdb + tsdb) + WAL
+
+    The default pairs 20Gi with a 7-day window, which budgets about 2.5 GiB of
+    combined compressed base backup. Raise BOTH together or neither: the
+    arithmetic is multiplicative in the retention window and no check can enforce
+    it, because the compressed size of a database is not knowable at plan time.
+
+    🔴 When it fills, archiving fails — and failed archiving does not stall
+    commits, it accumulates WAL on the DATABASES' own volumes until those fill and
+    PostgreSQL stops. A too-small destination takes the instance down by a route
+    that points nowhere near a bucket. BackupDestinationAlmostFull fires at 85% to
+    give warning, which is the only reason the failure is survivable.
+
+    🔴 Growing this later may not work in place. It is a PVC, so expansion needs a
+    StorageClass with allowVolumeExpansion — kind's default local-path has none,
+    and every provisioner refuses a SHRINK. That last one bites a real path:
+    re-running bootstrap on an existing instance with `--compact` asks for a
+    smaller value than the default and the apply fails.
+  EOT
   type        = string
   default     = "20Gi"
 }
@@ -554,6 +636,27 @@ variable "timescale_instances" {
     condition     = contains([0, 1, 3, 5], var.timescale_instances)
     error_message = "timescale_instances must be 0 (derive from var.ha), 1, 3, or 5. 2 is deliberately rejected: it costs a node without tolerating a standby loss."
   }
+}
+
+variable "allow_backup_destination_removal" {
+  description = <<-EOT
+    Proceed even though this apply destroys an in-cluster backup destination that
+    currently holds backups.
+
+    🔴 An ASSERTION THAT YOU HAVE HANDLED THE BACKUPS, not a migration — the same
+    shape as allow_legacy_rdb_removal, and for the same reason Terraform's own
+    prevent_destroy does not cover it: the object store is conditional on
+    `enable_database_backups && backup_destination == "in-cluster"`, and dropping a
+    module's count to zero ORPHANS its resources, which are then destroyed without
+    consulting any lifecycle rule.
+
+    What is at risk is the entire recovery window for BOTH databases — every base
+    backup and every archived WAL segment, for the control plane and the event
+    history alike. Nothing here can tell a copied archive from an abandoned one,
+    so setting this is a claim only you can make.
+  EOT
+  type        = bool
+  default     = false
 }
 
 variable "allow_legacy_tsdb_removal" {

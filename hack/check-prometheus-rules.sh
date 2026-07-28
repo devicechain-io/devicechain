@@ -124,3 +124,97 @@ cluster operator would see. The object stays present and healthy-looking and the
 alerts never fire."
 
 note "every rendered rule group parses"
+
+# ---------------------------------------------------------------------------
+# UNIT TESTS. Parsing is not meaning.
+#
+# `check rules` never evaluates an expression against a single sample, so a rule
+# can parse perfectly and be semantically inverted. That is not hypothetical: the
+# first version of the database-backup rules parsed, linted, rendered, and was
+# GREEN on the exact failure it was written to catch -- a Cluster whose backup
+# configuration had been deleted, where CloudNativePG's archive_command returns 0
+# for every segment and pg_stat_archiver reports healthy archiving forever.
+#
+# The tests feed synthetic series for that state and for the healthy and idle
+# states that must stay quiet.
+# ---------------------------------------------------------------------------
+tests_file="$repo_root/hack/testdata/prometheus-rules-tests.yaml"
+[[ -f "$tests_file" ]] || fail "no rule unit tests at $tests_file"
+
+# The tests name their rule file as `rendered-rules.yaml`, relative to the test
+# file's own directory. Both are staged into the work dir so the tests run against
+# the SHIPPED rules rather than a checked-in copy that can drift from them.
+#
+# 🔴 The database-backup group specifically, not every group: these tests encode
+# that group's semantics, and pointing them at a concatenation of all three would
+# make an unrelated rule's labels a failure here.
+cp "$tests_file" "$work/rules-tests.yaml"
+cp "$work/rule-database-backup.yaml" "$work/rendered-rules.yaml"
+chmod 644 "$work/rules-tests.yaml" "$work/rendered-rules.yaml"
+
+# 🔴 EVERY RULE MUST BE NAMED IN THE TESTS, and this is not tidiness.
+#
+# Found by mutation: re-introducing a staleness-threshold rule -- the exact
+# false-positive-on-an-idle-cluster shape the current design exists to avoid --
+# did NOT fail the unit tests. The "idle cluster raises nothing" scenario asserts
+# `exp_alerts: []` for the three rules that existed when it was written, so a
+# FOURTH rule firing on that same synthetic idle cluster was invisible.
+#
+# A negative assertion can only name rules its author knew about. This turns
+# "the tests cover what I remembered" into "the tests cover every rule", so a new
+# alert is untested loudly rather than silently.
+python3 - "$work/rule-database-backup.yaml" "$tests_file" <<'PY'
+import sys, yaml
+
+rendered, tests = sys.argv[1], sys.argv[2]
+
+defined = set()
+for group in yaml.safe_load(open(rendered))["groups"]:
+    for rule in group.get("rules", []):
+        if "alert" in rule:
+            defined.add(rule["alert"])
+
+covered = set()
+for case in yaml.safe_load(open(tests)).get("tests", []):
+    for assertion in case.get("alert_rule_test", []):
+        if "alertname" in assertion:
+            covered.add(assertion["alertname"])
+
+if not defined:
+    sys.exit("the rendered database-backup group defines no alerts at all; this check would pass vacuously")
+
+untested = defined - covered
+if untested:
+    sys.exit(
+        "these database-backup alerts appear in no unit test: %s.\n"
+        "  Every rule needs at least one scenario that fires it AND at least one that does\n"
+        "  not, including the idle-cluster case -- a rule nobody asserts about is a rule that\n"
+        "  can be silently wrong in either direction. Add cases to %s."
+        % (", ".join(sorted(untested)), tests)
+    )
+
+stale = covered - defined
+if stale:
+    sys.exit(
+        "these unit tests name alerts the chart no longer renders: %s.\n"
+        "  Their assertions still pass -- an alert that does not exist fires no alerts, so\n"
+        "  every `exp_alerts: []` is trivially satisfied. Remove them or fix the name."
+        % ", ".join(sorted(stale))
+    )
+
+print("    %d alert(s) defined, all covered by unit tests" % len(defined))
+PY
+
+say "running the database-backup rule unit tests"
+if command -v promtool >/dev/null 2>&1; then
+  (cd "$work" && promtool test rules rules-tests.yaml)
+else
+  docker run --rm -u 0 -v "$work:/w" -w /w --entrypoint /bin/promtool "$promtool_image" \
+    test rules rules-tests.yaml
+fi || fail "a database-backup alerting rule does not behave as specified.
+
+These tests are the only thing in the repository that evaluates an alert
+expression. A failure here means a rule fires when it should not, or -- far worse
+-- stays silent on a state that means this instance is not being backed up."
+
+note "the database-backup rules fire on the states they claim to"

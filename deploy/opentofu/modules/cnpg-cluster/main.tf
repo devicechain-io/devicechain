@@ -205,8 +205,8 @@ variable "backup" {
     everything else about the Cluster. It runs, it replicates, it passes every
     health check, and it cannot be restored to any point in time. The root
     derives this from one flag for both stores so the two cannot end up in
-    different states, and `dcctl ha verify` reports the resulting state rather
-    than the flag.
+    different states, and the `backup_destination` output reports where each
+    store's backups actually land rather than restating the flag.
 
     The object is all-or-nothing on purpose: the chart refuses a partially
     populated destination rather than rendering an ObjectStore that fails every

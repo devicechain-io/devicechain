@@ -1,0 +1,288 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for the database-backup alerting rules (ADR-028, ADR-020 A2.5).
+#
+# WHY THESE EXIST RATHER THAN JUST `promtool check rules`
+#
+# `check rules` PARSES. It never evaluates an expression against a single sample,
+# so every rule in the group can be syntactically perfect and semantically
+# inverted and it reports SUCCESS. That is not hypothetical here: the first
+# version of these rules passed `check rules`, passed `helm lint`, passed a
+# render-and-eyeball, and was green on the exact failure it was written to catch —
+# a Cluster with its backup configuration deleted, where CloudNativePG's
+# `archive_command` returns 0 for every segment and `pg_stat_archiver` reports
+# healthy continuous archiving forever.
+#
+# An alert is a claim about which states are bad. The only way to check a claim
+# about states is to feed it states. So each case below is a SCENARIO with a name,
+# and the negative cases — the healthy cluster, the idle cluster — matter as much
+# as the positive ones: a rule that fires on everything passes every "does it
+# fire" test and gets switched off within a week.
+#
+# 🔴 THE SERIES ARE THE SPEC. If these do not match what CloudNativePG and the
+# barman plugin actually export, the tests are self-consistent fiction. Sourced:
+#   - cnpg_pg_stat_archiver_*  — CNPG config/manager/default-monitoring.yaml,
+#     `cnpg_` prefix + query name + column. Every timestamp column is
+#     COALESCE(..., -1), which is why -1 appears below as a real value and not as
+#     a stand-in for "missing".
+#   - barman_cloud_cloudnative_pg_io_*  — the plugin's own observability doc,
+#     exported through the instance manager's endpoint, hence the same pod labels.
+#
+# Run via hack/check-prometheus-rules.sh, which renders the chart first: these
+# assert against the SHIPPED rules, not against a copy of them.
+
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # -------------------------------------------------------------------------
+  # THE FINDING. A Cluster with no barman plugin attached.
+  #
+  # archive_command is still set and still returns 0, so archived_count climbs
+  # and no failure is ever recorded. The plugin sidecar does not exist, so no
+  # barman_cloud_* series does either. This is a database that cannot be
+  # restored, reporting perfect health.
+  # -------------------------------------------------------------------------
+  - name: a cluster with no WAL archiver attached is not silently healthy
+    interval: 1m
+    input_series:
+      # Archiving "succeeds" every minute. A perfectly healthy-looking archiver.
+      - series: 'cnpg_pg_stat_archiver_archived_count{namespace="dc-system", pod="dc-rdb-1"}'
+        values: "1+1x120"
+      - series: 'cnpg_pg_stat_archiver_seconds_since_last_archival{namespace="dc-system", pod="dc-rdb-1"}'
+        values: "30+0x120"
+      - series: 'cnpg_pg_stat_archiver_last_archived_time{namespace="dc-system", pod="dc-rdb-1"}'
+        values: "1780000000+60x120"
+      # Never failed, because nothing was ever attempted for real.
+      - series: 'cnpg_pg_stat_archiver_last_failed_time{namespace="dc-system", pod="dc-rdb-1"}'
+        values: "-1+0x120"
+      # NOTE the absence: no barman_cloud_* series at all. That IS the condition.
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PostgresWALArchivingNotConfigured
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              namespace: dc-system
+              pod: dc-rdb-1
+            exp_annotations:
+              summary: "A PostgreSQL cluster has no WAL archiver attached and is NOT being backed up"
+              description: >-
+                dc-rdb-1 is running with archiving switched on and NO backup plugin behind it, so
+                every WAL segment is being "archived" by a command that discards it and reports
+                success. Nothing else will tell you: archived_count rises, no failure is ever
+                recorded, disk does not grow, and every other backup alert stays green. This database
+                cannot be restored to any point in time. Check that the Cluster still carries its
+                barman-cloud entry under spec.plugins and that its ObjectStore exists.
+      # 🔴 The counterweight, and the reason this scenario is worth more than a
+      # single assertion: every OTHER rule must stay quiet here. If one of them
+      # also fired, the pg_stat_archiver-based rules would look like they cover
+      # this case and the finding would be hidden rather than fixed.
+      - eval_time: 20m
+        alertname: PostgresWALArchivingFailing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: PostgresHasNeverArchivedWAL
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: PostgresNoRecentBaseBackup
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # The healthy case. Nothing may fire, or none of the above means anything.
+  # -------------------------------------------------------------------------
+  - name: a healthy backed-up cluster raises nothing
+    interval: 1m
+    input_series:
+      - series: 'cnpg_pg_stat_archiver_archived_count{namespace="dc-system", pod="dc-rdb-1"}'
+        values: "1+1x120"
+      - series: 'cnpg_pg_stat_archiver_seconds_since_last_archival{namespace="dc-system", pod="dc-rdb-1"}'
+        values: "45+0x120"
+      - series: 'cnpg_pg_stat_archiver_last_archived_time{namespace="dc-system", pod="dc-rdb-1"}'
+        values: "1780000000+60x120"
+      - series: 'cnpg_pg_stat_archiver_last_failed_time{namespace="dc-system", pod="dc-rdb-1"}'
+        values: "-1+0x120"
+      # The plugin is attached, and its last backup is recent. promtool's clock
+      # starts at 0, so `time() - x > 129600` needs x above -129600 to stay quiet.
+      - series: 'barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace="dc-system", pod="dc-rdb-1"}'
+        values: "0+0x120"
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dc-system", persistentvolumeclaim="dc-object-store-data"}'
+        values: "16000000000+0x120"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-object-store-data"}'
+        values: "21474836480+0x120"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: PostgresWALArchivingNotConfigured
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: PostgresWALArchivingFailing
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: PostgresHasNeverArchivedWAL
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: PostgresNoRecentBaseBackup
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: BackupDestinationAlmostFull
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # The IDLE cluster. This is the false-positive test, and it is the reason
+  # there is no "seconds since last archival" threshold rule.
+  #
+  # archive_timeout does NOT force a WAL switch when no important WAL has been
+  # logged since the last one (PostgreSQL CheckArchiveTimeout), so a quiet
+  # database genuinely archives nothing for hours while being entirely healthy.
+  # A staleness threshold would page on every small install.
+  # -------------------------------------------------------------------------
+  - name: an idle but working cluster raises nothing
+    interval: 1m
+    input_series:
+      - series: 'cnpg_pg_stat_archiver_archived_count{namespace="dc-system", pod="dc-tsdb-1"}'
+        values: "7+0x180"
+      # Four hours since the last segment, and climbing. Healthy: nothing has
+      # been written.
+      - series: 'cnpg_pg_stat_archiver_seconds_since_last_archival{namespace="dc-system", pod="dc-tsdb-1"}'
+        values: "14400+60x180"
+      - series: 'cnpg_pg_stat_archiver_last_archived_time{namespace="dc-system", pod="dc-tsdb-1"}'
+        values: "1780000000+0x180"
+      - series: 'cnpg_pg_stat_archiver_last_failed_time{namespace="dc-system", pod="dc-tsdb-1"}'
+        values: "-1+0x180"
+      - series: 'barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace="dc-system", pod="dc-tsdb-1"}'
+        values: "0+0x180"
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: PostgresWALArchivingNotConfigured
+        exp_alerts: []
+      - eval_time: 150m
+        alertname: PostgresWALArchivingFailing
+        exp_alerts: []
+      - eval_time: 150m
+        alertname: PostgresHasNeverArchivedWAL
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # A configured destination that is now erroring.
+  # -------------------------------------------------------------------------
+  - name: a failing archiver fires
+    interval: 1m
+    input_series:
+      - series: 'cnpg_pg_stat_archiver_archived_count{namespace="dc-system", pod="dc-rdb-1"}'
+        values: "40+0x120"
+      - series: 'cnpg_pg_stat_archiver_seconds_since_last_archival{namespace="dc-system", pod="dc-rdb-1"}'
+        values: "600+60x120"
+      - series: 'cnpg_pg_stat_archiver_last_archived_time{namespace="dc-system", pod="dc-rdb-1"}'
+        values: "1780000000+0x120"
+      # Failing more recently than it last succeeded.
+      - series: 'cnpg_pg_stat_archiver_last_failed_time{namespace="dc-system", pod="dc-rdb-1"}'
+        values: "1780000600+60x120"
+      - series: 'barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace="dc-system", pod="dc-rdb-1"}'
+        values: "0+0x120"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: PostgresWALArchivingFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              namespace: dc-system
+              pod: dc-rdb-1
+            exp_annotations:
+              summary: "PostgreSQL WAL archiving is failing"
+              description: >-
+                dc-rdb-1 last FAILED to archive a WAL segment more recently than it last succeeded,
+                so this database is no longer being backed up. Nothing will stall and nothing will
+                crash: writes continue and every health check stays green. Two things are
+                accumulating — the recovery gap, and unshipped WAL on the database's own volume,
+                which will eventually fill it and stop PostgreSQL. Check the object store is
+                reachable, has space, and still accepts these credentials.
+
+  # -------------------------------------------------------------------------
+  # Never archived, with the plugin attached. The gap between "failing" and
+  # "stale" that the first version of these rules left uncovered: BOTH
+  # timestamps are the -1 sentinel, so the failing rule computes 0 > 1 and the
+  # old staleness rule computed -1 > 900. Neither fired.
+  # -------------------------------------------------------------------------
+  - name: a cluster that has never archived a segment fires
+    interval: 1m
+    input_series:
+      - series: 'cnpg_pg_stat_archiver_archived_count{namespace="dc-system", pod="dc-rdb-1"}'
+        values: "0+0x180"
+      - series: 'cnpg_pg_stat_archiver_seconds_since_last_archival{namespace="dc-system", pod="dc-rdb-1"}'
+        values: "-1+0x180"
+      - series: 'cnpg_pg_stat_archiver_last_archived_time{namespace="dc-system", pod="dc-rdb-1"}'
+        values: "-1+0x180"
+      - series: 'cnpg_pg_stat_archiver_last_failed_time{namespace="dc-system", pod="dc-rdb-1"}'
+        values: "-1+0x180"
+      - series: 'barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace="dc-system", pod="dc-rdb-1"}'
+        values: "0+0x180"
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: PostgresHasNeverArchivedWAL
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              namespace: dc-system
+              pod: dc-rdb-1
+            exp_annotations:
+              summary: "PostgreSQL has never successfully archived a WAL segment"
+              description: >-
+                dc-rdb-1 has archived no WAL segment, ever. The first base backup forces a segment
+                switch, so a working cluster leaves this state within minutes of creation — an hour
+                in it means archiving has never worked here, not that the database is quiet. Note
+                this records no FAILURE either, so the failing-archival alert cannot see it: an
+                archiver that hangs rather than errors looks exactly like this.
+      # The two -1 timestamps must NOT look like a failure to the other rule.
+      - eval_time: 150m
+        alertname: PostgresWALArchivingFailing
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # The destination filling up, before it reaches the databases.
+  # -------------------------------------------------------------------------
+  - name: a nearly-full backup destination fires
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dc-system", persistentvolumeclaim="dc-object-store-data"}'
+        values: "2000000000+0x120"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-object-store-data"}'
+        values: "21474836480+0x120"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: BackupDestinationAlmostFull
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              namespace: dc-system
+              persistentvolumeclaim: dc-object-store-data
+            exp_annotations:
+              summary: "The backup destination is almost full"
+              description: >-
+                dc-object-store-data is over 85% full. When it fills, WAL archiving starts failing —
+                and failed archiving does not stall commits, it accumulates WAL on the DATABASES'
+                volumes until those fill and PostgreSQL stops. So this ends as a database outage
+                whose cause points nowhere near a database. Grow the volume, shorten
+                backup_retention, or move to an external destination.
+
+  # -------------------------------------------------------------------------
+  # A PVC in some other namespace must not be attributed to this instance. The
+  # first version of this rule had no namespace selector at all.
+  # -------------------------------------------------------------------------
+  - name: another namespace's object store is not this instance's problem
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{namespace="somebody-else", persistentvolumeclaim="dc-object-store-data"}'
+        values: "1000000+0x120"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="somebody-else", persistentvolumeclaim="dc-object-store-data"}'
+        values: "21474836480+0x120"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: BackupDestinationAlmostFull
+        exp_alerts: []

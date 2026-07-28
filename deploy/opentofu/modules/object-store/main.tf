@@ -23,9 +23,17 @@
 #   - a restore rehearsal that exercises the same code path production uses;
 #   - a real archive-lag signal, which cannot exist without a real destination.
 #
-# What it does NOT buy is survival of the cluster. `dcctl ha verify` says so, the
-# deployment docs say so, and `backup_destination = "external"` is the one-line
-# change that fixes it.
+# What it does NOT buy is survival of the cluster. `dcctl bootstrap` says so in
+# its closing report, the `database_backup_survives_cluster_loss` output says so
+# to anything reading state, the deployment docs say so, and
+# `backup_destination = "external"` is the one-line change that fixes it.
+#
+# 🔑 That list is deliberately specific. An earlier version of this comment
+# claimed `dcctl ha verify` reported it; that command contains no backup logic at
+# all, so the sentence asserted a safeguard that did not exist — in a header whose
+# entire job is to be honest about what this module is not. Teaching `ha verify`
+# to read backup state is worth doing and is not done here; until it is, do not
+# write it down as though it were.
 #
 # WHY THE DEFAULT IS THIS RATHER THAN "CONFIGURE A BUCKET FIRST"
 #
@@ -189,8 +197,18 @@ variable "resources" {
     memory = string
   })
   default = {
-    cpu    = "50m"
-    memory = "256Mi"
+    cpu = "50m"
+    # 🔴 512Mi, and the 256Mi it replaces was MEASURED to be wrong: the pinned
+    # image idles at ~213 MiB RSS with zero objects stored, i.e. 83% of the old
+    # request before a single upload.
+    #
+    # Under-requesting does not throttle anything -- there is no limit -- but the
+    # kubelet ranks Burstable pods for eviction by usage ABOVE request, so a pod
+    # that idles near its request and then uploads a base backup goes to the front
+    # of the queue on exactly the small nodes `--compact` targets. Evicting it
+    # means a Recreate against an RWO volume, so there is a detach/attach gap, and
+    # archiving fails for its duration.
+    memory = "512Mi"
   }
 }
 
@@ -381,15 +399,31 @@ resource "kubernetes_deployment_v1" "this" {
             container_port = local.api_port
           }
 
-          # 🔴 The readiness probe is what stands between "the apply finished" and
-          # "the databases can archive". /minio/health/ready reports whether the
-          # backend can actually serve object operations, not merely whether the
-          # process is up -- and the Cluster resources are applied in the same
-          # run, so a pod that is Running but not yet serving would take the first
-          # WAL archive attempts with it.
+          # 🔴 /minio/health/cluster, NOT /minio/health/ready, and the difference
+          # was MEASURED rather than read.
+          #
+          # An earlier version of this used `/ready` and claimed it "reports
+          # whether the backend can actually serve object operations". That is
+          # false. Against the pinned image, with the drive taken fully offline
+          # (`Read quorum could not be established ... drives-online: 0`):
+          #
+          #     /minio/health/live      healthy 200   backend dead 200
+          #     /minio/health/ready     healthy 200   backend dead 200
+          #     /minio/health/cluster   healthy 200   backend dead 503
+          #
+          # So `/ready` proves only that the object layer initialised. A store
+          # whose backend is dead or full stayed READY, kept its Service endpoint,
+          # and went on accepting-and-failing every archive request -- which is
+          # precisely the state this probe was supposed to take it out of.
+          #
+          # This matters twice over: it gates "the apply finished" against "the
+          # databases can archive" (the Clusters are applied in the same run and
+          # their first base backup runs immediately), and it is what removes a
+          # broken store from its Service instead of leaving it silently
+          # swallowing WAL.
           readiness_probe {
             http_get {
-              path = "/minio/health/ready"
+              path = "/minio/health/cluster"
               port = local.api_port
             }
             initial_delay_seconds = 5
@@ -397,10 +431,12 @@ resource "kubernetes_deployment_v1" "this" {
             failure_threshold     = 6
           }
 
-          # Liveness on /minio/health/live, which unlike the readiness path does
-          # NOT consult the backend. That asymmetry is deliberate: a store whose
-          # disk has filled should go UNREADY (stop taking archives, raise the
-          # alert) rather than be killed and restarted into the same full disk.
+          # Liveness stays on /minio/health/live, which -- per the measurement
+          # above -- really does answer 200 with a dead backend. That is the right
+          # behaviour HERE even though it made `/ready` useless: a store whose disk
+          # has filled should go unready and raise the alert, not be killed and
+          # restarted into the same full disk. The asymmetry the earlier comment
+          # described is real; it just needed `/cluster` to exist at all.
           liveness_probe {
             http_get {
               path = "/minio/health/live"

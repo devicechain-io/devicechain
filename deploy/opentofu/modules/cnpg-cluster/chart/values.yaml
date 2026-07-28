@@ -160,7 +160,16 @@ backup:
   # The plugin runs a sidecar in every instance pod. Requests only, matching the
   # database container: a memory limit here turns a large backup into an OOMKill
   # of the process taking the backup.
+  #
+  # 🔴 256Mi rather than the 128Mi first shipped, and the reason is about the
+  # DATABASE pod rather than about the sidecar. This container gzips and uploads
+  # with `jobs` / `maxParallel` concurrency, inside the PostgreSQL pod, and the
+  # kubelet ranks a pod for eviction by its total usage above its total requests.
+  # So an under-requested backup sidecar does not get itself evicted — it drags
+  # the PRIMARY DATABASE up the eviction ranking during every backup. That is not
+  # the failure the "requests without limits" reasoning above is protecting
+  # against, and it is a worse one.
   sidecarResources:
     requests:
       cpu: 50m
-      memory: 128Mi
+      memory: 256Mi
