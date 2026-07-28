@@ -57,7 +57,7 @@ func checkJetStreamVolumeIsUpgradable(ctx context.Context, st *State) error {
 		// the apply itself will report the connection problem far better.
 		return nil
 	}
-	sts, err := typed.AppsV1().StatefulSets(natsInfraNamespace).Get(ctx, natsStatefulSetName, metav1.GetOptions{})
+	sts, err := typed.AppsV1().StatefulSets(infraNamespace).Get(ctx, natsStatefulSetName, metav1.GetOptions{})
 	if err != nil {
 		// Not found is the overwhelmingly likely case: a fresh install. Any other
 		// error (RBAC, transient) is not worth blocking a bootstrap over.
@@ -86,7 +86,7 @@ func checkJetStreamVolumeIsUpgradable(ctx context.Context, st *State) error {
 				"%s: at %s the reservation sits exactly on its headroom floor, so the platform "+
 				"cannot add a stream or bucket without moving this volume",
 			have.String(), want.String(),
-			natsStatefulSetName, natsInfraNamespace, want.String(),
+			natsStatefulSetName, infraNamespace, want.String(),
 			have.String(), want.String(), have.String())
 	}
 	return nil
@@ -109,9 +109,10 @@ func jetStreamStorageFor(st *State) string {
 	return ""
 }
 
-// natsInfraNamespace is where the OpenTofu root installs the broker. It mirrors
-// the root's `namespace` default; dcctl does not override it.
-const natsInfraNamespace = "dc-system"
+// infraNamespace is where the OpenTofu root installs the shared infrastructure —
+// the broker AND both CloudNativePG Clusters. It mirrors the root's `namespace`
+// default; dcctl does not override it.
+const infraNamespace = "dc-system"
 
 // embeddedJetStreamStorageDefault extracts the nats_jetstream_storage default from
 // the embedded OpenTofu variables.tf, or "" if it cannot be found.

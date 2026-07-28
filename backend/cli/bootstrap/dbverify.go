@@ -173,7 +173,7 @@ func VerifyDatabaseReplication(ctx context.Context, opts DbVerifyOptions) (DbRep
 		return DbReport{}, fmt.Errorf("a cluster name is required")
 	}
 	if opts.Namespace == "" {
-		opts.Namespace = natsInfraNamespace
+		opts.Namespace = infraNamespace
 	}
 
 	restCfg, err := RestConfig(opts.KubeContext)
