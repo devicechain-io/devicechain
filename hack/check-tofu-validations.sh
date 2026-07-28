@@ -334,6 +334,60 @@ evaluates true 'module.cnpg_rdb.synchronous_enforced' -var ha=true
 evaluates false 'module.cnpg_rdb.synchronous_enforced' -var ha=false
 evaluates false 'module.cnpg_rdb.synchronous_enforced' -var ha=true -var postgres_instances=1
 
+# --- timescale_instances (ADR-020 A2.4) --------------------------------------
+#
+# The event store's half of the same two-lever derivation. Same 1-or-3-never-2
+# rule, and it needs its own assertions rather than being assumed to follow the
+# relational store: the two are separate variables feeding separate modules, so
+# a derivation that breaks on one is invisible from the other.
+for v in 0 1 3 5; do accepts timescale_instances "$v"; done
+for v in 2 4 -1; do rejects timescale_instances "$v"; done
+
+evaluates 3 'var.timescale_instances != 0 ? var.timescale_instances : (var.ha ? 3 : 1)' -var ha=true
+evaluates 1 'var.timescale_instances != 0 ? var.timescale_instances : (var.ha ? 3 : 1)' -var ha=false
+evaluates 1 'var.timescale_instances != 0 ? var.timescale_instances : (var.ha ? 3 : 1)' -var ha=true -var timescale_instances=1
+
+evaluates true 'module.cnpg_tsdb.synchronous_enforced' -var ha=true
+evaluates false 'module.cnpg_tsdb.synchronous_enforced' -var ha=false
+evaluates false 'module.cnpg_tsdb.synchronous_enforced' -var ha=true -var timescale_instances=1
+
+# 🔴 The two stores must not share a lever by accident. If a future edit points
+# the event store's module at postgres_instances, every assertion above still
+# passes (both derive 3 under ha=true), and the only visible symptom is that
+# pinning one store silently moves the other. These two lines are what make that
+# substitution fail: they set the levers to DIFFERENT values and require each
+# store to follow its own.
+evaluates 3 'module.cnpg_tsdb.synchronous_enforced ? 3 : 1' -var ha=true -var postgres_instances=1
+evaluates 1 'module.cnpg_rdb.synchronous_enforced ? 3 : 1' -var ha=true -var postgres_instances=1
+
+# --- the operand image tag is a SECOND COPY, and nothing links it to its source
+#
+# deploy/images/timescaledb/versions.conf is the single source of truth for the
+# image we build. The workflow computes the published tag from it as
+# `<pg_minor>-ts<timescaledb_version>-r<revision>`; variables.tf then carries
+# that tag as a hand-written string, because a Terraform default cannot read a
+# shell file.
+#
+# So the deployed event store's image version is defined in two places that have
+# no mechanical relationship. Bump versions.conf, rebuild, publish — and the
+# platform keeps deploying the OLD tag, successfully, with the new image sitting
+# unused in the registry. Nothing fails; the fix simply does not take effect.
+# This recomputes the tag and requires the default to match it.
+versions_conf="$repo_root/deploy/images/timescaledb/versions.conf"
+if [[ -f $versions_conf ]]; then
+  # shellcheck disable=SC1090
+  source "$versions_conf"
+  pg_minor=${PG_IMAGE##*:}
+  pg_minor=${pg_minor%%-*}
+  want_image="ghcr.io/devicechain-io/postgresql-timescaledb:${pg_minor}-ts${TIMESCALEDB_VERSION}-r${IMAGE_REVISION}"
+  # `tofu console` renders a string result WITH its quotes, so the expected value
+  # carries them too. Comparing the raw tag would fail on every correct run.
+  evaluates "\"$want_image\"" 'var.timescale_image'
+else
+  echo >&2 "MISSING: $versions_conf — cannot check the operand image tag against its source of truth."
+  ((failures++))
+fi
+
 if ((failures > 0)); then
   echo >&2
   echo "$failures validation assertion(s) failed." >&2

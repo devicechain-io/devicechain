@@ -60,6 +60,33 @@ hack/ha-rig.sh, which asserts against the API server, not against this file.
 {{- $owner := required "cnpg-cluster: .Values.bootstrap.owner is required" .Values.bootstrap.owner -}}
 
 {{- /*
+The owner must not be a role CloudNativePG reserves, and this guard exists
+because the failure is only HALF loud.
+
+Measured on CNPG 1.30.0 with `owner: postgres`:
+
+  spec.managed.roles      REJECTED by the webhook -- `Invalid value: "postgres":
+                          This role is reserved for operator use`.
+  spec.bootstrap.initdb.owner   ACCEPTED. No complaint at all.
+
+So today the combination is refused, but only because this chart happens to
+render a managed role for the owner. Make that block conditional -- or set an
+owner CNPG reserves in some future field that does not validate -- and the
+cluster comes up with the platform connecting as the ACTUAL superuser, its
+password in a Secret we wrote, and `enableSuperuserAccess: false` above rendered
+meaningless. Nothing would report a problem.
+
+This matters here rather than being theoretical: the event store's app username
+was `postgres` for as long as it was a plain StatefulSet, because the stock
+postgres image's POSTGRES_USER *is* the superuser. A2.4 renames it to
+`devicechain`, and this refuses the old value rather than trusting that the
+webhook will keep catching it somewhere else.
+*/ -}}
+{{- if has $owner (list "postgres" "streaming_replica" "cnpg_pooler_pgbouncer") -}}
+  {{- fail (printf "cnpg-cluster %q: bootstrap.owner is %q, which CloudNativePG reserves for its own use. Pick an application role name -- the platform connects as the owner, and naming it after a reserved role means connecting as the superuser rather than as an application." $name $owner) -}}
+{{- end -}}
+
+{{- /*
 The instance-count invariant, enforced rather than documented.
 
 Synchronous replication with `number: N` needs N standbys present to accept a

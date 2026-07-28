@@ -31,10 +31,10 @@ module "nats" {
 
 # 🔴 THE CUTOVER GUARD. Read this before touching anything below it.
 #
-# A2.3 replaced the relational store's StatefulSet with a CloudNativePG Cluster.
-# On a FRESH cluster that is unremarkable. On an EXISTING one it is a silent
-# data-abandonment bug, and the reason is a Terraform behaviour that is easy to
-# get exactly backwards:
+# A2.3 replaced the relational store's StatefulSet with a CloudNativePG Cluster,
+# and A2.4 did the same to the event store. On a FRESH cluster that is
+# unremarkable. On an EXISTING one it is a silent data-abandonment bug, and the
+# reason is a Terraform behaviour that is easy to get exactly backwards:
 #
 #   `lifecycle { prevent_destroy = true }` protects a resource that is STILL IN
 #   THE CONFIGURATION. Delete the module block and the resource becomes an
@@ -42,16 +42,15 @@ module "nats" {
 #   block, because there is no longer a lifecycle block to consult.
 #
 # Measured against a copy of a real state file: the plan succeeds, exit 0, and
-# `module.postgres.kubernetes_stateful_set_v1.db` is marked for destruction. The
-# guard that exists precisely to stop this does not fire.
+# the StatefulSet is marked for destruction. The guard that exists precisely to
+# stop this does not fire.
 #
 # What the operator would then get is the worst shape available: the StatefulSet
 # and its Service are destroyed, the PVC survives (its retention policy is
 # Retain, and it was never in Terraform state anyway because the StatefulSet's
 # volumeClaimTemplate created it), and a brand-new EMPTY Cluster takes over the
-# `dc-postgresql` name. The instance comes up green with every tenant, user,
-# device and relationship gone from the running system while still sitting on a
-# detached volume. Nothing anywhere reports a problem.
+# same hostname. The instance comes up green with the data gone from the running
+# system while still sitting on a detached volume. Nothing reports a problem.
 #
 # There is no in-place upgrade to offer instead: a StatefulSet's PGDATA cannot
 # be adopted by CloudNativePG. The migration is a dump and restore, or — pre-GA,
@@ -60,23 +59,63 @@ module "nats" {
 # So this refuses, at PLAN time, before the destroy can be planned. It covers
 # `tofu apply` run directly as well as `dcctl bootstrap`, which is why it lives
 # here rather than only in the CLI.
-data "kubernetes_resources" "legacy_rdb_statefulset" {
+#
+# It is written PER-STORE rather than once, and that is deliberate: this guard is
+# the thing a future storage move is most likely to forget, precisely because the
+# version that forgets it still applies cleanly and still comes up green. Adding
+# a store here is one map entry, and an absent entry is visible in a way a
+# missing copy of a 40-line block is not.
+locals {
+  # Each pre-CloudNativePG StatefulSet this configuration replaces, keyed by the
+  # store it belonged to. `dump` is the recovery recipe quoted back at whoever
+  # trips the guard — they differ, because pg_dumpall on the event store would
+  # pull hypertable data nobody wants in a text dump.
+  legacy_db_statefulsets = {
+    rdb = {
+      statefulset = "dc-postgresql"
+      store       = "relational-database"
+      holds       = "tenants, users, devices and relationships"
+      allow       = var.allow_legacy_rdb_removal
+      allow_var   = "allow_legacy_rdb_removal"
+      dump        = "pg_dumpall -U <user> > rdb.sql"
+    }
+    tsdb = {
+      statefulset = "dc-timescaledb-single"
+      store       = "event-database"
+      holds       = "all recorded device event history"
+      allow       = var.allow_legacy_tsdb_removal
+      allow_var   = "allow_legacy_tsdb_removal"
+      dump        = "pg_dump -U <user> -d <database> -Fc > events.dump"
+    }
+  }
+}
+
+# 🔴 A missing namespace returns ZERO objects rather than erroring, which is the
+# behaviour this depends on: on a fresh install there is no namespace yet and
+# the guard must pass, not explode. Verified.
+data "kubernetes_resources" "legacy_db_statefulsets" {
+  for_each = local.legacy_db_statefulsets
+
   api_version    = "apps/v1"
   kind           = "StatefulSet"
   namespace      = var.namespace
-  field_selector = "metadata.name=dc-postgresql"
+  field_selector = "metadata.name=${each.value.statefulset}"
 }
 
 resource "terraform_data" "cutover_guard" {
-  input = length(data.kubernetes_resources.legacy_rdb_statefulset.objects)
+  for_each = local.legacy_db_statefulsets
+
+  input = length(data.kubernetes_resources.legacy_db_statefulsets[each.key].objects)
 
   lifecycle {
     precondition {
-      condition     = length(data.kubernetes_resources.legacy_rdb_statefulset.objects) == 0 || var.allow_legacy_rdb_removal
+      condition     = length(data.kubernetes_resources.legacy_db_statefulsets[each.key].objects) == 0 || each.value.allow
       error_message = <<-EOT
-        This cluster still runs the OLD relational-database StatefulSet
-        (dc-postgresql in ${var.namespace}), and this configuration replaces it
-        with a CloudNativePG Cluster.
+        This cluster still runs the OLD ${each.value.store} StatefulSet
+        (${each.value.statefulset} in ${var.namespace}), and this configuration
+        replaces it with a CloudNativePG Cluster.
+
+        That store holds ${each.value.holds}.
 
         Applying as-is would DESTROY that StatefulSet and leave its data on an
         orphaned PersistentVolumeClaim while a new, EMPTY database takes over the
@@ -95,12 +134,12 @@ resource "terraform_data" "cutover_guard" {
 
           To KEEP it, dump before cutting over:
 
-            kubectl -n ${var.namespace} exec dc-postgresql-0 -- \
-              pg_dumpall -U <user> > rdb.sql
+            kubectl -n ${var.namespace} exec ${each.value.statefulset}-0 -- \
+              ${each.value.dump}
             # then remove the old objects, apply this configuration, and restore
-            # into the new Cluster through the dc-postgresql service.
+            # into the new Cluster through its service.
 
-        Once the data is safe, set allow_legacy_rdb_removal = true to proceed.
+        Once the data is safe, set ${each.value.allow_var} = true to proceed.
         Setting it is an assertion that you have handled the data — it is not a
         migration, and nothing checks it for you.
       EOT
@@ -160,21 +199,91 @@ module "cnpg_rdb" {
   depends_on = [module.namespace, module.cnpg]
 }
 
-# TimescaleDB — event hypertables (ADR-004). Same generic module, different image:
-# TimescaleDB is a Postgres superset, so the StatefulSet shape is identical.
-module "timescaledb" {
-  source = "./modules/postgres"
+# TimescaleDB — the event store's hypertables (ADR-004), as a CloudNativePG
+# Cluster (ADR-020 A2.4). Same module as the relational store; the stores differ
+# in their image, their durability and their instance count, and in nothing else.
+#
+# The Cluster object is `dc-tsdb`; clients keep reaching it at
+# `dc-timescaledb-single`, the name that is baked into the Helm chart defaults,
+# the compiled-in instance-config defaults and dcctl's shipped default CR. The
+# name is inherited rather than chosen — it reads as "single instance", which
+# above one instance it no longer is — but renaming a DNS contract is a separate
+# change from replacing a storage tier, and doing both at once would make a
+# failure of either indistinguishable from the other.
+module "cnpg_tsdb" {
+  source = "./modules/cnpg-cluster"
 
-  namespace     = var.namespace
-  name          = "dc-timescaledb-single"
-  image         = var.timescale_image
-  database      = var.timescale_database
-  username      = var.timescale_username
-  password      = var.timescale_password
-  storage       = var.timescale_storage
-  storage_class = var.timescale_storage_class
+  namespace          = var.namespace
+  name               = "dc-tsdb"
+  alias_service_name = "dc-timescaledb-single"
+  image              = var.timescale_image
+  database           = var.timescale_database
+  username           = var.timescale_username
+  password           = var.timescale_password
+  storage            = var.timescale_storage
+  storage_class      = var.timescale_storage_class
 
-  depends_on = [module.namespace]
+  instances = var.timescale_instances != 0 ? var.timescale_instances : (var.ha ? 3 : 1)
+
+  # 🔴 `preferred`, NOT `required` — the opposite of the relational store, and
+  # the asymmetry is the decision rather than an oversight.
+  #
+  # This store takes device telemetry at ingest rates. Holding a write until a
+  # standby confirms it would convert a lost standby into ingest backpressure,
+  # and the events are already held durably UPSTREAM in JetStream until they are
+  # persisted, so the ingest path can replay what a failover drops. `preferred`
+  # falls back to asynchronous when no standby is available and self-heals when
+  # one returns; the exposure is bounded by replication lag rather than being
+  # unbounded.
+  #
+  # The relational store makes the other trade for the other reason: it holds the
+  # audit journal, has no upstream replay, and a stall there is a loud recoverable
+  # failure rather than silent loss.
+  synchronous     = true
+  data_durability = "preferred"
+
+  # 🔴 BOTH of these are load-bearing, and each was found by building the operand
+  # image rather than by reading anything.
+  #
+  # shared_preload_libraries: TimescaleDB is not a plain extension — its custom
+  # WAL resource manager must be loaded at server start. Recovery bootstrap is
+  # also known to drop this (cnpg#10840), which kills a restore during WAL
+  # replay, so it is set on the Cluster itself rather than inherited.
+  shared_preload_libraries = ["timescaledb"]
+
+  post_init_template_sql = [
+    # Coupling (b). Every DeviceChain service creates its own database at startup
+    # and NOTHING in the codebase ever issues `CREATE EXTENSION` — grep confirms
+    # zero occurrences. The platform has always depended on the extension already
+    # being present in whatever a new database is cloned from, which the stock
+    # TimescaleDB image happened to provide. Putting it in template1 makes that
+    # dependency explicit and keeps it true. Measured: a database created by the
+    # app user afterwards inherits timescaledb 2.28.3.
+    "CREATE EXTENSION IF NOT EXISTS timescaledb;",
+
+    # 🔴 Remove the telemetry job, which is NOT the same thing as turning
+    # telemetry off, and the difference bites the job-health oracle.
+    #
+    # `timescaledb.telemetry_level=off` below stops the phone-home. It does NOT
+    # remove the job: measured, `policy_telemetry` remains present and
+    # `scheduled = true` while never being given a `next_start` and never
+    # running. So a healthy cluster permanently carries one job whose next_start
+    # is NULL — the exact shape an oracle would read as "the scheduler is
+    # stuck", on every cluster, forever, caused by our own setting. A check that
+    # is red on a working system is a check that gets switched off.
+    #
+    # Deleting it here is a no-op if a future image stops creating it.
+    "SELECT delete_job(job_id) FROM timescaledb_information.jobs WHERE proc_name = 'policy_telemetry';",
+  ]
+
+  parameters = {
+    # No phone-home. The operand image ships the telemetry job enabled by
+    # default; this is the half that stops it reporting, and the delete_job above
+    # is the half that stops it confusing the oracle.
+    "timescaledb.telemetry_level" = "off"
+  }
+
+  depends_on = [module.namespace, module.cnpg]
 }
 
 # CloudNativePG — the operator that will own both database stores (ADR-020 A2).

@@ -4,7 +4,8 @@
 # A DeviceChain database store as a CloudNativePG Cluster (ADR-020 A2).
 #
 # Generic on image, instance count, durability and bootstrap SQL, so it serves
-# BOTH stores exactly as modules/postgres did: `rdb` (A2.3) and `tsdb` (A2.4).
+# BOTH stores exactly as the StatefulSet module it replaced did: `rdb` (A2.3)
+# and `tsdb` (A2.4).
 # Keeping one module is the point -- the two stores differ in four values, and a
 # second copy would let them drift in the other forty.
 #
