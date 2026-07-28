@@ -64,7 +64,7 @@ import (
 // The read-back it needs already exists and is unused: OpenTofu exports
 // postgres_synchronous_enforced and timescaledb_synchronous_enforced, whose own
 // descriptions say to read them rather than re-derive from the flags. Wiring them
-// into the preflight the way the broker count is wired is tracked as A2.7c; until
+// into the preflight the way the broker count is wired is tracked as A2.8; until
 // then, treat the database sentence in summary() as a statement about the DEFAULT
 // topology, not an assertion about the applied one.
 //
