@@ -46,8 +46,9 @@ import (
 // are derived inside OpenTofu from the same `ha` variable this renders, so there is
 // no second value to keep in step. An earlier version of this comment said the
 // databases were "single-instance StatefulSets", which stopped being true at A2.3
-// and stopped being true for both stores at A2.4,
-// and it does not raise the DeviceChain services' own replica counts: the
+// and stopped being true for both stores at A2.4.
+//
+// What --ha does NOT raise is the DeviceChain services' own replica counts: the
 // stateful areas are pinned to one writer by the ADR-070 lease fence, and running
 // two would be a correctness change, not a sizing one.
 type haTopology struct {
@@ -114,11 +115,22 @@ func (h haTopology) natsValues() map[string]interface{} {
 }
 
 // summary is the one-line resolution printed in the bootstrap report.
+//
+// It names the DATABASE half without carrying a number for it, and the omission
+// is deliberate rather than lazy. The instance counts are derived inside
+// OpenTofu from the same `ha` variable infraVars emits, so printing "3" here
+// would be a second copy of a value this type does not own — the exact shape
+// this file exists to make unreachable. What an operator cannot infer, and what
+// costs real money, is that database volumes are sized PER INSTANCE: --ha does
+// not just replicate the stores, it triples their disk.
 func (h haTopology) summary() string {
 	if !h.Replicated() {
-		return "single-node NATS, unreplicated streams"
+		return "single-node NATS, unreplicated streams; single-instance databases"
 	}
-	return fmt.Sprintf("%d NATS servers (one per node), streams and KV buckets at %d replicas",
+	return fmt.Sprintf(
+		"%d NATS servers (one per node), streams and KV buckets at %d replicas; both databases "+
+			"replicated too — relational synchronously, event store preferred — with volumes sized "+
+			"per instance, so their disk scales with the count",
 		h.ServerReplicas, h.StreamReplicas)
 }
 
