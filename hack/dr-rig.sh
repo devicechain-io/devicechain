@@ -48,10 +48,17 @@
 # So the base backup is taken BEFORE the secret is seeded, deliberately. If the
 # order were reversed, the restore would be satisfied by the base backup alone and
 # would never replay a single WAL segment — the drill would pass without ever
-# exercising the mechanism it exists to test. `up` therefore refuses to continue
-# until a WAL segment that did NOT exist at base-backup time has appeared in the
-# bucket. That segment is the one carrying the seeded row, and recovering it is
-# the thing being proved.
+# exercising the mechanism it exists to test. Two things enforce it, because the
+# order the code is written in is not an enforcement:
+#
+#   - scheduled base backups are SUSPENDED before the seed, and anything already
+#     in flight is waited out. The chart's ScheduledBackup carries
+#     `immediate: true`, so without this a second base backup can land after the
+#     seed and quietly make the whole run vacuous;
+#   - `up` refuses to continue unless a WAL segment that did not exist at the
+#     moment of the forced switch has appeared in the bucket, AND no base backup
+#     has appeared since the seed. The first is the segment carrying the seeded
+#     row; the second is what stops anything else from being able to supply it.
 #
 # The object store is a MinIO container on the `kind` docker network — OUTSIDE
 # the cluster, which is what makes it a backup at all. `disaster` deletes the
@@ -139,7 +146,8 @@ work="${DC_DR_WORK:-$HOME/.devicechain-dr-rig}"
 escrow_file="$work/rootkey.escrow"
 decoy_file="$work/decoy.escrow"
 receipt_file="$work/receipt.json"
-wal_baseline_file="$work/wal-at-base-backup.txt"
+wal_baseline_file="$work/wal-at-seed.txt"
+base_baseline_file="$work/base-backups-at-seed.txt"
 minio_env_file="$work/minio.env"
 backup_env_file="$work/backup.env"
 
@@ -688,12 +696,88 @@ restore rather than as a backup that was never taken."
   done
 }
 
+# quiesce_base_backups closes the race that would make this whole drill VACUOUS.
+#
+# Recovery replays WAL onto the LATEST base backup it can use. So if a base backup
+# lands after the secret is seeded, the restore is satisfied by that backup alone,
+# never replays a segment, and passes — while the rig's own comments claim WAL
+# replay is what was proved. The drill would be measuring nothing and saying so
+# confidently, which is worse than not running it.
+#
+# It is not hypothetical. The chart's ScheduledBackup carries `immediate: true`,
+# so it fires during the Helm install and completes on its own schedule. In the
+# first full live run of this rig the two base backups landed at 21:18:22 and
+# 21:18:40 and the seed at 21:18:51 — eleven seconds of margin, on an unloaded
+# machine, entirely by luck. A slower box loses that race silently.
+#
+# So the schedule is suspended and anything already running is allowed to finish
+# BEFORE the seed. Suspending is safe: this cluster is about to be destroyed, and
+# the restored cluster gets its own schedule.
+quiesce_base_backups() {
+  local sb names running waited=0
+  say "suspending scheduled base backups for the seed window"
+  names="$(kubectl --context "$kube_context" -n dc-system \
+    get scheduledbackups.postgresql.cnpg.io -o name 2>/dev/null || true)"
+  for sb in $names; do
+    kubectl --context "$kube_context" -n dc-system patch "$sb" \
+      --type=merge -p '{"spec":{"suspend":true}}' >/dev/null ||
+      fail "could not suspend $sb; a base backup landing after the seed would make this drill vacuous"
+  done
+
+  # Suspending stops new ones; it does not stop one already in flight. A backup
+  # with no phase yet counts as running — the conservative reading.
+  #
+  # 🔴 Only $rdb_cluster's backups. The instance runs a SECOND CNPG cluster for
+  # the event store, dc-tsdb, whose base backups are large and slow and which this
+  # drill does not restore at all. Waiting on those was measured taking minutes
+  # while dc-rdb had long since finished, which would turn every `up` into a
+  # five-minute stall and then a refusal — for a cluster whose state cannot affect
+  # this result either way.
+  while true; do
+    running="$(kubectl --context "$kube_context" -n dc-system \
+      get backups.postgresql.cnpg.io -o json 2>/dev/null |
+      jq --arg c "$rdb_cluster" '[.items[]
+           | select(.spec.cluster.name == $c)
+           | .status.phase // "pending"
+           | select(. != "completed" and . != "failed")] | length')" ||
+      fail "could not read the backup phases for $rdb_cluster"
+    [[ "${running:-0}" -eq 0 ]] && break
+    waited=$((waited + 1))
+    [[ $waited -lt 60 ]] || fail "$running base backup(s) are still running after five minutes.
+Seeding now would risk one of them completing AFTER the secret is written, which
+makes the restore satisfiable without replaying any WAL — a drill that passes
+without exercising what it claims to prove."
+    sleep 5
+  done
+
+  # The set the completeness gate compares against. Recorded as a SET rather than
+  # a timestamp on purpose: barman names a base backup for when it STARTED, and
+  # what actually matters is when it ended, so no clock comparison here would be
+  # sound. "Did this set grow after the seed" needs no such assumption.
+  archive_base_backups >"$base_baseline_file"
+  note "$(wc -l <"$base_baseline_file" | tr -d ' ') base backup(s) exist, all of them before the seed"
+}
+
 # assert_archive_complete is the last look before the disaster. Both halves have
-# to be there: a base backup to start from and WAL to replay onto it.
+# to be there: a base backup to start from and WAL to replay onto it — and no
+# base backup may have appeared since the seed.
 assert_archive_complete() {
-  local bases wals
+  local bases wals late
   bases="$(archive_base_backups)"
   wals="$(archive_wal_segments)"
+
+  if [[ -f "$base_baseline_file" ]]; then
+    late="$(comm -13 <(sort "$base_baseline_file") <(printf '%s\n' "$bases" | sort) || true)"
+    if [[ -n "$late" ]]; then
+      fail "a base backup appeared AFTER the secret was seeded:
+$(printf '%s\n' "$late" | sed 's/^/  /')
+
+Recovery starts from the latest usable base backup, so this one would satisfy the
+restore on its own and no WAL would ever be replayed. The drill would pass while
+proving nothing about the mechanism it exists to test. Re-run: quiesce_base_backups
+suspends the schedule before the seed, so this means one slipped through."
+    fi
+  fi
 
   [[ -n "$bases" ]] || fail "no base backup under $bucket_rdb/$rdb_source/base.
 Recovery starts from a base backup; WAL alone restores nothing."
@@ -738,6 +822,7 @@ drill against an artifact that belongs to a cluster that no longer exists."
 
   wait_for_cluster_healthy "$rdb_cluster"
   take_base_backup
+  quiesce_base_backups
 
   say "waiting for the instance API to route"
   wait_for_api user-management
@@ -756,8 +841,9 @@ drill against an artifact that belongs to a cluster that no longer exists."
   assert_archive_complete
 
   say "UP COMPLETE — instance $instance holds a secret whose row exists ONLY in WAL
-archived after the base backup, and $work holds the two things a real operator
-would keep off-site: the escrow artifact and the archive's credentials."
+archived after every base backup in the bucket, so the restore cannot find it
+without replaying. $work holds the two things a real operator would keep off-site:
+the escrow artifact and the archive's credentials."
 }
 
 # cmd_archive exists so a run that seeded successfully and then tripped over the
