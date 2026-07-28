@@ -115,6 +115,7 @@ const usage = `drdrill — the ADR-028 root-key restore drill
 
   drdrill seed   [flags]   write a secret through the platform API, record a receipt
   drdrill verify [flags]   prove that secret still decrypts, from a receipt
+  drdrill decoy  [flags]   mint an escrow artifact holding the WRONG key (the control)
   drdrill codes            print the exit-code taxonomy as shell assignments
 
 Exit codes: 0 ok · 1 setup/inconclusive · 3 DECRYPT FAILED · 4 not found · 5 corrupt
@@ -151,6 +152,8 @@ func main() {
 		err = runSeed(ctx, os.Args[2:])
 	case "verify":
 		err = runVerify(ctx, os.Args[2:])
+	case "decoy":
+		err = runDecoy(os.Args[2:])
 	case "codes":
 		printExitCodes()
 		return
