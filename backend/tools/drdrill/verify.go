@@ -428,7 +428,12 @@ func quoteIdentifier(s string) string {
 // channel is back and still reports holding a secret.
 func checkChannelVisible(ctx context.Context, o verifyOptions, r Receipt) error {
 	if r.Identity == "" || r.Password == "" {
-		return fmt.Errorf("the receipt carries no identity, so the API check cannot run; pass --skip-api to test the decrypt alone")
+		// No "pass --skip-api" here, whatever an operator might wish for: that flag
+		// was removed on purpose (see the note at the call site) and telling
+		// someone to reach for it sends them looking for a way to delete the
+		// precheck. A receipt with no identity was written by a `seed` that did
+		// not finish, so the fix is upstream.
+		return fmt.Errorf("the receipt carries no identity, so the API check cannot run; re-seed — this receipt was written by a seed that did not complete")
 	}
 	base := fmt.Sprintf("%s://%s", o.scheme, o.server)
 	session := userclient.NewTenantSession(drillHTTPClient(o.scheme), base+"/api/user-management/graphql",

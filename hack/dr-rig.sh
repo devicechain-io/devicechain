@@ -90,7 +90,14 @@ note() { printf '\033[0;37m    %s\033[0m\n' "$*"; }
 fail() { printf '\n\033[1;31mFAIL: %s\033[0m\n' "$*" >&2; exit 1; }
 
 need() { command -v "$1" >/dev/null 2>&1 || fail "$1 is required but not on PATH"; }
-need_all() { local t; for t in kind kubectl docker jq curl; do need "$t"; done; }
+need_all() {
+  local t
+  for t in kind kubectl docker jq curl go make; do need "$t"; done
+  # Either name will do — dcctl looks for both. Checked here rather than left to
+  # surface from inside a bootstrap, where it reads as an infrastructure failure.
+  command -v tofu >/dev/null 2>&1 || command -v terraform >/dev/null 2>&1 ||
+    fail "neither tofu nor terraform is on PATH; dcctl bootstrap shells out to one of them"
+}
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # NOT configurable: kind takes the cluster name from the top-level `name:` in the
@@ -282,10 +289,14 @@ because the bucket it has to read was written under those exact credentials."
 minio_up() {
   write_credentials
 
-  if docker ps --format '{{.Names}}' | grep -qx "$minio_container"; then
-    say "object store $minio_container is already running; reusing it"
+  # `docker ps -a`, not `docker ps`. A container STOPPED by a host reboot still
+  # holds the archive, and the old form did not see it — it went straight to
+  # `rm -f` and created an empty one, destroying the only off-site copy without
+  # the "run down first" refusal the rig gives everywhere else.
+  if docker ps -a --format '{{.Names}}' | grep -qx "$minio_container"; then
+    say "object store $minio_container already exists; reusing it"
+    docker start "$minio_container" >/dev/null 2>&1 || true
   else
-    docker rm -f "$minio_container" >/dev/null 2>&1 || true
     say "starting the off-cluster object store"
     docker run -d --name "$minio_container" --network "$minio_network" \
       --env-file "$minio_env_file" \
@@ -533,8 +544,13 @@ wait_for_api() {
     code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 \
       -X POST "$url" -H 'Content-Type: application/json' \
       -d '{"query":"{__typename}"}' 2>/dev/null || true)"
+    # 404 is a RETRY, not an answer. ingress-nginx serves its default backend —
+    # a 404 — until the Ingress route is admitted, so accepting it would return
+    # success before anything routes to this area at all, which is precisely the
+    # race this loop exists to absorb. The cost of being wrong is a wait that
+    # times out with a diagnosis instead of a bring-up lost three steps later.
     case "${code:-000}" in
-      000 | 502 | 503 | 504) ;;
+      000 | 404 | 502 | 503 | 504) ;;
       *) return 0 ;;
     esac
     waited=$((waited + 1))
@@ -588,11 +604,7 @@ from, and every phase after this one would be testing an empty archive.
     sleep 5
   done
 
-  # Record what WAL existed at base-backup time. Everything after this line is
-  # what the restore has to REPLAY to see, and the gate below refuses to proceed
-  # until that set has grown.
-  archive_wal_segments >"$wal_baseline_file"
-  note "base backup complete; $(wc -l <"$wal_baseline_file" | tr -d ' ') WAL segment(s) archived at that point"
+  note "base backup complete; $(archive_wal_segments | wc -l | tr -d ' ') WAL segment(s) archived at that point"
 }
 
 # force_wal_archive makes the seeded row reach the archive.
@@ -610,6 +622,27 @@ from, and every phase after this one would be testing an empty archive.
 force_wal_archive() {
   local pod i
   pod="$(pg_pod)"
+
+  # 🔴 THE BASELINE IS TAKEN HERE, immediately before the switch — NOT when the
+  # base backup was taken.
+  #
+  # It used to be recorded at base-backup time, which is minutes before the seed:
+  # wait_for_api runs twice in between, and an instance with services running is
+  # writing leases and heartbeats the whole while. Any segment that filled on its
+  # own during that window would satisfy "a path appeared that was not in the
+  # baseline" WITHOUT the seeded row having been archived — and `all` proceeds to
+  # destroy the cluster seconds later, taking the row with it. That fails in the
+  # safe direction (the restore reports exit 4) but it blames the restore for a
+  # backup that was never taken, which is the misdiagnosis this gate exists to
+  # prevent.
+  #
+  # Snapshotting here makes the claim exact rather than probable: pg_switch_wal
+  # archives the segment that is CURRENT when it runs, the seed committed before
+  # that, so any segment appearing after this line necessarily contains the
+  # seed's commit. The residual window is between this snapshot and the switch on
+  # the next line, against an archive_timeout of five minutes.
+  archive_wal_segments >"$wal_baseline_file"
+
   say "forcing the seeded row into the WAL archive"
   for i in 1 2; do
     kubectl --context "$kube_context" -n dc-system exec -i "$pod" -- \
@@ -622,25 +655,26 @@ force_wal_archive() {
 # not have an equivalent of.
 #
 # It does not ask "is there WAL in the bucket" — there always is, from the base
-# backup itself. It asks whether a segment that did NOT exist when the base backup
-# was taken has arrived since. Only that segment can carry the seeded row, and
-# only replaying it can produce a pass. Without this the drill would happily
-# destroy the cluster, recover the base backup, find no row, and report exit 4.
+# backup itself. It asks whether a segment that did NOT exist at the moment of the
+# forced switch has arrived since. Because the seed committed before that switch,
+# such a segment necessarily carries the seeded row, and only replaying it can
+# produce a pass. Without this the drill would happily destroy the cluster,
+# recover the base backup, find no row, and report exit 4.
 wait_for_new_wal() {
   local waited=0 now fresh
-  # -f, not -s. An EMPTY baseline is legitimate — it means the base backup was
-  # taken before anything had been archived — and treating that as "missing"
-  # would refuse the one case where every segment counts as new.
+  # -f, not -s. An EMPTY baseline is legitimate — nothing had been archived yet
+  # when the switch was forced — and treating that as "missing" would refuse the
+  # one case where every segment counts as new.
   [[ -f "$wal_baseline_file" ]] ||
-    fail "no WAL baseline at $wal_baseline_file; take_base_backup did not run, so
-there is nothing to compare against and 'newer than the base backup' has no meaning"
+    fail "no WAL baseline at $wal_baseline_file; force_wal_archive did not run, so
+there is nothing to compare against and 'newer than the seed' has no meaning"
 
-  say "waiting for a WAL segment newer than the base backup"
+  say "waiting for a WAL segment archived after the seed"
   while true; do
     now="$(archive_wal_segments)"
     fresh="$(comm -13 <(sort "$wal_baseline_file") <(printf '%s\n' "$now" | sort) || true)"
     if [[ -n "$fresh" ]]; then
-      note "new since the base backup:"
+      note "archived since the seed:"
       printf '%s\n' "$fresh" | sed 's|.*/|      |'
       return 0
     fi
@@ -846,18 +880,44 @@ stop_port_forward() {
 # ones that abort mid-drill.
 trap stop_port_forward EXIT
 
+# port_forward_alive refuses if OUR kubectl is not the thing holding the port.
+port_forward_alive() {
+  kill -0 "$pf_pid" 2>/dev/null && return 0
+  fail "the port-forward to Postgres is not running, but port $pg_local_port answered anyway.
+
+Something else is listening there — a forward leaked by a run that was SIGKILLed
+(the EXIT trap does not fire on SIGKILL), a parallel rig, or an unrelated local
+database. The drill would read its verdict out of a database this rig did not
+choose. Free the port, or set DC_DR_PG_PORT to one that is free, and re-run."
+}
+
 run_verify() {
   local rc=0 waited=0
-  # Read the credentials FIRST, as plain assignments.
+  # Read the credentials FIRST, and CHECK THEM. Neither half is optional.
   #
-  # These used to be inline $( ) inside the drdrill invocation, where cfg_get's
-  # `fail` exits only the subshell: a missing config path printed a red banner and
-  # the rig carried on with empty values, contradicting cfg_get's own contract. As
-  # separate statements, `set -e` aborts here, where the problem is.
+  # 🔴 `set -e` does not protect this, and a comment here used to claim it did.
+  # cfg_get's `fail` runs inside a $( ), so its `exit 1` kills the subshell and
+  # leaves the variable empty; and because both callers invoke this function as
+  # `run_verify || rc=$?`, errexit is suppressed for run_verify's ENTIRE dynamic
+  # extent — so the failing assignment does not abort either. Measured: the red
+  # FAIL banner prints, the function continues with key='', and returns 0.
+  #
+  # Today drdrill refuses an empty root key and an empty user cannot authenticate,
+  # so the outcome degrades to an INCONCLUSIVE exit 1 rather than a false verdict.
+  # That protection lives in the TOOL, not here, and it is not something this
+  # function should be relying on. So the values are checked where they are read.
   local key user password
-  key="$(root_key)"
-  user="$(db_user)"
-  password="$(db_password)"
+  key="$(root_key)" || true
+  user="$(db_user)" || true
+  password="$(db_password)" || true
+  local name
+  for name in key user password; do
+    [[ -n "${!name}" ]] || fail "run_verify could not read the instance's $name from its config Secret.
+The banner above says which path was missing. Nothing below this point would be
+evidence: an empty credential fails the decrypt for a reason that has nothing to
+do with the escrow, which in the control phase is a control that 'held' while
+testing nothing."
+  done
 
   # 🔴 A FRESH FORWARD PER INVOCATION, every time.
   #
@@ -878,16 +938,21 @@ run_verify() {
   # while kubectl dies on a bind conflict — and the drill then verifies against a
   # database this rig did not choose, which in the control phase means an exit 0
   # and the catastrophic banner. So the liveness of OUR process is checked too.
+  #
+  # 🔴 AND THE CHECK IS AFTER THE LOOP, not only inside it. Inside the body it
+  # runs only while the connect is FAILING — which is exactly the case where the
+  # port is free and there is nothing to be confused by. The scenario the guard
+  # was written for is the opposite one: a foreign listener answers on the first
+  # attempt, the loop body never executes once, and the rig drives the whole
+  # verdict through a stranger's tunnel. An EXIT trap does not fire on SIGKILL, so
+  # a leaked forward from a previous run is a realistic way to arrive here.
   until (exec 3<>/dev/tcp/127.0.0.1/"$pg_local_port") 2>/dev/null; do
-    if ! kill -0 "$pf_pid" 2>/dev/null; then
-      fail "the port-forward to Postgres exited immediately — port $pg_local_port is most
-likely already held by another process (a leftover forward, or another rig). Free it,
-or set DC_DR_PG_PORT to a port that is free, and re-run."
-    fi
+    port_forward_alive
     waited=$((waited + 1))
     [[ $waited -lt 60 ]] || fail "the port-forward to Postgres never came up"
     sleep 1
   done
+  port_forward_alive
 
   # A hard bound, with --kill-after so a child that ignores the TERM is still
   # reaped. Plain `timeout` waits forever in that case, which is how an earlier
@@ -995,9 +1060,24 @@ cmd_control() {
     fail "the control instance is NOT running the decoy key, so --restore-root-key was
 not honoured and this phase is not a control. Nothing below would be evidence."
 
+  # 🔴 The real artifact is DECODED first, on its own.
+  #
+  # `escrow verify` exits non-zero identically for "the fingerprints differ", "this
+  # file is not a readable artifact" and "the cluster would not answer" — one error
+  # path, no distinct codes. So a truncated $escrow_file (still passing the -s
+  # guard above) would fail to decode, and the premise below would be declared held
+  # without a fingerprint ever having been compared. `escrow show` reads and parses
+  # the artifact without touching the cluster, which separates the two.
+  say "confirming the escrowed artifact is still readable at all"
+  "$dcctl" secrets escrow show "$escrow_file" >/dev/null ||
+    fail "$escrow_file does not parse as an escrow artifact. The check below would
+'hold' for that reason rather than for a key mismatch, which is not a control."
+
+  # And stderr is NOT suppressed here — if this refuses, the reason is the whole
+  # point.
   say "confirming the control instance does NOT run the escrowed key"
   if "$dcctl" secrets escrow verify "$escrow_file" --instance "$instance" \
-    --kube-context "$kube_context" >/dev/null 2>&1; then
+    --kube-context "$kube_context" >/dev/null; then
     fail "the control instance is running the ESCROWED key, so it is not a control.
 It was recovered under a decoy artifact and should be running that key; that it is
 not means the instance survived the disaster, or the key came from somewhere this

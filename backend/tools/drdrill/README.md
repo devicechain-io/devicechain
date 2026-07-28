@@ -11,7 +11,7 @@ answers the one question the rig cannot answer from the outside:
 
 ```
 drdrill seed   --instance <id> --receipt <path> [--server host[:port]]
-drdrill verify --receipt <path> --db-host ... --db-user ... [--skip-api]
+drdrill verify --receipt <path> --db-host ... --db-user ...
 drdrill decoy  --instance <id> --out <path>
 ```
 
