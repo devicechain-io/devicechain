@@ -152,6 +152,57 @@ func TestBothHaLeversAreAlwaysStated(t *testing.T) {
 	}
 }
 
+// TestHaSummaryNamesBothSubsystemsInBothStates pins the operator-facing sentence,
+// which until now had no test at all.
+//
+// It is worth one because the sentence is the ONLY place a bootstrap run tells an
+// operator what --ha did, and it has already been wrong once in a way nobody
+// noticed: it said --ha "does NOT replicate Postgres/TimescaleDB", which stopped
+// being true at A2.3 and stayed in the help through A2.4. A claim with no test is
+// how that survives.
+//
+// The false branch is asserted even though the command layer only calls
+// HaSummary(true) today. That asymmetry is the reason to pin it rather than skip
+// it: unreached code with a plausible-looking string is exactly what gets promoted
+// to a user-visible path later, still carrying whatever it happened to say.
+func TestHaSummaryNamesBothSubsystemsInBothStates(t *testing.T) {
+	for _, tc := range []struct {
+		on       bool
+		wantAll  []string
+		wantNone []string
+	}{
+		{
+			on: true,
+			// Both subsystems named, and the per-instance disk consequence stated —
+			// the one thing an operator cannot infer from "HA" and the one that
+			// costs money.
+			wantAll:  []string{"NATS", "replicas", "databases", "synchronous", "preferred", "per instance"},
+			wantNone: []string{"single-instance", "does not replicate", "unreplicated"},
+		},
+		{
+			on:      false,
+			wantAll: []string{"single-node NATS", "unreplicated", "single-instance databases"},
+			// The non-HA sentence must not claim any replication at all.
+			wantNone: []string{"synchronous", "preferred"},
+		},
+	} {
+		got := HaSummary(tc.on)
+		for _, want := range tc.wantAll {
+			if !strings.Contains(got, want) {
+				t.Errorf("HaSummary(%t) does not mention %q, so an operator reading the "+
+					"bootstrap report cannot tell what happened to that half:\n  %s",
+					tc.on, want, got)
+			}
+		}
+		for _, bad := range tc.wantNone {
+			if strings.Contains(got, bad) {
+				t.Errorf("HaSummary(%t) contains %q, which contradicts the topology it "+
+					"is describing:\n  %s", tc.on, bad, got)
+			}
+		}
+	}
+}
+
 // statedStreamReplicas digs the replica factor out of the values map dcctl hands
 // Helm, reporting whether it was stated at all.
 func statedStreamReplicas(vals map[string]interface{}) (int, bool) {

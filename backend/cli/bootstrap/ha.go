@@ -43,10 +43,30 @@ import (
 //
 // SCOPE. This type carries the messaging substrate's topology only. The DATABASES
 // are replicated too (ADR-020 A2.3/A2.4) but not from here: their instance counts
-// are derived inside OpenTofu from the same `ha` variable this renders, so there is
-// no second value to keep in step. An earlier version of this comment said the
-// databases were "single-instance StatefulSets", which stopped being true at A2.3
-// and stopped being true for both stores at A2.4.
+// default off the same `ha` variable this renders, inside OpenTofu. An earlier
+// version of this comment said the databases were "single-instance StatefulSets",
+// which stopped being true at A2.3 and stopped being true for both stores at A2.4.
+//
+// 🔴 That default is NOT the whole story, and an earlier version of this comment
+// claimed it was ("there is no second value to keep in step"). There is:
+//
+//	instances = var.postgres_instances != 0 ? var.postgres_instances : (var.ha ? 3 : 1)
+//	instances = var.timescale_instances != 0 ? var.timescale_instances : (var.ha ? 3 : 1)
+//
+// — structurally identical to nats_cluster_replicas, which this file already treats
+// as a real override path (see checkBrokerHostsReplication, which reads the APPLIED
+// server count back rather than trusting this struct). So an instance whose infra
+// dir pins postgres_instances = 1 gets a bootstrap report stating both databases
+// are replicated, relational synchronously, over a single asynchronous instance.
+// Nothing catches it — which is the false-HA shape A0 closed for the broker, still
+// open for the stores.
+//
+// The read-back it needs already exists and is unused: OpenTofu exports
+// postgres_synchronous_enforced and timescaledb_synchronous_enforced, whose own
+// descriptions say to read them rather than re-derive from the flags. Wiring them
+// into the preflight the way the broker count is wired is tracked as A2.7c; until
+// then, treat the database sentence in summary() as a statement about the DEFAULT
+// topology, not an assertion about the applied one.
 //
 // What --ha does NOT raise is the DeviceChain services' own replica counts: the
 // stateful areas are pinned to one writer by the ADR-070 lease fence, and running
@@ -117,12 +137,14 @@ func (h haTopology) natsValues() map[string]interface{} {
 // summary is the one-line resolution printed in the bootstrap report.
 //
 // It names the DATABASE half without carrying a number for it, and the omission
-// is deliberate rather than lazy. The instance counts are derived inside
-// OpenTofu from the same `ha` variable infraVars emits, so printing "3" here
-// would be a second copy of a value this type does not own — the exact shape
-// this file exists to make unreachable. What an operator cannot infer, and what
-// costs real money, is that database volumes are sized PER INSTANCE: --ha does
-// not just replicate the stores, it triples their disk.
+// is deliberate rather than lazy. The instance counts live in OpenTofu, so
+// printing "3" here would be a second copy of a value this type does not own —
+// the exact shape this file exists to make unreachable. It would also be a
+// number this code cannot stand behind, since a pinned postgres_instances
+// overrides the --ha default without telling anyone (see the SCOPE note on
+// haTopology). What an operator cannot infer, and what costs real money, is that
+// database volumes are sized PER INSTANCE: --ha does not just replicate the
+// stores, it triples their disk.
 func (h haTopology) summary() string {
 	if !h.Replicated() {
 		return "single-node NATS, unreplicated streams; single-instance databases"

@@ -35,7 +35,7 @@ import (
 
 func main() {
 	mode := flag.String("mode", "verify", "snapshot (write goldens) | verify (diff against goldens)")
-	container := flag.String("container", "", "docker container running Postgres/Timescale, for a version-matched pg_dump via `docker exec` (host pg_dump is often older than the server)")
+	container := flag.String("container", "", "docker container running Postgres/Timescale, for a version-matched pg_dump via 'docker exec' (host pg_dump is often older than the server)")
 	host := flag.String("host", "localhost", "Postgres host the migration chain connects to (TCP)")
 	port := flag.Int("port", 5432, "Postgres port")
 	user := flag.String("user", "postgres", "Postgres superuser")

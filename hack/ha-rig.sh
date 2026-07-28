@@ -149,9 +149,13 @@ build_dcctl() {
 # the identity exists only to put the adapter into its credentialed posture. It is
 # generated per run rather than committed, and written into a 0700 dir at 0600 —
 # a throwaway key is still a key, and a rig that models bad handling teaches it.
+#
+# `need openssl` is NOT here — it is on each command's dependency line, beside
+# kind/kubectl/docker. This function runs after create_cluster, and a missing
+# tool discovered two minutes into a kind bring-up is the posture this script
+# rejects everywhere else: fail before anything is provisioned.
 lease_identities_file=""
 ensure_lease_identities() {
-  need openssl
   lease_identities_file="$rig_tmp/lwm2m-identities.json"
   # A subshell so the umask does not leak into the rest of the run.
   (
@@ -168,17 +172,20 @@ ensure_lease_identities() {
 ]
 EOF
   )
-  # Checked rather than assumed. bootstrap does reject an empty file (it parses
-  # the JSON array and reports EOF) — measured, not assumed — so this guard is not
-  # load-bearing for correctness. It is here to fail at the line that wrote the
-  # file instead of inside a bootstrap whose error names a parse problem in a file
-  # the operator never wrote and cannot see: a full disk reads as bad JSON.
+  # Checked rather than assumed — but this guard is convenience, not correctness,
+  # and saying so is the point. Measured: bootstrap rejects an empty file, parsing
+  # the JSON array and reporting EOF. So the guard buys one thing only: failing at
+  # the line that wrote the file, rather than inside a bootstrap whose error names
+  # a parse problem in a file the operator never wrote and cannot see. A full disk
+  # reads as bad JSON.
   #
-  # Note what is NOT equivalent: an empty PATH (--lwm2m-identities "") means the
-  # feature is off, and THAT is the silent one. It puts lwm2m-ingest back in its
-  # inert posture while the area stays deployed, which is precisely the false-A2
-  # state described above. It cannot arise here because the path is built from
-  # $rig_tmp, and it is why this is a guard on the file rather than on the flag.
+  # It does NOT protect against the false-A2 state described above, and it would be
+  # wrong to think it does. An empty PATH (--lwm2m-identities "") parses to zero
+  # identities, and the area implication is gated on the parsed COUNT rather than
+  # on the flag being present — so the area is not deployed either, and A2 goes
+  # back to its honest skip. The input that actually produces a false A2 is
+  # `--enable-area lwm2m-ingest` with no identities: area deployed, no lease taken,
+  # bucket demanded and never created. Nothing in this rig passes it.
   [[ -s "$lease_identities_file" ]] ||
     fail "could not write the LwM2M identities file at $lease_identities_file"
 }
@@ -197,7 +204,7 @@ create_cluster() {
 }
 
 cmd_up() {
-  need kind; need kubectl; need docker
+  need kind; need kubectl; need docker; need openssl
   build_dcctl
   create_cluster "$ha_cluster" "$repo_root/deploy/local/kind-cluster-ha.yaml"
 
@@ -290,7 +297,7 @@ cmd_verify() {
 # A separate cluster rather than a second instance on the HA one: the object under
 # test is the BROKER, and both instances would share it.
 cmd_control() {
-  need kind; need kubectl
+  need kind; need kubectl; need openssl
   build_dcctl
   create_cluster "$control_cluster" "$repo_root/deploy/local/kind-cluster-ha-control.yaml"
 
