@@ -149,6 +149,22 @@ rendered+=("$(render_case backup-ha "${base[@]}" --set instances=3 --set synchro
   --set sharedPreloadLibraries[0]=timescaledb --set parameters.timescaledb\\.telemetry_level=off \
   --set backup.endpointCASecret.name=dc-ca --set backup.endpointCASecret.key=ca.crt)")
 
+# The RESTORE shape (A2.5c). A separate case rather than a variation, because
+# recovery replaces the whole bootstrap block: every field under
+# `bootstrap.initdb` disappears and a differently-shaped `bootstrap.recovery`
+# plus a top-level `externalClusters` takes its place. None of that is exercised
+# by any render above, so without these two the restore path would ship having
+# been validated against nothing.
+rendered+=("$(render_case restore "${base[@]}" --set instances=1 "${backup[@]}" \
+  --set backup.serverName=dc-store-restored \
+  --set restore.enabled=true --set restore.sourceServerName=dc-store)")
+rendered+=("$(render_case restore-pitr "${base[@]}" --set instances=3 --set synchronous.enabled=true "${backup[@]}" \
+  --set backup.serverName=dc-store-restored \
+  --set restore.enabled=true --set restore.sourceServerName=dc-store \
+  --set restore.recoveryTarget.targetTime='2026-07-28 03:00:00+00' \
+  --set restore.recoveryTarget.targetTLI=latest \
+  --set restore.recoveryTargetImmediate=true)")
+
 say "checking $(( ${#rendered[@]} )) rendered configurations"
 
 python3 - "$crds" "${rendered[@]}" <<'PY'
@@ -252,9 +268,107 @@ def check_plugin_wiring(docs, case, failures):
                 )
 
 
+def check_restore_wiring(docs, case, failures):
+    """The restore path's own free-form map, and the wedge the schema cannot see.
+
+    `externalClusters[].plugin.parameters` is the same `additionalProperties`
+    map as the archiver's, so `serverName` misspelled there is a legal key that
+    nothing rejects -- and its absence is not even an error: CloudNativePG falls
+    back to the externalCluster's own NAME as the folder in the bucket. So a
+    typo does not fail, it recovers from a different path.
+
+    Three things are asserted, none of which any schema can express:
+
+      1. recovery and externalClusters exist TOGETHER. `bootstrap.recovery.source`
+         naming an entry that is not there is a cluster that never bootstraps.
+      2. the entry is wired to barman with barmanObjectName + serverName.
+      3. 🔴 the restored cluster does not archive back over what it recovered
+         from. The chart guards this from its VALUES; this reads it off the
+         rendered objects, which is the thing that would actually be applied.
+    """
+    stores = {d["metadata"]["name"] for d in docs if d.get("kind") == "ObjectStore"}
+    seen = 0
+
+    for d in docs:
+        if d.get("kind") != "Cluster":
+            continue
+        spec = d.get("spec", {})
+        recovery = (spec.get("bootstrap") or {}).get("recovery")
+        externals = spec.get("externalClusters") or []
+        if not recovery and not externals:
+            continue
+
+        seen += 1
+        name = d["metadata"]["name"]
+        where = "%s: Cluster/%s" % (case, name)
+
+        if not recovery:
+            failures.append("%s has externalClusters but no bootstrap.recovery -- nothing reads them" % where)
+            continue
+
+        source = recovery.get("source")
+        if not source:
+            failures.append("%s sets bootstrap.recovery with no `source`" % where)
+            continue
+
+        entry = next((e for e in externals if e.get("name") == source), None)
+        if entry is None:
+            failures.append(
+                "%s recovers from source %r, which names no externalClusters entry "
+                "(present: %s) -- the cluster would never bootstrap"
+                % (where, source, ", ".join(sorted(e.get("name", "?") for e in externals)) or "none")
+            )
+            continue
+
+        plugin = entry.get("plugin") or {}
+        if plugin.get("name") != BARMAN:
+            failures.append("%s externalCluster %r is not wired to %s" % (where, source, BARMAN))
+            continue
+
+        params = plugin.get("parameters") or {}
+        for key in ("barmanObjectName", "serverName"):
+            if key not in params:
+                near = [k for k in params if k.lower() == key.lower()]
+                failures.append(
+                    "%s externalCluster %r has no `%s` parameter%s. `parameters` is a "
+                    "free-form map, so nothing else rejects this -- and a missing "
+                    "serverName does not even fail, it silently recovers from the "
+                    "entry's own name instead"
+                    % (where, source, key, (" (found %r -- wrong case)" % near[0]) if near else "")
+                )
+
+        target = params.get("barmanObjectName")
+        if target and target not in stores:
+            failures.append(
+                "%s recovers from ObjectStore %r, which this chart does not render "
+                "(rendered: %s)" % (where, target, ", ".join(sorted(stores)) or "none")
+            )
+
+        # 🔴 The wedge. Whatever this cluster archives UNDER must differ from what
+        # it recovered FROM, or CloudNativePG refuses to archive into a non-empty
+        # archive and the restore hangs in `Setting up primary`. An archiver with
+        # no serverName parameter falls back to the cluster's own name, so that is
+        # what gets compared -- not "unset", which would let the collision through.
+        from_path = params.get("serverName") or source
+        for plug in spec.get("plugins") or []:
+            if plug.get("name") != BARMAN or not plug.get("isWALArchiver"):
+                continue
+            to_path = (plug.get("parameters") or {}).get("serverName") or name
+            if to_path == from_path:
+                failures.append(
+                    "%s recovers from serverName %r and archives back to the SAME "
+                    "path. CloudNativePG refuses to archive into a non-empty archive, "
+                    "so this cluster would recover and then hang in `Setting up "
+                    "primary` -- during a restore" % (where, from_path)
+                )
+
+    return seen
+
+
 failures = []
 checked = 0
 kinds_seen = set()
+restores_checked = 0
 
 for path in rendered_paths:
     case = path.rsplit("/", 1)[-1]
@@ -274,11 +388,24 @@ for path in rendered_paths:
             failures.append("%s: %s (%s)" % (case, p, doc["metadata"]["name"]))
 
     check_plugin_wiring(docs, case, failures)
+    restores_checked += check_restore_wiring(docs, case, failures)
 
 # 🔴 THE POSITIVE CONTROL. Everything above is a loop over whatever happened to
 # render, so a chart that emitted nothing -- or a schema map that failed to match
 # any apiVersion -- produces zero failures and reads as a pass. Naming the kinds
 # that MUST have been validated is what makes a green run mean something.
+#
+# The restore half needs its own counter rather than a kind: recovery is a SHAPE
+# of Cluster, not a kind, so `Cluster` being present says nothing about whether
+# any render exercised it. A chart that stopped emitting externalClusters
+# entirely would satisfy the kind check and skip every assertion above.
+if restores_checked == 0:
+    sys.exit(
+        "no rendered Cluster carried a recovery bootstrap, so every restore\n"
+        "  assertion was skipped. Either the restore cases stopped rendering it or\n"
+        "  the chart no longer emits it -- both make this check vacuous."
+    )
+
 required = {"Cluster", "ObjectStore", "ScheduledBackup"}
 missing = required - kinds_seen
 if missing:
@@ -302,6 +429,7 @@ if failures:
 
 print("    %d custom resources validated across %d configurations" % (checked, len(rendered_paths)))
 print("    kinds covered: %s" % ", ".join(sorted(kinds_seen)))
+print("    %d recovery bootstrap(s) checked for restore wiring" % restores_checked)
 PY
 
 note "every rendered field exists in the pinned CRD schemas"

@@ -113,6 +113,71 @@ out, and that step is the entire availability argument for the third node.
   {{- end -}}
 {{- end -}}
 
+{{- /*
+RESTORE PRECONDITIONS.
+
+Each of these is a way to write a Cluster that CloudNativePG accepts and that
+does not restore what the operator believes it is restoring. They are `fail`s
+because every one of them is discovered during an incident, on the one path
+where there is no time to debug the configuration.
+*/ -}}
+{{- $restore := .Values.restore -}}
+{{- $restoreStore := "" -}}
+{{- if $restore.enabled -}}
+
+  {{- /*
+  (1) No source. The obvious default -- "this cluster's own name" -- is exactly
+  wrong: on a fresh install that path is EMPTY, so the recovery finds no base
+  backup and the cluster never reaches a primary. Worse, if the name happens to
+  collide with a real server the restore silently brings back the wrong
+  database. There is no safe inference here, so there is no default.
+  */ -}}
+  {{- if not $restore.sourceServerName -}}
+    {{- fail (printf "cnpg-cluster %q: restore.enabled is true but restore.sourceServerName is unset. That is the folder inside the bucket the backup was written under -- without it there is nothing to say WHICH database is being restored, and the only available inference (this cluster's own name) points at an empty path on a fresh install." $name) -}}
+  {{- end -}}
+
+  {{- /*
+  (2) Nowhere to read from. The ObjectStore defaults to the one this release
+  renders for its OWN archiving, which only exists when backup.enabled is true.
+  With backups off and no explicit name, the externalCluster would reference an
+  object that is not in this release and may not be in the cluster at all --
+  and the plugin reports that as a restore failure well after the PVCs have
+  been created.
+  */ -}}
+  {{- $restoreStore = $restore.objectStoreName | default (printf "%s-backup" $name) -}}
+  {{- if and (not $restore.objectStoreName) (not .Values.backup.enabled) -}}
+    {{- fail (printf "cnpg-cluster %q: restore.enabled is true with backup.enabled false and no restore.objectStoreName. This release renders no ObjectStore, so there is no destination to read the backup from. Name an ObjectStore that already exists in the namespace, or turn backups on so the restored cluster archives too." $name) -}}
+  {{- end -}}
+
+  {{- /*
+  (3) 🔴 THE ARCHIVE-OVER-THE-SOURCE WEDGE, and the reason this guard is worth
+  more than the other two put together.
+
+  A restored cluster that also archives MUST write under a different serverName
+  than it recovered from. CloudNativePG has a safety check for exactly this --
+  it refuses to begin archiving into a non-empty archive -- so the failure is
+  loud rather than silent: the cluster sits in `Setting up primary` with the
+  pod logging that the WAL archive is not empty, and it stays there.
+
+  Loud, but loud during a restore, which is the worst time to be reading pod
+  logs. And the recovery is not resumable from that state without editing the
+  Cluster in place. So the combination is refused at render time instead, where
+  the message can say what to set.
+
+  Equal names are refused, and so is an UNSET backup.serverName -- because unset
+  means "use the Cluster's own name", and a cluster restored under the name it
+  is restoring from is the same collision written differently.
+  */ -}}
+  {{- if .Values.backup.enabled -}}
+    {{- if not .Values.backup.serverName -}}
+      {{- fail (printf "cnpg-cluster %q: restoring from %q with archiving on, but backup.serverName is unset -- so the restored cluster would archive under its own name. If that equals the source it collides; if it does not, it is still an accident rather than a decision. Set backup.serverName to the path this restored cluster should own." $name $restore.sourceServerName) -}}
+    {{- end -}}
+    {{- if eq .Values.backup.serverName $restore.sourceServerName -}}
+      {{- fail (printf "cnpg-cluster %q: backup.serverName and restore.sourceServerName are both %q. CloudNativePG refuses to archive into a non-empty archive, so this cluster would recover and then hang in `Setting up primary` with its WAL going nowhere -- and it would do it during a restore. Give the restored cluster its own path." $name $restore.sourceServerName) -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
@@ -337,6 +402,47 @@ spec:
               name: {{ required "cnpg-cluster: .Values.aliasServiceName is required" .Values.aliasServiceName }}
 
   bootstrap:
+    {{- if $restore.enabled }}
+    {{- /*
+    RECOVERY, not initdb. The two are mutually exclusive in practice -- CNPG
+    reads whichever is present -- and the switch is the whole difference between
+    "stand up an empty database" and "bring this one back".
+
+    🔑 database / owner / secret are NOT what create the database here. The
+    database comes back with the backup, catalog and all. What they do is settle
+    the CREDENTIALS afterwards: once recovery completes, the operator updates the
+    owner's password from this Secret, but only if `owner` matches the
+    `username` inside it. That condition holds by construction here -- the
+    module renders both from the same variable -- and it is what makes a
+    restored cluster reachable with the DSN the platform already ships, rather
+    than with whatever password was in force when the backup was taken.
+
+    🔴 postInitTemplateSQL does NOT run on this path, and that is correct rather
+    than a gap: a physical restore brings template1 back with everything it
+    carried, so the TimescaleDB extension arrives WITH the data instead of being
+    re-declared over it. But the property is inherited rather than asserted, and
+    an inherited property is one nobody notices losing -- so the restore drill in
+    hack/dr-rig.sh queries a hypertable after recovery rather than trusting this
+    comment.
+    */}}
+    recovery:
+      # Must match an externalClusters entry by name. See the block below for
+      # why that name is the source server name rather than something decorative.
+      source: {{ $restore.sourceServerName }}
+      database: {{ required "cnpg-cluster: .Values.bootstrap.database is required" .Values.bootstrap.database }}
+      owner: {{ $owner }}
+      secret:
+        name: {{ required "cnpg-cluster: .Values.bootstrap.secretName is required" .Values.bootstrap.secretName }}
+      {{- $target := $restore.recoveryTarget | default dict }}
+      {{- if $restore.recoveryTargetImmediate }}
+      {{- $target = merge (dict "targetImmediate" true) $target }}
+      {{- end }}
+      {{- with $target }}
+      # Point-in-time recovery. Absent, every WAL in the archive is replayed.
+      recoveryTarget:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- else }}
     initdb:
       database: {{ required "cnpg-cluster: .Values.bootstrap.database is required" .Values.bootstrap.database }}
       owner: {{ $owner }}
@@ -368,3 +474,41 @@ spec:
       postInitTemplateSQL:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+    {{- end }}
+
+{{- if $restore.enabled }}
+
+  {{- /*
+  Where the recovery reads from.
+
+  🔑 THE ENTRY IS NAMED AFTER THE SOURCE SERVER, and that is a fail-safe rather
+  than a naming preference. `serverName` below is what actually selects the
+  folder inside the bucket -- but when it is ABSENT, CloudNativePG falls back to
+  the externalCluster's own name. So naming the entry anything else would mean a
+  dropped or misspelled `serverName` silently resolves to a decorative string
+  and recovers from a path that does not exist. Named this way, the fallback
+  lands on the right answer.
+
+  And `parameters` is a free-form string map -- `additionalProperties` in the
+  CRD -- so neither the API server nor the schema check can catch a misspelled
+  key here. hack/check-cnpg-chart-schema.sh asserts these two by name for that
+  reason, the same way it does for the archiver's own barmanObjectName.
+
+  🔴 ORDERING, measured: Helm applies unknown kinds in alphabetical order by
+  KIND, so this Cluster is applied BEFORE the ObjectStore rendered alongside it
+  (renaming the template file does not move it -- tried). The plugin's
+  documentation says the ObjectStore must exist before recovery begins. In
+  practice the gap is milliseconds and the operator has to create PVCs and
+  schedule a job before it can ask the plugin for anything, so the ObjectStore
+  is there by the time it matters. "In practice" is not a guarantee, which is
+  why the restore drill builds a recovery release from nothing and watches it
+  reach a primary rather than assuming this is fine.
+  */}}
+  externalClusters:
+    - name: {{ $restore.sourceServerName }}
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          barmanObjectName: {{ $restoreStore }}
+          serverName: {{ $restore.sourceServerName }}
+{{- end }}

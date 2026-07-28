@@ -245,6 +245,51 @@ variable "backup" {
   default = null
 }
 
+variable "restore" {
+  description = <<-EOT
+    Recover this store from an existing backup instead of initialising an empty
+    one (ADR-028, ADR-020 A2.5). Null is a normal install.
+
+    🔴 THIS IS THE HALF THAT MAKES `backup` MEAN SOMETHING. A destination nobody
+    has restored from is a destination nobody has shown to hold a restorable
+    database, and every archive metric reads the same either way. The chart
+    refuses the combinations that recover the wrong thing or wedge on the way
+    back up; hack/dr-rig.sh is what proves the path end to end.
+
+    `source_server_name` is the folder inside the bucket to read, and it has no
+    default on purpose: the only inference available is this cluster's own name,
+    which on a fresh install is an empty path that recovers nothing.
+
+    `object_store_name` defaults to the ObjectStore this module renders for its
+    own archiving, which is the normal case -- the bucket outlived the cluster.
+
+    🔴 A RESTORED STORE THAT ALSO ARCHIVES NEEDS ITS OWN `backup.server_name`,
+    and the chart will not render without one. CloudNativePG refuses to archive
+    into a non-empty archive, so a restored cluster pointed back at the path it
+    recovered from comes up and then hangs in `Setting up primary` -- during a
+    restore, which is the worst time to be reading pod logs.
+  EOT
+
+  type = object({
+    source_server_name = string
+    object_store_name  = optional(string, "")
+
+    # PostgreSQL recovery-target fields, camelCase, passed through as written.
+    # Empty replays the whole archive. A misspelling here is caught by
+    # hack/check-cnpg-chart-schema.sh against the real CRD rather than by this
+    # type -- the CRD is the only thing that knows the field names.
+    recovery_target = optional(map(string), {})
+
+    # `targetImmediate` is separate because it is the one recovery-target field
+    # that is a BOOLEAN. Inside the map above it would be the string "true",
+    # which the API server rejects against a boolean field -- so it gets its own
+    # typed lever rather than a footgun in a free-form map.
+    recovery_target_immediate = optional(bool, false)
+  })
+
+  default = null
+}
+
 locals {
   # The credentials Secret, in the shape CNPG's bootstrap expects
   # (kubernetes.io/basic-auth with username/password). Left unset, CNPG mints a
@@ -365,6 +410,19 @@ resource "helm_release" "cluster" {
             memory = var.backup.sidecar_resources.memory
           }
         }
+      }
+    })],
+    # A THIRD document, for the same reason as the second: a conditional inside
+    # the map would have to restate the whole restore schema on the "normal
+    # install" branch, and that copy stops failing the day the real one grows a
+    # field. Absent, the chart's own `restore.enabled: false` stands.
+    var.restore == null ? [] : [yamlencode({
+      restore = {
+        enabled                 = true
+        sourceServerName        = var.restore.source_server_name
+        objectStoreName         = var.restore.object_store_name
+        recoveryTarget          = var.restore.recovery_target
+        recoveryTargetImmediate = var.restore.recovery_target_immediate
       }
     })]
   )

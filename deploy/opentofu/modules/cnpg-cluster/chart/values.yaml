@@ -65,6 +65,43 @@ synchronous:
   # argued in the module, not here.
   dataDurability: required
 
+# Recover this Cluster from an existing backup instead of initialising an empty
+# one (ADR-028, ADR-020 A2.5).
+#
+# 🔴 THIS IS THE OTHER HALF OF `backup`, AND WITHOUT IT THE FIRST HALF IS A
+# CLAIM RATHER THAN A CAPABILITY. A destination that has never been restored
+# from is a destination nobody has shown to contain a restorable database --
+# and the moment you find out is the incident.
+#
+# Off by default and it must stay that way: this is what a fresh install is.
+restore:
+  enabled: false
+
+  # The serverName (the folder within the bucket) the backup was written under.
+  # No default: a restore that did not say what it is restoring FROM is a
+  # restore that would silently pick this cluster's own name, which on a fresh
+  # install is an empty path, which recovers nothing and reports no error the
+  # operator would recognise.
+  sourceServerName: ""
+
+  # The ObjectStore holding that backup. Empty means the one this release
+  # renders for its own archiving (<name>-backup), which is the normal case: the
+  # bucket survived, the cluster did not.
+  objectStoreName: ""
+
+  # Point-in-time recovery. Empty replays every WAL in the archive (full
+  # recovery); set targetTime/backupID/targetLSN/... to stop earlier. The field
+  # names are PostgreSQL's, passed through as-is -- a misspelling here is caught
+  # by hack/check-cnpg-chart-schema.sh against the real CRD, not by this chart.
+  recoveryTarget: {}
+
+  # Stop as soon as the restore is CONSISTENT, without replaying the WAL that
+  # follows the base backup. Separate from the map above because it is the one
+  # recovery-target field that is a boolean, and the OpenTofu module can only
+  # carry the map as map(string) -- "true" against a boolean field is rejected by
+  # the API server, so it gets its own lever rather than a footgun.
+  recoveryTargetImmediate: false
+
 bootstrap:
   database: null
   owner: null
