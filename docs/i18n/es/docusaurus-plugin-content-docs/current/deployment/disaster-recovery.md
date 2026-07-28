@@ -31,12 +31,14 @@ servidor relacional. No hay escrituras cruzadas que mantener consistentes entre 
 
 Dos consecuencias que conviene planificar:
 
-- **Calendarios distintos.** Los datos de núcleo son pequeños y cambian cuando alguien
-  cambia algo, así que piden copias completas frecuentes y baratas. Los datos de
-  eventos son volumen, casi siempre de anexado, y ya están sujetos a una política de
-  retención ([ciclo de vida de los datos](../concepts/architecture.md)) — respaldar fragmentos que el
-  reconciliador de ciclo de vida está a punto de eliminar es almacenamiento
-  desperdiciado.
+- **Calendarios distintos.** Ambos almacenes se archivan de la misma forma —una copia
+  base más un flujo continuo del registro de escritura anticipada (WAL)—, pero no
+  quieren la misma cadencia de copias base ni la misma retención. Los datos de núcleo
+  son pequeños y cambian cuando alguien cambia algo. Los datos de eventos son volumen,
+  casi siempre de anexado, y ya están sujetos a una política de retención
+  ([ciclo de vida de los datos](../concepts/architecture.md)) — conservar copias base de
+  fragmentos que el reconciliador de ciclo de vida está a punto de eliminar es pagar
+  dos veces por almacenar las mismas filas.
 - **Objetivos de recuperación distintos.** Restaurar solo los datos de núcleo le
   devuelve una instancia *operativa*: los dispositivos se reconectan, las reglas de
   detección se ejecutan, los comandos se despachan, los secretos se descifran.
@@ -139,42 +141,80 @@ secretos vaya a echar de menos.
 
 ## Recuperar una instancia {#recover}
 
-El orden importa. Sembrar la clave **primero**, restaurar los datos **después**: una
-instancia construida sobre la clave equivocada escribirá secretos nuevos bajo ella, y
-esos se convierten en daño colateral cuando corrija la clave más tarde.
+La recuperación es **un solo comando**, y es un comando que construye una instancia
+nueva. La base de datos se recupera desde su archivo histórico en el momento en que se
+crea el clúster, antes de que ningún servicio se conecte a ella, sembrada con la clave
+raíz de su artefacto de depósito.
 
-**1. Reconstruya la instancia con la clave depositada.**
+Por eso aquí no hay un paso de «restaurar sobre la instancia en marcha». No existe una
+forma soportada de hacerlo, deliberadamente: restaurar por debajo de servicios que ya
+han creado sus propios esquemas implica eliminar tablas que tienen abiertas y competir
+con sus migraciones. **Recupere reconstruyendo.**
 
-```bash
-dcctl bootstrap local mi-instancia --restore-root-key ~/backups/mi-instancia-rootkey.escrow
-```
-
-Se le pedirá la frase de contraseña del artefacto (o puede proporcionarla con
-`--escrow-passphrase-file` / `DCCTL_ESCROW_PASSPHRASE`). La instancia nueva ejecuta
-ahora la *misma* clave raíz que la antigua.
-
-**2. Aquiete la instancia, restaure los datos de núcleo y vuelva a levantarla.** La
-instancia reconstruida ya ha arrancado y ha creado sus propios esquemas vacíos, así que
-restaurar por debajo de un servicio en marcha implica eliminar tablas que tiene
-abiertas y competir con sus migraciones. Escale primero las cargas de trabajo a cero:
+**1. Reconstruya la instancia recuperando la base de datos y la clave a la vez.**
 
 ```bash
-kubectl -n mi-instancia get deploy -o custom-columns=NAME:.metadata.name,R:.spec.replicas --no-headers
-kubectl -n mi-instancia scale deploy --all --replicas=0
-# ... restaure su copia de PostgreSQL en la base de datos de la instancia ...
-kubectl -n mi-instancia scale deploy/<nombre> --replicas=<n>   # según los valores anotados arriba
-kubectl -n mi-instancia wait --for=condition=available deploy --all --timeout=300s
+dcctl bootstrap local mi-instancia \
+  --restore-root-key ~/backups/mi-instancia-rootkey.escrow \
+  --restore-rdb-from dc-rdb
 ```
 
-Anote los recuentos de réplicas antes de escalar a cero en lugar de suponer `1`: un
-área escalada volvería más pequeña de lo que era.
+`--restore-rdb-from` indica la **ruta del archivo histórico dentro de su bucket de
+copias**: el `serverName` bajo el que escribía la instancia antigua, `dc-rdb` salvo que
+lo haya cambiado. Se le pedirá la frase de contraseña del artefacto (o puede
+proporcionarla con `--escrow-passphrase-file` / `DCCTL_ESCROW_PASSPHRASE`).
 
-**3. Restaure los datos de eventos** por separado, en TimescaleDB, cuando convenga a su
-objetivo de tiempo de recuperación. El paso 4 no depende de ello.
+Dos cosas que este comando no le permitirá hacer:
+
+- **Recuperar datos sin la clave.** `--restore-rdb-from` por sí solo se rechaza.
+  Rehidrataría todas las filas y acuñaría una clave raíz *nueva*, de modo que la
+  restauración informaría de éxito y todos los secretos almacenados quedarían
+  ilegibles para siempre: el único fallo que es invisible en el momento en que ocurre.
+- **Recuperar sobre una instancia en uso.** La opción solo surte efecto cuando se
+  *crea* el clúster de base de datos. Volver a ejecutarla contra una instancia que ya
+  existe no hace absolutamente nada, en lugar de funcionar a medias.
+
+La instancia recuperada empieza de inmediato a archivar bajo una ruta **nueva**, propia,
+de modo que no puede sobrescribir el archivo histórico del que acaba de nacer. El
+resumen del bootstrap imprime el nombre que eligió.
+
+**2. Retroceda a un punto en el tiempo**, si el desastre fue que los datos se
+destruyeron *correctamente*: una migración defectuosa, un borrado masivo por error.
+Añada `--restore-rdb-at` con una marca de tiempo RFC 3339 estrictamente anterior al
+daño:
+
+```bash
+dcctl bootstrap local mi-instancia \
+  --restore-root-key ~/backups/mi-instancia-rootkey.escrow \
+  --restore-rdb-from dc-rdb \
+  --restore-rdb-at 2026-03-14T09:15:00Z
+```
+
+**3. Restaure los datos de eventos** por separado con `--restore-tsdb-from` (y
+opcionalmente `--restore-tsdb-at`), cuando convenga a su objetivo de tiempo de
+recuperación. Los dos almacenes mantienen líneas de tiempo independientes a propósito:
+rebobinar la telemetría hasta ayer no significa que el plano de control deba rebobinarse
+con ella. El paso 4 no depende de esto.
 
 **4. Confirme que los secretos almacenados se descifran**: lea un objeto respaldado por
 un secreto (un conector de salida, un canal de notificación) desde la consola o la API.
 Una restauración que devuelve filas no es una prueba; un valor que se descifra sí lo es.
+
+:::caution Que el bootstrap termine no significa que la base de datos esté lista
+`dcctl` informa de éxito en cuanto las cargas de trabajo están arriba, lo que puede
+ocurrir antes de que la base de datos en recuperación haya terminado de reproducir su
+archivo histórico. Si una recuperación no puede alcanzar su archivo, se queda esperando
+en lugar de fallar, así que compruebe la propia base de datos antes de dar por buena una
+restauración:
+
+```bash
+kubectl -n dc-system get clusters.postgresql.cnpg.io
+```
+
+Debe ver `Cluster in healthy state`. Un clúster atascado en `Setting up primary` no se
+ha recuperado: lo más habitual es que el archivo histórico sea inalcanzable, o que
+`--restore-rdb-from` indique una ruta que no existe en el bucket.
+:::
 
 :::note Restaurar con otro nombre de instancia
 Está perfectamente soportado: el artefacto registra el nombre para el que se escribió y
