@@ -31,12 +31,17 @@ import (
 // Producing that artifact through the shipped CLI would cost a whole extra
 // bootstrap: there is no `dcctl secrets escrow create`, only `show` and `verify`,
 // so the only supported way to obtain an artifact is to bootstrap an instance and
-// let it escrow the key it minted. And because Wrap binds the instance name into
-// the authenticated header, and bootstrap refuses an artifact whose instance does
-// not match, that throwaway instance would have to carry the drill's own name —
-// which means a second cluster, torn down again before the real control could run.
-// Three bootstraps for one control is enough friction that the control does not
-// get run, and a control that does not get run is not a control.
+// let it escrow the key it minted. That is a second cluster, stood up and torn
+// down again before the real control could run — three bootstraps for one
+// control, which is enough friction that the control does not get run, and a
+// control that does not get run is not a control.
+//
+// Wrap binds the instance name into the authenticated header. dcctl WARNS on a
+// mismatch rather than refusing it (resolveRestore: an operator may legitimately
+// restore under a new name), so a throwaway instance would not strictly have to
+// carry the drill's own name — but this command takes --instance and the rig
+// passes the real one, so the control runs without a warning that would have to
+// be read past every time.
 //
 // # WHAT THIS PROVES, AND WHAT IT DOES NOT
 //
@@ -57,13 +62,13 @@ import (
 // like a control that held.
 func runDecoy(args []string) error {
 	fs := flagSetFor("decoy")
-	instance := fs.String("instance", "", "instance name to bind into the artifact; must match the instance being restored")
+	instance := fs.String("instance", "", "instance name to bind into the artifact; name the instance being restored, or dcctl prints a mismatch warning on every run")
 	out := fs.String("out", "", "path to write the artifact to; refused if it already exists")
 	if err := fs.Parse(args); err != nil {
 		return failWith(exitSetup, "parse flags: %w", err)
 	}
 	if *instance == "" {
-		return failWith(exitSetup, "--instance is required; escrow.Wrap authenticates the instance name and bootstrap refuses an artifact that names a different one")
+		return failWith(exitSetup, "--instance is required; escrow.Wrap authenticates the instance name and refuses an empty one")
 	}
 	if *out == "" {
 		return failWith(exitSetup, "--out is required")

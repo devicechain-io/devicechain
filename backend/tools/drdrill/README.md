@@ -52,9 +52,14 @@ with it.
 The artifact comes out of `escrow.Wrap` — the same function `dcctl` calls, same
 KDF parameters, same passphrase — and is consumed by the same
 `--restore-root-key` path a real artifact takes, so the bootstrap cannot tell the
-two apart. What it does not stand in for is any claim that two real bootstraps
-mint *different* keys from each other; that belongs where the key generator lives.
-The claim under test here is the one that matters in an incident: given the right
+two apart. Minting one through the shipped CLI instead would mean bootstrapping a
+throwaway instance purely to make it escrow a key, since there is no `dcctl
+secrets escrow create` — a third cluster for one control, which is enough friction
+that the control stops being run.
+
+What it does not stand in for is any claim that two real bootstraps mint
+*different* keys from each other; that belongs where the key generator lives. The
+claim under test here is the one that matters in an incident: given the right
 archive and the wrong key, does the platform hand over the plaintext?
 
 It refuses to overwrite an existing file (`O_EXCL`, mode `0600`). Pointing `--out`
