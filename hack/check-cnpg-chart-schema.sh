@@ -236,13 +236,77 @@ def check_plugin_wiring(docs, case, failures):
     So the parameter is checked by NAME here, and its value is required to match an
     ObjectStore actually rendered alongside it. That second half is what makes this
     more than a spell-check: it is the only place the two objects are compared.
+
+    🔴 AND THE ARCHIVER MUST BE THERE AT ALL. Everything below is a loop over
+    whatever plugins happened to render, so for a long time it could only catch a
+    plugin entry that was WRONG -- never one that was MISSING. Both misses were
+    measured:
+
+      - deleting `isWALArchiver: true` was UNDETECTED. The entry still matched
+        BARMAN, still named its ObjectStore, and still passed every assertion
+        here, while Postgres had no `archive_command` and shipped nothing
+        anywhere. This is the exact failure this file's header describes, and it
+        went straight through. (A MISSPELLING was caught, by the schema walk --
+        which is what made the gap so easy to believe closed.)
+      - deleting the whole `{{- if .Values.backup.enabled }}` plugin block was
+        UNDETECTED. The Cluster rendered with no `spec.plugins` at all, so the
+        loop ran zero times and contributed zero failures, while ObjectStore and
+        ScheduledBackup still rendered and satisfied the `required` kinds check.
+        The result reads as a fully configured backup: a destination, a retention
+        policy, a schedule -- and a database wired to none of it.
+
+    Both are closed the way check_restore_wiring already closes its half: count
+    what was actually asserted and require the count to be non-zero, plus a
+    per-case invariant that an archiver exists wherever a destination does.
     """
     stores = {d["metadata"]["name"] for d in docs if d.get("kind") == "ObjectStore"}
+    archivers_checked = 0
 
     for d in docs:
         if d.get("kind") != "Cluster":
             continue
-        for i, plugin in enumerate(d.get("spec", {}).get("plugins", []) or []):
+        plugins = d.get("spec", {}).get("plugins", []) or []
+        # EXACTLY ONE WAL ARCHIVER, wherever this chart rendered a destination.
+        # Keyed on an ObjectStore having rendered rather than on a values flag,
+        # because the rendered objects are what would actually be applied -- and
+        # because "there is somewhere to archive to" is precisely the premise that
+        # makes a missing archiver a silent data-loss bug rather than a
+        # deliberately backup-less install.
+        #
+        # Two, not one, is also a failure: CloudNativePG takes a single archiver,
+        # and a second entry marked isWALArchiver is the shape an edit produces
+        # when the recovery source is pasted into spec.plugins instead of
+        # externalClusters[].plugin.
+        archivers = [
+            p for p in plugins
+            if p.get("name") == BARMAN and p.get("isWALArchiver")
+        ]
+        archivers_checked += len(archivers)
+        if stores and len(archivers) != 1:
+            # Two different bugs, two different consequences -- say which one.
+            if not archivers:
+                why = (
+                    "so there IS a destination and this database is not archiving "
+                    "to it. Postgres gets no `archive_command`: the apply is "
+                    "green, the ObjectStore and ScheduledBackup exist, and no WAL "
+                    "ever leaves the cluster"
+                )
+            else:
+                why = (
+                    "and CloudNativePG takes a SINGLE archiver. This is the shape "
+                    "an edit produces when a recovery source is pasted into "
+                    "spec.plugins instead of externalClusters[].plugin -- the "
+                    "restored cluster then archives over the very path it "
+                    "recovered from"
+                )
+            failures.append(
+                "%s: Cluster/%s carries %d barman plugin entries marked "
+                "`isWALArchiver`, want exactly 1 -- this chart rendered "
+                "ObjectStore(s) %s, %s"
+                % (case, d["metadata"]["name"], len(archivers),
+                   ", ".join(sorted(stores)), why)
+            )
+        for i, plugin in enumerate(plugins):
             if plugin.get("name") != BARMAN:
                 continue
             where = "%s: Cluster/%s .spec.plugins[%d]" % (case, d["metadata"]["name"], i)
@@ -266,6 +330,8 @@ def check_plugin_wiring(docs, case, failures):
                     "does not exist"
                     % (where, target, ", ".join(sorted(stores)) or "none")
                 )
+
+    return archivers_checked
 
 
 def check_restore_wiring(docs, case, failures):
@@ -369,6 +435,7 @@ failures = []
 checked = 0
 kinds_seen = set()
 restores_checked = 0
+archivers_checked = 0
 
 for path in rendered_paths:
     case = path.rsplit("/", 1)[-1]
@@ -387,7 +454,7 @@ for path in rendered_paths:
         for p in problems:
             failures.append("%s: %s (%s)" % (case, p, doc["metadata"]["name"]))
 
-    check_plugin_wiring(docs, case, failures)
+    archivers_checked += check_plugin_wiring(docs, case, failures)
     restores_checked += check_restore_wiring(docs, case, failures)
 
 # 🔴 THE POSITIVE CONTROL. Everything above is a loop over whatever happened to
@@ -399,6 +466,15 @@ for path in rendered_paths:
 # of Cluster, not a kind, so `Cluster` being present says nothing about whether
 # any render exercised it. A chart that stopped emitting externalClusters
 # entirely would satisfy the kind check and skip every assertion above.
+if archivers_checked == 0:
+    sys.exit(
+        "no rendered Cluster carried a barman WAL archiver, so every backup-wiring\n"
+        "  assertion above was skipped. A Cluster with no archiver is a database\n"
+        "  shipping no WAL anywhere -- and it renders a green apply, alongside an\n"
+        "  ObjectStore and a ScheduledBackup that satisfy the kind check below.\n"
+        "  Either the chart stopped emitting the plugin or no case enables backups."
+    )
+
 if restores_checked == 0:
     sys.exit(
         "no rendered Cluster carried a recovery bootstrap, so every restore\n"
@@ -429,6 +505,7 @@ if failures:
 
 print("    %d custom resources validated across %d configurations" % (checked, len(rendered_paths)))
 print("    kinds covered: %s" % ", ".join(sorted(kinds_seen)))
+print("    %d WAL archiver(s) checked for backup wiring" % archivers_checked)
 print("    %d recovery bootstrap(s) checked for restore wiring" % restores_checked)
 PY
 
