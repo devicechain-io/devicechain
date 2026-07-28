@@ -151,10 +151,19 @@ múltiples réplicas, algo que la ruta de cliente MQTT que reemplaza no podía h
 
 ## Durabilidad de los datos {#data-durability}
 
-La capa de base de datos es intencionalmente **independiente del ciclo de vida** de la aplicación: los
-volúmenes de Postgres y TimescaleDB se aprovisionan con una política `Retain` y una protección contra destrucción,
-de modo que sobreviven a una desinstalación de la aplicación, un redespliegue o un desmontaje accidental. Actualizar o
-reinstalar la aplicación nunca pone en riesgo sus datos.
+La capa de base de datos es intencionalmente **independiente del ciclo de vida** de la aplicación. Ambas
+bases de datos se aprovisionan como infraestructura separada con una protección contra destrucción, de modo
+que actualizar, reinstalar o desinstalar la *aplicación* nunca las toca. Ese es el caso habitual y es seguro.
+
+:::caution Quitar la base de datos de la configuración de infraestructura es un acto distinto
+La protección resguarda cada base de datos mientras está *dentro* de la configuración de infraestructura. No
+resguarda una que se haya sacado *fuera* de ella: un recurso eliminado de la configuración deja de estar
+cubierto por las reglas que esa configuración declara, y el plan de eliminación se ejecutará con éxito. Los
+clústeres de base de datos además son dueños de sus volúmenes, así que eliminar uno se lleva sus datos consigo
+en lugar de dejar un volumen desasociado.
+
+No edites la base de datos para sacarla de la configuración de infraestructura como forma de reemplazarla.
+:::
 
 Esto es durabilidad de los volúmenes en ejecución; no es un sustituto de las copias de seguridad programadas y la
 recuperación a un punto en el tiempo, que se aprovisionan con la infraestructura de producción. Consulte

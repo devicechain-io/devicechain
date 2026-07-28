@@ -19,7 +19,7 @@ these modules, passing its cluster credentials to the providers.
 | Namespace | `kubernetes_namespace_v1` | `dc-system` |
 | NATS (JetStream + MQTT) | `nats` Helm chart | `dc-nats.dc-system:4222` / `:1883` |
 | Relational Postgres | `cnpg-cluster` module — a CloudNativePG `Cluster` (`dc-rdb`) | `dc-postgresql.dc-system:5432` |
-| TimescaleDB | `postgres` module — StatefulSet + headless Service + Secret | `dc-timescaledb-single.dc-system:5432` |
+| TimescaleDB (event store) | `cnpg-cluster` module — a CloudNativePG `Cluster` (`dc-tsdb`) | `dc-timescaledb-single.dc-system:5432` |
 | NGINX ingress controller | `ingress-nginx` Helm chart | IngressClass `nginx` |
 | cert-manager (+ CRDs) | `cert-manager` Helm chart | namespace `cert-manager` |
 | Observability (Prometheus/Grafana/Alertmanager) | `kube-prometheus-stack` Helm chart | namespace `monitoring` |
@@ -29,13 +29,13 @@ these modules, passing its cluster credentials to the providers.
 **Both CNPG charts require Kubernetes ≥ 1.29** (`kubeVersion: '>=1.29.0-0'`), which is
 therefore the floor for this root as a whole.
 
-### The two database stores are on different mechanisms right now
+### Both database stores are CloudNativePG Clusters
 
-That is a migration in progress, not an inconsistency to tidy up. `dc-rdb` moved to
-CloudNativePG; `dc-timescaledb-single` follows next and the generic `postgres` module
-stays until it does.
+They share one module and differ in four values: the image, the instance count, the
+durability, and the bootstrap SQL. The relational store runs `required` durability and the
+event store runs `preferred`, which is a decision rather than a default — see the module.
 
-Three things about the relational store are worth knowing before changing it:
+Three things about them are worth knowing before changing either:
 
 - **The Cluster is `dc-rdb`; clients still use `dc-postgresql`.** The second is a
   *managed* alias Service whose selector CNPG maintains, so it follows the primary

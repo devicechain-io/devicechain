@@ -167,9 +167,8 @@ huella que el modo compacto no evita, y es deliberado: el respaldo no es una fun
 de alta disponibilidad, así que la capa de almacenamiento tiene una sola forma en
 todas partes.
 
-El almacén relacional ya se ejecuta sobre el operador. El almacén de eventos
-(TimescaleDB) sigue siendo un StatefulSet simple y se migrará a continuación, así que
-en un arranque de hoy el operador gestiona una de las dos bases de datos.
+Ambas bases de datos se ejecutan ahora sobre el operador: tanto el almacén relacional
+como el de eventos.
 :::
 
 :::caution Los tamaños de volumen son un presupuesto de tiempo, no de capacidad
@@ -240,10 +239,23 @@ cualquiera de ellas detiene todas las escrituras: peor disponibilidad que un sol
 cambio de mayor durabilidad. Una tercera instancia permite perder una réplica sin que el
 clúster se quede sin réplica confirmadora.
 
-**Lo que no hace.** TimescaleDB sigue siendo de instancia única, así que el almacén de
-*eventos* no está replicado. El número de réplicas de servicio no cambia.
+El almacén de eventos también se replica en tres instancias, pero con una diferencia
+deliberada: **no** retiene una escritura a la espera de una réplica. Si no hay ninguna
+disponible, vuelve a la replicación asíncrona y se pone al día cuando reaparece una. Esa
+concesión es la correcta para este almacén y la equivocada para el otro. Los eventos ya se
+conservan de forma duradera aguas arriba en la capa de mensajería hasta que se persisten,
+así que las escrituras de una conmutación por error pueden reproducirse; el registro de
+auditoría del almacén relacional no tiene ese respaldo, y por eso él sí se detiene. El
+costo es que el punto de recuperación del almacén de eventos queda acotado por el retraso
+de replicación en lugar de ser cero.
+
+**Lo que no hace.** El número de réplicas de servicio no cambia, y nada de esto sobrevive
+por sí solo a la pérdida de un nodo: la replicación es lo que hace posible la recuperación,
+no lo que la ejecuta.
 
 :::caution Una escritura detenida queda confirmada, no rechazada
+Esto se aplica al almacén relacional, que es el que se detiene.
+
 Cuando no hay ninguna réplica en espera disponible, una escritura no falla: espera, y la
 fila ya se ha confirmado localmente. Un cliente que se rinda y reintente escribirá dos
 veces salvo que la operación sea idempotente. Ten en cuenta además que `statement_timeout`

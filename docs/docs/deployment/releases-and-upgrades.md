@@ -150,10 +150,20 @@ multiple replicas, which the MQTT-client path it replaces could not.
 
 ## Data durability {#data-durability}
 
-The database tier is intentionally **lifecycle-independent** from the application: the
-Postgres and TimescaleDB volumes are provisioned with a `Retain` policy and a destroy guard,
-so they survive an application uninstall, a redeploy, or an accidental teardown. Upgrading or
-reinstalling the application never puts your data at risk.
+The database tier is intentionally **lifecycle-independent** from the application. Both
+databases are provisioned as separate infrastructure with a destroy guard, so upgrading,
+reinstalling or uninstalling the *application* never touches them. That is the common case
+and it is safe.
+
+:::caution Removing the database from the infrastructure configuration is a different act
+The guard protects each database while it is *in* the infrastructure configuration. It does
+not protect one that has been taken *out* of it: a resource removed from the configuration
+is no longer covered by rules the configuration declares, and the removal plan will
+succeed. The database clusters also own their volumes, so removing one takes its data with
+it rather than leaving an unattached volume behind.
+
+Do not edit the database out of the infrastructure configuration as a way of replacing it.
+:::
 
 This is durability of the running volumes — it is not a substitute for scheduled backups and
 point-in-time recovery, which are provisioned with the production infrastructure. See

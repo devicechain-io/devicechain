@@ -35,10 +35,12 @@ import (
 // for the reconcile invariants to be conclusive.
 const defaultSelfTestMinAccepted = 50
 
-// defaultDSN is the standard local kind coordinates (port-forward
-// dc-timescaledb-single-0 in dc-system to 127.0.0.1:5432). Override for any other
-// cluster.
-const defaultDSN = "postgres://postgres:devicechain@127.0.0.1:5432/devicechain"
+// defaultDSN is the standard local kind coordinates. Port-forward the event store's
+// alias Service — `kubectl -n dc-system port-forward svc/dc-timescaledb-single
+// 5432:5432` — rather than a pod: the store is a CloudNativePG Cluster, so its pods
+// are named `dc-tsdb-N` and which one is the primary changes on a failover, while the
+// alias Service follows it. Override for any other cluster.
+const defaultDSN = "postgres://devicechain:devicechain@127.0.0.1:5432/devicechain"
 
 func main() {
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix

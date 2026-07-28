@@ -11,10 +11,17 @@ The PostgreSQL image the `tsdb` CloudNativePG cluster runs (ADR-020 A2.6, ADR-02
 ghcr.io/devicechain-io/postgresql-timescaledb:<pg-minor>-ts<timescale-version>
 ```
 
-> **Nothing deploys this yet.** A2.6 builds, gates and publishes the image, and proves the
-> migration chain reproduces the committed goldens on it. The `tsdb` store still runs
-> `timescale/timescaledb:latest-pg16` as a StatefulSet until the A2.4 cutover moves it to a
-> CloudNativePG `Cluster`.
+> **This is the deployed event store.** A2.6 built, gated and published the image and
+> proved the migration chain reproduces the committed goldens on it; A2.4 moved the `tsdb`
+> store onto it as a CloudNativePG `Cluster`.
+>
+> 🔴 The published tag is a **second copy** of what `versions.conf` says. The workflow
+> computes it as `<pg-minor>-ts<timescale-version>-r<revision>`, and
+> `deploy/opentofu/variables.tf` carries the result as a hand-written string, because a
+> Terraform default cannot read a shell file. Bump `versions.conf` without bumping that
+> default and the platform keeps deploying the old tag — successfully, with the new image
+> sitting unused in the registry. `hack/check-tofu-validations.sh` recomputes the tag and
+> asserts the two agree.
 
 ## Why we build our own
 
