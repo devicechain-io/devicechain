@@ -554,6 +554,38 @@ func TestCompactDropsCertManagerOnlyWhenTLSIsOff(t *testing.T) {
 			"fails against a missing CRD; with an external issuer it succeeds and serves " +
 			"no cert at all")
 	}
+
+	// THE OTHER HALF OF THE SAME APPEND, and until now it was pinned by nothing.
+	//
+	// tofu.go emits `enable_cert_manager=false` and `enable_database_backups=false`
+	// from ONE statement, on purpose: the Barman Cloud plugin renders a cert-manager
+	// Issuer and two Certificates, so dropping cert-manager necessarily drops
+	// point-in-time recovery, and splitting the two appends would let a later edit
+	// re-enable one without seeing the other. That comment cited a test by name.
+	// The test did not exist — the citation was written and never followed — so the
+	// coupling it claimed to guarantee rested entirely on the two lines staying
+	// adjacent.
+	//
+	// 🔴 The failure it guards against is not an install error. Re-enable
+	// cert-manager here and the backup plugin comes back with no CRDs to render its
+	// Issuer against, which fails the apply loudly. Re-enable BACKUPS alone and the
+	// install succeeds: the plugin release fails, or renders against nothing, and
+	// what the operator gets is an instance that reports backups on and archives
+	// nowhere. That is the shape this whole slice exists to remove.
+	const backupsOff = "enable_database_backups=false"
+	if !slices.Contains(infraVars(compactState(true)), backupsOff) {
+		t.Error("--compact --no-tls dropped cert-manager but kept database backups on. " +
+			"The Barman Cloud plugin needs cert-manager to render its Issuer and " +
+			"Certificates, so this is an instance whose bootstrap report claims " +
+			"point-in-time recovery it cannot have. Both vars come from one append " +
+			"in tofu.go; keep them there")
+	}
+	if slices.Contains(infraVars(tlsOn), backupsOff) {
+		t.Error("--compact with TLS ON disabled database backups. cert-manager is " +
+			"installed on that path, so the backup plugin has everything it needs — " +
+			"this would silently cost every compact TLS install its point-in-time " +
+			"recovery, and hack/dr-rig.sh runs exactly that configuration")
+	}
 }
 
 // The MQTT NodePort is a LOCAL-only exposure: it must be set on a kind context (so a

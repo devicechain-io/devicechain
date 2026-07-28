@@ -337,7 +337,12 @@ func infraVars(st *State) []string {
 				// recovery. Compact is the footprint preset, cert-manager is three more
 				// workloads, and PITR additionally needs object storage; an install
 				// that wants backups should not be asking for the smallest possible
-				// one. TestDisablingCertManagerAlsoDisablesDatabaseBackups pins it.
+				// one. TestCompactDropsCertManagerOnlyWhenTLSIsOff pins BOTH halves —
+				// including that `--compact` WITH TLS keeps backups, which is the one
+				// configuration hack/dr-rig.sh can run and still have something to
+				// restore. (An earlier version of this comment cited a test by a name
+				// nothing in the tree carried, so the coupling it promised rested
+				// entirely on these two lines staying adjacent.)
 				"enable_database_backups=false",
 			)
 		}
