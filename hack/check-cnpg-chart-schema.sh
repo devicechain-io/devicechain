@@ -141,11 +141,25 @@ backup=(
 )
 
 rendered=()
-rendered+=("$(render_case single "${base[@]}" --set instances=1)")
+# The `single` case also carries the four OPTIONAL blocks, because each of them
+# lives behind a `{{- with }}` that no other case fires, and an unknown field
+# inside a template action that never runs is validated against nothing at all.
+# postInitTemplateSQL is the one that matters most: it is the hook that installs
+# the TimescaleDB extension into template1, so every database the platform
+# subsequently creates inherits it. It renders through `toYaml` as a LIST, and a
+# shape the CRD does not accept there would have shipped unseen.
+# The `branch_coverage` control at the bottom of the python block is what keeps
+# these from quietly dropping out of the case again.
+rendered+=("$(render_case single "${base[@]}" --set instances=1 \
+  --set storage.storageClass=fast-ssd \
+  --set resources.requests.cpu=500m --set resources.requests.memory=1Gi \
+  --set resources.limits.memory=2Gi \
+  --set 'bootstrap.postInitTemplateSQL[0]=CREATE EXTENSION IF NOT EXISTS timescaledb')")
 rendered+=("$(render_case ha "${base[@]}" --set instances=3 --set synchronous.enabled=true)")
 rendered+=("$(render_case backup-single "${base[@]}" --set instances=1 "${backup[@]}")")
 rendered+=("$(render_case backup-ha "${base[@]}" --set instances=3 --set synchronous.enabled=true "${backup[@]}" \
   --set backup.serverName=dc-store-restored --set walStorage.enabled=true --set walStorage.size=2Gi \
+  --set walStorage.storageClass=fast-ssd \
   --set sharedPreloadLibraries[0]=timescaledb --set parameters.timescaledb\\.telemetry_level=off \
   --set backup.endpointCASecret.name=dc-ca --set backup.endpointCASecret.key=ca.crt)")
 
@@ -431,11 +445,48 @@ def check_restore_wiring(docs, case, failures):
     return seen
 
 
+# Optional blocks that render only when their value is set, each with what it
+# costs to ship one unvalidated. Every one of these sits behind a `{{- with }}`,
+# and a template action that never fires validates nothing -- so the check would
+# be green on a chart whose storageClass key was misspelled, whose resources
+# block was the wrong shape, or whose TimescaleDB hook rendered a string where
+# CloudNativePG wants a list. `branch_coverage` below asserts each was actually
+# exercised by SOME case, which is what stops a `--set` quietly disappearing
+# from the render list and taking its coverage with it.
+OPTIONAL_BRANCHES = [
+    (("spec", "storage", "storageClass"),
+     "the data volume's StorageClass -- unset, every install lands on the "
+     "cluster default, which on a cloud provider is rarely the one a database wants"),
+    (("spec", "walStorage", "storageClass"),
+     "the WAL volume's StorageClass; the walStorage block renders only when "
+     "walStorage.enabled, so nothing else reaches this branch"),
+    (("spec", "resources"),
+     "the requests/limits passthrough -- a toYaml of whatever the caller "
+     "supplied, so its SHAPE is only ever checked against the CRD here"),
+    (("spec", "bootstrap", "initdb", "postInitTemplateSQL"),
+     "the hook that installs the TimescaleDB extension into template1, so "
+     "every database the platform creates inherits it. It renders as a LIST "
+     "through toYaml, and it runs exactly once per cluster -- at initdb, on a "
+     "path a restore never takes"),
+]
+
+
+def dig(doc, path):
+    """The value at a dotted path, or None if any segment is absent."""
+    cur = doc
+    for seg in path:
+        if not isinstance(cur, dict) or seg not in cur:
+            return None
+        cur = cur[seg]
+    return cur
+
+
 failures = []
 checked = 0
 kinds_seen = set()
 restores_checked = 0
 archivers_checked = 0
+branch_coverage = {p: 0 for p, _ in OPTIONAL_BRANCHES}
 
 for path in rendered_paths:
     case = path.rsplit("/", 1)[-1]
@@ -453,6 +504,11 @@ for path in rendered_paths:
         walk(doc, schemas[key], doc["kind"], problems)
         for p in problems:
             failures.append("%s: %s (%s)" % (case, p, doc["metadata"]["name"]))
+
+        if doc["kind"] == "Cluster":
+            for path, _ in OPTIONAL_BRANCHES:
+                if dig(doc, path) is not None:
+                    branch_coverage[path] += 1
 
     archivers_checked += check_plugin_wiring(docs, case, failures)
     restores_checked += check_restore_wiring(docs, case, failures)
@@ -482,6 +538,17 @@ if restores_checked == 0:
         "  the chart no longer emits it -- both make this check vacuous."
     )
 
+uncovered = [(p, why) for p, why in OPTIONAL_BRANCHES if branch_coverage[p] == 0]
+if uncovered:
+    sys.exit(
+        "these optional blocks were never rendered by any case, so the CRD walk\n"
+        "  above never saw them and this run says nothing about whether they are\n"
+        "  valid:\n\n%s\n\n"
+        "  Either a `--set` was dropped from the render list or the chart stopped\n"
+        "  emitting the block. Both leave a branch shipping unvalidated."
+        % "\n".join("    spec.%s -- %s" % (".".join(p[1:]), why) for p, why in uncovered)
+    )
+
 required = {"Cluster", "ObjectStore", "ScheduledBackup"}
 missing = required - kinds_seen
 if missing:
@@ -507,6 +574,9 @@ print("    %d custom resources validated across %d configurations" % (checked, l
 print("    kinds covered: %s" % ", ".join(sorted(kinds_seen)))
 print("    %d WAL archiver(s) checked for backup wiring" % archivers_checked)
 print("    %d recovery bootstrap(s) checked for restore wiring" % restores_checked)
+print("    %d optional block(s) exercised: %s" % (
+    len(OPTIONAL_BRANCHES),
+    ", ".join("spec.%s x%d" % (".".join(p[1:]), branch_coverage[p]) for p, _ in OPTIONAL_BRANCHES)))
 PY
 
 note "every rendered field exists in the pinned CRD schemas"
