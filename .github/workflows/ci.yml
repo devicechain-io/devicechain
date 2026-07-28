@@ -465,6 +465,37 @@ jobs:
           fi
           echo "ok: synchronous replication is refused below three instances"
 
+          # The reserved-owner guard (ADR-020 A2.4), asserted for the same reason:
+          # it is refused today only because this chart happens to render a managed
+          # role for the owner, and CloudNativePG's webhook rejects a reserved name
+          # THERE. Measured on 1.30.0, `bootstrap.initdb.owner: postgres` is accepted
+          # on its own — so make that block conditional and the store comes up
+          # connecting as the real superuser, with enableSuperuserAccess: false
+          # rendered meaningless and nothing reporting a problem.
+          for reserved in postgres streaming_replica; do
+            if helm template dc-tsdb deploy/opentofu/modules/cnpg-cluster/chart \
+                 --set name=dc-tsdb --set imageName=example/pg:17 --set instances=3 \
+                 --set aliasServiceName=dc-timescaledb-single --set storage.size=8Gi \
+                 --set bootstrap.database=devicechain --set "bootstrap.owner=$reserved" \
+                 --set bootstrap.secretName=dc-tsdb-app-credentials >/dev/null 2>&1; then
+              echo "FAIL: the chart rendered a Cluster owned by the reserved role '$reserved'." >&2
+              echo "The platform connects as the owner, so this means connecting as a" >&2
+              echo "CloudNativePG-reserved role rather than as an application." >&2
+              exit 1
+            fi
+          done
+          echo "ok: reserved owner names are refused"
+
+          # The counterweight. Refusing reserved owners is only safe while a valid
+          # owner still renders — a guard that rejects everything passes the two
+          # checks above and breaks every install.
+          helm template dc-tsdb deploy/opentofu/modules/cnpg-cluster/chart \
+            --set name=dc-tsdb --set imageName=example/pg:17 --set instances=3 \
+            --set aliasServiceName=dc-timescaledb-single --set storage.size=8Gi \
+            --set bootstrap.database=devicechain --set bootstrap.owner=devicechain \
+            --set bootstrap.secretName=dc-tsdb-app-credentials >/dev/null
+          echo "ok: a valid owner still renders"
+
       - name: profile workloads
         # Renders EVERY profile and pins the workloads each one produces.
         #
