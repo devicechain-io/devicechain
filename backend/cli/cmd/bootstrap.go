@@ -181,6 +181,35 @@ func resolveCompactMode(changed func(string) bool, profile string, noTLS, noMoni
 	return res, nil
 }
 
+// restoreFlagsFromArgv assembles the database-restore inputs from the parsed
+// flags and the already-settled escrow plan.
+//
+// Extracted from RunE so the wiring itself is testable. It is four string
+// copies and two derivations, which is exactly the kind of code that looks too
+// trivial to test and then transposes rdb and tsdb — a mistake with no symptom
+// at all until an operator recovers telemetry into the relational store's
+// timeline during an incident. The tests drive real argv through the real flag
+// set, so a rename on either side is a failure rather than a silent no-op.
+func restoreFlagsFromArgv(escrowPlan bootstrap.EscrowPlan) bootstrap.RestoreFlags {
+	return bootstrap.RestoreFlags{
+		RdbFrom:        bootstrapRestoreRdbFrom,
+		RdbTargetTime:  bootstrapRestoreRdbAt,
+		TsdbFrom:       bootstrapRestoreTsdbFrom,
+		TsdbTargetTime: bootstrapRestoreTsdbAt,
+		BackupsEnabled: bootstrap.DatabaseBackupsEnabled(bootstrapNoCNPG, bootstrapCompact, bootstrapNoTLS),
+		// Read off the SETTLED escrow plan rather than the raw flag, so this
+		// refusal and the thing it protects cannot disagree.
+		//
+		// 🔴 RestoringRootKey(), NOT RestoredRootKey != "". The key field is only
+		// populated once the artifact has actually been opened, which a DRY RUN
+		// deliberately never does — so keying on it refused
+		// `--dry-run --restore-rdb-from=X --restore-root-key=F` with a message
+		// telling the operator to pass --restore-root-key, which they had passed.
+		// A dry run is precisely how you rehearse a restore before you need it.
+		RootKeyRestored: escrowPlan.RestoringRootKey(),
+	}
+}
+
 // bootstrapCmd provisions a usable DeviceChain instance on a target provider.
 // It is a thin wrapper over the bootstrap engine package (ADR-032).
 var bootstrapCmd = &cobra.Command{
@@ -324,17 +353,7 @@ var bootstrapCmd = &cobra.Command{
 		// knowable from argv, and an incident is the wrong time to learn either.
 		// Resolved AFTER the presets, so it sees the --compact/--dev values that decide
 		// whether this instance has a backup destination at all.
-		restorePlan, err := bootstrap.ResolveRestorePlan(bootstrap.RestoreFlags{
-			RdbFrom:        bootstrapRestoreRdbFrom,
-			RdbTargetTime:  bootstrapRestoreRdbAt,
-			TsdbFrom:       bootstrapRestoreTsdbFrom,
-			TsdbTargetTime: bootstrapRestoreTsdbAt,
-			BackupsEnabled: bootstrap.DatabaseBackupsEnabled(bootstrapNoCNPG, bootstrapCompact, bootstrapNoTLS),
-			// Read off the SETTLED escrow plan rather than the raw flag: that is the
-			// value stepRenderConfig actually seeds the instance's root key from, so
-			// this refusal and the thing it protects cannot disagree.
-			RootKeyRestored: escrowPlan.RestoredRootKey != "",
-		})
+		restorePlan, err := bootstrap.ResolveRestorePlan(restoreFlagsFromArgv(escrowPlan))
 		if err != nil {
 			return err
 		}

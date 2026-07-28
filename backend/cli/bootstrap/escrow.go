@@ -132,6 +132,21 @@ type EscrowPlan struct {
 	RestoredFrom string
 }
 
+// RestoringRootKey reports whether this run seeds the instance's root key from
+// an escrow artifact rather than minting a fresh one.
+//
+// 🔴 IT KEYS ON RestoredFrom, NOT RestoredRootKey, and the difference is the
+// dry run. RestoredRootKey holds the opened key, and a dry run never opens the
+// artifact — it writes nothing, so it must not ask for a passphrase. Callers
+// that asked "is the root key being restored?" by testing RestoredRootKey
+// therefore got `false` on exactly the rehearsal an operator performs before a
+// real recovery, and refused the run for want of a flag that was supplied.
+//
+// Restoring is a property of the REQUEST; having the key in hand is a property
+// of having done the work. This is the first, and the two only differ under
+// --dry-run: resolveRestore sets both fields together on every other path.
+func (p EscrowPlan) RestoringRootKey() bool { return p.RestoredFrom != "" }
+
 // promptPassphrase and stdinIsTerminal are the two terminal seams, indirected so
 // tests can drive either branch.
 //
