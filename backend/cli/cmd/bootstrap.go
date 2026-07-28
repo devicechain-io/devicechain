@@ -26,6 +26,7 @@ var (
 	bootstrapNoTLS           bool
 	bootstrapNoMonitoring    bool
 	bootstrapNoCNPG          bool
+	bootstrapAllowLegacyDb   bool
 	bootstrapGrafanaSSO      bool
 	bootstrapDev             bool
 	bootstrapCompact         bool
@@ -314,22 +315,23 @@ var bootstrapCmd = &cobra.Command{
 		}
 
 		opts := bootstrap.Options{
-			Instance:      args[1],
-			KubeContext:   bootstrapKubeContext,
-			Profile:       bootstrapProfile,
-			DryRun:        bootstrapDryRun,
-			AssumeYes:     bootstrapAssumeYes,
-			ImageRegistry: bootstrapRegistry,
-			ImageVersion:  bootstrapVersion,
-			BuildImages:   bootstrapBuild,
-			IngressHost:   bootstrapHost,
-			NoTLS:         bootstrapNoTLS,
-			NoMonitoring:  bootstrapNoMonitoring,
-			NoCNPG:        bootstrapNoCNPG,
-			GrafanaSSO:    bootstrapGrafanaSSO,
-			Compact:       bootstrapCompact,
-			HA:            bootstrapHA,
-			EnableAreas:   enableAreas,
+			Instance:             args[1],
+			KubeContext:          bootstrapKubeContext,
+			Profile:              bootstrapProfile,
+			DryRun:               bootstrapDryRun,
+			AssumeYes:            bootstrapAssumeYes,
+			ImageRegistry:        bootstrapRegistry,
+			ImageVersion:         bootstrapVersion,
+			BuildImages:          bootstrapBuild,
+			IngressHost:          bootstrapHost,
+			NoTLS:                bootstrapNoTLS,
+			NoMonitoring:         bootstrapNoMonitoring,
+			NoCNPG:               bootstrapNoCNPG,
+			AllowLegacyDbRemoval: bootstrapAllowLegacyDb,
+			GrafanaSSO:           bootstrapGrafanaSSO,
+			Compact:              bootstrapCompact,
+			HA:                   bootstrapHA,
+			EnableAreas:          enableAreas,
 		}
 
 		ctx := cmd.Context()
@@ -340,26 +342,27 @@ var bootstrapCmd = &cobra.Command{
 		}
 
 		st := &bootstrap.State{
-			Instance:        opts.Instance,
-			KubeContext:     kubeContext,
-			Profile:         opts.Profile,
-			DryRun:          opts.DryRun,
-			AssumeYes:       opts.AssumeYes,
-			ImageRegistry:   opts.ImageRegistry,
-			ImageVersion:    opts.ImageVersion,
-			BuildImages:     opts.BuildImages,
-			IngressHost:     opts.IngressHost,
-			NoTLS:           opts.NoTLS,
-			NoMonitoring:    opts.NoMonitoring,
-			NoCNPG:          opts.NoCNPG,
-			GrafanaSSO:      opts.GrafanaSSO,
-			Compact:         opts.Compact,
-			HA:              opts.HA,
-			EnableAreas:     opts.EnableAreas,
-			EnabledAreas:    enabledAreas,
-			Lwm2mIdentities: lwm2mIdentities,
-			Escrow:          escrowPlan,
-			Values:          map[string]string{},
+			Instance:             opts.Instance,
+			KubeContext:          kubeContext,
+			Profile:              opts.Profile,
+			DryRun:               opts.DryRun,
+			AssumeYes:            opts.AssumeYes,
+			ImageRegistry:        opts.ImageRegistry,
+			ImageVersion:         opts.ImageVersion,
+			BuildImages:          opts.BuildImages,
+			IngressHost:          opts.IngressHost,
+			NoTLS:                opts.NoTLS,
+			NoMonitoring:         opts.NoMonitoring,
+			NoCNPG:               opts.NoCNPG,
+			AllowLegacyDbRemoval: opts.AllowLegacyDbRemoval,
+			GrafanaSSO:           opts.GrafanaSSO,
+			Compact:              opts.Compact,
+			HA:                   opts.HA,
+			EnableAreas:          opts.EnableAreas,
+			EnabledAreas:         enabledAreas,
+			Lwm2mIdentities:      lwm2mIdentities,
+			Escrow:               escrowPlan,
+			Values:               map[string]string{},
 		}
 		return bootstrap.NewDefaultPipeline().Run(ctx, st)
 	},
@@ -378,6 +381,12 @@ func init() {
 	bootstrapCmd.Flags().StringVar(&bootstrapHost, "host", "", "ingress host to expose the instance on (default devicechain.local; use 'localhost' for a local cluster to skip the /etc/hosts edit)")
 	bootstrapCmd.Flags().BoolVar(&bootstrapNoTLS, "no-tls", false, "serve plain HTTP instead of a self-signed cert (with --host localhost, a zero-config http://localhost/)")
 	bootstrapCmd.Flags().BoolVar(&bootstrapNoMonitoring, "no-monitoring", false, "skip the monitoring stack (Prometheus/Grafana) AND the chart's ServiceMonitors/alerts — for a minimal install or a cluster where you wire metrics separately")
+	bootstrapCmd.Flags().BoolVar(&bootstrapAllowLegacyDb, "allow-legacy-db-removal", false,
+		"proceed even though this cluster still runs the pre-CloudNativePG database "+
+			"StatefulSets (dc-postgresql / dc-timescaledb-single). 🔴 This ASSERTS THAT YOU "+
+			"HAVE HANDLED THE DATA — it is not a migration, nothing verifies it, and applying "+
+			"with it set destroys those StatefulSets and brings up empty databases on the same "+
+			"hostnames. Dump first, or use it deliberately to discard a local instance")
 	bootstrapCmd.Flags().BoolVar(&bootstrapNoCNPG, "no-cnpg", false, "skip the CloudNativePG operator and the database backup plugin — for a cluster that ALREADY runs CNPG, since Helm cannot adopt objects another installer created")
 	bootstrapCmd.Flags().BoolVar(&bootstrapGrafanaSSO, "grafana-sso", false, "wire Grafana login to DeviceChain SSO (ADR-047), operator/superuser-tier only; enables the OAuth AS (needs https, or --host localhost --no-tls for local http)")
 	bootstrapCmd.Flags().BoolVar(&bootstrapDev, "dev", false, "local-developer preset: --build --host localhost --no-tls --yes (a zero-config http://localhost/ bring-up); rejects contradictory flags. Compose with --grafana-sso for local SSO")

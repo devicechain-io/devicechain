@@ -184,9 +184,7 @@ one Deployment requesting 100m/128Mi, plus its CRDs. That is a footprint cost co
 does not avoid, and it is deliberate: backup is not a high-availability feature, so the
 storage tier has one shape everywhere.
 
-The relational store now runs on the operator. The event store (TimescaleDB) is still a
-plain StatefulSet and moves next, so on a bring-up today the operator owns one of the two
-databases.
+Both databases now run on the operator — the relational store and the event store alike.
 :::
 
 :::caution Volume sizes are a time budget, not a capacity budget
@@ -250,10 +248,22 @@ confirm every commit, so with only two instances the loss of either one stalls e
 write: worse availability than a single node, in exchange for better durability. A third
 instance means a standby can be lost without the cluster losing its confirming replica.
 
-**What it does not do.** TimescaleDB remains single-instance, so the *event* store is not
-replicated. The number of service replicas is unchanged.
+The event store is replicated to three instances too, but with a deliberate difference:
+it does **not** hold a write waiting for a standby. If no standby is available it falls
+back to asynchronous replication and catches up when one returns. That trade is right for
+this store and wrong for the other one. Events are already held durably upstream in the
+messaging layer until they are persisted, so a failover's worth of writes can be replayed;
+the audit journal in the relational store has no such upstream, which is why it stalls
+instead. The cost is that the event store's recovery point is bounded by replication lag
+rather than being zero.
+
+**What it does not do.** The number of service replicas is unchanged, and nothing here
+survives a node loss on its own — replication is what makes recovery possible, not what
+performs it.
 
 :::caution A stalled write is committed, not rejected
+This applies to the relational store, which is the one that stalls.
+
 When no standby is available, a write does not fail — it waits, and the row is already
 committed locally. A client that gives up and retries will write twice unless the operation
 is idempotent. Note also that `statement_timeout` does **not** bound this wait, because the

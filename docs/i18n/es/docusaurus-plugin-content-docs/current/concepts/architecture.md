@@ -29,7 +29,8 @@ Están planificados servicios adicionales — operaciones por lotes y programaci
 ## La columna vertebral de datos y mensajería
 
 - **NATS JetStream** es la columna vertebral única para la mensajería asíncrona, el ingreso MQTT (los dispositivos se conectan al servidor MQTT integrado de NATS en el puerto 1883), y el almacenamiento en caché / bloqueo de clave-valor. No hay un Kafka, Redis o broker MQTT separados.
-- **TimescaleDB** (PostgreSQL + la extensión TimescaleDB) es el almacén de datos único tanto para los datos relacionales de entidades como para los eventos de series temporales. Los eventos viven en hypertables con compresión y agregados continuos.
+- **PostgreSQL** lo almacena todo, en dos bases de datos separadas con una sola forma. El almacén *relacional* guarda los datos de entidades —inquilinos, usuarios, dispositivos, relaciones— y el almacén de *eventos* añade la extensión TimescaleDB, manteniendo los eventos de series temporales en hypertables con compresión y agregados continuos. `event-management` es el único servicio que habla con el almacén de eventos, y no habla con ningún otro, y por eso ambos pueden respaldarse, dimensionarse y restaurarse de forma independiente.
+- Ambos se ejecutan como clústeres PostgreSQL replicados gestionados por un operador, así que la alta disponibilidad es un número de instancias y no una capa de almacenamiento distinta. El almacén relacional retiene una escritura hasta que una réplica la confirma; el de eventos recurre en su lugar a la replicación asíncrona, porque los eventos aún no persistidos siguen conservados de forma duradera en la capa de mensajería y pueden reproducirse.
 
 Los subjects tienen alcance por inquilino (`{instance}.{tenant}.{suffix}`) y los datos de eventos están particionados por inquilino en la base de datos, que es cómo un conjunto compartido de servicios sirve de forma segura a muchos inquilinos.
 

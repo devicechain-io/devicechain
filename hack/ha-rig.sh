@@ -29,13 +29,13 @@
 # TWO CHECKS, TWO SUBSYSTEMS (ADR-020 A0 and A2.3):
 #
 #   CHECK A  the broker — JetStream streams, KV buckets, consumer groups, pods
-#   CHECK B  the relational database — CloudNativePG instance count, pod spread,
-#            the dc-postgresql alias Service, and PostgreSQL's own view of
-#            synchronous replication
+#   CHECK B  BOTH databases — CloudNativePG instance count, pod spread, the
+#            alias Services, PostgreSQL's own view of synchronous replication,
+#            and (for the event store) TimescaleDB background-job health
 #
-# 🔴 CHECK B DOES NOT COVER TimescaleDB. The event store is still a
-# single-instance StatefulSet until A2.4, so a green run here means the broker
-# and the control-plane database are replicated — not that the instance is.
+# 🔴 A green run means the broker and both databases are replicated. It does NOT
+# mean a node loss has been survived: nothing here kills a node. That is A1, and
+# it is a different drill.
 #
 # `all` is the one worth running. `verify` on its own reports on a check whose
 # ability to fail has not been demonstrated in this session, which is the exact
@@ -165,11 +165,31 @@ cmd_verify() {
   # compare the spec against itself and pass trivially. The flag's own help text
   # warns about this, and it was originally wired only on the negative control —
   # which is the half where it is easier to remember and less valuable.
-  say "CHECK B — asserting the DATABASE replication claim from live PostgreSQL state"
-  "$dcctl" ha verify-db --cluster dc-rdb --instances 3 --require-synchronous \
+  say "CHECK B1 — asserting the RELATIONAL database replication claim from live PostgreSQL state"
+  "$dcctl" ha verify-db --cluster dc-rdb --alias-service dc-postgresql \
+    --instances 3 --require-synchronous --durability required \
     --kube-context "kind-$ha_cluster" \
     || fail "the relational database does not hold the replication it declares (see the findings above)"
-  say "CHECK B PASSED"
+  say "CHECK B1 PASSED"
+
+  # The event store (ADR-020 A2.4). Same verifier, three deliberate differences.
+  #
+  # --durability preferred, because this store makes the opposite trade: a lost
+  # standby degrades it to asynchronous replication rather than stalling ingest,
+  # since events are held durably upstream in JetStream until they persist.
+  # Checking it against "required" would report a correct configuration broken,
+  # and a check that is red on a working system is one that gets switched off.
+  #
+  # --timescale-jobs, which is the assertion that only exists for this store. A
+  # database whose background scheduler has stopped passes every other check
+  # here — right instance count, right replication, right pod spread — and has
+  # silently stopped aggregating.
+  say "CHECK B2 — asserting the EVENT store replication claim and background-job health"
+  "$dcctl" ha verify-db --cluster dc-tsdb --alias-service dc-timescaledb-single \
+    --instances 3 --require-synchronous --durability preferred --timescale-jobs \
+    --kube-context "kind-$ha_cluster" \
+    || fail "the event store does not hold the replication it declares, or its background jobs are not healthy (see the findings above)"
+  say "CHECK B2 PASSED"
 }
 
 # cmd_control is the check on the check, and it is the reason this script exists
@@ -245,7 +265,19 @@ ABOVE, because those are different results and this exit status cannot tell them
 The same reading applies as for the broker control above: a PASS where a failure was
 expected means CHECK B proves nothing, while a connection or lookup error means the
 control never ran and the result is inconclusive."
-  say "NEGATIVE CONTROL HELD (database)"
+  say "NEGATIVE CONTROL HELD (relational database)"
+
+  # The same control for the EVENT store. Not redundant with the one above: the
+  # two stores are separate Cluster objects reached through separate alias
+  # Services, so a verifier that had stopped detecting an unreplicated event
+  # store would leave the relational control holding and say nothing.
+  say "NEGATIVE CONTROL — the same check, against an event store that is NOT replicated"
+  "$dcctl" ha verify-db --cluster dc-tsdb --alias-service dc-timescaledb-single \
+    --instances 3 --require-synchronous --durability preferred \
+    --kube-context "kind-$control_cluster" --expect-fail \
+    || fail "THE EVENT-STORE NEGATIVE CONTROL DID NOT HOLD, or could not run. Read the output
+above: a PASS where a failure was expected means CHECK B2 proves nothing."
+  say "NEGATIVE CONTROL HELD (event store)"
 
   # A SECOND database control, isolating the synchronous axis — and it is not
   # redundant with the one above, which is over-determined.
@@ -268,6 +300,34 @@ PASSED, then the synchronous assertions (B3/B6/B8) are no longer detecting an as
 database, and CHECK B's synchronous half proves nothing even though the topology control
 above may still be holding on the instance-count assertions."
   say "NEGATIVE CONTROL HELD (synchronous axis)"
+
+  # And the background-job axis, isolated for exactly the same reason.
+  #
+  # On the single-node control the event store has no timescaledb-carrying
+  # database only if the extension is genuinely absent — which it is not, so this
+  # control cannot lean on B9. It states the store's ACTUAL instance count and
+  # drops --require-synchronous, so B1/B2/B3/B6/B7/B8 are all out of the picture.
+  # What remains is the job axis alone.
+  #
+  # 🔴 Unlike the controls above, this one is expected to PASS: a healthy
+  # single-node event store has healthy jobs. That is the point — it proves the
+  # job checks RUN and can see real jobs, which is the half a --expect-fail
+  # control cannot establish.
+  #
+  # What makes that more than a hope is B9, which fires when the extension is
+  # nowhere OR when databases carry it and not one job was examined. An earlier
+  # version of this comment said "the counts line in the report is the evidence",
+  # which was wrong in the way this rig exists to prevent: nothing automated reads
+  # that line, this step is `|| fail` on exit status, and a run examining zero
+  # jobs exited 0. The evidence is the assertion, not the printout.
+  say "JOB-AXIS COVERAGE — the background-job checks must RUN and see real jobs"
+  "$dcctl" ha verify-db --cluster dc-tsdb --alias-service dc-timescaledb-single \
+    --instances 1 --timescale-jobs \
+    --kube-context "kind-$control_cluster" \
+    || fail "THE BACKGROUND-JOB CHECKS FAILED on a healthy single-node event store. Either the
+event store is genuinely broken, or (B9) no database carries the timescaledb extension, which
+would mean the checks examined nothing and CHECK B2's job half proves nothing."
+  say "JOB-AXIS COVERAGE CONFIRMED"
 }
 
 cmd_down() {
@@ -289,13 +349,15 @@ case "${1:-all}" in
     cmd_up
     cmd_verify
     cmd_control
-    say "CHECKS A AND B COMPLETE: the instance holds its declared replication in
-BOTH the broker and the relational database, and each verifier was shown to reject
-an instance that does not. This is the evidence the HA claim rests on.
+    say "CHECKS A AND B COMPLETE: the instance holds its declared replication in the
+broker, the relational database and the event store, each verifier was shown to
+reject an instance that does not, and the event store's background jobs were shown
+to be running rather than merely present. This is the evidence the HA claim rests on.
 
-WHAT IS STILL NOT COVERED, so this is not read as more than it is: TimescaleDB
-remains a single-instance StatefulSet until A2.4, so the EVENT store on this
-instance is not replicated and nothing here claims otherwise."
+WHAT IS STILL NOT COVERED, so this is not read as more than it is: nothing here
+kills a node, so no failover has been survived under load — that is A1. Nothing
+here backs anything up or restores it — that is A2.5. A green run means the
+declared replication is real, not that a disaster has been rehearsed."
     ;;
   *) fail "unknown command ${1}; try up | verify | control | all | down" ;;
 esac

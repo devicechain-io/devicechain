@@ -168,6 +168,19 @@ func infraVars(st *State) []string {
 	// on such a cluster the apply fails with an ownership error that no other flag
 	// gets past. Skipping the operator necessarily skips the backup plugin: the
 	// plugin is an extension of an operator that would not be there.
+	// The cutover-guard hatch, emitted for BOTH stores from one flag.
+	//
+	// One flag rather than two because the two guards fire together: any instance
+	// predating A2.3 carries both legacy StatefulSets, and an operator who has
+	// dealt with one has dealt with the other in the same maintenance window.
+	// Splitting them would mean discovering the second refusal after the first
+	// apply, halfway through the cutover.
+	if st.AllowLegacyDbRemoval {
+		vars = append(vars,
+			"allow_legacy_rdb_removal=true",
+			"allow_legacy_tsdb_removal=true",
+		)
+	}
 	if st.NoCNPG {
 		vars = append(vars, "enable_cnpg=false", "enable_database_backups=false")
 	}

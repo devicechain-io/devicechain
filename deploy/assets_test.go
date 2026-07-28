@@ -42,7 +42,7 @@ func TestNoSecretsEmbedded(t *testing.T) {
 // TestOpenTofuComplete checks the infra root and a module are present.
 func TestOpenTofuComplete(t *testing.T) {
 	files := strings.Join(collect(t, OpenTofu()), " ")
-	for _, want := range []string{"main.tf", "variables.tf", "modules/nats/main.tf", "modules/postgres/main.tf"} {
+	for _, want := range []string{"main.tf", "variables.tf", "modules/nats/main.tf", "modules/cnpg-cluster/main.tf"} {
 		if !strings.Contains(files, want) {
 			t.Errorf("OpenTofu assets missing %q", want)
 		}

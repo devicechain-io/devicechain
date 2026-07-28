@@ -59,8 +59,18 @@ output "postgres_cluster_name" {
 }
 
 output "timescaledb_host" {
-  description = "Host:port of TimescaleDB."
-  value       = module.timescaledb.host
+  description = "Host:port of the event store — the alias Service CloudNativePG keeps pointed at the primary."
+  value       = module.cnpg_tsdb.host
+}
+
+output "timescaledb_cluster_name" {
+  description = "The CloudNativePG Cluster object name for the event store. Pods carry it as cnpg.io/cluster=<name>; prefer resolving through the alias Service, which is topology-independent."
+  value       = module.cnpg_tsdb.cluster_name
+}
+
+output "timescaledb_synchronous_enforced" {
+  description = "Whether the event store is ACTUALLY replicating synchronously, after the instance-count derivation — read this rather than re-deriving it from the flags. Note this store runs `preferred` durability, so even when true a lost standby degrades to asynchronous rather than stalling writes."
+  value       = module.cnpg_tsdb.synchronous_enforced
 }
 
 output "ingress_class" {

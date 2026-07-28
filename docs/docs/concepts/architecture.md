@@ -29,7 +29,8 @@ Additional services — batch operations and scheduling — are planned. See the
 ## The data and messaging backbone
 
 - **NATS JetStream** is the single backbone for asynchronous messaging, the MQTT ingress (devices connect to NATS' built-in MQTT server on port 1883), and key-value caching / locking. There is no separate Kafka, Redis, or MQTT broker.
-- **TimescaleDB** (PostgreSQL + the TimescaleDB extension) is the single data store for both relational entity data and time-series events. Events live in hypertables with compression and continuous aggregates.
+- **PostgreSQL** stores everything, in two separate databases with one shape. The *relational* store holds entity data — tenants, users, devices, relationships — and the *event* store adds the TimescaleDB extension, keeping time-series events in hypertables with compression and continuous aggregates. `event-management` is the only service that talks to the event store, and it talks to nothing else, which is why the two can be backed up, sized and restored independently.
+- Both run as replicated PostgreSQL clusters managed by an operator, so high availability is an instance count rather than a different storage tier. The relational store holds a write until a replica confirms it; the event store falls back to asynchronous replication instead, because unpersisted events are still held durably in the messaging layer and can be replayed.
 
 Subjects are scoped per tenant (`{instance}.{tenant}.{suffix}`) and event data is partitioned by tenant in the database, which is how a shared set of services safely serves many tenants.
 

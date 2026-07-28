@@ -60,6 +60,14 @@ type compactSizing struct {
 	// where telemetry actually lands — the one volume here that grows with device
 	// count times message rate.
 	//
+	// 🔴 BOTH database sizes here are PER INSTANCE, not per cluster. Since the
+	// stores became CloudNativePG Clusters (ADR-020 A2.3/A2.4) these values land on
+	// spec.storage.size, and the operator provisions one volume per instance — so
+	// `--compact --ha` allocates three of each. The preset's disk claim is a
+	// single-instance figure; multiply by postgres_instances / timescale_instances
+	// for the cluster total. That combination is allowed and orthogonal, but its
+	// footprint is not what the numbers below read as.
+	//
 	// It is set explicitly, and larger than PostgresStorage, because leaving it out
 	// was a real bug: compact shrank the database that does not grow and left the
 	// one that does at its full-size default, so the preset's disk claim described

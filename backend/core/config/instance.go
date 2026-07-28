@@ -763,10 +763,17 @@ func NewDefaultInstanceConfiguration() *InstanceConfiguration {
 			Tsdb: DatastoreConfiguration{
 				Type: "timescaledb",
 				Configuration: map[string]interface{}{
-					"hostname":       "dc-timescaledb-single.dc-system",
-					"port":           5432,
+					"hostname": "dc-timescaledb-single.dc-system",
+					"port":     5432,
+					// The event store runs as a CloudNativePG Cluster (ADR-020
+					// A2.4), where the application role is distinct from the
+					// superuser and `postgres` is reserved for the operator. This
+					// was "postgres" while the store was a StatefulSet built from
+					// the stock image, whose POSTGRES_USER is the superuser.
+					// Keep in step with deploy/helm/devicechain/values.yaml and
+					// timescale_username in deploy/opentofu/variables.tf.
 					"maxConnections": 5,
-					"username":       "postgres",
+					"username":       "devicechain",
 					"password":       "devicechain",
 				},
 			},

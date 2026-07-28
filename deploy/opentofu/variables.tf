@@ -34,16 +34,16 @@ variable "ha" {
     Shorthand for the ADR-020 NATS topology: 3 NATS servers in a RAFT cluster,
     spread one-per-node, instead of 1. Defaults to single-node.
 
-    It ALSO now sets the relational database to 3 synchronously-replicated
-    CloudNativePG instances (ADR-020 A2.3) — see postgres_instances, and note
-    that synchronous replication is what forces the third instance rather than a
-    second.
+    It ALSO now sets BOTH databases to 3 replicated CloudNativePG instances —
+    the relational store synchronously (ADR-020 A2.3, see postgres_instances,
+    where synchronous replication is what forces a third instance rather than a
+    second) and the event store with `preferred` durability (A2.4, see
+    timescale_instances). The two differ deliberately: a lost standby stalls
+    writes on the relational store and merely degrades the event store to
+    asynchronous replication, because event ingest has an upstream replay and the
+    audit journal does not.
 
-    WHAT THIS DOES NOT DO: it does not yet replicate TimescaleDB, which remains a
-    single-instance StatefulSet until A2.4 — so an instance with `ha = true` has a
-    replicated broker and control-plane database, and a single-node EVENT store.
-    See ADR-028 for where that store's durability comes from meanwhile. It also
-    does not, on its own, replicate
+    WHAT THIS DOES NOT DO: it does not, on its own, replicate
     the JetStream STREAMS: that is a per-stream replica factor in the services'
     config (instance.config.infrastructure.nats.streamReplicas), rendered by the
     DeviceChain Helm chart, which this root does not install. Both halves must be
@@ -289,13 +289,13 @@ variable "postgres_password" {
 }
 
 variable "postgres_storage" {
-  description = "PersistentVolume size for the relational Postgres."
+  description = "PersistentVolume size for the relational Postgres, PER INSTANCE. 🔴 This is spec.storage.size on the CloudNativePG Cluster, so the cluster-wide total is this times postgres_instances — three times this under --ha. It sized a single StatefulSet before A2.3."
   type        = string
   default     = "8Gi"
 }
 
 variable "postgres_storage_class" {
-  description = "StorageClass for the relational Postgres data volume. Empty uses the cluster default (often reclaimPolicy Delete). FOR PRODUCTION DURABILITY set this to a StorageClass whose reclaimPolicy is Retain, so the underlying volume survives PVC/PV deletion and a redeploy can re-attach the data."
+  description = "StorageClass for the relational Postgres data volume. Empty uses the cluster default (often reclaimPolicy Delete). FOR PRODUCTION DURABILITY set this to a StorageClass whose reclaimPolicy is Retain, so the underlying volume and its data outlive PVC/PV deletion and can still be recovered FROM. 🔴 That is the whole guarantee: a retained PV goes to Released and will not bind a new claim without someone clearing its claimRef, and a new CloudNativePG Cluster bootstraps via initdb rather than adopting an existing PGDATA. It does NOT mean a redeploy comes back up on the old volume — an earlier version of this description said it did. The supported recovery path is bootstrap.recovery from a backup."
   type        = string
   default     = ""
 }
@@ -398,9 +398,59 @@ variable "enable_database_backups" {
 # --- TimescaleDB (event hypertables, ADR-004) -----------------------------------
 
 variable "timescale_image" {
-  description = "Container image for TimescaleDB (a Postgres superset that preloads the timescaledb extension; the app creates the extension + hypertables). PIN this for reproducible deploys."
+  description = <<-EOT
+    Operand image for the event store (ADR-020 A2.4).
+
+    🔴 This must be a CloudNativePG OPERAND image that also carries TimescaleDB,
+    and no community image satisfies both. It is OURS, built by
+    deploy/images/timescaledb and published by .github/workflows/operand-image.yml,
+    because every community option measured shipped a TimescaleDB below 2.26.4 —
+    the release that fixes continuous-aggregate jobs sticking at
+    `next_start = -infinity` after a failover, a state in which the database looks
+    entirely healthy and has silently stopped aggregating.
+
+    🔴 The tag here is a SECOND COPY. Its source of truth is
+    deploy/images/timescaledb/versions.conf, from which the workflow computes
+    `<pg_minor>-ts<timescaledb_version>-r<revision>`. Nothing links the two, so
+    hack/check-tofu-validations.sh recomputes the tag from versions.conf and
+    asserts this default matches it.
+  EOT
   type        = string
-  default     = "timescale/timescaledb:latest-pg16"
+  default     = "ghcr.io/devicechain-io/postgresql-timescaledb:17.10-ts2.28.3-r1"
+}
+
+variable "timescale_instances" {
+  description = <<-EOT
+    Number of event-store instances. 0 (default) derives it from var.ha — 3 when
+    true, 1 when false. Same 1-or-3-never-2 rule as postgres_instances, and for
+    the same reason; see that variable.
+
+    This store runs `preferred` data durability rather than `required`, so a lost
+    standby degrades it to asynchronous replication instead of stalling ingest.
+    The instance-count rule still applies: two instances buy no fault tolerance
+    worth the second node.
+  EOT
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = contains([0, 1, 3, 5], var.timescale_instances)
+    error_message = "timescale_instances must be 0 (derive from var.ha), 1, 3, or 5. 2 is deliberately rejected: it costs a node without tolerating a standby loss."
+  }
+}
+
+variable "allow_legacy_tsdb_removal" {
+  description = <<-EOT
+    Proceed even though this cluster still runs the pre-A2.4 event-database
+    StatefulSet (dc-timescaledb-single).
+
+    🔴 An ASSERTION THAT YOU HAVE HANDLED THE DATA, not a migration — the exact
+    sibling of allow_legacy_rdb_removal, and see that variable for why Terraform's
+    own prevent_destroy does not cover this. The data at risk here is all recorded
+    device event history.
+  EOT
+  type        = bool
+  default     = false
 }
 
 variable "timescale_database" {
@@ -410,9 +460,28 @@ variable "timescale_database" {
 }
 
 variable "timescale_username" {
-  description = "Superuser/username for TimescaleDB."
+  description = <<-EOT
+    Application role for the event store. Owns the instance databases and is the
+    identity every event-management connection uses.
+
+    🔴 This was `postgres` for as long as this store was a plain StatefulSet, and
+    A2.4 changes it to `devicechain` to match the relational store. That is not
+    tidying. On the stock postgres image POSTGRES_USER *is* the superuser, so the
+    platform has been connecting to the event store as a superuser all along;
+    under CloudNativePG the application role is a distinct, unprivileged role and
+    `postgres` is reserved for the operator.
+
+    Measured on CNPG 1.30.0: a managed role named `postgres` is refused by the
+    admission webhook, but `bootstrap.initdb.owner: postgres` is ACCEPTED — so the
+    old value fails loudly only by accident of which fields the chart renders. The
+    chart now refuses a reserved owner outright.
+
+    Changing this changes the DSN, so it must move together with the event-store
+    username in deploy/helm/devicechain/values.yaml, the compiled-in default in
+    backend/core/config/instance.go and dcctl's shipped default CR.
+  EOT
   type        = string
-  default     = "postgres"
+  default     = "devicechain"
 }
 
 variable "timescale_password" {
@@ -423,13 +492,13 @@ variable "timescale_password" {
 }
 
 variable "timescale_storage" {
-  description = "PersistentVolume size for TimescaleDB."
+  description = "PersistentVolume size for the event store, PER INSTANCE. 🔴 This is spec.storage.size on the CloudNativePG Cluster, so the cluster-wide total is this times timescale_instances — three times this under --ha. It sized a single StatefulSet before A2.4."
   type        = string
   default     = "8Gi"
 }
 
 variable "timescale_storage_class" {
-  description = "StorageClass for the TimescaleDB data volume. Empty uses the cluster default (often reclaimPolicy Delete). FOR PRODUCTION DURABILITY set this to a StorageClass whose reclaimPolicy is Retain, so the underlying volume survives PVC/PV deletion and a redeploy can re-attach the data."
+  description = "StorageClass for the event store data volume. Empty uses the cluster default (often reclaimPolicy Delete). FOR PRODUCTION DURABILITY set this to a StorageClass whose reclaimPolicy is Retain, so the underlying volume and its data outlive PVC/PV deletion and can still be recovered FROM. 🔴 That is the whole guarantee: a retained PV goes to Released and will not bind a new claim without someone clearing its claimRef, and a new CloudNativePG Cluster bootstraps via initdb rather than adopting an existing PGDATA. It does NOT mean a redeploy comes back up on the old volume — an earlier version of this description said it did. The supported recovery path is bootstrap.recovery from a backup."
   type        = string
   default     = ""
 }

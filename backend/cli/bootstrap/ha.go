@@ -41,8 +41,12 @@ import (
 // APPLIED infrastructure rather than trusting this struct; but via dcctl the
 // disagreement is not reachable.
 //
-// SCOPE. This is the messaging substrate only. It does not replicate Postgres or
-// TimescaleDB (single-instance StatefulSets — ADR-028 covers their durability),
+// SCOPE. This type carries the messaging substrate's topology only. The DATABASES
+// are replicated too (ADR-020 A2.3/A2.4) but not from here: their instance counts
+// are derived inside OpenTofu from the same `ha` variable this renders, so there is
+// no second value to keep in step. An earlier version of this comment said the
+// databases were "single-instance StatefulSets", which stopped being true at A2.3
+// and stopped being true for both stores at A2.4,
 // and it does not raise the DeviceChain services' own replica counts: the
 // stateful areas are pinned to one writer by the ADR-070 lease fence, and running
 // two would be a correctness change, not a sizing one.

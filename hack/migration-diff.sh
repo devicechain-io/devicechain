@@ -14,10 +14,14 @@
 # being refreshed, and — at the GA migration-squash — it proves a single baseline
 # migration reproduces the exact schema the incremental chain built.
 #
-# The Timescale image is pinned to what deploy/opentofu ships (a Postgres superset that
-# preloads the timescaledb extension). Goldens are version-sensitive (continuous-
-# aggregate dumps vary by Timescale version), so snapshot + verify must use the same
-# image; override with MDIFF_IMAGE if you bump the deployed version.
+# 🔴 The default image here is NOT the one deploy/opentofu ships, and that is deliberate.
+# The goldens were captured on PostgreSQL 16 against the community image pinned below, and
+# they are version-sensitive (continuous-aggregate dumps vary by Timescale version), so
+# snapshot + verify must keep using the image the goldens came from. The DEPLOYED event
+# store runs our own PostgreSQL 17 operand image, which CI verifies against these same
+# goldens in a second pass (MDIFF_LAUNCH=operand) — that second pass is what pins the
+# claim that both majors produce identical schema. Override with MDIFF_IMAGE to check
+# another one.
 set -euo pipefail
 
 MODE="${1:-verify}"
