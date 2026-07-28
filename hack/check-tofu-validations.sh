@@ -526,6 +526,30 @@ evaluates '"2026-07-28 03:00:00+00"' 'local.rdb_restore.recovery_target["targetT
   -var restore_rdb_from=dc-rdb -var 'restore_rdb_target_time=2026-07-28 03:00:00+00'
 evaluates 'tomap({})' 'local.rdb_restore.recovery_target' -var restore_rdb_from=dc-rdb
 
+# AND THE EVENT STORE'S TWIN, which had none of this. The rdb block above is
+# where a spelling mistake would be caught; the tsdb block is a hand-written copy
+# of it, and until now nothing read it at all — so `targetTime` misspelled there
+# was silent, and it is the store an operator is MORE likely to rewind, since
+# telemetry is where a bad ingest lands. The counterweight matters for the same
+# reason it does above: without it a `recovery_target` hard-wired to a constant
+# map satisfies the positive case.
+#
+# A DIFFERENT instant on purpose. With one shared literal, a tsdb block wired to
+# var.restore_rdb_target_time by copy-paste would read the right value whenever
+# both were set, and the assertion would confirm the bug.
+evaluates '"2026-07-26 01:02:03+00"' 'local.tsdb_restore.recovery_target["targetTime"]' \
+  -var restore_tsdb_from=dc-tsdb -var 'restore_tsdb_target_time=2026-07-26 01:02:03+00'
+evaluates 'tomap({})' 'local.tsdb_restore.recovery_target' -var restore_tsdb_from=dc-tsdb
+# The cross-wire, named directly: the event store's target must not follow the
+# relational store's variable. Both set, to different moments -- the only shape
+# in which a transposition produces a value rather than an empty map.
+evaluates '"2026-07-26 01:02:03+00"' 'local.tsdb_restore.recovery_target["targetTime"]' \
+  -var restore_rdb_from=dc-rdb -var 'restore_rdb_target_time=2026-07-28 03:00:00+00' \
+  -var restore_tsdb_from=dc-tsdb -var 'restore_tsdb_target_time=2026-07-26 01:02:03+00'
+evaluates '"2026-07-28 03:00:00+00"' 'local.rdb_restore.recovery_target["targetTime"]' \
+  -var restore_rdb_from=dc-rdb -var 'restore_rdb_target_time=2026-07-28 03:00:00+00' \
+  -var restore_tsdb_from=dc-tsdb -var 'restore_tsdb_target_time=2026-07-26 01:02:03+00'
+
 # 🔴 THE WEDGE CONDITION IS NOT CHECKED HERE, AND FIVE ASSERTIONS THAT CLAIMED TO
 # CHECK IT HAVE BEEN DELETED.
 #
