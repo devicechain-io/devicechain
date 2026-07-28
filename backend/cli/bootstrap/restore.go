@@ -214,10 +214,17 @@ func clusterArchivePath(ctx context.Context, dyn dynamic.Interface, namespace, n
 		if n, _, _ := unstructured.NestedString(plug, "name"); n != barmanPluginName {
 			continue
 		}
-		// The ARCHIVER, specifically. A restored Cluster carries the same plugin
-		// twice — once archiving, once as the externalCluster it recovered from —
-		// and only the archiving entry names the path this cluster OWNS. Reading the
-		// other one would hand back the source archive and wedge the next restore.
+		// The ARCHIVER, specifically — the entry naming the path this cluster OWNS.
+		//
+		// This is DEFENSIVE, not a fix for what the chart renders today: a restored
+		// Cluster's recovery source lives under spec.externalClusters[].plugin, a
+		// different field this loop never reads, so spec.plugins currently holds
+		// exactly one barman entry. CNPG permits several, only one of which may be
+		// the WAL archiver, and the day a second lands here (a replica source, a
+		// second destination) matching on the plugin NAME would return whichever
+		// came first — handing back an archive this cluster does not own and
+		// retargeting a live archiver at it. isWALArchiver is the field that
+		// actually carries the distinction, so match on it rather than on position.
 		if isArchiver, _, _ := unstructured.NestedBool(plug, "isWALArchiver"); !isArchiver {
 			continue
 		}

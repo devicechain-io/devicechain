@@ -191,13 +191,21 @@ func cnpgCluster(name string, plugins ...any) *unstructured.Unstructured {
 	}}
 }
 
-// A RESTORED CLUSTER CARRIES THE BARMAN PLUGIN TWICE: once under spec.plugins as
-// the WAL archiver (the path it OWNS), and once under externalClusters as the
-// source it recovered from. Only the first names this cluster's path.
+// The archive path must come from the entry that ARCHIVES, not from whichever
+// barman entry happens to be first.
 //
-// Reading the wrong one hands back the SOURCE archive, and the next re-run then
-// emits it as backup_server_name — pointing a live cluster's archiver at the dead
-// instance's archive. isWALArchiver is what tells them apart.
+// 🔴 THE FIXTURE HERE IS DELIBERATELY NOT WHAT THE CHART RENDERS. A restored
+// Cluster's recovery source lands under spec.externalClusters[].plugin — a
+// different field the reader never touches — so spec.plugins holds exactly one
+// barman entry today, and a reader matching on plugin name alone would pass every
+// test written against the real render. That is the whole problem: the check would
+// be worth nothing until the day the shape changed, which is the day it is needed.
+//
+// CNPG permits several plugin entries with only one WAL archiver among them, so
+// this builds the shape the API allows rather than the one the chart happens to
+// emit. Reading the wrong entry hands back an archive this cluster does not own,
+// and the next re-run emits it as backup_server_name — pointing a live archiver at
+// a dead instance's WAL.
 func TestArchivePathReadsTheArchiverNotTheRecoverySource(t *testing.T) {
 	cl := cnpgCluster(RdbClusterName,
 		// Deliberately FIRST, and deliberately without isWALArchiver: this is the
