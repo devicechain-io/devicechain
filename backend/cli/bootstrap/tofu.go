@@ -131,6 +131,37 @@ func applyInfra(ctx context.Context, st *State) error {
 			st.Values[natsClusterReplicasKey] = strconv.Itoa(servers)
 		}
 	}
+	// Whether the infrastructure ACTUALLY archives WAL and takes base backups
+	// (ADR-028, ADR-020 A2.5) — read back rather than derived from our own flags,
+	// for the same reason as nats_cluster_replicas above.
+	//
+	// It gates the backup alerting rules the Helm step renders. Getting it wrong in
+	// the permissive direction is not dangerous, only useless: with archive_mode off
+	// the cnpg_pg_stat_archiver_* series do not exist, so the rules would load,
+	// evaluate nothing and never fire — which is precisely the silent shape those
+	// alerts exist to remove, so it is worth reading the truth.
+	//
+	// 🔑 Absence is treated as OFF, and that asymmetry is deliberate. The two ways
+	// to be wrong are not equal: rules that cannot fire look like a monitored
+	// instance and are not, whereas no rules at all is visibly nothing. `dcctl ha
+	// verify` reports the backup state either way, so the quieter failure is the
+	// one to prefer here.
+	st.Values[databaseBackupsKey] = "false"
+	if meta, ok := outputs["database_backups_enabled"]; ok {
+		var enabled bool
+		if err := json.Unmarshal(meta.Value, &enabled); err == nil && enabled {
+			st.Values[databaseBackupsKey] = "true"
+		}
+	}
+	// The namespace the database Clusters run in, which is where their metrics are
+	// exported from. NOT the instance namespace — an alert scoped to the instance's
+	// own namespace selects no series at all.
+	if meta, ok := outputs["namespace"]; ok {
+		var ns string
+		if err := json.Unmarshal(meta.Value, &ns); err == nil && ns != "" {
+			st.Values[databaseNamespaceKey] = ns
+		}
+	}
 	// Grafana access (when monitoring was installed): stash the namespace/service so
 	// the report step can print a port-forward hint. Null when --no-monitoring.
 	if meta, ok := outputs["grafana_service"]; ok {
@@ -146,6 +177,30 @@ func applyInfra(ctx context.Context, st *State) error {
 		}
 	}
 	return nil
+}
+
+// Where applyInfra stashes what the infrastructure actually provisioned for
+// backups (ADR-028, ADR-020 A2.5), for the Helm step to render the alerting rules
+// against. Read back from the OpenTofu outputs rather than derived from dcctl's
+// own flags — the flags are what was asked for, and these are what exists.
+const (
+	databaseBackupsKey   = "databaseBackups"
+	databaseNamespaceKey = "databaseNamespace"
+)
+
+// databaseNamespaceFor is where the database Clusters export their metrics from.
+//
+// It falls back to infraNamespace rather than to the empty string, and the
+// difference matters more than a default usually does: an empty namespace label
+// in a PromQL selector does not mean "any namespace", it matches only series whose
+// namespace label is literally empty — of which there are none. So the fallback is
+// the difference between alerts that work on an install whose outputs could not be
+// read and alerts that silently select nothing.
+func databaseNamespaceFor(st *State) string {
+	if ns := st.Values[databaseNamespaceKey]; ns != "" {
+		return ns
+	}
+	return infraNamespace
 }
 
 // infraVars builds the `-var` settings the infrastructure apply runs with, as
@@ -229,6 +284,14 @@ func infraVars(st *State) []string {
 			"nats_jetstream_storage="+compact.JetStreamStorage,
 			"postgres_storage="+compact.PostgresStorage,
 			"timescale_storage="+compact.TimescaleStorage,
+			// The backup destination's volume. It joined this list when A2.5 made
+			// enable_database_backups provision a destination rather than merely
+			// installing the plugin — before that, compact's footprint genuinely
+			// had no object store in it. Left out, a compact install would take the
+			// 20Gi default for a preset whose whole point is small nodes, which is
+			// the same bug TimescaleStorage was added to fix: shrink some volumes
+			// and the preset's disk claim describes a fraction of the disk it uses.
+			"backup_object_store_storage="+compact.ObjectStoreStorage,
 			// Drop the prometheus-nats-exporter sidecar. It is a whole extra
 			// container per NATS pod, and what it publishes is BROKER-side cluster
 			// health — route state, RAFT peer health — which is information about a

@@ -1,0 +1,166 @@
+{{/*
+Alerting rules for database backups (ADR-028, ADR-020 A2.5).
+
+WHY THESE EXIST, AND WHY THEY ARE THE POINT OF THE SLICE RATHER THAN A TRIMMING
+
+WAL archiving fails QUIETLY. That is not an observation about this
+implementation, it is the shape of the mechanism: archiving is asynchronous to
+commit, so an archiver that cannot reach its destination does not stall a single
+write, does not crash a pod, and does not change any readiness probe. Postgres
+keeps accepting traffic, every dashboard stays green, and the instance stops
+being recoverable. The first symptom of an archiver that broke three weeks ago is
+usually the restore that was supposed to fix something else.
+
+There is a second act, and it is worse than the first. Unshipped WAL is not
+discarded — Postgres retains every segment the archiver has not confirmed. So a
+stalled archive accumulates on the DATABASE's own volume until that volume fills,
+and then Postgres stops. An outage whose root cause is an object store, reached
+by a path that points nowhere near one.
+
+So these alert on ARCHIVER STATE and DESTINATION CAPACITY, never on
+configuration. The install-time facts — whether backups are on, where they go,
+whether the destination survives cluster loss — are OpenTofu outputs and
+`dcctl ha verify`'s business. Install-time assurances go stale by construction;
+that is the same argument the JetStream replication rules are built on.
+
+🔴 A RULE WITH NO SERIES DOES NOT FIRE AND DOES NOT COMPLAIN. Everything here
+reads `cnpg_pg_stat_archiver_*` and `barman_cloud_cloudnative_pg_io_*`, which
+exist only if the CloudNativePG Cluster's PodMonitor is being scraped. That is
+why the Cluster chart sets `monitoring.enablePodMonitor: true` unconditionally,
+and why the DR rig asserts the SERIES EXIST rather than only that the rules
+loaded. This platform already carries one alert with nothing to evaluate; that is
+one too many.
+
+Gated on `metrics.databaseBackups` as well as the usual pair, because on an
+instance with backups off there is genuinely nothing to say — `archive_mode` is
+off, the series are absent, and rendering the rules anyway would produce four
+alerts that can never fire on an instance that is not backed up. Silence for a
+real reason, stated by `dcctl ha verify` instead.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts .Values.metrics.databaseBackups }}
+{{- $ns := .Values.instance.id }}
+{{- $dbns := .Values.metrics.databaseNamespace }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: database-backup
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.database-backup
+      rules:
+        # The fast, unambiguous one: the archiver TRIED and failed more recently
+        # than it last succeeded. No threshold to tune and no idle-instance
+        # confusion — a failure timestamp ahead of a success timestamp means the
+        # destination is refusing, unreachable, or out of space right now.
+        #
+        # 🔴 Both series report -1 for "never happened", which is why this is a
+        # comparison between them and not a test against `time()`. On a cluster
+        # that has never archived, last_failed_time is -1 and last_archived_time
+        # is -1, so the expression is 0 > 0 and stays silent — correct, because
+        # "archiving has never been attempted" is what the next rule is for.
+        - alert: PostgresWALArchivingFailing
+          expr: |
+            (
+              cnpg_pg_stat_archiver_last_failed_time{namespace="{{ $dbns }}"}
+              -
+              cnpg_pg_stat_archiver_last_archived_time{namespace="{{ $dbns }}"}
+            ) > 1
+          for: 5m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "PostgreSQL WAL archiving is failing"
+            description: >-
+              {{ "{{ $labels.pod }}" }} last FAILED to archive a WAL segment more recently than it
+              last succeeded, so this database is no longer being backed up. Nothing will stall and
+              nothing will crash: writes continue and every health check stays green. Two things are
+              accumulating — the recovery gap, and unshipped WAL on the database's own volume, which
+              will eventually fill it and stop PostgreSQL. Check the object store is reachable, has
+              space, and still accepts these credentials.
+        # The silent half. Archiving that has simply STOPPED — the sidecar is
+        # wedged, the endpoint blackholes, the credentials were rotated — leaves
+        # last_failed_time untouched, so the rule above never fires.
+        #
+        # 🔴 The threshold is only meaningful because the Cluster sets
+        # `archive_timeout: 5min`, which forces a WAL switch on an idle instance.
+        # Without it PostgreSQL ships a segment only when one FILLS, so a quiet
+        # database legitimately archives nothing for hours and this rule would be
+        # red on every healthy small install — the fastest way to have an alert
+        # switched off. Move archive_timeout and move this with it.
+        #
+        # 15m against a 5m forced switch: three intervals of slack, so a single
+        # slow upload or a failover is not a page.
+        - alert: PostgresWALArchivingStalled
+          expr: |
+            cnpg_pg_stat_archiver_seconds_since_last_archival{namespace="{{ $dbns }}"} > 900
+          for: 10m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "PostgreSQL has archived no WAL for 15 minutes"
+            description: >-
+              {{ "{{ $labels.pod }}" }} has shipped no WAL segment in 15 minutes. The cluster forces a
+              switch every 5 minutes precisely so that silence here means broken rather than idle, so
+              this is not a quiet database. Unlike an archiving FAILURE this leaves no error
+              timestamp — a wedged sidecar, a blackholed endpoint or a rotated credential all look
+              like this. WAL is accumulating on the database volume meanwhile.
+        # WAL archiving without a base backup restores nothing. This is the rule
+        # that notices the ScheduledBackup has quietly stopped running — which
+        # also stops retention pruning, since obsolete backups are only removed
+        # after a NEW backup completes.
+        #
+        # 36h against a daily schedule: one missed run is a warning, not a page.
+        - alert: PostgresNoRecentBaseBackup
+          expr: |
+            (
+              time()
+              -
+              barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace="{{ $dbns }}"}
+            ) > 129600
+          for: 30m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "No successful database base backup in 36 hours"
+            description: >-
+              {{ "{{ $labels.pod }}" }} has taken no successful base backup in 36 hours against a
+              daily schedule. WAL archiving alone restores NOTHING — a recovery replays WAL forward
+              from a base backup, so an ever-growing archive with no recent base is a longer and
+              longer replay onto older and older state. Retention pruning has stopped too: obsolete
+              backups are deleted only after a new backup completes.
+        # The cascade, caught one step before it reaches the database. A full
+        # object store makes archiving fail, and failed archiving fills the
+        # database's volume. This fires while there is still somewhere to put
+        # things.
+        #
+        # 🔴 kubelet_volume_stats_* comes from the KUBELET, not from anything this
+        # chart or CloudNativePG installs. kube-prometheus-stack scrapes it by
+        # default; a cluster monitored some other way may not have it, in which
+        # case this rule is one of the no-series shapes the header warns about.
+        # The DR rig checks the series exists rather than assuming it.
+        - alert: BackupDestinationAlmostFull
+          expr: |
+            (
+              kubelet_volume_stats_available_bytes{persistentvolumeclaim=~".*object-store.*"}
+              /
+              kubelet_volume_stats_capacity_bytes{persistentvolumeclaim=~".*object-store.*"}
+            ) < 0.15
+          for: 15m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "The backup destination is almost full"
+            description: >-
+              {{ "{{ $labels.persistentvolumeclaim }}" }} is over 85% full. When it fills, WAL
+              archiving starts failing — and failed archiving does not stall commits, it accumulates
+              WAL on the DATABASES' volumes until those fill and PostgreSQL stops. So this ends as a
+              database outage whose cause points nowhere near a database. Grow the volume, shorten
+              backup_retention, or move to an external destination.
+{{- end }}

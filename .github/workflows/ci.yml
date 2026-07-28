@@ -498,6 +498,49 @@ jobs:
             --set bootstrap.secretName=dc-tsdb-app-credentials >/dev/null
           echo "ok: a valid owner still renders"
 
+      - name: PrometheusRules parse
+        # Prometheus loads rule groups ATOMICALLY: one unparseable expression and
+        # the entire group is rejected, every other alert in it included. It fails
+        # in the server's log and in a counter — the PrometheusRule object stays
+        # present and healthy-looking, and the alerts simply never fire.
+        #
+        # Nothing else catches this. `helm lint` checks YAML, not PromQL, and the
+        # Prometheus Operator's admission webhook is optional and speaks only once
+        # the release is already being applied. The chart ships three rule files
+        # now (DETECT/REACT, JetStream replication, database backups), and a break
+        # in one takes its neighbours down with it.
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          hack/check-prometheus-rules.sh
+
+      - name: cnpg-cluster chart vs the real CRD schemas
+        # The one failure the chart cannot protect itself from.
+        #
+        # Every guard in the step above is a `fail` on a VALUE. None of them can
+        # see a misspelled FIELD, because Helm prunes unknown fields silently —
+        # measured: `kubectl apply` rejects `spec.postgresql.synchronus` outright
+        # while `helm install` exits 0 and creates an object without it. The
+        # module applies through Helm, so a one-character slip yields a green
+        # apply and a Cluster missing whatever that field controlled.
+        #
+        # A2.5 adds a second instance of the same shape and a worse one: misspell
+        # `isWALArchiver` and the Cluster still carries the plugin and still names
+        # its ObjectStore, but Postgres gets no archive_command and the instance
+        # is not backed up. Nothing else in this repo would notice.
+        #
+        # Validates the rendered objects against the CRDs of the PINNED chart
+        # versions, read from the OpenTofu variables rather than restated. Also
+        # asserts the one field a schema CANNOT check — `barmanObjectName` lives
+        # in a free-form parameters map, so it is checked by name and against the
+        # ObjectStore actually rendered beside it.
+        run: |
+          # The runner image ships PyYAML today; installing it if absent keeps
+          # this step from going red on an image change rather than on the chart.
+          # The script still refuses to run without it, so this cannot turn into a
+          # silent skip.
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          hack/check-cnpg-chart-schema.sh
+
       - name: profile workloads
         # Renders EVERY profile and pins the workloads each one produces.
         #

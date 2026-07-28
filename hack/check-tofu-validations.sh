@@ -360,6 +360,75 @@ evaluates false 'module.cnpg_tsdb.synchronous_enforced' -var ha=true -var timesc
 evaluates 3 'module.cnpg_tsdb.synchronous_enforced ? 3 : 1' -var ha=true -var postgres_instances=1
 evaluates 1 'module.cnpg_rdb.synchronous_enforced ? 3 : 1' -var ha=true -var postgres_instances=1
 
+# --- database backups (ADR-028, ADR-020 A2.5) --------------------------------
+#
+# The destination is two-valued by construction. There is deliberately no third
+# value meaning "backups on, destination none", because that is the exact state
+# this slice exists to remove: the plugin installed, the flag reading true, and
+# nothing archived anywhere. An empty string is the value a half-finished edit
+# produces, so it has to be refused rather than treated as "no destination".
+for v in in-cluster external; do accepts backup_destination "$v"; done
+for v in "" none s3 In-Cluster local; do rejects backup_destination "$v"; done
+
+# 🔴 BACKUPS REQUIRE THE OPERATOR, and the conjunction is the thing being pinned.
+# `--no-cnpg` already sets enable_database_backups=false at the dcctl layer, so
+# dropping `&& var.enable_cnpg` from the derivation looks harmless and passes
+# every dcctl-side test. What it produces is an object store, a 20Gi volume and
+# two ObjectStore resources standing ready for a plugin that was never installed
+# — no error anywhere, and no backups.
+evaluates true 'local.backups_on'
+evaluates false 'local.backups_on' -var enable_database_backups=false
+evaluates false 'local.backups_on' -var enable_cnpg=false
+evaluates false 'local.backups_on' -var enable_cnpg=false -var enable_database_backups=true
+
+# What the flag actually BUYS, read back through the modules rather than from the
+# flag itself. `database_backups_enabled` used to mean only that the plugin was
+# installed; these assert that each store resolves a real destination path, which
+# is the claim that was previously unsupported.
+evaluates '"s3://devicechain-rdb/dc-rdb"' 'module.cnpg_rdb.backup_destination'
+evaluates '"s3://devicechain-tsdb/dc-tsdb"' 'module.cnpg_tsdb.backup_destination'
+evaluates 'tostring(null)' 'module.cnpg_rdb.backup_destination' -var enable_database_backups=false
+evaluates 'tostring(null)' 'module.cnpg_tsdb.backup_destination' -var enable_database_backups=false
+
+# 🔴 THE TWO STORES MUST NOT SHARE A BUCKET, and this is the substitution guard
+# for it — the exact sibling of the instance-count one above, for the exact same
+# reason. Point the event store's module at var.backup_bucket_rdb by accident and
+# every assertion in this file still passes on the defaults, because the two
+# buckets are only ever compared here. What it would silently cost is the whole
+# core-data / event-data split: one bucket, one retention policy, and "restore
+# the event database without touching the control plane" stops being a thing that
+# can be done.
+#
+# Setting the two levers to DIFFERENT values is what makes a substitution fail
+# rather than coincide.
+evaluates '"s3://core-only/dc-rdb"' 'module.cnpg_rdb.backup_destination' -var backup_bucket_rdb=core-only
+evaluates '"s3://devicechain-tsdb/dc-tsdb"' 'module.cnpg_tsdb.backup_destination' -var backup_bucket_rdb=core-only
+evaluates '"s3://events-only/dc-tsdb"' 'module.cnpg_tsdb.backup_destination' -var backup_bucket_tsdb=events-only
+evaluates '"s3://devicechain-rdb/dc-rdb"' 'module.cnpg_rdb.backup_destination' -var backup_bucket_tsdb=events-only
+
+# The object store is provisioned only where it is used. An external destination
+# must not stand one up — that would be a MinIO pod and a volume nobody writes to,
+# on the configuration whose whole point is that storage lives elsewhere.
+evaluates 1 'length(module.object_store)'
+evaluates 0 'length(module.object_store)' -var enable_database_backups=false
+evaluates 0 'length(module.object_store)' -var backup_destination=external -var backup_endpoint_url=https://s3.example.com
+
+# ...and the credentials come from the matching source. The in-cluster
+# destination REUSES the object store's own Secret rather than writing a second
+# copy of the same credential — MinIO's root credentials and the credentials the
+# archiver presents are the same credentials, and two Secrets holding one value
+# is two things to rotate and one of them to forget.
+#
+# Asserted on the KEY NAMES rather than on a resource count, and not by choice:
+# `length(kubernetes_secret_v1.backup_credentials)` is `(known after apply)` in
+# the console, so it cannot discriminate anything. The key names can, and they
+# are a sharper probe anyway — they differ between the two branches, so this
+# fails if the conditional ever selects the wrong source while both branches
+# still produce a Secret.
+evaluates '"MINIO_ROOT_USER"' 'local.backup_credentials.access_key'
+evaluates '"ACCESS_KEY_ID"' 'local.backup_credentials.access_key' -var backup_destination=external -var backup_endpoint_url=https://s3.example.com
+evaluates 'tostring(null)' 'local.backup_credentials == null ? null : "set"' -var enable_database_backups=false
+
 # --- the operand image tag is a SECOND COPY, and nothing links it to its source
 #
 # deploy/images/timescaledb/versions.conf is the single source of truth for the

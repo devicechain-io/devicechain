@@ -1,0 +1,127 @@
+{{- /*
+Copyright The DeviceChain Authors
+SPDX-License-Identifier: Apache-2.0
+*/ -}}
+
+{{- /*
+The backup destination for THIS store (ADR-028, ADR-020 A2.5).
+
+WHY IT IS RENDERED HERE, NEXT TO THE CLUSTER
+
+One Cluster, one ObjectStore, one bucket -- created by the same release, so they
+cannot drift apart. The alternative was a separate object-store module owning
+both ObjectStores, and it is worse in the specific way that matters: an
+ObjectStore that no longer matches its Cluster does not fail. WAL archiving keeps
+succeeding against whatever bucket the CR happens to name, and the mistake is
+only discovered by someone restoring the wrong database during an incident.
+
+Two Clusters therefore get two ObjectStores over two buckets, never one bucket
+with two prefixes. That is the core-data / event-data split the DR track requires
+made physical: two independent restore domains, each with its own retention
+policy, each restorable without touching the other.
+
+🔴 `serverName` IS DELIBERATELY ABSENT FROM `.spec.configuration`, and this is
+not an oversight to be tidied up later. The plugin's own documentation says the
+field is retained solely for API compatibility with the in-tree barmanObjectStore
+and MUST always be left empty; the server name is a PLUGIN PARAMETER on the
+Cluster instead (see cluster.yaml). Setting it here is accepted by the schema and
+changes nothing, which is the worst combination -- it reads as configuration and
+is inert.
+*/ -}}
+
+{{- if .Values.backup.enabled }}
+{{- $name := required "cnpg-cluster: .Values.name is required" .Values.name -}}
+{{- $backup := .Values.backup -}}
+
+{{- /*
+Refuse an incomplete destination rather than render one.
+
+Every field below is load-bearing and none of them fails loudly when absent. A
+missing bucket yields `s3:///`, a missing endpoint sends the archiver at real
+AWS, and a missing credential reference resolves to a Secret key that is not
+there -- and all three surface the same way: WAL archiving starts failing while
+Postgres keeps accepting writes, which is not an outage and not on anybody's
+dashboard. The whole point of this slice is that "backups are on" stops being a
+claim the configuration cannot support, so an under-specified destination has to
+be a render error.
+*/ -}}
+{{- $missing := list -}}
+{{- if not $backup.bucket }}{{- $missing = append $missing "backup.bucket" }}{{- end }}
+{{- if not $backup.endpointURL }}{{- $missing = append $missing "backup.endpointURL" }}{{- end }}
+{{- if not $backup.credentialsSecret }}{{- $missing = append $missing "backup.credentialsSecret" }}{{- end }}
+{{- if not $backup.accessKeyIdKey }}{{- $missing = append $missing "backup.accessKeyIdKey" }}{{- end }}
+{{- if not $backup.secretAccessKeyKey }}{{- $missing = append $missing "backup.secretAccessKeyKey" }}{{- end }}
+{{- if $missing }}
+  {{- fail (printf "cnpg-cluster %q: backup.enabled is true but %s %s unset. An ObjectStore missing any of these renders successfully and then fails every archive attempt, which does not stop writes and does not crash anything -- it just means this store is not being backed up. Set them or set backup.enabled=false." $name (join ", " $missing) (ternary "is" "are" (eq (len $missing) 1))) -}}
+{{- end }}
+
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: {{ $name }}-backup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ $name }}
+    app.kubernetes.io/component: database-backup
+    app.kubernetes.io/managed-by: opentofu
+spec:
+  configuration:
+    # One bucket per store. The trailing slash matters to barman-cloud's path
+    # handling and costs nothing to be explicit about.
+    destinationPath: s3://{{ $backup.bucket }}/
+    endpointURL: {{ $backup.endpointURL }}
+    {{- with $backup.endpointCASecret }}
+    # A private CA for the endpoint. Only needed when the endpoint is HTTPS with
+    # a certificate the sidecar's trust store does not already carry -- the
+    # in-cluster store is plain HTTP inside the cluster network, and a public
+    # cloud endpoint chains to a public root.
+    endpointCA:
+      name: {{ .name }}
+      key: {{ .key }}
+    {{- end }}
+    s3Credentials:
+      accessKeyId:
+        name: {{ $backup.credentialsSecret }}
+        key: {{ $backup.accessKeyIdKey }}
+      secretAccessKey:
+        name: {{ $backup.credentialsSecret }}
+        key: {{ $backup.secretAccessKeyKey }}
+    wal:
+      # gzip rather than none. WAL is highly compressible and the archive is the
+      # thing that grows without bound between base backups, so this is the
+      # single biggest lever on how long the destination lasts. It costs CPU in
+      # the sidecar, not in the Postgres backend, so it does not touch commit
+      # latency.
+      compression: {{ $backup.walCompression }}
+      # 🔴 Parallel archiving is the difference between an archiver that keeps up
+      # under ingest load and one that falls permanently behind. The event store
+      # generates WAL at telemetry rates; serial archiving there is how the
+      # database's own volume fills up with segments that were never shipped.
+      maxParallel: {{ $backup.walMaxParallel | int }}
+    data:
+      compression: {{ $backup.dataCompression }}
+      # Immediate checkpoint: start the base backup now rather than spreading the
+      # checkpoint over the checkpoint interval. A backup that takes hours to
+      # begin is a backup whose "last successful backup" metric lies about how
+      # much is actually recoverable.
+      immediateCheckpoint: true
+      jobs: {{ $backup.dataJobs | int }}
+  {{- with $backup.retentionPolicy }}
+  # A RECOVERY WINDOW, not a backup count. The distinction is the whole point:
+  # this guarantees the cluster can be restored to any point in the window, so
+  # barman keeps the base backup that predates the window's start plus every WAL
+  # since. A count-based policy would let a long gap between base backups shrink
+  # the recoverable window to nothing while still reporting N backups retained.
+  #
+  # 🔴 Obsolete backups are deleted after the NEXT backup completes, not on a
+  # timer. A cluster whose scheduled backup has been failing therefore keeps its
+  # old backups -- which is the correct, forgiving behaviour, and also means
+  # destination usage is not a signal that backups are healthy.
+  retentionPolicy: {{ . | quote }}
+  {{- end }}
+  instanceSidecarConfiguration:
+    resources:
+      requests:
+        cpu: {{ $backup.sidecarResources.requests.cpu | quote }}
+        memory: {{ $backup.sidecarResources.requests.memory | quote }}
+{{- end }}

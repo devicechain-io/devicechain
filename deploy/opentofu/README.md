@@ -71,6 +71,54 @@ because there is no cert-manager at all, set `enable_database_backups = false` t
 cannot adopt objects installed by the upstream `kubectl apply` manifest, so without it
 the apply fails with an ownership error. `dcctl bootstrap --no-cnpg` sets it.
 
+### Where the backups go
+
+`enable_database_backups` is the master switch and it now provisions a **destination**,
+not only the plugin. Until ADR-020 A2.5 it installed the Barman Cloud plugin and stopped
+there, so the flag read `true` on instances that archived nothing anywhere — the plugin
+was present, `database_backups_enabled` was `true`, and there was no bucket. Both halves
+now arrive together.
+
+| `backup_destination` | What you get |
+| --- | --- |
+| `in-cluster` (default) | A single-replica MinIO in the instance's namespace, two buckets, WAL archiving and a daily base backup for each store. |
+| `external` | The same archiving, pointed at `backup_endpoint_url` with `backup_access_key` / `backup_secret_key`. Nothing is provisioned in-cluster. |
+
+🔴 **An in-cluster destination is not off-site backup.** It shares the cluster's failure
+domain and, on a single-node install, the node's disk — lose the cluster and the backups
+go with it. What it genuinely buys is the recovery that is needed far more often:
+point-in-time recovery from an operator error, a bad migration or a bad delete, where the
+cluster is healthy and the *data* is wrong. It also means the restore drill exercises the
+same code path production uses. For real disaster recovery, point `backup_destination` at
+storage outside the cluster. The `database_backup_survives_cluster_loss` output states
+which of the two an instance has, so nothing downstream has to infer it.
+
+There is deliberately **no** value meaning "backups on, destination none". That state —
+plugin installed, flag reading `true`, nothing archived — is the one this configuration
+exists to remove. Set `enable_database_backups = false` instead, which is honest and is
+reported as such.
+
+Two stores means **two buckets**, never one bucket with two prefixes
+(`backup_bucket_rdb`, `backup_bucket_tsdb`). Core data and event data are independent
+restore domains: the event store can be restored without touching the control plane, and
+each carries its own retention window. `hack/check-tofu-validations.sh` asserts the two
+resolve to different paths, because a copy-paste that points both at one bucket collapses
+that split silently.
+
+🔴 **`backup_schedule` takes SIX cron fields, not five.** CloudNativePG's schedule carries
+a leading *seconds* field, unlike a Kubernetes CronJob. A five-field entry is accepted by
+the API and then never runs — the object exists, `kubectl get scheduledbackup` shows it,
+and no backup is ever taken. The chart counts the fields and refuses at render time; the
+default is `0 0 3 * * *`, daily at 03:00.
+
+🔴 **Sizing `backup_object_store_storage` is not the same question as sizing a database
+volume.** It holds a base backup plus every WAL segment since it, for the retention
+window, for *both* stores — and WAL volume tracks write rate, not database size. When it
+fills, archiving fails, and failed archiving does not stall commits: WAL accumulates on
+the *databases'* volumes until those fill and Postgres stops. An undersized bucket takes
+the instance down by a route that points nowhere near the bucket, which is what the
+archive-lag alert exists to catch first.
+
 The ingress controller and cert-manager are the TLS/ingress *capability*; the
 per-instance **Ingress resource + cert Issuer** that route to the app Services are
 rendered by the Helm chart (it knows the enabled functional areas) — set

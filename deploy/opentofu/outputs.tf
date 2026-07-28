@@ -104,6 +104,40 @@ output "cnpg_namespace" {
 # to be a value a caller can READ. The module exposed it from the start; for a while
 # nothing at the root did, so the safeguard existed only as a description.
 output "database_backups_enabled" {
-  description = "Whether the Barman Cloud plugin is installed, i.e. whether point-in-time recovery is possible at all (null if CNPG was not installed here)."
-  value       = var.enable_cnpg ? module.cnpg[0].backup_plugin_enabled : null
+  description = "Whether both database stores are actually archiving WAL and taking scheduled base backups. 🔑 This used to mean only that the Barman Cloud plugin was INSTALLED, which was true on installs where nothing was archived anywhere; since A2.5 the plugin and the destination are provisioned together, so it means what it says."
+  value       = local.backups_on
+}
+
+output "database_backup_destinations" {
+  description = <<-EOT
+    Where each store's backups actually land, or null when it has none. Two
+    separate paths, because core data and event data are two independent restore
+    domains.
+
+    Read this rather than re-deriving it from the flags. A store whose backup
+    configuration was dropped looks identical to one that has it — it runs, it
+    replicates, it passes every health check — and the difference only surfaces
+    when someone tries to restore it.
+  EOT
+  value = {
+    rdb  = module.cnpg_rdb.backup_destination
+    tsdb = module.cnpg_tsdb.backup_destination
+  }
+}
+
+output "database_backup_survives_cluster_loss" {
+  description = <<-EOT
+    🔴 FALSE for the default in-cluster destination, and that is the single most
+    important thing to know about this instance's backups.
+
+    An in-cluster object store shares the cluster's failure domain and, on a
+    single-node install, the node's disk: it protects against an operator error,
+    a bad migration or a bad delete, and not against losing the cluster. Only
+    backup_destination = "external" is off-site.
+
+    Exported as a value rather than left to the deployment docs so that dcctl and
+    any health check can state it plainly instead of implying recoverability from
+    database_backups_enabled alone.
+  EOT
+  value       = local.backups_on ? var.backup_destination == "external" : null
 }

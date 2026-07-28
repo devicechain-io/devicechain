@@ -168,6 +168,37 @@ spec:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 
+  {{- if .Values.backup.enabled }}
+  # WAL archiving and base backups, via the Barman Cloud CNPG-I plugin
+  # (ADR-028, ADR-020 A2.5). The destination is the ObjectStore rendered by
+  # objectstore.yaml in this same release; the ScheduledBackup that drives the
+  # recurring base backup is scheduledbackup.yaml.
+  #
+  # 🔴 `isWALArchiver: true` is what actually turns archiving on. Without it the
+  # plugin is attached, the ObjectStore is referenced, `kubectl get cluster`
+  # looks configured for backup -- and Postgres has no archive_command, so
+  # nothing is shipped anywhere. At most one plugin may claim it, which is why it
+  # is a field on the entry rather than a property of the plugin.
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      enabled: true
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: {{ $name }}-backup
+        {{- with .Values.backup.serverName }}
+        # 🔑 The path WITHIN the bucket, and the one knob a restore has to move.
+        #
+        # It defaults to the Cluster's own name, which is what makes a plain
+        # install self-describing. A cluster recovered from this bucket, however,
+        # comes up with the SAME name -- and CloudNativePG refuses, by design, to
+        # let a restored cluster archive back over the path it just recovered
+        # from. So the restore sets this to something new and the recovered
+        # cluster starts a fresh timeline alongside the old one rather than
+        # writing into it.
+        serverName: {{ . }}
+        {{- end }}
+  {{- end }}
+
   # 🔴 hostname, NOT zone. See the header: a topologyKey no node carries makes
   # the anti-affinity term inert, and three instances on one node look exactly
   # like three instances on three nodes from every check that counts pods.
@@ -194,10 +225,66 @@ spec:
       number: {{ .Values.synchronous.number | int }}
       dataDurability: {{ .Values.synchronous.dataDurability }}
     {{- end }}
-    {{- with .Values.parameters }}
+    {{- $parameters := .Values.parameters | default dict }}
+    {{- if .Values.backup.enabled }}
+    {{- /*
+    🔴 archive_timeout IS WHAT MAKES BOTH THE RPO AND THE ALERT MEAN ANYTHING, and
+    it is set here rather than left to the caller because it is a property of
+    ARCHIVING, not of either store.
+
+    Postgres ships archive_timeout = 0, i.e. never force a WAL switch. A segment
+    is shipped when it FILLS. So on a quiet instance the most recent archived WAL
+    can be hours or days old while everything is perfectly healthy, and the
+    unshipped tail is unbounded — an instance taking one write an hour can lose a
+    day of them to a node failure and still show a green backup.
+
+    That also breaks the obvious alert. "Seconds since last archival > N" is red
+    on every idle instance, forever, caused by nothing — which is a check that
+    gets switched off, exactly like the policy_telemetry job the event store
+    deletes for the same reason. Forcing a switch every archive_timeout makes the
+    signal well-defined: past that interval plus slack, silence means broken
+    rather than quiet.
+
+    The cost is a mostly-empty 16MB segment per interval on an idle cluster,
+    which gzip compresses to almost nothing. The alert threshold in
+    prometheusrule-database-backup.yaml is derived from this value; move one and
+    move the other.
+    */ -}}
+    {{- $parameters = merge (dict "archive_timeout" .Values.backup.archiveTimeout) $parameters }}
+    {{- end }}
+    {{- with $parameters }}
     parameters:
       {{- toYaml . | nindent 6 }}
     {{- end }}
+
+  # 🔑 UNCONDITIONALLY TRUE, and that is a deliberate departure from how the
+  # OPERATOR's own PodMonitor is handled one module over (modules/cnpg sets
+  # enable_pod_monitor false and argues at length for not deriving it). The two
+  # look like the same decision and are not, because they are created by
+  # different things at different times:
+  #
+  #   - The operator's PodMonitor is rendered by a HELM RELEASE in the same apply
+  #     that installs kube-prometheus-stack. A variable read creates no dependency
+  #     edge, so it races the CRDs and a fresh apply fails nondeterministically on
+  #     `no matches for kind "PodMonitor"`.
+  #   - THIS one is created by the CNPG OPERATOR at reconcile time. Verified in
+  #     the operator's source (internal/controller/cluster_create.go): a missing
+  #     PodMonitor CRD logs `PodMonitor CRD not present. Cannot create the
+  #     PodMonitor object` and returns nil. It does not fail the Cluster, and the
+  #     next reconcile after the CRD appears creates it.
+  #
+  # So there is no race to lose and nothing to order. Both arguments the operator
+  # module makes against deriving this then point the same way: `enable_monitoring
+  # = false` documents "the cluster ALREADY has the Prometheus Operator", which is
+  # precisely where scraping works — so deriving from it would disable metrics in
+  # the case that needs no help, while a plain `true` is correct in both.
+  #
+  # 🔴 Without this the database exports NOTHING to Prometheus, and the whole
+  # archive-lag alert becomes a rule with no series to evaluate — which does not
+  # fail, it just never fires. That shape is already live elsewhere in this
+  # platform and it is why this is on by default rather than opt-in.
+  monitoring:
+    enablePodMonitor: true
 
   managed:
     roles:

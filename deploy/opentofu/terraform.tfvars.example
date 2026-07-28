@@ -59,6 +59,41 @@
 # cnpg_chart_version        = "0.29.0"
 # cnpg_plugin_chart_version = "0.7.0"
 
+# Where the backups actually land (ADR-020 A2.5, ADR-028).
+#
+# 🔴 "in-cluster" IS NOT OFF-SITE BACKUP. It stands up a single-replica MinIO in this
+# cluster, which shares the cluster's failure domain — lose the cluster and the backups
+# go with it. It buys point-in-time recovery from an operator error, a bad migration or
+# a bad delete, and a restore drill that exercises the production code path. For real
+# disaster recovery use "external" and point at storage outside the cluster.
+#
+# There is no value meaning "backups on, destination none": that state is a plugin with
+# nowhere to write, which reads as protection and is not. Use
+# enable_database_backups = false instead.
+#
+# Two stores get TWO BUCKETS, never one bucket with two prefixes — core data and event
+# data are independent restore domains with independent retention.
+#
+# 🔴 backup_schedule takes SIX cron fields (the first is SECONDS), unlike a Kubernetes
+# CronJob. A five-field entry is accepted by the API and never runs. Default = 03:00 daily.
+# backup_destination                = "in-cluster"
+# backup_bucket_rdb                 = "devicechain-rdb"
+# backup_bucket_tsdb                = "devicechain-tsdb"
+# backup_access_key                 = "devicechain"
+# backup_secret_key                 = "CHANGE-ME"
+# backup_schedule                   = "0 0 3 * * *"
+# backup_retention                  = "30d"
+# backup_object_store_storage       = "20Gi"
+# backup_object_store_storage_class = ""
+#
+# For an external destination, set the endpoint too — it is REQUIRED there and REFUSED
+# with "in-cluster" (the in-cluster endpoint is provisioned here, so an override would
+# name one destination while archiving to another). An EMPTY endpoint is not "no
+# endpoint" to barman-cloud: it is the default AWS S3 endpoint, and every archive
+# attempt would fail against real AWS without stalling a single write.
+# backup_destination   = "external"
+# backup_endpoint_url  = "https://s3.eu-west-1.amazonaws.com"
+
 # Observability (kube-prometheus-stack — Prometheus/Grafana/Alertmanager). Default-on.
 # Set enable_monitoring=false if the cluster already has the Prometheus Operator.
 # Local/kind should set monitoring_slim=true (emptyDir TSDB, smaller requests).

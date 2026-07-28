@@ -88,6 +88,67 @@ locals {
       dump        = "pg_dumpall -U <user> > events.sql   # NOT pg_dump: every service CREATEs its own database, so this store holds one per instance"
     }
   }
+
+  # Backups need the plugin, and the plugin is an extension of the operator, so
+  # an install without the operator has no backups no matter what the backup flag
+  # says. Deriving it ONCE here rather than writing the conjunction at each of
+  # the five places that need it is what stops the two halves drifting: a site
+  # that tested only var.enable_database_backups would provision an object store
+  # and two ObjectStore resources for a plugin that is not installed.
+  backups_on = var.enable_database_backups && var.enable_cnpg
+
+  # Where the archiver actually points, resolved once from the destination. The
+  # in-cluster case reads the module's outputs rather than re-deriving the
+  # Service DNS name and the Secret's key names, so the module stays free to
+  # change either without this file silently disagreeing.
+  backup_endpoint = local.backups_on ? (
+    var.backup_destination == "in-cluster" ? module.object_store[0].endpoint_url : var.backup_endpoint_url
+  ) : ""
+
+  backup_credentials = local.backups_on ? (
+    var.backup_destination == "in-cluster" ? {
+      secret     = module.object_store[0].credentials_secret
+      access_key = module.object_store[0].access_key_id_key
+      secret_key = module.object_store[0].secret_access_key_key
+      } : {
+      secret     = kubernetes_secret_v1.backup_credentials[0].metadata[0].name
+      access_key = "ACCESS_KEY_ID"
+      secret_key = "SECRET_ACCESS_KEY"
+    }
+  ) : null
+
+  # The two per-store backup configurations. Null when backups are off, which is
+  # what the cnpg-cluster module reads as "this store has no backups" — one
+  # nullable object rather than an `enabled` flag beside five fields that are
+  # meaningless without it.
+  rdb_backup = local.backups_on ? {
+    bucket                = var.backup_bucket_rdb
+    endpoint_url          = local.backup_endpoint
+    credentials_secret    = local.backup_credentials.secret
+    access_key_id_key     = local.backup_credentials.access_key
+    secret_access_key_key = local.backup_credentials.secret_key
+    schedule              = var.backup_schedule
+    retention_policy      = var.backup_retention
+  } : null
+
+  tsdb_backup = local.backups_on ? {
+    bucket                = var.backup_bucket_tsdb
+    endpoint_url          = local.backup_endpoint
+    credentials_secret    = local.backup_credentials.secret
+    access_key_id_key     = local.backup_credentials.access_key
+    secret_access_key_key = local.backup_credentials.secret_key
+    schedule              = var.backup_schedule
+    retention_policy      = var.backup_retention
+
+    # 🔴 Four parallel WAL uploads for the event store against the relational
+    # store's two, and this asymmetry is the same judgement that gave the two
+    # stores different durability settings. This one takes device telemetry at
+    # ingest rates, so it generates WAL far faster; an archiver that cannot keep
+    # up does not drop segments, it leaves them on the database's own volume
+    # until that volume fills and Postgres stops. The relational store's write
+    # rate is control-plane traffic and does not need it.
+    wal_max_parallel = 4
+  } : null
 }
 
 # 🔴 A missing namespace returns ZERO objects rather than erroring, which is the
@@ -147,6 +208,109 @@ resource "terraform_data" "cutover_guard" {
   }
 }
 
+# Database backups — the destination, and the two per-store configurations that
+# point at it (ADR-028, ADR-020 A2.5).
+#
+# 🔑 ONE FLAG DECIDES FOR BOTH STORES. It would be easy to make backups
+# per-store, and it would be a mistake: the state nobody would ever choose on
+# purpose is one store backed up and the other not, and that is exactly what a
+# per-store flag produces the first time someone edits one of two nearly
+# identical blocks. Whether a store HAS backups is a property of the instance;
+# WHERE they go is per-store, and that part genuinely differs (two buckets).
+
+# The credentials the ObjectStore resources present to the endpoint.
+#
+# For the in-cluster destination this is the object-store module's own Secret,
+# reused rather than copied — MinIO's root credentials and the credentials the
+# archiver presents ARE the same credentials, and two Secrets holding one value
+# is two things to rotate and one of them to forget. For an external destination
+# there is no module, so the root writes one.
+resource "kubernetes_secret_v1" "backup_credentials" {
+  count = local.backups_on && var.backup_destination == "external" ? 1 : 0
+
+  metadata {
+    name      = "dc-backup-credentials"
+    namespace = var.namespace
+    labels = {
+      "app.kubernetes.io/name"       = "dc-backup"
+      "app.kubernetes.io/component"  = "database-backup"
+      "app.kubernetes.io/managed-by" = "opentofu"
+    }
+  }
+
+  data = {
+    ACCESS_KEY_ID     = var.backup_access_key
+    SECRET_ACCESS_KEY = var.backup_secret_key
+  }
+
+  depends_on = [module.namespace]
+}
+
+# The in-cluster object store. Only for backup_destination = "in-cluster"; an
+# external destination provisions nothing here.
+module "object_store" {
+  source = "./modules/object-store"
+  count  = local.backups_on && var.backup_destination == "in-cluster" ? 1 : 0
+
+  namespace     = var.namespace
+  buckets       = [var.backup_bucket_rdb, var.backup_bucket_tsdb]
+  access_key    = var.backup_access_key
+  secret_key    = var.backup_secret_key
+  storage       = var.backup_object_store_storage
+  storage_class = var.backup_object_store_storage_class
+
+  depends_on = [module.namespace]
+}
+
+# 🔴 A PLAN-TIME REFUSAL, not an apply-time one, and not a variable validation.
+#
+# The condition spans two variables, and cross-variable references in a
+# `validation` block need a newer core than this root's `required_version = ">=
+# 1.6"` allows. A precondition on a terraform_data is the portable form and is
+# the shape this root already uses for the legacy-StatefulSet cutover guard.
+#
+# What it refuses is the configuration that CANNOT work and does not say so: an
+# external destination with no endpoint. barman-cloud with an empty endpointURL
+# does not fail to start — it talks to the real AWS S3, where the bucket does not
+# exist and the credentials are a local MinIO's, so every archive attempt fails
+# against a service the operator never intended to contact.
+resource "terraform_data" "backup_destination_guard" {
+  count = local.backups_on ? 1 : 0
+
+  input = var.backup_destination
+
+  lifecycle {
+    precondition {
+      condition     = var.backup_destination != "external" || var.backup_endpoint_url != ""
+      error_message = <<-EOT
+        backup_destination = "external" needs backup_endpoint_url, and it is empty.
+
+        An empty endpoint is not "no endpoint" to barman-cloud — it is the default
+        AWS S3 endpoint. Archiving would be attempted against real AWS with a
+        bucket that does not exist there, and it would fail on every WAL segment
+        without stalling a single write. Nothing would crash and nothing would be
+        backed up.
+
+        Set backup_endpoint_url to your S3-compatible endpoint, or set
+        backup_destination = "in-cluster" to provision one here.
+      EOT
+    }
+
+    precondition {
+      condition     = var.backup_destination != "in-cluster" || var.backup_endpoint_url == ""
+      error_message = <<-EOT
+        backup_endpoint_url is set while backup_destination = "in-cluster".
+
+        The in-cluster endpoint is an output of the object-store module this
+        configuration provisions, so an override here would be silently ignored —
+        leaving a configuration that names one destination and archives to
+        another. Pick one: drop backup_endpoint_url, or set
+        backup_destination = "external".
+      EOT
+    }
+  }
+}
+
 # Relational Postgres — the control-plane RDB (users, devices, relationships, …),
 # as a CloudNativePG Cluster (ADR-020 A2.3).
 #
@@ -188,6 +352,12 @@ module "cnpg_rdb" {
   # non-HA install does not inherit a setting that would wedge it.
   synchronous     = true
   data_durability = "required"
+
+  # WAL archiving + a daily base backup to this store's own bucket. Null when
+  # backups are off, which the module reads as "no backups for this store" and
+  # reports through its backup_destination output rather than leaving the caller
+  # to re-derive it from the flags.
+  backup = local.rdb_backup
 
   # The operator must exist before a Cluster referencing its CRDs is applied.
   # depends_on on the module (not merely writing it later) is what makes this
@@ -241,6 +411,12 @@ module "cnpg_tsdb" {
   # failure rather than silent loss.
   synchronous     = true
   data_durability = "preferred"
+
+  # The event-data half of the DR split (ADR-028): its own bucket, restorable
+  # without touching the control plane. The root key gates the CORE half only, so
+  # a core-restore-alone yields an operational instance and an event-restore-
+  # alone yields history — two operations, deliberately, because they are.
+  backup = local.tsdb_backup
 
   # 🔴 BOTH of these are load-bearing, and each was found by building the operand
   # image rather than by reading anything.

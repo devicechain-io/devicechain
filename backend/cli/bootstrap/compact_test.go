@@ -301,6 +301,15 @@ var compactVolumeDecisions = map[string]string{
 	"nats_jetstream_storage": "", // sized; TestCompactReservationFitsItsSmallerVolume
 	"postgres_storage":       "", // sized
 	"timescale_storage":      "", // sized
+	// sized; TestCompactSizesTheBackupDestination checks the VALUE matches
+	// compactSizing, which this map only checks is passed at all.
+	//
+	// 🔑 It arrived in the infrastructure without compact asking for it: A2.5 made
+	// enable_database_backups provision a destination rather than only installing
+	// the plugin, so a compact install that keeps TLS now carries an object store.
+	// This map is what turned that from an invisible footprint change into a
+	// failing test, which is what it was written for.
+	"backup_object_store_storage": "",
 	"monitoring_prometheus_storage": "not sized: --compact removes the monitoring " +
 		"stack outright, so no Prometheus PVC is created. An operator who keeps " +
 		"monitoring with --no-monitoring=false has made that call explicitly and " +

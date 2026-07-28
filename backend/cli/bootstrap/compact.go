@@ -80,6 +80,32 @@ type compactSizing struct {
 	// only decides how long it takes to fill.
 	TimescaleStorage string
 
+	// ObjectStoreStorage is the in-cluster backup destination (ADR-020 A2.5,
+	// ADR-028) — the volume WAL archives and base backups land on.
+	//
+	// 🔴 This appeared in compact's footprint without compact asking for it. A2.5
+	// made enable_database_backups provision a destination rather than only
+	// installing the plugin, so a `--compact` install that keeps TLS now also
+	// carries a MinIO pod and this volume. `--compact --no-tls` still drops both,
+	// because it drops cert-manager and the plugin with it — which means the two
+	// compact paths have materially different footprints, and only one of them has
+	// backups. That is worth knowing before reading either number.
+	//
+	// 🔴 It is NOT sized from the database volumes, and the intuition that it
+	// should be is wrong in the dangerous direction. What lands here is one base
+	// backup per store PLUS every WAL segment since, for the whole retention
+	// window — and WAL volume tracks WRITE RATE, not database size. A small,
+	// busy event store generates far more WAL than its own volume ever holds.
+	// Set at 2x TimescaleStorage as a starting point rather than a derivation,
+	// and it is the value in this struct with the least evidence behind it.
+	//
+	// When it fills, archiving fails. Archiving that fails does not stall commits:
+	// WAL accumulates on the DATABASE's volume until that fills and Postgres
+	// stops. So an undersized value here takes the instance down by a route that
+	// points nowhere near the object store — which is what the archive-lag alert
+	// exists to catch before it gets there.
+	ObjectStoreStorage string
+
 	// Scheduling requests. Lowering REQUESTS fixes scheduling — pods sitting
 	// Pending on a small node — and does not itself lower usage. The limits are
 	// left alone because lowering them shrinks nothing: a lower MEMORY limit
@@ -111,9 +137,10 @@ var compact = compactSizing{
 	KvCacheMaxBytes:       8 << 20,
 	KvStateMaxBytes:       16 << 20,
 
-	JetStreamStorage: "2Gi",
-	PostgresStorage:  "2Gi",
-	TimescaleStorage: "4Gi",
+	JetStreamStorage:   "2Gi",
+	PostgresStorage:    "2Gi",
+	TimescaleStorage:   "4Gi",
+	ObjectStoreStorage: "8Gi",
 
 	CPURequest:    "25m",
 	MemoryRequest: "64Mi",

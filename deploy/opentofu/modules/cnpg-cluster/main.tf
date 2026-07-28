@@ -196,6 +196,55 @@ variable "resources" {
   }
 }
 
+variable "backup" {
+  description = <<-EOT
+    WAL archiving + scheduled base backups for this store, via the Barman Cloud
+    plugin (ADR-028, ADR-020 A2.5). Null disables backup for this store.
+
+    🔴 A NULL HERE IS A STORE WITH NO BACKUPS, and that is invisible from
+    everything else about the Cluster. It runs, it replicates, it passes every
+    health check, and it cannot be restored to any point in time. The root
+    derives this from one flag for both stores so the two cannot end up in
+    different states, and `dcctl ha verify` reports the resulting state rather
+    than the flag.
+
+    The object is all-or-nothing on purpose: the chart refuses a partially
+    populated destination rather than rendering an ObjectStore that fails every
+    archive attempt. See chart/templates/objectstore.yaml for why a half-set
+    destination is the dangerous case -- it does not stop writes and it does not
+    crash anything.
+
+    `server_name` is the path within the bucket, defaulting to the cluster name.
+    A RESTORED cluster must set it: CloudNativePG refuses to archive back over
+    the path it recovered from, so a recovery that keeps the old value comes up
+    with archiving permanently broken.
+  EOT
+
+  type = object({
+    bucket                = string
+    endpoint_url          = string
+    credentials_secret    = string
+    access_key_id_key     = string
+    secret_access_key_key = string
+
+    server_name = optional(string, "")
+
+    # Forces a WAL switch on an idle cluster, bounding the RPO to this interval
+    # rather than to "whenever a segment happens to fill". Also what makes the
+    # archive-lag alert meaningful instead of red on every quiet instance.
+    archive_timeout = optional(string, "5min")
+
+    schedule          = optional(string, "0 0 3 * * *")
+    retention_policy  = optional(string, "30d")
+    wal_max_parallel  = optional(number, 2)
+    data_jobs         = optional(number, 2)
+    endpoint_ca       = optional(object({ name = string, key = string }))
+    sidecar_resources = optional(object({ cpu = string, memory = string }), { cpu = "50m", memory = "128Mi" })
+  })
+
+  default = null
+}
+
 locals {
   # The credentials Secret, in the shape CNPG's bootstrap expects
   # (kubernetes.io/basic-auth with username/password). Left unset, CNPG mints a
@@ -237,7 +286,18 @@ resource "helm_release" "cluster" {
   # (a string), and a string carries no dependency.
   depends_on = [kubernetes_secret_v1.app]
 
-  values = [yamlencode({
+  # 🔴 TWO documents, not one map with a conditional `backup` key inside it.
+  #
+  # A `var.backup == null ? {...} : {...}` inside the map does not type-check:
+  # both branches of a conditional must have the SAME object type, so the
+  # "backups off" branch would have to restate all fifteen backup fields with
+  # empty values. That is not merely verbose — it is a second, silent copy of the
+  # backup schema that no longer fails when the real one gains a field.
+  #
+  # Helm merges later values documents over earlier ones, so an absent second
+  # document leaves the chart's own `backup.enabled: false` default in force.
+  # Backups off is then the chart saying so, not this file re-deriving it.
+  values = concat([yamlencode({
     name                   = var.name
     imageName              = var.image
     instances              = var.instances
@@ -280,7 +340,34 @@ resource "helm_release" "cluster" {
       localeCType         = "C.utf8"
       postInitTemplateSQL = var.post_init_template_sql
     }
-  })]
+
+    })],
+    var.backup == null ? [] : [yamlencode({
+      backup = {
+        enabled            = true
+        bucket             = var.backup.bucket
+        endpointURL        = var.backup.endpoint_url
+        credentialsSecret  = var.backup.credentials_secret
+        accessKeyIdKey     = var.backup.access_key_id_key
+        secretAccessKeyKey = var.backup.secret_access_key_key
+        serverName         = var.backup.server_name
+        archiveTimeout     = var.backup.archive_timeout
+        schedule           = var.backup.schedule
+        retentionPolicy    = var.backup.retention_policy
+        walCompression     = "gzip"
+        dataCompression    = "gzip"
+        walMaxParallel     = var.backup.wal_max_parallel
+        dataJobs           = var.backup.data_jobs
+        endpointCASecret   = var.backup.endpoint_ca == null ? {} : var.backup.endpoint_ca
+        sidecarResources = {
+          requests = {
+            cpu    = var.backup.sidecar_resources.cpu
+            memory = var.backup.sidecar_resources.memory
+          }
+        }
+      }
+    })]
+  )
 
   # 🔴 `wait` DOES NOT WAIT FOR THE DATABASE, and an earlier version of this
   # comment claimed it did. The release manifest contains exactly one object —
@@ -350,6 +437,11 @@ output "service" {
 output "cluster_name" {
   description = "The CNPG Cluster object name. Pods carry it as cnpg.io/cluster=<name>; the DR/HA rigs resolve through the alias Service instead, which is topology-independent."
   value       = var.name
+}
+
+output "backup_destination" {
+  description = "Where this store's WAL and base backups actually go, or null if it has none. Read this rather than re-deriving it from the flags -- a store whose backup block was dropped is indistinguishable from one that has it, right up until a restore is attempted."
+  value       = var.backup == null ? null : "s3://${var.backup.bucket}/${var.backup.server_name != "" ? var.backup.server_name : var.name}"
 }
 
 output "synchronous_enforced" {
