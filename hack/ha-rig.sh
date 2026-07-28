@@ -312,8 +312,14 @@ above may still be holding on the instance-count assertions."
   # 🔴 Unlike the controls above, this one is expected to PASS: a healthy
   # single-node event store has healthy jobs. That is the point — it proves the
   # job checks RUN and can see real jobs, which is the half a --expect-fail
-  # control cannot establish. The counts line in the report is the evidence, and
-  # B9 turns "examined nothing" into a failure rather than a pass.
+  # control cannot establish.
+  #
+  # What makes that more than a hope is B9, which fires when the extension is
+  # nowhere OR when databases carry it and not one job was examined. An earlier
+  # version of this comment said "the counts line in the report is the evidence",
+  # which was wrong in the way this rig exists to prevent: nothing automated reads
+  # that line, this step is `|| fail` on exit status, and a run examining zero
+  # jobs exited 0. The evidence is the assertion, not the printout.
   say "JOB-AXIS COVERAGE — the background-job checks must RUN and see real jobs"
   "$dcctl" ha verify-db --cluster dc-tsdb --alias-service dc-timescaledb-single \
     --instances 1 --timescale-jobs \

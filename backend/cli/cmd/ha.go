@@ -138,6 +138,18 @@ expected NOT to hold:
 
   dcctl ha verify-db --cluster dc-rdb --instances 3 --require-synchronous --expect-fail`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// A stated expectation that is never tested is the failure this whole
+		// command is about, so refuse the combination rather than ignoring it.
+		// --durability is only consulted under --require-synchronous, so setting
+		// it alone produces a green report that never checked the thing the
+		// caller asked about.
+		if dbDurability != "" && !dbRequireSync {
+			return fmt.Errorf("--durability %q was given without --require-synchronous, "+
+				"and the durability check only runs under it — so this would have "+
+				"reported success without testing what you asked about. Add "+
+				"--require-synchronous, or drop --durability", dbDurability)
+		}
+
 		rep, err := bootstrap.VerifyDatabaseReplication(cmd.Context(), bootstrap.DbVerifyOptions{
 			KubeContext:        haKubeContext,
 			Namespace:          dbNamespace,

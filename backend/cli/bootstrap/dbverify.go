@@ -6,6 +6,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -467,6 +468,12 @@ func verifyPostgresState(
 	// all, so `database` and `secretName` are both empty. Without this, B5/B6/B7
 	// and B8 would all silently vanish on a restored cluster and CHECK B would
 	// pass with `--require-synchronous` set, because only B3 reads the spec.
+	// Set BEFORE any skip path, so the counts line prints even when the axis could
+	// not run. Without it a requested-but-skipped run and a not-requested run look
+	// identical, which is the one distinction the counts line exists to make.
+	if opts.TimescaleJobs {
+		rep.TimescaleJobsChecked = true
+	}
 	skip := func(why string) {
 		demanded := false
 		if opts.RequireSynchronous {
@@ -597,7 +604,6 @@ func verifyPostgresState(
 	}
 
 	if opts.TimescaleJobs {
-		rep.TimescaleJobsChecked = true
 		if err := verifyTimescaleJobs(ctx, local, user, pass, opts, rep, add); err != nil {
 			return err
 		}
@@ -652,9 +658,18 @@ func verifyTimescaleJobs(
 	rep *DbReport,
 	add func(check, object, format string, args ...any),
 ) error {
+	// Built with url.URL rather than by interpolating into a format string: a
+	// password containing @ / # or ? silently produces a DIFFERENT DSN, and the
+	// symptom is an authentication failure that looks like a wrong password.
 	connect := func(db string) (*pgx.Conn, error) {
-		return pgx.Connect(ctx, fmt.Sprintf("postgres://%s:%s@127.0.0.1:%d/%s?sslmode=disable",
-			user, pass, localPort, db))
+		u := url.URL{
+			Scheme:   "postgres",
+			User:     url.UserPassword(user, pass),
+			Host:     fmt.Sprintf("127.0.0.1:%d", localPort),
+			Path:     "/" + db,
+			RawQuery: "sslmode=disable",
+		}
+		return pgx.Connect(ctx, u.String())
 	}
 
 	admin, err := connect("postgres")
@@ -688,9 +703,21 @@ func verifyTimescaleJobs(
 	for _, db := range databases {
 		conn, err := connect(db)
 		if err != nil {
-			// A database the app role cannot open is not this check's business.
-			rep.Skipped = append(rep.Skipped,
-				fmt.Sprintf("the background-job checks for database %q (%v)", db, err))
+			// 🔴 A FINDING, not a skip, and the distinction is the same one the
+			// whole file turns on: OK() counts findings and cannot see Skipped.
+			//
+			// The tempting reading is "a database we cannot open is not our
+			// business". But the database this check most needs is the one holding
+			// the hypertables and the aggregate-refresh policy — named after the
+			// instance, created by the app at startup — and the bootstrap database
+			// beside it will happily satisfy the extension guard above. So a
+			// connect failure on exactly the interesting database would leave a
+			// green report that never looked at it.
+			add("B9", fmt.Sprintf("%s/database %q", opts.ClusterName, db),
+				"could not be opened to check its background jobs (%v), so its jobs were "+
+					"not examined. Reported rather than skipped because a report that "+
+					"could not reach the database holding the hypertables must not be "+
+					"green", err)
 			continue
 		}
 		err = verifyTimescaleJobsIn(ctx, conn, db, opts, rep, add)
@@ -712,6 +739,35 @@ func verifyTimescaleJobs(
 			"database inherits the extension from template1 at CREATE DATABASE time and "+
 			"nothing in the platform ever issues CREATE EXTENSION, so this means new "+
 			"databases are coming up without hypertable support")
+		return nil
+	}
+
+	// 🔴 THE SECOND HALF OF THE VACUITY GUARD, and the half that was missing.
+	//
+	// The check above asks "did we find any TimescaleDB databases?". It does NOT
+	// ask "did we examine any JOBS?" — and every assertion in this axis lives
+	// inside a `for rows.Next()` loop, so a query returning zero rows produces no
+	// findings and a green report over nothing examined.
+	//
+	// That is not hypothetical. It is exactly what the NATURAL JOIN did: zero rows
+	// against a perfectly healthy cluster. That was fixed by changing the join,
+	// which fixes the instance and not the shape — any future cause of zero rows
+	// (a renamed view, an upstream proc_name change, a `where` clause that stops
+	// matching) reproduces the identical silent pass.
+	//
+	// A server-level assertion is the right level. Per DATABASE, zero jobs is a
+	// legitimate state — retention and compression policies are opt-in, so a
+	// database with the extension and no policies genuinely has none. But a server
+	// carrying TimescaleDB databases and not one background job anywhere is not a
+	// healthy event store: the extension creates its own job-history retention
+	// policy in every database that has it, so the floor is one per database.
+	if rep.Checked.TimescaleJobs == 0 {
+		add("B9", opts.ClusterName, "%d database(s) carry the timescaledb extension but NOT "+
+			"ONE background job was examined across them, so every job assertion below "+
+			"passed over an empty set. The extension installs a job-history retention "+
+			"policy into each database that has it, so zero is not a state a healthy "+
+			"server reaches — treat this as the query being wrong rather than the jobs "+
+			"being fine", rep.Checked.TimescaleDatabases)
 	}
 	return nil
 }
@@ -736,22 +792,39 @@ func verifyTimescaleJobsIn(
 	}
 	rep.Checked.TimescaleDatabases++
 
-	// 🔴 `join ... using (job_id)`, never NATURAL JOIN. Measured: these two views
-	// also share `next_start`, `hypertable_schema` and `hypertable_name`, and the
-	// two `next_start` columns legitimately differ — so a natural join returns
-	// ZERO ROWS against a perfectly healthy cluster. That is the worst possible
-	// shape for this check, because an empty result is indistinguishable from
-	// "no jobs are broken". It cost a wasted failover measurement to find.
+	// 🔴 `join ... using (job_id)`, never NATURAL JOIN — measured, and the reason
+	// is NOT the one an earlier version of this comment gave.
+	//
+	// The two views also share `next_start`, `hypertable_schema` and
+	// `hypertable_name`. The `next_start` values are in fact EQUAL (both derive
+	// from the same stats row), so that column is a red herring. What empties the
+	// join is the hypertable pair, in two independent ways at once:
+	//
+	//   - for a continuous-aggregate job the two views report DIFFERENT
+	//     hypertables — `jobs` names the user-facing view
+	//     (event-management/measurement_rollups) while `job_stats` names the
+	//     internal materialized hypertable
+	//     (_timescaledb_internal/_materialized_hypertable_6), so the equality
+	//     fails outright;
+	//   - for a job with no hypertable at all both sides are NULL, and NULL never
+	//     equals NULL, so that row drops too.
+	//
+	// Measured on a healthy cluster: NATURAL JOIN returns 0 rows where
+	// `using (job_id)` returns 2. That is the worst possible shape here, because
+	// an empty result is indistinguishable from "no jobs are broken" — it cost a
+	// wasted failover measurement to find, which is why B9's job-count guard
+	// exists rather than only this comment.
 	rows, err := conn.Query(ctx, `
 		select j.job_id,
 		       j.proc_name,
 		       j.scheduled,
-		       j.next_start is null                          as next_start_unset,
-		       coalesce(j.next_start = '-infinity', false)    as next_start_infinite,
-		       coalesce(s.last_run_status, '')                as last_run_status
+		       j.next_start is null                        as next_start_unset,
+		       coalesce(j.next_start = '-infinity', false)  as next_start_past,
+		       coalesce(j.next_start = 'infinity', false)   as next_start_never,
+		       coalesce(s.last_run_status, '')              as last_run_status
 		  from timescaledb_information.jobs j
 		  left join timescaledb_information.job_stats s using (job_id)
-		 where j.proc_name <> $1
+		 where not (j.proc_name = $1 and j.proc_schema like '\_timescaledb%')
 		 order by j.job_id`, timescaleTelemetryJob)
 	if err != nil {
 		return fmt.Errorf("reading background jobs in %q: %w", db, err)
@@ -760,46 +833,92 @@ func verifyTimescaleJobsIn(
 
 	for rows.Next() {
 		var (
-			id              int64
-			proc            string
-			scheduled       bool
-			unset, infinite bool
-			lastStatus      string
+			st   jobState
+			id   int64
+			proc string
 		)
-		if err := rows.Scan(&id, &proc, &scheduled, &unset, &infinite, &lastStatus); err != nil {
+		if err := rows.Scan(&id, &proc, &st.Scheduled, &st.NextStartUnset,
+			&st.NextStartPast, &st.NextStartNever, &st.LastRunStatus); err != nil {
 			return fmt.Errorf("scanning background jobs in %q: %w", db, err)
 		}
 		rep.Checked.TimescaleJobs++
 
-		switch {
-		case infinite:
-			// The timescale#9360 shape. `-infinity` is not "later", it is never:
-			// the scheduler compares against it and the job is dead while the
-			// database reports itself entirely healthy.
-			add("B10", fmt.Sprintf("%s/job %d (%s)", db, id, proc),
-				"next_start is -infinity, which the scheduler will never reach — this job "+
-					"is permanently stuck and the work it does (continuous aggregate "+
-					"refresh, retention, compression) has silently stopped")
-		case scheduled && unset:
-			// 🔴 A finding, but a SETTLE-ELIGIBLE one, and that distinction is the
-			// whole reason this check is usable.
-			//
-			// The A2 spike's first oracle called a NULL next_start BROKEN and
-			// false-alarmed during the seconds after a promotion — in the exact
-			// window the check exists for, which is how an oracle gets switched
-			// off. It is reported here as an ordinary finding precisely because
-			// the caller re-runs the whole verification for --settle before
-			// returning a verdict, so a value that has simply not been recomputed
-			// yet clears itself, and only one that persists past the window is
-			// reported.
-			add("B11", fmt.Sprintf("%s/job %d (%s)", db, id, proc),
-				"is scheduled but has no next_start, and still had none after the settle "+
-					"window — the scheduler is not assigning it a next run")
-		case lastStatus == "Failed":
-			add("B12", fmt.Sprintf("%s/job %d (%s)", db, id, proc),
-				"last run FAILED; the job is still scheduled, so this is a job that runs "+
-					"and errors rather than one that has stopped")
+		// `opts.Settle > 0` is the right proxy for "a settle window elapsed": the
+		// caller discards every non-OK report until the window expires, so a
+		// finding that survives to be PRINTED is one that outlived it.
+		if check, reason := classifyJob(st, opts.Settle > 0); check != "" {
+			add(check, fmt.Sprintf("%s/job %d (%s)", db, id, proc), "%s", reason)
 		}
 	}
 	return rows.Err()
+}
+
+// jobState is one background job as OBSERVED, with no judgement applied.
+type jobState struct {
+	Scheduled      bool
+	NextStartUnset bool
+	NextStartPast  bool // next_start = -infinity
+	NextStartNever bool // next_start = +infinity
+	LastRunStatus  string
+}
+
+// classifyJob is the verdict, as a pure function of an observed job.
+//
+// Split out from the query loop so the precedence between these conditions is
+// testable without a database. The I/O gathers, this judges — the same split
+// drdrill's classify() uses, and for the same reason: a switch buried in a scan
+// loop is reachable only by standing up the thing it is judging.
+//
+// `settled` says whether a settle window actually elapsed, and exists so the
+// B11 message cannot claim one did when --settle was 0.
+func classifyJob(s jobState, settled bool) (check, reason string) {
+	switch {
+	case s.NextStartPast:
+		// The timescale#9360 shape. `-infinity` is not "later", it is never: the
+		// scheduler compares against it and the job is dead while the database
+		// reports itself entirely healthy.
+		return "B10", "next_start is -infinity, which the scheduler will never reach — this " +
+			"job is permanently stuck and the work it does (continuous aggregate refresh, " +
+			"retention, compression) has silently stopped"
+	case s.NextStartNever:
+		// `alter_job(id, next_start => 'infinity')` is the documented way to park
+		// a job indefinitely. Indistinguishable, from the outside, from one that
+		// stopped on its own — and equally not aggregating.
+		return "B10", "next_start is +infinity, so the job is parked and will never run " +
+			"again. This is what alter_job(next_start => 'infinity') does, so it may be " +
+			"deliberate — but nothing it was doing is still happening"
+	case !s.Scheduled:
+		// `alter_job(id, scheduled => false)` — a paused refresh job has stopped
+		// aggregating exactly as thoroughly as one stuck at -infinity, and every
+		// other signal about it looks healthy.
+		return "B11", "is NOT scheduled, so it will not run again until something schedules " +
+			"it. A paused job stops aggregating just as completely as a broken one, and " +
+			"reports no error while doing it"
+	case s.NextStartUnset:
+		// 🔴 A finding, but a SETTLE-ELIGIBLE one, and that distinction is the
+		// whole reason this check is usable.
+		//
+		// The A2 spike's first oracle called a NULL next_start BROKEN and
+		// false-alarmed during the seconds after a promotion — in the exact
+		// window the check exists for, which is how an oracle gets switched off.
+		// It is reported as an ordinary finding precisely because the caller
+		// re-runs the whole verification for --settle before returning a verdict,
+		// so a value that has simply not been recomputed yet clears itself.
+		//
+		// NULL here means there is no stats row at all — the column is NOT NULL in
+		// the underlying table — i.e. the job has never run or its statistics were
+		// reset, which is exactly the post-promotion state.
+		if settled {
+			return "B11", "is scheduled but has no next_start, and still had none after the " +
+				"settle window — the scheduler is not assigning it a next run"
+		}
+		return "B11", "is scheduled but has no next_start, so the scheduler has not assigned " +
+			"it a next run. NOTE: no settle window was allowed (--settle 0), and this clears " +
+			"on its own within seconds of a promotion — re-run with a settle window before " +
+			"treating it as a fault"
+	case s.LastRunStatus == "Failed":
+		return "B12", "last run FAILED. The job is still scheduled, so this is one that runs " +
+			"and errors rather than one that has stopped"
+	}
+	return "", ""
 }
