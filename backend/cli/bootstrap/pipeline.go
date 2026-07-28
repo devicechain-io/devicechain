@@ -74,6 +74,16 @@ type State struct {
 	// NoCNPG skips the CloudNativePG operator + backup plugin in the infra apply
 	// (default-on, ADR-020 A2). See Options for the rationale.
 	NoCNPG bool
+	// AllowLegacyDbRemoval passes the cutover-guard escape hatch through to
+	// OpenTofu (ADR-020 A2.3/A2.4).
+	//
+	// 🔴 It exists because without it the hatch is UNREACHABLE through the
+	// supported path. dcctl re-extracts the OpenTofu root into the instance's
+	// working directory on every run and passes a fixed set of -var flags, so an
+	// operator told by the guard to "set allow_legacy_tsdb_removal = true" had
+	// nowhere to set it. On a local cluster the other branch works (destroy and
+	// rebuild); on a real one there was no route past the guard at all.
+	AllowLegacyDbRemoval bool
 	// GrafanaSSO wires Grafana login to DeviceChain SSO (ADR-047). See Options.
 	GrafanaSSO bool
 	// Compact applies the small-footprint preset (compactSizing). See Options.

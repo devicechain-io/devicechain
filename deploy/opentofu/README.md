@@ -55,9 +55,8 @@ Three things about them are worth knowing before changing either:
 
 The CloudNativePG operator is installed on **every** apply, not only HA ones (ADR-020
 A2, decision D4): backup is not a high-availability feature, and one storage shape
-means HA becomes an instance count rather than a migration. It creates no `Cluster`
-resources yet — the two databases above are still StatefulSets — so today it and the
-plugin are inert machinery installed ahead of the slices that move the stores onto it.
+means HA becomes an instance count rather than a migration. Both databases above are
+`Cluster` resources it owns.
 
 🔴 `enable_database_backups` requires `enable_cert_manager`, and the requirement is a
 hard one: the plugin's chart renders an Issuer and two Certificates, so with no
@@ -113,17 +112,32 @@ accidental destroys (methodology §11). Three guards back this up:
   Empty (the default) uses the cluster default StorageClass, whose `reclaimPolicy`
   is typically `Delete` — fine for local dev, but PVC/PV deletion then destroys the
   data. **For production, point these at a StorageClass whose `reclaimPolicy` is
-  `Retain`**, so the underlying volume (and its data) survives PVC/PV deletion and a
-  redeploy can re-attach the existing volume.
-- **PVC retention policy.** Each DB StatefulSet sets
-  `persistent_volume_claim_retention_policy { when_deleted = "Retain"  when_scaled = "Retain" }`,
-  so deleting or scaling the StatefulSet never reaps the data PVCs.
-- **`prevent_destroy` backstop.** Each DB StatefulSet carries
-  `lifecycle { prevent_destroy = true }`. This is **intentional**: a naive
-  `tofu destroy` will *refuse* to remove the databases (and therefore refuses to
-  destroy this whole root). Intentional teardown requires removing the guard, or
-  removing the DBs from state / targeting around them — the "databases outlive the
-  deployment" guarantee.
+  `Retain`**, so the underlying volume and its data outlive PVC/PV deletion and are
+  still there to be recovered FROM.
+
+  🔴 That is where the guarantee ends, and an earlier version of this bullet claimed
+  more: it said "a redeploy can re-attach the existing volume". **It cannot.** A
+  retained PV whose PVC is deleted goes to `Released` and will not bind a new claim
+  until someone clears its `claimRef` by hand, and a new CloudNativePG `Cluster`
+  bootstraps through `bootstrap.initdb` — it never adopts a pre-existing PGDATA (the
+  cutover guard in main.tf says the same thing about StatefulSet data). A `Retain`
+  class buys a volume you can still get data OFF; it does not buy a redeploy that
+  comes back up on it. The supported recovery path is `bootstrap.recovery` from a
+  backup, which no `Cluster` here declares yet (A2.5).
+- 🔴 **The Cluster OWNS its PVCs, and this is SHARPER than the topology it replaced.**
+  The old StatefulSets set `persistent_volume_claim_retention_policy { when_deleted =
+  "Retain" }`, so deleting one left the data volumes behind. CloudNativePG has no
+  equivalent — the PVCs are owned by the `Cluster`, so deleting it garbage-collects
+  them. Removing a store takes its data with it rather than orphaning a volume.
+- **`prevent_destroy` backstop.** Each database `helm_release` carries
+  `lifecycle { prevent_destroy = true }`, so a naive `tofu destroy` *refuses* to
+  remove the databases (and therefore refuses to destroy this whole root).
+
+  🔴 It protects a resource that is **in the configuration**. It does NOT protect one
+  removed FROM the configuration: a resource whose module block is deleted becomes an
+  orphan, and orphans are destroyed without consulting a `lifecycle` block that is no
+  longer there to consult. That is what the plan-time cutover guard in `main.tf` is
+  for, and it is measured rather than assumed.
 
 **Planned next step:** split this OpenTofu root into a durable **data stack**
 (PG/Timescale/NATS JetStream — Retain, prevent_destroy, rarely touched) with its
@@ -137,9 +151,11 @@ fast-follow.
 - **Single-node by default.** `ha = true` provisions the ADR-020 NATS topology —
   3 servers in a RAFT cluster, spread one per node with a hard
   `topologySpreadConstraint`. `nats_cluster_replicas` overrides the count for a
-  topology the toggle cannot express (odd, at most 5). It does **not** replicate
-  the databases: Postgres and TimescaleDB are single-instance StatefulSets here
-  regardless — see ADR-028 for where their durability comes from.
+  topology the toggle cannot express (odd, at most 5). It also sets both databases
+  to three replicated CloudNativePG instances — the relational store synchronously,
+  the event store with `preferred` durability so a lost standby degrades it to
+  asynchronous replication rather than stalling ingest. `postgres_instances` and
+  `timescale_instances` override each independently.
 - **HA is two levers, and this root owns only one of them.** The server count
   lives here; the per-stream replica factor lives in the services' config
   (`instance.config.infrastructure.nats.streamReplicas`), rendered by the

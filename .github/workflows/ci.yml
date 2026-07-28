@@ -232,11 +232,13 @@ jobs:
       # Runs the production rdb.RdbManager path against a throwaway TimescaleDB
       # the script starts in docker (present on ubuntu-latest), then diffs each
       # area's pg_dump against backend/tools/migrationdiff/golden/.
-      - name: migration-diff verify (PostgreSQL 16, the deployed image)
+      - name: migration-diff verify (PostgreSQL 16, the image the goldens came from)
         run: hack/migration-diff.sh verify
 
       # The SAME goldens, on the PostgreSQL 17 operand image the `tsdb` cluster
-      # will run after the ADR-020 A2.4 cutover. Measured, not assumed: the two
+      # actually runs (ADR-020 A2.4). The pass above is NOT the deployed image —
+      # it is the one the goldens were captured on, and it stays because the
+      # goldens are version-sensitive. Measured, not assumed: the two
       # schemas are byte-identical today, which is why this can be `verify`
       # against the committed goldens rather than a separate golden set.
       #

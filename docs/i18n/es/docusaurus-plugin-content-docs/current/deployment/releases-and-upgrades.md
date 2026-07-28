@@ -163,6 +163,13 @@ clústeres de base de datos además son dueños de sus volúmenes, así que elim
 en lugar de dejar un volumen desasociado.
 
 No edites la base de datos para sacarla de la configuración de infraestructura como forma de reemplazarla.
+
+Actualizar una instancia creada antes de que las bases de datos pasaran al operador es el
+único caso en que esto aparece, y se rechaza en tiempo de planificación en lugar de dejarse
+al azar. Vuelca primero ambas bases de datos y vuelve a ejecutar el arranque con
+`--allow-legacy-db-removal`, que afirma que te has ocupado de los datos y no verifica nada.
+Para una instancia local, `dcctl destroy` seguido de un arranque nuevo es más simple y
+descarta los datos de forma deliberada.
 :::
 
 Esto es durabilidad de los volúmenes en ejecución; no es un sustituto de las copias de seguridad programadas y la

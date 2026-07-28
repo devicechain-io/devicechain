@@ -4,6 +4,7 @@
 package bootstrap
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -145,4 +146,43 @@ func TestClassifyJobHealthyStateIsReachable(t *testing.T) {
 		t.Fatalf("the ordinary healthy job was reported as %s without a settle window: %s",
 			check, reason)
 	}
+}
+
+// TestLegacyDbRemovalHatchReachesOpenTofu pins the escape hatch the cutover
+// guards name in their own error messages.
+//
+// Without this the hatch was UNREACHABLE through the supported path, which an
+// adversarial review found: dcctl re-extracts the OpenTofu root into the
+// instance's working directory on every run and passes a fixed set of -var
+// flags, so an operator told to "set allow_legacy_tsdb_removal = true" had
+// nowhere to set it. On a local cluster the other branch works — destroy and
+// rebuild — but on a real one there was no route past the guard at all.
+//
+// Asserted on the vars the apply ACTUALLY passes (infraVars, the production
+// renderer) rather than on the flag, because the flag being wired to a struct
+// field is not the property that matters.
+func TestLegacyDbRemovalHatchReachesOpenTofu(t *testing.T) {
+	both := []string{"allow_legacy_rdb_removal=true", "allow_legacy_tsdb_removal=true"}
+
+	t.Run("off by default", func(t *testing.T) {
+		vars := infraVars(&State{KubeContext: "kind-test"})
+		for _, want := range both {
+			if slices.Contains(vars, want) {
+				t.Errorf("%q is passed by DEFAULT. This variable authorises destroying a "+
+					"database and replacing it with an empty one; it must never be on "+
+					"unless asked for", want)
+			}
+		}
+	})
+
+	t.Run("set emits BOTH stores", func(t *testing.T) {
+		vars := infraVars(&State{KubeContext: "kind-test", AllowLegacyDbRemoval: true})
+		for _, want := range both {
+			if !slices.Contains(vars, want) {
+				t.Errorf("infraVars did not emit %q, so the guard for that store cannot be "+
+					"passed through dcctl and its error message names a variable the "+
+					"operator has no way to set.\ngot: %v", want, vars)
+			}
+		}
+	})
 }

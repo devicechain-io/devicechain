@@ -31,7 +31,7 @@ type Perturber struct {
 }
 
 // New opens a pgx connection with dsn (e.g.
-// postgres://postgres:devicechain@127.0.0.1:5432/devicechain) and scopes deletes
+// postgres://devicechain:devicechain@127.0.0.1:5432/devicechain) and scopes deletes
 // to tenant (the slug/token stored verbatim in events.tenant_id). The caller must
 // Close it.
 func New(ctx context.Context, dsn, tenant string) (*Perturber, error) {

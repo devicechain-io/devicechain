@@ -163,6 +163,12 @@ succeed. The database clusters also own their volumes, so removing one takes its
 it rather than leaving an unattached volume behind.
 
 Do not edit the database out of the infrastructure configuration as a way of replacing it.
+
+Upgrading an instance created before the databases moved onto the operator is the one case
+where this comes up, and it is refused at plan time rather than left to chance. Dump both
+databases first, then re-run the bootstrap with `--allow-legacy-db-removal` — which asserts
+you have handled the data, and verifies nothing. For a local instance, `dcctl destroy`
+followed by a fresh bootstrap is simpler and discards the data deliberately.
 :::
 
 This is durability of the running volumes — it is not a substitute for scheduled backups and

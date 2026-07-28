@@ -40,6 +40,9 @@ type Options struct {
 	// without this flag such a cluster fails the infra apply with an ownership error
 	// and no way past it.
 	NoCNPG bool
+	// AllowLegacyDbRemoval passes the cutover-guard escape hatch through to
+	// OpenTofu. See State for why it exists at all.
+	AllowLegacyDbRemoval bool
 	// GrafanaSSO wires Grafana login to DeviceChain SSO (ADR-047): it enables the
 	// OAuth AS (sets the issuer), seeds a confidential Grafana client, and configures
 	// Grafana's generic_oauth + /grafana ingress — operator/superuser-tier only.

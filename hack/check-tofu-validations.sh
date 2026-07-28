@@ -379,13 +379,23 @@ if [[ -f $versions_conf ]]; then
   source "$versions_conf"
   pg_minor=${PG_IMAGE##*:}
   pg_minor=${pg_minor%%-*}
+  # Guarded, because the workflow this formula is copied from guards it too. A
+  # digest-pinned PG_IMAGE leaves hex here, and the assertion would then fail
+  # pointing at variables.tf when the problem is PG_IMAGE.
+  if ! grep -qE '^[0-9]+\.[0-9]+$' <<<"$pg_minor"; then
+    echo >&2 "MISSING: could not parse a PostgreSQL minor version from PG_IMAGE=$PG_IMAGE (got '$pg_minor')."
+    failures=$((failures + 1))
+    pg_minor=""
+  fi
   want_image="ghcr.io/devicechain-io/postgresql-timescaledb:${pg_minor}-ts${TIMESCALEDB_VERSION}-r${IMAGE_REVISION}"
   # `tofu console` renders a string result WITH its quotes, so the expected value
   # carries them too. Comparing the raw tag would fail on every correct run.
   evaluates "\"$want_image\"" 'var.timescale_image'
 else
   echo >&2 "MISSING: $versions_conf — cannot check the operand image tag against its source of truth."
-  ((failures++))
+  # NOT `((failures++))`: with failures at 0 that arithmetic command evaluates to 0,
+  # exits 1, and `set -e` kills the script right here — losing the summary below.
+  failures=$((failures + 1))
 fi
 
 if ((failures > 0)); then

@@ -85,7 +85,7 @@ locals {
       holds       = "all recorded device event history"
       allow       = var.allow_legacy_tsdb_removal
       allow_var   = "allow_legacy_tsdb_removal"
-      dump        = "pg_dump -U <user> -d <database> -Fc > events.dump"
+      dump        = "pg_dumpall -U <user> > events.sql   # NOT pg_dump: every service CREATEs its own database, so this store holds one per instance"
     }
   }
 }
@@ -286,10 +286,10 @@ module "cnpg_tsdb" {
   depends_on = [module.namespace, module.cnpg]
 }
 
-# CloudNativePG — the operator that will own both database stores (ADR-020 A2).
+# CloudNativePG — the operator that owns both database stores (ADR-020 A2).
 # Installs the operator + CRDs and, when backups are enabled, the Barman Cloud
-# plugin. It creates no Cluster resources yet; A2.3/A2.4 move `rdb` and `tsdb`
-# onto it. Installed on non-HA installs too (decision D4) — backup is not an HA
+# plugin. The Clusters themselves are the two modules above.
+# Installed on non-HA installs too (decision D4) — backup is not an HA
 # feature, and one storage shape means HA is an `instances` count rather than a
 # migration.
 module "cnpg" {
