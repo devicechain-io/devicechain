@@ -233,6 +233,20 @@ var readLiveArchiveState = func(ctx context.Context, kubeContext string) (liveAr
 	if err != nil {
 		return liveArchiveState{}, err
 	}
+	return readArchiveState(ctx, dyn)
+}
+
+// readArchiveState is the half of readLiveArchiveState that has no cluster in it:
+// which Cluster's state lands in which field.
+//
+// 🔴 SPLIT OUT SO THAT WIRING IS TESTABLE AT ALL. readLiveArchiveState is the seam
+// every stepRenderConfig test stubs, so the mapping below is the one part of the
+// restore path that no test in this package could reach — and a swap here is
+// invisible in exactly the way that costs the most: each store would be handed the
+// OTHER's archive path, so an ordinary re-run retargets the relational archiver at
+// the event store's WAL and vice versa. Both clusters keep archiving, to the wrong
+// prefixes, with no base backup under either.
+func readArchiveState(ctx context.Context, dyn dynamic.Interface) (liveArchiveState, error) {
 	var out liveArchiveState
 	for _, s := range []struct {
 		name string
@@ -268,7 +282,21 @@ func clusterArchivePath(ctx context.Context, dyn dynamic.Interface, namespace, n
 	}
 	out := clusterArchiveState{Exists: true}
 	plugins, _, err := unstructured.NestedSlice(cl.Object, "spec", "plugins")
-	if err != nil || len(plugins) == 0 {
+	// 🔴 MALFORMED IS NOT ABSENT. This read used to fold the error in with the
+	// empty case — `if err != nil || len(plugins) == 0` — which looks fail-closed
+	// and is not: NestedSlice hands back a nil slice on error, so the error branch
+	// was unreachable and a Cluster whose spec.plugins is not a list reported
+	// Exists=true with an empty path. That reads as "archiving under its own name",
+	// the default, so the next re-run emits no serverName and retargets a live
+	// archiver at a prefix with no base backup in it. The same direction the Get
+	// above refuses to guess in.
+	if err != nil {
+		return clusterArchiveState{}, fmt.Errorf("reading spec.plugins of Cluster %s/%s: %w. "+
+			"Refusing to continue: reading a malformed plugin list as 'archiving nowhere' "+
+			"would retarget this cluster's WAL archive at a path with no base backup",
+			namespace, name, err)
+	}
+	if len(plugins) == 0 {
 		return out, nil
 	}
 	for _, p := range plugins {
@@ -293,7 +321,15 @@ func clusterArchivePath(ctx context.Context, dyn dynamic.Interface, namespace, n
 		if isArchiver, _, _ := unstructured.NestedBool(plug, "isWALArchiver"); !isArchiver {
 			continue
 		}
-		out.Path, _, _ = unstructured.NestedString(plug, "parameters", "serverName")
+		// Same rule as spec.plugins above, on the field that actually carries the
+		// answer: a serverName that is not a string is unreadable, not empty.
+		path, _, err := unstructured.NestedString(plug, "parameters", "serverName")
+		if err != nil {
+			return clusterArchiveState{}, fmt.Errorf("reading the archiver serverName of "+
+				"Cluster %s/%s: %w. Refusing to continue rather than read it as the default path",
+				namespace, name, err)
+		}
+		out.Path = path
 		return out, nil
 	}
 	return out, nil

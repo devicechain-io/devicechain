@@ -12,6 +12,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -203,6 +204,58 @@ func TestRestoringOneStoreLeavesTheOtherAlone(t *testing.T) {
 	}
 }
 
+// A fresh ordinary install — nothing there, nothing being restored — must settle on
+// "", which infraVars then omits entirely.
+//
+// The empty string is not cosmetic here. Unset, the chart renders NO serverName
+// parameter and CloudNativePG defaults it to the Cluster's own name; the chart's
+// restore guard keys on exactly that emptiness. Emitting the name explicitly reaches
+// the same archive prefix by a path the guard can no longer see.
+func TestAFreshOrdinaryInstallSettlesOnNoArchivePath(t *testing.T) {
+	got := resolveArchivePaths(liveArchiveState{}, RestorePlan{}, testNow)
+	if got.Rdb != "" || got.Tsdb != "" {
+		t.Fatalf("a fresh install with no restore must take the root's default (no var at all); "+
+			"got rdb=%q tsdb=%q", got.Rdb, got.Tsdb)
+	}
+	if len(got.AlreadyLive) != 0 {
+		t.Errorf("no store exists and none is being restored; got %v", got.AlreadyLive)
+	}
+}
+
+// 🔴 THE REAL RECOVERY MUST NOT BE TOLD IT WILL NOT RUN. AlreadyLive drives a
+// warning that says the restore is a no-op and the operator should destroy the
+// instance and rebuild it. Firing that on a restore into an EMPTY cluster — the one
+// case where the restore genuinely does run — hands an operator mid-incident a
+// destroy instruction for the data they have just recovered.
+func TestARestoreIntoNothingIsNotReportedAsIneffective(t *testing.T) {
+	got := resolveArchivePaths(liveArchiveState{},
+		RestorePlan{RdbFrom: RdbClusterName, TsdbFrom: TsdbClusterName}, testNow)
+	if len(got.AlreadyLive) != 0 {
+		t.Fatalf("neither Cluster exists, so both restores WILL run; reporting %v tells the "+
+			"operator to destroy and rebuild the instance they are in the middle of recovering",
+			got.AlreadyLive)
+	}
+}
+
+// The stamp claims UTC — the format literal ends in Z — so it has to BE UTC. An
+// operator reads these paths against backup timestamps while deciding which archive
+// to recover from, and a local-time stamp wearing a Z is off by the offset in the
+// direction of "the wrong archive looks like the right one".
+func TestTheRestoreStampIsUTCNotLocalTime(t *testing.T) {
+	// 14:05Z is the previous DAY in this zone, so the mutation is visible in the
+	// date as well as the time.
+	zone := time.FixedZone("UTC-16", -16*60*60)
+	got := RestoredArchivePath(RdbClusterName, testNow.In(zone))
+
+	if want := RestoredArchivePath(RdbClusterName, testNow); got != want {
+		t.Fatalf("the same instant produced %q in %s and %q in UTC — the stamp is formatted in "+
+			"the local zone while claiming Z", got, zone, want)
+	}
+	if !strings.HasSuffix(got, "-20260728T140506Z") {
+		t.Errorf("archive path %q does not carry the UTC instant", got)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Reading the live path
 // ---------------------------------------------------------------------------
@@ -317,6 +370,103 @@ func TestArchivePathFailsWhenTheClusterCannotBeRead(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Refusing to continue") {
 		t.Errorf("the error should say why it refuses rather than guesses; got: %v", err)
+	}
+}
+
+// 🔴 THE WIRING NO OTHER TEST IN THIS PACKAGE CAN REACH. readLiveArchiveState is
+// the seam every stepRenderConfig test stubs, so which Cluster's state lands in
+// which field was checked by nothing — and the fixtures above use one store, which
+// is exactly the shape a swap survives.
+//
+// A swap is not a mislabel. Each store would be handed the OTHER's archive path and
+// emit it as its own backup_server_name, so the next apply retargets the relational
+// archiver at the event store's WAL prefix and vice versa. Both clusters go on
+// archiving, to prefixes holding no base backup of the database writing to them:
+// two stores restorable to nothing, on a green apply.
+func TestReadArchiveStateKeepsTheTwoStoresApart(t *testing.T) {
+	archiver := func(serverName string) map[string]any {
+		return map[string]any{
+			"name":          barmanPluginName,
+			"isWALArchiver": true,
+			"parameters":    map[string]any{"serverName": serverName},
+		}
+	}
+	dyn := fakeDyn(
+		cnpgCluster(RdbClusterName, archiver("rdb-owns-this")),
+		cnpgCluster(TsdbClusterName, archiver("tsdb-owns-this")),
+	)
+
+	got, err := readArchiveState(context.Background(), dyn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Rdb.Path != "rdb-owns-this" || got.Tsdb.Path != "tsdb-owns-this" {
+		t.Fatalf("the stores were read into each other's slot: rdb=%q tsdb=%q.\n"+
+			"  Each store then emits the other's archive path, and the next apply points\n"+
+			"  both WAL archivers at prefixes with no base backup of the database writing\n"+
+			"  to them — silently, on a green apply.", got.Rdb.Path, got.Tsdb.Path)
+	}
+}
+
+// Before CloudNativePG is installed — a first bootstrap, or any --no-cnpg run —
+// the Cluster KIND does not exist, and the API server answers with a no-match
+// rather than a not-found. That is "nothing is archiving yet", not a failure: it is
+// the state every fresh install starts in, so reading it as an error would refuse
+// the ordinary path.
+func TestArchivePathTreatsAMissingCNPGCRDAsNothingThere(t *testing.T) {
+	dyn := fakeDyn()
+	dyn.PrependReactor("get", "clusters", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, &meta.NoResourceMatchError{PartialResource: clusterGVR}
+	})
+
+	got, err := clusterArchivePath(context.Background(), dyn, infraNamespace, RdbClusterName)
+	if err != nil {
+		t.Fatalf("a cluster with no CloudNativePG CRD installed is a fresh install, not a "+
+			"failure — this refuses every first bootstrap and every --no-cnpg run: %v", err)
+	}
+	if got.Exists || got.Path != "" {
+		t.Fatalf("want the zero state where the kind does not exist, got %+v", got)
+	}
+}
+
+// 🔴 MALFORMED IS NOT ABSENT, and this pair is the counterweight to the two tests
+// above: "not there" reads as empty, everything ELSE has to fail.
+//
+// The guard for the plugin list used to be `if err != nil || len(plugins) == 0`,
+// which looks fail-closed and is not — NestedSlice returns a nil slice on error, so
+// the error branch was unreachable and both cases returned the same "exists,
+// archiving under its own name". That answer is the destructive one: the next
+// re-run emits no serverName and retargets a live archiver at a prefix with no base
+// backup in it.
+func TestArchivePathFailsOnAnUnreadableArchiverSpec(t *testing.T) {
+	for name, spec := range map[string]map[string]any{
+		"spec.plugins is not a list": {"plugins": "barman-cloud.cloudnative-pg.io"},
+		"serverName is not a string": {"plugins": []any{map[string]any{
+			"name":          barmanPluginName,
+			"isWALArchiver": true,
+			"parameters":    map[string]any{"serverName": int64(2026)},
+		}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cl := &unstructured.Unstructured{Object: map[string]any{
+				"apiVersion": clusterGVR.GroupVersion().String(),
+				"kind":       "Cluster",
+				"metadata":   map[string]any{"name": RdbClusterName, "namespace": infraNamespace},
+				"spec":       spec,
+			}}
+
+			got, err := clusterArchivePath(
+				context.Background(), fakeDyn(cl), infraNamespace, RdbClusterName)
+			if err == nil {
+				t.Fatalf("an unreadable archiver spec was reported as %+v. Empty means "+
+					"'archiving under its own name', so this retargets a LIVE archiver at a "+
+					"prefix with no base backup — the one direction this reader must never "+
+					"guess in.", got)
+			}
+			if !strings.Contains(err.Error(), "Refusing to continue") {
+				t.Errorf("the error should say why it refuses rather than guesses; got: %v", err)
+			}
+		})
 	}
 }
 
