@@ -347,6 +347,33 @@ func infraVars(st *State) []string {
 			)
 		}
 	}
+	// The archive path each store OWNS (ADR-020 A2.5 / ADR-028), settled in
+	// stepRenderConfig. Empty is the OpenTofu default — the Cluster's own name — and
+	// is what every ordinary install emits, so the var is omitted rather than passed
+	// empty.
+	//
+	// 🔴 This is read from the LIVE Cluster, not derived from this run's flags. See
+	// resolveArchivePaths: passing a value derived from a one-shot restore flag would
+	// mean a later flagless re-run silently retargets a live cluster's archiver.
+	if v := st.Values["backupServerNameRdb"]; v != "" {
+		vars = append(vars, "backup_server_name_rdb="+v)
+	}
+	if v := st.Values["backupServerNameTsdb"]; v != "" {
+		vars = append(vars, "backup_server_name_tsdb="+v)
+	}
+	// The restore itself. Rebuild-time only: CloudNativePG reads `spec.bootstrap`
+	// when it CREATES a Cluster, so these do nothing to a store that already exists
+	// — stepRenderConfig says so out loud when it finds one.
+	for _, v := range []struct{ name, value string }{
+		{"restore_rdb_from", st.Restore.RdbFrom},
+		{"restore_rdb_target_time", st.Restore.RdbTargetTime},
+		{"restore_tsdb_from", st.Restore.TsdbFrom},
+		{"restore_tsdb_target_time", st.Restore.TsdbTargetTime},
+	} {
+		if v.value != "" {
+			vars = append(vars, v.name+"="+v.value)
+		}
+	}
 	// Broker authentication (ADR-025): enable auth callout on NATS and pass the
 	// minted public issuer + the bcrypt hash of the service password. The plaintext
 	// password + seed go into the instance config in helmInstall; nats-server

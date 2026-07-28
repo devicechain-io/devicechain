@@ -5,6 +5,7 @@ package bootstrap
 
 import (
 	"io/fs"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -59,7 +60,14 @@ func TestBothStoresAreActuallyWiredToABackupDestination(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading the embedded main.tf: %v", err)
 	}
-	main := string(body)
+	// Collapse runs of spaces before matching. `terraform fmt` ALIGNS the `=` of
+	// adjacent arguments, so adding a longer argument name to one of these module
+	// blocks silently rewrites its neighbours' whitespace — which is exactly what
+	// happened when `restore` joined the event store's block and turned
+	// `backup = ` into `backup  = `. The wiring was intact; only the literal moved.
+	// Matching on the assignment rather than on its column keeps the test pointed
+	// at the thing that matters.
+	main := regexp.MustCompile(`[ \t]+`).ReplaceAllString(string(body), " ")
 
 	for _, tc := range []struct {
 		what  string

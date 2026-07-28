@@ -120,6 +120,51 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		}
 	}
 
+	// SETTLE THE ARCHIVE PATH EACH DATABASE OWNS, FROM WHAT IT IS ALREADY ARCHIVING
+	// UNDER — not from this run's flags (ADR-020 A2.5 / ADR-028).
+	//
+	// Same shape, same reason as the credentials above: the path is permanent
+	// configuration and --restore-* is a one-shot flag, so deriving it from the flag
+	// would let an ordinary flagless re-run retarget a LIVE cluster's WAL archive at
+	// a path holding no base backup — silently, on a green run. See
+	// resolveArchivePaths.
+	//
+	// The lookup is skipped under --dry-run for the same reason as the one above: a
+	// dry run deploys nothing, so the derived path it prints is a plan, not a change.
+	var live liveArchiveState
+	if !st.DryRun {
+		live, err = readLiveArchiveState(ctx, st.KubeContext)
+		if err != nil {
+			return fail("reading the database archive state", err)
+		}
+	}
+	paths := resolveArchivePaths(live, st.Restore, time.Now().UTC())
+	st.Values["backupServerNameRdb"] = paths.Rdb
+	st.Values["backupServerNameTsdb"] = paths.Tsdb
+	if st.Restore.Active() {
+		for _, p := range []struct{ store, from, path string }{
+			{"relational store", st.Restore.RdbFrom, paths.Rdb},
+			{"event store", st.Restore.TsdbFrom, paths.Tsdb},
+		} {
+			if p.from != "" {
+				notes = append(notes, fmt.Sprintf(
+					"%s recovering from archive %q, and will archive under %q",
+					p.store, p.from, p.path))
+			}
+		}
+	}
+	// 🔴 A restore aimed at a store that already exists does NOTHING — CloudNativePG
+	// reads `spec.bootstrap` when it CREATES a Cluster. The apply is green, the
+	// operator is told a restore was requested, and no data moves. Say it here, out
+	// loud, because from the outside "it restored" and "it declined to restore" look
+	// identical.
+	for _, name := range paths.AlreadyLive {
+		fmt.Println(color.YellowString(
+			"  Cluster %s already exists, so its restore will NOT run: CloudNativePG reads "+
+				"spec.bootstrap only when it creates a cluster. Destroy the instance and rebuild "+
+				"it with the same flags to actually recover.", name))
+	}
+
 	// The NATS broker-auth credentials (ADR-025): the callout issuer nkey and the
 	// shared service password. These can't be generated declaratively (nkeys aren't a
 	// TF primitive), so dcctl mints them here and threads the public issuer + bcrypt
@@ -739,6 +784,23 @@ func stepReport(ctx context.Context, st *State) error {
 			color.YellowString("this is point-in-time recovery, NOT disaster recovery — the backups share the cluster's"))
 		fmt.Printf("           %s\n",
 			color.YellowString("failure domain and are lost with it. Set backup_destination=\"external\" for off-site."))
+	}
+	// The archive path each store OWNS — which is the INPUT to the next restore.
+	//
+	// Printed only when it is not the default, because that is exactly when an
+	// operator cannot work it out: after a recovery the paths are stamped names
+	// nobody chose, and `--restore-rdb-from dc-rdb` — the obvious guess — points at
+	// the archive of the instance that already died. Alongside it, the escrow line
+	// below completes the pair a restore actually needs.
+	if st.Values[databaseBackupsKey] == "true" {
+		for _, p := range []struct{ label, path string }{
+			{"Relational archive:", st.Values["backupServerNameRdb"]},
+			{"Event archive:", st.Values["backupServerNameTsdb"]},
+		} {
+			if p.path != "" {
+				fmt.Printf("  %s %s\n", color.WhiteString(p.label), color.GreenString(p.path))
+			}
+		}
 	}
 	// The root-key escrow, printed here because this is the screen an operator
 	// actually reads. Every branch says something: the file to back up, the artifact
