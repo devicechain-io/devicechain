@@ -28,6 +28,36 @@
 #   - kube_deployment_status_replicas_available — stock kube-state-metrics.
 #     Confirmed present for the cnpg-system namespace on the rig before anything
 #     was written against it.
+#   - cnpg_collector_up — the CloudNativePG instances' OWN metrics endpoint
+#     (:9187), scraped via the PodMonitor the operator creates, NOT
+#     kube-state-metrics. Read live in both directions: 1 on a healthy cluster,
+#     and 0 while the primary's connections were exhausted.
+#
+#     🔴 READ OUT OF PROMETHEUS, NOT OFF THE ENDPOINT, and the difference is a
+#     defect this file exists to prevent. The endpoint serves
+#     `cnpg_collector_up{cluster="dc-rdb"}`, which looks per-Cluster. Prometheus
+#     stores the PodMonitor's target labels alongside it:
+#
+#       {cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-2",
+#        instance="10.244.1.6:9187", container="postgres",
+#        endpoint="metrics", job="dc-system/dc-rdb"}
+#
+#     — one series PER INSTANCE. Every scenario below therefore carries THREE
+#     collector series per Cluster with real pod labels, because the rule
+#     aggregates them away with `min by (cluster, namespace)` and a test built on
+#     the endpoint's shape would assert nothing about that. Writing the synthetic
+#     series from the endpoint is exactly how the `pod`-label defect that killed
+#     the controller_runtime counter design nearly shipped a second time.
+#
+# 🔴 WHY cnpg_backends_total IS ABSENT FROM EVERY SCENARIO. It is the obvious
+# series for a connection-exhaustion test and it CANNOT be used, because it does
+# not exist when it would matter. The exporter authenticates as
+# cnpg_metrics_exporter, which is not a superuser, so `superuser_reserved_
+# connections` refuses it exactly as it refuses the application — measured, with
+# the endpoint still returning 200 OK and simply omitting every SQL-derived
+# metric, `cnpg_pg_settings_setting{name="max_connections"}` included. A
+# utilization ratio built from those two would go silent precisely at saturation.
+# That is why the A2.7b rule watches the collector's own health instead.
 #
 # 🔑 NOTE WHAT IS *NOT* HERE: no controller_runtime_* series. An earlier version
 # of these rules counted the operator's reconcile errors and was rejected after
@@ -76,6 +106,24 @@ tests:
         values: "1+0x9 0+0x170"
       - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="cnpg-cloudnative-pg"}'
         values: "2+0x180"
+      # 🔑 STAYS 1 FOR THE WHOLE OUTAGE, and that is a MEASURED fact rather than a
+      # convenient one: during the live A1.5 drill Postgres was perfectly
+      # reachable throughout — the broken part was the controller. This is the
+      # exact mirror of the A2.7b scenario below, where this series goes to 0
+      # while the Cluster conditions stay healthy. Together they are what makes
+      # the two rules non-redundant.
+      - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-2", instance="10.244.2.11:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dc-system", pod="dc-tsdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="dc-system/dc-tsdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dc-system", pod="dc-tsdb-2", instance="10.244.2.11:9187", container="postgres", endpoint="metrics", job="dc-system/dc-tsdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dc-system", pod="dc-tsdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="dc-system/dc-tsdb"}'
+        values: "1+0x180"
     alert_rule_test:
       # 🔴 THE `for` FROM THE SIDE THAT CAN BE WRONG. Ready drops at minute 10, so
       # the 15m `for` is satisfied at minute 25 — NOT at minute 20. A Cluster
@@ -146,6 +194,14 @@ tests:
       - eval_time: 60m
         alertname: CNPGClusterStateUnobserved
         exp_alerts: []
+      # 🔴 AND THE DATABASES ARE STILL REACHABLE. Asserting silence here is what
+      # stops CNPGClusterUnusable from degenerating into "something is wrong
+      # somewhere": if it fired during a pure control-plane outage it would carry
+      # no information the rule above does not already carry, and its description
+      # would send the operator to look at connection counts that are fine.
+      - eval_time: 60m
+        alertname: CNPGClusterUnusable
+        exp_alerts: []
 
   # -------------------------------------------------------------------------
   # The healthy control plane. Nothing may fire, or none of the above means
@@ -162,6 +218,18 @@ tests:
         values: "1+0x180"
       - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="cnpg-cloudnative-pg"}'
         values: "2+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-2", instance="10.244.2.11:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dc-system", pod="dc-tsdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="dc-system/dc-tsdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dc-system", pod="dc-tsdb-2", instance="10.244.2.11:9187", container="postgres", endpoint="metrics", job="dc-system/dc-tsdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dc-system", pod="dc-tsdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="dc-system/dc-tsdb"}'
+        values: "1+0x180"
     alert_rule_test:
       - eval_time: 60m
         alertname: CNPGClusterNotReady
@@ -171,6 +239,9 @@ tests:
         exp_alerts: []
       - eval_time: 60m
         alertname: CNPGClusterStateUnobserved
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: CNPGClusterUnusable
         exp_alerts: []
 
   # -------------------------------------------------------------------------
@@ -198,6 +269,20 @@ tests:
         values: "1+0x180"
       - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="cnpg-cloudnative-pg"}'
         values: "2+0x180"
+      # A switchover does not cost the collector its connection — it reconnects to
+      # the new primary. Measured 1 throughout the equivalent live event.
+      - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-2", instance="10.244.2.11:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dc-system", pod="dc-tsdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="dc-system/dc-tsdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dc-system", pod="dc-tsdb-2", instance="10.244.2.11:9187", container="postgres", endpoint="metrics", job="dc-system/dc-tsdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dc-system", pod="dc-tsdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="dc-system/dc-tsdb"}'
+        values: "1+0x180"
     alert_rule_test:
       # Minute 36: inside the outage, pending, short of the `for`.
       - eval_time: 36m
@@ -216,6 +301,185 @@ tests:
         exp_alerts: []
       - eval_time: 90m
         alertname: CNPGClusterStateUnobserved
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: CNPGClusterUnusable
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # 🔴 THE A2.7b FINDING — connection exhaustion, the EXACT MIRROR of the A1.5
+  # scenario at the top of this file.
+  #
+  # Every rdb-backed service opens a pool capped at 20 against the same primary;
+  # the default profile has 7 such services and the full profile 9, so demand is
+  # 140-180 against `max_connections - superuser_reserved_connections`. Measured
+  # on the rig at the stock 100: application connection number 94 was refused with
+  # "remaining connection slots are reserved for roles with the SUPERUSER
+  # attribute".
+  #
+  # 🔴 WHAT MAKES THIS WORTH A RULE OF ITS OWN, and it was measured while holding
+  # 98 of 100 slots: the Cluster went on reporting Ready=True and
+  # "Cluster in healthy state" throughout, because the OPERATOR authenticates as a
+  # superuser and keeps its reserved slots. So the series in every other scenario
+  # here stay pinned at 1 while the entire application tier is locked out of the
+  # database. This test asserts that blindness explicitly, the same way the
+  # monitoring-gap scenario below does — a failure this group cannot see is worth
+  # writing down.
+  #
+  # `cnpg_backends_total` is deliberately NOT in this input. It is not that the
+  # test declines to use it; the series genuinely VANISHES under this condition,
+  # because the exporter's own role is not a superuser either. Any rule built on a
+  # utilization ratio would evaluate an empty vector and stay silent.
+  #
+  # Sample layout (interval 1m):
+  #   minutes  0- 9   healthy
+  #   minute  10      the pools fill and the collector is locked out
+  # -------------------------------------------------------------------------
+  - name: a cluster that is ready but out of connections is not silently healthy
+    interval: 1m
+    input_series:
+      # 🔑 PINNED AT 1 FOR THE WHOLE TEST. This is the measured state, not a
+      # simplification, and it is the reason this scenario exists.
+      - series: 'kube_cnpg_cluster_condition{namespace="dc-system", cluster="dc-rdb", type="Ready", reason="ClusterIsReady"}'
+        values: "1+0x180"
+      - series: 'kube_cnpg_cluster_condition{namespace="dc-system", cluster="dc-tsdb", type="Ready", reason="ClusterIsReady"}'
+        values: "1+0x180"
+      # The control plane is entirely healthy. Nothing here is a controller fault.
+      - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="plugin-barman-cloud"}'
+        values: "1+0x180"
+      - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="cnpg-cloudnative-pg"}'
+        values: "2+0x180"
+      # The relational store exhausts its connections. The event store does not —
+      # only one service holds a pool against it — so this also pins that the
+      # alert identifies the affected Cluster rather than firing for the pair.
+      - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-2", instance="10.244.2.11:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
+        values: "1+0x9 0+0x170"
+      - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dc-system", pod="dc-tsdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="dc-system/dc-tsdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dc-system", pod="dc-tsdb-2", instance="10.244.2.11:9187", container="postgres", endpoint="metrics", job="dc-system/dc-tsdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dc-system", pod="dc-tsdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="dc-system/dc-tsdb"}'
+        values: "1+0x180"
+      # 🔴 ANOTHER DeviceChain INSTANCE'S DATABASE, IN ITS OWN NAMESPACE, FULLY
+      # BROKEN. Multiple Instances share one Kubernetes cluster and one CNPG
+      # operator, and EACH renders its own copy of this PrometheusRule. Without a
+      # namespace selector this rule matches every CNPG Cluster on the box, so one
+      # incident would page from every Instance, all but one of them stamping
+      # `devicechain_instance` on a database that is not theirs. The assertions
+      # below must therefore see dc-rdb ONLY.
+      - series: 'cnpg_collector_up{cluster="other-rdb", namespace="other-instance", pod="other-rdb-1", instance="10.244.9.9:9187", container="postgres", endpoint="metrics", job="other-instance/other-rdb"}'
+        values: "0+0x180"
+    alert_rule_test:
+      # 🔴 THE `for` FROM THE SIDE THAT CAN BE WRONG. The collector drops at
+      # minute 10, so a 5m `for` is satisfied at minute 15 and NOT at minute 14.
+      # Asserted here so shortening the `for` is caught rather than merely
+      # tolerated.
+      - eval_time: 14m
+        alertname: CNPGClusterUnusable
+        exp_alerts: []
+      # 🔴 AND FROM ABOVE. Without this the suite bounds `for` only from below:
+      # 14m quiet plus 60m firing admits anything in (3m, 50m], so `for: 45m` would
+      # pass a green run while silencing the alert for three quarters of an hour.
+      # The condition starts at minute 10, so asserting it FIRES by minute 16 pins
+      # the `for` to at most 6m. Both edges, or the number is not tested.
+      - eval_time: 16m
+        alertname: CNPGClusterUnusable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              namespace: dc-system
+              cluster: dc-rdb
+            exp_annotations:
+              summary: "A PostgreSQL instance is not answering its own metrics collector"
+              description: >-
+                At least one instance of dc-rdb in namespace dc-system cannot be queried by its
+                CloudNativePG metrics collector, while the pods and the Cluster's Ready condition
+                may look perfectly healthy — the operator holds reserved superuser connections, so
+                it keeps reconciling either way. This alert cannot say WHICH instance (it
+                aggregates them to keep pod identity out of the alert), so check both
+                possibilities. If it is the PRIMARY, clients are affected and the likeliest cause
+                is CONNECTION EXHAUSTION: every rdb-backed service opens a pool of up to 20 against
+                the primary, and a rolling upgrade briefly doubles the pod count, so demand can
+                exceed max_connections and application services then fail with "remaining
+                connection slots are reserved for roles with the SUPERUSER attribute". If it is a
+                STANDBY, clients are unaffected and this is a failing replica rather than an
+                outage. Run `SELECT count(*) FROM pg_stat_activity` against `SHOW max_connections`
+                as a superuser, which still works while this fires, and compare per instance.
+      - eval_time: 60m
+        alertname: CNPGClusterUnusable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              namespace: dc-system
+              cluster: dc-rdb
+            exp_annotations:
+              summary: "A PostgreSQL instance is not answering its own metrics collector"
+              description: >-
+                At least one instance of dc-rdb in namespace dc-system cannot be queried by its
+                CloudNativePG metrics collector, while the pods and the Cluster's Ready condition
+                may look perfectly healthy — the operator holds reserved superuser connections, so
+                it keeps reconciling either way. This alert cannot say WHICH instance (it
+                aggregates them to keep pod identity out of the alert), so check both
+                possibilities. If it is the PRIMARY, clients are affected and the likeliest cause
+                is CONNECTION EXHAUSTION: every rdb-backed service opens a pool of up to 20 against
+                the primary, and a rolling upgrade briefly doubles the pod count, so demand can
+                exceed max_connections and application services then fail with "remaining
+                connection slots are reserved for roles with the SUPERUSER attribute". If it is a
+                STANDBY, clients are unaffected and this is a failing replica rather than an
+                outage. Run `SELECT count(*) FROM pg_stat_activity` against `SHOW max_connections`
+                as a superuser, which still works while this fires, and compare per instance.
+      - eval_time: 60m
+        alertname: CNPGClusterNotReady
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: CNPGControlPlaneUnavailable
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: CNPGClusterStateUnobserved
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # 🔴 A COLLECTOR BLIP MUST NOT PAGE — an instance restart, a rolling restart of
+  # the Cluster, a scrape gap.
+  #
+  # Measured on the rig: once the connections drained, `cnpg_collector_up` was
+  # back to 1 within about ten seconds, with the SQL-derived series returning
+  # roughly ten seconds after that. Three minutes here is an order of magnitude
+  # longer than that, so this test does not ride on the `for` being generous.
+  # -------------------------------------------------------------------------
+  - name: a collector that recovers on its own does not page
+    interval: 1m
+    input_series:
+      - series: 'kube_cnpg_cluster_condition{namespace="dc-system", cluster="dc-rdb", type="Ready", reason="ClusterIsReady"}'
+        values: "1+0x180"
+      - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="plugin-barman-cloud"}'
+        values: "1+0x180"
+      - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="cnpg-cloudnative-pg"}'
+        values: "2+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-2", instance="10.244.2.11:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
+        values: "1+0x29 0+0x2 1+0x148"
+      - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
+        values: "1+0x180"
+    alert_rule_test:
+      # Minute 31: inside the blip, pending, short of the 5m `for`.
+      - eval_time: 31m
+        alertname: CNPGClusterUnusable
+        exp_alerts: []
+      # Minute 36: recovered, and past where a 5m `for` measured from the START of
+      # the blip would have fired had the expression stayed true.
+      - eval_time: 36m
+        alertname: CNPGClusterUnusable
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: CNPGClusterUnusable
         exp_alerts: []
 
   # -------------------------------------------------------------------------
@@ -239,6 +503,18 @@ tests:
         values: "1+0x180"
       - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="cnpg-cloudnative-pg"}'
         values: "2+0x180"
+      # 🔑 PRESENT, and that is the point of including it: this series comes from
+      # the CNPG instances' own PodMonitor, NOT from kube-state-metrics. A
+      # kube-state-metrics misconfiguration takes out the three rules that read it
+      # and leaves this one working — which is why CNPGClusterStateUnobserved's
+      # summary is scoped to Cluster CONDITIONS rather than claiming the whole
+      # group has gone blind.
+      - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-2", instance="10.244.2.11:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
+        values: "1+0x180"
     alert_rule_test:
       - eval_time: 60m
         alertname: CNPGClusterStateUnobserved
@@ -271,6 +547,9 @@ tests:
       - eval_time: 60m
         alertname: CNPGControlPlaneUnavailable
         exp_alerts: []
+      - eval_time: 60m
+        alertname: CNPGClusterUnusable
+        exp_alerts: []
 
   # -------------------------------------------------------------------------
   # The operator is gone entirely. The deployment series still speak — that is
@@ -293,6 +572,21 @@ tests:
       - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="cnpg-cloudnative-pg"}'
         values: "2+0x9 0+0x170"
       - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="plugin-barman-cloud"}'
+        values: "1+0x180"
+      # 🔑 The databases keep SERVING while unmanaged — an operator outage does not
+      # touch the query path. Pinning this at 1 is what stops the scenario from
+      # accidentally passing for the wrong reason.
+      - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-2", instance="10.244.2.11:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dc-system", pod="dc-tsdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="dc-system/dc-tsdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dc-system", pod="dc-tsdb-2", instance="10.244.2.11:9187", container="postgres", endpoint="metrics", job="dc-system/dc-tsdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dc-system", pod="dc-tsdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="dc-system/dc-tsdb"}'
         values: "1+0x180"
     alert_rule_test:
       - eval_time: 60m
@@ -317,4 +611,7 @@ tests:
         exp_alerts: []
       - eval_time: 60m
         alertname: CNPGClusterStateUnobserved
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: CNPGClusterUnusable
         exp_alerts: []
