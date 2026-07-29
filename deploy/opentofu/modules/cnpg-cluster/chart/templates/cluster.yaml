@@ -275,6 +275,71 @@ spec:
     # instance there is nothing to spread, and `required` with a single pod on a
     # single-node cluster would refuse to schedule at all.
     podAntiAffinityType: {{ gt $instances 1 | ternary "required" "preferred" }}
+    {{- /*
+    🔴 `if not (kindIs "invalid" ...)`, NOT `with`. `with` is falsy on 0, and 0
+    is a value an operator may legitimately want here -- it means "evict the
+    moment the taint lands", roughly 50s after the node dies. Under `with` that
+    setting would render nothing and silently deliver 300 instead, i.e. the most
+    aggressive request in the file producing the least aggressive behaviour. Only
+    an unset value means "leave Kubernetes' default alone".
+    */}}
+    {{- if not (kindIs "invalid" .Values.nodeLossTolerationSeconds) }}
+    {{- $tol := .Values.nodeLossTolerationSeconds | int }}
+    {{- /*
+    Kubernetes' DefaultTolerationSeconds admission plugin injects
+    `tolerationSeconds: 300` onto every pod that does not already tolerate these
+    two taints. So setting nothing here is not "leave it to Kubernetes"; it is
+    choosing 300 without writing it down anywhere in this repo.
+
+    🔴 WHAT THIS DOES **NOT** DO, stated first because an earlier version of this
+    comment claimed it and was wrong. It does NOT gate failover. The claim was
+    that CloudNativePG will not promote a standby until the old primary's pod is
+    evicted, and that this number therefore decided the RTO. Three drills say
+    otherwise:
+
+      run 1  primary's node killed                          RTO 7m12s
+      run 2  same, plugin also on that node                 RTO 10m50s
+      run 3  same, control plane safe elsewhere             RTO 1m51s
+
+    In run 3, `Failing over` began 4.7s after the pod went `Ready=False`, with no
+    eviction at all -- and the event store completed a full failover while its old
+    primary pod was still Running and un-evicted at a 300s toleration. Promotion
+    is gated on the instance being unreachable, not on the pod object going away.
+
+    Run 2 is what exposed the real mechanism: both stores recovered within 0.4s of
+    each other despite their pods being evicted 268s apart. What they were waiting
+    on was the Barman Cloud plugin, which had died with the node -- CloudNativePG
+    cannot reconcile a Cluster whose plugins it cannot reach, and a Cluster that
+    does not reconcile does not promote. The 300s that looked like THIS pod's
+    toleration was the PLUGIN Deployment's own default toleration: same number,
+    different pod, which is exactly why the wrong explanation fitted run 1.
+
+    WHAT IT DOES DO. It removes a dead primary's pod sooner, which shortens the
+    tail of the failover rather than its start. In run 3 the store at 30s came
+    back 24s ahead of the store at 300s (1m51s vs 2m15s) -- real, worth having,
+    and an order of magnitude less than the 4m30s the original model predicted.
+    The control plane's availability is the dominant term; see modules/cnpg.
+
+    WHY LOWERING IT IS SAFE, since a shorter fuse is not free in general. The 300s
+    default exists to keep a brief partition from mass-evicting pods. Two things
+    bound that risk here: the node is already confirmed silent for ~50s before the
+    taint is applied, so this timer starts well after a blip would have ended; and
+    Kubernetes' node controller throttles or halts evictions entirely when a large
+    fraction of a zone is unhealthy, so the correlated case is handled above us.
+    What remains is uncorrelated single-node loss -- the case being optimised --
+    where the old primary rejoins as a replica when its node returns. All three
+    drills confirmed that rejoin, with RPO 0 every time.
+    */}}
+    tolerations:
+      - key: node.kubernetes.io/not-ready
+        operator: Exists
+        effect: NoExecute
+        tolerationSeconds: {{ $tol }}
+      - key: node.kubernetes.io/unreachable
+        operator: Exists
+        effect: NoExecute
+        tolerationSeconds: {{ $tol }}
+    {{- end }}
 
   postgresql:
     {{- with .Values.sharedPreloadLibraries }}

@@ -246,6 +246,39 @@ concern — any install owes a root key.
 {{- .Values.serviceAccount.name | default (printf "dc-%s" .Values.instance.id) -}}
 {{- end -}}
 
+{{/*
+The node-loss eviction fuse, as a `tolerations:` block, or nothing when the value
+is unset. Takes the ROOT context. Emits at the pod-spec indent (6 spaces).
+
+🔴 A HELPER RATHER THAN AN INLINE COPY PER TEMPLATE, and the reason is not
+tidiness. The first version of this WAS two inline copies, and it shipped as one:
+deployment.yaml got the block, frontend.yaml did not, and the chart rendered ten
+Deployments of which nine carried the fuse. Nothing failed — the tenth simply kept
+Kubernetes' 300s default, which is invisible precisely because an unset toleration
+is not an absent one. A cross-check of "Deployments rendered" against "tolerations
+rendered" is what caught it. Anything that grows a new pod-spec template inherits
+the fix from here instead of needing to remember it.
+
+`if not (kindIs "invalid" ...)` rather than `with`: 0 is a legitimate value here —
+"evict the moment the taint lands" — and `with` is falsy on 0, so the most
+aggressive request in the values file would render nothing and silently deliver
+the least aggressive behaviour. Only unset means "leave Kubernetes' default".
+*/}}
+{{- define "devicechain.nodeLossTolerations" -}}
+{{- if not (kindIs "invalid" .Values.nodeLossTolerationSeconds) }}
+{{- $tol := .Values.nodeLossTolerationSeconds | int }}
+tolerations:
+  - key: node.kubernetes.io/not-ready
+    operator: Exists
+    effect: NoExecute
+    tolerationSeconds: {{ $tol }}
+  - key: node.kubernetes.io/unreachable
+    operator: Exists
+    effect: NoExecute
+    tolerationSeconds: {{ $tol }}
+{{- end }}
+{{- end -}}
+
 {{/* Identifying labels for an instance-scoped resource (namespace, ConfigMaps). */}}
 {{- define "devicechain.instanceLabels" -}}
 devicechain.io/instance: {{ .Values.instance.id }}

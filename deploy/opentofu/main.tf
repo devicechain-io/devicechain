@@ -691,6 +691,14 @@ module "cnpg" {
   plugin_chart_version   = var.cnpg_plugin_chart_version
   enable_backup_plugin   = var.enable_database_backups
 
+  # 🔴 The CNPG control plane follows the instance's HA posture because it is IN
+  # the database failover path, not merely adjacent to it. A single-replica
+  # operator or backup plugin that dies with a node blocks promotion for every
+  # Cluster in the instance until it is rescheduled — measured at 10m50s against
+  # 1m51s when it survived. Replicating the databases and leaving the thing that
+  # promotes them un-replicated is the false-HA shape one level up.
+  ha = var.ha
+
   # enable_pod_monitor is deliberately NOT passed, so it stays off. It was briefly
   # wired to var.enable_monitoring; that is wrong twice over — a variable read
   # orders nothing, so the release races kube-prometheus-stack's CRDs on a fresh

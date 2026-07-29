@@ -196,6 +196,52 @@ variable "resources" {
   }
 }
 
+variable "node_loss_toleration_seconds" {
+  description = <<-EOT
+    How long an instance pod stays put after its node is tainted NotReady or
+    unreachable, before Kubernetes evicts it. null leaves Kubernetes' default,
+    which is 300.
+
+    🔴 IT DOES NOT GATE FAILOVER, and an earlier version of this text said it
+    did. The claim was that CloudNativePG waits for the failed primary's pod to be
+    evicted before promoting. Measured across three drills, it does not: promotion
+    began 4.7s after the pod went `Ready=False`, and the event store completed a
+    full failover while its old primary pod was still Running and un-evicted at a
+    300s toleration.
+
+    What dominates the RTO is whether the CNPG CONTROL PLANE survived the node —
+    a Cluster whose plugins the operator cannot reach does not reconcile, and one
+    that does not reconcile does not promote. Same fault, same cluster, minutes
+    apart: 10m50s with the plugin on the dead node, 1m51s without. See
+    modules/cnpg, which is where that is fixed.
+
+    What this knob does is remove the dead primary's pod sooner, which shortens
+    the TAIL of a failover rather than its start. Measured, same drill: the store
+    at 30s came back 24s ahead of the store at 300s. Real and cheap, but a
+    twentieth of what the original model predicted, so do not reach for it
+    expecting the headline number.
+
+    The default is 30 rather than 0 because the remaining terms are not ours to
+    give — ~50s of kubelet-heartbeat grace before the taint lands, then CNPG's own
+    detection and promotion. 0 would buy another 30s and spend the whole margin
+    against a node that is briefly silent rather than gone.
+
+    Safe to shorten because the taint already implies ~40s of confirmed silence
+    (a kubelet restart re-heartbeats well inside that), and because Kubernetes'
+    node controller throttles or halts eviction entirely when a large fraction of
+    a zone is unhealthy — so the correlated-failure case this default was written
+    for is handled above us. What is left is single-node loss, which is the case
+    being optimised, and where the old primary rejoins as a replica on return.
+  EOT
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.node_loss_toleration_seconds == null || var.node_loss_toleration_seconds >= 0
+    error_message = "node_loss_toleration_seconds must be null (Kubernetes' 300s default) or a non-negative number of seconds."
+  }
+}
+
 variable "backup" {
   description = <<-EOT
     WAL archiving + scheduled base backups for this store, via the Barman Cloud
@@ -363,6 +409,8 @@ locals {
     parameters             = var.parameters
     sharedPreloadLibraries = var.shared_preload_libraries
 
+    nodeLossTolerationSeconds = var.node_loss_toleration_seconds
+
     storage = {
       size         = var.storage
       storageClass = var.storage_class
@@ -454,6 +502,12 @@ locals {
   # -- and a mutation of what Helm is handed now moves the assertion.
   reported = {
     synchronous_enforced = local.base_values.synchronous.enabled
+    # Read out of the values for the same reason as the line above: this one
+    # decides two thirds of the failover time, and re-deriving it from the
+    # variable would make the output agree with the request rather than with what
+    # Helm was handed. tostring() pins the type so the "unset means Kubernetes'
+    # 300" case compares as a null string rather than an untyped null.
+    node_loss_toleration_seconds = tostring(local.base_values.nodeLossTolerationSeconds)
     # tostring() pins the TYPE, not the value. Inside an object constructor a
     # bare `null` branch is a null of no particular type, and `tofu console`
     # prints that as `null` where a null string prints as `tostring(null)` --
@@ -573,4 +627,9 @@ output "backup_destination" {
 output "synchronous_enforced" {
   description = "Whether synchronous replication is ACTUALLY in force, after the instance-count derivation. Read this rather than re-deriving it from the flags: an install that asked for synchronous and did not get enough instances runs asynchronously, and the difference is invisible from the Cluster resources alone -- which is the false-HA shape A0 closed for the broker."
   value       = local.reported.synchronous_enforced
+}
+
+output "node_loss_toleration_seconds" {
+  description = "The eviction fuse this store's pods actually carry, as a string, or \"tostring(null)\" when Kubernetes' 300s default is left in force. Worth reporting because it is invisible everywhere else: an unset value is not absent from the pod, it is 300 injected by an admission plugin, and nothing else in the apply says so."
+  value       = local.reported.node_loss_toleration_seconds
 }
