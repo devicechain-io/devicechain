@@ -486,6 +486,65 @@ evaluates false 'module.cnpg_tsdb.synchronous_enforced' -var ha=true -var timesc
 evaluates 3 'module.cnpg_tsdb.synchronous_enforced ? 3 : 1' -var ha=true -var postgres_instances=1
 evaluates 1 'module.cnpg_rdb.synchronous_enforced ? 3 : 1' -var ha=true -var postgres_instances=1
 
+# --- the node-loss eviction fuse (ADR-020 A1.4) ------------------------------
+#
+# 🔴 THE FAILURE THIS PINS IS A DELETION, NOT A WRONG VALUE, and that is why it
+# is asserted at all when the module hard-codes a default. Drop
+# `nodeLossTolerationSeconds` from base_values in a refactor and nothing breaks:
+# the chart's own default is null, null renders no toleration, and Kubernetes'
+# DefaultTolerationSeconds admission plugin then injects 300 onto every instance
+# pod. Three healthy pods, a green apply, synchronous replication genuinely on —
+# and a dead primary's pod lingering five minutes instead of thirty seconds,
+# which lengthens the tail of every failover by the difference.
+#
+# There is no symptom until a node dies. So the assertion is that the value
+# REACHES the chart, on both stores, in both postures.
+#
+# The expected value is a STRING because the output is tostring()'d: the "unset"
+# case has to be distinguishable from a number, and an untyped null compares
+# badly against a typed one.
+#
+# Measured, by deleting the wiring and running the mutation: the unset case
+# prints `tostring(null)` here, NOT `<nil>` — an earlier version of this comment
+# said `<nil>` and was simply wrong. That string is what "Kubernetes' 300s
+# default is in force" looks like from the root, and it is the state these four
+# lines exist to keep from appearing silently.
+evaluates '"30"' 'module.cnpg_rdb.node_loss_toleration_seconds' -var ha=true
+evaluates '"30"' 'module.cnpg_rdb.node_loss_toleration_seconds' -var ha=false
+evaluates '"30"' 'module.cnpg_tsdb.node_loss_toleration_seconds' -var ha=true
+evaluates '"30"' 'module.cnpg_tsdb.node_loss_toleration_seconds' -var ha=false
+
+# --- the CNPG control plane's own availability (ADR-020 A1.5) ----------------
+#
+# 🔴 THE OPERATOR IS IN THE DATABASE FAILOVER PATH. CloudNativePG cannot
+# reconcile a Cluster whose plugins it cannot reach, and a Cluster that does not
+# reconcile does not promote a standby. Measured on one cluster, same fault
+# minutes apart: 10m50s to fail over when the control plane shared the dead node,
+# 1m51s when it did not.
+#
+# What these pin is a DELETION, and there are two distinct ones. Drop `ha =
+# var.ha` at the module call and the module's own default (false) silently takes
+# over — one replica, no spread, green apply. Drop `topologySpreadConstraints`
+# from the values document and two replicas cheerfully share a node, which is the
+# same false-HA shape as three database instances on one host: it costs twice as
+# much and protects against nothing, and every replica count agrees it is fine.
+#
+# `operator_spread_enforced` reports the SELECTOR, not merely the constraint,
+# because a topologySpreadConstraint whose labelSelector matches no pods renders
+# fine and spreads nothing.
+evaluates 2 'module.cnpg[0].operator_replicas' -var ha=true
+evaluates 1 'module.cnpg[0].operator_replicas' -var ha=false
+evaluates true 'module.cnpg[0].operator_spread_enforced' -var ha=true
+evaluates false 'module.cnpg[0].operator_spread_enforced' -var ha=false
+
+# The plugin is deliberately NOT replicated — its CNPG-I gRPC server is
+# leader-election-gated and its chart's readinessProbe is a hard-coded tcpSocket
+# on that port, so a second replica never becomes Ready and `helm wait` fails the
+# apply. This asserts the fuse it DOES get, on both postures, since that is the
+# whole of its node-loss story.
+evaluates '"30"' 'module.cnpg[0].control_plane_toleration_seconds' -var ha=true
+evaluates '"30"' 'module.cnpg[0].control_plane_toleration_seconds' -var ha=false
+
 # --- database backups (ADR-028, ADR-020 A2.5) --------------------------------
 #
 # The destination is two-valued by construction. There is deliberately no third

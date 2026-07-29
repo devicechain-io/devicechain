@@ -38,6 +38,7 @@ spec:
         {{- include "devicechain.areaLabels" (dict "root" . "area" "frontend") | nindent 8 }}
     spec:
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- include "devicechain.nodeLossTolerations" . | nindent 6 }}
       {{- if .Values.serviceAccount.create }}
       serviceAccountName: {{ include "devicechain.serviceAccountName" . }}
       {{- end }}

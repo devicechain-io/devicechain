@@ -47,6 +47,22 @@ aliasServiceName: null
 # pod-counting check reports healthy.
 topologyKey: kubernetes.io/hostname
 
+# How long an instance pod stays put after its node is tainted NotReady or
+# unreachable, before Kubernetes evicts it.
+#
+# null leaves Kubernetes' own default in force, which is 300 -- injected by an
+# admission plugin, so an unset toleration is not an absent one. Lowering it
+# shortens the tail of a database failover (measured: 24s across three node-loss
+# drills), NOT its start -- what dominates the RTO is whether the CNPG control
+# plane survived the node, which is modules/cnpg's problem. The measurements and
+# the model that turned out to be wrong are in templates/cluster.yaml next to the
+# `tolerations` block; read that before changing this.
+#
+# The module overrides it. This default is deliberately the SAFE-BUT-SLOW one so
+# that a caller which does not think about the question gets stock Kubernetes
+# behaviour rather than an aggressive eviction it never asked for.
+nodeLossTolerationSeconds: null
+
 # CNPG's own default. The upstream chart sets this true; the platform never
 # connects as a superuser, so a superuser password would be a standing
 # credential with no consumer.

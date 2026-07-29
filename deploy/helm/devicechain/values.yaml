@@ -511,6 +511,24 @@ rollingUpdate:
 terminationGracePeriodSeconds: 30
 shutdownDrainSeconds: 5
 
+# How long a pod stays put after its node is tainted NotReady or unreachable,
+# before Kubernetes evicts it and the ReplicaSet can replace it elsewhere.
+#
+# 🔴 UNSET DOES NOT MEAN "NO TOLERATION" -- it means 300, injected onto every pod
+# by Kubernetes' DefaultTolerationSeconds admission plugin. So the choice is not
+# "set this or leave it alone", it is "choose a number or accept 300 without
+# recording that you did".
+#
+# It matters most at `replicas: 1`, which is the default above: the single pod of
+# each area sits on the dead node in a stale `Running` state for the whole window,
+# and nothing replaces it, so the area is simply down. Raising `replicas` is the
+# better fix for that and this is not a substitute for it -- but the two are
+# independent, and at any replica count this is how long the lost capacity stays
+# lost.
+#
+# null restores Kubernetes' 300. 0 evicts as soon as the taint lands.
+nodeLossTolerationSeconds: 30
+
 # E7: a dedicated ServiceAccount per release, referenced by every Deployment, in
 # place of the namespace `default` SA. The data-plane services never call the
 # Kubernetes API, so the token is not mounted.

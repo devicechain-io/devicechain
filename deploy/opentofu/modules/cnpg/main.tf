@@ -121,6 +121,141 @@ variable "operator_resources" {
   }
 }
 
+variable "ha" {
+  description = <<-EOT
+    Run the CNPG OPERATOR at two replicas, spread across nodes.
+
+    🔴 THIS IS A DATABASE-AVAILABILITY SETTING, NOT AN OPERATOR-COMFORT ONE. The
+    operator and the Barman plugin both sit in the failover path: CloudNativePG
+    cannot reconcile a Cluster whose plugins it cannot reach, and a Cluster that
+    cannot reconcile cannot promote a standby. Both ship at replicaCount 1 with
+    no tolerations and no anti-affinity.
+
+    Measured, killing the node that held both database primaries AND the plugin:
+    failover did not complete for 10m50s, and the operator spent the outage
+    logging `connection refused` to barman-cloud.cloudnative-pg.io. Killing a node
+    that held both primaries but NOT the plugin, on the same cluster minutes
+    later: 1m51s. Same fault, same databases, 5.9x the outage -- the difference
+    was whether the control plane happened to be somewhere else.
+
+    The perverse consequence is worth remembering: enabling BACKUPS, a durability
+    feature, installs the plugin and thereby lengthens the worst-case failover of
+    the database it protects. An instance with backups off has no plugin to lose.
+
+    🔴 THIS DOES NOT REPLICATE THE PLUGIN, AND MUST NOT -- see the plugin release
+    below. The plugin's answer to node loss is the TOLERATION, which is applied at
+    every posture: reschedule in ~30s instead of ~300s. That is most of the 10m50s
+    and it is all that is available without upstream changes.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "node_loss_toleration_seconds" {
+  description = <<-EOT
+    How long the operator and plugin pods stay put after their node is tainted
+    NotReady or unreachable. null leaves Kubernetes' default, which is 300.
+
+    Unset is not "no toleration" -- the DefaultTolerationSeconds admission plugin
+    injects 300 onto any pod that does not tolerate these taints. For the control
+    plane that 300 is the window in which no Cluster in the instance can fail
+    over, so it is the same knob as on the database pods and wants the same value.
+  EOT
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.node_loss_toleration_seconds == null || var.node_loss_toleration_seconds >= 0
+    error_message = "node_loss_toleration_seconds must be null (Kubernetes' 300s default) or a non-negative number of seconds."
+  }
+}
+
+locals {
+  # 🔴 THE OPERATOR ONLY. The plugin stays at one replica no matter the posture,
+  # and that is a correctness constraint rather than a cost decision -- the
+  # reasoning is at the plugin release below, where it is actionable.
+  operator_replicas = var.ha ? 2 : 1
+
+  control_plane_tolerations = var.node_loss_toleration_seconds == null ? [] : [
+    {
+      key               = "node.kubernetes.io/not-ready"
+      operator          = "Exists"
+      effect            = "NoExecute"
+      tolerationSeconds = var.node_loss_toleration_seconds
+    },
+    {
+      key               = "node.kubernetes.io/unreachable"
+      operator          = "Exists"
+      effect            = "NoExecute"
+      tolerationSeconds = var.node_loss_toleration_seconds
+    },
+  ]
+
+  # 🔴 THE labelSelector IS THE LOAD-BEARING PART, AND OMITTING IT IS SILENT.
+  #
+  # The chart does not inject one -- measured, by rendering with a constraint that
+  # had none: it reaches the pod spec exactly as written. And a
+  # topologySpreadConstraint with no labelSelector matches NO pods, so the skew is
+  # always zero and the constraint never constrains. It is not rejected, it is not
+  # warned about, and `kubectl get deploy -o yaml` shows a spread constraint
+  # sitting right there in the pod spec.
+  #
+  # That is the same false-HA shape as a topologyKey no node carries (see
+  # modules/cnpg-cluster): the protection is decorative, and every check that
+  # counts replicas agrees the operator is spread. Note the asymmetry that makes
+  # it easy to get wrong -- for podAffinity an empty selector matches EVERYTHING,
+  # so the intuition carried over from there is exactly backwards.
+  #
+  # 🔑 SELECT ON A LABEL WE OWN, NOT ON THE CHART'S. The first version of this
+  # selected on `app.kubernetes.io/name` + `app.kubernetes.io/instance`, which the
+  # chart writes -- so the module was selecting on strings it does not control,
+  # a chart that renamed either one would silently un-spread the operator, and
+  # closing that hole needed a network-dependent CI step rendering the chart to
+  # re-check the pairing. The chart exposes `podLabels`, so instead we set our own
+  # label and select on that: the two values are now the same expression in the
+  # same file, and there is nothing left for an upstream rename to break.
+  operator_pod_label = {
+    "devicechain.io/cnpg-control-plane" = "operator"
+  }
+
+  # 🔴 DoNotSchedule, matching the NATS servers and the database instances. A soft
+  # constraint here would be worse than none: two replicas on one node cost twice
+  # as much and protect against nothing, while every replica-counting check
+  # reports the operator as highly available.
+  #
+  # Only applied at more than one replica -- at replicaCount 1 there is nothing to
+  # spread, and a hard constraint with a single pod can only ever refuse to
+  # schedule.
+  operator_spread = local.operator_replicas > 1 ? [
+    {
+      maxSkew           = 1
+      topologyKey       = "kubernetes.io/hostname"
+      whenUnsatisfiable = "DoNotSchedule"
+      labelSelector     = { matchLabels = local.operator_pod_label }
+    },
+  ] : []
+
+  # 🔴 THE VALUES LIVE IN LOCALS SO THE OUTPUTS CAN READ THEM BACK, exactly as in
+  # modules/cnpg-cluster. The failure being guarded is a DELETION: drop
+  # `topologySpreadConstraints` from the operator document, or `ha = var.ha` from
+  # the root, and both charts fall back to their own defaults — one replica, no
+  # spread, no tolerations — with a green apply and no symptom until a node dies.
+  # An output that re-derived these from the variables would agree with the
+  # request rather than with what Helm was handed, and the assertion would then be
+  # checking a copy against itself.
+  operator_values = {
+    replicaCount              = local.operator_replicas
+    tolerations               = local.control_plane_tolerations
+    podLabels                 = local.operator_pod_label
+    topologySpreadConstraints = local.operator_spread
+  }
+
+  plugin_values = {
+    replicaCount = 1
+    tolerations  = local.control_plane_tolerations
+  }
+}
+
 resource "helm_release" "cnpg" {
   name             = "cnpg"
   namespace        = var.namespace
@@ -128,6 +263,12 @@ resource "helm_release" "cnpg" {
   repository       = "https://cloudnative-pg.github.io/charts"
   chart            = "cloudnative-pg"
   version          = var.operator_chart_version != "" ? var.operator_chart_version : null
+
+  # Control-plane availability. A `values` document rather than `set` blocks
+  # because tolerations and topologySpreadConstraints are lists of objects, and
+  # expressing those through `set`'s index syntax is both unreadable and a
+  # well-known source of silently-wrong renders.
+  values = [yamlencode(local.operator_values)]
 
   # The CRDs are the deliverable of this slice — a later apply creates Cluster
   # resources against them. The chart installs them by default; state it, so
@@ -193,6 +334,37 @@ resource "helm_release" "barman_plugin" {
   chart      = "plugin-barman-cloud"
   version    = var.plugin_chart_version != "" ? var.plugin_chart_version : null
 
+  # 🔴 THE PLUGIN IS IN THE FAILOVER PATH, BUT IT MUST NOT BE REPLICATED, AND THE
+  # SECOND HALF IS THE SURPRISING ONE.
+  #
+  # In the path: CloudNativePG cannot reconcile a Cluster whose plugins it cannot
+  # reach — it reports `Cluster cannot proceed to reconciliation due to an error
+  # while interacting with plugins` and stops — and a Cluster that cannot
+  # reconcile cannot promote a standby. Measured: 10m50s to fail over when this
+  # pod died with the node, 1m51s when it did not.
+  #
+  # 🔴 AND YET replicaCount MUST STAY 1. An earlier version of this change set it
+  # to 2 under --ha, which would have broken EVERY HA bootstrap:
+  #
+  #   - The plugin's CNPG-I gRPC server is registered as a plain
+  #     controller-runtime Runnable, so it is LEADER-ELECTION-GATED: only the
+  #     leader ever opens :9090.
+  #   - The chart's readinessProbe is a hard-coded `tcpSocket: 9090` with no value
+  #     to override it. So the non-leader replica is never Ready. Ever.
+  #   - The chart hard-codes `strategy: Recreate` ("RollingUpdate is not supported
+  #     by the operator yet"), and Helm computes maxUnavailable as 0 for any
+  #     non-RollingUpdate Deployment — so `wait` requires 2 of 2 Ready.
+  #
+  # Net: helm_release would block for its full 600s timeout and fail the apply, on
+  # the release that stands between the platform and its backups. A warm standby
+  # here needs the plugin to declare itself non-leader-election first, upstream.
+  #
+  # So the plugin's answer to node loss is the TOLERATION, applied at every
+  # posture: it is rescheduled in ~30s rather than ~300s. That recovers most of
+  # the 10m50s and is all that is available today. No spread constraint either --
+  # at one replica there is nothing to spread.
+  values = [yamlencode(local.plugin_values)]
+
   # The plugin talks to the operator over CNPG-I, so the operator must exist
   # first. This is ordering, not just readiness — the namespace is created by the
   # release above (create_namespace), and this release does not create it.
@@ -204,6 +376,21 @@ resource "helm_release" "barman_plugin" {
 output "namespace" {
   description = "Namespace the operator runs in."
   value       = var.namespace
+}
+
+output "operator_replicas" {
+  description = "How many operator replicas are ACTUALLY requested, read out of the values document handed to Helm. Worth an output because a single-replica operator that dies with a node blocks promotion for every Cluster in the instance -- measured at 10m50s against 1m51s -- and nothing else in the apply reports it."
+  value       = local.operator_values.replicaCount
+}
+
+output "operator_spread_enforced" {
+  description = "Whether the operator carries a hard hostname spread constraint WITH a selector. False at one replica, which is correct. A constraint whose selector matched nothing would also spread nothing, so this reports the selector's presence rather than the constraint's -- see the locals."
+  value       = length(local.operator_values.topologySpreadConstraints) > 0 && length(local.operator_values.topologySpreadConstraints[0].labelSelector.matchLabels) > 0
+}
+
+output "control_plane_toleration_seconds" {
+  description = "The node-loss eviction fuse the operator and plugin pods actually carry, as a string, or \"tostring(null)\" when Kubernetes' 300s default is left in force. Reported because an unset toleration is not an absent one, and for the control plane that 300s is the window in which no Cluster in the instance can fail over."
+  value       = tostring(length(local.plugin_values.tolerations) == 0 ? null : local.plugin_values.tolerations[0].tolerationSeconds)
 }
 
 output "backup_plugin_enabled" {

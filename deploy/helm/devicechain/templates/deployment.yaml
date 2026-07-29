@@ -120,6 +120,7 @@ spec:
       time to drain in-flight requests, or the kubelet SIGKILLs mid-drain.
       */}}
       terminationGracePeriodSeconds: {{ $root.Values.terminationGracePeriodSeconds }}
+      {{- include "devicechain.nodeLossTolerations" $root | nindent 6 }}
       {{- if $root.Values.serviceAccount.create }}
       serviceAccountName: {{ include "devicechain.serviceAccountName" $root }}
       {{- end }}

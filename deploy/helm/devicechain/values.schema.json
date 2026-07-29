@@ -109,6 +109,11 @@
       "minimum": 0,
       "description": "§10.2: graceful-shutdown window; must exceed shutdownDrainSeconds plus in-flight request time."
     },
+    "nodeLossTolerationSeconds": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Seconds a pod tolerates its node being NotReady/unreachable before eviction. null leaves Kubernetes' 300s default. MUST be a bare integer, not a duration: `30s` would coerce to 0, which evicts every pod the instant a node is tainted."
+    },
     "shutdownDrainSeconds": {
       "type": "integer",
       "minimum": 0,
