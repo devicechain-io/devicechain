@@ -554,6 +554,88 @@ locals {
     }
     podTemplate = {
       topologySpreadConstraints = local.spread_constraints
+
+      # NO `tolerations` HERE, DELIBERATELY — which is not the same as having
+      # forgotten them, and the difference is worth the paragraphs.
+      #
+      # Kubernetes' DefaultTolerationSeconds admission plugin injects
+      # `tolerationSeconds: 300` for not-ready/unreachable onto every pod that does
+      # not already carry one. So these servers run at 300s while the database tier
+      # and every instance Deployment run at 30s (ADR-020 A1.4). That inconsistency
+      # is real and it looks like an oversight. It was measured before it was left
+      # alone; do not "fix" it for consistency.
+      #
+      # (Note also that this map has no `tolerations` KEY. The upstream chart's
+      # podTemplate exposes configChecksumAnnotation, topologySpreadConstraints,
+      # merge, patch and name — nothing else. Adding `tolerations` here is silently
+      # ignored; it would have to go through `podTemplate.merge`, the same escape
+      # hatch the cluster tls block above uses for `verify`.)
+      #
+      # THE DRILL. A node holding one of three servers was SIGKILLed on the HA rig,
+      # with the JetStream META leader on it. What a client actually saw:
+      #
+      #   t0      → t0+8.8s   no acknowledged JetStream write. The JetStream API
+      #                       itself was unanswered for the first 4.0s ("no
+      #                       responders"); the meta leader was observed moved at
+      #                       t0+6.23s and the stream's leader at t0+7.42s. The node
+      #                       was still Ready and untainted for the whole of it —
+      #                       Kubernetes had not yet noticed anything was wrong.
+      #   t0+8.8s → t0+44.9s  writable again, but 16 of 37 new connections through
+      #                       the ClusterIP still failed: the dead pod was STILL in
+      #                       the dc-nats Service endpoints, so kube-proxy kept
+      #                       picking it. No connection INITIATED after t0+44.9s
+      #                       ever failed.
+      #   t0+46.5s            node → Ready=Unknown, taint applied, pod Ready=False,
+      #                       endpoints 3 → 2. Zero messages lost across the whole
+      #                       drill: 1717 acknowledged publishes over a sequence span
+      #                       of 1717, and the stream itself read back contiguous.
+      #
+      # WHY A SHORTER FUSE CANNOT HELP — and this is a mechanism, not the fact that
+      # those events happened to land close together. `tolerationSeconds` is
+      # evaluated by the taint manager FROM THE MOMENT THE NoExecute TAINT IS ADDED,
+      # so t=0 for every possible value is t0+46.5s: 37.7s after JetStream was
+      # writable again. The same node-lifecycle evaluation that applies that taint
+      # also marks the pods on the node NotReady, which is what withdraws the
+      # endpoint — so the readiness path cannot lag the taint. And even
+      # `tolerationSeconds: 0` would only set a deletionTimestamp, and a terminating
+      # pod is already out of the ready endpoints that readiness had just emptied.
+      # There is nothing left for an earlier eviction to remove.
+      #
+      # AND NOTHING IS WAITING ON THE OTHER SIDE. This is a StatefulSet. At 300s the
+      # pod was marked for deletion, went Terminating with its ORIGINAL UID, and NO
+      # replacement was ever created — Kubernetes will not create a second dc-nats-1
+      # while the first cannot be confirmed gone, because its kubelet is unreachable.
+      # The StatefulSet sat at ready=2/3 until the node came back. Control from the
+      # same drill, same instant, same 300s: the nats-box Deployment pod on that same
+      # dead node WAS replaced and Running within the tick — so this is StatefulSet
+      # semantics, not a broken cluster.
+      #
+      # WHAT THE DRILL DID NOT TEST, stated plainly because the honest reason to
+      # leave this alone is "no measured benefit", not "measured harm":
+      #   - The node was down 6m47s, longer than BOTH candidate fuses, so 30s and
+      #     300s produce the identical outcome here — the pod was recreated (new UID)
+      #     32s after the node returned either way. A fuse shorter than the outage
+      #     but longer than nothing is only distinguishable when the node comes back
+      #     between taint+30s and taint+300s, which was not exercised.
+      #   - kind's local-path PV pinned this pod to the dead node. This module sets
+      #     no storage class, so on a managed cloud the volume is network-attached
+      #     and movable, AND the cloud-controller-manager DELETES the Node object on
+      #     a real instance termination — which force-deletes its pods and lets the
+      #     StatefulSet recreate elsewhere. `docker stop` cannot reproduce that path
+      #     (the Node object persists). The conclusion still holds there, but by node
+      #     deletion rather than by eviction; either way not by tolerationSeconds.
+      #   - N=1, and the cheapest case: the killed server led 1 of 30 streams and
+      #     held 0 client connections. 8.8s is a best-case election figure.
+      #
+      # IF THIS IS REVISITED, the lever that would move the 36s is the ENDPOINT, not
+      # the eviction — either the control plane's node-monitor grace period (a
+      # kube-controller-manager flag, not reachable from a workload and not settable
+      # on most managed clusters), or giving clients the peer list so a reconnect
+      # does not go back through kube-proxy. The chart defaults
+      # `cluster.no_advertise` to true, so today they never learn it, and
+      # core/messaging hands them a single ClusterIP URL. The tradeoff is that the
+      # advertised URLs would be pod IPs, useless to an external MQTT client. Both
+      # are separate decisions with their own costs.
     }
     promExporter = {
       enabled = var.enable_prom_exporter
