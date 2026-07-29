@@ -28,6 +28,21 @@ For each area (`registry.go`), the tool:
    TimescaleDB's sequential internal-hypertable numbers and job ids, then splits into
    statements and **sorts** them — so creation *order* does not matter, but every
    object's own definition (column order, types, constraints, indexes) still does.
+4. Compares the golden and the fresh dump **statement by statement, count-aware**
+   (`diff.go`).
+
+That last step is not a detail. It used to be a set difference over *lines*, and a
+pg_dump writes one column per line, so the comparison knew neither which table a column
+line belonged to nor how many tables had it. Removing `description` from one of four
+tables that share a `description character varying(1024),` line left the line present in
+the schema, so the difference was empty and the harness printed `ok ... matches golden`
+and exited 0 — measured, on the real thing, against a schema a plain `diff` showed to be
+one line short. Between 23% and 54% of the lines in every golden are duplicated somewhere
+else in the same schema and were invisible to removal the same way; `device-management`,
+the largest chain and the hardest flatten, was the worst at 54%.
+
+A statement carries its own object name, which fixes *which table*. Comparing as a
+multiset rather than a set fixes *how many*.
 
 ## Usage
 
@@ -61,7 +76,12 @@ Flags: `-mode snapshot|verify`, `-only area1,area2` (subset), `-golden-dir`.
    package with a single baseline migration. `registry.go` needs no change — it now
    points at the baseline. Run `hack/migration-diff.sh verify`: if the baseline
    reproduces the golden, the squash is proven schema-equivalent to the whole chain.
-   Then refresh the golden (the baseline is the new source of truth) and commit.
+
+   🔴 **Do not re-snapshot after a squash.** The golden is the oracle the flatten is
+   being judged against, and a squash that passes leaves it byte-identical anyway — so a
+   `snapshot` step here can only ever do one thing, which is overwrite the evidence with
+   whatever the new baseline happens to produce and turn a failing flatten into a green
+   one. When `verify` reports a diff, the baseline is wrong. Fix the baseline.
 
 ## Notes
 
@@ -69,7 +89,34 @@ Flags: `-mode snapshot|verify`, `-only area1,area2` (subset), `-golden-dir`.
   `snapshot` and `verify` must use the same image. The script pins it; override with
   `MDIFF_IMAGE` when the deployed Timescale version is bumped, and re-snapshot.
 - **event-management** is the hard case — the only Timescale user (hypertables + a
-  continuous aggregate). The other eight areas are plain Postgres.
-- Goldens capture **schema only** (no data) and exclude nothing structural; the
-  `<area>_migrations` bookkeeping table is identical across chain and baseline, so it
-  is left in.
+  continuous aggregate). The other nine areas are plain Postgres and their probe output is
+  empty.
+- Goldens capture **schema only** (no data); the `<area>_migrations` bookkeeping table is
+  identical across chain and baseline, so it is left in.
+- **TimescaleDB objects come from a catalog probe, not from `pg_dump`** (`timescale.go`).
+  A hypertable's identity lives in `_timescaledb_catalog`, which a `--schema <area>` dump
+  never visits, so a plain table and a hypertable dump identically apart from the
+  `<table>_occurred_time_idx` index Timescale creates for you. That made a false green
+  trivial to reach: a flatten author working *from the golden* writes that index as a
+  plain `CREATE INDEX`, omits `create_hypertable`, and `verify` reports `ok` for six plain
+  tables that should be six hypertables. Hypertables (with their dimension and chunk
+  interval), continuous aggregates and the aggregate's refresh policy are now captured as
+  pseudo-DDL `TIMESCALE ...` lines. Compression and retention policies are deliberately
+  **not** captured — those are reconciled at runtime from configuration
+  (`event-management/model/lifecycle.go`), never installed by a migration.
+- 🔴 **A LOST SEED IS INVISIBLE HERE, and that is the sharp edge of a flatten.**
+  `pg_dump --schema-only` captures no rows, so a baseline that creates every table
+  correctly and forgets the data a migration inserted passes with `ok`. Measured:
+  stubbing out `seedTenantTiers` in user-management's baseline left all ten areas green
+  and the exit code 0 — while a tenant cannot be created at all without a tier row,
+  because the FK is required. The only gate that catches it is `dcctl bootstrap` failing
+  in the kind e2e, which is slow and names the symptom rather than the cause.
+
+  So a flatten must account for every data-bearing migration in the chain EXPLICITLY,
+  and the two kinds are not treated alike:
+
+  - a **seed** (rows the schema is unusable without) folds into the baseline and needs a
+    unit test asserting the migration wrote them — running without error is not enough;
+  - a **backfill** (rows derived from rows already present) is *dropped*, because a
+    baseline runs against an empty database where there is nothing to backfill. Confirm
+    it really only rewrites existing rows before dropping it.
