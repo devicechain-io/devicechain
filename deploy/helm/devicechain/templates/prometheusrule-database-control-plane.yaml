@@ -52,13 +52,26 @@ kube-state-metrics' CustomResourceState reader, switched on by modules/monitorin
 carries the long-form reasoning; this file is its consumer.
 
 🔴 A RULE WITH NO SERIES DOES NOT FIRE AND DOES NOT COMPLAIN — which is why
-CNPGClusterStateUnobserved exists and is not optional. Every rule in this group
-reads kube-state-metrics, so kube-state-metrics is a single point of failure for
-the whole group: if it is not running, or its CustomResourceState config is
-absent, or its RBAC cannot read `postgresql.cnpg.io/clusters`, then all of these
-evaluate empty vectors and report perfect health forever. Not hypothetical —
-bringing this up on the rig by hand hit exactly that, and the only symptom was one
-`forbidden` line in a log nobody was reading.
+CNPGClusterStateUnobserved exists and is not optional. The two Cluster-condition
+rules and the control-plane deployment rule all read kube-state-metrics, so
+kube-state-metrics is a single point of failure for those three: if it is not
+running, or its CustomResourceState config is absent, or its RBAC cannot read
+`postgresql.cnpg.io/clusters`, then they evaluate empty vectors and report perfect
+health forever. Not hypothetical — bringing this up on the rig by hand hit exactly
+that, and the only symptom was one `forbidden` line in a log nobody was reading.
+
+CNPGClusterUnusable is the exception, and deliberately so: it reads
+`cnpg_collector_up`, scraped from the CNPG instances' own PodMonitor rather than
+from kube-state-metrics. That independence is worth having — the two halves of
+this group fail for different reasons and neither silences the other — but note
+it also means CNPGClusterStateUnobserved does NOT cover it. Nothing here reports
+the loss of the CNPG PodMonitor itself.
+
+🔑 THE GROUP COVERS TWO OPPOSITE FAILURES, and it is worth being explicit that
+they are not variations of one thing. A1.5 is "the operator cannot drive a
+database that is otherwise fine"; A2.7b is "the database is fine to its operator
+and unreachable to everything else". A Cluster can be Ready and unusable, or
+un-Ready and perfectly serving. Each needs its own signal.
 
 Unit-tested against synthetic series in
 hack/testdata/prometheus-rules-control-plane-tests.yaml. `helm lint` and
@@ -176,6 +189,124 @@ spec:
         # Warning, not critical: on its own this means "the health of database
         # failover is UNKNOWN", which is a monitoring gap rather than a database
         # incident — but it is the gap that hides one.
+        # 🔴 THE A2.7b ALERT — "Ready, and unusable".
+        #
+        # CNPGClusterNotReady above reads the Cluster's condition, which is
+        # maintained by the OPERATOR over its own superuser connection. This rule
+        # reads whether the metrics exporter can actually reach Postgres. The two
+        # look redundant and are close to orthogonal, which is the whole point:
+        #
+        #   - A1.5 (plugin scaled to zero): Ready went False, and
+        #     `cnpg_collector_up` stayed 1 throughout — Postgres was perfectly
+        #     reachable, the CONTROLLER was the broken part.
+        #   - A2.7b (connection exhaustion): the exact mirror. Ready stayed TRUE
+        #     and reported "Cluster in healthy state" while every application
+        #     service was locked out of the database.
+        #
+        # 🔑 WHY NOT A UTILIZATION RATIO. The obvious rule here is
+        # `cnpg_backends_total / cnpg_pg_settings_setting{name="max_connections"}`
+        # over some threshold. It cannot work, and it fails in the direction that
+        # looks healthy. Measured while holding 98 of 100 slots: BOTH of those
+        # series DISAPPEAR. The exporter authenticates as cnpg_metrics_exporter,
+        # which is not a superuser, so `superuser_reserved_connections` refuses it
+        # exactly as it refuses the application. The numerator and the denominator
+        # are gone precisely when the ratio would have been interesting, and a rule
+        # over an empty vector is silent, not true.
+        #
+        # `cnpg_collector_up` survives because the collector still serves 200 OK
+        # and reports its own health — it is emitted by the exporter process rather
+        # than read out of Postgres. Measured: 0 while saturated, back to 1 within
+        # ~10s of the connections draining, with the SQL-derived series returning
+        # ~10s after that.
+        #
+        # 🔴 THE `min by` IS NOT COSMETIC — IT IS THE SAME DEFECT THAT KILLED THE
+        # COUNTER DESIGN, AND IT NEARLY SHIPPED AGAIN.
+        #
+        # The raw metrics endpoint serves `cnpg_collector_up{cluster="dc-rdb"}`,
+        # which reads as per-Cluster and is NOT what Prometheus stores. The
+        # PodMonitor's target labels are attached at scrape time, so the series
+        # actually carries pod, instance, container, endpoint and job — verified by
+        # querying Prometheus rather than the endpoint:
+        #
+        #   cnpg_collector_up{cluster="dc-rdb", namespace="dc-system",
+        #                     pod="dc-rdb-2", instance="10.244.1.6:9187",
+        #                     container="postgres", endpoint="metrics",
+        #                     job="dc-system/dc-rdb"}
+        #
+        # There is one such series PER INSTANCE — six on a pair of 3-instance
+        # Clusters. Alerting on the bare metric would therefore put POD IDENTITY
+        # INTO ALERT IDENTITY, which is precisely the third reason
+        # controller_runtime_reconcile_errors_total was rejected above: the pod
+        # holding the interesting value changes on failover, so the alert's
+        # identity changes mid-incident, the `for` timer restarts on the new series
+        # and Alertmanager sees a RESOLVED followed by a fresh alert.
+        #
+        # `min by (cluster, namespace)` collapses the instances back to the thing
+        # the alert is actually about. It is `min` rather than `max` deliberately:
+        # max_connections is per-instance and the services all reach the PRIMARY
+        # through the -rw Service, so exhaustion takes out exactly one of the three
+        # collectors. `max` would require every instance to be affected and would
+        # have stayed silent through the measured failure.
+        #
+        # 🔑 THE COST OF `min`, stated because it is real: ANY single instance
+        # reporting 0 fires this, so a standby whose Postgres will not start pages
+        # at the same severity as a primary that clients cannot reach — and because
+        # the aggregation drops `pod`, the alert cannot say which instance. That is
+        # accepted rather than solved: both states need a human, and `max` would
+        # miss the one this rule was built for. The description below is worded to
+        # not assert client impact as fact.
+        #
+        # Scoped to the DATABASE namespace like its neighbours. Without the
+        # selector this matches every CNPG Cluster in the Kubernetes cluster —
+        # including other DeviceChain Instances, which each render their own copy
+        # of this rule, so one incident would page N times with N-1 of them naming
+        # the wrong instance.
+        - alert: CNPGClusterUnusable
+          expr: |
+            min by (cluster, namespace) (cnpg_collector_up{namespace="{{ $dbns }}"}) == 0
+          # 5m, and the number is MEASURED rather than assumed.
+          #
+          # 🔴 CORRECTING A PLAUSIBLE-SOUNDING MECHANISM: it is NOT true that a
+          # restarting pod cannot trip this because its series disappears. That
+          # holds for the REPLICAS — CNPG replaces those pods, so the series gets a
+          # new `instance` and simply gaps. The PRIMARY is restarted IN PLACE: the
+          # pod and its metrics endpoint keep running while Postgres is down, so
+          # the collector reports a genuine 0. Measured across two parameter
+          # changes on the rig: one produced a 30-SECOND run of real zeros on the
+          # primary, the other none at all (fast enough to fall between scrapes).
+          #
+          # So this `for` is doing real work rather than riding on a technicality,
+          # and 5m is a 10x margin over the longest benign run observed. It matters
+          # because changing max_connections is ITSELF applied as a rolling
+          # restart: without the margin, the rule would page for the change that
+          # fixes the problem it detects.
+          #
+          # The other direction is not symmetric, which is what makes 5m safe: real
+          # exhaustion persists until the load relents or someone intervenes. The
+          # bounded runs in the drill (90s, 150s, 240s) were bounded by the PROBE's
+          # own pg_sleep, not by the failure — do not read them as how long this
+          # condition lasts in production.
+          for: 5m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "A PostgreSQL instance is not answering its own metrics collector"
+            description: >-
+              At least one instance of {{ "{{ $labels.cluster }}" }} in namespace
+              {{ "{{ $labels.namespace }}" }} cannot be queried by its CloudNativePG metrics
+              collector, while the pods and the Cluster's Ready condition may look perfectly
+              healthy — the operator holds reserved superuser connections, so it keeps reconciling
+              either way. This alert cannot say WHICH instance (it aggregates them to keep pod
+              identity out of the alert), so check both possibilities. If it is the PRIMARY,
+              clients are affected and the likeliest cause is CONNECTION EXHAUSTION: every
+              rdb-backed service opens a pool of up to 20 against the primary, and a rolling
+              upgrade briefly doubles the pod count, so demand can exceed max_connections and
+              application services then fail with "remaining connection slots are reserved for
+              roles with the SUPERUSER attribute". If it is a STANDBY, clients are unaffected and
+              this is a failing replica rather than an outage. Run `SELECT count(*) FROM
+              pg_stat_activity` against `SHOW max_connections` as a superuser, which still works
+              while this fires, and compare per instance.
         - alert: CNPGClusterStateUnobserved
           expr: |
             absent(kube_cnpg_cluster_condition{type="Ready", namespace="{{ $dbns }}"})

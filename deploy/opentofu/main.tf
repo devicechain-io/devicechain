@@ -551,6 +551,86 @@ module "cnpg_rdb" {
   # is refused rather than merely discouraged.
   instances = var.postgres_instances != 0 ? var.postgres_instances : (var.ha ? 3 : 1)
 
+  # 🔴 max_connections IS SIZED FROM THE SERVICE POOLS, and leaving it at the
+  # Postgres default of 100 was an ADR-020 A2.7b defect rather than a tuning
+  # preference. Measured on the HA rig.
+  #
+  # Every rdb-backed service opens its own pool, capped by
+  # defaultMaxOpenConnections = 20 (backend/core/rdb/postgres.go); no service
+  # overrides it. There is no pgbouncer, and all of them resolve `dc-postgresql`,
+  # whose selector is byte-identical to `dc-rdb-rw` — so every pool lands on the
+  # SAME primary and they all draw from one budget:
+  #
+  #   default profile  7 services x 20 = 140
+  #   full profile     9 services x 20 = 180   (adds ai-inference, outbound-connectors)
+  #
+  # against `max_connections - superuser_reserved_connections` = 100 - 3 = 97.
+  # The default profile oversubscribes the primary 1.44x, full 1.86x. Confirmed by
+  # opening connections as the application role until refusal: number 94 failed with
+  # `FATAL: remaining connection slots are reserved for roles with the SUPERUSER
+  # attribute`.
+  #
+  # 🔑 WHY NOTHING CAUGHT IT. Pools open LAZILY, so an idle deployment holds a
+  # handful of connections and the rig sits green until real concurrent load
+  # arrives. Worse, the failure is invisible to every alert we have — measured
+  # while holding 98 of 100 slots:
+  #
+  #   - the Cluster still reports Ready=True / "Cluster in healthy state", so
+  #     CNPGClusterNotReady cannot see it;
+  #   - `cnpg_backends_total` and `cnpg_pg_settings_setting` DISAPPEAR, because the
+  #     exporter authenticates as cnpg_metrics_exporter, which is not a superuser
+  #     and is refused by the same reservation. A utilization-ratio alert would go
+  #     ABSENT rather than fire.
+  #
+  # Only the operator's own superuser connections survive, which is exactly why the
+  # Cluster keeps reporting healthy while every application service is locked out.
+  # The detector that does work is `cnpg_collector_up == 0`; see
+  # prometheusrule-database-control-plane.yaml, which alerts on it.
+  #
+  # 🔴 SIZE IT FROM THE ROLLOUT, NOT FROM THE STEADY STATE — this is where the
+  # obvious number is wrong, and 300 (the first value here) was wrong for exactly
+  # this reason.
+  #
+  # `rollingUpdate` ships maxUnavailable:0 / maxSurge:1 (values.yaml), so a new pod
+  # must pass readiness BEFORE the old one is removed. Both hold full pools at once,
+  # and a plain `helm upgrade` therefore roughly DOUBLES the pod count of every
+  # RollingUpdate area. Eight of the nine rdb consumers surge; only event-processing
+  # is Recreate (it is a single writer). And values.yaml recommends `replicas >= 2`
+  # in production, which is the configuration we tell people to run:
+  #
+  #                                    pods                      x20    vs 597
+  #   default, replicas 1, upgrading   6x2 + 1 = 13              260    ok
+  #   full,    replicas 1, upgrading   8x2 + 1 = 17              340    ok
+  #   default, replicas 2, upgrading   6x3 + 1 = 19              380    ok
+  #   full,    replicas 2, upgrading   8x3 + 1 = 25              500    ok
+  #
+  # At 300 the last three of those exceed the budget, so the fix would have been
+  # undone by a routine upgrade of the profile we ship, with the silent
+  # Ready-but-locked-out symptom described above. 600 covers the recommended
+  # production configuration mid-rollout with margin for the operator, the exporter,
+  # dcctl bootstrap/migrations and drdrill. The next break point is replicas 3 on the
+  # full profile (8x4 + 1 = 33 pods = 660); re-derive before going there.
+  #
+  # 🔑 RAISE THIS BEFORE RAISING `replicas` OR THE POOL CAP, and note that changing
+  # it is applied by CNPG as a rolling in-place restart (~2.5 min on the rig), not a
+  # reload.
+  #
+  # 🔑 THE FOOTPRINT COST IS SMALL, AND IT WAS MEASURED RATHER THAN ASSUMED, because
+  # `--compact` exists for small nodes and the instances request only 256Mi with no
+  # limit. Postgres sizes some shared memory from max_connections, so this is a real
+  # question. `SHOW shared_memory_size`, same rig, same shared_buffers (128MB):
+  #
+  #   max_connections   100 -> 145MB    300 -> 154MB    600 -> 169MB
+  #
+  # 24MB for 500 extra slots. The important part is that max_connections is a
+  # CEILING, not an allocation: a slot nothing connects to costs nothing beyond
+  # that, and the actual number of backends is bounded by the deployed pools
+  # (500 worst case above), not by this value. Raising it does not raise
+  # steady-state memory; it removes a cliff.
+  parameters = {
+    max_connections = "600"
+  }
+
   # `required` durability for this store specifically: it holds the audit
   # journal and the control plane, RPO=0 is the point, and a write stall is a
   # loud recoverable failure rather than silent loss. The event store takes
@@ -608,6 +688,25 @@ module "cnpg_tsdb" {
 
   instances = var.timescale_instances != 0 ? var.timescale_instances : (var.ha ? 3 : 1)
 
+  # 🔑 NO max_connections OVERRIDE HERE — the relational store carries one and this
+  # store deliberately does not. (This block DOES set `parameters`, further down,
+  # for timescaledb.telemetry_level; add to that map rather than starting a second
+  # one.)
+  #
+  # Exactly ONE service holds a pool against this store: event-management, the
+  # only caller passing Persistence.Tsdb. That is 1 x 20 = 20 against 97 usable,
+  # so the A2.7b arithmetic next door lands nowhere near the ceiling here, and the
+  # stock 100 is a real margin rather than an inherited accident.
+  #
+  # 🔴 RE-DERIVE IT ON `replicas`, WHICH IS THE LIKELIER TRIGGER than a second
+  # service. event-management inherits replicas 1 + RollingUpdate, and it is the
+  # ingest persistence path — the area most likely to be scaled out first. With
+  # maxSurge:1 the break point is 5 concurrent pods (5 x 20 = 100 > 97), i.e.
+  # replicas 4 mid-upgrade. A second tsdb-backed service moves it sooner.
+  #
+  # Remember the failure is silent: pools open lazily, the Cluster keeps reporting
+  # Ready, and the exporter's own metrics vanish with the application's. The
+  # CNPGClusterUnusable alert covers this store too, and would be the only warning.
   # 🔴 `preferred`, NOT `required` — the opposite of the relational store, and
   # the asymmetry is the decision rather than an oversight.
   #
