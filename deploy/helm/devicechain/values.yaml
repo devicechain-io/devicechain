@@ -392,6 +392,45 @@ metrics:
   # when that archiver fails.
   databaseNamespace: dc-system
 
+  # The namespace the CloudNativePG OPERATOR and the Barman Cloud plugin run in —
+  # the database CONTROL PLANE, which is a different tier from the databases
+  # themselves and fails in a different way.
+  #
+  # It renders two things, and it is ONE value rather than two booleans because
+  # both answer the same question — "is CloudNativePG something this cluster
+  # operates?" — and neither is meaningful when the answer is no:
+  #
+  #   - the control-plane alerting rules
+  #     (templates/prometheusrule-database-control-plane.yaml), one of which is
+  #     scoped by this namespace;
+  #   - a PodMonitor over the operator itself, which is DIAGNOSTIC only. No rule
+  #     reads its series; they are what an operator looks at in the fifteen
+  #     minutes after CNPGClusterNotReady fires.
+  #
+  # The CNPG namespace holds the operator and the plugin and nothing else
+  # (modules/cnpg creates it for exactly those two), so the alerts can scope by
+  # namespace rather than by deployment name and survive an upstream chart
+  # renaming its releases.
+  #
+  # EMPTY DISABLES BOTH. Set it "" on an instance whose Postgres is not managed by
+  # CloudNativePG here — a managed service, or an operator installed by someone
+  # else outside this cluster's reach. dcctl sets it from the `cnpg_namespace`
+  # OpenTofu output, which is null when enable_cnpg is false, so that case arrives
+  # here as "" without anyone choosing it.
+  #
+  # 🔴 IT IS NOT THE ONLY HALF. The alert that actually catches a Cluster nobody
+  # is reconciling reads `kube_cnpg_cluster_condition`, which exists only when
+  # kube-state-metrics has been given a CustomResourceState reader for
+  # CloudNativePG — OpenTofu's monitoring module does that from
+  # cnpg_cluster_metrics. Setting this value on a cluster whose kube-state-metrics
+  # lacks that config yields rules that load and evaluate nothing, so the rule set
+  # ships CNPGClusterStateUnobserved specifically to report that state rather than
+  # sit quietly in it.
+  #
+  # Ignored when metrics.enabled is false; the alerting rules additionally need
+  # metrics.alerts.
+  cnpgNamespace: cnpg-system
+
 # Kubernetes volume wiring for the FILESYSTEM object store (ADR-058), i.e. when
 # instance.config.infrastructure.blob.backend is "filesystem". The filesystem backend
 # reads/writes blob.directory, and because the service pods run with a read-only root

@@ -170,10 +170,22 @@ func helmValues(st *State) map[string]interface{} {
 		// fire. databaseNamespace is where the database Clusters run — deliberately
 		// NOT instance.id, because an alert scoped to the instance's own namespace
 		// selects none of those series at all.
+		//
+		// cnpgNamespace is a THIRD namespace and not a typo for either of the
+		// above: dc-system holds the database Clusters, the instance namespace
+		// holds this release, and cnpg-system holds the OPERATOR that drives the
+		// Clusters. It gates the operator's PodMonitor and the control-plane
+		// alerting rules as one unit (ADR-020 A1.5). Absent means OFF here, with
+		// no fallback to the chart's default — the same asymmetry the backup
+		// alerts use, and for the same reason: rules that cannot fire look like a
+		// monitored instance and are not, while no rules at all is visibly
+		// nothing. An install whose outputs could not be read should get the
+		// visible kind of gap.
 		"metrics": map[string]interface{}{
 			"enabled":           !st.NoMonitoring,
 			"databaseBackups":   st.Values[databaseBackupsKey] == "true",
 			"databaseNamespace": databaseNamespaceFor(st),
+			"cnpgNamespace":     st.Values[cnpgNamespaceKey],
 		},
 	}
 

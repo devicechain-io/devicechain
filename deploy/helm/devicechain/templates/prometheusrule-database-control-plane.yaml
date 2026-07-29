@@ -1,0 +1,203 @@
+{{/*
+Alerting rules for the database CONTROL PLANE — the CloudNativePG operator, the
+Barman Cloud plugin, and whether the Clusters they drive are actually being
+driven (ADR-020 A1.5).
+
+WHY THESE EXIST
+
+The A1.5 node-loss drills produced a result none of this platform's other series
+can express: what gates a database failover is not the database tier, it is
+whether the CNPG CONTROL PLANE survived. A Cluster whose plugins the operator
+cannot reach NEVER RECONCILES, so it never promotes. The primary is gone, two
+healthy replicas sit there fully caught up, and nothing moves them.
+
+Reproduced deliberately on the HA rig by scaling plugin-barman-cloud to zero, and
+the shape of it is the point:
+
+  - Within 13 seconds both Clusters went to
+    `.status.phase = "Cluster cannot proceed to reconciliation due to an error
+    while interacting with plugins"` and `Ready=False (ClusterIsNotReady)`.
+  - Every instance pod stayed 2/2 Running. `cnpg_collector_up` stayed 1,
+    replication stayed healthy, `pg_stat_archiver` stayed clean, and all five
+    alerts in prometheusrule-database-backup.yaml stayed green — correctly,
+    because nothing about Postgres was wrong. Being un-promotable is a property
+    of the CONTROLLER.
+
+🔴 WHY THE SIGNAL IS THE CLUSTER'S OWN CONDITION AND NOT THE OPERATOR'S ERROR
+COUNTER. The counter version of this file was built, drilled and REJECTED. Worth
+recording, because `controller_runtime_reconcile_errors_total` is the obvious
+choice and it is wrong in three independent ways:
+
+  1. It BACKS OFF. controller-runtime retries a failing item on an exponential
+     limiter capped at 1000s (16m40s), so a sustained outage settles at ~3.6
+     errors an hour per Cluster and goes quiet in between. Measured: 34 errors in
+     the first six minutes, then gaps of 61s, 132s, 296s, still doubling. Any
+     window short enough to mean "now" is empty for most of a real outage.
+  2. RECOVERY IS ALSO A BURST. Scaling the plugin back up drove the counter 36→40
+     in ELEVEN SECONDS as the operator caught up on what it had been unable to
+     touch. So a repair looks like a fault, and a routine plugin upgrade does too.
+     The counts genuinely overlap — 4 for a repair against ~3.6/hour for a stuck
+     Cluster — so NO threshold separates them, and any window long enough to span
+     the backoff holds a benign burst true for that entire window afterwards.
+  3. THE SERIES ONLY EXIST ON THE LEADER. A non-leading manager never starts its
+     controllers, so the counter carries a `pod` label that changes whenever the
+     leader lease moves — which is precisely what a node loss causes. That either
+     resets the alert's timer or splits one incident into two alerts.
+
+A condition is LEVEL-triggered: true exactly while the thing is true, identified
+by the Cluster rather than by whichever pod happened to observe it, with no
+backoff to outrun and no timer to reset. `kube_cnpg_cluster_condition` comes from
+kube-state-metrics' CustomResourceState reader, switched on by modules/monitoring's
+`cnpg_cluster_metrics` (which the root sets from enable_cnpg). That variable
+carries the long-form reasoning; this file is its consumer.
+
+🔴 A RULE WITH NO SERIES DOES NOT FIRE AND DOES NOT COMPLAIN — which is why
+CNPGClusterStateUnobserved exists and is not optional. Every rule in this group
+reads kube-state-metrics, so kube-state-metrics is a single point of failure for
+the whole group: if it is not running, or its CustomResourceState config is
+absent, or its RBAC cannot read `postgresql.cnpg.io/clusters`, then all of these
+evaluate empty vectors and report perfect health forever. Not hypothetical —
+bringing this up on the rig by hand hit exactly that, and the only symptom was one
+`forbidden` line in a log nobody was reading.
+
+Unit-tested against synthetic series in
+hack/testdata/prometheus-rules-control-plane-tests.yaml. `helm lint` and
+`promtool check rules` both pass a semantically inverted rule, so neither is a
+substitute.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts .Values.metrics.cnpgNamespace }}
+{{- $ns := .Values.instance.id }}
+{{- $cnpgns := .Values.metrics.cnpgNamespace }}
+{{- $dbns := .Values.metrics.databaseNamespace }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: database-control-plane
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.database-control-plane
+      rules:
+        # THE A1.5 ALERT.
+        #
+        # Scoped to the DATABASE namespace, not the operator's: this series is
+        # labelled with the Cluster's own namespace, because it describes the
+        # Cluster rather than the controller watching it.
+        #
+        # `type="Ready"` specifically. The Cluster carries five conditions and the
+        # others answer different questions that already have alerts —
+        # ContinuousArchiving and LastBackupSucceeded belong to the backup rules
+        # next door, at the severity a backup problem deserves rather than this
+        # one.
+        - alert: CNPGClusterNotReady
+          expr: |
+            kube_cnpg_cluster_condition{type="Ready", namespace="{{ $dbns }}"} == 0
+          # 15m. A Cluster legitimately passes through Ready=False during a
+          # switchover, a rolling restart of its instances, and its own initial
+          # bootstrap; on the rig a real recovery took 19 SECONDS end to end once
+          # the plugin came back. Fifteen minutes is two orders of magnitude clear
+          # of that, and a Cluster un-Ready for a quarter of an hour is not
+          # mid-operation.
+          #
+          # 🔑 It does NOT need to outrun anything else. The counter version of
+          # this rule needed its `for` to exceed its own window, because a
+          # transient made a counting expression true for the whole window after
+          # the fact. A level signal has no such tail — it goes false the instant
+          # the Cluster is Ready again — so this number answers one question only:
+          # how long is too long.
+          for: 15m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "A PostgreSQL Cluster has not been Ready for 15 minutes"
+            description: >-
+              {{ "{{ $labels.cluster }}" }} in namespace {{ "{{ $labels.namespace }}" }} reports
+              Ready=False ({{ "{{ $labels.reason }}" }}). THIS BLOCKS FAILOVER: while a Cluster is
+              not reconciling it is never promoted, so losing the primary leaves healthy, fully
+              caught-up replicas that nothing will elect — the databases look fine right up until
+              the moment they need to move. A phase of "Cluster cannot proceed to reconciliation"
+              points at the CloudNativePG operator or the Barman Cloud plugin rather than at
+              Postgres, and the instance pods will look perfectly healthy throughout.
+        # The cause, caught independently and from outside the control plane, so
+        # it can still speak when the operator cannot.
+        #
+        # Scoped by NAMESPACE, not by deployment name. modules/cnpg creates that
+        # namespace for the operator and the plugin and puts nothing else in it,
+        # so the namespace IS the control plane; naming `cnpg-cloudnative-pg` and
+        # `plugin-barman-cloud` would hard-code two strings the upstream charts
+        # own, and a rename would leave this selecting nothing and saying nothing.
+        # It also covers a future third control-plane component on the day it is
+        # added rather than the day someone remembers.
+        - alert: CNPGControlPlaneUnavailable
+          expr: |
+            kube_deployment_status_replicas_available{namespace="{{ $cnpgns }}"} == 0
+          # 10m rides out an ordinary upgrade. The plugin's Deployment uses the
+          # Recreate strategy, so it legitimately passes through zero available
+          # replicas on every rollout.
+          #
+          # 🔑 Measured caveat, because it bit during the live drill: RESTARTING
+          # kube-state-metrics RESETS THIS TIMER. The series vanishes with the
+          # pod and returns as a new one, so `for` starts again — observed
+          # delaying this alert by a further ten minutes in the middle of an
+          # outage it was already tracking. That is inherent to a `for` over an
+          # externally-exported series and is worth knowing rather than fixing.
+          for: 10m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "A CloudNativePG control-plane deployment has no available replicas"
+            description: >-
+              {{ "{{ $labels.deployment }}" }} in namespace {{ "{{ $labels.namespace }}" }} has zero
+              available replicas. With the operator down, no PostgreSQL Cluster in this cluster can
+              fail over, scale, or be reconfigured — the running databases keep serving and stop
+              being managed. With the Barman Cloud plugin down, the operator additionally cannot
+              reconcile any Cluster that references it, so the same failover block applies. Expect
+              CNPGClusterNotReady to follow within the quarter hour if this is not resolved.
+        # 🔴 THE INSTRUMENT'S OWN ALARM, and the only rule here that can notice
+        # this group has gone blind.
+        #
+        # Both rules above read kube-state-metrics, so every way of losing it —
+        # the pod down, the CustomResourceState config absent, RBAC that cannot
+        # read postgresql.cnpg.io/clusters, a relabel dropping the series — takes
+        # them out together and leaves an instance that looks monitored and is
+        # not. `== 0` over an empty vector is empty, not true: silence.
+        #
+        # `absent()` on the Cluster-condition series is the tightest available
+        # test, because that series is the one requiring ALL of the above to be
+        # right. A stock kube-state-metrics with no CustomResourceState reader
+        # still exports kube_deployment_status_replicas_available perfectly, so
+        # watching the deployment series instead would miss the most likely
+        # misconfiguration entirely.
+        #
+        # Warning, not critical: on its own this means "the health of database
+        # failover is UNKNOWN", which is a monitoring gap rather than a database
+        # incident — but it is the gap that hides one.
+        - alert: CNPGClusterStateUnobserved
+          expr: |
+            absent(kube_cnpg_cluster_condition{type="Ready", namespace="{{ $dbns }}"})
+          # 30m, the longest here on purpose. This is the rule most able to cry
+          # wolf: it is legitimately true between the monitoring stack starting
+          # and the first CloudNativePG Cluster existing, and across a
+          # kube-state-metrics restart or upgrade. Half an hour is longer than any
+          # of those, and far shorter than the time an unnoticed monitoring gap
+          # takes to matter.
+          for: 30m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "No CloudNativePG Cluster conditions are being collected"
+            description: >-
+              Nothing is reporting PostgreSQL Cluster conditions in namespace {{ $dbns }}, so the
+              health of database failover is UNKNOWN rather than good — and while this fires,
+              CNPGClusterNotReady CANNOT fire, because it reads the series this rule says are
+              missing. Check, in order: kube-state-metrics is running; it was started with
+              --custom-resource-state-config-file (OpenTofu's monitoring module sets this from
+              cnpg_cluster_metrics, which the root derives from enable_cnpg); and its ClusterRole
+              can list postgresql.cnpg.io/clusters. A missing RBAC rule shows up only as a
+              `forbidden` line in the kube-state-metrics log and an endpoint that exports nothing.
+{{- end }}

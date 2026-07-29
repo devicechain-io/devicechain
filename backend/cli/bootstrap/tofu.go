@@ -192,6 +192,36 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 			st.Values[databaseNamespaceKey] = ns
 		}
 	}
+	// The namespace the CloudNativePG OPERATOR runs in — the database CONTROL
+	// PLANE, which is a different tier from the databases and a different
+	// namespace: dc-system holds the Clusters, cnpg-system holds the operator that
+	// drives them. It gates the operator's PodMonitor and the control-plane
+	// alerting rules together (ADR-020 A1.5).
+	//
+	// 🔑 CLEARED FIRST, like databaseBackups above and for the same reason. This
+	// map is persisted state, so a value written by an earlier apply outlives the
+	// condition that produced it: take CloudNativePG out of an instance that once
+	// had it and, without this line, the next install still renders a PodMonitor
+	// and three alerts against a namespace with no operator in it.
+	//
+	// The damage is SILENCE rather than noise, which is the worse of the two and
+	// the reason this is worth a line of code. CNPGControlPlaneUnavailable would
+	// select deployments in a namespace that has none — an empty vector, so no
+	// alert, forever — while the whole group would render and look present.
+	// `kubectl get prometheusrule` shows three healthy rules and one of them can
+	// no longer fire. Clearing the value instead removes the group outright, which
+	// is a visible absence.
+	//
+	// The output is null when enable_cnpg is false, and json.Unmarshal of a null
+	// into a string is a silent no-op rather than an error — so "" is reached by
+	// leaving it cleared, not by trusting the decode to report anything.
+	st.Values[cnpgNamespaceKey] = ""
+	if meta, ok := outputs["cnpg_namespace"]; ok {
+		var ns string
+		if err := json.Unmarshal(meta.Value, &ns); err == nil && ns != "" {
+			st.Values[cnpgNamespaceKey] = ns
+		}
+	}
 	// Grafana access (when monitoring was installed): stash the namespace/service so
 	// the report step can print a port-forward hint. Null when --no-monitoring.
 	if meta, ok := outputs["grafana_service"]; ok {
@@ -217,6 +247,7 @@ const (
 	databaseBackupsKey       = "databaseBackups"
 	databaseNamespaceKey     = "databaseNamespace"
 	databaseBackupOffsiteKey = "databaseBackupOffsite"
+	cnpgNamespaceKey         = "cnpgNamespace"
 )
 
 // databaseNamespaceFor is where the database Clusters export their metrics from.

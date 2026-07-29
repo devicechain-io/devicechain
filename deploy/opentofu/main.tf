@@ -748,9 +748,15 @@ module "monitoring" {
   source = "./modules/monitoring"
   count  = var.enable_monitoring ? 1 : 0
 
-  namespace              = var.monitoring_namespace
-  chart_version          = var.monitoring_chart_version
-  slim                   = var.monitoring_slim
+  namespace     = var.monitoring_namespace
+  chart_version = var.monitoring_chart_version
+  slim          = var.monitoring_slim
+
+  # Export the CloudNativePG Clusters' own status conditions through
+  # kube-state-metrics (ADR-020 A1.5). Read from enable_cnpg rather than offered as
+  # a preference: with no CNPG CRDs there is nothing to watch, and the alerts that
+  # consume these series would load, select nothing and never fire.
+  cnpg_cluster_metrics   = var.enable_cnpg
   grafana_admin_password = var.monitoring_grafana_admin_password
   prometheus_retention   = var.monitoring_prometheus_retention
   prometheus_storage     = var.monitoring_prometheus_storage

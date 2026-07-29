@@ -35,6 +35,56 @@ variable "chart_version" {
   default     = "65.1.1"
 }
 
+variable "cnpg_cluster_metrics" {
+  description = <<-EOT
+    Teach kube-state-metrics to export the CloudNativePG Cluster's own status
+    conditions, as `kube_cnpg_cluster_condition{cluster,namespace,type,reason}`.
+
+    🔑 WHY THIS IS WORTH A CUSTOM RESOURCE READER. A Cluster the operator cannot
+    reconcile is NEVER PROMOTED — losing the primary leaves healthy, fully
+    caught-up replicas that nothing elects — and that state is invisible to every
+    other series this platform collects. The instance pods stay up, so
+    `cnpg_collector_up` stays 1; replication and WAL archiving stay clean. Being
+    un-promotable is a property of the CONTROLLER, and the only place it is
+    written down is the Cluster resource's own `Ready` condition.
+
+    The obvious alternative — counting the operator's
+    `controller_runtime_reconcile_errors_total` — was built, drilled on the HA rig
+    and REJECTED, because a counter is the wrong shape for the question twice
+    over. controller-runtime retries a failing item on an exponential backoff
+    capped at 1000s, so a sustained outage produces roughly 3.6 errors an hour and
+    goes quiet between them; while REPAIRING the control plane emits a burst of
+    its own (measured: 4 errors in 11 seconds as the operator caught up). The two
+    states overlap in count, so no threshold separates them, and any window long
+    enough to span the backoff also holds a benign burst true for that whole
+    window. Worse, those series exist only on the operator pod holding the leader
+    lease, so a leadership change — exactly what a node loss causes — either
+    resets the alert's timer or splits it in two.
+
+    A condition is LEVEL-triggered: true while the thing is true, per Cluster,
+    with no `pod` in its identity and nothing to time out. It says what an
+    operator actually wants to know instead of a proxy for it.
+
+    Cardinality is negligible: one series per Cluster per condition type, five
+    conditions, two Clusters on a stock instance.
+
+    🔴 SET THIS FROM WHETHER CLOUDNATIVEPG IS INSTALLED, not from taste — the root
+    passes enable_cnpg. With no CNPG CRDs in the cluster, kube-state-metrics has
+    nothing to watch: it does not fail, but it exports no series, and the alerting
+    rules that read them would be rules with no series, which is the one failure
+    mode those rules cannot self-report.
+
+    Ordering note: this only tells kube-state-metrics which GVK to WATCH, so
+    unlike a PodMonitor it creates no apply-time dependency on the CRD existing.
+    kube-state-metrics discovers CRDs dynamically (the subchart grants it
+    customresourcedefinitions list/watch as soon as this is on), so the usual
+    install race — monitoring and CloudNativePG applying in parallel — resolves
+    itself once the CRD lands rather than failing the apply.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "slim" {
   description = <<-EOT
     Reduce the footprint for a local/kind cluster: Prometheus keeps its TSDB on an
@@ -289,7 +339,80 @@ locals {
     }
 
     grafana = local.grafana_values
-  }, local.kind_component_overrides)
+  }, local.kind_component_overrides, local.cnpg_cluster_metrics_values)
+}
+
+locals {
+  # kube-state-metrics' CustomResourceState reader, pointed at the CloudNativePG
+  # Cluster's status conditions. See var.cnpg_cluster_metrics for WHY this is read
+  # from the resource rather than inferred from the operator's own counters.
+  #
+  # The key is quoted because it contains hyphens, and it is the SUBCHART's values
+  # block: kube-prometheus-stack does not enumerate `customResourceState` in its
+  # own values.yaml, but Helm passes any subchart key straight through. Verified by
+  # rendering chart 65.1.1 with exactly this document — it produces the ConfigMap,
+  # the --custom-resource-state-config-file argument, the volume mount and the
+  # ClusterRole rule.
+  #
+  # 🔑 ONLY the postgresql.cnpg.io rule is listed. The subchart adds
+  # customresourcedefinitions list/watch BY ITSELF whenever customResourceState is
+  # enabled, and adding it here as well renders a duplicate rule. That is easy to
+  # get wrong in the other direction: kube-state-metrics needs CRD discovery to
+  # resolve the GVK at all, and without it the only symptom is a `forbidden` line
+  # in its log and an endpoint that silently exports nothing.
+  cnpg_cluster_metrics_values = var.cnpg_cluster_metrics ? {
+    "kube-state-metrics" = {
+      rbac = {
+        extraRules = [{
+          apiGroups = ["postgresql.cnpg.io"]
+          resources = ["clusters"]
+          verbs     = ["get", "list", "watch"]
+        }]
+      }
+      customResourceState = {
+        enabled = true
+        config = {
+          kind = "CustomResourceStateMetrics"
+          spec = {
+            resources = [{
+              groupVersionKind = {
+                group   = "postgresql.cnpg.io"
+                kind    = "Cluster"
+                version = "v1"
+              }
+              # Yields kube_cnpg_cluster_condition. The prefix and the metric name
+              # are joined with an underscore by kube-state-metrics.
+              metricNamePrefix = "kube_cnpg"
+              labelsFromPath = {
+                namespace = ["metadata", "namespace"]
+                cluster   = ["metadata", "name"]
+              }
+              metrics = [{
+                name = "cluster_condition"
+                help = "CloudNativePG Cluster status conditions, one series per condition type."
+                each = {
+                  type = "Gauge"
+                  gauge = {
+                    path = ["status", "conditions"]
+                    labelsFromPath = {
+                      type   = ["type"]
+                      reason = ["reason"]
+                    }
+                    # The conditions' `status` is the string "True"/"False";
+                    # kube-state-metrics maps those onto 1/0. Confirmed live
+                    # against both a healthy Cluster (Ready=1) and one the
+                    # operator could not reconcile (Ready=0, reason
+                    # ClusterIsNotReady).
+                    valueFrom = ["status"]
+                  }
+                }
+              }]
+            }]
+          }
+        }
+      }
+    }
+  } : {}
 }
 
 resource "helm_release" "kube_prometheus_stack" {
