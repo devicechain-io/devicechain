@@ -28,17 +28,25 @@
 // deployed platform was given, is still readable after that cluster is gone —
 // using only a database dump and the escrow artifact.
 //
-// It is the CORE-DATA drill, and that is a seam rather than a shortcoming. An
-// instance's data sits on two separate database servers: the relational one,
-// which holds tenants, devices, rules, dashboards and every stored secret, and
-// TimescaleDB, which holds event history. event-management is the only service
-// that talks to the latter and it talks to nothing else, so there are no
-// cross-writes between them. The root key gates the core half ONLY — event data
-// carries no ciphertext — so restoring it is the operation the escrow exists to
-// make possible, and the one that has to be proved.
+// It covers BOTH of an instance's databases. Its data sits on two separate
+// servers: the relational one, which holds tenants, devices, rules, dashboards and
+// every stored secret, and TimescaleDB, which holds event history.
+// event-management is the only service that talks to the latter and it talks to
+// nothing else, so there are no cross-writes between them — they are two backups
+// and two restores. The root key gates the core half ONLY (event data carries no
+// ciphertext), so restoring it is the operation the escrow exists to make possible
+// and the one that had to be proved first; seed-events/verify-events are the other
+// half, because "we can restore" is false as a claim if half of it has never been
+// tried.
 //
-// The event-data restore is a sibling drill this tool does not attempt, as are
-// JetStream state and object storage.
+// The event half checks TimescaleDB's MACHINERY and not just its rows, because a
+// hypertable can come back as a plain table holding every row, a continuous
+// aggregate can come back as a definition with no materialization, the jobs that
+// maintain both are themselves data, and an extension whose catalog rehydrated
+// without its resource manager being loaded returns compressed chunks as nothing
+// at all — silently, on a Cluster that reports healthy. See README.md.
+//
+// JetStream state and object storage remain undrilled.
 //
 // The seed half talks to the platform over GraphQL — the real write path,
 // through the real ingress, into the service that holds the real KEK. The verify
@@ -81,6 +89,17 @@ const (
 	// masquerading as a wrong key would make the negative control hold for a
 	// reason that has nothing to do with the escrow.
 	exitMismatch = 5
+	// exitTimescaleBroken is the event half's own verdict, and it is separate from
+	// exitMismatch because it is a different KIND of answer. The rows came back
+	// and are correct; what did not come back is TimescaleDB's own machinery —
+	// the hypertable partitioning, a continuous aggregate's materialization, a
+	// compressed chunk, or the background scheduler that maintains them.
+	//
+	// It gets its own code because the two demand opposite responses. Corrupt data
+	// means restore again from an earlier point. This means the data is fine and
+	// the cluster is not, which is a platform bug and is invisible to every
+	// row-counting check — a plain table full of the right rows reads as a pass.
+	exitTimescaleBroken = 6
 )
 
 // exitError carries an exit code alongside the message, so each command returns a
@@ -113,12 +132,15 @@ func codeOf(err error) int {
 
 const usage = `drdrill — the ADR-028 root-key restore drill
 
-  drdrill seed   [flags]   write a secret through the platform API, record a receipt
-  drdrill verify [flags]   prove that secret still decrypts, from a receipt
-  drdrill decoy  [flags]   mint an escrow artifact holding the WRONG key (the control)
-  drdrill codes            print the exit-code taxonomy as shell assignments
+  drdrill seed          [flags]   write a secret through the platform API, record a receipt
+  drdrill verify        [flags]   prove that secret still decrypts, from a receipt
+  drdrill seed-events   [flags]   write telemetry into the event store, record it on the receipt
+  drdrill verify-events [flags]   prove that telemetry, and TimescaleDB's own machinery, survived
+  drdrill decoy         [flags]   mint an escrow artifact holding the WRONG key (the control)
+  drdrill codes                   print the exit-code taxonomy as shell assignments
 
 Exit codes: 0 ok · 1 setup/inconclusive · 3 DECRYPT FAILED · 4 not found · 5 corrupt
+                                          6 RESTORED BUT TIMESCALE MACHINERY BROKEN
 `
 
 // printExitCodes emits the taxonomy as shell assignments for `eval`.
@@ -135,6 +157,7 @@ func printExitCodes() {
 	fmt.Printf("DRDRILL_EXIT_DECRYPT_FAILED=%d\n", exitDecryptFailed)
 	fmt.Printf("DRDRILL_EXIT_NOT_FOUND=%d\n", exitNotFound)
 	fmt.Printf("DRDRILL_EXIT_CORRUPT=%d\n", exitMismatch)
+	fmt.Printf("DRDRILL_EXIT_TIMESCALE_BROKEN=%d\n", exitTimescaleBroken)
 }
 
 func main() {
@@ -150,6 +173,10 @@ func main() {
 	switch os.Args[1] {
 	case "seed":
 		err = runSeed(ctx, os.Args[2:])
+	case "seed-events":
+		err = runSeedEvents(ctx, os.Args[2:])
+	case "verify-events":
+		err = runVerifyEvents(ctx, os.Args[2:])
 	case "verify":
 		err = runVerify(ctx, os.Args[2:])
 	case "decoy":
