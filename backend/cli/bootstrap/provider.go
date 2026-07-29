@@ -52,11 +52,15 @@ type Options struct {
 	// over levers that already exist and does NOT change which services run (that
 	// stays on Profile). See compactSizing.
 	Compact bool
-	// HA provisions the ADR-020 messaging topology: a 3-node NATS RAFT cluster
-	// spread one server per node, with every JetStream stream and KV bucket
-	// replicated across it. It is ONE value driving both tools — see haTopology for
-	// why that matters. It does not replicate the databases and does not change how
-	// many DeviceChain services run.
+	// HA provisions the ADR-020 topology: a 3-node NATS RAFT cluster spread one
+	// server per node, with every JetStream stream and KV bucket replicated across
+	// it, AND both database stores as replicated CloudNativePG Clusters — the
+	// relational one synchronously (A2.3), the event store at `preferred`
+	// durability (A2.4). It is ONE value driving both tools — see haTopology for
+	// why that matters; the database instance counts are derived inside OpenTofu
+	// from the same variable, so there is no second value to keep in step. It does
+	// not change how many DeviceChain services run: the stateful areas are pinned
+	// to one writer by the ADR-070 lease fence.
 	HA bool
 	// EnableAreas is the raw set of extra functional areas requested via
 	// --enable-area, deployed ADDITIVELY on top of the profile (e.g. lwm2m-ingest on

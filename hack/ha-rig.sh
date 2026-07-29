@@ -33,6 +33,13 @@
 #            alias Services, PostgreSQL's own view of synchronous replication,
 #            and (for the event store) TimescaleDB background-job health
 #
+# BOTH instances deploy ONE AREA BEYOND the `default` profile — lwm2m-ingest, with
+# credentials — so this is deliberately not a stock default install. It is the only
+# way CHECK A2 can assert on anything: nothing in `default` takes an ADR-070 lease,
+# so the fence substrate does not exist on a default instance and A2 skips. The
+# reasoning, and why deploying the area without credentials would make things worse
+# rather than better, is at ensure_lease_identities.
+#
 # 🔴 A green run means the broker and both databases are replicated. It does NOT
 # mean a node loss has been survived: nothing here kills a node. That is A1, and
 # it is a different drill.
@@ -60,6 +67,13 @@ control_cluster="devicechain-ha-control"
 instance="${DC_INSTANCE:-harig}"
 control_instance="${DC_CONTROL_INSTANCE:-hactl}"
 dcctl="$repo_root/backend/cli/build/dcctl"
+
+# Scratch space for the run's generated inputs (see ensure_lease_identities). Not
+# under the repo: a rig that drops files into the working tree eventually gets one
+# committed. Removed on exit however the run ends, including a failed check —
+# `fail` exits non-zero and EXIT still fires.
+rig_tmp="$(mktemp -d "${TMPDIR:-/tmp}/dc-ha-rig.XXXXXX")"
+trap 'rm -rf "$rig_tmp"' EXIT
 
 # The output helpers are defined HERE, above their first use. The DC_VERSION
 # branch below calls say(), and a function defined later in the file does not
@@ -99,6 +113,83 @@ build_dcctl() {
   [[ -x "$dcctl" ]] || fail "dcctl was not built at $dcctl"
 }
 
+# THE LEASE-HOLDER ARGUMENT — why this rig deploys an area no default install runs.
+#
+# CHECK A2 asserts the replication of the ADR-070 fence substrate: the dc_leases KV
+# bucket holding the lease that decides which pod may write. On the first run this
+# rig ever completed end to end, A2 asserted NOTHING, and said so in as many words:
+#
+#   A2: the ADR-070 lease bucket (KV_harig_dc_leases) does not exist and no
+#       deployed area takes a lease, so the fence substrate's replication was NOT
+#       checked. Note this also means the JetStreamLeaseBucketNotReplicated alert
+#       has no series to evaluate on this instance
+#
+# That was not a transient, and reading it as one is the mistake worth naming. Only
+# lwm2m-ingest and sparkplug-ingest take leases; both are opt-in areas held out of
+# the `default` profile this rig bootstraps. So A2 could not have asserted on ANY
+# run this rig would ever do — a permanently dark axis inside a suite whose entire
+# premise is that an unexercised check is worth nothing. The skip line was correct
+# and honest every single time, which is exactly why it read as unremarkable.
+#
+# lwm2m-ingest rather than sparkplug-ingest because it is reachable from a
+# supported flag: --lwm2m-identities provisions the credentials AND implies
+# --enable-area lwm2m-ingest. Sparkplug's equivalent is a `sources` list with a
+# per-tenant broker URL, which bootstrap has no flag for.
+#
+# 🔴 And the area alone is NOT enough. BOTH lease holders create the bucket only
+# when CONFIGURED, not merely when deployed — lwm2m-ingest with no identities is a
+# documented inert posture (bind, authenticate no one) that takes no lease, and
+# sparkplug-ingest with no sources likewise. But the checker's expectation keys off
+# DEPLOYED (core/messaging leaseHolderDeployed). So `--enable-area lwm2m-ingest` on
+# its own would flip A2 from "not checked" to demanding a bucket nothing was ever
+# going to create — trading a silent skip for a false failure, which is worse.
+# Credentials are what make the assertion real.
+#
+# The credential is real but leads nowhere: nothing ever connects to this rig, so
+# the identity exists only to put the adapter into its credentialed posture. It is
+# generated per run rather than committed, and written into a 0700 dir at 0600 —
+# a throwaway key is still a key, and a rig that models bad handling teaches it.
+#
+# `need openssl` is NOT here — it is on each command's dependency line, beside
+# kind/kubectl/docker. This function runs after create_cluster, and a missing
+# tool discovered two minutes into a kind bring-up is the posture this script
+# rejects everywhere else: fail before anything is provisioned.
+lease_identities_file=""
+ensure_lease_identities() {
+  lease_identities_file="$rig_tmp/lwm2m-identities.json"
+  # A subshell so the umask does not leak into the rest of the run.
+  (
+    umask 077
+    cat >"$lease_identities_file" <<EOF
+[
+  {
+    "identity": "ha-rig-lease-probe",
+    "psk": "$(openssl rand -base64 32)",
+    "tenant": "ha-rig",
+    "externalId": "ha-rig-lease-probe",
+    "autoRegister": false
+  }
+]
+EOF
+  )
+  # Checked rather than assumed — but this guard is convenience, not correctness,
+  # and saying so is the point. Measured: bootstrap rejects an empty file, parsing
+  # the JSON array and reporting EOF. So the guard buys one thing only: failing at
+  # the line that wrote the file, rather than inside a bootstrap whose error names
+  # a parse problem in a file the operator never wrote and cannot see. A full disk
+  # reads as bad JSON.
+  #
+  # It does NOT protect against the false-A2 state described above, and it would be
+  # wrong to think it does. An empty PATH (--lwm2m-identities "") parses to zero
+  # identities, and the area implication is gated on the parsed COUNT rather than
+  # on the flag being present — so the area is not deployed either, and A2 goes
+  # back to its honest skip. The input that actually produces a false A2 is
+  # `--enable-area lwm2m-ingest` with no identities: area deployed, no lease taken,
+  # bucket demanded and never created. Nothing in this rig passes it.
+  [[ -s "$lease_identities_file" ]] ||
+    fail "could not write the LwM2M identities file at $lease_identities_file"
+}
+
 # create_cluster is idempotent: an existing cluster of the same name is reused
 # rather than recreated, because a full bring-up is long enough that losing one
 # to a re-run is its own deterrent to running the rig at all.
@@ -113,7 +204,7 @@ create_cluster() {
 }
 
 cmd_up() {
-  need kind; need kubectl; need docker
+  need kind; need kubectl; need docker; need openssl
   build_dcctl
   create_cluster "$ha_cluster" "$repo_root/deploy/local/kind-cluster-ha.yaml"
 
@@ -128,9 +219,13 @@ cmd_up() {
   # key worth a second copy. Bootstrap escrows by default and REFUSES to run
   # non-interactively without a passphrase, which is the correct default for an
   # instance anyone might keep — and the wrong one for this.
+  # --lwm2m-identities deploys a credentialed lease holder so CHECK A2 has a fence
+  # substrate to assert on at all. See ensure_lease_identities.
+  ensure_lease_identities
   say "bootstrapping --ha"
   "$dcctl" bootstrap local "$instance" --ha --yes --no-escrow \
     --kube-context "kind-$ha_cluster" --host localhost --no-tls \
+    --lwm2m-identities "$lease_identities_file" \
     "${image_args[@]}"
 }
 
@@ -202,7 +297,7 @@ cmd_verify() {
 # A separate cluster rather than a second instance on the HA one: the object under
 # test is the BROKER, and both instances would share it.
 cmd_control() {
-  need kind; need kubectl
+  need kind; need kubectl; need openssl
   build_dcctl
   create_cluster "$control_cluster" "$repo_root/deploy/local/kind-cluster-ha-control.yaml"
 
@@ -216,11 +311,20 @@ cmd_control() {
   # charts.jetstack.io), each costing a full bring-up to discover.
   #
   # It does NOT change which services run — that stays on --profile — so the
-  # control still exercises the same 10 functional areas creating the same streams
+  # control still exercises the same functional areas creating the same streams
   # and buckets as the HA side.
+  #
+  # --lwm2m-identities is passed HERE TOO, and matching the HA side is the whole
+  # point: a control that omitted it would be a different deployment, and the one
+  # axis it dropped would be the one A2 covers. With it, the control carries a
+  # dc_leases bucket at 1 replica while claiming 3 — so A2 is not merely exercised
+  # on the HA side, it is shown to FAIL on an instance that does not hold the
+  # claim. That is the difference between an assertion and a decoration.
   say "bootstrapping the negative control (no --ha, single node)"
+  ensure_lease_identities
   "$dcctl" bootstrap local "$control_instance" --yes --compact --no-escrow \
     --kube-context "kind-$control_cluster" --host localhost --no-tls \
+    --lwm2m-identities "$lease_identities_file" \
     "${image_args[@]}"
 
   say "NEGATIVE CONTROL — the same check, against an instance that is NOT replicated"

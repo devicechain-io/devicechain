@@ -104,14 +104,52 @@ The product/strategy narrative docs can be reconciled with the `/sync-product-do
 
 ## Build, test, and lint (these are the CI gates — run before committing)
 
-Go (from the repo root; the workspace resolves all modules — no vendor step):
+Go — **run these with a MODULE as the working directory, not the repo root.** CI does exactly
+that (`working-directory: ${{ matrix.module }}` on every Go step), and the root is not a Go
+module, so the root-level forms do not do what they look like they do:
+
+- `go build ./...` from the root **fails outright** — `pattern ./...: directory prefix . does not
+  contain modules listed in go.work or their selected dependencies`. So does `./backend/...`: a
+  `./…` pattern has to start inside a module, and none of them spans all 22. (`go build all` does
+  span them, but `all` in a workspace means every module *and every dependency*, so it builds the
+  whole Bento tree to tell you about your own code. Not the gate you want.)
+- `gofmt -l .` from the root **prints 8 files** — all under `_legacy/`, the archived pre-migration
+  tree that is deliberately not maintained. A gate documented as "must print nothing" that never
+  prints nothing teaches you to ignore it, or to reformat an archive you were told not to edit.
 
 ```bash
+cd backend/core     # ...or whichever module you touched
 gofmt -l .          # must print nothing
 go build ./...
 go vet ./...
 go test ./...
 ```
+
+Full sweep before committing — the workspace enumerates its own modules, so this needs no list to
+keep in step with `go.work`. **Save it to a file and run it; do not paste it into your shell** (it
+ends in `exit`). Two details in it are load-bearing, and both are the same trap in different
+clothes:
+
+- `gofmt -l` **exits 0 even when it names files**, so its OUTPUT is tested, not its status.
+- the loop records `rc=1` rather than just printing `FAILED:`. `… || echo "FAILED: $m"` — the
+  obvious way to write it — makes the loop's status that of the last `echo`, i.e. always 0. Every
+  module could fail and the sweep would still exit green, which is precisely the gate-that-cannot-
+  fail it exists to be.
+
+```bash
+rc=0
+for m in $(go list -m -f '{{.Dir}}'); do
+  ( cd "$m" || exit 1
+    fmt="$(gofmt -l .)"; [ -z "$fmt" ] || { echo "not gofmt-clean:"; echo "$fmt"; exit 1; }
+    go build ./... && go vet ./... && go test ./...
+  ) || { echo "FAILED: $m"; rc=1; }
+done
+exit "$rc"
+```
+
+This sweep is a superset of the `go` CI job in one respect: `deploy` is a workspace module
+(`deploy/assets.go`), but CI's module discovery globs only `backend/{cli,core,k8s,edge/*,services/*,sims/*,tools/*}`,
+so nothing in CI builds, vets or tests it.
 
 Other areas:
 

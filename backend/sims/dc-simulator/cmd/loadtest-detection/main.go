@@ -32,7 +32,7 @@ func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
 
 	handshakePath := flag.String("handshake", envOr("DC_SIM_HANDSHAKE", ""),
-		"path to the handshake JSON written by `dcctl sim create` (or set DC_SIM_HANDSHAKE)")
+		"path to the handshake JSON written by 'dcctl sim create' (or set DC_SIM_HANDSHAKE)")
 	bgDevices := flag.Int("bg-devices", envIntOr("DC_LOADTEST_BG_DEVICES", 0),
 		"background fleet size that saturates the pipeline (0 = default)")
 	bgInterval := flag.Duration("bg-interval", envDurationOr("DC_LOADTEST_BG_INTERVAL", 0),

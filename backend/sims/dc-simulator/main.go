@@ -46,7 +46,7 @@ func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
 
 	handshakePath := flag.String("handshake", envOr("DC_SIM_HANDSHAKE", ""),
-		"path to the handshake JSON file written by `dcctl sim create` (or set DC_SIM_HANDSHAKE)")
+		"path to the handshake JSON file written by 'dcctl sim create' (or set DC_SIM_HANDSHAKE)")
 	port := flag.String("port", envOr("DC_SIM_PORT", defaultPort),
 		"port the control API and presentation page listen on (or set DC_SIM_PORT)")
 	bind := flag.String("bind", envOr("DC_SIM_BIND", "127.0.0.1"),

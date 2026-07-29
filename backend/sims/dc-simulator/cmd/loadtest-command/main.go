@@ -41,7 +41,7 @@ func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
 
 	handshakePath := flag.String("handshake", envOr("DC_SIM_HANDSHAKE", ""),
-		"path to the handshake JSON written by `dcctl sim create` (or set DC_SIM_HANDSHAKE)")
+		"path to the handshake JSON written by 'dcctl sim create' (or set DC_SIM_HANDSHAKE)")
 	mqttBroker := flag.String("mqtt-broker", envOr("DC_LOADTEST_MQTT_BROKER", ""),
 		"NATS MQTT gateway address for the command receiver, e.g. ssl://127.0.0.1:1883 (port-forward dc-nats:1883; the listener is TLS)")
 	mqttInsecure := flag.Bool("mqtt-insecure", true,

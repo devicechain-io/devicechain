@@ -34,7 +34,7 @@ func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
 
 	handshakePath := flag.String("handshake", envOr("DC_SIM_HANDSHAKE", ""),
-		"path to the handshake JSON file written by `dcctl sim create` (or set DC_SIM_HANDSHAKE)")
+		"path to the handshake JSON file written by 'dcctl sim create' (or set DC_SIM_HANDSHAKE)")
 	manifest := flag.String("manifest", envOr("DC_LOADTEST_MANIFEST", ""),
 		"scenario id to drive (default: the handshake's manifestId, else devicepulse)")
 	devices := flag.Int("devices", envIntOr("DC_LOADTEST_DEVICES", 0),
