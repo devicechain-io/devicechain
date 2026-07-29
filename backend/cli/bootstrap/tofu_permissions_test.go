@@ -149,8 +149,24 @@ func TestExtractFSWritesOwnerOnlyAndTightensExistingFiles(t *testing.T) {
 		"modules/cnpg/z.tfv": {Data: []byte("# vars\n")},
 	}
 
-	// One file already present at the old loose mode, to catch the WriteFile
-	// subtlety: the mode argument is ignored when the file already exists.
+	// One file AND one directory already present at the old loose modes. Both
+	// halves are needed and the first version of this test only had the file:
+	// os.MkdirAll ignores its mode on an existing directory exactly as WriteFile
+	// ignores its mode on an existing file, so a test that seeds only a file
+	// passes against code that leaves every pre-existing modules/ subdirectory
+	// at 0755. That is not hypothetical — it is what shipped in the first draft
+	// of this fix, and a `find -perm /0077` over a real ~/.devicechain found it.
+	if err := os.MkdirAll(filepath.Join(dir, "modules", "cnpg"), 0o755); err != nil {
+		t.Fatalf("seeding modules/cnpg: %v", err)
+	}
+	for _, p := range []string{
+		filepath.Join(dir, "modules"),
+		filepath.Join(dir, "modules", "cnpg"),
+	} {
+		if err := os.Chmod(p, 0o755); err != nil {
+			t.Fatalf("chmod %s: %v", p, err)
+		}
+	}
 	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte("stale\n"), 0o644); err != nil {
 		t.Fatalf("seeding main.tf: %v", err)
 	}

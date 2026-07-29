@@ -520,7 +520,17 @@ func extractFS(src fs.FS, dir string) error {
 		}
 		target := filepath.Join(dir, path)
 		if d.IsDir() {
-			return os.MkdirAll(target, stateDirMode)
+			if err := os.MkdirAll(target, stateDirMode); err != nil {
+				return err
+			}
+			// The same reason as the file chmod below, and it was missed on the
+			// first pass: MkdirAll leaves an EXISTING directory exactly as it
+			// found it. modules/ and its children are created once and then
+			// re-extracted over on every run, so on an instance bootstrapped by
+			// an older dcctl every one of them stays 0755 forever. A `find -perm
+			// /0077` over a real instance directory is what surfaced it — the
+			// files were all 0600 and the directories holding them were not.
+			return os.Chmod(target, stateDirMode)
 		}
 		b, err := fs.ReadFile(src, path)
 		if err != nil {
