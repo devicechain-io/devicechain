@@ -57,8 +57,18 @@ this platform has already deleted one background job for exactly that reason.
 
 🔴 A RULE WITH NO SERIES DOES NOT FIRE AND DOES NOT COMPLAIN. Everything here
 depends on the CloudNativePG Cluster's PodMonitor being scraped, which is why the
-Cluster chart sets `monitoring.enablePodMonitor: true` unconditionally and why
-the DR rig asserts the series EXIST rather than only that the rules loaded.
+Cluster chart sets `monitoring.enablePodMonitor: true` unconditionally.
+
+🔴 AND NOTHING YET CHECKS THAT IT IS. An earlier version of this comment claimed
+"the DR rig asserts the series EXIST rather than only that the rules loaded".
+That was not true — `hack/dr-rig.sh` contains no query against Prometheus at all,
+and neither does anything else in the repository. It is corrected rather than
+deleted because the sentence is worth more as a record of the gap than it was as
+a false reassurance: the one failure mode these rules cannot self-detect is
+having no series to evaluate, and the only honest statement today is that a
+human has to look. The control-plane rules alongside this file at least alert on
+their own instrument going missing (CNPGClusterControllerAbsent); there is no
+equivalent here.
 
 These are unit-tested against synthetic series in
 hack/testdata/prometheus-rules-tests.yaml — including the "no plugin attached"

@@ -14,9 +14,10 @@
 # alerts simply never fire.
 #
 # That is the same failure mode as an alert with no series, reached by a
-# different route, and this repo now ships three rule files: the DETECT/REACT
-# rules, the JetStream replication rules (ADR-020 A0), and the database backup
-# rules (ADR-028, ADR-020 A2.5). A break in any one takes its neighbours with it.
+# different route, and this repo now ships four rule files: the DETECT/REACT
+# rules, the JetStream replication rules (ADR-020 A0), the database backup rules
+# (ADR-028, ADR-020 A2.5) and the database control-plane rules (ADR-020 A1.5).
+# A break in any one takes its neighbours with it.
 #
 # Nothing else catches this. `helm lint` checks YAML, not PromQL. The values
 # schema does not see rendered output. The Prometheus Operator's own admission
@@ -97,7 +98,7 @@ for doc in yaml.safe_load_all(open(os.path.join(work, "rendered.yaml"))):
 # renamed value, a template that stopped being included -- would produce zero
 # files, zero failures, and a green run. Requiring the rules we know we ship is
 # what stops this passing by rendering nothing.
-required = {"database-backup", "jetstream-replication"}
+required = {"database-backup", "jetstream-replication", "database-control-plane"}
 missing = required - set(names)
 if missing:
     sys.exit(
@@ -138,19 +139,62 @@ note "every rendered rule group parses"
 # The tests feed synthetic series for that state and for the healthy and idle
 # states that must stay quiet.
 # ---------------------------------------------------------------------------
-tests_file="$repo_root/hack/testdata/prometheus-rules-tests.yaml"
-[[ -f "$tests_file" ]] || fail "no rule unit tests at $tests_file"
+# Which rendered group is exercised by which test file. Each pair runs on its own,
+# against its own group -- NOT against a concatenation of all four, because these
+# files encode one group's semantics each and an unrelated rule's labels showing up
+# in the results would be a failure here for no reason.
+declare -A rule_tests=(
+  [database-backup]="$repo_root/hack/testdata/prometheus-rules-tests.yaml"
+  [database-control-plane]="$repo_root/hack/testdata/prometheus-rules-control-plane-tests.yaml"
+)
 
-# The tests name their rule file as `rendered-rules.yaml`, relative to the test
-# file's own directory. Both are staged into the work dir so the tests run against
-# the SHIPPED rules rather than a checked-in copy that can drift from them.
+# 🔴 AND THE GROUPS THAT ARE KNOWINGLY UNTESTED, NAMED. Without this list the loop
+# below is a loop over whatever has tests, so a NEW rule file -- the moment most
+# likely to ship a semantically inverted alert -- would be skipped in silence and
+# the run would still be green. That is the same silent-exemption shape the
+# `required` positive control above exists to close, reached from the other end:
+# there, a group that stopped rendering; here, a group that never got tests.
 #
-# 🔴 The database-backup group specifically, not every group: these tests encode
-# that group's semantics, and pointing them at a concatenation of all three would
-# make an unrelated rule's labels a failure here.
-cp "$tests_file" "$work/rules-tests.yaml"
-cp "$work/rule-database-backup.yaml" "$work/rendered-rules.yaml"
-chmod 644 "$work/rules-tests.yaml" "$work/rendered-rules.yaml"
+# Adding a rule file therefore forces a decision. Write tests for it, or write it
+# down here as a known gap. Both are fine; drifting past the question is not.
+untested_groups=(event-processing jetstream-replication)
+
+python3 - "$work" "${!rule_tests[@]}" -- "${untested_groups[@]}" <<'PY'
+import os, sys
+
+work = sys.argv[1]
+split = sys.argv.index("--")
+tested = set(sys.argv[2:split])
+known_untested = set(sys.argv[split + 1:])
+
+rendered = {
+    f[len("rule-"):-len(".yaml")]
+    for f in os.listdir(work)
+    if f.startswith("rule-") and f.endswith(".yaml")
+}
+
+unaccounted = rendered - tested - known_untested
+if unaccounted:
+    sys.exit(
+        "these rendered PrometheusRule groups are in neither the unit-tested set nor the\n"
+        "  known-untested list: %s.\n"
+        "  A group nobody listed is a group this check skips WITHOUT SAYING SO. Add it to\n"
+        "  rule_tests with a test file, or to untested_groups to record it as a known gap."
+        % ", ".join(sorted(unaccounted))
+    )
+
+phantom = (tested | known_untested) - rendered
+if phantom:
+    sys.exit(
+        "these groups are listed here but the chart renders no such rule: %s.\n"
+        "  A stale name means the tests it points at run against nothing, or that a group\n"
+        "  was renamed and its coverage quietly followed the old name into the void."
+        % ", ".join(sorted(phantom))
+    )
+
+print("    %d rendered group(s): %d unit-tested, %d recorded as untested"
+      % (len(rendered), len(tested), len(known_untested)))
+PY
 
 # 🔴 EVERY RULE MUST BE NAMED IN THE TESTS, and this is not tidiness.
 #
@@ -163,14 +207,30 @@ chmod 644 "$work/rules-tests.yaml" "$work/rendered-rules.yaml"
 # A negative assertion can only name rules its author knew about. This turns
 # "the tests cover what I remembered" into "the tests cover every rule", so a new
 # alert is untested loudly rather than silently.
-python3 - "$work/rule-database-backup.yaml" "$tests_file" <<'PY'
+for group in "${!rule_tests[@]}"; do
+  tests_file="${rule_tests[$group]}"
+  [[ -f "$tests_file" ]] || fail "no rule unit tests at $tests_file (for the $group group)"
+
+  # Each group runs in its OWN directory. The tests name their rule file as
+  # `rendered-rules.yaml`, relative to the test file's own directory, so two
+  # groups staged into one work dir would overwrite each other's rules and the
+  # second would silently be checked against the first's -- a green run proving
+  # nothing about either.
+  gwork="$work/t-$group"
+  mkdir -p "$gwork"
+  cp "$tests_file" "$gwork/rules-tests.yaml"
+  cp "$work/rule-$group.yaml" "$gwork/rendered-rules.yaml"
+  chmod 755 "$gwork"
+  chmod 644 "$gwork/rules-tests.yaml" "$gwork/rendered-rules.yaml"
+
+  python3 - "$group" "$gwork/rendered-rules.yaml" "$tests_file" <<'PY'
 import sys, yaml
 
-rendered, tests = sys.argv[1], sys.argv[2]
+group, rendered, tests = sys.argv[1], sys.argv[2], sys.argv[3]
 
 defined = set()
-for group in yaml.safe_load(open(rendered))["groups"]:
-    for rule in group.get("rules", []):
+for g in yaml.safe_load(open(rendered))["groups"]:
+    for rule in g.get("rules", []):
         if "alert" in rule:
             defined.add(rule["alert"])
 
@@ -181,40 +241,41 @@ for case in yaml.safe_load(open(tests)).get("tests", []):
             covered.add(assertion["alertname"])
 
 if not defined:
-    sys.exit("the rendered database-backup group defines no alerts at all; this check would pass vacuously")
+    sys.exit("the rendered %s group defines no alerts at all; this check would pass vacuously" % group)
 
 untested = defined - covered
 if untested:
     sys.exit(
-        "these database-backup alerts appear in no unit test: %s.\n"
+        "these %s alerts appear in no unit test: %s.\n"
         "  Every rule needs at least one scenario that fires it AND at least one that does\n"
         "  not, including the idle-cluster case -- a rule nobody asserts about is a rule that\n"
         "  can be silently wrong in either direction. Add cases to %s."
-        % (", ".join(sorted(untested)), tests)
+        % (group, ", ".join(sorted(untested)), tests)
     )
 
 stale = covered - defined
 if stale:
     sys.exit(
-        "these unit tests name alerts the chart no longer renders: %s.\n"
+        "these %s unit tests name alerts the chart no longer renders: %s.\n"
         "  Their assertions still pass -- an alert that does not exist fires no alerts, so\n"
         "  every `exp_alerts: []` is trivially satisfied. Remove them or fix the name."
-        % ", ".join(sorted(stale))
+        % (group, ", ".join(sorted(stale)))
     )
 
-print("    %d alert(s) defined, all covered by unit tests" % len(defined))
+print("    %s: %d alert(s) defined, all covered by unit tests" % (group, len(defined)))
 PY
 
-say "running the database-backup rule unit tests"
-if command -v promtool >/dev/null 2>&1; then
-  (cd "$work" && promtool test rules rules-tests.yaml)
-else
-  docker run --rm -u 0 -v "$work:/w" -w /w --entrypoint /bin/promtool "$promtool_image" \
-    test rules rules-tests.yaml
-fi || fail "a database-backup alerting rule does not behave as specified.
+  say "running the $group rule unit tests"
+  if command -v promtool >/dev/null 2>&1; then
+    (cd "$gwork" && promtool test rules rules-tests.yaml)
+  else
+    docker run --rm -u 0 -v "$gwork:/w" -w /w --entrypoint /bin/promtool "$promtool_image" \
+      test rules rules-tests.yaml
+  fi || fail "a $group alerting rule does not behave as specified.
 
 These tests are the only thing in the repository that evaluates an alert
 expression. A failure here means a rule fires when it should not, or -- far worse
--- stays silent on a state that means this instance is not being backed up."
+-- stays silent on a state this platform is supposed to catch."
 
-note "the database-backup rules fire on the states they claim to"
+  note "the $group rules fire on the states they claim to"
+done

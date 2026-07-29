@@ -1,0 +1,320 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for the database CONTROL-PLANE alerting rules (ADR-020 A1.5).
+#
+# WHAT THESE ARE FOR, over and above the parse check
+#
+# The rules they cover encode a claim that took a live drill to establish: a
+# CloudNativePG Cluster whose plugins the operator cannot reach never reconciles,
+# so it never promotes, and NOTHING on the database side says so. Every scenario
+# below therefore asserts on the quiet rules as loudly as on the firing one —
+# because the failure this group exists to catch is a state that LOOKS healthy,
+# and a group of alerts that all fire together would hide it just as effectively
+# as a group that stays silent.
+#
+# 🔴 THE SERIES ARE THE SPEC, and these were read off a live cluster rather than
+# recalled:
+#
+#   - kube_cnpg_cluster_condition{cluster,namespace,type,reason} — kube-state-
+#     metrics' CustomResourceState reader over postgresql.cnpg.io/v1 Cluster,
+#     configured by modules/monitoring's cnpg_cluster_metrics. The condition's
+#     `status` is the string "True"/"False" and kube-state-metrics maps it onto
+#     1/0. Confirmed live in both directions: a healthy Cluster reported
+#     type="Ready" reason="ClusterIsReady" value 1, and one the operator could not
+#     reconcile reported type="Ready" reason="ClusterIsNotReady" value 0. The
+#     `reason` label rides along and changes with the state, which is why the
+#     scenarios below set it per case rather than picking one and reusing it.
+#   - kube_deployment_status_replicas_available — stock kube-state-metrics.
+#     Confirmed present for the cnpg-system namespace on the rig before anything
+#     was written against it.
+#
+# 🔑 NOTE WHAT IS *NOT* HERE: no controller_runtime_* series. An earlier version
+# of these rules counted the operator's reconcile errors and was rejected after
+# the live drill — it backs off, a successful REPAIR emits its own burst of
+# errors, and the series exist only on the pod holding the leader lease. The
+# scenarios that used to encode that counter's shape are gone with it; what
+# replaced them is "the Cluster says it is not Ready", which needs no such care.
+#
+# Run via hack/check-prometheus-rules.sh, which renders the chart first: these
+# assert against the SHIPPED rules, not against a checked-in copy of them.
+
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # -------------------------------------------------------------------------
+  # THE A1.5 FINDING. The Barman Cloud plugin is gone; the operator is up and
+  # cannot reconcile either Cluster; every database is serving traffic normally.
+  #
+  # Sample layout (interval 1m):
+  #   minutes  0- 9   healthy: both Clusters Ready=1, plugin available
+  #   minute  10      the plugin goes to zero replicas and both Clusters drop to
+  #                   Ready=0 (measured on the rig: 13 seconds, well inside one
+  #                   sample)
+  # -------------------------------------------------------------------------
+  - name: clusters the operator cannot reconcile are not silently healthy
+    interval: 1m
+    input_series:
+      - series: 'kube_cnpg_cluster_condition{namespace="dc-system", cluster="dc-rdb", type="Ready", reason="ClusterIsNotReady"}'
+        values: "1+0x9 0+0x170"
+      - series: 'kube_cnpg_cluster_condition{namespace="dc-system", cluster="dc-tsdb", type="Ready", reason="ClusterIsNotReady"}'
+        values: "1+0x9 0+0x170"
+      # The other conditions stay TRUE throughout, exactly as they did on the rig:
+      # nothing is wrong with Postgres, WAL archiving, or the last backup. If the
+      # rule matched on condition type loosely these would drag it around.
+      - series: 'kube_cnpg_cluster_condition{namespace="dc-system", cluster="dc-rdb", type="ContinuousArchiving", reason="ContinuousArchivingSuccess"}'
+        values: "1+0x180"
+      - series: 'kube_cnpg_cluster_condition{namespace="dc-system", cluster="dc-rdb", type="LastBackupSucceeded", reason="LastBackupSucceeded"}'
+        values: "1+0x180"
+      # The plugin's Deployment loses its only replica. The operator keeps both of
+      # its own, which is what makes this the interesting case rather than an
+      # obvious outage.
+      - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="plugin-barman-cloud"}'
+        values: "1+0x9 0+0x170"
+      - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="cnpg-cloudnative-pg"}'
+        values: "2+0x180"
+    alert_rule_test:
+      # 🔴 THE `for` FROM THE SIDE THAT CAN BE WRONG. Ready drops at minute 10, so
+      # the 15m `for` is satisfied at minute 25 — NOT at minute 20. A Cluster
+      # legitimately passes through Ready=False during a switchover or a rolling
+      # restart, and on the rig a real recovery took 19 seconds; a rule that fired
+      # at minute 20 would still be fine here but would be measuring nothing, so
+      # the assertion is placed where shortening the `for` gets caught.
+      - eval_time: 20m
+        alertname: CNPGClusterNotReady
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: CNPGClusterNotReady
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              namespace: dc-system
+              cluster: dc-rdb
+              type: Ready
+              reason: ClusterIsNotReady
+            exp_annotations:
+              summary: "A PostgreSQL Cluster has not been Ready for 15 minutes"
+              description: >-
+                dc-rdb in namespace dc-system reports Ready=False (ClusterIsNotReady). THIS BLOCKS
+                FAILOVER: while a Cluster is not reconciling it is never promoted, so losing the
+                primary leaves healthy, fully caught-up replicas that nothing will elect — the
+                databases look fine right up until the moment they need to move. A phase of
+                "Cluster cannot proceed to reconciliation" points at the CloudNativePG operator or
+                the Barman Cloud plugin rather than at Postgres, and the instance pods will look
+                perfectly healthy throughout.
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              namespace: dc-system
+              cluster: dc-tsdb
+              type: Ready
+              reason: ClusterIsNotReady
+            exp_annotations:
+              summary: "A PostgreSQL Cluster has not been Ready for 15 minutes"
+              description: >-
+                dc-tsdb in namespace dc-system reports Ready=False (ClusterIsNotReady). THIS BLOCKS
+                FAILOVER: while a Cluster is not reconciling it is never promoted, so losing the
+                primary leaves healthy, fully caught-up replicas that nothing will elect — the
+                databases look fine right up until the moment they need to move. A phase of
+                "Cluster cannot proceed to reconciliation" points at the CloudNativePG operator or
+                the Barman Cloud plugin rather than at Postgres, and the instance pods will look
+                perfectly healthy throughout.
+      # The cause, caught independently and from outside the control plane.
+      - eval_time: 60m
+        alertname: CNPGControlPlaneUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              namespace: cnpg-system
+              deployment: plugin-barman-cloud
+            exp_annotations:
+              summary: "A CloudNativePG control-plane deployment has no available replicas"
+              description: >-
+                plugin-barman-cloud in namespace cnpg-system has zero available replicas. With the
+                operator down, no PostgreSQL Cluster in this cluster can fail over, scale, or be
+                reconfigured — the running databases keep serving and stop being managed. With the
+                Barman Cloud plugin down, the operator additionally cannot reconcile any Cluster
+                that references it, so the same failover block applies. Expect CNPGClusterNotReady
+                to follow within the quarter hour if this is not resolved.
+      # The series ARE being collected, so the instrument alarm must stay quiet.
+      # If it fired here it would be indistinguishable from monitoring being down.
+      - eval_time: 60m
+        alertname: CNPGClusterStateUnobserved
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # The healthy control plane. Nothing may fire, or none of the above means
+  # anything.
+  # -------------------------------------------------------------------------
+  - name: a healthy control plane raises nothing
+    interval: 1m
+    input_series:
+      - series: 'kube_cnpg_cluster_condition{namespace="dc-system", cluster="dc-rdb", type="Ready", reason="ClusterIsReady"}'
+        values: "1+0x180"
+      - series: 'kube_cnpg_cluster_condition{namespace="dc-system", cluster="dc-tsdb", type="Ready", reason="ClusterIsReady"}'
+        values: "1+0x180"
+      - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="plugin-barman-cloud"}'
+        values: "1+0x180"
+      - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="cnpg-cloudnative-pg"}'
+        values: "2+0x180"
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: CNPGClusterNotReady
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: CNPGControlPlaneUnavailable
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: CNPGClusterStateUnobserved
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # 🔴 THE TRANSIENT THAT MUST NOT PAGE — a switchover, a rolling restart of the
+  # instances, a failover that WORKED.
+  #
+  # Ready drops for eight minutes and comes back on its own. This is the shape
+  # that killed the previous design: with a counting expression, a brief blip
+  # stayed "true" for the length of the counting window afterwards and paged
+  # anyway. A level signal simply goes back to 1, and the pending alert is
+  # discarded having never fired.
+  #
+  # Eight minutes is deliberately much longer than anything measured (a real
+  # plugin-outage recovery on the rig completed in 19 SECONDS) so the test is not
+  # riding on the `for` being generous.
+  # -------------------------------------------------------------------------
+  - name: a cluster that recovers on its own does not page
+    interval: 1m
+    input_series:
+      - series: 'kube_cnpg_cluster_condition{namespace="dc-system", cluster="dc-rdb", type="Ready", reason="ClusterIsReady"}'
+        values: "1+0x29 0+0x7 1+0x143"
+      - series: 'kube_cnpg_cluster_condition{namespace="dc-system", cluster="dc-tsdb", type="Ready", reason="ClusterIsReady"}'
+        values: "1+0x180"
+      - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="plugin-barman-cloud"}'
+        values: "1+0x180"
+      - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="cnpg-cloudnative-pg"}'
+        values: "2+0x180"
+    alert_rule_test:
+      # Minute 36: inside the outage, pending, short of the `for`.
+      - eval_time: 36m
+        alertname: CNPGClusterNotReady
+        exp_alerts: []
+      # Minute 44: recovered, and past where a 15m `for` measured from the START
+      # of the blip would have fired if the expression had stayed true.
+      - eval_time: 44m
+        alertname: CNPGClusterNotReady
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: CNPGClusterNotReady
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: CNPGControlPlaneUnavailable
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: CNPGClusterStateUnobserved
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # 🔴 THE MONITORING GAP, asserted rather than described.
+  #
+  # kube-state-metrics is running and exporting Deployments perfectly — but its
+  # CustomResourceState reader is not configured, or its RBAC cannot list
+  # postgresql.cnpg.io/clusters. That is the MOST LIKELY misconfiguration of this
+  # whole feature and it is invisible from the deployment series: a stock
+  # kube-state-metrics looks completely healthy.
+  #
+  # CNPGClusterNotReady cannot fire here — there is nothing for it to read — so
+  # without the third rule an instance in this state reports perfect database
+  # health forever. That is the entire justification for that rule existing.
+  # -------------------------------------------------------------------------
+  - name: cluster conditions that are never collected raise the instrument alarm
+    interval: 1m
+    input_series:
+      # NOTE the absence: no kube_cnpg_cluster_condition series at all.
+      - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="plugin-barman-cloud"}'
+        values: "1+0x180"
+      - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="cnpg-cloudnative-pg"}'
+        values: "2+0x180"
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: CNPGClusterStateUnobserved
+        exp_alerts:
+          # 🔑 absent() synthesises a series from the selector's EQUALITY
+          # matchers, so the alert carries namespace and type even though no such
+          # series exists. Asserted explicitly because it is the difference
+          # between a routable alert and one Alertmanager cannot group.
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              namespace: dc-system
+              type: Ready
+            exp_annotations:
+              summary: "No CloudNativePG Cluster conditions are being collected"
+              description: >-
+                Nothing is reporting PostgreSQL Cluster conditions in namespace dc-system, so the
+                health of database failover is UNKNOWN rather than good — and while this fires,
+                CNPGClusterNotReady CANNOT fire, because it reads the series this rule says are
+                missing. Check, in order: kube-state-metrics is running; it was started with
+                --custom-resource-state-config-file (OpenTofu's monitoring module sets this from
+                cnpg_cluster_metrics, which the root derives from enable_cnpg); and its ClusterRole
+                can list postgresql.cnpg.io/clusters. A missing RBAC rule shows up only as a
+                `forbidden` line in the kube-state-metrics log and an endpoint that exports nothing.
+      # The blindness is asserted, not just the alarm: this is the rule pair's
+      # whole reason for existing.
+      - eval_time: 60m
+        alertname: CNPGClusterNotReady
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: CNPGControlPlaneUnavailable
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # The operator is gone entirely. The deployment series still speak — that is
+  # the point of reading them from OUTSIDE the control plane — while the Cluster
+  # conditions freeze at whatever they last were, because nothing is updating
+  # them any more.
+  #
+  # 🔑 So CNPGClusterNotReady stays SILENT here, correctly and unhelpfully: the
+  # Clusters were Ready when the operator died and the condition is now stale.
+  # Only the deployment rule can see this, which is why it is not redundant with
+  # the Cluster-condition rule despite both being about "the control plane".
+  # -------------------------------------------------------------------------
+  - name: an operator that is not running is caught from outside
+    interval: 1m
+    input_series:
+      - series: 'kube_cnpg_cluster_condition{namespace="dc-system", cluster="dc-rdb", type="Ready", reason="ClusterIsReady"}'
+        values: "1+0x180"
+      - series: 'kube_cnpg_cluster_condition{namespace="dc-system", cluster="dc-tsdb", type="Ready", reason="ClusterIsReady"}'
+        values: "1+0x180"
+      - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="cnpg-cloudnative-pg"}'
+        values: "2+0x9 0+0x170"
+      - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="plugin-barman-cloud"}'
+        values: "1+0x180"
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: CNPGControlPlaneUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              namespace: cnpg-system
+              deployment: cnpg-cloudnative-pg
+            exp_annotations:
+              summary: "A CloudNativePG control-plane deployment has no available replicas"
+              description: >-
+                cnpg-cloudnative-pg in namespace cnpg-system has zero available replicas. With the
+                operator down, no PostgreSQL Cluster in this cluster can fail over, scale, or be
+                reconfigured — the running databases keep serving and stop being managed. With the
+                Barman Cloud plugin down, the operator additionally cannot reconcile any Cluster
+                that references it, so the same failover block applies. Expect CNPGClusterNotReady
+                to follow within the quarter hour if this is not resolved.
+      - eval_time: 60m
+        alertname: CNPGClusterNotReady
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: CNPGClusterStateUnobserved
+        exp_alerts: []

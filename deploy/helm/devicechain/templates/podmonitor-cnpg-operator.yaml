@@ -1,0 +1,72 @@
+{{/*
+PodMonitor for the CloudNativePG OPERATOR (ADR-020 A1.5).
+
+🔑 THIS IS A DIAGNOSTIC SCRAPE, NOT AN ALERTING ONE, and saying so is the point.
+No rule in this chart reads these series. The alert for a Cluster that cannot be
+reconciled is CNPGClusterNotReady, which reads the Cluster's own condition through
+kube-state-metrics — prometheusrule-database-control-plane.yaml explains at length
+why the operator's `controller_runtime_reconcile_errors_total` was drilled and
+rejected as the alerting signal (it backs off, a REPAIR also emits a burst of
+errors, and the series live only on whichever pod holds the leader lease).
+
+What it is for is the next fifteen minutes after that alert fires. When a Cluster
+is stuck, the operator's own registry is what says why: whether the cluster
+controller is erroring at all (`controller_runtime_reconcile_errors_total`),
+whether anything is being attempted (`controller_runtime_reconcile_total` by
+`result`), whether work is piling up (`workqueue_depth`, `workqueue_retries_total`),
+and whether a pod believes it is in charge (`leader_election_master_status`). Those
+are exactly the questions a level-triggered alert cannot answer, and collecting
+them costs one scrape of a two-replica Deployment.
+
+WHY IT LIVES IN THE CHART AND NOT IN OPENTOFU, where the operator is installed:
+the same reason as podmonitor-nats.yaml, and modules/cnpg's `enable_pod_monitor`
+carries the long version. A PodMonitor is a Prometheus Operator CRD; reading
+`var.enable_monitoring` inside modules/cnpg creates no dependency edge, so
+`terraform graph` schedules that module in the first wave while kube-prometheus-
+stack is still installing, and a fresh apply fails nondeterministically on `no
+matches for kind "PodMonitor"`. The chart installs AFTER the infrastructure apply
+completes, so here the CRDs exist by construction.
+
+🔴 IT SELECTS ON A LABEL WE OWN. `devicechain.io/cnpg-control-plane: operator` is
+set by modules/cnpg through the chart's `podLabels`, and selected on there for the
+operator's topologySpreadConstraint. Selecting instead on the upstream
+`app.kubernetes.io/*` pair would put a string we do not control in the load-bearing
+position of a monitor whose only failure mode is silence — an upstream rename would
+leave this selecting nothing and produce no error anywhere. If that label changes
+in modules/cnpg it must change here too. Nothing alerts on this going quiet, which
+is acceptable only because nothing alerts on its contents either; the moment a rule
+starts reading these series, that rule needs an `absent()` guard of its own, the way
+CNPGClusterStateUnobserved guards the kube-state-metrics series.
+
+Both replicas are scraped deliberately. A non-leading manager never starts its
+controllers, so the follower's /metrics carries the go/process families and
+`leader_election_master_status 0` and NOTHING from controller-runtime — verified on
+the live two-replica operator. Scraping both is therefore what makes
+`leader_election_master_status` meaningful: summed across pods it is the number of
+operators that believe they are in charge, which should be exactly one.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.cnpgNamespace }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: cnpg-operator
+  namespace: {{ .Values.instance.id }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  # Cross-namespace, like the NATS monitor: the operator is cluster-scoped
+  # infrastructure and does not live in the instance namespace. Prometheus is
+  # configured to select monitors cluster-wide (podMonitorSelectorNilUsesHelmValues
+  # is false in the monitoring module), so no release label is needed here.
+  namespaceSelector:
+    matchNames:
+      - {{ .Values.metrics.cnpgNamespace | quote }}
+  selector:
+    matchLabels:
+      devicechain.io/cnpg-control-plane: operator
+  podMetricsEndpoints:
+    # The operator's container port name. Plain HTTP, no auth — CloudNativePG
+    # serves controller-runtime's metrics registry directly on it.
+    - port: metrics
+      path: /metrics
+{{- end }}

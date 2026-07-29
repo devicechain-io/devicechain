@@ -104,6 +104,28 @@ variable "enable_pod_monitor" {
 
     Turn it on deliberately, against a cluster already carrying the Prometheus
     Operator CRDs.
+
+    🔑 A DEVICECHAIN INSTANCE NO LONGER NEEDS THIS, and it is still not derived.
+    The Helm chart renders its own PodMonitor for the operator
+    (templates/podmonitor-cnpg-operator.yaml, gated on metrics.cnpgNamespace),
+    from the far side of the ordering problem above: the chart installs after
+    this apply completes, so the CRDs exist by construction. This flag stays
+    because it serves the case the chart cannot — an operator installed by this
+    root and monitored by something that is not a DeviceChain instance.
+
+    Note what those series are and are NOT for. Nothing alerts on the operator's
+    controller-runtime counters; the control-plane alerts (ADR-020 A1.5) read the
+    Cluster's own conditions through kube-state-metrics instead, for reasons set
+    out at length in modules/monitoring's cnpg_cluster_metrics. The operator
+    scrape is diagnostic — the first thing to look at once one of those alerts
+    fires.
+
+    Turning BOTH on is harmless: two PodMonitors select the same pods, so every
+    operator series is scraped twice under different `job` labels. Since no rule
+    reads them, the duplicate costs storage and makes a confusing graph and
+    nothing else. If a rule ever DOES read them, check that first — an
+    unaggregated expression would carry `job` into the alert's identity and page
+    twice for one event.
   EOT
   type        = bool
   default     = false
