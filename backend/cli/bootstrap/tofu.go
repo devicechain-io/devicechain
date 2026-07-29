@@ -17,11 +17,20 @@ import (
 	"github.com/hashicorp/terraform-exec/tfexec"
 )
 
+const (
+	// stateDirMode and stateFileMode keep ~/.devicechain/<instance> readable only
+	// by its owner. Same values, and the same reasoning, as escrowDirMode /
+	// escrowFileMode next door: the directory holds cleartext secrets, so the
+	// question is not whether anyone WOULD read it but whether they COULD.
+	stateDirMode  = 0o700
+	stateFileMode = 0o600
+)
+
 // applyInfra extracts the embedded OpenTofu config into a stable per-instance
 // working directory and runs init+apply through terraform-exec. The config (.tf
 // + modules) is refreshed from the binary on every run, but terraform.tfstate
 // lives in that directory and persists across runs so the apply is idempotent.
-func applyInfra(ctx context.Context, st *State) error {
+func applyInfra(ctx context.Context, st *State) (err error) {
 	tofuBin, err := findTofu()
 	if err != nil {
 		return err
@@ -31,6 +40,17 @@ func applyInfra(ctx context.Context, st *State) error {
 	if err != nil {
 		return err
 	}
+	// Deferred, and registered the moment the directory exists, because a FAILED
+	// apply writes state too — a partial apply is exactly the run that leaves
+	// resource attributes on disk, and the path that returns early is the one a
+	// call placed after the apply would skip. A chmod error only surfaces when
+	// nothing else went wrong; the apply's own error is always the better one to
+	// hand back.
+	defer func() {
+		if herr := hardenStateFiles(workdir); herr != nil && err == nil {
+			err = herr
+		}
+	}()
 	if err := extractFS(assets.OpenTofu(), workdir); err != nil {
 		return fmt.Errorf("extracting infrastructure config: %w", err)
 	}
@@ -432,16 +452,62 @@ func instanceRoot(instance string) (string, error) {
 // instanceStateDir returns a stable, per-instance directory under the user's
 // home for persistent bootstrap state (e.g. ~/.devicechain/<instance>/<sub>),
 // creating it if necessary.
+//
+// 🔴 THE MODE IS THE PROTECTION, and it protects a file this code does not write.
+// OpenTofu's local backend puts terraform.tfstate in here, and tfstate is not a
+// summary of the infrastructure — it is the infrastructure's values, in cleartext,
+// including the database superuser password and the NATS server's TLS PRIVATE KEY.
+// It was shipping at 0644 inside 0755 directories, so on any machine with a second
+// account those were readable by everyone on the box.
+//
+// Tightening the constant alone would have fixed only fresh installs: MkdirAll
+// applies its mode to directories it CREATES and silently leaves an existing one
+// as it found it, so every instance bootstrapped before this change would have
+// stayed world-readable while the code claimed otherwise. Hence the explicit walk
+// back down over each level.
 func instanceStateDir(instance, sub string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
 	dir := filepath.Join(home, ".devicechain", instance, sub)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, stateDirMode); err != nil {
 		return "", err
 	}
+	// Every level, not just the leaf: ~/.devicechain itself is the one an older
+	// dcctl created at 0755, and a private leaf under a traversable parent is
+	// still private — but the parent also holds the escrow directory and every
+	// other instance, so it is worth owning.
+	for _, p := range []string{
+		filepath.Join(home, ".devicechain"),
+		filepath.Join(home, ".devicechain", instance),
+		dir,
+	} {
+		if err := os.Chmod(p, stateDirMode); err != nil {
+			return "", fmt.Errorf("restricting permissions on %s: %w", p, err)
+		}
+	}
 	return dir, nil
+}
+
+// hardenStateFiles tightens anything OpenTofu wrote into the working directory
+// that this process did not create itself.
+//
+// The directory mode above is the real protection; this is the second layer, and
+// it exists because the file is written by a tool whose permission choices are
+// not ours to assume. It runs AFTER the apply, deliberately: a chmod before the
+// apply would be undone by the write it was meant to protect.
+//
+// Missing files are not an error. A dry run never produces a state file, and
+// there is no backup until the second apply.
+func hardenStateFiles(workdir string) error {
+	for _, name := range []string{"terraform.tfstate", "terraform.tfstate.backup"} {
+		p := filepath.Join(workdir, name)
+		if err := os.Chmod(p, stateFileMode); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("restricting permissions on %s: %w", p, err)
+		}
+	}
+	return nil
 }
 
 // extractFS writes every file in an embedded fs.FS into dir, recreating the
@@ -454,12 +520,22 @@ func extractFS(src fs.FS, dir string) error {
 		}
 		target := filepath.Join(dir, path)
 		if d.IsDir() {
-			return os.MkdirAll(target, 0o755)
+			return os.MkdirAll(target, stateDirMode)
 		}
 		b, err := fs.ReadFile(src, path)
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(target, b, 0o644)
+		// The .tf files themselves are not secret — they ship in the binary and
+		// in the public repo. They get the restrictive mode anyway so there is
+		// ONE rule for everything under this directory, rather than a rule with
+		// an exception that the next file added here has to know about.
+		//
+		// WriteFile's mode applies only when it CREATES the file, so a re-run
+		// over an older install's 0644 copies would leave them as they were.
+		if err := os.WriteFile(target, b, stateFileMode); err != nil {
+			return err
+		}
+		return os.Chmod(target, stateFileMode)
 	})
 }
