@@ -9,10 +9,13 @@ require (
 	gorm.io/gorm v1.31.2
 )
 
+require golang.org/x/crypto v0.54.0 // indirect
+
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/devicechain-io/dc-event-sources v0.0.0
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/go-gormigrate/gormigrate/v2 v2.1.6 // indirect
 	github.com/go-sql-driver/mysql v1.8.1 // indirect
@@ -20,7 +23,7 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.10.0 // indirect
+	github.com/jackc/pgx/v5 v5.10.0
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
@@ -47,3 +50,5 @@ replace github.com/devicechain-io/dc-microservice => ../../core
 replace github.com/devicechain-io/dc-notification-management => ../../services/notification-management
 
 replace github.com/graph-gophers/graphql-go => github.com/devicechain-io/graphql-go v1.10.2-dc.2
+
+replace github.com/devicechain-io/dc-event-sources => ../../services/event-sources

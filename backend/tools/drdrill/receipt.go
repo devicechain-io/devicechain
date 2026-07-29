@@ -41,6 +41,129 @@ type Receipt struct {
 	Password string `json:"password"`
 	// Secret is the expected plaintext. See the type comment.
 	Secret string `json:"secret"`
+
+	// Events is the EVENT-STORE half of the drill, written by `seed-events` and
+	// read by `verify-events`. It is a pointer so that a receipt from a run which
+	// seeded no telemetry does not make `verify` fail; nil means "this run did not
+	// drill the event store", which verify-events reports as a setup error rather
+	// than a verdict.
+	//
+	// 🔴 THE TWO HALVES ARE SEPARABLE OPERATIONS; THIS DRILL IS NOT SEPARABLE.
+	// dcctl really can recover an instance core-only (an operational instance with
+	// no history) or event-only (history with no control plane) — but
+	// verify-events authenticates as Identity/Password below, an identity that
+	// lives in the RELATIONAL store, so it cannot verify an event-only restore: the
+	// mandatory API check fails at login. An earlier comment here cited the
+	// operations' separability as if the drill inherited it. It does not, and the
+	// rig always restores both.
+	Events *EventSeed `json:"events,omitempty"`
+}
+
+// EventSeed is what seed-events records about the telemetry it wrote, so that
+// verify-events can tell a restore that brought the rows back from one that
+// merely brought a schema back.
+//
+// Every count here is an EXACT expectation, not a lower bound. A ">= 1" check
+// passes against a restore that recovered one chunk of many, which is the
+// partial-recovery failure most worth catching — and the one a hypertable makes
+// possible, since its data is spread across chunks that are separate physical
+// relations.
+type EventSeed struct {
+	// Tenant, DeviceToken and EventType locate the rows. The tenant is the same
+	// one the secret half seeds under (the tenant id in the event store is the
+	// tenant TOKEN — rdb.TenantScoped: "the stable tenant token"), so a single
+	// tenant-scoped session can read both halves back.
+	Tenant      string `json:"tenant"`
+	DeviceToken string `json:"deviceToken"`
+	EventType   int    `json:"eventType"`
+	// Name is the measurement name, and Window is the closed time range the rows
+	// were written into, RFC3339. Both are what the API query filters on.
+	Name  string `json:"name"`
+	Start string `json:"start"`
+	End   string `json:"end"`
+	// RawCount is how many measurement rows were written, and Sum is the sum of
+	// their values. The sum is carried because a count alone cannot distinguish the
+	// restored rows from a same-sized set of DIFFERENT ones.
+	//
+	// 🔴 It is NOT the same argument the secret half makes for carrying the
+	// plaintext, and an earlier comment here claimed it was. The secret is freshly
+	// random per run, so a match proves THIS run's ciphertext was opened. Measured
+	// values are drawn from a per-run random base (see seed-events) for the same
+	// reason — with a fixed base the sum was a constant of the default flags, 1290
+	// every run, and could not tell this run's twenty rows from an identical
+	// earlier run's. The time window in Start/End is the other discriminator.
+	RawCount int     `json:"rawCount"`
+	Sum      float64 `json:"sum"`
+	// MaterializedCount is the number of rows in the continuous aggregate's
+	// MATERIALIZATION hypertable at seed time, read directly rather than through
+	// the view.
+	//
+	// 🔴 It has to be read that way. measurement_rollups is created with
+	// `timescaledb.materialized_only = false`, so a read through the view
+	// recomputes anything above the aggregate's watermark live from the raw
+	// hypertable and reports correct numbers for it whether or not those rows were
+	// ever materialized. The watermark is restored state as well, so a view read
+	// conflates two findings with opposite meanings. See materializationTable.
+	MaterializedCount int `json:"materializedCount"`
+	// CompressedChunks and CompressedRows are the compression half's EXACT
+	// expectation.
+	//
+	// 🔴 They exist because `> 0` was not good enough, and the type comment above
+	// already said so. The old cohort can straddle a weekly chunk boundary, so the
+	// seed sometimes compresses two chunks; a restore that returned one compressed
+	// and one decompressed with its rows intact passed every count check and a
+	// `compressed > 0` assertion — which is exactly the silent capacity regression
+	// the compression check claims to catch.
+	CompressedChunks int `json:"compressedChunks"`
+	CompressedRows   int `json:"compressedRows"`
+}
+
+// Validate rejects an event seed that cannot drive a verify-events, for the same
+// reason Receipt.Validate exists: a malformed file must not degrade into a
+// finding about the restore three steps later.
+func (e EventSeed) Validate() error {
+	missing := []string{}
+	for name, value := range map[string]string{
+		"events.tenant":      e.Tenant,
+		"events.deviceToken": e.DeviceToken,
+		"events.name":        e.Name,
+		"events.start":       e.Start,
+		"events.end":         e.End,
+	} {
+		if strings.TrimSpace(value) == "" {
+			missing = append(missing, name)
+		}
+	}
+	// Zero is rejected rather than tolerated: a seed that wrote no rows would let
+	// verify-events pass against a cluster where nothing was restored, by
+	// comparing nothing to nothing.
+	//
+	// 🔴 eventType and sum are in here for a sharper reason — they are the two
+	// fields that STEER A VERDICT rather than just weakening one. A receipt that
+	// lost `eventType` unmarshals it as 0, which is a real enum value
+	// (NewRelationship, not Measurement), so the API query filters on the wrong
+	// type, returns nothing, and verify-events reports exit 4 "the event store was
+	// not restored". A lost `sum` becomes 0 and reports exit 5 "INCOMPLETE or
+	// CHANGED". Both are a malformed FILE degrading into a confident finding about
+	// a restore, which is the failure this whole method exists to prevent.
+	for name, n := range map[string]int{
+		"events.rawCount":          e.RawCount,
+		"events.materializedCount": e.MaterializedCount,
+		"events.compressedChunks":  e.CompressedChunks,
+		"events.compressedRows":    e.CompressedRows,
+		"events.eventType":         e.EventType,
+	} {
+		if n == 0 {
+			missing = append(missing, name)
+		}
+	}
+	if e.Sum == 0 {
+		missing = append(missing, "events.sum")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("receipt is missing %s", strings.Join(sortedStrings(missing), ", "))
+	}
+	return nil
 }
 
 // Validate rejects a receipt that cannot drive a verify. It is checked on READ
@@ -72,6 +195,13 @@ func (r Receipt) Validate() error {
 	if len(missing) > 0 {
 		// Sorted so the message is stable across map iteration order.
 		return fmt.Errorf("receipt is missing %s", strings.Join(sortedStrings(missing), ", "))
+	}
+	// Only when present: the event half is optional (see Receipt.Events), but a
+	// half-written one is a broken file rather than an absent drill.
+	if r.Events != nil {
+		if err := r.Events.Validate(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

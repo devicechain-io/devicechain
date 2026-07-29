@@ -2,7 +2,7 @@
 # Copyright The DeviceChain Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# The ADR-028 / ADR-020 A5 root-key RESTORE DRILL.
+# The ADR-028 / ADR-020 A5 RESTORE DRILL — both halves of an instance.
 #
 # WHAT THIS GATES
 #
@@ -10,6 +10,35 @@
 # all landable and CI-tested without a cluster, and they are. What needs a real
 # disaster is the CLAIM they make — that an instance rebuilt from an escrow
 # artifact can read the secrets in a database backup taken before it existed.
+#
+# AN INSTANCE HAS TWO DATABASES, AND "WE CAN RESTORE" IS A CLAIM ABOUT BOTH
+#
+# The relational store holds tenants, devices, profiles, rules, dashboards and
+# every stored secret; TimescaleDB holds event history. They are separate CNPG
+# Clusters, separate buckets and separate --restore-* flags, deliberately: a
+# core-only restore yields an operational instance with no history, and an
+# event-only restore yields history with no control plane.
+#
+# The drill covers both, because a release note that says "we can restore" is
+# false if half of it has never been tried. The event half is not a copy of the
+# secret half with different nouns — TimescaleDB brings its own ways to come back
+# WRONG while every ordinary check reports success:
+#
+#   - the extension's catalog rehydrates with the data, but its resource manager
+#     is loaded at SERVER START. Measured on a live cluster with timescaledb
+#     removed from shared_preload_libraries: the Cluster reported "Cluster in
+#     healthy state", the API answered, and every row in a compressed chunk came
+#     back as nothing at all — silently, with no error anywhere;
+#   - a hypertable can return as a plain table holding every row, which passes any
+#     count-based check and cannot be undone in place;
+#   - a continuous aggregate can return as a definition with no materialization;
+#   - the background jobs that maintain both are rows, so they restore whether or
+#     not anything will ever run them again.
+#
+# So the event half checks the MACHINERY, not just the rows, and it seeds a
+# pre-compression-window cohort — the platform compresses every event hypertable
+# after 7 days, so an instance older than a week is mostly compressed chunks, and
+# a drill that only seeds fresh data restores the shape production mostly is not.
 #
 # Until this passes, WITH its negative control, nothing in the docs should tell
 # an operator their instance is recoverable. Every restore procedure that skips
@@ -19,17 +48,21 @@
 # instead of an incident.
 #
 #   hack/dr-rig.sh up         off-cluster object store + cluster + bootstrap WITH
-#                             escrow and WITH backups; take a base backup, THEN
-#                             seed a real secret, then force it into the WAL
+#                             escrow and WITH backups; take a base backup of EACH
+#                             store, THEN seed a real secret and real telemetry,
+#                             then force both into the WAL
 #   hack/dr-rig.sh archive    force a WAL switch and re-run the completeness gate
 #                             (resume a run whose `up` got as far as seeding)
 #   hack/dr-rig.sh disaster   destroy the cluster and the local instance state,
 #                             keeping only what an off-site backup would have
 #   hack/dr-rig.sh restore    fresh cluster recovered from the escrow artifact +
-#                             the off-cluster archive; the secret MUST decrypt
-#   hack/dr-rig.sh control    THE NEGATIVE CONTROL: the identical restore under a
-#                             DIFFERENT root key; the secret MUST fail to decrypt,
-#                             and must fail AT THE DECRYPT
+#                             BOTH off-cluster archives; the secret MUST decrypt
+#                             and the telemetry MUST come back intact
+#   hack/dr-rig.sh control    THE NEGATIVE CONTROLS, one per half: the identical
+#                             restore under a DIFFERENT root key, with the event
+#                             store NOT restored at all. The secret must fail AT
+#                             THE DECRYPT, and the telemetry must be reported
+#                             MISSING — each with its own exact exit code
 #   hack/dr-rig.sh all        up → disaster → restore → disaster → control
 #   hack/dr-rig.sh down       delete the cluster, the object store and the rig's
 #                             working directory
@@ -128,6 +161,11 @@ api_server="localhost:18443"
 api_scheme="https"
 # Local port the Postgres forward binds for the drill's own connection.
 pg_local_port="${DC_DR_PG_PORT:-15432}"
+# ...and the event store's, which is a SECOND server on a second forward. Two
+# ports, never one reused: the halves are separate connections to separate
+# databases, and sharing a port would make a stale forward from one half look like
+# a live one to the other.
+event_pg_port="${DC_DR_TSDB_PORT:-15433}"
 
 # The CNPG Cluster whose archive the drill restores from, and the archive's
 # serverName within the bucket. They are the same string on a first bootstrap: the
@@ -138,6 +176,40 @@ pg_local_port="${DC_DR_PG_PORT:-15432}"
 rdb_cluster="dc-rdb"
 rdb_source="$rdb_cluster"
 
+# The event store is the SECOND half of the instance, and the second half of the
+# drill (ADR-028). It is a separate CNPG Cluster, in a separate bucket, restored
+# by a separate flag — because they really are two operations: a core-only restore
+# yields an operational instance with no history, and an event-only restore yields
+# history with no control plane. This rig now does both at once, which is the
+# harder case and the one an operator rebuilding after a total loss performs.
+tsdb_cluster="dc-tsdb"
+tsdb_source="$tsdb_cluster"
+
+# 🔴 Everything the rig does to an archive is now per-STORE, and these three
+# lookups are how. The alternative — a second copy of take_base_backup,
+# force_wal_archive and the completeness gate with `rdb` swapped for `tsdb` — is
+# the shape that lets one copy silently stop covering what the other does. The
+# event half was added by parameterising, not by duplicating, for exactly that
+# reason.
+#
+# store_service is the Service each store's primary is reached through, and it is
+# NOT derivable from the cluster name: `dc-postgresql` and `dc-timescaledb-single`
+# are the aliases the platform has always used, declared as CNPG managed services
+# so the operator keeps them pointed at the primary (see pg_pod).
+#
+# They RETURN NON-ZERO on an unknown store rather than calling `fail`. `fail`
+# exits, and these are called almost entirely inside command substitution where an
+# exit kills only the subshell — so it would abort nothing and report nothing. The
+# startup check below is what turns an unknown store into a stopped run.
+store_bucket() { case "$1" in rdb) printf '%s' "$bucket_rdb" ;; tsdb) printf '%s' "$bucket_tsdb" ;; *) return 1 ;; esac; }
+store_source() { case "$1" in rdb) printf '%s' "$rdb_source" ;; tsdb) printf '%s' "$tsdb_source" ;; *) return 1 ;; esac; }
+store_cluster() { case "$1" in rdb) printf '%s' "$rdb_cluster" ;; tsdb) printf '%s' "$tsdb_cluster" ;; *) return 1 ;; esac; }
+store_service() { case "$1" in rdb) printf '%s' "dc-postgresql" ;; tsdb) printf '%s' "dc-timescaledb-single" ;; *) return 1 ;; esac; }
+
+# The stores the drill seeds, archives, destroys and restores. Written as a list
+# so that adding a third store is one entry rather than an audit of every loop.
+stores=(rdb tsdb)
+
 # The rig's working directory stands in for OFF-SITE storage: the escrow artifact,
 # the receipt and the object store's credentials all have to survive the
 # destruction of both the cluster and ~/.devicechain/<instance>. It therefore lives
@@ -146,8 +218,11 @@ work="${DC_DR_WORK:-$HOME/.devicechain-dr-rig}"
 escrow_file="$work/rootkey.escrow"
 decoy_file="$work/decoy.escrow"
 receipt_file="$work/receipt.json"
-wal_baseline_file="$work/wal-at-seed.txt"
-base_baseline_file="$work/base-backups-at-seed.txt"
+# Per-store, because the two archives advance independently and a shared baseline
+# would let one store's fresh segment satisfy the other store's completeness gate
+# — which is a false pass in the direction that matters.
+wal_baseline_file() { printf '%s/wal-at-seed-%s.txt' "$work" "$1"; }
+base_baseline_file() { printf '%s/base-backups-at-seed-%s.txt' "$work" "$1"; }
 minio_env_file="$work/minio.env"
 backup_env_file="$work/backup.env"
 
@@ -158,6 +233,40 @@ minio_image="quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"
 minio_network="kind"
 bucket_rdb="$instance-rdb"
 bucket_tsdb="$instance-tsdb"
+
+# 🔴 THE STORE TABLE IS VALIDATED HERE, and it has to be HERE — after the bucket
+# names above, because store_bucket reads them and `set -u` makes an early call a
+# fatal "unbound variable" at startup. That is not hypothetical: this block was
+# first placed next to $stores, 50 lines before bucket_rdb exists, and it broke
+# every subcommand. It was caught by trying to MUTATE it — `bash -n` cannot see a
+# runtime unbound variable, and no amount of reading it had.
+#
+# It exists because the `fail` inside those four lookups cannot stop anything
+# where they are actually used.
+#
+# They are called almost exclusively inside command substitution, and `fail`'s
+# `exit 1` kills only the subshell. In archive_base_backups/archive_wal_segments a
+# trailing `|| true` then swallows it and the path becomes `/data//…`, so the
+# listing comes back empty and the caller misdiagnoses ("no base backup", or a WAL
+# wait that times out). The worst case is quiesce_base_backups: a failed
+# store_cluster expands to empty, jq happily counts the in-flight backups of a
+# cluster named "" (always zero), and the ordering gate — the one whose comment
+# says it "closes the race that would make this whole drill VACUOUS" — waives
+# itself for that store while a red FAIL banner scrolls past unacted-on.
+#
+# Unreachable while this list matches the case arms. But the comment above invites
+# adding a third entry, which is exactly the action that arms it, so the list is
+# checked against the lookups once, here, in the main shell where `fail` works.
+for _store in "${stores[@]}"; do
+  for _lookup in store_bucket store_source store_cluster store_service; do
+    "$_lookup" "$_store" >/dev/null ||
+      fail "store \"$_store\" is in \$stores but $_lookup does not know it. Add it to that
+case statement: left as it is, the lookup fails inside a command substitution,
+which cannot abort the run — it yields an empty string and the drill proceeds
+against a path or a cluster name that does not exist."
+  done
+done
+unset _store _lookup
 
 # A fixed throwaway passphrase. This is a rig whose instances exist to be
 # destroyed; the passphrase is not protecting anything, and prompting would stop
@@ -180,6 +289,12 @@ load_exit_codes() {
   defs="$("$drdrill" codes)" || fail "drdrill could not report its exit codes"
   eval "$defs"
   [[ -n "${DRDRILL_EXIT_DECRYPT_FAILED:-}" ]] || fail "drdrill reported no decrypt-failure exit code"
+  # The event half's two, checked for the same reason: both are compared against
+  # in cmd_control, and an unset one expands to the empty string, which no exit
+  # code ever equals — so every branch would fall through to INCONCLUSIVE forever,
+  # silently, and read as an environment problem.
+  [[ -n "${DRDRILL_EXIT_NOT_FOUND:-}" ]] || fail "drdrill reported no not-found exit code"
+  [[ -n "${DRDRILL_EXIT_TIMESCALE_BROKEN:-}" ]] || fail "drdrill reported no timescale-broken exit code"
 }
 
 # Image source: HEAD, built from source, BY DEFAULT — for the same reason the A0
@@ -347,15 +462,23 @@ wait_for_minio() {
 # else's data and report a pass. `down` clears this; so does removing the
 # container.
 assert_bucket_empty() {
-  local existing
-  existing="$(docker exec "$minio_container" ls -1 "/data/$bucket_rdb" 2>/dev/null || true)"
-  [[ -z "$existing" ]] && return 0
-  fail "bucket $bucket_rdb already holds objects:
+  # 🔴 EVERY store's bucket. Checking only the relational one left the event
+  # store's archive able to survive into a new run, where it would satisfy the
+  # event completeness gate on a previous run's data — the exact false pass this
+  # refusal exists to prevent, in the half that was added later.
+  local existing store bucket
+  for store in "${stores[@]}"; do
+    bucket="$(store_bucket "$store")"
+    existing="$(docker exec "$minio_container" ls -1 "/data/$bucket" 2>/dev/null || true)"
+    [[ -z "$existing" ]] && continue
+    fail "bucket $bucket already holds objects:
 $existing
 
 That is a previous run's archive. The completeness gate would pass on it without
 this run having backed anything up, and the restore would recover data this drill
 never seeded. Run 'hack/dr-rig.sh down' first."
+  done
+  return 0
 }
 
 minio_down() {
@@ -369,8 +492,9 @@ minio_down() {
 # under the SOURCE archive path. MinIO stores each object as a directory, so
 # `ls -1d <parent>/*` names the objects themselves.
 archive_base_backups() {
+  local store="${1:-rdb}"
   docker exec "$minio_container" \
-    sh -c 'ls -1 "$1"/base 2>/dev/null' _ "/data/$bucket_rdb/$rdb_source" || true
+    sh -c 'ls -1 "$1"/base 2>/dev/null' _ "/data/$(store_bucket "$store")/$(store_source "$store")" || true
 }
 
 # 🔴 The grep is not tidying. MinIO represents an object as a DIRECTORY holding an
@@ -389,8 +513,9 @@ archive_base_backups() {
 # cluster, where the pollution is visible; on a first-bootstrap archive there is
 # no history file and the bug is invisible.
 archive_wal_segments() {
+  local store="${1:-rdb}"
   docker exec "$minio_container" \
-    sh -c 'ls -1d "$1"/wals/*/* 2>/dev/null' _ "/data/$bucket_rdb/$rdb_source" 2>/dev/null |
+    sh -c 'ls -1d "$1"/wals/*/* 2>/dev/null' _ "/data/$(store_bucket "$store")/$(store_source "$store")" 2>/dev/null |
     grep -E '/[0-9A-F]{24}[^/]*$' || true
 }
 
@@ -432,6 +557,14 @@ db_user() { cfg_get '.persistence.rdb.configuration.username'; }
 db_password() { cfg_get '.persistence.rdb.configuration.password'; }
 root_key() { cfg_get '.infrastructure.secrets.rootKey'; }
 
+# The EVENT store's own credentials. Read from the same Secret and by the same
+# rule, and they are genuinely different values — an instance runs two Postgres
+# servers with two independently generated application passwords. Handing one
+# store's password to the other fails as `password authentication failed`, which
+# reads as a database that did not come back.
+tsdb_user() { cfg_get '.persistence.tsdb.configuration.username'; }
+tsdb_password() { cfg_get '.persistence.tsdb.configuration.password'; }
+
 # pg_pod finds the relational Postgres pod. The rig execs psql inside it to force
 # a WAL switch, so it needs no Postgres client on the host — only the drill's own
 # verify needs a port-forward.
@@ -455,10 +588,11 @@ root_key() { cfg_get '.infrastructure.secrets.rootKey'; }
 # endpoints count: a terminating or unready pod has a name but cannot serve, and
 # picking one would fail later and further away.
 pg_pod() {
-  local slices pod
+  local store="${1:-rdb}" svc slices pod
+  svc="$(store_service "$store")"
   slices="$(kubectl --context "$kube_context" -n dc-system get endpointslices \
-    -l "kubernetes.io/service-name=dc-postgresql" -o json)" ||
-    fail "could not list endpointslices for the dc-postgresql service"
+    -l "kubernetes.io/service-name=$svc" -o json)" ||
+    fail "could not list endpointslices for the $svc service"
 
   # `|| fail` is load-bearing. pg_pod is only ever called as `pod="$(pg_pod)"`,
   # and bash suppresses errexit for the whole dynamic extent of a command
@@ -473,12 +607,12 @@ pg_pod() {
     jq -r 'first(.items[].endpoints[]
              | select(.conditions.ready != false)
              | .targetRef.name // empty)')" ||
-    fail "could not parse the endpointslices for dc-postgresql (jq failed)"
+    fail "could not parse the endpointslices for $svc (jq failed)"
 
   # Same refusal as cfg_get: an empty answer here is a broken instance, not a
   # pod named "". Say which of the two it is, because they are fixed differently.
   if [[ -z "$pod" || "$pod" == "null" ]]; then
-    fail "no READY pod backs the dc-postgresql service in dc-system.$(
+    fail "no READY pod backs the $svc service in dc-system.$(
       printf '\n  endpointslices found: %s' \
         "$(printf '%s' "$slices" | jq -r '.items | length')"
     )"
@@ -577,11 +711,15 @@ wait_for_api() {
 # forward — so the drill needs both, and the scheduled backup the chart installs
 # is on a timer nobody wants to wait for.
 take_base_backup() {
-  local name stamp phase waited=0
+  # 🔴 pgcluster, not `cluster` and not `rdb_cluster`. Both of those names are
+  # already taken at global scope — `cluster` is the KIND cluster and shadowing it
+  # here would point kubectl at the wrong context for the rest of the function.
+  local store="${1:-rdb}" pgcluster name stamp phase waited=0
+  pgcluster="$(store_cluster "$store")"
   stamp="$(date -u +%Y%m%dt%H%M%S)"
-  name="dr-rig-base-$stamp"
+  name="dr-rig-base-$store-$stamp"
 
-  say "taking a base backup ($name) — BEFORE the secret is seeded"
+  say "taking a base backup of $pgcluster ($name) — BEFORE anything is seeded"
   kubectl --context "$kube_context" apply -f - >/dev/null <<YAML
 apiVersion: postgresql.cnpg.io/v1
 kind: Backup
@@ -590,7 +728,7 @@ metadata:
   namespace: dc-system
 spec:
   cluster:
-    name: $rdb_cluster
+    name: $pgcluster
   method: plugin
   pluginConfiguration:
     name: barman-cloud.cloudnative-pg.io
@@ -612,7 +750,7 @@ from, and every phase after this one would be testing an empty archive.
     sleep 5
   done
 
-  note "base backup complete; $(archive_wal_segments | wc -l | tr -d ' ') WAL segment(s) archived at that point"
+  note "base backup complete; $(archive_wal_segments "$store" | wc -l | tr -d ' ') WAL segment(s) archived at that point"
 }
 
 # force_wal_archive makes the seeded row reach the archive.
@@ -628,8 +766,8 @@ from, and every phase after this one would be testing an empty archive.
 # authenticated by uid (26 = postgres) and no secret enters the process table.
 # Twice, because the switch archives the segment that was current when it ran.
 force_wal_archive() {
-  local pod i
-  pod="$(pg_pod)"
+  local store="${1:-rdb}" pod i
+  pod="$(pg_pod "$store")"
 
   # 🔴 THE BASELINE IS TAKEN HERE, immediately before the switch — NOT when the
   # base backup was taken.
@@ -649,13 +787,13 @@ force_wal_archive() {
   # that, so any segment appearing after this line necessarily contains the
   # seed's commit. The residual window is between this snapshot and the switch on
   # the next line, against an archive_timeout of five minutes.
-  archive_wal_segments >"$wal_baseline_file"
+  archive_wal_segments "$store" >"$(wal_baseline_file "$store")"
 
-  say "forcing the seeded row into the WAL archive"
+  say "forcing the $store seed into the WAL archive"
   for i in 1 2; do
     kubectl --context "$kube_context" -n dc-system exec -i "$pod" -- \
       psql -U postgres -d postgres -q -c 'checkpoint' -c 'select pg_switch_wal()' >/dev/null ||
-      fail "could not force a WAL switch on $pod"
+      fail "could not force a WAL switch on $pod ($store)"
   done
 }
 
@@ -669,25 +807,26 @@ force_wal_archive() {
 # produce a pass. Without this the drill would happily destroy the cluster,
 # recover the base backup, find no row, and report exit 4.
 wait_for_new_wal() {
-  local waited=0 now fresh
+  local store="${1:-rdb}" waited=0 now fresh baseline
+  baseline="$(wal_baseline_file "$store")"
   # -f, not -s. An EMPTY baseline is legitimate — nothing had been archived yet
   # when the switch was forced — and treating that as "missing" would refuse the
   # one case where every segment counts as new.
-  [[ -f "$wal_baseline_file" ]] ||
-    fail "no WAL baseline at $wal_baseline_file; force_wal_archive did not run, so
+  [[ -f "$baseline" ]] ||
+    fail "no WAL baseline at $baseline; force_wal_archive did not run for $store, so
 there is nothing to compare against and 'newer than the seed' has no meaning"
 
-  say "waiting for a WAL segment archived after the seed"
+  say "waiting for a $store WAL segment archived after the seed"
   while true; do
-    now="$(archive_wal_segments)"
-    fresh="$(comm -13 <(sort "$wal_baseline_file") <(printf '%s\n' "$now" | sort) || true)"
+    now="$(archive_wal_segments "$store")"
+    fresh="$(comm -13 <(sort "$baseline") <(printf '%s\n' "$now" | sort) || true)"
     if [[ -n "$fresh" ]]; then
       note "archived since the seed:"
       printf '%s\n' "$fresh" | sed 's|.*/|      |'
       return 0
     fi
     waited=$((waited + 1))
-    [[ $waited -lt 60 ]] || fail "no new WAL segment reached $bucket_rdb after the seed.
+    [[ $waited -lt 60 ]] || fail "no new WAL segment reached $(store_bucket "$store") after the seed.
 
 The row is committed inside a cluster that is about to be destroyed, and the
 archive does not have it. Restoring would find no row and report that as a failed
@@ -714,7 +853,7 @@ restore rather than as a backup that was never taken."
 # BEFORE the seed. Suspending is safe: this cluster is about to be destroyed, and
 # the restored cluster gets its own schedule.
 quiesce_base_backups() {
-  local sb names running waited=0
+  local sb names running waited=0 store
   say "suspending scheduled base backups for the seed window"
   names="$(kubectl --context "$kube_context" -n dc-system \
     get scheduledbackups.postgresql.cnpg.io -o name 2>/dev/null || true)"
@@ -727,24 +866,39 @@ quiesce_base_backups() {
   # Suspending stops new ones; it does not stop one already in flight. A backup
   # with no phase yet counts as running — the conservative reading.
   #
-  # 🔴 Only $rdb_cluster's backups. The instance runs a SECOND CNPG cluster for
-  # the event store, dc-tsdb, whose base backups are large and slow and which this
-  # drill does not restore at all. Waiting on those was measured taking minutes
-  # while dc-rdb had long since finished, which would turn every `up` into a
-  # five-minute stall and then a refusal — for a cluster whose state cannot affect
-  # this result either way.
+  # 🔴 EVERY store, and this used to be $rdb_cluster only. The comment justifying
+  # that said dc-tsdb's base backups are large and slow "and this drill does not
+  # restore it at all" — which stopped being true the moment the event half was
+  # added. A store that is restored has to have the same ordering guarantee as the
+  # other one, or its half of the drill is the vacuous one: a base backup landing
+  # after the event seed satisfies the event restore without replaying a segment.
+  # The wait is the price, and it is now buying something.
+  local backups
   while true; do
-    running="$(kubectl --context "$kube_context" -n dc-system \
-      get backups.postgresql.cnpg.io -o json 2>/dev/null |
-      jq --arg c "$rdb_cluster" '[.items[]
-           | select(.spec.cluster.name == $c)
-           | .status.phase // "pending"
-           | select(. != "completed" and . != "failed")] | length')" ||
-      fail "could not read the backup phases for $rdb_cluster"
+    backups="$(kubectl --context "$kube_context" -n dc-system \
+      get backups.postgresql.cnpg.io -o json 2>/dev/null)" ||
+      fail "could not read the backups in dc-system"
+    running=0
+    for store in "${stores[@]}"; do
+      # Captured into a variable and defaulted before the arithmetic. Inlining the
+      # substitution would make a jq failure expand to nothing, and `$((n + ))` is
+      # an arithmetic SYNTAX error rather than a zero — so a broken query would
+      # abort the rig with a bash diagnostic instead of naming what went wrong.
+      local n
+      n="$(printf '%s' "$backups" |
+        jq --arg c "$(store_cluster "$store")" '[.items[]
+             | select(.spec.cluster.name == $c)
+             | .status.phase // "pending"
+             | select(. != "completed" and . != "failed")] | length')" ||
+        fail "could not read the backup phases for $(store_cluster "$store")"
+      [[ "$n" =~ ^[0-9]+$ ]] ||
+        fail "the backup-phase query for $(store_cluster "$store") returned ${n:-<nothing>}, not a count"
+      running=$((running + n))
+    done
     [[ "${running:-0}" -eq 0 ]] && break
     waited=$((waited + 1))
     [[ $waited -lt 60 ]] || fail "$running base backup(s) are still running after five minutes.
-Seeding now would risk one of them completing AFTER the secret is written, which
+Seeding now would risk one of them completing AFTER the seed is written, which
 makes the restore satisfiable without replaying any WAL — a drill that passes
 without exercising what it claims to prove."
     sleep 5
@@ -754,20 +908,23 @@ without exercising what it claims to prove."
   # a timestamp on purpose: barman names a base backup for when it STARTED, and
   # what actually matters is when it ended, so no clock comparison here would be
   # sound. "Did this set grow after the seed" needs no such assumption.
-  archive_base_backups >"$base_baseline_file"
-  note "$(wc -l <"$base_baseline_file" | tr -d ' ') base backup(s) exist, all of them before the seed"
+  for store in "${stores[@]}"; do
+    archive_base_backups "$store" >"$(base_baseline_file "$store")"
+    note "$store: $(wc -l <"$(base_baseline_file "$store")" | tr -d ' ') base backup(s) exist, all of them before the seed"
+  done
 }
 
 # assert_archive_complete is the last look before the disaster. Both halves have
 # to be there: a base backup to start from and WAL to replay onto it — and no
 # base backup may have appeared since the seed.
 assert_archive_complete() {
-  local bases wals late
-  bases="$(archive_base_backups)"
-  wals="$(archive_wal_segments)"
+  local store="${1:-rdb}" bases wals late baseline
+  baseline="$(base_baseline_file "$store")"
+  bases="$(archive_base_backups "$store")"
+  wals="$(archive_wal_segments "$store")"
 
-  if [[ -f "$base_baseline_file" ]]; then
-    late="$(comm -13 <(sort "$base_baseline_file") <(printf '%s\n' "$bases" | sort) || true)"
+  if [[ -f "$baseline" ]]; then
+    late="$(comm -13 <(sort "$baseline") <(printf '%s\n' "$bases" | sort) || true)"
     if [[ -n "$late" ]]; then
       fail "a base backup appeared AFTER the secret was seeded:
 $(printf '%s\n' "$late" | sed 's/^/  /')
@@ -779,13 +936,13 @@ suspends the schedule before the seed, so this means one slipped through."
     fi
   fi
 
-  [[ -n "$bases" ]] || fail "no base backup under $bucket_rdb/$rdb_source/base.
+  [[ -n "$bases" ]] || fail "no base backup under $(store_bucket "$store")/$(store_source "$store")/base.
 Recovery starts from a base backup; WAL alone restores nothing."
-  [[ -n "$wals" ]] || fail "no WAL under $bucket_rdb/$rdb_source/wals.
-The base backup predates the seeded secret by design, so without WAL to replay
-the restore cannot possibly find it."
+  [[ -n "$wals" ]] || fail "no WAL under $(store_bucket "$store")/$(store_source "$store")/wals.
+The base backup predates the seeded data by design, so without WAL to replay the
+restore cannot possibly find it."
 
-  note "archive $bucket_rdb/$rdb_source: $(printf '%s\n' "$bases" | wc -l | tr -d ' ') base backup(s), $(printf '%s\n' "$wals" | wc -l | tr -d ' ') WAL segment(s)"
+  note "archive $(store_bucket "$store")/$(store_source "$store"): $(printf '%s\n' "$bases" | wc -l | tr -d ' ') base backup(s), $(printf '%s\n' "$wals" | wc -l | tr -d ' ') WAL segment(s)"
 }
 
 # ---------------------------------------------------------------------------
@@ -821,7 +978,8 @@ drill against an artifact that belongs to a cluster that no longer exists."
   [[ -s "$escrow_file" ]] || fail "bootstrap reported success but wrote no escrow artifact at $escrow_file"
 
   wait_for_cluster_healthy "$rdb_cluster"
-  take_base_backup
+  wait_for_cluster_healthy "$tsdb_cluster"
+  for store in "${stores[@]}"; do take_base_backup "$store"; done
   quiesce_base_backups
 
   say "waiting for the instance API to route"
@@ -836,14 +994,26 @@ drill against an artifact that belongs to a cluster that no longer exists."
     --instance "$instance" --receipt "$receipt_file" ||
     fail "could not seed the drill secret; there is nothing to restore"
 
-  force_wal_archive
-  wait_for_new_wal
-  assert_archive_complete
+  # The EVENT half, into the other database. It goes after the secret because it
+  # reuses that seed's tenant — one tenant across both stores, so a single
+  # tenant-scoped session reads both halves back and a receipt from a different
+  # disaster cannot satisfy either.
+  say "seeding telemetry into the event store"
+  run_event seed-events ||
+    fail "could not seed the drill telemetry; the event half of the restore would
+have nothing to look for, and verify-events would report that as an event store
+that did not come back."
 
-  say "UP COMPLETE — instance $instance holds a secret whose row exists ONLY in WAL
-archived after every base backup in the bucket, so the restore cannot find it
-without replaying. $work holds the two things a real operator would keep off-site:
-the escrow artifact and the archive's credentials."
+  for store in "${stores[@]}"; do
+    force_wal_archive "$store"
+    wait_for_new_wal "$store"
+    assert_archive_complete "$store"
+  done
+
+  say "UP COMPLETE — instance $instance holds a secret AND telemetry whose rows
+exist ONLY in WAL archived after every base backup in either bucket, so neither
+restore can find its data without replaying. $work holds the two things a real
+operator would keep off-site: the escrow artifact and the archive's credentials."
 }
 
 # cmd_archive exists so a run that seeded successfully and then tripped over the
@@ -852,9 +1022,12 @@ the escrow artifact and the archive's credentials."
 cmd_archive() {
   need_all
   [[ -s "$receipt_file" ]] || fail "no receipt at $receipt_file; there is nothing seeded to archive"
-  force_wal_archive
-  wait_for_new_wal
-  assert_archive_complete
+  local store
+  for store in "${stores[@]}"; do
+    force_wal_archive "$store"
+    wait_for_new_wal "$store"
+    assert_archive_complete "$store"
+  done
 }
 
 # ---------------------------------------------------------------------------
@@ -871,7 +1044,15 @@ cmd_disaster() {
   docker ps --format '{{.Names}}' | grep -qx "$minio_container" ||
     fail "refusing to simulate a disaster: the object store $minio_container is not running,
 so there is nothing holding the archive the restore would read."
-  assert_archive_complete
+  # 🔴 EVERY store, because this check's entire purpose is to be BEFORE the
+  # destruction. It was a bare `assert_archive_complete` — which, once the function
+  # took a store argument defaulting to rdb, silently narrowed to half the instance:
+  # a missing or incomplete EVENT archive would have been discovered only after the
+  # cluster was gone, which is a real disaster rather than a drill.
+  local store
+  for store in "${stores[@]}"; do
+    assert_archive_complete "$store"
+  done
 
   say "SIMULATING TOTAL LOSS of the cluster and the local instance state"
   delete_cluster
@@ -928,7 +1109,10 @@ Run 'hack/dr-rig.sh disaster' first, or 'hack/dr-rig.sh all' to do it in order."
 # — because a recovery that mints a fresh key reports success and leaves every
 # secret permanently unreadable.
 rebuild() {
-  local artifact="$1" what="$2"
+  # $3 is the EVENT store's source serverName, and an EMPTY value means "do not
+  # restore the event store". That is not a convenience flag — it is how the
+  # event half's negative control is expressed. See cmd_control.
+  local artifact="$1" what="$2" tsdb_from="${3:-}"
   create_cluster
   require_no_instance
   backup_env
@@ -938,14 +1122,24 @@ rebuild() {
   # instance keeps the artifact it was restored from rather than writing a second
   # one. The first live run of this rig passed both and was stopped by that guard,
   # which is the guard working.
+  local restore_args=(--restore-root-key "$artifact" --restore-rdb-from "$rdb_source")
+  if [[ -n "$tsdb_from" ]]; then
+    note "event store: recovering from $tsdb_from"
+    restore_args+=(--restore-tsdb-from "$tsdb_from")
+  else
+    note "event store: NOT restored — it comes up empty, and that is deliberate"
+  fi
+
   "$dcctl" bootstrap local "$instance" --yes --compact --no-tls=false \
     --kube-context "$kube_context" --host localhost \
-    --restore-root-key "$artifact" --restore-rdb-from "$rdb_source" \
-    "${image_args[@]}"
+    "${restore_args[@]}" "${image_args[@]}"
 
-  # The bootstrap's exit code is not evidence that the database recovered. See
-  # wait_for_cluster_healthy.
+  # The bootstrap's exit code is not evidence that either database recovered. See
+  # wait_for_cluster_healthy. BOTH are waited on: a recovering cluster that cannot
+  # reach its archive sits in `Setting up primary` indefinitely, and the event
+  # store is now half the claim.
   wait_for_cluster_healthy "$rdb_cluster"
+  wait_for_cluster_healthy "$tsdb_cluster"
 }
 
 # run_verify runs the drill and echoes drdrill's exit code. It does NOT decide
@@ -967,9 +1161,10 @@ stop_port_forward() {
 trap stop_port_forward EXIT
 
 # port_forward_alive refuses if OUR kubectl is not the thing holding the port.
+pf_port=""
 port_forward_alive() {
   kill -0 "$pf_pid" 2>/dev/null && return 0
-  fail "the port-forward to Postgres is not running, but port $pg_local_port answered anyway.
+  fail "the port-forward to Postgres is not running, but port ${pf_port:-$pg_local_port} answered anyway.
 
 Something else is listening there — a forward leaked by a run that was SIGKILLed
 (the EXIT trap does not fire on SIGKILL), a parallel rig, or an unrelated local
@@ -1015,8 +1210,9 @@ testing nothing."
   # instantly. Reusing a forward makes a dead tunnel and a refused decrypt
   # indistinguishable, which is the exact false control this rig exists to avoid.
   stop_port_forward
+  pf_port="$pg_local_port"
   kubectl --context "$kube_context" -n dc-system port-forward \
-    --address 127.0.0.1 "svc/dc-postgresql" "$pg_local_port":5432 >/dev/null 2>&1 &
+    --address 127.0.0.1 "svc/$(store_service rdb)" "$pg_local_port":5432 >/dev/null 2>&1 &
   pf_pid=$!
 
   # "Something is listening" is not "my forward is up". A stale forward from an
@@ -1064,6 +1260,60 @@ INCONCLUSIVE and no result may be recorded from it. Re-run."
   return "$rc"
 }
 
+# run_event runs one half of the EVENT drill — `seed-events` or `verify-events` —
+# against the instance's TimescaleDB, and echoes drdrill's exit code without
+# deciding what it means. Same contract as run_verify, and same three scars:
+#
+#   - the credentials are read and CHECKED before anything else, because an empty
+#     one produces a failure that looks like an event store that did not come back;
+#   - a FRESH port-forward per invocation. A forward to this database survives
+#     exactly one drdrill run — measured on the event store as well as on the
+#     relational one, where the finding was first paid for. The second connect
+#     hangs with no output and the forward logs `lost connection to pod`;
+#   - a timeout is NOT a verdict, so 124/137 stop the rig rather than reaching the
+#     caller as an outcome.
+run_event() {
+  local sub="$1"; shift
+  local rc=0 waited=0 user password name
+
+  user="$(tsdb_user)" || true
+  password="$(tsdb_password)" || true
+  for name in user password; do
+    [[ -n "${!name}" ]] || fail "run_event could not read the event store's $name from the
+instance config Secret. The banner above says which path was missing. Nothing
+below this point would be evidence: a bad credential fails the connection for a
+reason that has nothing to do with the restore."
+  done
+
+  stop_port_forward
+  pf_port="$event_pg_port"
+  kubectl --context "$kube_context" -n dc-system port-forward \
+    --address 127.0.0.1 "svc/$(store_service tsdb)" "$event_pg_port":5432 >/dev/null 2>&1 &
+  pf_pid=$!
+
+  until (exec 3<>/dev/tcp/127.0.0.1/"$event_pg_port") 2>/dev/null; do
+    port_forward_alive
+    waited=$((waited + 1))
+    [[ $waited -lt 60 ]] || fail "the port-forward to the event store never came up"
+    sleep 1
+  done
+  port_forward_alive
+
+  DRDRILL_EVENT_PGPASSWORD="$password" \
+    timeout --kill-after=10 300 "$drdrill" "$sub" --receipt "$receipt_file" \
+    --db-host 127.0.0.1 --db-port "$event_pg_port" --db-user "$user" "$@" || rc=$?
+
+  stop_port_forward
+
+  if [[ $rc -eq 124 || $rc -eq 137 ]]; then
+    fail "drdrill $sub TIMED OUT (exit $rc). A timeout is not a verdict: a dead
+port-forward and an event store that lost its data are indistinguishable from
+here, so this run is INCONCLUSIVE. Re-run."
+  fi
+
+  return "$rc"
+}
+
 cmd_restore() {
   need_all
   build_tools
@@ -1072,7 +1322,7 @@ cmd_restore() {
     [[ -s "$f" ]] || fail "$f is missing or empty; run 'up' then 'disaster' first"
   done
 
-  rebuild "$escrow_file" "the ESCROWED root key"
+  rebuild "$escrow_file" "the ESCROWED root key" "$tsdb_source"
 
   # The premise, asserted with the shipped tool rather than assumed: this instance
   # really is running the key the artifact holds. `escrow verify` compares the
@@ -1098,8 +1348,21 @@ This is the finding the whole A5 workstream exists to prevent, reproduced in a
 rehearsal. Read drdrill's output above: exit 3 means the escrowed key did not fit,
 exit 4 means the row never came back, exit 1 means the drill could not run."
   fi
+  say "THE EVENT DRILL — did the telemetry, and TimescaleDB's own machinery, survive?"
+  rc=0
+  run_event verify-events --server "$api_server" --scheme "$api_scheme" || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    fail "the restored instance did NOT bring the event store back (drdrill exit $rc).
+Read drdrill's output above: exit 4 means the telemetry never came back, exit 5
+means it came back incomplete or changed, exit 6 means the rows are fine and
+TimescaleDB's own machinery is not — the partitioning, the aggregate's
+materialization, a compressed chunk or the job scheduler. Exit 1 means the drill
+could not run and this says nothing either way."
+  fi
+
   say "DRILL PASSED — a secret sealed by a cluster that no longer exists was read by
-the cluster that replaced it, from an archive and an escrow artifact alone."
+the cluster that replaced it, and the telemetry that cluster recorded is served by
+its replacement, from two archives and an escrow artifact alone."
 }
 
 # cmd_control is the check on the check.
@@ -1128,7 +1391,30 @@ cmd_control() {
   "$drdrill" decoy --instance "$instance" --out "$decoy_file" ||
     fail "could not mint the decoy artifact; there is no control to run"
 
-  rebuild "$decoy_file" "a DECOY root key (the negative control)"
+  # 🔴 No --restore-tsdb-from, and that empty third argument IS the event half's
+  # negative control.
+  #
+  # The secret half's control is "the same archive under the wrong key" — there is
+  # no equivalent for event data, which carries no ciphertext and no key. The
+  # claim that needs controlling here is a different one: that verify-events can
+  # report ABSENCE. It passes on a restored cluster; until it has been shown to
+  # FAIL on one where nothing was restored, a verify-events that always passed
+  # would be indistinguishable from a restore that always worked.
+  #
+  # So the control cluster gets an event store that is fresh rather than restored
+  # — event-management migrates an empty schema onto it at startup, which is the
+  # hardest version of the test: every hypertable, the continuous aggregate and
+  # every policy are PRESENT and correct, and only the data is missing.
+  #
+  # 🔑 Known and deliberate side effect: because it is not restored, this dc-tsdb
+  # takes the DEFAULT serverName — the same archive path the original cluster owns
+  # — and the barman plugin refuses to archive into a non-empty archive (see
+  # RestoredArchivePath in the cnpg-cluster module). So the control cluster runs its
+  # whole short life with event-store WAL archiving broken. That is verdict-neutral:
+  # the control asserts the telemetry is ABSENT, which needs no archive of its own,
+  # and this cluster is destroyed by `down`. Worth knowing before reading its logs
+  # and mistaking the archiving errors for the finding.
+  rebuild "$decoy_file" "a DECOY root key (the negative control)" ""
 
   # The control's premise, asserted BOTH ways. Either half alone is insufficient:
   #
@@ -1204,6 +1490,43 @@ That is INCONCLUSIVE — neither a pass nor a failure. The control is only evide
 when it fails at the DECRYPT (exit $DRDRILL_EXIT_DECRYPT_FAILED); exit $DRDRILL_EXIT_NOT_FOUND means the row never
 recovered and exit $DRDRILL_EXIT_SETUP means the drill could not get far enough to have an opinion.
 Fix what the output above reports and re-run rather than reading this either way."
+      ;;
+  esac
+
+  # THE EVENT HALF'S CONTROL. This cluster's event store was never restored, so
+  # verify-events must say the telemetry is not there — and must say it with the
+  # NOT-FOUND code specifically.
+  #
+  # Any other outcome is a different problem wearing the same clothes: exit 6 would
+  # mean it tripped over TimescaleDB's machinery before it ever looked for a row
+  # (so the absence was never actually detected), and exit 1 means it could not run.
+  # Only exit $DRDRILL_EXIT_NOT_FOUND shows the check reaching the question and
+  # answering it correctly.
+  say "NEGATIVE CONTROL, EVENT HALF — an event store that was never restored"
+  rc=0
+  run_event verify-events --server "$api_server" --scheme "$api_scheme" || rc=$?
+
+  case "$rc" in
+    "$DRDRILL_EXIT_OK")
+      fail "THE EVENT CONTROL DID NOT HOLD.
+
+verify-events PASSED against an event store that was never restored. Whatever it
+is reading, it is not this run's telemetry — so its pass in the restore phase is
+worth nothing, and no event-restore result may be recorded from this run."
+      ;;
+    "$DRDRILL_EXIT_NOT_FOUND")
+      say "EVENT CONTROL HELD — the telemetry was absent and was reported absent.
+The schema is all there (event-management migrated it onto an empty cluster:
+hypertables, the continuous aggregate, every policy) and the data is not. The
+check reached the question and answered it, which is what makes its pass in the
+restore phase mean something."
+      ;;
+    *)
+      fail "THE EVENT CONTROL DID NOT RUN (drdrill exit $rc).
+
+INCONCLUSIVE, not a result. The control is only evidence when it reports the data
+MISSING (exit $DRDRILL_EXIT_NOT_FOUND); exit $DRDRILL_EXIT_TIMESCALE_BROKEN means it stopped at TimescaleDB's machinery
+before it looked for a row, and exit $DRDRILL_EXIT_SETUP means it could not run at all."
       ;;
   esac
 }

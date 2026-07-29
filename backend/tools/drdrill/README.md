@@ -75,8 +75,9 @@ from "could not connect".
 | `0` | the secret decrypted and matched |
 | `1` | **inconclusive** — bad flags, no database, no root key, an API that would not answer. Never a verdict about the data. |
 | `3` | **the row is present and this instance's root key cannot open it** — the negative control's one acceptable outcome |
-| `4` | the row is not there; the restore did not happen |
-| `5` | it decrypted and the plaintext is wrong — corruption, not a key problem |
+| `4` | the row is not there; the restore did not happen. Also the EVENT half's control outcome: the telemetry is absent and was reported absent |
+| `5` | it decrypted and the plaintext is wrong — corruption, not a key problem. In the event half, history that came back incomplete or changed |
+| `6` | event half only: the rows are right and TimescaleDB's own machinery is not. Separate from `5` because the two demand opposite responses — `5` says restore again from an earlier point, `6` says the data is fine and the cluster is not |
 
 Code 3 is reached only after check 1 passed and the row was counted, and a resolve
 error is re-tested against a live database before it is called a decrypt failure.
@@ -91,9 +92,7 @@ rather than passed through: a zero-length key fails the decrypt, which is exactl
 the control's expected outcome, so an operator who simply forgot to export it
 would otherwise record a control that "held".
 
-## Scope
-
-This is the **core-data** drill, which is a seam and not a shortcoming.
+## The event half
 
 An instance's data lives on two separate database servers. The relational one
 holds tenants, devices, profiles, rules, dashboards, connectors, last-known state
@@ -103,7 +102,43 @@ two have no cross-writes to keep consistent — they are two backups and two
 restores, with different sizes, cadences and recovery-time targets.
 
 The root key gates the core half **only**: event data holds no ciphertext. So the
-core-data restore is exactly the operation the escrow artifact exists to make
-possible, and the one that had to be proved first. The event-data restore is a
-sibling drill this tool does not attempt, as are JetStream state and object
-storage.
+core-data restore is the operation the escrow artifact exists to make possible,
+and the one that had to be proved first. `seed-events` and `verify-events` are the
+other half, because "we can restore" is false as a claim if half of it has never
+been tried.
+
+```
+drdrill seed-events   --receipt <path> --db-host ... --db-user ... [--reset]
+drdrill verify-events --receipt <path> --db-host ... --db-user ... --server ...
+```
+
+They share the secret half's receipt, under the same tenant, so a receipt from one
+disaster cannot satisfy the other half's verify.
+
+**The event half checks the MACHINERY, not just the rows**, and that is the whole
+reason it is not the secret half with different nouns. TimescaleDB has several ways
+to come back wrong while every ordinary check reports success:
+
+| Failure | Why a row count misses it |
+|---|---|
+| `shared_preload_libraries` loses `timescaledb` | the extension's catalog rehydrates with the data; the resource manager loads at server START. Measured: Cluster reports healthy, API answers, and **every row in a compressed chunk returns as nothing at all**, silently |
+| a hypertable returns as a plain table | it holds every row, so counts agree; the partitioning is gone and cannot be restored in place |
+| a continuous aggregate returns as a definition with no materialization | reads through the view still work |
+| the background jobs come back unscheduled | job rows are DATA, so they restore whether or not anything will run them again |
+
+So `verify-events` asks about the server's configuration **before** it asks about
+rows — a precondition has to be answered before any verdict about data, or the
+symptom outranks the cause. It reads the aggregate's materialization hypertable
+directly rather than through the view, because the view's answer depends on the
+watermark and the watermark is restored state too. And it seeds a
+pre-compression-window cohort: the platform compresses every event hypertable
+after 7 days, so an instance older than a week is mostly compressed chunks, and a
+drill that only seeds fresh data restores the shape production mostly is not.
+
+The event half's negative control is not "the wrong key" — there is no key. It is
+**the verifier's ability to report absence**: the control cluster's event store is
+not restored at all, so `verify-events` must return `4`. Until that has been seen,
+a `verify-events` that always passed would be indistinguishable from a restore that
+always worked.
+
+JetStream state and object storage remain undrilled.
