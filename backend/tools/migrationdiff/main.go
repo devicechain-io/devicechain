@@ -57,6 +57,19 @@ func main() {
 		fatalf("%v", err)
 	}
 
+	// 🔴 A GOLDEN WITH NO AREA IS A SILENT SKIP, and the squash is nine changes to
+	// registry.go. run() iterates the areas, so deleting an entry there does not fail
+	// anything: the remaining areas all report ok, the exit code is 0, and that area's
+	// golden is simply never opened. A misspelled name is caught (the golden read
+	// fails); a DELETED one is not. So the areas are cross-checked against the goldens
+	// on disk before anything runs — a check that reports "no problems found" has to
+	// also say how many things it was supposed to look at.
+	if *mode == "verify" {
+		if err := assertGoldensCovered(*goldenDir, selected, *only != ""); err != nil {
+			fatalf("%v", err)
+		}
+	}
+
 	if err := run(*mode, *container, *host, *port, *user, *password, *db, *goldenDir, selected); err != nil {
 		fatalf("%v", err)
 	}
@@ -74,7 +87,17 @@ func run(mode, container, host string, port int, user, password, db, goldenDir s
 		if err != nil {
 			return fmt.Errorf("dumping %s schema: %w", a.name, err)
 		}
-		normalized := normalizeDump(dump)
+		// Appended BEFORE normalization so the probe's lines are scrubbed and sorted
+		// with everything else — Timescale's internal materialization-hypertable number
+		// appears in both the dumped view and the probed catalog row.
+		probe, err := probeTimescale(container, user, db, a.name)
+		if err != nil {
+			return fmt.Errorf("probing %s timescale objects: %w", a.name, err)
+		}
+		normalized := normalizeDump(dump + "\n" + probe)
+		// Parsed back out of the joined form rather than kept as a list, so the live
+		// side and the golden side go through the identical parser — see splitNormalized.
+		gotStmts := splitNormalized(normalized)
 
 		goldenPath := filepath.Join(goldenDir, a.name+".sql")
 		switch mode {
@@ -85,17 +108,19 @@ func run(mode, container, host string, port int, user, password, db, goldenDir s
 			if err := os.WriteFile(goldenPath, []byte(normalized+"\n"), 0o644); err != nil {
 				return err
 			}
-			fmt.Printf("snapshot %-24s %d statements → %s\n", a.name, statementCount(normalized), goldenPath)
+			fmt.Printf("snapshot %-24s %d statements → %s\n", a.name, len(gotStmts), goldenPath)
 		case "verify":
-			want, err := os.ReadFile(goldenPath)
+			raw, err := os.ReadFile(goldenPath)
 			if err != nil {
 				return fmt.Errorf("reading golden for %s (run -mode snapshot first?): %w", a.name, err)
 			}
-			if diff := lineDiff(strings.TrimRight(string(want), "\n"), normalized); diff != "" {
+			wantStmts := splitNormalized(strings.TrimRight(string(raw), "\n"))
+			if diff := statementDiff(wantStmts, gotStmts); diff != "" {
 				failures++
-				fmt.Printf("DIFF     %-24s schema differs from golden:\n%s\n", a.name, indent(diff))
+				fmt.Printf("DIFF     %-24s schema differs from golden (golden %d statements, got %d):\n%s\n",
+					a.name, len(wantStmts), len(gotStmts), indent(diff))
 			} else {
-				fmt.Printf("ok       %-24s matches golden (%d statements)\n", a.name, statementCount(normalized))
+				fmt.Printf("ok       %-24s matches golden (%d statements)\n", a.name, len(gotStmts))
 			}
 		}
 	}
@@ -160,6 +185,41 @@ func dumpSchema(container, user, db, schema string) (string, error) {
 	return string(out), nil
 }
 
+// assertGoldensCovered fails when the goldens on disk and the areas about to run do not
+// account for each other. filtered says an explicit -only subset is in force, in which
+// case an unvisited golden is the caller's intent rather than a defect — but the run is
+// then NOT full coverage, and the summary says so, because a green from a subset reads
+// exactly like a green from everything.
+func assertGoldensCovered(goldenDir string, selected []area, filtered bool) error {
+	entries, err := filepath.Glob(filepath.Join(goldenDir, "*.sql"))
+	if err != nil {
+		return err
+	}
+	have := map[string]bool{}
+	for _, e := range entries {
+		have[strings.TrimSuffix(filepath.Base(e), ".sql")] = true
+	}
+	for _, a := range selected {
+		delete(have, a.name)
+	}
+	if len(have) > 0 && !filtered {
+		var orphans []string
+		for n := range have {
+			orphans = append(orphans, n)
+		}
+		sort.Strings(orphans)
+		return fmt.Errorf("golden schema(s) with no area in registry.go: %s\n"+
+			"An area removed from the registry is not verified by anything — it is skipped\n"+
+			"silently and the run still exits 0. Restore the entry, or delete the golden if\n"+
+			"the area is genuinely gone.", strings.Join(orphans, ", "))
+	}
+	if filtered {
+		fmt.Printf("NOTE     -only is in force: %d of %d area(s) verified. This run is NOT full coverage.\n",
+			len(selected), len(areas))
+	}
+	return nil
+}
+
 func selectAreas(only string) ([]area, error) {
 	if only == "" {
 		return areas, nil
@@ -184,44 +244,6 @@ func selectAreas(only string) ([]area, error) {
 		return nil, fmt.Errorf("unknown area(s): %s", strings.Join(unknown, ", "))
 	}
 	return out, nil
-}
-
-func statementCount(normalized string) int {
-	if normalized == "" {
-		return 0
-	}
-	return strings.Count(normalized, "\n") + 1
-}
-
-// lineDiff returns a compact description of the statements present in one side but not
-// the other. Both sides are already normalized (noise-stripped, scrubbed, sorted), so
-// a set difference of lines is a faithful structural diff. Returns "" when identical.
-func lineDiff(want, got string) string {
-	wantSet := map[string]bool{}
-	for _, l := range strings.Split(want, "\n") {
-		wantSet[l] = true
-	}
-	gotSet := map[string]bool{}
-	for _, l := range strings.Split(got, "\n") {
-		gotSet[l] = true
-	}
-	var only, extra []string
-	for l := range wantSet {
-		if l != "" && !gotSet[l] {
-			only = append(only, "- "+l)
-		}
-	}
-	for l := range gotSet {
-		if l != "" && !wantSet[l] {
-			extra = append(extra, "+ "+l)
-		}
-	}
-	if len(only) == 0 && len(extra) == 0 {
-		return ""
-	}
-	sort.Strings(only)
-	sort.Strings(extra)
-	return strings.Join(append(only, extra...), "\n")
 }
 
 func indent(s string) string {

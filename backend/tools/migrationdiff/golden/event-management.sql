@@ -131,3 +131,11 @@ UNION ALL
  FROM "event-management".measurement_events
  WHERE (measurement_events.occurred_time >= COALESCE(_timescaledb_functions.to_timestamp(_timescaledb_functions.cagg_watermark(N)), '-infinity'::timestamp with time zone))
  GROUP BY measurement_events.tenant_id, measurement_events.device_token, measurement_events.event_type, measurement_events.name, (public.time_bucket('00:01:00'::interval, measurement_events.occurred_time));
+TIMESCALE CONTINUOUS AGGREGATE measurement_rollups MATERIALIZED_ONLY f MATERIALIZATION _materialized_hypertable_N;
+TIMESCALE HYPERTABLE alert_events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
+TIMESCALE HYPERTABLE event_anchors DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
+TIMESCALE HYPERTABLE events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
+TIMESCALE HYPERTABLE location_events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
+TIMESCALE HYPERTABLE measurement_events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
+TIMESCALE HYPERTABLE state_change_events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
+TIMESCALE POLICY policy_refresh_continuous_aggregate ON measurement_rollups SCHEDULE 00:01:00 CONFIG {"end_offset": "00:01:00", "start_offset": "30 days", "mat_hypertable_id": N};
