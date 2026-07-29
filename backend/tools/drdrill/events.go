@@ -5,10 +5,13 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/driver/postgres"
@@ -125,13 +128,22 @@ func openEventDB(ctx context.Context, o seedEventsOptions) (*gorm.DB, error) {
 // regresses, every hypertable query below fails with an obscure catalog error,
 // and the drill would report a restore problem instead of naming the cause.
 func assertTimescale(ctx context.Context, db *gorm.DB, database string) error {
+	// 🔴 ErrNoRows is the ONLY error that means "no extension". Every other error
+	// means the question was not answered, and answering it with a machinery
+	// verdict would be the same defect CHECK 1 in verify_events.go exists to fix:
+	// a port-forward dying mid-query would produce exit 6 and a confident factual
+	// claim about a database that was never successfully read.
 	var version *string
-	if err := db.WithContext(ctx).Raw(
-		`SELECT extversion FROM pg_extension WHERE extname = 'timescaledb'`).Row().Scan(&version); err != nil || version == nil {
+	err := db.WithContext(ctx).Raw(
+		`SELECT extversion FROM pg_extension WHERE extname = 'timescaledb'`).Row().Scan(&version)
+	switch {
+	case errors.Is(err, sql.ErrNoRows), err == nil && version == nil:
 		return failWith(exitTimescaleBroken, `database %q has no timescaledb extension.
 
 The event store is a TimescaleDB cluster; without the extension there are no
 hypertables to check and nothing this drill says would be about the data`, database)
+	case err != nil:
+		return failWith(exitSetup, "could not read the extension list of database %q: %w", database, err)
 	}
 
 	// The catalog entry above is DATA — it is restored with everything else, and
@@ -198,6 +210,11 @@ return zero rows, silently, while the Cluster reports healthy and the API answer
 // gone wrong — which is exactly the thing under test, and therefore not something
 // to assume in the lookup.
 func materializationTable(ctx context.Context, db *gorm.DB, schema string) (string, error) {
+	// The two outcomes are returned as DIFFERENT errors, and the caller maps them
+	// to different exit codes. "The catalog has no materialization for this
+	// aggregate" is a finding about the restore; "the query failed" is not a
+	// finding at all, and reporting it as one would claim the cluster is broken on
+	// the strength of a question that was never answered.
 	var qualified string
 	err := db.WithContext(ctx).Raw(`
 		SELECT format('%I.%I', ht.schema_name, ht.table_name)
@@ -205,25 +222,37 @@ func materializationTable(ctx context.Context, db *gorm.DB, schema string) (stri
 		JOIN _timescaledb_catalog.hypertable ht ON ht.id = ca.mat_hypertable_id
 		WHERE ca.user_view_schema = ? AND ca.user_view_name = ?`,
 		schema, rollupView).Row().Scan(&qualified)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", errNoMaterialization
+	}
 	if err != nil {
 		return "", fmt.Errorf("resolving the materialization hypertable behind %s.%s: %w", schema, rollupView, err)
-	}
-	if qualified == "" {
-		return "", fmt.Errorf("%s.%s has no materialization hypertable in the TimescaleDB catalog", schema, rollupView)
 	}
 	return qualified, nil
 }
 
+// errNoMaterialization is the aggregate having no materialization hypertable in
+// the catalog — a verdict about the restore, as opposed to a query that failed.
+var errNoMaterialization = errors.New("the continuous aggregate has no materialization hypertable in the TimescaleDB catalog")
+
 // materializedRows counts the rows physically present in the materialization
-// hypertable, restricted to the drill's own tenant so a shared cluster cannot
-// lend the count someone else's data.
-func materializedRows(ctx context.Context, db *gorm.DB, table, tenant string) (int, error) {
+// hypertable, restricted to the drill's own tenant AND DEVICE.
+//
+// 🔴 The device is part of the scope, not decoration. checkWritable inserts a
+// probe measurement into the same tenant to prove the restored cluster accepts
+// writes, and the refresh policy runs every 60 seconds — so a tenant-only count
+// can pick the probe's bucket up in the window before the probe is deleted, and a
+// later verify-events against the same cluster then reports 21 against a recorded
+// 20 and calls it broken machinery. A false verdict manufactured by the drill's
+// own probe.
+func materializedRows(ctx context.Context, db *gorm.DB, table, tenant, device string) (int, error) {
 	var n int
 	// The table name is interpolated because it comes from format('%I.%I') in the
-	// catalog, i.e. already quoted by Postgres itself; the tenant, which is the
-	// only caller-supplied value, is bound.
+	// catalog, i.e. already quoted by Postgres itself; the caller-supplied values
+	// are bound.
 	err := db.WithContext(ctx).Raw(
-		`SELECT count(*) FROM `+table+` WHERE tenant_id = ?`, tenant).Row().Scan(&n)
+		`SELECT count(*) FROM `+table+` WHERE tenant_id = ? AND device_token = ?`,
+		tenant, device).Row().Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("counting rows in the materialization hypertable %s: %w", table, err)
 	}
@@ -264,34 +293,60 @@ func isHypertable(ctx context.Context, db *gorm.DB, schema, table string) (bool,
 	return n > 0, nil
 }
 
-// timescaleJob is one row of timescaledb_information.jobs.
+// timescaleJob is one row of timescaledb_information.jobs, plus the run counter
+// that is the only field here capable of proving anything.
 type timescaleJob struct {
 	ID        int
 	Proc      string
 	Scheduled bool
-	// NextStart is null for a job the scheduler has not planned. A restored
-	// cluster whose background workers never started shows exactly this: the
-	// job rows are physically present (they came back with the data) and nothing
-	// is ever going to run them.
+	// NextStart and TotalRuns both come from _timescaledb_internal.bgw_job_stat.
+	//
+	// 🔴 THAT MAKES next_start USELESS ON ITS OWN, and an earlier version of this
+	// check rested on it. bgw_job_stat is an ordinary heap table (confirmed by
+	// reading the view definition: timescaledb_information.jobs LEFT JOINs it),
+	// so a PHYSICAL restore brings it back holding the OLD cluster's numbers. A
+	// restored cluster whose background-worker scheduler never started therefore
+	// shows every job `scheduled = true` with a non-NULL, stale next_start — and
+	// an assertion that next_start is present passes, because the data restored,
+	// not because anything will ever run.
+	//
+	// The shape the old comment claimed to catch — present, scheduled, and
+	// permanently WITHOUT a next_start — is what a FRESH cluster with a dead
+	// scheduler looks like (no bgw_job_stat row at all, so the LEFT JOIN yields
+	// NULL). It is precisely the shape a restored one cannot show.
+	//
+	// TotalRuns is a monotonic counter, so watching it MOVE observes the scheduler
+	// executing on THIS cluster. See schedulerIsRunning.
 	NextStart *string
+	TotalRuns int64
 }
 
 // eventStoreJobs lists the background jobs attached to the event store's own
-// objects: the continuous-aggregate refresh policy, plus any retention policy
-// the data-lifecycle reconciler has installed.
+// objects: the continuous-aggregate refresh policy and the per-hypertable
+// compression policies.
 //
-// 🔑 It deliberately does NOT list every job on the server. The stock TimescaleDB
-// image ships a telemetry job, and the platform DELETES it at initdb
-// (post_init_template_sql) precisely because `telemetry_level = off` leaves the
-// job present, scheduled and permanently without a next_start — the exact shape
-// this check reads as "the scheduler is stuck", on a healthy cluster, forever.
-// A check that is red on a working system is a check that gets switched off.
+// 🔑 It deliberately does NOT list every job on the server. Two stock jobs are
+// none of this drill's business, and one of them would break it: the image ships
+// a telemetry job that the platform DELETES at initdb (post_init_template_sql)
+// precisely because `telemetry_level = off` leaves it present, scheduled and
+// permanently without a next_start — a check that is red on a working system is a
+// check that gets switched off. policy_job_stat_history_retention carries no
+// hypertable at all and is likewise filtered out by the predicate below.
+//
+// Measured on a live instance: the refresh policy reports
+// hypertable_schema = 'event-management', hypertable_name = 'measurement_rollups'
+// — the USER view, not the materialization hypertable in _timescaledb_internal —
+// so this single predicate catches all seven. (An earlier version added
+// `OR (proc_schema = '_timescaledb_functions' AND hypertable_schema = ?)` binding
+// the SAME schema, which is `A OR (B AND A)` — dead, and dressed as coverage.)
 func eventStoreJobs(ctx context.Context, db *gorm.DB, schema string) ([]timescaleJob, error) {
 	rows, err := db.WithContext(ctx).Raw(`
-		SELECT job_id, proc_name, scheduled, next_start::text
-		FROM timescaledb_information.jobs
-		WHERE hypertable_schema = ? OR (proc_schema = '_timescaledb_functions' AND hypertable_schema = ?)
-		ORDER BY job_id`, schema, schema).Rows()
+		SELECT j.job_id, j.proc_name, j.scheduled, j.next_start::text,
+		       coalesce(s.total_runs, 0)
+		FROM timescaledb_information.jobs j
+		LEFT JOIN timescaledb_information.job_stats s ON s.job_id = j.job_id
+		WHERE j.hypertable_schema = ?
+		ORDER BY j.job_id`, schema).Rows()
 	if err != nil {
 		return nil, fmt.Errorf("listing the event store's background jobs: %w", err)
 	}
@@ -300,10 +355,54 @@ func eventStoreJobs(ctx context.Context, db *gorm.DB, schema string) ([]timescal
 	var out []timescaleJob
 	for rows.Next() {
 		var j timescaleJob
-		if err := rows.Scan(&j.ID, &j.Proc, &j.Scheduled, &j.NextStart); err != nil {
+		if err := rows.Scan(&j.ID, &j.Proc, &j.Scheduled, &j.NextStart, &j.TotalRuns); err != nil {
 			return nil, fmt.Errorf("reading a background job row: %w", err)
 		}
 		out = append(out, j)
 	}
 	return out, rows.Err()
+}
+
+// schedulerIsRunning proves the background-worker scheduler is EXECUTING on this
+// cluster, by watching the refresh policy's run counter advance.
+//
+// This is the only assertion in the jobs check that a physical restore cannot
+// satisfy on its own. Everything else about a job — that it exists, that it is
+// marked scheduled, that it has a next_start — is restored data.
+//
+// The refresh policy runs every 60 seconds (schedule_interval = 00:01:00 on a
+// stock instance), and its counter was measured advancing in step with that:
+// total_runs 132, next_start and last_run_started_at each moving exactly 60s
+// across a 75-second observation. So a bound of a little over two intervals is
+// generous without being unbounded.
+//
+// It returns the observed before/after counts so the caller can report what it
+// saw rather than only that it was satisfied.
+func schedulerIsRunning(ctx context.Context, db *gorm.DB, jobID int) (before, after int64, err error) {
+	const (
+		interval = 5 * time.Second
+		attempts = 30 // ~150s, i.e. two and a half 60-second intervals
+	)
+	if err := db.WithContext(ctx).Raw(
+		`SELECT coalesce(total_runs, 0) FROM timescaledb_information.job_stats WHERE job_id = ?`,
+		jobID).Row().Scan(&before); err != nil {
+		return 0, 0, fmt.Errorf("reading job %d's run counter: %w", jobID, err)
+	}
+	after = before
+	for i := 0; i < attempts; i++ {
+		select {
+		case <-ctx.Done():
+			return before, after, ctx.Err()
+		case <-time.After(interval):
+		}
+		if err := db.WithContext(ctx).Raw(
+			`SELECT coalesce(total_runs, 0) FROM timescaledb_information.job_stats WHERE job_id = ?`,
+			jobID).Row().Scan(&after); err != nil {
+			return before, after, fmt.Errorf("re-reading job %d's run counter: %w", jobID, err)
+		}
+		if after > before {
+			return before, after, nil
+		}
+	}
+	return before, after, nil
 }

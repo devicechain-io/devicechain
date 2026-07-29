@@ -196,10 +196,15 @@ tsdb_source="$tsdb_cluster"
 # NOT derivable from the cluster name: `dc-postgresql` and `dc-timescaledb-single`
 # are the aliases the platform has always used, declared as CNPG managed services
 # so the operator keeps them pointed at the primary (see pg_pod).
-store_bucket() { case "$1" in rdb) printf '%s' "$bucket_rdb" ;; tsdb) printf '%s' "$bucket_tsdb" ;; *) fail "unknown store $1" ;; esac; }
-store_source() { case "$1" in rdb) printf '%s' "$rdb_source" ;; tsdb) printf '%s' "$tsdb_source" ;; *) fail "unknown store $1" ;; esac; }
-store_cluster() { case "$1" in rdb) printf '%s' "$rdb_cluster" ;; tsdb) printf '%s' "$tsdb_cluster" ;; *) fail "unknown store $1" ;; esac; }
-store_service() { case "$1" in rdb) printf '%s' "dc-postgresql" ;; tsdb) printf '%s' "dc-timescaledb-single" ;; *) fail "unknown store $1" ;; esac; }
+#
+# They RETURN NON-ZERO on an unknown store rather than calling `fail`. `fail`
+# exits, and these are called almost entirely inside command substitution where an
+# exit kills only the subshell — so it would abort nothing and report nothing. The
+# startup check below is what turns an unknown store into a stopped run.
+store_bucket() { case "$1" in rdb) printf '%s' "$bucket_rdb" ;; tsdb) printf '%s' "$bucket_tsdb" ;; *) return 1 ;; esac; }
+store_source() { case "$1" in rdb) printf '%s' "$rdb_source" ;; tsdb) printf '%s' "$tsdb_source" ;; *) return 1 ;; esac; }
+store_cluster() { case "$1" in rdb) printf '%s' "$rdb_cluster" ;; tsdb) printf '%s' "$tsdb_cluster" ;; *) return 1 ;; esac; }
+store_service() { case "$1" in rdb) printf '%s' "dc-postgresql" ;; tsdb) printf '%s' "dc-timescaledb-single" ;; *) return 1 ;; esac; }
 
 # The stores the drill seeds, archives, destroys and restores. Written as a list
 # so that adding a third store is one entry rather than an audit of every loop.
@@ -228,6 +233,40 @@ minio_image="quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"
 minio_network="kind"
 bucket_rdb="$instance-rdb"
 bucket_tsdb="$instance-tsdb"
+
+# 🔴 THE STORE TABLE IS VALIDATED HERE, and it has to be HERE — after the bucket
+# names above, because store_bucket reads them and `set -u` makes an early call a
+# fatal "unbound variable" at startup. That is not hypothetical: this block was
+# first placed next to $stores, 50 lines before bucket_rdb exists, and it broke
+# every subcommand. It was caught by trying to MUTATE it — `bash -n` cannot see a
+# runtime unbound variable, and no amount of reading it had.
+#
+# It exists because the `fail` inside those four lookups cannot stop anything
+# where they are actually used.
+#
+# They are called almost exclusively inside command substitution, and `fail`'s
+# `exit 1` kills only the subshell. In archive_base_backups/archive_wal_segments a
+# trailing `|| true` then swallows it and the path becomes `/data//…`, so the
+# listing comes back empty and the caller misdiagnoses ("no base backup", or a WAL
+# wait that times out). The worst case is quiesce_base_backups: a failed
+# store_cluster expands to empty, jq happily counts the in-flight backups of a
+# cluster named "" (always zero), and the ordering gate — the one whose comment
+# says it "closes the race that would make this whole drill VACUOUS" — waives
+# itself for that store while a red FAIL banner scrolls past unacted-on.
+#
+# Unreachable while this list matches the case arms. But the comment above invites
+# adding a third entry, which is exactly the action that arms it, so the list is
+# checked against the lookups once, here, in the main shell where `fail` works.
+for _store in "${stores[@]}"; do
+  for _lookup in store_bucket store_source store_cluster store_service; do
+    "$_lookup" "$_store" >/dev/null ||
+      fail "store \"$_store\" is in \$stores but $_lookup does not know it. Add it to that
+case statement: left as it is, the lookup fails inside a command substitution,
+which cannot abort the run — it yields an empty string and the drill proceeds
+against a path or a cluster name that does not exist."
+  done
+done
+unset _store _lookup
 
 # A fixed throwaway passphrase. This is a rig whose instances exist to be
 # destroyed; the passphrase is not protecting anything, and prompting would stop
@@ -1005,7 +1044,15 @@ cmd_disaster() {
   docker ps --format '{{.Names}}' | grep -qx "$minio_container" ||
     fail "refusing to simulate a disaster: the object store $minio_container is not running,
 so there is nothing holding the archive the restore would read."
-  assert_archive_complete
+  # 🔴 EVERY store, because this check's entire purpose is to be BEFORE the
+  # destruction. It was a bare `assert_archive_complete` — which, once the function
+  # took a store argument defaulting to rdb, silently narrowed to half the instance:
+  # a missing or incomplete EVENT archive would have been discovered only after the
+  # cluster was gone, which is a real disaster rather than a drill.
+  local store
+  for store in "${stores[@]}"; do
+    assert_archive_complete "$store"
+  done
 
   say "SIMULATING TOTAL LOSS of the cluster and the local instance state"
   delete_cluster
@@ -1358,6 +1405,15 @@ cmd_control() {
   # — event-management migrates an empty schema onto it at startup, which is the
   # hardest version of the test: every hypertable, the continuous aggregate and
   # every policy are PRESENT and correct, and only the data is missing.
+  #
+  # 🔑 Known and deliberate side effect: because it is not restored, this dc-tsdb
+  # takes the DEFAULT serverName — the same archive path the original cluster owns
+  # — and the barman plugin refuses to archive into a non-empty archive (see
+  # RestoredArchivePath in the cnpg-cluster module). So the control cluster runs its
+  # whole short life with event-store WAL archiving broken. That is verdict-neutral:
+  # the control asserts the telemetry is ABSENT, which needs no archive of its own,
+  # and this cluster is destroyed by `down`. Worth knowing before reading its logs
+  # and mistaking the archiving errors for the finding.
   rebuild "$decoy_file" "a DECOY root key (the negative control)" ""
 
   # The control's premise, asserted BOTH ways. Either half alone is insufficient:

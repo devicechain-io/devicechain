@@ -5,8 +5,10 @@ package main
 
 import (
 	"context"
+	crand "crypto/rand"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 	"time"
 
@@ -143,14 +145,25 @@ device's rows first, or drill a fresh instance`, o.device, receipt.Tenant, exist
 	start := now.Add(-oldAge)
 	end := now.Add(-recentAge).Add(time.Duration(o.count-1) * time.Minute)
 
+	// 🔴 A PER-RUN RANDOM BASE, for the reason the secret half's plaintext is
+	// random. With the fixed bases this used to carry (100 and 20), the recorded
+	// sum was a constant of the default flags — 1290, every run — so it could not
+	// distinguish this run's twenty rows from an identical earlier run's, and the
+	// DB-level value check carries no time predicate. The window in Start/End was
+	// doing that work alone.
+	offset, err := randomOffset()
+	if err != nil {
+		return failWith(exitSetup, "%w", err)
+	}
+
 	var sum float64
 	rows := 0
 	for _, cohort := range []struct {
 		base  time.Time
 		first float64
 	}{
-		{base: now.Add(-oldAge), first: 100},
-		{base: now.Add(-recentAge), first: 20},
+		{base: now.Add(-oldAge), first: 100 + offset},
+		{base: now.Add(-recentAge), first: 20 + offset},
 	} {
 		for i := 0; i < o.count; i++ {
 			at := cohort.base.Add(time.Duration(i) * time.Minute)
@@ -173,7 +186,7 @@ device's rows first, or drill a fresh instance`, o.device, receipt.Tenant, exist
 	if err != nil {
 		return failWith(exitSetup, "%w", err)
 	}
-	matCount, err := materializedRows(ctx, db, matTable, receipt.Tenant)
+	matCount, err := materializedRows(ctx, db, matTable, receipt.Tenant, o.device)
 	if err != nil {
 		return failWith(exitSetup, "%w", err)
 	}
@@ -195,7 +208,21 @@ device's rows first, or drill a fresh instance`, o.device, receipt.Tenant, exist
 			"no chunk of %s.measurement_events was compressed, so the drill would only ever restore uncompressed chunks — which is not the shape a week-old instance is in",
 			areaEvent)
 	}
-	fmt.Printf("ok   %d chunk(s) compressed, so the archive carries compressed data as well as raw\n", compressed)
+
+	// How many rows are actually IN those chunks, scoped to this drill's own rows.
+	// Recorded so verify-events can assert an exact number rather than "more than
+	// none": the count is what distinguishes reading a compressed chunk from
+	// reading some other chunk that happens to be old.
+	compressedRows, err := compressedRowCount(ctx, db, receipt.Tenant, o.device)
+	if err != nil {
+		return failWith(exitSetup, "%w", err)
+	}
+	if compressedRows == 0 {
+		return failWith(exitSetup,
+			"%d chunk(s) of %s.measurement_events were compressed and none of this drill's rows are in them, so there would be nothing for the restore to read back out",
+			compressed, areaEvent)
+	}
+	fmt.Printf("ok   %d chunk(s) compressed holding %d of this run's rows\n", compressed, compressedRows)
 
 	receipt.Events = &EventSeed{
 		Tenant:            receipt.Tenant,
@@ -207,6 +234,8 @@ device's rows first, or drill a fresh instance`, o.device, receipt.Tenant, exist
 		RawCount:          rows,
 		Sum:               sum,
 		MaterializedCount: matCount,
+		CompressedChunks:  compressed,
+		CompressedRows:    compressedRows,
 	}
 	if err := WriteReceipt(o.receipt, receipt); err != nil {
 		return failWith(exitSetup, "write receipt: %w", err)
@@ -420,4 +449,64 @@ func resetSeed(ctx context.Context, db *gorm.DB, tenant, device string) (int64, 
 		removed += tx.RowsAffected
 	}
 	return removed, nil
+}
+
+// compressedRowCount counts the drill's own rows that live in COMPRESSED chunks,
+// resolved through the chunk catalog rather than by a time predicate.
+//
+// 🔴 A time predicate is what this replaces, and it was wrong in two ways at once.
+// `occurred_time < now() - interval '7 days'` counts rows in any chunk that
+// happens to be old — compressed or not — and it counted rows belonging to any
+// tenant and any device, so the number printed as "rows read back out of the
+// compressed chunks" was neither necessarily compressed nor necessarily this
+// drill's. Asking the catalog which chunks are compressed and reading only those
+// makes the claim and the measurement the same thing.
+func compressedRowCount(ctx context.Context, db *gorm.DB, tenant, device string) (int, error) {
+	var total int
+	rows, err := db.WithContext(ctx).Raw(`
+		SELECT format('%I.%I', chunk_schema, chunk_name)
+		FROM timescaledb_information.chunks
+		WHERE hypertable_schema = ? AND hypertable_name = 'measurement_events' AND is_compressed`,
+		areaEvent).Rows()
+	if err != nil {
+		return 0, fmt.Errorf("listing compressed chunks: %w", err)
+	}
+	var chunks []string
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("reading a compressed chunk name: %w", err)
+		}
+		chunks = append(chunks, c)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	for _, chunk := range chunks {
+		var n int
+		// The chunk name comes from format('%I.%I') over catalog values, so it is
+		// already quoted by Postgres; tenant and device are bound.
+		if err := db.WithContext(ctx).Raw(
+			`SELECT count(*) FROM `+chunk+` WHERE tenant_id = ? AND device_token = ?`,
+			tenant, device).Row().Scan(&n); err != nil {
+			return 0, fmt.Errorf("counting this drill's rows in compressed chunk %s: %w", chunk, err)
+		}
+		total += n
+	}
+	return total, nil
+}
+
+// randomOffset returns a small random value added to every seeded measurement, so
+// the recorded sum is specific to this run. See the call site.
+func randomOffset() (float64, error) {
+	n, err := crand.Int(crand.Reader, big.NewInt(1_000_000))
+	if err != nil {
+		return 0, fmt.Errorf("generating a per-run measurement offset: %w", err)
+	}
+	// Scaled to three decimals so it stays well inside numeric(20,8) and the sum
+	// remains exactly representable as a float64.
+	return float64(n.Int64()) / 1000, nil
 }

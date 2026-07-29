@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -133,7 +134,7 @@ func runVerifyEvents(ctx context.Context, argv []string) error {
 	if verdict := checkMaterialization(ctx, db, seed); verdict != nil {
 		return verdict
 	}
-	if verdict := checkCompression(ctx, db); verdict != nil {
+	if verdict := checkCompression(ctx, db, seed); verdict != nil {
 		return verdict
 	}
 	if verdict := checkJobs(ctx, db); verdict != nil {
@@ -162,45 +163,72 @@ func checkHypertables(ctx context.Context, db *gorm.DB, seed EventSeed) error {
 			return failWith(exitSetup, "%w", err)
 		}
 		if !ok {
+			// Deliberately does not claim the table EXISTS: isHypertable only asks
+			// the hypertables view, so a missing table and a de-partitioned one are
+			// the same answer here. An earlier version asserted "exists but is NOT a
+			// hypertable", which was a false statement in the case the drill's own
+			// rename mutation produces.
 			return failWith(exitTimescaleBroken,
-				"%s.%s exists but is NOT a hypertable. The rows may be intact; the time partitioning the event store is built on is not",
+				"%s.%s is not a hypertable — it is either missing or came back de-partitioned. If the rows are intact, the time partitioning the event store is built on is not, and that cannot be fixed in place",
 				areaEvent, table)
 		}
 	}
 	fmt.Printf("ok   all %d event tables are hypertables\n", len(eventHypertables))
 
-	chunks, err := hypertableChunks(ctx, db, areaEvent, "measurement_events")
-	if err != nil {
-		return failWith(exitSetup, "%w", err)
-	}
-	if chunks == 0 {
-		return failWith(exitTimescaleBroken,
-			"%s.measurement_events is a hypertable with ZERO chunks. A hypertable's rows live in chunks, so its shape survived and its data did not",
-			areaEvent)
+	// 🔴 BOTH tables the seed writes, not just the payload one.
+	//
+	// insertMeasurement writes a parent row in `events` AND a payload row in
+	// `measurement_events`. An earlier version counted only the payload table while
+	// this function's comment claimed it proved all six came back "holding the
+	// seeded rows" — so `TRUNCATE "event-management".events` passed every check,
+	// and five of the six hypertables got a shape-only check that the CONTROL
+	// cluster's un-restored event store also passes.
+	for _, table := range []string{"events", "measurement_events"} {
+		chunks, err := hypertableChunks(ctx, db, areaEvent, table)
+		if err != nil {
+			return failWith(exitSetup, "%w", err)
+		}
+		if chunks == 0 {
+			return failWith(exitTimescaleBroken,
+				"%s.%s is a hypertable with ZERO chunks. A hypertable's rows live in chunks, so its shape survived and its data did not",
+				areaEvent, table)
+		}
+		var n int
+		if err := db.WithContext(ctx).Raw(`
+			SELECT count(*) FROM "`+areaEvent+`".`+table+`
+			WHERE tenant_id = ? AND device_token = ?`,
+			seed.Tenant, seed.DeviceToken).Row().Scan(&n); err != nil {
+			return failWith(exitSetup, "counting restored rows in %s.%s: %w", areaEvent, table, err)
+		}
+		if n == 0 {
+			return failWith(exitNotFound,
+				"no rows in %s.%s for device %q under tenant %q — the restore did not bring the event data back",
+				areaEvent, table, seed.DeviceToken, seed.Tenant)
+		}
+		if n != seed.RawCount {
+			return failWith(exitMismatch,
+				"%s.%s holds %d rows for device %q; the seed wrote %d",
+				areaEvent, table, n, seed.DeviceToken, seed.RawCount)
+		}
+		fmt.Printf("ok   %s.%s: %d rows across %d chunk(s)\n", areaEvent, table, n, chunks)
 	}
 
-	// The raw count, read from the database rather than from the API, because the
-	// API applies pagination and tenant scoping of its own — two ways for these
-	// two numbers to differ for reasons that are not a restore.
-	var count int
+	// The VALUES, read from the database rather than from the API, because the API
+	// applies pagination and tenant scoping of its own — two ways for the two
+	// numbers to differ for reasons that are not a restore.
 	var sum float64
 	if err := db.WithContext(ctx).Raw(`
-		SELECT count(*), coalesce(sum(value), 0) FROM "`+areaEvent+`".measurement_events
+		SELECT coalesce(sum(value), 0) FROM "`+areaEvent+`".measurement_events
 		WHERE tenant_id = ? AND device_token = ? AND name = ?`,
-		seed.Tenant, seed.DeviceToken, seed.Name).Row().Scan(&count, &sum); err != nil {
-		return failWith(exitSetup, "counting restored measurements: %w", err)
+		seed.Tenant, seed.DeviceToken, seed.Name).Row().Scan(&sum); err != nil {
+		return failWith(exitSetup, "summing restored measurements: %w", err)
 	}
-	if count == 0 {
-		return failWith(exitNotFound,
-			"no measurement rows for device %q under tenant %q — the restore did not bring the event data back",
-			seed.DeviceToken, seed.Tenant)
-	}
-	if count != seed.RawCount || math.Abs(sum-seed.Sum) > valueEpsilon {
+	if math.Abs(sum-seed.Sum) > valueEpsilon {
 		return failWith(exitMismatch,
-			"the event store holds %d measurements summing to %g; the seed wrote %d summing to %g",
-			count, sum, seed.RawCount, seed.Sum)
+			"the restored measurements for %q sum to %g; the seed wrote %g. The right NUMBER of rows came back carrying different values",
+			seed.DeviceToken, sum, seed.Sum)
 	}
-	fmt.Printf("ok   %d measurement rows across %d chunk(s), summing to %g\n", count, chunks, sum)
+	fmt.Printf("ok   the restored values sum to %g, matching what the seed wrote\n", sum)
 	return nil
 }
 
@@ -217,10 +245,17 @@ func checkHypertables(ctx context.Context, db *gorm.DB, seed EventSeed) error {
 // the physical relation and gets a single answer.
 func checkMaterialization(ctx context.Context, db *gorm.DB, seed EventSeed) error {
 	table, err := materializationTable(ctx, db, areaEvent)
-	if err != nil {
-		return failWith(exitTimescaleBroken, "%w", err)
+	if errors.Is(err, errNoMaterialization) {
+		return failWith(exitTimescaleBroken,
+			"%s.%s has no materialization hypertable at all: %w. The aggregate's definition came back and the object holding its data did not",
+			areaEvent, rollupView, err)
 	}
-	count, err := materializedRows(ctx, db, table, seed.Tenant)
+	if err != nil {
+		// NOT a machinery verdict — the question was not answered. See
+		// materializationTable.
+		return failWith(exitSetup, "%w", err)
+	}
+	count, err := materializedRows(ctx, db, table, seed.Tenant, seed.DeviceToken)
 	if err != nil {
 		return failWith(exitSetup, "%w", err)
 	}
@@ -255,7 +290,7 @@ is already done. Repair means invalidating the range first`,
 // decompressed is a silent capacity regression (the data is right and the storage
 // it was chosen for is gone), while a compressed chunk that cannot be read is
 // data loss that only shows up on the query that touches it.
-func checkCompression(ctx context.Context, db *gorm.DB) error {
+func checkCompression(ctx context.Context, db *gorm.DB, seed EventSeed) error {
 	var compressed int
 	if err := db.WithContext(ctx).Raw(`
 		SELECT count(*) FROM timescaledb_information.chunks
@@ -265,28 +300,49 @@ func checkCompression(ctx context.Context, db *gorm.DB) error {
 	}
 	if compressed == 0 {
 		return failWith(exitTimescaleBroken,
-			`no chunk of %s.measurement_events is compressed, and the seed compressed at least one.
+			`no chunk of %s.measurement_events is compressed, and the seed compressed %d.
 
 The platform installs a compression policy on every event hypertable, so any
 instance more than a week old is mostly compressed chunks. A restore that returns
-them decompressed loses the storage the policy exists for, silently`, areaEvent)
+them decompressed loses the storage the policy exists for, silently`,
+			areaEvent, seed.CompressedChunks)
+	}
+	// 🔴 EXACT, not `> 0`. The old cohort can straddle a weekly chunk boundary, so
+	// the seed sometimes compresses two chunks; a restore returning one compressed
+	// and one decompressed-with-rows-intact satisfies every count check and a
+	// `> 0` assertion — which is precisely the silent capacity regression this
+	// function claims to catch.
+	if compressed != seed.CompressedChunks {
+		return failWith(exitTimescaleBroken,
+			"%s.measurement_events has %d compressed chunk(s) and the seed compressed %d. At least one came back DECOMPRESSED with its rows intact, which every row count agrees with",
+			areaEvent, compressed, seed.CompressedChunks)
 	}
 
 	// Reading them is a separate question from their being marked compressed:
 	// decompression happens at query time, out of a different physical relation.
-	var readable int
-	if err := db.WithContext(ctx).Raw(`
-		SELECT count(*) FROM "` + areaEvent + `".measurement_events
-		WHERE occurred_time < now() - interval '7 days'`).Row().Scan(&readable); err != nil {
-		return failWith(exitTimescaleBroken,
-			"reading the compressed chunks of %s.measurement_events failed: %w", areaEvent, err)
+	//
+	// Counted through the chunk CATALOG and scoped to this drill's rows. The
+	// earlier version used `occurred_time < now() - interval '7 days'`, which
+	// counted rows in any chunk that happened to be old, compressed or not, for any
+	// tenant and any device — so the number it printed as "rows read back out of
+	// the compressed chunks" was neither necessarily compressed nor necessarily
+	// this run's.
+	readable, err := compressedRowCount(ctx, db, seed.Tenant, seed.DeviceToken)
+	if err != nil {
+		return failWith(exitSetup, "%w", err)
 	}
 	if readable == 0 {
 		return failWith(exitTimescaleBroken,
-			"%d chunk(s) of %s.measurement_events are marked compressed and reading them returns nothing",
+			"%d chunk(s) of %s.measurement_events are marked compressed and reading this drill's rows out of them returns nothing",
 			compressed, areaEvent)
 	}
-	fmt.Printf("ok   %d compressed chunk(s) restored compressed, and %d rows read back out of them\n", compressed, readable)
+	if readable != seed.CompressedRows {
+		return failWith(exitMismatch,
+			"the compressed chunks hold %d of this drill's rows; the seed put %d in them",
+			readable, seed.CompressedRows)
+	}
+	fmt.Printf("ok   %d compressed chunk(s) restored compressed, and all %d of this run's rows read back out of them\n",
+		compressed, readable)
 	return nil
 }
 
@@ -314,27 +370,53 @@ func checkJobs(ctx context.Context, db *gorm.DB) error {
 			areaEvent)
 	}
 
-	var refresh bool
+	refreshJob := 0
 	var unplanned []string
 	for _, j := range jobs {
 		if j.Proc == "policy_refresh_continuous_aggregate" {
-			refresh = true
+			refreshJob = j.ID
 		}
 		if !j.Scheduled || j.NextStart == nil {
 			unplanned = append(unplanned, fmt.Sprintf("%s (job %d)", j.Proc, j.ID))
 		}
 	}
-	if !refresh {
+	if refreshJob == 0 {
 		return failWith(exitTimescaleBroken,
 			"the restored event store has %d background job(s) on %q but no policy_refresh_continuous_aggregate. %s would stop advancing, and real-time aggregation would hide that behind correct answers",
 			len(jobs), areaEvent, rollupView)
 	}
 	if len(unplanned) > 0 {
 		return failWith(exitTimescaleBroken,
-			"%d of %d background job(s) have no next run planned: %s. The rows are restored and the scheduler is not running them",
+			"%d of %d background job(s) are unscheduled or have no next run recorded: %s",
 			len(unplanned), len(jobs), strings.Join(unplanned, ", "))
 	}
-	fmt.Printf("ok   %d background job(s) restored, all scheduled with a next run\n", len(jobs))
+
+	// 🔴 AND NOW THE ONLY PART A PHYSICAL RESTORE CANNOT FAKE.
+	//
+	// Everything above is restored data — the job rows, `scheduled`, and
+	// next_start, which lives in the ordinary heap table bgw_job_stat and comes
+	// back holding the OLD cluster's numbers. A restored cluster whose scheduler
+	// never started passes every assertion above it. So the counter has to be
+	// watched MOVING.
+	fmt.Printf("     watching job %d's run counter, to separate a live scheduler from restored numbers\n", refreshJob)
+	before, after, err := schedulerIsRunning(ctx, db, refreshJob)
+	if err != nil {
+		return failWith(exitSetup, "%w", err)
+	}
+	if after <= before {
+		return failWith(exitTimescaleBroken,
+			`the restored event store's background scheduler is NOT RUNNING. Job %d
+(policy_refresh_continuous_aggregate, every 60s) has run %d times and that count
+did not move while it was watched.
+
+Every other job signal here is restored DATA and looks healthy: the rows are
+present, marked scheduled, and carry a next_start that came back from the old
+cluster. Nothing is going to act on any of it — %s will never advance again, and
+nothing will ever be compressed.`, refreshJob, after, rollupView)
+	}
+
+	fmt.Printf("ok   %d background job(s) restored, and the scheduler is live (job %d ran: %d -> %d)\n",
+		len(jobs), refreshJob, before, after)
 	return nil
 }
 
@@ -365,12 +447,16 @@ them while dropping everything that arrives from now on`, err)
 		return failWith(exitTimescaleBroken,
 			"the post-restore probe write reported success and %d rows came back", n)
 	}
-	if err := db.WithContext(ctx).Exec(`
-		DELETE FROM "`+areaEvent+`".measurement_events WHERE tenant_id = ? AND device_token = ?`,
-		seed.Tenant, probe).Error; err != nil {
-		return failWith(exitSetup, "cleaning up the post-restore probe row: %w", err)
+	// 🔴 BOTH tables. insertMeasurement writes a parent row in `events` and a
+	// payload row in `measurement_events`; an earlier version deleted only the
+	// payload, so "removed afterwards" was false and the parent row for the probe
+	// device persisted forever. resetSeed would not have caught it either — that is
+	// scoped to the SEED's device token, not the probe's.
+	removed, err := resetSeed(ctx, db, seed.Tenant, probe)
+	if err != nil {
+		return failWith(exitSetup, "cleaning up the post-restore probe rows: %w", err)
 	}
-	fmt.Printf("ok   the restored cluster accepts new telemetry (probe written, read back and removed)\n")
+	fmt.Printf("ok   the restored cluster accepts new telemetry (probe written, read back, and %d row(s) removed)\n", removed)
 	return nil
 }
 
