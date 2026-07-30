@@ -407,7 +407,36 @@ output "operator_replicas" {
 
 output "operator_spread_enforced" {
   description = "Whether the operator carries a hard hostname spread constraint WITH a selector. False at one replica, which is correct. A constraint whose selector matched nothing would also spread nothing, so this reports the selector's presence rather than the constraint's -- see the locals."
-  value       = length(local.operator_values.topologySpreadConstraints) > 0 && length(local.operator_values.topologySpreadConstraints[0].labelSelector.matchLabels) > 0
+
+  # 🔴 NO INDEX IN HERE, DELIBERATELY. The obvious way to write this --
+  #
+  #   length(x) > 0 && length(x[0].labelSelector.matchLabels) > 0
+  #
+  # -- FAILS THE APPLY at one replica with "Invalid index", because OpenTofu does
+  # not short-circuit `&&`: both operands are evaluated, so the index still runs
+  # against the empty list the left operand just ruled out. That is every non-HA
+  # bootstrap, including --compact, i.e. the default posture.
+  #
+  # It is worth knowing exactly why that form survived review, because the same
+  # trap is waiting for the next expression written this way:
+  #
+  #   - Terraform DOES short-circuit `&&` (measured: 1.13.1 returns false where
+  #     OpenTofu 1.9.1 errors). So the broken form works when tried by hand with
+  #     `terraform` and breaks only under the `tofu` that CI and dcctl actually
+  #     run. Reach for tofu, not terraform, when checking this tree.
+  #   - `tofu validate` cannot see it either: the list is only known to be empty
+  #     once var.ha is bound, so validation passes and the APPLY is the first
+  #     thing that fails.
+  #   - OpenTofu's *conditional* does short-circuit -- only `&&`/`||` are eager.
+  #     That asymmetry is why control_plane_toleration_seconds below can guard an
+  #     index with a ternary and this output cannot.
+  #
+  # anytrue([]) is false, which is the answer wanted at one replica anyway, so the
+  # index-free form needs no emptiness guard at all.
+  value = anytrue([
+    for c in local.operator_values.topologySpreadConstraints :
+    length(c.labelSelector.matchLabels) > 0
+  ])
 }
 
 output "control_plane_toleration_seconds" {
