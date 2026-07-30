@@ -593,6 +593,34 @@ jobs:
           # only the last step hung and every earlier one passed.
           tofu_wrapper: false
 
+          # 🔴 PINNED, AND PINNED TO THE SAME VERSION AS loadtest-gate.yml. Unpinned,
+          # this job installed whatever OpenTofu was newest while the gate that
+          # bootstraps real clusters ran 1.9.1 — so the two disagreed about the
+          # LANGUAGE, and the cheaper job was the one running the more forgiving
+          # semantics. That skew already cost a release: OpenTofu added boolean
+          # short-circuiting in 1.10 (opentofu/opentofu#3501), so
+          #
+          #   length(x) > 0 && length(x[0].y) > 0
+          #
+          # is fine on >=1.10 and an "Invalid index" APPLY FAILURE on <=1.9.x. The
+          # `variable validation blocks` step below asserts the very output that
+          # contained that expression, at both HA postures, and reported ok — on a
+          # tree where every non-HA bootstrap died. The check was right, the
+          # interpreter was not the one users get.
+          #
+          # 🔑 SO PIN THE OLDER SEMANTICS DELIBERATELY, not the newest release.
+          # versions.tf declares `required_version = ">= 1.6"` and dcctl's findTofu
+          # takes the first of `tofu`/`terraform` on PATH with no version check, so
+          # an eager-evaluation interpreter is squarely inside what this tree claims
+          # to support. Testing >=1.10 here would make the whole class invisible to
+          # CI while leaving it live for anyone on the floor.
+          #
+          # Two ways to change this, both fine, both deliberate: raise the pin AND
+          # `required_version` together (>= 1.10 buys short-circuiting as a language
+          # guarantee), or lower the pin toward the real floor. Do not raise this one
+          # alone — that is how the skew came back.
+          tofu_version: 1.9.1
+
       - name: tofu fmt
         run: tofu fmt -check -recursive
 
