@@ -162,12 +162,27 @@ without needing that passphrase. Without it, a database backup restored into a n
 cluster rehydrates secrets that nothing can decrypt — with no error at restore
 time. See [Disaster Recovery](docs/docs/deployment/disaster-recovery.md).
 
-**High availability, stated precisely.** `dcctl bootstrap --ha` runs the message
-broker as a 3-node RAFT cluster with every JetStream stream and KV bucket
-replicated across it, and `dcctl ha verify` asserts that from live broker state
-rather than from the rendered configuration. It replicates the **messaging tier
-only** — PostgreSQL and TimescaleDB remain single-instance today, and database HA
-is in progress.
+**High availability, stated precisely.** `dcctl bootstrap --ha` replicates both
+tiers from one flag. The message broker runs as a 3-node RAFT cluster with every
+JetStream stream and KV bucket replicated across it — and `dcctl ha verify`
+asserts that from **live broker state** rather than from the rendered
+configuration, because a three-node cluster whose every stream is single-replica
+costs three times the compute, reports three healthy peers, and survives nothing.
+Both databases run as replicated PostgreSQL clusters managed by an operator: the
+relational store holds each write until a standby confirms it, while the event
+store falls back to asynchronous replication instead, because unpersisted events
+are still held durably in the messaging layer and can be replayed. Note that
+`--ha` therefore also triples database disk, since volumes are sized per instance.
+
+**What is proven, and what is not.** A 3-node instance survives **one** node loss,
+and both databases restore into a freshly built cluster. Both are drilled against a
+real multi-node cluster, and the two claims that can carry a **negative control**
+do: the replication check is also run against a deliberately non-HA instance and
+required to fail, and the restore drill is repeated with the escrowed key withheld
+and required to fail *at the decrypt* — because a check nobody has watched fail is
+not yet evidence. Not proven: MQTT session continuity across a broker failover, and
+graceful-drain behavior. And the restore story covers the **two databases** —
+JetStream stream state and object storage have not been through a restore drill.
 
 ## Running locally
 

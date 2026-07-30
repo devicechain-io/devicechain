@@ -200,6 +200,51 @@ con ella. El paso 4 no depende de esto.
 un secreto (un conector de salida, un canal de notificación) desde la consola o la API.
 Una restauración que devuelve filas no es una prueba; un valor que se descifra sí lo es.
 
+**5. Si restauró datos de eventos, revise la maquinaria y no el número de filas.** Un
+almacén de eventos recuperado puede conservar todas las filas y haber dejado de ser en
+silencio una base de datos de series temporales: las tablas están ahí, las consultas
+responden, y lo que falta es el trabajo en segundo plano. Ese almacén responderá
+consultas perfectamente el tiempo que tarde el disco en llenarse.
+
+Abra una sesión en el primario del almacén de eventos; bajo el operador, `psql` no
+necesita contraseña allí:
+
+```bash
+kubectl -n dc-system exec -it dc-tsdb-1 -c postgres -- psql -U postgres -d devicechain
+```
+
+Hágale dos preguntas. **Primero: ¿siguen siendo hypertables las tablas de eventos?**
+
+```sql
+SELECT hypertable_schema, hypertable_name FROM timescaledb_information.hypertables;
+```
+
+Sus tablas de eventos viven en el esquema `event-management` y todas deberían aparecer.
+Una tabla que volvió como tabla ordinaria es el fallo que esto detecta, y es invisible
+en un volcado de esquema: una tabla normal y una hypertable se ven idénticas ahí. (No
+busque `measurement_rollups`. Es un agregado continuo, y la hypertable que lo respalda
+es interna, así que su ausencia de esta lista es normal.)
+
+**Segundo — y este es el que importa — ¿está realmente ejecutándose el planificador de
+trabajos _en este clúster_?** Ejecute esto, espere un minuto o dos, y ejecútelo de nuevo:
+
+```sql
+SELECT job_id, proc_name, total_runs, last_run_status
+  FROM timescaledb_information.job_stats ORDER BY job_id;
+```
+
+**`total_runs` tiene que MOVERSE.** Esa es toda la comprobación.
+
+:::danger No juzgue esto por `next_start` ni por un indicador de "programado"
+Es el campo obvio al que recurrir y aquí no puede decirle nada. La tabla que respalda a
+`next_start` es una tabla ordinaria, así que una restauración física la devuelve con los
+valores del clúster *antiguo*. Un almacén recuperado cuyo planificador nunca arrancó
+muestra cada trabajo como programado y con un `next_start` futuro perfectamente
+plausible, y se queda así para siempre. Parece sano **porque los datos se restauraron,
+no porque algo vaya a ejecutarse.** `total_runs` es un contador, así que verlo avanzar
+observa trabajo ocurriendo en el clúster que tiene delante.
+:::
+
 :::caution Que el bootstrap termine no significa que la base de datos esté lista
 `dcctl` informa de éxito en cuanto las cargas de trabajo están arriba, lo que puede
 ocurrir antes de que la base de datos en recuperación haya terminado de reproducir su
