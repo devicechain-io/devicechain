@@ -406,36 +406,54 @@ output "operator_replicas" {
 }
 
 output "operator_spread_enforced" {
-  description = "Whether the operator carries a hard hostname spread constraint WITH a selector. False at one replica, which is correct. A constraint whose selector matched nothing would also spread nothing, so this reports the selector's presence rather than the constraint's -- see the locals."
+  description = "Whether the operator carries a HARD HOSTNAME spread constraint with a selector: topologyKey kubernetes.io/hostname, whenUnsatisfiable DoNotSchedule, and a non-empty labelSelector. False at one replica, which is correct. All three are asserted because each on its own can be satisfied by a constraint that spreads nothing -- see the locals."
 
   # 🔴 NO INDEX IN HERE, DELIBERATELY. The obvious way to write this --
   #
   #   length(x) > 0 && length(x[0].labelSelector.matchLabels) > 0
   #
-  # -- FAILS THE APPLY at one replica with "Invalid index", because OpenTofu does
-  # not short-circuit `&&`: both operands are evaluated, so the index still runs
-  # against the empty list the left operand just ruled out. That is every non-HA
-  # bootstrap, including --compact, i.e. the default posture.
+  # -- FAILS at one replica with "Invalid index", on any OpenTofu older than 1.10:
+  # both operands of `&&` are evaluated, so the index still runs against the empty
+  # list the left operand just ruled out. That is every non-HA bootstrap, including
+  # --compact, i.e. the default posture. anytrue([]) is false, which is the answer
+  # wanted at one replica anyway, so the index-free form below needs no emptiness
+  # guard at all.
   #
-  # It is worth knowing exactly why that form survived review, because the same
-  # trap is waiting for the next expression written this way:
+  # 🔑 THE HAZARD IS A VERSION, NOT A VENDOR, and getting that backwards is what
+  # let the broken form ship:
   #
-  #   - Terraform DOES short-circuit `&&` (measured: 1.13.1 returns false where
-  #     OpenTofu 1.9.1 errors). So the broken form works when tried by hand with
-  #     `terraform` and breaks only under the `tofu` that CI and dcctl actually
-  #     run. Reach for tofu, not terraform, when checking this tree.
-  #   - `tofu validate` cannot see it either: the list is only known to be empty
-  #     once var.ha is bound, so validation passes and the APPLY is the first
-  #     thing that fails.
-  #   - OpenTofu's *conditional* does short-circuit -- only `&&`/`||` are eager.
+  #   - OpenTofu added boolean short-circuiting in 1.10 (opentofu/opentofu#3501).
+  #     Measured: the form above errors on 1.9.1 and returns false on 1.10.0.
+  #     Terraform has always short-circuited (1.13.1 returns false). So "use tofu,
+  #     not terraform" is NOT the lesson -- current tofu behaves like terraform.
+  #     The lesson is that anything below 1.10 is eager, and versions.tf declares
+  #     `required_version = ">= 1.6"` while dcctl's findTofu takes the first of
+  #     `tofu`/`terraform` on PATH with no version check. Eager evaluation is
+  #     inside what this tree supports, so write for it.
+  #   - `tofu validate` cannot see it: the list is only known to be empty once
+  #     var.ha is bound, so validation type-checks clean. `tofu plan -var ha=false`
+  #     DOES catch it, offline, with no cluster -- that is the cheap reproduction.
+  #   - The conditional short-circuits at every version; only `&&`/`||` were eager.
   #     That asymmetry is why control_plane_toleration_seconds below can guard an
   #     index with a ternary and this output cannot.
   #
-  # anytrue([]) is false, which is the answer wanted at one replica anyway, so the
-  # index-free form needs no emptiness guard at all.
+  # What actually caught it was the L5 load gate, which pins tofu 1.9.1. What
+  # SHOULD have caught it is hack/check-tofu-validations.sh, which asserts this
+  # very output at both postures and has since #565 -- it reported ok because the
+  # `opentofu` CI job pinned no version and so ran the forgiving semantics. That
+  # job is now pinned to the gate's version; keep them equal.
+  #
+  # 🔑 ALL THREE FIELDS, NOT JUST THE SELECTOR. The locals above name two false-HA
+  # shapes -- a topologyKey no node carries, and whenUnsatisfiable: ScheduleAnyway
+  # ("worse than none": twice the cost, no protection, and every replica-counting
+  # check still agrees the operator is spread). An output called
+  # operator_spread_ENFORCED that read only the selector reported true for both of
+  # them, so it certified exactly the shapes its own comments warn about.
   value = anytrue([
     for c in local.operator_values.topologySpreadConstraints :
-    length(c.labelSelector.matchLabels) > 0
+    c.topologyKey == "kubernetes.io/hostname"
+    && c.whenUnsatisfiable == "DoNotSchedule"
+    && length(c.labelSelector.matchLabels) > 0
   ])
 }
 
