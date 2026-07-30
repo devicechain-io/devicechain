@@ -12,7 +12,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/glebarez/sqlite"
-	gormigrate "github.com/go-gormigrate/gormigrate/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -57,14 +56,16 @@ func newTestApi(t *testing.T) *Api {
 // schemaMigrateAll runs ai-inference's real migrations, in order, against db. Shared so
 // that a harness variant (see auditedTestApi) cannot drift from this one by forgetting a
 // migration — a divergence that would show up as a missing table in one suite only.
+//
+// It iterates schema.Migrations rather than naming the migrations, which closes that drift
+// entirely rather than relying on this helper being kept in step: whatever the service
+// actually ships is what the tests build. It used to enumerate three constructors, and the
+// GA squash — which replaced them with a single baseline — is exactly the change that breaks
+// an enumeration.
 func schemaMigrateAll(t *testing.T, db *gorm.DB) error {
 	t.Helper()
-	for _, m := range []func() *gormigrate.Migration{
-		schema.NewAIProvidersSchema,
-		schema.NewAIProviderGrantsSchema,
-		schema.NewAIFunctionAssignmentsSchema,
-	} {
-		if err := m().Migrate(db); err != nil {
+	for _, m := range schema.Migrations {
+		if err := m.Migrate(db); err != nil {
 			return err
 		}
 	}

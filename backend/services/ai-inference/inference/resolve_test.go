@@ -104,10 +104,12 @@ func newHarnessWithRate(t *testing.T, facts TenantFactsReader, rate RateGate) (*
 	require.NoError(t, err)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, rdb.RegisterTokenGrammar(db))
-	require.NoError(t, secrets.NewSecretStoreSchema().Migrate(db))
-	require.NoError(t, aischema.NewAIProvidersSchema().Migrate(db))
-	require.NoError(t, aischema.NewAIProviderGrantsSchema().Migrate(db))
-	require.NoError(t, aischema.NewAIFunctionAssignmentsSchema().Migrate(db))
+	// The real shipped chain, not a list of migrations named here: an enumeration drifts
+	// the moment the chain changes, which is precisely what the GA squash did to the three
+	// constructors this used to call. schema.Migrations already includes the secret store.
+	for _, m := range aischema.Migrations {
+		require.NoError(t, m.Migrate(db))
+	}
 	kek, err := secrets.NewInstanceKeyProvider(testRootKey)
 	require.NoError(t, err)
 	api := model.NewApi(&rdb.RdbManager{Database: db}, secrets.NewStore(db, kek))
