@@ -184,6 +184,9 @@ CREATE INDEX "idx_device-management_entity_group_memberships_tenant_id" ON "devi
 CREATE INDEX "idx_device-management_entity_group_versions_deleted_at" ON "device-management".entity_group_versions USING btree (deleted_at);
 CREATE INDEX "idx_device-management_entity_group_versions_tenant_id" ON "device-management".entity_group_versions USING btree (tenant_id);
 CREATE INDEX "idx_device-management_entity_groups_deleted_at" ON "device-management".entity_groups USING btree (deleted_at);
+CREATE INDEX "idx_device-management_entity_groups_member_type" ON "device-management".entity_groups USING btree (member_type);
+CREATE INDEX "idx_device-management_entity_groups_tenant_id" ON "device-management".entity_groups USING btree (tenant_id);
+CREATE INDEX "idx_device-management_entity_groups_token" ON "device-management".entity_groups USING btree (token);
 CREATE INDEX "idx_device-management_entity_relationship_types_deleted_at" ON "device-management".entity_relationship_types USING btree (deleted_at);
 CREATE INDEX "idx_device-management_entity_relationship_types_tenant_id" ON "device-management".entity_relationship_types USING btree (tenant_id);
 CREATE INDEX "idx_device-management_entity_relationship_types_token" ON "device-management".entity_relationship_types USING btree (token);
@@ -198,7 +201,6 @@ CREATE INDEX "idx_device-management_provisioning_profiles_deleted_at" ON "device
 CREATE INDEX "idx_device-management_provisioning_profiles_device_type_id" ON "device-management".provisioning_profiles USING btree (device_type_id);
 CREATE INDEX "idx_device-management_provisioning_profiles_tenant_id" ON "device-management".provisioning_profiles USING btree (tenant_id);
 CREATE INDEX "idx_device-management_provisioning_profiles_token" ON "device-management".provisioning_profiles USING btree (token);
-CREATE INDEX idx_alarms_deleted_at ON "device-management".alarms USING btree (deleted_at);
 CREATE INDEX idx_audit_tenant_time ON "device-management".audit_events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX idx_dr_scope_ref_group ON "device-management".detection_rule_scope_refs USING btree (group_token, group_version);
 CREATE INDEX idx_egfr_group ON "device-management".entity_group_facet_refs USING btree (group_id, selector_version);
@@ -206,10 +208,6 @@ CREATE INDEX idx_egfr_lookup ON "device-management".entity_group_facet_refs USIN
 CREATE INDEX idx_egm_entity ON "device-management".entity_group_memberships USING btree (entity_type, entity_id);
 CREATE INDEX idx_egm_group ON "device-management".entity_group_memberships USING btree (group_id, selector_version);
 CREATE INDEX idx_entity_attr_key ON "device-management".entity_attributes USING btree (entity_type, entity_id, scope, attr_key);
-CREATE INDEX idx_entity_groups_deleted_at ON "device-management".entity_groups USING btree (deleted_at);
-CREATE INDEX idx_entity_groups_member_type ON "device-management".entity_groups USING btree (member_type);
-CREATE INDEX idx_entity_groups_tenant_id ON "device-management".entity_groups USING btree (tenant_id);
-CREATE INDEX idx_entity_groups_token ON "device-management".entity_groups USING btree (token);
 CREATE INDEX idx_entity_rel_source ON "device-management".entity_relationships USING btree (source_type, source_id);
 CREATE INDEX idx_entity_rel_target ON "device-management".entity_relationships USING btree (target_type, target_id);
 CREATE INDEX idx_facet_keys_deleted_at ON "device-management".facet_keys USING btree (deleted_at);
