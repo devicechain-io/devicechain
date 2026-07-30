@@ -229,6 +229,21 @@ jobs:
           cache: true
           cache-dependency-path: "**/go.sum"
 
+      # Proves the duplicate-index check can fail, BEFORE its green run is used as
+      # evidence of anything. Plants a duplicate in a copy of the goldens and
+      # requires detection, then requires the clean goldens to still pass.
+      - name: duplicate-index check self-test
+        run: hack/check-duplicate-indexes.sh --self-test
+
+      # Reads the goldens only — no container, no Postgres — so it is cheap and
+      # runs before the two verify passes below. It asserts no area declares two
+      # indexes over an identical key, which is a property of the EMITTED schema
+      # rather than of the code style that produced it: the defect it was written
+      # for (two snapshot structs describing one table, one pinning TableName) is
+      # only one of the ways indexes can collide.
+      - name: no duplicate indexes in any golden schema
+        run: hack/check-duplicate-indexes.sh
+
       # Runs the production rdb.RdbManager path against a throwaway TimescaleDB
       # the script starts in docker (present on ubuntu-latest), then diffs each
       # area's pg_dump against backend/tools/migrationdiff/golden/.

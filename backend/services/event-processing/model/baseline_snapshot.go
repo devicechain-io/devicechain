@@ -33,6 +33,7 @@ import (
 // table name from the type name below, so RENAMING A TYPE RETARGETS THE MIGRATION. Note
 // `profileActive` → "profile_actives" and `deviceRoster` → "device_rosters": the pluralisation
 // is gorm's, and both are the names the stores query.
+//
 
 // detectSnapshot is one durable checkpoint per partition (ADR-051): partition_id is the
 // natural primary key, since a partition has exactly one live checkpoint overwritten in place

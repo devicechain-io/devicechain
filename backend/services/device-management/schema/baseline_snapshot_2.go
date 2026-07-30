@@ -193,31 +193,6 @@ type alarm struct {
 	ContributorVersion uint            `gorm:"not null;default:0"`
 }
 
-// 🔴 alarmContributorsPinned AND entityGroupsPinned REPRODUCE A REAL DUPLICATE, ON PURPOSE.
-//
-// Two migrations in the replaced chain declared a partial snapshot that pinned an explicit
-// TableName ("alarms", "entity_groups") in order to ALTER an existing table. Because gorm applies
-// core/rdb's area TablePrefix only to names it DERIVES, those partial snapshots created a SECOND
-// set of indexes under UNPREFIXED names alongside the prefixed ones the original create had
-// already made — so the live schema really does carry both
-// `idx_device-management_alarms_deleted_at` and `idx_alarms_deleted_at` on the same column.
-//
-// That is a wart. It is NOT this change's job to fix it: the whole claim a flatten makes is
-// schema EQUIVALENCE to the chain it replaces, proven by migration-diff, and silently dropping a
-// pair of redundant indexes here would make that claim false while looking like a tidy-up.
-// Removing them is a separate, deliberate change with its own golden refresh — and one worth
-// making, since a duplicate index costs write throughput on every insert forever.
-//
-// Reproduced by AutoMigrating these pinned partial shapes after the real ones, exactly as the
-// chain did.
-type alarmContributorsPinned struct {
-	gorm.Model
-	Contributors       datatypes.JSON `gorm:"type:jsonb"`
-	ContributorVersion uint           `gorm:"not null;default:0"`
-}
-
-func (alarmContributorsPinned) TableName() string { return "alarms" }
-
 // detectionRule is a rule AUTHORED on a profile. The engine that runs it lives in
 // event-processing; this is the authoring record, versioned with its profile.
 //
@@ -294,13 +269,23 @@ type entityAttribute struct {
 // uniqueness is a per-tenant partial index over live rows, which lets a deleted facet's key be
 // reused.
 //
-// 🔴 IT PINS TableName BECAUSE THE CHAIN DID. facet_keys was created by a migration whose local
-// struct pinned the name, so every index on this table is UNPREFIXED
-// (idx_facet_keys_member_type, not idx_device-management_facet_keys_member_type). Dropping the
-// pin here would rename all three. Unlike the two `…Pinned` types above this is not a duplicate
-// — it is the only creator of the table — so there is nothing to clean up later.
+// 🔴 IT PINS TableName BECAUSE THE CHAIN DID, and that pin STAYS. facet_keys was created by a
+// migration whose local struct pinned the name, so every index on this table is UNPREFIXED
+// (idx_facet_keys_member_type, not idx_device-management_facet_keys_member_type). Dropping the pin
+// would rename all three for no gain: this shape is the table's ONLY creator, so the names are
+// internally consistent and nothing duplicates them. Pinning is legitimate — two whole areas
+// (ai-inference, user-management) pin every shape out of necessity, one because gorm's snake_case
+// splits the "AI" initialism into `a_iproviders` and the other to carry the `iam_` prefix. What is
+// never legitimate is pinning on ONE of two shapes describing the same table; see baseline.go.
 type facetKeyDef struct {
-	gorm.Model
+	// gorm.Model INLINED, like every other snapshot in the tree. It is upstream's type, so
+	// embedding it would let a gorm release change what this frozen migration emits — a smaller
+	// risk than for our own core mixins, but the same shape of risk, and this was one of only
+	// three places in the repo that took it.
+	ID        uint `gorm:"primarykey"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	DeletedAt gorm.DeletedAt `gorm:"index"`
 
 	TenantId string `gorm:"index;not null;size:128"`
 
@@ -323,14 +308,15 @@ type entityGroup struct {
 	UpdatedAt time.Time
 	DeletedAt gorm.DeletedAt `gorm:"index"`
 
-	// 🔴 NO `index` ON THESE TWO, WHICH IS NOT AN OVERSIGHT — measured against the golden.
-	// entity_groups was CREATED by the fold migration's pinned shape, so its tenant_id and token
-	// indexes exist only under the UNPREFIXED names that shape produced. Tagging them here adds a
-	// prefixed SECOND index on each, which is what the first draft did and what migration-diff
-	// caught. The deleted_at index below IS duplicated in the real schema, because a later
-	// derived-name partial shape touched the table; tenant_id and token are not.
-	TenantId string `gorm:"not null;size:128"`
-	Token    string `gorm:"not null;size:128"`
+	// These carry `index` again, and the history is worth one line because the tags flipped twice.
+	// entity_groups used to be described by TWO shapes — this one plus a pinned partial — so
+	// tagging here produced a prefixed SECOND index beside the pinned shape's unprefixed one, and
+	// the tags had to come off. The pinned shape is gone (one table, one shape), so this shape is
+	// now the sole source and the tags belong here. The names moved with them:
+	// idx_entity_groups_token became idx_device-management_entity_groups_token, matching every
+	// other derived index in the area.
+	TenantId string `gorm:"index;not null;size:128"`
+	Token    string `gorm:"index;not null;size:128"`
 
 	Name        sql.NullString `gorm:"size:128"`
 	Description sql.NullString `gorm:"size:1024"`
@@ -343,26 +329,12 @@ type entityGroup struct {
 
 	Metadata *datatypes.JSON
 
-	MemberType     string         `gorm:"not null;size:32"`
+	MemberType     string         `gorm:"not null;size:32;index"`
 	MembershipMode string         `gorm:"not null;size:16"`
 	Selector       sql.NullString `gorm:"type:text"`
 	SelectorSchema uint           `gorm:"not null;default:0"`
 	ActiveVersion  *int32
 }
-
-// entityGroupsPinned reproduces the fold migration's pinned partial shape. See the note on
-// alarmContributorsPinned — this is the second of the two duplicate-index sources, and the
-// reason entity_groups carries both prefixed and unprefixed indexes.
-type entityGroupsPinned struct {
-	gorm.Model
-
-	TenantId string `gorm:"index;not null;size:128"`
-	Token    string `gorm:"index;not null;size:128"`
-
-	MemberType string `gorm:"not null;size:32;index"`
-}
-
-func (entityGroupsPinned) TableName() string { return "entity_groups" }
 
 // entityGroupVersion is an immutable published snapshot of a group's selector.
 type entityGroupVersion struct {

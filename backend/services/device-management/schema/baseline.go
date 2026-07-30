@@ -78,8 +78,14 @@ var tokenIndexModels = []any{
 //
 // This REPLACES the former TWENTY-SIX migration chain — by far the largest of the nine areas —
 // collapsed pre-GA. Until v1.0.0 there is no released version to upgrade FROM. Equivalence is
-// proven by hack/migration-diff.sh verify against the golden captured from that chain: 271
-// statements, 26 tables, 95 indexes.
+// proven by hack/migration-diff.sh verify against the golden captured from that chain.
+//
+// 🔑 DELIBERATELY NO STATEMENT/TABLE/INDEX COUNTS HERE. An earlier version of this comment
+// carried "271 statements, 26 tables, 95 indexes"; the first number went stale the moment two
+// duplicate indexes were removed, and the other two were already wrong. A count restated in prose
+// is a second copy of something the golden already holds exactly, so it can only ever drift out of
+// agreement with it. If you want the numbers, read the golden or the verify output — those cannot
+// be wrong about themselves.
 //
 // 🔴 FOUR TABLES THE CHAIN CREATED ARE DELIBERATELY NOT CREATED HERE. device_groups,
 // asset_groups, customer_groups and area_groups were the per-family group tables, folded into the
@@ -144,13 +150,16 @@ func NewBaselineSchema() *gormigrate.Migration {
 				return err
 			}
 
-			// The two pinned partial shapes, applied AFTER the real ones exactly as the chain
-			// applied them, so the duplicate unprefixed indexes they create are reproduced
-			// rather than silently dropped. See the note on alarmContributorsPinned.
-			if err := tx.AutoMigrate(&alarmContributorsPinned{}, &entityGroupsPinned{}); err != nil {
-				return err
-			}
-
+			// 🔑 ONE TABLE, ONE SHAPE. Every table above is described by exactly one struct, and
+			// that invariant is the whole reason this migration cannot produce a duplicate index.
+			// It previously did: two extra `…Pinned` partial shapes were AutoMigrated here to
+			// reproduce the replaced chain's incremental ALTERs, and because they pinned an
+			// explicit TableName while the full shapes did not, gorm derived a SECOND name for
+			// the same index on `alarms` and `entity_groups`. A chain has to describe a table
+			// more than once — that is what an ALTER is — but a flattened baseline does not, so
+			// the exception class was deleted rather than policed. Do not reintroduce a partial
+			// shape for a table another shape already creates.
+			//
 			// ADR-042 P1: a token is unique within a tenant among LIVE rows only.
 			for _, m := range tokenIndexModels {
 				if err := createTenantTokenIndex(tx, m); err != nil {
