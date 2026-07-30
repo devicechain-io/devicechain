@@ -164,6 +164,25 @@ type tenantTier struct {
 
 	Token  string         `gorm:"uniqueIndex;not null;size:128"`
 	Config map[string]any `gorm:"serializer:json"`
+
+	// PRESENTATION ONLY, folded in from the migration that appended them after the first
+	// flatten (ADR-065 S5c). display_order is the operator's chosen listing order; color is a
+	// token into a named palette shown as a pill beside a tenant.
+	//
+	// 🔴 display_order IS NOT A RANK. It is the order tiers are SHOWN in, nothing more — not a
+	// priority, and not a claim that a higher-placed tier's entitlements contain a lower one's.
+	// ADR-065 rejected a tier ordinal for exactly that reason: real packaging does not nest, two
+	// tiers can offer almost the same set arranged differently, and neither contains the other.
+	// Nothing may read this column to make a decision; shed priority is its own field on the
+	// tenant. This note is here because a bare integer named "order" is precisely the shape a
+	// future reader mistakes for a ranking.
+	//
+	// Defaults are deliberate: every existing tier lands at display_order 0 and sorts by a
+	// stable secondary key until an operator arranges them (an unarranged catalog is
+	// alphabetical, not broken), and color defaults to empty so there is no pill until the
+	// operator picks one, rather than a color the platform chose for them.
+	DisplayOrder int    `gorm:"not null;default:0"`
+	Color        string `gorm:"not null;default:'';size:32"`
 }
 
 func (tenantTier) TableName() string { return "iam_tenant_tiers" }
@@ -208,6 +227,12 @@ type tenant struct {
 
 	AiInferenceRequestsPerMinute *float64
 	AiInferenceBurst             *int
+
+	// The per-tenant shed-priority override (ADR-063 decision 1), folded in from a migration
+	// appended after the first flatten. NULLABLE, and the nullability is the semantics: NULL
+	// means INHERIT — the tenant's tier shedPriority, then the platform fail-safe. A zero would
+	// mean "shed me first", which is the opposite of "I said nothing".
+	ShedPriority *int
 }
 
 func (tenant) TableName() string { return "iam_tenants" }

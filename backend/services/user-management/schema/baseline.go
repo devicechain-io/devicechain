@@ -30,6 +30,19 @@ func dropTables(tx *gorm.DB, tables []string) error {
 // add their own — live, with no deploy — because what "bronze includes" is a product
 // decision that changes. Nothing in the code may assume these values still hold.
 //
+// Config carries ADR-023 rate ceilings plus the ADR-063 shed priority, the latter folded in from
+// a seed migration appended after the first flatten. The bands are gold 90 (never-shed), silver 60
+// (mid), bronze 30 (first-shed), so the promise a fresh install SELLS — already the words in these
+// descriptions — holds without an operator configuring anything. No best-effort tier is seeded, so
+// the deepest-shed band exists only via a per-tenant override.
+//
+// 🔴 THIS SEED IS INVISIBLE TO migration-diff. pg_dump --schema-only captures no rows, so a flatten
+// that dropped it entirely would leave all ten areas green while a fresh instance shipped tiers
+// with no shed priority — and, worse for the tier vocabulary itself, an instance where NO TENANT
+// CAN BE CREATED, because the tenant's tier FK is required. Measured, not assumed: stubbing out
+// seedTenantTiers was tried during this work and verify exited 0. What covers it is
+// baseline_seed_test.go, which is the only reason it is safe to fold a seed at all.
+//
 // Config carries ADR-023 rate ceilings. These literals were valid against the key
 // registry (decision 8) when this migration was written and are not re-checked against
 // it at boot — see seedTenantTiers. The registry guards what an operator writes; a
@@ -60,10 +73,19 @@ var seededTiers = []struct {
 			"ingestBurst":               float64(4000),
 			"outboundMessagesPerSecond": float64(200),
 			"outboundBurst":             float64(400),
+			"shedPriority":              float64(90),
 		}},
 	{"silver", "Silver",
 		"Standard packaging: the platform's default ceilings and entitlements.",
-		nil},
+		// 🔴 SILVER NOW DECLARES ONE THING, WHERE IT ONCE DECLARED NOTHING. Its rate ceilings
+		// are still absent on purpose (see above) — this is only the shed priority, folded in
+		// from the seed migration that appended it. It has to be here rather than left to the
+		// platform default because the shed BEHAVIOUR may not key on a tier's token (ADR-065
+		// forbids assuming a token still means what it meant at seed), so the value must come
+		// from config or it does not exist at all.
+		map[string]any{
+			"shedPriority": float64(60),
+		}},
 	{"bronze", "Bronze",
 		"Entry packaging: the first to shed under contention, a reduced set of AI models, and conservative ceilings — a quarter of the standard ingest and egress rate.",
 		map[string]any{
@@ -71,6 +93,7 @@ var seededTiers = []struct {
 			"ingestBurst":               float64(500),
 			"outboundMessagesPerSecond": float64(25),
 			"outboundBurst":             float64(50),
+			"shedPriority":              float64(30),
 		}},
 }
 

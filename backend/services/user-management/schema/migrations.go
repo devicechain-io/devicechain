@@ -19,22 +19,21 @@ import (
 // (backend/core/rdb). Don't enable that validation without first reconciling those
 // orphaned rows.
 //
+// The three migrations that had accumulated on top of that baseline — the tier presentation
+// columns, the per-tenant shed-priority column, and the tier shed-priority seed — were folded
+// back into it at the GA squash, which is what their own note here said would happen. Two were
+// DDL and fold in as fields; the seed folded into seededTiers and is covered by
+// baseline_seed_test.go, because migration-diff cannot see a row.
+//
 // CHANGING THE SCHEMA: append a migration here. Do NOT rely on the baseline's
 // AutoMigrate to converge a model change, and never edit the baseline — it builds
 // from its own frozen snapshot types precisely so it does not track the live models
 // (see baseline_snapshot.go and .agent-os/product/data-modeling.md). A new migration
 // declares its own snapshot of just what it touches. Anything appended must be
 // individually re-runnable, since migrations run with UseTransaction:false and replay
-// from the top after a failure. These are all folded back into the baseline at the GA
-// squash.
+// from the top after a failure.
 var (
 	Migrations = []*gormigrate.Migration{
 		NewBaselineSchema(),
-		// ADR-065 S5c: display_order + color on iam_tenant_tiers (presentation only).
-		NewTierPresentationSchema(),
-		// ADR-063 decision 1: per-tenant shed-priority override column on iam_tenants.
-		NewShedPrioritySchema(),
-		// ADR-065 S6: seed the shedPriority default onto the gold/silver/bronze tiers.
-		NewTierShedPrioritySeed(),
 	}
 )
