@@ -191,6 +191,51 @@ the control plane should be rewound with it. Step 4 does not depend on this.
 outbound connector, a notification channel) through the console or the API. A restore
 that returns rows is not proof; a value that decrypts is.
 
+**5. If you restored event data, check the machinery and not the row count.** A
+recovered event store can hold every row and still have quietly stopped being a
+time-series database — the tables are there, the queries return, and the thing that is
+missing is the background work. That store answers queries perfectly for as long as it
+takes the disk to fill.
+
+Open a shell on the event store's primary — under the operator, `psql` needs no
+password there:
+
+```bash
+kubectl -n dc-system exec -it dc-tsdb-1 -c postgres -- psql -U postgres -d devicechain
+```
+
+Ask it two questions. **First, are the event tables still hypertables?**
+
+```sql
+SELECT hypertable_schema, hypertable_name FROM timescaledb_information.hypertables;
+```
+
+Your event tables live in the `event-management` schema and should all be listed. A
+table that came back as an ordinary table is the failure this catches, and it is
+invisible in a schema dump — a plain table and a hypertable look identical there.
+(Don't look for `measurement_rollups`. It is a continuous aggregate, and the
+hypertable backing it is internal, so its absence from this list is normal.)
+
+**Second — and this is the one that matters — is the job scheduler actually running
+_on this cluster_?** Run this, wait a minute or two, and run it again:
+
+```sql
+SELECT job_id, proc_name, total_runs, last_run_status
+  FROM timescaledb_information.job_stats ORDER BY job_id;
+```
+
+**`total_runs` must MOVE.** That is the whole check.
+
+:::danger Do not judge this by `next_start` or by a scheduled flag
+It is the obvious field to reach for and it cannot tell you anything here. The table
+behind `next_start` is an ordinary table, so a physical restore brings it back holding
+the *old* cluster's values. A recovered store whose scheduler never started shows every
+job as scheduled with a perfectly plausible future `next_start` — and stays that way
+forever. It looks healthy **because the data restored, not because anything will ever
+run.** `total_runs` is a counter, so watching it advance observes work happening on the
+cluster in front of you.
+:::
+
 :::caution The bootstrap finishing is not the database being ready
 `dcctl` reports success once the workloads are up, which can be before the recovering
 database has finished replaying its archive. If a recovery cannot reach its archive it

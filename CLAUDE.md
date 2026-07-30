@@ -187,13 +187,24 @@ cd deploy/opentofu && tofu fmt -check -recursive && tofu init -backend=false && 
      A migration that points at a live model is silently rewritten whenever that model changes — which
      breaks *fresh* installs (`column already exists`) while every existing database applies cleanly
      and looks healthy. Seeds count: insert through the snapshot, with literal values.
-  2. **Never edit an existing migration.** Append a new one; flatten before GA. A flatten creates the
-     final structure directly — each table once, no `ALTER`s inside it — and carries no version
-     suffixes (post-flatten they are all v1).
+  2. **Never edit an existing migration — and that now includes the baselines.** The pre-GA flatten is
+     **done**: every area's chain has been collapsed into one frozen `NewBaselineSchema()` built from its
+     own snapshot structs (`baseline.go` + `baseline_snapshot*.go`), each table created once with no
+     `ALTER`s inside it and no version suffixes. A schema change from here **appends** a new migration
+     that declares its own snapshot of just what it touches; a baseline is never edited and its snapshot
+     types are never "updated" to match the live models. Anything appended must be individually
+     re-runnable, since migrations run with `UseTransaction:false` and replay from the top after a
+     failure. Consequence, deliberate and pre-GA only: an existing instance is **recreated**
+     (`dcctl destroy` + `bootstrap`), not migrated onto a baseline.
 
   `hack/migration-diff.sh verify` is the ONLY thing that exercises the migrations at all (the unit
-  tests AutoMigrate live structs on SQLite and never run a chain). It runs in CI. Maintainers: the
-  reasoning, the recipes and the gorm traps are in `.agent-os/product/data-modeling.md`.
+  tests AutoMigrate live structs on SQLite and never run a chain). It runs in CI, on both supported
+  Postgres majors. 🔴 **Know its one blind spot: it compares `pg_dump --schema-only`, so it captures no
+  ROWS.** A baseline that creates every table perfectly and seeds nothing passes with every area green —
+  which is why a folded seed needs its own test asserting the values were written
+  (`user-management/schema/baseline_seed_test.go` is the worked example). It *can* see hypertables and
+  continuous aggregates, via a catalog probe added for exactly that reason. Maintainers: the reasoning,
+  the recipes and the gorm traps are in `.agent-os/product/data-modeling.md`.
 - **Pre-GA (v1.0.0):** all models and APIs are changeable. Prefer decisive cutovers over compat shims,
   backfills, or migration scaffolding for old shapes.
 - **Fail closed:** typed config rejects unknown/invalid keys at startup; the DB tenant-scope callback
