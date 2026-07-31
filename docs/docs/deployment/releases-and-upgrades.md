@@ -9,6 +9,13 @@ DeviceChain ships as a set of prebuilt, versioned container images plus a Helm c
 You do **not** need to build anything to run it — pull a released version, install the
 chart, and upgrade in place with zero downtime.
 
+:::warning v0.9.0 cannot be upgraded into
+`v0.9.0` replaced every service's database migration chain with a single frozen baseline, so
+an existing `v0.8.x` instance **cannot** be moved onto it with `helm upgrade` — the migration
+fails on `already exists`. Recreate the instance instead. See
+[The v0.9.0 baseline squash](#v090-baseline-squash) below before you do anything else.
+:::
+
 ## Versioning model
 
 Every release is a single semantic-version git tag (`vX.Y.Z`). That one version covers
@@ -40,6 +47,9 @@ Concretely, before v1.0.0 you should expect that a release may:
   because it was being silently accepted or silently discarded
 - **change or remove a GraphQL field**, rather than deprecating it for a cycle
 - **alter database schema** in ways that a downgrade will not undo
+- **replace the migration baseline outright**, which removes the upgrade path entirely rather
+  than merely making it one-way. When that happens the release notes say so at the top, and
+  the only route forward is to recreate the instance. `v0.9.0` is such a release
 
 The "upgrade in place with zero downtime" property above describes the *mechanics* of a
 rolling upgrade. It is not a promise that your existing API calls keep the same meaning
@@ -84,8 +94,11 @@ helm install dc oci://ghcr.io/devicechain-io/charts/devicechain \
 
 ## Zero-downtime upgrades
 
-Upgrading to a new version is a normal `helm upgrade`. The chart and services are built to
-roll customers forward without dropping traffic:
+Upgrading to a new version is normally a plain `helm upgrade`, and the chart and services are
+built to roll customers forward without dropping traffic. Two releases so far are exceptions,
+both documented below: the durable-ingest cutover, which is still a `helm upgrade` but has a
+visible side effect, and **`v0.9.0`, which cannot be upgraded into at all**. Check the release
+notes for the version you are moving to before running the command:
 
 ```bash
 helm upgrade dc deploy/helm/devicechain \
@@ -114,6 +127,40 @@ replaced. Set it globally with `--set replicas=2`, or per area under
 `functionalAreas.<area>.replicas`. A `PodDisruptionBudget` is rendered automatically for any
 area with more than one replica, so node drains can't evict every replica at once.
 :::
+
+### The v0.9.0 baseline squash {#v090-baseline-squash}
+
+`v0.9.0` is the one release that **cannot be reached with `helm upgrade`.**
+
+Before it, each service's schema was built by a chain of migrations applied in order. `v0.9.0`
+replaces every one of those chains with a **single frozen baseline** — one migration per
+service that creates the whole schema as it stands. A database created by `v0.8.x` has already
+applied the old chain, so when it meets the baseline it tries to create tables that are
+already there and fails with `already exists`. The failure is loud and happens at startup; it
+does not corrupt anything.
+
+There is no migration path, and before `v1.0.0` there will not be one. Carrying a compatibility
+shim for a schema shape that is still moving is exactly the cost this project has chosen not to
+take on while every install is still an early one.
+
+**To move to `v0.9.0`, recreate the instance:**
+
+```bash
+# Export anything you need first — this discards the databases.
+dcctl destroy local devicechain
+dcctl bootstrap local devicechain
+```
+
+:::caution Export first — recreation discards your data
+The [destroy guard](#data-durability) protects the databases from an ordinary `helm` operation,
+not from a deliberate `dcctl destroy`. If the instance holds telemetry, device definitions or
+dashboards you care about, dump them before you start. There is no in-place path that preserves
+them across this release.
+:::
+
+This is a one-time cost, taken deliberately while the platform's only installs are early ones.
+From `v0.9.0` onward a schema change **appends** a new migration to the baseline, which is a
+normal `helm upgrade` again — so this section describes a single release, not a new policy.
 
 ### The one-time durable-ingest cutover
 

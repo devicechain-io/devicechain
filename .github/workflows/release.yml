@@ -15,8 +15,12 @@
 #             artifact to ghcr.io/devicechain-io/charts.
 #   - cli:    goreleaser cross-compiles dcctl and creates the GitHub Release.
 #
-# Auth is the built-in GITHUB_TOKEN -- no PAT. ghcr packages are created private
-# on first push; flip each to Public once (org Packages settings).
+# Auth is the built-in GITHUB_TOKEN -- no PAT. New ghcr packages come out PUBLIC:
+# measured on v0.9.0-rc.1, which pushed three package names for the first time
+# (lwm2m-ingest, sparkplug-ingest, dc-edge-agent) and all three answered an
+# ANONYMOUS manifest GET with 200, same as long-established ones. No flip to do.
+# (This comment previously claimed the opposite, which sends a maintainer hunting
+# through org Packages settings for a problem that is not there.)
 
 name: release
 
@@ -409,10 +413,9 @@ jobs:
   # `needs: cli` orders it AFTER the Release exists (cli in turn needs loadtest-gate), so
   # the edge binaries never land on a Release that the correctness-under-load gate failed.
   # The edge container IMAGE is published separately by the `images` matrix (the module is
-  # in the guard's smoke list); NOTE its ghcr package is created PRIVATE on the first
-  # release that pushes it and must be flipped Public once for operators to pull it (same
-  # one-time flip as any new module -- the loadtest-gate does not pull it, so it is not
-  # gate-blocking, only a pull-for-operators concern).
+  # in the guard's smoke list). Its ghcr package came out PUBLIC on the first release that
+  # pushed it (v0.9.0-rc.1, verified by anonymous manifest GET), so there is no visibility
+  # flip to perform -- see the header.
   edge-agent:
     needs: [guard, images, loadtest-gate, cli]
     runs-on: ubuntu-latest
