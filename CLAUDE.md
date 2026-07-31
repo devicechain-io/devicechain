@@ -238,16 +238,34 @@ version and not just the module path.
 
 Two things to know:
 
-1. A `replace` applies **only in the main module**, so each of the 12 modules that compile
-   graphql-go (core plus the 11 GraphQL-serving services) needs its own. Four more — `cli`,
-   `services/mcp`, `sims/dc-simulator`, `tools/migrationdiff` — carry the replace too. They resolve
-   graphql-go transitively through core but currently compile none of it (`mcp` fronts GraphQL over
-   HTTP rather than executing a schema), so their replace is defensive: it means the day one of them
-   *does* import the library, it gets the patched one rather than silently getting upstream. Because
-   they have no graphql-go line in their `go.mod`, a grep cannot find them — which is exactly how a
-   module ends up on the unpatched library unnoticed. The `graphql-go fork guard` step in the `go`
-   CI job enforces this per module with `GOWORK=off`, so a module that loses its replace fails CI
-   instead of reverting silently.
+1. A `replace` applies **only in the main module**, so **every module that resolves graphql-go at
+   all needs its own** — not just the ones that compile it. Modules split into two kinds, and the
+   second is the dangerous one:
+   - those that **import** the library (core plus the GraphQL-serving services), and
+   - those that resolve it **transitively through core and compile none of it** — `cli`,
+     `services/mcp` (which fronts GraphQL over HTTP rather than executing a schema), the ingest
+     services, `sims/dc-simulator`, `tools/*`, `edge/dc-edge-agent`. Their replace is *defensive*:
+     it means the day one of them **does** import the library, it gets the patched one rather than
+     silently getting upstream. Because they carry no graphql-go line in their `go.mod`, a grep
+     cannot find them — which is exactly how a module ends up on the unpatched library unnoticed.
+
+   Deliberately **no count is given here**: the split moves whenever a service gains or drops a
+   schema (`event-sources` has already crossed from the first group to the second), and a number
+   frozen in prose only ever drifts away from the tree. Ask the tree instead:
+
+   ```bash
+   # every module carrying the replace, split by whether it actually imports the library
+   for m in $(go list -m -f '{{.Dir}}'); do
+     grep -q 'graph-gophers/graphql-go => ' "$m/go.mod" 2>/dev/null || continue
+     n=${m#"$PWD"/}
+     if grep -rlq graph-gophers/graphql-go "$m" --include=*.go 2>/dev/null
+       then echo "compiles  $n"; else echo "defensive $n"; fi
+   done | sort
+   ```
+
+   The `graphql-go fork guard` step in the `go` CI job is the authority, not this file: it enforces
+   the replace per module with `GOWORK=off`, so a module that loses it fails CI instead of reverting
+   silently, and a newly added module is covered the moment it joins the matrix.
 2. Dependabot does not track the fork, so upstream security advisories for graphql-go will not
    raise an alert here. Re-check it by hand when reviewing GraphQL-layer CVEs.
 
