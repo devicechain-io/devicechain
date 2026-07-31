@@ -9,6 +9,20 @@
 #
 # The Go workspace (go.work) has one go.mod per module; the `directories`
 # glob below fans Dependabot across all of them in one ecosystem entry.
+#
+# 🔴 THIS LIST MUST COVER EVERY WORKSPACE MODULE, and the reason is not tidiness.
+# Every module outside core carries `replace github.com/devicechain-io/dc-microservice
+# => ../../core`, and CI validates each module with GOWORK=off — so a module resolves
+# against the LOCAL core on disk, not a published version. The moment Dependabot moves
+# core's requirements without moving a module that replaces it, that module's own
+# go.mod/go.sum are stale relative to the core it points at and it fails with
+# `go: updates to go.mod needed`. It is not the bumped module that breaks; it is the
+# one Dependabot could not see.
+#
+# That is exactly what happened: this list omitted /backend/edge/*, /backend/sims/*
+# and /backend/tools/*, so every weekly gomod PR broke the same four modules
+# (dc-edge-agent, dc-simulator, drdrill, migrationdiff) — and, worse, those four
+# received no dependency or security updates at all. Keep it in step with go.work.
 version: 2
 
 updates:
@@ -19,6 +33,12 @@ updates:
       - "/backend/cli"
       - "/backend/k8s"
       - "/backend/services/*"
+      # The three trees below are NOT optional — see the note above. They are
+      # workspace modules with a local replace onto core, so leaving them out
+      # does not merely skip them, it breaks them on every core bump.
+      - "/backend/edge/*"
+      - "/backend/sims/*"
+      - "/backend/tools/*"
       - "/deploy"
     schedule:
       interval: "weekly"

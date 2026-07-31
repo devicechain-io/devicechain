@@ -38,6 +38,20 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Proves the coverage check can fail before its green run is used as evidence.
+      - name: dependabot module-coverage self-test
+        run: hack/check-dependabot-modules.sh --self-test
+
+      # A workspace module missing from Dependabot's gomod `directories` does not go
+      # quietly stale — it BREAKS. Each module replaces core with the local ../../core
+      # and CI resolves it with GOWORK=off, so the next bump of core leaves an
+      # unlisted module's go.mod stale and it fails with `go: updates to go.mod
+      # needed`. The module that fails is never the one that was bumped, which is what
+      # made the original gap take four weekly PRs to read correctly. Runs here, in
+      # discover, so it fails before the whole go matrix fans out.
+      - name: dependabot covers every workspace module
+        run: hack/check-dependabot-modules.sh
+
       - name: Discover services
         id: svc
         run: |
