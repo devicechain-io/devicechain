@@ -231,6 +231,25 @@ func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmode
 		ProcessedTime: event.ProcessedTime,
 		EventType:     event.EventType,
 	}
+	// Give the event an identity of its own, derived from its content, BEFORE anything is
+	// written — the base event, its payload rows and its anchors all key off it, so it has
+	// to exist before the first insert. Deriving here rather than at ingest is what makes
+	// it hold on every transport: lwm2m-ingest and sparkplug-ingest have no capture stream
+	// to carry a minted id through, and a redelivery replays the raw publish, so only a
+	// value computed from the content itself converges on the same row every time.
+	//
+	// ProcessedTime is deliberately NOT part of the identity: it is when WE handled the
+	// message, so including it would make every redelivery a new event and defeat the
+	// dedup this exists to protect.
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		return nil, core.ErrNoTenant
+	}
+	payloadBytes, perr := json.Marshal(event.Payload)
+	if perr != nil {
+		return nil, fmt.Errorf("canonicalizing payload for the event identity: %w", perr)
+	}
+	pevent.EventId = model.DeriveEventId(tenant, &pevent, payloadBytes)
 	// All of a single message's inserts run inside one transaction so the
 	// message's events are persisted all-or-nothing (ADR-022 E5): a mid-message
 	// failure rolls the whole message back rather than leaving some rows
@@ -302,7 +321,7 @@ func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmode
 		}
 		// Persist the event's anchor set in the same transaction, so the event and
 		// its queryable dimensions commit atomically (ADR-013 addendum 2026-07-01).
-		return ep.persistEventAnchors(ctx, tx, event)
+		return ep.persistEventAnchors(ctx, tx, pevent.EventId, event)
 	})
 	if err != nil {
 		return nil, err
@@ -313,13 +332,15 @@ func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmode
 // persistEventAnchors writes one event_anchors row per resolved anchor, so the
 // event is queryable by each of the device's tracked-relationship dimensions. An
 // unassigned event carries no anchors and writes nothing.
-func (ep *EventPersistenceWorker) persistEventAnchors(ctx context.Context, db *gorm.DB, event dmmodel.ResolvedEvent) error {
+func (ep *EventPersistenceWorker) persistEventAnchors(ctx context.Context, db *gorm.DB,
+	eventId []byte, event dmmodel.ResolvedEvent) error {
 	if len(event.Anchors) == 0 {
 		return nil
 	}
 	anchors := make([]*model.EventAnchor, 0, len(event.Anchors))
 	for _, a := range event.Anchors {
 		anchors = append(anchors, &model.EventAnchor{
+			EventId:      eventId,
 			DeviceToken:  event.SourceDeviceToken,
 			EventType:    event.EventType,
 			OccurredTime: event.OccurredTime,

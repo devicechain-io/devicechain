@@ -32,11 +32,13 @@ func newStateChangeTestApi(t *testing.T) *Api {
 	if err := db.AutoMigrate(&Event{}); err != nil {
 		t.Fatalf("failed to migrate events: %v", err)
 	}
-	// The base events natural-key PK lives in the Timescale migration, not the live
-	// struct tags; restate it for sqlite so upsertParentEvents' ON CONFLICT resolves.
-	if err := db.Exec(`CREATE UNIQUE INDEX idx_events_natural_key ` +
-		`ON events (tenant_id, device_token, event_type, occurred_time);`).Error; err != nil {
-		t.Fatalf("failed to create events natural-key index: %v", err)
+	// The base events identity PK lives in the Timescale migration, not the live struct
+	// tags; restate it for sqlite so upsertParentEvents' ON CONFLICT resolves. It keys on
+	// the event's own derived identity — the natural key it replaced could not tell two
+	// distinct events apart.
+	if err := db.Exec(`CREATE UNIQUE INDEX idx_events_identity ` +
+		`ON events (tenant_id, event_id, occurred_time);`).Error; err != nil {
+		t.Fatalf("failed to create events identity index: %v", err)
 	}
 	if err := db.AutoMigrate(&StateChangeEvent{}); err != nil {
 		t.Fatalf("failed to migrate state_change_events: %v", err)
