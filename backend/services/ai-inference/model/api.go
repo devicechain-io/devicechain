@@ -218,7 +218,12 @@ func (api *Api) UpdateAIProvider(ctx context.Context, token string, request *AIP
 	// Optimistic concurrency: a clean early-out, then an ATOMIC guarded write so a
 	// concurrent save slipping in between the read and this write moves updated_at and
 	// matches zero rows instead of being silently clobbered.
-	if current.UpdatedAt.Format(time.RFC3339) != *expectedUpdatedAt {
+	//
+	// 🔴 The layout must match core/graphql.FormatTime, which produced the string the
+	// caller echoes back; the guarded write re-reads updated_at, so this comparison is
+	// the only enforcement of the CALLER's version. At RFC3339 it enforced it to the
+	// whole second.
+	if current.UpdatedAt.Format(time.RFC3339Nano) != *expectedUpdatedAt {
 		return nil, ErrConflict
 	}
 	res := api.sys(ctx).Model(&AIProvider{}).

@@ -204,6 +204,17 @@ func (r *AlarmEventResolver) Message() *string { return r.E.Message }
 func (r *AlarmEventResolver) RaisedTime() *string { return util.FormatTime(r.E.RaisedTime) }
 
 // OccurredTime is always present (every transition has an event time); formatted with
-// the GraphQL API's uniform RFC3339 convention (the sub-second precision preserved on
-// the NATS wire is a wire-ordering concern, not part of the API's time contract).
-func (r *AlarmEventResolver) OccurredTime() string { return r.E.OccurredTime.Format(time.RFC3339) }
+// the GraphQL API's uniform RFC3339Nano convention.
+//
+// 🔴 This deliberately REVERSES the previous stance, which held that "the sub-second
+// precision preserved on the NATS wire is a wire-ordering concern, not part of the
+// API's time contract." That was wrong in a way that only shows up downstream: an event
+// time is not decoration, it is part of how an event is ADDRESSED (occurred_time is in
+// the base event's key, and the read cursor already had to use UnixNano because seconds
+// could not order a page). Publishing a coarser clock than the one recorded meant two
+// readings 200ms apart came back indistinguishable, and anything that round-tripped the
+// value silently moved it. Nano drops trailing zeros, so whole-second times are byte
+// identical to before.
+func (r *AlarmEventResolver) OccurredTime() string {
+	return r.E.OccurredTime.Format(time.RFC3339Nano)
+}

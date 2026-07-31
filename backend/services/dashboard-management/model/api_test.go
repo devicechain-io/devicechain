@@ -7,9 +7,9 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	util "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -187,7 +187,10 @@ func TestUpdateOptimisticConcurrency(t *testing.T) {
 
 	created, err := api.CreateDashboard(ctx, &DashboardCreateRequest{Token: "d", Definition: `{"schemaVersion":1}`})
 	require.NoError(t, err)
-	current := created.UpdatedAt.Format(time.RFC3339)
+	// Build the precondition with the SAME function the GraphQL layer hands the client
+	// (core/graphql.FormatTime) rather than re-spelling a layout here — see the comment
+	// on UpdateDashboard: the read formatter and this compare are one contract.
+	current := *util.FormatTime(created.UpdatedAt)
 
 	req := func() *DashboardCreateRequest {
 		return &DashboardCreateRequest{Token: "d", Definition: `{"schemaVersion":1,"widgets":[]}`}
@@ -289,7 +292,10 @@ func TestPublishOptimisticPrecondition(t *testing.T) {
 
 	created, err := api.CreateDashboard(ctx, &DashboardCreateRequest{Token: "d", Definition: `{"schemaVersion":1}`})
 	require.NoError(t, err)
-	current := created.UpdatedAt.Format(time.RFC3339)
+	// Build the precondition with the SAME function the GraphQL layer hands the client
+	// (core/graphql.FormatTime) rather than re-spelling a layout here — see the comment
+	// on UpdateDashboard: the read formatter and this compare are one contract.
+	current := *util.FormatTime(created.UpdatedAt)
 
 	_, err = api.PublishDashboard(ctx, "d", nil, nil, "alice", strp("2000-01-01T00:00:00Z"))
 	assert.ErrorIs(t, err, ErrConflict)

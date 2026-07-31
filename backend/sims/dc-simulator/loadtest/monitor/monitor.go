@@ -57,7 +57,11 @@ type measurementStreamData struct {
 }
 
 // measurementEvent is the streamed MeasurementEvent (event-management schema).
-// occurredTime is a nullable RFC3339 (whole-second) string; value is nullable.
+// occurredTime is a nullable RFC3339 string carrying SUB-SECOND precision (the read
+// surface formats with RFC3339Nano); value is nullable. time.Parse with the RFC3339
+// layout accepts a fractional part, so the parse below needs no change — but the
+// equal-consecutive-stamp tolerance further down is now a rare case rather than the
+// norm it was while the API published whole seconds.
 type measurementEvent struct {
 	DeviceToken  string   `json:"deviceToken"`
 	OccurredTime string   `json:"occurredTime"`

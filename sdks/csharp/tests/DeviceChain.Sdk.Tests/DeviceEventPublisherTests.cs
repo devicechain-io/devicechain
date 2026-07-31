@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
@@ -37,9 +38,41 @@ public class DeviceEventPublisherTests
         Assert.Contains("\"credentialType\":\"ACCESS_TOKEN\"", call.Body);
         Assert.Contains("\"credentialId\":\"cred-9\"", call.Body);
         Assert.Contains("\"temperature\":\"21.5\"", call.Body); // invariant string value
-        Assert.Contains("\"occurredTime\":\"2026-07-08T12:00:00Z\"", call.Body);
+        Assert.Contains("\"occurredTime\":\"2026-07-08T12:00:00.0000000Z\"", call.Body);
         // No credential SECRET is sent (a token device presents type+id only).
         Assert.DoesNotContain("credentialSecret", call.Body);
+    }
+
+    // A base event is keyed by (tenant, device, event_type, occurred_time). While this SDK
+    // emitted whole seconds, a device sampling faster than 1 Hz published two readings under
+    // one identical key and the platform silently discarded the second envelope — with a 202
+    // returned to the device either way. The emitted timestamp is therefore part of the
+    // correctness contract, not a display detail.
+    [Fact]
+    public async Task Emits_sub_second_precision_so_two_readings_in_one_second_stay_distinct()
+    {
+        var handler = new StubHandler((_, _) => (HttpStatusCode.Accepted, ""));
+        DeviceEventPublisher pub = Publisher(handler);
+
+        var baseline = new DateTimeOffset(2026, 7, 8, 12, 0, 0, TimeSpan.Zero);
+        DateTimeOffset first = baseline.AddMilliseconds(250);
+        DateTimeOffset second = baseline.AddMilliseconds(500);
+
+        // Negative control: these two instants are the SAME string under the whole-second
+        // format this SDK used to emit, so the assertions below are measured against a
+        // collision that was really there.
+        Assert.Equal(
+            first.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture),
+            second.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture));
+
+        await pub.EmitMeasurementsAsync(
+            "dev-1", "cred-9", new Dictionary<string, double> { ["temperature"] = 21.5 }, first);
+        await pub.EmitMeasurementsAsync(
+            "dev-1", "cred-9", new Dictionary<string, double> { ["temperature"] = 22.5 }, second);
+
+        Assert.Equal(2, handler.Calls.Count);
+        Assert.Contains("\"occurredTime\":\"2026-07-08T12:00:00.2500000Z\"", handler.Calls[0].Body);
+        Assert.Contains("\"occurredTime\":\"2026-07-08T12:00:00.5000000Z\"", handler.Calls[1].Body);
     }
 
     [Fact]

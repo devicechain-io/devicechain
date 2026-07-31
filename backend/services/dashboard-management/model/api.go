@@ -123,11 +123,18 @@ func (api *Api) UpdateDashboard(ctx context.Context, token string, request *Dash
 	}
 
 	// Optimistic concurrency. A clean early-out against the caller's stated version
-	// (RFC3339 second precision — the exact string the caller was handed), then an
-	// ATOMIC guarded write: UPDATE ... WHERE updated_at = <the value just read>, so a
-	// concurrent save slipping in between the read and this write moves updated_at and
-	// matches zero rows (RowsAffected == 0) instead of being silently clobbered.
-	if current.UpdatedAt.Format(time.RFC3339) != *expectedUpdatedAt {
+	// (the exact string the caller was handed by core/graphql.FormatTime, so the layout
+	// must match it), then an ATOMIC guarded write: UPDATE ... WHERE updated_at = <the
+	// value just read>, so a concurrent save slipping in between the read and this write
+	// moves updated_at and matches zero rows (RowsAffected == 0) instead of being
+	// silently clobbered.
+	//
+	// 🔴 This used to say "RFC3339 second precision" as though the coarseness were part
+	// of the contract. It was not — the guarded write re-reads updated_at, so this
+	// comparison is the only enforcement of the CALLER's version, and truncating it to
+	// the second let a client whose view was stale by under a second publish over a
+	// change it had never seen.
+	if current.UpdatedAt.Format(time.RFC3339Nano) != *expectedUpdatedAt {
 		return nil, ErrConflict
 	}
 	res := api.RDB.DB(ctx).Model(&Dashboard{}).
@@ -175,7 +182,8 @@ func (api *Api) PublishDashboard(ctx context.Context, token string, label *strin
 	// Optimistic precondition (same contract as UpdateDashboard): refuse to freeze a
 	// draft that moved on since the caller loaded it — otherwise publish could snapshot
 	// another writer's content while the author believes they froze their own view.
-	if expectedUpdatedAt != nil && dash.UpdatedAt.Format(time.RFC3339) != *expectedUpdatedAt {
+	// Same layout coupling as UpdateDashboard — see the comment there.
+	if expectedUpdatedAt != nil && dash.UpdatedAt.Format(time.RFC3339Nano) != *expectedUpdatedAt {
 		return nil, ErrConflict
 	}
 

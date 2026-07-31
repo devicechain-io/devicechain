@@ -122,15 +122,23 @@ func EmitMeasurement(ctx context.Context, rt *Runtime, d DeviceInstance, metricK
 // HTTP 202 (accepted into the pipeline; persistence/resolution happen
 // asynchronously downstream).
 func EmitMeasurements(ctx context.Context, rt *Runtime, d DeviceInstance, metrics map[string]float64) error {
-	// Sub-second precision is load-bearing, not cosmetic. The pipeline dedups on
-	// the natural key (tenant, device, event_type, occurred_time), so two emits
-	// from one device within the same wall-clock SECOND collapse to a single
-	// persisted event. At the demo's 5s cadence that never bites, but a load run
-	// emitting faster than 1/device/sec would see the platform correctly dedup
-	// its second-identical events — indistinguishable from a drop to a
-	// count-reconciling oracle. RFC3339Nano stamps every emit distinctly, so a
-	// device may emit at any rate and each reading is its own event (which is
-	// also just true — a device sampling sub-second carries sub-second times).
+	// Sub-second precision is load-bearing, not cosmetic. A base event is keyed by
+	// (tenant, device, event_type, occurred_time), so two emits from one device
+	// within the same wall-clock SECOND collide on that key and the second one's
+	// envelope is silently discarded. At the demo's 5s cadence that never bites,
+	// but a load run emitting faster than 1/device/sec loses events — and loses
+	// them indistinguishably from a drop, to a count-reconciling oracle.
+	// RFC3339Nano stamps every emit distinctly, so a device may emit at any rate
+	// and each reading is its own event (which is also just true — a device
+	// sampling sub-second carries sub-second times).
+	//
+	// 🔴 This once described the collapse as the platform "correctly dedup"ing its
+	// second-identical events. It is not correct behaviour, it is data loss: two
+	// DISTINCT readings sharing a key, with the later one dropped. Stamping the
+	// simulator distinctly stopped the oracle from seeing it, which is why the
+	// platform-side defect survived — a fix to the measuring instrument that reads
+	// like a fix to the thing measured. The platform fix is the per-message event
+	// identity that gives a base event a key of its own.
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	credType := credentialTypeAccessToken
 	credId := d.CredentialId
