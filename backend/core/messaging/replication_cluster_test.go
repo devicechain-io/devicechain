@@ -4,6 +4,7 @@
 package messaging
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -189,26 +190,38 @@ func TestCollectCountsConsumersPerStream(t *testing.T) {
 	}
 }
 
+// mustAddStream creates a stream and does not return until its own RAFT group has
+// elected a leader.
+//
+// The wait is load-bearing, not politeness: newTestCluster gates on the META group,
+// but a freshly created stream forms a SEPARATE group, and a consumer cannot be
+// added to one that has no leader yet. Without this,
+// TestCollectCountsConsumersPerStream added a durable in that window and failed
+// with `context deadline exceeded` — observed on `main` (39eef5f) and again in CI
+// on 2026-07-31. See jsGroupNotServingYet.
 func mustAddStream(t *testing.T, js nats.JetStreamContext, name string, replicas int) {
 	t.Helper()
-	if _, err := js.AddStream(&nats.StreamConfig{
-		Name:     name,
-		Subjects: []string{name + ".>"},
-		Storage:  nats.FileStorage,
-		Replicas: replicas,
-	}); err != nil {
-		t.Fatalf("adding stream %s at R%d: %v", name, replicas, err)
-	}
+	retryWhileGroupSettles(t, fmt.Sprintf("adding stream %s at R%d", name, replicas), func() error {
+		_, err := js.AddStream(&nats.StreamConfig{
+			Name:     name,
+			Subjects: []string{name + ".>"},
+			Storage:  nats.FileStorage,
+			Replicas: replicas,
+		})
+		return err
+	})
+	waitForStreamLeader(t, js, name)
 }
 
 func mustAddDurable(t *testing.T, js nats.JetStreamContext, stream, durable string) {
 	t.Helper()
-	if _, err := js.AddConsumer(stream, &nats.ConsumerConfig{
-		Durable:   durable,
-		AckPolicy: nats.AckExplicitPolicy,
-	}); err != nil {
-		t.Fatalf("adding durable %s on %s: %v", durable, stream, err)
-	}
+	retryWhileGroupSettles(t, fmt.Sprintf("adding durable %s on %s", durable, stream), func() error {
+		_, err := js.AddConsumer(stream, &nats.ConsumerConfig{
+			Durable:   durable,
+			AckPolicy: nats.AckExplicitPolicy,
+		})
+		return err
+	})
 }
 
 func objectNamed(t *testing.T, snap replication.Snapshot, name string) replication.Object {
