@@ -5,7 +5,7 @@ go 1.26.5
 require (
 	github.com/devicechain-io/dc-microservice v0.0.1
 	github.com/devicechain-io/dc-notification-management v0.0.0-00010101000000-000000000000
-	gorm.io/driver/postgres v1.6.0
+	gorm.io/driver/postgres v1.6.1
 	gorm.io/gorm v1.31.2
 )
 
