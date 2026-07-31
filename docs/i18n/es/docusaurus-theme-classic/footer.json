@@ -23,6 +23,14 @@
     "message": "GitHub",
     "description": "The label of footer link with label=GitHub linking to https://github.com/devicechain-io/devicechain"
   },
+  "link.item.label.Discussions": {
+    "message": "Discusiones",
+    "description": "The label of footer link with label=Discussions linking to https://github.com/devicechain-io/devicechain/discussions"
+  },
+  "link.item.label.Getting help": {
+    "message": "Cómo obtener ayuda",
+    "description": "The label of footer link with label=Getting help linking to /getting-help"
+  },
   "copyright": {
     "message": "Copyright © 2026 DeviceChain. Apache 2.0.",
     "description": "The footer copyright"

@@ -3,6 +3,22 @@
 Thanks for your interest in improving DeviceChain! This guide covers the legal
 prerequisites for contributing and the local checks your change must pass.
 
+## Getting help
+
+You do not need to contribute code to be useful to this project — telling us what broke
+is a contribution.
+
+| What you have | Where it goes |
+| --- | --- |
+| A question, or something that confused you | [Discussions](https://github.com/devicechain-io/devicechain/discussions) |
+| An idea or feature request | [Discussions → Ideas](https://github.com/devicechain-io/devicechain/discussions/categories/ideas) |
+| Something is broken | [Open an issue](https://github.com/devicechain-io/devicechain/issues/new/choose) |
+| A security vulnerability | Email **admin@devicechain.io** — see [below](#reporting-security-issues) |
+
+DeviceChain is pre-1.0 and we would rather hear a rough report now than a polished one
+after the interfaces are frozen. "I got stuck at step three and gave up" is a perfectly
+good issue.
+
 ## Contributor License Agreement (required)
 
 DeviceChain is stewarded by **IoT Innovations, LLC**. Before we can merge your
@@ -60,15 +76,40 @@ before using the name or logo beyond ordinary referential use.
 
 ## Local checks (these are the CI gates)
 
-Run these from the repo root before pushing — a Go workspace resolves all modules, so
-no vendor step is needed:
+**Run the Go checks with a module as the working directory, not the repo root.** The
+root is not a Go module, so `go build ./...` there fails outright with `directory prefix
+. does not contain modules listed in go.work`, and `gofmt -l .` reports files under
+`_legacy/` — an archived tree that is deliberately not maintained. CI runs each module
+separately, and so should you:
 
 ```bash
+cd backend/core     # ...or whichever module you touched
 gofmt -l .          # must print nothing
 go build ./...
 go vet ./...
 go test ./...
 ```
+
+To sweep every module before pushing, **save this to a file and run it** — it ends in
+`exit`, so pasting it into your shell will close it. The workspace enumerates its own
+modules, so the script never falls out of step with `go.work`:
+
+```bash
+rc=0
+for m in $(go list -m -f '{{.Dir}}'); do
+  ( cd "$m" || exit 1
+    fmt="$(gofmt -l .)"; [ -z "$fmt" ] || { echo "not gofmt-clean:"; echo "$fmt"; exit 1; }
+    go build ./... && go vet ./... && go test ./...
+  ) || { echo "FAILED: $m"; rc=1; }
+done
+exit "$rc"
+```
+
+Two details in that script are load-bearing: `gofmt -l` exits 0 even when it names
+files, so its *output* is tested rather than its status; and the loop records `rc=1`
+rather than just printing, because `... || echo "FAILED: $m"` would make the loop's exit
+status that of the `echo` — always 0 — so every module could fail and the sweep would
+still look green.
 
 Area-specific checks when you touch them:
 
@@ -79,8 +120,11 @@ cd backend/cli && make build
 # frontend
 cd frontend && npm ci && npm run codegen && npm run typecheck && npm test && npm run build
 
-# helm
-helm lint deploy/helm/devicechain && helm template deploy/helm/devicechain >/dev/null
+# helm — a bare `helm template` fails: any profile carrying a secret-store area needs
+# an instance root key, so pass a throwaway one. (dcctl bootstrap mints the real one.)
+helm lint deploy/helm/devicechain
+helm template deploy/helm/devicechain \
+  --set "instance.config.infrastructure.secrets.rootKey=$(openssl rand -base64 32)" >/dev/null
 
 # opentofu
 cd deploy/opentofu && tofu fmt -check -recursive && tofu init -backend=false && tofu validate

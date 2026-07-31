@@ -317,7 +317,26 @@ docs/       Docusaurus documentation site
 
 The [`docs/`](docs/) directory is a Docusaurus site covering concepts
 (architecture, domain model, multi-tenancy), deployment, and guides. See
-[`docs/docs/intro.md`](docs/docs/intro.md) to start.
+[`docs/docs/intro.md`](docs/docs/intro.md) to start, or read it published at
+[docs.devicechain.io](https://docs.devicechain.io).
+
+## Getting help
+
+- **A question, or something that confused you** —
+  [Discussions](https://github.com/devicechain-io/devicechain/discussions). If a page or
+  a workflow did not make sense, that is worth posting; confusion is a defect we can fix.
+- **An idea or feature request** —
+  [Discussions → Ideas](https://github.com/devicechain-io/devicechain/discussions/categories/ideas),
+  so the design conversation happens in the open.
+- **Something is broken** —
+  [open an issue](https://github.com/devicechain-io/devicechain/issues/new/choose). There
+  are short forms for install failures, missing telemetry, docs problems, and everything
+  else.
+- **A security vulnerability** — do not file publicly. Email **admin@devicechain.io**.
+
+DeviceChain is pre-1.0. Interfaces can still change in response to what people run into,
+which they cannot once 1.0 freezes them — so early, rough reports are worth more to us
+than polished ones later. "I got stuck here and gave up" is a perfectly good issue.
 
 ## License
 

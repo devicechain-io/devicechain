@@ -1,0 +1,82 @@
+name: Device or telemetry is not showing up
+description: A device connects but data never appears — or appears in one place and not another.
+title: '[ingest] '
+labels: ['bug', 'area/ingest']
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Data going missing between a device and the console crosses several services, so
+        the most useful thing you can tell us is **where it stops**. If you are not sure,
+        pick your best guess — narrowing it down is our job, not yours.
+
+  - type: dropdown
+    id: stops-where
+    attributes:
+      label: Where does it stop?
+      options:
+        - The device cannot connect or authenticate at all
+        - It connects, but no events are recorded
+        - Events are recorded, but the device's live state never updates
+        - State is fine, but charts or dashboards stay empty
+        - An alarm or automation rule never fires
+        - A command is sent but never reaches the device
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: transport
+    attributes:
+      label: How is the device connected?
+      options:
+        - MQTT
+        - HTTP
+        - Sparkplug B
+        - LwM2M
+        - DeviceChain edge agent
+        - Simulator (dcctl sim)
+        - Other (say which below)
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: DeviceChain version
+      description: Output of `dcctl version`, or the chart/image tag you installed.
+      placeholder: v0.9.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What you did and what you expected
+      description: The setup, what the device sends, and what you expected to see where.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: sanity
+    attributes:
+      label: Things worth checking first
+      description: >-
+        Not required — but each of these silently swallows data, so telling us which you
+        have ruled out saves a round trip.
+      options:
+        - label: The device is assigned (unassigned devices drop their events silently)
+        - label: The device's type has a profile, and the profile declares the measurement being sent
+        - label: The tenant is active and I am looking at the same tenant the device reports into
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Service logs
+      description: >-
+        Logs from whichever services are relevant — typically the ingest service for your
+        transport (event-sources, sparkplug-ingest, lwm2m-ingest), then event-management
+        and device-state. Redact tokens and hostnames.
+      render: shell
+    validations:
+      required: false

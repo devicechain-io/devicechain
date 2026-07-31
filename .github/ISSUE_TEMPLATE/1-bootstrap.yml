@@ -1,0 +1,82 @@
+name: Install or bootstrap failed
+description: dcctl bootstrap, the Helm install, or the operator did not come up.
+title: '[bootstrap] '
+labels: ['bug', 'area/bootstrap']
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Getting a cluster up is the step we most want to hear about, because it is the
+        one we are least able to test — we only have our own machines. A report that is
+        just "it failed here, I gave up" is still worth filing.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you ran and where it stopped.
+      placeholder: dcctl bootstrap got as far as "waiting for TimescaleDB" and then timed out.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: DeviceChain version
+      description: Output of `dcctl version`, or the chart/image tag you installed.
+      placeholder: v0.9.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: distro
+    attributes:
+      label: Kubernetes distribution
+      options:
+        - kind
+        - k3s / k3d
+        - minikube
+        - Docker Desktop
+        - EKS
+        - GKE
+        - AKS
+        - OpenShift
+        - Other (say which below)
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: Kubernetes version, host OS, and architecture
+      description: '`kubectl version --short` plus your OS/arch — arm64 and WSL2 both have their own failure modes.'
+      placeholder: k8s v1.31.0, Ubuntu 24.04 on WSL2, amd64
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Command output
+      description: The full output of the command that failed. Redact secrets and hostnames as needed.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: pods
+    attributes:
+      label: Pod status
+      description: 'Output of `kubectl get pods -A`. If a pod is crash-looping, add `kubectl logs <pod> --previous` for it.'
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: preflight
+    attributes:
+      label: Preflight output
+      description: 'Output of `dcctl preflight`, if you were able to run it.'
+      render: shell
+    validations:
+      required: false
