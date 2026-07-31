@@ -9,6 +9,13 @@ DeviceChain se distribuye como un conjunto de imágenes de contenedor precompila
 más un chart de Helm. **No** necesita compilar nada para ejecutarlo: descargue una versión publicada,
 instale el chart y actualice in situ sin tiempo de inactividad.
 
+:::warning No se puede actualizar a la v0.9.0
+La `v0.9.0` reemplazó la cadena de migraciones de cada servicio por una única línea base congelada, por lo que
+una instancia `v0.8.x` existente **no** puede migrarse a ella con `helm upgrade`: la migración falla con
+`already exists`. En su lugar, recree la instancia. Consulte
+[La compactación de la línea base de la v0.9.0](#v090-baseline-squash) más abajo antes de hacer nada más.
+:::
+
 ## Modelo de versionado
 
 Cada versión es una única etiqueta git de versión semántica (`vX.Y.Z`). Ese único número cubre
@@ -41,6 +48,9 @@ En concreto, antes de la v1.0.0 debe esperar que una versión pueda:
   porque se estaba aceptando silenciosamente o descartando silenciosamente
 - **cambiar o eliminar un campo GraphQL**, en lugar de marcarlo obsoleto durante un ciclo
 - **alterar el esquema de la base de datos** de formas que una reversión no deshará
+- **reemplazar por completo la línea base de migraciones**, lo que elimina por entero la ruta de
+  actualización en lugar de limitarse a hacerla unidireccional. Cuando eso ocurre, las notas de la versión lo
+  indican al principio, y la única vía es recrear la instancia. La `v0.9.0` es una versión de este tipo
 
 La propiedad de "actualizar in situ sin tiempo de inactividad" descrita arriba describe la *mecánica* de una
 actualización progresiva. No es una promesa de que sus llamadas a la API existentes conserven el mismo significado
@@ -85,8 +95,11 @@ helm install dc oci://ghcr.io/devicechain-io/charts/devicechain \
 
 ## Actualizaciones sin tiempo de inactividad
 
-Actualizar a una nueva versión es un `helm upgrade` normal. El chart y los servicios están diseñados para
-hacer avanzar a los clientes sin perder tráfico:
+Actualizar a una nueva versión es normalmente un `helm upgrade` simple, y el chart y los servicios están
+diseñados para hacer avanzar a los clientes sin perder tráfico. Hasta ahora hay dos versiones que son
+excepciones, ambas documentadas más abajo: la transición a la ingesta duradera, que sigue siendo un
+`helm upgrade` pero tiene un efecto secundario visible, y la **`v0.9.0`, a la que no se puede actualizar en
+absoluto**. Consulte las notas de la versión a la que va a migrar antes de ejecutar el comando:
 
 ```bash
 helm upgrade dc deploy/helm/devicechain \
@@ -115,6 +128,39 @@ Configúrelo globalmente con `--set replicas=2`, o por área bajo
 `functionalAreas.<area>.replicas`. Un `PodDisruptionBudget` se genera automáticamente para cualquier
 área con más de una réplica, de modo que los drenajes de nodo no puedan expulsar a todas las réplicas a la vez.
 :::
+
+### La compactación de la línea base de la v0.9.0 {#v090-baseline-squash}
+
+La `v0.9.0` es la única versión a la que **no se puede llegar con `helm upgrade`.**
+
+Antes de ella, el esquema de cada servicio se construía mediante una cadena de migraciones aplicadas en orden.
+La `v0.9.0` reemplaza todas esas cadenas por una **única línea base congelada**: una migración por servicio que
+crea el esquema completo tal y como está. Una base de datos creada por `v0.8.x` ya aplicó la cadena antigua, así
+que cuando se encuentra con la línea base intenta crear tablas que ya existen y falla con `already exists`. El
+fallo es evidente y ocurre en el arranque; no corrompe nada.
+
+No hay ruta de migración y, antes de la `v1.0.0`, no la habrá. Mantener una capa de compatibilidad para una forma
+de esquema que todavía se está asentando es precisamente el coste que este proyecto ha decidido no asumir
+mientras todas las instalaciones siguen siendo tempranas.
+
+**Para pasar a la `v0.9.0`, recree la instancia:**
+
+```bash
+# Exporte antes lo que necesite: esto descarta las bases de datos.
+dcctl destroy local devicechain
+dcctl bootstrap local devicechain
+```
+
+:::caution Exporte primero: recrear descarta sus datos
+La [protección de destrucción](#data-durability) protege las bases de datos frente a una operación normal de
+`helm`, no frente a un `dcctl destroy` deliberado. Si la instancia contiene telemetría, definiciones de
+dispositivos o paneles que le importan, expórtelos antes de empezar. No existe una ruta in situ que los
+conserve a través de esta versión.
+:::
+
+Es un coste puntual, asumido deliberadamente mientras las únicas instalaciones de la plataforma son tempranas.
+A partir de la `v0.9.0`, un cambio de esquema **añade** una nueva migración sobre la línea base, lo que vuelve a
+ser un `helm upgrade` normal; por tanto, esta sección describe una única versión, no una nueva política.
 
 ### La transición única a la ingesta duradera
 
