@@ -15,14 +15,14 @@
     "@devicechain/client": "*",
     "@devicechain/dashboards": "*",
     "@devicechain/widgets": "*",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "react-rnd": "^10.5.2"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "^6.0.0",
+    "@vitejs/plugin-react": "^6.0.4",
     "typescript": "~7.0.2",
     "vite": "^8.1.5",
     "vitest": "^4.0.0"
