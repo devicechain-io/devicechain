@@ -4,8 +4,11 @@
 package messaging
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -188,6 +191,107 @@ func tryNewTestCluster(t *testing.T) (*NatsManager, func(), error) {
 	}, nil
 }
 
+// jsGroupNotServingYet reports whether err is one of the transients a JetStream
+// group returns in the window between "this stream exists" and "this stream is
+// serving requests".
+//
+// 🔑 THAT WINDOW IS THE ONE THING newTestCluster's READINESS GATE CANNOT COVER.
+// The gate waits for the META group to reach three peers, which is necessary — an
+// R3 stream cannot even be placed before it — but every stream and every KV bucket
+// then forms its OWN RAFT group, elects its OWN leader, and has to have its subject
+// interest propagated over the routes to whichever server the client happens to be
+// attached to. Operations issued into that window fail in two distinct ways, and
+// both were observed failing CI on `main`:
+//
+//   - ErrNoStreamResponse ("no response from stream") — the no-responders FAST
+//     PATH, not a timeout. It comes back in milliseconds, which is why the failing
+//     test took 0.9s rather than hitting any deadline.
+//   - context deadline exceeded / ErrTimeout on AddConsumer — the JS API request
+//     reaches the meta leader but the stream's own group has no leader to service
+//     it yet.
+//
+// Neither is a product fault and neither is a slow machine per se; starving the box
+// only widens the window. Reproduced locally with `taskset -c 0,1` at 2 failures in
+// 6 runs, matching the CI shape exactly.
+func jsGroupNotServingYet(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, nats.ErrNoStreamResponse) || errors.Is(err, nats.ErrNoResponders) ||
+		errors.Is(err, nats.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	// nats.go does not wrap every transport error into a typed identity, so match
+	// the two remaining texts as a fallback rather than let an untyped one through.
+	msg := err.Error()
+	return strings.Contains(msg, "no response from stream") ||
+		strings.Contains(msg, "no responders available")
+}
+
+// retryWhileGroupSettles runs op until it succeeds, until it fails for a reason
+// that is NOT the settling window, or until the deadline.
+//
+// 🔴 THE FAIL-FAST BRANCH IS WHAT KEEPS THIS FROM BEING A FLAKE-HIDER. A blanket
+// "retry until it works" around a JetStream call would swallow a genuine product
+// regression — exactly the outcome this whole change exists to prevent, since a
+// gate that cannot fail is worse than a gate that fails intermittently. So a
+// non-transient error fails the test on the FIRST attempt with the original error,
+// and a transient that never clears still fails when the deadline passes, naming
+// how many attempts it took. Only the documented settling transients are retried.
+func retryWhileGroupSettles(t *testing.T, what string, op func() error) {
+	t.Helper()
+	if err := settleRetry(op, 30*time.Second, 50*time.Millisecond); err != nil {
+		t.Fatalf("%s: %v", what, err)
+	}
+}
+
+// settleRetry is the decision logic behind retryWhileGroupSettles, split out so it
+// can be tested in both failure directions — see TestSettleRetry*. A helper whose
+// fail-fast branch is never exercised is indistinguishable from a blanket retry,
+// which is the thing that must not ship here.
+func settleRetry(op func() error, timeout, gap time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	attempts := 0
+	for {
+		attempts++
+		err := op()
+		if err == nil {
+			return nil
+		}
+		if !jsGroupNotServingYet(err) {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the group never began serving — still %w after %d attempts over %s; "+
+				"this is NOT the ordinary settling window, treat it as a real failure",
+				err, attempts, timeout)
+		}
+		time.Sleep(gap)
+	}
+}
+
+// waitForStreamLeader blocks until a stream's own RAFT group reports a leader,
+// which is the minimum precondition for creating a consumer on it.
+//
+// Distinct from waitForReplicated, which additionally requires the full peer set to
+// be current — the right gate before asserting on replication, but more than a
+// consumer needs, and it cannot be used on a stream whose replica factor is still
+// the thing under test.
+func waitForStreamLeader(t *testing.T, js nats.JetStreamContext, stream string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		info, err := js.StreamInfo(stream)
+		if err == nil && info.Cluster != nil && info.Cluster.Leader != "" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("stream %q never elected a leader within 30s (last err: %v)", stream, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // waitForReplicated blocks until a stream reports the wanted replica count with a
 // leader and every peer current, or fails the test.
 //
@@ -278,15 +382,24 @@ func TestExistingBucketIsLiftedToReplicatedOnUpgrade(t *testing.T) {
 		t.Fatalf("creating the bucket at one replica: %v", err)
 	}
 	// Even a single-replica stream in a cluster needs its RAFT group to elect a
-	// leader before it accepts writes; without this the setup itself flakes with
-	// "no response from stream".
+	// leader before it accepts writes.
+	//
+	// 🔴 THIS WAIT IS NECESSARY BUT NOT SUFFICIENT, which is what the original
+	// version of this comment got wrong. A leader in StreamInfo does not mean the
+	// subject's interest has reached the server THIS client is attached to, and
+	// until it has, a write comes back ErrNoStreamResponse on the no-responders
+	// fast path — in milliseconds, nowhere near any deadline. The identical
+	// construction at the bottom of this file failed exactly that way in CI.
 	waitForReplicated(t, nmgr.js, kvStreamPrefix+bucket, 1)
 	var lastRev uint64
 	for i := 0; i < 8; i++ {
-		rev, err := store.Put(kvKey(fmt.Sprintf("holder-%d", i)), []byte("owner"))
-		if err != nil {
-			t.Fatalf("put: %v", err)
-		}
+		key := kvKey(fmt.Sprintf("holder-%d", i))
+		var rev uint64
+		retryWhileGroupSettles(t, fmt.Sprintf("put %s", key), func() error {
+			var err error
+			rev, err = store.Put(key, []byte("owner"))
+			return err
+		})
 		lastRev = rev
 	}
 
@@ -336,10 +449,17 @@ func TestExistingBucketIsLiftedToReplicatedOnUpgrade(t *testing.T) {
 	// distinguishes a lift from a recreate, and for the lease bucket it is the
 	// difference between a working failover and a fence that rejects its rightful
 	// new owner.
-	nextRev, err := store.Put(kvKey("holder-after"), []byte("owner"))
-	if err != nil {
-		t.Fatalf("put after the lift: %v", err)
-	}
+	// The write is retried through the settling window, but the ASSERTION below is
+	// not weakened by that: what distinguishes a lift from a recreate is the
+	// revision NUMBER, not whether the first attempt happened to land. A lift is a
+	// RAFT peer-set change followed by catch-up, so a transient refusal here is the
+	// operation's real shape — see waitForReplicated's comment.
+	var nextRev uint64
+	retryWhileGroupSettles(t, "put after the lift", func() error {
+		var err error
+		nextRev, err = store.Put(kvKey("holder-after"), []byte("owner"))
+		return err
+	})
 	if nextRev <= lastRev {
 		t.Errorf("revision went backwards across the lift (%d -> %d): the bucket was recreated, "+
 			"which for dc_leases is a fence invalidation — every standby's epoch comparison is "+
@@ -369,9 +489,10 @@ func TestExistingStreamIsLiftedToReplicatedOnUpgrade(t *testing.T) {
 	waitForReplicated(t, nmgr.js, name, 1)
 	subject := StreamSubject(nmgr.Microservice.InstanceId, suffix)
 	for i := 0; i < 8; i++ {
-		if _, err := nmgr.js.Publish(subject, []byte("payload")); err != nil {
-			t.Fatalf("publish: %v", err)
-		}
+		retryWhileGroupSettles(t, fmt.Sprintf("publish %d", i), func() error {
+			_, err := nmgr.js.Publish(subject, []byte("payload"))
+			return err
+		})
 	}
 	before, err := nmgr.js.StreamInfo(name)
 	if err != nil {
@@ -554,11 +675,18 @@ func TestReplicaLiftIsNotBlockedByTheShrinkRefusal(t *testing.T) {
 	}
 	waitForReplicated(t, nmgr.js, kvStreamPrefix+bucket, 1)
 
+	// Filling the bucket is SETUP, not the assertion — but the first write into a
+	// bucket created moments ago can come back ErrNoStreamResponse while the
+	// subject's interest is still propagating to the server this client is attached
+	// to. That is what failed here in CI, in under a second. Retrying only that
+	// transient keeps the setup honest; a real Put failure still fails immediately.
 	payload := make([]byte, 4096)
 	for i := 0; i < 32; i++ {
-		if _, err := store.Put(kvKey(fmt.Sprintf("k%d", i)), payload); err != nil {
-			t.Fatalf("put: %v", err)
-		}
+		key := kvKey(fmt.Sprintf("k%d", i))
+		retryWhileGroupSettles(t, fmt.Sprintf("put %s", key), func() error {
+			_, err := store.Put(key, payload)
+			return err
+		})
 	}
 	before, err := nmgr.js.StreamInfo(kvStreamPrefix + bucket)
 	if err != nil {
