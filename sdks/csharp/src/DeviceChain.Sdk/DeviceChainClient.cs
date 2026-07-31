@@ -23,6 +23,7 @@ public sealed class DeviceChainClient : IAsyncDisposable
 {
     private readonly IHttpTransport _httpTransport;
     private readonly IWebSocketFactory _webSocketFactory;
+    private readonly IReadLoopDriver? _readLoopDriver;
     private readonly IDisposable? _ownedHttp;
     private readonly ConcurrentDictionary<Area, GraphQlWsClient> _subscriptions = new();
     private volatile bool _disposed;
@@ -67,11 +68,21 @@ public sealed class DeviceChainClient : IAsyncDisposable
     /// <param name="origin">The platform origin the ingress serves (/api/... and the device-plane ingress).</param>
     /// <param name="httpTransport">The HTTP transport to use for GraphQL + device-plane emit.</param>
     /// <param name="webSocketFactory">The factory for live-subscription sockets.</param>
-    public DeviceChainClient(Uri origin, IHttpTransport httpTransport, IWebSocketFactory webSocketFactory)
+    /// <param name="readLoopDriver">
+    /// How each subscription's read loop is driven. Null takes the thread pool, which WebGL under
+    /// IL2CPP does not have — that host passes a <see cref="ManualPumpDriver"/> and pumps it from
+    /// its frame loop.
+    /// </param>
+    public DeviceChainClient(
+        Uri origin,
+        IHttpTransport httpTransport,
+        IWebSocketFactory webSocketFactory,
+        IReadLoopDriver? readLoopDriver = null)
     {
         Origin = origin ?? throw new ArgumentNullException(nameof(origin));
         _httpTransport = httpTransport ?? throw new ArgumentNullException(nameof(httpTransport));
         _webSocketFactory = webSocketFactory ?? throw new ArgumentNullException(nameof(webSocketFactory));
+        _readLoopDriver = readLoopDriver;
         InitClients();
     }
 
@@ -99,7 +110,9 @@ public sealed class DeviceChainClient : IAsyncDisposable
     public GraphQlWsClient Subscriptions(Area area)
     {
         ThrowIfDisposed();
-        return _subscriptions.GetOrAdd(area, a => new GraphQlWsClient(_webSocketFactory, WebSocketUri(a), Auth.GetAccessTokenAsync));
+        return _subscriptions.GetOrAdd(
+            area,
+            a => new GraphQlWsClient(_webSocketFactory, WebSocketUri(a), Auth.GetAccessTokenAsync, _readLoopDriver));
     }
 
     /// <summary>

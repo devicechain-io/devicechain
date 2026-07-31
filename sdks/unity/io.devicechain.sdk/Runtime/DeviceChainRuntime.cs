@@ -3,6 +3,7 @@
 
 using System;
 using DeviceChain.Sdk;
+using DeviceChain.Sdk.Subscriptions;
 using DeviceChain.Sdk.Transport;
 
 namespace DeviceChain.Sdk.Unity
@@ -17,6 +18,10 @@ namespace DeviceChain.Sdk.Unity
     ///   the WebGL player, where it falls back to <see cref="WebGlWebSocketFactory"/> (a browser
     ///   <c>WebSocket</c> via <c>.jslib</c>). <c>ClientWebSocket</c> works fine in the Editor and in
     ///   IL2CPP desktop/mobile builds, so those get the proven path.</item>
+    ///   <item>The subscription read loop runs on the thread pool everywhere EXCEPT the WebGL
+    ///   player, which has none under IL2CPP — there it is advanced from the player loop by a
+    ///   <see cref="DeviceChainPump"/> attached here (slice 4.3). A useful side effect: events
+    ///   arrive on the main thread, so an <c>await foreach</c> body may touch the scene.</item>
     /// </list>
     /// The caller drives the returned client with the normal SDK API (login → selectTenant →
     /// query / subscribe / emit). Dispose it (<c>await client.DisposeAsync()</c>) on teardown.
@@ -29,13 +34,16 @@ namespace DeviceChain.Sdk.Unity
             if (origin == null) throw new ArgumentNullException(nameof(origin));
 
             IHttpTransport http = new UnityWebRequestHttpTransport();
-            IWebSocketFactory sockets =
 #if UNITY_WEBGL && !UNITY_EDITOR
-                new WebGlWebSocketFactory();
+            IWebSocketFactory sockets = new WebGlWebSocketFactory();
+            // Attached before the client can subscribe, so no frame's worth of events is missed.
+            var pumped = new ManualPumpDriver();
+            DeviceChainPump.Attach(pumped);
+            return new DeviceChainClient(origin, http, sockets, pumped);
 #else
-                new ClientWebSocketFactory();
-#endif
+            IWebSocketFactory sockets = new ClientWebSocketFactory();
             return new DeviceChainClient(origin, http, sockets);
+#endif
         }
 
         /// <summary>Convenience overload taking the origin as a string.</summary>

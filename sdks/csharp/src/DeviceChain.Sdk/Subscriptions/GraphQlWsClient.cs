@@ -28,6 +28,12 @@ namespace DeviceChain.Sdk.Subscriptions;
 /// the old generation's teardown. Per-operation deserialization is contained: one subscription's
 /// bad payload fails only that subscription, never the read loop. Auto-reconnect of a dropped
 /// socket is a documented follow-up (a consumer re-subscribes today).
+///
+/// HOW the read loop is driven is injected (<see cref="IReadLoopDriver"/>, ADR-035 slice 4.3),
+/// because Unity WebGL under IL2CPP has no thread pool to run it on. For the same reason nothing
+/// on the operational path uses <c>ConfigureAwait(false)</c>: discarding the caller's
+/// <see cref="SynchronizationContext"/> is a request for a pool thread, which is exactly what is
+/// missing there. Teardown is the deliberate exception — see <see cref="DisposeAsync"/>.
 /// </summary>
 public sealed class GraphQlWsClient : IAsyncDisposable
 {
@@ -35,8 +41,13 @@ public sealed class GraphQlWsClient : IAsyncDisposable
     // Per-operation buffer bound: a slow consumer drops the OLDEST buffered events rather than
     // growing without bound (latest-wins — right for live telemetry driving a chart/twin).
     private const int OperationBufferCapacity = 1024;
+    // How long DisposeAsync waits for the read loop to unwind before finishing the teardown itself.
+    // Bounded on purpose: a loop that cannot be advanced (a pump driver whose host has stopped
+    // pumping) or one wedged on an unresponsive socket must not turn teardown into a hang.
+    private static readonly TimeSpan DisposeDrainTimeout = TimeSpan.FromSeconds(2);
 
     private readonly IWebSocketFactory _webSocketFactory;
+    private readonly IReadLoopDriver _readLoopDriver;
     private readonly Uri _endpoint;
     private readonly TokenProvider? _tokenProvider;
     private readonly SemaphoreSlim _connectLock = new(1, 1);
@@ -50,11 +61,17 @@ public sealed class GraphQlWsClient : IAsyncDisposable
     /// <param name="webSocketFactory">Creates the underlying socket (default <see cref="ClientWebSocketFactory"/>; Unity WebGL injects its own).</param>
     /// <param name="endpoint">The absolute ws(s):// URL of one area's GraphQL endpoint.</param>
     /// <param name="tokenProvider">Resolves the Bearer token for connection_init; null = anonymous.</param>
-    public GraphQlWsClient(IWebSocketFactory webSocketFactory, Uri endpoint, TokenProvider? tokenProvider = null)
+    /// <param name="readLoopDriver">Drives the per-connection read loop (default <see cref="BackgroundTaskDriver"/>; Unity WebGL injects a <see cref="ManualPumpDriver"/>).</param>
+    public GraphQlWsClient(
+        IWebSocketFactory webSocketFactory,
+        Uri endpoint,
+        TokenProvider? tokenProvider = null,
+        IReadLoopDriver? readLoopDriver = null)
     {
         _webSocketFactory = webSocketFactory ?? throw new ArgumentNullException(nameof(webSocketFactory));
         _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
         _tokenProvider = tokenProvider;
+        _readLoopDriver = readLoopDriver ?? new BackgroundTaskDriver();
     }
 
     /// <summary>Convenience overload for the plain-.NET path: uses the default <see cref="ClientWebSocketFactory"/>.</summary>
@@ -79,7 +96,7 @@ public sealed class GraphQlWsClient : IAsyncDisposable
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        Connection conn = await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
+        Connection conn = await EnsureConnectedAsync(cancellationToken);
 
         string id = Interlocked.Increment(ref _nextId).ToString(CultureInfo.InvariantCulture);
         var op = new Operation<TData>(dataInfo);
@@ -87,7 +104,7 @@ public sealed class GraphQlWsClient : IAsyncDisposable
 
         try
         {
-            await SendSubscribeAsync(conn, id, query, variables, variablesInfo, cancellationToken).ConfigureAwait(false);
+            await SendSubscribeAsync(conn, id, query, variables, variablesInfo, cancellationToken);
         }
         catch
         {
@@ -97,7 +114,9 @@ public sealed class GraphQlWsClient : IAsyncDisposable
 
         try
         {
-            while (await op.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+            // No ConfigureAwait(false): each yielded event resumes on the consumer's context, so a
+            // Unity caller's `await foreach` body is back on the main thread and may touch the scene.
+            while (await op.Reader.WaitToReadAsync(cancellationToken))
             {
                 while (op.Reader.TryRead(out TData? item))
                 {
@@ -108,7 +127,7 @@ public sealed class GraphQlWsClient : IAsyncDisposable
         finally
         {
             conn.Operations.TryRemove(id, out _);
-            await TryCompleteAsync(conn, id).ConfigureAwait(false);
+            await TryCompleteAsync(conn, id);
         }
     }
 
@@ -119,7 +138,7 @@ public sealed class GraphQlWsClient : IAsyncDisposable
         {
             return existing!;
         }
-        await _connectLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await _connectLock.WaitAsync(cancellationToken);
         try
         {
             ThrowIfDisposed();
@@ -132,9 +151,9 @@ public sealed class GraphQlWsClient : IAsyncDisposable
             IWebSocketConnection socket = _webSocketFactory.Create();
             try
             {
-                await socket.ConnectAsync(_endpoint, SubProtocol, cancellationToken).ConfigureAwait(false);
-                await SendConnectionInitAsync(socket, cancellationToken).ConfigureAwait(false);
-                await AwaitConnectionAckAsync(socket, cancellationToken).ConfigureAwait(false);
+                await socket.ConnectAsync(_endpoint, SubProtocol, cancellationToken);
+                await SendConnectionInitAsync(socket, cancellationToken);
+                await AwaitConnectionAckAsync(socket, cancellationToken);
             }
             catch
             {
@@ -143,7 +162,7 @@ public sealed class GraphQlWsClient : IAsyncDisposable
             }
 
             var conn = new Connection(socket, Interlocked.Increment(ref _generation));
-            conn.ReadLoop = Task.Run(() => ReadLoopAsync(conn, _disposedCts.Token));
+            conn.ReadLoop = _readLoopDriver.Start(ct => ReadLoopAsync(conn, ct), _disposedCts.Token);
             _connection = conn;
             return conn;
         }
@@ -156,12 +175,17 @@ public sealed class GraphQlWsClient : IAsyncDisposable
     // A connection is usable only while its socket is open AND its read loop is still running —
     // a loop that exited (a bad frame, a server close) with the socket not yet observably closed
     // must not be reused, or a subscribe would send into a socket nobody reads (a silent hang).
+    //
+    // Liveness comes from the DRIVER, never from "a Task has not completed". Under a pump driver
+    // the loop has not begun executing before the first pump, so a Task-completion test would read
+    // every connection as dead and open a brand-new socket on every subscribe — an endless
+    // reconnect that presents as a server fault. ReadLoopPumpTests pins this.
     private static bool IsLive(Connection? conn) =>
-        conn is { Socket.IsOpen: true } && !conn.ReadLoop.IsCompleted;
+        conn is { Socket.IsOpen: true } && conn.ReadLoop.IsRunning;
 
     private async Task SendConnectionInitAsync(IWebSocketConnection socket, CancellationToken cancellationToken)
     {
-        string? token = _tokenProvider is null ? null : await _tokenProvider(cancellationToken).ConfigureAwait(false);
+        string? token = _tokenProvider is null ? null : await _tokenProvider(cancellationToken);
         using var ms = new MemoryStream();
         using (var w = new Utf8JsonWriter(ms))
         {
@@ -177,14 +201,14 @@ public sealed class GraphQlWsClient : IAsyncDisposable
             w.WriteEndObject();
         }
         // No read loop yet + single caller under _connectLock, so a lock-free send is safe here.
-        await socket.SendTextAsync(ms.ToArray(), cancellationToken).ConfigureAwait(false);
+        await socket.SendTextAsync(ms.ToArray(), cancellationToken);
     }
 
     private async Task AwaitConnectionAckAsync(IWebSocketConnection socket, CancellationToken cancellationToken)
     {
         while (true)
         {
-            string message = await ReceiveTextAsync(socket, cancellationToken).ConfigureAwait(false);
+            string message = await ReceiveTextAsync(socket, cancellationToken);
             using var doc = JsonDocument.Parse(message);
             string type = TypeOf(doc.RootElement);
             switch (type)
@@ -192,7 +216,7 @@ public sealed class GraphQlWsClient : IAsyncDisposable
                 case "connection_ack":
                     return;
                 case "ping":
-                    await socket.SendTextAsync(PongFrame, cancellationToken).ConfigureAwait(false);
+                    await socket.SendTextAsync(PongFrame, cancellationToken);
                     break;
                 default:
                     throw new GraphQlRequestException($"expected connection_ack, got '{type}'");
@@ -217,7 +241,7 @@ public sealed class GraphQlWsClient : IAsyncDisposable
             w.WriteEndObject();
             w.WriteEndObject();
         }
-        await LockedSendAsync(conn, ms.ToArray(), cancellationToken).ConfigureAwait(false);
+        await LockedSendAsync(conn, ms.ToArray(), cancellationToken);
     }
 
     private async Task ReadLoopAsync(Connection conn, CancellationToken cancellationToken)
@@ -227,7 +251,7 @@ public sealed class GraphQlWsClient : IAsyncDisposable
         {
             while (conn.Socket.IsOpen && !cancellationToken.IsCancellationRequested)
             {
-                string message = await ReceiveTextAsync(conn.Socket, cancellationToken).ConfigureAwait(false);
+                string message = await ReceiveTextAsync(conn.Socket, cancellationToken);
                 Dispatch(conn, message, cancellationToken);
             }
         }
@@ -341,7 +365,7 @@ public sealed class GraphQlWsClient : IAsyncDisposable
         try
         {
             byte[] frame = Encoding.UTF8.GetBytes($"{{\"id\":\"{id}\",\"type\":\"complete\"}}");
-            await LockedSendAsync(conn, frame, _disposedCts.Token).ConfigureAwait(false);
+            await LockedSendAsync(conn, frame, _disposedCts.Token);
         }
         catch
         {
@@ -353,7 +377,7 @@ public sealed class GraphQlWsClient : IAsyncDisposable
     {
         try
         {
-            await LockedSendAsync(conn, PongFrame, cancellationToken).ConfigureAwait(false);
+            await LockedSendAsync(conn, PongFrame, cancellationToken);
         }
         catch
         {
@@ -363,10 +387,10 @@ public sealed class GraphQlWsClient : IAsyncDisposable
 
     private async Task LockedSendAsync(Connection conn, byte[] payload, CancellationToken cancellationToken)
     {
-        await conn.SendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await conn.SendLock.WaitAsync(cancellationToken);
         try
         {
-            await conn.Socket.SendTextAsync(payload, cancellationToken).ConfigureAwait(false);
+            await conn.Socket.SendTextAsync(payload, cancellationToken);
         }
         finally
         {
@@ -376,7 +400,7 @@ public sealed class GraphQlWsClient : IAsyncDisposable
 
     private static async Task<string> ReceiveTextAsync(IWebSocketConnection socket, CancellationToken cancellationToken)
     {
-        WebSocketMessage message = await socket.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+        WebSocketMessage message = await socket.ReceiveAsync(cancellationToken);
         if (message.Kind == WebSocketMessageKind.Closed)
         {
             // Carry the spec close code (4401 invalid token, 4429 rate-limited, …) so a
@@ -415,7 +439,11 @@ public sealed class GraphQlWsClient : IAsyncDisposable
         }
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Tears the client down. Teardown keeps <c>ConfigureAwait(false)</c> — unlike the operational
+    /// path — precisely because it must not need the host's pump to finish: a Unity component
+    /// disposes in <c>OnDestroy</c>, after its last <c>Update</c> has run.
+    /// </summary>
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
@@ -429,17 +457,33 @@ public sealed class GraphQlWsClient : IAsyncDisposable
         if (conn is not null)
         {
             conn.Socket.Abort(); // unblock the read loop's pending ReceiveAsync (no concurrent CloseAsync)
-            try
-            {
-                await conn.ReadLoop.ConfigureAwait(false); // its finally fails all ops + clears the slot
-            }
-            catch
-            {
-                // Loop faulted on the way down — ops are failed either way.
-            }
+            // Bounded wait, then finish the job ourselves: the loop's own finally does this cleanup,
+            // but a loop the host can no longer advance would never reach it.
+            await WaitBoundedAsync(conn.ReadLoop.Completion, DisposeDrainTimeout).ConfigureAwait(false);
+            // Idempotent with that finally — whichever ran first, every operation ends failed and
+            // the shared slot no longer points at a dead connection.
+            FailAll(conn, new GraphQlRequestException("subscription client disposed"));
+            Interlocked.CompareExchange(ref _connection, null, conn);
             conn.Socket.Dispose();
         }
         _disposedCts.Dispose();
+    }
+
+    // netstandard2.1 has no Task.WaitAsync(TimeSpan), so this is the WhenAny form. A timeout is not
+    // an error here: the caller proceeds with teardown either way.
+    private static async Task WaitBoundedAsync(Task task, TimeSpan timeout)
+    {
+        if (task.IsCompleted)
+        {
+            return;
+        }
+        using var timeoutCts = new CancellationTokenSource();
+        Task delay = Task.Delay(timeout, timeoutCts.Token);
+        Task winner = await Task.WhenAny(task, delay).ConfigureAwait(false);
+        if (winner != delay)
+        {
+            timeoutCts.Cancel(); // release the timer rather than letting it run out
+        }
     }
 
     // ── per-connection + per-operation plumbing ─────────────────────────────
@@ -454,9 +498,21 @@ public sealed class GraphQlWsClient : IAsyncDisposable
 
         public IWebSocketConnection Socket { get; }
         public int Generation { get; }
-        public Task ReadLoop { get; set; } = Task.CompletedTask;
+
+        // Not-yet-started reads as NOT running, so a connection can never be handed out before its
+        // driver has it (IsLive is conservative in the only direction that is safe).
+        public IReadLoopHandle ReadLoop { get; set; } = NotStarted.Instance;
         public SemaphoreSlim SendLock { get; } = new(1, 1);
         public ConcurrentDictionary<string, IOperation> Operations { get; } = new();
+    }
+
+    private sealed class NotStarted : IReadLoopHandle
+    {
+        public static readonly NotStarted Instance = new();
+
+        public bool IsRunning => false;
+
+        public Task Completion => Task.CompletedTask;
     }
 
     private interface IOperation
