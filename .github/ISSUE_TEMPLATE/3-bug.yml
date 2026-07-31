@@ -1,0 +1,62 @@
+name: Something else is broken
+description: Any other bug — console, API, dashboards, commands, upgrades, the operator.
+title: '[bug] '
+labels: ['bug']
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: DeviceChain version
+      description: Output of `dcctl version`, or the chart/image tag you installed.
+      placeholder: v0.9.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of the platform?
+      options:
+        - Admin console (UI)
+        - Dashboards or widgets
+        - GraphQL API
+        - Devices, types, or profiles
+        - Alarms or automation rules
+        - Commands
+        - Notifications
+        - Outbound connectors
+        - Users, tenants, or login
+        - Upgrading between versions
+        - Kubernetes operator
+        - dcctl
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: If you can reproduce it, the exact steps. If it happened once and you cannot, say so — that is still useful.
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, errors, or screenshots
+      description: Browser console output for UI issues, service logs otherwise. Redact tokens and hostnames.
+    validations:
+      required: false

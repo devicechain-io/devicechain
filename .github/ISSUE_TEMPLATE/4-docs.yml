@@ -1,0 +1,37 @@
+name: Documentation problem
+description: A page is wrong, out of date, missing, or assumes something it never told you.
+title: '[docs] '
+labels: ['documentation']
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        "I followed the docs and it did not work" is a documentation bug, not a user error.
+        So is "the page never said I needed to do X first."
+
+  - type: input
+    id: page
+    attributes:
+      label: Which page?
+      description: URL or file path. Leave blank if the problem is that the page does not exist.
+      placeholder: https://docs.devicechain.io/guides/connecting-a-device
+    validations:
+      required: false
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong or missing
+      description: What you expected the page to tell you, and what it told you instead.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: locale
+    attributes:
+      label: Language
+      options:
+        - English
+        - Español
+    validations:
+      required: false

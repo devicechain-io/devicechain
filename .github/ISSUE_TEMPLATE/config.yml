@@ -1,0 +1,16 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question, idea, or "is it supposed to work like this?"
+    url: https://github.com/devicechain-io/devicechain/discussions
+    about: >-
+      Not sure whether you hit a bug? Ask here. Half-formed questions are welcome —
+      if something confused you, that is a defect in the platform or its docs, and
+      we would rather hear it early.
+  - name: Feature request or design discussion
+    url: https://github.com/devicechain-io/devicechain/discussions/categories/ideas
+    about: >-
+      Propose new capabilities in Discussions so the design conversation happens in
+      the open. Accepted ideas become tracked issues.
+  - name: Security vulnerability (do not file publicly)
+    url: https://github.com/devicechain-io/devicechain/blob/main/CONTRIBUTING.md#reporting-security-issues
+    about: Email admin@devicechain.io instead of opening an issue.

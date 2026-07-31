@@ -104,6 +104,11 @@ const config: Config = {
           title: 'Project',
           items: [
             { label: 'GitHub', href: 'https://github.com/devicechain-io/devicechain' },
+            {
+              label: 'Discussions',
+              href: 'https://github.com/devicechain-io/devicechain/discussions',
+            },
+            { label: 'Getting help', to: '/getting-help' },
           ],
         },
       ],
