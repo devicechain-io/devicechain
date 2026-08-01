@@ -33,7 +33,12 @@ import (
 const (
 	widgetlabSlotZone   = "zone"
 	widgetlabSlotSensor = "sensor"
-	widgetlabSlotEdge   = "edge"
+	// One slot per pathology, because each is a DIFFERENT device. A single "edge"
+	// slot meant every widget on the stress board read the same sensor, so the board
+	// showed one pathology under three titles.
+	widgetlabSlotExtremes = "edgeExtremes"
+	widgetlabSlotPartial  = "edgePartial"
+	widgetlabSlotSilent   = "edgeSilent"
 )
 
 // widgetSubject is what a builder binds to: a slot name plus the measurements it
@@ -325,13 +330,32 @@ func buildWidgetlabGallery(devices []DeviceInstance) (string, error) {
 // does not say it is deliberately broken is a support ticket waiting to happen, and
 // this one is reachable by anyone who bootstraps the scenario.
 func buildWidgetlabStress(devices []DeviceInstance) (string, error) {
-	edge, err := firstOfType(devices, WidgetlabEdgeDeviceTypeToken)
+	// Bound by BEHAVIOUR, not by position: each widget below is titled for a specific
+	// pathology, so the device it reads has to be the one that produces it. Binding
+	// the first edge device to everything showed spikes under a title promising
+	// silence and a table promising dropped rows that never dropped one.
+	extremes, err := widgetlabEdgeDevice(devices, edgeExtremes)
+	if err != nil {
+		return "", err
+	}
+	partial, err := widgetlabEdgeDevice(devices, edgePartial)
+	if err != nil {
+		return "", err
+	}
+	silent, err := widgetlabEdgeDevice(devices, edgeSilent)
 	if err != nil {
 		return "", err
 	}
 
-	onEdge := func(measurements ...string) widgetSubject {
-		return widgetSubject{Slot: widgetlabSlotEdge, Measurements: measurements}
+	on := func(slot string, measurements ...string) widgetSubject {
+		return widgetSubject{Slot: slot, Measurements: measurements}
+	}
+	deviceSlot := func(label string, d DeviceInstance) dashboardSlot {
+		return dashboardSlot{
+			Type:           "device",
+			Label:          label,
+			DefaultBinding: &dashboardSlotBinding{Kind: "device", DeviceToken: d.Token},
+		}
 	}
 
 	def := dashboardDefinition{
@@ -339,37 +363,54 @@ func buildWidgetlabStress(devices []DeviceInstance) (string, error) {
 		Title:         "Widget Lab — Stress",
 		Canvas:        widgetlabCanvas(),
 		Slots: map[string]dashboardSlot{
-			widgetlabSlotEdge: {
-				Type:           "device",
-				Label:          "Edge sensor",
-				DefaultBinding: &dashboardSlotBinding{Kind: "device", DeviceToken: edge.Token},
-			},
+			widgetlabSlotExtremes: deviceSlot("Extremes sensor", extremes),
+			widgetlabSlotPartial:  deviceSlot("Partial reporter", partial),
+			widgetlabSlotSilent:   deviceSlot("Silent sensor", silent),
 		},
 		Widgets: []dashboardWidget{
 			buildLabelWidget("wl-stress-title", box{0, 24, 0, 2},
-				"Maintainer board: these widgets are bound to the edge sensors and are meant to be fed "+
-					"deliberately pathological data. The generators that do that are not built yet, so "+
-					"what you see below is still nominal.",
+				"Maintainer board — deliberately pathological data. Each widget is bound to the edge "+
+					"sensor that produces its own case: spikes and out-of-range values, dropped "+
+					"metrics, and silence. Everything below is SUPPOSED to look wrong.",
 				"left", 16),
 
-			// A chart of a device that spikes and goes silent: the axis blows out and
-			// the line stops.
+			// The extremes device: a chart whose axis is blown out by a spike an order
+			// of magnitude past the sweep, and a gauge scaled for the sweep that the
+			// device leaves entirely, so the needle pins.
 			buildTimeSeriesChartWidget("wl-stress-chart", box{0, 14, 2, 8},
-				onEdge(WidgetlabTemperatureKey), "Spikes and silence"),
-			// A card with no precision cap, so a raw float renders at full width.
+				on(widgetlabSlotExtremes, WidgetlabTemperatureKey), "Spikes and out-of-range"),
+			buildGaugeWidget("wl-stress-gauge", box{14, 10, 2, 4},
+				on(widgetlabSlotExtremes, WidgetlabTemperatureKey),
+				"Off the scale", WidgetlabTemperatureKey, "C", WidgetlabSweepMin, WidgetlabSweepMax),
+			// No precision cap, so a raw float renders at its full width.
 			{
-				Id: "wl-stress-card", Type: "latest-card", Layout: box{14, 10, 2, 4}.layout(),
-				Datasource: onEdge(WidgetlabTemperatureKey).datasource(),
+				Id: "wl-stress-card", Type: "latest-card", Layout: box{14, 10, 6, 4}.layout(),
+				Datasource: on(widgetlabSlotExtremes, WidgetlabTemperatureKey).datasource(),
 				Options: map[string]any{
 					"title": "Unrounded", "measurement": WidgetlabTemperatureKey, "unit": "C",
 				},
 			},
-			// A gauge whose scale is the nominal sweep while the device leaves it: the
-			// needle pins at an end rather than tracking.
-			buildGaugeWidget("wl-stress-gauge", box{14, 10, 6, 4}, onEdge(WidgetlabTemperatureKey),
-				"Out of range", WidgetlabTemperatureKey, "C", WidgetlabSweepMin, WidgetlabSweepMax),
-			// A table of a device that reports only some of its metrics.
-			buildTableWidget("wl-stress-table", box{0, 24, 10, 6}, onEdge(), "Partial reports"),
+
+			// The partial reporter: rows appear and disappear underneath the table.
+			buildTableWidget("wl-stress-table", box{0, 12, 10, 6}, on(widgetlabSlotPartial), "Partial reports"),
+			// The silent device: the chart stops extending and the card's timestamp
+			// goes stale while the device is simply gone.
+			buildTimeSeriesChartWidget("wl-stress-silence", box{12, 12, 10, 6},
+				on(widgetlabSlotSilent, WidgetlabTemperatureKey), "Goes silent"),
+
+			// label and image carry no datasource, so a PLACEMENT is the only
+			// pathological axis they have — there is no device behaviour to drive them
+			// with. Text far longer than its box (which the frame CLIPS rather than
+			// overflowing), and an image that fails to decode.
+			buildLabelWidget("wl-stress-label", box{0, 12, 16, 4},
+				"Pneumonoultramicroscopicsilicovolcanoconiosisantidisestablishmentarianismfloccinaucinihilipilification",
+				"left", 18),
+			// A data: URI whose payload is not valid base64, so the decode fails
+			// locally. A broken http(s) URL would ALSO fail behind an air-gapped
+			// deploy's egress policy, making a network block indistinguishable from
+			// the render failure this is here to show.
+			buildImageWidget("wl-stress-image", box{12, 12, 16, 4},
+				"Broken image", "data:image/png;base64,this-is-not-base64", "An image that cannot decode", "cover"),
 		},
 	}
 

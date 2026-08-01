@@ -314,7 +314,13 @@ func (s *widgetlab) Manifest() SimManifest {
 				Count:             widgetlabEdgeCount,
 				TokenPattern:      "wl-edge-{n:02d}",
 				ExternalIdPattern: "WL-EDGE-{n:04d}",
-				DistributeAcross:  []string{"area"},
+				// Deliberately NOT distributed across the zones. The gallery's alarm
+				// widgets are scoped to a zone anchor, and the shared profile means the
+				// DETECT rule fires for edge devices too — so an edge sensor inside the
+				// gallery's zone would put 350 C alarms on the catalog board, and one
+				// click on the alarm table's originator drill would rebind the whole
+				// gallery to the extremes device. The stress board binds these by
+				// device token directly, so they need no area to be reachable.
 			},
 		},
 	})
@@ -358,28 +364,190 @@ func (s *widgetlab) Bootstrap(ctx context.Context, rt *Runtime) error {
 	return Provision(ctx, rt, s.Manifest())
 }
 
-// Tick emits one measurement per device, all four metrics together.
+// ---- The pathological lane ----------------------------------------------------
 //
-// L0 drives every device from the same sweep, including the edge sensors: the
-// pathological lane (L3) is what makes them differ, and giving them a half-built
-// behaviour here would be a fixture nobody designed. What this DOES establish is
-// that the temperature every device reports is the shared sweep — the same
-// function the DETECT rule's threshold is checked against.
+// The edge sensors exist to drive widgets into the states they render badly. Which
+// case a device shows is a function of the TICK COUNT, never the wall clock, so a
+// fixture, a test and a live run agree on what tick N looks like.
+//
+// 🔴 THESE STATES ARE NOT EQUALLY REPRODUCIBLE, and pretending otherwise would make
+// the stress board lie about what it is showing:
+//
+//   - reproducible-under-reset: the spike, zero, negative and at-threshold values,
+//     and the partial reporter's dropped metrics. Pure tick math over a device that
+//     keeps emitting, so `reset` (a re-Bootstrap, which cannot purge telemetry)
+//     shows them again on the next cycle.
+//   - phase-dependent: the silent device. Whether it is mid-silence depends on where
+//     the process is in its cycle, and the tick counter restarts at zero on a
+//     restart — so a viewer sees the silence eventually, not on demand.
+//   - NOT PRODUCED AT ALL, deliberately: "no data yet" and "exactly one sample". Both
+//     exist only before a device's first telemetry, and `reset` never deletes events,
+//     so after run 1 they are gone from this instance forever. Manufacturing them
+//     would need a device provisioned per run, which is a different scenario. A
+//     widget's empty state is worth seeing; it is not worth lying about.
+type edgeBehaviour int
+
+const (
+	// edgeExtremes cycles through the values that break a chart's axis and a gauge's
+	// scale: a large spike, zero, a negative reading, and one exactly AT the alarm
+	// threshold — which must NOT raise, because the rule compares with a strict `gt`.
+	edgeExtremes edgeBehaviour = iota
+	// edgePartial reports only some of the metrics its profile declares, so a table
+	// loses rows and a card bound to a missing one shows its empty state while the
+	// device is plainly still alive.
+	edgePartial
+	// edgeSilent stops emitting for part of the cycle: the chart stops extending, the
+	// card's timestamp goes stale, and an absence rule would fire.
+	edgeSilent
+)
+
+// widgetlabEdgeNominalPhases is how many steps of the cycle an edge device spends
+// behaving normally before its extremes begin, so a viewer sees the contrast.
+const widgetlabEdgeNominalPhases = 2
+
+// widgetlabEdgeCyclePhases is the cycle length, DERIVED from the number of extremes
+// rather than fixed at six.
+//
+// It has to be derived. With a hard-coded length, adding a fifth extreme leaves it
+// unreachable (the cycle never gets to its step) and removing one panics on an
+// out-of-range index — both from a one-line edit to a list whose comment invites
+// exactly that edit. Deriving it makes the list the only thing to change.
+var widgetlabEdgeCyclePhases = int64(widgetlabEdgeNominalPhases + len(widgetlabEdgeExtremes))
+
+// widgetlabEdgePhaseTicks is how long each step lasts: a whole cycle spans one sweep
+// period, so an edge device walks its entire repertoire while a nominal one draws
+// one triangle.
+var widgetlabEdgePhaseTicks = max(int64(1), WidgetlabSweepTicks/widgetlabEdgeCyclePhases)
+
+// The extremes an edgeExtremes device visits, in cycle order. A slice rather than a
+// switch so a test can assert the cycle visits every one of them, and so adding a
+// case is one line rather than an edit to control flow.
+//
+// The at-threshold value is the interesting one: `gt` is strict, so a device sitting
+// exactly ON the threshold must not raise. That boundary is easy to get wrong in a
+// rule and impossible to notice without a device that tests it.
+var widgetlabEdgeExtremes = []float64{
+	WidgetlabSweepMax * 10, // a spike that blows a chart axis scaled for the sweep
+	0,
+	-WidgetlabSweepMax, // negative, which a gauge scaled from 15 cannot show
+	WidgetlabAlarmThreshold,
+}
+
+// widgetlabEdgePhase is which step of the cycle a tick falls in.
+//
+// The normalisation is load-bearing for negative ticks: Go's % keeps the dividend's
+// sign, so tick -15 lands on step -1 and indexes the extremes slice out of range. It
+// is not reachable through Tick (the counter starts at 1) but the function is total,
+// and a total function that panics for some of its domain is a trap for whatever
+// calls it next.
+func widgetlabEdgePhase(tick int64) int {
+	phase := (tick / widgetlabEdgePhaseTicks) % widgetlabEdgeCyclePhases
+	if phase < 0 {
+		phase += widgetlabEdgeCyclePhases
+	}
+	return int(phase)
+}
+
+// widgetlabEdgeMetrics returns what an edge device emits at a tick, or nil for a
+// device that is silent. Pure in (behaviour, tick).
+func widgetlabEdgeMetrics(behaviour edgeBehaviour, tick int64) map[string]float64 {
+	phase := widgetlabEdgePhase(tick)
+
+	switch behaviour {
+	case edgeExtremes:
+		// Nominal for the first two steps so a viewer sees the contrast, then one
+		// extreme per remaining step.
+		if phase < widgetlabEdgeNominalPhases {
+			return widgetlabNominalMetrics(tick)
+		}
+		values := widgetlabNominalMetrics(tick)
+		values[WidgetlabTemperatureKey] = widgetlabEdgeExtremes[phase-widgetlabEdgeNominalPhases]
+		return values
+
+	case edgePartial:
+		values := widgetlabNominalMetrics(tick)
+		// Drop metrics progressively, so a table visibly loses rows rather than
+		// switching between two fixed shapes.
+		switch {
+		case int64(phase) >= widgetlabEdgeCyclePhases-2:
+			delete(values, WidgetlabPressureKey)
+			delete(values, WidgetlabBatteryKey)
+			delete(values, WidgetlabHumidityKey)
+		case phase >= widgetlabEdgeNominalPhases:
+			delete(values, WidgetlabPressureKey)
+			delete(values, WidgetlabBatteryKey)
+		}
+		return values
+
+	case edgeSilent:
+		// Silent for the last third of the cycle. Nil, not an empty measurement:
+		// EmitAll skips the device entirely, which is what an offline device does.
+		if int64(phase) >= widgetlabEdgeCyclePhases-2 {
+			return nil
+		}
+		return widgetlabNominalMetrics(tick)
+	}
+	return widgetlabNominalMetrics(tick)
+}
+
+// widgetlabEdgeBehaviours classifies rt.Devices, positionally, so a generator reads
+// a device's behaviour off its INDEX rather than parsing its token. Edge devices get
+// one behaviour each in Expand order; a nominal device gets none.
+func widgetlabEdgeBehaviours(devices []DeviceInstance) map[int]edgeBehaviour {
+	out := make(map[int]edgeBehaviour, len(devices))
+	edge := 0
+	for i, d := range devices {
+		if d.DeviceTypeToken != WidgetlabEdgeDeviceTypeToken {
+			continue
+		}
+		out[i] = edgeBehaviour(edge % 3)
+		edge++
+	}
+	return out
+}
+
+// widgetlabEdgeDevice returns the edge device carrying a given behaviour.
+//
+// The stress board binds through this rather than taking the first edge device it
+// finds: each of its widgets is titled for a specific pathology, so a board that
+// bound them all to one device would show one pathology under three titles — which
+// is what it did, and what made two of its titles false.
+func widgetlabEdgeDevice(devices []DeviceInstance, want edgeBehaviour) (DeviceInstance, error) {
+	for i, behaviour := range widgetlabEdgeBehaviours(devices) {
+		if behaviour == want {
+			return devices[i], nil
+		}
+	}
+	return DeviceInstance{}, fmt.Errorf("no edge device carries behaviour %d, so a board bound "+
+		"to it would show nothing the widget claims", want)
+}
+
+// widgetlabNominalMetrics is what a well-behaved sensor reports at a tick: the sweep
+// plus three supporting curves. Returned fresh each call because the pathological
+// generators mutate it.
+func widgetlabNominalMetrics(tick int64) map[string]float64 {
+	return map[string]float64{
+		WidgetlabTemperatureKey: widgetlabSweep(tick),
+		// Offset by a quarter period so the two curves are visibly different on a
+		// multi-series chart rather than one line hiding another.
+		WidgetlabHumidityKey: 40 + 20*(widgetlabSweep(tick+WidgetlabSweepTicks/4)-WidgetlabSweepMin)/(WidgetlabSweepMax-WidgetlabSweepMin),
+		WidgetlabPressureKey: 101.3,
+		WidgetlabBatteryKey:  100 - float64(tick%100),
+	}
+}
+
+// Tick emits one measurement per device: the nominal sweep for a sensor, and the
+// current step of the pathological cycle for an edge sensor.
 func (s *widgetlab) Tick(ctx context.Context, rt *Runtime) error {
 	n := s.ticks.Add(1)
-	temperature := widgetlabSweep(n)
+	behaviours := widgetlabEdgeBehaviours(rt.Devices)
 
 	err := EmitAll(ctx, rt, rt.Load.Workers(len(rt.Devices)),
-		func(int, DeviceInstance) map[string]float64 {
-			return map[string]float64{
-				WidgetlabTemperatureKey: temperature,
-				// Offset by a quarter period so the two curves are visibly
-				// different on a multi-series chart rather than one line hiding
-				// another.
-				WidgetlabHumidityKey: 40 + 20*(widgetlabSweep(n+WidgetlabSweepTicks/4)-WidgetlabSweepMin)/(WidgetlabSweepMax-WidgetlabSweepMin),
-				WidgetlabPressureKey: 101.3,
-				WidgetlabBatteryKey:  100 - float64(n%100),
+		func(i int, _ DeviceInstance) map[string]float64 {
+			if behaviour, isEdge := behaviours[i]; isEdge {
+				return widgetlabEdgeMetrics(behaviour, n)
 			}
+			return widgetlabNominalMetrics(n)
 		})
 	if err != nil {
 		log.Error().Err(err).Msg("emit measurement failed")

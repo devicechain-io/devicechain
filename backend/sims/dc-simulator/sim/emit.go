@@ -32,6 +32,12 @@ var ErrShed = errors.New("emit shed at ingress rate limit (HTTP 429)")
 // MetricsFunc returns the metrics device d (the i-th in rt.Devices) emits on
 // the current tick. It is pure per-device value generation — EmitAll owns the
 // wire path, the concurrency, and the accounting.
+//
+// Returning an EMPTY map means the device emits NOTHING this tick — a device gone
+// silent, which is a first-class state a scenario needs to be able to produce: it is
+// what an offline device looks like to every widget, and it is what an absence rule
+// fires on. It is distinct from emitting a measurement with no values, which is a
+// device reporting that it has nothing to say.
 type MetricsFunc func(i int, d DeviceInstance) map[string]float64
 
 // EmitAll emits one Measurement per device concurrently, bounded to workers,
@@ -64,7 +70,14 @@ func EmitAll(ctx context.Context, rt *Runtime, workers int, metrics MetricsFunc)
 		go func() {
 			defer wg.Done()
 			for i := range idx {
-				err := EmitMeasurements(ctx, rt, devices[i], metrics(i, devices[i]))
+				values := metrics(i, devices[i])
+				if len(values) == 0 {
+					// Silent this tick. Not counted as emitted, failed or shed: nothing
+					// was offered to the ingress, so there is nothing for a count
+					// reconciliation to account for.
+					continue
+				}
+				err := EmitMeasurements(ctx, rt, devices[i], values)
 				switch {
 				case err == nil:
 					rt.Stats.Emitted.Add(1)
