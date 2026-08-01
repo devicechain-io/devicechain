@@ -5,12 +5,14 @@ package sim
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"net/http"
 	"os"
 	"regexp"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -481,4 +483,369 @@ func TestWidgetlabPanicsOnADirectlyConstructedIllegalLoad(t *testing.T) {
 		}
 	}()
 	_ = NewWidgetlab(1, Load{DeviceCount: 500}).Manifest()
+}
+
+// ---- The rule and the command are read from two sides ------------------------
+//
+// The rule's predicate is authored here and the curve that must cross it is
+// generated here, so they share constants. The COMMAND has the same shape one step
+// later: L2's command-button bakes a commandName and a parameterSchema into its
+// widget options, and a button naming a command the profile's published vocabulary
+// does not contain looks configured, sends, and fails at the delivery boundary.
+//
+// These read the authored artifacts BACK — decoding the JSON rather than trusting
+// the builder — so a literal typed into the definition in place of a constant is a
+// failure rather than a coincidence that happens to agree today.
+
+func widgetlabProfile(t *testing.T) ProfileSpec {
+	t.Helper()
+	for _, p := range NewWidgetlab(1, Load{}).Manifest().Profiles {
+		if p.Token == WidgetlabProfileToken {
+			return p
+		}
+	}
+	t.Fatalf("manifest declares no profile %q", WidgetlabProfileToken)
+	return ProfileSpec{}
+}
+
+func TestWidgetlabRuleIsAuthoredFromTheSweepConstants(t *testing.T) {
+	rules := widgetlabProfile(t).DetectionRules
+	if len(rules) != 1 {
+		t.Fatalf("expected exactly one detection rule, got %d", len(rules))
+	}
+
+	var def struct {
+		Type     string `json:"type"`
+		Severity string `json:"severity"`
+		When     struct {
+			Metric    string  `json:"metric"`
+			Op        string  `json:"op"`
+			Threshold float64 `json:"threshold"`
+		} `json:"when"`
+		Actions []struct {
+			Type       string `json:"type"`
+			RaiseAlarm struct {
+				AlarmKey string `json:"alarmKey"`
+			} `json:"raiseAlarm"`
+		} `json:"actions"`
+	}
+	if err := json.Unmarshal([]byte(rules[0].Definition), &def); err != nil {
+		t.Fatalf("rule definition is not decodable: %v", err)
+	}
+
+	// The number the whole alarm channel turns on. A literal here that drifted from
+	// the sweep would leave every constant-level test green and raise nothing.
+	if def.When.Threshold != WidgetlabAlarmThreshold {
+		t.Errorf("rule fires above %v but the sweep is designed around %v — the two halves of "+
+			"the threshold decision have drifted", def.When.Threshold, WidgetlabAlarmThreshold)
+	}
+	if def.When.Metric != WidgetlabTemperatureKey {
+		t.Errorf("rule reads metric %q, but %q is the metric the sweep drives",
+			def.When.Metric, WidgetlabTemperatureKey)
+	}
+	// "gt" is what makes crossing UPWARD the raise. With "lt" the sweep would still
+	// cross the threshold twice a period and the alarm would be inverted.
+	if def.When.Op != "gt" {
+		t.Errorf("rule operator is %q, not \"gt\" — the alarm would be inverted", def.When.Op)
+	}
+	// A raiseAlarm action requires a non-empty severity; without one the rule is
+	// rejected at publish, which a create-or-get provisioner reports as a failure
+	// only if someone reads the log.
+	if def.Severity == "" {
+		t.Error("rule declares no severity, but a raiseAlarm action requires one")
+	}
+	if len(def.Actions) != 1 || def.Actions[0].Type != "raiseAlarm" {
+		t.Fatalf("expected a single raiseAlarm action, got %+v", def.Actions)
+	}
+	if def.Actions[0].RaiseAlarm.AlarmKey != WidgetlabAlarmKey {
+		t.Errorf("rule raises alarm key %q, not the declared %q — the alarm widgets filter on "+
+			"the constant", def.Actions[0].RaiseAlarm.AlarmKey, WidgetlabAlarmKey)
+	}
+	if !rules[0].Enabled {
+		t.Error("rule is disabled: publish-time validation only gates ENABLED rules, so a " +
+			"disabled one is published unchecked and never fires")
+	}
+}
+
+func TestWidgetlabCommandExercisesMoreThanOneParameterType(t *testing.T) {
+	commands := widgetlabProfile(t).Commands
+	if len(commands) != 1 {
+		t.Fatalf("expected exactly one command definition, got %d", len(commands))
+	}
+	if commands[0].CommandKey != WidgetlabCommandKey {
+		t.Errorf("command definition declares key %q, not the constant %q the widget will bake",
+			commands[0].CommandKey, WidgetlabCommandKey)
+	}
+
+	var params []struct {
+		Name     string   `json:"name"`
+		DataType string   `json:"dataType"`
+		Required bool     `json:"required"`
+		Enum     []string `json:"enum"`
+	}
+	if err := json.Unmarshal([]byte(commands[0].ParameterSchema), &params); err != nil {
+		t.Fatalf("parameterSchema is not a decodable descriptor array: %v", err)
+	}
+	// The spec asks for at least two parameters of DIFFERENT types, because the
+	// console's form branches on type: a one-parameter command leaves most of the
+	// widget the board exists to show unexercised.
+	if len(params) < 2 {
+		t.Fatalf("command declares %d parameter(s); the form needs at least 2 to be exercised",
+			len(params))
+	}
+	types := map[string]bool{}
+	for _, p := range params {
+		if p.Name == "" {
+			t.Error("a parameter has no name, and parseParameterSchema drops a nameless " +
+				"descriptor silently — the form would render one field fewer")
+		}
+		types[p.DataType] = true
+	}
+	if len(types) < 2 {
+		t.Errorf("all %d parameters share a data type (%v); the form's branches stay unexercised",
+			len(params), types)
+	}
+}
+
+// ---- Validate rejects the ways a rule silently never fires -------------------
+
+func TestValidateRejectsARuleReadingAnUndeclaredMetric(t *testing.T) {
+	m := NewWidgetlab(1, Load{}).Manifest()
+	for i := range m.Profiles {
+		for j := range m.Profiles[i].DetectionRules {
+			m.Profiles[i].DetectionRules[j].Metric = "not_reported"
+		}
+	}
+	err := m.Validate()
+	if err == nil {
+		t.Fatal("a rule reading a metric no device reports was accepted; it would publish " +
+			"cleanly and never fire")
+	}
+	if !strings.Contains(err.Error(), "not_reported") {
+		t.Errorf("refusal did not name the offending metric: %v", err)
+	}
+}
+
+func TestValidateRejectsMalformedRuleAndCommandJSON(t *testing.T) {
+	base := NewWidgetlab(1, Load{}).Manifest()
+
+	broken := base
+	broken.Profiles = append([]ProfileSpec(nil), base.Profiles...)
+	broken.Profiles[0].DetectionRules = []DetectionRuleSpec{{
+		Token: "wl-bad", Name: "bad", Definition: "{not json", Metric: WidgetlabTemperatureKey,
+	}}
+	if err := broken.Validate(); err == nil {
+		t.Error("a rule definition that is not JSON was accepted")
+	}
+
+	broken = base
+	broken.Profiles = append([]ProfileSpec(nil), base.Profiles...)
+	broken.Profiles[0].Commands = []CommandSpec{{
+		Token: "wl-bad-cmd", CommandKey: "x", ParameterSchema: "[{name:1}]",
+	}}
+	if err := broken.Validate(); err == nil {
+		t.Error("a parameterSchema that is not JSON was accepted; parseParameterSchema would " +
+			"swallow it and render a bare Send button")
+	}
+
+	broken = base
+	broken.Profiles = append([]ProfileSpec(nil), base.Profiles...)
+	broken.Profiles[0].Commands = []CommandSpec{{Token: "wl-nokey-cmd", CommandKey: ""}}
+	if err := broken.Validate(); err == nil {
+		t.Error("a command with no commandKey was accepted")
+	}
+}
+
+// DetectionRuleSpec.Metric is a hand-written copy of a value that also lives
+// inside the opaque definition. Validate checks the DECLARED one against the
+// profile, so a rule whose declared metric is reported and whose predicate reads
+// something else would pass every other check and never fire.
+func TestValidateRejectsARuleWhoseDeclaredMetricIsNotTheOneItReads(t *testing.T) {
+	m := NewWidgetlab(1, Load{}).Manifest()
+	m.Profiles = append([]ProfileSpec(nil), m.Profiles...)
+	m.Profiles[0].DetectionRules = []DetectionRuleSpec{{
+		Token: "wl-mismatch",
+		Name:  "mismatch",
+		// Declares the metric the profile reports; reads a different one.
+		Definition: `{"name":"m","type":"threshold","severity":"MAJOR","when":{"metric":"humidity","op":"gt","threshold":1}}`,
+		Metric:     WidgetlabTemperatureKey,
+		Enabled:    true,
+	}}
+	err := m.Validate()
+	if err == nil {
+		t.Fatal("a rule declaring one metric and reading another was accepted")
+	}
+	if !strings.Contains(err.Error(), "humidity") {
+		t.Errorf("refusal did not name the metric the predicate actually reads: %v", err)
+	}
+}
+
+// An AGGREGATE rule names its metric at the TOP level, not in a leaf comparison.
+// Reading only `when.metric` left every such rule unchecked: it provisions cleanly
+// against a profile that never reports the metric and never fires — the exact seam
+// the declared-metric check exists to close.
+func TestValidateReadsTheMetricOfAnAggregateRule(t *testing.T) {
+	m := NewWidgetlab(1, Load{}).Manifest()
+	m.Profiles = append([]ProfileSpec(nil), m.Profiles...)
+	m.Profiles[0].DetectionRules = []DetectionRuleSpec{{
+		Token: "wl-aggregate",
+		Name:  "aggregate",
+		// Declares a metric the profile reports; its value selector reads one it does not.
+		Definition: `{"name":"a","type":"aggregate","metric":"not_reported","agg":"avg","op":"gt","threshold":1}`,
+		Metric:     WidgetlabTemperatureKey,
+		Enabled:    true,
+	}}
+	err := m.Validate()
+	if err == nil {
+		t.Fatal("an aggregate rule whose value selector reads an unreported metric was accepted")
+	}
+	if !strings.Contains(err.Error(), "not_reported") {
+		t.Errorf("refusal did not name the metric the rule actually reads: %v", err)
+	}
+}
+
+// The counterweight: a rule that legitimately names NO metric must be left alone,
+// not rejected. "No opinion" has to mean no opinion, or a connectivity rule —
+// leaf-less and config-less by design, the presence event itself being the signal —
+// becomes unauthorable.
+//
+// An earlier version of this test used a `composite` rule with an `all` array.
+// There is no such rule type and no such field: the real decoder rejects it with
+// DisallowUnknownFields, so the counterweight certified tolerance of a rule that
+// cannot exist while the shapes that DO lack a leaf metric went untested.
+func TestValidateAcceptsARuleThatNamesNoMetric(t *testing.T) {
+	m := NewWidgetlab(1, Load{}).Manifest()
+	m.Profiles = append([]ProfileSpec(nil), m.Profiles...)
+	m.Profiles[0].DetectionRules = []DetectionRuleSpec{{
+		Token:      "wl-connectivity",
+		Name:       "offline",
+		Definition: `{"name":"offline","type":"connectivity","severity":"major"}`,
+		Metric:     WidgetlabTemperatureKey,
+		Enabled:    true,
+	}}
+	if err := m.Validate(); err != nil {
+		t.Errorf("a rule that names no metric was rejected: %v", err)
+	}
+}
+
+// ---- The rule severity vocabulary is not the alarm wire vocabulary -----------
+//
+// The rule compiler's severities are LOWERCASE; the durable alarm row's tier is
+// the uppercase form the raise-alarm consumer produces, and it is what an alarm
+// widget's `severity` filter is written in. Authoring a rule with the wire form is
+// rejected by the compiler — so with the publish gate wired the scenario cannot
+// bootstrap, and with it unwired the rule is dropped at load with only a log line
+// and the alarm never fires.
+//
+// This is not hypothetical: this scenario shipped "MAJOR" as its authoring
+// severity, having collapsed the two constants loadtest/detection.go deliberately
+// keeps apart. So the vocabulary is read out of event-processing's own source
+// rather than mirrored and hoped over — dc-simulator cannot import that module,
+// and a comment asking the next person to remember is what failed the first time.
+func TestWidgetlabSeverityIsTheRuleAuthoringVocabulary(t *testing.T) {
+	const schema = "../../../services/event-processing/internal/rules/schema.go"
+	source, err := os.ReadFile(schema)
+	if err != nil {
+		t.Fatalf("read %s: %v (if the rules schema moved, re-point this check rather than "+
+			"deleting it — it is the only thing tying this constant to the compiler that "+
+			"accepts or rejects it)", schema, err)
+	}
+
+	valid := map[string]bool{}
+	for _, m := range regexp.MustCompile(`Severity\w*\s+Severity\s*=\s*"([^"]+)"`).FindAllStringSubmatch(string(source), -1) {
+		valid[m[1]] = true
+	}
+	// Negative control: an expression that matched nothing would make the
+	// membership check below accept anything at all.
+	if len(valid) == 0 {
+		t.Fatalf("parsed no severities out of %s; the pattern has rotted and this test would "+
+			"pass for any value", schema)
+	}
+
+	if !valid[WidgetlabSeverity] {
+		t.Errorf("rule severity %q is not one of the compiler's severities %v — the rule would "+
+			"be rejected at publish, or dropped at load and never fire",
+			WidgetlabSeverity, sortedKeys(valid))
+	}
+	// The wire form is the authoring form uppercased, which is exactly what the
+	// raise-alarm consumer does. An alarm widget filtering on the wrong case
+	// matches nothing and renders an empty table that looks like "no alarms yet".
+	if WidgetlabAlarmSeverityWire != strings.ToUpper(WidgetlabSeverity) {
+		t.Errorf("alarm wire severity %q is not the uppercase of the authoring severity %q",
+			WidgetlabAlarmSeverityWire, WidgetlabSeverity)
+	}
+	// And the authored rule must actually carry the authoring form.
+	if !strings.Contains(widgetlabRuleDefinition(), `"severity":"`+WidgetlabSeverity+`"`) {
+		t.Errorf("the authored rule does not carry severity %q", WidgetlabSeverity)
+	}
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Command and rule tokens are not profile-prefixed the way metric tokens are, so
+// two profiles can name the same one. The second profile's reconciler finds the
+// token present, matches its content, and does nothing — so that profile publishes
+// WITHOUT the command, and no step reports a failure.
+func TestValidateRejectsAVersionContentTokenDeclaredTwice(t *testing.T) {
+	base := NewWidgetlab(1, Load{}).Manifest()
+
+	// Each duplicate is exercised ALONE. Sharing both tokens at once would let the
+	// rule check stand in for the command check, leaving one of them unpinned —
+	// which is what happened the first time this was written.
+	withSecond := func(second ProfileSpec) SimManifest {
+		m := base
+		m.Profiles = append(append([]ProfileSpec(nil), base.Profiles...), second)
+		return m
+	}
+	distinctRule := DetectionRuleSpec{
+		Token: "wl-second-rule", Name: "Second",
+		Definition: `{"name":"second"}`, Metric: WidgetlabTemperatureKey, Enabled: true,
+	}
+	distinctCommand := CommandSpec{Token: "wl-second-cmd", CommandKey: "other", Name: "Other"}
+
+	dupCommandOnly := base.Profiles[0]
+	dupCommandOnly.Token = "wl-second-profile"
+	dupCommandOnly.DetectionRules = []DetectionRuleSpec{distinctRule}
+	if err := withSecond(dupCommandOnly).Validate(); err == nil {
+		t.Error("two profiles declaring the same COMMAND token were accepted; the second " +
+			"would publish without it")
+	}
+
+	dupRuleOnly := base.Profiles[0]
+	dupRuleOnly.Token = "wl-second-profile"
+	dupRuleOnly.Commands = []CommandSpec{distinctCommand}
+	if err := withSecond(dupRuleOnly).Validate(); err == nil {
+		t.Error("two profiles declaring the same RULE token were accepted; the second " +
+			"would publish without it")
+	}
+
+	// The counterweight: distinct tokens on two profiles are legitimate.
+	ok := base.Profiles[0]
+	ok.Token = "wl-second-profile"
+	ok.Commands = []CommandSpec{distinctCommand}
+	ok.DetectionRules = []DetectionRuleSpec{distinctRule}
+	if err := withSecond(ok).Validate(); err != nil {
+		t.Errorf("two profiles with distinct command and rule tokens were rejected: %v", err)
+	}
+}
+
+// A parameterSchema that is valid JSON but not an ARRAY is rejected by the
+// platform at create; naming the manifest field here is the difference between a
+// message a reader can act on and one from a GraphQL round-trip.
+func TestValidateRejectsANonArrayParameterSchema(t *testing.T) {
+	m := NewWidgetlab(1, Load{}).Manifest()
+	m.Profiles = append([]ProfileSpec(nil), m.Profiles...)
+	m.Profiles[0].Commands = []CommandSpec{{
+		Token: "wl-obj-cmd", CommandKey: "x", ParameterSchema: `{"name":"target"}`,
+	}}
+	if err := m.Validate(); err == nil {
+		t.Error("an object parameterSchema was accepted; the platform stores only an array")
+	}
 }

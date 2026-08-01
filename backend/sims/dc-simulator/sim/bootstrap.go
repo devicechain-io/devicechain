@@ -5,7 +5,11 @@ package sim
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"reflect"
 
 	"github.com/rs/zerolog/log"
 )
@@ -15,7 +19,7 @@ import (
 // GraphQL API, in the order a real scenario's references demand:
 //
 //  1. customer/area/asset classifier types, then their instances
-//  2. device profile(s) (+ metrics + alarm defs) -> publish
+//  2. device profile(s) (+ metrics + commands + detection rules) -> publish
 //  3. device type(s)
 //  4. devices (+ credentials)
 //  5. assignments (bulk createEntityRelationships, "assigned" type)
@@ -25,9 +29,15 @@ import (
 // only if it comes back empty), so re-running Provision against an already-
 // provisioned tenant is a no-op except for whatever is genuinely missing —
 // this is what makes `reset` an idempotent re-Bootstrap rather than a
-// drop-and-recreate. Alarm defs are created before publish (phase 2's own
-// ordering, inside ensureProfile) since ADR-045's draft is inert until publish
-// — the active version's snapshot must already include them.
+// drop-and-recreate. Everything a profile version snapshots — metrics, commands,
+// detection rules — is created before publish (phase 2's own ordering, inside
+// ensureProfile) since ADR-045's draft is inert until publish, and ensureProfile
+// republishes when a re-run added any of them.
+//
+// Alarms are raised by a DetectionRule action, not by an AlarmDefinition: ADR-057
+// made the DETECT rule the one authoring path and createAlarmDefinition no longer
+// exists. This comment claimed "+ alarm defs" long after that was true, which is
+// how buildingpulse came to look like it seeds alarms while raising none.
 //
 // On success, rt.Devices holds the manifest's Expand()'d devices (with their
 // credential material and Assignments), ready for Tick to emit against.
@@ -110,19 +120,43 @@ func Provision(ctx context.Context, rt *Runtime, manifest SimManifest) error {
 
 // --- device profile + metrics -------------------------------------------------
 
+// deviceProfileInfo carries the profile plus its DRAFT definitions, fetched in one
+// query so ensureProfile can compare what a scenario declares against what the
+// tenant already holds — not merely whether a token exists.
 type deviceProfileInfo struct {
-	Token         string `json:"token"`
-	ActiveVersion *int   `json:"activeVersion"`
+	Token             string `json:"token"`
+	ActiveVersion     *int   `json:"activeVersion"`
+	MetricDefinitions []struct {
+		Token    string `json:"token"`
+		Name     string `json:"name"`
+		DataType string `json:"dataType"`
+		Unit     string `json:"unit"`
+	} `json:"metricDefinitions"`
+	CommandDefinitions []struct {
+		Token           string `json:"token"`
+		CommandKey      string `json:"commandKey"`
+		Name            string `json:"name"`
+		ParameterSchema string `json:"parameterSchema"`
+	} `json:"commandDefinitions"`
+	DetectionRules []struct {
+		Token      string `json:"token"`
+		Name       string `json:"name"`
+		Definition string `json:"definition"`
+		Enabled    bool   `json:"enabled"`
+	} `json:"detectionRules"`
 }
 
 const queryDeviceProfilesByToken = `query($tokens:[String!]!){` +
-	`deviceProfilesByToken(tokens:$tokens){token activeVersion}}`
+	`deviceProfilesByToken(tokens:$tokens){token activeVersion ` +
+	`metricDefinitions{token name dataType unit} ` +
+	`commandDefinitions{token commandKey name parameterSchema} ` +
+	`detectionRules{token name definition enabled}}}`
 
 const mutationCreateDeviceProfile = `mutation($request:DeviceProfileCreateRequest){` +
 	`createDeviceProfile(request:$request){token activeVersion}}`
 
-const mutationPublishDeviceProfile = `mutation($token:String!){` +
-	`publishDeviceProfile(token:$token){version}}`
+const mutationPublishDeviceProfile = `mutation($token:String!,$label:String,$description:String){` +
+	`publishDeviceProfile(token:$token,label:$label,description:$description){version}}`
 
 func ensureProfile(ctx context.Context, rt *Runtime, p ProfileSpec) error {
 	profile, err := deviceProfileByToken(ctx, rt, p.Token)
@@ -146,25 +180,116 @@ func ensureProfile(ctx context.Context, rt *Runtime, p ProfileSpec) error {
 		log.Info().Str("token", p.Token).Msg("created device profile")
 	}
 
+	// Everything a profile version SNAPSHOTS is reconciled before the publish below,
+	// because ADR-045's draft is inert until published: a metric, command or rule
+	// that is not in the active version is one the running platform behaves as
+	// though nobody declared.
+	//
+	// Reconciled, not merely created. Matching on token alone never converges
+	// CONTENT: a scenario that ships a corrected rule definition would find its own
+	// token already present and leave the broken one in place, so a fix could not be
+	// delivered to any tenant that had already run the old build. That is not
+	// hypothetical — this scenario shipped a rule the compiler rejects, and a
+	// create-or-get provisioner could not have healed it.
 	for _, m := range p.Metrics {
-		if err := ensureMetricDefinition(ctx, rt, p.Token, m); err != nil {
+		if err := ensureMetricDefinition(ctx, rt, p.Token, m, profile); err != nil {
 			return err
 		}
 	}
-	if profile.ActiveVersion == nil {
-		var published struct {
+	for _, c := range p.Commands {
+		if err := ensureCommandDefinition(ctx, rt, p.Token, c, profile); err != nil {
+			return err
+		}
+	}
+	for _, r := range p.DetectionRules {
+		if err := ensureDetectionRule(ctx, rt, p.Token, r, profile); err != nil {
+			return err
+		}
+	}
+
+	// Publish when no published version already carries THIS content.
+	//
+	// The obvious formulation — publish when this run created something — is wrong
+	// in a way that fails silently and permanently. If a run adds a rule and the
+	// publish then fails (the ADR-044 validation gate fails CLOSED, so a transiently
+	// unavailable event-processing is enough), the next run finds the rule already
+	// present, concludes it added nothing, sees a non-nil activeVersion, and skips
+	// the publish forever. The addition is stranded as a draft: the tenant looks
+	// fully provisioned and the widget bound to it renders empty, which is exactly
+	// the failure this whole reconciliation exists to prevent.
+	//
+	// So the decision is made against durable state instead of against what this
+	// process happened to do. The publish stamps a version label derived from the
+	// declared content; if no version carries that label, the content has never been
+	// published — whether because it changed, because a publish failed, or because
+	// the profile is new. Retrying is then automatic, and an unchanged re-bootstrap
+	// still publishes nothing, so repeated resets do not accumulate junk versions.
+	marker := profileContentMarker(p)
+	published, err := profileVersionLabels(ctx, rt, p.Token)
+	if err != nil {
+		return err
+	}
+	if !published[marker] {
+		var out struct {
 			PublishDeviceProfile struct {
 				Version int `json:"version"`
 			} `json:"publishDeviceProfile"`
 		}
 		if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, mutationPublishDeviceProfile,
-			map[string]any{"token": p.Token}, &published); err != nil {
+			map[string]any{
+				"token":       p.Token,
+				"label":       marker,
+				"description": "Published by the sim scenario that declares this profile.",
+			}, &out); err != nil {
 			return fmt.Errorf("publishDeviceProfile: %w", err)
 		}
-		log.Info().Str("token", p.Token).Int("version", published.PublishDeviceProfile.Version).
-			Msg("published device profile")
+		log.Info().Str("token", p.Token).Int("version", out.PublishDeviceProfile.Version).
+			Str("label", marker).Msg("published device profile")
 	}
 	return nil
+}
+
+// profileContentMarker is a stable, short digest of everything a ProfileSpec
+// contributes to a published version. It is used as the version LABEL, which makes
+// "has this exact content ever been published?" a question the tenant itself can
+// answer — see ensureProfile.
+//
+// It hashes the declared content in declaration order. Order is part of the
+// identity on purpose: reordering is a change a reader would expect to see
+// published, and pretending otherwise would need a canonicalisation step whose only
+// job is to hide it.
+func profileContentMarker(p ProfileSpec) string {
+	h := sha256.New()
+	for _, m := range p.Metrics {
+		fmt.Fprintf(h, "metric\x00%s\x00%s\x00%s\x00%s\n", m.Key, m.Name, m.DataType, m.Unit)
+	}
+	for _, c := range p.Commands {
+		fmt.Fprintf(h, "command\x00%s\x00%s\x00%s\x00%s\n", c.Token, c.CommandKey, c.Name, c.ParameterSchema)
+	}
+	for _, r := range p.DetectionRules {
+		fmt.Fprintf(h, "rule\x00%s\x00%s\x00%s\x00%t\n", r.Token, r.Name, r.Definition, r.Enabled)
+	}
+	return "sim-" + hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+const queryDeviceProfileVersions = `query($token:String!){deviceProfileVersions(token:$token){version label}}`
+
+func profileVersionLabels(ctx context.Context, rt *Runtime, token string) (map[string]bool, error) {
+	var out struct {
+		DeviceProfileVersions []struct {
+			Version int    `json:"version"`
+			Label   string `json:"label"`
+		} `json:"deviceProfileVersions"`
+	}
+	if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, queryDeviceProfileVersions,
+		map[string]any{"token": token}, &out); err != nil {
+		return nil, fmt.Errorf("deviceProfileVersions: %w", err)
+	}
+	labels := make(map[string]bool, len(out.DeviceProfileVersions))
+	for _, v := range out.DeviceProfileVersions {
+		labels[v.Label] = true
+	}
+	return labels, nil
 }
 
 func deviceProfileByToken(ctx context.Context, rt *Runtime, token string) (*deviceProfileInfo, error) {
@@ -187,21 +312,14 @@ const queryMetricDefinitionsByToken = `query($tokens:[String!]!){` +
 const mutationCreateMetricDefinition = `mutation($request:MetricDefinitionCreateRequest){` +
 	`createMetricDefinition(request:$request){token}}`
 
-func ensureMetricDefinition(ctx context.Context, rt *Runtime, profileToken string, m MetricSpec) error {
-	metricToken := profileToken + "-" + m.Key
-	var existing struct {
-		MetricDefinitionsByToken []struct {
-			Token string `json:"token"`
-		} `json:"metricDefinitionsByToken"`
-	}
-	if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, queryMetricDefinitionsByToken,
-		map[string]any{"tokens": []string{metricToken}}, &existing); err != nil {
-		return fmt.Errorf("metricDefinitionsByToken: %w", err)
-	}
-	if len(existing.MetricDefinitionsByToken) > 0 {
-		return nil
-	}
+const mutationUpdateMetricDefinition = `mutation($token:String!,$request:MetricDefinitionCreateRequest){` +
+	`updateMetricDefinition(token:$token,request:$request){token}}`
 
+// ensureMetricDefinition creates the metric when the profile's draft lacks it, and
+// updates it when the draft holds a different shape. Both paths leave the draft
+// matching what the scenario declares; the publish decision is ensureProfile's.
+func ensureMetricDefinition(ctx context.Context, rt *Runtime, profileToken string, m MetricSpec, profile *deviceProfileInfo) error {
+	metricToken := profileToken + "-" + m.Key
 	req := map[string]any{
 		"token":              metricToken,
 		"deviceProfileToken": profileToken,
@@ -210,6 +328,27 @@ func ensureMetricDefinition(ctx context.Context, rt *Runtime, profileToken strin
 		"dataType":           m.DataType,
 		"unit":               m.Unit,
 	}
+
+	for _, existing := range profile.MetricDefinitions {
+		if existing.Token != metricToken {
+			continue
+		}
+		if existing.Name == m.Name && existing.DataType == m.DataType && existing.Unit == m.Unit {
+			return nil
+		}
+		var updated struct {
+			UpdateMetricDefinition struct {
+				Token string `json:"token"`
+			} `json:"updateMetricDefinition"`
+		}
+		if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, mutationUpdateMetricDefinition,
+			map[string]any{"token": metricToken, "request": req}, &updated); err != nil {
+			return fmt.Errorf("updateMetricDefinition: %w", err)
+		}
+		log.Info().Str("token", metricToken).Str("profile", profileToken).Msg("updated metric definition")
+		return nil
+	}
+
 	var created struct {
 		CreateMetricDefinition struct {
 			Token string `json:"token"`
@@ -221,6 +360,133 @@ func ensureMetricDefinition(ctx context.Context, rt *Runtime, profileToken strin
 	}
 	log.Info().Str("token", metricToken).Str("profile", profileToken).Msg("created metric definition")
 	return nil
+}
+
+// --- command definitions + detection rules (ADR-043 / ADR-051, ADR-057) ---------
+//
+// Both are profile-version content, so both are created BEFORE ensureProfile's
+// publish and both report whether they created anything, so a re-bootstrap that
+// introduces one republishes rather than leaving it a draft.
+//
+// Both are create-or-get, unlike the load-test harnesses this is ported from
+// (loadtest/detection.go, loadtest/command.go) which REFUSE a pre-existing rule.
+// That refusal is right for a measurement tool — residual state skews a verdict —
+// and wrong here: `reset` is a re-Bootstrap, so a scenario must converge on the
+// topology it declares rather than demand a fresh tenant.
+
+const mutationCreateCommandDefinition = `mutation($request:CommandDefinitionCreateRequest){` +
+	`createCommandDefinition(request:$request){token}}`
+
+const mutationUpdateCommandDefinition = `mutation($token:String!,$request:CommandDefinitionCreateRequest){` +
+	`updateCommandDefinition(token:$token,request:$request){token}}`
+
+func ensureCommandDefinition(ctx context.Context, rt *Runtime, profileToken string, c CommandSpec, profile *deviceProfileInfo) error {
+	req := map[string]any{
+		"token":              c.Token,
+		"deviceProfileToken": profileToken,
+		"commandKey":         c.CommandKey,
+		"name":               c.Name,
+	}
+	if c.ParameterSchema != "" {
+		req["parameterSchema"] = c.ParameterSchema
+	}
+
+	for _, existing := range profile.CommandDefinitions {
+		if existing.Token != c.Token {
+			continue
+		}
+		if existing.CommandKey == c.CommandKey && existing.Name == c.Name && existing.ParameterSchema == c.ParameterSchema {
+			return nil
+		}
+		var updated struct {
+			UpdateCommandDefinition struct {
+				Token string `json:"token"`
+			} `json:"updateCommandDefinition"`
+		}
+		if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, mutationUpdateCommandDefinition,
+			map[string]any{"token": c.Token, "request": req}, &updated); err != nil {
+			return fmt.Errorf("updateCommandDefinition: %w", err)
+		}
+		log.Info().Str("token", c.Token).Str("profile", profileToken).Msg("updated command definition")
+		return nil
+	}
+
+	var created struct {
+		CreateCommandDefinition struct {
+			Token string `json:"token"`
+		} `json:"createCommandDefinition"`
+	}
+	if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, mutationCreateCommandDefinition,
+		map[string]any{"request": req}, &created); err != nil {
+		return fmt.Errorf("createCommandDefinition: %w", err)
+	}
+	log.Info().Str("token", c.Token).Str("profile", profileToken).Str("commandKey", c.CommandKey).
+		Msg("created command definition")
+	return nil
+}
+
+const mutationCreateDetectionRule = `mutation($request:DetectionRuleCreateRequest!){` +
+	`createDetectionRule(request:$request){token}}`
+
+const mutationUpdateDetectionRule = `mutation($token:String!,$request:DetectionRuleCreateRequest!){` +
+	`updateDetectionRule(token:$token,request:$request){token}}`
+
+func ensureDetectionRule(ctx context.Context, rt *Runtime, profileToken string, r DetectionRuleSpec, profile *deviceProfileInfo) error {
+	req := map[string]any{
+		"token":              r.Token,
+		"deviceProfileToken": profileToken,
+		"name":               r.Name,
+		"definition":         r.Definition,
+		"enabled":            r.Enabled,
+	}
+
+	for _, existing := range profile.DetectionRules {
+		if existing.Token != r.Token {
+			continue
+		}
+		// Compared as JSON VALUES, not as strings: the platform round-trips a
+		// definition through its own marshaller, so key order and whitespace differ
+		// from what was sent. A byte comparison would report every unchanged rule as
+		// changed and rewrite it on every bootstrap.
+		if existing.Name == r.Name && existing.Enabled == r.Enabled && sameJSON(existing.Definition, r.Definition) {
+			return nil
+		}
+		var updated struct {
+			UpdateDetectionRule struct {
+				Token string `json:"token"`
+			} `json:"updateDetectionRule"`
+		}
+		if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, mutationUpdateDetectionRule,
+			map[string]any{"token": r.Token, "request": req}, &updated); err != nil {
+			return fmt.Errorf("updateDetectionRule: %w", err)
+		}
+		log.Info().Str("token", r.Token).Str("profile", profileToken).Msg("updated detection rule")
+		return nil
+	}
+
+	var created struct {
+		CreateDetectionRule struct {
+			Token string `json:"token"`
+		} `json:"createDetectionRule"`
+	}
+	if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, mutationCreateDetectionRule,
+		map[string]any{"request": req}, &created); err != nil {
+		return fmt.Errorf("createDetectionRule: %w", err)
+	}
+	log.Info().Str("token", r.Token).Str("profile", profileToken).Bool("enabled", r.Enabled).
+		Msg("created detection rule")
+	return nil
+}
+
+// sameJSON reports whether two JSON documents carry the same value, ignoring key
+// order and formatting. Either side failing to parse means "not the same" — an
+// unparseable stored definition is precisely one that should be rewritten.
+func sameJSON(a, b string) bool {
+	var av, bv any
+	if json.Unmarshal([]byte(a), &av) != nil || json.Unmarshal([]byte(b), &bv) != nil {
+		return false
+	}
+	return reflect.DeepEqual(av, bv)
 }
 
 // --- device type ---------------------------------------------------------------
