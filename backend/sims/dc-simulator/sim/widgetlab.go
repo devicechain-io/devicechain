@@ -5,6 +5,7 @@ package sim
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync/atomic"
 
@@ -25,10 +26,10 @@ import (
 // generator classifies a device structurally, off DeviceInstance.DeviceTypeToken,
 // instead of guessing from its name.
 //
-// BUILD STATE: this is lane L0 — topology, tokens and the shared sweep. The
-// DETECT rule and command definition (L1), the two dashboard definitions (L2)
-// and the per-channel generators (L3) land on top of it. Until L2, Manifest
-// declares no dashboards, so the scenario provisions and emits but shows nothing.
+// BUILD STATE: lanes L0 (topology, tokens, the shared sweep) and L1 (the DETECT
+// rule and command definition). The two dashboard definitions (L2) and the
+// per-channel generators (L3) land on top. Until L2, Manifest declares no
+// dashboards, so the scenario provisions, alarms and emits but shows nothing.
 type widgetlab struct {
 	// seed drives all deterministic generation, threaded from the handshake —
 	// see devicepulse's identical field for the reset/idempotency rationale.
@@ -99,6 +100,83 @@ const (
 	// hoped-for; TestWidgetlabSweepCrossesAndClearsTheThreshold holds it there.
 	WidgetlabAlarmThreshold = 30.0
 )
+
+// The alarm the rule raises and the command the button issues. Both are read from
+// TWO sides — the rule/definition authored here, and the widget options L2 bakes —
+// so they are constants for the same reason the threshold is: a command-button
+// whose commandName misses the authored definition looks configured, enqueues
+// nothing the profile's vocabulary resolves, and fails at the delivery boundary.
+const (
+	WidgetlabRuleToken  = "wl-over-temp"
+	WidgetlabAlarmKey   = "wl-over-temp"
+	WidgetlabCommandDef = "wl-set-setpoint-cmd"
+	WidgetlabCommandKey = "setSetpoint"
+
+	// 🔴 TWO severities, and they are not interchangeable.
+	//
+	// WidgetlabSeverity is the RULE AUTHORING vocabulary, which is lowercase
+	// (event-processing's rules.Severity). WidgetlabAlarmSeverityWire is the same
+	// tier as it lands on the durable alarm row, because the raise-alarm consumer
+	// uppercases the authoring severity — and it is the wire form an alarm widget's
+	// `severity` filter option is written in.
+	//
+	// Collapsing them into one uppercase constant is not a cosmetic mistake: the
+	// rule compiler rejects "MAJOR" outright, so with the ADR-044 publish gate wired
+	// the profile fails to publish and the scenario cannot bootstrap at all, and
+	// with the gate unwired the version publishes while event-processing drops the
+	// rule at load with only a log line — the alarm the whole board depends on
+	// silently never fires. loadtest/detection.go carries the same pair for the same
+	// reason; this port collapsed them and had to be corrected.
+	WidgetlabSeverity          = "major"
+	WidgetlabAlarmSeverityWire = "MAJOR"
+)
+
+// widgetlabParameterSchema is the command's parameter descriptors, as the JSON
+// array the platform stores and a command-button widget bakes in.
+//
+// Two parameters of DIFFERENT types on purpose: the console's typed form renders
+// a numeric input with bounds for one and a select for the other, so a single
+// command exercises both branches. A one-parameter command would leave most of
+// the form unexercised, which is the whole reason the widget is on the board.
+const widgetlabParameterSchema = `[` +
+	`{"name":"target","kind":"SCALAR","dataType":"DOUBLE","unit":"C","required":true,"minValue":15,"maxValue":35},` +
+	`{"name":"mode","kind":"SCALAR","dataType":"STRING","required":false,"enum":["heat","cool","auto"],"default":"auto"}` +
+	`]`
+
+// widgetlabRuleDefinition is the opaque rules.Rule JSON: a threshold rule whose
+// predicate reads the swept metric and whose raiseAlarm action drives the alarm
+// widgets. The keys are exactly the rules.Rule / Condition / Action json tags —
+// event-processing decodes with DisallowUnknownFields, so a stray one is rejected
+// at publish. A raiseAlarm action requires a non-empty severity.
+//
+// The threshold is WidgetlabAlarmThreshold rather than a literal, which is the
+// entire point of the const block above: the rule and the curve that must cross it
+// cannot drift apart if neither owns the number.
+func widgetlabRuleDefinition() string {
+	raw, err := json.Marshal(map[string]any{
+		"name":     "Widget Lab over-temperature",
+		"type":     "threshold",
+		"severity": WidgetlabSeverity,
+		"when": map[string]any{
+			"metric":    WidgetlabTemperatureKey,
+			"op":        "gt",
+			"threshold": WidgetlabAlarmThreshold,
+		},
+		"actions": []any{
+			map[string]any{
+				"type":       "raiseAlarm",
+				"raiseAlarm": map[string]any{"alarmKey": WidgetlabAlarmKey},
+			},
+		},
+	})
+	if err != nil {
+		// Marshaling a static map of strings and floats cannot fail; a failure here
+		// is a programming error, not a runtime condition, and the same house style
+		// as buildingpulse's panic on a dashboard it cannot marshal.
+		panic(fmt.Sprintf("widgetlab: marshal rule definition: %v", err))
+	}
+	return string(raw)
+}
 
 // widgetlabSweep is the nominal temperature at a given tick: a triangle wave
 // between WidgetlabSweepMin and WidgetlabSweepMax with period WidgetlabSweepTicks.
@@ -190,6 +268,29 @@ func (s *widgetlab) Manifest() SimManifest {
 					{Key: WidgetlabHumidityKey, Name: "Humidity", DataType: "DOUBLE", Unit: "%"},
 					{Key: WidgetlabPressureKey, Name: "Pressure", DataType: "DOUBLE", Unit: "kPa"},
 					{Key: WidgetlabBatteryKey, Name: "Battery", DataType: "DOUBLE", Unit: "%"},
+				},
+				// The command a command-button issues, and the rule whose raiseAlarm
+				// drives alarm-table and alarm-count. Both are profile-version
+				// content, so Provision creates them before it publishes.
+				Commands: []CommandSpec{
+					{
+						Token:           WidgetlabCommandDef,
+						CommandKey:      WidgetlabCommandKey,
+						Name:            "Set Setpoint",
+						ParameterSchema: widgetlabParameterSchema,
+					},
+				},
+				DetectionRules: []DetectionRuleSpec{
+					{
+						Token:      WidgetlabRuleToken,
+						Name:       "Widget Lab over-temperature",
+						Definition: widgetlabRuleDefinition(),
+						Metric:     WidgetlabTemperatureKey,
+						// Enabled, because publish-time validation only gates ENABLED
+						// rules — a disabled rule is published unchecked and would make
+						// a broken predicate look accepted.
+						Enabled: true,
+					},
 				},
 			},
 		},

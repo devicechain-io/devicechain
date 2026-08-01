@@ -6,6 +6,7 @@ package sim
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -24,16 +25,52 @@ type MetricSpec struct {
 	Unit     string
 }
 
-// ProfileSpec is a static-singleton device profile (+ its metric definitions) a
-// manifest provisions once and publishes. Profiles are shared capability contracts
-// (ADR-045) — a manifest declares few of them even when it fans out many devices.
-// Alarm authoring moved off AlarmDefinition to the DETECT DetectionRule path
-// (ADR-057), which the sim does not seed yet.
+// CommandSpec is one typed command a profile declares (ADR-043): the key a
+// sendCommand action or a dashboard's command-button issues, plus the JSON
+// parameter schema that drives the console's typed form.
+//
+// ParameterSchema is the wire format verbatim — a JSON array of parameter
+// descriptors — because that is what the platform stores and what a dashboard
+// widget bakes in at author time. Modelling it as Go structs here would give two
+// shapes to keep in step for no gain: nothing in the sim reads it back.
+type CommandSpec struct {
+	Token           string
+	CommandKey      string
+	Name            string
+	ParameterSchema string
+}
+
+// DetectionRuleSpec is one DETECT rule authored on a profile (ADR-051/057).
+// Definition is the opaque rules.Rule JSON; event-processing decodes it with
+// DisallowUnknownFields, so a stray key is rejected at publish.
+//
+// Metric is NOT part of that JSON — it is a copy of the metric key the rule's
+// predicate reads, declared separately so Validate can check the profile actually
+// declares it. A rule referencing a metric no device reports is accepted by the
+// platform and simply never fires: the scenario looks provisioned and is inert.
+type DetectionRuleSpec struct {
+	Token      string
+	Name       string
+	Definition string
+	Metric     string
+	Enabled    bool
+}
+
+// ProfileSpec is a static-singleton device profile (+ its metric definitions,
+// commands and detection rules) a manifest provisions once and publishes.
+// Profiles are shared capability contracts (ADR-045) — a manifest declares few of
+// them even when it fans out many devices.
+//
+// Alarm authoring lives on DetectionRules, not AlarmDefinition: ADR-057 made the
+// DETECT rule the one authoring path, and createAlarmDefinition no longer exists.
+// A scenario that wants an alarm declares a rule whose action raises one.
 type ProfileSpec struct {
-	Token    string
-	Name     string
-	Category string
-	Metrics  []MetricSpec
+	Token          string
+	Name           string
+	Category       string
+	Metrics        []MetricSpec
+	Commands       []CommandSpec
+	DetectionRules []DetectionRuleSpec
 }
 
 // DeviceTypeSpec is a static-singleton device type referencing a profile.
@@ -369,9 +406,84 @@ func (m SimManifest) Validate() error {
 	}
 
 	profileTokens := make(map[string]bool, len(m.Profiles))
+	// Command and rule tokens share one namespace across the whole manifest, unlike
+	// metric tokens, which ensureMetricDefinition prefixes with their profile.
+	versionContentTokens := make(map[string]bool)
 	for _, p := range m.Profiles {
 		if err := core.ValidateToken(p.Token); err != nil {
 			return fmt.Errorf("profile token: %w", err)
+		}
+		metricKeys := make(map[string]bool, len(p.Metrics))
+		for _, mx := range p.Metrics {
+			metricKeys[mx.Key] = true
+		}
+		for _, c := range p.Commands {
+			if err := core.ValidateToken(c.Token); err != nil {
+				return fmt.Errorf("command definition token: %w", err)
+			}
+			if c.CommandKey == "" {
+				return fmt.Errorf("command %q declares no commandKey", c.Token)
+			}
+			// The schema must be a JSON ARRAY of descriptors. The platform decodes
+			// it strictly and rejects anything else at create, so this is early
+			// rather than the difference between a failure and none — but the
+			// message here names the manifest field, and the one from a GraphQL
+			// round-trip does not.
+			if c.ParameterSchema != "" {
+				var params []any
+				if err := json.Unmarshal([]byte(c.ParameterSchema), &params); err != nil {
+					return fmt.Errorf("command %q has a parameterSchema that is not a JSON array "+
+						"of parameter descriptors: %w", c.Token, err)
+				}
+			}
+			// Command and rule tokens are NOT profile-prefixed the way metric tokens
+			// are, so two profiles can name the same one. The second profile's
+			// reconciler then finds the token already present, matches its content,
+			// and does nothing — so that profile publishes WITHOUT the command, and
+			// no step anywhere reports a failure.
+			if versionContentTokens[c.Token] {
+				return fmt.Errorf("command token %q is declared twice; the second profile would "+
+					"silently publish without it", c.Token)
+			}
+			versionContentTokens[c.Token] = true
+		}
+		for _, r := range p.DetectionRules {
+			if err := core.ValidateToken(r.Token); err != nil {
+				return fmt.Errorf("detection rule token: %w", err)
+			}
+			if versionContentTokens[r.Token] {
+				return fmt.Errorf("detection rule token %q is declared twice; the second profile "+
+					"would silently publish without it", r.Token)
+			}
+			versionContentTokens[r.Token] = true
+			if !json.Valid([]byte(r.Definition)) {
+				return fmt.Errorf("detection rule %q has a definition that is not valid JSON", r.Token)
+			}
+			// The seam this check exists for: a rule reading a metric the profile
+			// does not declare is accepted by the platform and never fires, so the
+			// scenario provisions cleanly and produces no alarms at all.
+			if r.Metric == "" {
+				return fmt.Errorf("detection rule %q names no metric, so nothing checks that its "+
+					"predicate reads something the profile reports", r.Token)
+			}
+			if !metricKeys[r.Metric] {
+				return fmt.Errorf("detection rule %q reads metric %q, which profile %q does not "+
+					"declare — the rule would be published and never fire", r.Token, r.Metric, p.Token)
+			}
+			// Metric is a hand-written copy of a value that also lives INSIDE the
+			// opaque definition, which is the two-lists-that-must-agree shape: the
+			// check above would happily bless a rule whose declared metric is
+			// reported and whose predicate reads something else entirely.
+			//
+			// Only a top-level `when.metric` is read back. A composite rule has no
+			// single metric there, and inventing a traversal of a JSON shape this
+			// package deliberately treats as opaque would reject rules it cannot
+			// actually judge. So: check the shape we can see, stay quiet on the rest.
+			if predicate := ruleTopLevelMetric(r.Definition); predicate != "" && predicate != r.Metric {
+				return fmt.Errorf("detection rule %q declares metric %q but its predicate reads %q; "+
+					"the declared one is what Validate checks against the profile, so the rule "+
+					"would pass this check and still never fire", r.Token, r.Metric, predicate)
+			}
 		}
 		for _, mx := range p.Metrics {
 			// Mirrors bootstrap.go's ensureMetricDefinition token derivation
@@ -435,6 +547,36 @@ func (m SimManifest) Validate() error {
 		}
 	}
 	return nil
+}
+
+// ruleTopLevelMetric reads the metric a rules.Rule reads, or "" when the
+// definition names none at a depth this package is willing to look.
+//
+// TWO fields, because a rules.Rule has two. A threshold/duration/repeating rule
+// names it in its leaf comparison (`when.metric`); an aggregate or deltaRate rule
+// names its value selector at the top level (`metric`). Reading only the first
+// left every aggregate rule unchecked — it would provision cleanly against a
+// profile that never reports the metric, and never fire, which is the exact seam
+// the caller says it closes. They are the same trivial depth; missing one was an
+// oversight, not a judgement about opacity.
+//
+// A rule may legitimately name neither (connectivity is leaf-less and config-less
+// by design). Returning "" means "no opinion", never "no metric": the caller must
+// not treat it as a failure, or it would make those rules unauthorable.
+func ruleTopLevelMetric(definition string) string {
+	var rule struct {
+		Metric string `json:"metric"`
+		When   struct {
+			Metric string `json:"metric"`
+		} `json:"when"`
+	}
+	if err := json.Unmarshal([]byte(definition), &rule); err != nil {
+		return ""
+	}
+	if rule.When.Metric != "" {
+		return rule.When.Metric
+	}
+	return rule.Metric
 }
 
 // validateAssignments checks one device's rendered Assignment set: token
