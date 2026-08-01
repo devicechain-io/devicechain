@@ -59,7 +59,14 @@ type Record struct {
 // `sim create --manifest` can fail fast on a typo rather than writing a
 // handshake dc-simulator will reject (or silently run the wrong scenario for)
 // at process start.
-var KnownManifestIds = []string{"devicepulse", "buildingpulse"}
+//
+// 🔴 This is a VALIDATION GATE, not help text: an id missing here is not merely
+// undocumented, it is REFUSED, and the scenario becomes unreachable through the
+// only supported provisioning path. The mirror is deliberate but it is still two
+// lists that must agree, so dc-simulator's TestDcctlKnowsEveryRegisteredScenario
+// reads this file and fails when they diverge — a comment asking the next person
+// to remember would not have survived the third scenario, and did not.
+var KnownManifestIds = []string{"devicepulse", "buildingpulse", "widgetlab"}
 
 // ValidateManifestId rejects a --manifest value dc-simulator's registry
 // doesn't know.

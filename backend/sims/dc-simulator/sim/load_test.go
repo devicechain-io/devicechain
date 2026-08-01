@@ -28,6 +28,28 @@ func TestAZeroLoadChangesNothing(t *testing.T) {
 	if got := len(NewBuildingpulse(1, zero).Manifest().Expand(1)); got != buildingpulseThermostatCount {
 		t.Errorf("buildingpulse default device count = %d, want %d", got, buildingpulseThermostatCount)
 	}
+	if got, want := len(NewWidgetlab(1, zero).Manifest().Expand(1)), widgetlabSensorCount+widgetlabEdgeCount; got != want {
+		t.Errorf("widgetlab default device count = %d, want %d", got, want)
+	}
+}
+
+// resizableManifestIds is the scenarios a device-count override applies to at
+// all — every registered id except the composed fixtures, which refuse one by
+// design (see SimManifest.FixedTopology).
+//
+// Filtering here is only safe because TestEveryScenarioIsResizableOrSaysWhyNot
+// asserts the OTHER direction: that each scenario is resizable or explicitly
+// declares why not. Without it, this helper would let a scale scenario slip out
+// of every resize test below simply by acquiring the flag. It also refuses to
+// return an empty set, so the loops it feeds can never pass vacuously.
+func resizableManifestIds(t *testing.T) []string {
+	t.Helper()
+	ids := ResizableManifestIds()
+	if len(ids) == 0 {
+		t.Fatal("no resizable scenarios remain, so every resize test below would pass without " +
+			"asserting anything")
+	}
+	return ids
 }
 
 // The device-count override must actually change the rendered topology.
@@ -36,7 +58,7 @@ func TestAZeroLoadChangesNothing(t *testing.T) {
 // devices" is a fabrication if Expand still yields 12 — so it is asserted on
 // Expand's output rather than on the field that was set.
 func TestDeviceCountOverrideResizesTheRenderedTopology(t *testing.T) {
-	for _, id := range ManifestIds() {
+	for _, id := range resizableManifestIds(t) {
 		t.Run(id, func(t *testing.T) {
 			s, err := NewSim(id, 1, Load{DeviceCount: 500})
 			if err != nil {
@@ -68,7 +90,7 @@ func TestDeviceCountOverrideResizesTheRenderedTopology(t *testing.T) {
 // definitions for shape, never the device tokens a definition binds to. That
 // gap is why TestAResizedDashboardBindsToADeviceThatExists is separate.
 func TestAResizedScenarioStillValidates(t *testing.T) {
-	for _, id := range ManifestIds() {
+	for _, id := range resizableManifestIds(t) {
 		for _, count := range []int{1, 7, 250} {
 			s, err := NewSim(id, 1, Load{DeviceCount: count})
 			if err != nil {
@@ -81,21 +103,61 @@ func TestAResizedScenarioStillValidates(t *testing.T) {
 	}
 }
 
-// Every registered scenario must accept a device-count override.
-//
-// withDeviceCount refuses a manifest with several populations, because one
-// count cannot unambiguously size them. That refusal is correct and it is also
-// invisible: it surfaces as a startup error on a scenario nobody has written
-// yet. Enumerating the Registry means the day a multi-population scenario lands,
-// THIS fails — naming the decision that has to be made — rather than the
-// measurement run failing later with the same message and less context.
-func TestEveryScenarioAcceptsADeviceCountOverride(t *testing.T) {
+// Every registered scenario is either resizable or explicitly a composed
+// fixture, and the test asserts BOTH directions rather than only that a resize
+// succeeds. A one-directional check would pass the day a scale scenario
+// accidentally acquired a second population and quietly stopped accepting the
+// --devices flag it exists to serve.
+func TestEveryScenarioIsResizableOrSaysWhyNot(t *testing.T) {
 	for _, id := range ManifestIds() {
-		if _, err := NewSim(id, 1, Load{DeviceCount: 3}); err != nil {
-			t.Errorf("scenario %q cannot be resized: %v.\n"+
-				"Either give it a single population, or decide how one --devices "+
-				"value should size several and teach withDeviceCount that rule", id, err)
+		base := Registry[id](1, Load{}).Manifest()
+		_, err := NewSim(id, 1, Load{DeviceCount: 3})
+
+		if base.FixedTopology {
+			if err == nil {
+				t.Errorf("scenario %q declares FixedTopology but accepted a device count: "+
+					"its dashboards bind named devices, so the run would provision a "+
+					"topology those boards do not match", id)
+			}
+			continue
 		}
+		if err != nil {
+			t.Errorf("scenario %q cannot be resized: %v.\n"+
+				"Either give it a single population, decide how one --devices value "+
+				"should size several and teach withDeviceCount that rule, or declare "+
+				"it FixedTopology if resizing it is meaningless", id, err)
+		}
+	}
+}
+
+// The two refusals must stay distinguishable: a fixed-topology scenario is not
+// merely ambiguous to resize, and a reader sent looking for a sizing rule would
+// be looking for something that should never be written.
+func TestAFixedTopologyManifestIsRefusedOnItsOwnTerms(t *testing.T) {
+	m := SimManifest{
+		Name:          "composed",
+		FixedTopology: true,
+		Populations: []PopulationSpec{
+			{OfType: "a", Count: 2, TokenPattern: "a-{n}"},
+		},
+	}
+	_, err := withDeviceCount(m, 10)
+	if err == nil {
+		t.Fatal("a fixed-topology manifest accepted a device count, so its dashboards " +
+			"would bind devices the resized run never provisions")
+	}
+	if !strings.Contains(err.Error(), "fixed topology") {
+		t.Errorf("refusal did not name the reason: %v", err)
+	}
+	// A single population is the shape that WOULD have resized cleanly, so this
+	// case proves the fixed-topology check is what refused it — not the
+	// multi-population ambiguity guard.
+	if strings.Contains(err.Error(), "ambiguous") {
+		t.Errorf("a fixed-topology manifest was refused as ambiguous instead: %v", err)
+	}
+	// With no override there is nothing to refuse.
+	if _, err := withDeviceCount(m, 0); err != nil {
+		t.Errorf("an un-overridden fixed-topology manifest was rejected: %v", err)
 	}
 }
 
@@ -241,7 +303,7 @@ func TestTheClientPoolIsSizedForTheConcurrency(t *testing.T) {
 // device the run does not have, this fails. A hero picked from the end of the
 // population plus the wrong order does trip it.
 func TestAResizedDashboardBindsToADeviceThatExists(t *testing.T) {
-	for _, id := range ManifestIds() {
+	for _, id := range resizableManifestIds(t) {
 		for _, count := range []int{1, 5, 300} {
 			s, err := NewSim(id, 1, Load{DeviceCount: count})
 			if err != nil {
@@ -273,6 +335,55 @@ func TestAResizedDashboardBindsToADeviceThatExists(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// The same invariant at each scenario's OWN topology, with no override.
+//
+// The resized test above is where this check started, and routing it through
+// resizableManifestIds silently carved a hole in it: a fixed-topology scenario
+// is excluded from every count, so it lost the check entirely — and it is the
+// kind of scenario whose dashboards bind NAMED devices, which is the only way to
+// dangle a binding once resizing is off the table. A dashboard binding a device
+// token with a typo in it would have shipped green.
+//
+// So the invariant is asserted twice, on different axes: above, that resizing
+// cannot orphan a binding; here, that authoring one cannot either. This one runs
+// over every registered scenario, because "declares no dashboards yet" is a
+// passing state that becomes a real check the moment a lane adds one.
+func TestEveryScenarioDashboardBindsToADeviceThatExists(t *testing.T) {
+	checked := 0
+	for _, id := range ManifestIds() {
+		s, err := NewSim(id, 1, Load{})
+		if err != nil {
+			t.Fatalf("%s: NewSim: %v", id, err)
+		}
+		m := s.Manifest()
+		live := make(map[string]bool)
+		for _, d := range m.Expand(m.Seed) {
+			live[d.Token] = true
+		}
+
+		for _, ds := range m.Dashboards {
+			bound := deviceTokensIn(m, ds.Definition)
+			if len(bound) == 0 {
+				t.Errorf("%s: dashboard %q names no device at all — either it is no longer "+
+					"device-bound, or this test can no longer see what it binds", id, ds.Token)
+			}
+			for _, token := range bound {
+				checked++
+				if !live[token] {
+					t.Errorf("%s: dashboard %q binds device %q, which the scenario's own "+
+						"topology does not contain", id, ds.Token, token)
+				}
+			}
+		}
+	}
+	// Negative control. Every scenario declaring no dashboard is a legitimate
+	// state mid-build, but it is indistinguishable from this test having gone
+	// blind, so say which one it is rather than reporting a silent pass.
+	if checked == 0 {
+		t.Log("no scenario declares a device-bound dashboard yet, so this test asserted nothing")
 	}
 }
 
@@ -313,7 +424,7 @@ func deviceTokensIn(m SimManifest, definition string) []string {
 // pool is undersized and the generator throttles for a reason no test or log
 // would attribute to it.
 func TestDeviceCountAgreesWithExpand(t *testing.T) {
-	for _, id := range ManifestIds() {
+	for _, id := range resizableManifestIds(t) {
 		for _, count := range []int{0, 1, 12, 501} {
 			s, err := NewSim(id, 1, Load{DeviceCount: count})
 			if err != nil {
