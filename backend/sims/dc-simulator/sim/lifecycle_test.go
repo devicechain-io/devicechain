@@ -315,3 +315,65 @@ func (emittingSim) Bootstrap(context.Context, *Runtime) error { return nil }
 func (emittingSim) Tick(ctx context.Context, rt *Runtime) error {
 	return EmitAll(ctx, rt, rt.Load.Workers(len(rt.Devices)), constantMetrics)
 }
+
+// shedSim sheds a fixed number of emits per tick, so the lifecycle's attribution of
+// sheds TO A TICK is testable without an ingress.
+type shedSim struct {
+	shedPerTick atomic.Int64
+	ticks       atomic.Int64
+}
+
+func (s *shedSim) Manifest() SimManifest                     { return SimManifest{Name: "shed-fake"} }
+func (s *shedSim) Bootstrap(context.Context, *Runtime) error { return nil }
+func (s *shedSim) Tick(_ context.Context, rt *Runtime) error {
+	s.ticks.Add(1)
+	rt.Stats.Shed.Add(s.shedPerTick.Load())
+	return nil
+}
+
+// 🔴 A shed device and a deliberately-silent one look identical on a board: both
+// produce nothing. The cumulative Shed counter cannot separate them either, because a
+// total that grew an hour ago reads the same as one growing now. LastTickShed is what
+// makes "empty because governed" distinguishable from "empty on purpose", so it must
+// track the CURRENT tick and — critically — fall back to zero when shedding stops.
+func TestLastTickShedTracksTheCurrentTick(t *testing.T) {
+	s := &shedSim{}
+	s.shedPerTick.Store(3)
+	rt := &Runtime{Tenant: "acme", InstanceId: "dc", Load: Load{EmitInterval: 10 * time.Millisecond}}
+	lc := NewLifecycle(s, rt)
+	if err := lc.Bootstrap(context.Background()); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	if err := lc.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer func() { _ = lc.Stop() }()
+
+	waitFor(t, func() bool { return rt.Stats.LastTickShed.Load() == 3 },
+		"LastTickShed never reached the 3 sheds each tick produces")
+
+	// And it must come back DOWN. A high-water mark would report a governed tenant
+	// forever after one burst, which is the same confusion in the other direction.
+	s.shedPerTick.Store(0)
+	waitFor(t, func() bool { return rt.Stats.LastTickShed.Load() == 0 },
+		"LastTickShed stayed non-zero after shedding stopped, so it is a high-water "+
+			"mark rather than a statement about the current tick")
+
+	// The cumulative counter must NOT reset with it — the two answer different questions.
+	if total := rt.Stats.Shed.Load(); total < 3 {
+		t.Errorf("cumulative Shed is %d; the per-tick counter overwrote the run total", total)
+	}
+}
+
+// waitFor polls cond until it holds or the deadline passes.
+func waitFor(t *testing.T, cond func() bool, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal(msg)
+}

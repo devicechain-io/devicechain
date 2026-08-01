@@ -120,6 +120,21 @@ otherwise answer "already published" forever, so a board edited and republished 
 the console would leave every later bootstrap skipping the publish and reporting
 success over content the platform is not serving.
 
+### Telling a governed device from a quiet one
+
+`GET /status` reports `stats.lastTickShed` beside the cumulative `stats.shed`, and
+the runner logs a warning the first tick that sheds (and an info line when it stops).
+
+A shed is not an emit failure — the ingress refuses it cleanly at the per-tenant rate
+ceiling, and a governed load run expects them — so the emit loop deliberately does not
+treat one as an error. But on a scenario being *watched* rather than measured, that
+silence is the problem: a device whose events are being refused looks exactly like a
+device that has nothing to say, and on a board built to show what a widget does with
+awkward data, those are the two readings that must not be confused. The cumulative
+counter cannot separate them either, since a total that grew an hour ago reads the
+same as one growing now. Only the runner does this; the load harness drives the emit
+loop directly and is unaffected.
+
 ### The command far end
 
 A device that only POSTs telemetry cannot receive anything, so a scenario with a
