@@ -13,7 +13,7 @@ import { parseDashboardDefinition, WIDGET_TYPES, type WidgetType } from '@device
 import { describe, expect, it } from 'vitest';
 
 import { validateWidgetOptions } from './options';
-import { WIDGET_CHANNEL } from './registry';
+import { WIDGET_BINDS_DATASOURCE, WIDGET_CHANNEL } from './registry';
 
 // ---- The cross-workspace gate --------------------------------------------------
 //
@@ -286,14 +286,38 @@ describe('the parsed widgetlab boards', () => {
         expect(issues).toEqual([]);
       });
 
-      it('binds each widget through the channel its type actually reads', () => {
-        // A selection widget carries no datasource — it drives a slot through its
-        // options — so requiring one would be wrong; requiring the others to have
-        // one is what catches a widget that lost its binding upstream.
+      // 🔴 A widget that loses its datasource ENTIRELY used to pass every gate in the
+      // arc, because every layer shared one shape: `if (!widget.datasource) continue`.
+      // A mangled selector failed; no selector object at all — strictly worse — did
+      // not. Live, that widget keeps its frame, its title and its layout and binds to
+      // nothing, which is the parser's most quietly degraded case.
+      //
+      // The check could not be a blanket requirement, because label, image and
+      // entity-selector legitimately carry none. WIDGET_BINDS_DATASOURCE answers it
+      // per type and is exhaustive over WidgetType — it existed one PR later, built
+      // for the config panel, and nobody wired it back here.
+      it('gives a datasource to every widget type that binds one, and none to the rest', () => {
         for (const widget of parsed(token).widgets) {
-          if (WIDGET_CHANNEL[widget.type] === 'selection') {
-            expect(widget.options?.selectionTarget, `${widget.id} drives no slot`).toBeTruthy();
+          if (WIDGET_BINDS_DATASOURCE[widget.type]) {
+            expect(
+              widget.datasource,
+              `${widget.id} (${widget.type}) binds no datasource; it renders its frame and ` +
+                `its title over nothing at all`,
+            ).toBeDefined();
+          } else {
+            expect(
+              widget.datasource,
+              `${widget.id} (${widget.type}) carries a datasource, but nothing on this widget ` +
+                `reads one`,
+            ).toBeUndefined();
           }
+        }
+      });
+
+      it('gives a selection widget the slot it drives', () => {
+        for (const widget of parsed(token).widgets) {
+          if (WIDGET_CHANNEL[widget.type] !== 'selection') continue;
+          expect(widget.options?.selectionTarget, `${widget.id} drives no slot`).toBeTruthy();
         }
       });
     });

@@ -752,9 +752,30 @@ func TestWidgetlabSeverityIsTheRuleAuthoringVocabulary(t *testing.T) {
 			"accepts or rejects it)", schema, err)
 	}
 
+	// 🔴 Read the ACCEPTANCE, not the spelling.
+	//
+	// An earlier version parsed the constant DECLARATIONS. That is the wrong surface:
+	// the compiler accepts or rejects a severity through Severity.Valid(), a switch
+	// over those identifiers. A severity dropped from the switch while its declaration
+	// survives — kept for old data, or for another caller — passes a declaration scan
+	// while the compiler rejects the rule, which is precisely the outcome this gate
+	// exists to prevent. So both are read, and a severity counts only if it appears in
+	// both: declared with a string value, AND named by the switch that accepts it.
+	clean := stripGoComments(string(source))
+	declared := map[string]string{}
+	for _, m := range regexp.MustCompile(`(Severity\w+)\s+Severity\s*=\s*"([^"]+)"`).FindAllStringSubmatch(clean, -1) {
+		declared[m[1]] = m[2]
+	}
+	accepts := regexp.MustCompile(`func \(s Severity\) Valid\(\) bool \{[^}]*case ([^:]+):`).FindStringSubmatch(clean)
+	if accepts == nil {
+		t.Fatalf("could not find Severity.Valid's accepting case in %s; the gate cannot see what "+
+			"the compiler actually accepts and would pass for any value", schema)
+	}
 	valid := map[string]bool{}
-	for _, m := range regexp.MustCompile(`Severity\w*\s+Severity\s*=\s*"([^"]+)"`).FindAllStringSubmatch(string(source), -1) {
-		valid[m[1]] = true
+	for _, ident := range strings.Split(accepts[1], ",") {
+		if value, ok := declared[strings.TrimSpace(ident)]; ok {
+			valid[value] = true
+		}
 	}
 	// Negative control: an expression that matched nothing would make the
 	// membership check below accept anything at all.
@@ -1090,7 +1111,6 @@ func TestWidgetlabBoardOptionsAgreeWithWhatIsProvisioned(t *testing.T) {
 	// last instance win, so the day a board carries a second gauge or command-button
 	// — which the coverage gate's at-least-once policy invites — the earlier one's
 	// options would go unasserted with every test still green.
-	options := map[string]map[string]any{}
 	each := func(widgetType string, check func(id string, opts map[string]any)) {
 		seen := 0
 		for _, w := range board.Widgets {
@@ -1104,9 +1124,6 @@ func TestWidgetlabBoardOptionsAgreeWithWhatIsProvisioned(t *testing.T) {
 			t.Fatalf("the gallery carries no %q widget, so this check asserted nothing", widgetType)
 		}
 	}
-	each("command-button", func(id string, o map[string]any) { options["command-button:"+id] = o })
-	each("alarm-count", func(id string, o map[string]any) { options["alarm-count:"+id] = o })
-	each("gauge", func(id string, o map[string]any) { options["gauge:"+id] = o })
 
 	// Every command-button must name the command the profile actually publishes.
 	command := widgetlabProfile(t).Commands[0]
@@ -1664,4 +1681,26 @@ func TestWidgetlabEdgeDevicesAreOutsideTheGalleryZones(t *testing.T) {
 		t.Error("no device is in any zone at all, so the gallery's zone-scoped widgets have " +
 			"nothing to show and this test passed for the wrong reason")
 	}
+}
+
+// stripGoComments blanks out comments before a source scan.
+//
+// 🔴 A regex over raw source cannot tell code from prose, so a gate that scans for a
+// declaration is satisfied by the same text sitting in a comment — the retired check
+// coming back to life as documentation. Verified: deleting a severity constant and
+// leaving its name in a comment passed the gate while the real compiler rejected the
+// rule. Comments are replaced with spaces rather than removed so that offsets, and
+// therefore any multi-line pattern spanning them, behave the same.
+func stripGoComments(source string) string {
+	blank := func(m string) string {
+		out := []rune(m)
+		for i, r := range out {
+			if r != '\n' {
+				out[i] = ' '
+			}
+		}
+		return string(out)
+	}
+	source = regexp.MustCompile(`(?s)/\*.*?\*/`).ReplaceAllStringFunc(source, blank)
+	return regexp.MustCompile(`(?m)//.*$`).ReplaceAllStringFunc(source, blank)
 }

@@ -26,10 +26,12 @@ import (
 // generator classifies a device structurally, off DeviceInstance.DeviceTypeToken,
 // instead of guessing from its name.
 //
-// BUILD STATE: lanes L0 (topology, tokens, the shared sweep), L1 (the DETECT rule
-// and command definition) and L2 (the two boards, in widgetlab_dashboard.go). The
-// per-channel generators (L3) land on top: until then every device traces the same
-// nominal sweep, so the stress board is wired but not yet fed anything hostile.
+// 🔴 NOT YET A COMPLETE ROUND TRIP. The measurement, alarm and selection channels
+// work end to end; the CONTROL channel does not. The command-button enqueues against
+// a real published command definition, but these devices are HTTP-ingress-only and
+// one-way — nothing here subscribes to command delivery — so an issued command sits
+// at SENT until it expires. That is the scenario permanently demonstrating the very
+// failure this board exists to distinguish from success, and it wants a receiver.
 type widgetlab struct {
 	// seed drives all deterministic generation, threaded from the handshake —
 	// see devicepulse's identical field for the reset/idempotency rationale.
@@ -101,11 +103,19 @@ const (
 	WidgetlabAlarmThreshold = 30.0
 )
 
-// The alarm the rule raises and the command the button issues. Both are read from
-// TWO sides — the rule/definition authored here, and the widget options L2 bakes —
-// so they are constants for the same reason the threshold is: a command-button
-// whose commandName misses the authored definition looks configured, enqueues
-// nothing the profile's vocabulary resolves, and fails at the delivery boundary.
+// The alarm the rule raises and the command the button issues.
+//
+// WidgetlabCommandKey is genuinely read from TWO sides — the definition authored here
+// and the widget options the board bakes — so it is a constant for the same reason
+// the threshold is: a button whose commandName misses the published definition looks
+// configured, enqueues nothing the vocabulary resolves, and fails at the delivery
+// boundary. A test reads both back and compares them.
+//
+// WidgetlabAlarmKey is NOT: no widget option filters on an alarm key, so it has one
+// side only. An earlier version of this comment claimed otherwise and said "the alarm
+// widgets filter on the constant" — they filter on state and severity. It is a
+// constant because the rule and any future consumer should agree, not because
+// anything today disagrees.
 const (
 	WidgetlabRuleToken  = "wl-over-temp"
 	WidgetlabAlarmKey   = "wl-over-temp"

@@ -228,6 +228,15 @@ func TestWidgetlabBoardsSelectOnlyDeclaredMetrics(t *testing.T) {
 		}
 		for _, w := range board.Widgets {
 			if w.Datasource == nil {
+				// 🔴 NOT merely skipped. Every check in this arc shared the shape
+				// "no datasource, nothing to say", so a widget that lost its binding
+				// entirely passed everything while a widget with a merely mangled
+				// selector failed — the strictly worse case being the one that got
+				// through. Which types must carry one is decided on the TypeScript
+				// side, where WIDGET_BINDS_DATASOURCE is exhaustive over WidgetType;
+				// what this side can say is that a widget SELECTING measurements is
+				// the only kind whose selector is worth checking, and that a board
+				// widget carrying neither a datasource nor a reason is worth naming.
 				continue
 			}
 			for _, name := range w.Datasource.Measurements {

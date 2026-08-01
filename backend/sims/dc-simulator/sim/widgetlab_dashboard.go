@@ -50,9 +50,6 @@ type widgetSubject struct {
 	Measurements []string
 }
 
-// noSubject marks a widget that binds nothing.
-var noSubject = widgetSubject{}
-
 func (s widgetSubject) datasource() *dashboardDatasource {
 	if s.Slot == "" {
 		return nil
@@ -214,9 +211,13 @@ func widgetlabCanvas() dashboardCanvas {
 	}
 }
 
-// deviceAreaToken returns the area a device is assigned to. Every widgetlab device
-// carries one (Validate enforces it), so a device without one is a malformed
-// scenario and surfaces as an error rather than a context-less board.
+// deviceAreaToken returns the area a device is assigned to.
+//
+// Only the NOMINAL sensors carry one: the edge sensors were deliberately taken out of
+// the zones so their pathological alarms stay off the zone-scoped catalog. Nothing
+// enforces that a given device has an area — an earlier version of this comment
+// claimed Validate did, which was true before that change and is not now — so this
+// returns an error rather than assuming, and callers must pass a device that has one.
 func deviceAreaToken(d DeviceInstance) (string, error) {
 	for _, a := range d.Assignments {
 		if a.TargetType == "area" {
