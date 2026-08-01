@@ -1,0 +1,21 @@
+# Crawling is allowed everywhere ON PURPOSE. Nothing on the docs site is
+# work-in-progress or intentionally unlisted; if that ever changes, keep the
+# crawl open and mark the page with an X-Robots-Tag: noindex response header
+# instead. A disallowed URL is never fetched, so the crawler never sees the
+# noindex — and can still list the bare URL if anything links to it. Blocking
+# the crawl is weaker than letting it read the noindex.
+#
+# BOTH sitemaps are listed on purpose. Docusaurus builds each locale as its own
+# site, so it emits build/sitemap.xml (en) and build/es/sitemap.xml (es), and
+# the English one contains ZERO /es/ URLs. Listing only the first would advertise
+# half the documentation and silently omit the GA Spanish locale. When another
+# locale ships (de, pt-BR, ja), it gets its own sitemap and its own line here —
+# there is no combined index to fall back on.
+#
+# This file lives in docs/static/, so it is copied to the root of every locale
+# build. Only the copy at the domain root is ever read; /es/robots.txt is inert.
+User-agent: *
+Allow: /
+
+Sitemap: https://docs.devicechain.io/sitemap.xml
+Sitemap: https://docs.devicechain.io/es/sitemap.xml
