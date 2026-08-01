@@ -849,3 +849,362 @@ func TestValidateRejectsANonArrayParameterSchema(t *testing.T) {
 		t.Error("an object parameterSchema was accepted; the platform stores only an array")
 	}
 }
+
+// ---- The boards ---------------------------------------------------------------
+
+// A parsed board, decoded back from the JSON the builders emit. Reading the
+// artifact rather than the builder is the point: these assert what the platform
+// will actually store, not what the Go structs looked like on the way there.
+type parsedBoard struct {
+	SchemaVersion int    `json:"schemaVersion"`
+	Title         string `json:"title"`
+	Canvas        struct {
+		Grid struct {
+			Columns int `json:"columns"`
+		} `json:"grid"`
+	} `json:"canvas"`
+	Slots map[string]struct {
+		Type           string `json:"type"`
+		DefaultBinding *struct {
+			Kind        string `json:"kind"`
+			DeviceToken string `json:"deviceToken"`
+			Anchor      *struct {
+				TargetToken string `json:"targetToken"`
+			} `json:"anchor"`
+		} `json:"defaultBinding"`
+		Scope *struct {
+			Parent string `json:"parent"`
+		} `json:"scope"`
+	} `json:"slots"`
+	Widgets []struct {
+		Id         string                                              `json:"id"`
+		Type       string                                              `json:"type"`
+		Layout     map[string]struct{ Col, ColSpan, Row, RowSpan int } `json:"layout"`
+		Datasource *struct {
+			Kind         string   `json:"kind"`
+			Slot         string   `json:"slot"`
+			Measurements []string `json:"measurements"`
+		} `json:"datasource"`
+		Options map[string]any `json:"options"`
+	} `json:"widgets"`
+}
+
+func widgetlabBoard(t *testing.T, token string) parsedBoard {
+	t.Helper()
+	for _, d := range NewWidgetlab(1, Load{}).Manifest().Dashboards {
+		if d.Token != token {
+			continue
+		}
+		var board parsedBoard
+		if err := json.Unmarshal([]byte(d.Definition), &board); err != nil {
+			t.Fatalf("board %q is not decodable: %v", token, err)
+		}
+		return board
+	}
+	t.Fatalf("manifest declares no dashboard %q", token)
+	return parsedBoard{}
+}
+
+// 🔑 THE COVERAGE GATE. The gallery is the catalog, so it must carry every widget
+// type there is — and Go does not know what those are. The list lives in
+// @devicechain/dashboards, so it is read from there rather than mirrored: a
+// mirrored list is the thing that goes stale the day a widget is added, which is
+// the exact event this scenario exists to keep up with.
+//
+// The TypeScript side will assert this again over the real parser (that is what the
+// fixture gate is for). This is the same claim held one lane earlier, so a missing
+// widget fails in the lane that added it.
+func TestWidgetlabGalleryCarriesEveryWidgetType(t *testing.T) {
+	const types = "../../../../frontend/packages/dashboards/src/types.ts"
+	source, err := os.ReadFile(types)
+	if err != nil {
+		t.Fatalf("read %s: %v (if WIDGET_TYPES moved, re-point this check rather than deleting "+
+			"it — it is what keeps the gallery a complete catalog)", types, err)
+	}
+	block := regexp.MustCompile(`WIDGET_TYPES\s*=\s*\[([^\]]*)\]`).FindSubmatch(source)
+	if block == nil {
+		t.Fatalf("could not find WIDGET_TYPES in %s; the check cannot see the list it compares "+
+			"against and would pass without asserting anything", types)
+	}
+	var declared []string
+	for _, m := range regexp.MustCompile(`'([^']+)'`).FindAllStringSubmatch(string(block[1]), -1) {
+		declared = append(declared, m[1])
+	}
+	// Negative control: an empty parse would make the coverage check vacuous.
+	if len(declared) < 2 {
+		t.Fatalf("parsed %d widget types out of %s; the pattern has rotted", len(declared), types)
+	}
+
+	present := map[string]int{}
+	for _, w := range widgetlabBoard(t, WidgetlabGalleryDashboardToken).Widgets {
+		present[w.Type]++
+	}
+	// At least once, not exactly once. A second instance of a type is sometimes the
+	// only way to show what it does: the two entity-selectors are the root context
+	// picker and the scoped child picker, and a rebind is only observable with both.
+	for _, widgetType := range declared {
+		if present[widgetType] == 0 {
+			t.Errorf("the gallery carries no %q widget, so the catalog is missing an entry a "+
+				"dashboard author can choose", widgetType)
+		}
+	}
+	for widgetType := range present {
+		if !slices.Contains(declared, widgetType) {
+			t.Errorf("the gallery carries a %q widget, which is not a declared widget type — the "+
+				"parser rejects an unknown type and the whole board fails to open", widgetType)
+		}
+	}
+}
+
+// Both boards, checked for the structural properties a reader would notice: unique
+// ids, a base layout box, a datasource pointing at a declared slot, and no slot
+// declared that nothing uses.
+func TestWidgetlabBoardsAreStructurallySound(t *testing.T) {
+	for _, token := range []string{WidgetlabGalleryDashboardToken, WidgetlabStressDashboardToken} {
+		t.Run(token, func(t *testing.T) {
+			board := widgetlabBoard(t, token)
+			if board.SchemaVersion != 1 {
+				t.Errorf("schemaVersion is %d, not 1", board.SchemaVersion)
+			}
+			if len(board.Widgets) == 0 {
+				t.Fatal("board carries no widgets")
+			}
+
+			ids := map[string]bool{}
+			usedSlots := map[string]bool{}
+			for _, w := range board.Widgets {
+				if ids[w.Id] {
+					t.Errorf("duplicate widget id %q; React keys collide and one widget replaces "+
+						"the other", w.Id)
+				}
+				ids[w.Id] = true
+
+				// parseDashboardDefinition throws on a missing layout.base, so a widget
+				// without one takes the entire board down rather than rendering badly.
+				if _, ok := w.Layout["base"]; !ok {
+					t.Errorf("widget %q has no base layout box; the parser rejects the board", w.Id)
+				}
+				if w.Datasource == nil {
+					continue
+				}
+				if w.Datasource.Kind != "slot" {
+					t.Errorf("widget %q binds a %q datasource; these boards bind slots so a "+
+						"selector can re-point them", w.Id, w.Datasource.Kind)
+				}
+				if _, ok := board.Slots[w.Datasource.Slot]; !ok {
+					t.Errorf("widget %q binds slot %q, which the board does not declare — the "+
+						"hub resolves nothing and the widget renders empty",
+						w.Id, w.Datasource.Slot)
+				}
+				usedSlots[w.Datasource.Slot] = true
+				// A nil measurements array marshals as null, which the parser coerces to
+				// [] — meaning EVERY measurement. It does not drop the datasource (an
+				// earlier version of this comment claimed it did); it silently widens
+				// the subscription, so a chart meant to draw two series draws all of
+				// them.
+				if w.Datasource.Measurements == nil {
+					t.Errorf("widget %q has a null measurements array, which the parser reads as "+
+						"\"every measurement\" — a wider subscription than was authored", w.Id)
+				}
+			}
+
+			// A selection widget uses a slot without carrying a datasource, so count
+			// those too before calling a slot dead.
+			for _, w := range board.Widgets {
+				if target, ok := w.Options["selectionTarget"].(string); ok {
+					usedSlots[target] = true
+				}
+			}
+			for name, slot := range board.Slots {
+				if !usedSlots[name] {
+					t.Errorf("slot %q is declared but nothing references it", name)
+				}
+				if slot.DefaultBinding == nil {
+					t.Errorf("slot %q has no default binding, so it opens unbound and every "+
+						"widget on it renders a placeholder", name)
+				}
+				if slot.Scope != nil {
+					if _, ok := board.Slots[slot.Scope.Parent]; !ok {
+						t.Errorf("slot %q is scoped to %q, which the board does not declare",
+							name, slot.Scope.Parent)
+					}
+				}
+			}
+		})
+	}
+}
+
+// No widget may sit on top of another. Overlap is legal in the model (z-order
+// exists) and wrong on a board meant to be read.
+//
+// A NEGATIVE coordinate has to be rejected rather than merely mapped, because the
+// parser CLAMPS col and row to zero: two widgets authored at col -6 and col 0 both
+// arrive at column 0, a pixel-perfect overlap — while a gate that marked the
+// authored cells would tick off phantom cells at -6..-1 and see no collision. So the
+// coordinates are checked against the parser's domain before they are marked.
+//
+// Both boards, not just the gallery: the stress board is meant to look hostile, not
+// to be unreadable, and nothing else checks its layout.
+func TestWidgetlabBoardWidgetsDoNotOverlap(t *testing.T) {
+	for _, token := range []string{WidgetlabGalleryDashboardToken, WidgetlabStressDashboardToken} {
+		t.Run(token, func(t *testing.T) {
+			type cell struct{ col, row int }
+			occupied := map[cell]string{}
+			for _, w := range widgetlabBoard(t, token).Widgets {
+				b := w.Layout["base"]
+				if b.Col < 0 || b.Row < 0 {
+					t.Errorf("widget %q is placed at (%d,%d); the parser clamps a negative "+
+						"coordinate to zero, so it would land on top of whatever is there",
+						w.Id, b.Col, b.Row)
+					continue
+				}
+				if b.ColSpan <= 0 || b.RowSpan <= 0 {
+					t.Errorf("widget %q spans %dx%d; it would render as a zero-size box",
+						w.Id, b.ColSpan, b.RowSpan)
+					continue
+				}
+				if b.Col+b.ColSpan > dashboardGridColumns {
+					t.Errorf("widget %q runs from column %d for %d, past the %d-column grid",
+						w.Id, b.Col, b.ColSpan, dashboardGridColumns)
+				}
+				for c := b.Col; c < b.Col+b.ColSpan; c++ {
+					for r := b.Row; r < b.Row+b.RowSpan; r++ {
+						if other, taken := occupied[cell{c, r}]; taken {
+							t.Errorf("widgets %q and %q both occupy cell (%d,%d)", other, w.Id, c, r)
+						}
+						occupied[cell{c, r}] = w.Id
+					}
+				}
+			}
+		})
+	}
+}
+
+// The board's options and the profile's authored content are two sides of one
+// decision, exactly like the sweep and the threshold. Each of these would render a
+// widget that looks configured and shows nothing.
+func TestWidgetlabBoardOptionsAgreeWithWhatIsProvisioned(t *testing.T) {
+	board := widgetlabBoard(t, WidgetlabGalleryDashboardToken)
+	// Keyed by ID, and every instance of a type is checked. Keying by TYPE let the
+	// last instance win, so the day a board carries a second gauge or command-button
+	// — which the coverage gate's at-least-once policy invites — the earlier one's
+	// options would go unasserted with every test still green.
+	options := map[string]map[string]any{}
+	each := func(widgetType string, check func(id string, opts map[string]any)) {
+		seen := 0
+		for _, w := range board.Widgets {
+			if w.Type != widgetType {
+				continue
+			}
+			seen++
+			check(w.Id, w.Options)
+		}
+		if seen == 0 {
+			t.Fatalf("the gallery carries no %q widget, so this check asserted nothing", widgetType)
+		}
+	}
+	each("command-button", func(id string, o map[string]any) { options["command-button:"+id] = o })
+	each("alarm-count", func(id string, o map[string]any) { options["alarm-count:"+id] = o })
+	each("gauge", func(id string, o map[string]any) { options["gauge:"+id] = o })
+
+	// Every command-button must name the command the profile actually publishes.
+	command := widgetlabProfile(t).Commands[0]
+	each("command-button", func(id string, o map[string]any) {
+		if got := o["commandName"]; got != command.CommandKey {
+			t.Errorf("%s issues %v but the profile publishes %q; the button would send and "+
+				"fail at the delivery boundary", id, got, command.CommandKey)
+		}
+		if got := o["parameterSchema"]; got != command.ParameterSchema {
+			t.Errorf("%s bakes a parameterSchema the profile does not declare; the form would "+
+				"render fields the device does not accept", id)
+		}
+	})
+
+	// An alarm widget filtering by severity must use the WIRE form — the authoring
+	// severity uppercased by the raise-alarm consumer. The lowercase form matches no
+	// alarm row and renders a permanent zero that reads as a quiet system.
+	each("alarm-count", func(id string, o map[string]any) {
+		if got := o["severity"]; got != WidgetlabAlarmSeverityWire {
+			t.Errorf("%s filters severity %v, not the wire form %q a raised alarm carries",
+				id, got, WidgetlabAlarmSeverityWire)
+		}
+	})
+
+	// A gauge's scale is the sweep's own bounds, so the needle visits both ends, and
+	// it displays the swept metric rather than tracking a flat line against it.
+	each("gauge", func(id string, o map[string]any) {
+		if got := o["min"]; got != WidgetlabSweepMin {
+			t.Errorf("%s min is %v, not the sweep's %v", id, got, WidgetlabSweepMin)
+		}
+		if got := o["max"]; got != WidgetlabSweepMax {
+			t.Errorf("%s max is %v, not the sweep's %v", id, got, WidgetlabSweepMax)
+		}
+		if got := o["measurement"]; got != WidgetlabTemperatureKey {
+			t.Errorf("%s displays %v, not the swept metric %q", id, got, WidgetlabTemperatureKey)
+		}
+	})
+
+	// The alarm-table must NOT pin a state: filtering to ACTIVE makes a resolve
+	// render as a vanishing row, so the cleared state never appears on the catalog.
+	each("alarm-table", func(id string, o map[string]any) {
+		if state, pinned := o["state"]; pinned {
+			t.Errorf("%s filters state %v, so a cleared alarm leaves the table and the resolve "+
+				"path — half of what this widget draws — is never shown", id, state)
+		}
+	})
+}
+
+// Each board binds the device population it is about. The stress board bound to a
+// nominal sensor would show well-behaved data under a banner announcing hostile
+// input, which is worse than showing nothing.
+func TestWidgetlabBoardsBindTheirOwnPopulations(t *testing.T) {
+	m := NewWidgetlab(1, Load{}).Manifest()
+	byToken := map[string]string{}
+	for _, d := range m.Expand(m.Seed) {
+		byToken[d.Token] = d.DeviceTypeToken
+	}
+
+	cases := []struct{ board, wantType string }{
+		{WidgetlabGalleryDashboardToken, WidgetlabDeviceTypeToken},
+		{WidgetlabStressDashboardToken, WidgetlabEdgeDeviceTypeToken},
+	}
+	for _, c := range cases {
+		bound := 0
+		for name, slot := range widgetlabBoard(t, c.board).Slots {
+			if slot.DefaultBinding == nil || slot.DefaultBinding.Kind != "device" {
+				continue
+			}
+			bound++
+			token := slot.DefaultBinding.DeviceToken
+			if got, ok := byToken[token]; !ok {
+				t.Errorf("%s: slot %q binds device %q, which the topology does not contain",
+					c.board, name, token)
+			} else if got != c.wantType {
+				t.Errorf("%s: slot %q binds a %q device; this board is about %q devices",
+					c.board, name, got, c.wantType)
+			}
+		}
+		if bound == 0 {
+			t.Errorf("%s binds no device slot at all, so this test asserted nothing", c.board)
+		}
+	}
+}
+
+// The stress board must say it is deliberately pathological. It is reachable by
+// anyone who bootstraps the scenario, and a board that looks broken without saying
+// why is a support ticket.
+func TestWidgetlabStressBoardSaysItIsDeliberatelyPathological(t *testing.T) {
+	var announced bool
+	for _, w := range widgetlabBoard(t, WidgetlabStressDashboardToken).Widgets {
+		if w.Type != "label" {
+			continue
+		}
+		if text, ok := w.Options["text"].(string); ok && strings.Contains(strings.ToLower(text), "pathological") {
+			announced = true
+		}
+	}
+	if !announced {
+		t.Error("the stress board carries no label announcing that its data is deliberately " +
+			"hostile; a viewer would read it as a broken dashboard")
+	}
+}

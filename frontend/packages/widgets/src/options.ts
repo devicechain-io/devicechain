@@ -117,11 +117,16 @@ const FLASH_ON_CHANGE = {
 // per measurement unconditionally and trims only `samples`. Only the chart draws
 // `samples`, so on a card, gauge or table this is a memory bound with no visible effect —
 // declared because the renderer honors it, documented so nobody expects it to show.
+//
+// The trim is GLOBAL across the widget's measurements, not per measurement: `samples` is
+// one interleaved list, so a chart drawing N series retains roughly window/N of each. An
+// earlier version of this doc said "per measurement", and a caller sized a window off it
+// and got half the history it intended.
 const WINDOW = {
   kind: 'number',
   integer: true,
   min: 1,
-  doc: 'Samples retained per measurement before the oldest are dropped. Bounds memory; only the chart draws them. Default 300.',
+  doc: 'Samples retained across ALL of the widget\'s measurements before the oldest are dropped. Bounds memory; only the chart draws them. Default 300.',
 } as const satisfies OptionSpec;
 
 const UNIT = {
