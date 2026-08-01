@@ -9,6 +9,7 @@ import (
 
 	"github.com/devicechain-io/dcctl/sim"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 var simCreateCmd = &cobra.Command{
@@ -32,11 +33,51 @@ stored password in sync with the identity).`,
 func init() {
 	simCreateCmd.Flags().Int64("seed", 1, "deterministic generation seed for the sim's populations")
 	simCreateCmd.Flags().String("ingress", "", "device-plane HTTP ingress base URL (default http(s)://<server>:8081)")
+	registerMqttFlags(simCreateCmd.Flags())
 	simCreateCmd.Flags().String("manifest", "devicepulse",
 		"built-in scenario to run ("+strings.Join(sim.KnownManifestIds, ", ")+")")
 	simCreateCmd.Flags().String("tier", sim.DefaultTenantTier, "tenant tier to package the sim at (ADR-065)")
 	simCreateCmd.Flags().Int("shed-priority", 0, "ADR-063 shed-priority override 1-100 (0 = inherit the tier's); a load-test lever to place a probe tenant in a shed band")
 	simCmd.AddCommand(simCreateCmd)
+}
+
+// flagMqttBroker/flagMqttInsecure name the two flags that address the MQTT gateway a
+// scenario's command far end dials. Named once so registration, the resolver below,
+// and the test that drives them through real pflag parsing cannot drift apart on a
+// rename — a mismatch would make Changed() always false and silently pin the default.
+const (
+	flagMqttBroker   = "mqtt-broker"
+	flagMqttInsecure = "mqtt-insecure"
+)
+
+// registerMqttFlags adds the far-end addressing flags to a flag set. Shared with the
+// test so the behaviour is exercised through the SAME registration the command uses.
+func registerMqttFlags(fs *pflag.FlagSet) {
+	fs.String(flagMqttBroker, "",
+		"NATS MQTT gateway a scenario's command far end dials (default ssl://<server>:1883)")
+	fs.Bool(flagMqttInsecure, false,
+		"skip verification of the MQTT gateway's certificate (defaults ON without --tls, since a "+
+			"local bring-up's gateway cert is self-signed; pass --mqtt-insecure=false to force verification)")
+}
+
+// resolveMqttInsecure decides whether the sim's command far end verifies the MQTT
+// gateway's certificate.
+//
+// The broker's TLS is terminated with whatever cert its deployment holds, and a local
+// bring-up's is self-signed — nothing chains it to a system root, so a verifying far
+// end cannot connect there at all. --tls is the available signal for "this is a real
+// deployment reachable at its cert's SAN": a run that does not even use TLS to the
+// platform's own HTTP endpoints has already given up more than this protects.
+//
+// An explicit --mqtt-insecure overrides in BOTH directions, which is why it reads
+// Changed rather than the value — a plain GetBool could not tell "--mqtt-insecure=false"
+// from "not passed", and the derived default would win over an explicit instruction.
+func resolveMqttInsecure(fs *pflag.FlagSet, tls bool) bool {
+	if fs.Changed(flagMqttInsecure) {
+		v, _ := fs.GetBool(flagMqttInsecure)
+		return v
+	}
+	return !tls
 }
 
 func runSimCreate(cmd *cobra.Command, args []string) error {
@@ -52,6 +93,8 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 	tls, _ := cmd.Flags().GetBool("tls")
 	controlAddr, _ := cmd.Flags().GetString("control-addr")
 	ingress, _ := cmd.Flags().GetString("ingress")
+	mqttBroker, _ := cmd.Flags().GetString(flagMqttBroker)
+	mqttInsecure := resolveMqttInsecure(cmd.Flags(), tls)
 	seed, _ := cmd.Flags().GetInt64("seed")
 	manifestId, _ := cmd.Flags().GetString("manifest")
 	if err := sim.ValidateManifestId(manifestId); err != nil {
@@ -85,7 +128,7 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 		password = p
 	}
 
-	endpoints := sim.ResolveEndpoints(server, ingress, tls)
+	endpoints := sim.ResolveEndpoints(server, ingress, mqttBroker, tls)
 	adminURL := sim.AdminURL(server, tls)
 	admin := sim.NewAdmin(endpoints.UserGraphQL, adminURL, adminEmail, adminPassword)
 
@@ -126,6 +169,8 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 		InstanceId:  instance,
 		ControlAddr: controlAddr,
 		AdminURL:    adminURL,
+
+		MqttTLSInsecure: mqttInsecure,
 	}
 	if err := sim.Save(rec); err != nil {
 		return err
@@ -133,6 +178,17 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 	path, _ := sim.RecordPath(name)
 
 	fmt.Printf("✅ sim %q created — tenant %q, scoped identity %q\n\n", name, tenant, email)
+	// Stated on every create, not only for a scenario that needs it: a certificate
+	// check that was skipped is worth one line wherever it was decided, and dcctl
+	// does not know which scenario the handshake will end up running.
+	fmt.Printf("MQTT gateway (command far end): %s\n", endpoints.MqttBroker)
+	// Only for a broker the client will actually establish TLS to. A plaintext
+	// tcp:// broker presents no certificate, so "its certificate will NOT be
+	// verified" is a security-relevant sentence that is untrue there.
+	if mqttInsecure && sim.BrokerIsTLS(endpoints.MqttBroker) {
+		fmt.Println("  ⚠️  its certificate will NOT be verified (--mqtt-insecure=false to require it)")
+	}
+	fmt.Println()
 	fmt.Println("Run the sim actor (the Go reference runner):")
 	fmt.Printf("    dc-simulator --handshake %s\n\n", path)
 	fmt.Println("Then drive / inspect it:")

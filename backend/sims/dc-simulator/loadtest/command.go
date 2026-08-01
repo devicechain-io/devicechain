@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/devicechain-io/dc-simulator/loadtest/cmdreceiver"
+	"github.com/devicechain-io/dc-simulator/cmdreceiver"
 	"github.com/devicechain-io/dc-simulator/sim"
 	"github.com/rs/zerolog/log"
 )

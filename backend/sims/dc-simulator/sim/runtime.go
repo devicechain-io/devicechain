@@ -170,6 +170,25 @@ type Runtime struct {
 	// Stats accumulates emit accounting across the process lifetime.
 	Stats Stats
 
+	// MqttBroker/MqttTLSInsecure address the NATS MQTT gateway a scenario's
+	// CommandFarEnd dials, threaded from the handshake. Empty broker is legal for
+	// every scenario that declares no far end; for one that does, Bootstrap
+	// refuses rather than running a control channel with nothing on the other side.
+	MqttBroker      string
+	MqttTLSInsecure bool
+
+	// FarEndDisabled is the operator's explicit "run this scenario knowing its
+	// command widget answers nothing" (--no-command-far-end). It is a FIELD rather
+	// than the absence of a broker because the two are different situations and only
+	// one of them is a decision: /status reports this one as disabled, and the other
+	// never gets that far.
+	FarEndDisabled bool
+
+	// NewFarEnd builds the command far end. Nil in production (the real MQTT
+	// cmdreceiver); a test substitutes a fake so the ATTACH WIRING is gated without
+	// a broker — which is the half that was missing, not the receiver itself.
+	NewFarEnd FarEndFactory
+
 	// Load is the run-time load profile, carried here because Runtime is the
 	// handle every Tick already receives — so a scenario derives its emit
 	// concurrency from the SAME profile that sized this client's connection
@@ -197,11 +216,13 @@ func NewRuntime(hs *Handshake, load Load, deviceCount int) (*Runtime, error) {
 
 	httpc := &http.Client{Timeout: httpTimeout, Transport: transport}
 	return &Runtime{
-		Session:    userclient.NewTenantSession(httpc, hs.Endpoints.UserGraphQL, hs.SimEmail, hs.SimPassword, hs.Tenant),
-		Endpoints:  hs.Endpoints,
-		InstanceId: hs.InstanceId,
-		Tenant:     hs.Tenant,
-		HTTPClient: httpc,
-		Load:       load,
+		Session:         userclient.NewTenantSession(httpc, hs.Endpoints.UserGraphQL, hs.SimEmail, hs.SimPassword, hs.Tenant),
+		Endpoints:       hs.Endpoints,
+		InstanceId:      hs.InstanceId,
+		Tenant:          hs.Tenant,
+		HTTPClient:      httpc,
+		MqttBroker:      hs.Endpoints.MqttBroker,
+		MqttTLSInsecure: hs.MqttTLSInsecure,
+		Load:            load,
 	}, nil
 }

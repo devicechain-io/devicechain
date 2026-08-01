@@ -125,6 +125,19 @@ const alarmRow: AlarmRow = {
   message: 'over temperature',
 };
 
+// A completed command round trip, as a RENDER INPUT: this asserts the widget draws
+// an acked command, and says nothing about whether anything acks one.
+//
+// It used to say something it should not have. While the widgetlab devices were
+// HTTP-ingress-only, SUCCESSFUL existed nowhere but here — the one place the round
+// trip completed was a literal in a test, and a reader could take a green gate for
+// evidence of a working control channel. The scenario now attaches a command
+// receiver per device (SimManifest.CommandFarEnd), so this shape is one the run
+// genuinely reaches.
+//
+// respondedTime is set, not null: the response IS what makes a command successful,
+// so a SUCCESSFUL row without one is a state the platform never produces, and a
+// widget reading it would render a blank against a fixture nobody would question.
 const commandRow: CommandRow = {
   token: 'cmd-1',
   name: 'setSetpoint',
@@ -134,7 +147,7 @@ const commandRow: CommandRow = {
   error: null,
   queuedTime: '2026-08-01T12:00:00Z',
   sentTime: '2026-08-01T12:00:01Z',
-  respondedTime: null,
+  respondedTime: '2026-08-01T12:00:02Z',
 };
 
 const alarmData: AlarmStreamState = { alarms: [alarmRow], total: 1, loading: false, error: null };

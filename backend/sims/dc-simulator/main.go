@@ -58,6 +58,10 @@ func main() {
 		"override the telemetry cadence, e.g. 200ms (0 keeps the 5s demo cadence)")
 	concurrency := flag.Int("concurrency", envIntOr("DC_SIM_CONCURRENCY", 0),
 		"max emits in flight per tick (0 derives it from the device count)")
+	noFarEnd := flag.Bool("no-command-far-end", envBoolOr("DC_SIM_NO_COMMAND_FAR_END", false),
+		"run a scenario that needs a command far end WITHOUT one. Its command widgets then "+
+			"enqueue commands nothing answers, which reach SENT and expire — an escape hatch for "+
+			"a host that cannot reach the MQTT gateway, not a default")
 	flag.Parse()
 
 	if *handshakePath == "" {
@@ -69,12 +73,12 @@ func main() {
 		EmitInterval: *emitInterval,
 		Concurrency:  *concurrency,
 	}
-	if err := run(*handshakePath, *bind, *port, load); err != nil {
+	if err := run(*handshakePath, *bind, *port, load, *noFarEnd); err != nil {
 		log.Fatal().Err(err).Msg("dc-simulator exited")
 	}
 }
 
-func run(handshakePath, bind, port string, load sim.Load) error {
+func run(handshakePath, bind, port string, load sim.Load, noFarEnd bool) error {
 	hs, err := sim.LoadHandshake(handshakePath)
 	if err != nil {
 		return err
@@ -107,6 +111,15 @@ func run(handshakePath, bind, port string, load sim.Load) error {
 	rt, err := sim.NewRuntime(hs, load, deviceCount)
 	if err != nil {
 		return err
+	}
+	rt.FarEndDisabled = noFarEnd
+	if noFarEnd && driver.Manifest().CommandFarEnd {
+		// WARN rather than a one-line info, and stated as the consequence rather
+		// than as the flag that was passed: the operator who set this is not
+		// necessarily the person later reading a board whose Send button does nothing.
+		log.Warn().Str("manifestId", manifestId).
+			Msg("--no-command-far-end: this scenario's devices will NOT receive commands; " +
+				"a command issued from its dashboard reaches SENT and expires unanswered")
 	}
 
 	lc := sim.NewLifecycle(driver, rt)
@@ -142,6 +155,10 @@ func run(handshakePath, bind, port string, load sim.Load) error {
 		// Halt the emit loop before draining the server so a graceful shutdown
 		// stops POSTing telemetry rather than emitting until the process dies.
 		_ = lc.Stop()
+		// Then release the command far end's broker connections. After Stop, not
+		// instead of it: the far end outlives a Stop on purpose (a real device keeps
+		// listening while it is not reporting) and only a process exit ends it.
+		lc.Close()
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
 		_ = srv.Shutdown(shutdownCtx)
@@ -175,6 +192,18 @@ func envIntOr(key string, fallback int) int {
 		log.Fatal().Str(key, v).Msg("not an integer")
 	}
 	return n
+}
+
+func envBoolOr(key string, fallback bool) bool {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		log.Fatal().Str(key, v).Msg("not a boolean (want e.g. 1, true, 0, false)")
+	}
+	return b
 }
 
 func envDurationOr(key string, fallback time.Duration) time.Duration {

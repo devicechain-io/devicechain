@@ -26,12 +26,14 @@ import (
 // generator classifies a device structurally, off DeviceInstance.DeviceTypeToken,
 // instead of guessing from its name.
 //
-// 🔴 NOT YET A COMPLETE ROUND TRIP. The measurement, alarm and selection channels
-// work end to end; the CONTROL channel does not. The command-button enqueues against
-// a real published command definition, but these devices are HTTP-ingress-only and
-// one-way — nothing here subscribes to command delivery — so an issued command sits
-// at SENT until it expires. That is the scenario permanently demonstrating the very
-// failure this board exists to distinguish from success, and it wants a receiver.
+// All four channels complete. Telemetry goes out over the one-way HTTP ingress like
+// every other scenario's; the CONTROL channel is the exception, and it is why this
+// manifest declares CommandFarEnd: an HTTP-ingress-only device cannot receive
+// anything, so a command-button on the board would enqueue against a real published
+// definition, dispatch correctly, and sit at SENT until it expired a week later —
+// the scenario permanently demonstrating the very failure the board exists to
+// distinguish from success. Bootstrap therefore attaches a cmdreceiver per device
+// over the MQTT gateway, and REFUSES to come up if it cannot.
 type widgetlab struct {
 	// seed drives all deterministic generation, threaded from the handshake —
 	// see devicepulse's identical field for the reset/idempotency rationale.
@@ -250,6 +252,9 @@ func (s *widgetlab) Manifest() SimManifest {
 		// The boards bind named devices in named zones, so resizing this scenario
 		// would leave a dashboard pointing at a device that no longer exists.
 		FixedTopology: true,
+		// The gallery carries a command-button, so these devices must LISTEN, not
+		// only report. Manifest.Validate refuses the board without this.
+		CommandFarEnd: true,
 		CustomerTypes: []CustomerTypeSpec{
 			{Token: "wl-operator", Name: "Operator"},
 		},

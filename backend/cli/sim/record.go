@@ -15,6 +15,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -31,6 +32,7 @@ type Endpoints struct {
 	EventMgmtWS          string `json:"eventMgmtWS"`
 	EventProcessingWS    string `json:"eventProcessingWS"`
 	CommandMgmtGraphQL   string `json:"commandMgmtGraphQL"`
+	MqttBroker           string `json:"mqttBroker"`
 }
 
 // Record is dcctl's local record for one sim. It is written verbatim as the
@@ -48,6 +50,11 @@ type Record struct {
 	Seed        int64     `json:"seed"`
 	InstanceId  string    `json:"instanceId"`
 	ControlAddr string    `json:"controlAddr"`
+	// MqttTLSInsecure skips verification of the MQTT gateway's server certificate.
+	// A local bring-up terminates TLS with a self-signed cert, so a sim's command far
+	// end cannot connect there without it; a deployment reachable at its cert's SAN
+	// leaves it false. Consumed by dc-simulator's Handshake.
+	MqttTLSInsecure bool `json:"mqttTLSInsecure"`
 	// AdminURL is the /admin/graphql endpoint create resolved, persisted so destroy
 	// tears down against the same host it was created on (not a re-derived default).
 	AdminURL string `json:"adminURL"`
@@ -208,15 +215,58 @@ func AdminURL(server string, tls bool) string {
 	return fmt.Sprintf("%s://%s/api/user-management/admin/graphql", h, server)
 }
 
+// DefaultMqttBroker is the NATS MQTT gateway address for an instance host: the
+// gateway's own listener, not an /api ingress route, so it is host:1883 the way the
+// device-plane ingress is host:8081.
+//
+// The scheme is ssl:// unconditionally, because the broker's TLS is not the
+// ingress's: nats_enable_tls defaults to TRUE in the OpenTofu module, so a
+// standard bring-up terminates TLS on 1883 whether or not the HTTP ingress does.
+// Deriving this from the --tls flag would hand a plaintext-ingress local cluster a
+// tcp:// broker its gateway will not speak.
+//
+// A port already on `server` is DROPPED rather than appended. `--server host:8080`
+// is legitimate for the HTTP endpoints (a port-forwarded ingress), and naively
+// formatting it here yields "ssl://host:8080:1883" — which url.Parse and paho both
+// accept, so `sim create` succeeds and writes the record, and the only symptom is a
+// confusing dial failure at bootstrap much later. The gateway's port is 1883
+// whatever port the HTTP ingress happens to be on, so the host is what carries over.
+func DefaultMqttBroker(server string) string {
+	host := server
+	if h, _, err := net.SplitHostPort(server); err == nil {
+		host = h
+	}
+	return fmt.Sprintf("ssl://%s:1883", host)
+}
+
+// BrokerIsTLS reports whether a broker URL's scheme makes the client establish TLS,
+// which is what decides whether a certificate-verification choice applies to it at
+// all. Mirrors dc-simulator's brokerTLSSchemes, which mirrors paho's openConnection.
+// dcctl uses it only to decide whether to SAY anything about verification: telling
+// an operator their certificate will not be verified on a tcp:// broker, which
+// presents none, is a security-relevant sentence that is simply untrue.
+func BrokerIsTLS(broker string) bool {
+	for _, s := range []string{"ssl://", "tls://", "mqtts://", "mqtt+ssl://", "tcps://", "wss://"} {
+		if strings.HasPrefix(broker, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // ResolveEndpoints derives the platform endpoints the sim needs from the instance
 // host, using the chart's /api/<area> ingress convention (prefix stripped to the
 // service's /graphql). ingress overrides the device-plane HTTP ingress base, which
 // is NOT on the /api ingress (event-sources :8081); it defaults to
-// http(s)://<server>:8081, matching a port-forward of that service.
-func ResolveEndpoints(server, ingress string, tls bool) Endpoints {
+// http(s)://<server>:8081, matching a port-forward of that service. mqttBroker
+// likewise overrides the MQTT gateway address a scenario's command far end dials.
+func ResolveEndpoints(server, ingress, mqttBroker string, tls bool) Endpoints {
 	h, ws := scheme(tls)
 	if strings.TrimSpace(ingress) == "" {
 		ingress = fmt.Sprintf("%s://%s:8081", h, server)
+	}
+	if strings.TrimSpace(mqttBroker) == "" {
+		mqttBroker = DefaultMqttBroker(server)
 	}
 	return Endpoints{
 		UserGraphQL:          fmt.Sprintf("%s://%s/api/user-management/graphql", h, server),
@@ -226,5 +276,6 @@ func ResolveEndpoints(server, ingress string, tls bool) Endpoints {
 		EventMgmtWS:          fmt.Sprintf("%s://%s/api/event-management/graphql", ws, server),
 		EventProcessingWS:    fmt.Sprintf("%s://%s/api/event-processing/graphql", ws, server),
 		CommandMgmtGraphQL:   fmt.Sprintf("%s://%s/api/command-delivery/graphql", h, server),
+		MqttBroker:           mqttBroker,
 	}
 }

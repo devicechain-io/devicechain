@@ -45,6 +45,17 @@ type dashboardGrid struct {
 	RowHeight int `json:"rowHeight"`
 }
 
+// commandWidgetType is the one widget type that ISSUES rather than displays — the
+// only one whose presence on a board makes a demand of the scenario's devices
+// (SimManifest.CommandFarEnd). Named once because both the builder that emits it
+// and Validate's far-end check must mean the same widget; a typo in either would
+// otherwise disagree silently, and the direction that fails open is the check.
+//
+// It is not gated against the TypeScript WIDGET_TYPES list here, because it does
+// not need to be: a value that is not a real widget type puts an undeclared type on
+// the gallery, which TestWidgetlabGalleryCarriesEveryWidgetType already fails on.
+const commandWidgetType = "command-button"
+
 // dashboardWidget mirrors WidgetInstance. Datasource is a pointer so a widget
 // that has none (a label/image) omits the field entirely rather than marshaling
 // an empty object.

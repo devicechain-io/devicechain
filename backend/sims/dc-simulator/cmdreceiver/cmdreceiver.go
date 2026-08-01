@@ -1,11 +1,21 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package cmdreceiver is a device-plane MQTT command receiver for the ADR-064
-// load-test command round-trip harness (L2d-3). It is the first Go client in the
-// repo that RECEIVES device commands: the sim otherwise only PUBLISHES telemetry
-// over HTTP ingress, so there was no device-side "listen for a command, act on it,
-// answer it" path to reuse.
+// Package cmdreceiver is a device-plane MQTT command receiver: the device side of
+// the two-way command contract (ADR-043). It is the only Go client in the repo
+// that RECEIVES device commands — the sim otherwise only PUBLISHES telemetry over
+// HTTP ingress, which is one-way.
+//
+// It has TWO consumers, which is why it sits at the module root rather than
+// inside either of them:
+//
+//   - loadtest (ADR-064 L2d-3) drives a bounded probe cohort and reconciles the
+//     durable command status against this receiver's wire-level evidence.
+//   - a SCENARIO whose manifest declares CommandFarEnd (widgetlab) attaches one
+//     for its whole device set at bootstrap, so a command issued from a dashboard's
+//     command-button widget completes QUEUED -> SENT -> SUCCESSFUL instead of
+//     sitting at SENT until it expires. Without it the widget renders a plausible
+//     round trip that never happens.
 //
 // A DeviceChain device receives commands over MQTT on the NATS built-in MQTT
 // gateway. Each device is its own MQTT connection (MQTT 3.1.1 has no shared
@@ -36,6 +46,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -90,6 +101,7 @@ type deviceState struct {
 	distinct   map[string]int // command token → times seen (dedup key)
 	malformed  int            // frames that did not decode as a command envelope
 	connLosses int            // OnConnectionLost callbacks (a blip; auto-reconnect recovers)
+	responded  int            // response publishes that were ACKED by the broker
 	respondErr error          // first response-publish error, if any
 }
 
@@ -284,21 +296,51 @@ func (r *Receiver) recordFrame(ds *deviceState, payload []byte) (token string, o
 }
 
 // respond publishes a success response for a command token on the device's own
-// connection (its JWT grants PUB to command-responses).
+// connection (its JWT grants PUB to command-responses), then records the outcome.
+//
+// Every path funnels through ONE recordResponse call so the meaning of the counters
+// lives somewhere a test can reach: this function needs a live broker connection, so
+// nothing here is unit-testable, and the accounting used to be inlined among the
+// publish steps where only a comment claimed a failed publish is not a response.
 func (r *Receiver) respond(ds *deviceState, commandToken string) {
+	r.recordResponse(ds, r.publishResponse(ds, commandToken))
+}
+
+// publishResponse marshals and publishes one response, returning the first failure
+// or nil once the broker has ACKED it. A timeout is a failure: an unacked QoS-1
+// publish is not a delivered response.
+func (r *Receiver) publishResponse(ds *deviceState, commandToken string) error {
 	payload, err := json.Marshal(responseEnvelope{CommandToken: commandToken, Success: true})
+	if err != nil {
+		return err
+	}
+	tok := ds.client.Publish(ds.responseTopic, 1, false, payload)
+	if !tok.WaitTimeout(publishTimeout) {
+		return fmt.Errorf("response publish timed out for command %q", commandToken)
+	}
+	if perr := tok.Error(); perr != nil {
+		return fmt.Errorf("response publish failed for command %q: %w", commandToken, perr)
+	}
+	return nil
+}
+
+// recordResponse records one response publish's OUTCOME: a nil error counts a
+// broker-acked response, anything else records the failure and counts nothing.
+//
+// It is the pure heart of the response accounting — no broker, no network — the way
+// recordFrame is for the receive accounting, and for the same reason: `responded`
+// has to mean "the broker acked this", not "we tried". A count that included
+// attempts would read as a healthy far end on a device whose every publish failed,
+// which is precisely the reading these counters exist to make impossible, and while
+// the decision was inlined in respond() nothing could check it.
+func (r *Receiver) recordResponse(ds *deviceState, err error) {
 	if err != nil {
 		r.recordRespondErr(ds, err)
 		return
 	}
-	tok := ds.client.Publish(ds.responseTopic, 1, false, payload)
-	if !tok.WaitTimeout(publishTimeout) {
-		r.recordRespondErr(ds, fmt.Errorf("response publish timed out for command %q", commandToken))
-		return
-	}
-	if perr := tok.Error(); perr != nil {
-		r.recordRespondErr(ds, fmt.Errorf("response publish failed for command %q: %w", commandToken, perr))
-	}
+	ds.mu.Lock()
+	ds.responded++
+	ds.mu.Unlock()
 }
 
 func (r *Receiver) recordRespondErr(ds *deviceState, err error) {
@@ -351,16 +393,18 @@ type DeviceReport struct {
 	Distinct   int    `json:"distinctReceived"`
 	Malformed  int    `json:"malformed"`
 	ConnLosses int    `json:"connectionLosses"`
+	Responded  int    `json:"responded"`
 	RespondErr string `json:"respondError,omitempty"`
 }
 
 // Report is the whole cohort's receive evidence.
 type Report struct {
-	Broker        string                  `json:"broker"`
-	Devices       map[string]DeviceReport `json:"devices"`
-	TotalRaw      int                     `json:"totalRawReceived"`
-	TotalDistinct int                     `json:"totalDistinctReceived"`
-	Blind         []string                `json:"blindDevices,omitempty"` // subscribed==false
+	Broker         string                  `json:"broker"`
+	Devices        map[string]DeviceReport `json:"devices"`
+	TotalRaw       int                     `json:"totalRawReceived"`
+	TotalDistinct  int                     `json:"totalDistinctReceived"`
+	TotalResponded int                     `json:"totalResponded"`
+	Blind          []string                `json:"blindDevices,omitempty"` // subscribed==false
 }
 
 // Report snapshots the cohort's receive evidence.
@@ -377,6 +421,7 @@ func (r *Receiver) Report() Report {
 			Distinct:   len(ds.distinct),
 			Malformed:  ds.malformed,
 			ConnLosses: ds.connLosses,
+			Responded:  ds.responded,
 		}
 		if ds.respondErr != nil {
 			dr.RespondErr = ds.respondErr.Error()
@@ -385,9 +430,14 @@ func (r *Receiver) Report() Report {
 		rep.Devices[tok] = dr
 		rep.TotalRaw += dr.Raw
 		rep.TotalDistinct += dr.Distinct
+		rep.TotalResponded += dr.Responded
 		if !dr.Subscribed {
 			rep.Blind = append(rep.Blind, tok)
 		}
 	}
+	// Sorted because this report is now rendered on the sim's /status, which a
+	// human and a script both read repeatedly: map iteration order would reshuffle
+	// the blind list between two polls of an unchanged far end.
+	sort.Strings(rep.Blind)
 	return rep
 }

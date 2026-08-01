@@ -24,7 +24,14 @@ identity and drives the same tenant-facing surfaces a real integration would.
    credential — exactly the path a physical device uses. The cadence and
    population default to the scenario's own demo sizing (~5s) and are
    overridable — see [Driving load](#driving-load).
-5. Serves a small **control API** (`GET /status`, `POST /start`, `POST /stop`,
+5. **Receives** commands, for a scenario whose manifest declares a **command far
+   end** (widgetlab). Telemetry over HTTP ingress is one-way, so a scenario whose
+   dashboard offers a command-button otherwise enqueues real commands nothing
+   answers: they reach `SENT` and expire days later, with every layer reporting
+   success. Such a scenario subscribes every device to its own command topic on
+   the MQTT gateway and answers what arrives, completing `QUEUED -> SENT ->
+   SUCCESSFUL`. See [The command far end](#the-command-far-end).
+6. Serves a small **control API** (`GET /status`, `POST /start`, `POST /stop`,
    `POST /reset`) and a **presentation page** (`web/index.html`, embedded in
    the binary) that subscribes to event-management's `measurementStream` over
    `graphql-ws` and lists live measurements — read-back of *resolved* platform
@@ -61,6 +68,36 @@ is one. devicepulse and buildingpulse take any size.
 # 500 devices every 200ms = a 2500 events/sec target
 go run . --handshake ./hs.json --devices 500 --emit-interval 200ms
 ```
+
+### The command far end
+
+A device that only POSTs telemetry cannot receive anything, so a scenario with a
+control widget on its board needs a second connection: every device subscribed to
+`{instance}/{tenant}/device-commands/{token}` on the NATS MQTT gateway, answering
+on `{instance}/{tenant}/command-responses` (the `cmdreceiver` package, shared with
+the load-test command harness). A scenario opts in with `CommandFarEnd` on its
+manifest; widgetlab does, devicepulse and buildingpulse do not.
+
+`dcctl sim create` resolves the gateway address into the handshake
+(`endpoints.mqttBroker`, default `ssl://<server>:1883` — the broker terminates TLS
+independently of the HTTP ingress) and records whether to verify its certificate
+(`mqttTLSInsecure`, on by default without `--tls`, since a local bring-up's gateway
+cert is self-signed). Override either with `--mqtt-broker` / `--mqtt-insecure`.
+
+**Bootstrap FAILS if a declared far end cannot be brought up** — no broker
+configured, or any device that does not come back subscribed. Degrading to "run
+without it" is the failure the seam exists to remove: the scenario would come up
+green and its Send button would enqueue commands that expire unanswered. On a host
+that genuinely cannot reach the gateway, `--no-command-far-end` accepts that
+knowingly; it logs a warning at startup and `GET /status` reports the channel as
+`declared` but `disabled`, alongside per-device receive/respond evidence when one
+is attached.
+
+⚠️ **Run one process per handshake.** An MQTT session is keyed by client id, which
+is derived from `(tenant, deviceToken)` — both fixed by the handshake — so two
+`dc-simulator` processes on the same record (say, a second one on another port) take
+each other's sessions over in a loop. Nothing prevents the second launch; the symptom
+is a reconnect storm and commands ping-ponging between the two receivers.
 
 **Compare `achievedRatePerSec` against `targetRatePerSec`.** A target rate is a
 request; whether the sim reached it depends on emit latency, ingress

@@ -1704,3 +1704,125 @@ func stripGoComments(source string) string {
 	source = regexp.MustCompile(`(?s)/\*.*?\*/`).ReplaceAllStringFunc(source, blank)
 	return regexp.MustCompile(`(?m)//.*$`).ReplaceAllStringFunc(source, blank)
 }
+
+// ---- The command far end -------------------------------------------------------
+
+// 🔑 THE CONTROL-CHANNEL GATE. A board offering control and a scenario whose devices
+// answer are facts on opposite sides of the "definition is opaque JSON" boundary,
+// so nothing but Manifest.Validate can see both — and while nothing did, widgetlab
+// shipped a Send button whose every command reached SENT and expired.
+//
+// Asserted in both directions. Rejecting the unanswered board is only meaningful
+// while a board WITH a far end still passes.
+func TestValidateRefusesAControlBoardWithNoFarEnd(t *testing.T) {
+	m := NewWidgetlab(1, Load{}).Manifest()
+	if err := m.Validate(); err != nil {
+		t.Fatalf("widgetlab's own manifest is invalid: %v", err)
+	}
+	if !m.CommandFarEnd {
+		t.Fatal("widgetlab does not declare CommandFarEnd, so the check below asserts nothing")
+	}
+
+	// Negative control on the fixture itself: this test is only about the far end if
+	// the board it runs against genuinely carries a command widget.
+	if !boardCarriesACommandWidget(t, m) {
+		t.Fatal("no board in the manifest carries a command widget; the rejection below " +
+			"would fire for the wrong reason")
+	}
+
+	stripped := m
+	stripped.CommandFarEnd = false
+	err := stripped.Validate()
+	if err == nil {
+		t.Fatal("a board carrying a command widget was accepted with no far end: its commands " +
+			"would reach SENT and expire unanswered")
+	}
+	if !strings.Contains(err.Error(), "CommandFarEnd") {
+		t.Errorf("error %q does not name the manifest field a reader has to set", err)
+	}
+}
+
+// The inverse. A far end is a live broker connection per device; acquiring one for a
+// scenario with no command vocabulary subscribes every device to a topic nothing can
+// publish to.
+func TestValidateRefusesAFarEndWithNothingToAnswer(t *testing.T) {
+	m := NewWidgetlab(1, Load{}).Manifest()
+	m.Profiles = append([]ProfileSpec(nil), m.Profiles...)
+	for i := range m.Profiles {
+		m.Profiles[i].Commands = nil
+	}
+	// Drop the boards too: without them the command-widget check cannot be what
+	// fires, so the error below is unambiguously the inverse check.
+	m.Dashboards = nil
+	err := m.Validate()
+	if err == nil {
+		t.Fatal("a manifest declaring a far end with no command definitions was accepted")
+	}
+	if !strings.Contains(err.Error(), "nothing for the far end to answer") {
+		t.Errorf("error %q is not the far-end-with-no-commands rejection", err)
+	}
+}
+
+// The far end attaches to rt.Devices, so it covers the command widget's device only
+// if that device is one the manifest expands. A board binding a token outside the
+// population would render a Send button for a device nothing subscribed.
+func TestWidgetlabsCommandWidgetBindsADeviceTheFarEndCovers(t *testing.T) {
+	m := NewWidgetlab(1, Load{}).Manifest()
+	expanded := map[string]bool{}
+	for _, d := range m.Expand(m.Seed) {
+		expanded[d.Token] = true
+	}
+	if len(expanded) == 0 {
+		t.Fatal("the manifest expands no devices")
+	}
+
+	board := widgetlabBoard(t, WidgetlabGalleryDashboardToken)
+	checked := 0
+	for _, w := range board.Widgets {
+		if w.Type != commandWidgetType {
+			continue
+		}
+		if w.Datasource == nil {
+			t.Errorf("command widget %q carries no datasource, so it has no device to command", w.Id)
+			continue
+		}
+		slot, ok := board.Slots[w.Datasource.Slot]
+		if !ok {
+			t.Errorf("command widget %q binds slot %q, which the board does not declare",
+				w.Id, w.Datasource.Slot)
+			continue
+		}
+		if slot.DefaultBinding == nil || slot.DefaultBinding.DeviceToken == "" {
+			t.Errorf("command widget %q binds slot %q, which has no default device binding",
+				w.Id, w.Datasource.Slot)
+			continue
+		}
+		if !expanded[slot.DefaultBinding.DeviceToken] {
+			t.Errorf("command widget %q resolves to device %q, which the manifest does not "+
+				"expand — the far end subscribes rt.Devices, so nothing would answer it",
+				w.Id, slot.DefaultBinding.DeviceToken)
+		}
+		checked++
+	}
+	if checked == 0 {
+		t.Fatal("the gallery carries no command widget; this test asserted nothing")
+	}
+}
+
+// boardCarriesACommandWidget reports whether any dashboard in the manifest carries
+// the widget type that makes a demand of the scenario's devices.
+func boardCarriesACommandWidget(t *testing.T, m SimManifest) bool {
+	t.Helper()
+	for _, ds := range m.Dashboards {
+		var parsed dashboardDefinition
+		if err := json.Unmarshal([]byte(ds.Definition), &parsed); err != nil {
+			t.Fatalf("dashboard %q does not parse: %v", ds.Token, err)
+		}
+		for _, w := range parsed.Widgets {
+			if w.Type == commandWidgetType {
+				return true
+			}
+		}
+	}
+	return false
+}

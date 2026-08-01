@@ -5,6 +5,8 @@ package cmdreceiver
 
 import (
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -118,4 +120,37 @@ func TestReceiverBlindDeviceSurfaced(t *testing.T) {
 	assert.Equal(t, []string{"harness-cmd-probe-001"}, rep.Blind)
 	assert.False(t, rep.Devices["harness-cmd-probe-001"].Subscribed)
 	assert.Equal(t, 0, r.Distinct("unknown-device"), "an unknown device has received nothing")
+}
+
+// `responded` must mean "the broker ACKED this response", not "we tried".
+//
+// 🔴 A count that included attempts would report a healthy far end on a device whose
+// every publish failed — precisely the reading these counters exist to make
+// impossible. respond() itself needs a live broker connection, so while the decision
+// was inlined among its publish steps only a comment pinned it: incrementing the
+// counter BEFORE the ack check passed every test in this package, in sim, and in
+// loadtest. recordResponse is the same pure heart recordFrame is, for the same reason.
+func TestRespondedCountsOnlyAckedResponses(t *testing.T) {
+	r := New("dc", "acme", "tcp://127.0.0.1:1883", nil)
+	ds := &deviceState{token: "dev-1", distinct: map[string]int{}}
+
+	r.recordResponse(ds, nil)
+	r.recordResponse(ds, nil)
+	r.recordResponse(ds, errors.New("response publish timed out for command \"cmd-3\""))
+	r.recordResponse(ds, errors.New("second failure, which must not replace the first"))
+
+	ds.mu.Lock()
+	defer ds.mu.Unlock()
+	if ds.responded != 2 {
+		t.Errorf("responded is %d after 2 acks and 2 failures, want 2", ds.responded)
+	}
+	if ds.respondErr == nil {
+		t.Fatal("a failed response publish recorded no error, so a device that never answered " +
+			"anything reports clean")
+	}
+	// The FIRST failure is kept: it is the one closest to the cause, and a later
+	// cascade would otherwise overwrite it.
+	if !strings.Contains(ds.respondErr.Error(), "cmd-3") {
+		t.Errorf("respondErr is %q, want the first failure", ds.respondErr)
+	}
 }

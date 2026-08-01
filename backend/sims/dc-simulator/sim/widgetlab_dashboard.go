@@ -172,7 +172,7 @@ func buildAlarmCountWidget(id string, b box, s widgetSubject, title string) dash
 // does not contain renders a form, sends, and fails at the delivery boundary.
 func buildCommandButtonWidget(id string, b box, s widgetSubject, title string) dashboardWidget {
 	return dashboardWidget{
-		Id: id, Type: "command-button", Layout: b.layout(), Datasource: s.datasource(),
+		Id: id, Type: commandWidgetType, Layout: b.layout(), Datasource: s.datasource(),
 		Options: map[string]any{
 			"title": title, "commandName": WidgetlabCommandKey, "commandLabel": "Set Setpoint",
 			"parameterSchema": widgetlabParameterSchema, "maxRows": 10,
