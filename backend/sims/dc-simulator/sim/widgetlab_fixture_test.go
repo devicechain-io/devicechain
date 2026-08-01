@@ -215,8 +215,9 @@ func TestWidgetlabBoardsSelectOnlyDeclaredMetrics(t *testing.T) {
 	for _, d := range manifest.Dashboards {
 		var board struct {
 			Widgets []struct {
-				Id         string `json:"id"`
-				Type       string `json:"type"`
+				Id         string         `json:"id"`
+				Type       string         `json:"type"`
+				Options    map[string]any `json:"options"`
 				Datasource *struct {
 					Measurements []string `json:"measurements"`
 				} `json:"datasource"`
@@ -235,6 +236,14 @@ func TestWidgetlabBoardsSelectOnlyDeclaredMetrics(t *testing.T) {
 					t.Errorf("%s/%s selects measurement %q, which no profile declares — the "+
 						"widget binds a real device and shows nothing", d.Token, w.Id, name)
 				}
+			}
+			// 🔴 options.measurement is what a single-value widget ACTUALLY displays:
+			// primaryMeasurementName prefers it over the datasource. A typo there is a
+			// perfectly legal string that no schema check can question, and the widget
+			// renders an em dash — configured, bound, and showing nothing.
+			if name, ok := w.Options["measurement"].(string); ok && !declared[name] {
+				t.Errorf("%s/%s displays measurement %q, which no profile declares — it renders "+
+					"an em dash on a board that is otherwise correctly bound", d.Token, w.Id, name)
 			}
 			// An EMPTY selector means every measurement. That is deliberate on a
 			// table (its whole view is "the latest of everything") and a widening
