@@ -137,6 +137,20 @@ jobs:
         working-directory: ${{ matrix.module }}
         run: go vet ./...
 
+      # Build-tagged tests are invisible to every step above: `go build`, `go vet` and
+      # `go test` all skip a file whose tags are not set, so a tagged suite compiles
+      # against nothing and rots silently — its first sign of trouble is the day someone
+      # needs it and it no longer builds. The `integration` suite (event-management's
+      # real-TimescaleDB write-path tests) and the `interop` suite (Leshan) both live
+      # behind tags for good reasons: they need a server this job does not have.
+      #
+      # Vetting them RUNS nothing and needs no server; it only keeps them compiling
+      # against the code they test. That is the cheap half of the guarantee, and it is
+      # the half that actually decays. Running them is a separate, deliberate job.
+      - name: go vet (build-tagged suites)
+        working-directory: ${{ matrix.module }}
+        run: go vet -tags "integration interop" ./...
+
       # graph-gophers/graphql-go silently discards input-object entries the schema
       # does not define when the value arrives through a VARIABLE (the literal path
       # rejects them correctly). The spec requires a request error, so a misnamed
