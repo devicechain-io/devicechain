@@ -35,10 +35,10 @@ import (
 // draft of this file did.
 //
 // 🔴 NONE OF THE PAYLOAD TABLES DECLARES A PRIMARY KEY, AND THAT IS DELIBERATE. Only `events`
-// has one, on (tenant_id, device_token, event_type, occurred_time). The payload tables relate
-// to the base event by that same natural key joined at the APP layer, with no database foreign
-// key: an FK referencing a hypertable blocks drop_chunks on the parent, which would make the
-// retention and compression work un-droppable. Do not "tidy this up" by adding a key or an FK.
+// has one, on (tenant_id, event_id, occurred_time). The payload tables relate to the base event
+// by event_id joined at the APP layer, with no database foreign key: an FK referencing a
+// hypertable blocks drop_chunks on the parent, which would make the retention and compression
+// work un-droppable. Do not "tidy this up" by adding a key or an FK.
 //
 // 🔑 WHY INLINED — stated carefully, because the obvious version of this argument is BACKWARDS.
 // An earlier version of this comment claimed the golden gate now "largely catches" a core mixin
@@ -71,21 +71,36 @@ type eventTypeSnapshot = int64
 
 // event is the base event row. The originating device is keyed by its token (ADR-044).
 //
-// 🔴 tenant_id LEADS THE COMPOSITE PRIMARY KEY, and that ordering is a correctness property,
-// not a style choice. A device token is unique only PER TENANT (ADR-042), so without tenant_id
-// in the key two tenants with a same-named device emitting at the same instant collide — and
-// upsertParentEvents uses ON CONFLICT DO NOTHING, so one tenant's event is silently dropped
-// rather than erroring. It is declared explicitly here (not through the tenant mixin's layout)
-// because only this table needs it in the key.
+// 🔴 THE KEY IS (tenant_id, event_id, occurred_time), AND event_id IS THE IDENTITY. The natural
+// key (tenant_id, device_token, event_type, occurred_time) used to BE the primary key, and it is
+// not unique: a device that samples two sensors and publishes each as its own message under one
+// shared timestamp produces two DISTINCT events with one identical key. upsertParentEvents
+// inserts ON CONFLICT DO NOTHING, so the second envelope was silently discarded while its payload
+// rows still inserted and joined onto the first event — and because its alt_id never reached the
+// idempotency index, that event became permanently un-deduplicable and every later redelivery
+// re-inserted its rows. event_id is derived from the event's content (see DeriveEventId), so it
+// is unique per distinct event and identical across a redelivery on every transport.
+//
+// The natural key survives ONLY as a query path (see the index below). Never key on it again.
+//
+// tenant_id still LEADS, and that ordering is a correctness property rather than a style choice:
+// it keeps a tenant's rows co-located and matches the tenant-scope predicate every read carries.
+// It is declared explicitly here (not through the tenant mixin's layout) because only this table
+// needs it in the key. occurred_time is in the key because Timescale requires the partitioning
+// column in every unique index, not because it identifies anything.
 //
 // 🔴 THERE ARE NO anchor_type / anchor_id COLUMNS. The chain created that single denormalized
 // pair and then dropped it when anchors became a SET in event_anchors (ADR-013 addendum): one
 // event can be anchored to a customer AND an area AND an asset, which a single pair cannot
 // express. Do not reintroduce them to make a query simpler.
 type event struct {
-	TenantId      string            `gorm:"primaryKey;not null;size:128"`
-	DeviceToken   string            `gorm:"primaryKey;type:varchar(128)"`
-	EventType     eventTypeSnapshot `gorm:"primaryKey"`
+	TenantId string `gorm:"primaryKey;not null;size:128"`
+	EventId  []byte `gorm:"primaryKey;not null"`
+	// 🔴 not null is declared EXPLICITLY on these two. They used to be primary-key columns,
+	// which implied it; dropping them from the key silently made them nullable, which the
+	// golden diff caught. An event without a device or a type is not a thing.
+	DeviceToken   string            `gorm:"type:varchar(128);not null"`
+	EventType     eventTypeSnapshot `gorm:"not null"`
 	OccurredTime  time.Time         `gorm:"primaryKey"`
 	Source        string
 	AltId         sql.NullString
@@ -97,6 +112,10 @@ type event struct {
 type locationEvent struct {
 	TenantId string `gorm:"index;not null;size:128"`
 
+	// event_id names the base event this row belongs to. It replaced the
+	// (device_token, event_type, occurred_time) join, which could not identify a parent
+	// uniquely once two distinct events were allowed to share that tuple.
+	EventId      []byte            `gorm:"not null"`
 	DeviceToken  string            `gorm:"type:varchar(128);not null"`
 	EventType    eventTypeSnapshot `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`
@@ -116,6 +135,10 @@ type locationEvent struct {
 type measurementEvent struct {
 	TenantId string `gorm:"index;not null;size:128"`
 
+	// event_id names the base event this row belongs to. It replaced the
+	// (device_token, event_type, occurred_time) join, which could not identify a parent
+	// uniquely once two distinct events were allowed to share that tuple.
+	EventId      []byte            `gorm:"not null"`
 	DeviceToken  string            `gorm:"type:varchar(128);not null"`
 	EventType    eventTypeSnapshot `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`
@@ -131,6 +154,10 @@ type measurementEvent struct {
 type alertEvent struct {
 	TenantId string `gorm:"index;not null;size:128"`
 
+	// event_id names the base event this row belongs to. It replaced the
+	// (device_token, event_type, occurred_time) join, which could not identify a parent
+	// uniquely once two distinct events were allowed to share that tuple.
+	EventId      []byte            `gorm:"not null"`
 	DeviceToken  string            `gorm:"type:varchar(128);not null"`
 	EventType    eventTypeSnapshot `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`
@@ -162,6 +189,10 @@ type alertEvent struct {
 type eventAnchor struct {
 	TenantId string `gorm:"index;not null;size:128"`
 
+	// event_id names the base event this row belongs to. It replaced the
+	// (device_token, event_type, occurred_time) join, which could not identify a parent
+	// uniquely once two distinct events were allowed to share that tuple.
+	EventId      []byte            `gorm:"not null"`
 	DeviceToken  string            `gorm:"type:varchar(128);not null"`
 	EventType    eventTypeSnapshot `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`
@@ -178,6 +209,10 @@ type eventAnchor struct {
 type stateChangeEvent struct {
 	TenantId string `gorm:"index;not null;size:128"`
 
+	// event_id names the base event this row belongs to. It replaced the
+	// (device_token, event_type, occurred_time) join, which could not identify a parent
+	// uniquely once two distinct events were allowed to share that tuple.
+	EventId      []byte            `gorm:"not null"`
 	DeviceToken  string            `gorm:"type:varchar(128);not null"`
 	EventType    eventTypeSnapshot `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`

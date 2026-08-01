@@ -21,6 +21,20 @@ import (
 // and .agent-os/product/data-modeling.md). Anything appended must be individually re-runnable:
 // this area's DDL is non-transactional (Timescale forbids it), so a half-applied migration is
 // never rolled back and replays from the top on the next boot.
+//
+// 🔴 THE BASELINE WAS RE-CUT ONCE AFTER THE SQUASH, and this is the record of it: the base event
+// gained event_id and its primary key moved from the natural key to (tenant_id, event_id,
+// occurred_time). It was folded into the baseline rather than appended, deliberately and as a
+// pre-GA decision, because an APPENDED version could not be made safe: compression is enabled on
+// these hypertables by the data-lifecycle reconciler, and Timescale forbids altering a primary key
+// on a hypertable with compressed chunks — so the migration would have had to decompress every
+// chunk, alter, and recompress. The content digest also cannot be recomputed in SQL (the canonical
+// payload is not reconstructible there), so existing rows had no correct backfill.
+//
+// The cost, accepted knowingly: an instance created before this change is RECREATED
+// (dcctl destroy + bootstrap), not upgraded. That includes v0.9.x. Do not read this as licence to
+// re-cut the baseline again — it was justified by a defect that made stored data wrong, on a
+// schema no released instance can carry forward, and the next schema change appends.
 var (
 	Migrations = []*gormigrate.Migration{
 		NewBaselineSchema(),

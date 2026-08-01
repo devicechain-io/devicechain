@@ -159,6 +159,18 @@ func NewBaselineSchema() *gormigrate.Migration {
 				// on alt_id so events without one are simply not deduplicated.
 				`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_tenant_alt_id ` +
 					`ON "event-management"."events" (tenant_id, alt_id, occurred_time) WHERE alt_id IS NOT NULL;`,
+				// The natural key as a QUERY path. It used to be the primary key, which gave
+				// this index for free — until keying on it turned out to drop one of any two
+				// distinct events that shared it. The reads that filtered on it are still
+				// there ("this device's alerts over this window"), so the access path is kept
+				// deliberately while the uniqueness claim is gone. NOT UNIQUE, and it must
+				// never become unique again.
+				`CREATE INDEX IF NOT EXISTS idx_events_tenant_device_type_time ` +
+					`ON "event-management"."events" (tenant_id, device_token, event_type, occurred_time DESC);`,
+				// Anchors are read by their event's identity (AnchorsForEvent), so that lookup
+				// needs its own index now that it no longer rides the natural key.
+				`CREATE INDEX IF NOT EXISTS idx_event_anchors_event ` +
+					`ON "event-management"."event_anchors" (tenant_id, event_id, occurred_time);`,
 				// Backs the server-side bucketed read: the base (tenant_id, occurred_time)
 				// index cannot serve the device/name filters, so a per-device chart would
 				// otherwise scan the whole tenant's measurements.

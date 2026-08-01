@@ -5,7 +5,7 @@ ALTER TABLE ONLY "event-management".audit_events ALTER COLUMN id SET DEFAULT nex
 ALTER TABLE ONLY "event-management".event_management_migrations
  ADD CONSTRAINT event_management_migrations_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "event-management".events
- ADD CONSTRAINT events_pkey PRIMARY KEY (tenant_id, device_token, event_type, occurred_time);
+ ADD CONSTRAINT events_pkey PRIMARY KEY (tenant_id, event_id, occurred_time);
 CREATE INDEX "idx_event-management_alert_events_tenant_id" ON "event-management".alert_events USING btree (tenant_id);
 CREATE INDEX "idx_event-management_event_anchors_tenant_id" ON "event-management".event_anchors USING btree (tenant_id);
 CREATE INDEX "idx_event-management_location_events_tenant_id" ON "event-management".location_events USING btree (tenant_id);
@@ -18,7 +18,9 @@ CREATE INDEX events_device_token_occurred_time_idx ON "event-management".events 
 CREATE INDEX events_occurred_time_idx ON "event-management".events USING btree (occurred_time DESC);
 CREATE INDEX events_tenant_id_occurred_time_idx ON "event-management".events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX idx_audit_tenant_time ON "event-management".audit_events USING btree (tenant_id, occurred_time DESC);
+CREATE INDEX idx_event_anchors_event ON "event-management".event_anchors USING btree (tenant_id, event_id, occurred_time);
 CREATE INDEX idx_event_anchors_lookup ON "event-management".event_anchors USING btree (tenant_id, anchor_type, anchor_token, occurred_time DESC);
+CREATE INDEX idx_events_tenant_device_type_time ON "event-management".events USING btree (tenant_id, device_token, event_type, occurred_time DESC);
 CREATE INDEX idx_measurement_tenant_device_name_time ON "event-management".measurement_events USING btree (tenant_id, device_token, name, occurred_time DESC);
 CREATE INDEX idx_state_change_events_lookup ON "event-management".state_change_events USING btree (tenant_id, device_token, occurred_time DESC);
 CREATE INDEX location_events_occurred_time_idx ON "event-management".location_events USING btree (occurred_time DESC);
@@ -35,6 +37,7 @@ CREATE SEQUENCE "event-management".audit_events_id_seq
  CACHE 1;
 CREATE TABLE "event-management".alert_events (
  tenant_id character varying(128) NOT NULL,
+ event_id bytea NOT NULL,
  device_token character varying(128) NOT NULL COLLATE pg_catalog."C",
  event_type bigint NOT NULL,
  occurred_time timestamp with time zone NOT NULL,
@@ -57,6 +60,7 @@ CREATE TABLE "event-management".audit_events (
 );
 CREATE TABLE "event-management".event_anchors (
  tenant_id character varying(128) NOT NULL,
+ event_id bytea NOT NULL,
  device_token character varying(128) NOT NULL COLLATE pg_catalog."C",
  event_type bigint NOT NULL,
  occurred_time timestamp with time zone NOT NULL,
@@ -68,6 +72,7 @@ CREATE TABLE "event-management".event_management_migrations (
 );
 CREATE TABLE "event-management".events (
  tenant_id character varying(128) NOT NULL,
+ event_id bytea NOT NULL,
  device_token character varying(128) NOT NULL COLLATE pg_catalog."C",
  event_type bigint NOT NULL,
  occurred_time timestamp with time zone NOT NULL,
@@ -77,6 +82,7 @@ CREATE TABLE "event-management".events (
 );
 CREATE TABLE "event-management".location_events (
  tenant_id character varying(128) NOT NULL,
+ event_id bytea NOT NULL,
  device_token character varying(128) NOT NULL COLLATE pg_catalog."C",
  event_type bigint NOT NULL,
  occurred_time timestamp with time zone NOT NULL,
@@ -86,6 +92,7 @@ CREATE TABLE "event-management".location_events (
 );
 CREATE TABLE "event-management".measurement_events (
  tenant_id character varying(128) NOT NULL,
+ event_id bytea NOT NULL,
  device_token character varying(128) NOT NULL COLLATE pg_catalog."C",
  event_type bigint NOT NULL,
  occurred_time timestamp with time zone NOT NULL,
@@ -97,6 +104,7 @@ CREATE TABLE "event-management".measurement_events (
 );
 CREATE TABLE "event-management".state_change_events (
  tenant_id character varying(128) NOT NULL,
+ event_id bytea NOT NULL,
  device_token character varying(128) NOT NULL COLLATE pg_catalog."C",
  event_type bigint NOT NULL,
  occurred_time timestamp with time zone NOT NULL,
