@@ -26,10 +26,10 @@ import (
 // generator classifies a device structurally, off DeviceInstance.DeviceTypeToken,
 // instead of guessing from its name.
 //
-// BUILD STATE: lanes L0 (topology, tokens, the shared sweep) and L1 (the DETECT
-// rule and command definition). The two dashboard definitions (L2) and the
-// per-channel generators (L3) land on top. Until L2, Manifest declares no
-// dashboards, so the scenario provisions, alarms and emits but shows nothing.
+// BUILD STATE: lanes L0 (topology, tokens, the shared sweep), L1 (the DETECT rule
+// and command definition) and L2 (the two boards, in widgetlab_dashboard.go). The
+// per-channel generators (L3) land on top: until then every device traces the same
+// nominal sweep, so the stress board is wired but not yet fed anything hostile.
 type widgetlab struct {
 	// seed drives all deterministic generation, threaded from the handshake —
 	// see devicepulse's identical field for the reset/idempotency rationale.
@@ -234,7 +234,7 @@ func (s *widgetlab) Manifest() SimManifest {
 	// is the house contract for a driver built by calling New* directly with an
 	// illegal load. Returning the manifest without it would make this the one
 	// scenario that silently ignores a device count instead of failing loudly.
-	return resize(s.load, SimManifest{
+	manifest := resize(s.load, SimManifest{
 		Name: "widgetlab",
 		Seed: s.seed,
 		// The boards bind named devices in named zones, so resizing this scenario
@@ -318,6 +318,40 @@ func (s *widgetlab) Manifest() SimManifest {
 			},
 		},
 	})
+
+	// The boards bind concrete device tokens, so they are built from this same
+	// manifest's own (pure, deterministic) Expand output rather than handed
+	// rt.Devices later — keeping Manifest a single source of truth with no
+	// dependency on Provision having already run. Resize is applied above first, so
+	// the boards are built from the topology this scenario will actually run.
+	devices := manifest.Expand(manifest.Seed)
+	gallery, err := buildWidgetlabGallery(devices)
+	if err != nil {
+		// The builders only fail on a malformed topology (no device of a declared
+		// type, a device with no area) or on marshaling static structs — programming
+		// errors, not runtime conditions, so fail loudly rather than handing
+		// Provision a manifest with a missing board.
+		panic(fmt.Sprintf("widgetlab: build gallery dashboard: %v", err))
+	}
+	stress, err := buildWidgetlabStress(devices)
+	if err != nil {
+		panic(fmt.Sprintf("widgetlab: build stress dashboard: %v", err))
+	}
+	manifest.Dashboards = []DashboardSpec{
+		{
+			Token:       WidgetlabGalleryDashboardToken,
+			Name:        "Widget Lab",
+			Description: "One of every dashboard widget, with data that exercises each of them.",
+			Definition:  gallery,
+		},
+		{
+			Token:       WidgetlabStressDashboardToken,
+			Name:        "Widget Lab — Stress",
+			Description: "The same widgets fed deliberately pathological data.",
+			Definition:  stress,
+		},
+	}
+	return manifest
 }
 
 func (s *widgetlab) Bootstrap(ctx context.Context, rt *Runtime) error {
