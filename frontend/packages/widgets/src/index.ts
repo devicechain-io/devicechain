@@ -25,6 +25,23 @@ export {
 } from './registry';
 export { pickSample, optBoolean, type WidgetProps, type WidgetComponent } from './widget';
 
+// The typed schema for each widget's options bag: what the renderer reads, at what type,
+// with what legal values. WidgetOptions<T> types code that BUILDS options;
+// validateWidgetOptions reports where a stored bag disagrees with the renderer.
+export {
+  WIDGET_OPTIONS,
+  validateWidgetOptions,
+  type WidgetOptions,
+  type WidgetOptionSpecs,
+  type OptionSpec,
+  type StringOptionSpec,
+  type NumberOptionSpec,
+  type BooleanOptionSpec,
+  type EnumOptionSpec,
+  type OptionIssue,
+  type OptionIssueCode,
+} from './options';
+
 // Directional change-flash (opt-in `flashOnChange`): a reusable hook + the flashing value cell.
 export {
   useFlashOnChange,
