@@ -1,0 +1,290 @@
+{
+  "canvas": {
+    "breakpoints": {
+      "base": 0
+    },
+    "grid": {
+      "columns": 24,
+      "gap": 8,
+      "rowHeight": 40
+    },
+    "sizing": "fill"
+  },
+  "schemaVersion": 1,
+  "slots": {
+    "sensor": {
+      "defaultBinding": {
+        "deviceToken": "wl-sensor-01",
+        "kind": "device"
+      },
+      "label": "Sensor",
+      "scope": {
+        "parent": "zone",
+        "strategy": "manual"
+      },
+      "type": "device"
+    },
+    "zone": {
+      "defaultBinding": {
+        "anchor": {
+          "relationship": "assigned",
+          "targetToken": "wl-zone-01",
+          "targetType": "area"
+        },
+        "kind": "anchor"
+      },
+      "label": "Zone",
+      "type": "anchor"
+    }
+  },
+  "title": "Widget Lab",
+  "widgets": [
+    {
+      "id": "wl-title",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 24,
+          "row": 0,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "align": "left",
+        "fontSize": 20,
+        "text": "Widget Lab — one of every dashboard widget"
+      },
+      "type": "label"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-card",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 6,
+          "row": 2,
+          "rowSpan": 4,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": true,
+        "measurement": "temperature",
+        "precision": 1,
+        "title": "Temperature",
+        "unit": "C"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-gauge",
+      "layout": {
+        "base": {
+          "col": 6,
+          "colSpan": 6,
+          "row": 2,
+          "rowSpan": 4,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": true,
+        "max": 35,
+        "measurement": "temperature",
+        "min": 15,
+        "title": "Temperature",
+        "unit": "C"
+      },
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "zone"
+      },
+      "id": "wl-alarm-count",
+      "layout": {
+        "base": {
+          "col": 12,
+          "colSpan": 6,
+          "row": 2,
+          "rowSpan": 4,
+          "z": 0
+        }
+      },
+      "options": {
+        "severity": "MAJOR",
+        "state": "ACTIVE",
+        "title": "Active alarms"
+      },
+      "type": "alarm-count"
+    },
+    {
+      "id": "wl-image",
+      "layout": {
+        "base": {
+          "col": 18,
+          "colSpan": 6,
+          "row": 2,
+          "rowSpan": 4,
+          "z": 0
+        }
+      },
+      "options": {
+        "alt": "A placeholder image",
+        "fit": "contain",
+        "title": "Image",
+        "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+      },
+      "type": "image"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature",
+          "humidity"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-chart",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 14,
+          "row": 6,
+          "rowSpan": 8,
+          "z": 0
+        }
+      },
+      "options": {
+        "title": "Temperature and humidity",
+        "window": 180
+      },
+      "type": "timeseries-chart"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "sensor"
+      },
+      "id": "wl-table",
+      "layout": {
+        "base": {
+          "col": 14,
+          "colSpan": 10,
+          "row": 6,
+          "rowSpan": 8,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": true,
+        "precision": 2,
+        "title": "Latest values"
+      },
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "zone"
+      },
+      "id": "wl-alarm-table",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 14,
+          "row": 14,
+          "rowSpan": 6,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": true,
+        "maxRows": 25,
+        "precision": 1,
+        "selectionTarget": "sensor",
+        "title": "Alarms"
+      },
+      "type": "alarm-table"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "sensor"
+      },
+      "id": "wl-command",
+      "layout": {
+        "base": {
+          "col": 14,
+          "colSpan": 10,
+          "row": 14,
+          "rowSpan": 6,
+          "z": 0
+        }
+      },
+      "options": {
+        "commandLabel": "Set Setpoint",
+        "commandName": "setSetpoint",
+        "maxRows": 10,
+        "parameterSchema": "[{\"name\":\"target\",\"kind\":\"SCALAR\",\"dataType\":\"DOUBLE\",\"unit\":\"C\",\"required\":true,\"minValue\":15,\"maxValue\":35},{\"name\":\"mode\",\"kind\":\"SCALAR\",\"dataType\":\"STRING\",\"required\":false,\"enum\":[\"heat\",\"cool\",\"auto\"],\"default\":\"auto\"}]",
+        "title": "Setpoint"
+      },
+      "type": "command-button"
+    },
+    {
+      "id": "wl-zone-select",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 12,
+          "row": 20,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "selectionTarget": "zone",
+        "title": "Zone"
+      },
+      "type": "entity-selector"
+    },
+    {
+      "id": "wl-sensor-select",
+      "layout": {
+        "base": {
+          "col": 12,
+          "colSpan": 12,
+          "row": 20,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "selectionTarget": "sensor",
+        "title": "Sensor"
+      },
+      "type": "entity-selector"
+    }
+  ]
+}

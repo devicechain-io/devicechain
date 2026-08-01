@@ -1,0 +1,222 @@
+{
+  "canvas": {
+    "breakpoints": {
+      "base": 0
+    },
+    "grid": {
+      "columns": 24,
+      "gap": 8,
+      "rowHeight": 40
+    },
+    "sizing": "fill"
+  },
+  "schemaVersion": 1,
+  "slots": {
+    "edgeExtremes": {
+      "defaultBinding": {
+        "deviceToken": "wl-edge-01",
+        "kind": "device"
+      },
+      "label": "Extremes sensor",
+      "type": "device"
+    },
+    "edgePartial": {
+      "defaultBinding": {
+        "deviceToken": "wl-edge-02",
+        "kind": "device"
+      },
+      "label": "Partial reporter",
+      "type": "device"
+    },
+    "edgeSilent": {
+      "defaultBinding": {
+        "deviceToken": "wl-edge-03",
+        "kind": "device"
+      },
+      "label": "Silent sensor",
+      "type": "device"
+    }
+  },
+  "title": "Widget Lab — Stress",
+  "widgets": [
+    {
+      "id": "wl-stress-title",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 24,
+          "row": 0,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "align": "left",
+        "fontSize": 16,
+        "text": "Maintainer board — deliberately pathological data. Each widget is bound to the edge sensor that produces its own case: spikes and out-of-range values, dropped metrics, and silence. Everything below is SUPPOSED to look wrong."
+      },
+      "type": "label"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "edgeExtremes"
+      },
+      "id": "wl-stress-chart",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 14,
+          "row": 2,
+          "rowSpan": 8,
+          "z": 0
+        }
+      },
+      "options": {
+        "title": "Spikes and out-of-range",
+        "window": 180
+      },
+      "type": "timeseries-chart"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "edgeExtremes"
+      },
+      "id": "wl-stress-gauge",
+      "layout": {
+        "base": {
+          "col": 14,
+          "colSpan": 10,
+          "row": 2,
+          "rowSpan": 4,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": true,
+        "max": 35,
+        "measurement": "temperature",
+        "min": 15,
+        "title": "Off the scale",
+        "unit": "C"
+      },
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "edgeExtremes"
+      },
+      "id": "wl-stress-card",
+      "layout": {
+        "base": {
+          "col": 14,
+          "colSpan": 10,
+          "row": 6,
+          "rowSpan": 4,
+          "z": 0
+        }
+      },
+      "options": {
+        "measurement": "temperature",
+        "title": "Unrounded",
+        "unit": "C"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "edgePartial"
+      },
+      "id": "wl-stress-table",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 12,
+          "row": 10,
+          "rowSpan": 6,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": true,
+        "precision": 2,
+        "title": "Partial reports"
+      },
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "edgeSilent"
+      },
+      "id": "wl-stress-silence",
+      "layout": {
+        "base": {
+          "col": 12,
+          "colSpan": 12,
+          "row": 10,
+          "rowSpan": 6,
+          "z": 0
+        }
+      },
+      "options": {
+        "title": "Goes silent",
+        "window": 180
+      },
+      "type": "timeseries-chart"
+    },
+    {
+      "id": "wl-stress-label",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 12,
+          "row": 16,
+          "rowSpan": 4,
+          "z": 0
+        }
+      },
+      "options": {
+        "align": "left",
+        "fontSize": 18,
+        "text": "Pneumonoultramicroscopicsilicovolcanoconiosisantidisestablishmentarianismfloccinaucinihilipilification"
+      },
+      "type": "label"
+    },
+    {
+      "id": "wl-stress-image",
+      "layout": {
+        "base": {
+          "col": 12,
+          "colSpan": 12,
+          "row": 16,
+          "rowSpan": 4,
+          "z": 0
+        }
+      },
+      "options": {
+        "alt": "An image that cannot decode",
+        "fit": "cover",
+        "title": "Broken image",
+        "url": "data:image/png;base64,this-is-not-base64"
+      },
+      "type": "image"
+    }
+  ]
+}
