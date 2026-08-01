@@ -511,3 +511,35 @@ function describe(value: unknown): string {
   if (Array.isArray(value)) return 'an array';
   return `${typeof value} ${JSON.stringify(value)}`;
 }
+
+// numberOptionSpec returns the declared bounds for a numeric option, so an authoring
+// UI can constrain its input from the schema rather than from a second, hand-written
+// copy of the same numbers.
+//
+// This exists because the console's numeric inputs were unbounded: a `precision` of
+// -1 is a legal number, reaches Number.prototype.toFixed, and throws a RangeError
+// DURING RENDER. formatValue clamps so the renderer survives, but the definition is
+// still wrong and the author had no way to know. A panel that reads the schema cannot
+// offer the value at all.
+export function numberOptionSpec(type: WidgetType, key: string): NumberOptionSpec | undefined {
+  const specs: WidgetOptionSpecs = WIDGET_OPTIONS[type];
+  if (!Object.prototype.hasOwnProperty.call(specs, key)) return undefined;
+  const spec = specs[key];
+  return spec.kind === 'number' ? spec : undefined;
+}
+
+// clampNumberOption folds a raw number into what a numeric option's schema allows, or
+// returns undefined when it is not a number at all.
+//
+// Separate from the input that calls it because the correction is the part worth
+// testing: an authoring UI's keystroke handling is awkward to exercise, and the
+// question that actually matters — what value gets STORED for a given input — is a
+// pure function of the schema and the number.
+export function clampNumberOption(spec: NumberOptionSpec | undefined, value: number): number | undefined {
+  if (!Number.isFinite(value)) return undefined;
+  if (!spec) return value;
+  let next = spec.integer ? Math.trunc(value) : value;
+  if (spec.min !== undefined) next = Math.max(spec.min, next);
+  if (spec.max !== undefined) next = Math.min(spec.max, next);
+  return next;
+}

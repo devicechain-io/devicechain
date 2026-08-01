@@ -14,7 +14,14 @@ import { fileURLToPath } from 'node:url';
 import { WIDGET_TYPES, type WidgetType } from '@devicechain/dashboards';
 import { describe, expect, it } from 'vitest';
 
-import { WIDGET_OPTIONS, validateWidgetOptions, type WidgetOptions } from './options';
+import {
+  WIDGET_OPTIONS,
+  validateWidgetOptions,
+  numberOptionSpec,
+  clampNumberOption,
+  type WidgetOptions,
+} from './options';
+import { WIDGET_BINDS_DATASOURCE, WIDGET_CHANNEL } from './registry';
 
 const SRC = dirname(fileURLToPath(import.meta.url));
 // The dashboards package reads a widget's options too (slots.ts), so the gate spans both.
@@ -419,5 +426,121 @@ describe('validateWidgetOptions', () => {
         ['state', 'enum'],
       ].sort(),
     );
+  });
+});
+
+// ---- The authoring surface reads the schema ----------------------------------
+
+describe('numberOptionSpec', () => {
+  it('returns the declared bounds for a numeric option', () => {
+    expect(numberOptionSpec('table', 'precision')).toMatchObject({ kind: 'number', min: 0, max: 100, integer: true });
+    expect(numberOptionSpec('alarm-table', 'maxRows')).toMatchObject({ kind: 'number', min: 1, integer: true });
+  });
+
+  it('returns nothing for an option that is not numeric, or not read at all', () => {
+    expect(numberOptionSpec('table', 'title')).toBeUndefined();
+    expect(numberOptionSpec('alarm-count', 'maxRows')).toBeUndefined();
+    // An Object.prototype name must not resolve to a spec, for the same reason the
+    // unknown-key check uses an own-property test.
+    expect(numberOptionSpec('gauge', 'toString')).toBeUndefined();
+  });
+
+  // The reason this accessor exists: an authoring UI that reads it cannot offer a
+  // value the renderer would have to clamp. `precision` below 0 reaches
+  // Number.prototype.toFixed and throws a RangeError during render.
+  it('bounds precision to the domain toFixed can survive', () => {
+    const spec = numberOptionSpec('latest-card', 'precision');
+    expect(spec?.min).toBe(0);
+    expect(spec?.max).toBe(100);
+    expect(() => (1.5).toFixed(spec?.min as number)).not.toThrow();
+    expect(() => (1.5).toFixed(spec?.max as number)).not.toThrow();
+    expect(() => (1.5).toFixed((spec?.min as number) - 1)).toThrow();
+  });
+});
+
+describe('WIDGET_BINDS_DATASOURCE', () => {
+  it('classifies every widget type', () => {
+    expect(Object.keys(WIDGET_BINDS_DATASOURCE).sort()).toEqual([...WIDGET_TYPES].sort());
+  });
+
+  // The structural half, and only that half.
+  //
+  // An earlier version required `window` to be declared exactly where a widget both
+  // binds a datasource AND sits on the measurement channel. That is a curation
+  // choice dressed as a fact: the option is read channel-wide, so an alarm widget
+  // that legitimately grew a buffer bound would have had to rename it or misdeclare
+  // its binding to get a green suite — and the failure said "declares window but
+  // binds no datasource" about a widget that binds one, which is simply wrong.
+  //
+  // What IS structural is the direction that cannot be a preference: a widget with no
+  // datasource has no stream for a window to size.
+  it('declares no stream option on a widget that binds no stream', () => {
+    for (const type of WIDGET_TYPES) {
+      if (WIDGET_BINDS_DATASOURCE[type]) continue;
+      expect(
+        'window' in WIDGET_OPTIONS[type],
+        `${type} binds no datasource, so there is no stream for its window to size`,
+      ).toBe(false);
+    }
+  });
+
+  it('claims no datasource for a widget on the selection channel', () => {
+    // A selection widget drives a slot through its options and reads no data at all.
+    for (const type of WIDGET_TYPES) {
+      if (WIDGET_CHANNEL[type] !== 'selection') continue;
+      expect(
+        WIDGET_BINDS_DATASOURCE[type],
+        `${type} is a selection widget but claims to bind a datasource`,
+      ).toBe(false);
+    }
+  });
+})
+
+describe('clampNumberOption', () => {
+  const precision = numberOptionSpec('table', 'precision');
+  const maxRows = numberOptionSpec('alarm-table', 'maxRows');
+  const unbounded = numberOptionSpec('gauge', 'min');
+
+  it('folds a value into the declared bounds', () => {
+    expect(clampNumberOption(precision, -1)).toBe(0);
+    expect(clampNumberOption(precision, 101)).toBe(100);
+    expect(clampNumberOption(precision, 2)).toBe(2);
+    expect(clampNumberOption(maxRows, 0)).toBe(1);
+  });
+
+  it('truncates toward zero on an integer option', () => {
+    expect(clampNumberOption(precision, 2.7)).toBe(2);
+    expect(clampNumberOption(maxRows, 12.9)).toBe(12);
+  });
+
+  it('leaves an unbounded option alone, including a negative one', () => {
+    // A gauge's scale legitimately starts below zero, so the absence of bounds in the
+    // schema has to mean the absence of a clamp — not a default of zero.
+    expect(clampNumberOption(unbounded, -20)).toBe(-20);
+    expect(clampNumberOption(unbounded, 1e6)).toBe(1e6);
+  });
+
+  it('reports a non-number as absent rather than coercing it', () => {
+    // The input hands over Number(raw); a field holding only "-" parses to NaN, and
+    // storing that would put a value in the definition that reads back as undefined.
+    expect(clampNumberOption(precision, Number.NaN)).toBeUndefined();
+    expect(clampNumberOption(precision, Number.POSITIVE_INFINITY)).toBeUndefined();
+    expect(clampNumberOption(undefined, Number.NaN)).toBeUndefined();
+  });
+
+  it('passes a value through when the option has no schema at all', () => {
+    // An option this package does not declare is not one it gets to bound.
+    expect(clampNumberOption(undefined, 42)).toBe(42);
+  });
+
+  // The clamp and the validator have to agree, or the panel authors values the gate
+  // then rejects. Every clamped result must validate clean.
+  it('produces values the validator accepts', () => {
+    for (const raw of [-100, -1, 0, 0.5, 2.7, 99, 101, 1000]) {
+      const value = clampNumberOption(precision, raw);
+      expect(validateWidgetOptions('table', { title: 't', precision: value }), `precision from ${raw}`).toEqual(
+        [],
+      );
+    }
   });
 });
