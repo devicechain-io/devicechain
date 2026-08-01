@@ -47,6 +47,19 @@ func newPersistenceTestApi(t *testing.T) *Api {
 	if err := db.AutoMigrate(&MeasurementEvent{}, &EventAnchor{}); err != nil {
 		t.Fatalf("failed to migrate child tables: %v", err)
 	}
+	// Each payload row carries its own identity too, so a redelivery of an event with no
+	// alternateId cannot duplicate it; restated here for sqlite like the base-event key.
+	// AFTER the child AutoMigrate — the table has to exist before it can be indexed.
+	if err := db.Exec(`CREATE UNIQUE INDEX uq_measurement_events_idem ` +
+		`ON measurement_events (tenant_id, payload_id, occurred_time);`).Error; err != nil {
+		t.Fatalf("failed to create payload identity index: %v", err)
+	}
+	// The anchor set is idempotent on its own natural columns — the ON CONFLICT arbiter
+	// CreateEventAnchors uses, so a redelivery cannot duplicate an event's anchor set.
+	if err := db.Exec(`CREATE UNIQUE INDEX uq_event_anchors_idem ` +
+		`ON event_anchors (tenant_id, event_id, occurred_time, anchor_type, anchor_token);`).Error; err != nil {
+		t.Fatalf("failed to create anchor identity index: %v", err)
+	}
 	if err := db.Exec(`PRAGMA foreign_keys = ON;`).Error; err != nil {
 		t.Fatalf("failed to enable foreign keys: %v", err)
 	}

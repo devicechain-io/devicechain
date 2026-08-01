@@ -167,10 +167,23 @@ func NewBaselineSchema() *gormigrate.Migration {
 				// never become unique again.
 				`CREATE INDEX IF NOT EXISTS idx_events_tenant_device_type_time ` +
 					`ON "event-management"."events" (tenant_id, device_token, event_type, occurred_time DESC);`,
-				// Anchors are read by their event's identity (AnchorsForEvent), so that lookup
-				// needs its own index now that it no longer rides the natural key.
-				`CREATE INDEX IF NOT EXISTS idx_event_anchors_event ` +
-					`ON "event-management"."event_anchors" (tenant_id, event_id, occurred_time);`,
+				// Anchors are read by their event's identity (AnchorsForEvent), and the same
+				// index makes the anchor set idempotent: one event is anchored to a given
+				// target at most once, so these columns ARE the identity. UNIQUE, because a
+				// redelivery re-presents the whole set and nothing else stops it — the
+				// Deduped skip in persistEventAnchors only ever fires for state changes.
+				`CREATE UNIQUE INDEX IF NOT EXISTS uq_event_anchors_idem ` +
+					`ON "event-management"."event_anchors" (tenant_id, event_id, occurred_time, anchor_type, anchor_token);`,
+				// Per-row idempotency for the payload tables. state_change_events already had
+				// exactly this (uq_state_change_events_idem) and for exactly this reason — a
+				// row whose event carries no alternateId has nothing else to dedup it. These
+				// three tables were left out; a redelivery duplicated every one of their rows.
+				`CREATE UNIQUE INDEX IF NOT EXISTS uq_location_events_idem ` +
+					`ON "event-management"."location_events" (tenant_id, payload_id, occurred_time);`,
+				`CREATE UNIQUE INDEX IF NOT EXISTS uq_measurement_events_idem ` +
+					`ON "event-management"."measurement_events" (tenant_id, payload_id, occurred_time);`,
+				`CREATE UNIQUE INDEX IF NOT EXISTS uq_alert_events_idem ` +
+					`ON "event-management"."alert_events" (tenant_id, payload_id, occurred_time);`,
 				// Backs the server-side bucketed read: the base (tenant_id, occurred_time)
 				// index cannot serve the device/name filters, so a per-device chart would
 				// otherwise scan the whole tenant's measurements.

@@ -5,6 +5,8 @@ package model
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/entity"
@@ -118,6 +120,19 @@ func (api *Api) EventExistsByAltId(ctx context.Context, db *gorm.DB, altId strin
 	return count > 0, nil
 }
 
+// canonicalPayloadEntry renders one payload row's distinguishing content as deterministic
+// bytes for DerivePayloadId. json.Marshal is deterministic HERE because every field below
+// belongs to a struct — Go only randomises MAP iteration, and these carry no maps. That is
+// load-bearing rather than incidental: the map that does exist upstream
+// (UnresolvedMeasurementsEntry.Measurements) has already been expanded into one request per
+// entry by the time these rows are built, so its ordering can no longer reach the digest.
+//
+// occurred_time is included because a single message's entries may each carry their own,
+// so it discriminates within one event rather than merely repeating the parent's key.
+func canonicalPayloadEntry(v any) ([]byte, error) {
+	return json.Marshal(v)
+}
+
 // upsertParentEvents inserts the parent `events` rows for a batch of child event
 // requests (location/measurement/alert) before the children, so a reader joining a
 // payload row to its base event on the natural key (device_token, event_type,
@@ -199,8 +214,16 @@ func (api *Api) CreateLocationEvents(ctx context.Context, db *gorm.DB, requests 
 	created := make([]*LocationEvent, 0, len(requests))
 	for _, request := range requests {
 		parents = append(parents, &request.Event)
+		entry, cerr := canonicalPayloadEntry(struct {
+			Lat, Lon, Elev *float64
+			Occurred       time.Time
+		}{request.Latitude, request.Longitude, request.Elevation, request.OccurredTime})
+		if cerr != nil {
+			return nil, fmt.Errorf("canonicalizing a LocationEvent for its payload identity: %w", cerr)
+		}
 		created = append(created, &LocationEvent{
 			EventId:      request.EventId,
+			PayloadId:    DerivePayloadId(request.EventId, entry),
 			DeviceToken:  request.DeviceToken,
 			EventType:    request.EventType,
 			OccurredTime: request.OccurredTime,
@@ -212,10 +235,17 @@ func (api *Api) CreateLocationEvents(ctx context.Context, db *gorm.DB, requests 
 	if err := upsertParentEvents(ctx, db, parents); err != nil {
 		return nil, err
 	}
-	// The parent events are upserted above; the child rows are inserted directly and
-	// relate to the base event by the natural key (device_id, event_type,
-	// occurred_time) — no association / foreign key (ADR-026 amd, see events.go).
-	result := db.WithContext(ctx).Create(&created)
+	// The parent events are upserted above; the child rows relate to the base event by
+	// event_id — no association / foreign key (ADR-026 amd, see events.go).
+	//
+	// ON CONFLICT on the row's own identity, for the same reason the parent has one: the
+	// base-event key cannot cover payload rows, so a redelivery of an event carrying no
+	// alternateId (every event lwm2m-ingest and sparkplug-ingest produce) used to leave one
+	// envelope owning N copies of its own rows.
+	result := db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "payload_id"}, {Name: "occurred_time"}},
+		DoNothing: true,
+	}).Create(&created)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -234,8 +264,19 @@ func (api *Api) CreateMeasurementEvents(ctx context.Context, db *gorm.DB, reques
 	created := make([]*MeasurementEvent, 0, len(requests))
 	for _, request := range requests {
 		parents = append(parents, &request.Event)
+		entry, cerr := canonicalPayloadEntry(struct {
+			Name           string
+			Value          *float64
+			Classifier     *uint
+			Unit, DataType *string
+			Occurred       time.Time
+		}{request.Name, request.Value, request.Classifier, request.Unit, request.DataType, request.OccurredTime})
+		if cerr != nil {
+			return nil, fmt.Errorf("canonicalizing a MeasurementEvent for its payload identity: %w", cerr)
+		}
 		created = append(created, &MeasurementEvent{
 			EventId:      request.EventId,
+			PayloadId:    DerivePayloadId(request.EventId, entry),
 			DeviceToken:  request.DeviceToken,
 			EventType:    request.EventType,
 			OccurredTime: request.OccurredTime,
@@ -249,10 +290,17 @@ func (api *Api) CreateMeasurementEvents(ctx context.Context, db *gorm.DB, reques
 	if err := upsertParentEvents(ctx, db, parents); err != nil {
 		return nil, err
 	}
-	// The parent events are upserted above; the child rows are inserted directly and
-	// relate to the base event by the natural key (device_id, event_type,
-	// occurred_time) — no association / foreign key (ADR-026 amd, see events.go).
-	result := db.WithContext(ctx).Create(&created)
+	// The parent events are upserted above; the child rows relate to the base event by
+	// event_id — no association / foreign key (ADR-026 amd, see events.go).
+	//
+	// ON CONFLICT on the row's own identity, for the same reason the parent has one: the
+	// base-event key cannot cover payload rows, so a redelivery of an event carrying no
+	// alternateId (every event lwm2m-ingest and sparkplug-ingest produce) used to leave one
+	// envelope owning N copies of its own rows.
+	result := db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "payload_id"}, {Name: "occurred_time"}},
+		DoNothing: true,
+	}).Create(&created)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -271,8 +319,19 @@ func (api *Api) CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*
 	created := make([]*AlertEvent, 0, len(requests))
 	for _, request := range requests {
 		parents = append(parents, &request.Event)
+		entry, cerr := canonicalPayloadEntry(struct {
+			Type     string
+			Level    uint32
+			Message  string
+			Source   string
+			Occurred time.Time
+		}{request.Type, request.Level, request.Message, request.Source, request.OccurredTime})
+		if cerr != nil {
+			return nil, fmt.Errorf("canonicalizing a AlertEvent for its payload identity: %w", cerr)
+		}
 		created = append(created, &AlertEvent{
 			EventId:      request.EventId,
+			PayloadId:    DerivePayloadId(request.EventId, entry),
 			DeviceToken:  request.DeviceToken,
 			EventType:    request.EventType,
 			OccurredTime: request.OccurredTime,
@@ -285,10 +344,17 @@ func (api *Api) CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*
 	if err := upsertParentEvents(ctx, db, parents); err != nil {
 		return nil, err
 	}
-	// The parent events are upserted above; the child rows are inserted directly and
-	// relate to the base event by the natural key (device_id, event_type,
-	// occurred_time) — no association / foreign key (ADR-026 amd, see events.go).
-	result := db.WithContext(ctx).Create(&created)
+	// The parent events are upserted above; the child rows relate to the base event by
+	// event_id — no association / foreign key (ADR-026 amd, see events.go).
+	//
+	// ON CONFLICT on the row's own identity, for the same reason the parent has one: the
+	// base-event key cannot cover payload rows, so a redelivery of an event carrying no
+	// alternateId (every event lwm2m-ingest and sparkplug-ingest produce) used to leave one
+	// envelope owning N copies of its own rows.
+	result := db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "payload_id"}, {Name: "occurred_time"}},
+		DoNothing: true,
+	}).Create(&created)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -357,7 +423,24 @@ func (api *Api) CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors []*
 	if len(anchors) == 0 {
 		return nil
 	}
-	return db.WithContext(ctx).Create(anchors).Error
+	// An anchor set is idempotent on (event_id, anchor_type, anchor_token): one event is
+	// anchored to a given target at most once, so the columns already ARE the identity and
+	// no derived digest is needed here — unlike the payload tables, whose rows carry no
+	// naturally unique column.
+	//
+	// 🔴 This closes the last leg of the same defect. persistEventAnchors is skipped only
+	// when results.Deduped, which ONLY the state-change path ever sets, so for every other
+	// event type a redelivery re-inserted the whole anchor set — and event_anchors carried
+	// no unique index to stop it. The in-tree comment on that skip already warned "a plain
+	// re-insert would duplicate the anchor set"; it was right, and it only guarded one of
+	// the four paths that reach here.
+	return db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "tenant_id"}, {Name: "event_id"}, {Name: "occurred_time"},
+			{Name: "anchor_type"}, {Name: "anchor_token"},
+		},
+		DoNothing: true,
+	}).Create(anchors).Error
 }
 
 // DeleteAnchorsForEntity removes event_anchors rows referencing a deleted entity
