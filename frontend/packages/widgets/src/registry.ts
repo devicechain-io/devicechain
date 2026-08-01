@@ -77,3 +77,27 @@ export const CONTROL_WIDGET_REGISTRY: Record<ControlWidgetType, WidgetComponent<
 export const SELECTION_WIDGET_REGISTRY: Record<SelectionWidgetType, WidgetComponent<null>> = {
   'entity-selector': EntitySelector,
 };
+
+// Whether a widget type binds a DATASOURCE — the entity whose data it reads.
+//
+// Not derivable from the channel: label and image sit on the measurement channel
+// (ConnectedWidget's default branch) and read no stream at all, while the alarm and
+// control widgets carry one as a SCOPE rather than a value selector. An authoring UI
+// needs this to decide whether to offer a datasource picker, and it had it as a
+// hand-written set that no compiler checked.
+//
+// `satisfies` keeps it exhaustive, so a new widget type does not compile until it
+// says whether it binds anything — which is the question the config panel silently
+// answered "no" to for every type nobody remembered to add.
+export const WIDGET_BINDS_DATASOURCE = {
+  'timeseries-chart': true,
+  'latest-card': true,
+  gauge: true,
+  table: true,
+  label: false,
+  image: false,
+  'alarm-table': true,
+  'alarm-count': true,
+  'command-button': true,
+  'entity-selector': false,
+} as const satisfies Record<WidgetType, boolean>;

@@ -21,6 +21,7 @@ export {
   CONTROL_WIDGET_REGISTRY,
   SELECTION_WIDGET_REGISTRY,
   WIDGET_CHANNEL,
+  WIDGET_BINDS_DATASOURCE,
   type WidgetChannel,
 } from './registry';
 export { pickSample, optBoolean, type WidgetProps, type WidgetComponent } from './widget';
@@ -31,6 +32,8 @@ export { pickSample, optBoolean, type WidgetProps, type WidgetComponent } from '
 export {
   WIDGET_OPTIONS,
   validateWidgetOptions,
+  numberOptionSpec,
+  clampNumberOption,
   type WidgetOptions,
   type WidgetOptionSpecs,
   type OptionSpec,

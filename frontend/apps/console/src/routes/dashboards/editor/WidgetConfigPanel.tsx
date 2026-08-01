@@ -23,6 +23,13 @@ import type {
   WidgetInstance,
   WidgetType,
 } from '@devicechain/dashboards';
+import {
+  WIDGET_BINDS_DATASOURCE,
+  WIDGET_CHANNEL,
+  clampNumberOption,
+  numberOptionSpec,
+  type WidgetChannel,
+} from '@devicechain/widgets';
 import { useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -38,19 +45,36 @@ import {
 import { commandChoices, type PickableCommand } from '@/routes/devices/commandVocabulary';
 import { EntityPicker, type EntityKind } from './EntityPicker';
 
-// Widgets that carry a datasource (label/image do not). Alarm widgets carry one too —
-// as SCOPE (which entity's alarms), where "None" means tenant-wide (all alarms). The
-// command-button carries one as its single TARGET device (device-only, no measurements).
-const ALARM_WIDGETS = new Set<WidgetType>(['alarm-table', 'alarm-count']);
-const CONTROL_WIDGETS = new Set<WidgetType>(['command-button']);
-const DATA_WIDGETS = new Set<WidgetType>([
-  'latest-card',
-  'gauge',
-  'timeseries-chart',
-  'table',
-  ...ALARM_WIDGETS,
-  ...CONTROL_WIDGETS,
-]);
+// Which widgets carry a datasource, and on which channel — DERIVED from the widget
+// package's own classifiers rather than listed here.
+//
+// These were three hand-written sets, and a hand-written set of widget types is a
+// list that silently omits whatever nobody remembered to add: a new alarm widget
+// would have been offered no scope picker, a new data widget no datasource picker at
+// all, and nothing would have failed. WIDGET_CHANNEL and WIDGET_BINDS_DATASOURCE are
+// exhaustive over WidgetType by construction, so a new type does not compile until it
+// answers both questions.
+//
+// Alarm widgets carry a datasource as SCOPE (which entity's alarms; "None" means
+// tenant-wide); the command-button carries one as its single TARGET device.
+const widgetTypesOn = (channel: WidgetChannel): Set<WidgetType> =>
+  new Set((Object.keys(WIDGET_CHANNEL) as WidgetType[]).filter((type) => WIDGET_CHANNEL[type] === channel));
+
+// The widget.options field keys this panel edits. Named at module scope rather than
+// written as bare literals inside the JSX tree: the i18n lint rule walks those (they
+// look like user-facing text and are not), and a single place to spell them means the
+// key passed to NumberInput for its SCHEMA and the key passed to setOption for its
+// VALUE cannot drift apart — which would silently bound one option by another's rules.
+const OPTION_MIN = 'min';
+const OPTION_MAX = 'max';
+const OPTION_PRECISION = 'precision';
+const OPTION_MAX_ROWS = 'maxRows';
+
+const ALARM_WIDGETS = widgetTypesOn('alarm');
+const CONTROL_WIDGETS = widgetTypesOn('control');
+const DATA_WIDGETS = new Set<WidgetType>(
+  (Object.keys(WIDGET_BINDS_DATASOURCE) as WidgetType[]).filter((type) => WIDGET_BINDS_DATASOURCE[type]),
+);
 
 // The option arrays below build Combobox dropdown text, so each is a FUNCTION of the
 // caller's `t` (module scope has no hook access) rather than a plain constant — a
@@ -362,12 +386,20 @@ function TypeOptions({
     return (
       <>
         <FormField label={t('widgetLabelMin')}>
-          {/* eslint-disable-next-line i18next/no-literal-string */}
-          <NumberInput value={optNumber(widget, 'min')} onChange={(v) => setOption('min', v)} />
+          <NumberInput
+            widgetType={widget.type}
+            option={OPTION_MIN}
+            value={optNumber(widget, 'min')}
+            onChange={(v) => setOption(OPTION_MIN, v)}
+          />
         </FormField>
         <FormField label={t('widgetLabelMax')}>
-          {/* eslint-disable-next-line i18next/no-literal-string */}
-          <NumberInput value={optNumber(widget, 'max')} onChange={(v) => setOption('max', v)} />
+          <NumberInput
+            widgetType={widget.type}
+            option={OPTION_MAX}
+            value={optNumber(widget, 'max')}
+            onChange={(v) => setOption(OPTION_MAX, v)}
+          />
         </FormField>
         <FormField label={t('widgetLabelUnit')}>
           {/* eslint-disable-next-line i18next/no-literal-string */}
@@ -385,8 +417,12 @@ function TypeOptions({
           <Input value={optString(widget, 'unit')} onChange={(e) => setOption('unit', e.target.value)} />
         </FormField>
         <FormField label={t('widgetLabelPrecision')}>
-          {/* eslint-disable-next-line i18next/no-literal-string */}
-          <NumberInput value={optNumber(widget, 'precision')} onChange={(v) => setOption('precision', v)} />
+          <NumberInput
+            widgetType={widget.type}
+            option={OPTION_PRECISION}
+            value={optNumber(widget, 'precision')}
+            onChange={(v) => setOption(OPTION_PRECISION, v)}
+          />
         </FormField>
         <FlashToggle widget={widget} setOption={setOption} />
       </>
@@ -425,8 +461,12 @@ function TypeOptions({
         {widget.type === 'alarm-table' && (
           <>
             <FormField label={t('widgetLabelMaxRows')} description={t('widgetMaxRowsAlarmHint')}>
-              {/* eslint-disable-next-line i18next/no-literal-string */}
-              <NumberInput value={optNumber(widget, 'maxRows')} onChange={(v) => setOption('maxRows', v)} />
+              <NumberInput
+            widgetType={widget.type}
+            option={OPTION_MAX_ROWS}
+            value={optNumber(widget, 'maxRows')}
+            onChange={(v) => setOption(OPTION_MAX_ROWS, v)}
+          />
             </FormField>
             <FlashToggle widget={widget} setOption={setOption} />
           </>
@@ -437,8 +477,12 @@ function TypeOptions({
   if (widget.type === 'command-button') {
     return (
       <FormField label={t('widgetLabelMaxRows')} description={t('widgetMaxRowsCommandHint')}>
-        {/* eslint-disable-next-line i18next/no-literal-string */}
-        <NumberInput value={optNumber(widget, 'maxRows')} onChange={(v) => setOption('maxRows', v)} />
+        <NumberInput
+            widgetType={widget.type}
+            option={OPTION_MAX_ROWS}
+            value={optNumber(widget, 'maxRows')}
+            onChange={(v) => setOption(OPTION_MAX_ROWS, v)}
+          />
       </FormField>
     );
   }
@@ -446,8 +490,12 @@ function TypeOptions({
     return (
       <>
         <FormField label={t('widgetLabelPrecision')} description={t('widgetPrecisionTableHint')}>
-          {/* eslint-disable-next-line i18next/no-literal-string */}
-          <NumberInput value={optNumber(widget, 'precision')} onChange={(v) => setOption('precision', v)} />
+          <NumberInput
+            widgetType={widget.type}
+            option={OPTION_PRECISION}
+            value={optNumber(widget, 'precision')}
+            onChange={(v) => setOption(OPTION_PRECISION, v)}
+          />
         </FormField>
         <FlashToggle widget={widget} setOption={setOption} />
       </>
@@ -897,22 +945,56 @@ function optNumber(widget: WidgetInstance, key: string): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+// A numeric option input, bounded by its own schema.
+//
+// 🔴 IT CLAMPS ON BLUR, NOT PER KEYSTROKE, and the difference is the whole design. An
+// onChange clamp fights the author mid-word: with a minimum of 1, typing "05" to mean
+// 5 rewrites the 0 to a 1 under the cursor and stores 15; on an integer option,
+// typing "1.5" deletes the fraction the instant the 5 lands. A controlled input
+// writes the corrected value straight back into the field, so each of those is
+// visible and unrecoverable without retyping.
+//
+// So the draft is held locally while the field has focus and reconciled when it is
+// not. min/max/step still drive the spinner and the browser's own validity state
+// during typing; the clamp is what stops an out-of-range value being STORED, since
+// typing bypasses the spinner entirely.
+//
+// The bounds come from WIDGET_OPTIONS rather than a second copy of the same numbers
+// here, so the panel and the validator cannot disagree about one option. They can
+// still disagree about a RULE spanning two — a gauge min above its max is authorable
+// here and rejected there — because that is not something a single input can see.
 function NumberInput({
+  widgetType,
+  option,
   value,
   onChange,
 }: {
+  widgetType: WidgetType;
+  option: string;
   value: number | undefined;
   onChange: (value: number | undefined) => void;
 }) {
+  const spec = numberOptionSpec(widgetType, option);
+  const [draft, setDraft] = useState<string | null>(null);
+
+  const commit = (raw: string) => {
+    setDraft(null);
+    onChange(raw === '' ? undefined : clampNumberOption(spec, Number(raw)));
+  };
+
   return (
     <Input
       type="number"
-      value={value ?? ''}
-      onChange={(e) => {
-        const raw = e.target.value;
-        if (raw === '') return onChange(undefined);
-        const n = Number(raw);
-        onChange(Number.isFinite(n) ? n : undefined);
+      value={draft ?? value ?? ''}
+      min={spec?.min}
+      max={spec?.max}
+      step={spec?.integer ? 1 : undefined}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={(e) => commit(e.target.value)}
+      onKeyDown={(e) => {
+        // Enter commits too: an author who types a value and presses Enter expects it
+        // applied, not held as a draft until they click somewhere else.
+        if (e.key === 'Enter') commit((e.target as HTMLInputElement).value);
       }}
     />
   );
