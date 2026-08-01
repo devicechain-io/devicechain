@@ -20,9 +20,9 @@ func TestDistinctAnchorRefs(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "acme")
 	occurred := time.Date(2026, 7, 6, 20, 0, 0, 0, time.UTC)
 	if err := api.CreateEventAnchors(ctx, api.RDB.DB(ctx), []*EventAnchor{
-		{DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
-		{DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "area", AnchorToken: "area-9"},
-		{DeviceToken: "device-7", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"}, // dup target
+		{EventId: anchorEventId("device-4", occurred), DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
+		{EventId: anchorEventId("device-4", occurred), DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "area", AnchorToken: "area-9"},
+		{EventId: anchorEventId("device-7", occurred), DeviceToken: "device-7", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"}, // dup target
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestDistinctAnchorTenants(t *testing.T) {
 	for _, tenant := range []string{"acme", "globex"} {
 		tctx := core.WithTenant(context.Background(), tenant)
 		if err := api.CreateEventAnchors(tctx, api.RDB.DB(tctx), []*EventAnchor{
-			{DeviceToken: "device-1", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-1"},
+			{EventId: anchorEventId("device-1", occurred), DeviceToken: "device-1", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-1"},
 		}); err != nil {
 			t.Fatalf("seed %s: %v", tenant, err)
 		}

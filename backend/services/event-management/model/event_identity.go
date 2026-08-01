@@ -70,6 +70,43 @@ func DeriveEventId(tenantId string, event *Event, canonicalPayload []byte) []byt
 	return h.Sum(nil)
 }
 
+// DerivePayloadId computes one payload row's identity from its parent event and its own
+// content, so a redelivery converges on the same row.
+//
+// 🔴 WHY PAYLOAD ROWS NEED THEIR OWN IDENTITY AT ALL. Giving the base event one is not
+// enough: PersistEvent's dedup probe is keyed on alt_id, and lwm2m-ingest and
+// sparkplug-ingest set no alt_id anywhere, so for those two transports the probe never
+// engages. The base event still converged on its content digest, but payload rows inserted
+// unconditionally — leaving one envelope owning N copies of its own measurements after N
+// deliveries, on a path (at-least-once redelivery) the system is designed around.
+//
+// state_change_events already carried exactly this fix, and only for itself, for exactly
+// this reason ("a StateChange carries no AltId"). This generalises it.
+//
+// 🔴 WHY A CONTENT DIGEST RATHER THAN A POSITION OR A NATURAL COLUMN — both cheaper
+// options are wrong, and each is wrong in its own way:
+//
+//   - An ORDINAL (the entry's index within the message) is not stable across a redelivery.
+//     UnresolvedMeasurementsEntry.Measurements is a map[string]string, and Go randomises
+//     map iteration, so the same bytes decode to the same set in a different ORDER every
+//     time. An ordinal key would therefore admit duplicates under different ordinals —
+//     failing exactly where it is needed while looking like it works.
+//   - A NATURAL COLUMN does not discriminate. (event_id, name) suits measurements, but the
+//     equivalent (event_id, type) for alerts silently eats a second SENSOR_FAULT carrying a
+//     different message — turning a duplicate-row bug into a lost-row bug, which is worse.
+//
+// Hashing the entry's canonical content is uniform across all three payload tables, immune
+// to map ordering, and collapses only entries that are byte-identical — which nothing
+// downstream could have told apart anyway.
+//
+// Scoped to the parent event so the same reading under two different events stays distinct.
+func DerivePayloadId(eventId []byte, canonicalEntry []byte) []byte {
+	h := sha256.New()
+	writeField(h, eventId)
+	writeField(h, canonicalEntry)
+	return h.Sum(nil)
+}
+
 // writeField feeds one length-prefixed field into the digest, so field boundaries are
 // unambiguous regardless of the bytes inside them.
 func writeField(h hash.Hash, value []byte) {

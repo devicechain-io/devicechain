@@ -76,7 +76,13 @@ type LocationEvent struct {
 	// (device_token, event_type, occurred_time) join, which could not identify a
 	// parent uniquely — two distinct events sharing that tuple made this row's
 	// parentage ambiguous, and it silently resolved to whichever envelope won.
-	EventId      []byte            `gorm:"not null"`
+	EventId []byte `gorm:"not null"`
+	// PayloadId is this ROW's identity, derived from its parent event and its own
+	// content (see DerivePayloadId). It backs the per-row idempotency index: the
+	// base event's key cannot cover payload rows, so without it a redelivery of an
+	// event carrying no alternateId — which is every event lwm2m-ingest and
+	// sparkplug-ingest produce — left one envelope owning N copies of its own rows.
+	PayloadId    []byte            `gorm:"not null"`
 	DeviceToken  string            `gorm:"type:varchar(128);not null"`
 	EventType    esmodel.EventType `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`
@@ -110,7 +116,13 @@ type MeasurementEvent struct {
 	// (device_token, event_type, occurred_time) join, which could not identify a
 	// parent uniquely — two distinct events sharing that tuple made this row's
 	// parentage ambiguous, and it silently resolved to whichever envelope won.
-	EventId      []byte            `gorm:"not null"`
+	EventId []byte `gorm:"not null"`
+	// PayloadId is this ROW's identity, derived from its parent event and its own
+	// content (see DerivePayloadId). It backs the per-row idempotency index: the
+	// base event's key cannot cover payload rows, so without it a redelivery of an
+	// event carrying no alternateId — which is every event lwm2m-ingest and
+	// sparkplug-ingest produce — left one envelope owning N copies of its own rows.
+	PayloadId    []byte            `gorm:"not null"`
 	DeviceToken  string            `gorm:"type:varchar(128);not null"`
 	EventType    esmodel.EventType `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`
@@ -163,7 +175,13 @@ type AlertEvent struct {
 	// (device_token, event_type, occurred_time) join, which could not identify a
 	// parent uniquely — two distinct events sharing that tuple made this row's
 	// parentage ambiguous, and it silently resolved to whichever envelope won.
-	EventId      []byte            `gorm:"not null"`
+	EventId []byte `gorm:"not null"`
+	// PayloadId is this ROW's identity, derived from its parent event and its own
+	// content (see DerivePayloadId). It backs the per-row idempotency index: the
+	// base event's key cannot cover payload rows, so without it a redelivery of an
+	// event carrying no alternateId — which is every event lwm2m-ingest and
+	// sparkplug-ingest produce — left one envelope owning N copies of its own rows.
+	PayloadId    []byte            `gorm:"not null"`
 	DeviceToken  string            `gorm:"type:varchar(128);not null"`
 	EventType    esmodel.EventType `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`

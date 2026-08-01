@@ -182,6 +182,54 @@ func TestIntegrationRedeliveryConvergesOnOneRow(t *testing.T) {
 	assert.EqualValues(t, 1, count, "three deliveries of one event must converge on one row")
 }
 
+// TestIntegrationNoAltIdRedeliveryDuplicatesNothing exercises the shape lwm2m-ingest and
+// sparkplug-ingest actually produce — an event carrying NO alternateId — on the real engine.
+//
+// Neither service sets AltId anywhere, so PersistEvent's dedup probe never engages for them,
+// and redelivery is a designed-for path (ADR-022 at-least-once). Before the payload rows and
+// the anchor set carried identities of their own, three deliveries left one envelope owning
+// three copies of its measurement and three copies of its anchors. Postgres is where this
+// has to be checked: the dedup rests on ON CONFLICT against unique indexes on bytea columns
+// of hypertables, none of which sqlite models.
+func TestIntegrationNoAltIdRedeliveryDuplicatesNothing(t *testing.T) {
+	api := newPostgresApi(t, "itnoaltid")
+	ctx := core.WithTenant(context.Background(), "acme")
+	occurred := time.Date(2026, 8, 1, 10, 15, 30, 0, time.UTC)
+
+	ev := Event{
+		DeviceToken:  "device-1",
+		EventType:    esmodel.Measurement,
+		OccurredTime: occurred,
+		Source:       "lwm2m",
+	}
+	ev.EventId = DeriveEventId("acme", &ev, []byte("temperature=21.5"))
+	require.False(t, ev.AltId.Valid,
+		"negative control: no alternateId, so nothing upstream can catch the redelivery")
+
+	for i := 0; i < 3; i++ {
+		_, err := api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx),
+			[]*MeasurementEventCreateRequest{{Event: ev, Name: "temperature", Value: f64(21.5)}})
+		require.NoErrorf(t, err, "delivery %d", i+1)
+		require.NoErrorf(t, api.CreateEventAnchors(ctx, api.RDB.DB(ctx), []*EventAnchor{{
+			EventId: ev.EventId, DeviceToken: "device-1", EventType: esmodel.Measurement,
+			OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3",
+		}}), "anchors, delivery %d", i+1)
+	}
+
+	for _, c := range []struct {
+		what  string
+		model any
+	}{
+		{"base events", &Event{}},
+		{"measurement rows", &MeasurementEvent{}},
+		{"anchor rows", &EventAnchor{}},
+	} {
+		var n int64
+		require.NoError(t, api.RDB.DB(ctx).Model(c.model).Count(&n).Error)
+		assert.EqualValues(t, 1, n, "three deliveries must leave exactly one of the %s", c.what)
+	}
+}
+
 // TestIntegrationCompressionEnablesWithTheIdentityKey is the risk this change most needed
 // checking and that no existing gate could see.
 //

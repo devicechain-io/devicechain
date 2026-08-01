@@ -115,7 +115,13 @@ type locationEvent struct {
 	// event_id names the base event this row belongs to. It replaced the
 	// (device_token, event_type, occurred_time) join, which could not identify a parent
 	// uniquely once two distinct events were allowed to share that tuple.
+	//
+	// payload_id is the ROW's own identity, derived from its parent event and its own
+	// content, and it backs the per-row idempotency index below. The base event's key
+	// cannot cover payload rows, so without it a redelivery of an event carrying no
+	// alternateId left one envelope owning N copies of its own rows.
 	EventId      []byte            `gorm:"not null"`
+	PayloadId    []byte            `gorm:"not null"`
 	DeviceToken  string            `gorm:"type:varchar(128);not null"`
 	EventType    eventTypeSnapshot `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`
@@ -138,7 +144,13 @@ type measurementEvent struct {
 	// event_id names the base event this row belongs to. It replaced the
 	// (device_token, event_type, occurred_time) join, which could not identify a parent
 	// uniquely once two distinct events were allowed to share that tuple.
+	//
+	// payload_id is the ROW's own identity, derived from its parent event and its own
+	// content, and it backs the per-row idempotency index below. The base event's key
+	// cannot cover payload rows, so without it a redelivery of an event carrying no
+	// alternateId left one envelope owning N copies of its own rows.
 	EventId      []byte            `gorm:"not null"`
+	PayloadId    []byte            `gorm:"not null"`
 	DeviceToken  string            `gorm:"type:varchar(128);not null"`
 	EventType    eventTypeSnapshot `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`
@@ -157,7 +169,13 @@ type alertEvent struct {
 	// event_id names the base event this row belongs to. It replaced the
 	// (device_token, event_type, occurred_time) join, which could not identify a parent
 	// uniquely once two distinct events were allowed to share that tuple.
+	//
+	// payload_id is the ROW's own identity, derived from its parent event and its own
+	// content, and it backs the per-row idempotency index below. The base event's key
+	// cannot cover payload rows, so without it a redelivery of an event carrying no
+	// alternateId left one envelope owning N copies of its own rows.
 	EventId      []byte            `gorm:"not null"`
+	PayloadId    []byte            `gorm:"not null"`
 	DeviceToken  string            `gorm:"type:varchar(128);not null"`
 	EventType    eventTypeSnapshot `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`
