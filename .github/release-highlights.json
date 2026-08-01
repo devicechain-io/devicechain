@@ -1,0 +1,32 @@
+{
+  "_comment": [
+    "USER-FACING highlights for the release named by `version`, published to the website as",
+    "part of https://devicechain.io/releases.json (see hack/build-release-manifest.sh).",
+    "",
+    "🔴 UPDATE THIS IN THE PR THAT PREPARES A RELEASE, BEFORE TAGGING. The `guard` job fails",
+    "the release when `version` does not match the tag, deliberately and as the FIRST job —",
+    "so a forgotten update costs nothing but a re-run, rather than publishing last release's",
+    "highlights against this release's version. Confidently wrong is worse than absent, and",
+    "this file is the one part of the manifest a machine cannot derive.",
+    "",
+    "WRITE FOR SOMEONE DECIDING WHETHER TO UPGRADE, not for someone reading the commit log.",
+    "The changelog is already generated from commit subjects and is right there in the release",
+    "notes; repeating `fix(events): give payload rows and anchors identities of their own` here",
+    "adds nothing. Say what changed for the person running the platform.",
+    "",
+    "Keep it to a handful of lines. This renders in a download menu and a docs banner, not in",
+    "a document — a fifteen-item list is a changelog wearing a different hat.",
+    "",
+    "`breaking` drives an automatic warning on the website and in the docs. Set it true when an",
+    "upgrade is not a plain `helm upgrade`, and say so in the first highlight."
+  ],
+  "version": "v0.10.0",
+  "breaking": true,
+  "highlights": [
+    "Breaking: an existing instance must be recreated (dcctl destroy + bootstrap), not upgraded.",
+    "Events published by one device under the same timestamp are no longer silently discarded.",
+    "Redelivered messages no longer duplicate readings on LwM2M and Sparkplug.",
+    "Timestamps are reported at the precision they were recorded, not rounded to the second.",
+    "The .NET SDK publishes sub-second event times and runs under WebGL."
+  ]
+}

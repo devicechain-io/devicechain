@@ -58,6 +58,29 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The release highlights are the one part of the published manifest a machine cannot
+      # derive: generated from commit subjects they would read as `fix(events): give payload
+      # rows and anchors identities of their own`, which is a developer's sentence, not a
+      # feature bullet. So a human writes them — and the failure mode of a human-written file
+      # in a release pipeline is that it is FORGOTTEN, publishing the previous release's
+      # highlights against this release's version. Confidently wrong is worse than absent.
+      #
+      # Checked HERE, in the first job, deliberately: a forgotten update costs a re-run rather
+      # than a release that has already pushed 17 images before anyone notices.
+      - name: Release highlights match the tag
+        run: |
+          hl=".github/release-highlights.json"
+          want="${GITHUB_REF_NAME}"
+          got="$(jq -r '.version' "$hl")"
+          if [ "$got" != "$want" ]; then
+            echo "::error::$hl is for '$got' but this release is '$want'. Update it (highlights + breaking) before tagging."
+            exit 1
+          fi
+          if [ "$(jq -r '.highlights | length' "$hl")" -eq 0 ]; then
+            echo "::error::$hl carries no highlights for $want."
+            exit 1
+          fi
+
       - name: Validate tag is strict semver
         id: semver
         run: |
@@ -476,3 +499,85 @@ jobs:
             backend/edge/dc-edge-agent/dist/dc-edge-agent_checksums.txt \
             --clobber
 
+  # ---------------------------------------------------------------------------
+  # Publish the release manifest to the public website (https://devicechain.io/releases.json).
+  #
+  # 🔴 THIS RUNS LAST, AND THAT ORDERING IS THE POINT. It needs `cli` (which creates the
+  # Release and its dcctl archives) and `edge-agent` (the last job to attach assets), so by
+  # the time it runs the release is fully published. A failure here therefore means
+  # "release shipped, website not updated" — recoverable by re-running this one job — and
+  # never "images pushed, no Release", which is the shape the loadtest gate ordering exists
+  # to avoid. Do not move it earlier to save a minute.
+  #
+  # It is also NOT `continue-on-error`. A stale manifest makes the website's download menu
+  # confidently offer an old version, which is worse than the menu being broken: the failure
+  # has to be visible.
+  #
+  # WEBSITE_PUBLISH_TOKEN is a fine-grained PAT scoped to devicechain-io/website with
+  # contents:write and nothing else — the narrowest credential that can do this. Every other
+  # job in this workflow uses the built-in GITHUB_TOKEN; this is the one exception, and it
+  # exists because a cross-repo write is not something GITHUB_TOKEN can do by design.
+  # 🔴 It EXPIRES. When this job fails, check the token's expiry before anything else.
+  publish-manifest:
+    needs: [guard, cli, edge-agent]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the release manifest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Stamp the manifest with the Release's own publication time rather than "now",
+          # so a re-run does not report a different release date for the same version.
+          RELEASED_AT="$(gh release view "$TAG" --json publishedAt -q .publishedAt)"
+          export RELEASED_AT
+          hack/build-release-manifest.sh "$TAG" releases.json
+          jq . releases.json
+
+      - name: Publish to the website repo
+        env:
+          TOKEN: ${{ secrets.WEBSITE_PUBLISH_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::WEBSITE_PUBLISH_TOKEN is not set — the manifest cannot be published."
+            exit 1
+          fi
+          git clone --depth 1 "https://x-access-token:${TOKEN}@github.com/devicechain-io/website.git" site
+          cp releases.json site/releases.json
+          cd site
+          # A re-run of an unchanged release is a no-op rather than an empty commit.
+          if git diff --quiet -- releases.json; then
+            echo "releases.json already current for $TAG — nothing to publish."
+            exit 0
+          fi
+          git config user.name "devicechain-release"
+          git config user.email "noreply@devicechain.io"
+          git add releases.json
+          git commit -m "Publish release manifest for $TAG"
+          git push origin HEAD:main
+
+      - name: Confirm the site serves it
+        env:
+          TAG: ${{ github.ref_name }}
+        # Netlify deploys on push; give it a moment, then verify the PUBLISHED file rather
+        # than trusting that a green push means a live site. A prerelease is skipped: it is
+        # deliberately not what devicechain.io should advertise.
+        run: |
+          if [ "${{ needs.guard.outputs.is_prerelease }}" = "true" ]; then
+            echo "Prerelease — manifest pushed, skipping the live check."
+            exit 0
+          fi
+          for i in $(seq 1 20); do
+            live="$(curl -fsS https://devicechain.io/releases.json | jq -r '.version' 2>/dev/null || true)"
+            if [ "$live" = "$TAG" ]; then
+              echo "devicechain.io/releases.json is serving $TAG."
+              exit 0
+            fi
+            echo "attempt $i: serving '${live:-<none>}', waiting for $TAG"
+            sleep 15
+          done
+          echo "::error::devicechain.io/releases.json did not report $TAG within 5 minutes. The commit landed; check the Netlify deploy."
+          exit 1
