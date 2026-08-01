@@ -287,7 +287,12 @@ func (suite *EventPersistenceProcessorTestSuite) TestStateChangeEventPersists() 
 	suite.API.Mock.On("CreateStateChangeEvents", mock.Anything, mock.Anything).Return([]*model.StateChangeEvent{{}}, int64(1), nil)
 	suite.API.Mock.On("CreateEventAnchors", mock.Anything, mock.Anything).Return(nil)
 
-	results, err := worker.PersistEvent(context.Background(), *buildStateChangeEvent())
+	// A tenant-scoped context, as every production caller supplies: PersistEvent derives
+	// the event's identity from the tenant among other fields, and the tenant-scope DB
+	// callback would fail-closed on a bare context anyway. The other subtests get this
+	// via SuccessEventFlowFor, which derives the tenant from the message subject.
+	ctx := core.WithTenant(context.Background(), "acme")
+	results, err := worker.PersistEvent(ctx, *buildStateChangeEvent())
 	assert.Nil(suite.T(), err)
 	assert.NotNil(suite.T(), results)
 
@@ -309,11 +314,13 @@ func (suite *EventPersistenceProcessorTestSuite) TestStateChangeRedeliverySkipsA
 	suite.API.Mock.On("CreateStateChangeEvents", mock.Anything, mock.Anything).Return([]*model.StateChangeEvent{}, int64(0), nil).Once()
 	suite.API.Mock.On("CreateEventAnchors", mock.Anything, mock.Anything).Return(nil)
 
+	// Tenant-scoped, as every production caller is (see TestStateChangeEventPersists).
+	ctx := core.WithTenant(context.Background(), "acme")
 	sc := *buildStateChangeEvent()
-	if _, err := worker.PersistEvent(context.Background(), sc); err != nil {
+	if _, err := worker.PersistEvent(ctx, sc); err != nil {
 		suite.T().Fatalf("first delivery: %v", err)
 	}
-	if _, err := worker.PersistEvent(context.Background(), sc); err != nil {
+	if _, err := worker.PersistEvent(ctx, sc); err != nil {
 		suite.T().Fatalf("redelivery: %v", err)
 	}
 

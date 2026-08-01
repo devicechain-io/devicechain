@@ -19,8 +19,22 @@ import (
 // 2026-07-01) rather than a single denormalized pair, so an event assigned to
 // several targets is queryable by each; an unassigned device's event simply has no
 // anchor rows.
+//
+// EventId is the event's OWN identity, derived from its content (see DeriveEventId).
+// It exists because the tuple this table used to be keyed by —
+// (tenant_id, device_token, event_type, occurred_time) — is not unique: a device that
+// samples two sensors and publishes each as its own message under one shared timestamp
+// produces two distinct events with one identical key. Parents are upserted ON CONFLICT
+// DO NOTHING, so the second envelope was silently discarded while its payload rows still
+// inserted and joined onto the first event. Worse, the discarded envelope's alt_id never
+// reached the idempotency index, so the event became permanently un-deduplicable and each
+// later redelivery re-inserted its rows.
+//
+// 🔴 The natural key remains a useful QUERY path and must never be treated as an identity
+// again. Anything that needs to address one event addresses it by event_id.
 type Event struct {
 	rdb.TenantScoped
+	EventId       []byte `gorm:"not null"`
 	DeviceToken   string `gorm:"type:varchar(128)"`
 	EventType     esmodel.EventType
 	OccurredTime  time.Time
@@ -33,11 +47,13 @@ type Event struct {
 // (ADR-013) denormalized so the event is queryable by that (anchor_type,
 // anchor_token) dimension. Both the source device and the anchor target are named
 // by their stable per-tenant tokens (ADR-044), not device-management row ids. It
-// points back to the base event by its natural key (device_token, event_type,
-// occurred_time); occurred_time is also the hypertable partition column. One event
-// has zero or more anchor rows.
+// points back to the base event by EVENT_ID (occurred_time is carried alongside because
+// it is the hypertable partition column, and device_token/event_type stay denormalized
+// for the query indexes — none of the three identifies the event). One event has zero or
+// more anchor rows.
 type EventAnchor struct {
 	rdb.TenantScoped
+	EventId      []byte            `gorm:"not null"`
 	DeviceToken  string            `gorm:"type:varchar(128);not null"`
 	EventType    esmodel.EventType `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`
@@ -56,6 +72,11 @@ type EventAnchor struct {
 // Location event fields.
 type LocationEvent struct {
 	rdb.TenantScoped
+	// EventId names the base event this payload row belongs to. It replaced the
+	// (device_token, event_type, occurred_time) join, which could not identify a
+	// parent uniquely — two distinct events sharing that tuple made this row's
+	// parentage ambiguous, and it silently resolved to whichever envelope won.
+	EventId      []byte            `gorm:"not null"`
 	DeviceToken  string            `gorm:"type:varchar(128);not null"`
 	EventType    esmodel.EventType `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`
@@ -85,6 +106,11 @@ type LocationEventCreateRequest struct {
 // later profile republish does not rewrite the unit/type of already-stored rows.
 type MeasurementEvent struct {
 	rdb.TenantScoped
+	// EventId names the base event this payload row belongs to. It replaced the
+	// (device_token, event_type, occurred_time) join, which could not identify a
+	// parent uniquely — two distinct events sharing that tuple made this row's
+	// parentage ambiguous, and it silently resolved to whichever envelope won.
+	EventId      []byte            `gorm:"not null"`
 	DeviceToken  string            `gorm:"type:varchar(128);not null"`
 	EventType    esmodel.EventType `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`
@@ -133,6 +159,11 @@ type MeasurementRollup struct {
 // Alert event fields.
 type AlertEvent struct {
 	rdb.TenantScoped
+	// EventId names the base event this payload row belongs to. It replaced the
+	// (device_token, event_type, occurred_time) join, which could not identify a
+	// parent uniquely — two distinct events sharing that tuple made this row's
+	// parentage ambiguous, and it silently resolved to whichever envelope won.
+	EventId      []byte            `gorm:"not null"`
 	DeviceToken  string            `gorm:"type:varchar(128);not null"`
 	EventType    esmodel.EventType `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`
@@ -169,6 +200,11 @@ type AlertEventCreateRequest struct {
 // is dropped.
 type StateChangeEvent struct {
 	rdb.TenantScoped
+	// EventId names the base event this payload row belongs to. It replaced the
+	// (device_token, event_type, occurred_time) join, which could not identify a
+	// parent uniquely — two distinct events sharing that tuple made this row's
+	// parentage ambiguous, and it silently resolved to whichever envelope won.
+	EventId      []byte            `gorm:"not null"`
 	DeviceToken  string            `gorm:"type:varchar(128);not null"`
 	EventType    esmodel.EventType `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`

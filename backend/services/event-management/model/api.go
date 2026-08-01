@@ -5,10 +5,8 @@ package model
 
 import (
 	"context"
-	"fmt"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
@@ -75,9 +73,10 @@ type EventManagementApi interface {
 	// idempotent ingestion of a redelivered message.
 	EventExistsByAltId(ctx context.Context, db *gorm.DB, altId string, occurred time.Time) (bool, error)
 
-	// AnchorsForEvent returns one event's anchor set by its natural key
-	// (device_token, event_type, occurred_time), backing the Event.anchors field.
-	AnchorsForEvent(ctx context.Context, deviceToken string, eventType esmodel.EventType, occurredTime time.Time) ([]EventAnchor, error)
+	// AnchorsForEvent returns one event's anchor set by its EVENT ID, backing the
+	// Event.anchors field. Keyed on the identity because the natural key can name two
+	// distinct events; occurred_time is carried only to prune hypertable chunks.
+	AnchorsForEvent(ctx context.Context, eventId []byte, occurredTime time.Time) ([]EventAnchor, error)
 
 	Events(ctx context.Context, criteria EventSearchCriteria) (*EventSearchResults, error)
 	LocationEvents(ctx context.Context, criteria EventSearchCriteria) (*LocationEventSearchResults, error)
@@ -139,7 +138,11 @@ func upsertParentEvents(ctx context.Context, db *gorm.DB, events []*Event) error
 	seen := make(map[string]struct{}, len(events))
 	distinct := make([]*Event, 0, len(events))
 	for _, e := range events {
-		key := fmt.Sprintf("%s|%d|%d", e.DeviceToken, int64(e.EventType), e.OccurredTime.UnixNano())
+		// Keyed on the event's OWN identity. This used to dedupe on
+		// (device_token, event_type, occurred_time), which silently collapsed two
+		// DISTINCT events that shared that tuple into one — the in-memory half of the
+		// same defect the primary key had.
+		key := string(e.EventId)
 		if _, ok := seen[key]; ok {
 			continue
 		}
@@ -152,7 +155,7 @@ func upsertParentEvents(ctx context.Context, db *gorm.DB, events []*Event) error
 	// tenant_id is stamped onto each row by the tenant-scope create callback before
 	// the insert, so the value is present when the conflict is evaluated.
 	return db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "device_token"}, {Name: "event_type"}, {Name: "occurred_time"}},
+		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "event_id"}, {Name: "occurred_time"}},
 		DoNothing: true,
 	}).Create(distinct).Error
 }
@@ -197,6 +200,7 @@ func (api *Api) CreateLocationEvents(ctx context.Context, db *gorm.DB, requests 
 	for _, request := range requests {
 		parents = append(parents, &request.Event)
 		created = append(created, &LocationEvent{
+			EventId:      request.EventId,
 			DeviceToken:  request.DeviceToken,
 			EventType:    request.EventType,
 			OccurredTime: request.OccurredTime,
@@ -231,6 +235,7 @@ func (api *Api) CreateMeasurementEvents(ctx context.Context, db *gorm.DB, reques
 	for _, request := range requests {
 		parents = append(parents, &request.Event)
 		created = append(created, &MeasurementEvent{
+			EventId:      request.EventId,
 			DeviceToken:  request.DeviceToken,
 			EventType:    request.EventType,
 			OccurredTime: request.OccurredTime,
@@ -267,6 +272,7 @@ func (api *Api) CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*
 	for _, request := range requests {
 		parents = append(parents, &request.Event)
 		created = append(created, &AlertEvent{
+			EventId:      request.EventId,
 			DeviceToken:  request.DeviceToken,
 			EventType:    request.EventType,
 			OccurredTime: request.OccurredTime,
@@ -320,6 +326,7 @@ func (api *Api) CreateStateChangeEvents(ctx context.Context, db *gorm.DB, reques
 	for _, request := range requests {
 		parents = append(parents, &request.Event)
 		created = append(created, &StateChangeEvent{
+			EventId:      request.EventId,
 			DeviceToken:  request.DeviceToken,
 			EventType:    request.EventType,
 			OccurredTime: request.OccurredTime,

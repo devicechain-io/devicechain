@@ -35,9 +35,14 @@ func newPersistenceTestApi(t *testing.T) *Api {
 	if err := db.AutoMigrate(&Event{}); err != nil {
 		t.Fatalf("failed to migrate events: %v", err)
 	}
-	if err := db.Exec(`CREATE UNIQUE INDEX idx_events_natural_key ` +
-		`ON events (tenant_id, device_token, event_type, occurred_time);`).Error; err != nil {
-		t.Fatalf("failed to create natural-key index: %v", err)
+	// The event's own identity is the key and the ON CONFLICT arbiter (production gets it
+	// as the composite primary key from the Postgres/Timescale migration, restated here for
+	// sqlite). It replaced a unique index on (tenant_id, device_token, event_type,
+	// occurred_time) — that tuple is a query path, not an identity, and keying on it
+	// silently dropped one of two distinct events that happened to share it.
+	if err := db.Exec(`CREATE UNIQUE INDEX idx_events_identity ` +
+		`ON events (tenant_id, event_id, occurred_time);`).Error; err != nil {
+		t.Fatalf("failed to create identity index: %v", err)
 	}
 	if err := db.AutoMigrate(&MeasurementEvent{}, &EventAnchor{}); err != nil {
 		t.Fatalf("failed to migrate child tables: %v", err)

@@ -7,8 +7,6 @@ import (
 	"context"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
-
 	emmodel "github.com/devicechain-io/dc-event-management/model"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -82,7 +80,7 @@ func (api *MockApi) DeleteAnchorsForEntity(ctx context.Context, entityType strin
 	return int64(args.Int(0)), args.Error(1)
 }
 
-func (api *MockApi) AnchorsForEvent(ctx context.Context, deviceToken string, eventType esmodel.EventType, occurredTime time.Time) ([]emmodel.EventAnchor, error) {
+func (api *MockApi) AnchorsForEvent(ctx context.Context, eventId []byte, occurredTime time.Time) ([]emmodel.EventAnchor, error) {
 	args := api.Mock.Called()
 	return args.Get(0).([]emmodel.EventAnchor), args.Error(1)
 }

@@ -78,11 +78,11 @@ func (r *EventResolver) AltId() *string {
 
 // Anchors resolves the event's anchor set (ADR-013/044): the tracked-relationship
 // targets it is queryable by, each named by (type, token). Read from event_anchors
-// by the event's natural key. Only resolved when the caller selects `anchors`, so a
-// plain event list pays nothing.
+// by the event's own id. Only resolved when the caller selects `anchors`, so a plain
+// event list pays nothing.
 func (r *EventResolver) Anchors() ([]*EventAnchorRefResolver, error) {
 	api := r.S.GetApi(r.C)
-	anchors, err := api.AnchorsForEvent(r.C, r.M.DeviceToken, r.M.EventType, r.M.OccurredTime)
+	anchors, err := api.AnchorsForEvent(r.C, r.M.EventId, r.M.OccurredTime)
 	if err != nil {
 		return nil, err
 	}

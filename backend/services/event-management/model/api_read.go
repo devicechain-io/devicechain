@@ -7,7 +7,6 @@ import (
 	"context"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"gorm.io/gorm"
 )
 
@@ -60,16 +59,20 @@ func (api *Api) anchorFilter(ctx context.Context, criteria EventSearchCriteria, 
 	return result
 }
 
-// AnchorsForEvent returns the anchor set of one event, addressed by its natural key
-// (device_token, event_type, occurred_time). Backs the Event.anchors GraphQL field
-// (ADR-013/044) — the tracked-relationship targets the event is queryable by, each
-// as a (type, token) reference. Tenant-scoped via DB(ctx).
-func (api *Api) AnchorsForEvent(ctx context.Context, deviceToken string,
-	eventType esmodel.EventType, occurredTime time.Time) ([]EventAnchor, error) {
+// AnchorsForEvent returns the anchor set of one event, addressed by its EVENT ID.
+// Backs the Event.anchors GraphQL field (ADR-013/044) — the tracked-relationship targets
+// the event is queryable by, each as a (type, token) reference. Tenant-scoped via DB(ctx).
+//
+// 🔴 This took (device_token, event_type, occurred_time) and was therefore capable of
+// returning the UNION of two different events' anchors whenever both shared that tuple,
+// with nothing in the result marking which anchor belonged to which. occurred_time is
+// still passed because it is the hypertable partition column and lets the read prune
+// chunks; it is not part of the address.
+func (api *Api) AnchorsForEvent(ctx context.Context, eventId []byte,
+	occurredTime time.Time) ([]EventAnchor, error) {
 	anchors := make([]EventAnchor, 0)
 	err := api.RDB.DB(ctx).Model(&EventAnchor{}).
-		Where("device_token = ? AND event_type = ? AND occurred_time = ?",
-			deviceToken, eventType, occurredTime).
+		Where("event_id = ? AND occurred_time = ?", eventId, occurredTime).
 		Find(&anchors).Error
 	if err != nil {
 		return nil, err
