@@ -310,3 +310,32 @@ func parseFloat(t *testing.T, s string) float64 {
 	}
 	return f
 }
+
+// A device that returns no metrics emits nothing at all, rather than posting an
+// empty measurement. Going silent is a state a scenario has to be able to produce —
+// it is what an offline device looks like to every widget — and it must not show up
+// in the accounting as an emit that happened.
+func TestEmitAllSkipsADeviceWithNoMetrics(t *testing.T) {
+	var posts atomic.Int64
+	rt := fakeIngress(t, 4, func(w http.ResponseWriter, r *http.Request) {
+		posts.Add(1)
+		w.WriteHeader(http.StatusAccepted)
+	})
+
+	// Every other device is silent.
+	err := EmitAll(context.Background(), rt, 2, func(i int, _ DeviceInstance) map[string]float64 {
+		if i%2 == 0 {
+			return nil
+		}
+		return map[string]float64{"speed_kph": 1}
+	})
+	if err != nil {
+		t.Fatalf("EmitAll: %v", err)
+	}
+	if got := posts.Load(); got != 2 {
+		t.Errorf("%d devices reached the ingress, want 2 — a silent device must not post", got)
+	}
+	if got := rt.Stats.Emitted.Load(); got != 2 {
+		t.Errorf("counted %d emits, want 2 — a silent device must not be counted as emitted", got)
+	}
+}

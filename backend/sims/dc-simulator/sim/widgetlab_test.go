@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"regexp"
 	"slices"
@@ -1206,5 +1207,461 @@ func TestWidgetlabStressBoardSaysItIsDeliberatelyPathological(t *testing.T) {
 	if !announced {
 		t.Error("the stress board carries no label announcing that its data is deliberately " +
 			"hostile; a viewer would read it as a broken dashboard")
+	}
+}
+
+// ---- The pathological lane ----------------------------------------------------
+
+// Every declared extreme must actually be reached within one cycle. A cycle that
+// silently skipped one would leave a widget's worst case unexercised while the
+// stress board announces it — which is the board lying about itself.
+func TestWidgetlabEdgeCycleVisitsEveryExtreme(t *testing.T) {
+	// Checked FIRST, and with Fatalf, because a divergence here is what makes the
+	// loop below index out of range — a panic that aborts the whole test binary
+	// instead of naming the one-line edit that caused it.
+	if want := int64(widgetlabEdgeNominalPhases + len(widgetlabEdgeExtremes)); widgetlabEdgeCyclePhases != want {
+		t.Fatalf("the cycle runs %d steps but %d nominal steps plus %d extremes need %d; "+
+			"derive the length from the list rather than fixing it",
+			widgetlabEdgeCyclePhases, widgetlabEdgeNominalPhases, len(widgetlabEdgeExtremes), want)
+	}
+	// Negative control: an empty extremes list would make the loop assert nothing.
+	if len(widgetlabEdgeExtremes) == 0 {
+		t.Fatal("no extremes are declared, so this test asserts nothing")
+	}
+
+	seen := map[float64]bool{}
+	// Two full sweep periods, so a cycle that only lines up on some periods is
+	// still caught.
+	for tick := int64(1); tick <= 2*WidgetlabSweepTicks; tick++ {
+		values := widgetlabEdgeMetrics(edgeExtremes, tick)
+		if values == nil {
+			t.Fatalf("tick %d: the extremes device went silent; that is another device's job", tick)
+		}
+		seen[values[WidgetlabTemperatureKey]] = true
+	}
+	for _, want := range widgetlabEdgeExtremes {
+		if !seen[want] {
+			t.Errorf("the cycle never emits %v, so the case it represents is never shown", want)
+		}
+	}
+}
+
+// 🔴 The boundary case the rule's operator turns on. The rule fires on `gt`, which
+// is STRICT, so a device sitting exactly ON the threshold must not raise. Nothing
+// else in the scenario tests that boundary, and a rule that used `gte` would look
+// correct in every other test.
+func TestWidgetlabEdgeCycleSitsExactlyOnTheThresholdWithoutRaising(t *testing.T) {
+	if !slices.Contains(widgetlabEdgeExtremes, float64(WidgetlabAlarmThreshold)) {
+		t.Fatal("the cycle never sits exactly on the alarm threshold, so the strictness of the " +
+			"rule's comparison is untested")
+	}
+	// The rule's own operator, read back out of the authored definition.
+	var def struct {
+		When struct {
+			Op        string  `json:"op"`
+			Threshold float64 `json:"threshold"`
+		} `json:"when"`
+	}
+	if err := json.Unmarshal([]byte(widgetlabRuleDefinition()), &def); err != nil {
+		t.Fatalf("rule definition is not decodable: %v", err)
+	}
+	if def.When.Op != "gt" {
+		t.Errorf("the rule compares with %q; the at-threshold case only means something under "+
+			"a strict comparison", def.When.Op)
+	}
+	if !(WidgetlabAlarmThreshold > def.When.Threshold) && WidgetlabAlarmThreshold != def.When.Threshold {
+		t.Errorf("the at-threshold value %v is not the rule's threshold %v",
+			WidgetlabAlarmThreshold, def.When.Threshold)
+	}
+}
+
+// The silent device must actually stop emitting — nil, not an empty measurement,
+// because EmitAll skips a device only on nil and an empty map would post a
+// measurement carrying nothing, which is a device reporting that it has nothing to
+// say rather than a device that is gone.
+func TestWidgetlabEdgeSilenceIsRealSilence(t *testing.T) {
+	silent, reporting := 0, 0
+	for tick := int64(1); tick <= WidgetlabSweepTicks; tick++ {
+		switch values := widgetlabEdgeMetrics(edgeSilent, tick); {
+		case values == nil:
+			silent++
+		case len(values) == 0:
+			t.Fatalf("tick %d returned an empty map; EmitAll would post a measurement with no "+
+				"values, which is not silence", tick)
+		default:
+			reporting++
+		}
+	}
+	if silent == 0 {
+		t.Error("the silent device never goes silent")
+	}
+	if reporting == 0 {
+		t.Error("the silent device never reports, so a viewer sees no transition into silence")
+	}
+
+	// CONTIGUOUS, not a flicker. A device alternating on/off every tick satisfies
+	// "some ticks silent, some reporting" while producing no visible gap at all: the
+	// chart just gets sparser, the timestamp never goes stale, and an absence rule
+	// with a window over one interval never fires. Every observable property the
+	// silence exists for depends on the run being unbroken.
+	var longest, current int
+	for tick := int64(1); tick <= WidgetlabSweepTicks; tick++ {
+		if widgetlabEdgeMetrics(edgeSilent, tick) == nil {
+			current++
+			if current > longest {
+				longest = current
+			}
+			continue
+		}
+		current = 0
+	}
+	// Two phase steps' worth, which is what the cycle allots to silence.
+	if want := int(2 * widgetlabEdgePhaseTicks); longest < want {
+		t.Errorf("the longest unbroken silence is %d ticks, want at least %d — a device that "+
+			"flickers produces a sparser chart, not a gap", longest, want)
+	}
+}
+
+// The partial reporter must drop metrics AND recover them, or a table simply shows
+// fewer rows forever and nothing about it reads as pathological.
+func TestWidgetlabEdgePartialReporterDropsAndRestoresMetrics(t *testing.T) {
+	full := len(widgetlabNominalMetrics(1))
+	if full < 3 {
+		t.Fatalf("a nominal report carries %d metrics; there is nothing to drop", full)
+	}
+	counts := map[int]bool{}
+	for tick := int64(1); tick <= WidgetlabSweepTicks; tick++ {
+		values := widgetlabEdgeMetrics(edgePartial, tick)
+		if values == nil {
+			t.Fatalf("tick %d: the partial reporter went silent; that is another device's job", tick)
+		}
+		counts[len(values)] = true
+	}
+	if !counts[full] {
+		t.Error("the partial reporter never sends a complete report, so the drop has nothing " +
+			"to contrast against")
+	}
+	if len(counts) < 2 {
+		t.Error("the partial reporter always sends the same number of metrics, so no table row " +
+			"ever appears or disappears")
+	}
+	// The swept metric is never dropped: it is what the chart, gauge, card and the
+	// alarm rule all read, and a device that stopped reporting it would look silent
+	// rather than partial.
+	for tick := int64(1); tick <= WidgetlabSweepTicks; tick++ {
+		if _, ok := widgetlabEdgeMetrics(edgePartial, tick)[WidgetlabTemperatureKey]; !ok {
+			t.Fatalf("tick %d drops the swept metric, so this device is indistinguishable from "+
+				"a silent one", tick)
+		}
+	}
+}
+
+// Behaviours are assigned by POSITION among the edge devices, not by parsing a
+// token, and every edge device gets one while no nominal device does.
+func TestWidgetlabEdgeBehavioursAreAssignedStructurally(t *testing.T) {
+	m := NewWidgetlab(1, Load{}).Manifest()
+	devices := m.Expand(m.Seed)
+	behaviours := widgetlabEdgeBehaviours(devices)
+
+	assigned := map[edgeBehaviour]int{}
+	for i, d := range devices {
+		behaviour, isEdge := behaviours[i]
+		switch d.DeviceTypeToken {
+		case WidgetlabEdgeDeviceTypeToken:
+			if !isEdge {
+				t.Errorf("edge device %q was given no behaviour, so it emits nominal data on the "+
+					"board that announces hostile data", d.Token)
+				continue
+			}
+			assigned[behaviour]++
+		default:
+			if isEdge {
+				t.Errorf("nominal device %q was given a pathological behaviour; the gallery would "+
+					"show hostile data", d.Token)
+			}
+		}
+	}
+	// Every behaviour must be represented, or the stress board announces a case no
+	// device produces.
+	for _, behaviour := range []edgeBehaviour{edgeExtremes, edgePartial, edgeSilent} {
+		if assigned[behaviour] == 0 {
+			t.Errorf("no edge device carries behaviour %d, so the case it shows never happens",
+				behaviour)
+		}
+	}
+}
+
+// The cycle is pure in the tick, like the sweep: a fixture, a test and a live run
+// must agree on what tick N shows.
+func TestWidgetlabEdgeCycleIsDeterministicAndTotal(t *testing.T) {
+	for _, behaviour := range []edgeBehaviour{edgeExtremes, edgePartial, edgeSilent} {
+		for _, tick := range []int64{-1, -91, 0, 1, 7, 1_000_003, math.MaxInt64 - 1} {
+			a, b := widgetlabEdgeMetrics(behaviour, tick), widgetlabEdgeMetrics(behaviour, tick)
+			if len(a) != len(b) {
+				t.Fatalf("behaviour %d at tick %d is not deterministic", behaviour, tick)
+			}
+			for key, av := range a {
+				if b[key] != av {
+					t.Fatalf("behaviour %d at tick %d is not deterministic for %q", behaviour, tick, key)
+				}
+			}
+		}
+	}
+	// The phase index must stay in range for any tick, including negative ones —
+	// Go's % keeps the dividend's sign, which would index the extremes slice out of
+	// bounds if it were not normalised.
+	// These are chosen to actually produce a negative quotient. An earlier list
+	// (-1, -1000, MinInt64+1) all happened to give phase 0, so removing the
+	// normalisation changed nothing and the test proved the opposite of its claim.
+	negatives := []int64{
+		-widgetlabEdgePhaseTicks, -3 * widgetlabEdgePhaseTicks,
+		-1, -1000, math.MinInt64 + 1,
+	}
+	for _, tick := range negatives {
+		phase := widgetlabEdgePhase(tick)
+		if int64(phase) < 0 || int64(phase) >= widgetlabEdgeCyclePhases {
+			t.Errorf("tick %d gives phase %d, outside the %d-step cycle",
+				tick, phase, widgetlabEdgeCyclePhases)
+		}
+		// And the value it produces must be indexable, which is what the phase
+		// bound actually protects.
+		if widgetlabEdgeMetrics(edgeExtremes, tick) == nil {
+			t.Errorf("tick %d produced no metrics for the extremes device", tick)
+		}
+	}
+}
+
+// A nominal sensor is never touched by the pathological lane — the gallery is the
+// catalog, and hostile data on it would misrepresent every widget it shows.
+func TestWidgetlabNominalDevicesStayNominal(t *testing.T) {
+	for tick := int64(1); tick <= WidgetlabSweepTicks; tick++ {
+		values := widgetlabNominalMetrics(tick)
+		temperature := values[WidgetlabTemperatureKey]
+		if temperature < WidgetlabSweepMin || temperature > WidgetlabSweepMax {
+			t.Fatalf("tick %d: a nominal device reported %v, outside the sweep", tick, temperature)
+		}
+		if len(values) != 4 {
+			t.Fatalf("tick %d: a nominal device reported %d metrics, not the full 4", tick, len(values))
+		}
+	}
+}
+
+// 🔴 The pathological lane has to reach the WIRE, not just the pure functions.
+//
+// This is the seam that was already open once in this scenario: the sweep and the
+// threshold agreed while nothing observed what Tick actually emitted. The generators
+// are a second chance to make the same mistake — a Tick that classified devices
+// wrongly, or dropped the behaviour map, would leave every test above green while
+// every device on the stress board emitted nominal data.
+func TestWidgetlabTickDrivesEdgeDevicesDownThePathologicalPath(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		posts = map[string][]map[string]float64{}
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Device  string `json:"device"`
+			Payload struct {
+				Entries []struct {
+					Measurements map[string]string `json:"measurements"`
+				} `json:"entries"`
+			} `json:"payload"`
+		}
+		decodeJSON(t, r, &body)
+		values := map[string]float64{}
+		for _, entry := range body.Payload.Entries {
+			for key, raw := range entry.Measurements {
+				values[key] = parseFloat(t, raw)
+			}
+		}
+		mu.Lock()
+		posts[body.Device] = append(posts[body.Device], values)
+		mu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(srv.Close)
+
+	// One nominal sensor and the three edge sensors, in Expand's order.
+	m := NewWidgetlab(1, Load{}).Manifest()
+	var devices []DeviceInstance
+	for _, d := range m.Expand(m.Seed) {
+		if d.DeviceTypeToken == WidgetlabDeviceTypeToken && len(devices) > 0 {
+			continue
+		}
+		devices = append(devices, d)
+	}
+	rt := &Runtime{
+		Endpoints:  Endpoints{Ingress: srv.URL},
+		InstanceId: "dc", Tenant: "acme", HTTPClient: srv.Client(), Devices: devices,
+	}
+
+	s := NewWidgetlab(1, Load{})
+	for i := 0; i < WidgetlabSweepTicks; i++ {
+		if err := s.Tick(context.Background(), rt); err != nil {
+			t.Fatalf("tick %d: %v", i+1, err)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	behaviours := widgetlabEdgeBehaviours(devices)
+	for i, d := range devices {
+		got := posts[d.Token]
+		behaviour, isEdge := behaviours[i]
+		if !isEdge {
+			if len(got) != WidgetlabSweepTicks {
+				t.Errorf("nominal device %q posted %d of %d ticks", d.Token, len(got), WidgetlabSweepTicks)
+			}
+			for _, values := range got {
+				if v := values[WidgetlabTemperatureKey]; v < WidgetlabSweepMin || v > WidgetlabSweepMax {
+					t.Fatalf("nominal device %q emitted %v, outside the sweep", d.Token, v)
+				}
+			}
+			continue
+		}
+
+		switch behaviour {
+		case edgeExtremes:
+			var sawExtreme bool
+			for _, values := range got {
+				if v := values[WidgetlabTemperatureKey]; v < WidgetlabSweepMin || v > WidgetlabSweepMax {
+					sawExtreme = true
+				}
+			}
+			if !sawExtreme {
+				t.Errorf("device %q is the extremes device but every value it put on the wire was "+
+					"inside the nominal sweep", d.Token)
+			}
+		case edgePartial:
+			shapes := map[int]bool{}
+			for _, values := range got {
+				shapes[len(values)] = true
+			}
+			if len(shapes) < 2 {
+				t.Errorf("device %q is the partial reporter but every measurement it put on the "+
+					"wire carried the same metrics", d.Token)
+			}
+		case edgeSilent:
+			if len(got) == 0 {
+				t.Errorf("device %q never reported at all; it is the silent device, not an absent one",
+					d.Token)
+			}
+			if len(got) >= WidgetlabSweepTicks {
+				t.Errorf("device %q posted %d of %d ticks; it is supposed to go silent for part "+
+					"of its cycle", d.Token, len(got), WidgetlabSweepTicks)
+			}
+		}
+	}
+}
+
+// 🔴 The stress board's widgets must be bound to the devices that produce the
+// pathologies their titles promise.
+//
+// Nothing pinned this: the board bound the FIRST edge device to every widget, so it
+// showed one pathology under three titles — a chart titled "spikes and silence" over
+// a device that never goes silent, and a "Partial reports" table over a device that
+// never drops a metric. The wire test could not catch it either, because it derived
+// its expectations from the same classifier the code uses, so any permutation of the
+// assignment passed. This reads the BOARD and the GENERATOR and checks them against
+// each other.
+func TestWidgetlabStressWidgetsAreBoundToTheBehaviourTheyShow(t *testing.T) {
+	m := NewWidgetlab(1, Load{}).Manifest()
+	devices := m.Expand(m.Seed)
+	behaviourOf := map[string]edgeBehaviour{}
+	for i, behaviour := range widgetlabEdgeBehaviours(devices) {
+		behaviourOf[devices[i].Token] = behaviour
+	}
+
+	board := widgetlabBoard(t, WidgetlabStressDashboardToken)
+	slotBehaviour := map[string]edgeBehaviour{}
+	for name, slot := range board.Slots {
+		if slot.DefaultBinding == nil || slot.DefaultBinding.Kind != "device" {
+			t.Fatalf("stress slot %q does not bind a device", name)
+		}
+		behaviour, ok := behaviourOf[slot.DefaultBinding.DeviceToken]
+		if !ok {
+			t.Fatalf("stress slot %q binds %q, which is not an edge device — the board would "+
+				"show nominal data under a banner announcing hostile data",
+				name, slot.DefaultBinding.DeviceToken)
+		}
+		slotBehaviour[name] = behaviour
+	}
+
+	// Every behaviour must be on the board. Otherwise the lane produces a case
+	// nothing displays, which is indistinguishable from not producing it.
+	shown := map[edgeBehaviour]bool{}
+	for _, behaviour := range slotBehaviour {
+		shown[behaviour] = true
+	}
+	for _, behaviour := range []edgeBehaviour{edgeExtremes, edgePartial, edgeSilent} {
+		if !shown[behaviour] {
+			t.Errorf("no stress slot binds a device with behaviour %d, so that pathology is "+
+				"generated and never shown", behaviour)
+		}
+	}
+
+	// And each widget must read the slot whose device produces what it claims.
+	want := map[string]edgeBehaviour{
+		"wl-stress-chart":   edgeExtremes,
+		"wl-stress-gauge":   edgeExtremes,
+		"wl-stress-card":    edgeExtremes,
+		"wl-stress-table":   edgePartial,
+		"wl-stress-silence": edgeSilent,
+	}
+	checked := 0
+	for _, w := range board.Widgets {
+		expected, named := want[w.Id]
+		if !named {
+			continue
+		}
+		if w.Datasource == nil {
+			t.Errorf("widget %q carries no datasource", w.Id)
+			continue
+		}
+		checked++
+		if got := slotBehaviour[w.Datasource.Slot]; got != expected {
+			t.Errorf("widget %q reads slot %q, whose device has behaviour %d, but the widget "+
+				"shows behaviour %d", w.Id, w.Datasource.Slot, got, expected)
+		}
+	}
+	if checked != len(want) {
+		t.Errorf("checked %d of %d named widgets; the rest are absent from the board and this "+
+			"test asserted nothing about them", checked, len(want))
+	}
+}
+
+// The gallery is the catalog, so its zone-scoped alarm widgets must not fill with
+// pathological alarms. The profile is shared, so the DETECT rule fires for edge
+// devices too — an edge sensor inside the gallery's zone would put a 350 C alarm on
+// the catalog board, and one click on the alarm table's originator drill would
+// rebind the gallery's card, gauge, chart and table to the extremes device.
+func TestWidgetlabEdgeDevicesAreOutsideTheGalleryZones(t *testing.T) {
+	m := NewWidgetlab(1, Load{}).Manifest()
+
+	zones := map[string]bool{}
+	for _, a := range m.Areas {
+		zones[a.Token] = true
+	}
+	if len(zones) == 0 {
+		t.Fatal("the manifest declares no zones, so this test asserts nothing")
+	}
+
+	nominalInAZone := 0
+	for _, d := range m.Expand(m.Seed) {
+		for _, a := range d.Assignments {
+			if a.TargetType != "area" || !zones[a.TargetToken] {
+				continue
+			}
+			if d.DeviceTypeToken == WidgetlabEdgeDeviceTypeToken {
+				t.Errorf("edge device %q is assigned to zone %q; the gallery's alarm widgets are "+
+					"scoped to a zone, so its pathological alarms would appear on the catalog",
+					d.Token, a.TargetToken)
+			}
+			nominalInAZone++
+		}
+	}
+	if nominalInAZone == 0 {
+		t.Error("no device is in any zone at all, so the gallery's zone-scoped widgets have " +
+			"nothing to show and this test passed for the wrong reason")
 	}
 }
