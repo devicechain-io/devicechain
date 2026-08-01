@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/devicechain-io/dcctl/sim"
 	"github.com/spf13/cobra"
@@ -31,7 +32,8 @@ stored password in sync with the identity).`,
 func init() {
 	simCreateCmd.Flags().Int64("seed", 1, "deterministic generation seed for the sim's populations")
 	simCreateCmd.Flags().String("ingress", "", "device-plane HTTP ingress base URL (default http(s)://<server>:8081)")
-	simCreateCmd.Flags().String("manifest", "devicepulse", "built-in scenario to run (devicepulse, buildingpulse)")
+	simCreateCmd.Flags().String("manifest", "devicepulse",
+		"built-in scenario to run ("+strings.Join(sim.KnownManifestIds, ", ")+")")
 	simCreateCmd.Flags().String("tier", sim.DefaultTenantTier, "tenant tier to package the sim at (ADR-065)")
 	simCreateCmd.Flags().Int("shed-priority", 0, "ADR-063 shed-priority override 1-100 (0 = inherit the tier's); a load-test lever to place a probe tenant in a shed band")
 	simCmd.AddCommand(simCreateCmd)

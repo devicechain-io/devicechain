@@ -19,6 +19,7 @@ import {
   validateWidgetOptions,
   numberOptionSpec,
   clampNumberOption,
+  enumOptionValues,
   type WidgetOptions,
 } from './options';
 import { WIDGET_BINDS_DATASOURCE, WIDGET_CHANNEL } from './registry';
@@ -103,8 +104,22 @@ function sourceFiles(): string[] {
   return out;
 }
 
+// stripComments blanks out comments before a scan.
+//
+// 🔴 A regex over raw source cannot tell code from prose, so the same text sitting in
+// a comment satisfies a scan looking for a call — the retired read coming back to life
+// as documentation. Verified: replacing a widget's optBoolean read with `false` and
+// leaving the old call in a comment kept every gate green, while the schema went on
+// declaring, and validateWidgetOptions went on blessing, an option the renderer no
+// longer read. Blanked rather than removed so multi-line patterns still span the same
+// distance.
+function stripComments(source: string): string {
+  const blank = (m: string) => m.replace(/[^\n]/g, ' ');
+  return source.replace(/\/\*[\s\S]*?\*\//g, blank).replace(/\/\/.*$/gm, blank);
+}
+
 function optionKeysIn(relativePath: string): string[] {
-  const source = readFileSync(join(SRC, relativePath), 'utf8');
+  const source = stripComments(readFileSync(join(SRC, relativePath), 'utf8'));
   return [
     ...[...source.matchAll(HELPER_READ)].map((m) => m[1]),
     ...[...source.matchAll(DIRECT_READ)].map((m) => m[1]),
@@ -542,5 +557,40 @@ describe('clampNumberOption', () => {
         [],
       );
     }
+  });
+});
+
+describe('enumOptionValues', () => {
+  it('returns the legal values an authoring dropdown must offer', () => {
+    expect(enumOptionValues('alarm-table', 'state')).toEqual(['ACTIVE', 'CLEARED']);
+    expect(enumOptionValues('alarm-table', 'acknowledged')).toEqual(['true', 'false']);
+    expect(enumOptionValues('image', 'fit')).toEqual(['contain', 'cover', 'fill']);
+  });
+
+  it('returns nothing for an option that is not an enum, or not read at all', () => {
+    expect(enumOptionValues('table', 'precision')).toBeUndefined();
+    expect(enumOptionValues('table', 'nope')).toBeUndefined();
+    expect(enumOptionValues('gauge', 'toString')).toBeUndefined();
+  });
+
+  // The point of the accessor: what a panel offers and what the validator accepts are
+  // the same list, so a dropdown cannot author a value the gate then refuses.
+  it('offers exactly what the validator accepts', () => {
+    let checked = 0;
+    for (const [type, specs] of Object.entries(WIDGET_OPTIONS)) {
+      for (const [key, spec] of Object.entries(specs)) {
+        if (spec.kind !== 'enum') continue;
+        const values = enumOptionValues(type as WidgetType, key);
+        expect(values, `${type}.${key}`).toBeDefined();
+        for (const value of values as readonly string[]) {
+          checked++;
+          expect(
+            validateWidgetOptions(type as WidgetType, { [key]: value }).filter((i) => i.key === key),
+            `${type}.${key} offers ${value} but the validator rejects it`,
+          ).toEqual([]);
+        }
+      }
+    }
+    expect(checked, 'no enum option was checked at all').toBeGreaterThan(0);
   });
 });

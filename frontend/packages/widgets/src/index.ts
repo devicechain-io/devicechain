@@ -34,6 +34,7 @@ export {
   validateWidgetOptions,
   numberOptionSpec,
   clampNumberOption,
+  enumOptionValues,
   type WidgetOptions,
   type WidgetOptionSpecs,
   type OptionSpec,

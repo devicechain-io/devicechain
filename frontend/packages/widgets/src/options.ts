@@ -543,3 +543,16 @@ export function clampNumberOption(spec: NumberOptionSpec | undefined, value: num
   if (spec.max !== undefined) next = Math.min(spec.max, next);
   return next;
 }
+
+// enumOptionValues returns the legal values of an enum option, so an authoring UI can
+// build its dropdown from the schema instead of a private copy of the same list.
+//
+// A dropdown offering a value the schema rejects lets a panel author a definition the
+// validator refuses; one MISSING a value silently removes a filter an author could
+// previously express. Both are invisible without a shared source.
+export function enumOptionValues(type: WidgetType, key: string): readonly string[] | undefined {
+  const specs: WidgetOptionSpecs = WIDGET_OPTIONS[type];
+  if (!Object.prototype.hasOwnProperty.call(specs, key)) return undefined;
+  const spec = specs[key];
+  return spec.kind === 'enum' ? spec.values : undefined;
+}

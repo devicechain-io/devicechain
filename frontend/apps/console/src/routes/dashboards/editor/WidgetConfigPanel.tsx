@@ -27,6 +27,7 @@ import {
   WIDGET_BINDS_DATASOURCE,
   WIDGET_CHANNEL,
   clampNumberOption,
+  enumOptionValues,
   numberOptionSpec,
   type WidgetChannel,
 } from '@devicechain/widgets';
@@ -69,6 +70,9 @@ const OPTION_MIN = 'min';
 const OPTION_MAX = 'max';
 const OPTION_PRECISION = 'precision';
 const OPTION_MAX_ROWS = 'maxRows';
+const OPTION_STATE = 'state';
+const OPTION_SEVERITY = 'severity';
+const OPTION_ACKNOWLEDGED = 'acknowledged';
 
 const ALARM_WIDGETS = widgetTypesOn('alarm');
 const CONTROL_WIDGETS = widgetTypesOn('control');
@@ -91,35 +95,52 @@ function kindOptions(t: TFunction): ComboboxOption[] {
   ];
 }
 
-// eslint-disable-next-line i18next/no-literal-string -- 'ACTIVE'/'CLEARED' are the
-// alarm-state API values, not user text.
-function alarmStateOptions(t: TFunction): ComboboxOption[] {
-  return [
-    { value: 'ACTIVE', label: t('widgetAlarmStateActive') },
-    { value: 'CLEARED', label: t('widgetAlarmStateCleared') },
-  ];
+// The VALUES come from the option schema, the labels from the catalogue. A dropdown
+// that offered a value the schema rejects would let the panel author a definition the
+// validator refuses — and these were hand-written copies of lists WIDGET_OPTIONS
+// already declares, one import away from the package that owns them.
+//
+// enumValues throws rather than returning empty on a missing option: an empty
+// dropdown is a working-looking control that can express nothing, and a widget whose
+// filter silently disappeared is exactly the failure this panel edits toward.
+function enumValues(type: WidgetType, key: string): readonly string[] {
+  const values = enumOptionValues(type, key);
+  if (!values) {
+    throw new Error(`${type} declares no enum option ${key}; the dropdown would be empty`);
+  }
+  return values;
 }
 
-// eslint-disable-next-line i18next/no-literal-string -- severity API values.
+// Labels are keyed by value so a schema change surfaces as a missing translation
+// rather than as a silently mislabelled option.
+function labelled(values: readonly string[], label: (value: string) => string): ComboboxOption[] {
+  return values.map((value) => ({ value, label: label(value) }));
+}
+
+function alarmStateOptions(t: TFunction): ComboboxOption[] {
+  return labelled(enumValues('alarm-table', OPTION_STATE), (value) =>
+    value === 'ACTIVE' ? t('widgetAlarmStateActive') : t('widgetAlarmStateCleared'),
+  );
+}
+
 function alarmSeverityOptions(t: TFunction): ComboboxOption[] {
-  return [
-    { value: 'CRITICAL', label: t('widgetAlarmSeverityCritical') },
-    { value: 'MAJOR', label: t('widgetAlarmSeverityMajor') },
-    { value: 'MINOR', label: t('widgetAlarmSeverityMinor') },
-    { value: 'WARNING', label: t('widgetAlarmSeverityWarning') },
-    { value: 'INDETERMINATE', label: t('widgetAlarmSeverityIndeterminate') },
-  ];
+  const labels: Record<string, string> = {
+    CRITICAL: t('widgetAlarmSeverityCritical'),
+    MAJOR: t('widgetAlarmSeverityMajor'),
+    MINOR: t('widgetAlarmSeverityMinor'),
+    WARNING: t('widgetAlarmSeverityWarning'),
+    INDETERMINATE: t('widgetAlarmSeverityIndeterminate'),
+  };
+  return labelled(enumValues('alarm-table', OPTION_SEVERITY), (value) => labels[value] ?? value);
 }
 
 // Stored as the string 'true'/'false' (absent = any) — the widget maps it back to the
-// boolean acknowledged filter.
-// eslint-disable-next-line i18next/no-literal-string -- 'true'/'false' are the stored
-// option values, not user text.
+// boolean acknowledged filter, which is why the schema declares it as an enum of two
+// STRINGS and why a real boolean here would make the filter vanish.
 function alarmAckOptions(t: TFunction): ComboboxOption[] {
-  return [
-    { value: 'false', label: t('widgetAlarmAckUnacknowledged') },
-    { value: 'true', label: t('widgetAlarmAckAcknowledged') },
-  ];
+  return labelled(enumValues('alarm-table', OPTION_ACKNOWLEDGED), (value) =>
+    value === 'true' ? t('widgetAlarmAckAcknowledged') : t('widgetAlarmAckUnacknowledged'),
+  );
 }
 
 // eslint-disable-next-line i18next/no-literal-string -- target-type API values.
