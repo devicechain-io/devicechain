@@ -129,7 +129,22 @@ public sealed class DeviceEventPublisher
         }
     }
 
-    // RFC3339 in UTC without fractional seconds — matches the Go sim's time.RFC3339 emit.
+    // RFC3339 in UTC WITH fractional seconds ("O" is .NET's round-trip form: always Z,
+    // always seven fractional digits, and Go's time.Parse accepts it).
+    //
+    // 🔴 The fractional part is load-bearing, not cosmetic, and this previously emitted
+    // whole seconds. A base event is keyed by (tenant, device, event_type, occurred_time),
+    // so two readings this SDK published inside one wall-clock second carried an identical
+    // key — and the second one's envelope was silently discarded on insert. A device
+    // sampling faster than once per second lost every reading after the first in each
+    // second, and lost it quietly: the publish returned 202.
+    //
+    // The old comment justified the truncation as matching "the Go sim's time.RFC3339
+    // emit". That had stopped being true — sims/dc-simulator/sim/emit.go moved to
+    // RFC3339Nano precisely because second-identical emits were collapsing, and its
+    // comment explains the mechanism in full. The simulator was corrected; the SDK real
+    // devices actually use was not. Emitting sub-second time is also just honest: a device
+    // sampling sub-second HAS a sub-second timestamp.
     private static string FormatRfc3339(DateTimeOffset when) =>
-        when.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
+        when.UtcDateTime.ToString("O", CultureInfo.InvariantCulture);
 }

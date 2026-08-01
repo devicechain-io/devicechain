@@ -91,9 +91,10 @@ func (r *DetectionEventResolver) Edge() string      { return r.de.Edge }
 func (r *DetectionEventResolver) Series() string    { return r.de.Series }
 
 // OccurredTime is the logical (event) time the detection is stamped at, formatted with the
-// API's uniform RFC3339 convention.
+// API's uniform RFC3339Nano convention — an event time is addressable, so it is published
+// at the resolution it was recorded at. See AlarmEventResolver.OccurredTime.
 func (r *DetectionEventResolver) OccurredTime() string {
-	return r.de.OccurredTime.UTC().Format(time.RFC3339)
+	return r.de.OccurredTime.UTC().Format(time.RFC3339Nano)
 }
 
 // Severity is the detection's tier snapshot, null when the rule declares none.

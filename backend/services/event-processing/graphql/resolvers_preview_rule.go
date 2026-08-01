@@ -234,7 +234,9 @@ func newPreviewResult(res preview.Result, degraded string, wallMs int32, tb *tra
 		if f.Raise {
 			signal = "raised"
 		}
-		fr := &PreviewFiringResolver{occurredAt: f.OccurredAt.UTC().Format(time.RFC3339), series: f.Series, signal: signal, trace: []*NodeTraceStepResolver{}}
+		// RFC3339Nano: a replay preview is compared against real history, so a firing
+		// time truncated to the second cannot be lined up with the event that caused it.
+		fr := &PreviewFiringResolver{occurredAt: f.OccurredAt.UTC().Format(time.RFC3339Nano), series: f.Series, signal: signal, trace: []*NodeTraceStepResolver{}}
 		if tb != nil {
 			steps := tb.Build(tracepkg.Firing{Raise: f.Raise, Series: f.Series, Value: f.Value, HasValue: f.HasValue})
 			fr.trace = make([]*NodeTraceStepResolver, 0, len(steps))

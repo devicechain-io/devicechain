@@ -141,12 +141,12 @@ func (r *RuleHealthResolver) FireCount() int32 {
 	return int32(r.fireCount)
 }
 
-// LastFiredAt returns the RFC3339 fire time, or null when the rule has never fired.
+// LastFiredAt returns the RFC3339Nano fire time, or null when the rule has never fired.
 func (r *RuleHealthResolver) LastFiredAt() *string {
 	if !r.hasFired {
 		return nil
 	}
-	s := r.lastFiredAt.UTC().Format(time.RFC3339)
+	s := r.lastFiredAt.UTC().Format(time.RFC3339Nano)
 	return &s
 }
 

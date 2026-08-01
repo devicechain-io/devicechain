@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	util "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/glebarez/sqlite"
@@ -346,11 +347,15 @@ func TestOptimisticConcurrency(t *testing.T) {
 	_, err = api.PublishConnector(ctx, "c", nil, nil, "alice", &stale)
 	require.ErrorIs(t, err, ErrConflict)
 
-	// A matching precondition succeeds. Read the timestamp back the same way the guarded
-	// write does (re-load + RFC3339) so the round-tripped value matches exactly.
+	// A matching precondition succeeds. Build the precondition with the SAME function the
+	// GraphQL layer hands the client (core/graphql.FormatTime) rather than re-spelling a
+	// layout here: the precondition compare and the read formatter are one contract, and
+	// hardcoding the layout in the test is exactly what let them drift apart — the read
+	// published whole seconds while the compare accepted whole seconds, so a client stale
+	// by under a second passed a check that looked airtight from either side alone.
 	reloaded, err := api.ConnectorsByToken(ctx, []string{"c"})
 	require.NoError(t, err)
-	current := reloaded[0].UpdatedAt.Format(time.RFC3339)
+	current := *util.FormatTime(reloaded[0].UpdatedAt)
 	_, err = api.UpdateConnector(ctx, "c", &ConnectorCreateRequest{
 		Token: "c", Type: string(ConnectorTypeKafka), Config: `{"addresses":["k:9092"],"topic":"t"}`,
 	}, &current)
@@ -358,6 +363,52 @@ func TestOptimisticConcurrency(t *testing.T) {
 	found, err := api.ConnectorsByToken(ctx, []string{"c"})
 	require.NoError(t, err)
 	assert.Equal(t, "kafka", found[0].Type)
+}
+
+// TestOptimisticConcurrencyIsSubSecond pins the precision of the precondition itself.
+//
+// The guarded write re-reads updated_at, so the string comparison in UpdateConnector is
+// the ONLY thing enforcing the CALLER's stated version. While both the read formatter and
+// that comparison truncated to whole seconds, a client whose view was stale by less than a
+// second produced a byte-identical precondition and overwrote a change it had never seen —
+// a lost update that no test could see, because both sides of the contract were wrong in
+// the same direction.
+//
+// The require.Equal below is the negative control and is load-bearing: it asserts the two
+// instants really were indistinguishable under the old layout. Without it this test would
+// still pass if someone made the precondition reject everything.
+func TestOptimisticConcurrencyIsSubSecond(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	_, err := api.CreateConnector(ctx, &ConnectorCreateRequest{
+		Token: "c", Type: string(ConnectorTypeMQTT), Config: mqttConfig,
+	})
+	require.NoError(t, err)
+	reloaded, err := api.ConnectorsByToken(ctx, []string{"c"})
+	require.NoError(t, err)
+	actual := reloaded[0].UpdatedAt
+
+	// A DIFFERENT instant inside the same wall-clock second as the real updated_at.
+	stale := actual.Truncate(time.Second).Add(250 * time.Millisecond)
+	if stale.Equal(actual) {
+		stale = actual.Truncate(time.Second).Add(750 * time.Millisecond)
+	}
+	require.Equal(t, actual.Format(time.RFC3339), stale.Format(time.RFC3339),
+		"negative control: under the old whole-second layout these must be the same string, "+
+			"otherwise this test is not exercising the lost-update window at all")
+
+	_, err = api.UpdateConnector(ctx, "c", &ConnectorCreateRequest{
+		Token: "c", Type: string(ConnectorTypeKafka), Config: `{"addresses":["k:9092"],"topic":"t"}`,
+	}, util.FormatTime(stale))
+	require.ErrorIs(t, err, ErrConflict,
+		"a precondition stale by less than a second must be refused")
+
+	// And the real value still succeeds, so the check rejects staleness rather than everything.
+	_, err = api.UpdateConnector(ctx, "c", &ConnectorCreateRequest{
+		Token: "c", Type: string(ConnectorTypeKafka), Config: `{"addresses":["k:9092"],"topic":"t"}`,
+	}, util.FormatTime(actual))
+	require.NoError(t, err)
 }
 
 // TestLatestPublishedConnector verifies the dispatch-side read returns the MAX published

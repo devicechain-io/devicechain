@@ -174,7 +174,14 @@ func (api *Api) UpdateConnector(ctx context.Context, token string, request *Conn
 	// then an ATOMIC guarded write (UPDATE ... WHERE updated_at = <the value just read>)
 	// so a concurrent save slipping in between the read and this write moves updated_at
 	// and matches zero rows instead of being silently clobbered.
-	if current.UpdatedAt.Format(time.RFC3339) != *expectedUpdatedAt {
+	//
+	// 🔴 The layout must match core/graphql.FormatTime, which produced the string the
+	// caller is echoing back. It does NOT merely need to be self-consistent: the guarded
+	// write below re-reads updated_at, so this comparison is the ONLY thing enforcing the
+	// CALLER's version, and at RFC3339 it enforced it to the whole second — a client whose
+	// view was stale by less than a second passed the precondition and overwrote a change
+	// it had never seen.
+	if current.UpdatedAt.Format(time.RFC3339Nano) != *expectedUpdatedAt {
 		return nil, ErrConflict
 	}
 	res := api.RDB.DB(ctx).Model(&Connector{}).
@@ -256,7 +263,8 @@ func (api *Api) PublishConnector(ctx context.Context, token string, label, descr
 	}
 	conn := matches[0]
 
-	if expectedUpdatedAt != nil && conn.UpdatedAt.Format(time.RFC3339) != *expectedUpdatedAt {
+	// Same layout coupling as UpdateConnector — see the comment there.
+	if expectedUpdatedAt != nil && conn.UpdatedAt.Format(time.RFC3339Nano) != *expectedUpdatedAt {
 		return nil, ErrConflict
 	}
 
