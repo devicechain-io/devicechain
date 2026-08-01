@@ -9,11 +9,17 @@ DeviceChain ships as a set of prebuilt, versioned container images plus a Helm c
 You do **not** need to build anything to run it — pull a released version, install the
 chart, and upgrade in place with zero downtime.
 
-:::warning v0.9.0 cannot be upgraded into
-`v0.9.0` replaced every service's database migration chain with a single frozen baseline, so
-an existing `v0.8.x` instance **cannot** be moved onto it with `helm upgrade` — the migration
-fails on `already exists`. Recreate the instance instead. See
-[The v0.9.0 baseline squash](#v090-baseline-squash) below before you do anything else.
+:::warning v0.9.0 and v0.10.0 cannot be upgraded into
+Two releases so far require recreating the instance rather than upgrading it:
+
+- **`v0.9.0`** replaced every service's migration chain with a single frozen baseline, so a
+  `v0.8.x` database meets it and fails on `already exists`. See
+  [The v0.9.0 baseline squash](#v090-baseline-squash).
+- **`v0.10.0`** changed the primary key of the event tables to fix a defect that was
+  silently discarding telemetry. See [The v0.10.0 event key change](#v0100-event-key).
+
+If you are on either earlier version, read the matching section below before you do
+anything else.
 :::
 
 ## Versioning model
@@ -95,10 +101,11 @@ helm install dc oci://ghcr.io/devicechain-io/charts/devicechain \
 ## Zero-downtime upgrades
 
 Upgrading to a new version is normally a plain `helm upgrade`, and the chart and services are
-built to roll customers forward without dropping traffic. Two releases so far are exceptions,
-both documented below: the durable-ingest cutover, which is still a `helm upgrade` but has a
-visible side effect, and **`v0.9.0`, which cannot be upgraded into at all**. Check the release
-notes for the version you are moving to before running the command:
+built to roll customers forward without dropping traffic. Three releases so far are
+exceptions, all documented below: the durable-ingest cutover, which is still a
+`helm upgrade` but has a visible side effect, and **`v0.9.0` and `v0.10.0`, which cannot be
+upgraded into at all**. Check the release notes for the version you are moving to before
+running the command:
 
 ```bash
 helm upgrade dc deploy/helm/devicechain \
@@ -158,9 +165,57 @@ dashboards you care about, dump them before you start. There is no in-place path
 them across this release.
 :::
 
-This is a one-time cost, taken deliberately while the platform's only installs are early ones.
-From `v0.9.0` onward a schema change **appends** a new migration to the baseline, which is a
-normal `helm upgrade` again — so this section describes a single release, not a new policy.
+A schema change normally **appends** a new migration to the baseline, which is an ordinary
+`helm upgrade`. That is the rule, and it holds for almost every release.
+
+:::note This section once promised it would never happen again
+It said the squash described "a single release, not a new policy". Then `v0.10.0` needed a
+recreate too, for an unrelated reason. The honest version of the rule is: appending is the
+norm, and before `v1.0.0` a release may still require a recreate when a defect cannot be
+fixed any other way. **Any release that does will say so in its notes and here.** Check both
+before upgrading rather than assuming from the version number.
+:::
+
+### The v0.10.0 event key change {#v0100-event-key}
+
+`v0.10.0` is the second release that **cannot be reached with `helm upgrade`**, for a
+different reason from the squash.
+
+An event was identified by the combination of its tenant, device, type and timestamp. That
+combination is not unique: a device that samples two sensors and publishes each as its own
+message under one shared timestamp produces two genuinely different events that look
+identical to the database. The second one was silently discarded — its readings were stored
+against the first event's record, and once dropped it could never be recognised as a repeat,
+so every later retry of that message added another copy of its readings.
+
+Any device stamping whole seconds could hit this by emitting twice in one second, and the
+published .NET SDK stamped whole seconds until this release.
+
+`v0.10.0` gives every event, every reading and every relationship record an identity derived
+from its own content, and makes that identity the key. Storing telemetry correctly means
+changing the primary key of the largest tables in the system, and those tables are
+compressed — a database engine will not alter a key on compressed data in place. There is no
+upgrade path that preserves the existing rows.
+
+**To move to `v0.10.0`, recreate the instance:**
+
+```bash
+# Export anything you need first — this discards the databases.
+dcctl destroy local devicechain
+dcctl bootstrap local devicechain
+```
+
+The same caution applies as above: recreation discards your telemetry, device definitions
+and dashboards. Export anything you need before you start.
+
+Two changes to how the API reports time come with it, and neither needs any action:
+
+- Timestamps are now returned at the precision they were recorded — previously they were
+  rounded down to the whole second on the way out, so two readings 200 milliseconds apart
+  came back looking simultaneous. Whole-second timestamps are unchanged on the wire.
+- Requests that use a record's `updatedAt` value to avoid overwriting someone else's edit
+  are now checked at that same precision. Two edits inside one second could previously both
+  pass the check, and the later one silently overwrote a change it had never seen.
 
 ### The one-time durable-ingest cutover
 

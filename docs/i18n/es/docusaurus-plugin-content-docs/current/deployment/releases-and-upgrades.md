@@ -9,11 +9,18 @@ DeviceChain se distribuye como un conjunto de imágenes de contenedor precompila
 más un chart de Helm. **No** necesita compilar nada para ejecutarlo: descargue una versión publicada,
 instale el chart y actualice in situ sin tiempo de inactividad.
 
-:::warning No se puede actualizar a la v0.9.0
-La `v0.9.0` reemplazó la cadena de migraciones de cada servicio por una única línea base congelada, por lo que
-una instancia `v0.8.x` existente **no** puede migrarse a ella con `helm upgrade`: la migración falla con
-`already exists`. En su lugar, recree la instancia. Consulte
-[La compactación de la línea base de la v0.9.0](#v090-baseline-squash) más abajo antes de hacer nada más.
+:::warning No se puede actualizar a la v0.9.0 ni a la v0.10.0
+Hasta ahora, dos versiones exigen recrear la instancia en lugar de actualizarla:
+
+- La **`v0.9.0`** reemplazó la cadena de migraciones de cada servicio por una única línea base
+  congelada, por lo que una base de datos `v0.8.x` falla con `already exists` al encontrarla.
+  Consulte [La compactación de la línea base de la v0.9.0](#v090-baseline-squash).
+- La **`v0.10.0`** cambió la clave primaria de las tablas de eventos para corregir un defecto que
+  descartaba telemetría de forma silenciosa. Consulte
+  [El cambio de clave de eventos de la v0.10.0](#v0100-event-key).
+
+Si está en cualquiera de las versiones anteriores, lea la sección correspondiente más abajo antes
+de hacer nada más.
 :::
 
 ## Modelo de versionado
@@ -96,10 +103,11 @@ helm install dc oci://ghcr.io/devicechain-io/charts/devicechain \
 ## Actualizaciones sin tiempo de inactividad
 
 Actualizar a una nueva versión es normalmente un `helm upgrade` simple, y el chart y los servicios están
-diseñados para hacer avanzar a los clientes sin perder tráfico. Hasta ahora hay dos versiones que son
-excepciones, ambas documentadas más abajo: la transición a la ingesta duradera, que sigue siendo un
-`helm upgrade` pero tiene un efecto secundario visible, y la **`v0.9.0`, a la que no se puede actualizar en
-absoluto**. Consulte las notas de la versión a la que va a migrar antes de ejecutar el comando:
+diseñados para hacer avanzar a los clientes sin perder tráfico. Hasta ahora hay tres versiones que
+son excepciones, todas documentadas más abajo: la transición a la ingesta duradera, que sigue siendo
+un `helm upgrade` pero tiene un efecto secundario visible, y la **`v0.9.0` y la `v0.10.0`, a las que
+no se puede actualizar en absoluto**. Consulte las notas de la versión a la que va a migrar antes de
+ejecutar el comando:
 
 ```bash
 helm upgrade dc deploy/helm/devicechain \
@@ -158,9 +166,59 @@ dispositivos o paneles que le importan, expórtelos antes de empezar. No existe 
 conserve a través de esta versión.
 :::
 
-Es un coste puntual, asumido deliberadamente mientras las únicas instalaciones de la plataforma son tempranas.
-A partir de la `v0.9.0`, un cambio de esquema **añade** una nueva migración sobre la línea base, lo que vuelve a
-ser un `helm upgrade` normal; por tanto, esta sección describe una única versión, no una nueva política.
+Normalmente, un cambio de esquema **añade** una nueva migración sobre la línea base, lo que es un
+`helm upgrade` corriente. Esa es la regla, y se cumple en casi todas las versiones.
+
+:::note Esta sección prometió una vez que no volvería a ocurrir
+Decía que la compactación describía «una única versión, no una nueva política». Después, la
+`v0.10.0` también necesitó recrear la instancia, por un motivo distinto. La versión honesta de la
+regla es: añadir migraciones es lo normal y, antes de la `v1.0.0`, una versión todavía puede exigir
+recrear la instancia cuando un defecto no se puede corregir de otra forma. **Toda versión que lo
+exija lo indicará en sus notas y aquí.** Consulte ambas antes de actualizar, en lugar de deducirlo
+del número de versión.
+:::
+
+### El cambio de clave de eventos de la v0.10.0 {#v0100-event-key}
+
+La `v0.10.0` es la segunda versión a la que **no se puede llegar con `helm upgrade`**, por un motivo
+distinto al de la compactación.
+
+Un evento se identificaba por la combinación de su inquilino, dispositivo, tipo y marca de tiempo.
+Esa combinación no es única: un dispositivo que muestrea dos sensores y publica cada uno como su
+propio mensaje bajo una misma marca de tiempo produce dos eventos realmente distintos que a la base
+de datos le parecen idénticos. El segundo se descartaba de forma silenciosa: sus lecturas quedaban
+guardadas contra el registro del primero y, una vez descartado, ya nunca podía reconocerse como
+repetido, de modo que cada reintento posterior de ese mensaje añadía otra copia de sus lecturas.
+
+Cualquier dispositivo que marque el tiempo en segundos enteros podía provocarlo emitiendo dos veces
+en un mismo segundo, y el SDK de .NET publicado lo hacía así hasta esta versión.
+
+La `v0.10.0` otorga a cada evento, a cada lectura y a cada registro de relación una identidad
+derivada de su propio contenido, y convierte esa identidad en la clave. Almacenar la telemetría
+correctamente implica cambiar la clave primaria de las tablas más grandes del sistema, y esas tablas
+están comprimidas: un motor de base de datos no altera una clave sobre datos comprimidos in situ. No
+existe ninguna ruta de actualización que conserve las filas existentes.
+
+**Para migrar a la `v0.10.0`, recree la instancia:**
+
+```bash
+# Exporte antes lo que necesite: esto descarta las bases de datos.
+dcctl destroy local devicechain
+dcctl bootstrap local devicechain
+```
+
+Se aplica la misma advertencia que más arriba: recrear la instancia descarta su telemetría, las
+definiciones de dispositivos y los paneles. Exporte lo que necesite antes de empezar.
+
+La acompañan dos cambios en cómo la API informa del tiempo, y ninguno requiere acción alguna:
+
+- Las marcas de tiempo se devuelven ahora con la precisión con la que se registraron; antes se
+  redondeaban hacia abajo al segundo entero al salir, por lo que dos lecturas separadas por 200
+  milisegundos volvían pareciendo simultáneas. Las marcas de tiempo de segundo entero no cambian.
+- Las peticiones que usan el valor `updatedAt` de un registro para evitar sobrescribir la edición de
+  otra persona se comprueban ahora con esa misma precisión. Antes, dos ediciones dentro de un mismo
+  segundo podían superar ambas la comprobación, y la posterior sobrescribía en silencio un cambio
+  que nunca había visto.
 
 ### La transición única a la ingesta duradera
 
