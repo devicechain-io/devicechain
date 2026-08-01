@@ -20,7 +20,15 @@ export function formatDateTime(iso: string | null): string {
 
 // formatValue renders a measurement value, applying a fixed precision when given
 // and showing an em dash for a missing value.
+//
+// The precision is clamped to toFixed's domain because it arrives from an opaque stored
+// definition: outside 0..100 toFixed throws a RangeError, which is an exception thrown
+// during render — it unmounts the widget's whole subtree rather than degrading, and every
+// other bad option value in this package degrades. The console's config panel can author
+// a negative one today, and a hand-edited definition always could.
 export function formatValue(value: number | null | undefined, precision?: number): string {
   if (value == null) return '—';
-  return precision != null ? value.toFixed(precision) : String(value);
+  if (precision == null) return String(value);
+  const places = Math.min(100, Math.max(0, Math.trunc(precision)));
+  return value.toFixed(places);
 }
