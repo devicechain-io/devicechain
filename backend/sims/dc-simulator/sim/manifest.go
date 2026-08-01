@@ -156,8 +156,20 @@ type DeviceInstance struct {
 // credentials/assignments on every run (ADR-050), which is what makes
 // bootstrap's create-or-ignore idempotent across resets.
 type SimManifest struct {
-	Name          string
-	Seed          int64
+	Name string
+	Seed int64
+	// FixedTopology marks a scenario whose device set is a composed FIXTURE
+	// rather than a scale knob: its dashboards bind named devices in named
+	// areas, so resizing it leaves a board pointing at a device that no longer
+	// exists — a dashboard that renders an empty pane on a topology nobody
+	// asked for. withDeviceCount refuses an override against such a manifest.
+	//
+	// It is declared rather than inferred from the population count on purpose.
+	// "One population" and "resizable" are different facts that happen to
+	// coincide today, and inferring one from the other means a scenario becomes
+	// silently un-resizable the day it grows a second population for an
+	// unrelated reason.
+	FixedTopology bool
 	CustomerTypes []CustomerTypeSpec
 	Customers     []CustomerSpec
 	AreaTypes     []AreaTypeSpec

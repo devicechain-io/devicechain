@@ -330,8 +330,16 @@ func TestBuildingpulseManifestShape(t *testing.T) {
 
 // TestRegistry checks the manifest-id -> Sim constructor lookup main.go relies
 // on to pick a driver from the handshake's ManifestId.
+// It enumerates the registry rather than a written-out list: the property being
+// pinned — a scenario's registry KEY equals its manifest NAME — is one every
+// scenario must have, and the hardcoded list had already gone stale by one when
+// a third scenario landed, leaving it unchecked.
 func TestRegistry(t *testing.T) {
-	for _, id := range []string{"devicepulse", "buildingpulse"} {
+	if len(ManifestIds()) < 2 {
+		t.Fatalf("only %d scenarios registered; this test asserts a property across them "+
+			"and would say very little about one", len(ManifestIds()))
+	}
+	for _, id := range ManifestIds() {
 		ctor, ok := Registry[id]
 		if !ok {
 			t.Fatalf("expected manifest id %q to be registered", id)

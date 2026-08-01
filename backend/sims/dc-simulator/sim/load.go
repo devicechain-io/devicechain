@@ -96,13 +96,28 @@ func (l Load) TargetRate(n int) float64 {
 // manifest declares several: with more than one population, a single
 // DeviceCount has no unambiguous meaning (split evenly? scale proportionally?
 // apply to each?), and every answer silently produces a topology the caller did
-// not ask for. Today every registered scenario declares exactly one population
-// — TestEveryScenarioAcceptsADeviceCountOverride holds that true — so this
-// branch is a guard against a future scenario, and the day one lands it fails
-// loudly here instead of mis-sizing a measurement run.
+// not ask for.
+//
+// Two distinct refusals live here, and conflating them was the trap. A
+// multi-population manifest is AMBIGUOUS — a rule could be invented for it. A
+// FixedTopology manifest is not ambiguous but MEANINGLESS to resize, because
+// its dashboards name the devices they bind. widgetlab is both, and reporting
+// the ambiguity would have sent a reader looking for a sizing rule that should
+// never be written. TestEveryScenarioIsResizableOrSaysWhyNot holds each
+// registered scenario to whichever of the two it declares.
 func withDeviceCount(m SimManifest, count int) (SimManifest, error) {
 	if count <= 0 {
 		return m, nil
+	}
+	// A composed fixture is refused before the population count is even
+	// considered: it is not that sizing it is ambiguous, it is that sizing it
+	// is meaningless, and the two deserve different messages.
+	if m.FixedTopology {
+		return SimManifest{}, fmt.Errorf(
+			"scenario %q has a fixed topology — its dashboards bind named devices, so a "+
+				"device count of %d would leave them bound to devices that do not exist; "+
+				"it is a composed fixture, not a scale scenario",
+			m.Name, count)
 	}
 	if len(m.Populations) != 1 {
 		return SimManifest{}, fmt.Errorf(

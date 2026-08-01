@@ -29,6 +29,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -49,8 +50,13 @@ func main() {
 		"handshake JSON for the best-effort SHED probe tenant (created with dcctl sim create --shed-priority 10)")
 	expectFloor := flag.Int("expect-floor", envIntOr("DC_LOADTEST_EXPECT_FLOOR", 0),
 		"the ADR-063 contention manual_floor the operator set on event-sources (0..3). 0 = negative control (no tenant may shed)")
+	// Built from the registry rather than spelled out, because the hardcoded list
+	// this replaces had already gone stale by one scenario. It offers only the
+	// RESIZABLE scenarios: withDefaults forces a device count on every run, so a
+	// fixed-topology scenario is refused at startup — listing one would be help
+	// text advertising a run that cannot happen.
 	manifest := flag.String("manifest", envOr("DC_LOADTEST_MANIFEST", "devicepulse"),
-		"scenario each probe tenant drives (devicepulse, buildingpulse)")
+		"scenario each probe tenant drives ("+strings.Join(sim.ResizableManifestIds(), ", ")+")")
 	devices := flag.Int("devices", envIntOr("DC_LOADTEST_DEVICES", 0),
 		"devices per probe tenant (0 = default; sizes the drive rate)")
 	emitInterval := flag.Duration("emit-interval", envDurationOr("DC_LOADTEST_EMIT_INTERVAL", 0),

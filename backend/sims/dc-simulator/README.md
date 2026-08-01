@@ -39,8 +39,8 @@ go run . --handshake /path/to/handshake.json [--port 8090]
 
 ### Driving load
 
-The built-in scenarios are sized as **demos** — devicepulse is 1 device and
-buildingpulse is 12, both at a 5s cadence (2.4 events/sec), which is the right
+The built-in scenarios are sized as **demos** — devicepulse is 1 device,
+buildingpulse is 12 and widgetlab is 7, all at a 5s cadence, which is the right
 default for watching the presentation page and far too small to measure what an
 instance costs. Three flags override that; each also reads an env var, and each
 defaults to the scenario's own sizing:
@@ -50,6 +50,12 @@ defaults to the scenario's own sizing:
 | `--devices <n>` | `DC_SIM_DEVICES` | Population size (`0` keeps the scenario's own). |
 | `--emit-interval <d>` | `DC_SIM_EMIT_INTERVAL` | Cadence, e.g. `200ms` (`0` keeps 5s). |
 | `--concurrency <n>` | `DC_SIM_CONCURRENCY` | Max emits in flight per tick (`0` derives it). |
+
+**`--devices` does not apply to every scenario.** A scenario whose dashboards bind
+named devices is a composed fixture, not a scale vehicle: resizing it would leave
+its boards pointing at devices the run never provisions, so it refuses the flag at
+startup rather than provisioning a topology its own boards do not match. widgetlab
+is one. devicepulse and buildingpulse take any size.
 
 ```sh
 # 500 devices every 200ms = a 2500 events/sec target

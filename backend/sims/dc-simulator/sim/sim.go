@@ -303,6 +303,7 @@ func (s *buildingpulse) Tick(ctx context.Context, rt *Runtime) error {
 var Registry = map[string]func(int64, Load) Sim{
 	"devicepulse":   NewDevicepulse,
 	"buildingpulse": NewBuildingpulse,
+	"widgetlab":     NewWidgetlab,
 }
 
 // ManifestIds returns the Registry's known manifest ids, sorted — a single
@@ -312,6 +313,26 @@ func ManifestIds() []string {
 	ids := make([]string, 0, len(Registry))
 	for id := range Registry {
 		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// ResizableManifestIds returns the manifest ids a device-count override applies
+// to — every registered scenario except the composed fixtures, which refuse one
+// (see SimManifest.FixedTopology).
+//
+// It exists because "the scenarios that exist" and "the scenarios a load tool can
+// drive" stopped being the same set. A tool that sizes its own runs must offer
+// THIS list: naming a fixed-topology scenario in help text advertises a run that
+// fails at startup, which is a worse form of the stale list that deriving from
+// the registry was meant to fix.
+func ResizableManifestIds() []string {
+	ids := make([]string, 0, len(Registry))
+	for id, newDriver := range Registry {
+		if !newDriver(1, Load{}).Manifest().FixedTopology {
+			ids = append(ids, id)
+		}
 	}
 	sort.Strings(ids)
 	return ids
