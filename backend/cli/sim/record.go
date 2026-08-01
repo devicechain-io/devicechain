@@ -25,14 +25,15 @@ import (
 // Endpoints mirrors dc-simulator/sim.Endpoints exactly (the handshake wire
 // contract). Keep the json tags in lockstep with that struct.
 type Endpoints struct {
-	UserGraphQL          string `json:"userGraphQL"`
-	DeviceMgmtGraphQL    string `json:"deviceMgmtGraphQL"`
-	DashboardMgmtGraphQL string `json:"dashboardMgmtGraphQL"`
-	Ingress              string `json:"ingress"`
-	EventMgmtWS          string `json:"eventMgmtWS"`
-	EventProcessingWS    string `json:"eventProcessingWS"`
-	CommandMgmtGraphQL   string `json:"commandMgmtGraphQL"`
-	MqttBroker           string `json:"mqttBroker"`
+	UserGraphQL            string `json:"userGraphQL"`
+	DeviceMgmtGraphQL      string `json:"deviceMgmtGraphQL"`
+	DashboardMgmtGraphQL   string `json:"dashboardMgmtGraphQL"`
+	Ingress                string `json:"ingress"`
+	EventMgmtWS            string `json:"eventMgmtWS"`
+	EventProcessingWS      string `json:"eventProcessingWS"`
+	EventProcessingGraphQL string `json:"eventProcessingGraphQL"`
+	CommandMgmtGraphQL     string `json:"commandMgmtGraphQL"`
+	MqttBroker             string `json:"mqttBroker"`
 }
 
 // Record is dcctl's local record for one sim. It is written verbatim as the
@@ -269,13 +270,14 @@ func ResolveEndpoints(server, ingress, mqttBroker string, tls bool) Endpoints {
 		mqttBroker = DefaultMqttBroker(server)
 	}
 	return Endpoints{
-		UserGraphQL:          fmt.Sprintf("%s://%s/api/user-management/graphql", h, server),
-		DeviceMgmtGraphQL:    fmt.Sprintf("%s://%s/api/device-management/graphql", h, server),
-		DashboardMgmtGraphQL: fmt.Sprintf("%s://%s/api/dashboard-management/graphql", h, server),
-		Ingress:              ingress,
-		EventMgmtWS:          fmt.Sprintf("%s://%s/api/event-management/graphql", ws, server),
-		EventProcessingWS:    fmt.Sprintf("%s://%s/api/event-processing/graphql", ws, server),
-		CommandMgmtGraphQL:   fmt.Sprintf("%s://%s/api/command-delivery/graphql", h, server),
-		MqttBroker:           mqttBroker,
+		UserGraphQL:            fmt.Sprintf("%s://%s/api/user-management/graphql", h, server),
+		DeviceMgmtGraphQL:      fmt.Sprintf("%s://%s/api/device-management/graphql", h, server),
+		DashboardMgmtGraphQL:   fmt.Sprintf("%s://%s/api/dashboard-management/graphql", h, server),
+		Ingress:                ingress,
+		EventMgmtWS:            fmt.Sprintf("%s://%s/api/event-management/graphql", ws, server),
+		EventProcessingWS:      fmt.Sprintf("%s://%s/api/event-processing/graphql", ws, server),
+		EventProcessingGraphQL: fmt.Sprintf("%s://%s/api/event-processing/graphql", h, server),
+		CommandMgmtGraphQL:     fmt.Sprintf("%s://%s/api/command-delivery/graphql", h, server),
+		MqttBroker:             mqttBroker,
 	}
 }

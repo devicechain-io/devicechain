@@ -69,6 +69,57 @@ is one. devicepulse and buildingpulse take any size.
 go run . --handshake ./hs.json --devices 500 --emit-interval 200ms
 ```
 
+### Detection rules are proven live, not assumed
+
+A scenario that declares detection rules does not treat a clean publish as evidence
+they run. device-management compiles a profile's enabled rules at publish and fails
+closed — but **only when a validator is wired**; with the service secret unset the
+check returns nil having validated nothing. On such an instance a rule the compiler
+rejects publishes cleanly, event-processing drops it at load with a log line nobody
+reads, and the scenario's alarm widgets are permanently empty while every step
+reports success.
+
+So bootstrap post-asserts against event-processing's own `ruleHealth`, which reads
+the engine's live rule set. That catches a rule absent from the engine (dropped at
+load) and one reported `COMPILE_ERROR` — the latter with the engine's own diagnostic,
+the former with the sim's inference, since a rule that never arrived generates no
+diagnostic to quote.
+
+⚠️ **The check is per VERSION, and that is the whole subtlety.** `ruleHealth` answers
+from a projection an async consumer writes, so for a window after a publish it still
+serves the *previous* version — whose rows carry the *same* rule tokens (a token is a
+stable authoring id that survives every definition change), all `ACTIVE`. Matching on
+token alone therefore passes on the first read and confirms a version the engine has
+not loaded, which is worst precisely on "ship a corrected rule and re-bootstrap" — the
+flow where the new rule is most likely to be the broken one. A rule id embeds
+`{profileToken}@{version}`, so rows from any other version count as *not settled yet*
+rather than as an answer, and the loop keeps polling. Separately, a post-assert
+against device-management confirms its **active** version is the one just published.
+
+This needs `endpoints.eventProcessingGraphQL` in the handshake. A scenario with
+enabled rules and no such endpoint **fails** rather than skipping the check — a
+verification that quietly does nothing reports the same green as a real pass. A
+profile whose rules are all disabled needs neither, since a disabled rule is inert by
+design.
+
+⚠️ **The chart's `telemetry` and `ingest-only` profiles do not deploy
+event-processing,** so widgetlab cannot run on them — its alarm path has no engine
+behind it, and there is nothing to opt out of (unlike the command far end, where the
+gateway may simply be unreachable from the host while the platform is fine). The
+timeout message names this as the first thing to check, because the symptom otherwise
+reads as a bug in the sim. Transient failures are retried inside the settle window, so
+a rolling restart of event-processing does not fail a bootstrap.
+
+Only the declared rules must be live; extra rules are ignored. A tenant may author its
+own on the same profile from the console, and refusing to bootstrap over one would
+make the sim hostile to the instance it runs on.
+
+Relatedly, the publish decision reads the **active version's** label rather than the
+set of all labels ever published. A marker sitting in a superseded version would
+otherwise answer "already published" forever, so a board edited and republished from
+the console would leave every later bootstrap skipping the publish and reporting
+success over content the platform is not serving.
+
 ### The command far end
 
 A device that only POSTs telemetry cannot receive anything, so a scenario with a

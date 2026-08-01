@@ -43,6 +43,16 @@ type Endpoints struct {
 	// never carried the field still loads and runs; the harness enforces it lazily
 	// at dial time rather than Validate rejecting every sim record without it.
 	EventProcessingWS string `json:"eventProcessingWS"`
+	// EventProcessingGraphQL is event-processing's tenant-scoped HTTP GraphQL
+	// endpoint, carrying the ruleHealth query a scenario post-asserts its detection
+	// rules against — the only place "this rule is RUNNING" can be read, as opposed
+	// to "the publish did not error", which is not the same claim.
+	//
+	// Optional in the handshake like the WS endpoint beside it, so a pre-existing sim
+	// record still loads. It is NOT optional at bootstrap for a scenario that
+	// declares enabled detection rules: that case fails loudly rather than
+	// provisioning alarm widgets nothing can confirm will ever fill.
+	EventProcessingGraphQL string `json:"eventProcessingGraphQL"`
 	// CommandMgmtGraphQL is command-delivery's tenant-scoped GraphQL endpoint,
 	// carrying the durable command-status query (commands/commandsByToken) the
 	// ADR-064 load-test command round-trip probes reconcile against. Optional in

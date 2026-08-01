@@ -4,6 +4,7 @@
 package sim
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -55,16 +56,18 @@ func TestBrokerIsTLSMatchesWhatTheClientDials(t *testing.T) {
 // point a run at a different cluster than the operator named.
 func TestResolveEndpointsDerivesAndOverrides(t *testing.T) {
 	e := ResolveEndpoints("dc.local", "", "", false)
-	for name, got := range map[string]string{
-		"userGraphQL":          e.UserGraphQL,
-		"deviceMgmtGraphQL":    e.DeviceMgmtGraphQL,
-		"dashboardMgmtGraphQL": e.DashboardMgmtGraphQL,
-		"ingress":              e.Ingress,
-		"eventMgmtWS":          e.EventMgmtWS,
-		"eventProcessingWS":    e.EventProcessingWS,
-		"commandMgmtGraphQL":   e.CommandMgmtGraphQL,
-		"mqttBroker":           e.MqttBroker,
-	} {
+	// Walked by REFLECTION rather than from a hand-listed map: a hand-listed one is a
+	// second copy of the struct's field set, and the field it omits is always the one
+	// just added — exactly the field whose resolution nobody has checked yet. An
+	// endpoint left empty is written into the handshake and fails much later, wherever
+	// the sim first tries to use it.
+	v := reflect.ValueOf(e)
+	if v.NumField() == 0 {
+		t.Fatal("Endpoints declares no fields; this check asserts nothing")
+	}
+	for i := 0; i < v.NumField(); i++ {
+		name, _, _ := strings.Cut(v.Type().Field(i).Tag.Get("json"), ",")
+		got := v.Field(i).String()
 		if got == "" {
 			t.Errorf("endpoint %s resolved empty", name)
 		}
