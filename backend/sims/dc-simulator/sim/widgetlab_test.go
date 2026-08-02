@@ -500,39 +500,12 @@ func TestWidgetlabPanicsOnADirectlyConstructedIllegalLoad(t *testing.T) {
 
 func widgetlabProfile(t *testing.T) ProfileSpec {
 	t.Helper()
-	for _, p := range NewWidgetlab(1, Load{}).Manifest().Profiles {
-		if p.Token == WidgetlabProfileToken {
-			return p
-		}
-	}
-	t.Fatalf("manifest declares no profile %q", WidgetlabProfileToken)
-	return ProfileSpec{}
+	return profileByToken(t, NewWidgetlab(1, Load{}).Manifest(), WidgetlabProfileToken)
 }
 
 func TestWidgetlabRuleIsAuthoredFromTheSweepConstants(t *testing.T) {
-	rules := widgetlabProfile(t).DetectionRules
-	if len(rules) != 1 {
-		t.Fatalf("expected exactly one detection rule, got %d", len(rules))
-	}
-
-	var def struct {
-		Type     string `json:"type"`
-		Severity string `json:"severity"`
-		When     struct {
-			Metric    string  `json:"metric"`
-			Op        string  `json:"op"`
-			Threshold float64 `json:"threshold"`
-		} `json:"when"`
-		Actions []struct {
-			Type       string `json:"type"`
-			RaiseAlarm struct {
-				AlarmKey string `json:"alarmKey"`
-			} `json:"raiseAlarm"`
-		} `json:"actions"`
-	}
-	if err := json.Unmarshal([]byte(rules[0].Definition), &def); err != nil {
-		t.Fatalf("rule definition is not decodable: %v", err)
-	}
+	rule := soleDetectionRule(t, widgetlabProfile(t))
+	def := decodeThresholdRule(t, rule.Definition)
 
 	// The number the whole alarm channel turns on. A literal here that drifted from
 	// the sweep would leave every constant-level test green and raise nothing.
@@ -552,8 +525,9 @@ func TestWidgetlabRuleIsAuthoredFromTheSweepConstants(t *testing.T) {
 	// A raiseAlarm action requires a non-empty severity; without one the rule is
 	// rejected at publish, which a create-or-get provisioner reports as a failure
 	// only if someone reads the log.
-	if def.Severity == "" {
-		t.Error("rule declares no severity, but a raiseAlarm action requires one")
+	if def.Severity != WidgetlabSeverity {
+		t.Errorf("rule declares severity %q, not the authoring constant %q",
+			def.Severity, WidgetlabSeverity)
 	}
 	if len(def.Actions) != 1 || def.Actions[0].Type != "raiseAlarm" {
 		t.Fatalf("expected a single raiseAlarm action, got %+v", def.Actions)
@@ -562,7 +536,7 @@ func TestWidgetlabRuleIsAuthoredFromTheSweepConstants(t *testing.T) {
 		t.Errorf("rule raises alarm key %q, not the declared %q — the alarm widgets filter on "+
 			"the constant", def.Actions[0].RaiseAlarm.AlarmKey, WidgetlabAlarmKey)
 	}
-	if !rules[0].Enabled {
+	if !rule.Enabled {
 		t.Error("rule is disabled: publish-time validation only gates ENABLED rules, so a " +
 			"disabled one is published unchecked and never fires")
 	}
@@ -1206,16 +1180,9 @@ func TestWidgetlabEdgeCycleSitsExactlyOnTheThresholdWithoutRaising(t *testing.T)
 		t.Fatal("the cycle never sits exactly on the alarm threshold, so the strictness of the " +
 			"rule's comparison is untested")
 	}
-	// The rule's own operator, read back out of the authored definition.
-	var def struct {
-		When struct {
-			Op        string  `json:"op"`
-			Threshold float64 `json:"threshold"`
-		} `json:"when"`
-	}
-	if err := json.Unmarshal([]byte(widgetlabRuleDefinition()), &def); err != nil {
-		t.Fatalf("rule definition is not decodable: %v", err)
-	}
+	// The rule's own operator, read back out of the definition the manifest PUBLISHES
+	// (not out of a builder — the published document is what the engine compiles).
+	def := decodeThresholdRule(t, soleDetectionRule(t, widgetlabProfile(t)).Definition)
 	if def.When.Op != "gt" {
 		t.Errorf("the rule compares with %q; the at-threshold case only means something under "+
 			"a strict comparison", def.When.Op)

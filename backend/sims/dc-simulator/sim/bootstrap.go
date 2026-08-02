@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 )
@@ -54,6 +55,25 @@ func Provision(ctx context.Context, rt *Runtime, manifest SimManifest) error {
 	if len(manifest.Dashboards) > 0 && rt.Endpoints.DashboardMgmtGraphQL == "" {
 		return fmt.Errorf("manifest %q declares %d dashboard(s) but the handshake has no endpoints.dashboardMgmtGraphQL",
 			manifest.Name, len(manifest.Dashboards))
+	}
+
+	// Same shape, for detection rules. verifyDetectionRulesAreLive makes this check
+	// too, but only after the profile has published — by which point a customer, its
+	// areas, its assets and a profile version already exist. There is nothing to
+	// discover on the network here: a handshake with no event-processing endpoint
+	// cannot confirm a rule no matter what the cluster is running, so it is decided
+	// up front where it costs nothing.
+	//
+	// 🔴 It does NOT establish that event-processing is DEPLOYED. dcctl mints every
+	// endpoint URL from the server name unconditionally, so this string is non-empty
+	// even on a chart profile that omits the service; only the post-publish liveness
+	// poll can tell those apart. This catches a handshake written by an older dcctl,
+	// which is a different failure with a different fix.
+	if rules := manifest.EnabledDetectionRuleCount(); rules > 0 && strings.TrimSpace(rt.Endpoints.EventProcessingGraphQL) == "" {
+		return fmt.Errorf("manifest %q declares %d enabled detection rule(s) but the handshake "+
+			"has no endpoints.eventProcessingGraphQL, so nothing can confirm they are running: "+
+			"a rule dropped at load leaves the alarm widgets permanently empty with every step "+
+			"reporting success. Re-create the sim with a current dcctl", manifest.Name, rules)
 	}
 
 	for _, ct := range manifest.CustomerTypes {

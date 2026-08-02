@@ -214,8 +214,9 @@ var harnessRuleBuilders = []harnessRuleBuilder{
 // it is what puts it in front of device-management's gate. Without the refusal, such a
 // scenario would simply carry an empty mirror and be waved through.
 var mirroredAlarmSeverityWire = map[string]string{
-	"widgetlab": sim.WidgetlabAlarmSeverityWire,
-	"loadtest":  harnessAlarmSeverityWire,
+	"buildingpulse": sim.BuildingpulseAlarmSeverityWire,
+	"widgetlab":     sim.WidgetlabAlarmSeverityWire,
+	"loadtest":      harnessAlarmSeverityWire,
 }
 
 // raisesAlarm reports whether a published definition carries a raiseAlarm action. The

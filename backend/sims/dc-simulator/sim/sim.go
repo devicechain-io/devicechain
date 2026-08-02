@@ -136,15 +136,85 @@ const (
 	BuildingpulseCO2Key          = "co2"
 )
 
+// ---- The temperature curve and the threshold it has to cross ----------------
+//
+// One design object, the same arrangement widgetlab's sweep uses and for the same
+// reason: the DETECT rule's threshold and the curve that must cross it are a single
+// decision, so neither side owns the number alone. Written as separate literals they
+// drift independently — Tick changes its amplitude, the rule keeps its threshold, both
+// changes look local and correct, and the demo simply stops raising alarms with every
+// test still green.
+//
+// Tick reads these; the rule below reads the threshold; and the tests check the
+// threshold against the curve's own bounds AND against what actually reaches the wire.
+const (
+	// The sine's centre and amplitude, in degrees C, so the curve spans
+	// [centre-amplitude, centre+amplitude] = [16, 32].
+	BuildingpulseTempCentre    = 24.0
+	BuildingpulseTempAmplitude = 8.0
+	// How far each device's phase advances per tick. A full period is therefore
+	// 2*pi/step ≈ 21 ticks — at the demo cadence, a raise and a clear every couple of
+	// minutes, which is what makes the alarm widgets worth watching rather than a
+	// single event someone has to catch.
+	BuildingpulsePhaseStep = 0.3
+	// The temperature the DETECT rule alarms above. STRICTLY inside the curve's bounds,
+	// which is what makes a raise AND a clear inevitable rather than hoped-for;
+	// TestBuildingpulseThresholdLiesStrictlyInsideTheCurve holds it there.
+	BuildingpulseAlarmThreshold = 30.0
+)
+
+// The alarm the buildingpulse rule raises. Both severity spellings live in
+// wirevocabulary.go, which carries the reasoning for why they are two constants and
+// what each way of collapsing them breaks.
+const (
+	BuildingpulseRuleToken         = "bp-over-temp"
+	BuildingpulseAlarmKey          = "bp-over-temp"
+	BuildingpulseSeverity          = SeverityMajor
+	BuildingpulseAlarmSeverityWire = AlarmSeverityMajorWire
+	buildingpulseRuleName          = "Building Pulse over-temperature"
+)
+
+// buildingpulseCoverageFloor is the smallest population that keeps SOME thermostat above
+// the alarm threshold at every tick.
+//
+// The thermostats are spread evenly around one temperature cycle, so the worst tick is
+// the one where the sine peak falls midway between two neighbours — putting the hottest
+// device pi/n away from the peak, and the population's maximum at
+// centre + amplitude*cos(pi/n). Coverage holds exactly while that exceeds the threshold.
+//
+// It lives in non-test code because it is an OPERATOR-facing number: Bootstrap warns
+// below it, and a README that told a reader to go and look up a test name for it would
+// be documenting the wrong surface. The test then confirms this same formula against the
+// wire, so the independent check now guards the production number rather than a copy.
+func buildingpulseCoverageFloor() int {
+	for n := 1; n <= buildingpulseThermostatCount; n++ {
+		if BuildingpulseTempCentre+BuildingpulseTempAmplitude*math.Cos(math.Pi/float64(n)) >
+			BuildingpulseAlarmThreshold {
+			return n
+		}
+	}
+	// Unreachable while the threshold lies strictly inside the curve, which
+	// TestBuildingpulseThresholdLiesStrictlyInsideTheCurve holds it to. Reported as the
+	// full population rather than 0 so a caller comparing against it cannot read "no
+	// floor" as "any size is fine".
+	return buildingpulseThermostatCount
+}
+
 // buildingpulse is the slice-2 reference scenario
 // (sim-slice2-buildingpulse-spec.md): a building-automation topology — one
 // customer, three buildings, one HVAC asset per building, and 12 thermostats
 // distributed round-robin across the buildings and all assigned to both their
 // building and the customer, so every measurement they emit carries an area
 // anchor and a customer anchor (ADR-013/044). Each tick emits all four metrics
-// in one Measurement; the temperature curve deterministically crosses 30 C,
-// which the DETECT DetectionRule path will alarm on once rule seeding lands
-// (alarm authoring moved off AlarmDefinition, ADR-057).
+// in one Measurement; the temperature curve deterministically crosses
+// BuildingpulseAlarmThreshold and falls back below it, which the profile's DETECT
+// rule raises and clears an alarm on (alarm authoring lives on DetectionRule, not
+// AlarmDefinition — ADR-057).
+//
+// That rule is why this scenario now needs event-processing: Provision refuses to finish
+// unless every enabled rule it publishes is confirmed live in the engine
+// (verifyDetectionRulesAreLive), so buildingpulse cannot bootstrap on a deployment
+// profile that omits event-processing. Deliberate; the README says why.
 type buildingpulse struct {
 	// seed drives all deterministic generation, threaded from the handshake —
 	// see devicepulse's identical field for the reset/idempotency rationale.
@@ -207,6 +277,22 @@ func (s *buildingpulse) Manifest() SimManifest {
 					{Key: BuildingpulseSetpointKey, Name: "Setpoint", DataType: "DOUBLE", Unit: "C"},
 					{Key: BuildingpulseCO2Key, Name: "CO2", DataType: "DOUBLE", Unit: "ppm"},
 				},
+				// The rule whose raiseAlarm fills the dashboard's alarm-table. It is
+				// profile-version content (ADR-045), so Provision creates it before it
+				// publishes the version. Enabled, because publish-time validation only
+				// gates ENABLED rules — a disabled one is published unchecked and would
+				// make a broken predicate look accepted.
+				DetectionRules: []DetectionRuleSpec{
+					ThresholdAlarmRule{
+						Token:     BuildingpulseRuleToken,
+						Name:      buildingpulseRuleName,
+						Metric:    BuildingpulseTemperatureKey,
+						Threshold: BuildingpulseAlarmThreshold,
+						Severity:  BuildingpulseSeverity,
+						AlarmKey:  BuildingpulseAlarmKey,
+						Enabled:   true,
+					}.Spec(),
+				},
 			},
 		},
 		DeviceTypes: []DeviceTypeSpec{
@@ -260,19 +346,64 @@ func (s *buildingpulse) Manifest() SimManifest {
 }
 
 func (s *buildingpulse) Bootstrap(ctx context.Context, rt *Runtime) error {
-	return Provision(ctx, rt, s.Manifest())
+	manifest := s.Manifest()
+	if err := Provision(ctx, rt, manifest); err != nil {
+		return err
+	}
+	warnIfBuildingpulseIsTooSmallToWatch(manifest, len(rt.Devices))
+	return nil
+}
+
+// warnIfBuildingpulseIsTooSmallToWatch reports the two ways a `--devices` override
+// leaves the demo's alarm story degraded. Both are WARNINGS, not refusals: every device
+// still raises and still clears at any size, so the scenario is correct — just less
+// worth watching. (Contrast FixedTopology, which refuses a resize outright, because
+// there resizing is MEANINGLESS rather than merely disappointing.)
+//
+// Worded as the consequence rather than as the flag that was passed, matching the
+// far-end warning in main.go: the reader needs to know what they will see, not what
+// they typed.
+func warnIfBuildingpulseIsTooSmallToWatch(manifest SimManifest, devices int) {
+	// The harsher of the two, and it is not a matter of degree: a building with no
+	// thermostats can never show an alarm, so a board scoped to it is empty forever and
+	// no rule can change that.
+	if buildings := len(manifest.Areas); devices < buildings {
+		log.Warn().Int("devices", devices).Int("buildings", buildings).
+			Msg("fewer thermostats than buildings: a dashboard scoped to a building with none " +
+				"will show an empty alarm table permanently, whatever the detection rule does")
+	}
+	if floor := buildingpulseCoverageFloor(); devices < floor {
+		log.Warn().Int("devices", devices).Int("floor", floor).
+			Msg("too few thermostats to keep one above the alarm threshold at all times: the " +
+				"tenant-wide view will have moments with no active alarm. Every device still " +
+				"raises and clears, so this is a quieter demo rather than a broken one")
+	}
 }
 
 // Tick emits all four metrics in one Measurement per device (EmitMeasurements,
 // not one EmitMeasurement call per metric). Each device gets a distinct phase
-// offset spaced evenly around a full sine period (2*pi / device count) so
-// that, at any tick, the device closest to the sine peak is at most half that
-// spacing away from it. With 12 evenly-spaced thermostats that worst case is
-// 15 degrees from the peak: sin(90-15 degrees) = sin(75 degrees) is about
-// 0.966, giving temperature = 24 + 8*0.966 is about 31.7 degrees C —
-// comfortably over 30 C every cycle (the level a DETECT rule will alarm on
-// once rule seeding lands), regardless of n, without ever needing every
-// device in phase at once.
+// offset spaced evenly around a full sine period (2*pi / device count), so the
+// thermostats reach their peaks at staggered times rather than breathing in
+// unison — alarms come and go across the population instead of all at once.
+//
+// 🔴 TWO PROPERTIES, AND ONLY ONE OF THEM HOLDS AT EVERY POPULATION SIZE.
+//
+//   - EVERY DEVICE RAISES AND CLEARS, at any size. Each device's own phase advances
+//     BuildingpulsePhaseStep per tick, so it traverses a full period by itself; the
+//     offset shifts WHEN it crosses, never WHETHER. This is the property the alarm
+//     channel actually rests on, and TestBuildingpulseEmittedTemperatureCrossesAndClears
+//     PerDevice drives it out of this function onto the wire.
+//   - "SOME DEVICE IS ABOVE THE THRESHOLD AT EVERY TICK" IS SIZE-DEPENDENT, and an
+//     earlier version of this comment claimed it held "regardless of n". It does not.
+//     In the worst tick the peak falls midway between two neighbours, so the hottest
+//     device sits at centre + amplitude*cos(pi/n): at the demo's 12 that is ~31.7 C,
+//     but at n=4 it is ~29.7 C — under the threshold, and nobody is hot. The floor is
+//     n >= 5 for the shipped constants (TestBuildingpulseWholePopulationCoverageHasA
+//     StatedFloor derives it rather than restating the 5).
+//
+// Below that floor a `--devices 2` run still bootstraps, still raises and still clears
+// — there are simply moments with no ACTIVE alarm anywhere. That is a degraded DEMO,
+// not a broken scenario, which is why it is documented rather than refused.
 func (s *buildingpulse) Tick(ctx context.Context, rt *Runtime) error {
 	n := s.ticks.Add(1)
 	if len(rt.Devices) == 0 {
@@ -282,9 +413,11 @@ func (s *buildingpulse) Tick(ctx context.Context, rt *Runtime) error {
 
 	err := EmitAll(ctx, rt, rt.Load.Workers(len(rt.Devices)),
 		func(i int, _ DeviceInstance) map[string]float64 {
-			phase := float64(n)*0.3 + float64(i)*offset
+			phase := float64(n)*BuildingpulsePhaseStep + float64(i)*offset
 			return map[string]float64{
-				BuildingpulseTemperatureKey: 24 + 8*math.Sin(phase),
+				// Read from the shared const block, not written as literals: this is the
+				// curve the rule's threshold is chosen against.
+				BuildingpulseTemperatureKey: BuildingpulseTempCentre + BuildingpulseTempAmplitude*math.Sin(phase),
 				BuildingpulseHumidityKey:    45 + 10*math.Sin(phase+1),
 				BuildingpulseSetpointKey:    22,
 				BuildingpulseCO2Key:         600 + 150*math.Sin(phase+2),

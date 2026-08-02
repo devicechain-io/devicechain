@@ -5,7 +5,6 @@ package sim
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync/atomic"
 
@@ -124,32 +123,11 @@ const (
 	WidgetlabCommandDef = "wl-set-setpoint-cmd"
 	WidgetlabCommandKey = "setSetpoint"
 
-	// 🔴 TWO severities, and they are not interchangeable.
-	//
-	// WidgetlabSeverity is the RULE AUTHORING vocabulary, which is lowercase
-	// (event-processing's rules.Severity). WidgetlabAlarmSeverityWire is the same
-	// tier as it lands on the durable alarm row, because the raise-alarm consumer
-	// uppercases the authoring severity — and it is the wire form an alarm widget's
-	// `severity` filter option is written in.
-	//
-	// Collapsing them into one uppercase constant is not a cosmetic mistake: the
-	// rule compiler rejects "MAJOR" outright, so with the ADR-044 publish gate wired
-	// the profile fails to publish and the scenario cannot bootstrap at all, and
-	// with the gate unwired the version publishes while event-processing drops the
-	// rule at load with only a log line — the alarm the whole board depends on
-	// silently never fires. loadtest/detection.go carries the same pair for the same
-	// reason; this port collapsed them and had to be corrected.
-	//
-	// Both are now GATED, and not from this module — it cannot import either owner.
-	// loadtest/authored_rules_fixture_test.go publishes them to
-	// backend/testdata/authored-rules, where device-management's
-	// model/authored_sim_alarm_wire_test.go holds the wire form to the real
-	// AlarmSeverity enum via the real conversion, and event-processing's
-	// graphql/authored_sim_rules_test.go runs the whole rule through the real publish
-	// gate. Change either constant and regenerate the fixture; those two tests are what
-	// decide whether the new value is real.
-	WidgetlabSeverity          = "major"
-	WidgetlabAlarmSeverityWire = "MAJOR"
+	// The alarm tier. Both spellings live in wirevocabulary.go, which carries the whole
+	// reasoning for why they are two constants and what each collapse breaks — the
+	// canonical copy, not a summary of one.
+	WidgetlabSeverity          = SeverityMajor
+	WidgetlabAlarmSeverityWire = AlarmSeverityMajorWire
 )
 
 // widgetlabParameterSchema is the command's parameter descriptors, as the JSON
@@ -163,41 +141,6 @@ const widgetlabParameterSchema = `[` +
 	`{"name":"target","kind":"SCALAR","dataType":"DOUBLE","unit":"C","required":true,"minValue":15,"maxValue":35},` +
 	`{"name":"mode","kind":"SCALAR","dataType":"STRING","required":false,"enum":["heat","cool","auto"],"default":"auto"}` +
 	`]`
-
-// widgetlabRuleDefinition is the opaque rules.Rule JSON: a threshold rule whose
-// predicate reads the swept metric and whose raiseAlarm action drives the alarm
-// widgets. The keys are exactly the rules.Rule / Condition / Action json tags —
-// event-processing decodes with DisallowUnknownFields, so a stray one is rejected
-// at publish. A raiseAlarm action requires a non-empty severity.
-//
-// The threshold is WidgetlabAlarmThreshold rather than a literal, which is the
-// entire point of the const block above: the rule and the curve that must cross it
-// cannot drift apart if neither owns the number.
-func widgetlabRuleDefinition() string {
-	raw, err := json.Marshal(map[string]any{
-		"name":     "Widget Lab over-temperature",
-		"type":     "threshold",
-		"severity": WidgetlabSeverity,
-		"when": map[string]any{
-			"metric":    WidgetlabTemperatureKey,
-			"op":        "gt",
-			"threshold": WidgetlabAlarmThreshold,
-		},
-		"actions": []any{
-			map[string]any{
-				"type":       "raiseAlarm",
-				"raiseAlarm": map[string]any{"alarmKey": WidgetlabAlarmKey},
-			},
-		},
-	})
-	if err != nil {
-		// Marshaling a static map of strings and floats cannot fail; a failure here
-		// is a programming error, not a runtime condition, and the same house style
-		// as buildingpulse's panic on a dashboard it cannot marshal.
-		panic(fmt.Sprintf("widgetlab: marshal rule definition: %v", err))
-	}
-	return string(raw)
-}
 
 // widgetlabSweep is the nominal temperature at a given tick: a triangle wave
 // between WidgetlabSweepMin and WidgetlabSweepMax with period WidgetlabSweepTicks.
@@ -304,17 +247,22 @@ func (s *widgetlab) Manifest() SimManifest {
 						ParameterSchema: widgetlabParameterSchema,
 					},
 				},
+				// The threshold is WidgetlabAlarmThreshold rather than a literal, which
+				// is the entire point of the sweep const block: the rule and the curve
+				// that must cross it cannot drift apart if neither owns the number.
+				// Enabled, because publish-time validation only gates ENABLED rules — a
+				// disabled one is published unchecked and would make a broken predicate
+				// look accepted.
 				DetectionRules: []DetectionRuleSpec{
-					{
-						Token:      WidgetlabRuleToken,
-						Name:       "Widget Lab over-temperature",
-						Definition: widgetlabRuleDefinition(),
-						Metric:     WidgetlabTemperatureKey,
-						// Enabled, because publish-time validation only gates ENABLED
-						// rules — a disabled rule is published unchecked and would make
-						// a broken predicate look accepted.
-						Enabled: true,
-					},
+					ThresholdAlarmRule{
+						Token:     WidgetlabRuleToken,
+						Name:      "Widget Lab over-temperature",
+						Metric:    WidgetlabTemperatureKey,
+						Threshold: WidgetlabAlarmThreshold,
+						Severity:  WidgetlabSeverity,
+						AlarmKey:  WidgetlabAlarmKey,
+						Enabled:   true,
+					}.Spec(),
 				},
 			},
 		},

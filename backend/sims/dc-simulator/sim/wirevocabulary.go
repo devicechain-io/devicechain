@@ -41,4 +41,32 @@ const (
 	// liveness assert accepts. Gated by event-processing's
 	// graphql/authored_sim_rules_test.go.
 	RuleStatusActiveWire = "ACTIVE"
+
+	// 🔴 THE ALARM TIER IS TWO CONSTANTS, AND THEY ARE NOT INTERCHANGEABLE — this is the
+	// one entry here whose hazard is a rename of NEITHER side.
+	//
+	// SeverityMajor is the RULE AUTHORING vocabulary, which event-processing spells in
+	// lowercase (its rules.Severity) and which its compiler rejects in any other case.
+	// AlarmSeverityMajorWire is the SAME ADR-041 tier as it lands on the durable alarm
+	// row, because the raise-alarm consumer uppercases the authoring severity — and it
+	// is the form an alarm widget's `severity` filter option is written in.
+	//
+	// Collapsing them into one uppercase constant makes the profile UNPUBLISHABLE (the
+	// rule compiler refuses "MAJOR"); collapsing them into one lowercase constant
+	// publishes fine and leaves every alarm widget's severity filter matching nothing.
+	// The second is the dangerous direction, and it is the mistake that actually
+	// shipped once on the load-test harness. Note that a gate comparing the two to EACH
+	// OTHER catches neither, since ToUpper("MAJOR") is "MAJOR" — which is why the real
+	// check is the fixture, where event-processing judges the authoring form and
+	// device-management judges the wire form, each against its own real type.
+	//
+	// Declared once here rather than per scenario: the scenarios' TIER CHOICE is a
+	// design decision, but the PAIRING is a platform fact, and three copies of it meant
+	// three copies of this warning. A scenario wanting a different tier adds that pair
+	// here, where the fixture can reach it. (The load-test harness keeps its own pair in
+	// loadtest/detection.go — its choice of major is arbitrary where a demo's is not,
+	// and its comment carries oracle-specific reasoning about the INDETERMINATE
+	// tombstone row that does not belong to any scenario.)
+	SeverityMajor          = "major"
+	AlarmSeverityMajorWire = "MAJOR"
 )
