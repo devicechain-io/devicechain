@@ -16,6 +16,7 @@
 // survives is the part an author acts on — WHICH option, and WHAT KIND of wrong — and
 // that beats precise English nobody in the room reads.
 
+import type { DashboardDefinition } from '@devicechain/dashboards';
 import type { OptionIssueCode } from '@devicechain/widgets';
 
 // A translation key per issue code.
@@ -35,3 +36,22 @@ export const OPTION_ISSUE_MESSAGE_KEYS: Record<OptionIssueCode, string> = {
   json: 'optionIssueJson',
   invariant: 'optionIssueInvariant',
 };
+
+// widgetLabel names the widget an issue belongs to, the way an author recognises it.
+//
+// The join lives HERE rather than on the issue itself. @devicechain/widgets used to
+// enrich each issue with `options.title`, which meant the package read an option key
+// purely for presentation — and that single read had to be excused inside the
+// closed-world scan that decides which files are evidence a RENDERER reads a key. The
+// consumer already holds the definition, so it can do the join and the scan keeps
+// meaning one thing.
+//
+// Falls back to the id: a title that is absent, blank or not a string is not a label,
+// and rendering it would give the author a nameless row to go and find.
+export function widgetLabel(
+  definition: Pick<DashboardDefinition, 'widgets'>,
+  widgetId: string,
+): string {
+  const title = definition.widgets.find((w) => w.id === widgetId)?.options?.title;
+  return typeof title === 'string' && title.trim() ? title : widgetId;
+}

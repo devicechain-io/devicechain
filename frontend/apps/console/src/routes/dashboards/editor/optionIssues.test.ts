@@ -14,17 +14,23 @@
 // which a test built on t() passes without a murmur. (Verified: deleting an `es` entry
 // left the first draft of this file green.) So the per-locale check reads the catalog
 // through getResource, which returns undefined for a key that locale does not define,
-// and only the "is it a key echo" check below goes through t().
+// so nothing here goes through t() at all.
 
 import i18n, { SUPPORTED_LOCALES } from '@/i18n/config';
 import { describe, expect, it } from 'vitest';
 
-import { OPTION_ISSUE_MESSAGE_KEYS } from './optionIssues';
+import type { WidgetInstance, WidgetType } from '@devicechain/dashboards';
+
+import { OPTION_ISSUE_MESSAGE_KEYS, widgetLabel } from './optionIssues';
 
 const NS = 'dashboards';
 const CODES = Object.entries(OPTION_ISSUE_MESSAGE_KEYS);
 
 describe('option issue wording', () => {
+  // This also covers the mapping pointing at a key NO catalog defines — i18next would
+  // render such a key as the key itself. A separate t()-based test for that was deleted
+  // as a control that could not fail: SUPPORTED_LOCALES includes `en`, so proving the
+  // English resource exists already proves t() has something to return.
   it('gives every issue code its own string in every locale the console ships', () => {
     for (const locale of SUPPORTED_LOCALES) {
       for (const [code, key] of CODES) {
@@ -37,16 +43,6 @@ describe('option issue wording', () => {
         // twelve widgets is wrong.
         expect(text, `${where} does not interpolate the option name`).toContain('{{key}}');
       }
-    }
-  });
-
-  // The mapping can also point at a key NO locale defines — the `Record` is exhaustive
-  // over the codes, not over the catalog — and i18next renders a missing key as the key
-  // itself. That is the one failure t() is the right instrument for.
-  it('maps every code to a key that resolves rather than echoing', async () => {
-    await i18n.changeLanguage('en');
-    for (const [code, key] of CODES) {
-      expect(i18n.t(`${NS}:${key}`, { key: 'someOption' }), code).not.toBe(key);
     }
   });
 
@@ -65,5 +61,33 @@ describe('option issue wording', () => {
         ).not.toBe(i18n.getResource('en', NS, key));
       }
     }
+  });
+});
+
+describe('widgetLabel', () => {
+  const widget = (id: string, type: WidgetType, options?: Record<string, unknown>): WidgetInstance => ({
+    id,
+    type,
+    layout: { base: { col: 0, row: 0, colSpan: 4, rowSpan: 2, z: 0 } },
+    options,
+  });
+
+  it('prefers the title an author gave the widget', () => {
+    const board = { widgets: [widget('w1', 'image', { title: 'Floor plan', url: 'u' })] };
+    expect(widgetLabel(board, 'w1')).toBe('Floor plan');
+  });
+
+  // A title that is absent, blank, whitespace or not a string is not a label. Rendering
+  // one would give the author a nameless row and nothing to search the board for — and
+  // whitespace is the case a plain `title || id` fallback gets wrong.
+  it('falls back to the id for anything that is not a usable title', () => {
+    for (const bad of ['', '   ', 42, null, undefined, { text: 'x' }]) {
+      const board = { widgets: [widget('w1', 'image', { title: bad })] };
+      expect(widgetLabel(board, 'w1'), `title ${JSON.stringify(bad)}`).toBe('w1');
+    }
+  });
+
+  it('falls back to the id for a widget the board does not carry', () => {
+    expect(widgetLabel({ widgets: [] }, 'gone')).toBe('gone');
   });
 });

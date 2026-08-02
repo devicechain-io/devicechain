@@ -47,14 +47,13 @@ import { useQuery } from '@/lib/hooks/use-query';
 import { Textarea, errMessage } from '@/routes/common';
 import { formatTime } from '@/lib/utils';
 import { validateDefinitionOptions } from '@devicechain/widgets';
-import { OPTION_ISSUE_MESSAGE_KEYS } from './optionIssues';
+import { OPTION_ISSUE_MESSAGE_KEYS, widgetLabel } from './optionIssues';
 import type { DashboardDefinition } from '@devicechain/dashboards';
 import {
   listDashboardVersions,
   publishDashboard,
   rollbackDashboard,
   CONFLICT_MARKER,
-  INVALID_DEFINITION_MARKER,
   type DashboardVersion,
 } from '@/lib/api/dashboards';
 
@@ -78,9 +77,10 @@ export interface VersionHistorySheetProps {
   // Called after a successful rollback with the new draft so the workspace can
   // re-baseline its working/saved copies (and updatedAt) without a page reload.
   onRolledBack: (result: { definition: string; updatedAt: string | null }) => void;
-  // Strips every option key no widget reads from the WORKING copy, leaving the
-  // author an unsaved edit to review and save. The workspace owns the definition,
-  // so the repair has to happen there; this drawer only offers it.
+  // Strips every option key no widget reads from the WORKING copy, leaving the author
+  // an unsaved edit to review and save (why that repair exists at all: see
+  // stripUnknownOptions in @devicechain/widgets). The workspace owns the definition, so
+  // the repair happens there; this drawer only offers it.
   onStripUnknownOptions: () => void;
 }
 
@@ -178,14 +178,12 @@ function VersionHistoryBody({
       setRefreshKey((k) => k + 1);
     } catch (err) {
       const raw = errMessage(err);
-      toast(
-        raw.includes(CONFLICT_MARKER)
-          ? t('versionPublishConflict')
-          : raw.includes(INVALID_DEFINITION_MARKER)
-            ? t('versionPublishInvalid')
-            : raw,
-        'error',
-      );
+      // Only CONFLICT is re-worded. publishDashboard's own option refusal cannot reach
+      // here from this drawer — the button is disabled while `issues` is non-empty, and
+      // both checks run the same pure function over the same object — so if it ever
+      // does, the raw message (which names the widget and the option) is exactly what
+      // should be shown rather than a friendlier sentence that discards it.
+      toast(raw.includes(CONFLICT_MARKER) ? t('versionPublishConflict') : raw, 'error');
     } finally {
       setBusy(false);
     }
@@ -246,7 +244,7 @@ function VersionHistoryBody({
                   // issues, and the same option can be both missing and out of range
                   // on different widgets of the same type.
                   <li key={`${issue.widgetId}:${issue.key}:${issue.code}`}>
-                    <span className="text-foreground">{issue.title || issue.widgetId}</span>
+                    <span className="text-foreground">{widgetLabel(saved, issue.widgetId)}</span>
                     <span className="ml-1">({issue.widgetType})</span>
                     {/* The CODE is translated, not the schema's English message — see
                         optionIssues.ts. `key` is an option name, not user text. */}
@@ -272,7 +270,7 @@ function VersionHistoryBody({
             size="sm"
             onClick={publish}
             loading={busy}
-            disabled={busy || dirty || saving || issues.length > 0}
+            disabled={dirty || saving || issues.length > 0}
           >
             {t('versionPublishButton')}
           </Button>

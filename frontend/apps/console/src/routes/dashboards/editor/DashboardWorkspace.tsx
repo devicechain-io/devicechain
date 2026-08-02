@@ -411,17 +411,18 @@ export function DashboardWorkspace({
   };
 
   // Remove every option key no widget of that type reads. Offered from the publish
-  // drawer, because a leftover key is the one thing blocking publish that the config
-  // panel cannot fix — it renders a control per DECLARED option, and an unknown key by
-  // definition has none, while every edit it makes preserves the rest of the bag.
+  // drawer, because a leftover key is the one issue blocking publish that the config
+  // panel cannot fix — stripUnknownOptions in @devicechain/widgets carries the full
+  // reasoning.
   //
   // It lands as an ordinary unsaved edit rather than writing straight through: this
   // DELETES authored values, so the author gets the same review-then-save (or discard)
   // they get for any other change, and the same conflict precondition on the way out.
   const stripUnknown = () => {
     const next = stripUnknownOptions(working);
-    // Identity, not equality: stripUnknownOptions returns the same object when there
-    // was nothing to strip, so this cannot present a no-op as an unsaved edit.
+    // Identity is the no-op signal (see stripUnknownOptions). Not a dirty-state concern:
+    // isDirty compares serializations, so an equal-but-new object would not read as an
+    // edit either way — this just distinguishes "nothing to remove" from "removed".
     if (next === working) {
       toast(t('workspaceNoUnknownOptions'));
       return;

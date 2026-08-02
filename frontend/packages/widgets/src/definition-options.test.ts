@@ -60,22 +60,6 @@ describe('validateDefinitionOptions', () => {
     ]);
   });
 
-  // The title is what an author recognises a widget by; the id is generated. But a
-  // blank or non-string title must NOT be carried through as one — the console renders
-  // `title || widgetId`, and an empty string there would silently fall back while a
-  // whitespace one would render as a nameless row.
-  it('carries a usable title and omits an unusable one', () => {
-    const titled = validateDefinitionOptions(board(widget('w1', 'image', { title: 'Floor plan' })));
-    expect(titled[0].title).toBe('Floor plan');
-
-    for (const bad of ['', '   ', 42, null, undefined]) {
-      const issues = validateDefinitionOptions(board(widget('w1', 'image', { title: bad })));
-      // A non-string title is itself an issue, so filter to the one about `url`.
-      const urlIssue = issues.find((i) => i.key === 'url');
-      expect(urlIssue?.title, `title ${JSON.stringify(bad)}`).toBeUndefined();
-    }
-  });
-
   it('reports nothing for a board with no widgets', () => {
     expect(validateDefinitionOptions(board())).toEqual([]);
   });

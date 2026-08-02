@@ -65,24 +65,14 @@ const WIDGET_SOURCES: Record<WidgetType, string> = {
 };
 
 // Files that read options on behalf of MORE THAN ONE widget type — the channel wrapper,
-// the shared measurement helper, the dashboards package's slot-reference walk, and the
-// definition-level validator.
+// the shared measurement helper, and the dashboards package's slot-reference walk.
 //
-// 🔴 definition-options.ts is the odd one out and the entry is worth reading twice: it
-// reads `title` to LABEL A REPORT, not to render anything. Every other file here is
-// evidence that a renderer reads the key, and this one is not — so if `title` ever
-// stopped being rendered, this read alone would keep the scan finding it and the schema
-// would go on declaring an option nothing displays. It is listed anyway because the
-// closed-world check below is about VISIBILITY: a file that reads a widget's options and
-// appears in no list is invisible to every assertion here, which is a worse failure than
-// a diluted one. (`title` is declared on every widget type, so today it adds no key and
-// changes no attribution.)
-const SHARED_SOURCES = [
-  'connected-widget.tsx',
-  'widget.ts',
-  'definition-options.ts',
-  '../../dashboards/src/slots.ts',
-];
+// Every entry here is evidence that a RENDERER reads a key, which is what makes the
+// per-type attribution below mean anything. definition-options.ts briefly appeared in
+// this list because it read `title` to label a report — a read that is not renderer
+// evidence and needed a paragraph saying so. It reads no option key now, which is the
+// better fix: the list means one thing again.
+const SHARED_SOURCES = ['connected-widget.tsx', 'widget.ts', '../../dashboards/src/slots.ts'];
 
 // Which types each shared read actually applies to. A shared file cannot say this itself —
 // ConnectedWidget reads `state` inside alarmSubscription(), which runs for the alarm

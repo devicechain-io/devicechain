@@ -74,7 +74,6 @@
   "versionPublishBlocked_one": "{{count}} widget option must be fixed before this dashboard can be published.",
   "versionPublishBlocked_other": "{{count}} widget options must be fixed before this dashboard can be published.",
   "versionStripUnknownOptions": "Remove unrecognized options",
-  "versionPublishInvalid": "This dashboard has widget options the viewer does not read. Fix them before publishing.",
   "optionIssueMissing": "{{key}} is required but not set",
   "optionIssueUnknown": "{{key}} is not read by this widget",
   "optionIssueType": "{{key}} is the wrong type",

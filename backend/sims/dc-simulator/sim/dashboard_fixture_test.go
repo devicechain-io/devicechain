@@ -42,10 +42,10 @@ var updateFixtures = flag.Bool("update-fixtures", false,
 
 const simDashboardFixtureDir = "../../../../frontend/testdata/sim-dashboards"
 
-// widgetlabFixtureSeed is fixed so the fixture is reproducible. The boards bind
-// device tokens, which are (manifest, seed) derived, so a fixture generated under a
-// different seed would differ in every binding for no reason a reader could see.
-const widgetlabFixtureSeed = 1
+// fixtureSeed is fixed so the fixtures are reproducible. Boards bind device tokens,
+// which are (manifest, seed) derived, so a fixture generated under a different seed
+// would differ in every binding for no reason a reader could see.
+const fixtureSeed = 1
 
 // scenarioManifests builds every registered scenario at the fixture seed.
 //
@@ -56,7 +56,14 @@ func scenarioManifests(t *testing.T) map[string]SimManifest {
 	t.Helper()
 	out := map[string]SimManifest{}
 	for id, newDriver := range Registry {
-		out[id] = newDriver(widgetlabFixtureSeed, Load{}).Manifest()
+		m := newDriver(fixtureSeed, Load{}).Manifest()
+		// Validated HERE rather than in one test, so it also covers the path that WRITES
+		// the fixtures: -update-fixtures used to regenerate from manifests nothing had
+		// checked, which is the one moment a bad board becomes the committed reference.
+		if err := m.Validate(); err != nil {
+			t.Fatalf("the %s manifest the fixtures come from does not validate: %v", id, err)
+		}
+		out[id] = m
 	}
 	if len(out) == 0 {
 		t.Fatal("the registry is empty, so every check below would be vacuous")
@@ -117,15 +124,21 @@ func indent(t *testing.T, definition string) []byte {
 //
 //	go test ./sim/ -run TestSimDashboardFixturesAreCurrent -update-fixtures
 func TestSimDashboardFixturesAreCurrent(t *testing.T) {
-	for token, definition := range simDashboardFixtures(t) {
+	fixtures := simDashboardFixtures(t)
+	if *updateFixtures {
+		// Once per RUN, not once per board: both are whole-directory operations, and
+		// removeOrphanFixtures rebuilds every manifest to decide what is orphaned.
+		if err := os.MkdirAll(simDashboardFixtureDir, 0o755); err != nil {
+			t.Fatalf("create fixture dir: %v", err)
+		}
+		removeOrphanFixtures(t)
+	}
+
+	for token, definition := range fixtures {
 		path := fixturePath(token)
 		want := indent(t, definition)
 
 		if *updateFixtures {
-			if err := os.MkdirAll(simDashboardFixtureDir, 0o755); err != nil {
-				t.Fatalf("create fixture dir: %v", err)
-			}
-			removeOrphanFixtures(t)
 			if err := os.WriteFile(path, want, 0o644); err != nil {
 				t.Fatalf("write %s: %v", path, err)
 			}
@@ -195,14 +208,12 @@ func removeOrphanFixtures(t *testing.T) {
 // Asserting equality is what makes the fixture directory a description of the
 // manifest rather than an accumulation of everything it has ever been called.
 func TestSimDashboardFixtureFilesMatchTheDashboardsExactly(t *testing.T) {
+	// Declared tokens come from the same collector that writes the files, so this
+	// compares disk against exactly what -update-fixtures would produce — and inherits
+	// its cross-scenario token-collision check for free.
 	declared := map[string]bool{}
-	for id, manifest := range scenarioManifests(t) {
-		if err := manifest.Validate(); err != nil {
-			t.Fatalf("the %s manifest the fixtures come from does not validate: %v", id, err)
-		}
-		for _, d := range manifest.Dashboards {
-			declared[d.Token] = true
-		}
+	for token := range simDashboardFixtures(t) {
+		declared[token] = true
 	}
 	committed := map[string]bool{}
 	for _, token := range committedFixtureTokens(t) {
@@ -255,14 +266,17 @@ func TestSimBoardsSelectOnlyDeclaredMetrics(t *testing.T) {
 			t.Fatalf("%s declares dashboards but no profile metrics, so its boards are checked "+
 				"against an empty set and every selector passes", id)
 		}
-		checkBoardMetrics(t, manifest, declared, &checked)
+		checked += checkBoardMetrics(t, manifest, declared)
 	}
 	if checked == 0 {
 		t.Error("no board selects any measurement at all, so this test asserted nothing")
 	}
 }
 
-func checkBoardMetrics(t *testing.T, manifest SimManifest, declared map[string]bool, checked *int) {
+// checkBoardMetrics returns how many measurement selections it examined, so the caller
+// can refuse a run in which nothing was checked at all.
+func checkBoardMetrics(t *testing.T, manifest SimManifest, declared map[string]bool) int {
+	checked := 0
 	t.Helper()
 	for _, d := range manifest.Dashboards {
 		var board struct {
@@ -292,7 +306,7 @@ func checkBoardMetrics(t *testing.T, manifest SimManifest, declared map[string]b
 				continue
 			}
 			for _, name := range w.Datasource.Measurements {
-				*checked++
+				checked++
 				if !declared[name] {
 					t.Errorf("%s/%s selects measurement %q, which no profile declares — the "+
 						"widget binds a real device and shows nothing", d.Token, w.Id, name)
@@ -324,6 +338,7 @@ func checkBoardMetrics(t *testing.T, manifest SimManifest, declared map[string]b
 			}
 		}
 	}
+	return checked
 }
 
 // The gallery's chart is sized for the two series it draws: useMeasurementStream
@@ -333,7 +348,7 @@ func checkBoardMetrics(t *testing.T, manifest SimManifest, declared map[string]b
 // Stays widgetlab-specific on purpose: the number 2 is this board's design, not a
 // property any scenario's chart has.
 func TestWidgetlabGalleryChartDrawsTheSeriesItsWindowIsSizedFor(t *testing.T) {
-	manifest := NewWidgetlab(widgetlabFixtureSeed, Load{}).Manifest()
+	manifest := NewWidgetlab(fixtureSeed, Load{}).Manifest()
 	var gallery struct {
 		Widgets []struct {
 			Id         string `json:"id"`

@@ -74,7 +74,6 @@
   "versionPublishBlocked_one": "Debe corregir {{count}} opción de widget antes de publicar este panel.",
   "versionPublishBlocked_other": "Debe corregir {{count}} opciones de widget antes de publicar este panel.",
   "versionStripUnknownOptions": "Eliminar opciones no reconocidas",
-  "versionPublishInvalid": "Este panel tiene opciones de widget que el visor no lee. Corríjalas antes de publicar.",
   "optionIssueMissing": "{{key}} es obligatorio y no está definido",
   "optionIssueUnknown": "Este widget no lee {{key}}",
   "optionIssueType": "{{key}} tiene un tipo incorrecto",

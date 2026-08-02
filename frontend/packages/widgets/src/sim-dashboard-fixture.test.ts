@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { parseDashboardDefinition, WIDGET_TYPES, type WidgetType } from '@devicechain/dashboards';
 import { describe, expect, it } from 'vitest';
 
-import { validateWidgetOptions } from './options';
+import { validateDefinitionOptions } from './definition-options';
 import { WIDGET_BINDS_DATASOURCE, WIDGET_CHANNEL } from './registry';
 
 // ---- The cross-workspace gate --------------------------------------------------
@@ -83,9 +83,10 @@ describe('the sim dashboard fixtures', () => {
   // 🔑 This list is NOT what gives a board coverage — the per-board block walks the
   // directory, so a new fixture is covered generically without touching this file. It
   // exists so a new board's ARRIVAL is a decision: someone has to look and say whether
-  // it needs assertions of its own, the way the gallery and stress board do. And it
-  // still catches the original hazard in the other direction — a renamed board leaving
-  // its old fixture on disk for the named tests to keep passing over.
+  // it needs assertions of its own, the way the gallery and stress board do. That is its
+  // ONLY job — a renamed or orphaned fixture is already caught twice over, by the Go
+  // side's manifest/disk equality and by the named tests below failing to read a file
+  // that moved.
   it('are exactly the boards this file knows about', () => {
     expect(fixtureTokens()).toEqual([BUILDINGPULSE, GALLERY, STRESS].sort());
   });
@@ -280,14 +281,19 @@ describe('the parsed sim boards', () => {
         }
       });
 
-      // 🔑 The check the option schemas were built for, finally wired to something
-      // that produces definitions. Every bag on the board, against the schema the
-      // renderer actually reads.
+      // 🔑 The check the option schemas were built for, wired to something that
+      // produces definitions. Every bag on the board, against the schema the renderer
+      // actually reads.
+      //
+      // 🔴 THROUGH validateDefinitionOptions, NOT A HAND-ROLLED WALK OF THE SAME SHAPE.
+      // This test wrote its own widgets.flatMap(validateWidgetOptions(...)) loop for one
+      // commit, which is the reconstruction trap by the letter: the console's publish
+      // gate calls that function, so a definition-level rule added to it would reach the
+      // console and silently miss the sim — while a comment on the function named this
+      // fixture gate as one of the two producers held to it.
       it('authors only options the widgets read, at the types they read them', () => {
-        const issues = parsed(token).widgets.flatMap((widget) =>
-          validateWidgetOptions(widget.type, widget.options).map(
-            (issue) => `${widget.id} (${widget.type}): ${issue.code} on ${issue.key} — ${issue.message}`,
-          ),
+        const issues = validateDefinitionOptions(parsed(token)).map(
+          (issue) => `${issue.widgetId} (${issue.widgetType}): ${issue.code} on ${issue.key} — ${issue.message}`,
         );
         expect(issues).toEqual([]);
       });

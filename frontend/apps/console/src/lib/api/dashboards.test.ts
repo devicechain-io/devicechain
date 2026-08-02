@@ -82,21 +82,16 @@ describe('publishDashboard', () => {
     expect(gqlMock).not.toHaveBeenCalled();
   });
 
-  // The message is the console's last line of explanation when a publish reaches this
-  // throw by a path the drawer did not expect, so it has to name the widget an author
-  // can find and the option that is wrong — not just that "something" was invalid.
+  // Reaching this throw means the drawer's own check was bypassed, so the message is
+  // read by whoever is debugging that — it names the widget ID (the handle that is
+  // stable and greppable, where a title is neither) and the option that is wrong, not
+  // just that "something" was invalid. The author-facing wording is the drawer's job,
+  // through the translated per-code strings.
   it('names the offending widget and option in the error', async () => {
     const definition = { widgets: [widget('w2', 'image', { title: 'Floor plan' })] };
     await expect(
       publishDashboard('ops', { definition, expectedUpdatedAt: null }),
-    ).rejects.toThrow(/Floor plan.*image.*url/);
-  });
-
-  it('falls back to the widget id when the widget has no title', async () => {
-    const definition = { widgets: [widget('w-no-title', 'image', {})] };
-    await expect(
-      publishDashboard('ops', { definition, expectedUpdatedAt: null }),
-    ).rejects.toThrow(/w-no-title/);
+    ).rejects.toThrow(/w2 \(image\).*url/);
   });
 
   // Every issue code is fatal, and the one that is easiest to argue should not be — a

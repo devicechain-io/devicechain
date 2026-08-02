@@ -155,14 +155,19 @@ export async function updateDashboard(
 // hint rather than a generic error.
 export const CONFLICT_MARKER = 'modified by another writer';
 
-// INVALID_DEFINITION_MARKER prefixes the error publishDashboard throws when the board
-// it was handed carries option issues. Unlike CONFLICT_MARKER it matches no backend
-// text — this refusal never reaches the network — but the UI recognises it the same
-// way, so the drawer can show a translated explanation instead of the raw list.
+// INVALID_DEFINITION_MARKER prefixes the error publishDashboard throws when the board it
+// was handed carries option issues.
 //
-// The list is still in the message: the drawer disables Publish and names every issue
-// before it gets here, so anything that DOES reach this throw arrived by a path the UI
-// did not expect, and the one useful thing to carry is what was actually wrong.
+// 🔴 IT IS NOT A SECOND CONFLICT_MARKER, AND THE DRAWER DELIBERATELY DOES NOT MATCH ON
+// IT. That constant exists because a backend error cannot carry a type across the wire;
+// this refusal never reaches the network. The drawer names every issue and disables
+// Publish before a call gets here, so reaching this throw means the UI's own check was
+// bypassed — at which point the useful thing to show is WHAT WAS WRONG, not a friendly
+// sentence. An earlier version matched on it and replaced the detail with a generic
+// translated string: a branch that could not be reached, which threw away the only
+// information worth having if it ever were.
+//
+// So this is a stable, greppable prefix for the message and for the tests, nothing more.
 export const INVALID_DEFINITION_MARKER = 'dashboard definition is not publishable';
 
 // ── Versioning (ADR-039) ──────────────────────────────────────────────────
@@ -246,7 +251,7 @@ export async function publishDashboard(
   if (issues.length > 0) {
     throw new Error(
       `${INVALID_DEFINITION_MARKER}: ${issues
-        .map((i) => `${i.title ?? i.widgetId} (${i.widgetType}): ${i.message}`)
+        .map((i) => `${i.widgetId} (${i.widgetType}): ${i.message}`)
         .join('; ')}`,
     );
   }
