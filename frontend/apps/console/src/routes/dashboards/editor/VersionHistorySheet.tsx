@@ -256,7 +256,12 @@ function VersionHistoryBody({
                   </li>
                 ))}
               </ul>
-              {strippable && (
+              {/* Offered only against a clean editor. The list above describes `saved`,
+                  so once the repair (or any other edit) is pending, it describes a
+                  document that is no longer current — and leaving the button armed
+                  beside issues it has already fixed invites a second click that can
+                  only report there is nothing to do. The dirty hint above takes over. */}
+              {strippable && !dirty && (
                 <Button variant="outline" size="sm" onClick={onStripUnknownOptions} disabled={busy}>
                   {t('versionStripUnknownOptions')}
                 </Button>

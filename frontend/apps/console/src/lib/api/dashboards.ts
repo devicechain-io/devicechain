@@ -234,7 +234,12 @@ export async function publishDashboard(
     definition: Pick<DashboardDefinition, 'widgets'>;
     label?: string;
     description?: string;
-    expectedUpdatedAt?: string | null;
+    // REQUIRED, though nullable: this is the whole tie between the definition
+    // validated above and the draft the server freezes. Optional, a caller could omit
+    // it and get a check over a document the server may not hold — which is the exact
+    // failure the `definition` parameter exists to prevent, re-entering by the back
+    // door. `null` is still expressible, and means "publish whatever is there".
+    expectedUpdatedAt: string | null;
   },
 ): Promise<{ version: number }> {
   const issues = validateDefinitionOptions(input.definition);
@@ -249,7 +254,7 @@ export async function publishDashboard(
     token,
     label: input.label?.trim() ? input.label.trim() : null,
     description: input.description?.trim() ? input.description.trim() : null,
-    expectedUpdatedAt: input.expectedUpdatedAt ?? null,
+    expectedUpdatedAt: input.expectedUpdatedAt,
   });
   return data.publishDashboard;
 }

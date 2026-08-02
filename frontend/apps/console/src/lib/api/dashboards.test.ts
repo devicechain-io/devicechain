@@ -56,7 +56,10 @@ describe('publishDashboard', () => {
   // chart carries.
   it('publishes a widget that declares no options when none are required', async () => {
     await expect(
-      publishDashboard('ops', { definition: { widgets: [widget('w1', 'timeseries-chart')] } }),
+      publishDashboard('ops', {
+        definition: { widgets: [widget('w1', 'timeseries-chart')] },
+        expectedUpdatedAt: null,
+      }),
     ).resolves.toEqual({ version: 7 });
     expect(gqlMock).toHaveBeenCalledTimes(1);
   });
@@ -73,7 +76,9 @@ describe('publishDashboard', () => {
       ],
     };
 
-    await expect(publishDashboard('ops', { definition })).rejects.toThrow(INVALID_DEFINITION_MARKER);
+    await expect(
+      publishDashboard('ops', { definition, expectedUpdatedAt: null }),
+    ).rejects.toThrow(INVALID_DEFINITION_MARKER);
     expect(gqlMock).not.toHaveBeenCalled();
   });
 
@@ -82,12 +87,16 @@ describe('publishDashboard', () => {
   // can find and the option that is wrong — not just that "something" was invalid.
   it('names the offending widget and option in the error', async () => {
     const definition = { widgets: [widget('w2', 'image', { title: 'Floor plan' })] };
-    await expect(publishDashboard('ops', { definition })).rejects.toThrow(/Floor plan.*image.*url/);
+    await expect(
+      publishDashboard('ops', { definition, expectedUpdatedAt: null }),
+    ).rejects.toThrow(/Floor plan.*image.*url/);
   });
 
   it('falls back to the widget id when the widget has no title', async () => {
     const definition = { widgets: [widget('w-no-title', 'image', {})] };
-    await expect(publishDashboard('ops', { definition })).rejects.toThrow(/w-no-title/);
+    await expect(
+      publishDashboard('ops', { definition, expectedUpdatedAt: null }),
+    ).rejects.toThrow(/w-no-title/);
   });
 
   // Every issue code is fatal, and the one that is easiest to argue should not be — a
@@ -96,7 +105,9 @@ describe('publishDashboard', () => {
   // nothing at all. The repair for it is stripUnknownOptions, not a weaker gate.
   it('refuses a board carrying an option no widget reads', async () => {
     const definition = { widgets: [widget('g', 'gauge', { min: 0, max: 10, minimum: 5 })] };
-    await expect(publishDashboard('ops', { definition })).rejects.toThrow(/minimum/);
+    await expect(
+      publishDashboard('ops', { definition, expectedUpdatedAt: null }),
+    ).rejects.toThrow(/minimum/);
     expect(gqlMock).not.toHaveBeenCalled();
   });
 });

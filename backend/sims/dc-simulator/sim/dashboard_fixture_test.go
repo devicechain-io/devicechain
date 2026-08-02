@@ -19,6 +19,14 @@ import (
 // it builds, TypeScript reads it and holds it to the real parser, the real option
 // schemas and the real widget registry.
 //
+// 🔴 IT COVERS EVERY REGISTERED SCENARIO, AND THAT IS THE POINT OF THE REGISTRY WALK.
+// This gate was widgetlab-only, and the omission was invisible in exactly the way this
+// repo keeps rediscovering: buildingpulse — the demo board — published through the same
+// mutation with its option bags checked by nothing, while a comment elsewhere claimed
+// "the sim's boards are gated". Naming the scenarios that have boards today would
+// reproduce the hole the day a fourth one lands, so the set comes from sim.Registry and
+// a scenario that declares dashboards is covered by existing.
+//
 // 🔴 THE FIXTURE IS THE PUBLISHED DOCUMENT, not a copy of it. A fixture assembled by
 // a test while Provision publishes something built another way would give a green
 // gate over a different document — the failure mode is not that the gate breaks, it
@@ -30,30 +38,58 @@ import (
 // or an .npmignore, so anything inside one publishes to npm with it.
 
 var updateFixtures = flag.Bool("update-fixtures", false,
-	"rewrite the widgetlab golden fixtures from the current builders")
+	"rewrite the golden dashboard fixtures from the current builders")
 
-const widgetlabFixtureDir = "../../../../frontend/testdata/widgetlab"
+const simDashboardFixtureDir = "../../../../frontend/testdata/sim-dashboards"
 
 // widgetlabFixtureSeed is fixed so the fixture is reproducible. The boards bind
 // device tokens, which are (manifest, seed) derived, so a fixture generated under a
 // different seed would differ in every binding for no reason a reader could see.
 const widgetlabFixtureSeed = 1
 
-func widgetlabFixtures(t *testing.T) map[string]string {
+// scenarioManifests builds every registered scenario at the fixture seed.
+//
+// Not every scenario declares dashboards — devicepulse declares none — so this returns
+// them all and the callers below decide. A scenario is covered by being REGISTERED, so
+// nothing here is a list anyone has to remember to extend.
+func scenarioManifests(t *testing.T) map[string]SimManifest {
 	t.Helper()
-	out := map[string]string{}
-	for _, d := range NewWidgetlab(widgetlabFixtureSeed, Load{}).Manifest().Dashboards {
-		out[d.Token] = d.Definition
+	out := map[string]SimManifest{}
+	for id, newDriver := range Registry {
+		out[id] = newDriver(widgetlabFixtureSeed, Load{}).Manifest()
 	}
 	if len(out) == 0 {
-		t.Fatal("the scenario declares no dashboards, so the fixtures would be empty and every " +
-			"check over them vacuous")
+		t.Fatal("the registry is empty, so every check below would be vacuous")
+	}
+	return out
+}
+
+// simDashboardFixtures is every dashboard every registered scenario publishes, keyed by
+// token. Tokens are asserted unique across scenarios: they name files in one directory,
+// so a collision would silently leave one board's fixture holding another's document.
+func simDashboardFixtures(t *testing.T) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	owner := map[string]string{}
+	for id, manifest := range scenarioManifests(t) {
+		for _, d := range manifest.Dashboards {
+			if prev, dup := owner[d.Token]; dup {
+				t.Fatalf("scenarios %q and %q both declare dashboard %q; the fixture files are "+
+					"keyed by token, so one would overwrite the other", prev, id, d.Token)
+			}
+			owner[d.Token] = id
+			out[d.Token] = d.Definition
+		}
+	}
+	if len(out) == 0 {
+		t.Fatal("no registered scenario declares a dashboard, so the fixtures would be empty " +
+			"and every check over them vacuous")
 	}
 	return out
 }
 
 func fixturePath(token string) string {
-	return filepath.Join(widgetlabFixtureDir, token+".json")
+	return filepath.Join(simDashboardFixtureDir, token+".json")
 }
 
 // indent renders a definition for the committed file. Indented rather than the exact
@@ -73,20 +109,20 @@ func indent(t *testing.T, definition string) []byte {
 	return append(pretty, '\n')
 }
 
-// TestWidgetlabFixturesAreCurrent is the staleness gate. It fails when the committed
+// TestSimDashboardFixturesAreCurrent is the staleness gate. It fails when the committed
 // fixture no longer matches what the builders produce, which is the only thing
 // keeping the TypeScript side honest about a board that has since changed.
 //
 // Regenerate with:
 //
-//	go test ./sim/ -run TestWidgetlabFixturesAreCurrent -update-fixtures
-func TestWidgetlabFixturesAreCurrent(t *testing.T) {
-	for token, definition := range widgetlabFixtures(t) {
+//	go test ./sim/ -run TestSimDashboardFixturesAreCurrent -update-fixtures
+func TestSimDashboardFixturesAreCurrent(t *testing.T) {
+	for token, definition := range simDashboardFixtures(t) {
 		path := fixturePath(token)
 		want := indent(t, definition)
 
 		if *updateFixtures {
-			if err := os.MkdirAll(widgetlabFixtureDir, 0o755); err != nil {
+			if err := os.MkdirAll(simDashboardFixtureDir, 0o755); err != nil {
 				t.Fatalf("create fixture dir: %v", err)
 			}
 			removeOrphanFixtures(t)
@@ -100,13 +136,13 @@ func TestWidgetlabFixturesAreCurrent(t *testing.T) {
 		got, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read %s: %v\nRegenerate with: go test ./sim/ -run "+
-				"TestWidgetlabFixturesAreCurrent -update-fixtures", path, err)
+				"TestSimDashboardFixturesAreCurrent -update-fixtures", path, err)
 		}
 		// Compared as VALUES: the committed file is indented and the published
 		// document is not, so bytes would differ for a reason that means nothing.
 		if !sameJSON(string(got), definition) {
 			t.Errorf("%s is stale — the builders now produce a different board.\n"+
-				"Regenerate with: go test ./sim/ -run TestWidgetlabFixturesAreCurrent "+
+				"Regenerate with: go test ./sim/ -run TestSimDashboardFixturesAreCurrent "+
 				"-update-fixtures", path)
 		}
 	}
@@ -115,9 +151,9 @@ func TestWidgetlabFixturesAreCurrent(t *testing.T) {
 // committedFixtureTokens lists the fixture files actually on disk.
 func committedFixtureTokens(t *testing.T) []string {
 	t.Helper()
-	entries, err := os.ReadDir(widgetlabFixtureDir)
+	entries, err := os.ReadDir(simDashboardFixtureDir)
 	if err != nil {
-		t.Fatalf("read fixture dir %s: %v", widgetlabFixtureDir, err)
+		t.Fatalf("read fixture dir %s: %v", simDashboardFixtureDir, err)
 	}
 	var tokens []string
 	for _, e := range entries {
@@ -134,7 +170,7 @@ func committedFixtureTokens(t *testing.T) []string {
 // name — goes on parsing the fossil.
 func removeOrphanFixtures(t *testing.T) {
 	t.Helper()
-	live := widgetlabFixtures(t)
+	live := simDashboardFixtures(t)
 	for _, token := range committedFixtureTokens(t) {
 		if _, ok := live[token]; ok {
 			continue
@@ -158,15 +194,15 @@ func removeOrphanFixtures(t *testing.T) {
 //
 // Asserting equality is what makes the fixture directory a description of the
 // manifest rather than an accumulation of everything it has ever been called.
-func TestWidgetlabFixtureFilesMatchTheDashboardsExactly(t *testing.T) {
-	manifest := NewWidgetlab(widgetlabFixtureSeed, Load{}).Manifest()
-	if err := manifest.Validate(); err != nil {
-		t.Fatalf("the manifest the fixtures come from does not validate: %v", err)
-	}
-
+func TestSimDashboardFixtureFilesMatchTheDashboardsExactly(t *testing.T) {
 	declared := map[string]bool{}
-	for _, d := range manifest.Dashboards {
-		declared[d.Token] = true
+	for id, manifest := range scenarioManifests(t) {
+		if err := manifest.Validate(); err != nil {
+			t.Fatalf("the %s manifest the fixtures come from does not validate: %v", id, err)
+		}
+		for _, d := range manifest.Dashboards {
+			declared[d.Token] = true
+		}
 	}
 	committed := map[string]bool{}
 	for _, token := range committedFixtureTokens(t) {
@@ -187,7 +223,7 @@ func TestWidgetlabFixtureFilesMatchTheDashboardsExactly(t *testing.T) {
 		if !declared[token] {
 			t.Errorf("%s is a fixture for a dashboard the manifest no longer declares; the "+
 				"TypeScript gate may still be reading it and passing.\nRegenerate with: "+
-				"go test ./sim/ -run TestWidgetlabFixturesAreCurrent -update-fixtures",
+				"go test ./sim/ -run TestSimDashboardFixturesAreCurrent -update-fixtures",
 				fixturePath(token))
 		}
 	}
@@ -199,19 +235,35 @@ func TestWidgetlabFixtureFilesMatchTheDashboardsExactly(t *testing.T) {
 // device reports leaves the widget bound to a real device, on a real slot, showing
 // nothing — and the fixture would round-trip it perfectly. The TypeScript side can
 // see that a datasource survived; only this side knows what the devices report.
-func TestWidgetlabBoardsSelectOnlyDeclaredMetrics(t *testing.T) {
-	manifest := NewWidgetlab(widgetlabFixtureSeed, Load{}).Manifest()
-	declared := map[string]bool{}
-	for _, p := range manifest.Profiles {
-		for _, m := range p.Metrics {
-			declared[m.Key] = true
-		}
-	}
-	if len(declared) == 0 {
-		t.Fatal("the profile declares no metrics, so this asserts nothing")
-	}
-
+// 🔴 THE METRIC SET IS PER SCENARIO, AND POOLING IT WOULD BE THE BUG. Every scenario
+// declares its own profiles; a union across the registry would let widgetlab's
+// `temperature` excuse a buildingpulse board selecting a metric buildingpulse never
+// reports — a check that reads as coverage and answers a question nobody asked.
+func TestSimBoardsSelectOnlyDeclaredMetrics(t *testing.T) {
 	checked := 0
+	for id, manifest := range scenarioManifests(t) {
+		if len(manifest.Dashboards) == 0 {
+			continue
+		}
+		declared := map[string]bool{}
+		for _, p := range manifest.Profiles {
+			for _, m := range p.Metrics {
+				declared[m.Key] = true
+			}
+		}
+		if len(declared) == 0 {
+			t.Fatalf("%s declares dashboards but no profile metrics, so its boards are checked "+
+				"against an empty set and every selector passes", id)
+		}
+		checkBoardMetrics(t, manifest, declared, &checked)
+	}
+	if checked == 0 {
+		t.Error("no board selects any measurement at all, so this test asserted nothing")
+	}
+}
+
+func checkBoardMetrics(t *testing.T, manifest SimManifest, declared map[string]bool, checked *int) {
+	t.Helper()
 	for _, d := range manifest.Dashboards {
 		var board struct {
 			Widgets []struct {
@@ -240,7 +292,7 @@ func TestWidgetlabBoardsSelectOnlyDeclaredMetrics(t *testing.T) {
 				continue
 			}
 			for _, name := range w.Datasource.Measurements {
-				checked++
+				*checked++
 				if !declared[name] {
 					t.Errorf("%s/%s selects measurement %q, which no profile declares — the "+
 						"widget binds a real device and shows nothing", d.Token, w.Id, name)
@@ -272,13 +324,16 @@ func TestWidgetlabBoardsSelectOnlyDeclaredMetrics(t *testing.T) {
 			}
 		}
 	}
-	if checked == 0 {
-		t.Error("no board selects any measurement at all, so this test asserted nothing")
-	}
+}
 
-	// The gallery's chart is sized for the two series it draws: useMeasurementStream
-	// trims its buffer across ALL of a widget's measurements, so a third would cut
-	// each series to two thirds of a sweep period.
+// The gallery's chart is sized for the two series it draws: useMeasurementStream
+// trims its buffer across ALL of a widget's measurements, so a third would cut
+// each series to two thirds of a sweep period.
+//
+// Stays widgetlab-specific on purpose: the number 2 is this board's design, not a
+// property any scenario's chart has.
+func TestWidgetlabGalleryChartDrawsTheSeriesItsWindowIsSizedFor(t *testing.T) {
+	manifest := NewWidgetlab(widgetlabFixtureSeed, Load{}).Manifest()
 	var gallery struct {
 		Widgets []struct {
 			Id         string `json:"id"`
@@ -313,9 +368,9 @@ func TestWidgetlabBoardsSelectOnlyDeclaredMetrics(t *testing.T) {
 
 // A fixture that is not reproducible is not a fixture: a regeneration that changed
 // every device binding for no reason would bury a real change in noise.
-func TestWidgetlabFixturesAreReproducible(t *testing.T) {
-	first := widgetlabFixtures(t)
-	second := widgetlabFixtures(t)
+func TestSimDashboardFixturesAreReproducible(t *testing.T) {
+	first := simDashboardFixtures(t)
+	second := simDashboardFixtures(t)
 	if len(first) != len(second) {
 		t.Fatalf("two builds produced %d and %d dashboards", len(first), len(second))
 	}

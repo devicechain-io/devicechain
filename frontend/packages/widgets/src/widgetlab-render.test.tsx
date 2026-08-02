@@ -52,8 +52,17 @@ afterEach(cleanup);
 // renders identically from a live stream or a fixture. That is what makes this
 // possible without standing up a hub.
 
-const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'testdata', 'widgetlab');
+const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'testdata', 'sim-dashboards');
 
+// 🔴 THIS GATE IS WIDGETLAB-ONLY, DELIBERATELY, AND THE SIBLING ONE IS NOT.
+// sim-dashboard-fixture.test.ts walks the whole fixture directory, so every scenario's
+// board is held to the parser and the option schemas. Rendering is different: the
+// synthetic data below is built from widgetlab's own metrics and device tokens, and
+// feeding a board data derived from the board is precisely the mistake this file was
+// corrected for once already. Covering buildingpulse here means giving it its own
+// externally-pinned data, which is real work and not what the publish gate needs.
+// Naming the two boards keeps that limit visible instead of letting a directory walk
+// imply coverage this file does not have.
 const GALLERY = 'wl-gallery';
 const STRESS = 'wl-stress';
 

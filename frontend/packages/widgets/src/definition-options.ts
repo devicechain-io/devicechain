@@ -15,11 +15,21 @@
 // a JSON object; it is Go, so it cannot run these schemas, and a Go copy of them
 // would be a THIRD representation of the same table (the reason ADR-076 declined a
 // cross-language widget manifest). So the strictness belongs to whoever PRODUCES a
-// definition, and each producer has to wire it for itself: the sim's boards are held
-// to it by the golden-fixture gate, and the console — the main producer — by its
-// publish action. This is not the server-side, ADR-044-style publish gate it
-// superficially resembles, and calling it one would misdescribe what protects a
-// dashboard written by anything other than the console.
+// definition, and 🔴 EACH PRODUCER HAS TO WIRE IT FOR ITSELF — there is no chokepoint
+// downstream that would catch a producer nobody thought about:
+//
+//   • the console, by its publish action (apps/console/src/lib/api/dashboards.ts);
+//   • the sim, by the golden-fixture gate over frontend/testdata/sim-dashboards, which
+//     covers every dashboard of every REGISTERED scenario. It was widgetlab-only when
+//     this function was written, and the sentence here claimed otherwise — buildingpulse,
+//     the demo board, was gated by nothing. Two reviewers found the same overclaim
+//     independently. The gate walks sim.Registry now, so the claim is true by
+//     construction rather than by a list someone has to remember to extend.
+//
+// Anything ELSE writing a definition — raw GraphQL, a future importer — is unchecked,
+// because dashboard-management deliberately validates nothing. This is not the
+// server-side, ADR-044-style publish gate it superficially resembles, and calling it one
+// would misdescribe exactly which documents are protected.
 
 import { type DashboardDefinition, type WidgetInstance } from '@devicechain/dashboards';
 
