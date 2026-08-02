@@ -103,12 +103,15 @@ profile whose rules are all disabled needs neither, since a disabled rule is ine
 design.
 
 ⚠️ **The chart's `telemetry` and `ingest-only` profiles do not deploy
-event-processing,** so widgetlab cannot run on them — its alarm path has no engine
-behind it, and there is nothing to opt out of (unlike the command far end, where the
-gateway may simply be unreachable from the host while the platform is fine). The
-timeout message names this as the first thing to check, because the symptom otherwise
-reads as a bug in the sim. Transient failures are retried inside the settle window, so
-a rolling restart of event-processing does not fail a bootstrap.
+event-processing,** so **buildingpulse and widgetlab cannot run on them** — their alarm
+path has no engine behind it, and there is nothing to opt out of (unlike the command far
+end, where the gateway may simply be unreachable from the host while the platform is
+fine). An opt-out flag would buy a green bootstrap over an alarm table that stays empty,
+which is the failure this check exists to make visible. The timeout message names the
+deployment profile as the first thing to check, because the symptom otherwise reads as a
+bug in the sim. Transient failures are retried inside the settle window, so a rolling
+restart of event-processing does not fail a bootstrap. devicepulse declares no rules and
+runs anywhere.
 
 Only the declared rules must be live; extra rules are ignored. A tenant may author its
 own on the same profile from the console, and refusing to bootstrap over one would

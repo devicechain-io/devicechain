@@ -5,6 +5,7 @@ package sim
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -136,15 +137,108 @@ const (
 	BuildingpulseCO2Key          = "co2"
 )
 
+// ---- The temperature curve and the threshold it has to cross ----------------
+//
+// One design object, the same arrangement widgetlab's sweep uses and for the same
+// reason: the DETECT rule's threshold and the curve that must cross it are a single
+// decision, so neither side owns the number alone. Written as separate literals they
+// drift independently — Tick changes its amplitude, the rule keeps its threshold, both
+// changes look local and correct, and the demo simply stops raising alarms with every
+// test still green.
+//
+// Tick reads these; the rule below reads the threshold; and the tests check the
+// threshold against the curve's own bounds AND against what actually reaches the wire.
+const (
+	// The sine's centre and amplitude, in degrees C, so the curve spans
+	// [centre-amplitude, centre+amplitude] = [16, 32].
+	BuildingpulseTempCentre    = 24.0
+	BuildingpulseTempAmplitude = 8.0
+	// How far each device's phase advances per tick. A full period is therefore
+	// 2*pi/step ≈ 21 ticks — at the demo cadence, a raise and a clear every couple of
+	// minutes, which is what makes the alarm widgets worth watching rather than a
+	// single event someone has to catch.
+	BuildingpulsePhaseStep = 0.3
+	// The temperature the DETECT rule alarms above. STRICTLY inside the curve's bounds,
+	// which is what makes a raise AND a clear inevitable rather than hoped-for;
+	// TestBuildingpulseThresholdLiesStrictlyInsideTheCurve holds it there.
+	BuildingpulseAlarmThreshold = 30.0
+)
+
+// The alarm the buildingpulse rule raises.
+//
+// 🔴 TWO severities, and they are not interchangeable — see the identical pair on
+// widgetlab (WidgetlabSeverity / WidgetlabAlarmSeverityWire) for the full reasoning.
+// BuildingpulseSeverity is the RULE AUTHORING vocabulary, which event-processing
+// spells in lowercase; BuildingpulseAlarmSeverityWire is the same ADR-041 tier as it
+// lands on the durable alarm row, because the raise-alarm consumer uppercases the
+// authoring severity. Collapsing them into one uppercase constant makes the profile
+// unpublishable (the rule compiler rejects "MAJOR"), and collapsing them into one
+// lowercase constant would leave an alarm widget's severity filter matching nothing.
+//
+// Both are gated from outside this module, which cannot import either owner:
+// loadtest/authored_rules_fixture_test.go publishes them to
+// backend/testdata/authored-rules, where event-processing runs the whole rule through
+// the real publish gate and device-management holds the wire form to the real
+// AlarmSeverity enum. Change either and regenerate the fixture.
+const (
+	BuildingpulseRuleToken         = "bp-over-temp"
+	BuildingpulseAlarmKey          = "bp-over-temp"
+	BuildingpulseSeverity          = "major"
+	BuildingpulseAlarmSeverityWire = "MAJOR"
+	buildingpulseRuleName          = "Building Pulse over-temperature"
+)
+
+// buildingpulseRuleDefinition is the opaque rules.Rule JSON for the over-temperature
+// rule: a threshold predicate on the swept metric whose raiseAlarm action is what fills
+// the dashboard's alarm-table. The keys are exactly the rules.Rule / Condition / Action
+// json tags — event-processing decodes with DisallowUnknownFields, so a stray one is
+// rejected at publish rather than ignored.
+//
+// The threshold is BuildingpulseAlarmThreshold rather than a literal, which is the whole
+// point of the const block above.
+func buildingpulseRuleDefinition() string {
+	raw, err := json.Marshal(map[string]any{
+		"name":     buildingpulseRuleName,
+		"type":     "threshold",
+		"severity": BuildingpulseSeverity,
+		"when": map[string]any{
+			"metric":    BuildingpulseTemperatureKey,
+			"op":        "gt",
+			"threshold": BuildingpulseAlarmThreshold,
+		},
+		"actions": []any{
+			map[string]any{
+				"type":       "raiseAlarm",
+				"raiseAlarm": map[string]any{"alarmKey": BuildingpulseAlarmKey},
+			},
+		},
+	})
+	if err != nil {
+		// Marshaling a static map of strings and floats cannot fail; a failure here is a
+		// programming error, not a runtime condition — same house style as the panic on a
+		// dashboard this scenario cannot marshal.
+		panic(fmt.Sprintf("buildingpulse: marshal rule definition: %v", err))
+	}
+	return string(raw)
+}
+
 // buildingpulse is the slice-2 reference scenario
 // (sim-slice2-buildingpulse-spec.md): a building-automation topology — one
 // customer, three buildings, one HVAC asset per building, and 12 thermostats
 // distributed round-robin across the buildings and all assigned to both their
 // building and the customer, so every measurement they emit carries an area
 // anchor and a customer anchor (ADR-013/044). Each tick emits all four metrics
-// in one Measurement; the temperature curve deterministically crosses 30 C,
-// which the DETECT DetectionRule path will alarm on once rule seeding lands
-// (alarm authoring moved off AlarmDefinition, ADR-057).
+// in one Measurement; the temperature curve deterministically crosses
+// BuildingpulseAlarmThreshold and falls back below it, which the profile's DETECT
+// rule raises and clears an alarm on (alarm authoring lives on DetectionRule, not
+// AlarmDefinition — ADR-057).
+//
+// That rule is why this scenario now needs event-processing: Provision refuses to
+// finish unless every enabled rule it publishes is confirmed live in the engine
+// (verifyDetectionRulesAreLive), so buildingpulse cannot bootstrap on a deployment
+// profile that omits event-processing. Deliberate — a demo whose headline is a live
+// alarm has no meaningful degraded mode, and the alternative (an opt-out flag) buys
+// a green bootstrap whose alarm-table stays permanently empty.
 type buildingpulse struct {
 	// seed drives all deterministic generation, threaded from the handshake —
 	// see devicepulse's identical field for the reset/idempotency rationale.
@@ -206,6 +300,21 @@ func (s *buildingpulse) Manifest() SimManifest {
 					{Key: BuildingpulseHumidityKey, Name: "Humidity", DataType: "DOUBLE", Unit: "%"},
 					{Key: BuildingpulseSetpointKey, Name: "Setpoint", DataType: "DOUBLE", Unit: "C"},
 					{Key: BuildingpulseCO2Key, Name: "CO2", DataType: "DOUBLE", Unit: "ppm"},
+				},
+				// The rule whose raiseAlarm fills the dashboard's alarm-table. It is
+				// profile-version content (ADR-045), so Provision creates it before it
+				// publishes the version.
+				DetectionRules: []DetectionRuleSpec{
+					{
+						Token:      BuildingpulseRuleToken,
+						Name:       buildingpulseRuleName,
+						Definition: buildingpulseRuleDefinition(),
+						Metric:     BuildingpulseTemperatureKey,
+						// Enabled, because publish-time validation only gates ENABLED rules
+						// — a disabled rule is published unchecked and would make a broken
+						// predicate look accepted.
+						Enabled: true,
+					},
 				},
 			},
 		},
@@ -270,9 +379,13 @@ func (s *buildingpulse) Bootstrap(ctx context.Context, rt *Runtime) error {
 // spacing away from it. With 12 evenly-spaced thermostats that worst case is
 // 15 degrees from the peak: sin(90-15 degrees) = sin(75 degrees) is about
 // 0.966, giving temperature = 24 + 8*0.966 is about 31.7 degrees C —
-// comfortably over 30 C every cycle (the level a DETECT rule will alarm on
-// once rule seeding lands), regardless of n, without ever needing every
-// device in phase at once.
+// comfortably over the rule's threshold every cycle, regardless of n, without
+// ever needing every device in phase at once.
+//
+// The staggering is about the alarm-table never being empty mid-demo. Each device
+// crossing at all is a separate and stronger property, and it does not depend on the
+// spacing: every device's own phase advances BuildingpulsePhaseStep per tick, so each
+// one traverses a full period (and so raises and clears) on its own.
 func (s *buildingpulse) Tick(ctx context.Context, rt *Runtime) error {
 	n := s.ticks.Add(1)
 	if len(rt.Devices) == 0 {
@@ -282,9 +395,11 @@ func (s *buildingpulse) Tick(ctx context.Context, rt *Runtime) error {
 
 	err := EmitAll(ctx, rt, rt.Load.Workers(len(rt.Devices)),
 		func(i int, _ DeviceInstance) map[string]float64 {
-			phase := float64(n)*0.3 + float64(i)*offset
+			phase := float64(n)*BuildingpulsePhaseStep + float64(i)*offset
 			return map[string]float64{
-				BuildingpulseTemperatureKey: 24 + 8*math.Sin(phase),
+				// Read from the shared const block, not written as literals: this is the
+				// curve the rule's threshold is chosen against.
+				BuildingpulseTemperatureKey: BuildingpulseTempCentre + BuildingpulseTempAmplitude*math.Sin(phase),
 				BuildingpulseHumidityKey:    45 + 10*math.Sin(phase+1),
 				BuildingpulseSetpointKey:    22,
 				BuildingpulseCO2Key:         600 + 150*math.Sin(phase+2),
