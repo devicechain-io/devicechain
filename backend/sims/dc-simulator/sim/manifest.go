@@ -44,6 +44,18 @@ type CommandSpec struct {
 // Definition is the opaque rules.Rule JSON; event-processing decodes it with
 // DisallowUnknownFields, so a stray key is rejected at publish.
 //
+// It is written here as an untyped map and this module cannot import the type that
+// decodes it, so a misspelled key costs nothing on this side — it marshals, publishes,
+// and the rule simply never fires.
+//
+// So a rule declared on any REGISTERED scenario (sim.Registry) is published to
+// backend/testdata/authored-rules by loadtest/authored_rules_fixture_test.go, which walks
+// the registry rather than naming scenarios, and is then run through event-processing's
+// REAL publish gate by event-processing/graphql/authored_sim_rules_test.go. Change a
+// definition and regenerate the fixture; that test is what decides whether the new rule is
+// valid. A scenario that is NOT in the registry is not reachable by a handshake either, so
+// it is out of scope rather than a gap.
+//
 // Metric is NOT part of that JSON — it is a copy of the metric key the rule's
 // predicate reads, declared separately so Validate can check the profile actually
 // declares it. A rule referencing a metric no device reports is accepted by the

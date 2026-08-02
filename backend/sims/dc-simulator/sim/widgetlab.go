@@ -139,6 +139,15 @@ const (
 	// rule at load with only a log line — the alarm the whole board depends on
 	// silently never fires. loadtest/detection.go carries the same pair for the same
 	// reason; this port collapsed them and had to be corrected.
+	//
+	// Both are now GATED, and not from this module — it cannot import either owner.
+	// loadtest/authored_rules_fixture_test.go publishes them to
+	// backend/testdata/authored-rules, where device-management's
+	// model/authored_sim_alarm_wire_test.go holds the wire form to the real
+	// AlarmSeverity enum via the real conversion, and event-processing's
+	// graphql/authored_sim_rules_test.go runs the whole rule through the real publish
+	// gate. Change either constant and regenerate the fixture; those two tests are what
+	// decide whether the new value is real.
 	WidgetlabSeverity          = "major"
 	WidgetlabAlarmSeverityWire = "MAJOR"
 )

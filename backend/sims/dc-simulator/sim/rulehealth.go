@@ -47,7 +47,11 @@ const queryRuleHealth = `query($profileToken:String!){` +
 // running. Any other value — COMPILE_ERROR today, whatever is added later — is a
 // failure here, so the comparison is against ACTIVE rather than against a list of
 // known-bad statuses that a new one would silently join.
-const ruleStatusActive = "ACTIVE"
+//
+// It aliases the single mirrored copy in wirevocabulary.go, which is what the
+// authored-rules fixture publishes and event-processing holds to its real RuleStatus.
+// A second inline "ACTIVE" here would be a copy no gate can see.
+const ruleStatusActive = RuleStatusActiveWire
 
 // The settle window. The projection is asynchronous, so a check with no wait would
 // fail on timing rather than on correctness — the fastest way to get a real gate

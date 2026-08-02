@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"sync"
 
 	"github.com/devicechain-io/dc-device-management/model"
@@ -156,11 +155,11 @@ func (rc *RaiseAlarmConsumer) handle(ctx context.Context, msg messaging.Message)
 	// severity/tier is required only on a RAISE (a resolve removes a contributor regardless of tier).
 	// An empty required field or an unknown raise severity is a malformed request (forged/buggy
 	// producer) — poison, dropped.
-	severity := strings.ToUpper(req.Severity)
+	severity := model.AlarmSeverityFromRuleSeverity(req.Severity)
 	// A zero occurred time is dropped: it is the per-contributor decision/ordering key the integrator
 	// uses, so a zero would stamp a 0001-01-01 decision time and defeat the ordering. A well-formed
 	// producer always stamps the detection's event time — symmetric with the roster consumer's drop.
-	badRaise := raised && !model.AlarmSeverity(severity).Valid()
+	badRaise := raised && !severity.Valid()
 	if req.DeviceToken == "" || req.AlarmKey == "" || req.RuleID == "" || req.OccurredTime.IsZero() || badRaise {
 		log.Warn().Str("device", req.DeviceToken).Str("alarmKey", req.AlarmKey).Str("rule", req.RuleID).
 			Str("edge", edge).Str("severity", req.Severity).
@@ -186,7 +185,7 @@ func (rc *RaiseAlarmConsumer) handle(ctx context.Context, msg messaging.Message)
 	}
 
 	if err := rc.Api.ApplyAlarmContributorEdge(msgctx, devices[0].ID, req.AlarmKey, req.MetricKey,
-		req.RuleID, edge, severity, req.Value, req.OccurredTime); err != nil {
+		req.RuleID, edge, severity.String(), req.Value, req.OccurredTime); err != nil {
 		rc.retryOrDrop(msg, done, err, "apply alarm edge")
 		return
 	}
