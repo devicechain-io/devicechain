@@ -5,7 +5,6 @@ package sim
 
 import (
 	"context"
-	"encoding/json"
 	"math"
 	"net/http"
 	"testing"
@@ -19,11 +18,9 @@ import (
 // both diffs read as local and correct, and the demo's alarm-table is empty forever
 // with every other test green. Every assertion below reads BOTH sides.
 
-// The constants alone decide whether an alarm is possible, before any curve is
-// evaluated. A threshold outside the sine's bounds can never be crossed, and one
-// exactly AT a bound is touched at a single instant per period rather than crossed —
-// so it would raise only if a tick landed exactly on the peak, which is a coin flip
-// the demo would lose silently.
+// A fast algebraic diagnosis, not unique coverage: every failure this catches also fails
+// the per-device wire test below, which is the real gate. It earns its place by saying
+// WHICH of the constants is wrong instead of reporting that twelve devices misbehaved.
 func TestBuildingpulseThresholdLiesStrictlyInsideTheCurve(t *testing.T) {
 	min := BuildingpulseTempCentre - BuildingpulseTempAmplitude
 	max := BuildingpulseTempCentre + BuildingpulseTempAmplitude
@@ -82,10 +79,9 @@ func TestBuildingpulsePhaseStepSamplesTheRegionAboveTheThreshold(t *testing.T) {
 // buildingpulseWireTemperatures ticks a real buildingpulse through a fake ingress and
 // returns, per device index, the temperatures that reached the wire.
 //
-// It keys by the ingress's own device ordering rather than by token because the
-// per-device phase offset is an index, and nothing here needs the tokens; what it must
-// NOT do is collapse the devices together, since "some device was above and some other
-// device was below" is exactly the claim a per-device raise-and-clear is not.
+// Keyed by device token. The load-bearing part is only that the devices are NOT
+// collapsed together: "some device was above and some other device was below" is exactly
+// the claim a per-device raise-and-clear is not.
 func buildingpulseWireTemperatures(t *testing.T, deviceCount, ticks int) map[string][]float64 {
 	t.Helper()
 	byDevice := map[string][]float64{}
@@ -178,14 +174,9 @@ func TestBuildingpulseEmittedTemperatureCrossesAndClearsPerDevice(t *testing.T) 
 // that the tenant as a whole has a hot one. Combined with the per-device property
 // above, every building therefore raises and clears.
 //
-// 🔴 An earlier version of this file asserted the tenant-wide claim ("some device
-// somewhere is above the threshold at every tick") and justified it with the
-// alarm-table's scope. Those are different claims, and the global one is neither
-// necessary nor sufficient for the scoped one: a building's four thermostats sit
-// pi/2 apart in phase, wider than the ~1.44 rad the curve spends above the threshold,
-// so a given building genuinely has no ACTIVE alarm on a small fraction of ticks. That
-// is fine — the widget renders CLEARED rows too, so the table is not empty — but the
-// test was arguing from a premise it did not check.
+// 🔴 A tenant-wide "someone is hot at every tick" claim does NOT establish this one, and
+// an earlier version of this file conflated them. See Tick's comment for the sizes at
+// which each holds.
 func TestBuildingpulseGivesEveryBuildingAThermostat(t *testing.T) {
 	m := NewBuildingpulse(1, Load{}).Manifest()
 	perBuilding := map[string]int{}
@@ -219,37 +210,25 @@ func TestBuildingpulseGivesEveryBuildingAThermostat(t *testing.T) {
 // maximum is centre + amplitude*cos(pi/n), and coverage holds exactly while that
 // exceeds the threshold.
 func TestBuildingpulseWholePopulationCoverageHasAStatedFloor(t *testing.T) {
-	covered := func(n int) bool {
-		return BuildingpulseTempCentre+BuildingpulseTempAmplitude*math.Cos(math.Pi/float64(n)) >
-			BuildingpulseAlarmThreshold
-	}
-	floor := 0
-	for n := 1; n <= 64; n++ {
-		if covered(n) {
-			floor = n
-			break
-		}
-	}
-	if floor == 0 {
-		t.Fatal("no population up to 64 keeps a device above the threshold at every tick; the " +
-			"curve and threshold are too far apart for the stagger to buy anything")
-	}
+	floor := buildingpulseCoverageFloor()
+
 	// The demo's own sizing must be above its own floor, or the scenario ships in the
-	// degraded state this test exists to name.
+	// degraded state Bootstrap's warning exists to name.
 	if buildingpulseThermostatCount < floor {
 		t.Errorf("the demo provisions %d thermostats but whole-population coverage needs at "+
 			"least %d, so the tenant-wide view has moments with no active alarm at the "+
 			"DEFAULT sizing", buildingpulseThermostatCount, floor)
 	}
 
-	// 🔴 The algebra above cannot check itself. Asserting `!covered(floor-1)` would be
-	// vacuous — the loop already evaluated it and found it false, so such a "control"
-	// can never fail. So the boundary is confirmed against an INDEPENDENT source: the
-	// wire, out of a real Tick. The formula and the running scenario are two separate
-	// derivations of the same number, and only their agreement means anything.
+	// 🔴 The algebra cannot check itself. Asserting the formula's own next-lower case
+	// would be vacuous — the loop inside it already evaluated that and found it false, so
+	// such a "control" can never fail. So the boundary is confirmed against an
+	// INDEPENDENT source: the wire, out of a real Tick. The formula and the running
+	// scenario are two separate derivations of the same number, and only their agreement
+	// means anything.
 	//
-	// Three periods, so a boundary that exists in continuous phase but is only visited
-	// on some ticks still gets sampled. Deterministic in both directions — no clock, no
+	// Three periods, so a boundary that exists in continuous phase but is only visited on
+	// some ticks still gets sampled. Deterministic in both directions — no clock, no
 	// randomness — so a failure here is a real disagreement, not a flake.
 	window := 3*buildingpulsePeriodTicks() + 1
 	if gaps := ticksWithNoDeviceAboveThreshold(t, floor, window); gaps != 0 {
@@ -261,11 +240,9 @@ func TestBuildingpulseWholePopulationCoverageHasAStatedFloor(t *testing.T) {
 		if gaps := ticksWithNoDeviceAboveThreshold(t, floor-1, window); gaps == 0 {
 			t.Errorf("the formula says %d devices do NOT cover every tick, but a real run at "+
 				"that size covered all %d — the floor is not where the algebra puts it, so "+
-				"the number in Tick's comment is wrong", floor-1, window)
+				"the number Bootstrap warns on is wrong", floor-1, window)
 		}
 	}
-	t.Logf("whole-population coverage floor is %d device(s), confirmed on the wire; the demo "+
-		"provisions %d", floor, buildingpulseThermostatCount)
 }
 
 // ticksWithNoDeviceAboveThreshold drives a real Tick at the given population and counts
@@ -316,42 +293,15 @@ func TestBuildingpulseEmitsTheDeclaredCurve(t *testing.T) {
 
 func buildingpulseProfile(t *testing.T) ProfileSpec {
 	t.Helper()
-	for _, p := range NewBuildingpulse(1, Load{}).Manifest().Profiles {
-		if p.Token == BuildingpulseProfileToken {
-			return p
-		}
-	}
-	t.Fatalf("manifest declares no profile %q", BuildingpulseProfileToken)
-	return ProfileSpec{}
+	return profileByToken(t, NewBuildingpulse(1, Load{}).Manifest(), BuildingpulseProfileToken)
 }
 
 // The rule is authored FROM the constants above, not from literals that happen to
 // agree with them today. This is the seam ADR-062 bit us on: two halves of one
 // decision, each individually defensible, drifting apart across separate PRs.
 func TestBuildingpulseRuleIsAuthoredFromTheCurveConstants(t *testing.T) {
-	rules := buildingpulseProfile(t).DetectionRules
-	if len(rules) != 1 {
-		t.Fatalf("expected exactly one detection rule, got %d", len(rules))
-	}
-
-	var def struct {
-		Type     string `json:"type"`
-		Severity string `json:"severity"`
-		When     struct {
-			Metric    string  `json:"metric"`
-			Op        string  `json:"op"`
-			Threshold float64 `json:"threshold"`
-		} `json:"when"`
-		Actions []struct {
-			Type       string `json:"type"`
-			RaiseAlarm struct {
-				AlarmKey string `json:"alarmKey"`
-			} `json:"raiseAlarm"`
-		} `json:"actions"`
-	}
-	if err := json.Unmarshal([]byte(rules[0].Definition), &def); err != nil {
-		t.Fatalf("rule definition is not decodable: %v", err)
-	}
+	rule := soleDetectionRule(t, buildingpulseProfile(t))
+	def := decodeThresholdRule(t, rule.Definition)
 
 	if def.When.Threshold != BuildingpulseAlarmThreshold {
 		t.Errorf("rule fires above %v but the curve is designed around %v — the two halves of "+
@@ -382,7 +332,7 @@ func TestBuildingpulseRuleIsAuthoredFromTheCurveConstants(t *testing.T) {
 		t.Errorf("rule declares severity %q, not the authoring constant %q",
 			def.Severity, BuildingpulseSeverity)
 	}
-	if !rules[0].Enabled {
+	if !rule.Enabled {
 		t.Error("rule is disabled: publish-time validation only gates ENABLED rules, so a " +
 			"disabled one is published unchecked and never fires")
 	}

@@ -985,3 +985,61 @@ func TestFirstUnhealthyRuleVerdicts(t *testing.T) {
 		})
 	}
 }
+
+// The enabled-rules fail-fast: a handshake with no event-processing endpoint cannot
+// confirm a rule whatever the cluster is running, so Provision decides it BEFORE
+// touching the network. verifyDetectionRulesAreLive makes the same check, but only
+// after a customer, its areas, its assets and a profile version already exist — the
+// error is the same, the mess left behind is not.
+//
+// The server fails the test on any request, which is what makes this about the ORDER
+// rather than merely about the error text.
+func TestProvisionRefusesEnabledRulesWithNoEventProcessingEndpointBeforeAnyCall(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("Provision made a network call before deciding it could not verify its rules")
+	}))
+	t.Cleanup(srv.Close)
+
+	manifest := NewBuildingpulse(1, Load{}).Manifest()
+	if manifest.EnabledDetectionRuleCount() == 0 {
+		t.Fatal("buildingpulse declares no enabled rule, so this test proves nothing")
+	}
+	rt := &Runtime{
+		Endpoints: Endpoints{
+			DeviceMgmtGraphQL:    srv.URL,
+			DashboardMgmtGraphQL: srv.URL,
+			// EventProcessingGraphQL deliberately absent — the condition under test.
+		},
+		InstanceId: "dc",
+		Tenant:     "acme",
+		HTTPClient: srv.Client(),
+	}
+
+	err := Provision(context.Background(), rt, manifest)
+	if err == nil {
+		t.Fatal("Provision succeeded with no way to confirm the rules it published are running")
+	}
+	if !strings.Contains(err.Error(), "eventProcessingGraphQL") {
+		t.Errorf("error does not name the missing endpoint, so a reader cannot act on it: %v", err)
+	}
+	if len(rt.Devices) != 0 {
+		t.Errorf("Provision populated %d devices before refusing", len(rt.Devices))
+	}
+}
+
+// The counterweight: the check must not fire for a scenario with no enabled rules, or
+// devicepulse would stop working on any instance without event-processing.
+func TestProvisionDoesNotRequireEventProcessingWithoutEnabledRules(t *testing.T) {
+	manifest := NewDevicepulse(1, Load{}).Manifest()
+	if got := manifest.EnabledDetectionRuleCount(); got != 0 {
+		t.Fatalf("devicepulse now declares %d enabled rule(s); this test needs a rule-less "+
+			"scenario to say anything", got)
+	}
+	_, rt := newFakeProfileServer(t)
+	rt.Endpoints.EventProcessingGraphQL = ""
+
+	if err := Provision(context.Background(), rt, manifest); err != nil &&
+		strings.Contains(err.Error(), "eventProcessingGraphQL") {
+		t.Fatalf("a scenario with no enabled rules was refused for a missing rule endpoint: %v", err)
+	}
+}

@@ -64,14 +64,11 @@ its boards pointing at devices the run never provisions, so it refuses the flag 
 startup rather than provisioning a topology its own boards do not match. widgetlab
 is one. devicepulse and buildingpulse take any size.
 
-⚠️ **buildingpulse below ~5 devices is a degraded demo, not a broken one.** Its
-thermostats are spread evenly around one temperature cycle so their alarms stagger; with
-only a handful, the gaps between them grow wider than the stretch of the cycle spent above
-the alarm threshold, and the tenant-wide view has moments with no active alarm at all.
-Every device still raises and still clears — that property holds at any size — so the
-scenario is correct, just less lively to watch. The floor is derived from the curve's own
-constants and asserted by `TestBuildingpulseWholePopulationCoverageHasAStatedFloor` rather
-than written down here, since a changed threshold moves it.
+⚠️ **A small buildingpulse is a quieter demo, not a broken one.** Every device raises and
+clears at any size, but below a handful the tenant-wide view has moments with no active
+alarm, and below one-per-building a board scoped to an empty building shows nothing at
+all. Bootstrap warns on both, with the size it computed — no number is written down here,
+because the curve's constants decide it.
 
 ```sh
 # 500 devices every 200ms = a 2500 events/sec target
@@ -120,15 +117,11 @@ which is the failure this check exists to make visible. The timeout message name
 deployment profile as the first thing to check, because the symptom otherwise reads as a
 bug in the sim. devicepulse declares no rules and runs anywhere.
 
-⚠️ **Only the post-publish check retries; the publish itself does not.** Transient
-failures inside the settle window are absorbed, so a rolling restart of event-processing
-does not fail the *liveness* check — but `publishDeviceProfile` calls device-management's
-rule validation synchronously and **fails closed on a transport error**, with no retry. A
-bootstrap started while event-processing is mid-rollout (the chart deploys it
-`Recreate`, so it is briefly absent rather than briefly degraded) therefore dies earlier,
-on a bare publish error rather than the carefully-worded timeout above. Re-running the
-bootstrap heals it: the version's content marker is only stamped on a publish that
-succeeded, so the next run republishes rather than concluding the work was already done.
+⚠️ **Only the post-publish check retries; the publish itself does not.** `publishDeviceProfile`
+validates rules synchronously and **fails closed on a transport error**, so a bootstrap
+started while event-processing is mid-rollout (the chart deploys it `Recreate`, so it is
+briefly absent) fails there rather than in the settle window. Re-running heals it: the
+version's content marker is stamped only on a publish that succeeded.
 
 Only the declared rules must be live; extra rules are ignored. A tenant may author its
 own on the same profile from the console, and refusing to bootstrap over one would

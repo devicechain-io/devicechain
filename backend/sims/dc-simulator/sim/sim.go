@@ -5,7 +5,6 @@ package sim
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -164,62 +163,41 @@ const (
 	BuildingpulseAlarmThreshold = 30.0
 )
 
-// The alarm the buildingpulse rule raises.
-//
-// 🔴 TWO severities, and they are not interchangeable — see the identical pair on
-// widgetlab (WidgetlabSeverity / WidgetlabAlarmSeverityWire) for the full reasoning.
-// BuildingpulseSeverity is the RULE AUTHORING vocabulary, which event-processing
-// spells in lowercase; BuildingpulseAlarmSeverityWire is the same ADR-041 tier as it
-// lands on the durable alarm row, because the raise-alarm consumer uppercases the
-// authoring severity. Collapsing them into one uppercase constant makes the profile
-// unpublishable (the rule compiler rejects "MAJOR"), and collapsing them into one
-// lowercase constant would leave an alarm widget's severity filter matching nothing.
-//
-// Both are gated from outside this module, which cannot import either owner:
-// loadtest/authored_rules_fixture_test.go publishes them to
-// backend/testdata/authored-rules, where event-processing runs the whole rule through
-// the real publish gate and device-management holds the wire form to the real
-// AlarmSeverity enum. Change either and regenerate the fixture.
+// The alarm the buildingpulse rule raises. Both severity spellings live in
+// wirevocabulary.go, which carries the reasoning for why they are two constants and
+// what each way of collapsing them breaks.
 const (
 	BuildingpulseRuleToken         = "bp-over-temp"
 	BuildingpulseAlarmKey          = "bp-over-temp"
-	BuildingpulseSeverity          = "major"
-	BuildingpulseAlarmSeverityWire = "MAJOR"
+	BuildingpulseSeverity          = SeverityMajor
+	BuildingpulseAlarmSeverityWire = AlarmSeverityMajorWire
 	buildingpulseRuleName          = "Building Pulse over-temperature"
 )
 
-// buildingpulseRuleDefinition is the opaque rules.Rule JSON for the over-temperature
-// rule: a threshold predicate on the swept metric whose raiseAlarm action is what fills
-// the dashboard's alarm-table. The keys are exactly the rules.Rule / Condition / Action
-// json tags — event-processing decodes with DisallowUnknownFields, so a stray one is
-// rejected at publish rather than ignored.
+// buildingpulseCoverageFloor is the smallest population that keeps SOME thermostat above
+// the alarm threshold at every tick.
 //
-// The threshold is BuildingpulseAlarmThreshold rather than a literal, which is the whole
-// point of the const block above.
-func buildingpulseRuleDefinition() string {
-	raw, err := json.Marshal(map[string]any{
-		"name":     buildingpulseRuleName,
-		"type":     "threshold",
-		"severity": BuildingpulseSeverity,
-		"when": map[string]any{
-			"metric":    BuildingpulseTemperatureKey,
-			"op":        "gt",
-			"threshold": BuildingpulseAlarmThreshold,
-		},
-		"actions": []any{
-			map[string]any{
-				"type":       "raiseAlarm",
-				"raiseAlarm": map[string]any{"alarmKey": BuildingpulseAlarmKey},
-			},
-		},
-	})
-	if err != nil {
-		// Marshaling a static map of strings and floats cannot fail; a failure here is a
-		// programming error, not a runtime condition — same house style as the panic on a
-		// dashboard this scenario cannot marshal.
-		panic(fmt.Sprintf("buildingpulse: marshal rule definition: %v", err))
+// The thermostats are spread evenly around one temperature cycle, so the worst tick is
+// the one where the sine peak falls midway between two neighbours — putting the hottest
+// device pi/n away from the peak, and the population's maximum at
+// centre + amplitude*cos(pi/n). Coverage holds exactly while that exceeds the threshold.
+//
+// It lives in non-test code because it is an OPERATOR-facing number: Bootstrap warns
+// below it, and a README that told a reader to go and look up a test name for it would
+// be documenting the wrong surface. The test then confirms this same formula against the
+// wire, so the independent check now guards the production number rather than a copy.
+func buildingpulseCoverageFloor() int {
+	for n := 1; n <= buildingpulseThermostatCount; n++ {
+		if BuildingpulseTempCentre+BuildingpulseTempAmplitude*math.Cos(math.Pi/float64(n)) >
+			BuildingpulseAlarmThreshold {
+			return n
+		}
 	}
-	return string(raw)
+	// Unreachable while the threshold lies strictly inside the curve, which
+	// TestBuildingpulseThresholdLiesStrictlyInsideTheCurve holds it to. Reported as the
+	// full population rather than 0 so a caller comparing against it cannot read "no
+	// floor" as "any size is fine".
+	return buildingpulseThermostatCount
 }
 
 // buildingpulse is the slice-2 reference scenario
@@ -233,12 +211,10 @@ func buildingpulseRuleDefinition() string {
 // rule raises and clears an alarm on (alarm authoring lives on DetectionRule, not
 // AlarmDefinition — ADR-057).
 //
-// That rule is why this scenario now needs event-processing: Provision refuses to
-// finish unless every enabled rule it publishes is confirmed live in the engine
+// That rule is why this scenario now needs event-processing: Provision refuses to finish
+// unless every enabled rule it publishes is confirmed live in the engine
 // (verifyDetectionRulesAreLive), so buildingpulse cannot bootstrap on a deployment
-// profile that omits event-processing. Deliberate — a demo whose headline is a live
-// alarm has no meaningful degraded mode, and the alternative (an opt-out flag) buys
-// a green bootstrap whose alarm-table stays permanently empty.
+// profile that omits event-processing. Deliberate; the README says why.
 type buildingpulse struct {
 	// seed drives all deterministic generation, threaded from the handshake —
 	// see devicepulse's identical field for the reset/idempotency rationale.
@@ -303,18 +279,19 @@ func (s *buildingpulse) Manifest() SimManifest {
 				},
 				// The rule whose raiseAlarm fills the dashboard's alarm-table. It is
 				// profile-version content (ADR-045), so Provision creates it before it
-				// publishes the version.
+				// publishes the version. Enabled, because publish-time validation only
+				// gates ENABLED rules — a disabled one is published unchecked and would
+				// make a broken predicate look accepted.
 				DetectionRules: []DetectionRuleSpec{
-					{
-						Token:      BuildingpulseRuleToken,
-						Name:       buildingpulseRuleName,
-						Definition: buildingpulseRuleDefinition(),
-						Metric:     BuildingpulseTemperatureKey,
-						// Enabled, because publish-time validation only gates ENABLED rules
-						// — a disabled rule is published unchecked and would make a broken
-						// predicate look accepted.
-						Enabled: true,
-					},
+					ThresholdAlarmRule{
+						Token:     BuildingpulseRuleToken,
+						Name:      buildingpulseRuleName,
+						Metric:    BuildingpulseTemperatureKey,
+						Threshold: BuildingpulseAlarmThreshold,
+						Severity:  BuildingpulseSeverity,
+						AlarmKey:  BuildingpulseAlarmKey,
+						Enabled:   true,
+					}.Spec(),
 				},
 			},
 		},
@@ -369,7 +346,38 @@ func (s *buildingpulse) Manifest() SimManifest {
 }
 
 func (s *buildingpulse) Bootstrap(ctx context.Context, rt *Runtime) error {
-	return Provision(ctx, rt, s.Manifest())
+	manifest := s.Manifest()
+	if err := Provision(ctx, rt, manifest); err != nil {
+		return err
+	}
+	warnIfBuildingpulseIsTooSmallToWatch(manifest, len(rt.Devices))
+	return nil
+}
+
+// warnIfBuildingpulseIsTooSmallToWatch reports the two ways a `--devices` override
+// leaves the demo's alarm story degraded. Both are WARNINGS, not refusals: every device
+// still raises and still clears at any size, so the scenario is correct — just less
+// worth watching. (Contrast FixedTopology, which refuses a resize outright, because
+// there resizing is MEANINGLESS rather than merely disappointing.)
+//
+// Worded as the consequence rather than as the flag that was passed, matching the
+// far-end warning in main.go: the reader needs to know what they will see, not what
+// they typed.
+func warnIfBuildingpulseIsTooSmallToWatch(manifest SimManifest, devices int) {
+	// The harsher of the two, and it is not a matter of degree: a building with no
+	// thermostats can never show an alarm, so a board scoped to it is empty forever and
+	// no rule can change that.
+	if buildings := len(manifest.Areas); devices < buildings {
+		log.Warn().Int("devices", devices).Int("buildings", buildings).
+			Msg("fewer thermostats than buildings: a dashboard scoped to a building with none " +
+				"will show an empty alarm table permanently, whatever the detection rule does")
+	}
+	if floor := buildingpulseCoverageFloor(); devices < floor {
+		log.Warn().Int("devices", devices).Int("floor", floor).
+			Msg("too few thermostats to keep one above the alarm threshold at all times: the " +
+				"tenant-wide view will have moments with no active alarm. Every device still " +
+				"raises and clears, so this is a quieter demo rather than a broken one")
+	}
 }
 
 // Tick emits all four metrics in one Measurement per device (EmitMeasurements,

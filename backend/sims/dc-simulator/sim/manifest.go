@@ -85,6 +85,34 @@ type ProfileSpec struct {
 	DetectionRules []DetectionRuleSpec
 }
 
+// EnabledDetectionRuleCount is how many ENABLED detection rules this manifest publishes
+// across all its profiles.
+//
+// Only enabled rules count, everywhere this number is used: a disabled rule is inert by
+// design — the publish gate does not submit it and the liveness check does not require
+// it — so a scenario that deliberately parks one must not be treated as depending on the
+// engine.
+//
+// It is DERIVED rather than declared. A declared "this scenario needs event-processing"
+// flag would be a second statement of the same fact with nothing to say that the first
+// one does not: unlike FixedTopology and CommandFarEnd — which exist because INTENT can
+// legitimately diverge from content ("one population" is not "resizable"; "has a command
+// vocabulary" is not "intends to answer commands") — there is no scenario that publishes
+// an enabled rule without needing the engine, nor one that needs the engine without
+// publishing a rule. A flag whose validation would force it to equal the inference is
+// inference wearing a declaration's clothes, plus one more thing to forget.
+func (m SimManifest) EnabledDetectionRuleCount() int {
+	n := 0
+	for _, p := range m.Profiles {
+		for _, r := range p.DetectionRules {
+			if r.Enabled {
+				n++
+			}
+		}
+	}
+	return n
+}
+
 // DeviceTypeSpec is a static-singleton device type referencing a profile.
 type DeviceTypeSpec struct {
 	Token        string
