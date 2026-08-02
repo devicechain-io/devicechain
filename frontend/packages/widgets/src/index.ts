@@ -46,6 +46,15 @@ export {
   type OptionIssueCode,
 } from './options';
 
+// The same schemas applied to a whole board: what a producer of definitions asks
+// before it publishes one, plus the repair for the one issue an author cannot fix in
+// a config panel.
+export {
+  validateDefinitionOptions,
+  stripUnknownOptions,
+  type DefinitionOptionIssue,
+} from './definition-options';
+
 // Directional change-flash (opt-in `flashOnChange`): a reusable hook + the flashing value cell.
 export {
   useFlashOnChange,
