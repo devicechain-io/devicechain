@@ -374,18 +374,28 @@ func (s *buildingpulse) Bootstrap(ctx context.Context, rt *Runtime) error {
 
 // Tick emits all four metrics in one Measurement per device (EmitMeasurements,
 // not one EmitMeasurement call per metric). Each device gets a distinct phase
-// offset spaced evenly around a full sine period (2*pi / device count) so
-// that, at any tick, the device closest to the sine peak is at most half that
-// spacing away from it. With 12 evenly-spaced thermostats that worst case is
-// 15 degrees from the peak: sin(90-15 degrees) = sin(75 degrees) is about
-// 0.966, giving temperature = 24 + 8*0.966 is about 31.7 degrees C —
-// comfortably over the rule's threshold every cycle, regardless of n, without
-// ever needing every device in phase at once.
+// offset spaced evenly around a full sine period (2*pi / device count), so the
+// thermostats reach their peaks at staggered times rather than breathing in
+// unison — alarms come and go across the population instead of all at once.
 //
-// The staggering is about the alarm-table never being empty mid-demo. Each device
-// crossing at all is a separate and stronger property, and it does not depend on the
-// spacing: every device's own phase advances BuildingpulsePhaseStep per tick, so each
-// one traverses a full period (and so raises and clears) on its own.
+// 🔴 TWO PROPERTIES, AND ONLY ONE OF THEM HOLDS AT EVERY POPULATION SIZE.
+//
+//   - EVERY DEVICE RAISES AND CLEARS, at any size. Each device's own phase advances
+//     BuildingpulsePhaseStep per tick, so it traverses a full period by itself; the
+//     offset shifts WHEN it crosses, never WHETHER. This is the property the alarm
+//     channel actually rests on, and TestBuildingpulseEmittedTemperatureCrossesAndClears
+//     PerDevice drives it out of this function onto the wire.
+//   - "SOME DEVICE IS ABOVE THE THRESHOLD AT EVERY TICK" IS SIZE-DEPENDENT, and an
+//     earlier version of this comment claimed it held "regardless of n". It does not.
+//     In the worst tick the peak falls midway between two neighbours, so the hottest
+//     device sits at centre + amplitude*cos(pi/n): at the demo's 12 that is ~31.7 C,
+//     but at n=4 it is ~29.7 C — under the threshold, and nobody is hot. The floor is
+//     n >= 5 for the shipped constants (TestBuildingpulseWholePopulationCoverageHasA
+//     StatedFloor derives it rather than restating the 5).
+//
+// Below that floor a `--devices 2` run still bootstraps, still raises and still clears
+// — there are simply moments with no ACTIVE alarm anywhere. That is a degraded DEMO,
+// not a broken scenario, which is why it is documented rather than refused.
 func (s *buildingpulse) Tick(ctx context.Context, rt *Runtime) error {
 	n := s.ticks.Add(1)
 	if len(rt.Devices) == 0 {

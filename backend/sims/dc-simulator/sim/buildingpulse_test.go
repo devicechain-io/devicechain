@@ -173,14 +173,107 @@ func TestBuildingpulseEmittedTemperatureCrossesAndClearsPerDevice(t *testing.T) 
 	}
 }
 
-// The alarm-table is scoped to a building, and it is the thing someone watches during
-// a demo. A single device crossing satisfies the test above for every device only
-// because they all do — this one asserts the weaker but separately-load-bearing claim
-// that at any given tick SOMEONE is hot, so the table is never empty mid-demo. That is
-// what the phase staggering buys and nothing else checks.
-func TestBuildingpulseKeepsSomeDeviceAboveTheThresholdAtEveryTick(t *testing.T) {
-	ticks := buildingpulsePeriodTicks() + 1
-	byDevice := buildingpulseWireTemperatures(t, buildingpulseThermostatCount, ticks)
+// The board's alarm-table is scoped to ONE building (dashboard.go binds the `building`
+// slot), so what keeps it fed is that the building being viewed HAS thermostats — not
+// that the tenant as a whole has a hot one. Combined with the per-device property
+// above, every building therefore raises and clears.
+//
+// 🔴 An earlier version of this file asserted the tenant-wide claim ("some device
+// somewhere is above the threshold at every tick") and justified it with the
+// alarm-table's scope. Those are different claims, and the global one is neither
+// necessary nor sufficient for the scoped one: a building's four thermostats sit
+// pi/2 apart in phase, wider than the ~1.44 rad the curve spends above the threshold,
+// so a given building genuinely has no ACTIVE alarm on a small fraction of ticks. That
+// is fine — the widget renders CLEARED rows too, so the table is not empty — but the
+// test was arguing from a premise it did not check.
+func TestBuildingpulseGivesEveryBuildingAThermostat(t *testing.T) {
+	m := NewBuildingpulse(1, Load{}).Manifest()
+	perBuilding := map[string]int{}
+	for _, a := range m.Areas {
+		perBuilding[a.Token] = 0
+	}
+	if len(perBuilding) == 0 {
+		t.Fatal("the manifest declares no buildings, so there is nothing for a board to scope to")
+	}
+	for _, d := range m.Expand(m.Seed) {
+		for _, a := range d.Assignments {
+			if a.TargetType == "area" {
+				perBuilding[a.TargetToken]++
+			}
+		}
+	}
+	for token, count := range perBuilding {
+		if count == 0 {
+			t.Errorf("building %s has no thermostats assigned, so a board scoped to it shows an "+
+				"empty alarm-table forever — no rule can fix that", token)
+		}
+	}
+}
+
+// The tenant-wide "someone is hot at every tick" property is real at the demo sizing
+// and false below a population floor, so the floor is DERIVED here rather than left as
+// a number in a comment that a changed threshold or amplitude would quietly invalidate.
+//
+// The worst tick is the one where the sine peak falls midway between two neighbouring
+// devices, putting the hottest device pi/n away from the peak — so the population's
+// maximum is centre + amplitude*cos(pi/n), and coverage holds exactly while that
+// exceeds the threshold.
+func TestBuildingpulseWholePopulationCoverageHasAStatedFloor(t *testing.T) {
+	covered := func(n int) bool {
+		return BuildingpulseTempCentre+BuildingpulseTempAmplitude*math.Cos(math.Pi/float64(n)) >
+			BuildingpulseAlarmThreshold
+	}
+	floor := 0
+	for n := 1; n <= 64; n++ {
+		if covered(n) {
+			floor = n
+			break
+		}
+	}
+	if floor == 0 {
+		t.Fatal("no population up to 64 keeps a device above the threshold at every tick; the " +
+			"curve and threshold are too far apart for the stagger to buy anything")
+	}
+	// The demo's own sizing must be above its own floor, or the scenario ships in the
+	// degraded state this test exists to name.
+	if buildingpulseThermostatCount < floor {
+		t.Errorf("the demo provisions %d thermostats but whole-population coverage needs at "+
+			"least %d, so the tenant-wide view has moments with no active alarm at the "+
+			"DEFAULT sizing", buildingpulseThermostatCount, floor)
+	}
+
+	// 🔴 The algebra above cannot check itself. Asserting `!covered(floor-1)` would be
+	// vacuous — the loop already evaluated it and found it false, so such a "control"
+	// can never fail. So the boundary is confirmed against an INDEPENDENT source: the
+	// wire, out of a real Tick. The formula and the running scenario are two separate
+	// derivations of the same number, and only their agreement means anything.
+	//
+	// Three periods, so a boundary that exists in continuous phase but is only visited
+	// on some ticks still gets sampled. Deterministic in both directions — no clock, no
+	// randomness — so a failure here is a real disagreement, not a flake.
+	window := 3*buildingpulsePeriodTicks() + 1
+	if gaps := ticksWithNoDeviceAboveThreshold(t, floor, window); gaps != 0 {
+		t.Errorf("the formula says %d devices cover every tick, but a real run at that size "+
+			"left %d of %d ticks with nobody above %v", floor, gaps, window,
+			BuildingpulseAlarmThreshold)
+	}
+	if floor > 1 {
+		if gaps := ticksWithNoDeviceAboveThreshold(t, floor-1, window); gaps == 0 {
+			t.Errorf("the formula says %d devices do NOT cover every tick, but a real run at "+
+				"that size covered all %d — the floor is not where the algebra puts it, so "+
+				"the number in Tick's comment is wrong", floor-1, window)
+		}
+	}
+	t.Logf("whole-population coverage floor is %d device(s), confirmed on the wire; the demo "+
+		"provisions %d", floor, buildingpulseThermostatCount)
+}
+
+// ticksWithNoDeviceAboveThreshold drives a real Tick at the given population and counts
+// the ticks on which no device's emitted temperature exceeded the alarm threshold.
+func ticksWithNoDeviceAboveThreshold(t *testing.T, deviceCount, ticks int) int {
+	t.Helper()
+	byDevice := buildingpulseWireTemperatures(t, deviceCount, ticks)
+	gaps := 0
 	for tick := 0; tick < ticks; tick++ {
 		hot := false
 		for _, temps := range byDevice {
@@ -190,10 +283,10 @@ func TestBuildingpulseKeepsSomeDeviceAboveTheThresholdAtEveryTick(t *testing.T) 
 			}
 		}
 		if !hot {
-			t.Errorf("at tick %d no thermostat was above %v, so the alarm-table would show "+
-				"nothing at that moment of the demo", tick+1, BuildingpulseAlarmThreshold)
+			gaps++
 		}
 	}
+	return gaps
 }
 
 // The curve on the wire IS the one the constants describe. Without this, every test
