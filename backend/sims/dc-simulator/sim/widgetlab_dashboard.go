@@ -162,7 +162,7 @@ func buildAlarmCountWidget(id string, b box, s widgetSubject, title string) dash
 	return dashboardWidget{
 		Id: id, Type: "alarm-count", Layout: b.layout(), Datasource: s.datasource(),
 		Options: map[string]any{
-			"title": title, "state": "ACTIVE", "severity": WidgetlabAlarmSeverityWire,
+			"title": title, "state": AlarmStateActiveWire, "severity": WidgetlabAlarmSeverityWire,
 		},
 	}
 }

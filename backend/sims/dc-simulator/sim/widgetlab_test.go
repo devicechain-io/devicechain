@@ -729,87 +729,21 @@ func TestValidateAcceptsARuleThatNamesNoMetric(t *testing.T) {
 	}
 }
 
-// ---- The rule severity vocabulary is not the alarm wire vocabulary -----------
+// The rule-severity / alarm-wire vocabulary check used to live here, reading
+// event-processing's source with a regex. It is GONE, not lost: the sim now writes its
+// authored rules to backend/testdata/authored-rules, and two gates in the modules that
+// actually own those vocabularies judge them —
+// event-processing/graphql/authored_sim_rules_test.go runs each rule through the REAL
+// ADR-044 publish gate, and device-management/model/authored_sim_alarm_wire_test.go holds
+// the mirrored wire severity and alarm states to the REAL enums.
 //
-// The rule compiler's severities are LOWERCASE; the durable alarm row's tier is
-// the uppercase form the raise-alarm consumer produces, and it is what an alarm
-// widget's `severity` filter is written in. Authoring a rule with the wire form is
-// rejected by the compiler — so with the publish gate wired the scenario cannot
-// bootstrap, and with it unwired the rule is dropped at load with only a log line
-// and the alarm never fires.
-//
-// This is not hypothetical: this scenario shipped "MAJOR" as its authoring
-// severity, having collapsed the two constants loadtest/detection.go deliberately
-// keeps apart. So the vocabulary is read out of event-processing's own source
-// rather than mirrored and hoped over — dc-simulator cannot import that module,
-// and a comment asking the next person to remember is what failed the first time.
-func TestWidgetlabSeverityIsTheRuleAuthoringVocabulary(t *testing.T) {
-	const schema = "../../../services/event-processing/internal/rules/schema.go"
-	source, err := os.ReadFile(schema)
-	if err != nil {
-		t.Fatalf("read %s: %v (if the rules schema moved, re-point this check rather than "+
-			"deleting it — it is the only thing tying this constant to the compiler that "+
-			"accepts or rejects it)", schema, err)
-	}
-
-	// 🔴 Read the ACCEPTANCE, not the spelling.
-	//
-	// An earlier version parsed the constant DECLARATIONS. That is the wrong surface:
-	// the compiler accepts or rejects a severity through Severity.Valid(), a switch
-	// over those identifiers. A severity dropped from the switch while its declaration
-	// survives — kept for old data, or for another caller — passes a declaration scan
-	// while the compiler rejects the rule, which is precisely the outcome this gate
-	// exists to prevent. So both are read, and a severity counts only if it appears in
-	// both: declared with a string value, AND named by the switch that accepts it.
-	clean := stripGoComments(string(source))
-	declared := map[string]string{}
-	for _, m := range regexp.MustCompile(`(Severity\w+)\s+Severity\s*=\s*"([^"]+)"`).FindAllStringSubmatch(clean, -1) {
-		declared[m[1]] = m[2]
-	}
-	accepts := regexp.MustCompile(`func \(s Severity\) Valid\(\) bool \{[^}]*case ([^:]+):`).FindStringSubmatch(clean)
-	if accepts == nil {
-		t.Fatalf("could not find Severity.Valid's accepting case in %s; the gate cannot see what "+
-			"the compiler actually accepts and would pass for any value", schema)
-	}
-	valid := map[string]bool{}
-	for _, ident := range strings.Split(accepts[1], ",") {
-		if value, ok := declared[strings.TrimSpace(ident)]; ok {
-			valid[value] = true
-		}
-	}
-	// Negative control: an expression that matched nothing would make the
-	// membership check below accept anything at all.
-	if len(valid) == 0 {
-		t.Fatalf("parsed no severities out of %s; the pattern has rotted and this test would "+
-			"pass for any value", schema)
-	}
-
-	if !valid[WidgetlabSeverity] {
-		t.Errorf("rule severity %q is not one of the compiler's severities %v — the rule would "+
-			"be rejected at publish, or dropped at load and never fire",
-			WidgetlabSeverity, sortedKeys(valid))
-	}
-	// The wire form is the authoring form uppercased, which is exactly what the
-	// raise-alarm consumer does. An alarm widget filtering on the wrong case
-	// matches nothing and renders an empty table that looks like "no alarms yet".
-	if WidgetlabAlarmSeverityWire != strings.ToUpper(WidgetlabSeverity) {
-		t.Errorf("alarm wire severity %q is not the uppercase of the authoring severity %q",
-			WidgetlabAlarmSeverityWire, WidgetlabSeverity)
-	}
-	// And the authored rule must actually carry the authoring form.
-	if !strings.Contains(widgetlabRuleDefinition(), `"severity":"`+WidgetlabSeverity+`"`) {
-		t.Errorf("the authored rule does not carry severity %q", WidgetlabSeverity)
-	}
-}
-
-func sortedKeys(m map[string]bool) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
+// 🔴 Deleted rather than kept alongside them. All it could check from HERE was the sim's
+// two copies against EACH OTHER (wire == ToUpper(authoring)), plus a regex scan of
+// another module's source. The pair check is not worthless — it catches a one-sided edit
+// — but it is satisfied by the mistake that actually shipped: collapsing BOTH constants
+// to "MAJOR" passes a ToUpper identity while the rule compiler rejects "MAJOR" outright.
+// And a regex over source is exactly the kind of gate that rots into a green light over a
+// vocabulary that has since moved.
 
 // Command and rule tokens are not profile-prefixed the way metric tokens are, so
 // two profiles can name the same one. The second profile's reconciler finds the
@@ -1681,28 +1615,6 @@ func TestWidgetlabEdgeDevicesAreOutsideTheGalleryZones(t *testing.T) {
 		t.Error("no device is in any zone at all, so the gallery's zone-scoped widgets have " +
 			"nothing to show and this test passed for the wrong reason")
 	}
-}
-
-// stripGoComments blanks out comments before a source scan.
-//
-// 🔴 A regex over raw source cannot tell code from prose, so a gate that scans for a
-// declaration is satisfied by the same text sitting in a comment — the retired check
-// coming back to life as documentation. Verified: deleting a severity constant and
-// leaving its name in a comment passed the gate while the real compiler rejected the
-// rule. Comments are replaced with spaces rather than removed so that offsets, and
-// therefore any multi-line pattern spanning them, behave the same.
-func stripGoComments(source string) string {
-	blank := func(m string) string {
-		out := []rune(m)
-		for i, r := range out {
-			if r != '\n' {
-				out[i] = ' '
-			}
-		}
-		return string(out)
-	}
-	source = regexp.MustCompile(`(?s)/\*.*?\*/`).ReplaceAllStringFunc(source, blank)
-	return regexp.MustCompile(`(?m)//.*$`).ReplaceAllStringFunc(source, blank)
 }
 
 // ---- The command far end -------------------------------------------------------

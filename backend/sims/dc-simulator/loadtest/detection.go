@@ -89,7 +89,10 @@ const (
 	// whereas a resolve-only TOMBSTONE row (a raise dropped while its resolve landed)
 	// is stamped INDETERMINATE — so the tier is the only durable evidence the alarm
 	// ever went genuinely ACTIVE. Mirrored here as a literal since the sim speaks the
-	// wire; kept in lockstep with HarnessSeverity via ToUpper.
+	// wire; kept in lockstep with HarnessSeverity via ToUpper — and no longer only by
+	// hand: authored_rules_fixture_test.go publishes both to
+	// backend/testdata/authored-rules, where device-management holds the pair to the
+	// real AlarmSeverity enum through the real conversion.
 	harnessAlarmSeverityWire = "MAJOR"
 
 	// harnessThreshold is the rule's `> threshold` bound. Probe values straddle it
@@ -112,8 +115,19 @@ const (
 	// Durable alarm state wire values (device-management schema: Alarm.state is a
 	// String "ACTIVE"|"CLEARED"). Mirrored here as literals — the sim speaks only the
 	// wire — like emit.go mirrors the credential/event-type strings.
-	alarmStateActive  = "ACTIVE"
-	alarmStateCleared = "CLEARED"
+	//
+	// 🔴 These appear in comparisons whose FALSE branch is the PASSING one: the
+	// no-spurious-alarm invariant asserts a safety probe's row is not ACTIVE. So a
+	// rename on the owning side does not break the oracle, it makes the comparison
+	// unable to match — and the run passes, certifying nothing. They are published to
+	// backend/testdata/authored-rules by authored_rules_fixture_test.go and held to
+	// device-management's real AlarmState enum there.
+	//
+	// They alias sim's single mirrored copy rather than re-spelling the strings: the sim
+	// package needs the same two values for the widgetlab alarm widgets' state filter,
+	// and a second inline copy is one the fixture cannot see.
+	alarmStateActive  = sim.AlarmStateActiveWire
+	alarmStateCleared = sim.AlarmStateClearedWire
 )
 
 // Detection-harness defaults.

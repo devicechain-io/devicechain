@@ -1,0 +1,45 @@
+{
+  "rules": [
+    {
+      "producer": "loadtest",
+      "ruleToken": "harness-cmd-overtemp",
+      "profileToken": "harness-cmd-profile",
+      "enabled": true,
+      "alarmSeverityWire": "",
+      "definition": "{\"actions\":[{\"sendCommand\":{\"command\":\"harness-reset\"},\"type\":\"sendCommand\"}],\"name\":\"Load-test command harness over-temp\",\"type\":\"threshold\",\"when\":{\"metric\":\"temp\",\"op\":\"gt\",\"threshold\":30}}",
+      "groupScoped": false
+    },
+    {
+      "producer": "loadtest",
+      "ruleToken": "harness-overtemp",
+      "profileToken": "harness-profile",
+      "enabled": true,
+      "alarmSeverityWire": "MAJOR",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"harness-overtemp\"},\"type\":\"raiseAlarm\"}],\"name\":\"Load-test harness over-temp\",\"severity\":\"major\",\"type\":\"threshold\",\"when\":{\"metric\":\"temp\",\"op\":\"gt\",\"threshold\":30}}",
+      "groupScoped": false
+    },
+    {
+      "producer": "widgetlab",
+      "ruleToken": "wl-over-temp",
+      "profileToken": "wl-sensor-profile",
+      "enabled": true,
+      "alarmSeverityWire": "MAJOR",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"wl-over-temp\"},\"type\":\"raiseAlarm\"}],\"name\":\"Widget Lab over-temperature\",\"severity\":\"major\",\"type\":\"threshold\",\"when\":{\"metric\":\"temperature\",\"op\":\"gt\",\"threshold\":30}}",
+      "groupScoped": false
+    }
+  ],
+  "wireVocabulary": {
+    "alarmState": {
+      "active": "ACTIVE",
+      "cleared": "CLEARED"
+    },
+    "commandStatus": {
+      "queued": "QUEUED",
+      "sent": "SENT",
+      "successful": "SUCCESSFUL"
+    },
+    "detectionRuleStatus": {
+      "active": "ACTIVE"
+    }
+  }
+}
