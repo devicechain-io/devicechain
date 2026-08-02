@@ -43,6 +43,16 @@ type Endpoints struct {
 	// never carried the field still loads and runs; the harness enforces it lazily
 	// at dial time rather than Validate rejecting every sim record without it.
 	EventProcessingWS string `json:"eventProcessingWS"`
+	// EventProcessingGraphQL is event-processing's tenant-scoped HTTP GraphQL
+	// endpoint, carrying the ruleHealth query a scenario post-asserts its detection
+	// rules against — the only place "this rule is RUNNING" can be read, as opposed
+	// to "the publish did not error", which is not the same claim.
+	//
+	// Optional in the handshake like the WS endpoint beside it, so a pre-existing sim
+	// record still loads. It is NOT optional at bootstrap for a scenario that
+	// declares enabled detection rules: that case fails loudly rather than
+	// provisioning alarm widgets nothing can confirm will ever fill.
+	EventProcessingGraphQL string `json:"eventProcessingGraphQL"`
 	// CommandMgmtGraphQL is command-delivery's tenant-scoped GraphQL endpoint,
 	// carrying the durable command-status query (commands/commandsByToken) the
 	// ADR-064 load-test command round-trip probes reconcile against. Optional in
@@ -51,6 +61,18 @@ type Endpoints struct {
 	// and runs; the harness enforces it lazily rather than Validate rejecting every
 	// sim record without it.
 	CommandMgmtGraphQL string `json:"commandMgmtGraphQL"`
+	// MqttBroker is the NATS MQTT gateway a scenario's COMMAND FAR END dials to
+	// receive its devices' commands and answer them (ADR-043 two-way delivery) —
+	// e.g. "ssl://127.0.0.1:1883" for a local kind bring-up, "tcp://..." for a
+	// broker with no TLS. Unlike every other endpoint here this is not an HTTP(S)
+	// base URL, because the device command plane is not HTTP.
+	//
+	// Optional in the handshake like EventProcessingWS and CommandMgmtGraphQL, and
+	// for the same reason: a pre-widgetlab handshake never carried it. It is NOT
+	// optional at bootstrap for a scenario that declares CommandFarEnd — that case
+	// fails loudly rather than running a scenario whose command widget can only
+	// ever demonstrate a command expiring.
+	MqttBroker string `json:"mqttBroker"`
 }
 
 // Handshake is the local sim record dcctl (Lane B) writes and dc-simulator (Lane
@@ -66,6 +88,16 @@ type Handshake struct {
 	ManifestId  string    `json:"manifestId"`
 	Seed        int64     `json:"seed"`
 	InstanceId  string    `json:"instanceId"`
+	// MqttTLSInsecure skips verification of the MQTT gateway's server certificate
+	// when Endpoints.MqttBroker carries an ssl:// scheme. A local bring-up
+	// terminates TLS with a self-signed cert that no system root chains to, so
+	// without this the far end cannot connect at all there; a real deployment
+	// reachable at its cert's SAN leaves it false.
+	//
+	// It is a top-level field rather than one of Endpoints because it is not an
+	// address — it is a trust decision about one, and burying a verification
+	// opt-out among base URLs is how it stops being read as one.
+	MqttTLSInsecure bool `json:"mqttTLSInsecure"`
 }
 
 // LoadHandshake reads and validates a handshake file from path.

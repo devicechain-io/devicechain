@@ -24,7 +24,14 @@ identity and drives the same tenant-facing surfaces a real integration would.
    credential — exactly the path a physical device uses. The cadence and
    population default to the scenario's own demo sizing (~5s) and are
    overridable — see [Driving load](#driving-load).
-5. Serves a small **control API** (`GET /status`, `POST /start`, `POST /stop`,
+5. **Receives** commands, for a scenario whose manifest declares a **command far
+   end** (widgetlab). Telemetry over HTTP ingress is one-way, so a scenario whose
+   dashboard offers a command-button otherwise enqueues real commands nothing
+   answers: they reach `SENT` and expire days later, with every layer reporting
+   success. Such a scenario subscribes every device to its own command topic on
+   the MQTT gateway and answers what arrives, completing `QUEUED -> SENT ->
+   SUCCESSFUL`. See [The command far end](#the-command-far-end).
+6. Serves a small **control API** (`GET /status`, `POST /start`, `POST /stop`,
    `POST /reset`) and a **presentation page** (`web/index.html`, embedded in
    the binary) that subscribes to event-management's `measurementStream` over
    `graphql-ws` and lists live measurements — read-back of *resolved* platform
@@ -61,6 +68,102 @@ is one. devicepulse and buildingpulse take any size.
 # 500 devices every 200ms = a 2500 events/sec target
 go run . --handshake ./hs.json --devices 500 --emit-interval 200ms
 ```
+
+### Detection rules are proven live, not assumed
+
+A scenario that declares detection rules does not treat a clean publish as evidence
+they run. device-management compiles a profile's enabled rules at publish and fails
+closed — but **only when a validator is wired**; with the service secret unset the
+check returns nil having validated nothing. On such an instance a rule the compiler
+rejects publishes cleanly, event-processing drops it at load with a log line nobody
+reads, and the scenario's alarm widgets are permanently empty while every step
+reports success.
+
+So bootstrap post-asserts against event-processing's own `ruleHealth`, which reads
+the engine's live rule set. That catches a rule absent from the engine (dropped at
+load) and one reported `COMPILE_ERROR` — the latter with the engine's own diagnostic,
+the former with the sim's inference, since a rule that never arrived generates no
+diagnostic to quote.
+
+⚠️ **The check is per VERSION, and that is the whole subtlety.** `ruleHealth` answers
+from a projection an async consumer writes, so for a window after a publish it still
+serves the *previous* version — whose rows carry the *same* rule tokens (a token is a
+stable authoring id that survives every definition change), all `ACTIVE`. Matching on
+token alone therefore passes on the first read and confirms a version the engine has
+not loaded, which is worst precisely on "ship a corrected rule and re-bootstrap" — the
+flow where the new rule is most likely to be the broken one. A rule id embeds
+`{profileToken}@{version}`, so rows from any other version count as *not settled yet*
+rather than as an answer, and the loop keeps polling. Separately, a post-assert
+against device-management confirms its **active** version is the one just published.
+
+This needs `endpoints.eventProcessingGraphQL` in the handshake. A scenario with
+enabled rules and no such endpoint **fails** rather than skipping the check — a
+verification that quietly does nothing reports the same green as a real pass. A
+profile whose rules are all disabled needs neither, since a disabled rule is inert by
+design.
+
+⚠️ **The chart's `telemetry` and `ingest-only` profiles do not deploy
+event-processing,** so widgetlab cannot run on them — its alarm path has no engine
+behind it, and there is nothing to opt out of (unlike the command far end, where the
+gateway may simply be unreachable from the host while the platform is fine). The
+timeout message names this as the first thing to check, because the symptom otherwise
+reads as a bug in the sim. Transient failures are retried inside the settle window, so
+a rolling restart of event-processing does not fail a bootstrap.
+
+Only the declared rules must be live; extra rules are ignored. A tenant may author its
+own on the same profile from the console, and refusing to bootstrap over one would
+make the sim hostile to the instance it runs on.
+
+Relatedly, the publish decision reads the **active version's** label rather than the
+set of all labels ever published. A marker sitting in a superseded version would
+otherwise answer "already published" forever, so a board edited and republished from
+the console would leave every later bootstrap skipping the publish and reporting
+success over content the platform is not serving.
+
+### Telling a governed device from a quiet one
+
+`GET /status` reports `stats.lastTickShed` beside the cumulative `stats.shed`, and
+the runner logs a warning the first tick that sheds (and an info line when it stops).
+
+A shed is not an emit failure — the ingress refuses it cleanly at the per-tenant rate
+ceiling, and a governed load run expects them — so the emit loop deliberately does not
+treat one as an error. But on a scenario being *watched* rather than measured, that
+silence is the problem: a device whose events are being refused looks exactly like a
+device that has nothing to say, and on a board built to show what a widget does with
+awkward data, those are the two readings that must not be confused. The cumulative
+counter cannot separate them either, since a total that grew an hour ago reads the
+same as one growing now. Only the runner does this; the load harness drives the emit
+loop directly and is unaffected.
+
+### The command far end
+
+A device that only POSTs telemetry cannot receive anything, so a scenario with a
+control widget on its board needs a second connection: every device subscribed to
+`{instance}/{tenant}/device-commands/{token}` on the NATS MQTT gateway, answering
+on `{instance}/{tenant}/command-responses` (the `cmdreceiver` package, shared with
+the load-test command harness). A scenario opts in with `CommandFarEnd` on its
+manifest; widgetlab does, devicepulse and buildingpulse do not.
+
+`dcctl sim create` resolves the gateway address into the handshake
+(`endpoints.mqttBroker`, default `ssl://<server>:1883` — the broker terminates TLS
+independently of the HTTP ingress) and records whether to verify its certificate
+(`mqttTLSInsecure`, on by default without `--tls`, since a local bring-up's gateway
+cert is self-signed). Override either with `--mqtt-broker` / `--mqtt-insecure`.
+
+**Bootstrap FAILS if a declared far end cannot be brought up** — no broker
+configured, or any device that does not come back subscribed. Degrading to "run
+without it" is the failure the seam exists to remove: the scenario would come up
+green and its Send button would enqueue commands that expire unanswered. On a host
+that genuinely cannot reach the gateway, `--no-command-far-end` accepts that
+knowingly; it logs a warning at startup and `GET /status` reports the channel as
+`declared` but `disabled`, alongside per-device receive/respond evidence when one
+is attached.
+
+⚠️ **Run one process per handshake.** An MQTT session is keyed by client id, which
+is derived from `(tenant, deviceToken)` — both fixed by the handshake — so two
+`dc-simulator` processes on the same record (say, a second one on another port) take
+each other's sessions over in a loop. Nothing prevents the second launch; the symptom
+is a reconnect storm and commands ping-ponging between the two receivers.
 
 **Compare `achievedRatePerSec` against `targetRatePerSec`.** A target rate is a
 request; whether the sim reached it depends on emit latency, ingress

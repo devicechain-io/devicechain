@@ -207,6 +207,25 @@ type SimManifest struct {
 	// silently un-resizable the day it grows a second population for an
 	// unrelated reason.
 	FixedTopology bool
+	// CommandFarEnd marks a scenario whose devices must LISTEN for commands and
+	// answer them, not merely emit telemetry. Bootstrap attaches a cmdreceiver to
+	// every expanded device, so a command issued against any of them completes
+	// QUEUED -> SENT -> SUCCESSFUL.
+	//
+	// It exists because the sim's device model is otherwise one-way: it POSTs to
+	// the HTTP ingress and subscribes to nothing. A scenario that provisions
+	// CommandDefinitions and puts a command-button on a dashboard therefore ships
+	// a control surface with NO FAR END — the button enqueues a real command
+	// against a real definition, the platform dispatches it correctly, and it sits
+	// at SENT until it expires seven days later. That is a demo of the platform
+	// working and the scenario not, and the two are indistinguishable on the board.
+	//
+	// Declared rather than inferred from "does any profile declare commands"
+	// for the FixedTopology reason above: a profile may carry a command vocabulary
+	// for provisioning coverage without the scenario intending to answer one, and
+	// attaching a broker connection per device is not something to acquire by
+	// accident. Validate refuses the inverse — a far end with nothing to answer.
+	CommandFarEnd bool
 	CustomerTypes []CustomerTypeSpec
 	Customers     []CustomerSpec
 	AreaTypes     []AreaTypeSpec
@@ -532,6 +551,44 @@ func (m SimManifest) Validate() error {
 		}
 		if strings.TrimSpace(ds.Definition) == "" {
 			return fmt.Errorf("dashboard %q has an empty definition", ds.Token)
+		}
+		// A board carrying a control widget with no far end is the defect this
+		// gate exists for, and it is invisible everywhere else: the widget renders,
+		// the enqueue succeeds against a real command definition, the platform
+		// dispatches correctly, and the command sits at SENT until it expires. Every
+		// layer reports success and the demonstration is worthless.
+		//
+		// This is the ONE place the manifest reads inside a definition it otherwise
+		// treats as opaque. The justification is that the two facts genuinely live
+		// on opposite sides of that boundary — "this board offers control" is in the
+		// definition, "these devices answer" is in the manifest — so nothing else
+		// can see both. A definition that does not parse is left to the dashboard
+		// tests, not re-reported here.
+		if !m.CommandFarEnd {
+			var parsed dashboardDefinition
+			if err := json.Unmarshal([]byte(ds.Definition), &parsed); err == nil {
+				for _, w := range parsed.Widgets {
+					if w.Type == commandWidgetType {
+						return fmt.Errorf("dashboard %q carries a %s widget (%q) but the manifest "+
+							"does not declare CommandFarEnd: nothing in the scenario would answer "+
+							"the command, so it would reach SENT and expire", ds.Token, commandWidgetType, w.Id)
+					}
+				}
+			}
+		}
+	}
+
+	// The inverse: a far end is a live broker connection per device. Acquiring one
+	// for a scenario that publishes no command vocabulary means every device
+	// subscribes to a topic nothing can ever publish to.
+	if m.CommandFarEnd {
+		commands := 0
+		for _, p := range m.Profiles {
+			commands += len(p.Commands)
+		}
+		if commands == 0 {
+			return fmt.Errorf("manifest %q declares CommandFarEnd but no profile declares a "+
+				"command definition, so there is nothing for the far end to answer", m.Name)
 		}
 	}
 

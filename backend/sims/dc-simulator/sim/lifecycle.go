@@ -37,10 +37,41 @@ type Lifecycle struct {
 	sim Sim
 	rt  *Runtime
 
+	// name and farEndDeclared are read off the manifest ONCE, at construction.
+	// Manifest() is pure but not cheap — a scenario builds its dashboards there, and
+	// /status is polled — so re-deriving a constant on every poll would marshal two
+	// board definitions a second to answer a boolean.
+	name           string
+	farEndDeclared bool
+
 	mu         sync.Mutex
 	state      State
 	lastError  string
 	cancelTick context.CancelFunc
+	// bootstrapMu serializes Bootstrap (and therefore Reset, which is Bootstrap)
+	// end to end.
+	//
+	// 🔴 Bootstrap is reachable concurrently — nothing serializes POST /reset — and
+	// while every step of Provision is create-or-ignore, that makes it idempotent,
+	// not concurrency-safe: Provision WRITES rt.Devices, and two overlapping runs
+	// race on it (confirmed by the race detector). The far end then made the
+	// consequence worse than a torn slice, because attaching is check-then-act
+	// across a network round trip: both runs see no far end, both build one, and the
+	// loser's is overwritten while still connected — never Closed, and holding the
+	// same MQTT client ids with CleanSession(false), so the two cohorts evict each
+	// other through session takeover indefinitely.
+	//
+	// It is deliberately NOT mu. mu guards the FSM fields and is taken by /status on
+	// every poll; Bootstrap does provisioning and per-device broker round trips, so
+	// holding mu across it would stall every status read behind the network. Lock
+	// order is bootstrapMu (outer) then mu (inner, briefly); nothing takes them the
+	// other way round.
+	bootstrapMu sync.Mutex
+
+	// farEnd is the scenario's command receiver once Bootstrap attached one (nil
+	// for a scenario that declares none, or when it is explicitly disabled). It
+	// outlives Stop deliberately — see Close.
+	farEnd CommandFarEnd
 	// tickDone is closed by runTickLoop as it exits, so Stop can WAIT for the
 	// loop rather than merely signalling it. Without the join, a Stop/Start
 	// pair resets the counters while the previous run's workers are still
@@ -50,7 +81,8 @@ type Lifecycle struct {
 
 // NewLifecycle builds a Lifecycle in the CREATED state.
 func NewLifecycle(s Sim, rt *Runtime) *Lifecycle {
-	return &Lifecycle{sim: s, rt: rt, state: StateCreated}
+	m := s.Manifest()
+	return &Lifecycle{sim: s, rt: rt, state: StateCreated, name: m.Name, farEndDeclared: m.CommandFarEnd}
 }
 
 // State returns the current FSM state.
@@ -64,7 +96,19 @@ func (l *Lifecycle) State() State {
 // Idempotent: Provision itself create-or-ignores, so calling Bootstrap again
 // (via Reset) from any state is always safe.
 func (l *Lifecycle) Bootstrap(ctx context.Context) error {
+	l.bootstrapMu.Lock()
+	defer l.bootstrapMu.Unlock()
+
 	if err := l.sim.Bootstrap(ctx, l.rt); err != nil {
+		l.mu.Lock()
+		l.lastError = err.Error()
+		l.mu.Unlock()
+		return err
+	}
+	// After Provision, so rt.Devices carries the credentials the far end
+	// authenticates each subscription with; before BOOTSTRAPPED, so a scenario whose
+	// command channel has no far end never reports itself as ready to run.
+	if err := l.attachCommandFarEnd(ctx); err != nil {
 		l.mu.Lock()
 		l.lastError = err.Error()
 		l.mu.Unlock()
@@ -149,11 +193,36 @@ func (l *Lifecycle) runTickLoop(ctx context.Context, done chan struct{}) {
 		case <-ticker.C:
 			started := time.Now()
 			l.rt.Stats.Ticks.Add(1)
+			shedBefore := l.rt.Stats.Shed.Load()
 			if err := l.sim.Tick(ctx, l.rt); err != nil {
 				log.Error().Err(err).Msg("sim tick failed")
 				l.mu.Lock()
 				l.lastError = err.Error()
 				l.mu.Unlock()
+			}
+
+			// Attribute this tick's sheds, and SAY SO when the answer changes.
+			//
+			// 🔴 A shed is not an emit failure — the ingress refuses it cleanly at the
+			// per-tenant ceiling (ADR-023/063) and a governed load run expects them, so
+			// EmitAll deliberately does not treat one as an error. But on a scenario
+			// being watched rather than measured, that silence is the problem: a device
+			// whose events are being refused looks exactly like a device that has
+			// nothing to say, and on a board built to show what a widget does with
+			// awkward data those are the two readings that must not be confused.
+			// Logging the transition in both directions puts the fact where a person
+			// will see it, rather than only in a counter they would have to think to
+			// read. Only the LIFECYCLE does this: the load harness drives EmitAll
+			// directly and is unaffected.
+			shedNow := l.rt.Stats.Shed.Load() - shedBefore
+			if was := l.rt.Stats.LastTickShed.Swap(shedNow); (was == 0) != (shedNow == 0) {
+				if shedNow > 0 {
+					log.Warn().Int64("shed", shedNow).
+						Msg("ingress is SHEDDING this tenant's events at its rate ceiling; " +
+							"devices whose widgets look silent are being refused, not quiet")
+				} else {
+					log.Info().Msg("ingress is no longer shedding this tenant's events")
+				}
 			}
 			// Count a tick that outran the interval it was scheduled on.
 			//
@@ -187,6 +256,12 @@ type statusResponse struct {
 	EmitIntervalMs int64    `json:"emitIntervalMs"`
 	TargetRate     float64  `json:"targetRatePerSec"`
 	Stats          Snapshot `json:"stats"`
+
+	// CommandFarEnd reports the CONTROL channel the way Stats reports the telemetry
+	// one: what was asked for next to what is actually there. A scenario whose
+	// command widget looks live is not evidence that anything answers it, and this
+	// is the only place that distinction is visible without a live cluster.
+	CommandFarEnd farEndStatus `json:"commandFarEnd"`
 }
 
 // ControlServer exposes the ADR-035 control-API seam (bootstrap/start/stop/
@@ -218,6 +293,8 @@ func (c *ControlServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	resp := statusResponse{State: c.lc.state, LastError: c.lc.lastError}
 	resp.Stats = c.rt.Stats.Snapshot(now)
 	c.lc.mu.Unlock()
+	// Outside the lock: commandFarEndStatus takes the same mutex.
+	resp.CommandFarEnd = c.lc.commandFarEndStatus()
 	resp.Tenant = c.rt.Tenant
 	resp.InstanceId = c.rt.InstanceId
 	resp.DeviceCount = len(c.rt.Devices)

@@ -6,11 +6,13 @@ package sim
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/userclient"
 )
@@ -26,6 +28,12 @@ import (
 // that owns the rules, and faking the whole chain (devices, credentials,
 // relationships, dashboards) would be a large surface whose failures would mostly
 // be the fake's own.
+
+// fakeProfileToken is the profile every test here provisions. Named once so the
+// fake's own responses (its profile token, and the version-bearing rule ids it mints)
+// agree with what the sim actually queries for — a fake answering about a different
+// profile than the one asked about is a fake that cannot catch a mis-wired argument.
+const fakeProfileToken = WidgetlabProfileToken
 
 type fakeMetric struct{ Name, DataType, Unit string }
 type fakeCommand struct{ CommandKey, Name, ParameterSchema string }
@@ -48,20 +56,69 @@ type fakeProfileServer struct {
 	// failNextPublish makes exactly one publish fail, modelling the ADR-044
 	// validation gate failing closed on a transiently unavailable event-processing.
 	failNextPublish bool
+
+	// liveRules is what event-processing's ENGINE holds — the ruleHealth read —
+	// which is a different thing from the rules device-management stores. Publishing
+	// loads the active version's enabled rules into it, and the two knobs below model
+	// the ways they diverge on an instance whose publish-time validator was skipped:
+	// a rule the engine dropped at load, and one it surfaced as COMPILE_ERROR.
+	//
+	// Modelled separately rather than derived, because "the publish succeeded" and
+	// "the rule is running" being the same thing is precisely the assumption under
+	// test. A fake that reported health straight from its stored rules could only
+	// ever agree with itself.
+	liveRules       map[string]string // rule token → RuleStatus
+	liveVersion     int               // the profile version those rules belong to
+	dropRuleAtLoad  string            // a rule token the engine never loads
+	breakRuleAtLoad string            // a rule token the engine reports COMPILE_ERROR
+
+	// 🔴 settleAfterPolls models the ASYNCHRONOUS seam, and it is the reason this
+	// fake is not merely a mirror of the code under test.
+	//
+	// ruleHealth answers from event-processing's OWN projection, written by a NATS
+	// consumer — so for a window after a publish it still serves the PREVIOUS
+	// version, whose rows carry the SAME rule tokens, all ACTIVE. While this fake
+	// loaded the new rules synchronously inside publishDeviceProfile, that window
+	// could not be expressed, and a check matching on rule token alone passed on its
+	// first read for a version the engine had not loaded. The fake agreed with the
+	// code by construction on exactly the axis that mattered.
+	//
+	// With this, ruleHealth keeps answering for the previous version until it has
+	// been polled this many times.
+	settleAfterPolls int
+	ruleHealthPolls  int
+	// pendingRules/pendingVersion are what the engine will serve once it settles.
+	pendingRules   map[string]string
+	pendingVersion int
+	// unhealthyForNPolls makes the first N ruleHealth requests fail at the transport
+	// layer, modelling event-processing restarting mid-bootstrap.
+	unhealthyForNPolls int
 }
 
 func newFakeProfileServer(t *testing.T) (*fakeProfileServer, *Runtime) {
 	t.Helper()
 	f := &fakeProfileServer{
-		metrics:  map[string]fakeMetric{},
-		commands: map[string]fakeCommand{},
-		rules:    map[string]fakeRule{},
+		metrics:   map[string]fakeMetric{},
+		commands:  map[string]fakeCommand{},
+		rules:     map[string]fakeRule{},
+		liveRules: map[string]string{},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 
+	// Shorten the rule-health settle window for the whole package: a negative case
+	// must outlast it, and 30s per case is how a suite gets skipped.
+	t.Cleanup(func(to time.Duration, pi time.Duration) func() {
+		return func() { ruleHealthSettleTimeout, ruleHealthPollInterval = to, pi }
+	}(ruleHealthSettleTimeout, ruleHealthPollInterval))
+	ruleHealthSettleTimeout, ruleHealthPollInterval = 150*time.Millisecond, 10*time.Millisecond
+
 	return f, &Runtime{
-		Endpoints:  Endpoints{DeviceMgmtGraphQL: srv.URL, UserGraphQL: srv.URL},
+		Endpoints: Endpoints{
+			DeviceMgmtGraphQL:      srv.URL,
+			UserGraphQL:            srv.URL,
+			EventProcessingGraphQL: srv.URL,
+		},
 		InstanceId: "dc",
 		Tenant:     "acme",
 		HTTPClient: srv.Client(),
@@ -140,7 +197,59 @@ func (f *fakeProfileServer) dispatch(query string, vars map[string]any) (map[str
 		}
 		label, _ := vars["label"].(string)
 		f.versions = append(f.versions, label)
+		// Publishing hands a new active version to the engine — EVENTUALLY. Only
+		// ENABLED rules are loaded, matching the runtime (a disabled rule is inert and
+		// the publish gate does not even submit it).
+		loaded := map[string]string{}
+		for token, r := range f.rules {
+			if !r.Enabled || token == f.dropRuleAtLoad {
+				continue
+			}
+			status := "ACTIVE"
+			if token == f.breakRuleAtLoad {
+				status = "COMPILE_ERROR"
+			}
+			loaded[token] = status
+		}
+		if f.settleAfterPolls > 0 {
+			// Hold the new version back: ruleHealth keeps answering for the previous
+			// one until it has been polled settleAfterPolls times.
+			f.pendingRules, f.pendingVersion = loaded, len(f.versions)
+			f.ruleHealthPolls = 0
+		} else {
+			f.liveRules, f.liveVersion = loaded, len(f.versions)
+		}
 		return map[string]any{"publishDeviceProfile": map[string]any{"version": len(f.versions)}}, 0
+
+	case strings.Contains(query, "ruleHealth"):
+		// The fake must READ the argument, or a query that names the wrong profile
+		// would pass every test while failing every live bootstrap.
+		if got := str(vars, "profileToken"); got != fakeProfileToken {
+			return nil, http.StatusBadRequest
+		}
+		f.ruleHealthPolls++
+		if f.unhealthyForNPolls > 0 {
+			f.unhealthyForNPolls--
+			return nil, http.StatusServiceUnavailable
+		}
+		if f.pendingRules != nil && f.ruleHealthPolls > f.settleAfterPolls {
+			f.liveRules, f.liveVersion = f.pendingRules, f.pendingVersion
+			f.pendingRules = nil
+		}
+		out := make([]any, 0, len(f.liveRules))
+		for token, status := range f.liveRules {
+			entry := map[string]any{
+				// The real id shape: the version here is what tells a caller which
+				// version the engine is answering for.
+				"ruleId":    fmt.Sprintf("acme/%s@%d/%s", fakeProfileToken, f.liveVersion, token),
+				"ruleToken": token, "status": status, "message": nil,
+			}
+			if status == "COMPILE_ERROR" {
+				entry["message"] = "predicate exceeds the cost ceiling"
+			}
+			out = append(out, entry)
+		}
+		return map[string]any{"ruleHealth": out}, 0
 
 	case strings.Contains(query, "createMetricDefinition"):
 		r := requestArg(vars)
@@ -198,12 +307,15 @@ func (f *fakeProfileServer) profileJSON() map[string]any {
 			"token": token, "name": r.Name, "definition": r.Definition, "enabled": r.Enabled})
 	}
 	return map[string]any{
-		"token": "profile", "activeVersion": active,
+		"token": fakeProfileToken, "activeVersion": active,
 		"metricDefinitions": metrics, "commandDefinitions": commands, "detectionRules": rules,
 	}
 }
 
-func (f *fakeProfileServer) publishCount() int {
+// versionCount is the number of versions that EXIST, which is not the same as the
+// number of times this fake was asked to publish — a test may append a version
+// directly to model somebody else republishing. Named for what it counts.
+func (f *fakeProfileServer) versionCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.versions)
@@ -244,7 +356,7 @@ func TestEnsureProfilePublishesOnceOnAFreshTenant(t *testing.T) {
 	if err := run(t, rt, widgetlabProfileSpec(t)); err != nil {
 		t.Fatalf("ensureProfile: %v", err)
 	}
-	if got := f.publishCount(); got != 1 {
+	if got := f.versionCount(); got != 1 {
 		t.Errorf("published %d times on a fresh tenant, want exactly 1", got)
 	}
 }
@@ -261,7 +373,7 @@ func TestEnsureProfileDoesNotRepublishAnUnchangedProfile(t *testing.T) {
 			t.Fatalf("run %d: %v", i+1, err)
 		}
 	}
-	if got := f.publishCount(); got != 1 {
+	if got := f.versionCount(); got != 1 {
 		t.Errorf("published %d times across three identical runs, want 1", got)
 	}
 	if got := f.updateCount(); got != 0 {
@@ -314,7 +426,7 @@ func TestEnsureProfileRepublishesWhenARerunAddsSomething(t *testing.T) {
 			if err := run(t, rt, addition(base)); err != nil {
 				t.Fatalf("second run: %v", err)
 			}
-			if got := f.publishCount(); got != 2 {
+			if got := f.versionCount(); got != 2 {
 				t.Errorf("published %d times after a re-run introduced %s, want 2 — without the "+
 					"second publish it stays a draft the active version never contains", got, name)
 			}
@@ -349,7 +461,7 @@ func TestEnsureProfileConvergesAChangedRuleDefinition(t *testing.T) {
 		t.Errorf("the stored rule was not updated to the declared definition:\n got %s\nwant %s",
 			got, fixed.DetectionRules[0].Definition)
 	}
-	if got := f.publishCount(); got != 2 {
+	if got := f.versionCount(); got != 2 {
 		t.Errorf("published %d times after the rule changed, want 2 — the corrected rule would "+
 			"otherwise sit in the draft while the broken one stays active", got)
 	}
@@ -386,7 +498,7 @@ func TestEnsureProfileDoesNotRewriteAReformattedDefinition(t *testing.T) {
 	if got := f.updateCount(); got != 0 {
 		t.Errorf("issued %d updates against a merely reformatted definition, want 0", got)
 	}
-	if got := f.publishCount(); got != 1 {
+	if got := f.versionCount(); got != 1 {
 		t.Errorf("published %d times against a merely reformatted definition, want 1", got)
 	}
 }
@@ -410,7 +522,7 @@ func TestEnsureProfileRecoversFromAFailedPublish(t *testing.T) {
 	if err := run(t, rt, spec); err == nil {
 		t.Fatal("the first run reported success though its publish failed")
 	}
-	if got := f.publishCount(); got != 0 {
+	if got := f.versionCount(); got != 0 {
 		t.Fatalf("a failed publish still cut %d version(s); the fake does not model the gate", got)
 	}
 
@@ -419,7 +531,7 @@ func TestEnsureProfileRecoversFromAFailedPublish(t *testing.T) {
 	if err := run(t, rt, spec); err != nil {
 		t.Fatalf("recovery run: %v", err)
 	}
-	if got := f.publishCount(); got != 1 {
+	if got := f.versionCount(); got != 1 {
 		t.Errorf("published %d times after recovering from a failed publish, want 1 — the "+
 			"scenario's whole vocabulary would otherwise stay a draft forever", got)
 	}
@@ -446,7 +558,7 @@ func TestEnsureProfilePublishesAnExistingUnpublishedProfile(t *testing.T) {
 	if err := run(t, rt, spec); err != nil {
 		t.Fatalf("ensureProfile: %v", err)
 	}
-	if got := f.publishCount(); got != 1 {
+	if got := f.versionCount(); got != 1 {
 		t.Errorf("published %d times over a created-but-unpublished profile, want 1", got)
 	}
 }
@@ -473,5 +585,403 @@ func TestProfileContentMarkerChangesWithTheContent(t *testing.T) {
 	if profileContentMarker(reordered) == marker {
 		t.Error("reordered metrics produced the same marker; order is part of the declared " +
 			"content and a reader would expect the change to be published")
+	}
+}
+
+// ---- Proving the rules are LIVE, not merely published -------------------------
+
+// 🔑 THE SKIPPED-VALIDATOR GATE. device-management compiles a profile's enabled
+// rules at publish and fails closed — but only when a validator is WIRED. With the
+// service secret unset the check returns nil having validated nothing, so a rule the
+// compiler would reject publishes cleanly, event-processing drops it at load with a
+// log line nobody reads, and the scenario's alarm widgets are permanently empty with
+// every step reporting success.
+//
+// "The publish did not error" and "the rule is running" are different claims, and
+// the first was standing in for the second. This asserts the second.
+func TestEnsureProfileFailsWhenARuleNeverReachesTheEngine(t *testing.T) {
+	f, rt := newFakeProfileServer(t)
+	spec := widgetlabProfileSpec(t)
+	if len(spec.DetectionRules) == 0 {
+		t.Fatal("the spec declares no detection rules, so this test asserts nothing")
+	}
+	dropped := spec.DetectionRules[0].Token
+
+	f.mu.Lock()
+	f.dropRuleAtLoad = dropped
+	f.mu.Unlock()
+
+	err := run(t, rt, spec)
+	if err == nil {
+		t.Fatal("bootstrap reported success though its rule never reached the engine")
+	}
+	if !strings.Contains(err.Error(), dropped) {
+		t.Errorf("error %q does not name the rule that is missing", err)
+	}
+	if !strings.Contains(err.Error(), "absent") {
+		t.Errorf("error %q does not say the rule is absent, so a reader cannot tell it from "+
+			"a rule that failed to compile", err)
+	}
+	// The publish itself must still have happened: the failure is the POST-ASSERTION,
+	// and a test that passed because nothing was published would prove nothing.
+	if got := f.versionCount(); got != 1 {
+		t.Errorf("published %d times, want 1 — the failure must come from the health check, "+
+			"not from never publishing", got)
+	}
+}
+
+// The other half of the same read: a rule the engine surfaced rather than dropped.
+// Reported differently because it points at a different cause, and a gate that said
+// only "not healthy" would send the reader to the wrong place.
+func TestEnsureProfileFailsWhenARuleDoesNotCompileInTheEngine(t *testing.T) {
+	f, rt := newFakeProfileServer(t)
+	spec := widgetlabProfileSpec(t)
+	broken := spec.DetectionRules[0].Token
+
+	f.mu.Lock()
+	f.breakRuleAtLoad = broken
+	f.mu.Unlock()
+
+	err := run(t, rt, spec)
+	if err == nil {
+		t.Fatal("bootstrap reported success over a rule the engine cannot compile")
+	}
+	if !strings.Contains(err.Error(), "COMPILE_ERROR") {
+		t.Errorf("error %q does not report the engine's status", err)
+	}
+	// The engine's own diagnostic has to survive into the message, or the operator
+	// has to go find a log to learn anything actionable.
+	if !strings.Contains(err.Error(), "cost ceiling") {
+		t.Errorf("error %q drops the engine's diagnostic", err)
+	}
+}
+
+// The counterweight: a healthy profile must pass, and pass without waiting out the
+// settle window. Rejecting a broken rule is worthless if a correct one is refused too.
+func TestEnsureProfileAcceptsRulesThatAreLive(t *testing.T) {
+	f, rt := newFakeProfileServer(t)
+	spec := widgetlabProfileSpec(t)
+
+	if err := run(t, rt, spec); err != nil {
+		t.Fatalf("a profile whose rules are live was rejected: %v", err)
+	}
+	f.mu.Lock()
+	live, polls := len(f.liveRules), f.ruleHealthPolls
+	f.mu.Unlock()
+	// Asserted as a poll COUNT rather than as elapsed time: a healthy profile must be
+	// confirmed by reading once, and a wall-clock bound for that is a flake on a
+	// loaded runner rather than a statement about the code.
+	if polls != 1 {
+		t.Errorf("ruleHealth was polled %d times for an already-live profile, want 1 — the "+
+			"check is waiting rather than reading", polls)
+	}
+	if live == 0 {
+		t.Fatal("the fake loaded no rules into its engine, so the acceptance above is vacuous")
+	}
+}
+
+// A scenario with enabled rules and no endpoint to check them against must FAIL, not
+// quietly skip the check. A verification that silently does nothing when its endpoint
+// is missing is worse than none: it reports the same green as a real pass.
+func TestEnsureProfileRefusesRulesItCannotVerify(t *testing.T) {
+	_, rt := newFakeProfileServer(t)
+	rt.Endpoints.EventProcessingGraphQL = ""
+
+	err := run(t, rt, widgetlabProfileSpec(t))
+	if err == nil {
+		t.Fatal("bootstrap succeeded with no way to confirm its rules are running")
+	}
+	if !strings.Contains(err.Error(), "eventProcessingGraphQL") {
+		t.Errorf("error %q does not name the missing handshake field", err)
+	}
+}
+
+// A profile with no ENABLED rules needs no endpoint: a disabled rule is inert by
+// design, and requiring it to be live would refuse a scenario that parks one
+// deliberately. Without this the check would make a legitimate manifest unrunnable.
+func TestEnsureProfileWithNoEnabledRulesNeedsNoRuleHealth(t *testing.T) {
+	_, rt := newFakeProfileServer(t)
+	rt.Endpoints.EventProcessingGraphQL = ""
+
+	spec := widgetlabProfileSpec(t)
+	spec.DetectionRules = append([]DetectionRuleSpec(nil), spec.DetectionRules...)
+	for i := range spec.DetectionRules {
+		spec.DetectionRules[i].Enabled = false
+	}
+	if err := run(t, rt, spec); err != nil {
+		t.Fatalf("a profile whose rules are all disabled was refused: %v", err)
+	}
+}
+
+// 🔴 THE STALE-MARKER GATE. The publish decision reads the ACTIVE version's label,
+// not the set of every label ever published. Matching the whole history means a
+// marker sitting in a SUPERSEDED version answers "already published" forever: a
+// console user edits the draft and republishes, the new active version does not carry
+// the scenario's rule, and every later bootstrap skips the publish and reports
+// success over content the platform is not serving.
+func TestEnsureProfileRepublishesWhenSomethingElseSupersededIt(t *testing.T) {
+	f, rt := newFakeProfileServer(t)
+	spec := widgetlabProfileSpec(t)
+
+	if err := run(t, rt, spec); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if got := f.versionCount(); got != 1 {
+		t.Fatalf("published %d times on a fresh profile, want 1", got)
+	}
+
+	// Somebody else publishes over it — the sim's label is now history.
+	f.mu.Lock()
+	f.versions = append(f.versions, "edited-in-the-console")
+	f.mu.Unlock()
+
+	if err := run(t, rt, spec); err != nil {
+		t.Fatalf("run after being superseded: %v", err)
+	}
+	if got := f.versionCount(); got != 3 {
+		t.Errorf("published %d times total, want 3 — the scenario's content is no longer the "+
+			"active version, so it must be republished rather than assumed present", got)
+	}
+	// And the active version must now be the scenario's own again.
+	f.mu.Lock()
+	active := f.versions[len(f.versions)-1]
+	f.mu.Unlock()
+	if !strings.HasPrefix(active, "sim-") {
+		t.Errorf("the active version's label is %q, not the scenario's content marker", active)
+	}
+}
+
+// 🔴🔴 THE STALE-PROJECTION GATE — the one a token-only check could not see.
+//
+// ruleHealth answers from event-processing's OWN projection, written asynchronously.
+// For a window after a publish it still serves the PREVIOUS version, whose rows carry
+// the SAME rule tokens (tokens are stable authoring ids that survive every definition
+// change), all ACTIVE. A check matching on token alone therefore passes on its FIRST
+// read and confirms a version the engine has not loaded.
+//
+// That is not a corner case. It is "ship a corrected rule and re-bootstrap" — exactly
+// the flow the reconciler exists for, and the one where a false green costs most:
+// the corrected rule is the one most likely to be broken.
+func TestEnsureProfileDoesNotAcceptThePreviousVersionsRules(t *testing.T) {
+	f, rt := newFakeProfileServer(t)
+	spec := widgetlabProfileSpec(t)
+
+	// v1: healthy, and live.
+	if err := run(t, rt, spec); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	// A corrected definition — same rule TOKEN, new content, so a republish. The
+	// engine lags, then loads it broken.
+	changed := spec
+	changed.DetectionRules = append([]DetectionRuleSpec(nil), spec.DetectionRules...)
+	changed.DetectionRules[0].Definition = `{"name":"corrected","when":{"metric":"temperature"}}`
+	f.mu.Lock()
+	f.settleAfterPolls = 3
+	f.breakRuleAtLoad = changed.DetectionRules[0].Token
+	f.mu.Unlock()
+
+	err := run(t, rt, changed)
+	if err == nil {
+		t.Fatal("bootstrap reported success while event-processing was still serving the " +
+			"PREVIOUS version's rules — the corrected rule is broken and nothing noticed")
+	}
+	if !strings.Contains(err.Error(), "COMPILE_ERROR") {
+		t.Errorf("error %q is not the engine's verdict on the new version; the check may have "+
+			"timed out on the stale rows instead of ever reading the new ones", err)
+	}
+}
+
+// The counterweight, and the reason the version check must not simply fail on lag:
+// once the engine catches up, the same run must succeed. Without this, tolerating lag
+// and refusing it are indistinguishable.
+func TestEnsureProfileWaitsForTheEngineToCatchUp(t *testing.T) {
+	f, rt := newFakeProfileServer(t)
+	spec := widgetlabProfileSpec(t)
+
+	f.mu.Lock()
+	f.settleAfterPolls = 3
+	f.mu.Unlock()
+
+	if err := run(t, rt, spec); err != nil {
+		t.Fatalf("bootstrap failed though the engine caught up within the settle window: %v", err)
+	}
+	f.mu.Lock()
+	polls := f.ruleHealthPolls
+	live := f.liveVersion
+	f.mu.Unlock()
+	if polls <= 1 {
+		t.Errorf("ruleHealth was polled %d time(s); the settle loop never retried, so the "+
+			"asynchronous seam this test exists for was not exercised", polls)
+	}
+	if live == 0 {
+		t.Error("the fake never settled, so the success above is not the case under test")
+	}
+}
+
+// A single 5xx must not fail the bootstrap. event-processing gates its data plane on
+// an auth-readiness check and is restarted by ordinary rollouts, so a transient error
+// is the same asynchronous seam the loop already absorbs for a lagging projection —
+// failing on it would make bootstrap flaky for a reason that resolves itself.
+func TestEnsureProfileRetriesATransientRuleHealthFailure(t *testing.T) {
+	f, rt := newFakeProfileServer(t)
+
+	f.mu.Lock()
+	f.unhealthyForNPolls = 3
+	f.mu.Unlock()
+
+	if err := run(t, rt, widgetlabProfileSpec(t)); err != nil {
+		t.Fatalf("a transient ruleHealth failure failed the bootstrap: %v", err)
+	}
+}
+
+// And the counterweight to THAT: an endpoint that never recovers must still fail,
+// with a message naming the likely causes rather than convicting one of them.
+func TestEnsureProfileFailsWhenRuleHealthNeverRecovers(t *testing.T) {
+	f, rt := newFakeProfileServer(t)
+
+	f.mu.Lock()
+	f.unhealthyForNPolls = 1 << 30
+	f.mu.Unlock()
+
+	err := run(t, rt, widgetlabProfileSpec(t))
+	if err == nil {
+		t.Fatal("bootstrap succeeded though ruleHealth never answered")
+	}
+	if !strings.Contains(err.Error(), "could not be reached") {
+		t.Errorf("error %q does not report that event-processing was unreachable", err)
+	}
+	// The most likely cause on a chart profile without event-processing has to be in
+	// the message, or the failure reads as a bug in the sim.
+	if !strings.Contains(err.Error(), "not deployed") {
+		t.Errorf("error %q does not mention that the instance may not deploy event-processing, "+
+			"so an operator on a telemetry/ingest-only profile has nothing to act on", err)
+	}
+}
+
+// ruleIdVersion is what makes the version check possible, so its failure modes are
+// pinned directly: an id it cannot parse must never read as a match.
+func TestRuleIdVersionParsesOnlyTheMintedShape(t *testing.T) {
+	if v, ok := ruleIdVersion("acme/wl-sensor-profile@7/wl-over-temp", "wl-sensor-profile"); !ok || v != 7 {
+		t.Errorf("ruleIdVersion of a minted id = (%d, %t), want (7, true)", v, ok)
+	}
+	for _, bad := range []string{
+		"",
+		"wl-over-temp",                          // no tenant prefix
+		"acme/wl-over-temp",                     // no profile-version segment
+		"acme/wl-sensor-profile/wl-over-temp",   // no @version
+		"acme/wl-sensor-profile@x/wl-over-temp", // non-numeric version
+		"acme/other-profile@7/wl-over-temp",     // another profile's rule
+		"acme/wl-sensor-profile@/wl-over-temp",  // empty version
+	} {
+		if v, ok := ruleIdVersion(bad, "wl-sensor-profile"); ok {
+			t.Errorf("ruleIdVersion(%q) = (%d, true); an id it cannot confirm must not read "+
+				"as a match", bad, v)
+		}
+	}
+}
+
+// firstUnhealthyRule is the pure heart of the liveness check, and each of its verdicts
+// points somewhere different — a lagging engine, a dropped rule, a rule that does not
+// compile, an id the check cannot interpret. Tested directly because the fake mints
+// only well-formed ids for the version under test, so the bootstrap-level tests reach
+// some of these branches by accident and others not at all.
+func TestFirstUnhealthyRuleVerdicts(t *testing.T) {
+	const profile = "wl-sensor-profile"
+	id := func(version int, rule string) string {
+		return fmt.Sprintf("acme/%s@%d/%s", profile, version, rule)
+	}
+	want := []string{"r1", "r2"}
+
+	cases := []struct {
+		name     string
+		health   []ruleHealthEntry
+		contains string // "" == must be healthy
+	}{
+		{
+			name: "every declared rule active for this version",
+			health: []ruleHealthEntry{
+				{RuleId: id(4, "r1"), RuleToken: "r1", Status: "ACTIVE"},
+				{RuleId: id(4, "r2"), RuleToken: "r2", Status: "ACTIVE"},
+			},
+		},
+		{
+			// The stale-projection case, stated as lag rather than as absence: the
+			// tokens ARE there, which is exactly why reading them as an answer is wrong.
+			name: "only the previous version is live",
+			health: []ruleHealthEntry{
+				{RuleId: id(3, "r1"), RuleToken: "r1", Status: "ACTIVE"},
+				{RuleId: id(3, "r2"), RuleToken: "r2", Status: "ACTIVE"},
+			},
+			contains: "still serving an older version",
+		},
+		{
+			name:     "the engine knows nothing about this profile yet",
+			health:   nil,
+			contains: "absent",
+		},
+		{
+			name: "a declared rule is missing from this version",
+			health: []ruleHealthEntry{
+				{RuleId: id(4, "r1"), RuleToken: "r1", Status: "ACTIVE"},
+			},
+			contains: "absent",
+		},
+		{
+			name: "a declared rule does not compile",
+			health: []ruleHealthEntry{
+				{RuleId: id(4, "r1"), RuleToken: "r1", Status: "ACTIVE"},
+				{RuleId: id(4, "r2"), RuleToken: "r2", Status: "COMPILE_ERROR", Message: "cost ceiling"},
+			},
+			contains: "COMPILE_ERROR",
+		},
+		{
+			// 🔴 An id the check cannot interpret must never read as agreement. Without
+			// the explicit rejection this degrades into "still serving an older
+			// version", which sends the reader to wait for a projection that is
+			// already current.
+			name: "an id that does not carry a version",
+			health: []ruleHealthEntry{
+				{RuleId: "not-a-rule-id", RuleToken: "r1", Status: "ACTIVE"},
+			},
+			contains: "does not carry a",
+		},
+		{
+			name: "an id belonging to a different profile",
+			health: []ruleHealthEntry{
+				{RuleId: "acme/other-profile@4/r1", RuleToken: "r1", Status: "ACTIVE"},
+			},
+			contains: "does not carry a",
+		},
+		{
+			// A rule this scenario did not declare is not this scenario's problem: a
+			// tenant may author its own on the same profile, and refusing to bootstrap
+			// over one would make the sim hostile to the instance it runs on.
+			name: "an extra rule nobody declared is ignored",
+			health: []ruleHealthEntry{
+				{RuleId: id(4, "r1"), RuleToken: "r1", Status: "ACTIVE"},
+				{RuleId: id(4, "r2"), RuleToken: "r2", Status: "ACTIVE"},
+				{RuleId: id(4, "console-authored"), RuleToken: "console-authored", Status: "ACTIVE"},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := firstUnhealthyRule(want, tc.health, profile, 4)
+			if tc.contains == "" {
+				if got != "" {
+					t.Errorf("reported %q, want healthy", got)
+				}
+				return
+			}
+			if got == "" {
+				t.Fatalf("reported healthy, want a verdict containing %q", tc.contains)
+			}
+			if !strings.Contains(got, tc.contains) {
+				t.Errorf("verdict %q does not contain %q — the message points at the wrong cause",
+					got, tc.contains)
+			}
+		})
 	}
 }

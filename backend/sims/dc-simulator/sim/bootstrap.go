@@ -207,7 +207,7 @@ func ensureProfile(ctx context.Context, rt *Runtime, p ProfileSpec) error {
 		}
 	}
 
-	// Publish when no published version already carries THIS content.
+	// Publish when the ACTIVE version does not already carry THIS content.
 	//
 	// The obvious formulation — publish when this run created something — is wrong
 	// in a way that fails silently and permanently. If a run adds a rule and the
@@ -220,16 +220,27 @@ func ensureProfile(ctx context.Context, rt *Runtime, p ProfileSpec) error {
 	//
 	// So the decision is made against durable state instead of against what this
 	// process happened to do. The publish stamps a version label derived from the
-	// declared content; if no version carries that label, the content has never been
-	// published — whether because it changed, because a publish failed, or because
-	// the profile is new. Retrying is then automatic, and an unchanged re-bootstrap
-	// still publishes nothing, so repeated resets do not accumulate junk versions.
+	// declared content; if the content has never been published — because it
+	// changed, because a publish failed, or because the profile is new — the label
+	// is not there and the publish is retried automatically, while an unchanged
+	// re-bootstrap publishes nothing and repeated resets accumulate no junk versions.
+	//
+	// 🔴 The question is asked of the ACTIVE version, not of every version that has
+	// ever existed. Only the active version is live (ADR-045: a draft is inert), and
+	// matching against the whole history means a marker in a SUPERSEDED version
+	// answers "yes, published" forever. Concretely: the sim publishes its content,
+	// a console user edits the draft and republishes, and the new active version does
+	// not carry the scenario's rule — but the old label is still in history, so every
+	// later bootstrap skips the publish and reports success over an active version
+	// missing the very thing it was asked to provision. Reading the active label
+	// instead makes that self-healing: it does not match, so the reconciled content
+	// is republished.
 	marker := profileContentMarker(p)
-	published, err := profileVersionLabels(ctx, rt, p.Token)
+	active, hasActive, err := activeVersionOf(ctx, rt, p.Token)
 	if err != nil {
 		return err
 	}
-	if !published[marker] {
+	if !hasActive || active.Label != marker {
 		var out struct {
 			PublishDeviceProfile struct {
 				Version int `json:"version"`
@@ -245,8 +256,27 @@ func ensureProfile(ctx context.Context, rt *Runtime, p ProfileSpec) error {
 		}
 		log.Info().Str("token", p.Token).Int("version", out.PublishDeviceProfile.Version).
 			Str("label", marker).Msg("published device profile")
+
+		// Post-assert the ACTIVE version now carries this content. publishDeviceProfile
+		// returning a version number says a row was written, not that the row is the
+		// one the platform will serve — and everything downstream reads the active
+		// version, not the one this call happened to create.
+		republished, hasActive, verifyErr := activeVersionOf(ctx, rt, p.Token)
+		if verifyErr != nil {
+			return verifyErr
+		}
+		if !hasActive || republished.Label != marker {
+			return fmt.Errorf("published profile %q but its active version carries label %q, not %q "+
+				"(hasActive=%t): something republished it concurrently, and the running platform is "+
+				"serving content this scenario did not declare", p.Token, republished.Label, marker, hasActive)
+		}
+		active = republished
 	}
-	return nil
+
+	// Whether or not this run published, prove the rules are LIVE before returning —
+	// and specifically live for THIS version, which is why the active version number
+	// is threaded through rather than re-derived.
+	return verifyDetectionRulesAreLive(ctx, rt, p, active.Version)
 }
 
 // profileContentMarker is a stable, short digest of everything a ProfileSpec
@@ -274,7 +304,29 @@ func profileContentMarker(p ProfileSpec) string {
 
 const queryDeviceProfileVersions = `query($token:String!){deviceProfileVersions(token:$token){version label}}`
 
-func profileVersionLabels(ctx context.Context, rt *Runtime, token string) (map[string]bool, error) {
+// activeProfileVersion is the profile's ACTIVE published version: its number and its
+// label. Superseded versions are ignored — only the active version is live (ADR-045:
+// a draft, and every version behind the active one, is inert), so it is the only one
+// whose label answers "is this content published?".
+//
+// The NUMBER is returned as well as the label because it is what identifies the
+// version to event-processing: a rule id embeds "{profileToken}@{version}", so it is
+// the only way to tell the engine serving what was just published from the engine
+// still serving what came before it.
+type activeProfileVersion struct {
+	Version int
+	Label   string
+}
+
+func activeVersionOf(ctx context.Context, rt *Runtime, token string) (activeProfileVersion, bool, error) {
+	profile, err := deviceProfileByToken(ctx, rt, token)
+	if err != nil {
+		return activeProfileVersion{}, false, err
+	}
+	if profile == nil || profile.ActiveVersion == nil {
+		return activeProfileVersion{}, false, nil
+	}
+
 	var out struct {
 		DeviceProfileVersions []struct {
 			Version int    `json:"version"`
@@ -283,13 +335,18 @@ func profileVersionLabels(ctx context.Context, rt *Runtime, token string) (map[s
 	}
 	if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, queryDeviceProfileVersions,
 		map[string]any{"token": token}, &out); err != nil {
-		return nil, fmt.Errorf("deviceProfileVersions: %w", err)
+		return activeProfileVersion{}, false, fmt.Errorf("deviceProfileVersions: %w", err)
 	}
-	labels := make(map[string]bool, len(out.DeviceProfileVersions))
 	for _, v := range out.DeviceProfileVersions {
-		labels[v.Label] = true
+		if v.Version == *profile.ActiveVersion {
+			return activeProfileVersion{Version: v.Version, Label: v.Label}, true, nil
+		}
 	}
-	return labels, nil
+	// An active version number with no matching row is not "unpublished" — it is the
+	// two reads disagreeing. Treating it as unpublished would republish on every
+	// bootstrap; saying so is better than either guess.
+	return activeProfileVersion{}, false, fmt.Errorf("profile %q reports active version %d, which "+
+		"deviceProfileVersions does not list", token, *profile.ActiveVersion)
 }
 
 func deviceProfileByToken(ctx context.Context, rt *Runtime, token string) (*deviceProfileInfo, error) {

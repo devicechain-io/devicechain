@@ -40,6 +40,22 @@ type Stats struct {
 	Emitted atomic.Int64
 	Shed    atomic.Int64
 	Failed  atomic.Int64
+
+	// LastTickShed is how many emits the MOST RECENT tick had shed, as opposed to
+	// how many the run has shed in total.
+	//
+	// 🔴 It exists because a cumulative counter cannot answer the question a shed
+	// actually raises: "is this widget empty right now because the device is quiet,
+	// or because its events are being rejected?" A device that is deliberately silent
+	// offers nothing and is counted nowhere; a shed device offers and is refused. The
+	// two are already distinguishable in aggregate — but a total that grew at some
+	// point in the last hour looks the same as one growing now, and on a scenario
+	// whose whole purpose is showing what a widget does with awkward data, "empty
+	// because governed" and "empty on purpose" are exactly the two readings that must
+	// not be confused. The lifecycle also logs the transition in both directions, so
+	// the fact appears in a log a person is reading rather than only in a field they
+	// would have to think to poll.
+	LastTickShed atomic.Int64
 	// Overruns counts ticks that took LONGER than the interval they were
 	// scheduled on. Two things it is NOT, both measured:
 	//
@@ -91,6 +107,7 @@ func (s *Stats) Reset(now time.Time) {
 	s.Emitted.Store(0)
 	s.Shed.Store(0)
 	s.Failed.Store(0)
+	s.LastTickShed.Store(0)
 	s.Overruns.Store(0)
 	s.Ticks.Store(0)
 	s.frozenNanos.Store(0)
@@ -118,13 +135,18 @@ func (s *Stats) Freeze(now time.Time) {
 // Snapshot is a consistent-enough read of the counters for reporting: the
 // achieved rate over the run so far, alongside the raw totals.
 type Snapshot struct {
-	Emitted  int64   `json:"emitted"`
-	Shed     int64   `json:"shed"`
-	Failed   int64   `json:"failed"`
-	Overruns int64   `json:"overruns"`
-	Ticks    int64   `json:"ticks"`
-	Seconds  float64 `json:"elapsedSeconds"`
-	Rate     float64 `json:"achievedRatePerSec"`
+	Emitted int64 `json:"emitted"`
+	Shed    int64 `json:"shed"`
+	// LastTickShed answers "is it being shed NOW", which the cumulative Shed above
+	// cannot. Non-zero means the most recent tick had emits refused at the per-tenant
+	// ingest ceiling, so a widget showing nothing is showing a governed device rather
+	// than a quiet one.
+	LastTickShed int64   `json:"lastTickShed"`
+	Failed       int64   `json:"failed"`
+	Overruns     int64   `json:"overruns"`
+	Ticks        int64   `json:"ticks"`
+	Seconds      float64 `json:"elapsedSeconds"`
+	Rate         float64 `json:"achievedRatePerSec"`
 }
 
 // Snapshot reads the counters and derives the achieved emit rate. The reads are
@@ -132,11 +154,12 @@ type Snapshot struct {
 // that skew is far below the precision anyone should read into the rate.
 func (s *Stats) Snapshot(now time.Time) Snapshot {
 	snap := Snapshot{
-		Emitted:  s.Emitted.Load(),
-		Shed:     s.Shed.Load(),
-		Failed:   s.Failed.Load(),
-		Overruns: s.Overruns.Load(),
-		Ticks:    s.Ticks.Load(),
+		Emitted:      s.Emitted.Load(),
+		Shed:         s.Shed.Load(),
+		LastTickShed: s.LastTickShed.Load(),
+		Failed:       s.Failed.Load(),
+		Overruns:     s.Overruns.Load(),
+		Ticks:        s.Ticks.Load(),
 	}
 	// A frozen elapsed wins: once a run has stopped, its rate is a fact about a
 	// finished window and must not keep being divided by wall-clock.
@@ -170,6 +193,25 @@ type Runtime struct {
 	// Stats accumulates emit accounting across the process lifetime.
 	Stats Stats
 
+	// MqttBroker/MqttTLSInsecure address the NATS MQTT gateway a scenario's
+	// CommandFarEnd dials, threaded from the handshake. Empty broker is legal for
+	// every scenario that declares no far end; for one that does, Bootstrap
+	// refuses rather than running a control channel with nothing on the other side.
+	MqttBroker      string
+	MqttTLSInsecure bool
+
+	// FarEndDisabled is the operator's explicit "run this scenario knowing its
+	// command widget answers nothing" (--no-command-far-end). It is a FIELD rather
+	// than the absence of a broker because the two are different situations and only
+	// one of them is a decision: /status reports this one as disabled, and the other
+	// never gets that far.
+	FarEndDisabled bool
+
+	// NewFarEnd builds the command far end. Nil in production (the real MQTT
+	// cmdreceiver); a test substitutes a fake so the ATTACH WIRING is gated without
+	// a broker — which is the half that was missing, not the receiver itself.
+	NewFarEnd FarEndFactory
+
 	// Load is the run-time load profile, carried here because Runtime is the
 	// handle every Tick already receives — so a scenario derives its emit
 	// concurrency from the SAME profile that sized this client's connection
@@ -197,11 +239,13 @@ func NewRuntime(hs *Handshake, load Load, deviceCount int) (*Runtime, error) {
 
 	httpc := &http.Client{Timeout: httpTimeout, Transport: transport}
 	return &Runtime{
-		Session:    userclient.NewTenantSession(httpc, hs.Endpoints.UserGraphQL, hs.SimEmail, hs.SimPassword, hs.Tenant),
-		Endpoints:  hs.Endpoints,
-		InstanceId: hs.InstanceId,
-		Tenant:     hs.Tenant,
-		HTTPClient: httpc,
-		Load:       load,
+		Session:         userclient.NewTenantSession(httpc, hs.Endpoints.UserGraphQL, hs.SimEmail, hs.SimPassword, hs.Tenant),
+		Endpoints:       hs.Endpoints,
+		InstanceId:      hs.InstanceId,
+		Tenant:          hs.Tenant,
+		HTTPClient:      httpc,
+		MqttBroker:      hs.Endpoints.MqttBroker,
+		MqttTLSInsecure: hs.MqttTLSInsecure,
+		Load:            load,
 	}, nil
 }
