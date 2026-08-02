@@ -17,11 +17,18 @@ package sim
 // none of those error: the filter matches nothing and renders an empty table that reads
 // as "no alarms yet", and the invariant becomes unfalsifiable and PASSES.
 //
-// So they are declared ONCE, here, rather than inline at each use — and published to
-// backend/testdata/authored-rules by loadtest/authored_rules_fixture_test.go, where a
-// test in each OWNING module holds them to the real enum. A second copy of any of these
-// spelled inline somewhere is a copy no gate can see; that is exactly how the widgetlab
-// alarm-count widget carried its own "ACTIVE" past every check in this arc.
+// So the values BOTH this package and loadtest need are declared once, here, rather than
+// inline at each use — and published to backend/testdata/authored-rules by
+// loadtest/authored_rules_fixture_test.go, where a test in each OWNING module holds them
+// to the real enum. A second copy spelled inline somewhere is a copy no gate can see;
+// that is exactly how the widgetlab alarm-count widget carried its own "ACTIVE" past
+// every check in this arc.
+//
+// This is not the whole mirrored vocabulary. The load-test command statuses
+// (QUEUED/SENT/SUCCESSFUL) stay in loadtest/command.go because nothing in this package
+// needs them — they are published to the same fixture and gated by command-delivery just
+// the same. The rule for a new mirrored value is "declare it once where its consumers can
+// reach it, and put it in the fixture", not "put it in this file".
 const (
 	// AlarmStateActiveWire / AlarmStateClearedWire are device-management's AlarmState
 	// (its Alarm.state column is a plain string). Gated by device-management's

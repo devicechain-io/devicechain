@@ -11,7 +11,9 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-simulator/sim"
@@ -72,11 +74,24 @@ const authoredRuleFixtureFile = "authored-rules.json"
 // seed, which TestAuthoredRulesDoNotVaryWithSeedOrConfig asserts rather than assumes.
 const authoredRuleFixtureSeed = 1
 
-// authoredRuleFixture is the committed artifact. The same shape is re-declared in each
-// consuming module (they cannot import this one), and every consumer decodes it with
-// DisallowUnknownFields — so a field added here fails those tests loudly rather than
-// being silently dropped on the floor, which is the same fail-closed posture the rule
-// decoder itself takes.
+// authoredRuleFixture is the committed artifact.
+//
+// Each consuming module declares its own PARTIAL mirror — typing only the section it owns
+// and holding the rest as json.RawMessage — and every one decodes with
+// DisallowUnknownFields. That duplication is the mechanism, not an accident of the module
+// boundary, and it is why a shared fixture type (in backend/core, which all four modules
+// already depend on) would be worse rather than merely unnecessary:
+//
+//   - It would DELETE THE TRIPWIRE. Today a field added here breaks all three consumer
+//     decodes, forcing each owning module to judge it or consciously park it. With one
+//     shared struct the producer edits core once and all three go green without any owning
+//     module seeing the change — the silent pass this artifact exists to prevent.
+//   - Shared CONSTANTS would go further and make the oracle SELF-REFERENTIAL: platform
+//     compared against platform, green by construction. A wire-breaking rename would move
+//     the sim and the services in lockstep, keeping the sim green while every real
+//     external client — the frontend's generated types, the C# SDK, a user integration —
+//     breaks. The committed file makes that rename a reviewable diff at the surface that
+//     actually constitutes the compatibility contract.
 type authoredRuleFixture struct {
 	Rules []authoredRule `json:"rules"`
 	// WireVocabulary is every enum value the sim MIRRORS from a service it cannot
@@ -150,13 +165,6 @@ type authoredRule struct {
 	// json.RawMessage, which would quietly make the fixture a pretty-printed
 	// paraphrase of the document instead of the document.
 	Definition string `json:"definition"`
-	// GroupScoped mirrors the per-rule entity-group scope device-management forwards to
-	// event-processing's publish gate, which rejects a scope on a rule kind that cannot
-	// carry one. DetectionRuleSpec has no group-scope field, so every rule the sim
-	// authors is unscoped and this is false throughout — recorded rather than assumed so
-	// the consumer submits what the real publish path submits, and so the day the sim
-	// gains the concept the field is already the thing that has to be filled in.
-	GroupScoped bool `json:"groupScoped"`
 }
 
 // harnessRuleBuilder is one detection rule the LOAD-TEST HARNESSES author directly
@@ -164,30 +172,35 @@ type authoredRule struct {
 //
 // Receiver names the config type whose ruleDefinitionJSON method builds it. It is not
 // decoration: TestEveryHarnessRuleBuilderIsCollected parses this package and fails if a
-// ruleDefinitionJSON method exists whose receiver is not listed here. That check is the
-// whole reason this is a list rather than two inline appends — the first version of this
-// file enumerated the producers it happened to know about and silently missed the
-// command harness entirely, leaving a rule with the exact typo class this fixture exists
-// to catch publishable with every gate green.
+// ruleDefinitionJSON method exists whose receiver is not listed here — which is why this
+// is a registered list rather than two inline appends (see the header note).
 type harnessRuleBuilder struct {
 	Receiver     string
 	RuleToken    string
 	ProfileToken string
-	Build        func() (string, error)
+	// Build is the definition as the fixture records it — from the ZERO config, so the
+	// committed bytes are reproducible. BuildWithDefaults is the same definition from a
+	// populated, defaulted config, which is what a real run actually publishes. The two
+	// must agree; TestAuthoredRulesDoNotVaryWithSeedOrConfig is what says so, and the day
+	// they stop agreeing the fixture has quietly become a sample of a family.
+	Build             func() (string, error)
+	BuildWithDefaults func() (string, error)
 }
 
 var harnessRuleBuilders = []harnessRuleBuilder{
 	{
-		Receiver:     "DetectionConfig",
-		RuleToken:    HarnessRuleToken,
-		ProfileToken: HarnessProfileToken,
-		Build:        DetectionConfig{}.ruleDefinitionJSON,
+		Receiver:          "DetectionConfig",
+		RuleToken:         HarnessRuleToken,
+		ProfileToken:      HarnessProfileToken,
+		Build:             DetectionConfig{}.ruleDefinitionJSON,
+		BuildWithDefaults: DetectionConfig{Seed: 42}.withDefaults().ruleDefinitionJSON,
 	},
 	{
-		Receiver:     "CommandConfig",
-		RuleToken:    HarnessCommandRuleToken,
-		ProfileToken: HarnessCommandProfileToken,
-		Build:        CommandConfig{}.ruleDefinitionJSON,
+		Receiver:          "CommandConfig",
+		RuleToken:         HarnessCommandRuleToken,
+		ProfileToken:      HarnessCommandProfileToken,
+		Build:             CommandConfig{}.ruleDefinitionJSON,
+		BuildWithDefaults: CommandConfig{Seed: 42}.withDefaults().ruleDefinitionJSON,
 	},
 }
 
@@ -228,15 +241,28 @@ func raisesAlarm(t *testing.T, producer, ruleToken, definition string) bool {
 	return false
 }
 
+// forEachScenarioRule visits every detection rule declared by every REGISTERED scenario
+// at the given seed. Registry is what main.go resolves a handshake's manifestId against,
+// so it is exactly the set of scenarios a real bring-up can run — which is why the walk
+// is over the registry and not over a list of scenario names.
+func forEachScenarioRule(seed int64, visit func(manifestId, profileToken string, r sim.DetectionRuleSpec)) {
+	for _, manifestId := range sim.ManifestIds() {
+		for _, p := range sim.Registry[manifestId](seed, sim.Load{}).Manifest().Profiles {
+			for _, r := range p.DetectionRules {
+				visit(manifestId, p.Token, r)
+			}
+		}
+	}
+}
+
 // buildAuthoredRules collects every DETECT rule this module publishes, from the same
 // values the provisioning paths read.
 //
-// 🔴 IT COLLECTS THE CLASS, NOT THE INSTANCES IT KNOWS ABOUT. Scenarios come from
-// sim.Registry, so a rule added to any registered scenario — or a fourth scenario — is
-// picked up with no edit here; harness rules come from harnessRuleBuilders, which a
-// source scan holds to the package's actual ruleDefinitionJSON methods. Hardcoding
-// "widgetlab and the detection harness" is exactly how this file shipped a hole the
-// first time.
+// 🔴 IT COLLECTS THE CLASS, NOT THE INSTANCES IT KNOWS ABOUT (see the header note).
+// Scenarios come from sim.Registry, so a rule added to any registered scenario — or a
+// fourth scenario — is picked up with no edit here; harness rules come from
+// harnessRuleBuilders, which a source scan holds to the package's actual
+// ruleDefinitionJSON methods.
 func buildAuthoredRules(t *testing.T) []authoredRule {
 	t.Helper()
 	var out []authoredRule
@@ -268,16 +294,10 @@ func buildAuthoredRules(t *testing.T) []authoredRule {
 	}
 
 	// Every REGISTERED scenario, not just the one that happens to declare rules today.
-	// Registry is what main.go resolves a handshake's manifestId against, so it is the
-	// full set of scenarios a real bring-up can run.
-	for _, manifestId := range sim.ManifestIds() {
-		manifest := sim.Registry[manifestId](authoredRuleFixtureSeed, sim.Load{}).Manifest()
-		for _, p := range manifest.Profiles {
-			for _, r := range p.DetectionRules {
-				add(manifestId, r.Token, p.Token, r.Enabled, r.Definition)
-			}
-		}
-	}
+	forEachScenarioRule(authoredRuleFixtureSeed,
+		func(manifestId, profileToken string, r sim.DetectionRuleSpec) {
+			add(manifestId, r.Token, profileToken, r.Enabled, r.Definition)
+		})
 
 	// The load-test harnesses, which author their rules directly rather than through a
 	// manifest — which is why they cannot come from the walk above.
@@ -305,23 +325,6 @@ func buildAuthoredRules(t *testing.T) []authoredRule {
 		t.Fatal("collected no authored rules, so the fixture would be empty and every check " +
 			"over it in event-processing and device-management vacuous")
 	}
-	// 🔴 The control below counts RULE TOKENS, not producers.
-	//
-	// The first version asserted that the producers {"widgetlab", "loadtest"} were both
-	// present — and that control was SATISFIED by the detection harness while the command
-	// harness's rule was missing entirely, because both share the producer label
-	// "loadtest". A control that a known-broken state passes is worse than none: it reads
-	// as coverage. Every harness builder must contribute its own token.
-	collected := map[string]bool{}
-	for _, r := range out {
-		collected[r.RuleToken] = true
-	}
-	for _, b := range harnessRuleBuilders {
-		if !collected[b.RuleToken] {
-			t.Fatalf("harness rule %q (%s) is not in the fixture, so it is published to a "+
-				"real cluster and validated by nothing", b.RuleToken, b.Receiver)
-		}
-	}
 	return out
 }
 
@@ -329,9 +332,9 @@ func buildAuthoredRules(t *testing.T) []authoredRule {
 // of this package rather than a list of what someone remembered.
 //
 // The harnesses author rules directly instead of through a manifest, so no walk can find
-// them — and the first version of this file simply missed one. The convention they follow
-// is a `ruleDefinitionJSON` method on a config type, so that is what is checked: every
-// such method declared in this package must have its receiver registered.
+// them (see the header note for what that cost the first time). The convention they
+// follow is a `ruleDefinitionJSON` method on a config type, so that is what is checked:
+// every such method declared in this package must have its receiver registered.
 //
 // go/parser rather than a regex, deliberately. A regex over source cannot tell code from
 // prose, so the same text sitting in a comment satisfies it — a gate this repo has
@@ -432,24 +435,72 @@ func renderAuthoredRuleFixture(t *testing.T, rules []authoredRule) []byte {
 	// nothing, so a consumer looping over the group would have nothing to hold to its
 	// enum and would pass — the vacuous green this whole artifact exists to prevent.
 	// Every consumer refuses an empty value too; this refuses to write one at all.
-	for name, value := range map[string]string{
-		"alarmState.active":          fixture.WireVocabulary.AlarmState.Active,
-		"alarmState.cleared":         fixture.WireVocabulary.AlarmState.Cleared,
-		"commandStatus.queued":       fixture.WireVocabulary.CommandStatus.Queued,
-		"commandStatus.sent":         fixture.WireVocabulary.CommandStatus.Sent,
-		"commandStatus.successful":   fixture.WireVocabulary.CommandStatus.Successful,
-		"detectionRuleStatus.active": fixture.WireVocabulary.DetectionRuleStatus.Active,
-	} {
+	//
+	// Walked by reflection rather than enumerated, for the same reason the rules are
+	// collected by class: a hand-written list of the six values we have today is a list
+	// someone must remember to extend, and a new vocabulary group added without its line
+	// here would be written blank and gated by nothing.
+	forEachVocabularyValue(t, fixture.WireVocabulary, func(name, value string) {
 		if value == "" {
 			t.Fatalf("wire vocabulary %s is empty, so the module that owns it would have "+
 				"nothing to hold to its real enum", name)
 		}
-	}
+	})
 	raw, err := json.MarshalIndent(fixture, "", "  ")
 	if err != nil {
 		t.Fatalf("render the fixture: %v", err)
 	}
 	return append(raw, '\n')
+}
+
+// forEachVocabularyValue visits every leaf string in the wire-vocabulary section, named
+// "group.field" from the JSON tags. Reflection is worth it here precisely because the
+// alternative is a list that has to be kept in step by hand — the shape this file exists
+// to argue against. It PANICS on a non-struct/non-string field rather than skipping it,
+// so a vocabulary group added in some other shape is a loud failure and not a silent gap
+// in the walk.
+func forEachVocabularyValue(t *testing.T, v wireVocabulary, visit func(name, value string)) {
+	t.Helper()
+	groups := reflect.ValueOf(v)
+	groupTypes := groups.Type()
+	if groups.NumField() == 0 {
+		t.Fatal("the wire vocabulary declares no groups, so this walk visits nothing")
+	}
+	visited := 0
+	for i := 0; i < groups.NumField(); i++ {
+		group, groupName := groups.Field(i), jsonFieldName(groupTypes.Field(i))
+		if group.Kind() != reflect.Struct {
+			t.Fatalf("wire vocabulary group %q is a %s, not a struct of strings — the walk "+
+				"cannot see inside it", groupName, group.Kind())
+		}
+		for j := 0; j < group.NumField(); j++ {
+			field := group.Field(j)
+			if field.Kind() != reflect.String {
+				t.Fatalf("wire vocabulary %s.%s is a %s, not a string",
+					groupName, jsonFieldName(group.Type().Field(j)), field.Kind())
+			}
+			visited++
+			visit(groupName+"."+jsonFieldName(group.Type().Field(j)), field.String())
+		}
+	}
+	if visited == 0 {
+		t.Fatal("the wire vocabulary has groups but no values, so this walk asserted nothing")
+	}
+}
+
+// jsonFieldName is the field's JSON tag name, falling back to the Go name.
+func jsonFieldName(f reflect.StructField) string {
+	tag := f.Tag.Get("json")
+	if tag == "" {
+		return f.Name
+	}
+	if comma := strings.Index(tag, ","); comma >= 0 {
+		tag = tag[:comma]
+	}
+	if tag == "" {
+		return f.Name
+	}
+	return tag
 }
 
 // TestAuthoredRuleFixtureIsCurrent is the staleness gate: the committed fixture must be
@@ -505,47 +556,65 @@ func TestAuthoredRuleFixtureIsCurrent(t *testing.T) {
 //
 // Both of these hold today by construction (the definitions are built from constants),
 // which is exactly the kind of fact that stops holding quietly.
+// scenarioRuleDefinitions returns every registered scenario's authored rule definitions
+// at one seed, keyed "manifestId/profileToken/ruleToken". It goes through the SAME walk
+// buildAuthoredRules uses, so the two literally cannot disagree about which rules a
+// scenario declares — a second loop of the same shape would be one more thing to keep in
+// step, in the file that argues against exactly that.
+func scenarioRuleDefinitions(seed int64) map[string]string {
+	out := map[string]string{}
+	forEachScenarioRule(seed, func(manifestId, profileToken string, r sim.DetectionRuleSpec) {
+		out[manifestId+"/"+profileToken+"/"+r.Token] = r.Definition
+	})
+	return out
+}
+
 func TestAuthoredRulesDoNotVaryWithSeedOrConfig(t *testing.T) {
-	first := sim.NewWidgetlab(1, sim.Load{}).Manifest().Profiles
-	// Seed only — widgetlab is a composed fixture and PANICS on a load override (its
-	// boards bind named devices), so the load axis does not exist to vary here.
-	second := sim.NewWidgetlab(20260802, sim.Load{}).Manifest().Profiles
+	// Every REGISTERED scenario, not just the one that declares rules today — a fourth
+	// scenario with a seed-dependent rule would otherwise be pinned at one seed and ship
+	// every other seed ungated. Seed is the only axis: the composed-fixture scenarios
+	// PANIC on a load override (their boards bind named devices), so there is no load
+	// axis to vary here.
+	first := scenarioRuleDefinitions(authoredRuleFixtureSeed)
+	second := scenarioRuleDefinitions(20260802)
+	if len(first) == 0 {
+		t.Fatal("no registered scenario declares a detection rule, so the seed check " +
+			"asserted nothing")
+	}
 	if len(first) != len(second) {
-		t.Fatalf("two seeds produced %d and %d profiles", len(first), len(second))
+		t.Fatalf("two seeds produced %d and %d scenario rules", len(first), len(second))
 	}
-	compared := 0
-	for i := range first {
-		if len(first[i].DetectionRules) != len(second[i].DetectionRules) {
-			t.Fatalf("profile %q declares %d rules at one seed and %d at another",
-				first[i].Token, len(first[i].DetectionRules), len(second[i].DetectionRules))
+	for key, definition := range first {
+		other, ok := second[key]
+		if !ok {
+			t.Errorf("rule %s exists at one seed and not another", key)
+			continue
 		}
-		for j := range first[i].DetectionRules {
-			compared++
-			if a, b := first[i].DetectionRules[j], second[i].DetectionRules[j]; a.Definition != b.Definition {
-				t.Errorf("widgetlab rule %q differs between seeds, so the fixture pins one "+
-					"seed's rule and every other seed publishes something ungated:\n %s\n %s",
-					a.Token, a.Definition, b.Definition)
-			}
+		if definition != other {
+			t.Errorf("rule %s differs between seeds, so the fixture pins one seed's rule "+
+				"and every other seed publishes something ungated:\n %s\n %s",
+				key, definition, other)
 		}
-	}
-	if compared == 0 {
-		t.Fatal("widgetlab declares no detection rules, so the seed check asserted nothing")
 	}
 
-	// The harness rule is built from a DetectionConfig; ensureDetectionRule passes one
-	// that has been through withDefaults(). If the definition ever starts reading a
-	// config field, the zero-config fixture stops describing what a real run publishes.
-	zero, err := DetectionConfig{}.ruleDefinitionJSON()
-	if err != nil {
-		t.Fatalf("zero config: %v", err)
-	}
-	populated, err := DetectionConfig{Seed: 42}.withDefaults().ruleDefinitionJSON()
-	if err != nil {
-		t.Fatalf("populated config: %v", err)
-	}
-	if zero != populated {
-		t.Errorf("the harness rule now varies with its config, so the fixture pins the "+
-			"zero-config form while a real run publishes another:\n %s\n %s", zero, populated)
+	// The harness rules are built from a config; ensureDetectionRule/ensureCommandRule
+	// pass one that has been through withDefaults(). If a definition ever starts reading
+	// a config field, the zero-config fixture stops describing what a real run publishes.
+	// Checked for EVERY registered builder, not just the detection one.
+	for _, b := range harnessRuleBuilders {
+		zero, err := b.Build()
+		if err != nil {
+			t.Fatalf("%s zero config: %v", b.Receiver, err)
+		}
+		populated, err := b.BuildWithDefaults()
+		if err != nil {
+			t.Fatalf("%s populated config: %v", b.Receiver, err)
+		}
+		if zero != populated {
+			t.Errorf("the %s harness rule now varies with its config, so the fixture pins "+
+				"the zero-config form while a real run publishes another:\n %s\n %s",
+				b.Receiver, zero, populated)
+		}
 	}
 }
 
@@ -574,26 +643,7 @@ func TestHarnessProbeValuesStraddleTheRuleThreshold(t *testing.T) {
 			"safety invariant is satisfied by the detection path being inert",
 			harnessAboveValue, harnessThreshold)
 	}
-	// And the threshold the probes straddle must be the one the rule actually publishes.
-	// Two constants that agree with each other while the rule carries a third would leave
-	// the probes straddling nothing.
-	def, err := DetectionConfig{}.ruleDefinitionJSON()
-	if err != nil {
-		t.Fatalf("build the harness rule definition: %v", err)
-	}
-	var rule struct {
-		When struct {
-			Threshold *float64 `json:"threshold"`
-		} `json:"when"`
-	}
-	if err := json.Unmarshal([]byte(def), &rule); err != nil {
-		t.Fatalf("decode the harness rule definition: %v", err)
-	}
-	if rule.When.Threshold == nil {
-		t.Fatal("the harness rule publishes no threshold, so the probe values straddle nothing")
-	}
-	if *rule.When.Threshold != harnessThreshold {
-		t.Errorf("the published rule compares against %v but the probes are placed around %v",
-			*rule.When.Threshold, harnessThreshold)
-	}
+	// That the PUBLISHED rule compares against harnessThreshold — rather than the probes
+	// straddling a constant the rule does not use — is already pinned next door by
+	// TestRuleDefinitionJSON in detection_test.go, in this same package.
 }

@@ -57,7 +57,6 @@ type authoredSimRule struct {
 	Enabled           bool   `json:"enabled"`
 	AlarmSeverityWire string `json:"alarmSeverityWire"`
 	Definition        string `json:"definition"`
-	GroupScoped       bool   `json:"groupScoped"`
 }
 
 // publishedRule is the slice of the opaque rule definition this module cares about: the
@@ -164,10 +163,10 @@ func TestAuthoredSimAlarmSeverityIsARealTier(t *testing.T) {
 // This is not hypothetical: widgetlab shipped "MAJOR" as its authoring severity once,
 // having collapsed the pair the load-test harness deliberately keeps apart.
 func TestTheTwoAlarmVocabulariesReallyDoDiffer(t *testing.T) {
-	// AllAlarmSeverities, not a hand-written list: a sixth tier added to the enum would
-	// simply sit outside a literal list here, silently unchecked. Ranging over the one
-	// declaration means a new tier is covered the moment it can be ranked at all.
-	tiers := AllAlarmSeverities()
+	// The one declaration, not a hand-written list: a sixth tier added to the enum would
+	// simply sit outside a literal list here, silently unchecked. Ranging over
+	// alarmSeveritiesByRank means a new tier is covered the moment it can be ranked at all.
+	tiers := alarmSeveritiesByRank
 	if len(tiers) == 0 {
 		t.Fatal("the severity vocabulary is empty, so this test asserted nothing")
 	}
@@ -208,9 +207,7 @@ func TestAuthoredSimAlarmStatesAreRealStates(t *testing.T) {
 			"%q — a raised-and-cleared liveness check would never see its terminal state",
 			wire.Cleared, AlarmStateCleared)
 	}
-	// Equality above already implies validity; asserted anyway so that dropping a state
-	// from Valid() while keeping its declaration is caught here rather than at runtime.
-	if !AlarmState(wire.Active).Valid() || !AlarmState(wire.Cleared).Valid() {
-		t.Errorf("a mirrored alarm state is declared but no longer accepted by AlarmState.Valid()")
-	}
+	// No Valid() re-assertion here: equality with the declared constant implies it, and
+	// the one case it would not — a state declared but dropped from Valid() — is already
+	// pinned by TestAlarmStateValid in this package.
 }

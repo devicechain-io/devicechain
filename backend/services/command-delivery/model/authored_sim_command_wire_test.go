@@ -67,6 +67,10 @@ func TestAuthoredSimCommandStatusesAreRealStatuses(t *testing.T) {
 			"not ignored)", authoredSimFixturePath, err)
 	}
 
+	// Identity against the declared constant, not merely Valid(): a DIFFERENT valid status
+	// would satisfy Valid() while the harness asked a well-formed question about the wrong
+	// thing. Identity implies validity, and the one case it would not — a status declared
+	// but dropped from Valid() — is already pinned by TestCommandStatusValid in this package.
 	mirrored := fixture.WireVocabulary.CommandStatus
 	for _, c := range []struct {
 		name string
@@ -89,9 +93,6 @@ func TestAuthoredSimCommandStatusesAreRealStatuses(t *testing.T) {
 				"writes %q — the harness's comparison can never match, so its "+
 				"'no command stranded' invariant becomes trivially true and PASSES over a run "+
 				"in which every command was stranded", c.name, c.got, c.want)
-		}
-		if !CommandStatus(c.got).Valid() {
-			t.Errorf("mirrored %s status %q is not a known CommandStatus", c.name, c.got)
 		}
 	}
 

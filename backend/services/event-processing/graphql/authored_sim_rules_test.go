@@ -48,12 +48,6 @@ type authoredRule struct {
 	Enabled           bool   `json:"enabled"`
 	AlarmSeverityWire string `json:"alarmSeverityWire"`
 	Definition        string `json:"definition"`
-	// GroupScoped mirrors the per-rule entity-group scope device-management forwards to
-	// this gate (ADR-062 S4 rejects a scope on a kind that cannot carry one). No sim rule
-	// is scoped today, so it is false throughout — but it is submitted rather than
-	// hardcoded here, so that the day a scenario authors a scoped rule this test asks the
-	// gate the same question the real publish path does instead of a laxer one.
-	GroupScoped bool `json:"groupScoped"`
 }
 
 // authoredSimFixture is the whole committed file. Every section is declared because the
@@ -110,8 +104,13 @@ func validateAuthored(t *testing.T, rules []authoredRule) *DetectionRuleValidati
 	t.Helper()
 	inputs := make([]detectionRuleInput, 0, len(rules))
 	for _, r := range rules {
+		// GroupScoped false: the sim has no entity-group-scope concept (sim.DetectionRuleSpec
+		// declares no such field), so every rule it authors is unscoped and this matches what
+		// device-management forwards. If the sim ever gains scoping, the producer gains the
+		// field and this decode fails closed on the unknown key rather than quietly asking the
+		// gate a laxer question than the real publish path does.
 		inputs = append(inputs, detectionRuleInput{
-			Token: r.RuleToken, Definition: r.Definition, GroupScoped: r.GroupScoped})
+			Token: r.RuleToken, Definition: r.Definition, GroupScoped: false})
 	}
 	res, err := (&SchemaResolver{}).ValidateDetectionRules(
 		authedContext(auth.DeviceRead), struct{ Rules []detectionRuleInput }{Rules: inputs})
@@ -136,27 +135,27 @@ func TestAuthoredSimRulesPassThePublishGate(t *testing.T) {
 		if strings.TrimSpace(r.Definition) == "" {
 			t.Fatalf("fixture entry %s/%s carries an empty rule definition", r.Producer, r.RuleToken)
 		}
-		// A DISABLED rule is published UNCHECKED in production — the publish gate only
-		// validates enabled rules — so a scenario shipping one has authored something
-		// nothing validates on a real cluster. Legitimate, but it must be visible.
-		if !r.Enabled {
-			t.Logf("NOTE: %s/%s is authored DISABLED, so the real publish gate skips it and "+
-				"this test is its only check", r.Producer, r.RuleToken)
-		}
+		// NOTE on `enabled`: the real publish gate validates only ENABLED rules, so a
+		// scenario shipping a disabled one has authored something nothing validates on a
+		// real cluster. This test deliberately validates it anyway — stricter than
+		// production, which is the safe direction — so the flag changes nothing here and
+		// is recorded in the fixture for the reader rather than branched on.
 	}
 
 	res := validateAuthored(t, authored)
 	if !res.Valid() {
-		byToken := map[string]string{}
+		byToken := map[string]authoredRule{}
 		for _, r := range authored {
-			byToken[r.RuleToken] = r.Producer
+			byToken[r.RuleToken] = r
 		}
 		for _, e := range res.Errors() {
-			t.Errorf("the sim publishes a rule the publish gate REJECTS: %s/%s: %s\n"+
-				"With the gate wired the profile fails to publish and the scenario cannot "+
-				"bootstrap at all; with it unwired the version publishes and the engine drops "+
-				"the rule at load with only a log line — the alarm silently never fires.",
-				byToken[e.Token()], e.Token(), e.Message())
+			t.Errorf("the sim publishes a rule the publish gate REJECTS: %s (rule %s on "+
+				"profile %s): %s\nWith the gate wired the profile fails to publish and the "+
+				"scenario cannot bootstrap at all; with it unwired the version publishes and "+
+				"the engine drops the rule at load with only a log line — the alarm silently "+
+				"never fires.",
+				byToken[e.Token()].Producer, e.Token(), byToken[e.Token()].ProfileToken,
+				e.Message())
 		}
 	}
 }

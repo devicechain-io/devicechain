@@ -26,20 +26,15 @@ const (
 // alarmSeveritiesByRank is the tier order, most severe first. It is the SINGLE
 // declaration of the vocabulary: Rank is its index and Valid is membership in it, so a
 // tier added to the const block above but not to this slice has no rank and is not valid
-// — it cannot be half-added. Anything ranging over the severities (a test, a UI list)
-// gets it from AllAlarmSeverities rather than re-listing them and drifting.
+// — it cannot be half-added. Anything needing to range over the severities reads this
+// rather than re-listing them and drifting. (Unexported: nothing outside the package
+// needs it yet. Export a copy-returning accessor when something does — not before.)
 var alarmSeveritiesByRank = []AlarmSeverity{
 	AlarmSeverityCritical,
 	AlarmSeverityMajor,
 	AlarmSeverityMinor,
 	AlarmSeverityWarning,
 	AlarmSeverityIndeterminate,
-}
-
-// AllAlarmSeverities returns the known severities, most severe first. The returned slice
-// is a copy, so a caller cannot reorder the ranking by mutating it.
-func AllAlarmSeverities() []AlarmSeverity {
-	return append([]AlarmSeverity(nil), alarmSeveritiesByRank...)
 }
 
 // Valid reports whether the severity names one of the known levels.
