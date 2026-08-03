@@ -20,7 +20,7 @@ import {
 import { useQuery } from '@/lib/hooks/use-query';
 import { listTenants } from '@/lib/api/admin';
 import { TierPill } from '@/components/tiers/TierPill';
-import { StatusBadge, rowLinkProps } from '@/routes/common';
+import { PurgeBadge, StatusBadge, rowLinkProps } from '@/routes/common';
 
 export default function TenantsPage() {
   const { t } = useTranslation('tenants');
@@ -68,7 +68,10 @@ export default function TenantsPage() {
                     <TierPill label={tr.tier.token} color={tr.tier.color} />
                   </DataTableCell>
                   <DataTableCell>
-                    <StatusBadge enabled={tr.enabled} />
+                    <div className="flex items-center gap-1.5">
+          <StatusBadge enabled={tr.enabled} />
+          <PurgeBadge state={tr.purgeState} epoch={tr.purgeEpoch} />
+        </div>
                   </DataTableCell>
                   <DataTableCell className="max-w-xs truncate font-mono text-xs text-muted-foreground">
                     {tr.config ?? '—'}

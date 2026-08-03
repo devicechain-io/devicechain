@@ -14,7 +14,7 @@ import {
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { ArrowLeft, CheckCircle2, CircleSlash } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, CircleSlash, Trash2 } from 'lucide-react';
 import { GraphQLRequestError } from '@devicechain/client';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
@@ -89,6 +89,23 @@ export function StatusBadge({ enabled }: { enabled: boolean }) {
   ) : (
     <Badge variant="outline" className="gap-1 text-muted-foreground">
       <CircleSlash size={12} /> {t('disabled')}
+    </Badge>
+  );
+}
+
+// PurgeBadge renders a deleted tenant's lifecycle state. It sits BESIDE StatusBadge
+// rather than replacing it because the two say different things: a deleted tenant is
+// also disabled, but a disabled tenant can be switched back on and a deleted one
+// cannot — showing only the enabled/disabled pill made a destroyed tenant look like an
+// ordinarily paused one in every listing.
+export function PurgeBadge({ state, epoch }: { state: string; epoch?: string | null }) {
+  const { t } = useTranslation('tenants');
+  if (state === 'active') return null;
+  const label = state === 'purged' ? t('purgeStatePurged') : t('purgeStatePurging');
+  return (
+    <Badge variant="destructive" className="gap-1">
+      <Trash2 size={12} /> {label}
+      {epoch ? ` — ${t('purgeStateSince', { when: new Date(epoch).toLocaleDateString() })}` : ''}
     </Badge>
   );
 }

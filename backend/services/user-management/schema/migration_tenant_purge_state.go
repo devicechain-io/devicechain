@@ -29,9 +29,10 @@ import (
 // tenantPurgeStateSnapshot is this migration's snapshot of iam_tenants: the primary
 // key gorm needs to target the table, plus exactly the two columns being added.
 //
-// TableName is pinned to match the baseline's own tenant snapshot. Every snapshot type
-// in this area pins it, so leaving it off here would derive a table from the Go type
-// name and quietly migrate nothing.
+// TableName is pinned to match the baseline's own tenant snapshot; leaving it off would
+// derive a table from the Go type name and quietly migrate nothing. (Nearly every
+// snapshot in this area pins it — signingKey is the deliberate exception, where pinning
+// it would rename the table's indexes.)
 type tenantPurgeStateSnapshot struct {
 	ID uint `gorm:"primarykey"`
 

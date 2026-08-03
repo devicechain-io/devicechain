@@ -30,6 +30,8 @@ func TestTolerateExistsSwallowsOnlyAnAlreadyExists(t *testing.T) {
 		"tenant already exists",
 		"ERROR: duplicate key",
 		"UNIQUE constraint failed: iam_tenants.token",
+		// The server's prose still wins when the caller's echoed input is irrelevant.
+		`create tenant "sim-wl": tenant already exists`,
 	}
 	for _, msg := range tolerated {
 		inner := errors.New(msg)
@@ -40,14 +42,23 @@ func TestTolerateExistsSwallowsOnlyAnAlreadyExists(t *testing.T) {
 
 	refusals := []string{
 		// The ADR-077 reservation, in the shape user-management sends it.
-		"that tenant token is reserved: a tenant at this token was deleted and its data is " +
-			"still being reclaimed. Tokens are never reused, because every functional area keys " +
-			"its rows on the token; pick a different one",
+		`create tenant "sim-wl": that tenant token is reserved: a tenant at this token was ` +
+			`deleted. Tokens are never reused, because every functional area keys its rows on ` +
+			`the token; pick a different one`,
 		// Ordinary failures that must never read as success either.
-		"unknown tier \"platinum\"",
+		`unknown tier "platinum"`,
 		"tenant does not exist",
 		"connection refused",
 		"permission denied",
+
+		// 🔴 THE CASE THAT DEFEATED THE FIRST VERSION OF THIS TEST. The server echoes the
+		// caller's identifiers back inside quotes, so a sim whose NAME contains a
+		// tolerated phrase used to decide its own outcome: every one of these is a real
+		// failure whose only tolerated word is in the caller's own input.
+		`create tenant "sim-unique1": that tenant token is reserved; pick a different one`,
+		`create tenant "sim-duplicate-check": connection refused`,
+		`create identity "duplicate-name@sim.devicechain.local": permission denied`,
+		`create tenant "sim-unique1": unknown tier "platinum"`,
 	}
 	for _, msg := range refusals {
 		inner := errors.New(msg)

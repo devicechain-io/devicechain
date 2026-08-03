@@ -133,11 +133,20 @@ func (s *Service) AddMembership(ctx context.Context, email, tenant string, roleT
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.iam.TenantByToken(ctx, tenant); err != nil {
+	t, err := s.iam.TenantByToken(ctx, tenant)
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrTenantNotFound
 		}
 		return nil, err
+	}
+	// A deleted tenant takes no new members (ADR-077). Its row survives only to reserve
+	// the token, and the grant path refuses everyone, so a membership added here could
+	// never be used: the identity would see the tenant in its menu and be told "invalid
+	// credentials" on every attempt to enter, indistinguishable from a bad password.
+	// It would also un-do DeleteTenant's zero-membership precondition after the fact.
+	if t.PurgeState.Deleted() {
+		return nil, ErrTenantDeleted
 	}
 	if _, err := s.iam.MembershipByIdentityTenant(ctx, id.ID, tenant); err == nil {
 		return nil, ErrAlreadyMember

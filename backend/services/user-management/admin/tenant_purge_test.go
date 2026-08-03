@@ -103,9 +103,10 @@ func TestCreateTenantRefusesAReservedToken(t *testing.T) {
 // which swallows any error whose text contains "already exists", "duplicate" or
 // "unique" so that re-running `sim create` is idempotent. A reservation refusal
 // phrased with any of those words would be silently treated as success by the caller
-// most likely to hit it — and dcctl would then go on to mint an identity and a
-// membership against a tenant it does not own, which is the disclosure this whole
-// change exists to prevent, arrived at through the front door.
+// most likely to hit it — dcctl would report ✅, having minted an identity and a
+// membership against a tenant nobody can enter, and the sim would then fail at login
+// with nothing pointing back here. (Not a disclosure: resolveTenantGrant refuses a
+// deleted tenant, so the layer below still holds. A silent, misattributed break.)
 //
 // The coupling is real and cross-module, so it is asserted on both sides; the dcctl
 // half lives in backend/cli/sim/admin_test.go.
@@ -132,4 +133,47 @@ func TestCreateTenantStillCollidesOnAnActiveToken(t *testing.T) {
 	require.Error(t, err)
 	require.NotErrorIs(t, err, ErrTenantTokenReserved,
 		"an active duplicate is an already-exists, not a reservation")
+}
+
+// A deleted tenant takes no new members. Without this, DeleteTenant's zero-membership
+// precondition holds only at the instant of the cut: an operator could attach a user
+// afterwards, get a success toast, and hand them a tenant that answers every login
+// attempt with "invalid credentials".
+func TestAddMembershipRefusesADeletedTenant(t *testing.T) {
+	s := newPurgeTestService(t)
+	ctx := context.Background()
+	createTenant(t, s, "acme")
+	_, err := s.CreateIdentity(ctx, CreateIdentityInput{Email: "someone@example.com", Password: "hunter2hunter2", Enabled: true})
+	require.NoError(t, err)
+	_, err = s.DeleteTenant(ctx, "acme")
+	require.NoError(t, err)
+
+	_, err = s.AddMembership(ctx, "someone@example.com", "acme", nil)
+	require.ErrorIs(t, err, ErrTenantDeleted)
+}
+
+// A deleted tenant must not pin its tier forever. The row keeps its NOT NULL tier_id
+// (it survives to reserve the token), so counting tombstones would refuse every future
+// tier deletion with "move them to another tier first" — naming tenants an operator
+// can neither see nor move.
+func TestDeletedTenantsDoNotBlockTierDeletion(t *testing.T) {
+	s := newPurgeTestService(t)
+	ctx := context.Background()
+	createTenant(t, s, "acme")
+	_, err := s.DeleteTenant(ctx, "acme")
+	require.NoError(t, err)
+
+	removed, err := s.DeleteTenantTier(ctx, iam.TierSilverToken)
+	require.NoError(t, err, "a tier whose only tenant was deleted must be removable")
+	require.True(t, removed)
+
+	// The negative control: a LIVE tenant still pins its tier, so the exclusion above
+	// narrowed the count rather than disabling the guard.
+	createTenant2 := func(token, tier string) {
+		_, err := s.CreateTenant(ctx, TenantInput{Token: token, TierToken: tier})
+		require.NoError(t, err)
+	}
+	createTenant2("live-one", iam.TierGoldToken)
+	_, err = s.DeleteTenantTier(ctx, iam.TierGoldToken)
+	require.ErrorIs(t, err, ErrTierInUse)
 }

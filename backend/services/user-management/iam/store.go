@@ -459,7 +459,14 @@ func (s *Store) DeleteTenantTier(ctx context.Context, t *TenantTier) error {
 // ErrEntityInUse pattern).
 func (s *Store) CountTenantsAtTier(ctx context.Context, tierID uint) (int64, error) {
 	var n int64
-	err := s.sys(ctx).Model(&Tenant{}).Where("tier_id = ?", tierID).Count(&n).Error
+	// LIVE tenants only. A deleted tenant keeps its NOT NULL tier_id forever (the row
+	// survives to reserve its token), so counting tombstones would make any tier that
+	// ever hosted a now-deleted tenant permanently undeletable — and the refusal would
+	// say "move them to another tier first" about tenants an operator cannot see or
+	// move. The FK still protects the rows themselves; this is the question a human is
+	// actually asking, which is "is anyone using this tier".
+	err := s.sys(ctx).Model(&Tenant{}).
+		Where("tier_id = ? AND purge_state = ?", tierID, PurgeActive).Count(&n).Error
 	return n, err
 }
 

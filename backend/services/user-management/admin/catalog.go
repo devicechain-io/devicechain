@@ -32,12 +32,19 @@ var (
 	// 🔴 THE WORDING IS LOAD-BEARING, and not for style. dcctl's sim flow wraps its
 	// createTenant call in tolerateExists (backend/cli/sim/admin.go), which swallows any
 	// error whose text contains "already exists", "duplicate" or "unique" so that a
-	// re-create is idempotent. If this refusal read like one of those, the one caller
-	// most likely to hit it would treat the refusal as success and carry on against a
-	// tenant it does not own. Keep those three phrases out of it — there is a test.
-	ErrTenantTokenReserved = errors.New("that tenant token is reserved: a tenant at this token was " +
-		"deleted and its data is still being reclaimed. Tokens are never reused, because every " +
-		"functional area keys its rows on the token; pick a different one")
+	// re-create is idempotent. If this refusal read like one of those, the caller most
+	// likely to hit it would report success and carry on — minting an identity and a
+	// membership against a tenant it cannot actually enter, then failing at login with
+	// nothing pointing back here. (It is not a disclosure: resolveTenantGrant refuses a
+	// deleted tenant, so the layer below still holds. It is a silent, misattributed
+	// break.) Keep those three phrases out of it — both sides have tests.
+	// ErrTenantDeleted refuses a write against a tenant that has been through the delete
+	// door — it exists only to hold its token, and nothing may be attached to it.
+	ErrTenantDeleted = errors.New("that tenant has been deleted and no longer accepts changes")
+
+	ErrTenantTokenReserved = errors.New("that tenant token is reserved: a tenant at this token " +
+		"was deleted. Tokens are never reused, because every functional area keys its rows on " +
+		"the token; pick a different one")
 )
 
 // RoleInput is the data to create a role (ADR-008 RBAC / ADR-033). Scope is
