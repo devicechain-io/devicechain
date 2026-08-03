@@ -36,7 +36,7 @@ import (
 type tenantPurgeStateSnapshot struct {
 	ID uint `gorm:"primarykey"`
 
-	// PurgeState is "active" | "purging" | "purged". Defaulted in the database rather
+	// PurgeState is "active" | "purging". Defaulted in the database rather
 	// than only in Go, so the rows that already exist when this runs come out `active`
 	// instead of empty — a NULL here would read as "not active" to any check written
 	// the obvious way.

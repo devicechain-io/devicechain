@@ -44,7 +44,6 @@
   "outboundBurstLabel": "Outbound burst",
   "outboundRateDescription": "Rate ceiling for outbound connector actions. Leave blank to inherit the platform default.",
   "outboundRateLabel": "Outbound rate (calls/sec)",
-  "purgeStatePurged": "Deleted",
   "purgeStatePurging": "Deleting",
   "purgeStateSince": "since {{when}}",
   "searchModelsPlaceholder": "Search models…",

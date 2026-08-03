@@ -25,9 +25,11 @@ var (
 	ErrTierInUse            = errors.New("tenant tier still has tenants; move them to another tier first")
 	ErrUnknownTierColor     = errors.New("unknown tier color (must be a palette token or empty)")
 
-	// ErrTenantTokenReserved refuses a create at the token of a tenant that has been
-	// deleted (ADR-077). The token is the isolation key every other area stores, so
-	// handing it to a new tenant would hand over the old one's rows.
+	// ErrTenantTokenReserved refuses a create at the token of a tenant that is being
+	// purged (ADR-077). The token is the isolation key every other area stores, so
+	// handing it to a new tenant before the old one's rows are gone would hand over the
+	// old one's data. The reservation lasts exactly as long as the purge: reclamation
+	// removes the tenant row, and the token is then free.
 	//
 	// 🔴 THE WORDING IS LOAD-BEARING, and not for style. dcctl's sim flow wraps its
 	// createTenant call in tolerateExists (backend/cli/sim/admin.go), which swallows any
@@ -43,8 +45,8 @@ var (
 	ErrTenantDeleted = errors.New("that tenant has been deleted and no longer accepts changes")
 
 	ErrTenantTokenReserved = errors.New("that tenant token is reserved: a tenant at this token " +
-		"was deleted. Tokens are never reused, because every functional area keys its rows on " +
-		"the token; pick a different one")
+		"is being deleted, and its token stays taken until every functional area has reclaimed " +
+		"the rows it keys on that token. Retry once the deletion finishes, or pick another token")
 )
 
 // RoleInput is the data to create a role (ADR-008 RBAC / ADR-033). Scope is

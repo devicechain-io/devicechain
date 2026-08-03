@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-command-delivery/model"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
@@ -217,4 +218,111 @@ func (g *gatedApi) TrySweepLock(_ context.Context, fn func() error) (bool, error
 		return false, nil
 	}
 	return true, fn()
+}
+
+// queuedFor is queued() for a named tenant, so a sweep can carry commands for more than
+// one — which is what the sweep actually loads (PendingCommands reads cross-tenant under
+// a system context).
+func queuedFor(id uint, token, tenant string) *model.Command {
+	cmd := queued(id, token)
+	cmd.TenantId = tenant
+	return cmd
+}
+
+// 🔴 ADR-077: a queued command must not fire into a tenant that has been deleted.
+//
+// A command is a PHYSICAL ACTUATION. The sweep loads QUEUED rows cross-tenant under a
+// system context, and a command enqueued before an operator deleted the tenant is still
+// queued after it — so without this gate the next sweep tick opens a valve or trips a
+// relay on an offboarded customer's hardware. Worse, the publish happens BEFORE MarkSent,
+// so once the tenant's rows are swept the actuation has already happened by the time
+// MarkSent fails to find its row: the device acts, and the platform's only record is an
+// error log about a command it can no longer describe.
+//
+// The three assertions are the three things that have to be true together: nothing is
+// published for the deleted tenant, the OTHER tenant in the same sweep is unaffected
+// (a gate that stopped the batch would be an outage, not a fix), and the refused row is
+// left QUEUED rather than marked sent.
+func TestSweepRefusesToDeliverIntoADeletedTenant(t *testing.T) {
+	api := &fakeApi{lockAvailable: true, pending: []*model.Command{
+		queuedFor(1, "c1", "acme"),
+		queuedFor(2, "c2", "other"),
+	}}
+	writer := &recordingWriter{}
+	proc := procWith(api, writer)
+	proc.TenantDeleted = func(tenant string) bool { return tenant == "acme" }
+
+	proc.sweepLocked(context.Background())
+
+	if got := writer.devices; len(got) != 1 || got[0] != "dev-c2" {
+		t.Fatalf("expected only the live tenant's command to be published, got %v", got)
+	}
+	if len(api.markedSent) != 1 || api.markedSent[0] != 2 {
+		t.Fatalf("the refused command must be left QUEUED; marked sent = %v", api.markedSent)
+	}
+}
+
+// The negative control: with the gate wired and answering "live", both commands still
+// deliver. Without it, a gate that refused everything would satisfy the test above while
+// silently stopping every command on the instance.
+func TestSweepStillDeliversWhenTheGateSaysLive(t *testing.T) {
+	api := &fakeApi{lockAvailable: true, pending: []*model.Command{
+		queuedFor(1, "c1", "acme"),
+		queuedFor(2, "c2", "other"),
+	}}
+	writer := &recordingWriter{}
+	proc := procWith(api, writer)
+	proc.TenantDeleted = func(string) bool { return false }
+
+	proc.sweepLocked(context.Background())
+
+	if writer.count() != 2 {
+		t.Fatalf("a live tenant's commands must still deliver, published %d", writer.count())
+	}
+}
+
+// An UNWIRED gate must deliver, not panic. The struct's fields are exported and it is
+// built by literal (procWith above, and anywhere else that skips the constructor), so a
+// nil-normalizing constructor alone would leave a nil call on the delivery path. This is
+// the test that makes "read it through the accessor" load-bearing rather than a style
+// note — it is how the panic was found.
+func TestSweepDeliversWithNoLifecycleGateWired(t *testing.T) {
+	api := &fakeApi{lockAvailable: true, pending: []*model.Command{queued(1, "c1")}}
+	writer := &recordingWriter{}
+
+	procWith(api, writer).sweepLocked(context.Background()) // TenantDeleted is nil
+
+	if writer.count() != 1 {
+		t.Fatalf("an unwired gate must leave delivery working, published %d", writer.count())
+	}
+}
+
+// 🔴 THE PLUMBING, which every test above skips.
+//
+// procWith builds the processor by struct literal and assigns TenantDeleted directly, so
+// all three tests above measure the FIELD. The shipped binary reaches it only through
+// NewCommandDeliveryProcessor — and with nothing covering that, deleting the constructor's
+// `TenantDeleted: tenantDeleted` line disabled the gate in production while leaving this
+// entire suite green. A gate is not wired because its logic is right; it is wired because
+// the constructor carries it.
+//
+// It calls the real constructor once. Once is the limit: NewProcessorMetrics registers
+// into prometheus' default registry via promauto, so a second construction in this
+// package would panic on duplicate registration — which is also why the other tests use
+// the fixture, and why this one is the single place the constructor is exercised.
+func TestConstructorWiresTheLifecycleGate(t *testing.T) {
+	ms := &core.Microservice{FunctionalArea: "commanddelivery"}
+	api := &fakeApi{lockAvailable: true, pending: []*model.Command{queued(1, "c1")}}
+	writer := &recordingWriter{}
+
+	proc := NewCommandDeliveryProcessor(ms, nil, writer, core.NewNoOpLifecycleCallbacks(), api,
+		func(tenant string) bool { return tenant == "acme" })
+
+	// Drive the real sweep rather than reading proc.TenantDeleted back: the field being
+	// set proves assignment, not that the delivery path consults what was assigned.
+	proc.sweepLocked(context.Background())
+
+	if writer.count() != 0 {
+		t.Fatalf("the gate passed to the constructor must reach the sweep; published %d", writer.count())
+	}
 }

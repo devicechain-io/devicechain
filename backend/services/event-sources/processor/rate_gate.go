@@ -36,6 +36,45 @@ import (
 // know when this was sent" degrades to today's behaviour rather than to unmetered.
 type RateGate func(source string, tenant string, sentAt time.Time) bool
 
+// RefuseDeletedTenants composes the ADR-077 lifecycle refusal in front of an ingest
+// gate, so a tenant an operator has deleted stops ingesting on every transport at once.
+//
+// 🔴 It is composed HERE, onto the gate, rather than added to each source, and that is
+// the whole point. Every inbound source — HTTP, external MQTT, and the platform-broker
+// capture stream — already calls exactly one admission hook before it reads a body, and
+// they are the only three places a tenant string is known before the write. Adding a
+// second check to each would mean a fourth transport arrives one day with the rate gate
+// wired (it is a constructor argument, so it cannot be forgotten) and the lifecycle
+// check missing. Composed, there is nothing to remember.
+//
+// This front NEEDS its own gate. The Registrar's gate covers LwM2M and Sparkplug, which
+// resolve a device by external id; nothing here goes through it. MQTT and NATS connects
+// are separately stopped by the broker auth-callout — but that gates the CONNECT, and a
+// session established before the delete keeps its minted JWT for its full TTL (12h by
+// default), which is far longer than this gate's 60s cache. HTTP has no transport auth
+// at all (credentials ride in the event body), so before this there was nothing.
+//
+// A refused message is shed exactly as a rate-limited one is, down to the status code
+// the HTTP source returns. That is deliberate: answering differently would tell an
+// unauthenticated caller which tenants exist and what has happened to them, and the
+// device's behaviour on either answer — back off and retry — is the behaviour we want.
+// onRefused counts it apart from a rate shed, because the two mean opposite things to an
+// operator reading the metric.
+func RefuseDeletedTenants(tenantDeleted func(string) bool, next RateGate, onRefused func(source, tenant string)) RateGate {
+	if tenantDeleted == nil {
+		return next // gate unconfigured; see governance.NewTenantLifecycleGate
+	}
+	return func(source string, tenant string, sentAt time.Time) bool {
+		if tenantDeleted(tenant) {
+			if onRefused != nil {
+				onRefused(source, tenant)
+			}
+			return false
+		}
+		return next(source, tenant, sentAt)
+	}
+}
+
 // BacklogThreshold is how far behind a message must be before it is metered as
 // BACKLOG on the send timeline rather than as live traffic at now.
 //

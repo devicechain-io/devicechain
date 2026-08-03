@@ -79,7 +79,9 @@ func newTestResponder(t *testing.T, authFn func(context.Context, *model.Presente
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := NewCalloutResponder(nil, fakeAuthApi{authFn: authFn}, creds.IssuerSeed, "inst-1")
+	// nil lifecycle gate: every tenant reads live, which is the shape every test here
+	// but the ADR-077 ones wants. TestAuthorizeRefusesADeletedTenant passes a real one.
+	r := NewCalloutResponder(nil, fakeAuthApi{authFn: authFn}, creds.IssuerSeed, "inst-1", nil)
 	r.now = func() time.Time { return time.Unix(1_780_000_000, 0) }
 	return r, creds.IssuerPublic
 }
@@ -219,4 +221,70 @@ func TestAuthorizeDeny(t *testing.T) {
 			t.Errorf("expected generic denial, got jwt=%q err=%q", token, errMsg)
 		}
 	})
+}
+
+// 🔴 ADR-077: a deleted tenant's fleet must stop connecting.
+//
+// Nothing cascades a tenant delete to the credential store, so every credential a
+// deleted tenant's devices hold still resolves. Without this gate the fleet reconnects
+// on its normal backoff and keeps writing into data being reclaimed underneath it —
+// and, once the token is released and reused, into a SUCCESSOR tenant's subject tree.
+//
+// The assertions are three, and the second two are the ones worth having:
+//   - the connect is refused,
+//   - it is refused with the SAME generic message as every other failure, so the
+//     callout does not become an oracle for which tenants exist or what is happening
+//     to them,
+//   - the credential store is never touched, which is what makes a deleted tenant's
+//     reconnect storm cheap instead of a load source on the DB.
+func TestAuthorizeRefusesADeletedTenant(t *testing.T) {
+	creds, err := natsauth.GenerateCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticated := false
+	api := fakeAuthApi{authFn: func(context.Context, *model.PresentedCredential) (*model.Device, error) {
+		authenticated = true
+		d := &model.Device{}
+		d.Token = "sensor-001"
+		return d, nil
+	}}
+	var asked string
+	r := NewCalloutResponder(nil, api, creds.IssuerSeed, "inst-1", func(tenant string) bool {
+		asked = tenant
+		return tenant == "acme-corp"
+	})
+
+	userJWT, errMsg := r.authorize(testRequest(t, "acme-corp:dev1", "s3cret"))
+	if userJWT != "" || errMsg != genericAuthFailure {
+		t.Errorf("a deleted tenant must be denied generically, got jwt=%q err=%q", userJWT, errMsg)
+	}
+	if asked != "acme-corp" {
+		t.Errorf("the gate was asked about %q, want the connecting tenant", asked)
+	}
+	if authenticated {
+		t.Error("the credential store must not be touched for a deleted tenant")
+	}
+}
+
+// The negative control for the test above: with the gate wired and answering "not
+// deleted", a connect still succeeds. Without this, a gate that refused every tenant
+// would pass the test above and take the whole device plane down.
+func TestAuthorizeStillGrantsWhenTheGateIsWiredAndSaysLive(t *testing.T) {
+	creds, err := natsauth.GenerateCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := fakeAuthApi{authFn: func(context.Context, *model.PresentedCredential) (*model.Device, error) {
+		d := &model.Device{}
+		d.Token = "sensor-001"
+		return d, nil
+	}}
+	r := NewCalloutResponder(nil, api, creds.IssuerSeed, "inst-1", func(string) bool { return false })
+	r.now = func() time.Time { return time.Unix(1_780_000_000, 0) }
+
+	userJWT, errMsg := r.authorize(testRequest(t, "acme-corp:dev1", "s3cret"))
+	if errMsg != "" || userJWT == "" {
+		t.Errorf("a live tenant must still be granted, got jwt=%q err=%q", userJWT, errMsg)
+	}
 }

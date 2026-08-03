@@ -146,3 +146,52 @@ func TestBacklogMeteringIsPerTenant(t *testing.T) {
 	}
 	require.Equal(t, 100, admitted, "one tenant's flood must not shed another's backlog")
 }
+
+// 🔴 ADR-077 at the ingest admission hook — the gate that covers the transports nothing
+// else does.
+//
+// Composed onto the rate gate rather than added per source, because the three inbound
+// sources (HTTP, external MQTT, capture stream) each call exactly one admission hook and
+// a fourth transport must not be able to arrive with the ceiling wired and the lifecycle
+// check missing.
+func TestRefuseDeletedTenants(t *testing.T) {
+	t.Run("a deleted tenant is refused before the rate gate is consulted", func(t *testing.T) {
+		metered := false
+		next := RateGate(func(string, string, time.Time) bool { metered = true; return true })
+		var refused []string
+		gate := RefuseDeletedTenants(func(tenant string) bool { return tenant == "acme" }, next,
+			func(_, tenant string) { refused = append(refused, tenant) })
+
+		if gate("http", "acme", time.Time{}) {
+			t.Fatal("a deleted tenant's message must not be admitted")
+		}
+		if metered {
+			t.Error("a refused message must not spend the tenant's rate budget")
+		}
+		if len(refused) != 1 || refused[0] != "acme" {
+			t.Errorf("the refusal must be accounted apart from a rate shed, got %v", refused)
+		}
+	})
+
+	// The negative control: a live tenant still reaches the rate gate and is answered by
+	// it. Without this, a wrapper that refused everything would satisfy the case above
+	// and silently stop all ingest on the instance.
+	t.Run("a live tenant is passed through to the rate gate", func(t *testing.T) {
+		for _, allowed := range []bool{true, false} {
+			next := RateGate(func(string, string, time.Time) bool { return allowed })
+			gate := RefuseDeletedTenants(func(string) bool { return false }, next, nil)
+			if got := gate("http", "acme", time.Time{}); got != allowed {
+				t.Errorf("a live tenant must get the rate gate's own answer: got %v want %v", got, allowed)
+			}
+		}
+	})
+
+	// An unconfigured gate returns the underlying one untouched, so an instance with no
+	// reachable user-management ingests exactly as before rather than refusing everything.
+	t.Run("nil lifecycle gate leaves ingest alone", func(t *testing.T) {
+		next := RateGate(func(string, string, time.Time) bool { return true })
+		if !RefuseDeletedTenants(nil, next, nil)("http", "acme", time.Time{}) {
+			t.Error("an unwired lifecycle gate must not refuse ingest")
+		}
+	})
+}

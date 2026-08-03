@@ -319,6 +319,8 @@ func buildMetrics() {
 			"Devices auto-created on a first telemetry sample (rare: LwM2M devices are created at /rd registration).", nil),
 		UnknownDropped: Microservice.NewCounter("telemetry_unknown_dropped_total",
 			"Telemetry samples dropped for an unregistered device (auto-registration off for the credential).", nil),
+		TenantGoneDropped: Microservice.NewCounter("telemetry_tenant_deleted_dropped_total",
+			"Telemetry samples dropped because the tenant has been deleted and its data is being reclaimed.", nil),
 	}
 
 	obsMetrics = observe.Metrics{
@@ -376,6 +378,8 @@ func buildMetrics() {
 			"Wake-drain triggers dropped because the device's shard worker was busy (the next wake re-triggers).", nil),
 		DrainDedup: Microservice.NewCounter("command_drain_dedup_total",
 			"Commands skipped because they were already dispatched (drain/live overlap) — a re-actuation avoided.", nil),
+		TenantGoneRefused: Microservice.NewCounter("commands_tenant_deleted_total",
+			"Commands ack-dropped because their tenant has been deleted and its data is being reclaimed — the platform declining to actuate an offboarded customer's hardware.", nil),
 	}
 }
 
@@ -417,7 +421,21 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 		[]string{string(auth.DeviceRead), string(auth.DeviceWrite), string(auth.StateRead),
 			string(auth.TenantRead), string(auth.CommandRead)})
 
-	registrar := adapter.NewRegistrar(client, ingestURL, "lw-")
+	// The ADR-077 gate. It matters more here than on any other ingest front: an LwM2M
+	// device authenticates at the DTLS-PSK handshake against this server directly, so it
+	// never passes the broker auth-callout that stops a deleted tenant's MQTT/Sparkplug
+	// fleet. This gate and the registry's use of it are all that stand between a purged
+	// tenant's devices and a session that would auto-register them straight back into the
+	// tenant being erased. A SEPARATE service token, scoped to tenant:read alone.
+	//
+	// What it does NOT do, stated because a reader will assume otherwise: it refuses new
+	// REGISTRATIONS and new telemetry, not sessions already installed. A device that
+	// registered before the delete keeps its entry (Update never re-resolves) and stays
+	// CONNECTED in the projection until its lifetime lapses — its telemetry is cut, its
+	// presence is not. Closing that belongs with slice 2's per-area fence, which is the
+	// correctness path; this gate stops the inflow.
+	tenantGate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "lwm2m-ingest")
+	registrar := adapter.NewRegistrar(client, ingestURL, "lw-", tenantGate)
 	// authenticatedTransport=true: LwM2M devices authenticate at the DTLS-PSK
 	// handshake, and the device token is bound to that authenticated PSK identity
 	// (ADR-075 D1), so emitted events carry no per-event credential but the resolver
@@ -483,6 +501,14 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 		opts := downlink.Options{
 			Workers:   Configuration.Downlink.Concurrency,
 			OpTimeout: durationSeconds(Configuration.Downlink.TimeoutSeconds),
+			// The SAME ADR-077 gate the registrar uses, and it is needed here for a
+			// reason the registrar's does not cover: this is the second path by which a
+			// command actuates hardware. command-delivery refuses to publish new commands
+			// into a deleted tenant, but a command already durable on the stream still
+			// arrives, and the L4b wake-drain re-fetches commands left in SENT and fires
+			// them when a sleeping device next registers — which can be long after the
+			// delete, off a (tenant, token) remembered from before it.
+			TenantDeleted: tenantGate,
 		}
 		if fetcher != nil {
 			dispatcher = downlink.NewDispatcher(CommandReader, ResponseWriter, connTable, downlink.NewOps(), fetcher, downlinkMetrics, opts)

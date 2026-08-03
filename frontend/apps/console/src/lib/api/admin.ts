@@ -103,9 +103,11 @@ const TENANTS = graphql(`
       token
       name
       enabled
-      # The deletion lifecycle. A deleted tenant is NOT removed — its row survives so
-      # its token stays reserved, because every part of the platform stores that
-      # tenant's rows under the token and a tenant recreated at it would inherit them.
+      # The deletion lifecycle. Deleting a tenant does not remove it on the spot: the
+      # row survives while its data is reclaimed across every functional area, holding
+      # its token so nothing can be created at it in the meantime — every area stores
+      # that tenant's rows under the token, and a tenant created at it too early would
+      # inherit them. The row (and the token) go once the reclamation finishes.
       purgeState
       purgeEpoch
       tier {

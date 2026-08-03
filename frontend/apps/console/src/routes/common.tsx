@@ -98,13 +98,18 @@ export function StatusBadge({ enabled }: { enabled: boolean }) {
 // also disabled, but a disabled tenant can be switched back on and a deleted one
 // cannot — showing only the enabled/disabled pill made a destroyed tenant look like an
 // ordinarily paused one in every listing.
+//
+// Any non-active state renders the same "Deleting" pill. There is only one today, and
+// the server's states are deliberately not enumerated here: a tenant whose deletion has
+// finished is not in some final state, it is GONE (the row is removed once every area
+// has reclaimed its rows), so the only thing this badge ever describes is a deletion in
+// flight. A branch on a specific state name would be dead code pretending to be a case.
 export function PurgeBadge({ state, epoch }: { state: string; epoch?: string | null }) {
   const { t } = useTranslation('tenants');
   if (state === 'active') return null;
-  const label = state === 'purged' ? t('purgeStatePurged') : t('purgeStatePurging');
   return (
     <Badge variant="destructive" className="gap-1">
-      <Trash2 size={12} /> {label}
+      <Trash2 size={12} /> {t('purgeStatePurging')}
       {epoch ? ` — ${t('purgeStateSince', { when: new Date(epoch).toLocaleDateString() })}` : ''}
     </Badge>
   );

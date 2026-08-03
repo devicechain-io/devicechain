@@ -95,6 +95,26 @@ func TestResolveTenantGrantAllowsSuperuserBreakGlassIntoAPurgingTenant(t *testin
 	require.Equal(t, []string{string(auth.AuthorityAll)}, authorities)
 }
 
+// 🔴 THE ASSUMPTION THE ENTIRE DEVICE-PLANE GATE RESTS ON (ADR-077 slice 1b).
+//
+// device-management, event-sources and command-delivery read a tenant's purgeState from
+// tenantGovernance over a service token, and that query resolves through CurrentTenant.
+// If CurrentTenant filtered the lifecycle the way resolveTenantGrant does — which is the
+// obvious thing to do, and which the refusals above might invite someone to add — then
+// the one query those services ask would fail for exactly the tenants it exists to
+// report on, and every gate downstream would fail open forever while looking correct.
+//
+// So the asymmetry is deliberate and this is where it is pinned: the grant path refuses
+// a purging tenant, the READ path still describes it.
+func TestCurrentTenantStillAnswersForAPurgingTenant(t *testing.T) {
+	m, store := newGrantTestManager(t)
+	seedGrantTenant(t, store, "acme", iam.PurgePurging, false)
+
+	got, err := m.CurrentTenant(context.Background(), "acme")
+	require.NoError(t, err, "the lifecycle read must not be filtered by the lifecycle")
+	require.Equal(t, iam.PurgePurging, got.PurgeState)
+}
+
 // The negative control: an ACTIVE tenant still grants normally, so the refusals above
 // are about the lifecycle rather than a grant path that has stopped working.
 func TestResolveTenantGrantStillAdmitsAnActiveTenant(t *testing.T) {

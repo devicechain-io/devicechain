@@ -603,3 +603,71 @@ func TestCrossDeviceCommandsRunConcurrently(t *testing.T) {
 	cancel()
 	<-done
 }
+
+// --- ADR-077 lifecycle gate -------------------------------------------------
+
+// 🔴 A COMMAND IS A PHYSICAL ACTUATION, and there are TWO paths by which one reaches a
+// device here. command-delivery's sweep gate stops NEW publishes into a deleted tenant,
+// and stopping there would have looked complete:
+//
+//   - the LIVE path still receives commands already durable on the stream when the
+//     delete happened;
+//   - the WAKE-DRAIN re-fetches commands left in SENT and fires them when a sleeping
+//     device next registers — arbitrarily long after the delete, off a (tenant, token)
+//     remembered from a registration that predates it, on a path where nothing else
+//     consults the lifecycle (PSK bindings are static config and Update never
+//     re-resolves).
+//
+// So the gate sits at process(), the union both paths funnel through, and these are the
+// tests for each half.
+func TestProcessRefusesALiveCommandForADeletedTenant(t *testing.T) {
+	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
+	pub := &fakePublisher{}
+	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
+	ack := &fakeAck{}
+	d := NewDispatcher(nil, pub, look, exec, nil, Metrics{},
+		Options{TenantDeleted: func(tenant string) bool { return tenant == "acme" }})
+
+	w := liveWorkTok("acme", "pump-1", "c1", CommandWrite, `{"path":"/5/0/1","value":"u"}`, ack)
+	d.process(context.Background(), task{deviceToken: "pump-1", live: &w})
+
+	assert.Equal(t, 0, exec.callCount(), "no CoAP op may run for a deleted tenant")
+	assert.Empty(t, pub.responses(), "a refusal is not a command outcome to report")
+	assert.True(t, ack.acked(), "the message must be acked, or this refusal redelivers until MaxDeliver")
+}
+
+func TestProcessRefusesAWakeDrainForADeletedTenant(t *testing.T) {
+	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
+	pub := &fakePublisher{}
+	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
+	ff := &fakeFetcher{cmds: []DrainCommand{
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`)},
+	}}
+	d := NewDispatcher(nil, pub, look, exec, ff, Metrics{},
+		Options{TenantDeleted: func(tenant string) bool { return tenant == "acme" }})
+
+	d.process(context.Background(), task{deviceToken: "pump-1", drain: &drainJob{tenant: "acme", deviceToken: "pump-1"}})
+
+	assert.Equal(t, 0, ff.callCount(), "a deleted tenant's held commands must not even be fetched")
+	assert.Equal(t, 0, exec.callCount(), "no held command may actuate for a deleted tenant")
+}
+
+// The negative control for both: with the gate wired and answering "live", each path
+// still actuates. Without it, a gate that refused everything would satisfy both tests
+// above and silently stop every command on the instance.
+func TestProcessStillActuatesWhenTheGateSaysLive(t *testing.T) {
+	live := func() Options { return Options{TenantDeleted: func(string) bool { return false }} }
+
+	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
+	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
+	d := NewDispatcher(nil, &fakePublisher{}, look, exec, nil, Metrics{}, live())
+	w := liveWorkTok("acme", "pump-1", "c1", CommandWrite, `{"path":"/5/0/1","value":"u"}`, &fakeAck{})
+	d.process(context.Background(), task{deviceToken: "pump-1", live: &w})
+	assert.Equal(t, 1, exec.callCount(), "a live tenant's command must still actuate")
+
+	exec2 := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
+	ff := &fakeFetcher{cmds: []DrainCommand{{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`)}}}
+	d2 := NewDispatcher(nil, &fakePublisher{}, look, exec2, ff, Metrics{}, live())
+	d2.process(context.Background(), task{deviceToken: "pump-1", drain: &drainJob{tenant: "acme", deviceToken: "pump-1"}})
+	assert.Equal(t, 1, exec2.callCount(), "a live tenant's held command must still drain")
+}

@@ -33,6 +33,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
@@ -249,8 +250,16 @@ func buildIngester(writer messaging.MessageWriter) (*host.Ingester, *host.Reconc
 			"Devices auto-registered on first sight of their Sparkplug identity.", nil),
 		UnknownDropped: Microservice.NewCounter("unknown_device_dropped_total",
 			"Samples/presence dropped for an unregistered device on a source with auto-registration off.", nil),
+		TenantGoneDropped: Microservice.NewCounter("tenant_deleted_dropped_total",
+			"Samples/presence dropped because the tenant has been deleted and its data is being reclaimed.", nil),
 	}
-	registrar := host.NewRegistrar(client, graphqlURL)
+	// The ADR-077 gate. A Sparkplug publisher's devices do pass the broker auth-callout,
+	// so this is the second gate rather than the only one — but the callout stops a
+	// CONNECT, and a Sparkplug host application publishes on behalf of devices over its
+	// own long-lived connection, which a purge does not interrupt. A SEPARATE service
+	// token from the client above, scoped to tenant:read alone.
+	tenantGate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "sparkplug-ingest")
+	registrar := host.NewRegistrar(client, graphqlURL, tenantGate)
 	emitter := host.NewEmitter(writer, time.Now)
 	reconciler := host.NewReconciler(client, deviceStateURL)
 	log.Info().Str("deviceManagement", graphqlURL).Str("deviceState", deviceStateURL).

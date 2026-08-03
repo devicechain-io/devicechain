@@ -109,6 +109,15 @@ type TenantGovernance {
     # contention floor, lowers the affected classes' effective ingest ceiling. Null ⇒
     # the reader substitutes the platform fail-safe (a bronze-band value), never gold.
     shedPriority: Int
+    # Where this tenant sits in the ADR-077 deletion lifecycle: "active" or "purging".
+    # Read by the data-plane services that must stop acting on behalf of a tenant an
+    # operator has deleted — device connect-auth, ingest auto-registration, command
+    # dispatch — none of which has any other way to learn it (a device credential and a
+    # queued command both outlive the delete). Non-null, and never null-as-inherit: a
+    # tenant is always in exactly one state, and there is nothing above it to inherit
+    # from. Unlike the ceilings above this is not a metered value; it is here because it
+    # is the same per-tenant fact, on the same service-token read, with the same cache.
+    purgeState: String!
     # This tenant's ADR-065 packaging tier — its identity, not a value derived from it.
     # Read by ai-inference, which joins its own tier↔provider grants against it to
     # resolve which AI models the tenant may use (decision 10). It is here rather than

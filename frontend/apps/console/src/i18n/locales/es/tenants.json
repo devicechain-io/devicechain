@@ -44,7 +44,6 @@
   "outboundBurstLabel": "Ráfaga de salida",
   "outboundRateDescription": "Límite de tasa para las acciones del conector de salida. Déjalo en blanco para heredar el valor predeterminado de la plataforma.",
   "outboundRateLabel": "Tasa de salida (llamadas/s)",
-  "purgeStatePurged": "Eliminado",
   "purgeStatePurging": "Eliminando",
   "purgeStateSince": "desde {{when}}",
   "searchModelsPlaceholder": "Buscar modelos…",

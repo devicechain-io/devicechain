@@ -89,6 +89,13 @@ var (
 	DecodedCounter      *prometheus.CounterVec
 	FailedDecodeCounter *prometheus.CounterVec
 	RateLimitedCounter  *prometheus.CounterVec
+	// TenantGoneCounter counts inbound messages refused because their tenant has been
+	// deleted (ADR-077). Apart from RateLimitedCounter because the two mean opposite
+	// things: a rate shed is a tenant pressing against a ceiling, this is the platform
+	// refusing to write into data being erased. Labelled by SOURCE only — never by
+	// tenant, whose values here are exactly the unverified strings off the wire
+	// (ADR-023 G.3).
+	TenantGoneCounter *prometheus.CounterVec
 )
 
 func main() {
@@ -148,6 +155,10 @@ func initializeMetrics() {
 		// operator see WHICH tier is being shed under a contention floor without leaking
 		// per-tenant cardinality into the metric.
 		[]string{"source", "shed_class"})
+	TenantGoneCounter = Microservice.NewCounterVec(
+		"total_msg_tenant_deleted",
+		"Count of inbound messages refused because their tenant has been deleted and its data is being reclaimed",
+		[]string{"source"})
 }
 
 // contentionLevel is the effective ADR-063 shed level. At GA it is just the operator
@@ -255,6 +266,23 @@ func createDecoder(source config.EventSource) (processor.Decoder, error) {
 func buildEventSources() error {
 	created := make([]core.LifecycleComponent, 0)
 	gatewaySourceBuilt := false
+
+	// ONE admission gate for every transport, built once and shared. Each source takes
+	// it as a constructor argument, so a transport added later cannot be wired without
+	// one — which is the property that matters here, since this is now where the ADR-077
+	// lifecycle refusal lives as well as the ADR-023 ceiling. Built per-source before,
+	// the three call sites were identical and a fourth would have been a copy.
+	//
+	// The lifecycle refusal covers the gap the other gates leave: LwM2M and Sparkplug
+	// resolve devices through the Registrar's gate and never come here, MQTT/NATS
+	// CONNECTS are stopped at the broker callout (but an established session keeps its
+	// minted JWT for its full TTL), and HTTP ingest has no transport auth at all.
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	ingestGate := processor.RefuseDeletedTenants(
+		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources"),
+		processor.NewRateGate(RateLimiter, BacklogRateLimiter, onRateShed),
+		onTenantGone)
+
 	for _, source := range Configuration.EventSources {
 		// Create decoder.
 		decoder, err := createDecoder(source)
@@ -307,7 +335,7 @@ func buildEventSources() error {
 				gatewaySourceBuilt = true
 				gateway := processor.NewGatewayJetStreamSource(source.Id, decoder,
 					onMessageReceived, onEventDecoded, onEventDecodeFailed,
-					processor.NewRateGate(RateLimiter, BacklogRateLimiter, onRateShed))
+					ingestGate)
 				// Held so createNatsComponents can hand it the capture reader once that
 				// reader exists. Sources are built in the INITIALIZE phase and readers are
 				// created in START, so there is nothing to wire here yet.
@@ -321,7 +349,7 @@ func buildEventSources() error {
 			// concern, so this dials plaintext and anonymous.
 			mqtt, err := processor.NewMqttEventSource(source.Id, source.Configuration, nil, "", "",
 				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed,
-				processor.NewRateGate(RateLimiter, BacklogRateLimiter, onRateShed))
+				ingestGate)
 			if err != nil {
 				return err
 			}
@@ -329,7 +357,7 @@ func buildEventSources() error {
 		case processor.TYPE_HTTP:
 			http, err := processor.NewHttpEventSource(source.Id, source.Configuration, Microservice.InstanceId,
 				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed,
-				processor.NewRateGate(RateLimiter, BacklogRateLimiter, onRateShed))
+				ingestGate)
 			if err != nil {
 				return err
 			}
@@ -355,6 +383,18 @@ func onMessageReceived(source string, raw []byte) {
 //
 // The admission decision itself — including which timeline a message is metered on —
 // lives in processor.NewRateGate; this is only the shed accounting.
+// onTenantGone accounts for a message refused by the ADR-077 lifecycle gate. Same
+// no-per-tenant-label discipline as onRateShed, and for a sharper reason here: the whole
+// point of this path is that it fires for tenants that no longer exist, so a tenant label
+// would be an unbounded series of dead values.
+func onTenantGone(source string, tenant string) {
+	TenantGoneCounter.WithLabelValues(source).Inc()
+	if log.Debug().Enabled() {
+		log.Debug().Str("source", source).Str("tenant", tenant).
+			Msg("Refused inbound event for a tenant that has been deleted")
+	}
+}
+
 func onRateShed(source string, tenant string) {
 	RateLimitedCounter.WithLabelValues(source, shedClassOf(tenant)).Inc()
 	// Per-tenant attribution is logged (debug) rather than carried as a metric label:

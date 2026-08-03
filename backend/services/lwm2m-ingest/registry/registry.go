@@ -308,10 +308,19 @@ func (r *Registry) Register(ctx context.Context, identity string, binding config
 	if err != nil {
 		return RegisterUnavailable, "", 0, false // retryable — the device re-Registers
 	}
-	if outcome == adapter.ResolveDropped {
+	// Tested as "did this produce a token?", never as "was it the one outcome I know
+	// about". A resolve that yields no token cannot establish a session: the presence
+	// event below would be written with an EMPTY device token, and for a deleted tenant
+	// (ADR-077) it would be written into the tenant being erased, by the one device front
+	// that never passes the broker auth-callout.
+	if !outcome.Ingestible() {
 		incr(r.metrics.Dropped, 1)
+		reason := "auto-registration is off for this credential"
+		if outcome == adapter.ResolveTenantGone {
+			reason = "the tenant has been deleted and its data is being reclaimed"
+		}
 		log.Debug().Str("tenant", binding.Tenant).Str("externalId", binding.ExternalId).
-			Msg("Refusing LwM2M registration for an unregistered device (auto-registration is off for this credential).")
+			Msgf("Refusing LwM2M registration (%s).", reason)
 		return RegisterUnknownDevice, "", 0, false
 	}
 	if outcome == adapter.ResolveCreated {
@@ -624,8 +633,11 @@ func (r *Registry) ReconstructDisconnect(ctx context.Context, tenant, externalId
 			Msg("Could not resolve an orphaned asserted device to DISCONNECT it (device-management unreachable); retried on the next acquisition.")
 		return
 	}
-	if outcome == adapter.ResolveDropped {
-		return // the device no longer exists — nothing to disconnect
+	if !outcome.Ingestible() {
+		// No token: the device no longer exists, or its tenant has been deleted (ADR-077).
+		// Either way there is nothing to disconnect, and emitting would write a presence
+		// event with an empty token — into a tenant being erased, in the second case.
+		return
 	}
 	epoch := r.epoch.Mint()
 	log.Info().Str("tenant", tenant).Str("externalId", externalId).Uint64("session", epoch).
@@ -663,8 +675,9 @@ func (r *Registry) onShadowExpiry(regId string, gen uint64) {
 		r.rearmShadow(regId, gen) // transient — retry later, never drop (F5-2)
 		return
 	}
-	if outcome == adapter.ResolveDropped {
-		r.dropShadow(regId, gen) // device gone — nothing to disconnect
+	if !outcome.Ingestible() {
+		// Device gone, or its tenant deleted (ADR-077) — nothing to disconnect either way.
+		r.dropShadow(regId, gen)
 		return
 	}
 

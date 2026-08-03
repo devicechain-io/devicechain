@@ -152,6 +152,24 @@ func (r *TenantGovernanceResolver) ShedPriority() *int32 {
 	return &i
 }
 
+// PurgeState resolves where the tenant sits in the ADR-077 deletion lifecycle, as the
+// raw state string ("active" | "purging").
+//
+// It resolves from the tenant row itself, which is what makes it answerable at all for
+// the tenant it is about: a purging tenant is still a row (that is the whole mechanism
+// — the row holds the token while its data is reclaimed), and CurrentTenant reads the
+// control-plane table by token without filtering the lifecycle. A design that removed
+// the row at the cut would have made this query fail for exactly the tenants that need
+// an answer.
+//
+// The state is sent rather than a boolean deliberately. The consumers gate on "not
+// active", which they can compute from any state — a boolean would have to be named for
+// one reading of the lifecycle and would go stale the moment a state is added between
+// the cut and reclamation.
+func (r *TenantGovernanceResolver) PurgeState() string {
+	return string(r.t.PurgeState)
+}
+
 // TierToken resolves the tenant's ADR-065 tier token — the tenant's packaging
 // identity, not any value derived from it. ai-inference reads it over a service token
 // and joins its own tier↔provider grants against it to resolve which AI models the

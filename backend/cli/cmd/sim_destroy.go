@@ -32,17 +32,26 @@ membership that made inspection routine.)
 Teardown order is enforced: the identity goes first, because the server refuses a
 tenant delete while any membership still references it.
 
-🔴 A SIM NAME IS SINGLE-USE. Destroying a sim reserves its tenant token permanently,
-so 'dcctl sim create <name>' will refuse that name afterwards — pick a new one rather
-than reusing it. The reservation is the point: the tenant token is the key every
-functional area stores its rows under, so a sim recreated at a used name would attach
-to the previous run's devices, dashboards and telemetry instead of starting clean.
+🔴 THE NAME STAYS TAKEN UNTIL THE PURGE FINISHES. 'dcctl sim create <name>' refuses a
+name whose tenant is still being deleted, and that refusal is the point: the tenant
+token is the key every functional area stores its rows under, so a sim recreated at a
+name whose data is still there would attach to the previous run's devices, dashboards
+and telemetry instead of starting clean. Once every area reports its rows reclaimed the
+name is free again.
 
 What this does NOT delete, yet: those rows in the other functional areas. Nothing
 cascades a tenant delete to them today, so they are kept (telemetry too, unless the
-instance opted in to a retention policy) until the tenant purge reclaims them. They
-are unreachable in the meantime — no membership remains and no token can be minted
-for the tenant.`,
+instance opted in to a retention policy) until the tenant purge reclaims them — which
+means, until that sweep exists, the name does not come back.
+
+Human access ends at once: no membership remains and no token can be minted. The DEVICE
+plane is cut too, but it drains rather than stopping dead, and the difference matters if
+you are watching a dashboard. New connects, ingest and command dispatch are refused
+within about a minute (the refusal is a cached read, refreshed on that interval). A
+session already established keeps its broker-issued credential until it expires — up to
+12 hours by default — though its ingest is refused at admission regardless. And a device
+still holding a lifetime or a subscription drops off on its own schedule, so presence can
+read connected for a while after the data stops.`,
 	Args:         cobra.ExactArgs(1),
 	RunE:         runSimDestroy,
 	SilenceUsage: true,

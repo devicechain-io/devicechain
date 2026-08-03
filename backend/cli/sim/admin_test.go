@@ -42,9 +42,9 @@ func TestTolerateExistsSwallowsOnlyAnAlreadyExists(t *testing.T) {
 
 	refusals := []string{
 		// The ADR-077 reservation, in the shape user-management sends it.
-		`create tenant "sim-wl": that tenant token is reserved: a tenant at this token was ` +
-			`deleted. Tokens are never reused, because every functional area keys its rows on ` +
-			`the token; pick a different one`,
+		`create tenant "sim-wl": that tenant token is reserved: a tenant at this token is ` +
+			`being deleted, and its token stays taken until every functional area has reclaimed ` +
+			`the rows it keys on that token. Retry once the deletion finishes, or pick another token`,
 		// Ordinary failures that must never read as success either.
 		`unknown tier "platinum"`,
 		"tenant does not exist",
