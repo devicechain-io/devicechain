@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-device-management/schema"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -325,7 +326,14 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	// AuthenticateDevice. Absent an issuer seed the broker isn't running callout,
 	// so there is nothing to serve.
 	if seed := Microservice.InstanceConfiguration.Infrastructure.Nats.Auth.CalloutIssuerSeed; seed != "" {
-		CalloutResponder = processor.NewCalloutResponder(NatsManager.Conn(), CachedApi, seed, Microservice.InstanceId)
+		// The ADR-077 gate: a deleted tenant's devices hold credentials that still
+		// resolve (nothing cascades a delete to the credential store), so without this
+		// the fleet reconnects on its own backoff and keeps writing into data being
+		// reclaimed. Nil when user-management is unconfigured — the gate is off, matching
+		// the resolver's own fail-open, since the erasure guarantee is the per-area fence.
+		infra := Microservice.InstanceConfiguration.Infrastructure
+		gate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "device-management")
+		CalloutResponder = processor.NewCalloutResponder(NatsManager.Conn(), CachedApi, seed, Microservice.InstanceId, gate)
 		if err = CalloutResponder.Start(); err != nil {
 			return err
 		}

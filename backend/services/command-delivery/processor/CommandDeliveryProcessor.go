@@ -50,20 +50,32 @@ type CommandDeliveryProcessor struct {
 	// RED metrics for the response-consumer path (E13).
 	metrics *core.ProcessorMetrics
 
+	// TenantDeleted reports whether a tenant has been through the ADR-077 delete door.
+	// A closure rather than the governance resolver type so this package needs no live
+	// user-management to test. MAY BE NIL — read it through tenantDeleted, never
+	// directly: this struct's fields are exported and it is built by literal in places
+	// the constructor never runs.
+	TenantDeleted func(tenant string) bool
+
 	lifecycle core.LifecycleManager
 	quit      chan struct{}
 }
 
 // NewCommandDeliveryProcessor creates a new command delivery processor.
+//
+// tenantDeleted gates delivery on the ADR-077 tenant lifecycle. Nil disables the gate
+// (every tenant reads live), matching the resolver's own fail-open, so an unwired gate
+// behaves like an unreachable authority rather than stalling every tenant's commands.
 func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.MessageReader,
 	commands messaging.MessageWriter, callbacks core.LifecycleCallbacks,
-	api model.CommandDeliveryApi) *CommandDeliveryProcessor {
+	api model.CommandDeliveryApi, tenantDeleted func(string) bool) *CommandDeliveryProcessor {
 	cproc := &CommandDeliveryProcessor{
 		Microservice:           ms,
 		CommandResponsesReader: responses,
 		DeviceCommandsWriter:   commands,
 		Api:                    api,
 		metrics:                ms.NewProcessorMetrics("response"),
+		TenantDeleted:          tenantDeleted,
 	}
 
 	// Create lifecycle manager.
@@ -87,11 +99,47 @@ func (cproc *CommandDeliveryProcessor) deliverPendingCommands(ctx context.Contex
 		return
 	}
 	for _, cmd := range pending {
+		// 🔴 The ADR-077 lifecycle gate, and the reason it is HERE rather than inside
+		// deliverCommand: publishing is a PHYSICAL ACTUATION and it happens BEFORE
+		// MarkSent. A command queued before an operator deleted the tenant would
+		// otherwise fire a valve or a relay on an offboarded customer's hardware — and
+		// once the tenant's rows are swept, the actuation has already happened by the time
+		// MarkSent fails to find its row, so the device acts and the platform's only
+		// record of it is an error log on a command it can no longer describe.
+		//
+		// The row is LEFT QUEUED, not failed. It is about to be deleted with the rest of
+		// the tenant, so transitioning it would be writing into data being erased in
+		// order to describe the erasure; and if the purge is ever abandoned, a queued
+		// command is the state an operator can reason about. `continue` also skips the
+		// error log the delivery path would emit — this is a refusal, not a failure, and
+		// logging one line per command per sweep tick forever is how a correct refusal
+		// gets mistaken for an outage.
+		if cproc.tenantDeleted(cmd.TenantId) {
+			continue
+		}
 		if err := cproc.deliverCommand(ctx, cmd); err != nil {
 			log.Error().Err(err).Uint("command", cmd.ID).Str("device", cmd.DeviceToken).
 				Msg("unable to deliver command")
 		}
 	}
+}
+
+// tenantDeleted answers the ADR-077 gate, tolerating an unwired closure.
+//
+// A method rather than a normalization in the constructor because this struct's fields
+// are exported and it is assembled by literal — today only by this package's own test
+// fixture, but that is enough: a constructor-only guarantee is one a literal can silently
+// drop, and what it drops here is a nil call on the delivery sweep. A gate that crashes
+// the sweep when unwired is strictly worse than one that is off, and "off" is the same
+// fail-open the resolver behind it takes when it cannot reach user-management.
+//
+// 🔴 The cost of the fixture skipping the constructor is real and was paid: with the
+// plumbing untested, deleting `TenantDeleted: tenantDeleted` from the constructor
+// disabled the gate in every shipped binary and left the whole suite green.
+// TestConstructorWiresTheLifecycleGate is what closes that, and it is the reason this
+// accessor is not a licence to keep testing around the constructor.
+func (cproc *CommandDeliveryProcessor) tenantDeleted(tenant string) bool {
+	return cproc.TenantDeleted != nil && cproc.TenantDeleted(tenant)
 }
 
 // deliverCommand publishes a single command to its device's tenant subject and

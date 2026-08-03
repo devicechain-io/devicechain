@@ -53,6 +53,14 @@ type IngestMetrics struct {
 	PresenceEmitted     prometheus.Counter // presence StateChange events durably written
 	DevicesRegistered   prometheus.Counter // devices auto-created on first sight
 	UnknownDropped      prometheus.Counter // samples/presence dropped: unknown device, auto-register off
+	// TenantGoneDropped counts samples/presence dropped because the tenant has been
+	// deleted (ADR-077). Counted apart from UnknownDropped because they mean opposite
+	// things to whoever is looking: one is a source misconfiguration to fix, the other is
+	// the platform correctly refusing to write into a tenant being erased. No per-tenant
+	// LABEL, deliberately — the ADR-023 cardinality lesson applies here more than
+	// anywhere, since the label's values would be exactly the attacker-supplied tenant
+	// strings this path does not otherwise trust.
+	TenantGoneDropped prometheus.Counter
 }
 
 // ResolveOutcome distinguishes how a device external id resolved, so the ingester can
@@ -63,10 +71,20 @@ type IngestMetrics struct {
 type ResolveOutcome int
 
 const (
-	ResolveDropped ResolveOutcome = iota // unknown device + auto-register off — do not ingest
-	ResolveFound                         // the device already existed
-	ResolveCreated                       // the device was auto-registered on this call
+	ResolveDropped    ResolveOutcome = iota // unknown device + auto-register off — do not ingest
+	ResolveFound                            // the device already existed
+	ResolveCreated                          // the device was auto-registered on this call
+	ResolveTenantGone                       // the tenant has been deleted (ADR-077) — do not ingest
 )
+
+// Ingestible reports whether an outcome produced a device token to emit under.
+//
+// Callers test THIS rather than listing the outcomes that mean "stop", and the
+// difference is not stylistic: ResolveTenantGone was added after ResolveDropped, and a
+// caller written as `if outcome == ResolveDropped { skip }` would have fallen straight
+// through to Emit for the new one — ingesting into the tenant the outcome exists to stop
+// ingesting into. Phrased this way, an outcome added later fails closed by default.
+func (o ResolveOutcome) Ingestible() bool { return o == ResolveFound || o == ResolveCreated }
 
 // The device-management GraphQL operations. Field names are pinned to the schema
 // (DeviceCreateRequest.token/externalId/deviceTypeToken); the graphql-go fork rejects
@@ -92,12 +110,28 @@ type Registrar struct {
 	tokenPrefix string
 
 	cache *tokenCache
+	// tenantDeleted reports whether a tenant has been through the ADR-077 delete door.
+	// A closure rather than the governance resolver type, matching NewIngestLimiter's
+	// injection: the adapter stays testable without a live user-management, and the
+	// owning binary decides what backs it. Never nil; see NewRegistrar.
+	tenantDeleted func(tenant string) bool
 }
 
 // NewRegistrar binds a registrar to a GraphQL client, device-management's endpoint URL,
 // and the origin protocol's token prefix (e.g. "sp-", "lw-").
-func NewRegistrar(client GraphQLClient, graphqlURL, tokenPrefix string) *Registrar {
-	return &Registrar{client: client, url: graphqlURL, tokenPrefix: tokenPrefix, cache: newTokenCache()}
+//
+// tenantDeleted gates resolution on the ADR-077 tenant lifecycle. Nil disables the gate
+// (every tenant reads live) — the same reading an unresolvable tenant gets from the
+// resolver itself, so an unwired gate behaves like an unreachable authority rather than
+// refusing every ingest on the instance.
+func NewRegistrar(client GraphQLClient, graphqlURL, tokenPrefix string, tenantDeleted func(string) bool) *Registrar {
+	if tenantDeleted == nil {
+		tenantDeleted = func(string) bool { return false }
+	}
+	return &Registrar{
+		client: client, url: graphqlURL, tokenPrefix: tokenPrefix,
+		cache: newTokenCache(), tenantDeleted: tenantDeleted,
+	}
 }
 
 // Resolve maps tenant + external id to a device token. It returns the token and how it
@@ -106,6 +140,21 @@ func NewRegistrar(client GraphQLClient, graphqlURL, tokenPrefix string) *Registr
 // (unknown device, auto-register off) is a definitive skip, not an error — the caller
 // counts it and moves on.
 func (r *Registrar) Resolve(ctx context.Context, tenant, externalId string, policy IngestPolicy) (string, ResolveOutcome, error) {
+	// The ADR-077 lifecycle gate, checked BEFORE the cache and therefore before every
+	// other path in this function. Placing it first is what makes it one gate instead of
+	// three: it stops a hot device that resolves from memory (the case device deletion
+	// alone cannot stop, since the cache never expires and never re-asks), it stops the
+	// lookup, and it stops auto-registration — which is the worst of the three, because
+	// a cache miss under an auto-register policy issues createDevice under a SERVICE
+	// token naming the purged tenant, re-seeding the entity root every other area's rows
+	// cascade from, after that area may already have swept.
+	//
+	// Definitive, not retryable: a purge does not un-happen, so returning an error here
+	// would have the source retry this message for the lifetime of its session.
+	if r.tenantDeleted(tenant) {
+		r.cache.invalidateTenant(tenant)
+		return "", ResolveTenantGone, nil
+	}
 	if tok, ok := r.cache.get(tenant, externalId); ok {
 		return tok, ResolveFound, nil
 	}
@@ -430,6 +479,23 @@ func NewIngester(registrar *Registrar, emitter *Emitter, metrics IngestMetrics) 
 	return &Ingester{registrar: registrar, emitter: emitter, metrics: metrics}
 }
 
+// meterDrop counts and explains a non-ingestible outcome. It exists so the two ingest
+// paths cannot drift, and so each drop is reported with the reason it actually had:
+// "auto-registration is off" was the only reason before ADR-077, and reusing that line
+// for a deleted tenant would make the one log entry an operator reads while debugging a
+// silent fleet blame the wrong setting.
+func (ing *Ingester) meterDrop(outcome ResolveOutcome, tenant, externalId string, n int) {
+	if outcome == ResolveTenantGone {
+		incr(ing.metrics.TenantGoneDropped, n)
+		log.Debug().Str("tenant", tenant).Str("externalId", externalId).Int("events", n).
+			Msg("Dropping ingest for a tenant that has been deleted; its data is being reclaimed.")
+		return
+	}
+	incr(ing.metrics.UnknownDropped, n)
+	log.Debug().Str("tenant", tenant).Str("externalId", externalId).Int("events", n).
+		Msg("Dropping ingest for an unregistered device (auto-registration is off for this source).")
+}
+
 // Ingest resolves the device for externalId and emits its samples. It returns nil when
 // the message was fully handled — whether emitted OR definitively dropped (unknown
 // device, auto-register off) — and an error ONLY for a retryable failure
@@ -439,10 +505,8 @@ func (ing *Ingester) Ingest(ctx context.Context, tenant string, policy IngestPol
 	if err != nil {
 		return err
 	}
-	if outcome == ResolveDropped {
-		incr(ing.metrics.UnknownDropped, len(samples))
-		log.Debug().Str("tenant", tenant).Str("externalId", externalId).Int("samples", len(samples)).
-			Msg("Dropping samples for an unregistered device (auto-registration is off for this source).")
+	if !outcome.Ingestible() {
+		ing.meterDrop(outcome, tenant, externalId, len(samples))
 		return nil
 	}
 	if outcome == ResolveCreated {
@@ -469,10 +533,8 @@ func (ing *Ingester) IngestPresence(ctx context.Context, tenant string, policy I
 		if err != nil {
 			return err
 		}
-		if outcome == ResolveDropped {
-			incr(ing.metrics.UnknownDropped, 1)
-			log.Debug().Str("tenant", tenant).Str("externalId", ev.ExternalId).
-				Msg("Dropping presence for an unregistered device (auto-registration is off for this source).")
+		if !outcome.Ingestible() {
+			ing.meterDrop(outcome, tenant, ev.ExternalId, 1)
 			continue
 		}
 		if outcome == ResolveCreated {

@@ -90,7 +90,7 @@ func (w *fakeWriter) WriteMessages(ctx context.Context, msgs ...messaging.Messag
 
 func TestRegistrarCachesResolvedToken(t *testing.T) {
 	gql := &fakeGraphQL{responder: func(string, map[string]any) (any, error) { return lookupHit("dev-1"), nil }}
-	r := NewRegistrar(gql, "url", "sp-")
+	r := NewRegistrar(gql, "url", "sp-", nil)
 
 	tok, outcome, err := r.Resolve(context.Background(), "acme", "g/n", IngestPolicy{})
 	require.NoError(t, err)
@@ -106,7 +106,7 @@ func TestRegistrarCachesResolvedToken(t *testing.T) {
 
 func TestRegistrarDropsUnknownWhenAutoRegisterOff(t *testing.T) {
 	gql := &fakeGraphQL{responder: func(string, map[string]any) (any, error) { return lookupMiss(), nil }}
-	r := NewRegistrar(gql, "url", "sp-")
+	r := NewRegistrar(gql, "url", "sp-", nil)
 
 	tok, outcome, err := r.Resolve(context.Background(), "acme", "g/n", IngestPolicy{AutoRegister: false})
 	require.NoError(t, err)
@@ -124,7 +124,7 @@ func TestRegistrarAutoRegistersUnknownDevice(t *testing.T) {
 		createdRequest, _ = vars["request"].(map[string]any)
 		return createHit(createdRequest["token"].(string)), nil
 	}}
-	r := NewRegistrar(gql, "url", "sp-")
+	r := NewRegistrar(gql, "url", "sp-", nil)
 
 	tok, outcome, err := r.Resolve(context.Background(), "acme", "plant-a/node-3", IngestPolicy{AutoRegister: true, DeviceTypeToken: "sp-node"})
 	require.NoError(t, err)
@@ -152,7 +152,7 @@ func TestRegistrarSwallowsCreateRaceViaReLookup(t *testing.T) {
 		}
 		return nil, errors.New("ERROR: duplicate key value violates unique constraint")
 	}}
-	r := NewRegistrar(gql, "url", "sp-")
+	r := NewRegistrar(gql, "url", "sp-", nil)
 
 	tok, outcome, err := r.Resolve(context.Background(), "acme", "g/n", IngestPolicy{AutoRegister: true, DeviceTypeToken: "t"})
 	require.NoError(t, err)
@@ -164,7 +164,7 @@ func TestRegistrarReturnsTransportErrorForRetry(t *testing.T) {
 	gql := &fakeGraphQL{responder: func(string, map[string]any) (any, error) {
 		return nil, errors.New("svcclient: call url: connection refused")
 	}}
-	r := NewRegistrar(gql, "url", "sp-")
+	r := NewRegistrar(gql, "url", "sp-", nil)
 
 	_, _, err := r.Resolve(context.Background(), "acme", "g/n", IngestPolicy{})
 	assert.Error(t, err, "a transport error must be returned so the caller can retry")
@@ -301,13 +301,19 @@ func newIngestMetrics() (IngestMetrics, func(string) float64) {
 	emitted := prometheus.NewCounter(prometheus.CounterOpts{Name: "emitted"})
 	registered := prometheus.NewCounter(prometheus.CounterOpts{Name: "registered"})
 	dropped := prometheus.NewCounter(prometheus.CounterOpts{Name: "dropped"})
-	m := IngestMetrics{MeasurementsEmitted: emitted, DevicesRegistered: registered, UnknownDropped: dropped}
+	tenantGone := prometheus.NewCounter(prometheus.CounterOpts{Name: "tenant_gone"})
+	m := IngestMetrics{
+		MeasurementsEmitted: emitted, DevicesRegistered: registered,
+		UnknownDropped: dropped, TenantGoneDropped: tenantGone,
+	}
 	read := func(which string) float64 {
 		switch which {
 		case "emitted":
 			return testutil.ToFloat64(emitted)
 		case "registered":
 			return testutil.ToFloat64(registered)
+		case "tenantGone":
+			return testutil.ToFloat64(tenantGone)
 		default:
 			return testutil.ToFloat64(dropped)
 		}
@@ -319,7 +325,7 @@ func TestIngesterEmitsForAKnownDevice(t *testing.T) {
 	gql := &fakeGraphQL{responder: func(string, map[string]any) (any, error) { return lookupHit("dev-1"), nil }}
 	w := &fakeWriter{}
 	m, read := newIngestMetrics()
-	ing := NewIngester(NewRegistrar(gql, "url", "sp-"), NewEmitter(w, fixedNow, "sp", false), m)
+	ing := NewIngester(NewRegistrar(gql, "url", "sp-", nil), NewEmitter(w, fixedNow, "sp", false), m)
 
 	err := ing.Ingest(context.Background(), "acme", IngestPolicy{Source: "s"}, "g/n", []Sample{{Name: "t", Value: 1, Time: 1}})
 	require.NoError(t, err)
@@ -332,7 +338,7 @@ func TestIngesterDropsUnknownAndCountsIt(t *testing.T) {
 	gql := &fakeGraphQL{responder: func(string, map[string]any) (any, error) { return lookupMiss(), nil }}
 	w := &fakeWriter{}
 	m, read := newIngestMetrics()
-	ing := NewIngester(NewRegistrar(gql, "url", "sp-"), NewEmitter(w, fixedNow, "sp", false), m)
+	ing := NewIngester(NewRegistrar(gql, "url", "sp-", nil), NewEmitter(w, fixedNow, "sp", false), m)
 
 	err := ing.Ingest(context.Background(), "acme", IngestPolicy{AutoRegister: false}, "g/n", []Sample{{Name: "t", Value: 1, Time: 1}, {Name: "u", Value: 2, Time: 1}})
 	require.NoError(t, err, "a definitive drop is handled, not an error")
@@ -350,7 +356,7 @@ func TestIngesterCountsRegistrationThenEmits(t *testing.T) {
 	}}
 	w := &fakeWriter{}
 	m, read := newIngestMetrics()
-	ing := NewIngester(NewRegistrar(gql, "url", "sp-"), NewEmitter(w, fixedNow, "sp", false), m)
+	ing := NewIngester(NewRegistrar(gql, "url", "sp-", nil), NewEmitter(w, fixedNow, "sp", false), m)
 
 	err := ing.Ingest(context.Background(), "acme", IngestPolicy{Source: "s", AutoRegister: true, DeviceTypeToken: "t"}, "g/n", []Sample{{Name: "t", Value: 1, Time: 1}})
 	require.NoError(t, err)
@@ -363,7 +369,7 @@ func TestIngesterReturnsRetryableErrors(t *testing.T) {
 	gqlErr := &fakeGraphQL{responder: func(string, map[string]any) (any, error) { return nil, errors.New("dm down") }}
 	w := &fakeWriter{}
 	m, _ := newIngestMetrics()
-	ing := NewIngester(NewRegistrar(gqlErr, "url", "sp-"), NewEmitter(w, fixedNow, "sp", false), m)
+	ing := NewIngester(NewRegistrar(gqlErr, "url", "sp-", nil), NewEmitter(w, fixedNow, "sp", false), m)
 	err := ing.Ingest(context.Background(), "acme", IngestPolicy{}, "g/n", []Sample{{Name: "t", Value: 1, Time: 1}})
 	assert.Error(t, err)
 	assert.Empty(t, w.msgs)
@@ -371,7 +377,7 @@ func TestIngesterReturnsRetryableErrors(t *testing.T) {
 	// Emit failure is retryable.
 	gqlOK := &fakeGraphQL{responder: func(string, map[string]any) (any, error) { return lookupHit("dev-1"), nil }}
 	wErr := &fakeWriter{err: errors.New("nats down")}
-	ing2 := NewIngester(NewRegistrar(gqlOK, "url", "sp-"), NewEmitter(wErr, fixedNow, "sp", false), m)
+	ing2 := NewIngester(NewRegistrar(gqlOK, "url", "sp-", nil), NewEmitter(wErr, fixedNow, "sp", false), m)
 	err = ing2.Ingest(context.Background(), "acme", IngestPolicy{}, "g/n", []Sample{{Name: "t", Value: 1, Time: 1}})
 	assert.Error(t, err)
 }

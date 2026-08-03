@@ -1036,3 +1036,46 @@ func TestDeviceTokenShadowHasNone(t *testing.T) {
 	_, ok := r.DeviceToken("dev-1")
 	assert.False(t, ok, "a shadow entry exposes no device token")
 }
+
+// 🔴 ADR-077 — THE LWM2M FRONT DOOR.
+//
+// An LwM2M device authenticates at the DTLS-PSK handshake against this server directly,
+// so it never passes the broker auth-callout that stops a deleted tenant's MQTT and
+// Sparkplug fleets. This registry is the only thing between a purged tenant's devices and
+// a live session.
+//
+// It is also where the gate was ACTUALLY MISSING. The refusal was added inside the
+// adapter's Resolve, and the two callers in the adapter's own package were converted to
+// the Ingestible() predicate — but this caller, in another module, still read
+// `outcome == ResolveDropped`, which still compiles. A deleted tenant's device got a
+// 2.01, an installed session, and a CONNECTED presence event with an EMPTY device token
+// written into the tenant being erased. The gate existed and did nothing here.
+//
+// So this test drives the REAL Register against the new outcome rather than asserting the
+// predicate, and every other unconverted call site got the same treatment below.
+func TestRegisterRefusedForADeletedTenant(t *testing.T) {
+	res := &fakeResolver{token: "tok-1", outcome: adapter.ResolveTenantGone}
+	em := &fakeEmitter{}
+	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
+	r := newTestRegistry(res, em, clk, nil)
+
+	result, regId, _, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
+
+	assert.Equal(t, RegisterUnknownDevice, result, "a deleted tenant's device must not register")
+	assert.Empty(t, regId, "no session may be installed for a deleted tenant")
+	assert.Empty(t, em.all(), "no presence event may be written into a tenant being erased")
+}
+
+// The reconstruction path resolves lazily to DISCONNECT an orphaned asserted device. For a
+// deleted tenant there is nothing to disconnect and the resolve carries no token, so
+// emitting would write an empty-token presence event into the tenant being erased.
+func TestReconstructDisconnectSilentForADeletedTenant(t *testing.T) {
+	res := &fakeResolver{outcome: adapter.ResolveTenantGone}
+	em := &fakeEmitter{}
+	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
+	r := newTestRegistry(res, em, clk, nil)
+
+	r.ReconstructDisconnect(context.Background(), "acme", "ext-1")
+
+	assert.Empty(t, em.all(), "a deleted tenant's orphan must not produce a DISCONNECT")
+}

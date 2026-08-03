@@ -51,7 +51,7 @@ func (fakeCreateGQL) Query(_ context.Context, _, _, query string, vars map[strin
 }
 
 func TestSparkplugWiringInjectsTokenPrefix(t *testing.T) {
-	r := NewRegistrar(fakeCreateGQL{}, "url")
+	r := NewRegistrar(fakeCreateGQL{}, "url", nil)
 	tok, outcome, err := r.Resolve(context.Background(), "acme", "plant-a/node-3/dev-2",
 		IngestPolicy{AutoRegister: true, DeviceTypeToken: "t"})
 	require.NoError(t, err)

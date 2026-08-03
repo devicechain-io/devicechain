@@ -60,6 +60,12 @@ type CalloutResponder struct {
 	ttl        time.Duration
 	now        func() time.Time
 	sub        *nats.Subscription
+	// tenantDeleted reports whether a tenant has been through the ADR-077 delete door.
+	// A closure rather than the resolver type so this package does not take a
+	// dependency on core/governance for one boolean, and so a test can drive the gate
+	// without a live user-management — the same injection shape event-sources uses for
+	// its ingest limiter. Never nil; see NewCalloutResponder.
+	tenantDeleted func(tenant string) bool
 }
 
 // NewCalloutResponder builds a responder over an established NATS connection (the
@@ -67,14 +73,24 @@ type CalloutResponder struct {
 // seed the minted user JWTs are signed with, and the instance id the minted device
 // permissions are scoped under (ADR-048), so a device is confined to its own
 // instance's subject tree on a shared broker.
-func NewCalloutResponder(conn *nats.Conn, api model.DeviceManagementApi, issuerSeed, instanceId string) *CalloutResponder {
+//
+// tenantDeleted gates connects on the ADR-077 tenant lifecycle. A nil closure disables
+// the gate (every tenant reads live), which is what an instance with no reachable
+// user-management gets — the same fail-open the resolver itself takes, made explicit
+// here so an unwired gate behaves like an unresolvable one rather than panicking or
+// refusing everything. main logs when it takes that path.
+func NewCalloutResponder(conn *nats.Conn, api model.DeviceManagementApi, issuerSeed, instanceId string, tenantDeleted func(string) bool) *CalloutResponder {
+	if tenantDeleted == nil {
+		tenantDeleted = func(string) bool { return false }
+	}
 	return &CalloutResponder{
-		conn:       conn,
-		api:        api,
-		issuerSeed: issuerSeed,
-		instanceId: instanceId,
-		ttl:        natsauth.DefaultUserJWTTTL,
-		now:        time.Now,
+		conn:          conn,
+		api:           api,
+		issuerSeed:    issuerSeed,
+		instanceId:    instanceId,
+		ttl:           natsauth.DefaultUserJWTTTL,
+		now:           time.Now,
+		tenantDeleted: tenantDeleted,
 	}
 }
 
@@ -135,6 +151,21 @@ func (c *CalloutResponder) handle(msg *nats.Msg) {
 func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT string, errMsg string) {
 	tenant, presented, ok := parseDeviceCredential(req.ConnectOptions.Username, req.ConnectOptions.Password)
 	if !ok {
+		return "", genericAuthFailure
+	}
+
+	// The ADR-077 lifecycle gate. A device credential outlives the operator's delete —
+	// nothing cascades to the credential store — so without this a deleted tenant's
+	// fleet reconnects and keeps writing into data that is being reclaimed underneath
+	// it. Checked HERE, before the credential store is touched: it is a cached read, it
+	// costs nothing on the common path, and refusing before the DB round-trip means a
+	// deleted tenant's reconnect storm cannot load the credential store either.
+	//
+	// It rides on genericAuthFailure like every other refusal, deliberately: telling a
+	// caller "that tenant is being deleted" would make the callout an oracle for which
+	// tenants exist and what is happening to them.
+	if c.tenantDeleted(tenant) {
+		log.Debug().Str("tenant", tenant).Msg("Auth-callout refused a device connect for a deleted tenant.")
 		return "", genericAuthFailure
 	}
 

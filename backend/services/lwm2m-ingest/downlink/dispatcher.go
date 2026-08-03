@@ -110,6 +110,12 @@ type Metrics struct {
 	DrainErrors  prometheus.Counter // a wake-drain fetch that failed (retried on the device's next wake)
 	DrainDropped prometheus.Counter // a wake-drain trigger dropped because the device's shard was busy (next wake re-triggers)
 	DrainDedup   prometheus.Counter // a command skipped because it was already dispatched (drain/live overlap) — a re-actuation avoided
+	// TenantGoneRefused counts live commands ack-dropped because their tenant has been
+	// deleted (ADR-077). Distinct from Poison: the command is well formed, the platform is
+	// declining to actuate an offboarded customer's hardware. Wake-drains refused for the
+	// same reason are not counted here — a drain is a trigger, not a command, and it
+	// carries no count of what it would have fired.
+	TenantGoneRefused prometheus.Counter
 }
 
 // Default tuning for the dispatcher. Each is overridable via Options.
@@ -162,9 +168,12 @@ type Dispatcher struct {
 	exec      executor
 	fetcher   drainFetcher
 	metrics   Metrics
-	workers   int
-	opTimeout time.Duration
-	dedupe    *dedupe
+	// tenantDeleted reports whether a tenant has been through the ADR-077 delete door.
+	// Never nil; see NewDispatcher.
+	tenantDeleted func(tenant string) bool
+	workers       int
+	opTimeout     time.Duration
+	dedupe        *dedupe
 	// queuesPtr publishes the CURRENT leadership term's worker channels so Drain (called from the
 	// /rd handler goroutine, off the Run loop) can enqueue a wake-drain onto a device's shard. It is
 	// nil whenever this replica is not the serving leader (before Run, and after it returns), so a
@@ -182,11 +191,20 @@ type Dispatcher struct {
 type Options struct {
 	Workers   int
 	OpTimeout time.Duration
+	// TenantDeleted reports whether a tenant has been through the ADR-077 delete door.
+	// A closure rather than the governance resolver type so this package is testable
+	// without a live user-management. Nil disables the gate; see NewDispatcher.
+	TenantDeleted func(tenant string) bool
 }
 
 // NewDispatcher builds a Dispatcher over the durable command reader, the command-responses writer,
 // the conn table, the CoAP op executor, and the wake-drain fetcher (nil disables draining).
+// tenantDeleted gates ACTUATION on the ADR-077 tenant lifecycle (Options.TenantDeleted).
+// Nil disables the gate, matching the resolver's own fail-open.
 func NewDispatcher(rdr reader, responses responsePublisher, conns connLookup, exec executor, fetcher drainFetcher, metrics Metrics, opts Options) *Dispatcher {
+	if opts.TenantDeleted == nil {
+		opts.TenantDeleted = func(string) bool { return false }
+	}
 	if opts.Workers <= 0 {
 		opts.Workers = DefaultWorkers
 	}
@@ -194,16 +212,17 @@ func NewDispatcher(rdr reader, responses responsePublisher, conns connLookup, ex
 		opts.OpTimeout = DefaultOpTimeout
 	}
 	return &Dispatcher{
-		reader:    rdr,
-		responses: responses,
-		conns:     conns,
-		exec:      exec,
-		fetcher:   fetcher,
-		metrics:   metrics,
-		workers:   opts.Workers,
-		opTimeout: opts.OpTimeout,
-		dedupe:    newDedupe(dedupeTTL, dedupeMax),
-		ready:     make(chan struct{}),
+		reader:        rdr,
+		responses:     responses,
+		conns:         conns,
+		exec:          exec,
+		fetcher:       fetcher,
+		metrics:       metrics,
+		tenantDeleted: opts.TenantDeleted,
+		workers:       opts.Workers,
+		opTimeout:     opts.OpTimeout,
+		dedupe:        newDedupe(dedupeTTL, dedupeMax),
+		ready:         make(chan struct{}),
 	}
 }
 
@@ -343,13 +362,47 @@ func (d *Dispatcher) Drain(tenant, deviceToken string) {
 }
 
 // process dispatches one shard-worker task: a live command or a wake-drain.
+//
+// 🔴 The ADR-077 lifecycle gate sits HERE, at the union, because there are TWO ways a
+// command reaches a device and command-delivery's own gate covers neither completely:
+//
+//   - the LIVE path reads the device-commands stream, and a command published in the
+//     moments before the delete is already durable in that stream — command-delivery
+//     refusing to publish more does not unpublish those;
+//   - the WAKE-DRAIN re-fetches commands still in SENT and fires them when a sleeping
+//     device next registers, which can be long after the tenant was deleted. Nothing on
+//     that path had a lifecycle check: the (tenant, token) is remembered from a
+//     registration that predates the delete, and PSK bindings are static config.
+//
+// A command is a PHYSICAL ACTUATION, so "the sweep gate stops most of them" is not a
+// standard this path can be held to. Gating the union rather than the two callers means a
+// third task kind cannot be added without one.
 func (d *Dispatcher) process(ctx context.Context, t task) {
 	switch {
 	case t.live != nil:
+		if d.tenantDeleted(t.live.tenant) {
+			// Acked, not retried: the tenant is not coming back, and leaving the message
+			// unacked would redeliver this refusal until the stream ages out.
+			d.ackRefused(t.live.msg, t.live.tenant)
+			return
+		}
 		d.dispatch(ctx, *t.live)
 	case t.drain != nil:
+		if d.tenantDeleted(t.drain.tenant) {
+			return
+		}
 		d.drain(ctx, *t.drain)
 	}
+}
+
+// ackRefused settles a live command refused by the lifecycle gate. It is counted apart
+// from a poison message: nothing is wrong with the command, the platform is declining to
+// actuate hardware on behalf of a tenant an operator has deleted.
+func (d *Dispatcher) ackRefused(msg messaging.Message, tenant string) {
+	incr(d.metrics.TenantGoneRefused, 1)
+	log.Debug().Str("tenant", tenant).
+		Msg("Refusing to actuate an LwM2M command for a tenant that has been deleted.")
+	ackDrop(msg)
 }
 
 // parse derives the tenant from the command subject and decodes the delivery envelope. A message

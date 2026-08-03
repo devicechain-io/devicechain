@@ -26,29 +26,57 @@ import (
 
 // PurgeState is where a tenant sits in the ADR-077 deletion lifecycle.
 //
-// The states are deliberately not a boolean. "Deleted" has to mean two different
-// things to two different readers: access is cut the moment an operator asks, while
-// the tenant's rows across eleven other areas are reclaimed asynchronously afterwards
-// — so a tenant that no one can reach may still hold data, and the difference is
-// exactly what an erasure record has to be able to state.
+// It is deliberately not a boolean, because "deleted" has to mean two different things
+// to two different readers: access is cut the moment an operator asks, while the
+// tenant's rows across eleven other areas are reclaimed asynchronously afterwards — so
+// a tenant nobody can reach may still hold data, and the difference is exactly what an
+// erasure record has to be able to state.
+//
+// There are only two states, and the missing third one is the design. A "purged" state
+// would have to live on a row that survives its own purge, and that row cannot survive:
+// it holds the unique index on the token, so keeping it would reserve the token
+// forever. ADR-077 amendment 2 releases the token once every area acks, which means
+// completion will REMOVE the tenant row and write the deletion record — keyed by (token,
+// epoch) — into its own table. The deletion record will BE the purged state, leaving
+// nothing here to label. The hard delete this ADR exists to fix therefore comes back,
+// but only after reclamation, which is the whole difference: the defect was never the
+// delete, it was the delete BEFORE reclamation.
+//
+// 🔴 None of that completion path exists yet — the sweep, the ack protocol and the
+// deletion record are slice 2, so today a purging tenant purges forever and its token
+// stays taken. The state SET is settled now rather than then because an unreachable state
+// is worse than a missing one: shipping `purged` would have put a value in this type that
+// nothing can ever write and every reader still has to handle.
 type PurgeState string
 
 const (
 	// PurgeActive is an ordinary live tenant.
 	PurgeActive PurgeState = "active"
 	// PurgePurging means access is cut and reclamation is in progress or pending. No
-	// token can be minted for it and no tenant can be created at its token.
+	// token can be minted for it and no tenant can be created at its token. It is the
+	// only non-active state a row is ever observed in — see the type comment.
 	PurgePurging PurgeState = "purging"
-	// PurgePurged means every area has reported its sweep complete. The row REMAINS —
-	// it is the token reservation and the deletion record's anchor, not a leftover.
-	PurgePurged PurgeState = "purged"
 )
 
-// Deleted reports whether the tenant has been through the delete door at all, in
-// either of the two post-delete states. Callers gating access want this rather than a
-// specific state: the difference between purging and purged is about the DATA, and
-// says nothing about whether anyone may still enter.
-func (p PurgeState) Deleted() bool { return p == PurgePurging || p == PurgePurged }
+// Deleted reports whether the tenant has been through the delete door.
+//
+// It reads as a predicate over the lifecycle rather than `== PurgePurging` at each
+// caller on purpose: every gate in the platform asks "may anyone still enter?", which
+// is a question about the lifecycle, not about one state's name. Should a state ever be
+// added between the cut and reclamation, it is added here once instead of being missed
+// at whichever call site the author did not think of.
+//
+// 🔴 Anything-but-active reads DELETED, including the empty string — so a zero-value
+// Tenant is refused. That is deliberate and it is the OPPOSITE of how core/governance
+// reads the same empty value on the wire (governance.lifecycleDeleted treats it as
+// active). The two are not inconsistent; they sit on different sides of the same trade.
+// Here we are the authority holding the row, and refusing a tenant we failed to load
+// costs one caller an error. There the answer gates the device plane for the whole
+// instance, and reading a broken response as "deleted" would refuse every connect,
+// ingest and command everywhere. Same edge, opposite blast radius, opposite default.
+// (Persisted rows cannot be empty — NOT NULL DEFAULT 'active' — so this only ever bites
+// an in-memory struct that was never loaded.)
+func (p PurgeState) Deleted() bool { return p != PurgeActive }
 
 // NormalizeEmail lower-cases and trims an email so identity lookups and the
 // uniqueness constraint are case-insensitive. The single normalizer shared by the
@@ -216,13 +244,17 @@ type Tenant struct {
 	Enabled bool           `gorm:"not null;default:true"`
 	Config  map[string]any `gorm:"serializer:json"`
 
-	// The ADR-077 lifecycle. A tenant is not deleted, it is PURGED: the row survives so
-	// its token stays taken, because the token is the isolation key every other area
-	// stores and a successor at a reused token would inherit the predecessor's data.
+	// The ADR-077 lifecycle. A tenant is not deleted on the spot, it is PURGED: the row
+	// survives FOR AS LONG AS THE PURGE RUNS so its token stays taken, because the token
+	// is the isolation key every other area stores and a successor at a reused token
+	// would inherit the predecessor's data. Reclamation releases the token by removing
+	// this row (see PurgeState) — the reservation is bounded by the purge, not permanent.
 	//
-	// PurgeEpoch dates the cut. It exists because a boolean cannot carry what a fence
-	// needs: bounded by the epoch, a fence suppresses the purged tenant's stragglers
-	// without also suppressing a future successor's legitimate writes.
+	// PurgeEpoch dates the cut, and releasing the token is what makes it load-bearing
+	// rather than defensive: a token really can be reused, so a fence or a deletion
+	// record keyed by the token alone is ambiguous by construction. Bounded by the epoch,
+	// a fence suppresses the purged tenant's stragglers without also suppressing a future
+	// successor's legitimate writes.
 	PurgeState PurgeState `gorm:"not null;default:'active';size:16;index"`
 	PurgeEpoch *time.Time
 

@@ -39,9 +39,10 @@ type (
 )
 
 // NewRegistrar binds the shared registrar with Sparkplug's token prefix, so callers (and
-// the wiring test) never repeat it.
-func NewRegistrar(client adapter.GraphQLClient, graphqlURL string) *adapter.Registrar {
-	return adapter.NewRegistrar(client, graphqlURL, tokenPrefix)
+// the wiring test) never repeat it. tenantDeleted is the ADR-077 lifecycle gate (nil
+// disables it); see adapter.NewRegistrar.
+func NewRegistrar(client adapter.GraphQLClient, graphqlURL string, tenantDeleted func(string) bool) *adapter.Registrar {
+	return adapter.NewRegistrar(client, graphqlURL, tokenPrefix, tenantDeleted)
 }
 
 // NewEmitter binds the shared emitter with Sparkplug's dedup-id prefix.

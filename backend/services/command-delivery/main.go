@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-command-delivery/verify"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -88,9 +89,15 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	DeviceCommandsWriter = commands
 
-	// Create and initialize command delivery processor.
+	// Create and initialize command delivery processor. The ADR-077 gate stops the
+	// delivery sweep from publishing into a deleted tenant — a physical actuation on an
+	// offboarded customer's hardware, which nothing else on this path would prevent: the
+	// sweep loads QUEUED commands cross-tenant under a system context, and a command
+	// enqueued before the delete is still queued after it.
+	infra := Microservice.InstanceConfiguration.Infrastructure
 	CommandDeliveryProcessor = processor.NewCommandDeliveryProcessor(Microservice, CommandResponsesReader,
-		DeviceCommandsWriter, core.NewNoOpLifecycleCallbacks(), Api)
+		DeviceCommandsWriter, core.NewNoOpLifecycleCallbacks(), Api,
+		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery"))
 	err = CommandDeliveryProcessor.Initialize(context.Background())
 	if err != nil {
 		return err
