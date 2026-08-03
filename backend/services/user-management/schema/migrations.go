@@ -38,5 +38,8 @@ var (
 		// ADR-077 tenant lifecycle. The first migration appended after the GA squash,
 		// and the worked example of the rule above: its own snapshot, no live models.
 		NewTenantPurgeStateMigration(),
+		// ADR-077 the deletion record + its per-store ledger. Completion removes the
+		// tenant row to release the token, so completion cannot be recorded on it.
+		NewTenantPurgeRecordMigration(),
 	}
 )

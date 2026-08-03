@@ -42,11 +42,18 @@ import (
 // but only after reclamation, which is the whole difference: the defect was never the
 // delete, it was the delete BEFORE reclamation.
 //
-// 🔴 None of that completion path exists yet — the sweep, the ack protocol and the
-// deletion record are slice 2, so today a purging tenant purges forever and its token
-// stays taken. The state SET is settled now rather than then because an unreachable state
-// is worse than a missing one: shipping `purged` would have put a value in this type that
-// nothing can ever write and every reader still has to handle.
+// That completion path now exists: the purge coordinator erases the tenant across every
+// store and calls CompleteTenantPurge, which stamps the record and removes this row. The
+// state SET was settled before any of it was built, because an unreachable state is worse
+// than a missing one: shipping `purged` would have put a value in this type that nothing
+// can ever write and every reader still has to handle.
+//
+// A purge still does not complete on today's build, and for a stated reason rather than a
+// missing one — the stores that hold telemetry, retained broker messages, cached
+// key-value entries and uploaded objects report on every pass that they are still holding
+// the tenant's data, so the coordinator declines to claim an erasure. Each one is a line
+// in the deletion record's ledger saying so. Building them is what lets a token be
+// released, and nothing about this type changes when they land.
 type PurgeState string
 
 const (
