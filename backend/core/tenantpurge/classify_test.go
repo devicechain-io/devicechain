@@ -4,6 +4,7 @@
 package tenantpurge
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -147,6 +148,93 @@ func TestTransitivityResolvesToAFixpointRegardlessOfMapOrder(t *testing.T) {
 	}
 }
 
+// TestADiamondCapturesEveryLinkOnEveryRun is the test that catches a transitive
+// resolution which settles membership and links in one pass.
+//
+// Shape: T references A (direct) and B; B references A. T is tenant-bearing through
+// BOTH edges. A single-phase walk that records T's links at the moment it first marks T
+// captures only the parents that were bearing right then — and the walk is over a Go
+// map, so if it reaches T before B, T keeps a link to A alone.
+//
+// 🔑 Note what has to be asserted. T's CLASS is transitive on every run either way; only
+// len(Links) is wrong. The fixpoint test below asserts Class and passes with the bug
+// present, which is exactly how it survived review of the first draft. A measured
+// single-phase version failed here in 25 of 200 runs, so 200 iterations makes it certain.
+func TestADiamondCapturesEveryLinkOnEveryRun(t *testing.T) {
+	cols := []column{
+		col("a", "root", "id", "bigint"),
+		col("a", "root", "tenant_id", "character varying"),
+		col("a", "middle", "id", "bigint"),
+		col("a", "middle", "root_id", "bigint"),
+		col("a", "joiner", "root_id", "bigint"),
+		col("a", "joiner", "middle_id", "bigint"),
+	}
+	fks := []constraint{
+		fk("a", "middle", "root_id", "a", "root", "id"),
+		fk("a", "joiner", "root_id", "a", "root", "id"),
+		fk("a", "joiner", "middle_id", "a", "middle", "id"),
+	}
+
+	for i := 0; i < 200; i++ {
+		plan, err := classify(cols, fks)
+		require.NoError(t, err)
+		joiner := classOf(t, plan, "a", "joiner")
+		require.Equal(t, ClassTransitive, joiner.Class)
+		require.Lenf(t, joiner.Links, 2,
+			"run %d: joiner reaches the tenant through BOTH root and middle. With one link "+
+				"missing, a joiner row whose other column is NULL survives the sweep and then "+
+				"trips the foreign key when its parent is deleted, aborting the whole purge", i)
+	}
+}
+
+// TestAMaterializedViewIsNeverSweptSilently pins the blind spot that made the
+// fail-closed gate fail OPEN.
+//
+// A materialized view holds a physical copy of its query's rows and is absent from
+// information_schema entirely — not from .tables and not from .columns, verified live on
+// PostgreSQL 16. A classifier reading information_schema therefore cannot see one at
+// all: it never reaches ClassUnclassified, the gate never fires, and a matview of tenant
+// data is retained forever behind a green CI run.
+//
+// And a tenant column must not make it DIRECT either, since `DELETE FROM` a matview is
+// a syntax error. The only correct outcome is that it demands an explicit answer.
+func TestAMaterializedViewIsNeverSweptSilently(t *testing.T) {
+	plan, err := classify([]column{
+		{Schema: "event-management", Table: "tenant_rollup", Kind: "m",
+			Name: "tenant_id", Type: "character varying"},
+	}, nil)
+	require.NoError(t, err)
+
+	e := classOf(t, plan, "event-management", "tenant_rollup")
+	assert.Equal(t, ClassUnclassified, e.Class,
+		"a matview carrying a tenant column cannot be swept with a DELETE, so it must demand "+
+			"an explicit answer rather than be classified direct")
+	require.Error(t, checkClassified(plan))
+}
+
+// TestAForeignTableIsNeverSweptSilently is the same rule for rows that are not in this
+// database at all. Sweeping one would reach through a wrapper into another system.
+func TestAForeignTableIsNeverSweptSilently(t *testing.T) {
+	plan, err := classify([]column{
+		{Schema: "some-area", Table: "remote_rows", Kind: "f",
+			Name: "tenant_id", Type: "character varying"},
+	}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, ClassUnclassified, classOf(t, plan, "some-area", "remote_rows").Class)
+}
+
+// TestAPartitionedTableIsSweptNormally is the counterweight to the two tests above: the
+// kind check must exclude what a DELETE cannot touch WITHOUT also excluding an ordinary
+// partitioned table, which a DELETE handles perfectly well.
+func TestAPartitionedTableIsSweptNormally(t *testing.T) {
+	plan, err := classify([]column{
+		{Schema: "event-management", Table: "events", Kind: "p",
+			Name: "tenant_id", Type: "character varying"},
+	}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, ClassDirect, classOf(t, plan, "event-management", "events").Class)
+}
+
 // TestChildrenAreDeletedBeforeTheirParents pins the ordering the foreign keys require.
 // None of the platform's foreign keys cascade, so deleting a parent while a child still
 // references it is a constraint violation partway through the sweep transaction.
@@ -173,6 +261,38 @@ func TestChildrenAreDeletedBeforeTheirParents(t *testing.T) {
 
 	require.Less(t, indexOf(plan, "areas"), indexOf(plan, "area_types"),
 		"areas references area_types, so areas must be emptied first — even though it sorts second")
+}
+
+// TestDeleteOrderIsAGraphWalkNotASort closes the remaining way an ordering test can pass
+// for the wrong reason.
+//
+// The test above pins one orientation: a child that sorts AFTER its parent. Alone, it is
+// satisfied by an implementation that merely reverses the alphabet — which is not a
+// topological sort and breaks the moment a child sorts before its parent. This graph
+// contains both orientations at once, so neither ascending nor descending name order can
+// satisfy it and only a real dependency walk does.
+//
+//	alpha  -> zulu    (child sorts FIRST, parent last)
+//	zebra  -> bravo   (child sorts LAST, parent first)
+func TestDeleteOrderIsAGraphWalkNotASort(t *testing.T) {
+	cols := []column{}
+	for _, name := range []string{"alpha", "zulu", "zebra", "bravo"} {
+		cols = append(cols,
+			col("a", name, "id", "bigint"),
+			col("a", name, "tenant_id", "character varying"),
+			col("a", name, "ref", "bigint"))
+	}
+	plan, err := classify(cols, []constraint{
+		fk("a", "alpha", "ref", "a", "zulu", "id"),
+		fk("a", "zebra", "ref", "a", "bravo", "id"),
+	})
+	require.NoError(t, err)
+
+	assert.Less(t, indexOf(plan, "alpha"), indexOf(plan, "zulu"),
+		"alpha references zulu; ascending name order gets this one right by luck")
+	assert.Less(t, indexOf(plan, "zebra"), indexOf(plan, "bravo"),
+		"zebra references bravo; descending name order gets THIS one right by luck, and no "+
+			"single sort direction can satisfy both")
 }
 
 // TestAForeignKeyCycleIsReportedRatherThanBroken pins that an unorderable schema stops
@@ -250,9 +370,8 @@ func TestTheDetectSnapshotHoleIsRegisteredAsDeferredNotExempt(t *testing.T) {
 		"a table holding un-erased tenant data must be deferred, not exempt")
 }
 
-// TestMigrationBookkeepingIsExemptInEveryArea pins the one wildcard in the registry:
-// each of the ten areas has its own gormigrate table, and none of them is worth a
-// hand-written entry.
+// TestMigrationBookkeepingIsExemptInEveryArea pins the one derived exemption: each area
+// has its own gormigrate ledger, named from the area with dashes turned to underscores.
 func TestMigrationBookkeepingIsExemptInEveryArea(t *testing.T) {
 	for _, area := range []string{"device-management", "user-management", "event-processing"} {
 		table := Table{Schema: area, Name: sanitizedArea(area) + "_migrations"}
@@ -262,29 +381,29 @@ func TestMigrationBookkeepingIsExemptInEveryArea(t *testing.T) {
 	}
 }
 
-// sanitizedArea mirrors rdb.MigrationTableName's dash-to-underscore rule.
-func sanitizedArea(area string) string {
-	out := []rune(area)
-	for i, r := range out {
-		if r == '-' {
-			out[i] = '_'
-		}
+// TestTheMigrationExemptionCannotSwallowAFeatureTable is that rule's negative control.
+// A suffix match on "*_migrations" — which is what this registry used to carry — would
+// also exempt a future feature table ending in the word, under a reason about gormigrate
+// that has nothing to do with it, and the coverage gate would go green over real tenant
+// data. The name is derived from the schema instead, so it matches that one ledger.
+func TestTheMigrationExemptionCannotSwallowAFeatureTable(t *testing.T) {
+	for _, name := range []string{
+		"channel_migrations", // a plausible firmware feature table
+		"tenant_migrations",  // and a more alarming one
+		"device_management_migrations_archive",
+	} {
+		_, ok := exemptionFor(Table{Schema: "device-management", Name: name})
+		assert.Falsef(t, ok, "%s must not inherit the gormigrate exemption", name)
 	}
-	return string(out)
+	// Another area's ledger is not exempt in this schema either: the name has to be
+	// derived from the schema it actually sits in.
+	_, ok := exemptionFor(Table{Schema: "device-management", Name: "user_management_migrations"})
+	assert.False(t, ok)
 }
 
-// TestMatchNameIsDeliberatelyNarrow pins that the registry's patterns cannot be widened
-// by accident into something that swallows a table nobody meant to exempt.
-func TestMatchNameIsDeliberatelyNarrow(t *testing.T) {
-	assert.True(t, matchName("iam_roles", "iam_roles"))
-	assert.True(t, matchName("*_migrations", "device_management_migrations"))
-	assert.True(t, matchName("ai_*", "ai_providers"))
-
-	assert.False(t, matchName("iam_roles", "iam_roles_extra"))
-	assert.False(t, matchName("*_migrations", "migrations_pending"))
-	assert.False(t, matchName("ai_*", "not_ai_providers"))
-	assert.False(t, matchName("*", "anything"),
-		"a bare * is not a supported pattern; an exemption must name what it excuses")
+// sanitizedArea mirrors rdb.MigrationTableName's dash-to-underscore rule.
+func sanitizedArea(area string) string {
+	return strings.ReplaceAll(area, "-", "_")
 }
 
 // TestQuoteIdentSurvivesHyphenatedSchemas pins the one piece of SQL hygiene that is not
@@ -293,7 +412,9 @@ func TestMatchNameIsDeliberatelyNarrow(t *testing.T) {
 func TestQuoteIdentSurvivesHyphenatedSchemas(t *testing.T) {
 	assert.Equal(t, `"device-management"."devices"`,
 		Table{Schema: "device-management", Name: "devices"}.quoted())
-	assert.Equal(t, `"we""ird"`, quoteIdent(`we"ird`))
+	// The escaping rule itself belongs to rdb.QuoteIdentifier and is pinned there;
+	// what matters here is that a table renders SCHEMA-QUALIFIED and quoted on both
+	// halves, which is what the generated SQL depends on.
 }
 
 func indexOf(plan *Plan, name string) int {

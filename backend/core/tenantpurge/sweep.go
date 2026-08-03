@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"gorm.io/gorm"
+
+	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
 // TableResult is what one table contributed to a sweep or a residual scan.
@@ -96,8 +98,18 @@ func checkClassified(plan *Plan) error {
 // The tenant's own row survives in `purging` state for the whole purge, and its unique
 // index on the token is what stops a successor being created at that token meanwhile.
 // So while this runs the token is unambiguous and the sweep needs no epoch bound. The
-// epoch is load-bearing for what OUTLIVES the sweep — the deletion record, and any
-// fence that survives the row — not for the delete itself.
+// epoch is load-bearing for what OUTLIVES the sweep — the deletion record, and any fence
+// that survives the row — not for the delete itself.
+//
+// # 🔴 CALLER'S PRECONDITION: the tenant must already be in `purging`
+//
+// This function does not check, and deliberately does not: the lifecycle lives in
+// user-management's iam_tenants, and teaching core about that table to guard one call
+// would invert the layering for every other user of the package. So the guarantee above
+// is the CALLER's to establish, and it is not a formality — the whole sweep commits in
+// one transaction, so a transposed token erases a live tenant completely and atomically,
+// with no partial state to notice on the way. Anything that calls this outside a test
+// must first confirm the token names a tenant whose purge has begun.
 func Sweep(ctx context.Context, db *gorm.DB, plan *Plan, tenant string) (Result, error) {
 	res := Result{Tenant: tenant, Deferred: plan.OfClass(ClassDeferred)}
 	if err := checkSweepable(plan, tenant); err != nil {
@@ -130,20 +142,29 @@ func Sweep(ctx context.Context, db *gorm.DB, plan *Plan, tenant string) (Result,
 	return res, nil
 }
 
-// Residue counts the rows that still identify as tenant's after a sweep — the
-// re-verify half of plant → act → re-verify, at tenant scope.
+// Residue counts the rows that still identify as tenant's after a sweep — the re-verify
+// half of plant → act → re-verify, at tenant scope.
 //
-// It is a genuinely weaker check than it looks, and saying so is the point: it asks
-// the same classification the same question, so a table the plan never knew about is
-// invisible to both. What actually makes coverage complete is checkClassified, which
-// refuses to run at all while any table is unexplained. This function's job is the
-// narrower one of catching a delete that did not take — a row re-inserted by a service
-// still running, a subquery that matched nothing because the delete order was wrong, a
-// trigger that put something back.
+// # What it can and cannot see, stated exactly
 //
-// It is therefore worth running twice with a pause between: the resurrection vectors
-// ADR-077 catalogues are all writes by a live service, and a scan run immediately after
-// the transaction commits can only see the ones that were already in flight.
+// It is a weaker check than it looks, and saying so is the point. It asks the same
+// classification the same question, so a table the plan never knew about is invisible to
+// both. What actually makes coverage complete is checkClassified, which refuses to run
+// at all while any table is unexplained; this function's narrower job is catching a
+// delete that did not take — most realistically a row re-inserted by a service that is
+// still running, which is every resurrection vector ADR-077 catalogues.
+//
+// For a TRANSITIVE table it does not check the child directly, and cannot: the predicate
+// selects children of tenant-bearing parents, and the sweep has just deleted those
+// parents, so the subquery matches nothing whatever the child holds. What makes this
+// sound rather than vacuous is the foreign key itself — a table is only transitive
+// BECAUSE a foreign key ties it to that parent, so a surviving child row would have
+// blocked the parent's delete and failed the sweep outright. A resurrection that
+// re-creates both is caught through the parent, which is direct. A leftover child alone
+// is not a state the database permits.
+//
+// It is worth running twice with a pause between. A scan run the instant the transaction
+// commits can only see writes that were already in flight.
 func Residue(ctx context.Context, db *gorm.DB, plan *Plan, tenant string) (Result, error) {
 	res := Result{Tenant: tenant, Deferred: plan.OfClass(ClassDeferred)}
 	if err := checkSweepable(plan, tenant); err != nil {
@@ -214,7 +235,7 @@ func tenantPredicate(idx map[Table]Entry, t Table, tenant string, depth int) (st
 
 	switch e.Class {
 	case ClassDirect:
-		return fmt.Sprintf("%s = ?", quoteIdent(e.Column)), []any{tenant}, nil
+		return fmt.Sprintf("%s = ?", rdb.QuoteIdentifier(e.Column)), []any{tenant}, nil
 
 	case ClassTransitive:
 		if len(e.Links) == 0 {
@@ -231,8 +252,13 @@ func tenantPredicate(idx map[Table]Entry, t Table, tenant string, depth int) (st
 			if err != nil {
 				return "", nil, err
 			}
-			// A row whose referencing columns are NULL references nothing, so it is
-			// not reached through this link; `IN (subquery)` already excludes it.
+			// A single-column link whose value is NULL references nothing, and
+			// `IN (subquery)` already excludes it. For a COMPOSITE link the row
+			// tuple is NULL if any column is, so a partially-NULL row is excluded
+			// too — which matches the foreign key's own MATCH SIMPLE semantics,
+			// under which such a row is not considered to reference the parent and
+			// does not block its deletion either. The two agree, which is what
+			// keeps the sweep from tripping over a row it declined to match.
 			clauses = append(clauses, fmt.Sprintf("(%s) IN (SELECT %s FROM %s WHERE %s)",
 				strings.Join(quoteAll(l.Columns), ", "),
 				strings.Join(quoteAll(l.ParentColumns), ", "),
@@ -249,7 +275,7 @@ func tenantPredicate(idx map[Table]Entry, t Table, tenant string, depth int) (st
 func quoteAll(names []string) []string {
 	out := make([]string, len(names))
 	for i, n := range names {
-		out[i] = quoteIdent(n)
+		out[i] = rdb.QuoteIdentifier(n)
 	}
 	return out
 }

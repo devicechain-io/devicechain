@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
 )
 
@@ -203,10 +204,10 @@ func TestARandomTokenIsFreshEachTime(t *testing.T) {
 func TestASchemaNameIsQuotedForTheSearchPath(t *testing.T) {
 	// Functional areas carry hyphens, which is exactly why the search path is set
 	// with a quoted identifier rather than passed through the DSN.
-	if got := quoteIdentifier(areaNotification); got != `"notification-management"` {
-		t.Fatalf("quoteIdentifier(%q) = %s", areaNotification, got)
+	if got := rdb.QuoteIdentifier(areaNotification); got != `"notification-management"` {
+		t.Fatalf("rdb.QuoteIdentifier(%q) = %s", areaNotification, got)
 	}
-	if got := quoteIdentifier(`we"ird`); got != `"we""ird"` {
+	if got := rdb.QuoteIdentifier(`we"ird`); got != `"we""ird"` {
 		t.Fatalf("an embedded quote was not doubled: %s", got)
 	}
 }

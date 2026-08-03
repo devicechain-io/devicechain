@@ -35,6 +35,8 @@ import (
 	"strings"
 
 	"gorm.io/gorm"
+
+	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
 // Class is what the purge knows about one table.
@@ -91,7 +93,7 @@ func (c Class) String() string {
 
 // Table identifies one table by schema and name. Schema names are the functional-area
 // names verbatim, so they contain hyphens ("device-management") and only survive SQL
-// as quoted identifiers — see quoteIdent.
+// as quoted identifiers — see rdb.QuoteIdentifier.
 type Table struct {
 	Schema string
 	Name   string
@@ -100,7 +102,9 @@ type Table struct {
 func (t Table) String() string { return t.Schema + "." + t.Name }
 
 // quoted renders the table as a schema-qualified quoted identifier.
-func (t Table) quoted() string { return quoteIdent(t.Schema) + "." + quoteIdent(t.Name) }
+func (t Table) quoted() string {
+	return rdb.QuoteIdentifier(t.Schema) + "." + rdb.QuoteIdentifier(t.Name)
+}
 
 // Entry is one table's classification, with everything the sweep needs to act on it
 // and everything a reader needs to judge it.
@@ -211,8 +215,38 @@ func isSystemSchema(name string) bool {
 type column struct {
 	Schema string
 	Table  string
-	Name   string
-	Type   string
+	// Kind is the relation's pg_class relkind. It decides whether a tenant column is
+	// enough to make the table sweepable — see sweepableKind.
+	Kind string
+	Name string
+	Type string
+}
+
+// sweepableKind reports whether a relation of this pg_class relkind can be erased with
+// a DELETE, which is the only thing this package knows how to do.
+//
+// An ordinary or partitioned table can. A MATERIALIZED VIEW cannot — `DELETE FROM` a
+// matview is a syntax error, and its rows are a copy that outlives any delete against
+// the base table until someone refreshes it. A FOREIGN TABLE's rows are not even in this
+// database. Both therefore need a mechanism this package does not have, so a tenant
+// column on one does NOT make it direct: it falls through to ClassUnclassified and has
+// to be answered for explicitly. Silently classifying one as direct would produce a
+// sweep that fails at the statement (matview) or reaches across a wrapper into somebody
+// else's system (foreign table) — and classifying it as exempt would be the retention
+// bug wearing a reassuring label.
+func sweepableKind(kind string) bool { return kind == "r" || kind == "p" }
+
+// kindOf returns a relation's relkind from its columns. Every column row carries the
+// same value, so the first one answers for the relation.
+//
+// An empty kind means the caller built the columns by hand rather than reading them
+// from the catalog, which the unit tests do; it is treated as an ordinary table so a
+// synthetic catalog does not have to restate the common case on every row.
+func kindOf(cols []column) string {
+	if len(cols) == 0 || cols[0].Kind == "" {
+		return "r"
+	}
+	return cols[0].Kind
 }
 
 // constraint is one catalog foreign key, flattened to parallel column lists.
@@ -228,9 +262,15 @@ type constraint struct {
 // Classify reads the catalog of the database behind db and classifies every table in
 // every non-system schema.
 //
-// It never reads or writes tenant data — the result describes the SHAPE of the
-// database, so it can be computed once and reused across purges, and can be asserted
-// on in CI against a freshly migrated database with no rows in it at all.
+// It never reads or writes tenant data — the result describes the SHAPE of the database,
+// which is why it can be asserted on in CI against a freshly migrated database holding
+// no rows at all.
+//
+// 🔴 Classify per purge; do NOT cache a plan across them. A plan is a snapshot of the
+// catalog, and migrations append normally now, so a plan held across a deploy that added
+// a table would simply never sweep it — and nothing would say so, because checkClassified
+// inspects the PLAN rather than the database. The cost of getting it fresh is two catalog
+// reads against a table count in the tens.
 func Classify(ctx context.Context, db *gorm.DB) (*Plan, error) {
 	cols, err := loadColumns(ctx, db)
 	if err != nil {
@@ -243,21 +283,40 @@ func Classify(ctx context.Context, db *gorm.DB) (*Plan, error) {
 	return classify(cols, fks)
 }
 
-// loadColumns reads every column of every ordinary table in every non-system schema.
+// loadColumns reads every column of every row-holding relation in every non-system
+// schema.
 //
-// The table_type filter keeps VIEWs and MATERIALIZED VIEWs out: a view holds no rows
-// of its own, so deleting through one is at best a no-op and at worst an updatable-view
-// write to the underlying table that the base table's own entry already covers.
+// 🔴 IT READS pg_class RATHER THAN information_schema, AND THAT IS NOT A STYLE CHOICE.
+// A MATERIALIZED VIEW does not appear in information_schema at all — not in .tables and
+// not in .columns; verified live on PostgreSQL 16, both queries return zero rows for one.
+// So an information_schema-based classifier does not merely misclassify a matview of
+// tenant data, it cannot see that it exists: the table never reaches ClassUnclassified,
+// the fail-closed gate never fires, and the rows are retained forever behind a green CI
+// run. pg_class has no such gap.
+//
+// relkind is filtered to the relations that hold rows of their own:
+//
+//	r  ordinary table
+//	p  partitioned table (its partitions are also 'r' and classify separately; the
+//	   resulting double delete is harmless, the second one matches nothing)
+//	m  materialized view — holds a physical copy of its query's rows
+//	f  foreign table — rows live elsewhere, which is worse, not better
+//
+// Plain views ('v') are excluded because they hold no rows: deleting through one is at
+// best a no-op and at worst an updatable-view write to a base table that has its own
+// entry. TimescaleDB's continuous aggregates are 'v' — the rows they serve live in a
+// materialization hypertable under _timescaledb_internal, which is its own erasure
+// target and is not reached by scanning schemas.
 func loadColumns(ctx context.Context, db *gorm.DB) ([]column, error) {
 	var out []column
 	err := db.WithContext(ctx).Raw(`
-		SELECT c.table_schema AS schema, c.table_name AS table,
-		       c.column_name AS name, c.data_type AS type
-		FROM information_schema.columns c
-		JOIN information_schema.tables t
-		  ON t.table_schema = c.table_schema AND t.table_name = c.table_name
-		WHERE t.table_type = 'BASE TABLE'
-		ORDER BY c.table_schema, c.table_name, c.ordinal_position`).Scan(&out).Error
+		SELECT ns.nspname AS schema, c.relname AS table, c.relkind AS kind,
+		       a.attname AS name, format_type(a.atttypid, NULL) AS type
+		FROM pg_class c
+		JOIN pg_namespace ns ON ns.oid = c.relnamespace
+		JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+		WHERE c.relkind IN ('r', 'p', 'm', 'f')
+		ORDER BY ns.nspname, c.relname, a.attnum`).Scan(&out).Error
 	if err != nil {
 		return nil, fmt.Errorf("read catalog columns: %w", err)
 	}
@@ -307,15 +366,27 @@ func classify(cols []column, fks []constraint) (*Plan, error) {
 	entries := make(map[Table]*Entry, len(tables))
 	for _, t := range order {
 		e := &Entry{Table: t}
-		if col, ok := directColumn(tables[t]); ok {
-			e.Class = ClassDirect
-			e.Column = col
+		// A tenant column only makes a relation direct if a DELETE can act on it.
+		// A matview or foreign table with a tenant column needs an explicit answer,
+		// not a statement that fails or reaches into another system.
+		if cols := tables[t]; sweepableKind(kindOf(cols)) {
+			if col, ok := directColumn(cols); ok {
+				e.Class = ClassDirect
+				e.Column = col
+			}
 		}
 		entries[t] = e
 	}
 
+	// A relation a DELETE cannot act on must not become transitive either — the
+	// statement would fail exactly as it would for a direct one.
+	sweepable := make(map[Table]bool, len(order))
+	for _, t := range order {
+		sweepable[t] = sweepableKind(kindOf(tables[t]))
+	}
+
 	edges := groupForeignKeys(fks)
-	resolveTransitive(entries, edges)
+	resolveTransitive(entries, edges, sweepable)
 
 	// Anything still unclassified gets its exemption, if it has one. Exemptions are
 	// applied LAST so that a table which genuinely carries tenant data is swept even
@@ -410,42 +481,63 @@ func groupForeignKeys(fks []constraint) map[Table][]Link {
 	return edges
 }
 
-// resolveTransitive marks every table that reaches tenant-bearing rows through
-// foreign keys, to a fixpoint.
+// resolveTransitive marks every table that reaches tenant-bearing rows through foreign
+// keys, and gives each one the full set of links by which it does so.
 //
-// The fixpoint matters because reachability chains: a join table whose parent is
-// itself only transitively tenant-bearing is still the tenant's data, and a single
-// pass in table order would classify it or not depending on which name sorted first.
-// Iterating until nothing changes makes the result independent of ordering.
-func resolveTransitive(entries map[Table]*Entry, edges map[Table][]Link) {
+// 🔴 IT IS TWO PHASES, AND COLLAPSING THEM INTO ONE IS A REAL BUG THAT LOOKS LIKE AN
+// OPTIMISATION. Membership and links have to be settled separately, because a table's
+// link set is only correct once the bearing set has stopped growing. Computing a link
+// set at the moment a table is first marked captures the parents that were bearing AT
+// THAT MOMENT — and the walk is over a Go map, so which those are is random per run.
+//
+// The shape that breaks: T references both A (direct) and B, and B references A. If the
+// walk reaches T before B, T is marked transitive with a link to A only, then skipped
+// forever, and its link to B is never added. A T row whose a_id is NULL and whose b_id
+// points at the purged tenant's B row is then not matched — the row survives the sweep,
+// and the later delete of B trips the foreign key and aborts the whole transaction. A
+// measured single-phase version produced the incomplete link set in 25 of 200 runs.
+//
+// Note what a test has to assert to see this: the CLASS is right in every run — only
+// len(Links) is wrong. An assertion on Class alone passes with the bug present.
+func resolveTransitive(entries map[Table]*Entry, edges map[Table][]Link, sweepable map[Table]bool) {
 	bearing := func(t Table) bool {
 		e, ok := entries[t]
 		return ok && (e.Class == ClassDirect || e.Class == ClassTransitive)
 	}
+	linksInto := func(t Table) []Link {
+		links := []Link{}
+		for _, l := range edges[t] {
+			if l.Parent != t && bearing(l.Parent) {
+				links = append(links, l)
+			}
+		}
+		sort.Slice(links, func(i, j int) bool {
+			return links[i].Parent.String() < links[j].Parent.String()
+		})
+		return links
+	}
+
+	// Phase 1 — settle WHICH tables are tenant-bearing, to a fixpoint. Reachability
+	// chains, so a single pass would classify a table or not depending on the order the
+	// map happened to yield.
 	for {
 		changed := false
 		for t, e := range entries {
-			if e.Class != ClassUnclassified {
+			if e.Class != ClassUnclassified || !sweepable[t] || len(linksInto(t)) == 0 {
 				continue
 			}
-			links := []Link{}
-			for _, l := range edges[t] {
-				if l.Parent != t && bearing(l.Parent) {
-					links = append(links, l)
-				}
-			}
-			if len(links) == 0 {
-				continue
-			}
-			sort.Slice(links, func(i, j int) bool {
-				return links[i].Parent.String() < links[j].Parent.String()
-			})
 			e.Class = ClassTransitive
-			e.Links = links
 			changed = true
 		}
 		if !changed {
-			return
+			break
+		}
+	}
+
+	// Phase 2 — derive every transitive table's links from the FINAL bearing set.
+	for t, e := range entries {
+		if e.Class == ClassTransitive {
+			e.Links = linksInto(t)
 		}
 	}
 }
@@ -454,10 +546,11 @@ func resolveTransitive(entries map[Table]*Entry, edges map[Table][]Link) {
 // references, which is what the foreign keys require: deleting a parent row while a
 // child still references it is what the constraint exists to prevent.
 //
-// None of the platform's foreign keys are ON DELETE CASCADE — they are plain
-// references — so the ordering is doing real work rather than papering over a
-// constraint the database would have handled. Verified against the golden schemas:
-// 15 foreign keys, none cascading.
+// The ordering is doing real work rather than papering over something the database
+// would have handled: the platform's foreign keys are plain references, not ON DELETE
+// CASCADE, so a parent deleted while a child still references it is rejected. (No count
+// is given here on purpose — a number frozen in prose only ever drifts away from the
+// tree. Ask it instead: `grep -h "FOREIGN KEY" backend/tools/migrationdiff/golden/*.sql`.)
 //
 // A cycle is reported rather than broken. Breaking one silently would produce a sweep
 // that fails partway through on a constraint violation, which reads as a database
@@ -520,14 +613,4 @@ func cyclePath(path []Table) string {
 		names = append(names, t.String())
 	}
 	return strings.Join(names, " -> ")
-}
-
-// quoteIdent renders a SQL identifier as a double-quoted literal.
-//
-// Every identifier this package emits goes through here, and it is not optional
-// hygiene: functional-area schema names contain hyphens, so "device-management".devices
-// is the only spelling PostgreSQL parses — unquoted it is a subtraction. Embedded
-// double quotes are doubled per the SQL standard.
-func quoteIdent(name string) string {
-	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }

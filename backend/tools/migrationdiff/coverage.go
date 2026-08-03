@@ -177,30 +177,9 @@ func report(plan *tenantpurge.Plan) {
 	if deferred := plan.OfClass(tenantpurge.ClassDeferred); len(deferred) > 0 {
 		fmt.Printf("\n%d table(s) hold tenant data the purge does NOT erase:\n", len(deferred))
 		for _, e := range deferred {
-			fmt.Printf("  %s\n      %s\n", e.Table, wrap(e.Reason, 78, "      "))
+			fmt.Printf("  %s\n      %s\n", e.Table, e.Reason)
 		}
 	}
-}
-
-// wrap re-flows a reason to a width so a long one stays readable in CI output.
-func wrap(s string, width int, indent string) string {
-	var lines []string
-	line := ""
-	for _, word := range strings.Fields(s) {
-		switch {
-		case line == "":
-			line = word
-		case len(line)+1+len(word) <= width:
-			line += " " + word
-		default:
-			lines = append(lines, line)
-			line = word
-		}
-	}
-	if line != "" {
-		lines = append(lines, line)
-	}
-	return strings.Join(lines, "\n"+indent)
 }
 
 // openDatabase opens a plain connection to the migrated instance database.

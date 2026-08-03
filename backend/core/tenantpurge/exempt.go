@@ -13,9 +13,9 @@ import "strings"
 // data is gone, so an entry that cannot state why a table is safe to skip has not
 // earned its place.
 type Exemption struct {
-	// Schema is the functional-area schema, or "*" to match any.
+	// Schema is the functional-area schema.
 	Schema string
-	// Name is the table name, or a "*"-suffixed prefix ("foo_*"), or "*_suffix".
+	// Name is the table name, matched exactly.
 	Name string
 	// Class is ClassExempt (holds no single tenant's data) or ClassDeferred (holds
 	// tenant data this mechanism does not yet erase).
@@ -37,12 +37,6 @@ type Exemption struct {
 // stale entry naming a table that has since gained a tenant column is inert rather
 // than dangerous — the catalog wins.
 var exemptions = []Exemption{
-	{
-		Schema: "*", Name: "*_migrations", Class: ClassExempt,
-		Reason: "gormigrate bookkeeping: one row per applied migration id, per functional area. " +
-			"Records schema history, never tenant data.",
-	},
-
 	// ---- user-management: the instance's own control plane -------------------
 	//
 	// This area is where "no tenant column" most often means "genuinely shared"
@@ -118,38 +112,38 @@ var exemptions = []Exemption{
 }
 
 // exemptionFor returns the registry entry covering a table, if one exists.
+//
+// Matching is EXACT on both schema and name — there is no pattern language, and that is
+// a deliberate narrowing. The one repetition worth generalising is each area's own
+// gormigrate bookkeeping table, and it is handled by migrationTableExemption below,
+// which derives the exact name from the schema instead of matching a suffix. The
+// difference is not cosmetic: a `*_migrations` rule would also exempt a future feature
+// table that happened to end in that word — say a firmware `channel_migrations` — under
+// a reason about gormigrate that has nothing to do with it, and the coverage gate would
+// go green over real tenant data.
 func exemptionFor(t Table) (Exemption, bool) {
+	if e, ok := migrationTableExemption(t); ok {
+		return e, true
+	}
 	for _, e := range exemptions {
-		if e.Schema != "*" && e.Schema != t.Schema {
-			continue
-		}
-		if matchName(e.Name, t.Name) {
+		if e.Schema == t.Schema && e.Name == t.Name {
 			return e, true
 		}
 	}
 	return Exemption{}, false
 }
 
-// matchName supports an exact name, a "prefix_*" pattern and a "*_suffix" pattern.
-// Deliberately not a regular expression: the patterns in the registry are there to
-// cover the per-area repetitions of one table (every area's *_migrations), and a
-// richer matcher would make it easy to write an exemption broad enough to swallow a
-// table nobody meant to exempt.
-//
-// A bare "*" is rejected rather than treated as match-everything. Schema:"*" is
-// legitimate — one rule covering the same table in every area — but Name:"*" would
-// exempt an entire area's tables in one line, which is not an exemption, it is
-// switching the fail-closed coverage check off for that area.
-func matchName(pattern, name string) bool {
-	switch {
-	case pattern == "*":
-		return false
-	case pattern == name:
-		return true
-	case strings.HasPrefix(pattern, "*") && strings.HasSuffix(name, pattern[1:]):
-		return true
-	case strings.HasSuffix(pattern, "*") && strings.HasPrefix(name, pattern[:len(pattern)-1]):
-		return true
+// migrationTableExemption covers one table per area: the gormigrate ledger, whose name
+// rdb.MigrationTableName derives from the functional area by replacing dashes with
+// underscores. Deriving the name the same way means this matches that table and nothing
+// else in the schema.
+func migrationTableExemption(t Table) (Exemption, bool) {
+	if t.Name != strings.ReplaceAll(t.Schema, "-", "_")+"_migrations" {
+		return Exemption{}, false
 	}
-	return false
+	return Exemption{
+		Schema: t.Schema, Name: t.Name, Class: ClassExempt,
+		Reason: "gormigrate bookkeeping: one row per applied migration id, for this functional " +
+			"area. Records schema history, never tenant data.",
+	}, true
 }

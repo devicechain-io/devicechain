@@ -161,22 +161,58 @@ func TestSweepRefusesAnUnclassifiedPlanBeforeTouchingTheDatabase(t *testing.T) {
 }
 
 // TestADeferredTableIsCarriedOnEveryResult pins that a known hole travels with the
-// answer. A caller that writes a deletion record reads Complete(); a Result that
-// silently dropped its deferred tables would let it certify an erasure that did not
-// happen.
+// answer, on BOTH the refusal path and the success path.
+//
+// 🔑 The success path is the one that matters and the one an earlier draft left untested.
+// A caller about to write a deletion record reads Complete(); if the successful return
+// dropped Deferred, Complete() would report true with detect_snapshots outstanding and
+// certify a total erasure that did not happen — which is the exact certification the
+// exempt/deferred distinction exists to prevent. Testing only the refusal path leaves
+// that mutation alive.
 func TestADeferredTableIsCarriedOnEveryResult(t *testing.T) {
 	plan := planOf(t, []column{
 		col("event-processing", "detect_rules", "tenant", "character varying"),
 		col("event-processing", "detect_snapshots", "partition_id", "character varying"),
 	}, nil)
 
-	// Even the refusal path carries it.
-	res, err := Sweep(context.Background(), nil, plan, "")
-	require.Error(t, err)
-	require.Len(t, res.Deferred, 1)
-	assert.Equal(t, "detect_snapshots", res.Deferred[0].Table.Name)
-	assert.False(t, res.Complete(),
-		"a sweep leaving a deferred table behind must not report a complete erasure")
+	t.Run("on the refusal path", func(t *testing.T) {
+		res, err := Sweep(context.Background(), nil, plan, "")
+		require.Error(t, err)
+		require.Len(t, res.Deferred, 1)
+		assert.Equal(t, "detect_snapshots", res.Deferred[0].Table.Name)
+		assert.False(t, res.Complete())
+	})
+
+	t.Run("on the success path", func(t *testing.T) {
+		db := sqliteDB(t)
+		require.NoError(t, db.Exec(`CREATE TABLE detect_rules (tenant TEXT)`).Error)
+		require.NoError(t, db.Exec(`CREATE TABLE detect_snapshots (partition_id TEXT)`).Error)
+		require.NoError(t, db.Exec(`INSERT INTO detect_rules (tenant) VALUES ('acme')`).Error)
+
+		// The registry keys the deferral on event-processing's schema, and SQLite's is
+		// "main", so the verdict is mirrored onto this plan rather than re-derived.
+		// classify (not planOf) because the table is unclassified until it is.
+		live, err := classify([]column{
+			col("main", "detect_rules", "tenant", "text"),
+			col("main", "detect_snapshots", "partition_id", "text"),
+		}, nil)
+		require.NoError(t, err)
+		for i := range live.Entries {
+			if live.Entries[i].Table.Name == "detect_snapshots" {
+				live.Entries[i].Class = ClassDeferred
+				live.Entries[i].Reason = "stand-in for the registered hole"
+			}
+		}
+		require.NoError(t, checkClassified(live))
+
+		res, err := Sweep(context.Background(), db, live, "acme") //nolint
+		require.NoError(t, err)
+		require.Equal(t, int64(1), res.Rows, "the sweep really ran")
+		require.Len(t, res.Deferred, 1,
+			"a successful sweep must still carry what it did not erase")
+		assert.False(t, res.Complete(),
+			"a successful sweep leaving a deferred table behind must not report a complete erasure")
+	})
 }
 
 // --- execution against a real database -------------------------------------------
@@ -190,9 +226,17 @@ func TestADeferredTableIsCarriedOnEveryResult(t *testing.T) {
 // The schema is "main" because that is what SQLite calls its default database, which
 // makes the same quoted `"schema"."table"` rendering the real path uses resolvable here.
 
+// sqliteDB opens a fresh in-memory database with foreign keys enforced.
+//
+// The pragma is in the DSN rather than issued as a statement on purpose. gorm hands out
+// pooled connections, so `db.Exec("PRAGMA foreign_keys = ON")` configures whichever
+// connection happened to serve it and a later transaction can land on a different one
+// with the pragma off — leaving the ordering tests passing against a database that was
+// never enforcing the constraint they exist to exercise.
 func sqliteDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(
+		"file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
 	require.NoError(t, err)
 	return db
 }
@@ -278,9 +322,8 @@ func TestSweepDeletesTheChildBeforeTheParent(t *testing.T) {
 		fk("main", "areas", "area_type_id", "main", "area_types", "id"),
 	})
 
-	// The guard that makes the assertion meaningful: SQLite silently ignores
-	// PRAGMA foreign_keys in some builds, and a database not enforcing the constraint
-	// would accept a parent-first sweep and report this test green forever.
+	// The guard that makes the assertion meaningful: a database not enforcing the
+	// constraint would accept a parent-first sweep and report this test green forever.
 	require.Error(t, db.Exec(`DELETE FROM area_types WHERE id = 1`).Error,
 		"foreign keys are not being enforced, so this test cannot observe a wrong delete order")
 
