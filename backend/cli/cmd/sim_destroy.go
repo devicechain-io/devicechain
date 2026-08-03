@@ -4,32 +4,123 @@
 package cmd
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
 
 	"github.com/devicechain-io/dcctl/sim"
 	"github.com/spf13/cobra"
 )
 
-var simDestroyPurge bool
-
 var simDestroyCmd = &cobra.Command{
 	Use:   "destroy <name>",
-	Short: "Delete a sim's scoped identity (and, with --purge, its tenant)",
-	Long: `Tear a sim back down. By default this removes the scoped identity (and its
-membership) but KEEPS the tenant and its data for inspection — deleting the sim is
-distinct from deleting its tenant (ADR-035). --purge also deletes the tenant and all
-its data.
+	Short: "Delete a sim's scoped identity and its tenant",
+	Long: `Tear a sim back down: delete its scoped identity (with its membership), then its
+tenant, then the local sim record.
 
-Teardown order is enforced: the identity (and its membership) is deleted first, so
-the tenant delete is not rejected for still having memberships.`,
+The tenant goes with the sim, unconditionally. A sim tenant exists only to hold that
+sim's entities, and the identity 'sim create' minted is the only member it is ever
+given — so a kept tenant is one that appears in nobody's tenant menu, reachable only
+by a superuser breaking glass into it through the API. (This used to be opt-in behind
+--purge, whose default claimed to keep the tenant "for inspection" while deleting the
+membership that made inspection routine.)
+
+Teardown order is enforced: the identity goes first, because the server refuses a
+tenant delete while any membership still references it.
+
+What this does NOT delete: the tenant's rows in the other functional areas — its
+devices, dashboards and telemetry — are keyed by the tenant TOKEN, which is derived
+from the sim's name, and nothing cascades a tenant delete to them. They are kept
+(telemetry too, unless the instance opted in to a retention policy), and recreating a
+sim of the same name re-attaches to whatever the previous run left behind.`,
 	Args:         cobra.ExactArgs(1),
 	RunE:         runSimDestroy,
 	SilenceUsage: true,
 }
 
 func init() {
-	simDestroyCmd.Flags().BoolVar(&simDestroyPurge, "purge", false, "also delete the tenant and ALL its data")
 	simCmd.AddCommand(simDestroyCmd)
+}
+
+// simTeardown is the slice of the admin surface destroy uses. An interface so the
+// teardown below can be driven over a fake in a test — the network is what gets
+// replaced, not the ordering logic under test.
+type simTeardown interface {
+	DeleteIdentity(ctx context.Context, email string) (bool, error)
+	DeleteTenant(ctx context.Context, token string) (bool, error)
+}
+
+// destroySim removes the sim's identity, then its tenant, then — via deleteRecord —
+// the local sim record, stopping at the first failure.
+//
+// 🔴 deleteRecord is a parameter rather than a call in the caller, and that is the
+// whole point: "a teardown that could not finish stays retryable" is a claim about
+// ORDER, and order asserted only by where two statements sit in the caller is a claim
+// no test can hold. Behind the seam, a record deleted too early is a failing test
+// rather than an operator left with a live tenant and nothing naming it.
+func destroySim(ctx context.Context, admin simTeardown, rec *sim.Record, deleteRecord func() error, out io.Writer) error {
+	// DeleteIdentity removes the identity AND its memberships, which is what makes
+	// the tenant delete below legal.
+	removed, err := admin.DeleteIdentity(ctx, rec.SimEmail)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "identity %q removed: %t\n", rec.SimEmail, removed)
+
+	tenantRemoved, err := admin.DeleteTenant(ctx, rec.Tenant)
+	if err != nil {
+		// The advice is CONDITIONAL because this path catches every failure, most of
+		// which are not the memberships case — a refused connection told to go hunt
+		// for a membership that does not exist is a confident diagnosis nothing made.
+		return fmt.Errorf("%w (the sim record was kept, so destroy can be retried; if the server "+
+			"refused because memberships remain, remove the one added outside the sim flow first)", err)
+	}
+	// false here means the tenant was already gone — the server's delete is
+	// idempotent, so an out-of-band removal is reported rather than failed on.
+	fmt.Fprintf(out, "tenant %q removed: %t\n", rec.Tenant, tenantRemoved)
+
+	if err := deleteRecord(); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "✅ sim %q destroyed\n", rec.Name)
+	return nil
+}
+
+// simActorRunning reports whether a dc-simulator process for THIS sim is answering on
+// its control address.
+//
+// It compares the tenant the process reports against the record's, which is what makes
+// the answer trustworthy: --control-addr defaults to localhost:8090 for EVERY sim, so
+// "something answered" is not evidence that THIS sim is running — a second sim's actor
+// on the same default port would otherwise be reported as this one.
+//
+// Every uncertainty resolves to false. This gates a warning, and a warning that fires
+// on an unreachable host would train an operator to ignore it.
+func simActorRunning(ctx context.Context, controlAddr, tenant string) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		strings.TrimRight(controlAddr, "/")+"/status", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := (&http.Client{Timeout: 2 * time.Second}).Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	var status struct {
+		Tenant string `json:"tenant"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&status); err != nil {
+		return false
+	}
+	return status.Tenant == tenant
 }
 
 func runSimDestroy(cmd *cobra.Command, args []string) error {
@@ -58,27 +149,14 @@ func runSimDestroy(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// deleteIdentity removes the identity AND its memberships, so a subsequent
-	// deleteTenant is not rejected for still having a membership.
-	removed, err := admin.DeleteIdentity(ctx, rec.SimEmail)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("identity %q removed: %t\n", rec.SimEmail, removed)
-
-	if simDestroyPurge {
-		tRemoved, err := admin.DeleteTenant(ctx, rec.Tenant)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("tenant %q removed: %t\n", rec.Tenant, tRemoved)
-	} else {
-		fmt.Printf("tenant %q kept — use --purge to delete it and its data\n", rec.Tenant)
+	out := cmd.OutOrStdout()
+	// Warn rather than refuse: there is no override flag to offer, and an actor on a
+	// host dcctl cannot reach must not be able to block a teardown.
+	if simActorRunning(ctx, rec.ControlAddr, rec.Tenant) {
+		fmt.Fprintf(out, "⚠️  the dc-simulator process for %q is still running at %s — stop it "+
+			"first (Ctrl-C). Destroy removes the record `dcctl sim stop` resolves that address "+
+			"from, so this is the last moment dcctl can reach it.\n", name, rec.ControlAddr)
 	}
 
-	if err := sim.Delete(name); err != nil {
-		return err
-	}
-	fmt.Printf("✅ sim %q destroyed\n", name)
-	return nil
+	return destroySim(ctx, admin, rec, func() error { return sim.Delete(name) }, out)
 }

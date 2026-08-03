@@ -19,7 +19,7 @@ var simCmd = &cobra.Command{
 'sim create' mints a scoped per-sim identity + tenant on the instance and writes a
 handshake file the dc-simulator process reads to come up. 'sim start/stop/status'
 drive an already-running sim through its control API; 'sim destroy' tears the
-scoped identity (and, with --purge, the tenant) back down.`,
+scoped identity and the tenant back down.`,
 }
 
 func init() {

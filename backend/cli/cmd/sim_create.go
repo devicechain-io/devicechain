@@ -192,8 +192,23 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 	fmt.Println("Run the sim actor (the Go reference runner):")
 	fmt.Printf("    dc-simulator --handshake %s\n\n", path)
 	fmt.Println("Then drive / inspect it:")
-	fmt.Printf("    dcctl sim status %s\n", name)
-	fmt.Printf("    dcctl sim stop %s   |   dcctl sim start %s\n", name, name)
-	fmt.Printf("    dcctl sim destroy %s [--purge]\n", name)
+	for _, line := range simCreateNextSteps(name) {
+		fmt.Printf("    %s\n", line)
+	}
 	return nil
+}
+
+// simCreateNextSteps are the dcctl commands create suggests once a sim exists.
+//
+// A function rather than three Printf calls so a test can resolve every command and
+// flag in them against the real cobra tree. These lines are copy-paste bait, and they
+// go stale the moment a command changes shape: this block printed
+// `dcctl sim destroy <name> [--purge]` for as long as that flag existed, and nothing
+// would have noticed when it was removed.
+func simCreateNextSteps(name string) []string {
+	return []string{
+		fmt.Sprintf("dcctl sim status %s", name),
+		fmt.Sprintf("dcctl sim stop %s   |   dcctl sim start %s", name, name),
+		fmt.Sprintf("dcctl sim destroy %s", name),
+	}
 }
