@@ -8,7 +8,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { effectiveBindings, type SlotBinding } from '@devicechain/dashboards';
+import { effectiveBindings, sameBinding } from '@devicechain/dashboards';
 import { describe, expect, it } from 'vitest';
 
 import { loadDashboard, MAX_PASTE_BYTES } from './load';
@@ -49,20 +49,6 @@ function sampleFiles(board: string): string[] {
 }
 
 const read = (path: string) => readFileSync(path, 'utf8');
-
-// bound names the entity each slot resolves to under a manifest — the BASE layer
-// (slot defaults overlaid by the host's manifest), which is what a paste asks for.
-// The cascade settles scoped slots later, at mount, against live membership.
-function bound(
-  definition: Parameters<typeof effectiveBindings>[0],
-  manifest?: Record<string, SlotBinding>,
-): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [slot, binding] of Object.entries(effectiveBindings(definition, manifest))) {
-    out[slot] = binding.kind === 'device' ? binding.deviceToken : binding.anchor.targetToken;
-  }
-  return out;
-}
 
 describe('the checked-in /dash samples', () => {
   const boards = sampleBoards();
@@ -111,9 +97,12 @@ describe('the checked-in /dash samples', () => {
       //    widget on this board references it, so the line binds nothing.
       //  - A binding of the wrong KIND is the likelier slip, because the two stanzas sit
       //    one above the other in the file. parseSlotBinding validates a binding's shape
-      //    and knows nothing of the slot it lands on, so an anchor binding on a
-      //    device-typed slot parses perfectly and is then dropped by the cascade —
-      //    leaving every widget on that slot empty, with nothing reported.
+      //    and knows nothing of the slot it lands on, so a wrong-kind binding parses
+      //    perfectly. What happens next depends on the slot, and BOTH outcomes are bad:
+      //    a SCOPED slot's binding is dropped by the cascade and its widgets render
+      //    empty, while a ROOT slot's is passed straight through — the cascade
+      //    type-checks only the selection overlay, not the manifest — so the board
+      //    renders the wrong shape of entity's data instead of nothing at all.
       const slots = definition.slots ?? {};
       const names = Object.keys(slots);
       expect(names, `${board} declares no slots, so nothing here binds anything`).not.toHaveLength(0);
@@ -122,7 +111,8 @@ describe('the checked-in /dash samples', () => {
         expect(
           binding.kind,
           `${board}/${file} binds "${name}" as ${binding.kind}, but ${board} declares it as ` +
-            `${slots[name]?.type} — the cascade drops a mismatched kind and the slot renders empty`,
+            `${slots[name]?.type} — a scoped slot renders empty and a root slot renders the ` +
+            'wrong entity, and neither is reported anywhere',
         ).toBe(slots[name]?.type);
       }
 
@@ -130,9 +120,11 @@ describe('the checked-in /dash samples', () => {
       // default bindings loads perfectly and demonstrates the opposite of the point:
       // the whole reason to paste a manifest is that the same definition renders
       // against different entities.
-      const defaults = bound(definition);
-      const overridden = bound(definition, manifest);
-      const changed = Object.keys(overridden).filter((slot) => overridden[slot] !== defaults[slot]);
+      const defaults = effectiveBindings(definition);
+      const overridden = effectiveBindings(definition, manifest);
+      // sameBinding, not a token comparison: two anchors can name one target through
+      // different relationships, which a token-string oracle would call unchanged.
+      const changed = Object.keys(overridden).filter((slot) => !sameBinding(overridden[slot], defaults[slot]));
       expect(
         changed,
         `${board}/${file} binds exactly what the definition already defaults to, so pasting it ` +
@@ -151,15 +143,14 @@ describe('the checked-in /dash samples', () => {
 describe('loadDashboard', () => {
   const board = JSON.stringify({ schemaVersion: 1, title: 'T', widgets: [] });
 
-  it('reports a definition that is not JSON', () => {
-    const result = loadDashboard('{not json', '');
-    expect('error' in result && result.error).toMatch(/^Definition: /);
-  });
-
-  it('reports a definition the parser refuses', () => {
-    // `widgets` not being an array is one of the few shapes parseDashboardDefinition
-    // throws on rather than silently degrading.
-    const result = loadDashboard(JSON.stringify({ schemaVersion: 1, widgets: 'nope' }), '');
+  // Both cases land in one try/catch, so this is one test with two inputs rather than
+  // two tests proving the same branch: bad JSON, and JSON the parser refuses (`widgets`
+  // not being an array is one of the few shapes it throws on rather than degrading).
+  it.each([
+    ['not JSON', '{not json'],
+    ['refused by the parser', JSON.stringify({ schemaVersion: 1, widgets: 'nope' })],
+  ])('reports a definition %s', (_label, text) => {
+    const result = loadDashboard(text, '');
     expect('error' in result && result.error).toMatch(/^Definition: /);
   });
 
@@ -184,7 +175,7 @@ describe('loadDashboard', () => {
   // unexplained empty widget instead of an error.
   it('reports entries the manifest parser dropped', () => {
     const result = loadDashboard(board, JSON.stringify({ zone: { kind: 'device' } }));
-    expect('error' in result && result.error).toContain('1 entry was ignored');
+    expect('error' in result && result.error).toContain('"zone" was ignored');
   });
 
   it('accepts an empty manifest as no overrides', () => {

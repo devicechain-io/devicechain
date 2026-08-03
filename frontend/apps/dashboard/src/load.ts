@@ -70,14 +70,15 @@ export function loadDashboard(
     return { error: 'Binding manifest must be a JSON object of slot → binding.' };
   }
 
-  const manifest = parseBindingManifest(rawManifest);
   // Surface dropped entries (a typo'd shape) rather than silently binding the
-  // wrong entity — or, for a stripped template, an unexplained blank widget.
-  const dropped = Object.keys(rawManifest).length - Object.keys(manifest).length;
-  if (dropped > 0) {
+  // wrong entity — or, for a stripped template, an unexplained blank widget. The
+  // parser reports which slots it refused, so this names them.
+  const { bindings: manifest, dropped } = parseBindingManifest(rawManifest);
+  if (dropped.length > 0) {
     return {
       error:
-        `Binding manifest: ${dropped} ${dropped === 1 ? 'entry was' : 'entries were'} ignored — ` +
+        `Binding manifest: ${dropped.map((slot) => `"${slot}"`).join(', ')} ` +
+        `${dropped.length === 1 ? 'was' : 'were'} ignored — ` +
         'check the shape (kind + deviceToken, or anchor with a targetToken).',
     };
   }

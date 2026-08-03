@@ -148,19 +148,6 @@ func baseLayout(col, colSpan, row, rowSpan, z int) map[string]dashboardBox {
 	return map[string]dashboardBox{"base": {Col: col, ColSpan: colSpan, Row: row, RowSpan: rowSpan, Z: z}}
 }
 
-// heroAreaToken returns the area (building) token the hero device is assigned to — the
-// root context the dashboard is built around. Every buildingpulse thermostat carries an
-// "area" assignment (Validate enforces it), so this resolves; a device with none is a
-// malformed scenario and surfaces as an error rather than a context-less dashboard.
-func heroAreaToken(hero DeviceInstance) (string, error) {
-	for _, a := range hero.Assignments {
-		if a.TargetType == "area" {
-			return a.TargetToken, nil
-		}
-	}
-	return "", fmt.Errorf("hero device %q has no area assignment to anchor the dashboard on", hero.Token)
-}
-
 // buildBuildingpulseDashboard renders the buildingpulse scenario's one dashboard,
 // wired for the ADR-039 scoped-slot context hierarchy: a `building` anchor slot
 // (the root context, defaulting to the hero device's building) and a
@@ -175,7 +162,7 @@ func buildBuildingpulseDashboard(devices []DeviceInstance) (string, error) {
 		return "", fmt.Errorf("buildBuildingpulseDashboard: no devices to bind")
 	}
 	hero := devices[0]
-	buildingToken, err := heroAreaToken(hero)
+	buildingToken, err := deviceAreaToken(hero)
 	if err != nil {
 		return "", err
 	}

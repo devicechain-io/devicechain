@@ -211,13 +211,15 @@ func widgetlabCanvas() dashboardCanvas {
 	}
 }
 
-// deviceAreaToken returns the area a device is assigned to.
+// deviceAreaToken returns the area a device is assigned to — the root context a board
+// scoped to that area is built around. Shared by every scenario's board builder and by
+// the sample gate; a device carries at most one area assignment (renderAssignments).
 //
-// Only the NOMINAL sensors carry one: the edge sensors were deliberately taken out of
-// the zones so their pathological alarms stay off the zone-scoped catalog. Nothing
-// enforces that a given device has an area — an earlier version of this comment
-// claimed Validate did, which was true before that change and is not now — so this
-// returns an error rather than assuming, and callers must pass a device that has one.
+// Nothing enforces that a given device HAS one. Widgetlab's edge sensors were
+// deliberately taken out of the zones so their pathological alarms stay off the
+// zone-scoped catalog, and an earlier version of this comment claimed Validate
+// enforced an area, which was true before that change and is not now. So this returns
+// an error rather than assuming, and callers must pass a device that has one.
 func deviceAreaToken(d DeviceInstance) (string, error) {
 	for _, a := range d.Assignments {
 		if a.TargetType == "area" {

@@ -35,21 +35,44 @@ export function effectiveBindings(
   return out;
 }
 
+// What parseBindingManifest made of a host manifest: the bindings it accepted, and the
+// slot names it did NOT — in manifest order.
+export interface ParsedBindingManifest {
+  bindings: Record<string, SlotBinding>;
+  dropped: string[];
+}
+
 // parseBindingManifest validates an untrusted host manifest (slot name → binding)
 // into a clean Record<slot, SlotBinding>, dropping malformed entries. The host of an
 // exported dashboard passes this to effectiveBindings to bind the definition's slots
 // to ITS entities: one definition + two manifests → two live dashboards.
-export function parseBindingManifest(raw: unknown): Record<string, SlotBinding> {
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {};
-  const out: Record<string, SlotBinding> = {};
+//
+// 🔴 IT REPORTS WHAT IT DROPPED, because a silent drop is this API's sharpest edge and
+// every host has to handle it. A typo'd binding does not fail — it vanishes, the slot
+// stays unbound, and the widgets on it render as empty frames with nothing anywhere
+// saying why. Returning the names makes that a thing a host can show a user. The
+// alternative every host would otherwise reach for is comparing key counts against its
+// own input, which infers the same fact less well: it cannot name the offender, and it
+// counts the `__proto__` refusal below as if it were malformed.
+export function parseBindingManifest(raw: unknown): ParsedBindingManifest {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return { bindings: {}, dropped: [] };
+  }
+  const bindings: Record<string, SlotBinding> = {};
+  const dropped: string[] = [];
   for (const [slot, spec] of Object.entries(raw as Record<string, unknown>)) {
     // Skip a `__proto__` key: `out['__proto__'] = …` would hit the prototype setter
     // (lose the binding + swap out's prototype) rather than set an own property.
-    if (slot === '__proto__') continue;
+    // Reported as dropped: it IS a binding the host asked for and did not get.
+    if (slot === '__proto__') {
+      dropped.push(slot);
+      continue;
+    }
     const binding = parseSlotBinding(spec);
-    if (binding) out[slot] = binding;
+    if (binding) bindings[slot] = binding;
+    else dropped.push(slot);
   }
-  return out;
+  return { bindings, dropped };
 }
 
 // stripDefaultBindings removes every slot's default binding, turning a concrete

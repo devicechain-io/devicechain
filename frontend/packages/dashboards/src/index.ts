@@ -41,7 +41,12 @@ export type {
   CommandParamDataType,
 } from './types';
 
-export { effectiveBindings, parseBindingManifest, stripDefaultBindings } from './bindings';
+export {
+  effectiveBindings,
+  parseBindingManifest,
+  stripDefaultBindings,
+  type ParsedBindingManifest,
+} from './bindings';
 
 export {
   resolveContextBindings,

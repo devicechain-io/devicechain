@@ -30,17 +30,14 @@ import (
 // this way because neither side can do the other's job, not for tidiness.
 //
 // 🔴 RUN THESE WITH -count=1 WHILE CHANGING SAMPLES — INCLUDING WHEN ONLY EDITING ONE.
-// `go test` decides a cached result is still good from the module's own sources, and it
-// does not track files outside the module at all: not their contents, not the directory
-// listing. Everything this file reads is outside the module. Measured: with a cached
-// pass in place, pointing the sample at a device that does not exist and re-running
-// printed "ok (cached)" over the broken tree; only -count=1 failed it.
+// `go test` does not track files outside the module at all, and everything this file
+// reads is outside it, so a cached pass replays over a broken sample. CI passes
+// -count=1 for this reason (the go job says why); locally it is discipline.
 //
-// (The first version of this comment claimed contents were tracked and only listings
-// were not, and that CI was safe because it starts cold. Both halves were wrong — the
-// earlier measurement had only ever compared runs with different -run/-v arguments, so
-// nothing was ever eligible for the cache. CI restores GOCACHE via setup-go, so the go
-// job now passes -count=1; the same hole covers the golden dashboard fixtures.)
+// The trap when checking that for yourself: two runs with different -run or -v
+// arguments are different cache entries, and a FAILING result is never cached — so a
+// mutation sequence that varies either one never tests the cache at all. That is how
+// the first version of this comment came to state the opposite, confidently.
 
 const dashSampleDir = "../../../../frontend/testdata/dash-samples"
 
@@ -228,8 +225,8 @@ func TestDashSampleScopedSlotsStayInsideTheirParent(t *testing.T) {
 
 				// A binding the cascade discards is not a binding. Refused rather than
 				// checked, and refused whether or not the token is any good.
-				resolved++
 				if spec.Scope.Strategy == "first" {
+					resolved++
 					if _, named := manifest[slot]; named {
 						t.Errorf("%s binds %q, but that slot is scoped 'first' — the cascade "+
 							"derives it from %q's first member and ignores what a manifest says, "+
@@ -246,11 +243,15 @@ func TestDashSampleScopedSlotsStayInsideTheirParent(t *testing.T) {
 				child, childOK := effectiveBinding(manifest, slot, spec)
 				parent, parentOK := effectiveBinding(manifest, parentName, def.Slots[parentName])
 				if !childOK {
+					// Not counted: this branch asserts nothing, and a guard that counted
+					// it would be satisfied by a corpus in which every scoped slot was
+					// unbound — the cannot-fail shape the guard exists to prevent.
 					// Neither the sample nor the board binds it. It renders as an empty
 					// placeholder until someone picks in the viewer — a board-authoring
 					// matter, not something a sample can fix, so there is no pair here.
 					continue
 				}
+				resolved++
 				if !parentOK {
 					t.Errorf("%s leaves %q — the parent of scoped slot %q — bound to nothing; "+
 						"the cascade cannot derive a child from an unbound parent, so %q renders "+
@@ -283,7 +284,8 @@ func TestDashSampleScopedSlotsStayInsideTheirParent(t *testing.T) {
 				if !exists {
 					continue // reported by TestDashSampleBindingsNameRealEntities
 				}
-				if !assignedTo(device, "area", parent.Anchor.TargetToken) {
+				area, err := deviceAreaToken(device)
+				if err != nil || area != parent.Anchor.TargetToken {
 					t.Errorf("%s binds %q to device %q, which is not in area %q that slot %q binds — "+
 						"the cascade drops the device and every widget on it renders empty",
 						where, slot, child.DeviceToken, parent.Anchor.TargetToken, parentName)
@@ -303,6 +305,12 @@ func TestDashSampleScopedSlotsStayInsideTheirParent(t *testing.T) {
 
 // effectiveBinding is a slot's binding under a sample: the sample's override if it
 // names the slot, otherwise the board's own default.
+//
+// 🔴 This is the Go side of effectiveBindings in frontend/packages/dashboards/src/
+// bindings.ts, and the coupling is unavoidable rather than chosen: the checks here run
+// where the entities are known, which is Go, and that function cannot be called from
+// here. If its merge rule changes, change this with it — otherwise this gate keeps
+// checking a different pair than the viewer renders.
 func effectiveBinding(manifest map[string]dashboardSlotBinding, name string, spec dashboardSlot) (dashboardSlotBinding, bool) {
 	if b, ok := manifest[name]; ok {
 		return b, true
@@ -311,15 +319,6 @@ func effectiveBinding(manifest map[string]dashboardSlotBinding, name string, spe
 		return *spec.DefaultBinding, true
 	}
 	return dashboardSlotBinding{}, false
-}
-
-func assignedTo(d DeviceInstance, targetType, targetToken string) bool {
-	for _, a := range d.Assignments {
-		if a.TargetType == targetType && a.TargetToken == targetToken {
-			return true
-		}
-	}
-	return false
 }
 
 // entityIndex is everything a scenario bootstraps that a binding may name.
