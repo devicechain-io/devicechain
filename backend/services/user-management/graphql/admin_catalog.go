@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	util "github.com/devicechain-io/dc-microservice/graphql"
@@ -57,6 +58,18 @@ func (r *AdminTenantResolver) OutboundBurst() *int32 {
 	}
 	v := int32(*r.M.OutboundBurst)
 	return &v
+}
+
+// PurgeState / PurgeEpoch resolve the ADR-077 deletion lifecycle. They are what let
+// the console say something true about a deleted tenant: the row is still here, it
+// admits nobody, its token is reserved, and its data is being reclaimed separately.
+func (r *AdminTenantResolver) PurgeState() string { return string(r.M.PurgeState) }
+func (r *AdminTenantResolver) PurgeEpoch() *string {
+	if r.M.PurgeEpoch == nil {
+		return nil
+	}
+	s := r.M.PurgeEpoch.UTC().Format(time.RFC3339)
+	return &s
 }
 
 // AiExternalEnabled resolves the per-tenant external-AI consent (ADR-056 §6) for

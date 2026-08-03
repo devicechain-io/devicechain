@@ -32,11 +32,17 @@ membership that made inspection routine.)
 Teardown order is enforced: the identity goes first, because the server refuses a
 tenant delete while any membership still references it.
 
-What this does NOT delete: the tenant's rows in the other functional areas — its
-devices, dashboards and telemetry — are keyed by the tenant TOKEN, which is derived
-from the sim's name, and nothing cascades a tenant delete to them. They are kept
-(telemetry too, unless the instance opted in to a retention policy), and recreating a
-sim of the same name re-attaches to whatever the previous run left behind.`,
+🔴 A SIM NAME IS SINGLE-USE. Destroying a sim reserves its tenant token permanently,
+so 'dcctl sim create <name>' will refuse that name afterwards — pick a new one rather
+than reusing it. The reservation is the point: the tenant token is the key every
+functional area stores its rows under, so a sim recreated at a used name would attach
+to the previous run's devices, dashboards and telemetry instead of starting clean.
+
+What this does NOT delete, yet: those rows in the other functional areas. Nothing
+cascades a tenant delete to them today, so they are kept (telemetry too, unless the
+instance opted in to a retention policy) until the tenant purge reclaims them. They
+are unreachable in the meantime — no membership remains and no token can be minted
+for the tenant.`,
 	Args:         cobra.ExactArgs(1),
 	RunE:         runSimDestroy,
 	SilenceUsage: true,

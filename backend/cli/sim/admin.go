@@ -172,15 +172,43 @@ func (a *Admin) DeleteTenant(ctx context.Context, token string) (bool, error) {
 // The match is by POSITIVE phrase — "already exists" / "duplicate" / "unique" — not
 // the bare substring "exist", which would also swallow a "does NOT exist" error and
 // report a broken create as success.
+//
+// 🔴 QUOTED SEGMENTS ARE STRIPPED BEFORE MATCHING, and that is not a nicety. The
+// server interpolates the caller's own identifiers into its errors (`create tenant
+// %q: ...`), so without this the SIM'S NAME decides whether a failure counts as
+// success: `dcctl sim create unique1` produces `create tenant "sim-unique1": <any
+// error at all>`, which contains "unique" and is swallowed. Every real refusal —
+// unknown tier, connection refused, and ADR-077's reserved-token refusal — would be
+// reported as ✅ for that one name. The phrases this function looks for are the
+// SERVER'S prose about what went wrong; anything inside quotes is the caller's own
+// input echoed back, and input must never be able to vote on its own outcome.
 func tolerateExists(wrapped, inner error) error {
 	if inner == nil {
 		return nil
 	}
-	m := strings.ToLower(inner.Error())
+	m := strings.ToLower(stripQuoted(inner.Error()))
 	for _, s := range []string{"already exists", "duplicate", "unique"} {
 		if strings.Contains(m, s) {
 			return nil
 		}
 	}
 	return wrapped
+}
+
+// stripQuoted removes double-quoted spans, which is where an error puts the values it
+// was given. An unterminated quote drops the rest of the message: the tail is
+// unattributable, and dropping it can only make this function LESS willing to call a
+// failure a success.
+func stripQuoted(s string) string {
+	var b strings.Builder
+	inQuote := false
+	for _, r := range s {
+		switch {
+		case r == '"':
+			inQuote = !inQuote
+		case !inQuote:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }

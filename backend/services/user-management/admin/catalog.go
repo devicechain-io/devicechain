@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -23,6 +24,27 @@ var (
 	ErrTierNotFound         = errors.New("tenant tier not found")
 	ErrTierInUse            = errors.New("tenant tier still has tenants; move them to another tier first")
 	ErrUnknownTierColor     = errors.New("unknown tier color (must be a palette token or empty)")
+
+	// ErrTenantTokenReserved refuses a create at the token of a tenant that has been
+	// deleted (ADR-077). The token is the isolation key every other area stores, so
+	// handing it to a new tenant would hand over the old one's rows.
+	//
+	// 🔴 THE WORDING IS LOAD-BEARING, and not for style. dcctl's sim flow wraps its
+	// createTenant call in tolerateExists (backend/cli/sim/admin.go), which swallows any
+	// error whose text contains "already exists", "duplicate" or "unique" so that a
+	// re-create is idempotent. If this refusal read like one of those, the caller most
+	// likely to hit it would report success and carry on — minting an identity and a
+	// membership against a tenant it cannot actually enter, then failing at login with
+	// nothing pointing back here. (It is not a disclosure: resolveTenantGrant refuses a
+	// deleted tenant, so the layer below still holds. It is a silent, misattributed
+	// break.) Keep those three phrases out of it — both sides have tests.
+	// ErrTenantDeleted refuses a write against a tenant that has been through the delete
+	// door — it exists only to hold its token, and nothing may be attached to it.
+	ErrTenantDeleted = errors.New("that tenant has been deleted and no longer accepts changes")
+
+	ErrTenantTokenReserved = errors.New("that tenant token is reserved: a tenant at this token " +
+		"was deleted. Tokens are never reused, because every functional area keys its rows on " +
+		"the token; pick a different one")
 )
 
 // RoleInput is the data to create a role (ADR-008 RBAC / ADR-033). Scope is
@@ -260,6 +282,23 @@ func (s *Service) CreateTenant(ctx context.Context, in TenantInput) (*iam.Tenant
 	if err := in.validate(); err != nil {
 		return nil, err
 	}
+
+	// The token reservation (ADR-077). Checked explicitly rather than left to the unique
+	// index: a raw constraint violation names a column, reads as "already exists" to
+	// every tolerant client, and would let a caller conclude the tenant it just tried to
+	// create is the one it now holds.
+	//
+	// An ACTIVE tenant at this token still falls through to the create below and its
+	// duplicate-key error, which is deliberate — that IS an already-exists, and callers
+	// rely on tolerating it to make create idempotent.
+	existing, lookupErr := s.iam.TenantByToken(ctx, in.Token)
+	switch {
+	case lookupErr == nil && existing.PurgeState.Deleted():
+		return nil, fmt.Errorf("create tenant %q: %w", in.Token, ErrTenantTokenReserved)
+	case lookupErr != nil && !errors.Is(lookupErr, gorm.ErrRecordNotFound):
+		return nil, lookupErr
+	}
+
 	tier, err := s.resolveTier(ctx, in.TierToken)
 	if err != nil {
 		return nil, err
@@ -329,8 +368,19 @@ func (s *Service) SetTenantEnabled(ctx context.Context, token string, enabled bo
 	return s.iam.TenantByToken(ctx, token)
 }
 
-// DeleteTenant removes a tenant. Idempotent: a missing tenant returns (false,
-// nil). Rejected when memberships still reference it, so it cannot orphan access.
+// DeleteTenant cuts a tenant's access and begins its purge (ADR-077).
+//
+// It no longer removes the row. The tenant moves to `purging`, disabled and stamped
+// with an epoch: access is gone immediately, its token is reserved forever, and the
+// reclamation of its rows across the other functional areas happens afterwards. What
+// this returns is therefore "the delete door was walked through", not "the data is
+// gone" — a distinction the console copy has to carry too, since the old wording
+// claimed an irreversible deletion while removing exactly one row.
+//
+// Idempotent in both directions: a missing tenant and an already-purging one both
+// return (false, nil), so a retry after a partly-failed teardown converges. Still
+// rejected while memberships reference the tenant, because removing those is what
+// actually revokes human access.
 func (s *Service) DeleteTenant(ctx context.Context, token string) (bool, error) {
 	t, err := s.iam.TenantByToken(ctx, token)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -339,6 +389,9 @@ func (s *Service) DeleteTenant(ctx context.Context, token string) (bool, error) 
 	if err != nil {
 		return false, err
 	}
+	if t.PurgeState.Deleted() {
+		return false, nil
+	}
 	n, err := s.iam.CountMembershipsInTenant(ctx, token)
 	if err != nil {
 		return false, err
@@ -346,7 +399,7 @@ func (s *Service) DeleteTenant(ctx context.Context, token string) (bool, error) 
 	if n > 0 {
 		return false, ErrTenantHasMemberships
 	}
-	if err := s.iam.DeleteTenant(ctx, t); err != nil {
+	if err := s.iam.BeginTenantPurge(ctx, t, time.Now().UTC()); err != nil {
 		return false, err
 	}
 	return true, nil

@@ -13,7 +13,7 @@ import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listTenants, setTenantEnabled, deleteTenant } from '@/lib/api/admin';
-import { StatusBadge, errMessage, useReload } from '@/routes/common';
+import { PurgeBadge, StatusBadge, errMessage, useReload } from '@/routes/common';
 import { TenantForm } from '@/routes/admin/tenants/TenantForm';
 import { TenantSettingsPanel } from '@/routes/admin/tenants/TenantSettingsPanel';
 import { TenantAiModelsPanel } from '@/routes/admin/tenants/TenantAiModelsPanel';
@@ -86,16 +86,22 @@ export default function TenantDetailPage() {
       return;
     try {
       const ok = await deleteTenant(tenant.token);
+      // `false` here means "nothing changed", which for a tenant we are looking at
+      // means it was already deleted — not that it is missing.
       toast(
         ok
           ? t('tenantDeletedToast', { token: tenant.token })
-          : t('tenantDeleteNotFoundToast', { token: tenant.token }),
+          : t('tenantAlreadyDeletedToast', { token: tenant.token }),
       );
       navigate('/admin/tenants');
     } catch (err) {
       toast(errMessage(err), 'error');
     }
   };
+
+  // A tenant that has been through the delete door (ADR-077). Its row survives to
+  // reserve the token, but it admits nobody and must not offer live-tenant actions.
+  const purged = tenant.purgeState !== 'active';
 
   return (
     <PageShell
@@ -108,18 +114,24 @@ export default function TenantDetailPage() {
         <div className="flex items-center gap-2">
           <TierPill label={tenant.tier.token} color={tenant.tier.color} />
           <StatusBadge enabled={tenant.enabled} />
+          {purged && <PurgeBadge state={tenant.purgeState} epoch={tenant.purgeEpoch} />}
         </div>
       }
       action={
-        <>
-          <Button variant="outline" size="sm" onClick={toggleEnabled}>
-            {tenant.enabled ? <Ban size={14} /> : <Power size={14} />}
-            {tenant.enabled ? t('disable') : t('enable')}
-          </Button>
-          <Button variant="destructive" size="sm" onClick={remove}>
-            <Trash2 size={14} /> {t('delete')}
-          </Button>
-        </>
+        // Neither action is offered once the tenant is deleted: re-enabling it would
+        // be a lie (the grant path refuses entry on the lifecycle, not on this flag),
+        // and deleting it again does nothing.
+        purged ? null : (
+          <>
+            <Button variant="outline" size="sm" onClick={toggleEnabled}>
+              {tenant.enabled ? <Ban size={14} /> : <Power size={14} />}
+              {tenant.enabled ? t('disable') : t('enable')}
+            </Button>
+            <Button variant="destructive" size="sm" onClick={remove}>
+              <Trash2 size={14} /> {t('delete')}
+            </Button>
+          </>
+        )
       }
     >
       {/* Tabbed: Basic + Settings edit the tenant (one atomic save), and the Effective

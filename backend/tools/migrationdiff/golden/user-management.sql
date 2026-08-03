@@ -60,6 +60,7 @@ CREATE INDEX idx_iam_oauth_clients_deleted_at ON "user-management".iam_oauth_cli
 CREATE INDEX idx_iam_roles_deleted_at ON "user-management".iam_roles USING btree (deleted_at);
 CREATE INDEX idx_iam_tenant_tiers_deleted_at ON "user-management".iam_tenant_tiers USING btree (deleted_at);
 CREATE INDEX idx_iam_tenants_deleted_at ON "user-management".iam_tenants USING btree (deleted_at);
+CREATE INDEX idx_iam_tenants_purge_state ON "user-management".iam_tenants USING btree (purge_state);
 CREATE INDEX idx_iam_tenants_tier_id ON "user-management".iam_tenants USING btree (tier_id);
 CREATE SCHEMA "user-management";
 CREATE SEQUENCE "user-management".audit_events_id_seq
@@ -211,7 +212,9 @@ CREATE TABLE "user-management".iam_tenants (
  ai_external_enabled boolean,
  ai_inference_requests_per_minute numeric,
  ai_inference_burst bigint,
- shed_priority bigint
+ shed_priority bigint,
+ purge_state character varying(16) DEFAULT 'active'::character varying NOT NULL,
+ purge_epoch timestamp with time zone
 );
 CREATE TABLE "user-management".signing_keys (
  id bigint NOT NULL,
