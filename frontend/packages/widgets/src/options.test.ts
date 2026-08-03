@@ -66,6 +66,12 @@ const WIDGET_SOURCES: Record<WidgetType, string> = {
 
 // Files that read options on behalf of MORE THAN ONE widget type — the channel wrapper,
 // the shared measurement helper, and the dashboards package's slot-reference walk.
+//
+// Every entry here is evidence that a RENDERER reads a key, which is what makes the
+// per-type attribution below mean anything. definition-options.ts briefly appeared in
+// this list because it read `title` to label a report — a read that is not renderer
+// evidence and needed a paragraph saying so. It reads no option key now, which is the
+// better fix: the list means one thing again.
 const SHARED_SOURCES = ['connected-widget.tsx', 'widget.ts', '../../dashboards/src/slots.ts'];
 
 // Which types each shared read actually applies to. A shared file cannot say this itself —

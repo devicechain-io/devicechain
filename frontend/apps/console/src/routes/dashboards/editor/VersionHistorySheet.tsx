@@ -7,8 +7,17 @@
 // SERVER draft, so it's disabled while there are unsaved edits — the author saves
 // first. Rollback replaces the draft server-side; the workspace re-baselines from
 // the returned definition (onRolledBack) rather than reloading the page.
+//
+// Publishing also refuses a board whose widgets carry options the renderer does not
+// read. 🔴 THE REFUSAL IS publishDashboard's, NOT THIS COMPONENT'S — everything here
+// is the explanation: which widget, which option, and (for a leftover key, the one
+// issue no config-panel control can reach) a way to remove it. A published version is
+// immutable and is what an embedder mounts, so shipping one whose gauge has no scale
+// or whose command button names no command is the one moment worth being strict at;
+// the draft it was built from stays unrestricted, the same way a device profile's
+// draft is inert until it is published.
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -37,6 +46,9 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useQuery } from '@/lib/hooks/use-query';
 import { Textarea, errMessage } from '@/routes/common';
 import { formatTime } from '@/lib/utils';
+import { validateDefinitionOptions } from '@devicechain/widgets';
+import { OPTION_ISSUE_MESSAGE_KEYS, widgetLabel } from './optionIssues';
+import type { DashboardDefinition } from '@devicechain/dashboards';
 import {
   listDashboardVersions,
   publishDashboard,
@@ -49,6 +61,9 @@ export interface VersionHistorySheetProps {
   token: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  // The definition that will be frozen: the last SAVED one, paired with the
+  // expectedUpdatedAt below. Forwarded to publishDashboard, which validates it.
+  saved: DashboardDefinition;
   // Publishing snapshots the saved server draft; block it while the editor has
   // unsaved edits so the author isn't surprised by an older snapshot.
   dirty: boolean;
@@ -62,17 +77,24 @@ export interface VersionHistorySheetProps {
   // Called after a successful rollback with the new draft so the workspace can
   // re-baseline its working/saved copies (and updatedAt) without a page reload.
   onRolledBack: (result: { definition: string; updatedAt: string | null }) => void;
+  // Strips every option key no widget reads from the WORKING copy, leaving the author
+  // an unsaved edit to review and save (why that repair exists at all: see
+  // stripUnknownOptions in @devicechain/widgets). The workspace owns the definition, so
+  // the repair happens there; this drawer only offers it.
+  onStripUnknownOptions: () => void;
 }
 
 export function VersionHistorySheet({
   token,
   open,
   onOpenChange,
+  saved,
   dirty,
   saving,
   canWrite,
   expectedUpdatedAt,
   onRolledBack,
+  onStripUnknownOptions,
 }: VersionHistorySheetProps) {
   const { t } = useTranslation(['dashboards', 'common']);
   return (
@@ -87,11 +109,13 @@ export function VersionHistorySheet({
         {open && (
           <VersionHistoryBody
             token={token}
+            saved={saved}
             dirty={dirty}
             saving={saving}
             canWrite={canWrite}
             expectedUpdatedAt={expectedUpdatedAt}
             onRolledBack={onRolledBack}
+            onStripUnknownOptions={onStripUnknownOptions}
             onClose={() => onOpenChange(false)}
           />
         )}
@@ -102,19 +126,23 @@ export function VersionHistorySheet({
 
 function VersionHistoryBody({
   token,
+  saved,
   dirty,
   saving,
   canWrite,
   expectedUpdatedAt,
   onRolledBack,
+  onStripUnknownOptions,
   onClose,
 }: {
   token: string;
+  saved: DashboardDefinition;
   dirty: boolean;
   saving: boolean;
   canWrite: boolean;
   expectedUpdatedAt: string | null;
   onRolledBack: (result: { definition: string; updatedAt: string | null }) => void;
+  onStripUnknownOptions: () => void;
   onClose: () => void;
 }) {
   const { t } = useTranslation(['dashboards', 'common']);
@@ -128,16 +156,33 @@ function VersionHistoryBody({
   const [description, setDescription] = useState('');
   const [busy, setBusy] = useState(false);
 
+  // The option issues on the document that would be frozen — the SAVED definition,
+  // never the working copy. While the editor is dirty those differ, and reporting the
+  // working copy's issues would tell an author their board is fine (or broken) about a
+  // document publish will not touch.
+  const issues = useMemo(() => validateDefinitionOptions(saved), [saved]);
+  const strippable = issues.some((i) => i.code === 'unknown');
+
   const publish = async () => {
     setBusy(true);
     try {
-      const { version } = await publishDashboard(token, { label, description, expectedUpdatedAt });
+      const { version } = await publishDashboard(token, {
+        definition: saved,
+        label,
+        description,
+        expectedUpdatedAt,
+      });
       toast(t('versionPublished', { version }));
       setLabel('');
       setDescription('');
       setRefreshKey((k) => k + 1);
     } catch (err) {
       const raw = errMessage(err);
+      // Only CONFLICT is re-worded. publishDashboard's own option refusal cannot reach
+      // here from this drawer — the button is disabled while `issues` is non-empty, and
+      // both checks run the same pure function over the same object — so if it ever
+      // does, the raw message (which names the widget and the option) is exactly what
+      // should be shown rather than a friendlier sentence that discards it.
       toast(raw.includes(CONFLICT_MARKER) ? t('versionPublishConflict') : raw, 'error');
     } finally {
       setBusy(false);
@@ -188,7 +233,45 @@ function VersionHistoryBody({
           {dirty ? (
             <p className="text-sm text-muted-foreground">{t('versionSaveBeforePublish')}</p>
           ) : null}
-          <Button size="sm" onClick={publish} loading={busy} disabled={busy || dirty || saving}>
+          {issues.length > 0 && (
+            <div className="space-y-2 rounded-md border border-destructive/40 bg-destructive/5 p-3">
+              <p className="text-sm font-medium">
+                {t('versionPublishBlocked', { count: issues.length })}
+              </p>
+              <ul className="space-y-1 text-sm text-muted-foreground">
+                {issues.map((issue) => (
+                  // Keyed by widget + option + code: one widget can carry several
+                  // issues, and the same option can be both missing and out of range
+                  // on different widgets of the same type.
+                  <li key={`${issue.widgetId}:${issue.key}:${issue.code}`}>
+                    <span className="text-foreground">{widgetLabel(saved, issue.widgetId)}</span>
+                    <span className="ml-1">({issue.widgetType})</span>
+                    {/* The CODE is translated, not the schema's English message — see
+                        optionIssues.ts. `key` is an option name, not user text. */}
+                    <span className="ml-1">
+                      — {t(OPTION_ISSUE_MESSAGE_KEYS[issue.code], { key: issue.key })}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              {/* Offered only against a clean editor. The list above describes `saved`,
+                  so once the repair (or any other edit) is pending, it describes a
+                  document that is no longer current — and leaving the button armed
+                  beside issues it has already fixed invites a second click that can
+                  only report there is nothing to do. The dirty hint above takes over. */}
+              {strippable && !dirty && (
+                <Button variant="outline" size="sm" onClick={onStripUnknownOptions} disabled={busy}>
+                  {t('versionStripUnknownOptions')}
+                </Button>
+              )}
+            </div>
+          )}
+          <Button
+            size="sm"
+            onClick={publish}
+            loading={busy}
+            disabled={dirty || saving || issues.length > 0}
+          >
             {t('versionPublishButton')}
           </Button>
         </div>

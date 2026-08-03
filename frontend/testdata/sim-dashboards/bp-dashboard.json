@@ -1,0 +1,149 @@
+{
+  "canvas": {
+    "breakpoints": {
+      "base": 0
+    },
+    "grid": {
+      "columns": 24,
+      "gap": 8,
+      "rowHeight": 40
+    },
+    "sizing": "fill"
+  },
+  "schemaVersion": 1,
+  "slots": {
+    "building": {
+      "defaultBinding": {
+        "anchor": {
+          "relationship": "assigned",
+          "targetToken": "bp-bldg-01",
+          "targetType": "area"
+        },
+        "kind": "anchor"
+      },
+      "label": "Building",
+      "type": "anchor"
+    },
+    "selectedThermostat": {
+      "defaultBinding": {
+        "deviceToken": "bp-therm-001",
+        "kind": "device"
+      },
+      "label": "Thermostat",
+      "scope": {
+        "parent": "building",
+        "strategy": "manual"
+      },
+      "type": "device"
+    }
+  },
+  "title": "Building Pulse",
+  "widgets": [
+    {
+      "id": "w-building-select",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 12,
+          "row": 0,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "selectionTarget": "building",
+        "title": "Building"
+      },
+      "type": "entity-selector"
+    },
+    {
+      "id": "w-thermostat-select",
+      "layout": {
+        "base": {
+          "col": 12,
+          "colSpan": 12,
+          "row": 0,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "selectionTarget": "selectedThermostat",
+        "title": "Thermostat"
+      },
+      "type": "entity-selector"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "selectedThermostat"
+      },
+      "id": "w-chart",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 14,
+          "row": 2,
+          "rowSpan": 8,
+          "z": 0
+        }
+      },
+      "options": {
+        "title": "Temperature",
+        "window": 300
+      },
+      "type": "timeseries-chart"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "selectedThermostat"
+      },
+      "id": "w-table",
+      "layout": {
+        "base": {
+          "col": 14,
+          "colSpan": 10,
+          "row": 2,
+          "rowSpan": 8,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": true,
+        "precision": 1,
+        "title": "Latest values"
+      },
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "building"
+      },
+      "id": "w-alarms",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 24,
+          "row": 10,
+          "rowSpan": 6,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": true,
+        "maxRows": 50,
+        "precision": 1,
+        "selectionTarget": "selectedThermostat",
+        "title": "Alarms"
+      },
+      "type": "alarm-table"
+    }
+  ]
+}

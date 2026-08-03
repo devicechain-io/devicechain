@@ -3,7 +3,12 @@
 
 // Typed GraphQL operations against the dashboard-management service (ADR-039).
 import { gql } from '@devicechain/client';
-import { parseDashboardDefinition, serializeDefinition } from '@devicechain/dashboards';
+import {
+  parseDashboardDefinition,
+  serializeDefinition,
+  type DashboardDefinition,
+} from '@devicechain/dashboards';
+import { validateDefinitionOptions } from '@devicechain/widgets';
 import { graphql } from '@/gql/dashboard-management';
 import type {
   DashboardsQuery,
@@ -150,6 +155,21 @@ export async function updateDashboard(
 // hint rather than a generic error.
 export const CONFLICT_MARKER = 'modified by another writer';
 
+// INVALID_DEFINITION_MARKER prefixes the error publishDashboard throws when the board it
+// was handed carries option issues.
+//
+// 🔴 IT IS NOT A SECOND CONFLICT_MARKER, AND THE DRAWER DELIBERATELY DOES NOT MATCH ON
+// IT. That constant exists because a backend error cannot carry a type across the wire;
+// this refusal never reaches the network. The drawer names every issue and disables
+// Publish before a call gets here, so reaching this throw means the UI's own check was
+// bypassed — at which point the useful thing to show is WHAT WAS WRONG, not a friendly
+// sentence. An earlier version matched on it and replaced the detail with a generic
+// translated string: a branch that could not be reached, which threw away the only
+// information worth having if it ever were.
+//
+// So this is a stable, greppable prefix for the message and for the tests, nothing more.
+export const INVALID_DEFINITION_MARKER = 'dashboard definition is not publishable';
+
 // ── Versioning (ADR-039) ──────────────────────────────────────────────────
 
 const DASHBOARD_VERSIONS = graphql(`
@@ -191,15 +211,55 @@ const PUBLISH_DASHBOARD = graphql(`
 // expectedUpdatedAt is the same precondition as updateDashboard: publish fails with
 // CONFLICT if the server draft moved on since — so it can't freeze another writer's
 // content while the author believes they published their own view.
+//
+// 🔴 IT ALSO REFUSES TO PUBLISH A BOARD WHOSE WIDGETS ARE MISCONFIGURED, and the two
+// paragraphs below are why the signature looks the way it does.
+//
+// WHY THE CHECK IS HERE AND NOT ON THE BUTTON. A disabled Publish button is a claim
+// about one rendering of one drawer; this is the console's publish ACTION, the single
+// place every publish passes through. Wiring the gate to the button would make it
+// evidence only about that button, which is exactly how a validator becomes decoration
+// — the UI below still disables the button, but as an explanation, not as the gate.
+//
+// 🔴 WHY IT TAKES A `definition` AT ALL, WHEN THE MUTATION SENDS NONE. The server
+// freezes the draft IT holds; nothing about the definition travels with this request.
+// So a caller validating "the definition" and a server publishing "the draft" can
+// disagree, and the check would be green over a different document — the same
+// one-construction-path trap the dashboard fixtures already hit. Naming the definition
+// in the signature makes the caller say which document it believes is being frozen,
+// and expectedUpdatedAt is what makes the belief true: it must be the baseline THAT
+// definition was loaded or saved at, so a draft that moved on fails CONFLICT rather
+// than being frozen unvalidated.
 export async function publishDashboard(
   token: string,
-  input: { label?: string; description?: string; expectedUpdatedAt?: string | null },
+  input: {
+    // The definition the caller believes the server will freeze — the last SAVED
+    // definition, at expectedUpdatedAt. Not the unsaved editor copy: that is a
+    // document the server has never seen.
+    definition: Pick<DashboardDefinition, 'widgets'>;
+    label?: string;
+    description?: string;
+    // REQUIRED, though nullable: this is the whole tie between the definition
+    // validated above and the draft the server freezes. Optional, a caller could omit
+    // it and get a check over a document the server may not hold — which is the exact
+    // failure the `definition` parameter exists to prevent, re-entering by the back
+    // door. `null` is still expressible, and means "publish whatever is there".
+    expectedUpdatedAt: string | null;
+  },
 ): Promise<{ version: number }> {
+  const issues = validateDefinitionOptions(input.definition);
+  if (issues.length > 0) {
+    throw new Error(
+      `${INVALID_DEFINITION_MARKER}: ${issues
+        .map((i) => `${i.widgetId} (${i.widgetType}): ${i.message}`)
+        .join('; ')}`,
+    );
+  }
   const data = await gql('dashboard-management', PUBLISH_DASHBOARD, {
     token,
     label: input.label?.trim() ? input.label.trim() : null,
     description: input.description?.trim() ? input.description.trim() : null,
-    expectedUpdatedAt: input.expectedUpdatedAt ?? null,
+    expectedUpdatedAt: input.expectedUpdatedAt,
   });
   return data.publishDashboard;
 }

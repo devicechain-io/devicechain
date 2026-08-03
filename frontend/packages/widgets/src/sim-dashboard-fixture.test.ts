@@ -12,13 +12,12 @@ import { fileURLToPath } from 'node:url';
 import { parseDashboardDefinition, WIDGET_TYPES, type WidgetType } from '@devicechain/dashboards';
 import { describe, expect, it } from 'vitest';
 
-import { validateWidgetOptions } from './options';
+import { validateDefinitionOptions } from './definition-options';
 import { WIDGET_BINDS_DATASOURCE, WIDGET_CHANNEL } from './registry';
 
 // ---- The cross-workspace gate --------------------------------------------------
 //
-// The widgetlab sim scenario authors its dashboards in Go and this package renders
-// them. Neither side can check the other: Go cannot run the parser, and TypeScript
+// The sim scenarios author their dashboards in Go and this package renders them. Neither side can check the other: Go cannot run the parser, and TypeScript
 // cannot run the builders. They meet at a committed fixture — Go writes exactly what
 // Provision publishes (and a Go test fails if it goes stale), and this holds that
 // document to the real parser and the real option schemas.
@@ -32,16 +31,16 @@ import { WIDGET_BINDS_DATASOURCE, WIDGET_CHANNEL } from './registry';
 // configured with nothing, parses perfectly. So every check below is about what
 // SURVIVED the parse, not about whether it threw.
 
-const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'testdata', 'widgetlab');
+const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'testdata', 'sim-dashboards');
 
 const GALLERY = 'wl-gallery';
 const STRESS = 'wl-stress';
+const BUILDINGPULSE = 'bp-dashboard';
 
-// Every fixture on disk, so a board that exists is never silently uncovered. The two
-// names above are still spelled out because the assertions differ per board — the
-// gallery is the catalog, the stress board is the exerciser — but a THIRD board
-// appearing with no test of its own is itself a failure, and so is one of these two
-// disappearing while the tests that name it quietly stop running.
+// Every fixture on disk. The per-board block below walks THIS list rather than a
+// hand-written one, so a board added by any scenario is covered by every generic
+// assertion the moment its fixture lands — which is the whole reason buildingpulse's
+// options were checked by nothing while a comment claimed the sim's boards were gated.
 function fixtureTokens(): string[] {
   return readdirSync(FIXTURES)
     .filter((name) => name.endsWith('.json'))
@@ -73,7 +72,7 @@ const PATHOLOGICAL_AXES = {
   image: 'a source that cannot decode',
 } as const satisfies Partial<Record<WidgetType, string>>;
 
-describe('the widgetlab fixtures', () => {
+describe('the sim dashboard fixtures', () => {
   // 🔴 The fixture directory and the boards this file tests must be the same set.
   //
   // The tokens below are read by NAME, so a renamed dashboard leaves its old fixture
@@ -81,13 +80,21 @@ describe('the widgetlab fixtures', () => {
   // exists, while the real one is parsed by nothing. The Go side asserts the same
   // equality against the manifest; this end catches the case where a fixture is
   // present and simply has no test.
-  it('are exactly the boards this file covers', () => {
-    expect(fixtureTokens()).toEqual([GALLERY, STRESS].sort());
+  // 🔑 This list is NOT what gives a board coverage — the per-board block walks the
+  // directory, so a new fixture is covered generically without touching this file. It
+  // exists so a new board's ARRIVAL is a decision: someone has to look and say whether
+  // it needs assertions of its own, the way the gallery and stress board do. That is its
+  // ONLY job — a renamed or orphaned fixture is already caught twice over, by the Go
+  // side's manifest/disk equality and by the named tests below failing to read a file
+  // that moved.
+  it('are exactly the boards this file knows about', () => {
+    expect(fixtureTokens()).toEqual([BUILDINGPULSE, GALLERY, STRESS].sort());
   });
 
   it('parse without throwing', () => {
-    expect(() => parsed(GALLERY)).not.toThrow();
-    expect(() => parsed(STRESS)).not.toThrow();
+    for (const token of fixtureTokens()) {
+      expect(() => parsed(token), `${token} does not parse`).not.toThrow();
+    }
   });
 
   // The gallery is the catalog, so it must carry every widget type there is. The Go
@@ -148,8 +155,8 @@ describe('the widgetlab fixtures', () => {
 
 // ---- What survived the parse ---------------------------------------------------
 
-describe('the parsed widgetlab boards', () => {
-  for (const token of [GALLERY, STRESS]) {
+describe('the parsed sim boards', () => {
+  for (const token of fixtureTokens()) {
     describe(token, () => {
       it('keeps every widget the fixture declares', () => {
         const before = (raw(token).widgets as unknown[]).length;
@@ -274,14 +281,19 @@ describe('the parsed widgetlab boards', () => {
         }
       });
 
-      // 🔑 The check the option schemas were built for, finally wired to something
-      // that produces definitions. Every bag on the board, against the schema the
-      // renderer actually reads.
+      // 🔑 The check the option schemas were built for, wired to something that
+      // produces definitions. Every bag on the board, against the schema the renderer
+      // actually reads.
+      //
+      // 🔴 THROUGH validateDefinitionOptions, NOT A HAND-ROLLED WALK OF THE SAME SHAPE.
+      // This test wrote its own widgets.flatMap(validateWidgetOptions(...)) loop for one
+      // commit, which is the reconstruction trap by the letter: the console's publish
+      // gate calls that function, so a definition-level rule added to it would reach the
+      // console and silently miss the sim — while a comment on the function named this
+      // fixture gate as one of the two producers held to it.
       it('authors only options the widgets read, at the types they read them', () => {
-        const issues = parsed(token).widgets.flatMap((widget) =>
-          validateWidgetOptions(widget.type, widget.options).map(
-            (issue) => `${widget.id} (${widget.type}): ${issue.code} on ${issue.key} — ${issue.message}`,
-          ),
+        const issues = validateDefinitionOptions(parsed(token)).map(
+          (issue) => `${issue.widgetId} (${issue.widgetType}): ${issue.code} on ${issue.key} — ${issue.message}`,
         );
         expect(issues).toEqual([]);
       });

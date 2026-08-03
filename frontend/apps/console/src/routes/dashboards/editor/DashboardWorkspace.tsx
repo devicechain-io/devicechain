@@ -45,7 +45,12 @@ import {
   type SyntheticGenerator,
   type WidgetType,
 } from '@devicechain/dashboards';
-import { DashboardRenderer, useResolvedBindings, useSlotCandidates } from '@devicechain/widgets';
+import {
+  DashboardRenderer,
+  stripUnknownOptions,
+  useResolvedBindings,
+  useSlotCandidates,
+} from '@devicechain/widgets';
 import { PageShell } from '@/components/ui/page-shell';
 import { CopyToken } from '@/components/ui/copy-token';
 import { Button } from '@/components/ui/button';
@@ -405,6 +410,27 @@ export function DashboardWorkspace({
       });
   };
 
+  // Remove every option key no widget of that type reads. Offered from the publish
+  // drawer, because a leftover key is the one issue blocking publish that the config
+  // panel cannot fix — stripUnknownOptions in @devicechain/widgets carries the full
+  // reasoning.
+  //
+  // It lands as an ordinary unsaved edit rather than writing straight through: this
+  // DELETES authored values, so the author gets the same review-then-save (or discard)
+  // they get for any other change, and the same conflict precondition on the way out.
+  const stripUnknown = () => {
+    const next = stripUnknownOptions(working);
+    // Identity is the no-op signal (see stripUnknownOptions). Not a dirty-state concern:
+    // isDirty compares serializations, so an equal-but-new object would not read as an
+    // edit either way — this just distinguishes "nothing to remove" from "removed".
+    if (next === working) {
+      toast(t('workspaceNoUnknownOptions'));
+      return;
+    }
+    setWorking(next);
+    toast(t('workspaceUnknownOptionsRemoved'));
+  };
+
   // After a rollback the server draft IS the chosen version; re-baseline working +
   // saved to it (seeding the title from the name like the initial load) so the
   // editor reflects it and isn't spuriously dirty, and advance the concurrency
@@ -691,11 +717,15 @@ export function DashboardWorkspace({
       token={token}
       open={historyOpen}
       onOpenChange={setHistoryOpen}
+      // `saved`, not `working`: publish freezes the server draft, which is what
+      // `saved` mirrors (and what expectedUpdatedAt is the baseline for).
+      saved={saved}
       dirty={dirty}
       saving={saveState.kind === 'saving'}
       canWrite={canEdit}
       expectedUpdatedAt={expectedUpdatedAt}
       onRolledBack={onRolledBack}
+      onStripUnknownOptions={stripUnknown}
     />
     </>
   );
