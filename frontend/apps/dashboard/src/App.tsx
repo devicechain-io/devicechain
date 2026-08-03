@@ -11,6 +11,11 @@
 // React state); (2) load (paste + parse a definition and manifest); (3) view
 // (render the definition read-only through a hub bound to the manifest). There is
 // NO editing, no save, no token fetch.
+//
+// Being paste-only leaves a first-time reader with nothing to paste, so there are
+// checked-in samples — a board definition and manifests that bind it to real simulated
+// entities — at frontend/testdata/dash-samples. Read that README before pasting one:
+// the scenario it names has to be bootstrapped first, or every widget renders empty.
 
 import { decodeToken, gql, setAuthTokenGetter } from '@devicechain/client';
 import {
@@ -18,24 +23,14 @@ import {
   createEntityLister,
   DashboardHub,
   effectiveBindings,
-  migrateToSlots,
-  parseBindingManifest,
-  parseDashboardDefinition,
-  type DashboardDefinition,
   type SelectionTarget,
   type SlotBinding,
 } from '@devicechain/dashboards';
 import { DashboardRenderer, useResolvedBindings, useSlotCandidates } from '@devicechain/widgets';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { errorMessage, loadDashboard, type Loaded } from './load';
 import { LOGIN, type Membership, SELECT_TENANT } from './queries';
-
-// A loaded, parsed dashboard ready to render: the definition plus the effective
-// binding manifest (defaults merged with the pasted override) it renders against.
-interface Loaded {
-  definition: DashboardDefinition;
-  manifest: Record<string, SlotBinding>;
-}
 
 export default function App() {
   // The tenant access token, once signed in. Kept in state (to drive the UI) AND a
@@ -177,10 +172,8 @@ function SignIn({ onAuthed }: { onAuthed: (accessToken: string) => void }) {
 
 // ── Step 2: Load ────────────────────────────────────────────────────────────
 // Paste an exported definition + an optional binding manifest, parse both, and
-// advance. Parse errors show inline; nothing throws to a white screen.
-
-// Matches dashboard-management's server-side definition cap (1 MiB).
-const MAX_PASTE_BYTES = 1 << 20;
+// advance. Parse errors show inline; nothing throws to a white screen. The parsing
+// itself is loadDashboard, in load.ts, so a test can drive it.
 
 const MANIFEST_HELP =
   '{ "slotName": { "kind": "device", "deviceToken": "..." } }  or  ' +
@@ -198,52 +191,13 @@ function Load({
   const [error, setError] = useState<string | null>(null);
 
   const render = () => {
+    const result = loadDashboard(definitionText, manifestText);
+    if ('error' in result) {
+      setError(result.error);
+      return;
+    }
     setError(null);
-
-    // Bound the paste on the main thread (parse is synchronous) — matches the
-    // server's definition size cap; a giant paste would only freeze this tab.
-    if (definitionText.length > MAX_PASTE_BYTES) {
-      setError('Definition is too large (over 1 MiB).');
-      return;
-    }
-
-    // Parse the definition (required).
-    let definition: DashboardDefinition;
-    try {
-      definition = migrateToSlots(parseDashboardDefinition(JSON.parse(definitionText)));
-    } catch (err) {
-      setError(`Definition: ${errorMessage(err)}`);
-      return;
-    }
-
-    // Parse the manifest (optional — empty → no overrides).
-    let manifest: Record<string, SlotBinding> = {};
-    if (manifestText.trim() !== '') {
-      let rawManifest: unknown;
-      try {
-        rawManifest = JSON.parse(manifestText);
-      } catch (err) {
-        setError(`Binding manifest: ${errorMessage(err)}`);
-        return;
-      }
-      if (rawManifest === null || typeof rawManifest !== 'object' || Array.isArray(rawManifest)) {
-        setError('Binding manifest must be a JSON object of slot → binding.');
-        return;
-      }
-      manifest = parseBindingManifest(rawManifest);
-      // Surface dropped entries (a typo'd shape) rather than silently binding the
-      // wrong entity — or, for a stripped template, an unexplained blank widget.
-      const dropped = Object.keys(rawManifest).length - Object.keys(manifest).length;
-      if (dropped > 0) {
-        setError(
-          `Binding manifest: ${dropped} ${dropped === 1 ? 'entry was' : 'entries were'} ignored — ` +
-            'check the shape (kind + deviceToken, or anchor with a targetToken).',
-        );
-        return;
-      }
-    }
-
-    onRender({ definition, manifest });
+    onRender(result.loaded);
   };
 
   return (
@@ -387,10 +341,6 @@ function View({
 }
 
 // ── Presentational helpers (inline styles + CSS vars — no Tailwind/shadcn) ────
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : 'Unexpected error';
-}
 
 function Centered({ children }: { children: React.ReactNode }) {
   return (

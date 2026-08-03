@@ -55,28 +55,44 @@ describe('parseBindingManifest', () => {
       bad3: 'not an object',
     };
     expect(parseBindingManifest(raw)).toEqual({
-      primary: { kind: 'device', deviceToken: 'therm-9' },
-      area: { kind: 'anchor', anchor: { relationship: 'contains', targetType: 'area', targetToken: 'plant-2' } },
+      bindings: {
+        primary: { kind: 'device', deviceToken: 'therm-9' },
+        area: { kind: 'anchor', anchor: { relationship: 'contains', targetType: 'area', targetToken: 'plant-2' } },
+      },
+      // NAMED, not counted. A host's only other way to learn an entry vanished is to
+      // compare key counts against its own input, which cannot say which one went.
+      dropped: ['bad1', 'bad2', 'bad3'],
     });
   });
 
-  it('returns {} for a non-object', () => {
-    expect(parseBindingManifest(null)).toEqual({});
-    expect(parseBindingManifest([])).toEqual({});
-    expect(parseBindingManifest('x')).toEqual({});
+  it('reports nothing dropped when every entry is good', () => {
+    // The counterweight: naming the refusals is only useful while a clean manifest
+    // reports an empty list, and a `dropped` that was never empty would make every
+    // host's error path fire on correct input.
+    const out = parseBindingManifest({ primary: { kind: 'device', deviceToken: 'therm-9' } });
+    expect(out.dropped).toEqual([]);
+  });
+
+  it('returns nothing for a non-object', () => {
+    for (const raw of [null, [], 'x']) {
+      expect(parseBindingManifest(raw)).toEqual({ bindings: {}, dropped: [] });
+    }
   });
 
   it('ignores a __proto__ key without polluting the prototype', () => {
     const raw = JSON.parse('{"__proto__": {"kind":"device","deviceToken":"x"}, "ok": {"kind":"device","deviceToken":"y"}}');
     const out = parseBindingManifest(raw);
-    expect(out).toEqual({ ok: { kind: 'device', deviceToken: 'y' } });
-    expect(Object.getPrototypeOf(out)).toBe(Object.prototype); // not swapped
+    expect(out.bindings).toEqual({ ok: { kind: 'device', deviceToken: 'y' } });
+    // Reported rather than swallowed: the host asked for a binding and did not get one,
+    // which is the same thing that happened to a malformed entry.
+    expect(out.dropped).toEqual(['__proto__']);
+    expect(Object.getPrototypeOf(out.bindings)).toBe(Object.prototype); // not swapped
     expect(({} as Record<string, unknown>).kind).toBeUndefined(); // no global pollution
   });
 
   it('a manifest overrides a definition default via effectiveBindings', () => {
     const d = def({ primary: { type: 'device', defaultBinding: devA } });
-    const manifest = parseBindingManifest({ primary: { kind: 'device', deviceToken: 'host-device' } });
+    const { bindings: manifest } = parseBindingManifest({ primary: { kind: 'device', deviceToken: 'host-device' } });
     expect(effectiveBindings(d, manifest)).toEqual({ primary: { kind: 'device', deviceToken: 'host-device' } });
   });
 });
@@ -98,8 +114,8 @@ describe('stripDefaultBindings', () => {
   it('a template + a matching host manifest resolves the slot (the embed contract)', () => {
     const authored = def({ primary: { type: 'device', label: 'therm-001', defaultBinding: devA } });
     const template = stripDefaultBindings(authored);
-    const hostA = parseBindingManifest({ primary: { kind: 'device', deviceToken: 'host-a' } });
-    const hostB = parseBindingManifest({ primary: { kind: 'device', deviceToken: 'host-b' } });
+    const { bindings: hostA } = parseBindingManifest({ primary: { kind: 'device', deviceToken: 'host-a' } });
+    const { bindings: hostB } = parseBindingManifest({ primary: { kind: 'device', deviceToken: 'host-b' } });
     // One template, two manifests → two different bindings.
     expect(effectiveBindings(template, hostA)).toEqual({ primary: { kind: 'device', deviceToken: 'host-a' } });
     expect(effectiveBindings(template, hostB)).toEqual({ primary: { kind: 'device', deviceToken: 'host-b' } });
