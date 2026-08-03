@@ -9,10 +9,22 @@
 #
 #   hack/migration-diff.sh snapshot   # capture golden schemas from the current chains
 #   hack/migration-diff.sh verify     # assert the chains still reproduce the goldens
+#   hack/migration-diff.sh coverage   # assert the tenant purge accounts for every table
 #
 # `verify` is the guard: it fails if a migration changes a schema without the golden
 # being refreshed, and — at the GA migration-squash — it proves a single baseline
 # migration reproduces the exact schema the incremental chain built.
+#
+# `verify` ALSO runs `coverage` against the same freshly migrated database, because the
+# two guards answer different questions about the same migration and only one of them
+# is about the schema's text. Coverage asserts that every table an instance ends up with
+# can be accounted for by the tenant purge — a tenant column, a foreign key into
+# tenant-bearing data, or a registered exemption stating why it holds none. A migration
+# that adds a table holding tenant data with no tenant column passes `verify` cleanly
+# (the golden simply gains the new table) and would leave that data un-erasable forever.
+# Running it here rather than as its own CI step is deliberate: it needs a database with
+# EVERY area migrated into it, which is what this harness already builds, on both
+# supported Postgres majors.
 #
 # 🔴 The default image here is NOT the one deploy/opentofu ships, and that is deliberate.
 # The goldens were captured on PostgreSQL 16 against the community image pinned below, and
@@ -26,8 +38,8 @@ set -euo pipefail
 
 MODE="${1:-verify}"
 case "$MODE" in
-  snapshot | verify) ;;
-  *) echo "usage: $0 <snapshot|verify>" >&2; exit 2 ;;
+  snapshot | verify | coverage) ;;
+  *) echo "usage: $0 <snapshot|verify|coverage>" >&2; exit 2 ;;
 esac
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -131,5 +143,17 @@ go run . \
   -user postgres -password "$PASSWORD" \
   -db "$DB" \
   -golden-dir "$GOLDEN_DIR"
+
+# The tenant-purge coverage gate, over the database `verify` just migrated. It re-runs
+# the chains first, which is a no-op on an already-migrated database, so the only cost
+# here is the classification itself.
+if [ "$MODE" = "verify" ]; then
+  echo "==> Running migrationdiff (mode=coverage)"
+  go run . \
+    -mode coverage \
+    -host localhost -port "$HOST_PORT" \
+    -user postgres -password "$PASSWORD" \
+    -db "$DB"
+fi
 
 echo "==> Done."

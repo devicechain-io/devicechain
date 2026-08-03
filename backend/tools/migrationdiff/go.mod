@@ -15,6 +15,8 @@ require (
 	github.com/devicechain-io/dc-outbound-connectors v0.0.0-00010101000000-000000000000
 	github.com/devicechain-io/dc-user-management v0.0.0-00010101000000-000000000000
 	github.com/go-gormigrate/gormigrate/v2 v2.1.6
+	gorm.io/driver/postgres v1.6.1
+	gorm.io/gorm v1.31.2
 )
 
 require (
@@ -47,8 +49,6 @@ require (
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af // indirect
 	gorm.io/datatypes v1.2.7 // indirect
 	gorm.io/driver/mysql v1.5.6 // indirect
-	gorm.io/driver/postgres v1.6.1 // indirect
-	gorm.io/gorm v1.31.2 // indirect
 )
 
 replace github.com/devicechain-io/dc-microservice => ../../core

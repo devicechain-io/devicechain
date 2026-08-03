@@ -34,7 +34,7 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "verify", "snapshot (write goldens) | verify (diff against goldens)")
+	mode := flag.String("mode", "verify", "snapshot (write goldens) | verify (diff against goldens) | coverage (assert the tenant purge accounts for every table)")
 	container := flag.String("container", "", "docker container running Postgres/Timescale, for a version-matched pg_dump via 'docker exec' (host pg_dump is often older than the server)")
 	host := flag.String("host", "localhost", "Postgres host the migration chain connects to (TCP)")
 	port := flag.Int("port", 5432, "Postgres port")
@@ -45,16 +45,28 @@ func main() {
 	only := flag.String("only", "", "comma-separated area filter (default: all)")
 	flag.Parse()
 
-	if *container == "" {
-		fatalf("-container is required (the schema dump runs `docker exec <container> pg_dump` for a version-matched dump)")
-	}
-	if *mode != "snapshot" && *mode != "verify" {
-		fatalf("-mode must be snapshot or verify, got %q", *mode)
+	switch *mode {
+	case "snapshot", "verify":
+		if *container == "" {
+			fatalf("-container is required (the schema dump runs `docker exec <container> pg_dump` for a version-matched dump)")
+		}
+	case "coverage":
+		// coverage reads the catalog over a normal connection and never shells out to
+		// pg_dump, so it needs no container.
+	default:
+		fatalf("-mode must be snapshot, verify or coverage, got %q", *mode)
 	}
 
 	selected, err := selectAreas(*only)
 	if err != nil {
 		fatalf("%v", err)
+	}
+
+	if *mode == "coverage" {
+		if err := runCoverage(context.Background(), *host, *port, *user, *password, *db, selected, *only != ""); err != nil {
+			fatalf("%v", err)
+		}
+		return
 	}
 
 	// 🔴 A GOLDEN WITH NO AREA IS A SILENT SKIP, and the squash is nine changes to
