@@ -71,21 +71,29 @@ func scenarioManifests(t *testing.T) map[string]SimManifest {
 	return out
 }
 
+// simDashboard is a published board plus the scenario that publishes it. The owner is
+// carried rather than looked up again because a board's DEFINITION is only half of what
+// a checker needs — the entities it binds come from its scenario's manifest, and
+// rediscovering which scenario that was is how the two drift apart.
+type simDashboard struct {
+	scenario   string
+	manifest   SimManifest
+	definition string
+}
+
 // simDashboardFixtures is every dashboard every registered scenario publishes, keyed by
 // token. Tokens are asserted unique across scenarios: they name files in one directory,
 // so a collision would silently leave one board's fixture holding another's document.
-func simDashboardFixtures(t *testing.T) map[string]string {
+func simDashboardFixtures(t *testing.T) map[string]simDashboard {
 	t.Helper()
-	out := map[string]string{}
-	owner := map[string]string{}
+	out := map[string]simDashboard{}
 	for id, manifest := range scenarioManifests(t) {
 		for _, d := range manifest.Dashboards {
-			if prev, dup := owner[d.Token]; dup {
+			if prev, dup := out[d.Token]; dup {
 				t.Fatalf("scenarios %q and %q both declare dashboard %q; the fixture files are "+
-					"keyed by token, so one would overwrite the other", prev, id, d.Token)
+					"keyed by token, so one would overwrite the other", prev.scenario, id, d.Token)
 			}
-			owner[d.Token] = id
-			out[d.Token] = d.Definition
+			out[d.Token] = simDashboard{scenario: id, manifest: manifest, definition: d.Definition}
 		}
 	}
 	if len(out) == 0 {
@@ -134,9 +142,9 @@ func TestSimDashboardFixturesAreCurrent(t *testing.T) {
 		removeOrphanFixtures(t)
 	}
 
-	for token, definition := range fixtures {
+	for token, board := range fixtures {
 		path := fixturePath(token)
-		want := indent(t, definition)
+		want := indent(t, board.definition)
 
 		if *updateFixtures {
 			if err := os.WriteFile(path, want, 0o644); err != nil {
@@ -153,7 +161,7 @@ func TestSimDashboardFixturesAreCurrent(t *testing.T) {
 		}
 		// Compared as VALUES: the committed file is indented and the published
 		// document is not, so bytes would differ for a reason that means nothing.
-		if !sameJSON(string(got), definition) {
+		if !sameJSON(string(got), board.definition) {
 			t.Errorf("%s is stale — the builders now produce a different board.\n"+
 				"Regenerate with: go test ./sim/ -run TestSimDashboardFixturesAreCurrent "+
 				"-update-fixtures", path)
@@ -389,8 +397,8 @@ func TestSimDashboardFixturesAreReproducible(t *testing.T) {
 	if len(first) != len(second) {
 		t.Fatalf("two builds produced %d and %d dashboards", len(first), len(second))
 	}
-	for token, definition := range first {
-		if second[token] != definition {
+	for token, board := range first {
+		if second[token].definition != board.definition {
 			t.Errorf("dashboard %q differs between two builds at the same seed", token)
 		}
 	}

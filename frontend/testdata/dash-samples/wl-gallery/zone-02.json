@@ -1,0 +1,14 @@
+{
+  "zone": {
+    "kind": "anchor",
+    "anchor": {
+      "relationship": "assigned",
+      "targetType": "area",
+      "targetToken": "wl-zone-02"
+    }
+  },
+  "sensor": {
+    "kind": "device",
+    "deviceToken": "wl-sensor-02"
+  }
+}
