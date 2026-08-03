@@ -210,11 +210,25 @@ jobs:
         # no specs yet — it boots a control plane but asserts nothing, and is
         # environment-sensitive. Exclude it from unit CI; add a dedicated envtest
         # job when real controller specs land. All other packages run normally.
+        #
+        # -count=1 disables TEST-RESULT caching, and it is load-bearing here rather
+        # than a habit. `go test` decides a cached result is still valid from the
+        # module's own sources, and it does NOT track files outside the module at
+        # all — not their contents, not their directory listings. Several gates read
+        # exactly such files: the sim's golden dashboard fixtures and /dash paste
+        # samples both live under frontend/testdata. Measured, not assumed: with a
+        # cached pass in place, breaking a sample and re-running printed
+        # "ok (cached)" over the broken tree, and only -count=1 failed.
+        #
+        # The setup-go cache above restores GOCACHE, so those stale results survive
+        # into CI — a PR touching only a fixture is precisely the shape that would
+        # replay someone else's green. This disables result caching only; the BUILD
+        # cache (the expensive part — outbound-connectors' Bento tree) is untouched.
         run: |
           if [ "${{ matrix.module }}" = "backend/k8s" ]; then
-            go test $(go list ./... | grep -v '/controllers$')
+            go test -count=1 $(go list ./... | grep -v '/controllers$')
           else
-            go test ./...
+            go test -count=1 ./...
           fi
 
   # NOTE: a golangci-lint job is intentionally omitted for now — no golangci-lint

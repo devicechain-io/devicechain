@@ -29,11 +29,18 @@ import (
 // frontend/apps/dashboard/src/load.test.ts, which drives the real loadDashboard. Split
 // this way because neither side can do the other's job, not for tidiness.
 //
-// 🔴 LOCALLY, RUN THESE WITH -count=1 WHILE CHANGING SAMPLES. The samples live outside
-// this module, and `go test` caching notices a file whose CONTENTS changed but not a
-// directory whose LISTING did — so adding, removing or renaming a sample can replay a
-// cached "ok" from before the change. CI is unaffected (it starts with a cold cache),
-// which is what makes this a trap rather than a bug: the green you get is local only.
+// 🔴 RUN THESE WITH -count=1 WHILE CHANGING SAMPLES — INCLUDING WHEN ONLY EDITING ONE.
+// `go test` decides a cached result is still good from the module's own sources, and it
+// does not track files outside the module at all: not their contents, not the directory
+// listing. Everything this file reads is outside the module. Measured: with a cached
+// pass in place, pointing the sample at a device that does not exist and re-running
+// printed "ok (cached)" over the broken tree; only -count=1 failed it.
+//
+// (The first version of this comment claimed contents were tracked and only listings
+// were not, and that CI was safe because it starts cold. Both halves were wrong — the
+// earlier measurement had only ever compared runs with different -run/-v arguments, so
+// nothing was ever eligible for the cache. CI restores GOCACHE via setup-go, so the go
+// job now passes -count=1; the same hole covers the golden dashboard fixtures.)
 
 const dashSampleDir = "../../../../frontend/testdata/dash-samples"
 
@@ -70,7 +77,16 @@ func dashSampleManifests(t *testing.T, board string) map[string]map[string]dashb
 	}
 	out := map[string]map[string]dashboardSlotBinding{}
 	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+		if e.IsDir() {
+			continue
+		}
+		// Both walkers — this one and the TypeScript half — select on the .json
+		// extension, so a sample saved as .JSON or .txt is a file someone can still find
+		// and paste while every check here skips it in silence. There is nothing else a
+		// sample directory legitimately holds.
+		if filepath.Ext(e.Name()) != ".json" {
+			t.Errorf("%s is not a .json file; both sample gates select on that extension, so "+
+				"it would be pastable and checked by nothing", filepath.Join(dir, e.Name()))
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
@@ -167,14 +183,30 @@ func TestDashSampleBindingsNameRealEntities(t *testing.T) {
 // TestDashSampleScopedSlotsStayInsideTheirParent is the subtle one, and the reason a
 // sample cannot just be a plausible-looking pair of tokens.
 //
-// A scoped slot resolves relative to its parent anchor: the cascade keeps a device
-// binding only while that device is still a member of the parent's area. So a manifest
-// that re-points the parent to another area and leaves the child on a device belonging
-// to the old one parses cleanly, names two entities that both exist, and still renders
-// the child's widgets empty. The pair has to be checked, not each token separately.
+// A scoped slot resolves relative to its parent anchor. Under the 'manual' strategy —
+// resolveContextBindings in frontend/packages/dashboards/src/context.ts — the cascade
+// keeps the child's binding only while that device is still a member of the parent's
+// area, and otherwise leaves the slot UNBOUND. So a manifest that re-points the parent
+// to another area and leaves the child on a device belonging to the old one parses
+// cleanly, names two entities that both exist, and still renders the child's widgets
+// empty. The pair has to be checked, not each token separately.
+//
+// 🔴 THE STRATEGY DECIDES WHETHER THE SAMPLE MEANS ANYTHING, so it is read rather than
+// assumed. Under 'first' the cascade ignores the child's binding outright and derives
+// the parent's first member instead — a sample naming a device there is a line that
+// reads as configuration and changes nothing on screen, which is worse than a wrong
+// token because nothing ever contradicts it. Those are refused below rather than
+// membership-checked, because membership is not the question for them.
+//
+// Nothing here uses `continue` for a shape it does not expect. An earlier version
+// skipped a child bound to an anchor (or a parent bound to a device) as uninteresting,
+// which made the type confusion — the likeliest copy-paste slip in a manifest, since
+// the two stanzas sit one above the other — invisible to this file. It was caught only
+// by the aggregate "asserted nothing" guard at the bottom, and one VALID sample
+// alongside a broken one was enough to satisfy that and turn the whole gate green.
 func TestDashSampleScopedSlotsStayInsideTheirParent(t *testing.T) {
 	boards := simDashboardFixtures(t)
-	checked := 0
+	resolved := 0
 	for _, name := range dashSampleBoards(t) {
 		board, ok := boards[name]
 		if !ok {
@@ -192,23 +224,61 @@ func TestDashSampleScopedSlotsStayInsideTheirParent(t *testing.T) {
 				if spec.Scope == nil || spec.Scope.Parent == "" {
 					continue
 				}
+				parentName := spec.Scope.Parent
+
+				// A binding the cascade discards is not a binding. Refused rather than
+				// checked, and refused whether or not the token is any good.
+				resolved++
+				if spec.Scope.Strategy == "first" {
+					if _, named := manifest[slot]; named {
+						t.Errorf("%s binds %q, but that slot is scoped 'first' — the cascade "+
+							"derives it from %q's first member and ignores what a manifest says, "+
+							"so this line changes nothing a viewer can see",
+							where, slot, parentName)
+					}
+					continue
+				}
+
 				// A slot the sample does not name still resolves — to the board's own
 				// default — so the pair to check is the EFFECTIVE binding on both ends,
 				// which is what makes a sample that rebinds only the parent a real case
 				// rather than one that slips through.
 				child, childOK := effectiveBinding(manifest, slot, spec)
-				parentName := spec.Scope.Parent
 				parent, parentOK := effectiveBinding(manifest, parentName, def.Slots[parentName])
-				if !childOK || !parentOK {
-					continue // an unbound end resolves at mount; there is no pair yet
+				if !childOK {
+					// Neither the sample nor the board binds it. It renders as an empty
+					// placeholder until someone picks in the viewer — a board-authoring
+					// matter, not something a sample can fix, so there is no pair here.
+					continue
 				}
-				if child.Kind != "device" || parent.Kind != "anchor" || parent.Anchor == nil {
+				if !parentOK {
+					t.Errorf("%s leaves %q — the parent of scoped slot %q — bound to nothing; "+
+						"the cascade cannot derive a child from an unbound parent, so %q renders "+
+						"empty", where, parentName, slot, slot)
+					continue
+				}
+				if child.Kind != "device" {
+					t.Errorf("%s binds scoped slot %q with kind %q, but a scoped slot resolves to "+
+						"a DEVICE; the cascade drops a binding of any other kind and the slot "+
+						"renders empty", where, slot, child.Kind)
+					continue
+				}
+				if parent.Kind != "anchor" || parent.Anchor == nil {
+					t.Errorf("%s binds %q — an anchor slot, and the parent of %q — with kind %q; "+
+						"the cascade derives a child only from an anchor parent",
+						where, parentName, slot, parent.Kind)
 					continue
 				}
 				if parent.Anchor.TargetType != "area" {
-					continue // membership below is area assignment; other anchors resolve elsewhere
+					// check() already refuses every target type the sim never assigns to,
+					// so reaching here means a type it does assign but membership is not
+					// area assignment. There is none today; erroring keeps it from being
+					// waved through the day there is.
+					t.Errorf("%s binds %q to a %s anchor; scoped-slot membership here is area "+
+						"assignment, so this pair is unchecked",
+						where, parentName, parent.Anchor.TargetType)
+					continue
 				}
-				checked++
 				device, exists := devices[child.DeviceToken]
 				if !exists {
 					continue // reported by TestDashSampleBindingsNameRealEntities
@@ -216,17 +286,18 @@ func TestDashSampleScopedSlotsStayInsideTheirParent(t *testing.T) {
 				if !assignedTo(device, "area", parent.Anchor.TargetToken) {
 					t.Errorf("%s binds %q to device %q, which is not in area %q that slot %q binds — "+
 						"the cascade drops the device and every widget on it renders empty",
-						where, slot, child.DeviceToken, parent.Anchor.TargetToken, spec.Scope.Parent)
+						where, slot, child.DeviceToken, parent.Anchor.TargetToken, parentName)
 				}
 			}
 		}
 	}
-	// The checks above are all inside a `continue`-heavy walk, so a definition that
-	// stopped declaring scoped slots — or a sample set that stopped covering one —
-	// would leave this test green having compared nothing.
-	if checked == 0 {
-		t.Error("no sample resolved a scoped slot against a parent anchor, so this test " +
-			"asserted nothing")
+	// A board that stopped declaring scoped slots — or a sample set that stopped covering
+	// one — would leave this test green having examined nothing. Counted at the top of the
+	// walk rather than at the membership check, because refusing a 'first'-scoped binding
+	// is real work too: a corpus made entirely of those has nothing left to compare, and
+	// failing it would be a complaint about the boards rather than about the samples.
+	if resolved == 0 {
+		t.Error("no sample resolved a scoped slot at all, so this test asserted nothing")
 	}
 }
 
@@ -256,7 +327,6 @@ type entityIndex struct {
 	devices   map[string]bool
 	areas     map[string]bool
 	customers map[string]bool
-	assets    map[string]bool
 }
 
 func knownEntities(m SimManifest) entityIndex {
@@ -264,7 +334,6 @@ func knownEntities(m SimManifest) entityIndex {
 		devices:   map[string]bool{},
 		areas:     map[string]bool{},
 		customers: map[string]bool{},
-		assets:    map[string]bool{},
 	}
 	for _, d := range m.Expand(fixtureSeed) {
 		idx.devices[d.Token] = true
@@ -274,9 +343,6 @@ func knownEntities(m SimManifest) entityIndex {
 	}
 	for _, c := range m.Customers {
 		idx.customers[c.Token] = true
-	}
-	for _, a := range m.Assets {
-		idx.assets[a.Token] = true
 	}
 	return idx
 }
@@ -301,17 +367,21 @@ func (idx entityIndex) check(b dashboardSlotBinding) error {
 			return fmt.Errorf("relationship %q, but the sim only creates %q relationships",
 				b.Anchor.Relationship, assignmentRelationshipType)
 		}
+		// Only the target types the sim actually ASSIGNS devices to. Assets are
+		// bootstrapped as entities and never assigned to (renderAssignments builds area
+		// and customer assignments only), so an asset anchor names something real and
+		// resolves to no members — an entity check on the token alone would wave it
+		// through, which is the same shape as accepting a relationship nothing creates.
 		var pool map[string]bool
 		switch b.Anchor.TargetType {
 		case "area":
 			pool = idx.areas
 		case "customer":
 			pool = idx.customers
-		case "asset":
-			pool = idx.assets
 		default:
 			return fmt.Errorf("anchor targetType %q, which is not an entity type a sim "+
-				"assignment targets", b.Anchor.TargetType)
+				"assignment targets — the anchor would resolve to no members",
+				b.Anchor.TargetType)
 		}
 		if !pool[b.Anchor.TargetToken] {
 			return fmt.Errorf("%s %q, which the scenario does not bootstrap",

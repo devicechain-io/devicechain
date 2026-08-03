@@ -100,14 +100,30 @@ describe('the checked-in /dash samples', () => {
       if ('error' in result) throw new Error(`${board}/${file}: ${result.error}`);
       const { definition, manifest } = result.loaded;
 
-      // Every slot the sample names must be one the board declares. effectiveBindings
-      // merges an unknown key in without complaint and no widget ever reads it, so a
-      // renamed slot leaves a manifest that parses cleanly and binds nothing — the
-      // empty-frame failure, with no error anywhere to attribute it to.
-      const slots = Object.keys(definition.slots ?? {});
-      expect(slots, `${board} declares no slots, so nothing here binds anything`).not.toHaveLength(0);
-      for (const name of Object.keys(manifest)) {
-        expect(slots, `${board}/${file} binds "${name}", which ${board} does not declare`).toContain(name);
+      // Every slot the sample names must be one the board declares, AT THE KIND THE
+      // SLOT IS. Both halves of that are load-bearing and neither is enforced anywhere
+      // else on the paste path:
+      //
+      //  - An undeclared slot name survives on purpose — effectiveBindings merges the
+      //    key in, and resolveContextBindings deliberately passes it through for a host
+      //    whose manifest binds slots the definition does not declare. So the platform
+      //    is right to keep it and a checked-in SAMPLE is still wrong to have one: no
+      //    widget on this board references it, so the line binds nothing.
+      //  - A binding of the wrong KIND is the likelier slip, because the two stanzas sit
+      //    one above the other in the file. parseSlotBinding validates a binding's shape
+      //    and knows nothing of the slot it lands on, so an anchor binding on a
+      //    device-typed slot parses perfectly and is then dropped by the cascade —
+      //    leaving every widget on that slot empty, with nothing reported.
+      const slots = definition.slots ?? {};
+      const names = Object.keys(slots);
+      expect(names, `${board} declares no slots, so nothing here binds anything`).not.toHaveLength(0);
+      for (const [name, binding] of Object.entries(manifest)) {
+        expect(names, `${board}/${file} binds "${name}", which ${board} does not declare`).toContain(name);
+        expect(
+          binding.kind,
+          `${board}/${file} binds "${name}" as ${binding.kind}, but ${board} declares it as ` +
+            `${slots[name]?.type} — the cascade drops a mismatched kind and the slot renders empty`,
+        ).toBe(slots[name]?.type);
       }
 
       // And it must actually CHANGE something. A sample that reproduces the board's own
@@ -141,7 +157,8 @@ describe('loadDashboard', () => {
   });
 
   it('reports a definition the parser refuses', () => {
-    // `widgets` not being an array is one of the three things the parser throws on.
+    // `widgets` not being an array is one of the few shapes parseDashboardDefinition
+    // throws on rather than silently degrading.
     const result = loadDashboard(JSON.stringify({ schemaVersion: 1, widgets: 'nope' }), '');
     expect('error' in result && result.error).toMatch(/^Definition: /);
   });
