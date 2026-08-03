@@ -345,7 +345,7 @@ func openInstanceDB(ctx context.Context, o verifyOptions, schema string) (_ *gor
 	sqlDB.SetConnMaxLifetime(0)
 	sqlDB.SetConnMaxIdleTime(0)
 
-	if err := db.WithContext(ctx).Exec(fmt.Sprintf("SET search_path TO %s, public", quoteIdentifier(schema))).Error; err != nil {
+	if err := db.WithContext(ctx).Exec(fmt.Sprintf("SET search_path TO %s, public", rdb.QuoteIdentifier(schema))).Error; err != nil {
 		return nil, fmt.Errorf("pin search_path to %q: %w", schema, err)
 	}
 
@@ -415,13 +415,6 @@ func closeDB(db *gorm.DB) {
 	if sqlDB, err := db.DB(); err == nil {
 		_ = sqlDB.Close()
 	}
-}
-
-// quoteIdentifier renders a SQL identifier safely. The schema names in play are
-// functional areas from the chart, but this is a SET statement built by string
-// formatting and it is not going to be the place that gets it wrong.
-func quoteIdentifier(s string) string {
-	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
 
 // checkChannelVisible asks the RESTORED instance, over its own API, whether the
