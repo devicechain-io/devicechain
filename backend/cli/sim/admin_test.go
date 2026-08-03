@@ -1,0 +1,69 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package sim
+
+import (
+	"errors"
+	"fmt"
+	"testing"
+)
+
+// tolerateExists is what makes `dcctl sim create` idempotent, and it is a substring
+// match on the server's error text — which means it decides, by reading prose, whether
+// a failed create counts as success. This pins what it must NOT swallow.
+//
+// 🔴 The case that motivated it: ADR-077 made a deleted tenant's token permanently
+// RESERVED, so `createTenant` at a used token is now a refusal rather than a
+// collision. If that refusal were tolerated, dcctl would carry on and mint an identity
+// and a tenant-admin membership against a tenant it does not own — handing a sim
+// operator the previous tenant's devices and telemetry, which is precisely the
+// disclosure ADR-077 exists to close, reached through the front door.
+//
+// user-management holds the other half of this coupling
+// (admin.ErrTenantTokenReserved's wording, asserted in admin/tenant_purge_test.go).
+// It is not imported here on purpose: dcctl does not depend on a service module, so
+// the two sides are pinned independently and this test states what it is pinning.
+func TestTolerateExistsSwallowsOnlyAnAlreadyExists(t *testing.T) {
+	tolerated := []string{
+		`pq: duplicate key value violates unique constraint "idx_iam_tenants_token"`,
+		"tenant already exists",
+		"ERROR: duplicate key",
+		"UNIQUE constraint failed: iam_tenants.token",
+	}
+	for _, msg := range tolerated {
+		inner := errors.New(msg)
+		if got := tolerateExists(fmt.Errorf("create tenant: %w", inner), inner); got != nil {
+			t.Errorf("tolerateExists did NOT swallow an already-exists (%q): %v", msg, got)
+		}
+	}
+
+	refusals := []string{
+		// The ADR-077 reservation, in the shape user-management sends it.
+		"that tenant token is reserved: a tenant at this token was deleted and its data is " +
+			"still being reclaimed. Tokens are never reused, because every functional area keys " +
+			"its rows on the token; pick a different one",
+		// Ordinary failures that must never read as success either.
+		"unknown tier \"platinum\"",
+		"tenant does not exist",
+		"connection refused",
+		"permission denied",
+	}
+	for _, msg := range refusals {
+		inner := errors.New(msg)
+		got := tolerateExists(fmt.Errorf("create tenant: %w", inner), inner)
+		if got == nil {
+			t.Errorf("🔴 tolerateExists SWALLOWED a real refusal as success: %q", msg)
+			continue
+		}
+		if !errors.Is(got, inner) {
+			t.Errorf("the returned error dropped its cause for %q: %v", msg, got)
+		}
+	}
+
+	// A nil inner error is success and must stay success — without this the loop above
+	// would pass just as happily against a tolerateExists that rejected everything.
+	if got := tolerateExists(errors.New("wrapped"), nil); got != nil {
+		t.Errorf("tolerateExists turned a success into an error: %v", got)
+	}
+}

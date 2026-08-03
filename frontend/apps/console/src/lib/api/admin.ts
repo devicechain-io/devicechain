@@ -8,8 +8,8 @@
 //
 // Selection sets are inlined per operation (matching user-management.ts:
 // fragmentMasking is off in codegen, so fragments would only add unused locals).
-import { gql } from '@devicechain/client';
-import { graphql } from '@/gql/user-management-admin';
+import { gql } from "@devicechain/client";
+import { graphql } from "@/gql/user-management-admin";
 import type {
   IdentitiesQuery,
   TenantsQuery,
@@ -27,26 +27,28 @@ import type {
   AdminTenantTierCreateRequest,
   AdminTenantTierUpdateRequest,
   CreateTenantMutation,
-} from '@/gql/user-management-admin/graphql';
+} from "@/gql/user-management-admin/graphql";
 
 // Public types derive from the generated operation results so they can never
 // drift from the schema.
-export type AdminIdentity = IdentitiesQuery['identities'][number];
-export type AdminMembership = AdminIdentity['memberships'][number];
-export type AdminTenant = TenantsQuery['tenants'][number];
-export type AdminTenantSetting = AdminTenant['effectiveSettings'][number];
+export type AdminIdentity = IdentitiesQuery["identities"][number];
+export type AdminMembership = AdminIdentity["memberships"][number];
+export type AdminTenant = TenantsQuery["tenants"][number];
+export type AdminTenantSetting = AdminTenant["effectiveSettings"][number];
 // What the tenant-returning MUTATIONS hand back: the tenant's own record, without
 // the resolved effectiveSettings the list query carries. A distinct type because the
 // difference is real — a write returns what was written, and re-deriving the whole
 // cascade on every mutation would be work for a field no caller of them reads (the
 // one screen showing effective settings reloads through listTenants). Callers that
 // need the cascade must go read it, not assume a mutation result carries it.
-export type AdminTenantRecord = CreateTenantMutation['createTenant'];
-export type AdminTenantTier = TenantTiersQuery['tenantTiers'][number];
-export type AdminGovernanceDimension = GovernanceDimensionsQuery['governanceDimensions'][number];
-export type AdminRole = RolesQuery['roles'][number];
-export type AdminAuditEvent = AdminAuditEventsQuery['auditEvents']['results'][number];
-export type AdminAuditEventSearchResults = AdminAuditEventsQuery['auditEvents'];
+export type AdminTenantRecord = CreateTenantMutation["createTenant"];
+export type AdminTenantTier = TenantTiersQuery["tenantTiers"][number];
+export type AdminGovernanceDimension =
+  GovernanceDimensionsQuery["governanceDimensions"][number];
+export type AdminRole = RolesQuery["roles"][number];
+export type AdminAuditEvent =
+  AdminAuditEventsQuery["auditEvents"]["results"][number];
+export type AdminAuditEventSearchResults = AdminAuditEventsQuery["auditEvents"];
 
 export type {
   AdminAuditEventSearchCriteria,
@@ -64,9 +66,9 @@ export type {
 // enum (the codebase has no enum precedent), so the values are named once here
 // rather than spelled at each comparison.
 export const SETTING_SOURCE = {
-  override: 'override',
-  tier: 'tier',
-  platformDefault: 'platform-default',
+  override: "override",
+  tier: "tier",
+  platformDefault: "platform-default",
 } as const;
 
 // ── Queries ───────────────────────────────────────────────────────────────
@@ -92,7 +94,9 @@ const IDENTITIES = graphql(`
 `);
 
 export async function listIdentities(): Promise<AdminIdentity[]> {
-  const data = await gql('user-management/admin', IDENTITIES, undefined, { identity: true });
+  const data = await gql("user-management/admin", IDENTITIES, undefined, {
+    identity: true,
+  });
   return data.identities;
 }
 
@@ -103,6 +107,11 @@ const TENANTS = graphql(`
       token
       name
       enabled
+      # The deletion lifecycle. A deleted tenant is NOT removed — its row survives so
+      # its token stays reserved, because every part of the platform stores that
+      # tenant's rows under the token and a tenant recreated at it would inherit them.
+      purgeState
+      purgeEpoch
       tier {
         token
         name
@@ -150,7 +159,9 @@ const TENANTS = graphql(`
 `);
 
 export async function listTenants(): Promise<AdminTenant[]> {
-  const data = await gql('user-management/admin', TENANTS, undefined, { identity: true });
+  const data = await gql("user-management/admin", TENANTS, undefined, {
+    identity: true,
+  });
   return data.tenants;
 }
 
@@ -170,8 +181,15 @@ const GOVERNANCE_DIMENSIONS = graphql(`
   }
 `);
 
-export async function listGovernanceDimensions(): Promise<AdminGovernanceDimension[]> {
-  const data = await gql('user-management/admin', GOVERNANCE_DIMENSIONS, undefined, { identity: true });
+export async function listGovernanceDimensions(): Promise<
+  AdminGovernanceDimension[]
+> {
+  const data = await gql(
+    "user-management/admin",
+    GOVERNANCE_DIMENSIONS,
+    undefined,
+    { identity: true },
+  );
   return data.governanceDimensions;
 }
 
@@ -193,7 +211,9 @@ const TENANT_TIERS = graphql(`
 `);
 
 export async function listTenantTiers(): Promise<AdminTenantTier[]> {
-  const data = await gql('user-management/admin', TENANT_TIERS, undefined, { identity: true });
+  const data = await gql("user-management/admin", TENANT_TIERS, undefined, {
+    identity: true,
+  });
   return data.tenantTiers;
 }
 
@@ -218,10 +238,18 @@ const TENANT_TIER_CATALOG = graphql(`
   }
 `);
 
-export type AdminTenantTierDetail = TenantTierCatalogQuery['tenantTiers'][number];
+export type AdminTenantTierDetail =
+  TenantTierCatalogQuery["tenantTiers"][number];
 
-export async function listTenantTierCatalog(): Promise<AdminTenantTierDetail[]> {
-  const data = await gql('user-management/admin', TENANT_TIER_CATALOG, undefined, { identity: true });
+export async function listTenantTierCatalog(): Promise<
+  AdminTenantTierDetail[]
+> {
+  const data = await gql(
+    "user-management/admin",
+    TENANT_TIER_CATALOG,
+    undefined,
+    { identity: true },
+  );
   return data.tenantTiers;
 }
 
@@ -242,13 +270,23 @@ const CREATE_TENANT_TIER = graphql(`
   }
 `);
 
-export async function createTenantTier(request: AdminTenantTierCreateRequest): Promise<AdminTenantTierDetail> {
-  const data = await gql('user-management/admin', CREATE_TENANT_TIER, { request }, { identity: true });
+export async function createTenantTier(
+  request: AdminTenantTierCreateRequest,
+): Promise<AdminTenantTierDetail> {
+  const data = await gql(
+    "user-management/admin",
+    CREATE_TENANT_TIER,
+    { request },
+    { identity: true },
+  );
   return data.createTenantTier;
 }
 
 const UPDATE_TENANT_TIER = graphql(`
-  mutation UpdateTenantTier($token: String!, $request: AdminTenantTierUpdateRequest!) {
+  mutation UpdateTenantTier(
+    $token: String!
+    $request: AdminTenantTierUpdateRequest!
+  ) {
     updateTenantTier(token: $token, request: $request) {
       id
       token
@@ -273,7 +311,12 @@ export async function updateTenantTier(
   token: string,
   request: AdminTenantTierUpdateRequest,
 ): Promise<AdminTenantTierDetail> {
-  const data = await gql('user-management/admin', UPDATE_TENANT_TIER, { token, request }, { identity: true });
+  const data = await gql(
+    "user-management/admin",
+    UPDATE_TENANT_TIER,
+    { token, request },
+    { identity: true },
+  );
   return data.updateTenantTier;
 }
 
@@ -287,7 +330,12 @@ const DELETE_TENANT_TIER = graphql(`
 // tenant is still packaged at it — a tenant's tier is a required FK, so there is no
 // un-tiered state to strand them in.
 export async function deleteTenantTier(token: string): Promise<boolean> {
-  const data = await gql('user-management/admin', DELETE_TENANT_TIER, { token }, { identity: true });
+  const data = await gql(
+    "user-management/admin",
+    DELETE_TENANT_TIER,
+    { token },
+    { identity: true },
+  );
   return data.deleteTenantTier;
 }
 
@@ -302,7 +350,12 @@ const TIER_COLOR_PALETTE = graphql(`
 `);
 
 export async function listTierColorPalette(): Promise<string[]> {
-  const data = await gql('user-management/admin', TIER_COLOR_PALETTE, undefined, { identity: true });
+  const data = await gql(
+    "user-management/admin",
+    TIER_COLOR_PALETTE,
+    undefined,
+    { identity: true },
+  );
   return data.tierColorPalette.colors;
 }
 
@@ -324,7 +377,7 @@ export async function reorderTenantTiers(
   orderedTokens: string[],
 ): Promise<{ token: string; displayOrder: number }[]> {
   const data = await gql(
-    'user-management/admin',
+    "user-management/admin",
     REORDER_TENANT_TIERS,
     { orderedTokens },
     { identity: true },
@@ -347,8 +400,15 @@ const ROLES = graphql(`
   }
 `);
 
-export async function listRoles(scope?: 'system' | 'tenant'): Promise<AdminRole[]> {
-  const data = await gql('user-management/admin', ROLES, { scope }, { identity: true });
+export async function listRoles(
+  scope?: "system" | "tenant",
+): Promise<AdminRole[]> {
+  const data = await gql(
+    "user-management/admin",
+    ROLES,
+    { scope },
+    { identity: true },
+  );
   return data.roles;
 }
 
@@ -382,7 +442,12 @@ const AUDIT_EVENTS = graphql(`
 export async function listAdminAuditEvents(
   criteria: AdminAuditEventSearchCriteria,
 ): Promise<AdminAuditEventSearchResults> {
-  const data = await gql('user-management/admin', AUDIT_EVENTS, { criteria }, { identity: true });
+  const data = await gql(
+    "user-management/admin",
+    AUDIT_EVENTS,
+    { criteria },
+    { identity: true },
+  );
   return data.auditEvents;
 }
 
@@ -398,8 +463,15 @@ const AUTHORITIES = graphql(`
 // must agree (ADR-065), so an unscoped checklist would offer a tenant role
 // `ai:admin` and let the operator find out from a save error. Omit it for the whole
 // vocabulary.
-export async function listAuthorities(scope?: 'system' | 'tenant'): Promise<string[]> {
-  const data = await gql('user-management/admin', AUTHORITIES, { scope: scope ?? null }, { identity: true });
+export async function listAuthorities(
+  scope?: "system" | "tenant",
+): Promise<string[]> {
+  const data = await gql(
+    "user-management/admin",
+    AUTHORITIES,
+    { scope: scope ?? null },
+    { identity: true },
+  );
   return data.authorities;
 }
 
@@ -428,8 +500,15 @@ const CREATE_IDENTITY = graphql(`
   }
 `);
 
-export async function createIdentity(request: AdminIdentityCreateRequest): Promise<AdminIdentity> {
-  const data = await gql('user-management/admin', CREATE_IDENTITY, { request }, { identity: true });
+export async function createIdentity(
+  request: AdminIdentityCreateRequest,
+): Promise<AdminIdentity> {
+  const data = await gql(
+    "user-management/admin",
+    CREATE_IDENTITY,
+    { request },
+    { identity: true },
+  );
   return data.createIdentity;
 }
 
@@ -453,8 +532,16 @@ const SET_IDENTITY_ENABLED = graphql(`
   }
 `);
 
-export async function setIdentityEnabled(email: string, enabled: boolean): Promise<AdminIdentity> {
-  const data = await gql('user-management/admin', SET_IDENTITY_ENABLED, { email, enabled }, { identity: true });
+export async function setIdentityEnabled(
+  email: string,
+  enabled: boolean,
+): Promise<AdminIdentity> {
+  const data = await gql(
+    "user-management/admin",
+    SET_IDENTITY_ENABLED,
+    { email, enabled },
+    { identity: true },
+  );
   return data.setIdentityEnabled;
 }
 
@@ -478,8 +565,16 @@ const SET_SYSTEM_ROLES = graphql(`
   }
 `);
 
-export async function setSystemRoles(email: string, roleTokens: string[]): Promise<AdminIdentity> {
-  const data = await gql('user-management/admin', SET_SYSTEM_ROLES, { email, roleTokens }, { identity: true });
+export async function setSystemRoles(
+  email: string,
+  roleTokens: string[],
+): Promise<AdminIdentity> {
+  const data = await gql(
+    "user-management/admin",
+    SET_SYSTEM_ROLES,
+    { email, roleTokens },
+    { identity: true },
+  );
   return data.setSystemRoles;
 }
 
@@ -493,8 +588,16 @@ const SET_PASSWORD = graphql(`
   }
 `);
 
-export async function setPassword(email: string, password: string): Promise<{ id: string; email: string; enabled: boolean }> {
-  const data = await gql('user-management/admin', SET_PASSWORD, { email, password }, { identity: true });
+export async function setPassword(
+  email: string,
+  password: string,
+): Promise<{ id: string; email: string; enabled: boolean }> {
+  const data = await gql(
+    "user-management/admin",
+    SET_PASSWORD,
+    { email, password },
+    { identity: true },
+  );
   return data.setPassword;
 }
 
@@ -505,14 +608,23 @@ const DELETE_IDENTITY = graphql(`
 `);
 
 export async function deleteIdentity(email: string): Promise<boolean> {
-  const data = await gql('user-management/admin', DELETE_IDENTITY, { email }, { identity: true });
+  const data = await gql(
+    "user-management/admin",
+    DELETE_IDENTITY,
+    { email },
+    { identity: true },
+  );
   return data.deleteIdentity;
 }
 
 // ── Membership mutations ────────────────────────────────────────────────
 
 const ADD_MEMBERSHIP = graphql(`
-  mutation AddMembership($email: String!, $tenant: String!, $roleTokens: [String!]!) {
+  mutation AddMembership(
+    $email: String!
+    $tenant: String!
+    $roleTokens: [String!]!
+  ) {
     addMembership(email: $email, tenant: $tenant, roleTokens: $roleTokens) {
       id
       email
@@ -525,14 +637,31 @@ const ADD_MEMBERSHIP = graphql(`
   }
 `);
 
-export async function addMembership(email: string, tenant: string, roleTokens: string[]): Promise<AdminIdentity['memberships']> {
-  const data = await gql('user-management/admin', ADD_MEMBERSHIP, { email, tenant, roleTokens }, { identity: true });
+export async function addMembership(
+  email: string,
+  tenant: string,
+  roleTokens: string[],
+): Promise<AdminIdentity["memberships"]> {
+  const data = await gql(
+    "user-management/admin",
+    ADD_MEMBERSHIP,
+    { email, tenant, roleTokens },
+    { identity: true },
+  );
   return data.addMembership.memberships;
 }
 
 const SET_MEMBERSHIP_ROLES = graphql(`
-  mutation SetMembershipRoles($email: String!, $tenant: String!, $roleTokens: [String!]!) {
-    setMembershipRoles(email: $email, tenant: $tenant, roleTokens: $roleTokens) {
+  mutation SetMembershipRoles(
+    $email: String!
+    $tenant: String!
+    $roleTokens: [String!]!
+  ) {
+    setMembershipRoles(
+      email: $email
+      tenant: $tenant
+      roleTokens: $roleTokens
+    ) {
       id
       email
       memberships {
@@ -544,13 +673,26 @@ const SET_MEMBERSHIP_ROLES = graphql(`
   }
 `);
 
-export async function setMembershipRoles(email: string, tenant: string, roleTokens: string[]): Promise<AdminIdentity['memberships']> {
-  const data = await gql('user-management/admin', SET_MEMBERSHIP_ROLES, { email, tenant, roleTokens }, { identity: true });
+export async function setMembershipRoles(
+  email: string,
+  tenant: string,
+  roleTokens: string[],
+): Promise<AdminIdentity["memberships"]> {
+  const data = await gql(
+    "user-management/admin",
+    SET_MEMBERSHIP_ROLES,
+    { email, tenant, roleTokens },
+    { identity: true },
+  );
   return data.setMembershipRoles.memberships;
 }
 
 const SET_MEMBERSHIP_ENABLED = graphql(`
-  mutation SetMembershipEnabled($email: String!, $tenant: String!, $enabled: Boolean!) {
+  mutation SetMembershipEnabled(
+    $email: String!
+    $tenant: String!
+    $enabled: Boolean!
+  ) {
     setMembershipEnabled(email: $email, tenant: $tenant, enabled: $enabled) {
       id
       email
@@ -563,8 +705,17 @@ const SET_MEMBERSHIP_ENABLED = graphql(`
   }
 `);
 
-export async function setMembershipEnabled(email: string, tenant: string, enabled: boolean): Promise<AdminIdentity['memberships']> {
-  const data = await gql('user-management/admin', SET_MEMBERSHIP_ENABLED, { email, tenant, enabled }, { identity: true });
+export async function setMembershipEnabled(
+  email: string,
+  tenant: string,
+  enabled: boolean,
+): Promise<AdminIdentity["memberships"]> {
+  const data = await gql(
+    "user-management/admin",
+    SET_MEMBERSHIP_ENABLED,
+    { email, tenant, enabled },
+    { identity: true },
+  );
   return data.setMembershipEnabled.memberships;
 }
 
@@ -582,8 +733,16 @@ const REMOVE_MEMBERSHIP = graphql(`
   }
 `);
 
-export async function removeMembership(email: string, tenant: string): Promise<AdminIdentity['memberships']> {
-  const data = await gql('user-management/admin', REMOVE_MEMBERSHIP, { email, tenant }, { identity: true });
+export async function removeMembership(
+  email: string,
+  tenant: string,
+): Promise<AdminIdentity["memberships"]> {
+  const data = await gql(
+    "user-management/admin",
+    REMOVE_MEMBERSHIP,
+    { email, tenant },
+    { identity: true },
+  );
   return data.removeMembership.memberships;
 }
 
@@ -604,13 +763,24 @@ const CREATE_ROLE = graphql(`
   }
 `);
 
-export async function createRole(request: AdminRoleCreateRequest): Promise<AdminRole> {
-  const data = await gql('user-management/admin', CREATE_ROLE, { request }, { identity: true });
+export async function createRole(
+  request: AdminRoleCreateRequest,
+): Promise<AdminRole> {
+  const data = await gql(
+    "user-management/admin",
+    CREATE_ROLE,
+    { request },
+    { identity: true },
+  );
   return data.createRole;
 }
 
 const UPDATE_ROLE = graphql(`
-  mutation UpdateRole($scope: String!, $token: String!, $request: AdminRoleUpdateRequest!) {
+  mutation UpdateRole(
+    $scope: String!
+    $token: String!
+    $request: AdminRoleUpdateRequest!
+  ) {
     updateRole(scope: $scope, token: $token, request: $request) {
       id
       scope
@@ -629,7 +799,12 @@ export async function updateRole(
   token: string,
   request: AdminRoleUpdateRequest,
 ): Promise<AdminRole> {
-  const data = await gql('user-management/admin', UPDATE_ROLE, { scope, token, request }, { identity: true });
+  const data = await gql(
+    "user-management/admin",
+    UPDATE_ROLE,
+    { scope, token, request },
+    { identity: true },
+  );
   return data.updateRole;
 }
 
@@ -639,8 +814,16 @@ const DELETE_ROLE = graphql(`
   }
 `);
 
-export async function deleteRole(scope: string, token: string): Promise<boolean> {
-  const data = await gql('user-management/admin', DELETE_ROLE, { scope, token }, { identity: true });
+export async function deleteRole(
+  scope: string,
+  token: string,
+): Promise<boolean> {
+  const data = await gql(
+    "user-management/admin",
+    DELETE_ROLE,
+    { scope, token },
+    { identity: true },
+  );
   return data.deleteRole;
 }
 
@@ -672,8 +855,15 @@ const CREATE_TENANT = graphql(`
   }
 `);
 
-export async function createTenant(request: AdminTenantCreateRequest): Promise<AdminTenantRecord> {
-  const data = await gql('user-management/admin', CREATE_TENANT, { request }, { identity: true });
+export async function createTenant(
+  request: AdminTenantCreateRequest,
+): Promise<AdminTenantRecord> {
+  const data = await gql(
+    "user-management/admin",
+    CREATE_TENANT,
+    { request },
+    { identity: true },
+  );
   return data.createTenant;
 }
 
@@ -703,8 +893,16 @@ const UPDATE_TENANT = graphql(`
   }
 `);
 
-export async function updateTenant(token: string, request: AdminTenantUpdateRequest): Promise<AdminTenantRecord> {
-  const data = await gql('user-management/admin', UPDATE_TENANT, { token, request }, { identity: true });
+export async function updateTenant(
+  token: string,
+  request: AdminTenantUpdateRequest,
+): Promise<AdminTenantRecord> {
+  const data = await gql(
+    "user-management/admin",
+    UPDATE_TENANT,
+    { token, request },
+    { identity: true },
+  );
   return data.updateTenant;
 }
 
@@ -734,8 +932,16 @@ const SET_TENANT_ENABLED = graphql(`
   }
 `);
 
-export async function setTenantEnabled(token: string, enabled: boolean): Promise<AdminTenantRecord> {
-  const data = await gql('user-management/admin', SET_TENANT_ENABLED, { token, enabled }, { identity: true });
+export async function setTenantEnabled(
+  token: string,
+  enabled: boolean,
+): Promise<AdminTenantRecord> {
+  const data = await gql(
+    "user-management/admin",
+    SET_TENANT_ENABLED,
+    { token, enabled },
+    { identity: true },
+  );
   return data.setTenantEnabled;
 }
 
@@ -746,6 +952,11 @@ const DELETE_TENANT = graphql(`
 `);
 
 export async function deleteTenant(token: string): Promise<boolean> {
-  const data = await gql('user-management/admin', DELETE_TENANT, { token }, { identity: true });
+  const data = await gql(
+    "user-management/admin",
+    DELETE_TENANT,
+    { token },
+    { identity: true },
+  );
   return data.deleteTenant;
 }

@@ -18,10 +18,37 @@ package iam
 
 import (
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
+
+// PurgeState is where a tenant sits in the ADR-077 deletion lifecycle.
+//
+// The states are deliberately not a boolean. "Deleted" has to mean two different
+// things to two different readers: access is cut the moment an operator asks, while
+// the tenant's rows across eleven other areas are reclaimed asynchronously afterwards
+// — so a tenant that no one can reach may still hold data, and the difference is
+// exactly what an erasure record has to be able to state.
+type PurgeState string
+
+const (
+	// PurgeActive is an ordinary live tenant.
+	PurgeActive PurgeState = "active"
+	// PurgePurging means access is cut and reclamation is in progress or pending. No
+	// token can be minted for it and no tenant can be created at its token.
+	PurgePurging PurgeState = "purging"
+	// PurgePurged means every area has reported its sweep complete. The row REMAINS —
+	// it is the token reservation and the deletion record's anchor, not a leftover.
+	PurgePurged PurgeState = "purged"
+)
+
+// Deleted reports whether the tenant has been through the delete door at all, in
+// either of the two post-delete states. Callers gating access want this rather than a
+// specific state: the difference between purging and purged is about the DATA, and
+// says nothing about whether anyone may still enter.
+func (p PurgeState) Deleted() bool { return p == PurgePurging || p == PurgePurged }
 
 // NormalizeEmail lower-cases and trims an email so identity lookups and the
 // uniqueness constraint are case-insensitive. The single normalizer shared by the
@@ -188,6 +215,16 @@ type Tenant struct {
 	Token   string         `gorm:"uniqueIndex;not null;size:128"`
 	Enabled bool           `gorm:"not null;default:true"`
 	Config  map[string]any `gorm:"serializer:json"`
+
+	// The ADR-077 lifecycle. A tenant is not deleted, it is PURGED: the row survives so
+	// its token stays taken, because the token is the isolation key every other area
+	// stores and a successor at a reused token would inherit the predecessor's data.
+	//
+	// PurgeEpoch dates the cut. It exists because a boolean cannot carry what a fence
+	// needs: bounded by the epoch, a fence suppresses the purged tenant's stragglers
+	// without also suppressing a future successor's legitimate writes.
+	PurgeState PurgeState `gorm:"not null;default:'active';size:16;index"`
+	PurgeEpoch *time.Time
 
 	// The tier this tenant is packaged at (ADR-065 decision 3). REQUIRED — a NOT
 	// NULL FK, which is the point: there is no unset state, so the "what does an

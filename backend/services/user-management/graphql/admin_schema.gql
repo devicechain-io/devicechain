@@ -99,6 +99,15 @@ type AdminTenant {
     token: String!
     name: String
     enabled: Boolean!
+    # Where the tenant sits in the deletion lifecycle (ADR-077): "active", "purging"
+    # or "purged". Deleting a tenant does NOT remove it — the row survives so its
+    # token stays reserved, because every functional area keys its rows on that token
+    # and a tenant recreated at a used token would inherit the old one's data.
+    purgeState: String!
+    # When the delete was requested (RFC3339), null while active. It dates the cut,
+    # which is what lets a later sweep tell a purged tenant's residue from a
+    # successor's legitimate rows.
+    purgeEpoch: String
     # The tier this tenant is packaged at (ADR-065). Never null: every tenant has a
     # tier, enforced by a NOT NULL FK, so there is no un-tiered state.
     tier: AdminTenantTier!

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -334,10 +335,24 @@ func (s *Store) SetTenantEnabled(ctx context.Context, t *Tenant, enabled bool) e
 	return s.sys(ctx).Model(t).Update("enabled", enabled).Error
 }
 
-// DeleteTenant hard-deletes a tenant row. The caller is responsible for ensuring
-// no memberships still reference it (see CountMembershipsInTenant).
-func (s *Store) DeleteTenant(ctx context.Context, t *Tenant) error {
-	return s.sys(ctx).Unscoped().Delete(t).Error
+// BeginTenantPurge cuts a tenant's access and starts its ADR-077 purge: disabled, in
+// state `purging`, stamped with the epoch that dates the cut.
+//
+// 🔴 THERE IS DELIBERATELY NO DeleteTenant ANY MORE. Hard-deleting the row freed the
+// token, and the token is the isolation key every other area stores — so the next
+// tenant created at that token inherited the deleted one's devices, telemetry and
+// secrets. Removing the method rather than documenting the hazard makes the mistake a
+// compile error instead of a code-review question.
+//
+// The caller must ensure no memberships still reference the tenant
+// (see CountMembershipsInTenant) — that is what actually revokes human access; this
+// marks the tenant so nothing can mint a token for it or re-create it afterwards.
+func (s *Store) BeginTenantPurge(ctx context.Context, t *Tenant, epoch time.Time) error {
+	return s.sys(ctx).Model(t).Updates(map[string]any{
+		"enabled":     false,
+		"purge_state": PurgePurging,
+		"purge_epoch": epoch,
+	}).Error
 }
 
 // ListTenantTiers returns the tier catalog (ADR-065) in the operator's arranged order

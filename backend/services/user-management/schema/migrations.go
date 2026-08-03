@@ -35,5 +35,8 @@ import (
 var (
 	Migrations = []*gormigrate.Migration{
 		NewBaselineSchema(),
+		// ADR-077 tenant lifecycle. The first migration appended after the GA squash,
+		// and the worked example of the rule above: its own snapshot, no live models.
+		NewTenantPurgeStateMigration(),
 	}
 )

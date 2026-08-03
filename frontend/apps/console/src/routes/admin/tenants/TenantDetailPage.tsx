@@ -1,28 +1,28 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useNavigate, useParams } from 'react-router-dom';
-import { Ban, Power, Trash2 } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
-import { PageShell } from '@/components/ui/page-shell';
-import { Button } from '@/components/ui/button';
-import { CopyToken } from '@/components/ui/copy-token';
-import { LoadingState } from '@/components/ui/loading-state';
-import { ErrorState } from '@/components/ui/error-state';
-import { useToast } from '@/components/ui/toast';
-import { useConfirm } from '@/components/ui/confirm-dialog';
-import { useQuery } from '@/lib/hooks/use-query';
-import { listTenants, setTenantEnabled, deleteTenant } from '@/lib/api/admin';
-import { StatusBadge, errMessage, useReload } from '@/routes/common';
-import { TenantForm } from '@/routes/admin/tenants/TenantForm';
-import { TenantSettingsPanel } from '@/routes/admin/tenants/TenantSettingsPanel';
-import { TenantAiModelsPanel } from '@/routes/admin/tenants/TenantAiModelsPanel';
-import { TierPill } from '@/components/tiers/TierPill';
+import { useNavigate, useParams } from "react-router-dom";
+import { Ban, Power, Trash2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { PageShell } from "@/components/ui/page-shell";
+import { Button } from "@/components/ui/button";
+import { CopyToken } from "@/components/ui/copy-token";
+import { LoadingState } from "@/components/ui/loading-state";
+import { ErrorState } from "@/components/ui/error-state";
+import { useToast } from "@/components/ui/toast";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import { useQuery } from "@/lib/hooks/use-query";
+import { listTenants, setTenantEnabled, deleteTenant } from "@/lib/api/admin";
+import { StatusBadge, errMessage, useReload } from "@/routes/common";
+import { TenantForm } from "@/routes/admin/tenants/TenantForm";
+import { TenantSettingsPanel } from "@/routes/admin/tenants/TenantSettingsPanel";
+import { TenantAiModelsPanel } from "@/routes/admin/tenants/TenantAiModelsPanel";
+import { TierPill } from "@/components/tiers/TierPill";
 
 export default function TenantDetailPage() {
-  const { t } = useTranslation('tenants');
+  const { t } = useTranslation("tenants");
   const { token: rawToken } = useParams<{ token: string }>();
-  const token = decodeURIComponent(rawToken ?? '');
+  const token = decodeURIComponent(rawToken ?? "");
   const navigate = useNavigate();
   const { toast } = useToast();
   const confirm = useConfirm();
@@ -42,7 +42,7 @@ export default function TenantDetailPage() {
   if (loading && !tenants) {
     return (
       <PageShell title={token}>
-        <LoadingState description={t('loadingTenant')} />
+        <LoadingState description={t("loadingTenant")} />
       </PageShell>
     );
   }
@@ -56,7 +56,7 @@ export default function TenantDetailPage() {
   if (!tenant) {
     return (
       <PageShell title={token}>
-        <ErrorState description={t('tenantNotFound', { token })} />
+        <ErrorState description={t("tenantNotFound", { token })} />
       </PageShell>
     );
   }
@@ -66,21 +66,21 @@ export default function TenantDetailPage() {
       await setTenantEnabled(tenant.token, !tenant.enabled);
       toast(
         tenant.enabled
-          ? t('tenantDisabledToast', { token: tenant.token })
-          : t('tenantEnabledToast', { token: tenant.token }),
+          ? t("tenantDisabledToast", { token: tenant.token })
+          : t("tenantEnabledToast", { token: tenant.token }),
       );
       reload();
     } catch (err) {
-      toast(errMessage(err), 'error');
+      toast(errMessage(err), "error");
     }
   };
 
   const remove = async () => {
     if (
       !(await confirm({
-        title: t('deleteTenantTitle'),
-        description: t('deleteTenantConfirm', { token: tenant.token }),
-        confirmLabel: t('delete'),
+        title: t("deleteTenantTitle"),
+        description: t("deleteTenantConfirm", { token: tenant.token }),
+        confirmLabel: t("delete"),
       }))
     )
       return;
@@ -88,14 +88,16 @@ export default function TenantDetailPage() {
       const ok = await deleteTenant(tenant.token);
       toast(
         ok
-          ? t('tenantDeletedToast', { token: tenant.token })
-          : t('tenantDeleteNotFoundToast', { token: tenant.token }),
+          ? t("tenantDeletedToast", { token: tenant.token })
+          : t("tenantDeleteNotFoundToast", { token: tenant.token }),
       );
-      navigate('/admin/tenants');
+      navigate("/admin/tenants");
     } catch (err) {
-      toast(errMessage(err), 'error');
+      toast(errMessage(err), "error");
     }
   };
+
+  const purged = tenant.purgeState !== "active";
 
   return (
     <PageShell
@@ -103,23 +105,39 @@ export default function TenantDetailPage() {
       // chip, and the tier + enabled state sit below as badges (a tenant can be unnamed,
       // so fall back to the token as the title too).
       title={tenant.name || tenant.token}
-      titleAdornment={tenant.name ? <CopyToken value={tenant.token} /> : undefined}
+      titleAdornment={
+        tenant.name ? <CopyToken value={tenant.token} /> : undefined
+      }
       description={
         <div className="flex items-center gap-2">
           <TierPill label={tenant.tier.token} color={tenant.tier.color} />
           <StatusBadge enabled={tenant.enabled} />
+          {purged && (
+            <span className="rounded-full border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive">
+              {tenant.purgeState === "purged"
+                ? t("purgeStatePurged")
+                : t("purgeStatePurging")}
+              {tenant.purgeEpoch &&
+                ` — ${t("purgeStateSince", { when: new Date(tenant.purgeEpoch).toLocaleString() })}`}
+            </span>
+          )}
         </div>
       }
       action={
-        <>
-          <Button variant="outline" size="sm" onClick={toggleEnabled}>
-            {tenant.enabled ? <Ban size={14} /> : <Power size={14} />}
-            {tenant.enabled ? t('disable') : t('enable')}
-          </Button>
-          <Button variant="destructive" size="sm" onClick={remove}>
-            <Trash2 size={14} /> {t('delete')}
-          </Button>
-        </>
+        // A deleted tenant offers neither action. Re-enabling it would be a lie —
+        // the grant path refuses entry on the lifecycle, not on this flag — and
+        // deleting it again does nothing.
+        purged ? null : (
+          <>
+            <Button variant="outline" size="sm" onClick={toggleEnabled}>
+              {tenant.enabled ? <Ban size={14} /> : <Power size={14} />}
+              {tenant.enabled ? t("disable") : t("enable")}
+            </Button>
+            <Button variant="destructive" size="sm" onClick={remove}>
+              <Trash2 size={14} /> {t("delete")}
+            </Button>
+          </>
+        )
       }
     >
       {/* Tabbed: Basic + Settings edit the tenant (one atomic save), and the Effective

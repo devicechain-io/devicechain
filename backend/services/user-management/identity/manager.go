@@ -548,6 +548,12 @@ func (m *Manager) resolveTenantGrant(ctx context.Context, tenant string, mem *ia
 		if mem != nil {
 			roles = roleTokens(mem.TenantRoles)
 		}
+		// 🔴 A superuser may still enter a PURGING tenant, and that is a decision rather
+		// than an oversight (ADR-077): operating a purge that has stuck is exactly the
+		// job break-glass exists for, and it is already audited as actingAsSuperuser.
+		// The cost is real and belongs with the sweep's design — a break-glass session
+		// can write rows into a tenant an area has already swept, which is why slice 2's
+		// fences are epoch-bounded rather than "swept once".
 		return roles, []string{string(auth.AuthorityAll)}, nil
 	}
 	t, err := m.iam.TenantByToken(ctx, tenant)
@@ -556,6 +562,14 @@ func (m *Manager) resolveTenantGrant(ctx context.Context, tenant string, mem *ia
 			return nil, nil, errTenantAccessDenied
 		}
 		return nil, nil, err
+	}
+	// A deleted tenant admits nobody but a superuser, checked on the LIFECYCLE rather
+	// than on Enabled. Both are set at the cut, but only one of them is permanent:
+	// `enabled` is an operator-facing toggle that can be flipped back, and a re-enabled
+	// tenant mid-purge would otherwise readmit its members to data that is being erased
+	// underneath them.
+	if t.PurgeState.Deleted() {
+		return nil, nil, errTenantAccessDenied
 	}
 	if !t.Enabled || !mem.Enabled {
 		return nil, nil, errTenantAccessDenied
