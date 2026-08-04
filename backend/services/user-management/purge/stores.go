@@ -8,6 +8,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/devicechain-io/dc-microservice/blob"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/tenantpurge"
@@ -37,7 +38,7 @@ const (
 // before a row is touched anywhere — so it is better to learn that before the others have
 // deleted anything.
 func DefaultStores(db *rdb.RdbManager, tsdb *rdb.Guest, broker messaging.Connection,
-	instanceId string) []Store {
+	instanceId string, objects blob.Store, tenants tenantReader) []Store {
 	return []Store{
 		NewRelational(StoreRelational, db, StillPurging),
 		NewTelemetry(tsdb),
@@ -49,11 +50,7 @@ func DefaultStores(db *rdb.RdbManager, tsdb *rdb.Guest, broker messaging.Connect
 				"relationships, group memberships and the per-tenant gate entries — keyed by an encoded " +
 				"tenant-and-token pair, so they expire only as their TTLs run out",
 		},
-		Pending{
-			StoreName: StoreObject,
-			Holds: "the object store still holds this tenant's uploaded assets, which today means its " +
-				"branding logos",
-		},
+		NewObject(objects, tenants),
 	}
 }
 
