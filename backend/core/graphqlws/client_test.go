@@ -555,3 +555,59 @@ func TestServerPingAnswered(t *testing.T) {
 		t.Fatal("client never answered the ping")
 	}
 }
+
+// TestClientCloseWinsAgainstThePeersCloseEcho pins the OTHER way the read loop can
+// be unblocked during a caller-initiated Close, which the first Close/readLoop
+// reorder did not cover.
+//
+// 🔴 Close writes a websocket close frame and only then attributes the terminal
+// error. A well-behaved peer answers that frame with its own close, so the read
+// loop can fail — with "close 1000 (normal)" — and call shutdown BEFORE the
+// attribution runs. shutdown is first-caller-wins, so the deliberate Close is then
+// recorded as a connection drop.
+//
+// The consequence is not cosmetic. The load-test safety monitor classifies any
+// subscription end that is not ErrClientClosed as a LOST VIEW, so a clean
+// end-of-run shutdown is reported as "the monitor went blind" — and the L5 gate
+// that reads it is a hard pre-release-tag gate. It failed exactly this way in CI.
+//
+// 🔑 THE PEER'S BEHAVIOUR IS THE VARIABLE, so the server here is one that READS —
+// which is what makes gorilla answer a close frame with its own.
+// TestClientCloseTerminatesLiveSubsWithClientClosed runs against the real
+// subscription handler and is measurably slower to echo: with a 20ms delay injected
+// into Close both tests fail, but at CI's own timing this shape is the one that
+// loses the race, and the run that caught it had the real-handler test passing
+// alongside a raw-server consumer failing. Neither test is redundant — the window
+// is a timing window, and each stages a different point on it.
+func TestClientCloseWinsAgainstThePeersCloseEcho(t *testing.T) {
+	url := rawServer(t, func(conn *websocket.Conn) {
+		var msg wsMessage
+		if err := conn.ReadJSON(&msg); err != nil { // connection_init
+			return
+		}
+		_ = conn.WriteJSON(wsMessage{Type: msgConnectionAck})
+		if err := conn.ReadJSON(&msg); err != nil { // subscribe
+			return
+		}
+		// Keep reading. Gorilla's default close handler answers a close frame with
+		// its own only from inside a read, so this is what stages the echo.
+		for {
+			if _, _, err := conn.NextReader(); err != nil {
+				return
+			}
+		}
+	})
+
+	c, err := Dial(dialCtx(t), url, nil)
+	require.NoError(t, err)
+	sub, err := c.Subscribe(context.Background(), "subscription { counter(to: 1000000) }", nil)
+	require.NoError(t, err)
+
+	done := drainCount(sub)
+	require.NoError(t, c.Close())
+	<-done
+	assert.ErrorIs(t, sub.Err(), ErrClientClosed,
+		"a caller-initiated Close was recorded as a connection drop because the peer's close "+
+			"echo reached the read loop first; every consumer that distinguishes a clean stop "+
+			"from a lost view now reports a phantom failure")
+}
