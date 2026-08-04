@@ -333,6 +333,11 @@ func (c *Coordinator) eraseOne(ctx context.Context, store Store, tenant string, 
 	outcome, err := store.Erase(ctx, tenant, epoch)
 	line.Rows = outcome.Rows
 	line.Deferred = outcome.Reason()
+	// Set BEFORE the two early returns below, so a store that also errors or defers still
+	// records what it skipped. The note is not a property of a clean pass — it is a
+	// property of the pass, and a reader deciding whether an erasure claim holds needs it
+	// most in exactly the passes that did not go smoothly.
+	line.Note = outcome.Note()
 	if err != nil {
 		line.Failure = err.Error()
 		log.Warn().Err(err).Str("tenant", tenant).Str("store", store.Name()).

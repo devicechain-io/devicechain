@@ -98,3 +98,43 @@ func TestAnOutcomeIsCleanOnlyWithNothingDeferred(t *testing.T) {
 	require.False(t, Outcome{Deferred: []string{"something"}}.Clean())
 	require.Equal(t, "a; b", Outcome{Deferred: []string{"a", "b"}}.Reason())
 }
+
+// TestANoteDoesNotBlockCompletion is the invariant the whole note mechanism rests on, and it
+// is named in Outcome's own doc comment as the thing to read before adding a note anywhere.
+//
+// Notes and deferrals are both free text on a store's outcome, which makes them very easy to
+// confuse — and confusing them is not a cosmetic error in either direction. A deferral
+// written as a note lets a purge complete over data that is still there, which is a false
+// erasure claim. A note written as a deferral blocks every purge on the instance forever.
+func TestANoteDoesNotBlockCompletion(t *testing.T) {
+	noted := Outcome{Rows: 3, Notes: []string{"the exempted buckets were not scanned"}}
+	require.True(t, noted.Clean(), "a note qualifies a clean pass; it must never hold one open")
+	require.Equal(t, "the exempted buckets were not scanned", noted.Note())
+	require.Empty(t, noted.Reason(), "a note must not leak into the deferral text")
+
+	deferred := Outcome{Deferred: []string{"the checkpoint still holds this tenant's windows"}}
+	require.False(t, deferred.Clean(), "a deferral must still block — this is the control")
+	require.Empty(t, deferred.Note(), "a deferral must not leak into the note text")
+
+	both := Outcome{
+		Notes:    []string{"skipped the exempted buckets"},
+		Deferred: []string{"the checkpoint still holds this tenant's windows"},
+	}
+	require.False(t, both.Clean(), "a note alongside a deferral must not soften it")
+	require.NotEqual(t, both.Note(), both.Reason())
+}
+
+// TestNoteJoinsMultipleEntriesTheSameWayReasonDoes pins the separator.
+//
+// It is not fussiness: the key-value store is the only producer of MULTIPLE notes, and its
+// three entries are multi-sentence paragraphs. Joined with an empty string they run together
+// into one garbled block in the durable record, on every pass, and nothing else in the suite
+// would notice — Reason() has this assertion and Note() did not.
+func TestNoteJoinsMultipleEntriesTheSameWayReasonDoes(t *testing.T) {
+	out := Outcome{Notes: []string{"the first thing", "the second thing"}}
+	require.Equal(t, "the first thing; the second thing", out.Note())
+
+	same := Outcome{Deferred: []string{"the first thing", "the second thing"}}
+	require.Equal(t, same.Reason(), out.Note(),
+		"a reader moves between these two fields; they must not be punctuated differently")
+}

@@ -81,7 +81,18 @@ type TenantPurgeStore struct {
 	// Failure is the last error, empty on success. Kept apart from Deferred because
 	// the two mean opposite things about the future: a failure is expected to clear on
 	// the next pass, a deferral is not going to clear until someone builds something.
-	Failure     string
+	Failure string
+	// Note qualifies a line without blocking it: what this store decided not to look at,
+	// or the ground on which it reported clean while erasing nothing. It is the third
+	// member of a set whose distinctions are the whole point — Deferred blocks completion
+	// and names data still here, Failure is expected to clear on the next pass, and a Note
+	// clears neither and blocks nothing. A reader who merges any two of them gets a
+	// different answer to "can I claim this data was erased?".
+	//
+	// 🔴 Rendered to an operator it must read as a QUALIFIER on "clean", never as a
+	// problem to act on. A store carrying a note is working as designed; a store carrying
+	// a deferral is not.
+	Note        string
 	AttemptedAt time.Time
 	// CleanSince is when this store FIRST reported complete and has reported complete on
 	// every pass since; cleared the moment it reports anything else.
@@ -162,7 +173,11 @@ func (s *Store) RecordPurgeStore(ctx context.Context, line *TenantPurgeStore) er
 	return s.sys(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "tenant_purge_id"}, {Name: "store"}},
 		DoUpdates: clause.AssignmentColumns([]string{
-			"complete", "rows", "deferred", "failure", "attempted_at", "clean_since", "updated_at",
+			// Every writable column, and it has to STAY every writable column: a line is
+			// rewritten on each pass rather than appended, so a column missing here keeps
+			// the value the FIRST pass wrote forever, silently, while every other field
+			// updates around it. TestRecordPurgeStoreReplacesTheLine is the guard.
+			"complete", "rows", "deferred", "failure", "note", "attempted_at", "clean_since", "updated_at",
 		}),
 	}).Create(line).Error
 }

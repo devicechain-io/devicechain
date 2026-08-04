@@ -41,5 +41,8 @@ var (
 		// ADR-077 the deletion record + its per-store ledger. Completion removes the
 		// tenant row to release the token, so completion cannot be recorded on it.
 		NewTenantPurgeRecordMigration(),
+		// ADR-077 the ledger's note column: what a store DECIDED NOT TO LOOK AT, which
+		// two of them could previously omit while reporting clean.
+		NewTenantPurgeNoteMigration(),
 	}
 )

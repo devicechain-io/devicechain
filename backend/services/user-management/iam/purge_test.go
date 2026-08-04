@@ -290,3 +290,43 @@ func TestCompleteTenantPurgeRefusesToRewriteACompletedRecord(t *testing.T) {
 	require.EqualValues(t, 999, after.Rows)
 	require.WithinDuration(t, original, *after.CompletedAt, time.Second)
 }
+
+// TestRecordPurgeStoreReplacesTheNote extends the replacement contract to the note column.
+//
+// 🔴 IT IS A SEPARATE TEST BECAUSE THE FAILURE IS SEPARATE AND SILENT. A ledger line is
+// rewritten on every pass, not appended, so a column missing from RecordPurgeStore's
+// DoUpdates list keeps the value the FIRST pass wrote — forever — while every field beside
+// it updates normally. There is no error, no log, and the line looks freshly written.
+//
+// For this column that failure is worse than for the others, because a stale note is a
+// stale CLAIM ABOUT THE INSTANCE. "There is no telemetry database here" is a reasonable
+// thing for a record to say on the pass that concluded it, and a lie on every pass after
+// one has been restored — and it is the sentence a reader is leaning on to decide whether
+// the erasure claim holds.
+func TestRecordPurgeStoreReplacesTheNote(t *testing.T) {
+	s := newPurgeTestStore(t)
+	ctx := context.Background()
+	rec, err := s.EnsurePurgeRecord(ctx, "acme", time.Now().UTC().Truncate(time.Second))
+	require.NoError(t, err)
+
+	require.NoError(t, s.RecordPurgeStore(ctx, &TenantPurgeStore{
+		TenantPurgeID: rec.ID, Store: "tsdb", Note: "the telemetry database does not exist",
+	}))
+	lines, err := s.PurgeStores(ctx, rec.ID)
+	require.NoError(t, err)
+	require.Len(t, lines, 1)
+	require.Equal(t, "the telemetry database does not exist", lines[0].Note,
+		"the first pass's note must be recorded")
+
+	// The database is restored and the next pass really sweeps: the note no longer applies.
+	require.NoError(t, s.RecordPurgeStore(ctx, &TenantPurgeStore{
+		TenantPurgeID: rec.ID, Store: "tsdb", Rows: 12, Complete: true,
+	}))
+	lines, err = s.PurgeStores(ctx, rec.ID)
+	require.NoError(t, err)
+	require.Len(t, lines, 1, "the line must be replaced, not appended")
+	require.Empty(t, lines[0].Note,
+		"the replacement must clear a note that no longer applies — a stale note is a stale claim "+
+			"about the instance, which is exactly what a reader of the record is relying on")
+	require.EqualValues(t, 12, lines[0].Rows, "the control: the rewrite really happened")
+}

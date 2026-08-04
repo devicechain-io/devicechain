@@ -42,6 +42,7 @@ type fakeStore struct {
 	calls    int
 	rows     int64
 	deferred []string
+	notes    []string
 	err      error
 	// failFor makes the store fail for one tenant only, so a test can have two tenants
 	// in the same pass reach different outcomes through the same registered store.
@@ -78,7 +79,7 @@ func (f *fakeStore) Erase(_ context.Context, tenant string, _ time.Time) (Outcom
 		rows = 0
 	}
 	f.erased[tenant] = true
-	return Outcome{Rows: rows, Deferred: f.deferred}, nil
+	return Outcome{Rows: rows, Deferred: f.deferred, Notes: f.notes}, nil
 }
 
 // harness is a coordinator over an in-memory database, with a clock the test moves.
@@ -626,4 +627,77 @@ func TestRowsAppearingLateRestartTheSettleWindow(t *testing.T) {
 	assert.False(t, h.exists("acme"),
 		"a full settle window has elapsed since the last pass that found anything, so the purge "+
 			"must complete — the restart is a delay, not a deadlock")
+}
+
+// TestANoteReachesTheLedgerWithoutBlockingCompletion is the whole contract of the note
+// column in one test: a store may say what it declined to look at, and saying it must not
+// hold the purge open.
+//
+// The two must be asserted TOGETHER. A note that never reached the ledger would be a silent
+// no-op, and a note that blocked completion would be a deferral under a different name —
+// and each of those failures passes a test that only checks for the other.
+func TestANoteReachesTheLedgerWithoutBlockingCompletion(t *testing.T) {
+	const note = "the exempted key-value buckets were not scanned"
+	store := &fakeStore{name: "kv", rows: 3, notes: []string{note}}
+	h := newHarness(t, store)
+	tenant := h.deleteTenant("acme")
+
+	h.pass()
+	line := h.ledger("acme", *tenant.PurgeEpoch)["kv"]
+	require.Equal(t, note, line.Note, "the note must be recorded on the ledger line")
+	require.True(t, line.Complete, "a note must not stop a store reporting complete")
+	require.Empty(t, line.Deferred, "a note is not a deferral")
+	require.NotNil(t, line.CleanSince, "a store carrying only a note is clean")
+
+	// And the purge itself must be able to finish. This is the assertion that would catch a
+	// note wired into Outcome.Clean by mistake — the ledger line above would look identical.
+	h.clock = h.clock.Add(settleWindow + tokenHoldWindow)
+	h.pass()
+	require.False(t, h.exists("acme"), "a tenant whose only residue is a NOTE must complete its purge")
+}
+
+// TestANoteIsRecordedOnAPassThatDidNotComplete pins that the note is captured BEFORE the
+// early return for a store that is not clean — not only on the happy path.
+//
+// This is the case where a reader needs it most. A pass that ended with data still held is
+// exactly when someone goes looking at the record, and a note that survived only clean passes
+// would be missing from every line they actually read.
+//
+// The error path is the same assignment and returns two lines later, so it is covered by the
+// same placement. It is not asserted separately because no store returns a note alongside an
+// error today — a fake that did would be pinning a shape nothing produces.
+func TestANoteIsRecordedOnAPassThatDidNotComplete(t *testing.T) {
+	const note = "the telemetry database does not exist"
+	store := &fakeStore{
+		name:     "tsdb",
+		notes:    []string{note},
+		deferred: []string{"the rollup continuous aggregate still holds this tenant's rows"},
+	}
+	h := newHarness(t, store)
+	tenant := h.deleteTenant("acme")
+
+	h.pass()
+	line := h.ledger("acme", *tenant.PurgeEpoch)["tsdb"]
+	require.Equal(t, note, line.Note, "a pass that did not complete must still record what the store skipped")
+	require.NotEmpty(t, line.Deferred, "the deferral must still be recorded alongside it")
+	require.False(t, line.Complete)
+	require.NotEqual(t, line.Note, line.Deferred, "a note and a deferral are different claims")
+}
+
+// TestANoteIsClearedWhenItNoLongerApplies covers the rewrite semantics from the coordinator's
+// side. A ledger line is REWRITTEN each pass rather than appended, so a note left behind by an
+// earlier pass would keep asserting something about the instance that has since changed —
+// "there is no telemetry database here" reads very differently after one is restored.
+func TestANoteIsClearedWhenItNoLongerApplies(t *testing.T) {
+	store := &fakeStore{name: "tsdb", notes: []string{"the telemetry database does not exist"}}
+	h := newHarness(t, store)
+	tenant := h.deleteTenant("acme")
+
+	h.pass()
+	require.NotEmpty(t, h.ledger("acme", *tenant.PurgeEpoch)["tsdb"].Note)
+
+	store.notes = nil
+	h.pass()
+	require.Empty(t, h.ledger("acme", *tenant.PurgeEpoch)["tsdb"].Note,
+		"a note that no longer applies must be cleared, not carried forward from the previous pass")
 }

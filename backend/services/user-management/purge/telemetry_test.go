@@ -154,3 +154,35 @@ func TestATelemetryDatabaseWithTheOwningSchemaIsActuallySwept(t *testing.T) {
 		"the owning schema is present, so this store must sweep rather than conclude anything")
 	assert.Zero(t, out.Rows)
 }
+
+// TestAnAbsentTelemetryDatabaseSaysSoInTheRECORD is the second half of the test above, and
+// the reason the note column exists.
+//
+// The clean-without-erasing conclusion was already logged. A log reaches whoever is watching
+// at the moment the pass runs; it does not reach the person reading the deletion record
+// afterwards to decide whether an erasure claim holds — and that is the reader the record is
+// FOR. Without a note, this store's line was byte-identical to a store that swept a real
+// cluster and found nothing: Rows=0, Complete=true, Deferred empty.
+func TestAnAbsentTelemetryDatabaseSaysSoInTheRECORD(t *testing.T) {
+	stub := &stubConnector{err: fmt.Errorf("connecting to the %q database: %w",
+		"tsdb", &pgconn.PgError{Code: "3D000"})}
+
+	out, err := telemetryWith(stub).Erase(context.Background(), "acme", time.Now())
+
+	require.NoError(t, err)
+	require.NotEmpty(t, out.Notes,
+		"a store reporting clean without erasing anything must say so in the record, not only the log")
+	assert.Contains(t, out.Note(), "does not exist",
+		"the note must name the ground it concluded on, so a reader can judge whether it holds")
+	assert.True(t, out.Clean(), "the note must not turn this into a deferral — it would block every "+
+		"purge on an instance that runs no event-management")
+}
+
+// TestASweptTelemetryDatabaseCarriesNoNote is the counterweight. A note on EVERY line would
+// be worth nothing: the whole value is that its presence distinguishes "we concluded" from
+// "we swept", so a store that really swept must produce none.
+func TestASweptTelemetryDatabaseCarriesNoNote(t *testing.T) {
+	out := Outcome{Rows: 42}
+	require.Empty(t, out.Note(), "a real sweep has nothing to qualify")
+	require.True(t, out.Clean())
+}
