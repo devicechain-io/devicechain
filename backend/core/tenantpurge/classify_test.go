@@ -378,8 +378,13 @@ func TestAnExternalEntryNamesTheStoreThatErasesIt(t *testing.T) {
 		external++
 		assert.NotEmptyf(t, e.Store, "%s.%s is external with no store named, so its claim that "+
 			"something else erases it cannot be checked", e.Schema, e.Name)
-		assert.Containsf(t, ExternalStores(), e.Store,
-			"%s.%s names store %q, which ExternalStores does not report", e.Schema, e.Name, e.Store)
+		// 🔴 AND NOTHING MORE IS ASSERTED HERE, DELIBERATELY. The obvious next line —
+		// requiring ExternalStores() to contain this name — cannot fail: ExternalStores is
+		// computed from the very slice this loop is walking, so it would be the registry
+		// agreeing with itself while reading as a coverage check. The claim that actually
+		// needs testing is that the name matches a REGISTERED STORE, and only the side that
+		// owns the store set can make it: user-management's
+		// TestExternalTablesNameARegisteredStore, asserted over DefaultStores.
 	}
 	require.NotZero(t, external, "no external entry exists, so this test asserted nothing — if "+
 		"the last one was removed, remove this test with it rather than leaving a green vacuum")

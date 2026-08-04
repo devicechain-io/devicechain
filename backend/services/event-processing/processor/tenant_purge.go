@@ -127,7 +127,10 @@ func (rp *ResolvedEventsProcessor) applyTenantPurge(tenant string) tenantPurgeRe
 		byID[id] = struct{}{}
 	}
 	prefix := tenant + "/"
-	n := int64(rp.engine.RemoveMatching(func(ruleID string) bool {
+	// victim selects a rule id belonging to this tenant on EITHER axis, and it is applied to
+	// the engine and to the loop's buffers alike — see dropTenantBuffers for why the buffers
+	// cannot use the prefix on its own.
+	victim := func(ruleID string) bool {
 		if _, ok := byID[ruleID]; ok {
 			return true
 		}
@@ -136,9 +139,19 @@ func (rp *ResolvedEventsProcessor) applyTenantPurge(tenant string) tenantPurgeRe
 		// no separator would evict "acme-2/…" along with "acme/…". Both leave one tenant's
 		// detection silently dead because another was deleted.
 		return strings.HasPrefix(ruleID, prefix)
-	}))
-	n += int64(len(removed))
+	}
 
+	// 🔴 ONLY THE ENGINE'S COUNT MAY DIRTY THE CHECKPOINT, and separating it from the total
+	// is not bookkeeping fussiness. The engine is the ONLY thing swept here that is
+	// serialized: the registry is rebuilt from the durable rule projection, the armer's views
+	// and the attribute view from their projections, and the dead-letter ring and the two
+	// buffers are not persisted at all. Folding them into the dirty test would force a full
+	// snapshot rewrite for state a restart discards anyway — and, against a store that cannot
+	// commit, would report "a restart would restore what was removed" about state a restart
+	// provably clears.
+	durable := int64(rp.engine.RemoveMatching(victim))
+
+	n := durable + int64(len(removed))
 	if rp.armer != nil {
 		n += int64(rp.armer.RemoveTenant(tenant))
 	}
@@ -152,21 +165,38 @@ func (rp *ResolvedEventsProcessor) applyTenantPurge(tenant string) tenantPurgeRe
 		// operator after the deletion record says they are gone.
 		n += int64(rp.publisher.RemoveTenant(tenant))
 	}
-	n += rp.dropTenantBuffers(tenant)
+	n += rp.dropTenantBuffers(victim, tenant)
 
-	if n == 0 {
-		// Nothing was held, so nothing needs committing: the engine's state IS the durable
-		// snapshot's content (a restore loads the whole payload), so an engine holding none
-		// of the tenant is a snapshot holding none of it either.
-		return tenantPurgeResult{}
+	if durable > 0 {
+		// The eviction changed serializable state, so it MUST be checkpointed — the same
+		// reason applyRuleUpdate marks a rule GC dirty, and here with a caller waiting.
+		rp.dirty = true
 	}
-	// The eviction changed serializable state, so it MUST be checkpointed — the same reason
-	// applyRuleUpdate marks a rule GC dirty, and here with a caller waiting on the answer.
-	rp.dirty = true
+
+	// 🔴 A CLEAN ANSWER REQUIRES A CLEAN CHECKPOINT, NOT A CLEAN ENGINE — including when this
+	// pass evicted nothing at all.
+	//
+	// The tempting shortcut is "n == 0, so there was nothing to erase, so answer clean". It
+	// is wrong, and the way it is wrong is this store's whole failure mode. An earlier pass
+	// can have swept the tenant out of MEMORY and then failed to commit — that path exists a
+	// few lines below and says so. The engine is then clean, `dirty` is still set, and the
+	// committed blob still holds every one of the tenant's windows and buffered values. A
+	// second pass moments later finds nothing, answers clean, and the coordinator starts its
+	// settle window over data that is still on disk. The purge COMPLETES; a later restart
+	// restores the tenant's state from the stale blob, and no pass remains that would ever
+	// evict it again.
+	//
+	// So the condition is `dirty`, not `n`. While it is set, memory and disk may disagree,
+	// and this process cannot say anything about what the snapshot holds until they agree.
+	// When it is clear, memory IS the snapshot's content (a restore loads the whole payload),
+	// and only then does an engine holding none of the tenant mean a snapshot holding none.
+	if !rp.dirty {
+		return tenantPurgeResult{evicted: n}
+	}
 	if !rp.checkpoint(rp.procCtx) {
-		return tenantPurgeResult{evicted: n, err: errors.New("the DETECT engine evicted the " +
-			"tenant in memory but could not commit the checkpoint, so the eviction is not yet " +
-			"durable and a restart would restore what was removed")}
+		return tenantPurgeResult{evicted: n, err: errors.New("the DETECT engine could not " +
+			"commit a checkpoint, so it cannot establish that its durable snapshot is free of " +
+			"this tenant — anything evicted from memory would be restored by a restart")}
 	}
 	log.Info().Str("tenant", tenant).Str("partition", rp.cfg.PartitionId).Int64("entries", n).
 		Msg("Evicted a purged tenant from the DETECT engine and committed the checkpoint.")
@@ -182,13 +212,23 @@ func (rp *ResolvedEventsProcessor) applyTenantPurge(tenant string) tenantPurgeRe
 // broker purge has already swept. The recheck sets are smaller but are still the tenant's
 // device tokens sitting in memory, and a retained entry would re-read a projection whose
 // rows are being deleted underneath it.
-func (rp *ResolvedEventsProcessor) dropTenantBuffers(tenant string) int64 {
+//
+// 🔴 IT TAKES THE SAME PREDICATE THE ENGINE SWEEP USES, not a fresh prefix test, and the
+// difference is a residue nothing can ever clear. A detection from a rule this tenant OWNS
+// but whose id was minted under another's prefix passes a prefix test and stays buffered.
+// Its rule is gone from the registry by then, so the next publish dead-letters it as an
+// orphan — and an orphan dead letter records no tenant fields at all, so no later
+// Publisher.RemoveTenant, for this tenant or any other, can select it. The tenant's device
+// token then sits in an operator-readable diagnostic permanently, after the deletion record
+// has said it is gone. The recheck sets are keyed on an explicit tenant field, so they stay
+// an equality test.
+func (rp *ResolvedEventsProcessor) dropTenantBuffers(victim func(ruleID string) bool,
+	tenant string) int64 {
 	n := int64(0)
-	prefix := tenant + "/"
 	if len(rp.pendingDets) > 0 {
 		kept := rp.pendingDets[:0]
 		for _, d := range rp.pendingDets {
-			if strings.HasPrefix(d.RuleID, prefix) {
+			if victim(d.RuleID) {
 				n++
 				continue
 			}

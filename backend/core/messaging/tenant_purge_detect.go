@@ -207,7 +207,22 @@ func PurgeTenantDetect(ctx context.Context, nc *nats.Conn, instanceId, tenant st
 			return res, fmt.Errorf("decoding a DETECT eviction reply for %q: %w", tenant, err)
 		}
 		res.Replies = append(res.Replies, reply)
-		delete(awaited, reply.PartitionId)
+		// 🔴 ONLY A REPLY THAT ERASED SOMETHING SATISFIES THE PARTITION, and this is not
+		// pedantry about error handling — a partition can have TWO responders, and the one
+		// that answers first is the one that did not do the work.
+		//
+		// A writer that lost a split brain latches `stale`, cancels its loop, and keeps
+		// running with its subscription intact (Stop runs only at service shutdown). Asked to
+		// evict, it fails immediately on the cancelled context — microseconds — while the
+		// healthy writer is still doing a real eviction and a database commit. If an error
+		// reply cleared the partition from this set, the gather would return on the halted
+		// pod's answer every single time and never read the committed one, and the ledger
+		// would carry "this tenant's windows are still in its checkpoint" about a partition
+		// that had just erased them. Deterministic, self-repeating, and clearable only by
+		// noticing a pod that looks healthy.
+		if reply.Error == "" {
+			delete(awaited, reply.PartitionId)
+		}
 		if len(partitions) > 0 && len(awaited) == 0 {
 			return res, nil
 		}

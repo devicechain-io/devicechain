@@ -272,3 +272,57 @@ func TestADisconnectedClientFailsRatherThanWaits(t *testing.T) {
 	assert.Less(t, time.Since(start), time.Second,
 		"a disconnected client waited instead of failing")
 }
+
+// respondAsAfter is respondAs with a delay before the reply, so a test can order two
+// responders on the wire deterministically.
+func respondAsAfter(t *testing.T, nc *nats.Conn, delay time.Duration, reply DetectPurgeReply) {
+	t.Helper()
+	sub, err := nc.Subscribe(DetectPurgeSubject(detectInstance), func(msg *nats.Msg) {
+		go func() {
+			time.Sleep(delay)
+			body, err := json.Marshal(reply)
+			if err != nil {
+				return
+			}
+			_ = nc.Publish(msg.Reply, body)
+		}()
+	})
+	require.NoError(t, err)
+	require.NoError(t, nc.Flush())
+	t.Cleanup(func() { _ = sub.Unsubscribe() })
+}
+
+// TestAFailedReplyDoesNotSatisfyItsPartition is the regression for a deferral that repeats
+// forever and that no documented operator action clears.
+//
+// 🔴 TWO RESPONDERS ON ONE PARTITION IS A DESIGNED-FOR STATE, not a contrived one. A DETECT
+// writer that loses a split brain latches `stale` and cancels its own loop, but the process
+// keeps running with its subscription intact — Stop happens only at service shutdown. Asked
+// to evict, it fails on the cancelled context in microseconds, while the writer that really
+// owns the partition is still doing an eviction and a database commit.
+//
+// If an error reply cleared the partition from the awaited set, the gather would return on
+// the halted pod's answer EVERY TIME and never read the committed one. The store would then
+// write "this tenant's open detection windows and timers are still in its checkpoint" about
+// a partition that had just erased them — a false sentence, repeated on every pass, blocking
+// the purge until someone happens to notice a pod that looks healthy.
+func TestAFailedReplyDoesNotSatisfyItsPartition(t *testing.T) {
+	nc := detectRig(t)
+	// The halted writer: instant, and it erased nothing.
+	respondAs(t, nc, DetectPurgeReply{PartitionId: "p1",
+		Error: "this DETECT writer is halted as a stale split-brain loser"})
+	// The writer that owns the partition: slower, because it did the work.
+	respondAsAfter(t, nc, 150*time.Millisecond, DetectPurgeReply{PartitionId: "p1", Evicted: 9})
+
+	res, err := PurgeTenantDetect(context.Background(), nc, detectInstance, "acme", []string{"p1"})
+	require.NoError(t, err)
+
+	var cleanReplies int
+	for _, r := range res.Replies {
+		if r.Error == "" {
+			cleanReplies++
+		}
+	}
+	require.NotZerof(t, cleanReplies, "the gather returned on the failed reply and never read "+
+		"the committed one: %+v", res.Replies)
+}

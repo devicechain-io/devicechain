@@ -6,6 +6,7 @@ package purge
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -25,8 +26,13 @@ const detectSchema = "event-processing"
 // relational sweep deletes from every area's tables in this same database. What it must
 // never do is read it through a MODEL: the shape belongs to event-processing, and one
 // column of one table is a far smaller thing to depend on than a struct that area is free
-// to change. The column and table names are pinned by a test that runs against the real
-// migrated schema, so a rename fails there rather than here, at a purge.
+// to change.
+//
+// The names it does depend on are pinned by TestTheDetectPartitionQueryRunsOnTheRealSchema
+// in the migration drill, which executes this exact string against a database with every
+// area's migrations applied. That test exists because the unit tests CANNOT do it: they
+// build a SQLite twin from this store's own belief about the shape, so a renamed column
+// would agree with itself all the way to a live purge.
 const detectPartitionsQuery = `SELECT partition_id FROM "event-processing"."detect_snapshots"`
 
 // Detect erases a tenant from the DETECT engine's in-process state (ADR-077 slice 2c).
@@ -144,24 +150,51 @@ func (d *Detect) checkpointedPartitions(ctx context.Context) ([]string, error) {
 }
 
 // outcome turns the replies into what the ledger records.
+//
+// 🔴 THE VERDICT IS PER PARTITION, AND EVERY REPLY FROM ONE IS WEIGHED TOGETHER. A
+// partition can have more than one responder — a split-brain writer that lost keeps its
+// subscription until the process stops — so a single partition can answer twice, once with
+// an error from the halted pod and once cleanly from the one that did the work. Reading
+// each reply on its own would put a false sentence in the deletion record ("this tenant's
+// windows are still in its checkpoint") about a partition that had just erased them, and
+// would do it on every pass. A partition is satisfied if ANY of its answers erased and
+// committed; only if none did is it still holding the tenant.
 func (d *Detect) outcome(tenant string, partitions []string, res messaging.DetectPurgeResult) Outcome {
 	var out Outcome
-	answered := make(map[string]bool, len(res.Replies))
+	clean := map[string]bool{}
+	failed := map[string]string{}
 	for _, r := range res.Replies {
-		answered[r.PartitionId] = true
 		out.Rows += r.Evicted
-		if r.Error != "" {
-			out.Deferred = append(out.Deferred, fmt.Sprintf("the DETECT engine on partition %q "+
-				"could not complete the eviction, so this tenant's open detection windows and "+
-				"timers are still in its checkpoint: %s", r.PartitionId, r.Error))
+		if r.Error == "" {
+			clean[r.PartitionId] = true
+			continue
+		}
+		if _, seen := failed[r.PartitionId]; !seen {
+			failed[r.PartitionId] = r.Error
 		}
 	}
 
-	var silent []string
-	for _, p := range partitions {
-		if !answered[p] {
-			silent = append(silent, p)
+	// Every partition that has durable state, plus any that answered only with a failure.
+	held := append([]string{}, partitions...)
+	for id := range failed {
+		if !slices.Contains(held, id) {
+			held = append(held, id)
 		}
+	}
+	sort.Strings(held)
+
+	var silent []string
+	for _, id := range held {
+		if clean[id] {
+			continue
+		}
+		if reason, ok := failed[id]; ok {
+			out.Deferred = append(out.Deferred, fmt.Sprintf("the DETECT engine on partition %q "+
+				"could not complete the eviction, so this tenant's open detection windows and "+
+				"timers are still in its checkpoint: %s", id, reason))
+			continue
+		}
+		silent = append(silent, id)
 	}
 	if len(silent) > 0 {
 		out.Deferred = append(out.Deferred, fmt.Sprintf("no DETECT engine answered for partition(s) "+
@@ -171,15 +204,30 @@ func (d *Detect) outcome(tenant string, partitions []string, res messaging.Detec
 			strings.Join(quoteAll(silent), ", "), messaging.DetectPurgeWindow))
 	}
 
-	// No responder at all, with no partition to name. Reachable when the area's schema exists
-	// (so it ran here once) but nothing has checkpointed and nothing is running — an engine
-	// that never got far enough to write a row. There is no durable state to point at, but
-	// there is also nothing that could have evicted an in-memory one, so this is reported
-	// rather than assumed away.
+	// 🔴 SOMETHING IS SUBSCRIBED AND NOTHING ANSWERED. No partition to name, so neither branch
+	// above fires, and without this the store would report clean over an engine that is
+	// demonstrably there. It is a narrow state — an engine running, holding this tenant, that
+	// has never committed a checkpoint, so no row names it — but it is the one shape where
+	// "nobody said anything" and "there is nothing here" are opposite facts and the code
+	// cannot tell them apart. Deferring is the answer that does not claim what it does not
+	// know; the next pass clears it as soon as the engine answers once.
+	if !res.NoResponders && len(res.Replies) == 0 && len(held) == 0 {
+		out.Deferred = append(out.Deferred, fmt.Sprintf("a DETECT engine is subscribed on this "+
+			"instance but none answered within %s, and none has committed a checkpoint, so there "+
+			"is no partition to name. An engine that is running holds this tenant's detection "+
+			"state in memory whether or not it has written a row for it.", messaging.DetectPurgeWindow))
+	}
+
+	// The complement: nothing is subscribed AND nothing has checkpointed. This is clean, and
+	// the claim is narrower than it looks — not "no engine is running", which the broker's
+	// no-responders answer does not establish (it attests to zero INTEREST, and a reconnecting
+	// client briefly has none). What it establishes is that nothing on disk names this tenant
+	// and nothing is reachable that could, which is all this store is asked for. Logged
+	// because it writes Rows=0, Complete=true, byte-identical to a real erasure.
 	if res.NoResponders && len(partitions) == 0 {
 		log.Warn().Str("tenant", tenant).Str("store", StoreDetect).
-			Msg("event-processing has run on this instance but no DETECT engine is running and none " +
-				"has checkpointed, so there is no engine state to evict; reporting clean.")
+			Msg("No DETECT engine is subscribed on this instance and none has committed a " +
+				"checkpoint, so there is no engine state this store can reach; reporting clean.")
 	}
 	return out
 }

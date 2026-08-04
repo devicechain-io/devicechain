@@ -361,3 +361,47 @@ func TestSchemaExistenceIsAnsweredByTheRealCatalog(t *testing.T) {
 	assert.False(t, absent,
 		"a probe that answers yes for everything makes an instance without the area block forever")
 }
+
+// TestTheDetectPartitionQueryRunsOnTheRealSchema pins the statement the ADR-077 `detect`
+// store bets its whole coverage claim on: the list of DETECT partitions that owe an answer.
+//
+// 🔴 GET THE TABLE OR COLUMN NAME WRONG AND THE STORE REPORTS CLEAN WITHOUT ASKING ANYONE.
+// An empty partition list means "no partition has durable state", which — with no engine
+// subscribed — is the store's one clean-and-say-nothing path. A renamed column would not
+// even produce that: it errors, which is loud and retryable. A renamed TABLE that still
+// exists under the old name, or a schema-qualification that quotes wrongly, is the shape
+// that goes quiet.
+//
+// The store's own unit tests cannot catch any of it. They coax SQLite into answering the
+// same statement by ATTACHing a database named for the schema — which is the right way to
+// exercise the statement verbatim, and is exactly why it agrees with whatever this codebase
+// currently believes the shape to be. Only a database with event-processing's migrations
+// actually applied can say whether that belief is true, and this is the one test that has
+// one.
+//
+// The query is duplicated here as a literal rather than imported: the drill is a maintainer
+// tool in its own module, and importing a service's purge package to reach an unexported
+// constant would invert the dependency for one string. A divergence shows up as this test
+// passing while the store's own statement fails at a purge — so the literal below is
+// asserted to be what the store holds, by the store's comment naming this test back.
+func TestTheDetectPartitionQueryRunsOnTheRealSchema(t *testing.T) {
+	db, _ := drillConn(t)
+
+	const query = `SELECT partition_id FROM "event-processing"."detect_snapshots"`
+	var ids []string
+	require.NoErrorf(t, db.Raw(query).Scan(&ids).Error, "the DETECT partition query does not run "+
+		"against a real migrated schema: %s", query)
+
+	// 🔑 THE NON-VACUITY CONTROL. A migrated-but-empty table returns no rows, which is
+	// indistinguishable from a query that reads the wrong place and finds nothing. Seed a
+	// partition and require the statement to see it, so "no rows" can only ever mean the
+	// table is empty.
+	require.NoError(t, db.Exec(`INSERT INTO "event-processing"."detect_snapshots" `+
+		`(partition_id, stream_seq, watermark, payload, updated_at) `+
+		`VALUES ('drill-partition', 1, now(), '{}'::bytea, now()) `+
+		`ON CONFLICT (partition_id) DO NOTHING`).Error)
+	require.NoError(t, db.Raw(query).Scan(&ids).Error)
+	require.Contains(t, ids, "drill-partition",
+		"the query ran but did not return a row that is demonstrably in the table, so it is "+
+			"reading something other than the DETECT checkpoint")
+}

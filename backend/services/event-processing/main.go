@@ -416,10 +416,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 	// AFTER the processor, never before: the responder marshals every eviction onto the
-	// single-writer loop, and that loop is launched by Start. Subscribing first would leave a
-	// window in which a purge request is accepted and then waits out its whole gather window
-	// against a loop that does not exist yet — reported to the coordinator as an engine that
-	// did not answer, on an instance that is merely still booting.
+	// single-writer loop, and BOTH the loop and the context that bounds the wait for it are
+	// created by Start. A request arriving before that would not merely wait — EvictTenant
+	// selects on rp.procCtx.Done(), and procCtx is nil until Start, so the handler goroutine
+	// would panic on a nil context and take the process down. The ordering is what makes that
+	// unreachable; it is not a latency preference.
 	TenantPurgeResponder = processor.NewTenantPurgeResponder(NatsManager.Conn(),
 		Microservice.InstanceId, ResolvedEventsProcessor)
 	if err := TenantPurgeResponder.Start(); err != nil {

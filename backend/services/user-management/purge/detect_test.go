@@ -482,3 +482,90 @@ func TestNoBrokerConnectionIsRetryableRatherThanClean(t *testing.T) {
 		"retryable rather than as an erasure")
 	assert.Zero(t, out.Rows)
 }
+
+// TestAPartitionThatAlsoAnsweredCleanlyIsNotReportedAsHolding is the store-side regression
+// for a false sentence that repeats on every pass.
+//
+// 🔴 ONE PARTITION CAN HAVE TWO RESPONDERS, and that is a designed-for state rather than a
+// contrived one: a DETECT writer that loses a split brain latches stale and cancels its loop
+// but keeps its subscription until the process stops. Asked to evict it fails instantly,
+// while the writer that owns the partition is still committing. Both answer, for the same
+// partition id.
+//
+// Read reply-by-reply, the store defers with "this tenant's open detection windows and timers
+// are still in its checkpoint" about a partition that had just erased them. The purge blocks
+// on a claim that is false, on every pass, and the only remedy is noticing a pod that looks
+// healthy. The verdict has to be per partition: satisfied if ANY of its answers committed.
+func TestAPartitionThatAlsoAnsweredCleanlyIsNotReportedAsHolding(t *testing.T) {
+	url := detectRig(t)
+	runEngine(t, detectDial(t, url), answersWith(
+		messaging.DetectPurgeReply{PartitionId: "p-alpha",
+			Error: "this DETECT writer is halted as a stale split-brain loser"},
+		messaging.DetectPurgeReply{PartitionId: "p-alpha", Evicted: 6},
+	))
+
+	ctx, cancel := context.WithTimeout(context.Background(), shortGather)
+	defer cancel()
+	out, err := detectStore(detectDial(t, url), detectCatalog(t, true, "p-alpha")).
+		Erase(ctx, detectTenant, time.Now())
+
+	require.NoError(t, err)
+	assert.Truef(t, out.Clean(), "partition p-alpha both failed and committed, and the store "+
+		"reported it as still holding the tenant: %q. The committed answer is the one that "+
+		"decides — the failure came from a writer that erased nothing", out.Reason())
+	assert.Equal(t, int64(6), out.Rows)
+}
+
+// TestAPartitionThatOnlyEverFailedIsStillReportedAsHolding is the control for the test above,
+// and without it that one is satisfied by a store that ignores errors entirely.
+func TestAPartitionThatOnlyEverFailedIsStillReportedAsHolding(t *testing.T) {
+	url := detectRig(t)
+	runEngine(t, detectDial(t, url), answersWith(
+		messaging.DetectPurgeReply{PartitionId: "p-alpha", Error: "could not commit the checkpoint"},
+	))
+
+	ctx, cancel := context.WithTimeout(context.Background(), shortGather)
+	defer cancel()
+	out, err := detectStore(detectDial(t, url), detectCatalog(t, true, "p-alpha")).
+		Erase(ctx, detectTenant, time.Now())
+
+	require.NoError(t, err)
+	assert.False(t, out.Clean(), "a partition whose every answer failed was reported clean")
+	assert.Contains(t, out.Reason(), "p-alpha")
+	assert.Contains(t, out.Reason(), "could not commit the checkpoint")
+}
+
+// TestAnEngineThatIsSubscribedButSilentIsDeferredRatherThanClean closes the one gap where
+// "nobody said anything" and "there is nothing here" are opposite facts.
+//
+// 🔴 NEITHER OF THE TWO DEFERRAL BRANCHES FIRES HERE. There is no checkpoint row, so no
+// partition is named as silent; and something IS subscribed, so this is not the
+// no-responders case. Without an explicit answer the store falls through to clean — over an
+// engine that is demonstrably running and that holds this tenant's detection state in memory
+// whether or not it has written a row for it yet.
+//
+// The state is narrow (an engine that has never committed a checkpoint) but it is exactly the
+// shape where a wrong answer is unrecoverable: the purge completes, and the engine's first
+// checkpoint afterwards writes the purged tenant's windows into a fresh row that no pass will
+// ever look at again.
+func TestAnEngineThatIsSubscribedButSilentIsDeferredRatherThanClean(t *testing.T) {
+	url := detectRig(t)
+	// Subscribed, so the broker does not answer no-responders — and never replies.
+	nc := detectDial(t, url)
+	sub, err := nc.Subscribe(messaging.DetectPurgeSubject(detectInstance), func(*nats.Msg) {})
+	require.NoError(t, err)
+	require.NoError(t, nc.Flush())
+	t.Cleanup(func() { _ = sub.Unsubscribe() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), shortGather)
+	defer cancel()
+	// No partitions: nothing has checkpointed, so there is no id to name.
+	out, err := detectStore(detectDial(t, url), detectCatalog(t, true)).
+		Erase(ctx, detectTenant, time.Now())
+
+	require.NoError(t, err)
+	assert.False(t, out.Clean(), "a DETECT engine is subscribed on this instance and answered "+
+		"nothing, and the store reported clean — an engine that is running holds this tenant's "+
+		"state in memory whether or not a checkpoint row names it")
+	assert.Contains(t, out.Reason(), "subscribed")
+}

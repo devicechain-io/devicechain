@@ -891,3 +891,157 @@ func TestEvictionSweepsTheTenantsDeadLetters(t *testing.T) {
 			remaining)
 	}
 }
+
+// TestASecondPassOverAnUncommittedEvictionStillRefusesToReportClean is the regression for
+// the defect that defeated this slice's entire purpose, and the scenario is built out of the
+// store's OWN documented failure path rather than an exotic one.
+//
+// 🔴 THE ENGINE BEING CLEAN IS NOT THE SNAPSHOT BEING CLEAN. Pass one sweeps the tenant out
+// of memory and then cannot commit — the broker is degraded, or the database is — and
+// correctly reports an error. Memory is now empty; the committed blob still holds every one
+// of the tenant's windows, timers and buffered values. Pass two, seconds later with the
+// outage still on, finds nothing left to evict.
+//
+// An implementation that answered "nothing found, therefore clean" there would hand the
+// coordinator a clean verdict over data sitting on disk. The store records no deferral,
+// clean_since starts, the settle window elapses, and the purge COMPLETES — after which a
+// restart restores the whole tenant from the stale blob, into memory and into every
+// subsequent snapshot, with no purge pass left in existence to evict it again.
+//
+// So the condition has to be `dirty`, not "did this pass find anything".
+func TestASecondPassOverAnUncommittedEvictionStillRefusesToReportClean(t *testing.T) {
+	store, breakStore := newBreakableStore(t)
+	rig := newEvictionRig(t, store, "acme", "globex")
+	rig.start(t)
+
+	// Pass one: the eviction happens in memory, the commit cannot.
+	breakStore()
+	first, err := rig.evict(t, "acme")
+	if err == nil {
+		t.Fatal("test bug: the first pass committed, so there is no uncommitted eviction to " +
+			"take a second pass over")
+	}
+	if first == 0 {
+		t.Fatal("test bug: the first pass evicted nothing, so the engine and the snapshot never " +
+			"diverged and the second pass below asserts nothing")
+	}
+
+	// Pass two, with the store still broken. The engine holds nothing of acme now — and the
+	// durable snapshot still holds all of it.
+	second, err := rig.evict(t, "acme")
+	if second != 0 {
+		t.Fatalf("test bug: the second pass evicted %d entries, so the first did not sweep "+
+			"memory and this is not the scenario under test", second)
+	}
+	if err == nil {
+		t.Fatal("a pass that found nothing reported CLEAN while the durable snapshot still " +
+			"held the tenant — the coordinator would start its settle window here and the " +
+			"purge would complete over data that is still on disk")
+	}
+}
+
+// TestAnEvictionOfNothingIsCleanOnlyWhileTheSnapshotIsCurrent is the other side of the same
+// condition, and it is what stops the fix above from being "always checkpoint".
+//
+// With no pending changes, memory IS the committed snapshot's content — a restore loads the
+// whole payload — so an engine holding none of the tenant is a snapshot holding none of it.
+// Answering clean there without touching the store is both correct and necessary: the
+// coordinator asks every 60s for as long as the deletion takes, and a no-op that committed
+// would rewrite the whole engine's snapshot on that schedule for tenants it has never held.
+func TestAnEvictionOfNothingIsCleanOnlyWhileTheSnapshotIsCurrent(t *testing.T) {
+	store, breakStore := newBreakableStore(t)
+	rig := newEvictionRig(t, store, "acme", "globex")
+	rig.start(t)
+	breakStore() // any commit from here on would fail, so a clean answer proves none was tried
+
+	evicted, err := rig.evict(t, "never-held")
+	if err != nil {
+		t.Fatalf("evicting a tenant this engine has never held forced a commit: %v", err)
+	}
+	if evicted != 0 {
+		t.Fatalf("evicting a tenant this engine has never held reported %d entries", evicted)
+	}
+}
+
+// TestABufferedDetectionIsDroppedByOwnerNotOnlyByIdPrefix is the regression for a residue
+// that, once created, nothing could ever clear.
+//
+// The registry admits a rule whose owning tenant and whose ID PREFIX disagree — a mis-minted
+// id is contained at the publish boundary, not refused at admission. A buffered detection
+// from such a rule is the victim's data under another tenant's prefix, so a prefix-only
+// sweep leaves it. It is then published, finds its rule gone from the registry, and is
+// dead-lettered as an ORPHAN — and an orphan dead-letter record carries no tenant fields at
+// all, so no later Publisher.RemoveTenant, for this tenant or any other, can select it.
+//
+// The victim's device token then sits in an operator-readable diagnostic permanently, after
+// the deletion record has reported it erased.
+func TestABufferedDetectionIsDroppedByOwnerNotOnlyByIdPrefix(t *testing.T) {
+	rig := newEvictionRig(t, newTestStore(t), "globex")
+	rp := rig.rp
+
+	// A rule OWNED by acme whose id was minted under globex's prefix.
+	misminted := "globex/prof@1/misminted"
+	if !rp.registry.Upsert(runtime.ScopedRule{
+		Tenant:              "acme",
+		ProfileVersionToken: "prof@1",
+		Compiled:            &rules0.CompiledRule{ID: misminted},
+	}) {
+		t.Fatal("test bug: the registry refused the mis-minted rule, so the case under test " +
+			"cannot arise")
+	}
+	rp.pendingDets = []detectcore.Detection{{
+		RuleID: misminted, Series: "acme-sensor-1", Kind: detectcore.Threshold,
+		Edge: detectcore.EdgeRaised, At: testBase,
+	}}
+	rig.start(t)
+
+	if _, err := rig.evict(t, "acme"); err != nil {
+		t.Fatalf("EvictTenant: %v", err)
+	}
+	rig.stop() // the shutdown checkpoint publishes whatever is still buffered
+
+	// 🔑 THE ORACLE IS THE DEAD-LETTER RING, NOT pendingDets, AND THE FIRST DRAFT GOT THIS
+	// WRONG. Asserting the buffer is empty after the eviction cannot fail: the shutdown
+	// checkpoint drains it either way, so the assertion passed with the sweep reverted to a
+	// prefix-only test — measured, not assumed. What survives is what the drain LEAVES: the
+	// rule is gone from the registry by then, so a detection that was not dropped is
+	// published, refused as an orphan, and recorded — with no tenant fields on the record,
+	// which is what makes it unsweepable afterwards.
+	for _, dl := range rp.publisher.DeadLetters() {
+		if dl.Series == "acme-sensor-1" {
+			t.Fatalf("a buffered detection for a rule acme OWNS survived the eviction because "+
+				"its id carries another tenant's prefix, and is now an orphan dead letter: %+v. "+
+				"An orphan record names no tenant, so no later RemoveTenant — for acme or for "+
+				"anyone — can ever select it out again", dl)
+		}
+	}
+}
+
+// TestEvictingOnlyNonDurableStateDoesNotForceACheckpoint pins the other half of the dirty
+// condition: WHICH of the things this sweep removes may set it.
+//
+// Only the engine is serialized. The registry is rebuilt from the durable rule projection,
+// the armer's views and the attribute view from theirs, and the dead-letter ring and the two
+// recheck sets are not persisted at all — a restart clears every one of them. So a pass whose
+// only find is in those must not rewrite the whole engine's snapshot, and — the part that is
+// not merely wasteful — must not report a FAILURE to erase when the store is unavailable.
+// Saying "a restart would restore what was removed" about state a restart provably clears is
+// a false sentence in the deletion record, and it blocks a purge on it.
+func TestEvictingOnlyNonDurableStateDoesNotForceACheckpoint(t *testing.T) {
+	store, breakStore := newBreakableStore(t)
+	rig := newEvictionRig(t, store, "globex")
+	rp := rig.rp
+	// acme owns nothing in the engine; its only residue is a recheck the loop is holding.
+	rp.attrRetries = map[attrUpdate]struct{}{{tenant: "acme", deviceToken: "d1"}: {}}
+	rig.start(t)
+	breakStore() // any commit from here would fail, so a clean answer proves none was tried
+
+	evicted, err := rig.evict(t, "acme")
+	if err != nil {
+		t.Fatalf("an eviction whose only find was non-durable state forced a checkpoint, and "+
+			"reported the tenant as still held when it could not commit: %v", err)
+	}
+	if evicted != 1 {
+		t.Fatalf("the eviction reported %d entries, want the single attribute recheck", evicted)
+	}
+}
