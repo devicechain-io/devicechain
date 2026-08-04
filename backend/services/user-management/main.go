@@ -41,6 +41,14 @@ var (
 	// PurgeCoordinator reclaims a deleted tenant's data and then releases its token
 	// (ADR-077). nil when disabled by a negative interval.
 	PurgeCoordinator *purge.Coordinator
+
+	// TsdbGuest is the purge's connection to the telemetry cluster, which
+	// event-management owns and this service only visits. Built alongside the
+	// coordinator, so it is nil whenever the coordinator is.
+	//
+	// It is deliberately NOT a lifecycle component: it has no start or stop phase, and
+	// the one it used to have made shutdown fail. See rdb.Guest.Initialize.
+	TsdbGuest *rdb.Guest
 )
 
 func main() {
@@ -214,8 +222,19 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// already use — a lifecycle component owning a ticker goroutine, joined on stop. See
 	// the package doc for why the erasure is organised by STORE rather than by area.
 	if interval := Configuration.TenantPurgeInterval(); interval > 0 {
+		// The telemetry cluster is a database this service does not own — event-management
+		// does — so it is reached through a guest connection rather than a second
+		// RdbManager, which would create a user-management schema inside it. It resolves
+		// its configuration here and connects on first use, so a telemetry cluster that is
+		// down delays a purge instead of blocking every login in the instance (rdb.Guest).
+		TsdbGuest = rdb.NewGuest(Microservice, "tsdb",
+			Microservice.InstanceConfiguration.Persistence.Tsdb, Configuration.TsdbConfiguration)
+		if err := TsdbGuest.Initialize(ctx); err != nil {
+			return err
+		}
+
 		PurgeCoordinator = purge.NewCoordinator(Microservice, iam.NewStore(RdbManager), RdbManager,
-			purge.DefaultStores(RdbManager), interval, Configuration.TenantPurgeSettle(),
+			purge.DefaultStores(RdbManager, TsdbGuest), interval, Configuration.TenantPurgeSettle(),
 			Configuration.TenantPurgeTokenHold(), core.NewNoOpLifecycleCallbacks())
 		if err := PurgeCoordinator.Initialize(ctx); err != nil {
 			return err
@@ -422,6 +441,12 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	}
 	if PurgeCoordinator != nil {
 		if err := PurgeCoordinator.Terminate(ctx); err != nil {
+			return err
+		}
+	}
+	// After the coordinator, which is its only user.
+	if TsdbGuest != nil {
+		if err := TsdbGuest.Close(); err != nil {
 			return err
 		}
 	}

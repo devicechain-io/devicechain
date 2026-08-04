@@ -90,7 +90,10 @@ func unclassifiedError(plan *tenantpurge.Plan) error {
 	}
 	var names []string
 	for _, e := range unclassified {
-		names = append(names, e.Table.String())
+		// Describe rather than the bare name: a continuous aggregate's materialization
+		// reaches here as "_timescaledb_internal._materialized_hypertable_7", which
+		// tells whoever tripped the gate nothing about what they changed.
+		names = append(names, e.Describe())
 	}
 	return fmt.Errorf(`%d table(s) cannot be accounted for by the tenant purge:
 

@@ -39,6 +39,8 @@ import (
 	"context"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 // Store is one storage system a tenant's data lives in.
@@ -62,6 +64,15 @@ type Store interface {
 	// are the token alone has no use for it, because the ones that outlive the tenant
 	// row need it to tell the purged tenant's residue from a successor's rows.
 	Erase(ctx context.Context, tenant string, epoch time.Time) (Outcome, error)
+}
+
+// Database is the handle a store sweeps through, narrowed to the one method the sweep
+// uses so that BOTH kinds of connection satisfy it: rdb.RdbManager, for the database this
+// service owns, and rdb.Guest, for one it does not (the telemetry cluster). Taking the
+// interface rather than the concrete manager is what lets the two stores be the same code
+// rather than a copy with the receiver type changed.
+type Database interface {
+	DB(ctx context.Context) *gorm.DB
 }
 
 // Outcome is what one store reports for one pass.

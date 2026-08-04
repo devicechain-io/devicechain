@@ -123,6 +123,30 @@ type Entry struct {
 
 	// Reason is why a table is exempt or deferred; empty otherwise.
 	Reason string
+
+	// Origin explains where a table came from when its own name does not. It is empty
+	// for the ordinary case — a table an area's migrations created under its own name —
+	// and set for one a maintainer would not otherwise recognise, today the
+	// materialization hypertable behind a continuous aggregate.
+	//
+	// Every message a HUMAN acts on renders it through Describe: the fail-closed refusal,
+	// the coverage gate's report, and both of the purge ledger's — the deferral sentence
+	// and the residue error. Internal wrapping errors ("sweep %s: %w") deliberately do
+	// not, because they already carry the failing statement's own context.
+	Origin string
+}
+
+// Describe renders a table for a human, with its provenance when it has any.
+//
+// "_timescaledb_internal._materialized_hypertable_7 cannot be classified" names nothing
+// anyone can act on; the same sentence with the aggregate it belongs to is actionable.
+func (e Entry) Describe() string { return describeTable(e.Table, e.Origin) }
+
+func describeTable(t Table, origin string) string {
+	if origin == "" {
+		return t.String()
+	}
+	return t.String() + " (" + origin + ")"
 }
 
 // Link is one foreign key from a transitive table into a tenant-bearing parent.
@@ -185,9 +209,14 @@ var tenantColumns = []string{"tenant_id", "tenant"}
 // one that matters to get right: it holds the chunks of every hypertable and the
 // materialization hypertables of every continuous aggregate. Deleting a tenant's rows
 // from the parent hypertable already removes them from its chunks, so classifying
-// chunks individually would double-count at best; the continuous aggregate's
-// materialization is genuinely separate residue and is handled as its own step
-// against the aggregate's own catalog, not by scanning this schema.
+// chunks individually would double-count at best.
+//
+// A continuous aggregate's materialization is the exception, because it is genuinely
+// separate residue rather than a second view of rows already in the plan. It is
+// admitted back INDIVIDUALLY, by name, from the aggregate catalog — see aggregate.go.
+// Skipping the schema and then re-admitting exactly the relations that need it is what
+// keeps thousands of chunks out of the plan without letting the one table that matters
+// out with them.
 var systemSchemas = []string{
 	"information_schema",
 	"_timescaledb_catalog",
@@ -280,7 +309,37 @@ func Classify(ctx context.Context, db *gorm.DB) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
-	return classify(cols, fks)
+	admitted, err := admittedRelations(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	return classify(cols, fks, admitted)
+}
+
+// SchemaExists reports whether a schema is present in the database behind db.
+//
+// It answers one question a purge caller cannot answer any other way: has a functional
+// area ever run against this database? A schema is created by its own service on first
+// startup and by nothing else, so its absence means the area was never deployed here —
+// which for a store that spans clusters is the difference between "nothing to erase" and
+// "something is wrong". Nothing in a service's configuration carries that fact: the
+// credentials for every cluster reach every pod, and there is no runtime area discovery.
+//
+// 🔴 IT IS ONLY EVER SAFE TO READ AS "NOTHING TO ERASE" WITH A LOGGED REASON. The same
+// answer is returned by a database that is mid-restore, and a purge that completes on it
+// writes an erasure record that is false. The caller owns that judgement; this function
+// only reports the fact.
+func SchemaExists(ctx context.Context, db *gorm.DB, schema string) (bool, error) {
+	var n int64
+	// pg_namespace rather than information_schema.schemata: the latter shows only schemas
+	// the CURRENT ROLE has privileges on, so a schema owned by another service's role
+	// would read as absent — which is exactly the fail-open this is guarding against.
+	err := db.WithContext(ctx).Raw(
+		`SELECT count(*) FROM pg_namespace WHERE nspname = ?`, schema).Scan(&n).Error
+	if err != nil {
+		return false, fmt.Errorf("checking whether the %q schema exists: %w", schema, err)
+	}
+	return n > 0, nil
 }
 
 // loadColumns reads every column of every row-holding relation in every non-system
@@ -305,8 +364,26 @@ func Classify(ctx context.Context, db *gorm.DB) (*Plan, error) {
 // Plain views ('v') are excluded because they hold no rows: deleting through one is at
 // best a no-op and at worst an updatable-view write to a base table that has its own
 // entry. TimescaleDB's continuous aggregates are 'v' — the rows they serve live in a
-// materialization hypertable under _timescaledb_internal, which is its own erasure
-// target and is not reached by scanning schemas.
+// materialization hypertable under _timescaledb_internal, which is admitted to the plan
+// by name from the aggregate catalog (aggregate.go) rather than by scanning schemas.
+//
+// No schema filter is applied HERE, deliberately, even though it would keep every chunk
+// of every hypertable out of the result. isSystemSchema is the one authority on which
+// schemas are ours, and expressing the same rule a second time in SQL would put the two a
+// refactor away from disagreeing — in the direction where a table silently leaves the
+// plan, which is the failure this package exists to prevent.
+//
+// The cost that buys off, measured on PG17/TimescaleDB 2.28: about 11 catalog rows per
+// chunk, ~35 for a compressed one — 5ms at one chunk, 28ms at a thousand, 99ms at three
+// thousand. 🔴 It has NO CEILING, because retention ships opt-in and off: chunks
+// accumulate for as long as an instance keeps events, so this grows without bound while
+// everything else in a pass does not. It is still only ~30% of a warm pass today (the
+// per-hypertable statements dominate, almost entirely in PLANNING against the chunk
+// count), and it runs on a 60s ticker only while a tenant is being erased.
+//
+// If it ever does need fixing, DERIVE the SQL predicate from systemSchemas and the
+// admitted map rather than hand-writing a second copy of the rule — that keeps the one
+// property this comment is defending.
 func loadColumns(ctx context.Context, db *gorm.DB) ([]column, error) {
 	var out []column
 	err := db.WithContext(ctx).Raw(`
@@ -360,12 +437,36 @@ func loadForeignKeys(ctx context.Context, db *gorm.DB) ([]constraint, error) {
 // classify is the pure core: catalog facts in, plan out. Kept separate from the
 // queries so the classification rules can be tested on synthetic catalogs, including
 // shapes no migration has produced yet.
-func classify(cols []column, fks []constraint) (*Plan, error) {
-	tables, order := groupColumns(cols)
+// admitted maps a relation that lives in a system schema but must still be classified to
+// the sentence explaining where it came from — see aggregate.go, which is the only thing
+// that produces one today.
+//
+// 🔑 THE MAP IS THE ADMISSION SET AND THE PROVENANCE SOURCE AT ONCE, which is the point of
+// its shape: nothing can be admitted without supplying the sentence that explains it, and
+// a relation whose generated name means nothing on its own cannot enter the plan
+// anonymously.
+type admitted map[Table]string
+
+func classify(cols []column, fks []constraint, extra admitted) (*Plan, error) {
+	tables, order := groupColumns(cols, extra)
+
+	// 🔴 Every relation admitted by name must have reached the plan. Admission is only as
+	// good as the name matching, and a mismatch — a TimescaleDB release that reports a
+	// materialization differently, a view whose materialization has been dropped — would
+	// take it out of the plan SILENTLY, which is the exact shape of retention bug the
+	// schema scan was made catalog-driven to avoid. Two catalogs disagreeing is a fact
+	// worth failing on.
+	for t, origin := range extra {
+		if _, ok := tables[t]; !ok {
+			return nil, fmt.Errorf("%s was admitted to the purge as %s, but no such relation is in "+
+				"the catalog — its rows cannot be erased and a purge would silently retain them",
+				t, origin)
+		}
+	}
 
 	entries := make(map[Table]*Entry, len(tables))
 	for _, t := range order {
-		e := &Entry{Table: t}
+		e := &Entry{Table: t, Origin: extra[t]}
 		// A tenant column only makes a relation direct if a DELETE can act on it.
 		// A matview or foreign table with a tenant column needs an explicit answer,
 		// not a statement that fails or reaches into another system.
@@ -415,14 +516,26 @@ func classify(cols []column, fks []constraint) (*Plan, error) {
 }
 
 // groupColumns buckets catalog columns by table and returns a stable table order.
-func groupColumns(cols []column) (map[Table][]column, []Table) {
+//
+// extra names the relations that live in a system schema and are classified anyway. It is
+// keyed by the exact table so it can only ever re-admit relations someone named
+// individually — a schema-level escape hatch here would let every chunk back in.
+func groupColumns(cols []column, extra admitted) (map[Table][]column, []Table) {
 	tables := map[Table][]column{}
 	order := []Table{}
+	// The catalog read is ordered by schema, so consecutive rows almost always share one.
+	// Caching the verdict turns a per-ROW linear scan of the system-schema list into a
+	// per-SCHEMA one — on a mature telemetry database that is the difference between a
+	// million-odd string comparisons and a couple of hundred.
+	lastSchema, lastIsSystem := "", false
 	for _, c := range cols {
-		if isSystemSchema(c.Schema) {
-			continue
+		if c.Schema != lastSchema {
+			lastSchema, lastIsSystem = c.Schema, isSystemSchema(c.Schema)
 		}
 		t := Table{Schema: c.Schema, Name: c.Table}
+		if _, ok := extra[t]; !ok && lastIsSystem {
+			continue
+		}
 		if _, seen := tables[t]; !seen {
 			order = append(order, t)
 		}

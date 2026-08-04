@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -558,4 +559,71 @@ func TestStillPurgingIsTheInterlockTheSweepCarriesInItsOwnTransaction(t *testing
 
 	err = StillPurging("never-existed")(db)
 	require.Error(t, err, "a token naming nothing must abort too — it would match unset tenant columns")
+}
+
+// reappearingStore is a store that goes quiet, then finds rows again.
+//
+// It is the shape no other fake here can produce, and the shape the settle window exists
+// to survive: a store that is legitimately clean for a while and then has real data show
+// up. The telemetry store is the first that can do it — it reports clean over a telemetry
+// database that does not exist yet, and starts finding rows once the cluster is restored
+// underneath it.
+type reappearingStore struct {
+	name string
+	// rowsOnCall dictates the rows reported per call, indexed from 1. Calls past the end
+	// report zero, which is what a real store does once it has nothing left.
+	rowsOnCall map[int]int64
+	calls      int
+}
+
+func (r *reappearingStore) Name() string { return r.name }
+
+func (r *reappearingStore) Erase(context.Context, string, time.Time) (Outcome, error) {
+	r.calls++
+	// Always CLEAN — nothing deferred. That is the point: this store never says it is
+	// holding anything, it just quietly has rows to delete.
+	return Outcome{Rows: r.rowsOnCall[r.calls]}, nil
+}
+
+// TestRowsAppearingLateRestartTheSettleWindow is the assertion that the settle window
+// measures what it claims to.
+//
+// 🔴 Clean() MEANS "NOTHING DEFERRED", NOT "FOUND NOTHING". A store that swept rows and
+// then read back none is clean by that definition — so without care, the window keeps
+// running from the moment the store FIRST went quiet, and a purge can complete on a
+// window measured from before the data it just deleted ever existed. Settling is supposed
+// to establish that everything already admitted has stopped arriving, and rows arriving is
+// precisely the evidence that it has not.
+//
+// The store below is clean on every pass and reports rows only on the third, which is the
+// one arrangement that tells the two behaviours apart: carry-through completes on that
+// pass, restarting does not.
+func TestRowsAppearingLateRestartTheSettleWindow(t *testing.T) {
+	store := &reappearingStore{name: "tsdb", rowsOnCall: map[int]int64{3: 42}}
+	h := newHarness(t, store)
+	tenant := h.deleteTenant("acme")
+
+	// Two quiet passes establish a clean-since, then time moves past BOTH windows — so
+	// the only thing that can hold the purge open from here is the late rows.
+	h.pass()
+	h.clock = h.clock.Add(time.Minute)
+	h.pass()
+	h.clock = h.clock.Add(settleWindow + tokenHoldWindow + time.Minute)
+
+	// The third pass finds rows. It is clean when it ends, and under carry-through that
+	// is enough to complete on the spot.
+	h.pass()
+	require.True(t, h.exists("acme"),
+		"the store had this tenant's rows on the pass that just ran, so its clean-since cannot "+
+			"predate them — completing here releases the token on a window measured from before "+
+			"the data existed")
+	assert.Equal(t, h.clock, *h.ledger("acme", *tenant.PurgeEpoch)["tsdb"].CleanSince,
+		"the window must restart at the pass that found rows, not carry an older timestamp")
+
+	// And it completes normally once the restarted window has actually elapsed.
+	h.clock = h.clock.Add(settleWindow + time.Minute)
+	h.pass()
+	assert.False(t, h.exists("acme"),
+		"a full settle window has elapsed since the last pass that found anything, so the purge "+
+			"must complete — the restart is a delay, not a deadlock")
 }

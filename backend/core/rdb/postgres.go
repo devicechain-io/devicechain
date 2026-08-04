@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	pgx "github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -257,33 +259,40 @@ func (rdb *RdbManager) initializePostgres(ctx context.Context) error {
 		return err
 	}
 
-	sqldb, err := rdb.Database.DB()
+	return applyPoolSizing(rdb.Database, rdb.MicroserviceConfig, log.Info())
+}
+
+// applyPoolSizing configures a connection pool from the per-microservice datastore
+// config, and is the ONE place that policy lives — an owned connection and a guest
+// connection (guest.go) both come through here, so a change to it cannot be made for one
+// and forgotten for the other.
+//
+// The sizing (ADR-022 review E4): the pool must comfortably exceed the owning service's
+// per-service worker count (currently 5 persistence/projection workers) plus the GraphQL
+// server's request concurrency, otherwise workers and GraphQL contend for the same
+// handles and per-pod throughput is capped. We deliberately do NOT validate
+// worker_count <= max_connections here: the worker counts live in the service processors,
+// not in this shared package.
+//
+// Values come from the per-microservice config (MaxOpen/MaxIdle). The legacy
+// instance-level PostgresConfig.MaxConnections (default 5) is subsumed by this and no
+// longer drives the pool; it is left on the struct for any other reader.
+//
+// event carries the caller's own log fields (a guest names which connection it is), so
+// the two do not have to agree on a message format to share the policy.
+func applyPoolSizing(db *gorm.DB, cfg config.MicroserviceDatastoreConfiguration,
+	event *zerolog.Event) error {
+	sqldb, err := db.DB()
 	if err != nil {
 		return err
 	}
-
-	// Size the connection pool (ADR-022 review E4). The pool must comfortably
-	// exceed the owning service's per-service worker count (currently 5
-	// persistence/projection workers) plus the GraphQL server's request
-	// concurrency, otherwise workers and GraphQL contend for the same handles and
-	// per-pod throughput is capped. We deliberately do NOT validate
-	// worker_count <= max_connections here: the worker counts live in the service
-	// processors, not in this shared package.
-	//
-	// Pool sizing now comes from the per-microservice config (MaxOpen/MaxIdle).
-	// The legacy instance-level PostgresConfig.MaxConnections (default 5) is
-	// subsumed by this and no longer drives the pool; it is left on the struct
-	// for any other reader but does not size the pool.
-	maxOpen, maxIdle := poolSizing(rdb.MicroserviceConfig.MaxOpenConnections,
-		rdb.MicroserviceConfig.MaxIdleConnections)
+	maxOpen, maxIdle := poolSizing(cfg.MaxOpenConnections, cfg.MaxIdleConnections)
 	sqldb.SetMaxOpenConns(maxOpen)
 	sqldb.SetMaxIdleConns(maxIdle)
 	sqldb.SetConnMaxLifetime(time.Hour)
-	log.Info().
-		Int("max_open_connections", maxOpen).
+	event.Int("max_open_connections", maxOpen).
 		Int("max_idle_connections", maxIdle).
 		Msg("Created connection pool.")
-
 	return nil
 }
 

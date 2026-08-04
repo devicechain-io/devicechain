@@ -48,7 +48,7 @@ func TestTheTwoRealTenantColumnSpellingsAreBothDirect(t *testing.T) {
 		col("device-management", "devices", "tenant_id", "character varying"),
 		col("event-processing", "device_rosters", "tenant", "character varying"),
 		col("event-processing", "device_rosters", "device_token", "character varying"),
-	}, nil)
+	}, nil, nil)
 	require.NoError(t, err)
 
 	embed := classOf(t, plan, "device-management", "devices")
@@ -69,7 +69,7 @@ func TestTheTwoRealTenantColumnSpellingsAreBothDirect(t *testing.T) {
 func TestANumericTenantIdIsNotATenantColumn(t *testing.T) {
 	plan, err := classify([]column{
 		col("some-area", "widgets", "tenant_id", "bigint"),
-	}, nil)
+	}, nil, nil)
 	require.NoError(t, err)
 
 	e := classOf(t, plan, "some-area", "widgets")
@@ -95,7 +95,7 @@ func TestAJoinTableReachesTheTenantThroughItsForeignKey(t *testing.T) {
 			"user-management", "iam_memberships", "id"),
 		fk("user-management", "iam_membership_tenant_roles", "role_id",
 			"user-management", "iam_roles", "id"),
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	join := classOf(t, plan, "user-management", "iam_membership_tenant_roles")
@@ -138,7 +138,7 @@ func TestTransitivityResolvesToAFixpointRegardlessOfMapOrder(t *testing.T) {
 	}
 
 	for i := 0; i < 100; i++ {
-		plan, err := classify(cols, fks)
+		plan, err := classify(cols, fks, nil)
 		require.NoError(t, err)
 		for _, name := range []string{"mid", "leaf", "tip"} {
 			assert.Equalf(t, ClassTransitive, classOf(t, plan, "a", name).Class,
@@ -176,7 +176,7 @@ func TestADiamondCapturesEveryLinkOnEveryRun(t *testing.T) {
 	}
 
 	for i := 0; i < 200; i++ {
-		plan, err := classify(cols, fks)
+		plan, err := classify(cols, fks, nil)
 		require.NoError(t, err)
 		joiner := classOf(t, plan, "a", "joiner")
 		require.Equal(t, ClassTransitive, joiner.Class)
@@ -202,7 +202,7 @@ func TestAMaterializedViewIsNeverSweptSilently(t *testing.T) {
 	plan, err := classify([]column{
 		{Schema: "event-management", Table: "tenant_rollup", Kind: "m",
 			Name: "tenant_id", Type: "character varying"},
-	}, nil)
+	}, nil, nil)
 	require.NoError(t, err)
 
 	e := classOf(t, plan, "event-management", "tenant_rollup")
@@ -218,7 +218,7 @@ func TestAForeignTableIsNeverSweptSilently(t *testing.T) {
 	plan, err := classify([]column{
 		{Schema: "some-area", Table: "remote_rows", Kind: "f",
 			Name: "tenant_id", Type: "character varying"},
-	}, nil)
+	}, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, ClassUnclassified, classOf(t, plan, "some-area", "remote_rows").Class)
 }
@@ -230,7 +230,7 @@ func TestAPartitionedTableIsSweptNormally(t *testing.T) {
 	plan, err := classify([]column{
 		{Schema: "event-management", Table: "events", Kind: "p",
 			Name: "tenant_id", Type: "character varying"},
-	}, nil)
+	}, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, ClassDirect, classOf(t, plan, "event-management", "events").Class)
 }
@@ -256,7 +256,7 @@ func TestChildrenAreDeletedBeforeTheirParents(t *testing.T) {
 	}, []constraint{
 		fk("device-management", "areas", "area_type_id",
 			"device-management", "area_types", "id"),
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	require.Less(t, indexOf(plan, "areas"), indexOf(plan, "area_types"),
@@ -285,7 +285,7 @@ func TestDeleteOrderIsAGraphWalkNotASort(t *testing.T) {
 	plan, err := classify(cols, []constraint{
 		fk("a", "alpha", "ref", "a", "zulu", "id"),
 		fk("a", "zebra", "ref", "a", "bravo", "id"),
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	assert.Less(t, indexOf(plan, "alpha"), indexOf(plan, "zulu"),
@@ -306,7 +306,7 @@ func TestAForeignKeyCycleIsReportedRatherThanBroken(t *testing.T) {
 	}, []constraint{
 		fk("a", "x", "y_id", "a", "y", "id"),
 		fk("a", "y", "x_id", "a", "x", "id"),
-	})
+	}, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cycle")
 	assert.Contains(t, err.Error(), "a.x", "the message must name the tables involved")
@@ -321,7 +321,7 @@ func TestTheCatalogOverridesAStaleExemption(t *testing.T) {
 		// iam_roles is in the exemption registry. Give it a tenant column.
 		col("user-management", "iam_roles", "id", "bigint"),
 		col("user-management", "iam_roles", "tenant_id", "character varying"),
-	}, nil)
+	}, nil, nil)
 	require.NoError(t, err)
 
 	e := classOf(t, plan, "user-management", "iam_roles")
@@ -340,7 +340,7 @@ func TestSystemSchemasAreNotClassified(t *testing.T) {
 		col("information_schema", "tables", "tenant_id", "character varying"),
 		col("_timescaledb_internal", "_hyper_1_1_chunk", "tenant_id", "character varying"),
 		col("event-management", "events", "tenant_id", "character varying"),
-	}, nil)
+	}, nil, nil)
 	require.NoError(t, err)
 
 	require.Len(t, plan.Entries, 1, "only the functional-area table belongs in the plan")
@@ -432,7 +432,7 @@ func indexOf(plan *Plan, name string) int {
 func TestPlanReportsUnclassifiedTablesByName(t *testing.T) {
 	plan, err := classify([]column{
 		col("new-area", "mystery_rows", "id", "bigint"),
-	}, nil)
+	}, nil, nil)
 	require.NoError(t, err)
 
 	err = checkClassified(plan)

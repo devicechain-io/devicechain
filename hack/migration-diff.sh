@@ -154,6 +154,33 @@ if [ "$MODE" = "verify" ]; then
     -host localhost -port "$HOST_PORT" \
     -user postgres -password "$PASSWORD" \
     -db "$DB"
+
+  # The purge DRILL, which is a different claim from the coverage gate above and the only
+  # one that touches a row. Coverage proves every table is accounted for; this proves a
+  # sweep of the real foreign-key graph erases one tenant and leaves another intact — and
+  # that a continuous aggregate's materialized copy goes with it, which is invisible to a
+  # schema-only check because no ROW appears in a pg_dump.
+  #
+  # These run here rather than in the `go` CI job because they need exactly what this
+  # script already has: a real PostgreSQL with the TimescaleDB extension, and (for the
+  # drill) every area's chain applied. The `go` job has no database at all, which is why
+  # both suites were previously only VETTED and never executed.
+  #
+  # -count=1 because they read a database, and a cached PASS would replay over a broken
+  # tree. No -run filter, deliberately: naming the tests here is the same
+  # remember-to-add-it coverage a list always turns out to be, and an integration test
+  # added tomorrow should run tomorrow.
+  echo "==> Running the tenant-purge drill"
+  DC_IT_PGPORT="$HOST_PORT" go test -tags integration -count=1 -timeout 20m ./...
+
+  # core/rdb's guest-connection suite. It is the only thing that proves a real "database
+  # does not exist" error survives pgx, database/sql, gorm and our own wrapping as
+  # something errors.As can still recognise — the single assumption the telemetry store's
+  # "absent database ⇒ nothing to erase" conclusion rests on, and one a hand-built
+  # pgconn.PgError structurally cannot check. Different module, so a separate invocation.
+  echo "==> Running the guest-connection integration suite"
+  ( cd "$ROOT/backend/core" && DC_IT_PGPORT="$HOST_PORT" \
+      go test -tags integration -count=1 ./rdb/... )
 fi
 
 echo "==> Done."

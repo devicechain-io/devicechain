@@ -17,8 +17,15 @@ import (
 type TableResult struct {
 	Table Table
 	Class Class
-	Rows  int64
+	// Origin carries Entry.Origin through, so a relation whose generated name means
+	// nothing on its own can still be named in the message an operator gets when a purge
+	// is STUCK — which is the one moment the provenance matters most.
+	Origin string
+	Rows   int64
 }
+
+// Describe renders the table for a human, with its provenance when it has any.
+func (r TableResult) Describe() string { return describeTable(r.Table, r.Origin) }
 
 // Result is the outcome of a Sweep or a Residue scan over one tenant.
 type Result struct {
@@ -45,18 +52,21 @@ type Result struct {
 func (r Result) Complete() bool { return len(r.Deferred) == 0 }
 
 // ErrUnclassified is returned when a plan contains a table this package cannot
-// explain. It carries the offending tables so the message names them.
-type ErrUnclassified struct{ Tables []Table }
+// explain. It carries the offending entries so the message names them — entries rather
+// than tables, because a relation admitted from another catalog (a continuous
+// aggregate's materialization) has a name that means nothing on its own and needs the
+// provenance Entry.Describe carries.
+type ErrUnclassified struct{ Entries []Entry }
 
 func (e *ErrUnclassified) Error() string {
-	names := make([]string, 0, len(e.Tables))
-	for _, t := range e.Tables {
-		names = append(names, t.String())
+	names := make([]string, 0, len(e.Entries))
+	for _, t := range e.Entries {
+		names = append(names, t.Describe())
 	}
 	return fmt.Sprintf("%d table(s) hold rows the tenant purge cannot classify, so a purge would "+
 		"silently retain data: %s. Give each one a tenant column, a foreign key into tenant-bearing "+
 		"data, or an entry in the tenantpurge exemption registry stating why it is safe to skip",
-		len(e.Tables), strings.Join(names, ", "))
+		len(e.Entries), strings.Join(names, ", "))
 }
 
 // checkClassified fails a plan that contains unclassified tables.
@@ -66,14 +76,14 @@ func (e *ErrUnclassified) Error() string {
 // the exact outcome ADR-077 exists to prevent: a purge reporting success while a table
 // nobody classified keeps the tenant's data indefinitely.
 func checkClassified(plan *Plan) error {
-	var bad []Table
+	var bad []Entry
 	for _, e := range plan.Entries {
 		if e.Class == ClassUnclassified {
-			bad = append(bad, e.Table)
+			bad = append(bad, e)
 		}
 	}
 	if len(bad) > 0 {
-		return &ErrUnclassified{Tables: bad}
+		return &ErrUnclassified{Entries: bad}
 	}
 	return nil
 }
@@ -151,7 +161,7 @@ func Sweep(ctx context.Context, db *gorm.DB, plan *Plan, tenant string, pre Prec
 			}
 			if out.RowsAffected > 0 {
 				res.Tables = append(res.Tables, TableResult{
-					Table: e.Table, Class: e.Class, Rows: out.RowsAffected,
+					Table: e.Table, Class: e.Class, Origin: e.Origin, Rows: out.RowsAffected,
 				})
 				res.Rows += out.RowsAffected
 			}
@@ -206,19 +216,40 @@ func Residue(ctx context.Context, db *gorm.DB, plan *Plan, tenant string) (Resul
 			return res, fmt.Errorf("residual scan %s: %w", e.Table, q.Error)
 		}
 		if n > 0 {
-			res.Tables = append(res.Tables, TableResult{Table: e.Table, Class: e.Class, Rows: n})
+			res.Tables = append(res.Tables, TableResult{
+				Table: e.Table, Class: e.Class, Origin: e.Origin, Rows: n})
 			res.Rows += n
 		}
 	}
 	return res, nil
 }
 
-// checkSweepable rejects the two ways a caller can ask for something destructive and
-// wrong: an empty token, and a plan with unexplained tables.
+// checkSweepable rejects the three ways a caller can ask for something destructive and
+// wrong: an empty token, an empty plan, and a plan with unexplained tables.
 func checkSweepable(plan *Plan, tenant string) error {
 	if tenant == "" {
 		return fmt.Errorf("refusing to act on an empty tenant token: it would match every row whose " +
 			"tenant column was never set, in every area")
+	}
+	// 🔴 AN EMPTY PLAN IS THE MOST REASSURING WAY THIS PACKAGE CAN LIE, and every other
+	// check here passes vacuously on it: checkClassified finds no unclassified table, the
+	// sweep deletes from no table, and Residue reads no table — so the caller is told the
+	// tenant is gone from a database nobody looked inside.
+	//
+	// No correct steady state produces it. A database whose owning area was never deployed
+	// does not EXIST, which a caller learns from the connection rather than from here. One
+	// that exists with no tables means a restore still loading, migrations that have not
+	// run, or a connection to the wrong database — transient or misconfigured, and in
+	// every case something to block on rather than certify.
+	//
+	// This is the runtime twin of assertPlanIsPopulated in tools/migrationdiff, which
+	// refuses an empty plan in CI for the same reason and with the same wording: no
+	// findings is also what measuring nothing looks like.
+	if len(plan.Entries) == 0 {
+		return fmt.Errorf("refusing to act on an empty classification: a database with no tables in "+
+			"it would report %q completely erased having examined nothing. Expect this while a "+
+			"restore is still loading or migrations have not yet run; if it persists, this is not "+
+			"the database it is supposed to be", tenant)
 	}
 	return checkClassified(plan)
 }
