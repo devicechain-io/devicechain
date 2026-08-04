@@ -4,6 +4,7 @@
 package config
 
 import (
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"testing"
 	"time"
 
@@ -252,4 +253,27 @@ func TestNegativeTokenHoldIsRefused(t *testing.T) {
 	err := cfg.Validate()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "tokenHoldSeconds")
+}
+
+// TestTheSettleDefaultOutlastsTheBrokersRetainedCache pins a relationship between two
+// constants in different packages that nothing else would notice breaking.
+//
+// 🔴 A STREAM PURGE IS NOT AN ERASURE FOR UP TO TWO MINUTES. nats-server answers a new
+// subscriber for a retained message from an in-memory cache before it reads JetStream, so
+// a tenant's retained payloads keep being delivered after the purge reports zero messages.
+// The TTL is a compiled-in server constant with no knob. If the settle window were ever
+// shortened below it, a purge would complete — writing a deletion record and releasing the
+// token — while the broker was still serving the deleted tenant's data to whoever
+// subscribed next.
+//
+// The margin today is large and this test is cheap; the point is that shortening the
+// window becomes a failing test with an explanation rather than a silent regression.
+func TestTheSettleDefaultOutlastsTheBrokersRetainedCache(t *testing.T) {
+	settle := NewUserManagementConfiguration().TenantPurgeSettle()
+
+	if settle <= messaging.RetainedCacheWindow {
+		t.Fatalf("the settle window (%s) does not outlast the broker's retained-message cache "+
+			"(%s), so a purge can complete while the broker is still delivering this tenant's "+
+			"retained payloads to new subscribers", settle, messaging.RetainedCacheWindow)
+	}
 }

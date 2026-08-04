@@ -186,6 +186,15 @@ const (
 	// to land. The asymmetry is the point: waiting too long reserves a token for a few
 	// extra minutes, not waiting long enough writes an erasure record that is false.
 	//
+	// 🔴 IT ALSO HAS A FLOOR IT MUST NOT DROP BELOW: messaging.RetainedCacheWindow. A
+	// stream purge does not stop retained delivery immediately — nats-server answers a new
+	// subscriber from an in-memory cache before it reads JetStream, for up to two minutes,
+	// with no configuration knob. A purge that completed inside that window would write a
+	// record saying the tenant's data is gone while the broker was still handing its
+	// retained payloads to new subscribers. The default clears it by a wide margin, and
+	// TestTheSettleDefaultOutlastsTheBrokersRetainedCache is what keeps that true rather
+	// than coincidental.
+	//
 	// 🔴 IT IS NOT THE BOUND ON WHEN THE TOKEN MAY BE RELEASED, and reading it that way
 	// is the misreading governance.TenantLifecycleResolver's own doc warns about: the 60s
 	// TTL bounds how long the gate keeps SAYING "active", not how long the device plane

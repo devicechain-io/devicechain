@@ -37,6 +37,15 @@ const (
 	// publish rather than evicting anything — the best failure of the three, and
 	// the reason bounding it is strictly an improvement.
 	MqttQoS2InStore = "$MQTT_qos2in"
+	// MqttSessionStore holds one record per persistent MQTT session, keyed by a HASH of
+	// the client id. Deliberately unbounded (see below); named here because the ADR-077
+	// tenant purge has to talk about it — its subject carries no tenant, but its record
+	// value does.
+	MqttSessionStore = "$MQTT_sess"
+	// MqttRetainedStore holds one record per retained topic, under the original subject.
+	// Deliberately unbounded (see below). Its subjects DO carry the tenant, so a
+	// tenant-scoped purge reaches it.
+	MqttRetainedStore = "$MQTT_rmsgs"
 )
 
 // The gateway's other two streams — $MQTT_sess and $MQTT_rmsgs — are deliberately

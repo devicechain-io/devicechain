@@ -8,6 +8,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/tenantpurge"
 	"github.com/devicechain-io/dc-user-management/iam"
@@ -35,19 +36,13 @@ const (
 // store that can fail the whole purge closed — a table it cannot classify stops the pass
 // before a row is touched anywhere — so it is better to learn that before the others have
 // deleted anything.
-func DefaultStores(db *rdb.RdbManager, tsdb *rdb.Guest) []Store {
+func DefaultStores(db *rdb.RdbManager, tsdb *rdb.Guest, broker messaging.Connection,
+	instanceId string) []Store {
 	return []Store{
 		NewRelational(StoreRelational, db, StillPurging),
 		NewTelemetry(tsdb),
+		NewBroker(broker, instanceId),
 
-		Pending{
-			StoreName: StoreBroker,
-			Holds: "the broker still holds this tenant's retained messages — its per-tenant subjects on " +
-				"the platform streams until the stream age limit expires them, and its MQTT session and " +
-				"retained-message state, which is deliberately age-unbounded and so does not expire at " +
-				"all. A successor at a reused token would be delivered its predecessor's events, alarms " +
-				"and MQTT messages",
-		},
 		Pending{
 			StoreName: StoreKeyValue,
 			Holds: "the key-value store still holds this tenant's cached resolutions — device-by-token, " +

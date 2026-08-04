@@ -84,6 +84,22 @@ const (
 	ShapeDeviceEvents
 )
 
+// String names a shape for the messages that mention one.
+//
+// Those messages are the ones a maintainer reads when a subject came out wrong, and a
+// shape is precisely what tends to be wrong — so "device-events-capture (device-events)"
+// is actionable where "device-events-capture (2)" is a number to go and look up.
+func (s Shape) String() string {
+	switch s {
+	case ShapeTenantDevice:
+		return "tenant-device"
+	case ShapeDeviceEvents:
+		return "device-events"
+	default:
+		return "tenant"
+	}
+}
+
 // Stream is one JetStream stream's declaration: the subject suffix that names
 // it, its disk-budget tier, and how its concrete subject is shaped.
 type Stream struct {

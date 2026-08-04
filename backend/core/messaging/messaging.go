@@ -70,6 +70,21 @@ func ConcreteSubjectFor(instanceId, tenant, suffix, deviceToken string) string {
 	}
 }
 
+// TenantSubjectFilter is the subject pattern matching every message ONE TENANT has on a
+// declared stream — the filter a tenant-scoped purge hands JetStream (ADR-077).
+//
+// It goes through ConcreteSubjectFor rather than restating the shape arithmetic, for the
+// reason that function's own doc gives: a hand-built filter does not fail when a new shape
+// appears, it quietly matches nothing, and "purged 0 messages" is indistinguishable from
+// "there were none". A filter that is wrong in that direction leaves a deleted tenant's
+// messages on the broker for a successor at a reused token to receive.
+//
+// The device token is the only part a purge does not pin, so it is the wildcard: every
+// device belongs to the tenant being erased.
+func TenantSubjectFilter(instanceId, tenant, suffix string) string {
+	return ConcreteSubjectFor(instanceId, tenant, suffix, "*")
+}
+
 // StreamSubject is the subject pattern a suffix's stream captures, per its
 // declared shape. A tenant-scoped suffix captures "{instance}.*.{suffix}"; a
 // per-device one captures an extra level, "{instance}.*.{suffix}.*", so every
