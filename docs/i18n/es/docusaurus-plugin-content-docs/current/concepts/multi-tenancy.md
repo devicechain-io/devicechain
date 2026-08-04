@@ -21,6 +21,17 @@ Los inquilinos **no** son recursos de Kubernetes. Un inquilino es un **registro 
 - **Mensajería (aplicado)** — los asuntos (subjects) tienen alcance por inquilino (`{instance}.{tenant}.{suffix}`), de modo que el tráfico de un inquilino queda espaciado por nombres en el bus. En el **plano de dispositivos** esto se aplica en el broker: los listeners MQTT/NATS usan TLS, un auth-callout de NATS vincula cada conexión de dispositivo a los asuntos de su propio inquilino, y los puntos de escritura/suscripción de mensajería rechazan un segmento de inquilino malformado — de modo que un dispositivo no puede publicar en los asuntos de otro inquilino ni suscribirse a ellos.
 - **Autenticación** — los JWT llevan afirmaciones (claims) de inquilino que resuelven el inquilino de la solicitud; los servicios las validan localmente sin una llamada de red por solicitud.
 
+## Eliminar un inquilino
+
+Como un inquilino es un registro de base de datos y no un conjunto de pods, eliminarlo no
+consiste en desmontar infraestructura, sino en recuperar filas, flujos, búsquedas en caché
+y objetos subidos repartidos por todos los sistemas de almacenamiento que usa la instancia,
+todos ellos indexados por el identificador del inquilino. Por eso la eliminación es un
+**ciclo de vida**: el acceso se corta de inmediato, los datos se recuperan en segundo plano
+y el identificador permanece reservado hasta que eso termina y ninguna conexión anterior a
+la eliminación podría seguir escribiendo bajo él. Consulte
+[Eliminación de inquilinos](../deployment/tenant-deletion.md).
+
 ## Por qué microservicios compartidos
 
 Ejecutar un único conjunto de servicios para todos los inquilinos mantiene pequeña la huella del clúster y simple el modelo operativo, mientras que el alcance aplicado a nivel de fila (más el alcance de asuntos en el bus) provee el aislamiento que importa. Los servicios compartidos derivan el inquilino de cada solicitud o mensaje y limitan automáticamente a él todo el acceso a datos.

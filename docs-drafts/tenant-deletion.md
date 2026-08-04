@@ -459,14 +459,30 @@ Stated here so they are found deliberately rather than discovered:
    runtime reconciler rather than by migrations. Covered instead by event-management's own
    integration tests.
 
-## Publishing this
+## Its published counterpart
 
-This draft is an **engineering reference**, and it is longer than any page currently on the docs
-site — the published concept pages run 30 to 114 lines. Integrating it is therefore not a file move:
-the user-facing page is a shorter derived article answering "what happens when I delete a tenant,
-how long does it take, and what is kept", drawn mainly from sections 1, 4, 10 and 11. This document
-is the source that page is written from, and the thing a maintainer reads before touching any part
-of the path.
+`docs/docs/deployment/tenant-deletion.md` is the user-facing page derived from this one, with a
+Spanish mirror and a link in from the multi-tenancy concept page.
+
+**The split between them is by AUDIENCE, not by length**, and that is worth stating because the
+obvious reading is wrong. Length is not the discriminator: the deployment section already carries
+pages of 279, 323 and 339 lines, so a long page is unremarkable there. What separates the two is
+CONTRACT versus MECHANISM.
+
+The published page describes what an operator can rely on and act on: what happens and when, why
+the token is held, what is erased, what is kept, what can stall a deletion, what is configurable,
+and what is visible today. That is stable, so it earns its Spanish mirror — the site is exactly 1:1
+in both languages, and every page is a standing obligation in each.
+
+This document describes how it is achieved: the per-partition verdict, the halted split-brain
+writer, why the gate is on the dirty flag rather than on a count. That changes with almost every
+slice, and translating it would be work thrown away.
+
+There is a second reason not to merge them, and it is the sharper one. **The rot gate works only on
+file anchors**, which no published page should carry — so a published mechanism document would be
+simultaneously the least verifiable page on the site and the most expensive to keep translated.
+Keeping the anchored version here means the mechanism stays checkable and the published page stays
+maintainable.
 
 The body carries no ADR references so that it and anything derived from it are publishable as-is;
 the frontmatter `adrs` field holds the pointers, and `hack/check-docs-adr-refs.sh` enforces the
