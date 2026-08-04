@@ -39,23 +39,50 @@ type PolicyNotifier struct {
 	adapters map[string]ChannelAdapter
 	attempts int
 	timeout  time.Duration
+
+	// TenantDeleted reports whether a tenant has been through the ADR-077 delete door.
+	// A closure rather than the governance resolver type so this package needs no live
+	// user-management to test. MAY BE NIL — read it through tenantDeleted, never
+	// directly: the test fixtures in this package build a PolicyNotifier by struct
+	// literal, so the constructor is not the only way one comes into existence.
+	TenantDeleted func(tenant string) bool
 }
 
 // NewPolicyNotifier builds the dispatcher over the persistence API and the secret
 // store (ADR-059, from which each channel's delivery secret is resolved server-
 // internal at delivery time), with attempts per-channel delivery tries and timeout
-// bounding a single attempt.
-func NewPolicyNotifier(api *model.Api, store secrets.SecretStore, attempts int, timeout time.Duration) *PolicyNotifier {
+// bounding a single attempt. tenantDeleted is the ADR-077 lifecycle gate (nil disables
+// the refusal).
+func NewPolicyNotifier(api *model.Api, store secrets.SecretStore, attempts int, timeout time.Duration,
+	tenantDeleted func(string) bool) *PolicyNotifier {
 	if attempts < 1 {
 		attempts = 1
 	}
 	return &PolicyNotifier{
-		api:      api,
-		store:    store,
-		adapters: newAdapterRegistry(),
-		attempts: attempts,
-		timeout:  timeout,
+		api:           api,
+		store:         store,
+		adapters:      newAdapterRegistry(),
+		attempts:      attempts,
+		timeout:       timeout,
+		TenantDeleted: tenantDeleted,
 	}
+}
+
+// tenantDeleted reads the ADR-077 lifecycle gate, treating an unconfigured gate as "not
+// deleted". Every consultation goes through here so the nil check and the call cannot be
+// separated — the field is exported and built by literal in tests, so a direct call is a
+// nil-dereference waiting for a deployment without user-management configured.
+func (n *PolicyNotifier) tenantDeleted(ctx context.Context) bool {
+	if n.TenantDeleted == nil {
+		return false
+	}
+	tenant, ok := core.TenantFromContext(ctx)
+	// A context with no tenant cannot be attributed, so it cannot be refused. Both entry
+	// points scope their context before calling (the consumer from the message subject,
+	// the scheduler from its own tenant list), so this is unreachable rather than lenient
+	// — but the alternative, refusing everything an unscoped context carries, would turn a
+	// missing scope into a silent instance-wide notification outage.
+	return ok && n.TenantDeleted(tenant)
 }
 
 // Notify routes one alarm transition. RAISED/ESCALATED are delivered through the
@@ -85,6 +112,17 @@ func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateCh
 // dispatch evaluates policies and delivers a RAISED/ESCALATED transition.
 func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmStateChangeEvent) error {
 	tenant, _ := core.TenantFromContext(ctx)
+
+	// ADR-077: a deleted tenant is not paged. Refused here, at the top, rather than left
+	// to the funnel in deliverWithRetry, because everything below this line either queries
+	// or writes on the tenant's behalf — and returning nil is what tells the durable
+	// consumer to ACK the event. Refusing further down would leave it unacked and churn
+	// the redelivery cap for a tenant that will never be notified.
+	if n.tenantDeleted(ctx) {
+		log.Debug().Str("tenant", tenant).Str("alarm", event.AlarmToken).
+			Msg("Not notifying: the tenant has been deleted.")
+		return nil
+	}
 
 	policies, err := n.api.EnabledNotificationPolicies(ctx)
 	if err != nil {
@@ -230,6 +268,21 @@ func (n *PolicyNotifier) throttled(event *dmmodel.AlarmStateChangeEvent,
 // and the deferred per-policy-clock enhancement.
 func (n *PolicyNotifier) Escalate(ctx context.Context, state *model.NotificationState,
 	policies []*model.NotificationPolicy, now time.Time, defaultMax int) error {
+	// ADR-077: a deleted tenant's open alarms stop escalating.
+	//
+	// This check has to be HERE, above ClaimEscalation, and not only at the funnel below.
+	// ClaimEscalation WRITES — it advances the alarm's escalation tier — so a refusal
+	// further down would still have dirtied a table the purge is sweeping. A store that
+	// erases rows loses its clean-since and the settle window restarts, so a deleted
+	// tenant with an open alarm would hold its own purge open on every scheduler tick.
+	// It would also fail forever: the claim succeeds, nothing delivers, and the error
+	// return brings the scheduler back to the same state on the next tick.
+	if n.tenantDeleted(ctx) {
+		log.Debug().Str("alarm", state.AlarmToken).
+			Msg("Not escalating: the tenant has been deleted.")
+		return nil
+	}
+
 	deliveries := n.planEscalation(state, policies, now, defaultMax)
 	if len(deliveries) == 0 {
 		return nil
@@ -364,6 +417,23 @@ func effectiveMaxEscalations(p *model.NotificationPolicy, defaultMax int) int {
 // is logged and dropped rather than left for redelivery — a redelivery would resend the
 // whole event and double-send the channels that already succeeded.
 func (n *PolicyNotifier) deliverWithRetry(ctx context.Context, d delivery, rendered *RenderedNotification) bool {
+	// ADR-077, and this one is the GUARANTEE rather than the disposition.
+	//
+	// dispatch and Escalate both refuse a deleted tenant above, and today they are the
+	// only two callers — so on every path that exists this check is unreachable. It is
+	// here anyway because this is the single function through which every notification
+	// this service has ever sent passes, and an email or a webhook POST cannot be
+	// un-sent. A third caller added later inherits the refusal instead of having to
+	// remember it, which is the only property worth buying with a redundant check.
+	//
+	// Its own test therefore drives it directly rather than through a caller: a
+	// backstop reached only via paths that already refuse cannot be observed failing.
+	if n.tenantDeleted(ctx) {
+		log.Warn().Str("channel", d.channel.Token).
+			Msg("Refusing to deliver a notification for a deleted tenant; this should have been refused upstream.")
+		return false
+	}
+
 	adapter := n.adapters[d.channel.ChannelType]
 	for attempt := 1; attempt <= n.attempts; attempt++ {
 		dctx, cancel := context.WithTimeout(ctx, n.timeout)

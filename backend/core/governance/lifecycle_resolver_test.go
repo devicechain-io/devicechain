@@ -185,7 +185,9 @@ func TestNewTenantLifecycleGateIsOffWhenUnconfigured(t *testing.T) {
 	}
 
 	// The control: fully configured builds a gate. Without it, a helper that returned nil
-	// unconditionally would satisfy every case above and leave all four services ungated.
+	// unconditionally would satisfy every case above and leave every service carrying this
+	// gate ungated. (Deliberately not counted — the count has been wrong twice; the set is
+	// `grep -rl NewTenantLifecycleGate backend/services`.)
 	gate := NewTenantLifecycleGate(full, "s3cret", "test")
 	require.NotNil(t, gate)
 	assert.False(t, gate("acme"),

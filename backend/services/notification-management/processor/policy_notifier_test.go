@@ -347,3 +347,190 @@ func TestParseRecipients(t *testing.T) {
 		t.Fatalf("garbage → nil, got %v", r)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ADR-077: a deleted tenant is never paged.
+//
+// This service EMITS — email and webhook POSTs — so a refusal that arrives late is
+// irreversible in a way a late refusal on an ingest path is not. The tests below cover
+// all three places the gate is consulted, and each is consulted for a different reason:
+// dispatch so the durable consumer acks, Escalate so nothing is written before the
+// refusal, and deliverWithRetry as the funnel a future caller inherits.
+
+// gatedNotifier builds a notifier whose lifecycle gate answers `deleted` for every tenant.
+//
+// 🔑 ITS api IS NIL, AND THAT IS THE INSTRUMENT, not an oversight. dispatch and Escalate
+// both call the API immediately after the point the gate sits at, so "did the refusal
+// happen before the work?" is answerable by whether the call survives a nil api. A test
+// that only asserted "no notification was delivered" would pass just as well with the
+// gate placed at the very bottom, after every query and every write.
+func gatedNotifier(adapters map[string]ChannelAdapter, deleted bool) *PolicyNotifier {
+	n := testNotifier(adapters)
+	n.TenantDeleted = func(string) bool { return deleted }
+	return n
+}
+
+// deletedTenantCtx scopes a context to a tenant, as both real entry points do before
+// calling into the notifier.
+func deletedTenantCtx() context.Context {
+	return core.WithTenant(context.Background(), "acme")
+}
+
+// panicked reports whether fn panicked, so a test can assert that the code path it is
+// pinning really does reach the nil api when the gate does NOT refuse.
+func panicked(fn func()) (didPanic bool) {
+	defer func() {
+		if recover() != nil {
+			didPanic = true
+		}
+	}()
+	fn()
+	return false
+}
+
+// TestDispatchRefusesADeletedTenantBeforeQuerying pins that a deleted tenant's alarm is
+// refused above the policy query, and that the refusal returns nil — which is what makes
+// the durable consumer ACK the event instead of leaving it to churn the redelivery cap
+// for a tenant that will never be notified.
+func TestDispatchRefusesADeletedTenantBeforeQuerying(t *testing.T) {
+	fa := &fakeAdapter{}
+	n := gatedNotifier(map[string]ChannelAdapter{model.ChannelTypeSMTP: fa}, true)
+
+	var err error
+	if panicked(func() { err = n.dispatch(deletedTenantCtx(), raisedEvent("CRITICAL")) }) {
+		t.Fatal("the refusal must come before the policy query; it reached the (nil) api instead")
+	}
+	if err != nil {
+		t.Fatalf("a refusal must return nil so the consumer acks and drops the event, got %v", err)
+	}
+	if fa.calls != 0 {
+		t.Fatalf("a deleted tenant must not be paged; the adapter was called %d time(s)", fa.calls)
+	}
+}
+
+// TestDispatchForALiveTenantStillReachesTheApi is the counterweight to the test above and
+// the proof that its instrument works: with the gate answering "not deleted", the same
+// call must get past the gate and reach the nil api. Without this, the test above would
+// pass with a dispatch that returned nil unconditionally.
+func TestDispatchForALiveTenantStillReachesTheApi(t *testing.T) {
+	n := gatedNotifier(map[string]ChannelAdapter{model.ChannelTypeSMTP: &fakeAdapter{}}, false)
+
+	if !panicked(func() { _ = n.dispatch(deletedTenantCtx(), raisedEvent("CRITICAL")) }) {
+		t.Fatal("a live tenant's alarm must get past the gate and query policies; it did not reach the api")
+	}
+}
+
+// TestEscalateRefusesADeletedTenantBeforeClaimingATier pins the ordering that matters most
+// in this file: the refusal sits above ClaimEscalation, which WRITES.
+//
+// A refusal below it would still advance the alarm's escalation tier for a tenant being
+// reclaimed. That dirties a table the purge is sweeping, and a store that erases rows
+// loses its clean-since — restarting the settle window the purge cannot complete without.
+// A deleted tenant with one open alarm would hold its own purge open on every tick.
+func TestEscalateRefusesADeletedTenantBeforeClaimingATier(t *testing.T) {
+	fa := &fakeAdapter{}
+	n := gatedNotifier(map[string]ChannelAdapter{model.ChannelTypeSMTP: fa}, true)
+	smtp := enabledChannel("smtp-1", model.ChannelTypeSMTP)
+	now := time.Now().UTC()
+	p := escalatingPolicy("p", 300, 0, rule("CRITICAL", smtp, "ops@x.com"))
+	state := openState("CRITICAL", now.Add(-10*time.Minute), 1)
+
+	var err error
+	if panicked(func() { err = n.Escalate(deletedTenantCtx(), state, []*model.NotificationPolicy{p}, now, 5) }) {
+		t.Fatal("the refusal must come before ClaimEscalation; it reached the (nil) api instead")
+	}
+	if err != nil {
+		t.Fatalf("a refused escalation must return nil so the scheduler moves on, got %v", err)
+	}
+	if fa.calls != 0 {
+		t.Fatalf("a deleted tenant must not be escalated; the adapter was called %d time(s)", fa.calls)
+	}
+}
+
+// TestEscalateForALiveTenantStillClaimsATier is the counterweight: the same fixture must
+// plan a real delivery and reach ClaimEscalation when the tenant is live. Without it, the
+// test above would pass with a fixture that planned zero deliveries and never went near
+// the write it claims to be protecting.
+func TestEscalateForALiveTenantStillClaimsATier(t *testing.T) {
+	n := gatedNotifier(map[string]ChannelAdapter{model.ChannelTypeSMTP: &fakeAdapter{}}, false)
+	smtp := enabledChannel("smtp-1", model.ChannelTypeSMTP)
+	now := time.Now().UTC()
+	p := escalatingPolicy("p", 300, 0, rule("CRITICAL", smtp, "ops@x.com"))
+	state := openState("CRITICAL", now.Add(-10*time.Minute), 1)
+
+	if !panicked(func() { _ = n.Escalate(deletedTenantCtx(), state, []*model.NotificationPolicy{p}, now, 5) }) {
+		t.Fatal("a live tenant's escalation must reach ClaimEscalation; the fixture planned no deliveries, " +
+			"so the test above proves nothing about ordering")
+	}
+}
+
+// TestDeliverWithRetryRefusesADeletedTenant drives the funnel DIRECTLY.
+//
+// It has to. dispatch and Escalate both refuse above it, so on every path that exists
+// today this check is unreachable — and a backstop reached only through callers that
+// already refuse cannot be observed failing. Driving it directly is the only way this
+// assertion measures the funnel rather than the callers.
+func TestDeliverWithRetryRefusesADeletedTenant(t *testing.T) {
+	fa := &fakeAdapter{}
+	n := gatedNotifier(map[string]ChannelAdapter{model.ChannelTypeSMTP: fa}, true)
+	d := delivery{channel: enabledChannel("smtp-1", model.ChannelTypeSMTP), recipients: []string{"ops@x.com"}}
+
+	if n.deliverWithRetry(deletedTenantCtx(), d, &RenderedNotification{}) {
+		t.Fatal("the funnel must refuse a deleted tenant")
+	}
+	if fa.calls != 0 {
+		t.Fatalf("nothing may reach the adapter for a deleted tenant; it was called %d time(s)", fa.calls)
+	}
+}
+
+// TestDeliverWithRetryDeliversForALiveTenant is the funnel's counterweight: without it,
+// a funnel that refused unconditionally would be a total notification outage passing as a
+// working gate.
+func TestDeliverWithRetryDeliversForALiveTenant(t *testing.T) {
+	fa := &fakeAdapter{}
+	n := gatedNotifier(map[string]ChannelAdapter{model.ChannelTypeSMTP: fa}, false)
+	d := delivery{channel: enabledChannel("smtp-1", model.ChannelTypeSMTP), recipients: []string{"ops@x.com"}}
+
+	if !n.deliverWithRetry(deletedTenantCtx(), d, &RenderedNotification{}) {
+		t.Fatal("a live tenant's notification must be delivered")
+	}
+	if fa.calls != 1 {
+		t.Fatalf("expected exactly one delivery, got %d", fa.calls)
+	}
+}
+
+// TestAnUnconfiguredGateDelivers pins the fail-open default: NewTenantLifecycleGate returns
+// nil on an instance with no user-management configured, and this service must then behave
+// exactly as it did before the gate existed rather than panic or refuse everything.
+func TestAnUnconfiguredGateDelivers(t *testing.T) {
+	fa := &fakeAdapter{}
+	n := testNotifier(map[string]ChannelAdapter{model.ChannelTypeSMTP: fa}) // TenantDeleted nil
+	d := delivery{channel: enabledChannel("smtp-1", model.ChannelTypeSMTP), recipients: []string{"ops@x.com"}}
+
+	if !n.deliverWithRetry(deletedTenantCtx(), d, &RenderedNotification{}) {
+		t.Fatal("an unconfigured gate must admit (fail open)")
+	}
+	if fa.calls != 1 {
+		t.Fatalf("expected exactly one delivery, got %d", fa.calls)
+	}
+}
+
+// TestTheConstructorWiresTheLifecycleGate covers the plumbing every test above skips.
+//
+// They all build a PolicyNotifier by struct literal and assign TenantDeleted directly, so
+// they measure the FIELD. The shipped binary reaches it only through NewPolicyNotifier —
+// and with nothing covering that, deleting `TenantDeleted: tenantDeleted` from the
+// constructor would disable the gate in production with this whole file still green.
+func TestTheConstructorWiresTheLifecycleGate(t *testing.T) {
+	n := NewPolicyNotifier(nil, nil, 3, time.Second, func(tenant string) bool { return tenant == "acme" })
+	fa := &fakeAdapter{}
+	n.adapters = map[string]ChannelAdapter{model.ChannelTypeSMTP: fa}
+	d := delivery{channel: enabledChannel("smtp-1", model.ChannelTypeSMTP), recipients: []string{"ops@x.com"}}
+
+	if n.deliverWithRetry(deletedTenantCtx(), d, &RenderedNotification{}) {
+		t.Fatal("the gate passed to the constructor must reach the delivery path")
+	}
+	if fa.calls != 0 {
+		t.Fatalf("nothing may reach the adapter; it was called %d time(s)", fa.calls)
+	}
+}

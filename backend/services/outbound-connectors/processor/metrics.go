@@ -33,6 +33,11 @@ const (
 	// burst is admitted by the wait and never reaches this; a rising rate_limited count is a tenant
 	// sustained over its outbound quota.
 	outcomeRateLimited = "rate_limited"
+	// outcomeTenantDeleted — the dispatch's tenant has been through the delete door (ADR-077), so the
+	// send was refused and the message dropped (acked). Counted apart from a rate shed because the two
+	// mean opposite things: a rate shed is a live tenant over quota whose dead-lettered message is
+	// replayable, this is a tenant that will not exist and whose message must never be sent.
+	outcomeTenantDeleted = "tenant_deleted"
 	// outcomeDeadWriteFailed — the terminal case where the dead-letter WRITE itself failed on the
 	// last delivery the broker will make, so the dispatch could be neither delivered nor durably
 	// dead-lettered: an explicit, alertable LOSS signal (never silently swallowed).

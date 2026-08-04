@@ -363,9 +363,11 @@ otherwise only in logs.
 
 ## 9. The device plane during a purge
 
-One shared mechanism, `governance.NewTenantLifecycleGate`, wired at five services: the broker
-auth-callout in device-management, all three inbound sources in event-sources, the Sparkplug and
-LwM2M ingest adapters, and command-delivery. It resolves the tenant's lifecycle from
+One shared mechanism, `governance.NewTenantLifecycleGate`, wired at the broker auth-callout in
+device-management, all three inbound sources in event-sources, the Sparkplug and LwM2M ingest
+adapters, command-delivery, outbound-connectors and notification-management. The set is
+deliberately not counted here — it has been counted wrong twice; ask
+`grep -rl NewTenantLifecycleGate backend/services`. It resolves the tenant's lifecycle from
 user-management's governance query over a service token scoped to `tenant:read` alone, through the
 same 60-second cache the ingest ceilings use.
 
@@ -388,11 +390,52 @@ answering differently would tell an unauthenticated caller which tenants exist a
 to them. The two are counted apart, because they mean opposite things to an operator reading a
 metric.
 
-**The gate covers the device plane, and outbound connectors are not on it.** A purging tenant's
-automation rules can still fire their outbound actions — webhooks and MQTT/Kafka/SNS/SQS publishes —
-until the pass that erases those rules lands. It is the one path where a deleted tenant's data can
-still *leave* the platform rather than merely arrive at it, and it is bounded by the sweep rather
-than by a gate.
+### The two services that EMIT
+
+Everywhere else this gate sits, a message admitted a moment too late is a row the sweep reclaims on
+its next pass. Two services are different in kind: what they admit late has already left, and no
+later pass can undo it.
+
+🔴 **There are two of them, and the first draft of this section said there was one.** That claim was
+written about outbound-connectors, was wrong, and the second emitter — notification-management —
+was found only by an adversarial review of the change that closed the first. Both now carry the
+gate. Do not restate "the only path that emits" here without re-deriving the set; the phrasing is
+what stops the next reader looking.
+
+**Outbound connectors.** A webhook POST, or an MQTT/Kafka/SNS/SQS publish, on somebody else's
+server.
+
+`DispatchConsumer`'s handler therefore consults it after the message decodes and **before** the egress
+rate wait, and a refused dispatch is **dropped (acked), never dead-lettered** — which is the
+non-obvious part. The dead-letter subject is `{instance}.{tenant}.connector-dispatch.dead`, inside
+the namespace being reclaimed; writing there would give the broker store messages to erase on its
+next pass, and a store that erases rows loses its `CleanSince` (`purge/coordinator.go`), restarting
+the settle window. A tenant deleted with a dispatch backlog would hold its own purge open, one pass
+per pass, for as long as the backlog took to drain. Nothing is lost by dropping: the dead-letter
+subject exists so an operator can inspect or replay, and both answer "should this have been sent?"
+for a tenant where the answer is permanently no.
+
+What remains is the gate's ordinary bound, not a hole of its own: a dispatch a worker had already
+read when the delete landed completes, and the 60-second cache means the refusal starts up to a
+minute later. Both are the same window every other service on this gate carries.
+
+**Notification management**, which emails and webhooks a tenant's *humans*. It is the harder of the
+two to see, because it does not need inbound traffic to fire: `EscalationScheduler` re-pages every
+open unacknowledged alarm on a timer, enumerating tenants from **its own rows** under a system
+context. A deleted tenant with one unacknowledged alarm would therefore have kept paging on every
+tick until the relational sweep reached those rows — no device, no event, no connector involved.
+
+The gate lives on `PolicyNotifier` and is consulted in three places, each for a different reason,
+which is why none of them is redundant:
+
+| Where | Why there and not only at the funnel |
+| --- | --- |
+| `dispatch` | Returning nil is what makes the durable consumer **ack** the alarm event. Refusing lower down would leave it unacked and churn the redelivery cap for a tenant that will never be paged. |
+| `Escalate` | It sits above `ClaimEscalation`, which **writes** — it advances the alarm's escalation tier. A refusal below it would dirty a table the purge is sweeping, restarting the settle window on every tick, and would then fail forever: claim succeeds, nothing delivers, same state next tick. |
+| `deliverWithRetry` | The funnel every notification ever sent passes through. Today it is unreachable — both callers refuse above it — and it exists so a third caller inherits the refusal rather than having to remember it. Its test drives it directly, because a backstop reached only through callers that already refuse cannot be observed failing. |
+
+The retention sweeper is deliberately **not** gated: its only per-tenant action is deleting its own
+cleared rows, which is exactly what should keep happening for a tenant being reclaimed.
 
 At the broker there is **no per-tenant NATS account or user** — isolation is by per-user permission
 within one account — so the only broker-layer stop is the auth callout, which refuses before the
@@ -444,18 +487,15 @@ Those are two different questions and an operator asking "is it done?" usually m
 
 Stated here so they are found deliberately rather than discovered:
 
-1. **Outbound connectors are not behind the lifecycle gate.** Between the cut and the pass that
-   erases a tenant's automation rules, their outbound actions can still fire. Every other known gap
-   here retains data; this one can still send it somewhere.
-2. **No progress API.** The ledger is database-only; the console shows two fields.
-3. **Orphaned objects** whose reference was lost before the purge are unreachable by a row-driven
+1. **No progress API.** The ledger is database-only; the console shows two fields.
+2. **Orphaned objects** whose reference was lost before the purge are unreachable by a row-driven
    work list.
-4. **Exempted key-value buckets** (refresh tokens, OAuth codes, locks, leases) never reach the
+3. **Exempted key-value buckets** (refresh tokens, OAuth codes, locks, leases) never reach the
    deletion record — the ledger records that store as clean without recording what it declined to
    look at. Same shape as the telemetry store's "no database here".
-5. **A false exemption is invisible to CI.** Only the presence of a reason is checked, never its
+4. **A false exemption is invisible to CI.** Only the presence of a reason is checked, never its
    truth.
-6. **Compressed chunks** are out of reach of the purge drill, because compression is applied by a
+5. **Compressed chunks** are out of reach of the purge drill, because compression is applied by a
    runtime reconciler rather than by migrations. Covered instead by event-management's own
    integration tests.
 
