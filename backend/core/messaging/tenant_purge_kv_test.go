@@ -208,3 +208,60 @@ func TestEveryTenantScopedBucketIsInTheInventory(t *testing.T) {
 				"exemptions, so nobody reading a deletion record can tell what it holds", b.Name)
 	}
 }
+
+// TestEveryBucketInTheInventoryIsActuallyReached closes the gap the inventory test cannot.
+//
+// 🔴 THE (AREA, LOGICAL) PAIR IS WHAT NAMES A BUCKET, AND ONLY THE LOGICAL HALF WAS EVER
+// CHECKED. A wrong area string produces a bucket name nothing ever created, which
+// PurgeTenantKv tolerates as ErrBucketNotFound — deliberately, because an instance without
+// device-management has none of these. So a typo does not fail: it reports clean, on every
+// pass, forever, over a bucket full of the deleted tenant's cached resolutions.
+//
+// 🔑 THE SEED LIST IS INDEPENDENT OF THE INVENTORY, AND THAT IS THE WHOLE TEST. A first
+// version of this seeded buckets by iterating tenantScopedBuckets — so it created whatever
+// the inventory named, purged whatever the inventory named, and passed with a deliberately
+// typo'd area. A derived oracle cannot confirm itself. The pairs below are written out, so
+// a typo in the inventory means the purge looks somewhere the seed is not.
+func TestEveryBucketInTheInventoryIsActuallyReached(t *testing.T) {
+	_, js := purgeRig(t)
+
+	// Written out on purpose — see above. "device-management" is the area that calls
+	// NewCache for all six (device-management/model/cache.go).
+	expected := []struct{ area, logical string }{
+		{"device-management", kv.BucketDeviceByToken},
+		{"device-management", kv.BucketRelationshipsBySource},
+		{"device-management", kv.BucketMembershipsByEntity},
+		{"device-management", kv.BucketMetricDefsByType},
+		{"device-management", kv.BucketProfileScopeByType},
+		{"device-management", kv.BucketScopedGroupsExist},
+	}
+	require.Len(t, tenantScopedBuckets, len(expected),
+		"the inventory gained or lost a bucket; this test's independent list has to follow, and "+
+			"deriving it from the inventory would make the check confirm itself")
+
+	stores := map[string]nats.KeyValue{}
+	for _, e := range expected {
+		bucket := CacheBucketName(purgeInstance, e.area, e.logical)
+		// scoped-groups-exist keys on the bare tenant; every other bucket on tenant|rest.
+		// Seeding each with ITS OWN layout is the point — one layout everywhere would let
+		// the bare-tenant bucket pass on a key it never actually holds.
+		victim, bystander := purgeVictim+"|x", purgeBystander+"|x"
+		if e.logical == kv.BucketScopedGroupsExist {
+			victim, bystander = purgeVictim, purgeBystander
+		}
+		stores[bucket] = seedBucket(t, js, bucket, victim, bystander)
+	}
+	require.Len(t, stores, len(expected), "two entries produced the same bucket name")
+
+	res, err := PurgeTenantKv(context.Background(), js, purgeInstance, purgeVictim)
+	require.NoError(t, err)
+
+	assert.Equal(t, int64(len(expected)), res.Keys,
+		"one key per bucket belonged to the victim, so a smaller total means a bucket the purge "+
+			"never reached — most likely a wrong functional area in the inventory, which looks "+
+			"exactly like a bucket that was already clean")
+	for bucket, store := range stores {
+		assert.Containsf(t, res.PerBucket, bucket, "%s contributed nothing", bucket)
+		assert.Lenf(t, bucketKeys(t, store), 1, "%s should hold only the bystander's key", bucket)
+	}
+}
