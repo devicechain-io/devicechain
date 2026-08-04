@@ -115,27 +115,45 @@ func (w *timerWheel) cancel(key SeriesKey) {
 	}
 }
 
-// purgeRule sweeps rule id out of the wheel entirely — its generation bookkeeping
-// (gens/live) and any of its timers still in the pq heap (ADR-051 slice 4b-3 rule
-// removal). fire/apply already early-return on a missing rule, so a leftover timer would
-// only fire into a no-op; this is GC, not correctness, but a removed rule must leave the
-// wheel clean. Indices are reset before heap.Init to keep the heap consistent.
-func (w *timerWheel) purgeRule(id string) {
-	deleteSeriesKeys(w.gens, id)
-	deleteSeriesKeys(w.live, id)
+// purgeMatching sweeps every rule the predicate selects out of the wheel entirely — its
+// generation bookkeeping (gens/live) and any of its timers still in the pq heap. It serves
+// both a single rule's removal (ADR-051 slice 4b-3) and the ADR-077 tenant eviction, which
+// selects by the rule id's owning tenant. fire/apply already early-return on a missing
+// rule, so a leftover timer would only fire into a no-op; this is GC, not correctness, but
+// a removed rule must leave the wheel clean. Indices are reset before heap.Init to keep the
+// heap consistent.
+//
+// The gens map is swept along with the rest, which reintroduces the generation-recycling
+// hazard this type's doc describes — a later timer for the same key would restart at
+// generation 1 and could match a stale heap entry. That is deliberate and is the same
+// trade the single-rule removal already made: the heap is swept in the same call, so there is no stale
+// entry left to match, and the alternative — retaining a map keyed on the purged tenant's
+// rule ids and device tokens — would leave the tenant's identifiers in memory and in the
+// snapshot (gens is serialized) after an erasure claimed they were gone.
+func (w *timerWheel) purgeMatching(match func(ruleID string) bool) int {
+	n := deleteSeriesKeysMatching(w.gens, match)
+	n += deleteSeriesKeysMatching(w.live, match)
 	old := w.pq
 	kept := old[:0]
 	for _, t := range old {
-		if t.key.Rule != id {
+		if !match(t.key.Rule) {
 			t.index = len(kept)
 			kept = append(kept, t)
 		}
+	}
+	if len(kept) == len(old) {
+		// Nothing matched, so the heap is untouched and its invariant already holds. Worth the
+		// branch because heap.Init is O(n) over every tenant's live timers and the steady state
+		// of a tenant purge is a pass that matches nothing — once a minute, for as long as the
+		// deletion takes. See closeHeap.purgeMatching, which skips the same rebuild.
+		return n
 	}
 	for i := len(kept); i < len(old); i++ {
 		old[i] = nil // release the dropped *timer for GC
 	}
 	w.pq = kept
 	heap.Init(&w.pq)
+	return n
 }
 
 // firedTimer is a due timer: the key plus the deadline it was scheduled for (so the

@@ -54,6 +54,11 @@ var (
 	// 6d cutover made raise-alarm the sole alarm path, its raise-alarm sink is always wired, so the
 	// dispatcher is always started; send-command is the optional sink (nil when unconfigured).
 	ReactDispatcher *processor.ReactDispatcher
+	// TenantPurgeResponder answers the ADR-077 purge coordinator's request to evict a deleted
+	// tenant from the running engine. It is the only way that state can be erased — no query
+	// reaches inside a checkpoint blob — so an instance running DETECT without this responder
+	// is one whose tenant purges can never complete.
+	TenantPurgeResponder *processor.TenantPurgeResponder
 )
 
 func main() {
@@ -410,6 +415,17 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := ResolvedEventsProcessor.Start(ctx); err != nil {
 		return err
 	}
+	// AFTER the processor, never before: the responder marshals every eviction onto the
+	// single-writer loop, and BOTH the loop and the context that bounds the wait for it are
+	// created by Start. A request arriving before that would not merely wait — EvictTenant
+	// selects on rp.procCtx.Done(), and procCtx is nil until Start, so the handler goroutine
+	// would panic on a nil context and take the process down. The ordering is what makes that
+	// unreachable; it is not a latency preference.
+	TenantPurgeResponder = processor.NewTenantPurgeResponder(NatsManager.Conn(),
+		Microservice.InstanceId, ResolvedEventsProcessor)
+	if err := TenantPurgeResponder.Start(); err != nil {
+		return err
+	}
 	// Start the REACT dispatcher last (after its reader is live) — independent of the DETECT
 	// processor. Always non-nil since 6d (raise-alarm is always wired); the nil guard is defensive.
 	if ReactDispatcher != nil {
@@ -420,6 +436,13 @@ func afterMicroserviceStarted(ctx context.Context) error {
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
+	// Unsubscribe the eviction responder first, symmetric with start: past this point the loop
+	// is stopping, so an accepted request could only be answered with a failure.
+	if TenantPurgeResponder != nil {
+		if err := TenantPurgeResponder.Stop(); err != nil {
+			return err
+		}
+	}
 	// Stop REACT first (before its reader is torn down with the NATS manager), symmetric with start.
 	if ReactDispatcher != nil {
 		if err := ReactDispatcher.Stop(ctx); err != nil {

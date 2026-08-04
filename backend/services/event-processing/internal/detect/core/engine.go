@@ -310,25 +310,59 @@ func (e *Engine) UpsertRule(r Rule) {
 // since versions are immutable and retained), so an O(live-state) linear sweep, with no
 // reverse index to maintain on the hot path, is the right trade.
 func (e *Engine) RemoveRule(id string) {
-	delete(e.rules, id)
-	deleteSeriesKeys(e.active, id)
-	deleteSeriesKeys(e.sliding, id)
-	deleteSeriesKeys(e.lastVal, id)
-	deleteSeriesKeys(e.counts, id)
-	deleteSeriesKeys(e.session, id)
-	deleteSeriesKeys(e.slides, id)
-	deleteSeriesKeys(e.corr, id)
-	deleteSeriesKeys(e.expected, id)
-	deleteSeriesKeys(e.raised, id)
-	deleteSeriesKeys(e.presenceState, id)
-	for pk := range e.panes {
-		if pk.Rule == id {
-			delete(e.panes, pk)
+	e.RemoveMatching(func(rule string) bool { return rule == id })
+}
+
+// RemoveMatching is the general form of RemoveRule: it evicts every rule the predicate
+// selects, along with all of that rule's keyed state, and reports how many entries it
+// removed.
+//
+// It exists because a tenant erasure (ADR-077 slice 2c) has to remove state by a
+// PREFIX of the rule id rather than by an exact id, and expressing that as "look up the
+// tenant's rules, then call RemoveRule on each" would have been wrong in a way that is
+// invisible from the outside: state can outlive the rule that created it. Restore
+// reloads dead-man armings for rules the restored rule set no longer contains (see
+// SetExpected), and a rule removed while its pane close was still pending leaves the
+// close item behind by design. Sweeping the state structures directly is what reaches
+// those; sweeping the rule map first would report a clean eviction over them.
+//
+// The predicate is given the RULE ID, not a parsed tenant, so this package needs no
+// opinion about how tenancy is encoded in an id — that belongs to the runtime, which is
+// where the id is minted. Every structure below is keyed (directly or through paneKey)
+// on that same id, so one predicate covers all of them.
+//
+// The count is of ENTRIES removed, not of distinct series or rules: a key holding both a
+// window and a timer contributes to both sweeps. It is used as evidence that this call
+// found something — a purge pass that removes anything restarts the coordinator's settle
+// window — so it is deliberately generous rather than deduplicated. Under-counting is the
+// dangerous direction: it would let a purge that still had work to do look quiescent.
+func (e *Engine) RemoveMatching(match func(ruleID string) bool) int {
+	n := 0
+	for id := range e.rules {
+		if match(id) {
+			delete(e.rules, id)
+			n++
 		}
 	}
-	e.closes.purgeRule(id)
-	e.wheel.purgeRule(id)
-	// Drop any buffered detections for the removed rule: deliver-before-checkpoint drains
+	n += deleteSeriesKeysMatching(e.active, match)
+	n += deleteSeriesKeysMatching(e.sliding, match)
+	n += deleteSeriesKeysMatching(e.lastVal, match)
+	n += deleteSeriesKeysMatching(e.counts, match)
+	n += deleteSeriesKeysMatching(e.session, match)
+	n += deleteSeriesKeysMatching(e.slides, match)
+	n += deleteSeriesKeysMatching(e.corr, match)
+	n += deleteSeriesKeysMatching(e.expected, match)
+	n += deleteSeriesKeysMatching(e.raised, match)
+	n += deleteSeriesKeysMatching(e.presenceState, match)
+	for pk := range e.panes {
+		if match(pk.Rule) {
+			delete(e.panes, pk)
+			n++
+		}
+	}
+	n += e.closes.purgeMatching(match)
+	n += e.wheel.purgeMatching(match)
+	// Drop any buffered detections for the removed rules: deliver-before-checkpoint drains
 	// e.out each message, so these have not been handed off yet, and once the rule is gone
 	// the publisher's registry Lookup would treat them as orphans. Dropping keeps removal
 	// atomic with respect to what the next checkpoint delivers. In-place filter: writes
@@ -336,22 +370,29 @@ func (e *Engine) RemoveRule(id string) {
 	if len(e.out) > 0 {
 		kept := e.out[:0]
 		for _, d := range e.out {
-			if d.RuleID != id {
-				kept = append(kept, d)
+			if match(d.RuleID) {
+				n++
+				continue
 			}
+			kept = append(kept, d)
 		}
 		e.out = kept
 	}
+	return n
 }
 
-// deleteSeriesKeys removes every entry of a SeriesKey-keyed state map whose rule
-// component equals rule — the per-map primitive RemoveRule's GC sweep is built from.
-func deleteSeriesKeys[V any](m map[SeriesKey]V, rule string) {
+// deleteSeriesKeysMatching removes every entry of a SeriesKey-keyed state map whose rule
+// component the predicate selects, returning how many it removed — the per-map primitive
+// RemoveMatching's GC sweep is built from.
+func deleteSeriesKeysMatching[V any](m map[SeriesKey]V, match func(string) bool) int {
+	n := 0
 	for k := range m {
-		if k.Rule == rule {
+		if match(k.Rule) {
 			delete(m, k)
+			n++
 		}
 	}
+	return n
 }
 
 // Descope drops ALL keyed state for one exact (rule, series) and resolves a raised alarm — the

@@ -100,14 +100,18 @@ func unclassifiedError(plan *tenantpurge.Plan) error {
   %s
 
 Every table in an instance database must be one of:
-  - tenant-bearing   — carries a "tenant_id" or "tenant" column of a character type
-  - transitive       — has a foreign key into a tenant-bearing table
-  - exempt/deferred  — listed in backend/core/tenantpurge/exempt.go with a reason
+  - tenant-bearing  — carries a "tenant_id" or "tenant" column of a character type
+  - transitive      — has a foreign key into a tenant-bearing table
+  - registered      — listed in backend/core/tenantpurge/exempt.go with a reason, as one
+                      of ClassExempt, ClassDeferred or ClassExternal
 
-If the table above holds tenant data, give it a tenant column. If it does not, add an
-exemption naming why. If it holds tenant data you are NOT yet erasing, add it as
-ClassDeferred so it stays visible in every purge result instead of being filed away
-among the tables that hold nothing`, len(unclassified), strings.Join(names, "\n  "))
+If the table above holds tenant data, give it a tenant column. If it does not, add a
+ClassExempt entry naming why. If it holds tenant data that some OTHER mechanism erases —
+because no SQL predicate can reach inside it — add it as ClassExternal and name the purge
+store that does; a test on the coordinator's side asserts that store is registered, so the
+claim has a failing test behind it rather than being taken on trust. Only if it holds
+tenant data that NOTHING erases is it ClassDeferred, which keeps it visible in every purge
+result and stops any purge on this instance completing until it is closed`, len(unclassified), strings.Join(names, "\n  "))
 }
 
 // assertPlanIsPopulated fails unless every migrated area contributed tables to the plan.
@@ -133,7 +137,7 @@ func assertPlanIsPopulated(plan *tenantpurge.Plan, selected []area) error {
 // report prints the classification, area by area, so a reviewer can see what the purge
 // believes about each schema rather than only whether it passed.
 func report(plan *tenantpurge.Plan) {
-	type counts struct{ direct, transitive, exempt, deferred, unclassified int }
+	type counts struct{ direct, transitive, exempt, deferred, external, unclassified int }
 	perSchema := map[string]*counts{}
 	schemas := []string{}
 	for _, e := range plan.Entries {
@@ -152,27 +156,30 @@ func report(plan *tenantpurge.Plan) {
 			c.exempt++
 		case tenantpurge.ClassDeferred:
 			c.deferred++
+		case tenantpurge.ClassExternal:
+			c.external++
 		default:
 			c.unclassified++
 		}
 	}
 	sort.Strings(schemas)
 
-	fmt.Printf("%-24s %8s %11s %7s %9s %13s\n",
-		"area", "direct", "transitive", "exempt", "deferred", "unclassified")
+	fmt.Printf("%-24s %8s %11s %7s %9s %9s %13s\n",
+		"area", "direct", "transitive", "exempt", "deferred", "external", "unclassified")
 	total := counts{}
 	for _, s := range schemas {
 		c := perSchema[s]
-		fmt.Printf("%-24s %8d %11d %7d %9d %13d\n",
-			s, c.direct, c.transitive, c.exempt, c.deferred, c.unclassified)
+		fmt.Printf("%-24s %8d %11d %7d %9d %9d %13d\n",
+			s, c.direct, c.transitive, c.exempt, c.deferred, c.external, c.unclassified)
 		total.direct += c.direct
 		total.transitive += c.transitive
 		total.exempt += c.exempt
 		total.deferred += c.deferred
+		total.external += c.external
 		total.unclassified += c.unclassified
 	}
-	fmt.Printf("%-24s %8d %11d %7d %9d %13d\n",
-		"TOTAL", total.direct, total.transitive, total.exempt, total.deferred, total.unclassified)
+	fmt.Printf("%-24s %8d %11d %7d %9d %9d %13d\n",
+		"TOTAL", total.direct, total.transitive, total.exempt, total.deferred, total.external, total.unclassified)
 
 	// Deferred tables are printed in full rather than counted. They are the tables that
 	// hold tenant data the purge does not erase, and a number in a column is exactly how
@@ -181,6 +188,19 @@ func report(plan *tenantpurge.Plan) {
 		fmt.Printf("\n%d table(s) hold tenant data the purge does NOT erase:\n", len(deferred))
 		for _, e := range deferred {
 			fmt.Printf("  %s\n      %s\n", e.Table, e.Reason)
+		}
+	}
+
+	// External tables are printed in full for the same reason, and they are NOT good
+	// news to be skimmed past: each one holds the tenant's data and is erased by a
+	// store this report cannot see. Printing the store name is what makes the next
+	// question askable — is that store registered, and what did it report? — rather
+	// than leaving "handled elsewhere" to be read as "handled".
+	if external := plan.OfClass(tenantpurge.ClassExternal); len(external) > 0 {
+		fmt.Printf("\n%d table(s) hold tenant data erased by a purge store rather than by this sweep:\n",
+			len(external))
+		for _, e := range external {
+			fmt.Printf("  %s  (store: %s)\n      %s\n", e.Table, e.Store, e.Reason)
 		}
 	}
 }

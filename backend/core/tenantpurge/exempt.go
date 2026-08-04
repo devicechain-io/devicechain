@@ -17,21 +17,40 @@ type Exemption struct {
 	Schema string
 	// Name is the table name, matched exactly.
 	Name string
-	// Class is ClassExempt (holds no single tenant's data) or ClassDeferred (holds
-	// tenant data this mechanism does not yet erase).
+	// Class is ClassExempt (holds no single tenant's data), ClassDeferred (holds
+	// tenant data this mechanism does not yet erase), or ClassExternal (holds tenant
+	// data that a named store erases by another route).
 	Class Class
 	// Reason says why. For ClassDeferred it must name what is left behind.
 	Reason string
+	// Store is the purge store that erases this table, for ClassExternal only. It is
+	// the coordinator's store name, not prose: the point of naming it is that the
+	// name can be checked against the registered store set, which is what stops
+	// "something else handles it" from being an unfalsifiable claim.
+	Store string
 }
 
 // exemptions is every table the catalog cannot classify but the platform can explain.
 //
-// 🔴 THE RULE FOR ADDING TO THIS LIST: an entry is a claim that a table holds no data
-// belonging to any single tenant. Before adding one, look at the table's rows, not at
-// its name. If it holds tenant data and you are not erasing it, the entry is
-// ClassDeferred with a reason naming what survives — not ClassExempt with a reason
-// that sounds reassuring. The two classes exist so that the second case stays visible
-// in every purge result instead of blending into a wall of exemptions.
+// 🔴 THE RULE FOR ADDING TO THIS LIST: an entry is a claim about what a table HOLDS.
+// Before adding one, look at the table's rows, not at its name, and then pick the class
+// that is true rather than the one that is convenient:
+//
+//   - ClassExempt — it holds no data belonging to any single tenant.
+//   - ClassExternal — it holds this tenant's data, but a named purge store erases it by
+//     a route this sweep cannot take. The store name is not decoration: the coordinator's
+//     side asserts that store is registered (see ExternalStores). Be exact about how far
+//     that goes — it establishes that the NAMED store exists, not that it still covers
+//     this table — but it is what turns "handled elsewhere" from an assertion into
+//     something with a failing test behind it.
+//   - ClassDeferred — it holds this tenant's data and NOTHING erases it. The reason must
+//     name what survives, and every purge on the instance stops completing until it does.
+//
+// The three exist so the last case stays visible instead of blending into a wall of
+// exemptions, and so the middle one does not have to masquerade as either neighbour: as
+// exempt it would hide a real hole, as deferred it would block every purge over data that
+// is in fact erased. Nothing is ClassDeferred today; that is a statement about where the
+// arc got to, not a reason to stop reaching for it.
 //
 // The list is checked only for tables the catalog could not classify on its own, so a
 // stale entry naming a table that has since gained a tenant column is inert rather
@@ -115,16 +134,57 @@ var exemptions = []Exemption{
 
 	// ---- event-processing: the DETECT engine's own state --------------------
 	{
-		Schema: "event-processing", Name: "detect_snapshots", Class: ClassDeferred,
-		Reason: "🔴 HOLDS TENANT DATA THAT THIS SWEEP CANNOT REACH. One row per DETECT partition, " +
-			"and GA ships a single partition per instance, so this is one opaque blob containing " +
-			"EVERY tenant's open detection windows and timers — including buffered event values for " +
-			"the purged tenant. It has no tenant column because the engine keys tenancy inside the " +
-			"payload (on the rule id), which no SQL predicate can address. Deleting the row is not " +
-			"the answer either: it is the checkpoint every other tenant's replay-correct recovery " +
-			"depends on. Erasing it requires the engine to evict the tenant in-process and " +
-			"re-checkpoint, which is a separate step tracked as part of ADR-077.",
+		Schema: "event-processing", Name: "detect_snapshots", Class: ClassExternal, Store: "detect",
+		Reason: "🔴 HOLDS TENANT DATA THAT THIS SWEEP CANNOT REACH, and is erased by the `detect` " +
+			"store instead. One row per DETECT partition, and GA ships a single partition per " +
+			"instance, so this is one opaque blob containing EVERY tenant's open detection windows " +
+			"and timers — including buffered event values for the purged tenant. It has no tenant " +
+			"column because the engine keys tenancy inside the payload (on the rule id), which no " +
+			"SQL predicate can address. Deleting the row is not the answer either: it is the " +
+			"checkpoint every other tenant's replay-correct recovery depends on. So the erasure " +
+			"runs where the state is owned — the `detect` store asks the engine that owns the " +
+			"partition to evict the tenant in-process and re-checkpoint, and the row is rewritten " +
+			"without it rather than deleted.",
 	},
+}
+
+// DetectPartitionsQuery lists the DETECT partitions that hold a durable checkpoint.
+//
+// It lives here, beside the exemption entry for the same table, because those are two facts
+// about ONE table and they have to move together: the entry says detect_snapshots is erased
+// out of band, and this is the statement the store erasing it uses to find out who owes an
+// answer. The alternative is a literal in the store and a copy of it in the test that proves
+// the literal works — which proves it about the copy.
+//
+// It is a raw statement rather than a model read on purpose. The shape belongs to
+// event-processing; one column of one table is a far smaller thing for another area to
+// depend on than a struct that area is free to change, and the dependency is pinned by
+// TestTheDetectPartitionQueryRunsOnTheRealSchema in the migration drill, which executes it
+// against a database with every area's migrations applied.
+const DetectPartitionsQuery = `SELECT partition_id FROM "event-processing"."detect_snapshots"`
+
+// ExternalStores returns the purge-store names the registry's ClassExternal entries
+// claim their tables are erased by, deduplicated.
+//
+// It exists so the claim can be checked from the other end. This package cannot see
+// the coordinator's store set — core cannot import a service — so on its own an
+// external entry is only an assertion that something, somewhere, erases the table.
+// Exposing the names lets the side that OWNS the store set assert the correspondence,
+// which is the difference between a documented hole and a closed one. Without it the
+// failure is silent in exactly the direction that matters: renaming or dropping a
+// store leaves the table classified external and swept by nobody, and every purge
+// completes reporting success.
+func ExternalStores() []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, e := range exemptions {
+		if e.Class != ClassExternal || seen[e.Store] {
+			continue
+		}
+		seen[e.Store] = true
+		out = append(out, e.Store)
+	}
+	return out
 }
 
 // exemptionFor returns the registry entry covering a table, if one exists.

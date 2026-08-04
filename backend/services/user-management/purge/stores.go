@@ -22,6 +22,11 @@ const (
 	StoreBroker     = "broker"
 	StoreKeyValue   = "kv"
 	StoreObject     = "blob"
+	// StoreDetect is named a second time in core/tenantpurge, by the ClassExternal entry
+	// for event-processing.detect_snapshots. That is the whole point of naming it there —
+	// a table classified as "erased by a store" is only as true as the store's existence —
+	// and TestExternalTablesNameARegisteredStore asserts the two agree.
+	StoreDetect = "detect"
 )
 
 // DefaultStores is the complete set of places a tenant's data lives, in the order a pass
@@ -40,7 +45,11 @@ const (
 // The order is deliberate. The relational database comes first because it is the only
 // store that can fail the whole purge closed — a table it cannot classify stops the pass
 // before a row is touched anywhere — so it is better to learn that before the others have
-// deleted anything.
+// deleted anything. The DETECT engine comes after the broker for a different reason: the
+// broker purge deletes the tenant's still-pending resolved events, and those are the only
+// thing that can rebuild the state the eviction is about to remove. Evicting first would
+// still converge — a pass that evicts anything restarts the settle window — but it would
+// spend a pass doing it.
 func DefaultStores(db *rdb.RdbManager, tsdb *rdb.Guest, broker messaging.Connection,
 	instanceId string, objects blob.Store, tenants tenantReader) []Store {
 	return []Store{
@@ -48,7 +57,7 @@ func DefaultStores(db *rdb.RdbManager, tsdb *rdb.Guest, broker messaging.Connect
 		NewTelemetry(tsdb),
 		NewBroker(broker, instanceId),
 		NewKeyValue(broker, instanceId),
-
+		NewDetect(broker, db, instanceId),
 		NewObject(objects, tenants),
 	}
 }

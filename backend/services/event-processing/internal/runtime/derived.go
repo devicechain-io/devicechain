@@ -277,6 +277,42 @@ func (p *Publisher) record(dl DeadLetter) {
 	p.dlq = append(p.dlq, dl)
 }
 
+// RemoveTenant drops one tenant's dead-letter entries and reports how many, for the
+// ADR-077 erasure.
+//
+// The ring is small (dlqMax), in-memory, and only ever populated by the backstop refusing a
+// detection — a path that should not fire in correct operation. So this is not a large
+// residue, and it is worth being explicit about why it is swept anyway: an entry holds the
+// tenant's rule id, its device token and the tenant names themselves, and a purge that
+// reported the tenant erased while an operator could still read those identifiers out of a
+// diagnostic would have made a claim that is not quite true. Between "erase it" and "note
+// the exception", erase wins — the deletion record is the durable evidence a purge leaves
+// behind, not this.
+//
+// It matches on EITHER tenant field for the same reason the registry does: the entries the
+// backstop writes are precisely the ones where the two disagree.
+//
+// Takes the mutex: unlike everything else the eviction touches, the ring is shared with the
+// publish path rather than owned by the single-writer loop.
+func (p *Publisher) RemoveTenant(tenant string) int {
+	if tenant == "" {
+		return 0
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	kept := p.dlq[:0]
+	for _, dl := range p.dlq {
+		idTenant, _ := RuleTenant(dl.RuleID)
+		if dl.OwningTenant == tenant || dl.ClaimedTenant == tenant || idTenant == tenant {
+			continue
+		}
+		kept = append(kept, dl)
+	}
+	removed := len(p.dlq) - len(kept)
+	p.dlq = kept
+	return removed
+}
+
 // DeadLetters returns a copy of the current dead-letter ring (operator inspection).
 func (p *Publisher) DeadLetters() []DeadLetter {
 	p.mu.Lock()

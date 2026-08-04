@@ -172,6 +172,40 @@ func (reg *RuleRegistry) Remove(id string) bool {
 	return true
 }
 
+// RemoveTenant evicts every rule belonging to one tenant and returns their ids, for the
+// ADR-077 erasure. The caller feeds the returned ids to the engine so the rules' keyed
+// state goes with them.
+//
+// It matches on EITHER axis — the rule's owning Tenant field or the tenant prefix of its
+// id — and the difference between them is the whole reason this is not a one-liner. The
+// two agree on every rule the publish path mints (PublishedRuleID composes the id from
+// the same tenant that fills the field), but the registry deliberately admits a rule
+// where they diverge: a mis-minted id is contained at the PUBLISH boundary, not refused
+// at admission, so such a rule runs with its detections dead-lettered. Matching one axis
+// only would leave the other tenant's identifier behind — either a rule filed under the
+// purged tenant, or engine state keyed on a rule id that names it — and an erasure that
+// leaves the tenant's name in memory has not erased the tenant. Over-matching in this
+// one case is the safe direction: the rule it would additionally evict is one whose
+// detections are already being refused.
+func (reg *RuleRegistry) RemoveTenant(tenant string) []string {
+	if tenant == "" {
+		// An empty tenant would match every id whose prefix parse fails and every rule with
+		// no owning tenant. There is no such purge; refuse rather than sweep the instance.
+		return nil
+	}
+	var ids []string
+	for id, sr := range reg.byID {
+		idTenant, _ := RuleTenant(id)
+		if sr.Tenant == tenant || idTenant == tenant {
+			ids = append(ids, id)
+		}
+	}
+	for _, id := range ids {
+		reg.Remove(id)
+	}
+	return ids
+}
+
 // detachFromScope removes one rule pointer from its scope bucket, deleting the bucket when it
 // empties so RulesFor never returns an empty non-nil slice and stale scopes do not accumulate.
 func (reg *RuleRegistry) detachFromScope(k scopeKey, sr *ScopedRule) {

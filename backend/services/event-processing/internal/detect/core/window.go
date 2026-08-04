@@ -135,29 +135,43 @@ func (h *closeHeap) Pop() any {
 	return c
 }
 
-// purgeRule drops every pending pane close belonging to rule id and re-establishes the
-// heap invariant (ADR-051 slice 4b-3 rule removal). closePanes already tolerates a
-// missing pane, so a leaked close item is only wasted memory rather than a wrong firing —
-// but a removed rule must leave nothing behind. Indices are reset before heap.Init so the
-// heap bookkeeping stays consistent.
-func (h *closeHeap) purgeRule(id string) {
+// purgeMatching drops every pending pane close whose rule the predicate selects, and
+// reports how many it dropped. closePanes already tolerates a missing pane, so a leaked
+// close item is only wasted memory rather than a wrong firing — but a removed rule must
+// leave nothing behind. Indices are reset before heap.Init so the heap bookkeeping stays
+// consistent.
+//
+// A close item is one of the things that can outlive its own rule, which is why the
+// ADR-077 tenant eviction sweeps by predicate rather than looking the tenant's rules up
+// first: it reaches state a rule-driven sweep would miss.
+func (h *closeHeap) purgeMatching(match func(ruleID string) bool) int {
 	old := *h
 	kept := old[:0]
 	for _, c := range old {
-		if c.pk.Rule != id {
+		if !match(c.pk.Rule) {
 			c.index = len(kept)
 			kept = append(kept, c)
 		}
+	}
+	dropped := len(old) - len(kept)
+	if dropped == 0 {
+		// 🔑 heap.Init is O(n) over EVERY tenant's pending closes, and the steady state of a
+		// tenant purge is a pass that matches nothing: the coordinator asks once a minute for
+		// as long as the deletion takes, and only the first pass removes anything. The index
+		// writes above are already identity when nothing was dropped, so there is nothing to
+		// re-establish.
+		return 0
 	}
 	for i := len(kept); i < len(old); i++ {
 		old[i] = nil // release the dropped *closeItem for GC
 	}
 	*h = kept
 	heap.Init(h)
+	return dropped
 }
 
 // purgeSeriesKey drops every pending pane close for ONE exact (rule, series) — the per-key
-// analogue of purgeRule, backing the ADR-062 membership-flip so an Aggregate rule's armed
+// analogue of purgeMatching, backing the ADR-062 membership-flip so an Aggregate rule's armed
 // pane-close cannot fire for a series that has left the rule's scoped group.
 func (h *closeHeap) purgeSeriesKey(key SeriesKey) {
 	old := *h

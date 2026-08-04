@@ -275,6 +275,47 @@ func (d *DeadmanArmer) reset() {
 	d.byProfile = map[profKey]map[string]struct{}{}
 }
 
+// RemoveTenant drops one tenant's three membership views and reports how many entries it
+// removed, for the ADR-077 erasure.
+//
+// It does NOT disarm through the engine device by device, and that is worth stating
+// because the armer's every other mutation does. The eviction that calls this removes the
+// tenant's rules and ALL of their keyed state — dead-man armings included — in one sweep,
+// so a per-device disarm would be re-deleting what is about to be deleted wholesale, and
+// would do it through SetExpected/RemoveExpected, whose gates are written for a live
+// tenant whose rules still exist.
+//
+// The views are swept even though they are re-derivable from the durable projections at
+// startup, because the projections are swept in the same purge: a retained view would be
+// a copy of a deleted tenant's device tokens and profile tokens sitting in memory, and
+// the reused-token hazard the whole epoch is about is precisely a successor inheriting
+// something keyed on a name it now shares.
+func (d *DeadmanArmer) RemoveTenant(tenant string) int {
+	if tenant == "" {
+		return 0
+	}
+	n := 0
+	for k := range d.active {
+		if k.tenant == tenant {
+			delete(d.active, k)
+			n++
+		}
+	}
+	for k := range d.roster {
+		if k.tenant == tenant {
+			delete(d.roster, k)
+			n++
+		}
+	}
+	for k := range d.byProfile {
+		if k.tenant == tenant {
+			n += len(d.byProfile[k])
+			delete(d.byProfile, k)
+		}
+	}
+	return n
+}
+
 // Reconcile rebuilds the armer's views and the engine's dead-man arming from the durable roster +
 // active-version projections at startup (slice 4c-2b-2b), diffing against the snapshot the engine
 // restored: the SNAPSHOT is authoritative for FIRED state (its once-per-epoch latches survive), the
