@@ -15,7 +15,8 @@ require (
 	github.com/devicechain-io/dc-outbound-connectors v0.0.0-00010101000000-000000000000
 	github.com/devicechain-io/dc-user-management v0.0.0-00010101000000-000000000000
 	github.com/go-gormigrate/gormigrate/v2 v2.1.6
-	gorm.io/driver/postgres v1.6.1
+	github.com/stretchr/testify v1.11.1
+	gorm.io/driver/postgres v1.6.2
 	gorm.io/gorm v1.31.2
 )
 
@@ -23,6 +24,7 @@ require (
 	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/devicechain-io/dc-event-sources v0.0.0-00010101000000-000000000000 // indirect
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/go-sql-driver/mysql v1.8.1 // indirect
@@ -37,6 +39,7 @@ require (
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
+	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus/client_golang v1.24.1 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.70.1 // indirect
@@ -47,6 +50,7 @@ require (
 	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gorm.io/datatypes v1.2.7 // indirect
 	gorm.io/driver/mysql v1.5.6 // indirect
 )
