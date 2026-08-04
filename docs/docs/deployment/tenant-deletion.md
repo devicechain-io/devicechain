@@ -144,10 +144,24 @@ of device connectivity for every tenant on the instance. The refusals exist to s
 traffic early so the reclamation is not chasing data that is still arriving; the erasure
 itself does not depend on them.
 
-**Outbound connectors are not yet covered.** Between the delete and the pass that erases
-a tenant's automation rules, those rules can still fire their outbound actions. If a
-tenant's deletion needs to guarantee that nothing further is sent to an external system,
-disable its connectors before deleting it.
+**Outbound connectors are covered by the same refusal**, and it matters most there. Every
+other place this applies, a message admitted a moment too late is data that stays on the
+platform until the reclamation reaches it. An outbound connector sends a tenant's data to
+a system you own but the platform does not — a webhook endpoint, an MQTT broker, a Kafka
+topic, an SNS or SQS queue — and once it has been sent, no later pass can take it back.
+So a connector dispatch for a deleted tenant is refused and discarded rather than held for
+inspection.
+
+**Notifications stop too.** A deleted tenant's alarms no longer send email or fire
+notification webhooks, and open alarms stop escalating. This one is worth calling out
+because it does not need any device traffic to happen: escalation re-pages open,
+unacknowledged alarms on a timer, so without this refusal a deleted tenant's on-call
+recipients would keep being paged about alarms belonging to a tenant that no longer exists.
+
+The window before these refusals take effect still applies: an action already in flight when
+the delete lands will complete, and refusals begin within a minute of the delete rather than
+instantly. If a deletion must guarantee that *nothing* further reaches an external system or
+recipient, disable the tenant's connectors and notification policies before deleting it.
 
 ## What you can see today {#visibility}
 

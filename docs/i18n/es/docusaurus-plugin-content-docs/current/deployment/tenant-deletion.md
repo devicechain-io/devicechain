@@ -153,10 +153,28 @@ dependencia estricta de la conectividad de los dispositivos para todos los inqui
 instancia. Los rechazos existen para detener el tráfico pronto, de modo que la recuperación
 no persiga datos que siguen llegando; el borrado en sí no depende de ellos.
 
-**Los conectores de salida aún no están cubiertos.** Entre la eliminación y la pasada que
-borra las reglas de automatización de un inquilino, esas reglas todavía pueden ejecutar sus
-acciones de salida. Si la eliminación de un inquilino debe garantizar que no se envía nada
-más a un sistema externo, deshabilite sus conectores antes de eliminarlo.
+**Los conectores de salida están cubiertos por el mismo rechazo**, y es allí donde más
+importa. En todos los demás casos, un mensaje admitido un instante demasiado tarde son
+datos que permanecen en la plataforma hasta que la recuperación llega a ellos. Un conector
+de salida envía los datos de un inquilino a un sistema que usted controla pero la
+plataforma no —un endpoint de webhook, un broker MQTT, un tema de Kafka, una cola de SNS o
+SQS— y una vez enviados, ninguna pasada posterior puede recuperarlos. Por eso un despacho
+de conector para un inquilino eliminado se rechaza y se descarta, en lugar de conservarse
+para su inspección.
+
+**Las notificaciones también se detienen.** Las alarmas de un inquilino eliminado ya no
+envían correo ni disparan webhooks de notificación, y las alarmas abiertas dejan de
+escalar. Conviene señalarlo porque esto no requiere tráfico de dispositivos: el escalado
+vuelve a notificar las alarmas abiertas sin confirmar mediante un temporizador, así que sin
+este rechazo se seguiría avisando a los destinatarios de guardia sobre alarmas de un
+inquilino que ya no existe.
+
+La ventana previa a que estos rechazos surtan efecto sigue existiendo: una acción que ya
+estaba en curso cuando llegó la eliminación se completará, y los rechazos empiezan a
+aplicarse dentro del minuto siguiente a la eliminación, no de forma instantánea. Si una
+eliminación debe garantizar que *no* llegue nada más a un sistema externo ni a ningún
+destinatario, deshabilite los conectores y las políticas de notificación del inquilino
+antes de eliminarlo.
 
 ## Qué se puede ver hoy {#visibility}
 

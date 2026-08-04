@@ -27,8 +27,9 @@ const deadLetterWriteBackoff = 100 * time.Millisecond
 // DispatchConsumer is the outbound-connectors service's durable consumer of the connector-dispatch
 // stream (ADR-060 §4 / slice C3). It mirrors the notification-management dispatch model: a single
 // read loop hands each message to a bounded worker pool, and the worker that dispatches a message is
-// the one that acks (success/poison), leaves it unacked (transient, redeliver after AckWait), or
-// dead-letters it (cap exhausted / terminal). The pool width is the outbound concurrency ceiling — SD-2's back-pressure:
+// the one that acks (success/poison/refused for a deleted tenant), leaves it unacked (transient,
+// redeliver after AckWait), or dead-letters it (cap exhausted / terminal). The pool width is the
+// outbound concurrency ceiling — SD-2's back-pressure:
 // once every worker is busy on a slow target, the loop stops pulling and unacked work stays durable
 // on the (per-tenant bounded) stream rather than growing an in-memory queue.
 //
@@ -47,6 +48,12 @@ type DispatchConsumer struct {
 	rate       *core.TenantRateLimiter
 	waitBudget time.Duration
 
+	// tenantDeleted answers the ADR-077 lifecycle question for one tenant. NIL means the gate is
+	// unconfigured (governance.NewTenantLifecycleGate returns nil when user-management is not
+	// reachable) and every dispatch is admitted, which is the behaviour this service had before the
+	// gate existed. Read through the tenantIsDeleted accessor, never directly.
+	tenantDeleted func(string) bool
+
 	backlog int
 
 	procCtx    context.Context
@@ -60,20 +67,27 @@ type DispatchConsumer struct {
 
 // NewDispatchConsumer builds the consumer over its dispatch reader, its dead-letter writer, and the
 // executor. rate is the per-tenant egress limiter (nil disables egress rate limiting); waitBudget is
-// how long a worker blocks for a token before shedding. workers is the outbound concurrency ceiling;
-// backlog is the reader→worker hand-off buffer. A nil Microservice (unit tests) leaves metrics nil
-// (every recorder is nil-safe).
+// how long a worker blocks for a token before shedding. tenantDeleted is the ADR-077 lifecycle gate
+// (nil disables the refusal). workers is the outbound concurrency ceiling; backlog is the
+// reader→worker hand-off buffer. A nil Microservice (unit tests) leaves metrics nil (every recorder
+// is nil-safe).
+//
+// tenantDeleted is a CONSTRUCTOR ARGUMENT rather than a setter for the same reason the rate limiter
+// is: this is the only consumer in the service, so the property worth buying is that a second one
+// added later cannot be constructed without answering the question.
 func NewDispatchConsumer(ms *core.Microservice, reader messaging.MessageReader, dead messaging.MessageWriter,
-	executor *Executor, rate *core.TenantRateLimiter, waitBudget time.Duration, workers, backlog int) *DispatchConsumer {
+	executor *Executor, rate *core.TenantRateLimiter, waitBudget time.Duration,
+	tenantDeleted func(string) bool, workers, backlog int) *DispatchConsumer {
 	return &DispatchConsumer{
-		reader:     reader,
-		dead:       dead,
-		executor:   executor,
-		metrics:    newDispatchMetrics(ms),
-		rate:       rate,
-		waitBudget: waitBudget,
-		backlog:    backlog,
-		workers:    workers,
+		reader:        reader,
+		dead:          dead,
+		executor:      executor,
+		metrics:       newDispatchMetrics(ms),
+		rate:          rate,
+		waitBudget:    waitBudget,
+		tenantDeleted: tenantDeleted,
+		backlog:       backlog,
+		workers:       workers,
 		// A non-nil default so a shutdown-aware wait (deadLetter's retry backoff) never dereferences a
 		// nil context before Start runs; Start replaces it with the cancelable process context.
 		procCtx: context.Background(),
@@ -149,8 +163,10 @@ func (c *DispatchConsumer) run() {
 // handle processes one dispatch message end-to-end and applies its ack/leave-unacked/dead-letter
 // disposition. A message with no parseable tenant, an undecodable body, a failed structural validation,
 // or a payload/subject tenant mismatch is POISON (a redelivery cannot fix it) — dropped (acked) and
-// counted invalid. A well-formed message is executed; the outcome decides ack (sent), leave-unacked
-// (transient, redeliver after AckWait until the cap), or dead-letter (cap exhausted / terminal).
+// counted invalid. A well-formed message for a DELETED tenant is refused and dropped (acked) without
+// being executed — the one disposition that is neither poison nor an outcome of a send. Otherwise it
+// is executed; the outcome decides ack (sent), leave-unacked (transient, redeliver after AckWait
+// until the cap), or dead-letter (cap exhausted / terminal).
 func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 	tctx, tenant, ok := messaging.TenantContextFromSubject(ctx, msg.Subject)
 	if !ok {
@@ -202,6 +218,58 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 	}
 
 	action := actionLabel(req.Kind)
+
+	// ADR-077 lifecycle gate: refuse to dispatch for a tenant that has been deleted.
+	//
+	// THIS SERVICE EMITS RATHER THAN RETAINS, which is what makes a late refusal different here.
+	// On the ingest fronts, a message admitted a moment too late is a row the sweep reclaims on its
+	// next pass. Here it is that tenant's payload on somebody else's server — a webhook, a Kafka
+	// topic, an SNS topic — where no purge of ours can reach it. So it is gated at admission rather
+	// than left to the fence, and it is gated here rather than at the executor because refusing
+	// costs nothing and un-sending is impossible.
+	//
+	// It is NOT the only emitter: notification-management pages a tenant's humans over SMTP and
+	// webhooks, and its escalation scheduler does so from its OWN rows on a timer, needing no
+	// inbound traffic at all. That one carries the same gate, at PolicyNotifier. Naming it here
+	// rather than claiming this path is unique is deliberate — the claim was made and was wrong,
+	// and an "only path" comment is exactly what stops the next person looking for the second one.
+	//
+	// It is not redundant with the broker purge. That purge deletes the tenant's PENDING dispatches,
+	// but a worker holding a message it already read is past the purge, DETECT can still be draining
+	// its own eviction, and the gate's 60s cache means the two are not synchronized in either
+	// direction. Between the operator's delete and the last of that settling, a message reaching
+	// this line is one send away from leaving.
+	//
+	// # Why this drops (acks) rather than dead-letters, which the rate shed above does
+	//
+	// The dead-letter subject is TENANT-SCOPED ({instance}.{tenant}.connector-dispatch.dead), so
+	// dead-lettering here writes new messages into the very namespace the sweep is reclaiming. The
+	// broker store's next pass would find them, erase them, and report rows erased — and a store
+	// that erases rows loses its clean-since, which restarts the settle window the purge cannot
+	// complete without. A tenant deleted with a dispatch backlog would therefore hold its own purge
+	// open, one pass per pass, for as long as the backlog took to drain. Dropping writes nothing.
+	//
+	// Nothing is lost by dropping that dead-lettering would have preserved: the dead-letter subject
+	// exists so an operator can inspect or replay a dispatch, and both of those are answers to
+	// "should this have been sent?" for a tenant where the answer is permanently no.
+	//
+	// # Why there is no redelivery exemption
+	//
+	// There cannot be one — the refusal acks, so a refused message is never redelivered. Said
+	// explicitly because the ingest gate this mirrors DOES take a redelivery flag, and the reason it
+	// needs one (its rate METERING must not charge a message twice) has no counterpart here: the
+	// rate wait below is reached only by an admitted message, and an admitted message is one this
+	// gate said yes to on this delivery, not on a previous one.
+	if c.tenantIsDeleted(tenant) {
+		// Debug, not Warn, on the same argument as the rate shed below: this fires once per message
+		// for a tenant that is being deleted wholesale, so a per-message warn would flood the log at
+		// exactly the moment an operator is watching it. The tenant_deleted COUNT is the signal.
+		log.Debug().Str("rule", req.RuleID).Str("tenant", tenant).Str("action", action).
+			Msg("Refused an outbound connector dispatch for a tenant that has been deleted; dropping it.")
+		c.metrics.recordOutcome(action, outcomeTenantDeleted)
+		c.ack(msg)
+		return
+	}
 
 	// Per-tenant egress rate gate (ADR-060 SD-3), applied BEFORE the expensive secret-resolve + send.
 	// The worker blocks up to waitBudget for a token: a brief burst just over the tenant's rate is
@@ -334,6 +402,22 @@ func (c *DispatchConsumer) deadLetter(tctx context.Context, msg messaging.Messag
 	// dead-lettering on the next attempt.
 	log.Warn().Err(err).Str("correlation", msg.CorrelationID()).
 		Msg("Failed to write connector dispatch to the dead-letter subject; leaving unacked to retry (not yet at the cap).")
+}
+
+// tenantIsDeleted reads the ADR-077 lifecycle gate, treating an unconfigured gate as "not deleted".
+//
+// It exists so the nil check and the call are ONE expression that cannot be split: a caller writing
+// `c.tenantDeleted(tenant)` against an unconfigured gate panics the worker, and a caller writing
+// `c.tenantDeleted != nil && ...` at a second call site is a copy that the next one gets wrong. The
+// gate is nil on any instance without user-management configured, so that panic is a real
+// deployment, not a hypothetical.
+//
+// The gate itself fails OPEN — an unresolvable tenant reads active — and governance's
+// TenantLifecycleResolver argues why at length. The short version is that this gate exists to stop
+// the bleeding early, not to be the guarantee; failing closed would make user-management a hard
+// dependency of every tenant's outbound traffic.
+func (c *DispatchConsumer) tenantIsDeleted(tenant string) bool {
+	return c.tenantDeleted != nil && c.tenantDeleted(tenant)
 }
 
 // ack best-effort acks; a failed ack redelivers, and the idempotency key makes the re-run safe.

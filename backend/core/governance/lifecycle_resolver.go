@@ -24,11 +24,22 @@ const LifecycleActive = "active"
 // learn it any other way — a device credential and a queued command both outlive the
 // operator's delete, and neither carries a lifecycle.
 //
-// Its consumers are deliberately not listed here. The set is the DEVICE plane today
-// (connect-auth, the ingest fronts, command dispatch) and will grow — a deleted tenant's
-// REACT rules still fire outbound connectors until the per-area fence lands — and a list
-// frozen in a comment only ever drifts away from the tree. Ask the tree:
-// `grep -rl NewTenantLifecycleGate backend`.
+// Its consumers are deliberately not listed here. The set spans the device plane
+// (connect-auth, the ingest fronts, command dispatch) and outbound egress, and it has
+// already grown twice since this was written — a list frozen in a comment only ever drifts
+// away from the tree. Ask the tree: `grep -rl NewTenantLifecycleGate backend`.
+//
+// Two consumers are worth naming for their ASYMMETRY rather than for being on the list.
+// On the ingest and command paths, a call this gate admits a moment too late is data that
+// stays on our disks until the sweep reaches it. At outbound-connectors and
+// notification-management it is a webhook POST, a broker publish or an email that has
+// already landed somewhere we do not own — where being late is irreversible, and where the
+// refusal is therefore worth more than the availability it costs.
+//
+// Do not write "the only path that emits" here, or anywhere else, without re-deriving the
+// set. It was written once, about outbound-connectors alone, and notification-management
+// falsified it — its escalation scheduler re-pages open alarms from its own rows on a
+// timer, so it emits with no inbound traffic at all.
 //
 // It reads purgeState from user-management's tenantGovernance query through the SAME
 // shared tenantResolver as the ADR-023 ceilings and the ADR-063 shed priority: 60s TTL,
@@ -74,7 +85,7 @@ func NewTenantLifecycleResolver(client *svcclient.Client, umURL string) *TenantL
 	}
 }
 
-// NewTenantLifecycleGate builds the ADR-077 device-plane gate for one service: the
+// NewTenantLifecycleGate builds the ADR-077 lifecycle gate for one service: the
 // closure its data path calls to decide whether a tenant has been deleted. It returns
 // NIL when user-management is not configured, which every caller must treat as "the gate
 // is off" rather than as an error.

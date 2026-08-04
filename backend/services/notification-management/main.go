@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -167,7 +168,17 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// behind the Notifier seam and is shared by the consumer processor (event-driven
 	// dispatch) and the escalation scheduler (timed re-notification), so both deliver
 	// through one adapter registry and retry policy.
-	Notifier = processor.NewPolicyNotifier(Api, secretStore, Configuration.DeliveryAttempts, Configuration.DeliveryTimeout())
+	//
+	// It also carries the ADR-077 lifecycle gate, and this service needs one for a reason
+	// the ingest fronts do not have: it EMITS. An email or a webhook POST for a deleted
+	// tenant has left the platform, and no later pass of the reclamation can take it back.
+	// Nor does it need new inbound traffic to do so — the escalation scheduler re-pages
+	// open alarms from this service's own rows on a timer, so a deleted tenant with an
+	// unacknowledged alarm would keep paging until the sweep reached those rows.
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	Notifier = processor.NewPolicyNotifier(Api, secretStore, Configuration.DeliveryAttempts,
+		Configuration.DeliveryTimeout(),
+		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "notification-management"))
 
 	// Retention sweep: prune cleared per-alarm state older than the retention window so
 	// the notification state stays bounded (ADR-017 N.C). A negative interval disables
