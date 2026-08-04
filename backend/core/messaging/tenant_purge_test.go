@@ -6,6 +6,7 @@ package messaging
 import (
 	"context"
 	"testing"
+	"time"
 
 	nats "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
@@ -196,5 +197,90 @@ func TestTheDeferralsNameWhatSurvives(t *testing.T) {
 	for _, must := range []string{"$MQTT_sess", "$MQTT_qos2in", "consumer", "retained"} {
 		assert.Containsf(t, joined, must,
 			"nothing in the deferrals mentions %q, so that hole is invisible in the record", must)
+	}
+}
+
+// TestTheMqttGatewayStreamsArePurgedByTheirWrappedSubject covers the one leg that cannot
+// go through ConcreteSubjectFor.
+//
+// 🔴 WITHOUT IT, NOTHING FAILS WHEN THIS LEG IS WRONG. The gateway's streams are created
+// by nats-server, not by us, so no test that seeds the platform inventory ever brings them
+// into existence — and a purge against an absent stream is tolerated by design. A typo in
+// the hand-written prefix, or a server release that changes the wrapping, therefore purges
+// nothing, reports success, and leaves every other test in this file green. That is the
+// precise "matches nothing ≡ nothing to purge" failure the design exists to prevent,
+// sitting on the leg the design could not cover.
+//
+// The prefixes are nats-server's (`$MQTT.msgs.` and `$MQTT.rmsgs.`, wrapping the original
+// subject), so the streams are built here with those real shapes rather than ours.
+func TestTheMqttGatewayStreamsArePurgedByTheirWrappedSubject(t *testing.T) {
+	nc, js := purgeRig(t)
+
+	for _, m := range mqttTenantStreams {
+		_, err := js.AddStream(&nats.StreamConfig{
+			Name:     m.stream,
+			Subjects: []string{m.prefix + ">"},
+			Storage:  nats.MemoryStorage,
+		})
+		require.NoErrorf(t, err, "creating %s", m.stream)
+
+		// The subject a device's telemetry actually lands on, wrapped the way the gateway
+		// wraps it.
+		for _, tenant := range []string{purgeVictim, purgeBystander} {
+			_, err := js.Publish(m.prefix+DeviceEventsSubject(purgeInstance, tenant, "dev-1"),
+				[]byte("payload for "+tenant))
+			require.NoError(t, err)
+		}
+		require.Equalf(t, uint64(2), streamMsgs(t, js, m.stream),
+			"%s did not receive both tenants' messages — the assertions below would be vacuous",
+			m.stream)
+	}
+
+	res, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim)
+	require.NoError(t, err)
+
+	for _, m := range mqttTenantStreams {
+		assert.Containsf(t, res.PerStream, m.stream,
+			"%s contributed nothing, so its filter matched no messages — which is exactly what a "+
+				"wrong prefix looks like, and it would otherwise report success forever", m.stream)
+		assert.Equalf(t, uint64(1), streamMsgs(t, js, m.stream),
+			"%s should hold only the bystander's message", m.stream)
+	}
+}
+
+// TestADisconnectedBrokerFailsThePassRatherThanHangingIt is a regression test for a stall
+// that had no symptom.
+//
+// The manager connects with infinite reconnects, so a request issued while the broker is
+// down is BUFFERED, not refused — the call blocks until the broker comes back. That call
+// is on the purge coordinator's single goroutine, inside the advisory lock, so one broker
+// outage stops every store for every purging tenant, with no error and no log line. It is
+// reachable on the very first pass if the pod starts while the broker is down.
+//
+// 🔑 IT ASSERTS THE PROPERTY, NOT THE MECHANISM, because two guards can satisfy it and
+// which one fires is a race: the client only learns it is disconnected when a ping fails,
+// so IsConnected catches an outage it has already noticed and the deadline catches the
+// rest. Both were verified separately by removing the other — deadline alone returns at
+// PurgeTimeout, and with neither this test hangs and fails. The deadline is what carries
+// the guarantee; IsConnected only makes the common case immediate.
+func TestADisconnectedBrokerFailsThePassRatherThanHangingIt(t *testing.T) {
+	srv := runTestServer(t)
+	nc, err := nats.Connect(srv.ClientURL(), nats.MaxReconnects(-1), nats.RetryOnFailedConnect(true))
+	require.NoError(t, err)
+	t.Cleanup(nc.Close)
+	srv.Shutdown()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.Error(t, err, "a purge against a broker that is not there has not purged anything")
+	case <-time.After(PurgeTimeout + 10*time.Second):
+		t.Fatal("PurgeTenant did not return with the broker down — it is waiting for a reconnect " +
+			"that may never come, on the goroutine that runs every tenant's purge")
 	}
 }

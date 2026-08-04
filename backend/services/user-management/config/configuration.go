@@ -11,6 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -256,6 +257,24 @@ func (c *UserManagementConfiguration) Validate() error {
 		return fmt.Errorf("tenantPurge.settleSeconds must not be negative (got %d): the window is what "+
 			"turns one clean residual scan into a sustained one, and a purge cannot complete without it",
 			c.TenantPurge.SettleSeconds)
+	}
+	// 🔴 THE FLOOR IS A CORRECTNESS BOUND, NOT A PREFERENCE, and it is checked here rather
+	// than left to the default because a default only protects an operator who never
+	// touches the knob. A stream purge does not stop retained delivery immediately:
+	// nats-server answers a new subscriber from an in-memory cache before it reads
+	// JetStream, for messaging.RetainedCacheWindow, with no configuration knob of its own.
+	// Complete a purge inside that window and the deletion record says the tenant's data
+	// is gone while the broker is still handing its retained payloads to whoever
+	// subscribes next.
+	//
+	// Strictly greater, not merely equal: the cache TTL runs from the last LOAD, which can
+	// be the moment of the purge itself, so a settle window equal to the TTL puts
+	// completion exactly on the boundary.
+	if settle := c.TenantPurgeSettle(); settle > 0 && settle <= messaging.RetainedCacheWindow {
+		return fmt.Errorf("tenantPurge.settleSeconds is %s, shorter than the broker's retained-message "+
+			"cache (%s): a purge could complete while the broker is still delivering this tenant's "+
+			"retained payloads to new subscribers, so the deletion record would be false",
+			settle, messaging.RetainedCacheWindow)
 	}
 	if c.Auth.IssuerUrl != "" {
 		if err := validateIssuerUrl(c.Auth.IssuerUrl); err != nil {

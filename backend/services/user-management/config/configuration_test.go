@@ -11,6 +11,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -212,11 +213,45 @@ func TestNegativeTenantPurgeIntervalDisablesTheCoordinator(t *testing.T) {
 }
 
 // A configured interval survives defaulting rather than being overwritten by it.
+//
+// The settle value here is 180s rather than something shorter because Validate now floors
+// it at the broker's retained-message cache — see
+// TestASettleWindowShorterThanTheBrokersRetainedCacheIsRefused. That floor is the reason
+// this fixture changed, and the fixture is not the thing under test here.
 func TestTenantPurgeIntervalIsConfigurable(t *testing.T) {
 	cfg := &UserManagementConfiguration{}
-	assert.NoError(t, core.LoadConfiguration([]byte(`{"tenantPurge":{"intervalSeconds":15,"settleSeconds":30}}`), cfg))
+	assert.NoError(t, core.LoadConfiguration([]byte(`{"tenantPurge":{"intervalSeconds":15,"settleSeconds":180}}`), cfg))
 	assert.Equal(t, 15*time.Second, cfg.TenantPurgeInterval())
-	assert.Equal(t, 30*time.Second, cfg.TenantPurgeSettle())
+	assert.Equal(t, 180*time.Second, cfg.TenantPurgeSettle())
+	assert.NoError(t, cfg.Validate())
+}
+
+// TestASettleWindowShorterThanTheBrokersRetainedCacheIsRefused pins the floor at the one
+// place that protects an operator who DOES touch the knob.
+//
+// 🔴 The default clearing the floor protects nobody who changed it, and the value that
+// looks most reasonable to change it to — "shorten the window so a test purge finishes
+// sooner" — is exactly the one that breaks it. A purge completing inside the broker's
+// retained-message cache writes a deletion record saying the tenant's data is gone while
+// the broker is still handing its retained payloads to whoever subscribes next. The cache
+// TTL is compiled into nats-server with no knob of its own, so this side is the only place
+// the constraint can be enforced.
+func TestASettleWindowShorterThanTheBrokersRetainedCacheIsRefused(t *testing.T) {
+	cfg := NewUserManagementConfiguration()
+	cfg.TenantPurge.SettleSeconds = int(messaging.RetainedCacheWindow.Seconds()) - 1
+
+	err := cfg.Validate()
+
+	require.Error(t, err, "a settle window inside the retained-message cache lets a purge "+
+		"complete while the broker is still serving the deleted tenant's payloads")
+	assert.Contains(t, err.Error(), "retained-message cache")
+
+	// The boundary is inclusive-safe on the other side: exactly the cache window is not
+	// enough, one second more is. Asserting both is what stops the check drifting into
+	// either a no-op or a blanket refusal.
+	cfg.TenantPurge.SettleSeconds = int(messaging.RetainedCacheWindow.Seconds())
+	assert.Error(t, cfg.Validate(), "equal is not longer")
+	cfg.TenantPurge.SettleSeconds = int(messaging.RetainedCacheWindow.Seconds()) + 1
 	assert.NoError(t, cfg.Validate())
 }
 

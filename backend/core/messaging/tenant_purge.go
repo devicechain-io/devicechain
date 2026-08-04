@@ -96,6 +96,28 @@ func PurgeTenant(ctx context.Context, nc *nats.Conn, instanceId, tenant string) 
 		return res, fmt.Errorf("refusing to purge the broker with no instance id: every subject is " +
 			"rooted at it, so the filter would match nothing and report a clean broker")
 	}
+	// 🔴 A DISCONNECTED CLIENT DOES NOT FAIL, IT WAITS. The manager connects with infinite
+	// reconnects, so while the broker is down a request is buffered rather than refused and
+	// the call blocks until the broker returns — which on the purge coordinator's single
+	// goroutine stalls every store for every purging tenant, holding the advisory lock, with
+	// no error and no log line. "Never reports clean" in its most invisible form, reachable
+	// on the very first pass if the pod starts while the broker is down.
+	//
+	// THE DEADLINE IS THE GUARD, NOT THE IsConnected CHECK. A client does not learn it has
+	// been disconnected until a ping fails, so asking first catches only an outage that has
+	// already been noticed — worth having, because it turns the common case into an
+	// immediate verdict, but it is not what makes the stall impossible.
+	//
+	// The deadline covers the WHOLE purge rather than each request. Per-request, an outage
+	// costs one timeout per stream and the pass still stalls for minutes; here it costs one,
+	// and the context the caller handed us has no deadline of its own (the coordinator's is
+	// cancel-only, cancelled at service stop).
+	if !nc.IsConnected() {
+		return res, fmt.Errorf("the broker connection is down, so nothing can be purged for %q on "+
+			"this pass", tenant)
+	}
+	ctx, cancel := context.WithTimeout(ctx, PurgeTimeout)
+	defer cancel()
 
 	// streams.Suffixes() is the complete declared set and needs no supplementing: a
 	// dead-letter stream is its own declared entry (streams.All carries it, built with
@@ -182,6 +204,18 @@ func purgeSubject(ctx context.Context, nc *nats.Conn, stream, filter string) (in
 
 // streamNotFoundErrCode is JetStream's API error code for a stream that does not exist.
 const streamNotFoundErrCode = 10059
+
+// PurgeTimeout bounds one whole broker purge, so a broker that goes away mid-pass costs
+// the coordinator one wait rather than an unbounded one.
+//
+// It is deliberately short relative to the coordinator's tick. Getting it wrong in the
+// SHORT direction is cheap: a timeout does not cancel the purge — the request has been
+// delivered, and the server does the work and replies to nobody — so the cost is one pass
+// reporting a failure over work that actually happened, which the next pass sees as
+// already done. Getting it wrong in the LONG direction stalls every tenant's purge.
+//
+// Exported so a caller can reason about it against its own tick.
+const PurgeTimeout = 20 * time.Second
 
 // TenantPurgeDeferrals names the broker state a subject purge does NOT reach, in sentences
 // meant for whoever is deciding whether an erasure claim can be made.
