@@ -150,7 +150,7 @@ func TestPurgeDrillErasesOneTenantAndLeavesTheOther(t *testing.T) {
 	for _, tenant := range []string{victim, bystander} {
 		plan, err := tenantpurge.Classify(ctx, db)
 		require.NoError(t, err)
-		_, err = tenantpurge.Sweep(ctx, db, plan, tenant)
+		_, err = tenantpurge.Sweep(ctx, db, plan, tenant, nil)
 		require.NoError(t, err)
 	}
 	mustExec(t, db, `DELETE FROM "user-management".iam_identities WHERE id = ?`, sharedIdentityID)
@@ -173,7 +173,7 @@ func TestPurgeDrillErasesOneTenantAndLeavesTheOther(t *testing.T) {
 	plan, err := tenantpurge.Classify(ctx, db)
 	require.NoError(t, err)
 
-	res, err := tenantpurge.Sweep(ctx, db, plan, victim)
+	res, err := tenantpurge.Sweep(ctx, db, plan, victim, nil)
 	require.NoError(t, err, "the sweep must survive the real foreign-key graph")
 	t.Logf("swept %d rows across %d tables", res.Rows, len(res.Tables))
 	assert.False(t, res.Complete(),

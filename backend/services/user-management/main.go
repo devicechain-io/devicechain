@@ -209,13 +209,14 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 
 	// The ADR-077 purge coordinator. Deleting a tenant marks its row `purging` and cuts
 	// access; this is what then erases its data across every store and removes the row,
-	// which is what releases its token for reuse. It is user-management's first
-	// background loop, so there is no established pattern here to follow — see the
-	// package doc for why the erasure is organised by STORE rather than by area.
+	// which is what releases its token for reuse. It follows the sweeper shape
+	// notification-management's retention sweep and event-management's anchor sweep
+	// already use — a lifecycle component owning a ticker goroutine, joined on stop. See
+	// the package doc for why the erasure is organised by STORE rather than by area.
 	if interval := Configuration.TenantPurgeInterval(); interval > 0 {
 		PurgeCoordinator = purge.NewCoordinator(Microservice, iam.NewStore(RdbManager), RdbManager,
 			purge.DefaultStores(RdbManager), interval, Configuration.TenantPurgeSettle(),
-			core.NewNoOpLifecycleCallbacks())
+			Configuration.TenantPurgeTokenHold(), core.NewNoOpLifecycleCallbacks())
 		if err := PurgeCoordinator.Initialize(ctx); err != nil {
 			return err
 		}

@@ -15,11 +15,8 @@ import (
 //
 // 🔴 BE CLEAR ABOUT WHAT THIS TEST CAN AND CANNOT DO. It cannot tell anyone that the
 // platform grew a sixth place to keep tenant data — nothing here derives the storage
-// systems from the deployment, and a store nobody registered is a store nobody misses.
-// What it CAN do is make removing a registration a failing test rather than a silent
-// change, which matters because removing one is indistinguishable from success at
-// runtime: the coordinator stops asking, every remaining store reports clean, and the
-// token is released over data nobody looked at.
+// systems from the deployment. What it CAN do is make removing a registration a failing
+// test rather than a silent change, which is the failure mode DefaultStores describes.
 //
 // The relational side has a real derivation and it lives elsewhere — the coverage gate in
 // hack/migration-diff.sh classifies every table in every schema against the catalog and

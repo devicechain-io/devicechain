@@ -5,6 +5,7 @@ package iam
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -50,14 +51,9 @@ type TenantPurge struct {
 	CompletedAt *time.Time `gorm:"index"`
 	// Rows is the total erased across every store, at completion.
 	Rows int64 `gorm:"not null;default:0"`
-
-	Stores []TenantPurgeStore `gorm:"foreignKey:TenantPurgeID"`
 }
 
 func (TenantPurge) TableName() string { return "iam_tenant_purges" }
-
-// Complete reports whether this purge finished — every store erased what it held.
-func (p TenantPurge) Complete() bool { return p.CompletedAt != nil }
 
 // TenantPurgeStore is one store's line in a purge's ledger: what the relational
 // database, the event store, the broker or the object store reported on the latest pass.
@@ -115,25 +111,41 @@ func (s *Store) TenantsPurging(ctx context.Context) ([]Tenant, error) {
 	return out, err
 }
 
-// EnsurePurgeRecord returns the record for (token, epoch), creating it on first sight.
-//
-// The coordinator calls this every pass, so it must converge rather than conflict: the
-// insert is an upsert that does nothing on the unique (token, epoch) index, and the row
-// is then read back. That also makes it correct with several coordinator replicas racing
-// on the same tenant — both see the same record rather than one failing.
-func (s *Store) EnsurePurgeRecord(ctx context.Context, token string, epoch time.Time) (*TenantPurge, error) {
-	if token == "" {
-		return nil, fmt.Errorf("refusing to open a purge record with no token")
-	}
-	rec := TenantPurge{Token: token, Epoch: epoch}
-	if err := s.sys(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&rec).Error; err != nil {
-		return nil, err
-	}
+// PurgeRecordFor reads the record for (token, epoch), or gorm.ErrRecordNotFound.
+func (s *Store) PurgeRecordFor(ctx context.Context, token string, epoch time.Time) (*TenantPurge, error) {
 	var out TenantPurge
 	if err := s.sys(ctx).Where("token = ? AND epoch = ?", token, epoch).First(&out).Error; err != nil {
 		return nil, err
 	}
 	return &out, nil
+}
+
+// EnsurePurgeRecord returns the record for (token, epoch), creating it on first sight.
+//
+// It reads before it writes, and that ordering is the whole design of this function. The
+// coordinator calls it on EVERY pass for the whole life of a purge, which on a purge that
+// cannot yet complete is forever — so an unconditional insert-on-conflict-do-nothing would
+// be a speculative write per tenant per minute, each conflict leaving a dead tuple behind.
+// The steady state here is one indexed read and no write at all.
+//
+// The insert is still an upsert that does nothing on the unique (token, epoch) index,
+// because the read-then-create is not atomic: two coordinator replicas racing on the same
+// tenant can both miss, and both must converge on one record rather than one failing.
+func (s *Store) EnsurePurgeRecord(ctx context.Context, token string, epoch time.Time) (*TenantPurge, error) {
+	if token == "" {
+		return nil, fmt.Errorf("refusing to open a purge record with no token")
+	}
+	switch existing, err := s.PurgeRecordFor(ctx, token, epoch); {
+	case err == nil:
+		return existing, nil
+	case !errors.Is(err, gorm.ErrRecordNotFound):
+		return nil, err
+	}
+	rec := TenantPurge{Token: token, Epoch: epoch}
+	if err := s.sys(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&rec).Error; err != nil {
+		return nil, err
+	}
+	return s.PurgeRecordFor(ctx, token, epoch)
 }
 
 // RecordPurgeStore writes one store's line of the ledger, replacing whatever the previous
@@ -194,6 +206,24 @@ func (s *Store) CompleteTenantPurge(ctx context.Context, t *Tenant, rec *TenantP
 	}
 	if rec.Token != t.Token {
 		return fmt.Errorf("purge record is for token %q but the tenant row is %q", rec.Token, t.Token)
+	}
+	// The token alone does not identify a purge. A token released by an earlier purge can
+	// be taken again, so a PREDECESSOR's record carries the same token as this tenant and
+	// would pass the check above — stamping the wrong purge complete and, worse, filing
+	// this tenant's erasure under the earlier one's evidence.
+	if t.PurgeEpoch == nil || !rec.Epoch.Equal(*t.PurgeEpoch) {
+		return fmt.Errorf("purge record for %q is stamped at a different epoch (%v) from the tenant "+
+			"row (%v) — a token can be purged more than once, so the epoch is what says WHICH purge",
+			t.Token, rec.Epoch, t.PurgeEpoch)
+	}
+	// Refuse to rewrite a completion that already happened. This cannot arise from the
+	// coordinator — completion removes the row in the same transaction — so a row still
+	// present above a completed record means something restored or hand-inserted one, and
+	// overwriting the original timestamp would destroy the evidence rather than repair it.
+	if rec.CompletedAt != nil {
+		return fmt.Errorf("purge record for %q at %v is already stamped complete (%v) while its "+
+			"tenant row still exists — refusing to overwrite the original erasure record",
+			t.Token, rec.Epoch, *rec.CompletedAt)
 	}
 	return s.sys(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(rec).Updates(map[string]any{

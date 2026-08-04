@@ -22,6 +22,13 @@ import (
 // a bug which restarts it on every pass cannot be mistaken for one that does not.
 const settleWindow = 5 * time.Minute
 
+// tokenHoldWindow is deliberately SHORTER than settleWindow in most tests, so a test that
+// means to exercise settling is not silently satisfied by the token hold instead. The two
+// windows are measured from different origins — settling from when the stores went quiet,
+// the hold from the cut — and a test that could not tell them apart would pass whichever
+// one broke.
+const tokenHoldWindow = time.Minute
+
 // fakeStore is a store whose outcome the test dictates.
 //
 // It exists so the coordinator's DECISIONS can be tested — when a purge completes, when
@@ -38,16 +45,39 @@ type fakeStore struct {
 	// failFor makes the store fail for one tenant only, so a test can have two tenants
 	// in the same pass reach different outcomes through the same registered store.
 	failFor string
+
+	// erased records which tenants have already been swept, so rows are reported ONCE.
+	erased map[string]bool
 }
 
 func (f *fakeStore) Name() string { return f.name }
 
+// Erase honours the Store contract's idempotence: rows on the first call for a tenant,
+// zero on every call after.
+//
+// 🔴 THAT DETAIL IS LOAD-BEARING AND WAS ORIGINALLY WRONG HERE. A fake that re-reports its
+// rows on every pass makes the deletion record's row count look correct in tests while it
+// reads 0 in production — because a purge can never complete on its first pass (the
+// settle window has not elapsed), so the completing pass is always one where a real,
+// idempotent store has nothing left to delete. The fake was the only reason that test
+// passed.
 func (f *fakeStore) Erase(_ context.Context, tenant string, _ time.Time) (Outcome, error) {
 	f.calls++
 	if f.failFor != "" && f.failFor == tenant {
 		return Outcome{}, errors.New("this store is stuck for " + tenant)
 	}
-	return Outcome{Rows: f.rows, Deferred: f.deferred}, f.err
+	if f.err != nil {
+		return Outcome{}, f.err
+	}
+	if f.erased == nil {
+		f.erased = map[string]bool{}
+	}
+	rows := f.rows
+	if f.erased[tenant] {
+		rows = 0
+	}
+	f.erased[tenant] = true
+	return Outcome{Rows: rows, Deferred: f.deferred}, nil
 }
 
 // harness is a coordinator over an in-memory database, with a clock the test moves.
@@ -70,7 +100,7 @@ func newHarness(t *testing.T, stores ...Store) *harness {
 	store := iam.NewStore(mgr)
 	h := &harness{t: t, iam: store, clock: time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)}
 	h.coord = NewCoordinator(&core.Microservice{FunctionalArea: "user-management"}, store, mgr,
-		stores, time.Minute, settleWindow, core.NewNoOpLifecycleCallbacks())
+		stores, time.Minute, settleWindow, tokenHoldWindow, core.NewNoOpLifecycleCallbacks())
 	h.coord.now = func() time.Time { return h.clock }
 	return h
 }
@@ -109,7 +139,7 @@ func (h *harness) exists(token string) bool {
 func (h *harness) ledger(token string, epoch time.Time) map[string]iam.TenantPurgeStore {
 	h.t.Helper()
 	ctx := context.Background()
-	rec, err := h.iam.EnsurePurgeRecord(ctx, token, epoch)
+	rec, err := h.iam.PurgeRecordFor(ctx, token, epoch)
 	require.NoError(h.t, err)
 	lines, err := h.iam.PurgeStores(ctx, rec.ID)
 	require.NoError(h.t, err)
@@ -141,8 +171,10 @@ func TestTheInterlockRefusesATenantThatIsNotPurging(t *testing.T) {
 
 	live := &iam.Tenant{Token: "still-in-business"}
 	require.NoError(t, h.iam.CreateTenant(ctx, live))
-	epoch := h.clock
-	live.PurgeEpoch = &epoch
+	// The epoch is stamped ON THE ROW, because the coordinator re-reads it — setting it
+	// on the struct would be undone by the re-read and hand the epoch guard the refusal.
+	require.NoError(t, h.coord.db.Database.Model(&iam.Tenant{}).
+		Where("token = ?", live.Token).Update("purge_epoch", h.clock).Error)
 	require.Equal(t, iam.PurgeActive, live.PurgeState)
 
 	err := h.coord.PurgeTenant(ctx, live)
@@ -163,7 +195,8 @@ func TestTheInterlockRefusesAPurgingTenantWithNoEpoch(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := h.deleteTenant("acme")
-	tenant.PurgeEpoch = nil
+	require.NoError(t, h.coord.db.Database.Model(&iam.Tenant{}).
+		Where("token = ?", tenant.Token).Update("purge_epoch", nil).Error)
 
 	err := h.coord.PurgeTenant(ctx, tenant)
 	require.Error(t, err)
@@ -305,24 +338,34 @@ func TestEveryStoreIsAskedEvenWhenOneFails(t *testing.T) {
 	require.True(t, h.exists("acme"))
 }
 
-// TestCompletionSumsWhatEveryStoreErased checks the record carries the total rather than
-// the last store's figure, which is the number an operator reads as "how much was erased".
-func TestCompletionSumsWhatEveryStoreErased(t *testing.T) {
+// TestCompletionRecordsWhatWasErasedAcrossEveryPass pins the number the deletion record
+// cites as evidence — the one an operator and an auditor read as "how much was erased".
+//
+// The stores here delete on the FIRST pass and find nothing afterwards, which is what the
+// Store contract requires of a real one. The completing pass is therefore always a pass
+// that erased nothing, so a count taken from that pass alone reads zero. The record has to
+// carry the running total, per store, across every pass of the purge.
+func TestCompletionRecordsWhatWasErasedAcrossEveryPass(t *testing.T) {
 	h := newHarness(t, &fakeStore{name: "rdb", rows: 100}, &fakeStore{name: "broker", rows: 5})
 	tenant := h.deleteTenant("acme")
 	epoch := *tenant.PurgeEpoch
 
 	h.pass()
+	require.EqualValues(t, 100, h.ledger("acme", epoch)["rdb"].Rows)
+
+	// Two more passes, both finding nothing. Neither may erode the recorded figure.
+	h.clock = h.clock.Add(time.Minute)
+	h.pass()
+	require.EqualValues(t, 100, h.ledger("acme", epoch)["rdb"].Rows,
+		"a pass that deletes nothing must not overwrite what an earlier pass erased")
+
 	h.clock = h.clock.Add(settleWindow + time.Second)
 	h.pass()
-
 	require.False(t, h.exists("acme"))
 
-	ctx := context.Background()
-	rec, err := h.iam.EnsurePurgeRecord(ctx, "acme", epoch)
+	rec, err := h.iam.PurgeRecordFor(context.Background(), "acme", epoch)
 	require.NoError(t, err)
-	require.True(t, rec.Complete())
-	// 105 per pass, and the pass that completes is the second one.
+	require.NotNil(t, rec.CompletedAt)
 	require.EqualValues(t, 105, rec.Rows)
 }
 
@@ -394,4 +437,125 @@ func TestACoordinatorWithNoStoresRefusesToCompleteAnything(t *testing.T) {
 
 	require.True(t, h.exists("acme"),
 		"a coordinator that asks nobody must never conclude a tenant's data is gone")
+}
+
+// TestTheSettleWindowIsMeasuredFromTheLASTStoreToGoClean pins which of several clean-since
+// timestamps constrains completion.
+//
+// 🔴 THIS PROPERTY WAS UNTESTED AND A MUTATION TO EARLIEST-CLEAN SEMANTICS STAYED GREEN.
+// Every other multi-store test has its stores go clean at the same frozen instant, so max
+// and min are indistinguishable there. Staggering them is the whole test: taking the
+// earliest would let a store that cleaned seconds ago ride out on a peer that has been
+// clean for far longer, and release the token while the newly-clean store is still inside
+// the window that exists to catch a straggler.
+func TestTheSettleWindowIsMeasuredFromTheLASTStoreToGoClean(t *testing.T) {
+	early := &fakeStore{name: "rdb"}
+	late := &fakeStore{name: "broker", err: errors.New("not yet")}
+	h := newHarness(t, early, late)
+	tenant := h.deleteTenant("acme")
+	epoch := *tenant.PurgeEpoch
+
+	// rdb goes clean now; broker is still failing.
+	h.pass()
+	require.NotNil(t, h.ledger("acme", epoch)["rdb"].CleanSince)
+	require.Nil(t, h.ledger("acme", epoch)["broker"].CleanSince)
+
+	// Most of the window passes with only rdb clean, then broker settles.
+	h.clock = h.clock.Add(settleWindow - time.Second)
+	late.err = nil
+	h.pass()
+	require.NotNil(t, h.ledger("acme", epoch)["broker"].CleanSince)
+
+	// rdb has now been clean for longer than the window; broker for a second. Completion
+	// must wait for BROKER, so a coordinator taking the earliest timestamp completes here.
+	h.clock = h.clock.Add(2 * time.Second)
+	h.pass()
+	require.True(t, h.exists("acme"),
+		"the window runs from the last store to go clean, not the first")
+
+	// Once broker has served the full window, it completes.
+	h.clock = h.clock.Add(settleWindow)
+	h.pass()
+	require.False(t, h.exists("acme"))
+}
+
+// TestTheTokenIsHeldUntilNoPreDeletionSessionCanWrite pins the second window, which the
+// settle window cannot substitute for.
+//
+// Completion is what REMOVES the fence: every device-plane gate resolves the tenant's
+// lifecycle through user-management, and an unknown tenant reads as not deleted, so the
+// moment the row goes the released token is admitted again. A device whose session
+// predates the delete keeps its broker credential until that credential expires, so its
+// writes would land under the released token and be inherited by the successor. Stores
+// going quiet says nothing about that — the quiet is exactly what a device between
+// reports looks like.
+func TestTheTokenIsHeldUntilNoPreDeletionSessionCanWrite(t *testing.T) {
+	h := newHarness(t, &fakeStore{name: "rdb", rows: 3})
+	// A hold well past the settle window, so settling cannot be what releases the token.
+	h.coord.tokenHold = settleWindow * 10
+	h.deleteTenant("acme")
+
+	h.pass()
+	h.clock = h.clock.Add(settleWindow + time.Second)
+	h.pass()
+	require.True(t, h.exists("acme"),
+		"clean and settled is not sufficient: the fence disappears when the row does")
+
+	h.clock = h.clock.Add(settleWindow * 10)
+	h.pass()
+	require.False(t, h.exists("acme"))
+}
+
+// TestAnIncompleteLineForAnUnregisteredStoreBlocksCompletion covers de-registering or
+// renaming a store mid-purge.
+//
+// Completion consults the CURRENT store set, so a store dropped from it stops being asked
+// while its ledger line — saying in words that the tenant's data is still somewhere —
+// stays in the record. The purge would then complete over its own written contradiction.
+func TestAnIncompleteLineForAnUnregisteredStoreBlocksCompletion(t *testing.T) {
+	held := Pending{StoreName: "tsdb", Holds: "the event store still holds this tenant's telemetry"}
+	h := newHarness(t, &fakeStore{name: "rdb"}, held)
+	tenant := h.deleteTenant("acme")
+	epoch := *tenant.PurgeEpoch
+
+	h.pass()
+	require.False(t, h.ledger("acme", epoch)["tsdb"].Complete)
+
+	// The store is dropped from the set — a de-registration, or the rename that the
+	// persisted ledger key makes indistinguishable from one.
+	h.coord.stores = []Store{&fakeStore{name: "rdb"}}
+	h.clock = h.clock.Add(settleWindow + tokenHoldWindow + time.Hour)
+	h.pass()
+
+	require.True(t, h.exists("acme"),
+		"a ledger line naming retained data must block completion even once nobody asks that store")
+	rec, err := h.iam.PurgeRecordFor(context.Background(), "acme", epoch)
+	require.NoError(t, err)
+	require.Nil(t, rec.CompletedAt, "the record must not be stamped complete above its own contradiction")
+}
+
+// TestStillPurgingIsTheInterlockTheSweepCarriesInItsOwnTransaction covers the predicate
+// handed to the relational sweep.
+//
+// The coordinator's re-read proves the token was safe a moment ago. This proves it under
+// the deleting transaction's own snapshot, which is the claim that actually matters:
+// between the two, a peer replica whose advisory lock lapsed can complete the purge and an
+// operator can create a new tenant at the reclaimed token. The sweep erases every schema
+// at once and commits, so "safe a moment ago" is not good enough.
+func TestStillPurgingIsTheInterlockTheSweepCarriesInItsOwnTransaction(t *testing.T) {
+	h := newHarness(t, &fakeStore{name: "rdb"})
+	ctx := context.Background()
+	db := h.coord.db.Database
+
+	h.deleteTenant("purging-now")
+	require.NoError(t, h.iam.CreateTenant(ctx, &iam.Tenant{Token: "live-tenant"}))
+
+	require.NoError(t, StillPurging("purging-now")(db))
+
+	err := StillPurging("live-tenant")(db)
+	require.Error(t, err, "a token naming a LIVE tenant must abort the sweep before a row is touched")
+	require.Contains(t, err.Error(), "live-tenant")
+
+	err = StillPurging("never-existed")(db)
+	require.Error(t, err, "a token naming nothing must abort too — it would match unset tenant columns")
 }

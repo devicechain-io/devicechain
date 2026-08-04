@@ -70,7 +70,7 @@ func TestCompleteTenantPurgeReleasesTheTokenForReuse(t *testing.T) {
 	// The record survives its subject and says the erasure finished.
 	var stored TenantPurge
 	require.NoError(t, s.sys(ctx).Where("id = ?", rec.ID).First(&stored).Error)
-	require.True(t, stored.Complete())
+	require.NotNil(t, stored.CompletedAt)
 	require.EqualValues(t, 42, stored.Rows)
 }
 
@@ -85,9 +85,14 @@ func TestCompleteTenantPurgeRefusesATenantThatIsNotPurging(t *testing.T) {
 	live := &Tenant{Token: "still-in-business"}
 	require.NoError(t, s.CreateTenant(ctx, live))
 
-	// A record that names the live tenant — the transposition this guards against.
-	rec, err := s.EnsurePurgeRecord(ctx, live.Token, time.Now().UTC())
+	// A record that names the live tenant — the transposition this guards against. Its
+	// epoch is stamped onto the struct too, so the epoch guard cannot be what refuses
+	// this: the lifecycle predicate inside the DELETE has to be, or the test would pass
+	// with that predicate removed.
+	epoch := time.Now().UTC().Truncate(time.Second)
+	rec, err := s.EnsurePurgeRecord(ctx, live.Token, epoch)
 	require.NoError(t, err)
+	live.PurgeEpoch = &epoch
 
 	err = s.CompleteTenantPurge(ctx, live, rec, 0, time.Now().UTC())
 	require.Error(t, err)
@@ -226,4 +231,62 @@ func TestTenantsPurgingIsTheWorkList(t *testing.T) {
 	require.Len(t, purging, 2, "a live tenant must never appear in the purge work list")
 	require.Equal(t, "older", purging[0].Token, "the queue drains in the order deletions were asked for")
 	require.Equal(t, "newer", purging[1].Token)
+}
+
+// TestCompleteTenantPurgeRefusesARecordFromADifferentPurge is why the epoch is part of the
+// record's identity rather than decoration on it.
+//
+// A released token can be taken again, so a PREDECESSOR's record carries the same token as
+// the tenant now being purged. It passes the token check, and stamping it would file this
+// tenant's erasure under the earlier tenant's evidence while leaving this purge with no
+// record of its own.
+func TestCompleteTenantPurgeRefusesARecordFromADifferentPurge(t *testing.T) {
+	s := newPurgeTestStore(t)
+	ctx := context.Background()
+
+	tenant, epoch := beginPurge(t, s, "acme")
+
+	// The record an earlier purge of this same token left behind.
+	predecessor, err := s.EnsurePurgeRecord(ctx, "acme", epoch.Add(-72*time.Hour))
+	require.NoError(t, err)
+	require.Equal(t, tenant.Token, predecessor.Token, "the token alone cannot tell the two apart")
+
+	err = s.CompleteTenantPurge(ctx, tenant, predecessor, 0, time.Now().UTC())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "different epoch")
+
+	_, err = s.TenantByToken(ctx, "acme")
+	require.NoError(t, err, "a record from another purge must not release this tenant's token")
+}
+
+// TestCompleteTenantPurgeRefusesToRewriteACompletedRecord guards the evidence itself.
+//
+// The coordinator cannot produce this state — completion stamps the record and removes the
+// tenant row in one transaction — so a row sitting above a completed record means one of
+// them was restored or inserted by hand. Re-stamping would replace the original completion
+// timestamp and row count with today's, destroying the record rather than repairing it.
+func TestCompleteTenantPurgeRefusesToRewriteACompletedRecord(t *testing.T) {
+	s := newPurgeTestStore(t)
+	ctx := context.Background()
+
+	tenant, epoch := beginPurge(t, s, "acme")
+	rec, err := s.EnsurePurgeRecord(ctx, "acme", epoch)
+	require.NoError(t, err)
+
+	original := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Second)
+	require.NoError(t, s.sys(ctx).Model(rec).Updates(map[string]any{
+		"completed_at": original, "rows": 999,
+	}).Error)
+	reloaded, err := s.PurgeRecordFor(ctx, "acme", epoch)
+	require.NoError(t, err)
+
+	err = s.CompleteTenantPurge(ctx, tenant, reloaded, 1, time.Now().UTC())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "already stamped complete")
+
+	// The original evidence is untouched.
+	after, err := s.PurgeRecordFor(ctx, "acme", epoch)
+	require.NoError(t, err)
+	require.EqualValues(t, 999, after.Rows)
+	require.WithinDuration(t, original, *after.CompletedAt, time.Second)
 }

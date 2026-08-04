@@ -44,18 +44,21 @@ const coordinatorLockName = "user-management-tenant-purge"
 // the purge would stall until someone noticed. A pass is short, purges are rare, and a
 // stalled purge is the one failure mode this design cannot tolerate quietly.
 type Coordinator struct {
-	Microservice *core.Microservice
-
 	iam    *iam.Store
 	db     *rdb.RdbManager
 	stores []Store
 
 	interval time.Duration
-	// settle is how long every store must have been reporting clean before the purge
-	// can complete. See iam.TenantPurgeStore.CleanSince: a residual scan run right after
-	// a sweep sees only writes already in flight, so one clean observation is not the
-	// same claim as "nothing is coming".
+	// settle is how long every store must have been reporting clean before the purge can
+	// complete — see iam.TenantPurgeStore.CleanSince for why one clean observation is not
+	// the claim it looks like.
 	settle time.Duration
+	// tokenHold is the minimum age of the purge itself before its token may be released,
+	// measured from the cut rather than from when the stores went quiet. It covers what
+	// settling cannot: a device session established before the delete can keep writing
+	// until its broker credential expires, and completion is what removes the fence that
+	// was refusing it. See config.defaultTenantPurgeTokenHoldSeconds.
+	tokenHold time.Duration
 
 	procCtx    context.Context
 	procCancel context.CancelFunc
@@ -69,17 +72,19 @@ type Coordinator struct {
 }
 
 // NewCoordinator builds the purge loop. interval is the tick period; settle is how long
-// every store must stay clean before the token is released.
+// every store must stay clean, and tokenHold how old the purge must be, before the token
+// is released.
 func NewCoordinator(ms *core.Microservice, store *iam.Store, db *rdb.RdbManager,
-	stores []Store, interval, settle time.Duration, callbacks core.LifecycleCallbacks) *Coordinator {
+	stores []Store, interval, settle, tokenHold time.Duration,
+	callbacks core.LifecycleCallbacks) *Coordinator {
 	c := &Coordinator{
-		Microservice: ms,
-		iam:          store,
-		db:           db,
-		stores:       stores,
-		interval:     interval,
-		settle:       settle,
-		now:          time.Now,
+		iam:       store,
+		db:        db,
+		stores:    stores,
+		interval:  interval,
+		settle:    settle,
+		tokenHold: tokenHold,
+		now:       time.Now,
 	}
 	c.lifecycle = core.NewLifecycleManager(fmt.Sprintf("%s-tenant-purge", ms.FunctionalArea), c, callbacks)
 	return c
@@ -183,7 +188,7 @@ func (c *Coordinator) pass(ctx context.Context) error {
 // local to the code that depends on it, so it survives someone later calling this from
 // somewhere that did not filter — which is exactly how the guarantee would otherwise be
 // lost.
-func (c *Coordinator) PurgeTenant(ctx context.Context, t *iam.Tenant) error {
+func (c *Coordinator) PurgeTenant(ctx context.Context, tenant *iam.Tenant) error {
 	sys := core.WithSystemContext(ctx)
 
 	// 🔴 AN EMPTY STORE SET COMPLETES INSTANTLY IF THIS IS NOT HERE, and it does so
@@ -194,7 +199,21 @@ func (c *Coordinator) PurgeTenant(ctx context.Context, t *iam.Tenant) error {
 	// to make impossible, arriving through the coordinator instead of through a store.
 	if len(c.stores) == 0 {
 		return fmt.Errorf("refusing to purge %q: no stores are registered, so nothing would be "+
-			"asked and nothing erased — but the purge would complete and release the token", t.Token)
+			"asked and nothing erased — but the purge would complete and release the token",
+			tenant.Token)
+	}
+
+	// 🔴 RE-READ THE ROW; DO NOT TRUST THE ONE THE PASS CARRIED IN. The struct was loaded
+	// when the pass listed its work, and between then and here a peer replica can have
+	// completed this purge and an operator can have created a NEW tenant at the reclaimed
+	// token — at which point the token in hand names a live tenant and the struct still
+	// says `purging`. That is not hypothetical: the advisory lock guarding a pass is a
+	// session lease, so a replica that loses its lock connection keeps going while a peer
+	// starts. The re-read shrinks the window; the relational store's in-transaction
+	// precondition (StillPurging) closes it.
+	t, err := c.iam.TenantByToken(sys, tenant.Token)
+	if err != nil {
+		return fmt.Errorf("re-reading %q before purging it: %w", tenant.Token, err)
 	}
 
 	if t.PurgeState != iam.PurgePurging {
@@ -217,6 +236,21 @@ func (c *Coordinator) PurgeTenant(ctx context.Context, t *iam.Tenant) error {
 		return fmt.Errorf("reading the ledger for %q: %w", t.Token, err)
 	}
 	cleanSince := cleanSinceByStore(previous)
+	carried := rowsByStore(previous)
+
+	// 🔴 A LEDGER LINE FOR A STORE NOBODY ASKS ABOUT ANY MORE STILL COUNTS. Completion
+	// otherwise consults only the CURRENT store set, so de-registering a store — or
+	// renaming one, which the ledger key makes the same event — silently drops its line
+	// out of the decision while leaving it in the record. The purge then completes over a
+	// line that says, in words, that the tenant's data is still somewhere. A deletion
+	// record whose completion stamp sits above its own contradiction is worse than no
+	// record.
+	if orphan := unaskedIncompleteStore(previous, c.stores); orphan != "" {
+		return fmt.Errorf("refusing to complete the purge of %q: the ledger carries an incomplete "+
+			"line for store %q, which is no longer registered — either its data is still there or "+
+			"the store was renamed, and both need answering before an erasure can be claimed",
+			t.Token, orphan)
+	}
 
 	total := int64(0)
 	allClean := true
@@ -232,6 +266,13 @@ func (c *Coordinator) PurgeTenant(ctx context.Context, t *iam.Tenant) error {
 		default:
 		}
 		line := c.eraseOne(ctx, store, t.Token, epoch, rec.ID, cleanSince[store.Name()])
+		// 🔴 ROWS ACCUMULATE ACROSS PASSES; THEY ARE NOT THIS PASS'S FIGURE. An erasure is
+		// idempotent by contract — the second call finds nothing and reports zero — and a
+		// purge cannot complete on its first pass, because the settle window has not
+		// elapsed. So a per-pass count is ZERO on every pass that could ever complete, and
+		// the row count the deletion record cites as evidence would read 0 for every real
+		// purge while every test using a fake that re-reports its rows looked healthy.
+		line.Rows += carried[store.Name()]
 		if err := c.iam.RecordPurgeStore(sys, line); err != nil {
 			return fmt.Errorf("recording %q's ledger line for %q: %w", store.Name(), t.Token, err)
 		}
@@ -251,6 +292,16 @@ func (c *Coordinator) PurgeTenant(ctx context.Context, t *iam.Tenant) error {
 	if settled := c.now().Sub(lastCleanAt); settled < c.settle {
 		log.Info().Str("tenant", t.Token).Dur("cleanFor", settled).Dur("settle", c.settle).
 			Msg("Tenant purge is clean, holding for the settle window")
+		return nil
+	}
+	// The second window, and it is not a longer version of the first. Settling asks
+	// whether everything already admitted has finished arriving; this asks whether
+	// anything can still be admitted at all — and completion is what re-opens that door,
+	// because removing the row makes every device-plane gate read the token as an unknown
+	// tenant, which they treat as not deleted.
+	if age := c.now().Sub(epoch); age < c.tokenHold {
+		log.Info().Str("tenant", t.Token).Dur("age", age).Dur("tokenHold", c.tokenHold).
+			Msg("Tenant purge is clean and settled, holding the token until no pre-deletion session can write")
 		return nil
 	}
 
@@ -312,4 +363,29 @@ func cleanSinceByStore(lines []iam.TenantPurgeStore) map[string]*time.Time {
 		}
 	}
 	return out
+}
+
+// rowsByStore indexes what each store has erased so far, so the running total survives the
+// passes on which there is nothing left to delete.
+func rowsByStore(lines []iam.TenantPurgeStore) map[string]int64 {
+	out := make(map[string]int64, len(lines))
+	for i := range lines {
+		out[lines[i].Store] = lines[i].Rows
+	}
+	return out
+}
+
+// unaskedIncompleteStore returns the name of a ledger line that is not complete and whose
+// store is no longer in the set being asked, or "" if there is none.
+func unaskedIncompleteStore(lines []iam.TenantPurgeStore, stores []Store) string {
+	asked := make(map[string]bool, len(stores))
+	for _, s := range stores {
+		asked[s.Name()] = true
+	}
+	for i := range lines {
+		if !lines[i].Complete && !asked[lines[i].Store] {
+			return lines[i].Store
+		}
+	}
+	return ""
 }

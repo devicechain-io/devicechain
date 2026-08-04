@@ -5,6 +5,7 @@ package tenantpurge
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -138,7 +139,7 @@ func TestSweepRefusesAnEmptyTokenBeforeTouchingTheDatabase(t *testing.T) {
 		col("a", "rows", "tenant_id", "character varying"),
 	}, nil)
 
-	_, err := Sweep(context.Background(), nil, plan, "")
+	_, err := Sweep(context.Background(), nil, plan, "", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "empty tenant token")
 }
@@ -155,7 +156,7 @@ func TestSweepRefusesAnUnclassifiedPlanBeforeTouchingTheDatabase(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 
-	_, err = Sweep(context.Background(), nil, plan, "acme")
+	_, err = Sweep(context.Background(), nil, plan, "acme", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "a.mystery")
 }
@@ -176,7 +177,7 @@ func TestADeferredTableIsCarriedOnEveryResult(t *testing.T) {
 	}, nil)
 
 	t.Run("on the refusal path", func(t *testing.T) {
-		res, err := Sweep(context.Background(), nil, plan, "")
+		res, err := Sweep(context.Background(), nil, plan, "", nil)
 		require.Error(t, err)
 		require.Len(t, res.Deferred, 1)
 		assert.Equal(t, "detect_snapshots", res.Deferred[0].Table.Name)
@@ -205,7 +206,7 @@ func TestADeferredTableIsCarriedOnEveryResult(t *testing.T) {
 		}
 		require.NoError(t, checkClassified(live))
 
-		res, err := Sweep(context.Background(), db, live, "acme") //nolint
+		res, err := Sweep(context.Background(), db, live, "acme", nil) //nolint
 		require.NoError(t, err)
 		require.Equal(t, int64(1), res.Rows, "the sweep really ran")
 		require.Len(t, res.Deferred, 1,
@@ -252,7 +253,7 @@ func TestSweepDeletesOnlyTheNamedTenantsRows(t *testing.T) {
 		col("main", "devices", "tenant_id", "text"),
 	}, nil)
 
-	res, err := Sweep(context.Background(), db, plan, "acme")
+	res, err := Sweep(context.Background(), db, plan, "acme", nil)
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), res.Rows)
 
@@ -283,7 +284,7 @@ func TestSweepDeletesAJoinRowThroughItsParent(t *testing.T) {
 		fk("main", "iam_membership_tenant_roles", "membership_id", "main", "iam_memberships", "id"),
 	})
 
-	res, err := Sweep(context.Background(), db, plan, "acme")
+	res, err := Sweep(context.Background(), db, plan, "acme", nil)
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), res.Rows, "two join rows plus the membership itself")
 
@@ -327,7 +328,7 @@ func TestSweepDeletesTheChildBeforeTheParent(t *testing.T) {
 	require.Error(t, db.Exec(`DELETE FROM area_types WHERE id = 1`).Error,
 		"foreign keys are not being enforced, so this test cannot observe a wrong delete order")
 
-	res, err := Sweep(context.Background(), db, plan, "acme")
+	res, err := Sweep(context.Background(), db, plan, "acme", nil)
 	require.NoError(t, err, "a parent-first order would be rejected by the foreign key")
 	assert.Equal(t, int64(2), res.Rows)
 }
@@ -345,7 +346,7 @@ func TestResidueReportsWhatSurvivedTheSweep(t *testing.T) {
 	}, nil)
 	ctx := context.Background()
 
-	_, err := Sweep(ctx, db, plan, "acme")
+	_, err := Sweep(ctx, db, plan, "acme", nil)
 	require.NoError(t, err)
 
 	clean, err := Residue(ctx, db, plan, "acme")
@@ -378,11 +379,62 @@ func TestSweepIsAllOrNothing(t *testing.T) {
 		col("main", "second", "tenant_id", "text"),
 	}, nil)
 
-	_, err := Sweep(context.Background(), db, plan, "acme")
+	_, err := Sweep(context.Background(), db, plan, "acme", nil)
 	require.Error(t, err)
 
 	var remaining int64
 	require.NoError(t, db.Raw(`SELECT count(*) FROM first`).Scan(&remaining).Error)
 	assert.Equal(t, int64(1), remaining,
 		"the first table's delete must have rolled back with the failure")
+}
+
+// TestAFailingPreconditionAbortsTheSweepWithNothingDeleted pins what Precondition is for.
+//
+// The check runs INSIDE the transaction, so a refusal has to leave the database exactly as
+// it was — not merely stop the remaining deletes. That distinction is the whole reason the
+// hook is here rather than in the caller: a caller checking beforehand proves the token was
+// safe at some earlier moment, and the sweep commits every schema at once, so "earlier" is
+// not a claim anyone can act on.
+func TestAFailingPreconditionAbortsTheSweepWithNothingDeleted(t *testing.T) {
+	db := sqliteDB(t)
+	require.NoError(t, db.Exec(`CREATE TABLE devices (id INTEGER PRIMARY KEY, tenant_id TEXT)`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO devices (id, tenant_id) VALUES (1,'acme')`).Error)
+
+	plan := planOf(t, []column{
+		col("main", "devices", "id", "bigint"),
+		col("main", "devices", "tenant_id", "text"),
+	}, nil)
+
+	refuse := func(*gorm.DB) error { return errors.New("that token names a live tenant") }
+	_, err := Sweep(context.Background(), db, plan, "acme", refuse)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "that token names a live tenant")
+
+	var n int64
+	require.NoError(t, db.Raw(`SELECT count(*) FROM devices WHERE tenant_id = 'acme'`).Scan(&n).Error)
+	assert.Equal(t, int64(1), n, "a refused precondition must roll back, not merely stop")
+}
+
+// TestAPassingPreconditionIsTheCounterweight. Refusing is only useful while a correct
+// precondition still lets the sweep through untouched.
+func TestAPassingPreconditionIsTheCounterweight(t *testing.T) {
+	db := sqliteDB(t)
+	require.NoError(t, db.Exec(`CREATE TABLE devices (id INTEGER PRIMARY KEY, tenant_id TEXT)`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO devices (id, tenant_id) VALUES (1,'acme')`).Error)
+
+	plan := planOf(t, []column{
+		col("main", "devices", "id", "bigint"),
+		col("main", "devices", "tenant_id", "text"),
+	}, nil)
+
+	called := 0
+	allow := func(tx *gorm.DB) error {
+		called++
+		require.NotNil(t, tx, "the precondition receives the sweep's own transaction")
+		return nil
+	}
+	res, err := Sweep(context.Background(), db, plan, "acme", allow)
+	require.NoError(t, err)
+	assert.Equal(t, 1, called)
+	assert.Equal(t, int64(1), res.Rows)
 }

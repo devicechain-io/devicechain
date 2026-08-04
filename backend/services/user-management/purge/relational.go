@@ -19,19 +19,31 @@ import (
 // Relational erases a tenant from a Postgres database, across every functional area's
 // schema in it.
 //
-// One instance of this type serves both clusters: the relational store, where ten areas
-// share a database, and the telemetry store, where event-management is alone in another.
-// They differ only in the connection and the name — the classification, the delete order
-// and the residual scan are identical, because both are one database with one owning
-// role and one catalog that answers for all of it.
+// It is built to serve BOTH clusters — the relational store, where ten areas share a
+// database, and the telemetry store, where event-management is alone in another — because
+// they differ only in the connection and the ledger name: the classification, the delete
+// order and the residual scan are identical, both being one database with one owning role
+// and one catalog that answers for all of it. Today only the relational one is
+// registered; the telemetry store is still Pending (see stores.go), which is why the name
+// is a parameter rather than a constant.
 type Relational struct {
 	name string
 	db   *rdb.RdbManager
+	pre  func(tenant string) tenantpurge.Precondition
 }
 
 // NewRelational builds the store for a database. name keys the ledger and is persisted.
-func NewRelational(name string, db *rdb.RdbManager) *Relational {
-	return &Relational{name: name, db: db}
+//
+// pre builds the check run inside the sweep's own transaction, for the tenant being
+// erased; it may be nil. Supplying one is what
+// makes the lifecycle interlock un-raceable rather than merely checked-recently, so the
+// relational cluster — the one whose sweep can erase every area at once — always gets it.
+// The telemetry cluster cannot: iam_tenants is in the other database, so nothing there can
+// read the lifecycle under the deleting transaction's snapshot. That store's interlock is
+// the coordinator's re-read alone, and saying so is better than implying otherwise.
+func NewRelational(name string, db *rdb.RdbManager,
+	pre func(tenant string) tenantpurge.Precondition) *Relational {
+	return &Relational{name: name, db: db, pre: pre}
 }
 
 func (r *Relational) Name() string { return r.name }
@@ -39,13 +51,18 @@ func (r *Relational) Name() string { return r.name }
 // Erase classifies the database, deletes the tenant's rows, and reads back whether any
 // remain.
 //
-// # The plan is rebuilt every pass
+// # The plan is rebuilt on every tenant's pass
 //
 // Classification is a snapshot of the catalog, and migrations append normally now, so a
 // plan held across a deploy that added a table would simply never sweep it — and nothing
 // would say so, because the fail-closed check inspects the plan rather than the database.
 // Two catalog reads against a table count in the tens is not a cost worth optimising into
 // a silent retention bug.
+//
+// It is per TENANT, not per pass, because that is where the call sits — with N tenants
+// purging at once a pass classifies N times identically. Hoisting it to the pass would
+// need either a stage in the Store interface or a plan handed across it, and both are
+// worse than the two queries they save while N is the 0 or 1 it is in practice.
 //
 // # A residual row is a failure, not a deferral
 //
@@ -64,7 +81,11 @@ func (r *Relational) Erase(ctx context.Context, tenant string, _ time.Time) (Out
 		return Outcome{}, fmt.Errorf("classifying %s: %w", r.name, err)
 	}
 
-	swept, err := tenantpurge.Sweep(ctx, db, plan, tenant)
+	var pre tenantpurge.Precondition
+	if r.pre != nil {
+		pre = r.pre(tenant)
+	}
+	swept, err := tenantpurge.Sweep(ctx, db, plan, tenant, pre)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("sweeping %s: %w", r.name, err)
 	}

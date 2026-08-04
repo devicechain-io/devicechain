@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -228,4 +229,27 @@ func TestNegativeSettleWindowIsRefused(t *testing.T) {
 	err := cfg.Validate()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "settleSeconds")
+}
+
+// The token-hold default is TIED to the broker credential's lifetime, not chosen to look
+// round. Completion removes the tenant row, and every device-plane gate reads an unknown
+// tenant as not deleted — so releasing the token re-opens the door to any session
+// established before the delete, which survives until its credential expires. Reading the
+// constant means the two cannot drift apart silently.
+func TestTokenHoldDefaultTracksTheBrokerCredentialLifetime(t *testing.T) {
+	cfg := &UserManagementConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(``), cfg))
+	assert.Equal(t, natsauth.DefaultUserJWTTTL, cfg.TenantPurgeTokenHold())
+	assert.Greater(t, cfg.TenantPurgeTokenHold(), cfg.TenantPurgeSettle(),
+		"the hold answers a longer-lived question than settling and must not be the shorter of the two")
+}
+
+// A negative token hold is refused for the same reason a negative settle window is: it
+// would release the token while a pre-deletion session can still write under it.
+func TestNegativeTokenHoldIsRefused(t *testing.T) {
+	cfg := NewUserManagementConfiguration()
+	cfg.TenantPurge.TokenHoldSeconds = -1
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "tokenHoldSeconds")
 }

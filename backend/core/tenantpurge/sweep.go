@@ -78,6 +78,14 @@ func checkClassified(plan *Plan) error {
 	return nil
 }
 
+// Precondition is a check the caller runs INSIDE the sweep's transaction, before the
+// first delete. Returning an error aborts the sweep with nothing written.
+//
+// It exists for one specific claim: that the token still names a tenant it is safe to
+// erase. Establishing that outside the transaction proves it was true at some earlier
+// moment, which is a different and much weaker statement — see Sweep.
+type Precondition func(tx *gorm.DB) error
+
 // Sweep deletes every row belonging to tenant, in foreign-key-safe order.
 //
 // The whole sweep runs in ONE transaction. Not for speed: a partially swept tenant is
@@ -103,14 +111,23 @@ func checkClassified(plan *Plan) error {
 //
 // # 🔴 CALLER'S PRECONDITION: the tenant must already be in `purging`
 //
-// This function does not check, and deliberately does not: the lifecycle lives in
-// user-management's iam_tenants, and teaching core about that table to guard one call
-// would invert the layering for every other user of the package. So the guarantee above
-// is the CALLER's to establish, and it is not a formality — the whole sweep commits in
-// one transaction, so a transposed token erases a live tenant completely and atomically,
-// with no partial state to notice on the way. Anything that calls this outside a test
-// must first confirm the token names a tenant whose purge has begun.
-func Sweep(ctx context.Context, db *gorm.DB, plan *Plan, tenant string) (Result, error) {
+// This function does not know what that means, and deliberately does not: the lifecycle
+// lives in user-management's iam_tenants, and teaching core about that table would invert
+// the layering for every other user of the package. So the guarantee is the CALLER's, and
+// it is not a formality — the whole sweep commits in one transaction, so a transposed
+// token erases a live tenant completely and atomically, with no partial state to notice
+// on the way.
+//
+// What this function DOES provide is somewhere to put that check where it cannot go
+// stale: pre runs inside the transaction, so the lifecycle is read under the same snapshot
+// that is about to do the deleting. A caller that checks beforehand instead is checking a
+// value that can change before the first DELETE lands — and the gap is not theoretical,
+// because the coordinator's advisory lock is a session lease, not a fence: lose the
+// connection holding it and the pass keeps running on other pooled connections while a
+// peer starts its own. pre is what makes that race lose safely. It may be nil, for a
+// caller with no lifecycle to consult (a test, or a database that does not hold the
+// tenant table) — and such a caller has the weaker guarantee, by construction.
+func Sweep(ctx context.Context, db *gorm.DB, plan *Plan, tenant string, pre Precondition) (Result, error) {
 	res := Result{Tenant: tenant, Deferred: plan.OfClass(ClassDeferred)}
 	if err := checkSweepable(plan, tenant); err != nil {
 		return res, err
@@ -118,6 +135,11 @@ func Sweep(ctx context.Context, db *gorm.DB, plan *Plan, tenant string) (Result,
 	idx := plan.index()
 
 	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if pre != nil {
+			if err := pre(tx); err != nil {
+				return fmt.Errorf("refusing to sweep %q: %w", tenant, err)
+			}
+		}
 		for _, e := range plan.Actionable() {
 			where, args, err := tenantPredicate(idx, e.Table, tenant, 0)
 			if err != nil {

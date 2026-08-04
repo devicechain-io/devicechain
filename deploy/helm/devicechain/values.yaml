@@ -654,11 +654,19 @@ functionalAreas:
     #                             # coordinator — deletions then stay pending rather
     #                             # than being lost, and no token is released.
     #       settleSeconds: 300    # how long every store must keep reporting clean
-    #                             # before the purge completes. It covers the window
-    #                             # in which a straggler write can still be admitted
-    #                             # for a tenant whose access was cut; shortening it
-    #                             # trades erasure certainty for a token released
-    #                             # sooner. Negative is rejected.
+    #                             # before the purge completes. It covers a write that
+    #                             # was already admitted when the fence closed and is
+    #                             # still on its way to storage. Negative is rejected.
+    #       tokenHoldSeconds: 43200
+    #                             # how long the token stays reserved, measured from the
+    #                             # deletion rather than from when the stores went quiet.
+    #                             # It covers a device session established BEFORE the
+    #                             # delete, which keeps its broker credential until that
+    #                             # credential expires — and completion is what removes
+    #                             # the fence refusing it. Defaults to the credential
+    #                             # lifetime (12h). Lowering it lets a deleted tenant's
+    #                             # name be reused sooner and narrows the guarantee that
+    #                             # its successor inherits nothing. Negative is rejected.
   device-management:
     config:
       # disabled | optional | required. required (the hardened default, ADR-025)
