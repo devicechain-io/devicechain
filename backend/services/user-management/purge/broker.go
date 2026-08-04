@@ -20,15 +20,18 @@ import (
 // the same split the telemetry store has, and for the same reason: a filter rebuilt by a
 // caller does not fail when a shape changes, it silently matches nothing.
 //
-// # 🔴 This store is NOT clean, and it is not supposed to be yet
+// # What this store does NOT defer any more, and the one thing it can still report
 //
-// Three things survive a subject purge, all named in the ledger on every pass
-// (messaging.TenantPurgeDeferrals): MQTT session state, whose streams key on a
-// device-chosen client id that is bound to no tenant; durable consumers, which a purge
-// does not remove and which on an interest-retention stream actively keep the deleted
-// tenant's messages alive; and the retained-message cache, which serves purged payloads
-// for up to two minutes after the purge. Until those are closed this store blocks
-// completion — deliberately, and visibly.
+// Three things used to survive a subject purge and were named in the ledger on every pass,
+// which is what kept this store from ever reporting clean. Two are now erased — MQTT
+// session state and the durable consumers that outlive it, both reached by READING the
+// gateway's own records rather than by filtering subjects that never carried the tenant —
+// and the third, the retained-message cache, is covered by the settle window
+// (messaging.RetainedCacheWindow spells out the argument and what it rests on).
+//
+// So a deferral here is now a MEASUREMENT: the broker reports one only when a pass observed
+// state it could not attribute, which today means a session record filed under a client id
+// that does not have the pinned device shape. The normal outcome is none.
 type Broker struct {
 	conn       messaging.Connection
 	instanceId string
@@ -60,5 +63,5 @@ func (b *Broker) Erase(ctx context.Context, tenant string, _ time.Time) (Outcome
 		return Outcome{}, fmt.Errorf("purging the broker for %q: %w", tenant, err)
 	}
 
-	return Outcome{Rows: res.Messages, Deferred: messaging.TenantPurgeDeferrals()}, nil
+	return Outcome{Rows: res.Rows(), Deferred: res.Deferrals}, nil
 }

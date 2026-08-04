@@ -53,8 +53,8 @@ import (
 // So a purge has to recover the exact ids rather than compute them, which it can:
 // the $MQTT_sess record's own payload carries its client id, so the ids are
 // readable even though they are not filterable. That is what the pin makes
-// possible and what it did not make cheap. Until that work lands,
-// TenantPurgeDeferrals still names this state as surviving a purge.
+// possible and what it did not make cheap. tenant_purge_mqtt.go is the work that
+// followed, and it is built entirely on reading rather than computing.
 //
 // # 🔑 Why a PREFIX and not an exact value
 //
@@ -151,4 +151,67 @@ func DeviceClientID(instanceId, tenant, deviceToken string) (string, error) {
 func DeviceClientIDMatches(presented, required string) bool {
 	return presented == required ||
 		strings.HasPrefix(presented, required+deviceClientIDSeparator)
+}
+
+// DeviceClientIDTenantPrefix is the string every one of this tenant's device client
+// ids begins with. It is what an ADR-077 purge attributes a recovered client id
+// with, and the only reason the erasure can name an owner for gateway state whose
+// subject says nothing.
+//
+// 🔑 THIS ONE IS A PLAIN PREFIX, NOT THE EQUALITY-OR-PREFIX TEST ABOVE, AND THE
+// DIFFERENCE IS STRUCTURAL RATHER THAN A SIMPLIFICATION. The tenant is never the
+// LAST field of a client id — a device token always follows it — so a legal id can
+// never be exactly this prefix, and the trailing separator is already present.
+// Against a client id there is nothing for an equality branch to admit. That is
+// why this is not a third caller for the shape keyBelongsTo and DeviceClientIDMatches
+// share, and why extracting all three into one helper would have to reintroduce a
+// case this one cannot have.
+func DeviceClientIDTenantPrefix(instanceId, tenant string) (string, error) {
+	for _, f := range []struct{ name, value string }{
+		{"instance id", instanceId},
+		{"tenant", tenant},
+	} {
+		if err := core.ValidateToken(f.value); err != nil {
+			return "", fmt.Errorf("refusing to build an MQTT client id prefix for an invalid %s: %w", f.name, err)
+		}
+	}
+	return instanceId + deviceClientIDSeparator + tenant + deviceClientIDSeparator, nil
+}
+
+// DeviceClientIDBelongsTo reports whether clientID was minted for a device of this
+// tenant in this instance. prefix comes from DeviceClientIDTenantPrefix.
+//
+// 🔴 FALSE MEANS "NOT THIS TENANT'S", WHICH IS NOT THE SAME AS "SOMEONE ELSE'S". An
+// id that is not device-shaped at all — the edge agent's uplink, a service client,
+// or anything a broker admitted before the callout began pinning the shape — also
+// reads false here. A purge deciding what to erase wants exactly that answer; a purge
+// deciding what it FAILED to reach has to ask the separate question, which is what
+// DeviceClientIDIsDeviceShaped is for.
+func DeviceClientIDBelongsTo(clientID, prefix string) bool {
+	return prefix != "" && strings.HasPrefix(clientID, prefix)
+}
+
+// DeviceClientIDIsDeviceShaped reports whether clientID has the three-field shape the
+// callout admits, whatever instance or tenant it names.
+//
+// It exists so a purge can tell the two reasons it skipped an id apart: a device in
+// ANOTHER tenant (correctly skipped, and someone else's purge will reach it) from an
+// id no tenant owns (correctly skipped, and nobody's purge will ever reach it). Only
+// the second is worth a word in a deletion record, and conflating them would put the
+// edge agent's uplink session into every tenant's ledger forever.
+func DeviceClientIDIsDeviceShaped(clientID string) bool {
+	fields := strings.SplitN(clientID, deviceClientIDSeparator, 4)
+	if len(fields) < 3 {
+		return false
+	}
+	// The first three fields are the composed identity, and each must be a token the
+	// grammar admits — which is what stops "a:b:" or "::x" counting as shaped. A
+	// fourth field, if present, is the device's own discriminator and is deliberately
+	// unconstrained.
+	for _, f := range fields[:3] {
+		if core.ValidateToken(f) != nil {
+			return false
+		}
+	}
+	return true
 }

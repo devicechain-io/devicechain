@@ -5,6 +5,7 @@ package messaging
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -176,27 +177,55 @@ func TestAHostileTenantTokenIsRefusedBeforeAnythingIsPurged(t *testing.T) {
 	assert.NotZero(t, res.Messages, "a legitimate token must still purge")
 }
 
-// TestTheDeferralsNameWhatSurvives pins the sentences that go into the deletion record.
+// TestABrokerWithNothingUnattributableDefersNothing is the assertion that the three
+// standing deferrals are actually GONE, rather than reworded.
+//
+// 🔴 IT IS THE ONE TEST THAT WOULD CATCH THE SLICE HAVING NO EFFECT. Deferrals are what
+// Outcome.Clean() reads, so as long as the broker returns any, the store can never report
+// clean and no purge can ever complete — the erasure could be perfect and the platform
+// would still be unable to say so. A purge over an ordinary broker must come back with an
+// empty list.
+func TestABrokerWithNothingUnattributableDefersNothing(t *testing.T) {
+	nc, js := purgeRig(t)
+	seedStream(t, js, streams.Suffixes()[0], purgeVictim, purgeBystander)
+
+	res, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim)
+	require.NoError(t, err)
+	require.NotZero(t, res.Messages, "the purge must have done something, or an empty deferral "+
+		"list is just an erasure that never ran")
+	assert.Empty(t, res.Deferrals,
+		"a broker holding nothing it cannot attribute must defer nothing; anything here blocks "+
+			"every purge from ever completing")
+}
+
+// TestADeferralNamesWhatSurvives pins the sentence a deferral goes into the deletion record
+// as, over the one condition that still produces one.
 //
 // A deferral's whole value is that a reader can act on it. One that named a stream without
 // saying what it holds would still block completion — so nothing would fail — while the
 // record told an auditor a purge is incomplete without telling them what is retained.
-func TestTheDeferralsNameWhatSurvives(t *testing.T) {
-	deferrals := TenantPurgeDeferrals()
-	require.NotEmpty(t, deferrals,
-		"the session streams, the orphaned consumers and the retained cache are all still "+
-			"outstanding; an empty list here would let a purge claim total erasure")
+func TestADeferralNamesWhatSurvives(t *testing.T) {
+	nc, js := purgeRig(t)
+	_, err := js.AddStream(&nats.StreamConfig{
+		Name:     MqttSessionStore,
+		Subjects: []string{mqttSessSubjectPrefix + ">"},
+		Storage:  nats.MemoryStorage,
+	})
+	require.NoError(t, err)
+	rec, err := json.Marshal(mqttSessionRecord{ID: "a-client-id-from-before-the-pin"})
+	require.NoError(t, err)
+	_, err = js.Publish(mqttSessSubjectPrefix+"abcd1234", rec)
+	require.NoError(t, err)
 
-	for _, d := range deferrals {
-		assert.Greaterf(t, len(d), 80, "a deferral must describe the data, not label it: %q", d)
-	}
-	joined := ""
-	for _, d := range deferrals {
-		joined += d
-	}
-	for _, must := range []string{"$MQTT_sess", "$MQTT_qos2in", "consumer", "retained"} {
-		assert.Containsf(t, joined, must,
-			"nothing in the deferrals mentions %q, so that hole is invisible in the record", must)
+	res, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim)
+	require.NoError(t, err)
+	require.Len(t, res.Deferrals, 1)
+
+	d := res.Deferrals[0]
+	assert.Greaterf(t, len(d), 80, "a deferral must describe the data, not label it: %q", d)
+	for _, must := range []string{"MQTT session", "client id", "device"} {
+		assert.Containsf(t, d, must,
+			"the deferral does not mention %q, so a reader cannot tell what is retained or why", must)
 	}
 }
 

@@ -17,7 +17,7 @@ import (
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
-	test "github.com/devicechain-io/dc-microservice/test"
+	"github.com/devicechain-io/dc-microservice/test/msgtest"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
 
@@ -33,8 +33,8 @@ const testTenantSubject = "instance1.tenant1.resolved-events"
 type EventPersistenceProcessorTestSuite struct {
 	suite.Suite
 	EP      *EventPersistenceProcessor
-	Inbound *test.MockMessageReader
-	Failed  *test.MockMessageWriter
+	Inbound *msgtest.MockMessageReader
+	Failed  *msgtest.MockMessageWriter
 	API     *emtest.MockApi
 }
 
@@ -48,8 +48,8 @@ func (suite *EventPersistenceProcessorTestSuite) SetupTest() {
 	prometheus.DefaultRegisterer = registry
 	prometheus.DefaultGatherer = registry
 
-	suite.Inbound = new(test.MockMessageReader)
-	suite.Failed = new(test.MockMessageWriter)
+	suite.Inbound = new(msgtest.MockMessageReader)
+	suite.Failed = new(msgtest.MockMessageWriter)
 	suite.API = new(emtest.MockApi)
 	suite.EP = NewEventPersistenceProcessor(
 		dmtest.DeviceManagementMicroservice,
