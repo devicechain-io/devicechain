@@ -29,9 +29,13 @@ const (
 //
 // 🔴 THE SET IS THE COORDINATOR'S WHOLE COVERAGE CLAIM. A store missing from here is not
 // a gap that shows up somewhere as a warning — it is a store the coordinator never asks
-// about, and its absence looks exactly like a store that reported clean. That is why the
-// ones with no erasure yet are REGISTERED as Pending rather than left out; see the Pending
-// type for the argument.
+// about, and its absence looks exactly like a store that reported clean. That is why a
+// storage system with no erasure yet is REGISTERED as Pending rather than left out; see the
+// Pending type for the argument.
+//
+// Every store here now erases, so nothing is Pending today. That is the goal state, not a
+// reason to delete the type: the next storage system the platform grows starts as one, and
+// the discipline only works if registering it is easier than remembering it.
 //
 // The order is deliberate. The relational database comes first because it is the only
 // store that can fail the whole purge closed — a table it cannot classify stops the pass
@@ -43,13 +47,8 @@ func DefaultStores(db *rdb.RdbManager, tsdb *rdb.Guest, broker messaging.Connect
 		NewRelational(StoreRelational, db, StillPurging),
 		NewTelemetry(tsdb),
 		NewBroker(broker, instanceId),
+		NewKeyValue(broker, instanceId),
 
-		Pending{
-			StoreName: StoreKeyValue,
-			Holds: "the key-value store still holds this tenant's cached resolutions — device-by-token, " +
-				"relationships, group memberships and the per-tenant gate entries — keyed by an encoded " +
-				"tenant-and-token pair, so they expire only as their TTLs run out",
-		},
 		NewObject(objects, tenants),
 	}
 }
