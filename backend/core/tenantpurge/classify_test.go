@@ -353,21 +353,54 @@ func TestSystemSchemasAreNotClassified(t *testing.T) {
 func TestEveryExemptionStatesAReason(t *testing.T) {
 	for _, e := range exemptions {
 		assert.NotEmptyf(t, e.Reason, "%s.%s is exempt with no stated reason", e.Schema, e.Name)
-		assert.Containsf(t, []Class{ClassExempt, ClassDeferred}, e.Class,
-			"%s.%s: an exemption may only mark a table exempt or deferred", e.Schema, e.Name)
+		assert.Containsf(t, []Class{ClassExempt, ClassDeferred, ClassExternal}, e.Class,
+			"%s.%s: an exemption may only mark a table exempt, deferred or external",
+			e.Schema, e.Name)
 	}
 }
 
-// TestTheDetectSnapshotHoleIsRegisteredAsDeferredNotExempt pins the distinction the two
-// classes exist for. detect_snapshots holds the purged tenant's open detection windows
-// inside an opaque blob; recording it as ClassExempt would file a known hole among the
-// "holds nothing of any tenant's" entries, where a reviewer reads it as reassurance.
-// Deferred keeps it in every sweep result instead.
-func TestTheDetectSnapshotHoleIsRegisteredAsDeferredNotExempt(t *testing.T) {
+// TestAnExternalEntryNamesTheStoreThatErasesIt guards the half of the ClassExternal
+// contract this package can check on its own.
+//
+// External is the one class whose reason is a claim about something OUTSIDE the registry,
+// so the reason text alone cannot carry it: "erased elsewhere" with no name is exactly the
+// unfalsifiable skip the mandatory-reason rule exists to prevent. The name is what lets
+// the coordinator's side assert the store is registered — see ExternalStores, and
+// user-management's TestExternalTablesNameARegisteredStore, which is the other half.
+func TestAnExternalEntryNamesTheStoreThatErasesIt(t *testing.T) {
+	external := 0
+	for _, e := range exemptions {
+		if e.Class != ClassExternal {
+			assert.Emptyf(t, e.Store, "%s.%s names a store but is not external, so nothing "+
+				"checks the name and nothing acts on it", e.Schema, e.Name)
+			continue
+		}
+		external++
+		assert.NotEmptyf(t, e.Store, "%s.%s is external with no store named, so its claim that "+
+			"something else erases it cannot be checked", e.Schema, e.Name)
+		assert.Containsf(t, ExternalStores(), e.Store,
+			"%s.%s names store %q, which ExternalStores does not report", e.Schema, e.Name, e.Store)
+	}
+	require.NotZero(t, external, "no external entry exists, so this test asserted nothing — if "+
+		"the last one was removed, remove this test with it rather than leaving a green vacuum")
+}
+
+// TestTheDetectSnapshotBlobIsExternalNotExemptOrDeferred pins the three-way distinction on
+// the table it was invented for.
+//
+// detect_snapshots holds the purged tenant's open detection windows inside an opaque blob.
+// ClassExempt would file a real hole among the "holds nothing of any tenant's" entries,
+// where a reviewer reads it as reassurance. ClassDeferred was right until slice 2c, and is
+// wrong now for the opposite reason: it would block every purge forever over state that a
+// registered store does erase. External is the only one of the three that is true, and the
+// store name is what makes it checkable.
+func TestTheDetectSnapshotBlobIsExternalNotExemptOrDeferred(t *testing.T) {
 	e, ok := exemptionFor(Table{Schema: "event-processing", Name: "detect_snapshots"})
 	require.True(t, ok)
-	assert.Equal(t, ClassDeferred, e.Class,
-		"a table holding un-erased tenant data must be deferred, not exempt")
+	assert.Equal(t, ClassExternal, e.Class,
+		"a table holding tenant data that another store erases is external — exempt would hide "+
+			"the hole, deferred would claim it is still open")
+	assert.Equal(t, "detect", e.Store)
 }
 
 // TestMigrationBookkeepingIsExemptInEveryArea pins the one derived exemption: each area

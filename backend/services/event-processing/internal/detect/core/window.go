@@ -141,19 +141,31 @@ func (h *closeHeap) Pop() any {
 // but a removed rule must leave nothing behind. Indices are reset before heap.Init so the
 // heap bookkeeping stays consistent.
 func (h *closeHeap) purgeRule(id string) {
+	h.purgeMatching(func(rule string) bool { return rule == id })
+}
+
+// purgeMatching is purgeRule's general form: it drops every pending pane close whose
+// rule the predicate selects, and reports how many it dropped. It backs the ADR-077
+// tenant eviction, which selects by the rule id's tenant prefix rather than by an exact
+// id — and a close item is one of the things that can outlive its own rule, so sweeping
+// it by predicate is not merely tidier than looking rules up first, it reaches state a
+// rule-driven sweep would miss.
+func (h *closeHeap) purgeMatching(match func(ruleID string) bool) int {
 	old := *h
 	kept := old[:0]
 	for _, c := range old {
-		if c.pk.Rule != id {
+		if !match(c.pk.Rule) {
 			c.index = len(kept)
 			kept = append(kept, c)
 		}
 	}
+	dropped := len(old) - len(kept)
 	for i := len(kept); i < len(old); i++ {
 		old[i] = nil // release the dropped *closeItem for GC
 	}
 	*h = kept
 	heap.Init(h)
+	return dropped
 }
 
 // purgeSeriesKey drops every pending pane close for ONE exact (rule, series) — the per-key

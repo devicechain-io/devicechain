@@ -86,6 +86,28 @@ func (v *DeviceAttributeView) ReplaceDevice(tenant, deviceToken string, rows []A
 	delete(v.byDevice, dk)
 }
 
+// RemoveTenant drops every device entry belonging to one tenant and reports how many it
+// removed, for the ADR-077 erasure.
+//
+// These values are platform-set device attributes — the per-device thresholds a dynamic
+// rule compares against — so they are the tenant's configuration, not derived engine
+// state, and they are keyed on (tenant, device token). The durable projection they mirror
+// is swept by the relational purge; this is the in-memory copy, which nothing else would
+// clear until a restart.
+func (v *DeviceAttributeView) RemoveTenant(tenant string) int {
+	if tenant == "" {
+		return 0
+	}
+	n := 0
+	for k := range v.byDevice {
+		if k.tenant == tenant {
+			delete(v.byDevice, k)
+			n++
+		}
+	}
+	return n
+}
+
 // For returns a device's flattened attribute map (or nil when it has none) for the fan-out to bind
 // as predicate.Input.Attr. The returned map is owned by the view and MUST NOT be mutated by the
 // caller; the predicate reads it read-only, and ReplaceDevice only ever swaps in a fresh map, so a

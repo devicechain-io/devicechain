@@ -233,6 +233,11 @@ type ResolvedEventsProcessor struct {
 	// ruleUpdates carries compiled rule changes from the fact consumer goroutine to the
 	// single-writer loop, where applyRuleUpdate mutates the registry and engine together.
 	ruleUpdates chan ruleUpdate
+	// tenantPurges carries an ADR-077 tenant eviction from the NATS responder goroutine to
+	// the single-writer loop, and — unlike the three fact channels — carries a reply channel
+	// back, because the caller's whole purpose is to learn whether the state is gone. It is
+	// the only inbound command on this loop that another SERVICE waits on.
+	tenantPurges chan tenantPurgeRequest
 
 	// engine and the checkpoint bookkeeping below are owned exclusively by the
 	// startup goroutine (restore/replay) and then the live loop goroutine; nothing
@@ -370,6 +375,12 @@ func NewResolvedEventsProcessor(ms *core.Microservice, reader messaging.MessageR
 		// Buffered generously for the same reason as armUpdates: an attribute config push across a
 		// fleet bursts, and the loop drains one recheck per resolved-event-batch iteration.
 		attrUpdates: make(chan attrUpdate, 256),
+		// Unbuffered on purpose, unlike the three fact channels. A sender here is a request
+		// waiting for an answer, so buffering would only let it queue behind other purges
+		// while its own deadline ran down; the responder already bounds its wait on the
+		// send. One tenant purge is in flight at a time in any case — the coordinator holds
+		// an instance-wide advisory lock.
+		tenantPurges: make(chan tenantPurgeRequest),
 	}
 	rp.publisher = runtime.NewPublisher(derivedWriter, registry, rp.metrics)
 	// Wire the rule-health fire projection (slice 7b) when a store is supplied. It is off the
@@ -999,6 +1010,17 @@ func (rp *ResolvedEventsProcessor) run() {
 			// the in-memory view — NOT engine state or the checkpoint sequence (the view is re-derived
 			// from the durable projection on restart, never snapshotted) — so it needs no checkpoint.
 			rp.applyAttrRecheck(at)
+		case tp := <-rp.tenantPurges:
+			// ADR-077 tenant eviction on the single writer. Unlike every other case here it
+			// answers, and unlike every other case it FORCES a checkpoint: the eviction is not
+			// re-derivable from a replay (replay re-feeds the tenant's events into a rule set
+			// that a restart would rebuild from the durable projection), so a crash before the
+			// next scheduled checkpoint would resurrect exactly what was just erased — and the
+			// caller would already have been told it was gone.
+			//
+			// It stays serviceable while idleUncommitted parks liveItems, which is deliberate:
+			// an erasure must not be blocked behind an idle-advance commit that is retrying.
+			tp.reply <- rp.applyTenantPurge(tp.tenant)
 		case item := <-liveItems:
 			// Stamp the read time on ANY pump delivery — a message or a read error. For a
 			// message it means the reader had work; for an error it is the fail-safe posture:
@@ -1687,22 +1709,30 @@ func (rp *ResolvedEventsProcessor) ackRuleFact(msg messaging.Message) {
 // committed snapshot captures engine.LastSeq(), every buffered valid event is at or below the
 // durable sequence and every poison message carries no state, so acking the whole buffer is
 // safe. A commit failure leaves the messages unacked (they redeliver / are re-read on replay).
-func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) {
+// It reports whether everything buffered is now durable — the snapshot committed (or
+// there was nothing dirty to commit) and every pending detection was handed off. Almost
+// every caller ignores that: a scheduled checkpoint that defers has already logged, and
+// the next tick retries. The ADR-077 tenant eviction is the exception, and the reason the
+// return value exists at all: its answer to another service is a claim that the tenant's
+// state is GONE, and a deferred checkpoint means the state it just evicted is still the
+// durable truth. Reporting success off a call that silently declined to commit would put
+// a false erasure in the deletion record.
+func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) bool {
 	if rp.stale {
-		return // a split-brain-losing writer: no publish, no commit, no ack (see stale)
+		return false // a split-brain-losing writer: no publish, no commit, no ack (see stale)
 	}
 	// Deliver-before-checkpoint: hand off every buffered detection first. If any fails
 	// (retryable broker error), defer the entire checkpoint so the producing messages stay
 	// unacked and a replay re-derives/re-emits.
 	if !rp.publishPending(ctx) {
-		return
+		return false
 	}
 	if rp.dirty {
 		start := rp.clock.Now()
 		payload, err := rp.engine.Snapshot()
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to serialize DETECT snapshot; deferring checkpoint")
-			return
+			return false
 		}
 		wm := rp.engine.Watermark()
 		snap := &model.DetectSnapshot{
@@ -1725,10 +1755,10 @@ func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) {
 				if rp.procCancel != nil {
 					rp.procCancel()
 				}
-				return
+				return false
 			}
 			log.Error().Err(err).Msg("Failed to commit DETECT snapshot; messages remain unacked and will redeliver")
-			return
+			return false
 		}
 		rp.dirty = false
 		// A committed snapshot makes any idle-advanced frontier durable, so the loop may resume
@@ -1749,6 +1779,7 @@ func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) {
 	}
 	rp.pendingAcks = rp.pendingAcks[:0]
 	rp.lastCheckpoint = rp.clock.Now()
+	return true
 }
 
 // stateBudgetStats is the bounded, tenant-label-free result of a per-tenant state-budget sample: the

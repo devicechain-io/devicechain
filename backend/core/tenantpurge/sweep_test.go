@@ -176,7 +176,26 @@ func TestADeferredTableIsCarriedOnEveryResult(t *testing.T) {
 		col("event-processing", "detect_snapshots", "partition_id", "character varying"),
 	}, nil)
 
+	// 🔴 THE DEFERRAL IS SYNTHESISED, NOT TAKEN FROM THE REGISTRY, and after slice 2c it has
+	// to be: detect_snapshots is now ClassExternal (the `detect` store evicts the tenant from
+	// the engine), so NO table in the registry is deferred today. This test is about the
+	// MECHANISM — that a hole travels with the answer — and a mechanism test that can only run
+	// while some registry entry happens to use it goes quietly vacuous the day that entry
+	// changes class, which is exactly what just happened. Both subtests below mark the entry
+	// themselves so the next hole finds the machinery already proven.
+	deferOne := func(p *Plan, name string) {
+		for i := range p.Entries {
+			if p.Entries[i].Table.Name == name {
+				p.Entries[i].Class = ClassDeferred
+				p.Entries[i].Reason = "stand-in for a registered hole"
+				return
+			}
+		}
+		t.Fatalf("no %q entry in the plan to mark deferred", name)
+	}
+
 	t.Run("on the refusal path", func(t *testing.T) {
+		deferOne(plan, "detect_snapshots")
 		res, err := Sweep(context.Background(), nil, plan, "", nil)
 		require.Error(t, err)
 		require.Len(t, res.Deferred, 1)
@@ -190,20 +209,15 @@ func TestADeferredTableIsCarriedOnEveryResult(t *testing.T) {
 		require.NoError(t, db.Exec(`CREATE TABLE detect_snapshots (partition_id TEXT)`).Error)
 		require.NoError(t, db.Exec(`INSERT INTO detect_rules (tenant) VALUES ('acme')`).Error)
 
-		// The registry keys the deferral on event-processing's schema, and SQLite's is
-		// "main", so the verdict is mirrored onto this plan rather than re-derived.
-		// classify (not planOf) because the table is unclassified until it is.
+		// SQLite's schema is "main", so the entry is classified here and then marked
+		// deferred, the same way the refusal path above does. classify (not planOf) because
+		// the table is unclassified until it is.
 		live, err := classify([]column{
 			col("main", "detect_rules", "tenant", "text"),
 			col("main", "detect_snapshots", "partition_id", "text"),
 		}, nil, nil)
 		require.NoError(t, err)
-		for i := range live.Entries {
-			if live.Entries[i].Table.Name == "detect_snapshots" {
-				live.Entries[i].Class = ClassDeferred
-				live.Entries[i].Reason = "stand-in for the registered hole"
-			}
-		}
+		deferOne(live, "detect_snapshots")
 		require.NoError(t, checkClassified(live))
 
 		res, err := Sweep(context.Background(), db, live, "acme", nil) //nolint

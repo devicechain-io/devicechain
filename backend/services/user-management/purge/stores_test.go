@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/tenantpurge"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,9 +29,38 @@ func TestTheStoreSetIsTheCoverageClaim(t *testing.T) {
 		names = append(names, s.Name())
 	}
 	require.Equal(t, []string{
-		StoreRelational, StoreTelemetry, StoreBroker, StoreKeyValue, StoreObject,
+		StoreRelational, StoreTelemetry, StoreBroker, StoreKeyValue, StoreDetect, StoreObject,
 	}, names, "changing the set of stores a purge asks about is a deliberate act; "+
 		"dropping one releases the token over whatever it held")
+}
+
+// TestExternalTablesNameARegisteredStore closes the ClassExternal contract from the side
+// that owns the store set.
+//
+// 🔴 THIS IS THE ONLY CHECK THERE IS, and without it "external" is strictly worse than
+// "deferred". A deferred table blocks completion, so forgetting it is loud. An external
+// table does NOT: the sweep skips it on the strength of a store name in a registry that
+// core cannot cross-check, because core cannot import a service. So a store renamed,
+// dropped from DefaultStores, or never written leaves the table classified as handled and
+// every purge completing — the registry saying one thing and the coordinator doing
+// another, with no error anywhere in between.
+//
+// It is deliberately asserted over DefaultStores rather than over the const block: a name
+// that exists as a constant but is not in the set is the exact failure being guarded
+// against.
+func TestExternalTablesNameARegisteredStore(t *testing.T) {
+	registered := map[string]bool{}
+	for _, s := range DefaultStores(nil, nil, nil, "inst", nil, nil) {
+		registered[s.Name()] = true
+	}
+	claimed := tenantpurge.ExternalStores()
+	require.NotEmpty(t, claimed, "no table claims to be erased by a store, so this test "+
+		"asserted nothing — remove it with the last external entry rather than leaving it green")
+	for _, name := range claimed {
+		require.Truef(t, registered[name], "the purge classifier skips a table because store %q "+
+			"erases it, but no such store is registered — the sweep passes over the table and "+
+			"nothing else touches it", name)
+	}
 }
 
 // TestEveryPendingStoreSaysWhatItHolds pins the part that goes into the deletion record.

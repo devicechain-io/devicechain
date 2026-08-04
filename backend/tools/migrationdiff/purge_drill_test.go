@@ -256,9 +256,29 @@ func TestPurgeDrillErasesOneTenantAndLeavesTheOther(t *testing.T) {
 	res, err := tenantpurge.Sweep(ctx, db, plan, victim, nil)
 	require.NoError(t, err, "the sweep must survive the real foreign-key graph")
 	t.Logf("swept %d rows across %d tables", res.Rows, len(res.Tables))
-	assert.False(t, res.Complete(),
-		"detect_snapshots is registered deferred, so no sweep of this schema may report a "+
-			"complete erasure")
+	assert.True(t, res.Complete(),
+		"no table in this schema is registered deferred any more, so the sweep has nothing left "+
+			"behind to report — detect_snapshots became ClassExternal when the `detect` store "+
+			"started evicting the tenant from the running engine")
+
+	// 🔑 AND THAT IS ONLY SAFE BECAUSE THE STORE EXISTS. Complete() flipping to true here is
+	// the sweep saying "I left nothing behind", which is a much weaker claim than "nothing is
+	// left": the external table's data is erased by a store this sweep cannot see, on a
+	// database it does not own. So the drill asserts the sweep still SEES the table and still
+	// says who erases it — a table that dropped out of the plan, or an entry that lost its
+	// store name, would leave the same green result over an erasure nobody performs.
+	var detectEntry *tenantpurge.Entry
+	for i, e := range plan.Entries {
+		if e.Table.String() == "event-processing.detect_snapshots" {
+			detectEntry = &plan.Entries[i]
+		}
+	}
+	require.NotNil(t, detectEntry, "detect_snapshots is not in the plan at all, so nothing "+
+		"records that the DETECT engine's checkpoint holds tenant data")
+	assert.Equal(t, tenantpurge.ClassExternal, detectEntry.Class)
+	assert.Equal(t, "detect", detectEntry.Store,
+		"the entry must still name the store that erases it; an unnamed one is an unfalsifiable "+
+			"claim that something, somewhere, handles it")
 
 	// The victim is gone everywhere.
 	for _, c := range tenantRowCounts() {

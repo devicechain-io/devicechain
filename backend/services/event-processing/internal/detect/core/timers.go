@@ -121,12 +121,27 @@ func (w *timerWheel) cancel(key SeriesKey) {
 // only fire into a no-op; this is GC, not correctness, but a removed rule must leave the
 // wheel clean. Indices are reset before heap.Init to keep the heap consistent.
 func (w *timerWheel) purgeRule(id string) {
-	deleteSeriesKeys(w.gens, id)
-	deleteSeriesKeys(w.live, id)
+	w.purgeMatching(func(rule string) bool { return rule == id })
+}
+
+// purgeMatching is purgeRule's general form, sweeping every rule the predicate selects
+// and reporting how many entries it removed. It backs the ADR-077 tenant eviction, which
+// selects by the rule id's tenant prefix.
+//
+// The gens map is swept along with the rest, which reintroduces the generation-recycling
+// hazard this type's doc describes — a later timer for the same key would restart at
+// generation 1 and could match a stale heap entry. That is deliberate and is the same
+// trade purgeRule already makes: the heap is swept in the same call, so there is no stale
+// entry left to match, and the alternative — retaining a map keyed on the purged tenant's
+// rule ids and device tokens — would leave the tenant's identifiers in memory and in the
+// snapshot (gens is serialized) after an erasure claimed they were gone.
+func (w *timerWheel) purgeMatching(match func(ruleID string) bool) int {
+	n := deleteSeriesKeysMatching(w.gens, match)
+	n += deleteSeriesKeysMatching(w.live, match)
 	old := w.pq
 	kept := old[:0]
 	for _, t := range old {
-		if t.key.Rule != id {
+		if !match(t.key.Rule) {
 			t.index = len(kept)
 			kept = append(kept, t)
 		}
@@ -136,6 +151,7 @@ func (w *timerWheel) purgeRule(id string) {
 	}
 	w.pq = kept
 	heap.Init(&w.pq)
+	return n
 }
 
 // firedTimer is a due timer: the key plus the deadline it was scheduled for (so the

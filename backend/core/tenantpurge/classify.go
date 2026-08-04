@@ -74,6 +74,23 @@ const (
 	// reassurance. A deferred table is reported in every sweep result, so a purge
 	// that completes with one outstanding cannot claim total erasure.
 	ClassDeferred
+
+	// ClassExternal names a table that holds tenant data no SQL predicate can reach,
+	// and that a NAMED purge store erases by another route.
+	//
+	// It is the third of the three honest answers, and it exists because the other
+	// two both misreport this case. ClassExempt would be a lie (the table holds the
+	// tenant's data). ClassDeferred was the truth right up until something erased it,
+	// and leaving it there once a store does would block every purge forever over
+	// data that is in fact gone.
+	//
+	// What separates it from an exemption is that the claim is CHECKABLE: the entry
+	// names a store, the store is registered with the coordinator, and that store
+	// reports its own outcome on every pass. So an external table is not skipped —
+	// it is erased somewhere else and accounted for there. The name is a claim of
+	// its own; see ExternalStores, which is what lets the coordinator's side of the
+	// tree assert that every named store actually exists.
+	ClassExternal
 )
 
 func (c Class) String() string {
@@ -86,6 +103,8 @@ func (c Class) String() string {
 		return "exempt"
 	case ClassDeferred:
 		return "deferred"
+	case ClassExternal:
+		return "external"
 	default:
 		return "unclassified"
 	}
@@ -121,8 +140,14 @@ type Entry struct {
 	// of what its other columns point at.
 	Links []Link
 
-	// Reason is why a table is exempt or deferred; empty otherwise.
+	// Reason is why a table is exempt, deferred or external; empty otherwise.
 	Reason string
+
+	// Store names the purge store that erases a ClassExternal table; empty otherwise.
+	// It is carried out of the registry so a reader of the plan — the coverage gate's
+	// report, or a test asserting the store is registered — can follow the claim to
+	// the thing that has to make it true.
+	Store string
 
 	// Origin explains where a table came from when its own name does not. It is empty
 	// for the ordinary case — a table an area's migrations created under its own name —
@@ -500,6 +525,7 @@ func classify(cols []column, fks []constraint, extra admitted) (*Plan, error) {
 		if rule, ok := exemptionFor(e.Table); ok {
 			e.Class = rule.Class
 			e.Reason = rule.Reason
+			e.Store = rule.Store
 		}
 	}
 
