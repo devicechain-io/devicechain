@@ -267,14 +267,25 @@ func (c *UserManagementConfiguration) Validate() error {
 	// is gone while the broker is still handing its retained payloads to whoever
 	// subscribes next.
 	//
-	// Strictly greater, not merely equal: the cache TTL runs from the last LOAD, which can
-	// be the moment of the purge itself, so a settle window equal to the TTL puts
-	// completion exactly on the boundary.
-	if settle := c.TenantPurgeSettle(); settle > 0 && settle <= messaging.RetainedCacheWindow {
-		return fmt.Errorf("tenantPurge.settleSeconds is %s, shorter than the broker's retained-message "+
-			"cache (%s): a purge could complete while the broker is still delivering this tenant's "+
-			"retained payloads to new subscribers, so the deletion record would be false",
-			settle, messaging.RetainedCacheWindow)
+	// 🔴 THE FLOOR IS THE CACHE WINDOW PLUS PurgeTimeout, AND THE SECOND TERM IS NOT PADDING.
+	// The settle window is measured from a store's clean-since, and the coordinator stamps
+	// that BEFORE calling the store (Coordinator.eraseOne) — so the purge that empties the
+	// retained stream, and therefore the last moment its payloads can be stamped into the
+	// broker's cache, can land up to a whole broker PurgeTimeout after the timestamp being
+	// measured from. A floor of the cache window alone leaves that gap uncovered: a
+	// configured 121s would pass validation and still allow completion while a retained
+	// payload is servable.
+	//
+	// Strictly greater, not merely equal, for the same reason at the other end: the last
+	// stamp can be the instant of the purge, so equality puts completion exactly on the
+	// boundary.
+	floor := messaging.RetainedCacheWindow + messaging.PurgeTimeout
+	if settle := c.TenantPurgeSettle(); settle > 0 && settle <= floor {
+		return fmt.Errorf("tenantPurge.settleSeconds is %s, which does not clear the broker's "+
+			"retained-message cache (%s) plus the time one broker purge may take (%s): a purge could "+
+			"complete while the broker is still delivering this tenant's retained payloads to new "+
+			"subscribers, so the deletion record would be false",
+			settle, messaging.RetainedCacheWindow, messaging.PurgeTimeout)
 	}
 	if c.Auth.IssuerUrl != "" {
 		if err := validateIssuerUrl(c.Auth.IssuerUrl); err != nil {

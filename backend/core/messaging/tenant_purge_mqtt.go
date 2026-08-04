@@ -11,40 +11,36 @@ import (
 	"strings"
 
 	nats "github.com/nats-io/nats.go"
-
-	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/rs/zerolog/log"
 )
 
 // Erasing one tenant's MQTT GATEWAY state (ADR-077) — the half a subject filter cannot
 // reach, and the reason the broker store used to be unable to report clean.
 //
-// # 🔑 Nothing here is computed. Everything here is READ
+// # 🔑 Everything here is addressed by READING, and the two exceptions are named
 //
-// That sentence is the whole design, and it is a correction of an earlier claim rather
-// than a flourish. Pinning the device client id (mqtt_clientid.go) was justified at the
-// time as making these records "computable from our own DB", and that was FALSE: $MQTT_sess
-// files a session under an 8-character digest of the client id, and $MQTT_qos2in carries
-// the raw id as a single subject token, which NATS wildcards cannot match a prefix of.
-// Neither is addressable from anything the platform stores.
+// The gateway's streams key on an MQTT client id, or on a digest of one, so none of them
+// answers a tenant-scoped subject filter (mqtt_clientid.go explains why in full, and
+// corrects the claim that pinning the id made them computable — it did not). What the pin
+// bought is ATTRIBUTION, and attribution is enough, because the broker writes down almost
+// every address this needs:
 //
-// What the pin actually bought is ATTRIBUTION, and attribution is enough, because every
-// address this erasure needs is written down somewhere the broker will hand over:
+//   - the client id, in the $MQTT_sess record's own PAYLOAD, which is what makes an
+//     otherwise anonymous record nameable;
+//   - a subscription consumer's filter, on the CONSUMER, as "$MQTT.msgs.{instance}.{tenant}…";
+//   - a PUBREL consumer's filter, on the CONSUMER, as "$MQTT.out.pubrel.{digest}";
+//   - the parked packets, under subjects the streams enumerate.
 //
-//   - the client id — in the $MQTT_sess record's own PAYLOAD ("id"), which is what makes
-//     an otherwise anonymous record nameable;
-//   - the QoS 2 PUBREL subject and its consumer's durable name — in the same payload
-//     ("pubrel"), as the server's own values, so the digest never has to be recomputed;
-//   - a subscription consumer's filter — on the CONSUMER itself, and it is
-//     "$MQTT.msgs.{instance}.{tenant}...", so the tenant is right there in it;
-//   - the parked QoS 2 packets — under subjects the stream will enumerate, each carrying
-//     the client id verbatim.
+// So nothing resembling the server's getHash is reimplemented. Two SUBJECT LAYOUTS are
+// read rather than values, and both are called out because a wrong belief about another
+// project's layout compiles perfectly and then silently matches nothing:
 //
-// So this file reimplements no server internal, and in particular it never calls anything
-// resembling getHash. A reimplementation would be a claim about another project's
-// unexported code that compiles perfectly whether or not it is true — the exact shape of
-// defect this epic keeps producing. The one derivation that remains (an idHash read off a
-// session record's SUBJECT, for a session that has no pubrel consumer to read it from) is
-// cross-checked against the server's own value by a live-broker test rather than trusted.
+//   - mqttSessionIDHash — the digest in a session's subject. Cross-checked against the
+//     server's own digest by TestMqttSessionIDHashAgreesWithTheServer, in both JetStream
+//     domain modes, because the domain-less case cannot distinguish a wrong derivation.
+//   - mqttQoS2InClientID — the client id in a parked packet's subject. Cross-checked by
+//     TestParkedQoS2SubjectsCarryTheClientIdVerbatim, which provokes a REAL parked packet
+//     out of a real broker rather than seeding one.
 //
 // # Why this reads the whole session stream
 //
@@ -53,51 +49,40 @@ import (
 // one request per record, and that is a liveness requirement, not a throughput preference:
 // a scan that cannot finish inside PurgeTimeout restarts from the beginning on the next
 // pass and times out in the same place, forever. Multi-pass idempotency does not rescue a
-// scan whose progress is not durable. Batching is what keeps the whole stream inside one
-// pass at fleet scale.
+// scan whose progress is not durable.
 
-// mqttSessionRecord is the subset of nats-server's mqttPersistedSession this purge reads.
+// mqttSessionRecord is the subset of nats-server's mqttPersistedSession this purge reads,
+// which is one field: the client id, because attribution is the only thing the record is
+// needed for. Every address is taken from the consumer or subject that carries it.
 //
 // 🔴 IT IS DELIBERATELY A LOCAL SNAPSHOT, NOT AN IMPORT. core/messaging does not depend on
 // nats-server outside its tests and must not start: the server is a deployment artifact
 // here, not a library. Declaring the shape locally is the same discipline a migration's
-// snapshot structs follow — this describes the bytes on the wire at a point in time, and
-// it should fail visibly if the server changes them rather than silently track a struct
-// that moved underneath it.
+// snapshot structs follow — it describes the bytes on the wire at a point in time, and
+// should fail visibly if the server changes them rather than silently track a struct that
+// moved underneath it.
 //
-// Unknown fields are ignored by encoding/json, which is correct here: a server that adds a
-// field must not break the erasure. A server that RENAMES "id" would break it, which is
-// why TestMqttSessionRecordMatchesWhatTheServerWrites reads a record a real broker wrote
-// rather than one this test package composed.
+// encoding/json ignores what it does not recognise, which is correct — a server that ADDS
+// a field must not break the erasure — but it also means a server that RENAMED "id" would
+// leave every record unattributable and the purge would erase nothing while reporting
+// success. TestMqttSessionRecordMatchesWhatTheServerWrites reads a record a real broker
+// wrote, which is the only thing standing between that and silence.
 type mqttSessionRecord struct {
-	// ID is the MQTT client id — the only thing in the record that names an owner.
 	ID string `json:"id,omitempty"`
-	// Cons is the session's subscription consumers on $MQTT_msgs, keyed by subscription
-	// id. Read for completeness of the sweep's cross-check, not as its primary path: a
-	// consumer's own filter subject names the tenant, so consumers are swept from the
-	// consumer list, which also reaches ones no surviving record mentions.
-	Cons map[string]*mqttConsumerRef `json:"cons,omitempty"`
-	// PubRel is the session's QoS 2 outbound consumer on $MQTT_out, carrying both the
-	// durable name to delete and the subject to purge. Nil for a session that has never
-	// completed a QoS 2 delivery, which is the common case.
-	PubRel *mqttConsumerRef `json:"pubrel,omitempty"`
-}
-
-// mqttConsumerRef is the part of a persisted ConsumerConfig this purge acts on.
-type mqttConsumerRef struct {
-	Durable       string `json:"durable_name,omitempty"`
-	FilterSubject string `json:"filter_subject,omitempty"`
 }
 
 // The gateway subject prefixes this purge reads and writes. They are nats-server's, fixed
 // in its source rather than configurable, and they are spelled out here for the same
 // reason the stream names are in mqtt_store.go: the alternative is scattering them through
 // the code that uses them, where a typo becomes a filter that matches nothing.
+//
+// TestMqttGatewaySubjectPrefixesAreTheServersOwn checks each against the subjects the
+// server declared on the stream it created.
 const (
 	// mqttSessSubjectPrefix precedes an optional JetStream domain token and then the
-	// digest of the client id. The digest contains no ".", so it is always the last
-	// dot-separated token of the subject — which is how mqttSessionIDHash recovers it
-	// without needing to know whether a domain is configured.
+	// digest of the client id. The digest's alphabet has no ".", so it is always the last
+	// dot-separated token — which is how mqttSessionIDHash recovers it without needing to
+	// know whether a domain is configured.
 	mqttSessSubjectPrefix = "$MQTT.sess."
 	// mqttMsgsSubjectPrefix wraps an original subject, so a tenant's own subject space
 	// appears under it verbatim.
@@ -105,7 +90,8 @@ const (
 	// mqttQoS2InSubjectPrefix is followed by the raw client id as ONE token, then the
 	// MQTT packet id.
 	mqttQoS2InSubjectPrefix = "$MQTT.qos2.in."
-	// mqttPubRelSubjectPrefix is followed by the digest of the client id.
+	// mqttPubRelSubjectPrefix is followed by the digest of the client id, and by nothing
+	// else — unlike the session subject, it carries no domain token.
 	mqttPubRelSubjectPrefix = "$MQTT.out.pubrel."
 )
 
@@ -113,22 +99,41 @@ const (
 type MqttGatewayPurgeResult struct {
 	// Sessions is how many $MQTT_sess records were deleted.
 	Sessions int64
-	// Consumers is how many durable consumers were deleted, across $MQTT_msgs and
-	// $MQTT_out.
+	// Consumers is how many durable consumers were deleted, across $MQTT_msgs and $MQTT_out.
 	Consumers int64
 	// Messages is how many parked QoS 2 messages were purged, across $MQTT_qos2in and
 	// $MQTT_out.
 	Messages int64
-	// UnownedSessions counts session records whose client id is not device-shaped at all.
+
+	// UnownedSessions counts session records whose client id is not device-shaped, so no
+	// tenant can be named for them and this purge left them alone.
 	//
-	// 🔑 IT IS NOT A DEFERRAL, AND THE REASONING IS LOAD-BEARING RATHER THAN A JUDGEMENT
-	// CALL. With the callout pinning the shape, a session record that is not device-shaped
-	// was not filed by a device, so it belongs to no tenant — the edge agent's uplink is
-	// the standing example, and it must not appear in a tenant's ledger, let alone block
-	// its completion forever. What the count is for is the case that reasoning does NOT
-	// cover: a record filed BEFORE the pin, which would be genuine tenant data nobody can
-	// attribute. Pre-GA an instance is recreated rather than migrated, so there are none —
-	// and a non-zero count here is how that assumption announces it has stopped holding.
+	// # 🔴 It is NOT a deferral, and getting that wrong deadlocks every purge on the instance
+	//
+	// An earlier draft made it one, reasoning that a non-device-shaped record "belongs to
+	// no tenant" because the callout pins the shape — and then deferred on it anyway, which
+	// is what a deferral does: it blocks completion until it goes away. It never goes away.
+	// nats-server saves a session record on EVERY connect, clean sessions included ("we save
+	// always in case we are running in cluster mode"), and clears it only at disconnect. So
+	// the edge agent's uplink — a permanently-connected clean-session client whose id is
+	// "dc-edge-agent-{instance}-{agent}" — holds a live record at all times, and on any
+	// ADR-068 topology every tenant's purge would have deferred on it forever. That is the
+	// exact never-completes condition this file exists to remove, reintroduced by the
+	// comment claiming it could not happen.
+	//
+	// # 🔑 Why counting without deferring is the honest answer, not the convenient one
+	//
+	// The question a deferral answers is "can this survive and hurt someone". For gateway
+	// state the harm is INHERITANCE: a successor tenant at a reused token whose device
+	// presents the same client id takes over the predecessor's session. That requires the
+	// successor's id to EQUAL the predecessor's — and a successor's device id is
+	// device-shaped, because the callout refuses anything else. A record that is NOT
+	// device-shaped therefore cannot be inherited by any device, whatever tenant filed it.
+	// The pin closes that path by itself, without erasure.
+	//
+	// What is left is a record that is not a disclosure risk and has no operator remedy —
+	// so it is counted and logged, where someone can see the assumption stop holding,
+	// rather than blocking an erasure it does not endanger.
 	UnownedSessions int64
 }
 
@@ -145,15 +150,15 @@ func (r MqttGatewayPurgeResult) Total() int64 { return r.Sessions + r.Consumers 
 // their parked QoS 2 messages.
 //
 // It is idempotent. A second call finds no session record, no consumer whose filter names
-// the tenant and no parked packet, and reports zero.
+// the tenant or one of its digests, and no parked packet, and reports zero.
 //
-// # Ordering, and why the session record is deleted LAST
+// # Ordering, and why the session records are deleted LAST
 //
-// Consumers and parked messages are removed first, and the record that named them only
-// once they are gone. A failure part-way therefore leaves a record that still points at
-// whatever survived, so the next pass finds it again. The reverse order loses the addresses
-// on the way to using them — it would strand the pubrel consumer with nothing left able to
-// name it. It is also the order nats-server's own session teardown uses.
+// A session record is the only thing that ties a tenant to a DIGEST, and the digest is the
+// only way to reach that session's PUBREL consumer and parked packets. Delete the records
+// first and a pass that then fails has thrown away the addresses on its way to using them,
+// with nothing left able to name what it stranded. So the records go last, after everything
+// they can name is gone, which is also the order nats-server's own session teardown uses.
 //
 // # What a live session does about it
 //
@@ -165,14 +170,11 @@ func (r MqttGatewayPurgeResult) Total() int64 { return r.Sessions + r.Consumers 
 func PurgeTenantMqttGateway(ctx context.Context, nc *nats.Conn, instanceId, tenant string) (MqttGatewayPurgeResult, error) {
 	var res MqttGatewayPurgeResult
 
-	// The same two guards the subject purge opens with. The tenant one matters less here —
-	// nothing below is a subject filter that could widen — but the value flows into a
-	// string prefix that decides what gets DELETED, and a prefix built from an empty token
-	// matches every client id in the instance.
-	if err := core.ValidateToken(tenant); err != nil {
-		return res, fmt.Errorf("refusing to purge the MQTT gateway for tenant %q: %w", tenant, err)
-	}
-	clientPrefix, err := DeviceClientIDTenantPrefix(instanceId, tenant)
+	// The one guard, and it covers both fields: an invalid instance id or tenant is refused
+	// here rather than composed into a prefix that decides what gets DELETED. A tenant token
+	// carrying ":" would compose a prefix spanning two fields and select another tenant's
+	// sessions; an empty one would match every client id in the instance.
+	clientPrefix, err := deviceClientIDTenantPrefix(instanceId, tenant)
 	if err != nil {
 		return res, fmt.Errorf("refusing to purge the MQTT gateway: %w", err)
 	}
@@ -189,8 +191,8 @@ func PurgeTenantMqttGateway(ctx context.Context, nc *nats.Conn, instanceId, tena
 	// 1. Subscription consumers, swept from the CONSUMER LIST rather than from the session
 	//    records that mention them. Their filter subject carries the tenant, so this reaches
 	//    every one of them — including a consumer whose session record was lost, which on an
-	//    interest-retention stream is the worst of the three residues, because it does not
-	//    merely linger: it keeps NEW messages on the deleted tenant's subjects alive.
+	//    interest-retention stream is the worst residue of the lot: it does not merely
+	//    linger, it keeps NEW messages on the deleted tenant's subjects alive.
 	consumers, err := deleteConsumersUnder(ctx, nc, js, MqttMessageStore, func(filter string) bool {
 		return strings.HasPrefix(filter, subjectPrefix)
 	})
@@ -199,66 +201,71 @@ func PurgeTenantMqttGateway(ctx context.Context, nc *nats.Conn, instanceId, tena
 	}
 	res.Consumers += consumers
 
-	// 2. The session records, and everything only they can name.
+	// 2. The session records — read now, deleted at the end. This is where attribution
+	//    happens and where the tenant's digests come from.
 	sessions, err := readMqttSessions(ctx, js)
 	if err != nil {
 		return res, err
 	}
+	victims := make([]mqttSession, 0, len(sessions))
+	digests := make(map[string]bool, len(sessions))
 	for _, s := range sessions {
-		if !DeviceClientIDBelongsTo(s.record.ID, clientPrefix) {
-			if !DeviceClientIDIsDeviceShaped(s.record.ID) {
-				res.UnownedSessions++
+		if strings.HasPrefix(s.record.ID, clientPrefix) {
+			victims = append(victims, s)
+			if h := mqttSessionIDHash(s.subject); h != "" {
+				digests[h] = true
 			}
 			continue
 		}
+		// Not this tenant's. That covers two different things, and only the second is worth
+		// counting: another TENANT's device, which its own purge will reach, and a record no
+		// tenant owns at all, which nobody's ever will.
+		if !deviceClientIDIsDeviceShaped(s.record.ID) {
+			res.UnownedSessions++
+		}
+	}
 
-		// The PUBREL consumer and its parked packets. Both addresses come from the record
-		// where the server wrote them; the fallback derives the digest from the record's
-		// own subject, for a session that never opened a QoS 2 delivery and so has no
-		// pubrel block to read. Neither path computes the digest.
-		pubRelSubject := ""
-		if s.record.PubRel != nil {
-			pubRelSubject = s.record.PubRel.FilterSubject
-			if durable := s.record.PubRel.Durable; durable != "" {
-				deleted, err := deleteConsumer(ctx, js, MqttPubRelStore, durable)
-				if err != nil {
-					return res, err
-				}
-				res.Consumers += deleted
-			}
+	if len(digests) > 0 {
+		// 3. The PUBREL consumers of those sessions, matched on the digest in their own
+		//    filter subject. Sweeping them the same way as the subscription consumers — from
+		//    the listing rather than from a record — is what reaches one whose session record
+		//    was lost, and it means the server's durable-name convention is never rebuilt here.
+		pubRelConsumers, err := deleteConsumersUnder(ctx, nc, js, MqttPubRelStore, func(filter string) bool {
+			return digests[pubRelSubjectIDHash(filter)]
+		})
+		if err != nil {
+			return res, err
 		}
-		if pubRelSubject == "" {
-			if hash := mqttSessionIDHash(s.subject); hash != "" {
-				pubRelSubject = mqttPubRelSubjectPrefix + hash
-			}
-		}
-		if pubRelSubject != "" {
-			n, err := purgeSubject(ctx, nc, MqttPubRelStore, pubRelSubject)
-			if err != nil {
-				return res, err
-			}
-			res.Messages += n
-		}
+		res.Consumers += pubRelConsumers
 
-		// A consumer the record names but the filter sweep did not reach. This should find
-		// nothing — a subscription consumer's filter always names the tenant — and it is
-		// here because "should" is doing the work in that sentence, and the cost of being
-		// wrong is an interest-retention consumer left holding a deleted tenant's traffic.
-		// DeleteConsumer on an already-deleted consumer is not an error (see deleteConsumer).
-		for _, c := range s.record.Cons {
-			if c == nil || c.Durable == "" {
-				continue
-			}
-			deleted, err := deleteConsumer(ctx, js, MqttMessageStore, c.Durable)
-			if err != nil {
-				return res, err
-			}
-			res.Consumers += deleted
+		// 4. Their parked outbound PUBREL packets.
+		pubRelMessages, err := purgeSubjectsMatching(ctx, nc, js, MqttPubRelStore, mqttPubRelSubjectPrefix,
+			func(subject string) bool { return digests[pubRelSubjectIDHash(subject)] })
+		if err != nil {
+			return res, err
 		}
+		res.Messages += pubRelMessages
+	}
 
+	// 5. Parked INBOUND QoS 2 packets, swept from the subject list rather than from the
+	//    session records. A client id appears in these subjects verbatim, and a client that
+	//    abandons a QoS 2 handshake can leave packets here under an id whose session record
+	//    has since been cleared — so deriving this from the records would miss exactly the
+	//    clients that leave nothing else behind.
+	messages, err := purgeSubjectsMatching(ctx, nc, js, MqttQoS2InStore, mqttQoS2InSubjectPrefix,
+		func(subject string) bool {
+			return strings.HasPrefix(mqttQoS2InClientID(subject), clientPrefix)
+		})
+	if err != nil {
+		return res, err
+	}
+	res.Messages += messages
+
+	// 6. And only now the records themselves.
+	for _, s := range victims {
 		if err := js.DeleteMsg(MqttSessionStore, s.sequence, nats.Context(ctx)); err != nil {
-			// A record a peer replica or the server itself deleted between the read and
-			// here is the outcome this wanted, not a failure.
+			// A record a peer replica or the server itself deleted between the read and here
+			// is the outcome this wanted, not a failure.
 			if errors.Is(err, nats.ErrMsgNotFound) {
 				continue
 			}
@@ -268,25 +275,20 @@ func PurgeTenantMqttGateway(ctx context.Context, nc *nats.Conn, instanceId, tena
 		res.Sessions++
 	}
 
-	// 3. Parked inbound QoS 2 packets, swept from the SUBJECT LIST rather than from the
-	//    session records. A client id appears in these subjects verbatim, and a clean-session
-	//    client leaves packets here while leaving no session record at all — so deriving this
-	//    from the records would miss exactly the clients that have nothing else to find.
-	messages, err := purgeSubjectsMatching(ctx, nc, js, MqttQoS2InStore, mqttQoS2InSubjectPrefix,
-		func(subject string) bool {
-			return DeviceClientIDBelongsTo(mqttQoS2InClientID(subject), clientPrefix)
-		})
-	if err != nil {
-		return res, err
+	if res.UnownedSessions > 0 {
+		// Warn rather than defer — see the field's own comment for why deferring here
+		// deadlocks every purge on any instance running an edge agent.
+		log.Warn().Str("tenant", tenant).Int64("sessions", res.UnownedSessions).
+			Msg("MQTT session records could not be attributed to any tenant and were left alone. " +
+				"Expected for the platform's own non-device clients; a record filed by a DEVICE " +
+				"before the client id was pinned would look the same and would be tenant data.")
 	}
-	res.Messages += messages
-
 	return res, nil
 }
 
 // mqttSession is one $MQTT_sess record with the two things about it that are not in its
-// payload: where it is, so it can be deleted, and what its subject is, so the digest it
-// was filed under can be recovered.
+// payload: where it is, so it can be deleted, and what its subject is, so the digest it was
+// filed under can be recovered.
 type mqttSession struct {
 	subject  string
 	sequence uint64
@@ -310,13 +312,14 @@ func readMqttSessions(ctx context.Context, js nats.JetStreamContext) ([]mqttSess
 	}
 
 	// An ORDERED consumer: ephemeral, no acks, cleaned up by Unsubscribe, and flow-
-	// controlled by the server so a large stream arrives in batches rather than one
-	// round trip per record. Reading is all this needs — the deletes go through the
-	// stream API by sequence, not through this subscription.
+	// controlled by the server so a large stream arrives in batches rather than one round
+	// trip per record. Reading is all this needs — the deletes go through the stream API by
+	// sequence, not through this subscription.
+	//
 	// The filter is given explicitly rather than left to the stream's own subject list,
-	// which carries the JetStream domain token when one is configured. "$MQTT.sess.>"
-	// covers the stream either way, and stating it keeps this read from depending on a
-	// deployment setting it has no other reason to know about.
+	// which carries the JetStream domain token when one is configured. "$MQTT.sess.>" covers
+	// the stream either way, and stating it keeps this read from depending on a deployment
+	// setting it has no other reason to know about.
 	sub, err := js.SubscribeSync(mqttSessSubjectPrefix+">", nats.OrderedConsumer(),
 		nats.BindStream(MqttSessionStore))
 	if err != nil {
@@ -362,20 +365,24 @@ func readMqttSessions(ctx context.Context, js nats.JetStreamContext) ([]mqttSess
 
 // mqttSessionIDHash recovers the digest a session was filed under from its subject.
 //
-// The subject is "$MQTT.sess." then an optional JetStream domain token then the digest.
-// The digest is drawn from an alphabet with no ".", so it is whatever follows the last
-// dot — which is why this needs to know neither the digest's length nor whether a domain
-// is configured.
-//
-// 🔴 THIS IS THE ONE PLACE THAT READS A SERVER LAYOUT RATHER THAN A SERVER VALUE, so it is
-// the one place a wrong belief about nats-server could survive compilation. It is checked
-// against the server's own value by TestMqttSessionIDHashAgreesWithTheServer, which reads
-// the digest out of a real broker's pubrel filter subject and compares.
+// The subject is "$MQTT.sess." then an OPTIONAL JetStream domain token then the digest.
+// The digest's alphabet has no ".", so it is whatever follows the last dot — which is why
+// this needs to know neither the digest's length nor whether a domain is configured.
 func mqttSessionIDHash(subject string) string {
 	if !strings.HasPrefix(subject, mqttSessSubjectPrefix) {
 		return ""
 	}
 	return subject[strings.LastIndex(subject, ".")+1:]
+}
+
+// pubRelSubjectIDHash recovers the digest from a PUBREL subject or consumer filter, which
+// is "$MQTT.out.pubrel.{digest}" and carries no domain token.
+func pubRelSubjectIDHash(subject string) string {
+	hash, ok := strings.CutPrefix(subject, mqttPubRelSubjectPrefix)
+	if !ok {
+		return ""
+	}
+	return hash
 }
 
 // mqttQoS2InClientID recovers the client id from a parked QoS 2 subject, which is
@@ -395,8 +402,8 @@ func mqttQoS2InClientID(subject string) string {
 // purgeSubjectsMatching purges every subject under prefix that match reports as the
 // tenant's, and returns how many messages went.
 //
-// It enumerates rather than filters because that is the only option: the tenant lives
-// INSIDE a subject token here, and a NATS wildcard matches whole tokens only.
+// It enumerates rather than filters because that is the only option: what identifies the
+// owner lives INSIDE a subject token here, and a NATS wildcard matches whole tokens only.
 func purgeSubjectsMatching(ctx context.Context, nc *nats.Conn, js nats.JetStreamContext,
 	stream, prefix string, match func(subject string) bool) (int64, error) {
 	info, err := js.StreamInfo(stream, &nats.StreamInfoRequest{SubjectsFilter: prefix + ">"}, nats.Context(ctx))
@@ -427,37 +434,20 @@ func purgeSubjectsMatching(ctx context.Context, nc *nats.Conn, js nats.JetStream
 // deleteConsumersUnder deletes every durable consumer on stream whose filter subject match
 // accepts, and returns how many went.
 //
-// # 🔴 Why this issues the API request instead of ranging over js.Consumers
+// # 🔴 Why this asks the API rather than ranging over js.Consumers
 //
 // nats.go reports that listing over a CHANNEL, and a channel that closes because the API
-// request failed is indistinguishable from a stream with no consumers. That is precisely
-// the failure this subsystem exists to refuse — "deleted 0" reading identically to "there
-// were none" — and the library gives a caller no way to tell them apart.
+// request failed is indistinguishable from a stream with no consumers — "deleted 0" reading
+// identically to "there were none", which is the purge failure this subsystem exists to
+// refuse. The obvious patch, comparing the yielded count against the one StreamInfo reports,
+// is worse: consumers legitimately come and go on this stream while a purge runs, so a short
+// read is an ordinary event, and it is a guard nothing could ever make fire. Asking the API
+// removes the choice — a failed request is an error and an empty page is an empty page.
 //
-// The obvious patch is to check the yielded count against the consumer count StreamInfo
-// reports, and it is WORSE THAN THE HOLE. Consumers come and go on this stream while the
-// purge runs: any other tenant's MQTT client disconnecting from a clean session removes one
-// mid-listing, so a short read is an ordinary event, and a purge that failed on it would
-// fail on every pass on a busy instance while looking like a real problem. It is also a
-// guard nothing could ever exercise — a check that cannot be made to fire is a check
-// nobody knows is broken.
-//
-// Asking the API directly removes the choice: a failed request is an error, an empty page
-// is an empty page, and paging is explicit. The consumers themselves are decoded into
-// nats.ConsumerInfo, so every field name inside one is still the library's; only the
-// envelope is spelled out here, and the live test would report zero deletions if that
-// envelope were wrong.
+// The consumers themselves decode into nats.ConsumerInfo, so every field name inside one is
+// still the library's; only the envelope is spelled out here.
 func deleteConsumersUnder(ctx context.Context, nc *nats.Conn, js nats.JetStreamContext,
 	stream string, match func(filter string) bool) (int64, error) {
-	// Confirm the stream exists first, so a lazily-created gateway stream reads as "nothing
-	// to sweep" rather than as an API error on the listing.
-	if _, err := js.StreamInfo(stream, nats.Context(ctx)); err != nil {
-		if errors.Is(err, nats.ErrStreamNotFound) {
-			return 0, nil
-		}
-		return 0, fmt.Errorf("reading %s before sweeping its consumers: %w", stream, err)
-	}
-
 	matched, err := consumersMatching(ctx, nc, stream, match)
 	if err != nil {
 		return 0, err
@@ -478,7 +468,8 @@ func deleteConsumersUnder(ctx context.Context, nc *nats.Conn, js nats.JetStreamC
 }
 
 // consumersMatching pages through a stream's consumers and returns the names of those whose
-// filter subject match accepts.
+// filter subject match accepts. A stream that does not exist has none — the gateway creates
+// its streams lazily, so an instance that has never used MQTT has neither.
 func consumersMatching(ctx context.Context, nc *nats.Conn, stream string,
 	match func(filter string) bool) ([]string, error) {
 	var names []string
@@ -495,10 +486,7 @@ func consumersMatching(ctx context.Context, nc *nats.Conn, stream string,
 		}
 
 		var resp struct {
-			Error *struct {
-				ErrCode     uint16 `json:"err_code"`
-				Description string `json:"description"`
-			} `json:"error"`
+			Error     *jsAPIError          `json:"error"`
 			Total     int                  `json:"total"`
 			Consumers []*nats.ConsumerInfo `json:"consumers"`
 		}
@@ -518,8 +506,8 @@ func consumersMatching(ctx context.Context, nc *nats.Conn, stream string,
 			}
 		}
 		// An empty page terminates as well as reaching the total. Without it a server that
-		// reports a total it cannot page to — which a concurrent delete produces — spins
-		// here forever, holding the purge coordinator's advisory lock.
+		// reports a total it cannot page to — which a concurrent delete produces — spins here
+		// forever, holding the purge coordinator's advisory lock.
 		offset += len(resp.Consumers)
 		if len(resp.Consumers) == 0 || offset >= resp.Total {
 			return names, nil

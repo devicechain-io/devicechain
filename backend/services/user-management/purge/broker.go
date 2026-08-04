@@ -20,18 +20,23 @@ import (
 // the same split the telemetry store has, and for the same reason: a filter rebuilt by a
 // caller does not fail when a shape changes, it silently matches nothing.
 //
-// # What this store does NOT defer any more, and the one thing it can still report
+// # 🔑 This store defers nothing, and that is a claim rather than an omission
 //
 // Three things used to survive a subject purge and were named in the ledger on every pass,
-// which is what kept this store from ever reporting clean. Two are now erased — MQTT
-// session state and the durable consumers that outlive it, both reached by READING the
-// gateway's own records rather than by filtering subjects that never carried the tenant —
-// and the third, the retained-message cache, is covered by the settle window
-// (messaging.RetainedCacheWindow spells out the argument and what it rests on).
+// which is what kept this store from ever reporting clean and therefore kept any purge from
+// ever completing. Two are now erased — MQTT session state and the durable consumers that
+// outlive it, both reached by READING the gateway's own records rather than by filtering
+// subjects that never carried the tenant. The third, the retained-message cache, cannot be
+// erased at all (it is in-process in nats-server with no API) and is instead covered by the
+// settle window; messaging.RetainedCacheWindow spells out that argument and names what it
+// rests on.
 //
-// So a deferral here is now a MEASUREMENT: the broker reports one only when a pass observed
-// state it could not attribute, which today means a session record filed under a client id
-// that does not have the pinned device shape. The normal outcome is none.
+// One thing the sweep can still find and not erase: a session record whose client id is not
+// device-shaped, which no tenant can be named for. It is COUNTED AND LOGGED rather than
+// deferred, and MqttGatewayPurgeResult.UnownedSessions carries the reasoning — the short
+// version is that such a record cannot be inherited by any device, so it is not the hazard
+// a deferral exists to hold a purge open for, and deferring on it would deadlock every
+// purge on any instance running an edge agent.
 type Broker struct {
 	conn       messaging.Connection
 	instanceId string
@@ -63,5 +68,5 @@ func (b *Broker) Erase(ctx context.Context, tenant string, _ time.Time) (Outcome
 		return Outcome{}, fmt.Errorf("purging the broker for %q: %w", tenant, err)
 	}
 
-	return Outcome{Rows: res.Rows(), Deferred: res.Deferrals}, nil
+	return Outcome{Rows: res.Rows()}, nil
 }

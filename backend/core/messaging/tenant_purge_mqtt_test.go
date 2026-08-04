@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -28,13 +30,15 @@ import (
 // a subscription creates. A fixture that writes those shapes is a fixture that agrees with
 // whatever this package believes about them — including a belief that is wrong, which is
 // exactly how the client-id pin came to ship with a false justification attached. So a real
-// broker files the records, a real paho client causes them, and the assertions read them
-// back through the LIBRARY's API rather than through the code under test.
+// broker files the records, real clients cause them, and the assertions read them back
+// through the LIBRARY's API rather than through the code under test.
 //
-// The two places a record cannot be caused deterministically (a parked QoS 2 packet needs a
-// client that abandons the handshake mid-flight) are seeded — but seeded at a subject shape
-// this file first pins against the server's OWN stream configuration, so the shape is still
-// not this package's assumption.
+// Every LAYOUT this package reads is therefore pinned against something the server produced:
+// the prefixes against the stream configs it declared, the session digest against the
+// consumer name it chose, the parked-packet subject against a packet it filed. Where a test
+// still seeds records — the bulk-behaviour ones, which need several ids at once — it seeds
+// at a layout one of those has already redeemed, so the seed is not this package's belief
+// about the layout, only about how many of them there are.
 
 const (
 	mqttInstance  = "inst1"
@@ -186,6 +190,101 @@ func TestMqttGatewaySubjectPrefixesAreTheServersOwn(t *testing.T) {
 		"the PUBREL subject prefix must lie inside %s's subject space", MqttPubRelStore)
 }
 
+// parkQoS2Packet leaves ONE inbound QoS 2 message parked in $MQTT_qos2in, by speaking MQTT
+// 3.1.1 directly and simply never sending the PUBREL that would release it.
+//
+// 🔴 PAHO CANNOT DO THIS, AND THAT IS WHY THERE IS A HAND-ROLLED CLIENT HERE. A client
+// library completes the QoS 2 handshake for you: it answers PUBREC with PUBREL, which is
+// precisely the step that deletes the record under test. Abandoning the handshake needs a
+// client that stops mid-exchange, and the alternative — seeding a message at the subject
+// this package BELIEVES the server uses — is the circle this whole file exists to avoid.
+// Only the server can be trusted to say where it files a parked packet.
+//
+// The frames are the two smallest in the protocol. CONNECT: fixed header, protocol name
+// "MQTT" at level 4, flags (0 = persistent session, so the record outlives the connection),
+// keepalive, then the client id. PUBLISH at QoS 2: fixed header with the QoS bits set,
+// topic, packet id, payload. Then we stop.
+func parkQoS2Packet(t *testing.T, broker, clientID, topic string) {
+	t.Helper()
+	conn, err := net.DialTimeout("tcp", strings.TrimPrefix(broker, "tcp://"), 10*time.Second)
+	require.NoError(t, err)
+	defer conn.Close()
+	require.NoError(t, conn.SetDeadline(time.Now().Add(10*time.Second)))
+
+	str := func(s string) []byte {
+		return append([]byte{byte(len(s) >> 8), byte(len(s))}, s...)
+	}
+	frame := func(header byte, body []byte) []byte {
+		// Remaining Length is a varint; every frame here is far below 128 bytes, and the
+		// assertion says so rather than the encoder pretending to handle more.
+		require.Less(t, len(body), 128, "this hand-rolled encoder only writes single-byte lengths")
+		return append([]byte{header, byte(len(body))}, body...)
+	}
+
+	var connect []byte
+	connect = append(connect, str("MQTT")...)
+	connect = append(connect, 4 /* protocol level 3.1.1 */, 0 /* flags: persistent */, 0, 60 /* keepalive */)
+	connect = append(connect, str(clientID)...)
+	_, err = conn.Write(frame(0x10, connect))
+	require.NoError(t, err)
+
+	// CONNACK: 4 bytes, and the last one is the return code. Reading it is what makes a
+	// refused connection fail here rather than silently produce no parked packet later.
+	ack := make([]byte, 4)
+	_, err = io.ReadFull(conn, ack)
+	require.NoError(t, err, "reading CONNACK for %q", clientID)
+	require.EqualValuesf(t, 0, ack[3], "the broker refused CONNECT for %q with code %d", clientID, ack[3])
+
+	var publish []byte
+	publish = append(publish, str(topic)...)
+	publish = append(publish, 0, 7 /* packet id */)
+	publish = append(publish, []byte("parked")...)
+	// 0x34 = PUBLISH with the QoS bits set to 2. The server files the message the moment it
+	// processes this; it is the PUBREL we deliberately never send that would remove it.
+	_, err = conn.Write(frame(0x34, publish))
+	require.NoError(t, err)
+
+	// Wait for PUBREC, which is the server telling us it has stored the packet. Without
+	// this the test races the server and the "parked" record may not exist yet.
+	rec := make([]byte, 4)
+	_, err = io.ReadFull(conn, rec)
+	require.NoError(t, err, "reading PUBREC for %q", clientID)
+	require.EqualValuesf(t, 0x50, rec[0], "expected PUBREC, got frame type %#x", rec[0])
+}
+
+// TestParkedQoS2SubjectsCarryTheClientIdVerbatim closes the last place this file could have
+// been agreeing with itself.
+//
+// mqttQoS2InClientID reads a LAYOUT — "$MQTT.qos2.in.{clientID}.{packetID}" — and every
+// other test that touches parked packets seeds them at that same layout, so all of them
+// would stay green if the belief were wrong while production purges silently skipped every
+// parked packet. TestMqttGatewaySubjectPrefixesAreTheServersOwn does not redeem it either:
+// it pins the PREFIX, not what follows.
+//
+// So this one makes a real broker file a real parked packet and asserts the client id comes
+// back out of the subject the server chose.
+func TestParkedQoS2SubjectsCarryTheClientIdVerbatim(t *testing.T) {
+	_, js, broker := mqttRig(t)
+	clientID, err := DeviceClientID(mqttInstance, mqttVictim, "sensor-001")
+	require.NoError(t, err)
+	parkQoS2Packet(t, broker, clientID, fmt.Sprintf("%s/%s/devices/sensor-001/events", mqttInstance, mqttVictim))
+
+	info, err := js.StreamInfo(MqttQoS2InStore, &nats.StreamInfoRequest{
+		SubjectsFilter: mqttQoS2InSubjectPrefix + ">",
+	})
+	require.NoError(t, err, "the gateway did not create %s", MqttQoS2InStore)
+	require.Len(t, info.State.Subjects, 1,
+		"the abandoned QoS 2 handshake should have left exactly one parked packet; got %v",
+		info.State.Subjects)
+
+	for subject := range info.State.Subjects {
+		assert.Equalf(t, clientID, mqttQoS2InClientID(subject),
+			"the server filed a parked packet at %q, and this package reads the client id out of "+
+				"it as %q — so a tenant purge would not recognise its own devices' parked packets",
+			subject, mqttQoS2InClientID(subject))
+	}
+}
+
 // TestMqttSessionRecordMatchesWhatTheServerWrites reads a record a real gateway wrote and
 // asserts the fields the erasure navigates by are the fields that are actually there.
 //
@@ -205,14 +304,18 @@ func TestMqttSessionRecordMatchesWhatTheServerWrites(t *testing.T) {
 		assert.Equalf(t, clientID, rec.ID,
 			"the session record at %s does not carry the client id the device connected with, so "+
 				"nothing in $MQTT_sess can be attributed to a tenant", subject)
-		require.NotEmpty(t, rec.Cons, "a subscribed session must carry its consumer")
-		for _, c := range rec.Cons {
-			assert.NotEmpty(t, c.Durable, "a consumer with no durable name cannot be deleted")
-			assert.Containsf(t, c.FilterSubject, mqttVictim,
-				"a subscription consumer's filter is what the tenant sweep matches on; %q does not "+
-					"name the tenant", c.FilterSubject)
-		}
 	}
+
+	// And the premise the consumer sweep rests on, read off the CONSUMER rather than off a
+	// copy of it in the record: a subscription's filter subject names the tenant. If it did
+	// not, the sweep in step 1 would match nothing and report a clean broker.
+	names := consumerNames(t, js, MqttMessageStore)
+	require.Len(t, names, 1)
+	info, err := js.ConsumerInfo(MqttMessageStore, names[0])
+	require.NoError(t, err)
+	assert.Containsf(t, info.Config.FilterSubject, mqttVictim,
+		"a subscription consumer's filter is what the tenant sweep matches on; %q does not name "+
+			"the tenant", info.Config.FilterSubject)
 }
 
 // TestMqttSessionIDHashAgreesWithTheServer checks the file's ONE derived value against the
@@ -345,6 +448,149 @@ func TestPurgeTenantMqttGatewayErasesAConsumerNoSessionRecordNames(t *testing.T)
 		"the surviving consumer filters %q, so the sweep deleted the wrong one", info.Config.FilterSubject)
 }
 
+// deliverQoS2 makes the gateway create a session's PUBREL consumer on $MQTT_out, by having
+// one device subscribe to a topic at QoS 2 and publish to it. The server creating that
+// consumer is a side effect of DELIVERING a QoS 2 message, so it cannot be provoked without
+// a real round trip.
+//
+// It returns the connected client so the caller can close it after inspecting the broker.
+func deliverQoS2(t *testing.T, broker, tenant, device string) (mqtt.Client, string) {
+	t.Helper()
+	clientID, err := DeviceClientID(mqttInstance, tenant, device)
+	require.NoError(t, err)
+
+	delivered := make(chan struct{}, 1)
+	opts := mqtt.NewClientOptions().
+		AddBroker(broker).
+		SetClientID(clientID).
+		SetCleanSession(false).
+		SetConnectTimeout(10 * time.Second)
+	c := mqtt.NewClient(opts)
+	tok := c.Connect()
+	require.True(t, tok.WaitTimeout(10*time.Second), "connecting %q timed out", clientID)
+	require.NoErrorf(t, tok.Error(), "connecting %q", clientID)
+	t.Cleanup(func() { c.Disconnect(250) })
+
+	topic := fmt.Sprintf("%s/%s/devices/%s/commands", mqttInstance, tenant, device)
+	sub := c.Subscribe(topic, 2, func(mqtt.Client, mqtt.Message) {
+		select {
+		case delivered <- struct{}{}:
+		default:
+		}
+	})
+	require.True(t, sub.WaitTimeout(10*time.Second))
+	require.NoError(t, sub.Error())
+
+	pub := c.Publish(topic, 2, false, []byte("qos2"))
+	require.True(t, pub.WaitTimeout(10*time.Second), "publishing QoS 2 to %q timed out", topic)
+	require.NoError(t, pub.Error())
+
+	select {
+	case <-delivered:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the QoS 2 message was never delivered to %q, so the gateway never created its "+
+			"PUBREL consumer and this test would prove nothing", clientID)
+	}
+	return c, clientID
+}
+
+// TestPurgeTenantMqttGatewayErasesThePubRelConsumer covers the $MQTT_out sweep, which is the
+// one addressed by a DIGEST rather than by a subject naming the tenant.
+//
+// 🔴 IT EXISTS BECAUSE A MUTATION PROVED THE PATH WAS UNTESTED. Breaking
+// pubRelSubjectIDHash so it returned the whole subject instead of the digest left the entire
+// suite green: nothing anywhere created a PUBREL consumer, so nothing could notice that the
+// sweep matching them had stopped matching. A QoS 2 DELIVERY is what makes the gateway
+// create one, which is why this test does a real round trip rather than seeding.
+//
+// The bystander is the control, and here it is doing real work: the digest is opaque, so a
+// sweep that matched on the wrong part of the subject would plausibly match everything.
+func TestPurgeTenantMqttGatewayErasesThePubRelConsumer(t *testing.T) {
+	nc, js, broker := mqttRig(t)
+	_, victimID := deliverQoS2(t, broker, mqttVictim, "sensor-001")
+	deliverQoS2(t, broker, mqttBystander, "sensor-001")
+
+	before := consumerNames(t, js, MqttPubRelStore)
+	require.Len(t, before, 2,
+		"both devices took a QoS 2 delivery, so the gateway should hold a PUBREL consumer for each")
+
+	// The digest the victim's consumer is filed under, taken from the SESSION record's
+	// subject — which is the path the purge uses, cross-checked here against the consumer the
+	// server actually created.
+	var victimDigest string
+	for subject, rec := range sessionRecords(t, js) {
+		if rec.ID == victimID {
+			victimDigest = mqttSessionIDHash(subject)
+		}
+	}
+	require.NotEmpty(t, victimDigest)
+
+	res, err := PurgeTenantMqttGateway(context.Background(), nc, mqttInstance, mqttVictim)
+	require.NoError(t, err)
+	assert.GreaterOrEqualf(t, res.Consumers, int64(2),
+		"the victim's subscription consumer AND its PUBREL consumer should both have gone; got %d",
+		res.Consumers)
+
+	after := consumerNames(t, js, MqttPubRelStore)
+	require.Len(t, after, 1, "exactly one PUBREL consumer should survive")
+	info, err := js.ConsumerInfo(MqttPubRelStore, after[0])
+	require.NoError(t, err)
+	assert.NotEqualf(t, victimDigest, pubRelSubjectIDHash(info.Config.FilterSubject),
+		"the surviving PUBREL consumer filters %q, which is the victim's own digest — the sweep "+
+			"deleted the bystander's", info.Config.FilterSubject)
+}
+
+// TestSessionAttributionIsAnchoredAtTheStartOfTheClientId covers the membership test that
+// decides which session records get deleted.
+//
+// 🔴 THE TWO PREFIX TESTS ARE SEPARATE CODE PATHS AND EACH NEEDS ITS OWN CONTROL. Parked
+// QoS 2 packets are attributed from a subject; session records are attributed from a
+// payload. A mutation swapping HasPrefix for Contains in the SESSION path survived the whole
+// suite even after the packet path gained an anchoring control — the two look alike and are
+// covered by nothing in common.
+//
+// The seeded ids are the three ways attribution can go wrong at a boundary: an id that
+// merely contains the prefix, one whose tenant is a string extension of it, and one for a
+// different instance entirely.
+func TestSessionAttributionIsAnchoredAtTheStartOfTheClientId(t *testing.T) {
+	nc, js, broker := mqttRig(t)
+	// A real connection first, so the gateway creates $MQTT_sess before anything is seeded.
+	victimID := connectDevice(t, broker, mqttVictim, "sensor-001")
+
+	adjacentTenantID, err := DeviceClientID(mqttInstance, mqttVictim+"-2", "sensor-001")
+	require.NoError(t, err)
+	otherInstanceID, err := DeviceClientID("inst2", mqttVictim, "sensor-001")
+	require.NoError(t, err)
+	// Written out because DeviceClientID would refuse to mint it: this shape can only arrive
+	// on the wire. It names tenant "inst1" in instance "other", so it CONTAINS the victim's
+	// prefix without starting with it.
+	unanchoredID := "other:" + mqttInstance + ":" + mqttVictim + ":sensor-001"
+
+	survivors := map[string]bool{adjacentTenantID: true, otherInstanceID: true, unanchoredID: true}
+	for i, id := range []string{adjacentTenantID, otherInstanceID, unanchoredID} {
+		rec, err := json.Marshal(mqttSessionRecord{ID: id})
+		require.NoError(t, err)
+		_, err = js.Publish(fmt.Sprintf("%sseed%04d", mqttSessSubjectPrefix, i), rec)
+		require.NoErrorf(t, err, "seeding a session record for %q", id)
+	}
+
+	res, err := PurgeTenantMqttGateway(context.Background(), nc, mqttInstance, mqttVictim)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, res.Sessions,
+		"only the victim's own session should have been deleted")
+	assert.Zero(t, res.UnownedSessions,
+		"all three survivors are device-shaped, just not this tenant's")
+
+	after := sessionRecords(t, js)
+	require.Len(t, after, len(survivors))
+	for subject, rec := range after {
+		assert.NotEqualf(t, victimID, rec.ID, "the victim's own record survived at %s", subject)
+		assert.Truef(t, survivors[rec.ID],
+			"%q survived the purge of %q but is not one of the three boundary cases seeded",
+			rec.ID, mqttVictim)
+	}
+}
+
 // TestPurgeTenantMqttGatewayIsIdempotent covers the Store contract's actual requirement: it
 // is called on every pass until it reports clean, so the pass AFTER the work must succeed
 // and report zero rather than error on records that are already gone.
@@ -395,9 +641,19 @@ func TestPurgeTenantMqttGatewayPurgesParkedQoS2Packets(t *testing.T) {
 	// because no other tenant in this file shares a prefix with the victim.
 	adjacentTenantID, err := DeviceClientID(mqttInstance, mqttVictim+"-2", "sensor-001")
 	require.NoError(t, err)
+	// 🔑 THE ANCHORING CONTROL. This id CONTAINS the victim's prefix but does not start with
+	// it — it names tenant "inst1" in instance "other", a different tenant that happens to be
+	// named after ours. A membership test written with Contains rather than HasPrefix admits
+	// it and deletes another tenant's packets; nothing else in this file has that shape, and a
+	// mutation swapping the two survived the whole suite before this case existed.
+	// Written out rather than composed: DeviceClientID would refuse to build it, which is the
+	// point — this is a shape that can only arrive on the wire, never from our own minting.
+	unanchoredID := "other:" + mqttInstance + ":" + mqttVictim + ":sensor-001"
+	require.Containsf(t, unanchoredID, mqttInstance+":"+mqttVictim+":",
+		"this control only controls anything if %q really does contain the victim's prefix", unanchoredID)
 
-	survivors := map[string]bool{bystanderID: true, adjacentTenantID: true}
-	for i, id := range []string{victimID, suffixedID, siblingID, adjacentTenantID, bystanderID} {
+	survivors := map[string]bool{bystanderID: true, adjacentTenantID: true, unanchoredID: true}
+	for i, id := range []string{victimID, suffixedID, siblingID, adjacentTenantID, bystanderID, unanchoredID} {
 		_, err := js.Publish(fmt.Sprintf("%s%s.%d", mqttQoS2InSubjectPrefix, id, i+1), []byte("parked"))
 		require.NoErrorf(t, err, "seeding a parked packet for %q", id)
 	}

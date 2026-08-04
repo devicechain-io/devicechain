@@ -177,56 +177,40 @@ func TestAHostileTenantTokenIsRefusedBeforeAnythingIsPurged(t *testing.T) {
 	assert.NotZero(t, res.Messages, "a legitimate token must still purge")
 }
 
-// TestABrokerWithNothingUnattributableDefersNothing is the assertion that the three
-// standing deferrals are actually GONE, rather than reworded.
+// TestAnUnattributableSessionDoesNotBlockThePurge is the regression test for the defect
+// that nearly shipped in this slice, and it is the most important one in the file.
 //
-// 🔴 IT IS THE ONE TEST THAT WOULD CATCH THE SLICE HAVING NO EFFECT. Deferrals are what
-// Outcome.Clean() reads, so as long as the broker returns any, the store can never report
-// clean and no purge can ever complete — the erasure could be perfect and the platform
-// would still be unable to say so. A purge over an ordinary broker must come back with an
-// empty list.
-func TestABrokerWithNothingUnattributableDefersNothing(t *testing.T) {
+// 🔴 A SESSION RECORD THAT NO TENANT OWNS MUST NOT STOP A PURGE COMPLETING. An earlier draft
+// reported one as a deferral, which is what Outcome.Clean() reads, which means the broker
+// store could never go clean and no purge could ever finish. That is not a corner case:
+// nats-server writes a session record on EVERY connect, clean sessions included, and clears
+// it only at disconnect — so the edge agent's permanently-connected uplink holds one at all
+// times, and every tenant's purge on every ADR-068 instance would have hung on it forever,
+// reintroducing the exact condition this slice exists to remove.
+//
+// The count is still expected, because the assumption behind leaving it alone (that a
+// non-device-shaped record cannot be inherited by a device) is worth watching.
+func TestAnUnattributableSessionDoesNotBlockThePurge(t *testing.T) {
 	nc, js := purgeRig(t)
 	seedStream(t, js, streams.Suffixes()[0], purgeVictim, purgeBystander)
-
-	res, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim)
-	require.NoError(t, err)
-	require.NotZero(t, res.Messages, "the purge must have done something, or an empty deferral "+
-		"list is just an erasure that never ran")
-	assert.Empty(t, res.Deferrals,
-		"a broker holding nothing it cannot attribute must defer nothing; anything here blocks "+
-			"every purge from ever completing")
-}
-
-// TestADeferralNamesWhatSurvives pins the sentence a deferral goes into the deletion record
-// as, over the one condition that still produces one.
-//
-// A deferral's whole value is that a reader can act on it. One that named a stream without
-// saying what it holds would still block completion — so nothing would fail — while the
-// record told an auditor a purge is incomplete without telling them what is retained.
-func TestADeferralNamesWhatSurvives(t *testing.T) {
-	nc, js := purgeRig(t)
 	_, err := js.AddStream(&nats.StreamConfig{
 		Name:     MqttSessionStore,
 		Subjects: []string{mqttSessSubjectPrefix + ">"},
 		Storage:  nats.MemoryStorage,
 	})
 	require.NoError(t, err)
-	rec, err := json.Marshal(mqttSessionRecord{ID: "a-client-id-from-before-the-pin"})
+	// The uplink's real shape (edge/dc-edge-agent/agent/uplink.go), not an invented one.
+	rec, err := json.Marshal(mqttSessionRecord{ID: "dc-edge-agent-" + purgeInstance + "-site-42"})
 	require.NoError(t, err)
 	_, err = js.Publish(mqttSessSubjectPrefix+"abcd1234", rec)
 	require.NoError(t, err)
 
 	res, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim)
 	require.NoError(t, err)
-	require.Len(t, res.Deferrals, 1)
-
-	d := res.Deferrals[0]
-	assert.Greaterf(t, len(d), 80, "a deferral must describe the data, not label it: %q", d)
-	for _, must := range []string{"MQTT session", "client id", "device"} {
-		assert.Containsf(t, d, must,
-			"the deferral does not mention %q, so a reader cannot tell what is retained or why", must)
-	}
+	require.NotZero(t, res.Messages, "the purge must have done something, or this proves nothing")
+	assert.EqualValues(t, 1, res.Gateway.UnownedSessions,
+		"the record must still be counted — it is the canary for a device session filed before "+
+			"the client id was pinned")
 }
 
 // TestTheMqttGatewayStreamsArePurgedByTheirWrappedSubject covers the one leg that cannot

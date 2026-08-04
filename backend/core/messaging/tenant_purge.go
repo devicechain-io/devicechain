@@ -56,25 +56,10 @@ type TenantPurgeResult struct {
 	// and their parked QoS 2 packets. Kept apart from Messages because those are counts of
 	// different things, and Rows totals them.
 	Gateway MqttGatewayPurgeResult
-	// Deferrals names broker state this pass HOLDS AND DID NOT ERASE, in sentences meant
-	// for whoever is deciding whether an erasure claim can be made.
-	//
-	// 🔑 IT IS A MEASUREMENT NOW, NOT A CONSTANT, AND THAT IS THE POINT OF THE CHANGE. It
-	// used to be a fixed list of three things a subject filter cannot reach, which meant
-	// the broker store could never report clean and no purge could ever complete. Two of
-	// those are now erased (tenant_purge_mqtt.go) and the third is covered by the settle
-	// window (see RetainedCacheWindow). What is left is reported only when this pass
-	// actually OBSERVED it — so an empty slice here is a statement about this broker on
-	// this pass rather than an absence of imagination.
-	Deferrals []string
 }
 
-// Rows is what the coordinator records as erased: every kind of thing removed, summed.
-//
-// Summing rather than reporting messages alone matters because the settle window restarts
-// on any pass that erased anything. A pass that deleted only a session record has just
-// found this tenant's data in the broker, and reporting zero would measure the window from
-// a moment the broker demonstrably still held it.
+// Rows is every kind of thing removed, summed — see MqttGatewayPurgeResult.Total for why
+// the sum rather than the message count is what the coordinator must be told.
 func (r TenantPurgeResult) Rows() int64 { return r.Messages + r.Gateway.Total() }
 
 // mqttTenantStreams are the gateway streams whose SUBJECTS carry the tenant, so a subject
@@ -183,14 +168,6 @@ func PurgeTenant(ctx context.Context, nc *nats.Conn, instanceId, tenant string) 
 		return res, err
 	}
 	res.Gateway = gw
-	if gw.UnownedSessions > 0 {
-		res.Deferrals = append(res.Deferrals, fmt.Sprintf("the broker holds %d MQTT session record(s) "+
-			"whose client id does not have the pinned device shape, so they cannot be attributed to any "+
-			"tenant and this purge did not touch them. Sessions filed by a non-device client — the edge "+
-			"agent's uplink is the standing one — are expected here and belong to nobody. A session filed "+
-			"by a DEVICE before the client id was pinned would look identical, and would be this tenant's "+
-			"data. Both need telling apart by hand before an erasure is claimed", gw.UnownedSessions))
-	}
 
 	return res, nil
 }
@@ -222,11 +199,8 @@ func purgeSubject(ctx context.Context, nc *nats.Conn, stream, filter string) (in
 	}
 
 	var resp struct {
-		Error *struct {
-			ErrCode     uint16 `json:"err_code"`
-			Description string `json:"description"`
-		} `json:"error"`
-		Purged int64 `json:"purged"`
+		Error  *jsAPIError `json:"error"`
+		Purged int64       `json:"purged"`
 	}
 	if err := json.Unmarshal(msg.Data, &resp); err != nil {
 		return 0, fmt.Errorf("reading the purge response for %s: %w", stream, err)
@@ -243,7 +217,16 @@ func purgeSubject(ctx context.Context, nc *nats.Conn, stream, filter string) (in
 	return resp.Purged, nil
 }
 
+// jsAPIError is the error envelope every JetStream API response carries, shared by the
+// hand-issued requests in this package so the wire field names are written once.
+type jsAPIError struct {
+	ErrCode     uint16 `json:"err_code"`
+	Description string `json:"description"`
+}
+
 // streamNotFoundErrCode is JetStream's API error code for a stream that does not exist.
+// The consumer-list endpoint returns it too, which is what lets a sweep treat a gateway
+// stream the server has not created yet as holding nothing.
 const streamNotFoundErrCode = 10059
 
 // PurgeTimeout bounds one whole broker purge, so a broker that goes away mid-pass costs
@@ -257,31 +240,6 @@ const streamNotFoundErrCode = 10059
 //
 // Exported so a caller can reason about it against its own tick.
 const PurgeTimeout = 20 * time.Second
-
-// The three things a subject purge could not reach, and what became of each.
-//
-// This used to be TenantPurgeDeferrals — a fixed list returned on every pass, which the
-// coordinator turned into "not clean", which meant no purge could ever complete. The list
-// is gone because all three are answered, and it is worth recording HOW, because two of
-// the answers are erasures and one is an argument, and an argument is the kind of answer
-// this epic has repeatedly got wrong.
-//
-//  1. MQTT SESSION STATE — erased. PurgeTenantMqttGateway reads $MQTT_sess, attributes each
-//     record from its own payload, and deletes the record, its parked QoS 2 packets in
-//     $MQTT_qos2in and $MQTT_out, and its PUBREL consumer.
-//
-//  2. DURABLE CONSUMERS — erased. A subscription consumer's filter subject names the
-//     tenant, so they are swept from the consumer list, which also reaches a consumer whose
-//     session record is gone. That one mattered most: $MQTT_msgs is interest-retention, so
-//     an orphan does not merely linger, it keeps new messages on the deleted tenant's
-//     subjects alive.
-//
-//  3. THE RETAINED-MESSAGE CACHE — argued, not erased, and it cannot be erased: the cache
-//     is in-process in nats-server with no API. See RetainedCacheWindow for why the settle
-//     window covers it, and for what has to stay true for that to hold.
-//
-// What replaces the list is TenantPurgeResult.Deferrals, which reports only what a pass
-// actually observed.
 
 // RetainedCacheWindow is how long nats-server may keep serving a retained message after it
 // has been purged from JetStream, from its in-memory cache (`mqttRetainedCacheTTL`, a
@@ -297,20 +255,31 @@ const PurgeTimeout = 20 * time.Second
 //
 // Three facts have to hold together, and each is checkable:
 //
-//   - A cache entry expires a fixed TTL after it was STORED, and a cache hit does not
+//   - A cache entry expires a fixed TTL after it was STAMPED, and a cache HIT does not
 //     extend it — nats-server's lookup path deletes an expired entry and never restamps a
 //     live one. So an entry's life is bounded from the moment it was filled.
-//   - An entry is only ever filled from a JetStream READ of the retained message. Once the
-//     purge has removed the message, no later subscriber can refill it, so the last
-//     possible fill is at the instant of the purge.
+//   - An entry is stamped by a JetStream read of the retained message OR by an inbound
+//     retained PUBLISH. 🔴 THE SECOND HALF OF THAT SENTENCE IS A CORRECTION: an earlier
+//     draft claimed a JetStream read was the only filler, which is false. It does not cost
+//     the conclusion, and the reason is worth having rather than the tidier wrong one — a
+//     retained PUBLISH that restamps the cache has also just written a MESSAGE to the
+//     retained stream, so the next pass purges it, counts it, and restarts the window
+//     below. A refill this purge cannot see is a refill that leaves evidence it can.
 //   - A pass that erased anything restarts the settle window (Coordinator.eraseOne), and
 //     completion requires the whole settle window to elapse after that. Since the settle
-//     window is validated to exceed this one, the cache entry is expired before the purge
-//     can complete.
+//     window is validated to exceed this one plus PurgeTimeout, the cache entry is expired
+//     before the purge can complete.
+//
+// The PurgeTimeout term in that last line is not padding. The coordinator stamps a store's
+// clean-since BEFORE calling it, so the purge that empties the retained stream can land up
+// to a whole PurgeTimeout after the timestamp the settle window is measured from.
 //
 // 🔴 THE THIRD IS THE ONE THAT ROTS. It rests on the coordinator restarting the window on
 // a non-zero row count, and on the config floor. Neither is visible from this file, and
-// both would keep compiling if they changed. They are pinned by tests on their own side —
-// TestSettleWindowMustExceedTheRetainedCacheWindow in user-management's config, and the
-// coordinator's own settle-restart test — and this comment is the pointer between them.
+// both would keep compiling if they changed. Each is pinned by a test on its own side, and
+// this comment is the pointer between them:
+//
+//   - config: TestASettleWindowShorterThanTheBrokersRetainedCacheIsRefused and
+//     TestTheSettleDefaultOutlastsTheBrokersRetainedCache;
+//   - coordinator: TestRowsAppearingLateRestartTheSettleWindow.
 const RetainedCacheWindow = 2 * time.Minute

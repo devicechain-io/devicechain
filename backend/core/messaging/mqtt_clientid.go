@@ -153,20 +153,17 @@ func DeviceClientIDMatches(presented, required string) bool {
 		strings.HasPrefix(presented, required+deviceClientIDSeparator)
 }
 
-// DeviceClientIDTenantPrefix is the string every one of this tenant's device client
+// deviceClientIDTenantPrefix is the string every one of this tenant's device client
 // ids begins with. It is what an ADR-077 purge attributes a recovered client id
 // with, and the only reason the erasure can name an owner for gateway state whose
 // subject says nothing.
 //
-// 🔑 THIS ONE IS A PLAIN PREFIX, NOT THE EQUALITY-OR-PREFIX TEST ABOVE, AND THE
-// DIFFERENCE IS STRUCTURAL RATHER THAN A SIMPLIFICATION. The tenant is never the
-// LAST field of a client id — a device token always follows it — so a legal id can
-// never be exactly this prefix, and the trailing separator is already present.
-// Against a client id there is nothing for an equality branch to admit. That is
-// why this is not a third caller for the shape keyBelongsTo and DeviceClientIDMatches
-// share, and why extracting all three into one helper would have to reintroduce a
-// case this one cannot have.
-func DeviceClientIDTenantPrefix(instanceId, tenant string) (string, error) {
+// 🔑 THE TRAILING SEPARATOR IS THE WHOLE POINT. Without it "victim" is a prefix of
+// "victim-2", and a purge of the first would take the second tenant's sessions and
+// parked packets with it — cross-tenant data loss, silently. Unlike the
+// equality-or-prefix test above there is no equality case to admit: the tenant is
+// never the LAST field of a client id, so a legal id can never be exactly this.
+func deviceClientIDTenantPrefix(instanceId, tenant string) (string, error) {
 	for _, f := range []struct{ name, value string }{
 		{"instance id", instanceId},
 		{"tenant", tenant},
@@ -178,28 +175,15 @@ func DeviceClientIDTenantPrefix(instanceId, tenant string) (string, error) {
 	return instanceId + deviceClientIDSeparator + tenant + deviceClientIDSeparator, nil
 }
 
-// DeviceClientIDBelongsTo reports whether clientID was minted for a device of this
-// tenant in this instance. prefix comes from DeviceClientIDTenantPrefix.
-//
-// 🔴 FALSE MEANS "NOT THIS TENANT'S", WHICH IS NOT THE SAME AS "SOMEONE ELSE'S". An
-// id that is not device-shaped at all — the edge agent's uplink, a service client,
-// or anything a broker admitted before the callout began pinning the shape — also
-// reads false here. A purge deciding what to erase wants exactly that answer; a purge
-// deciding what it FAILED to reach has to ask the separate question, which is what
-// DeviceClientIDIsDeviceShaped is for.
-func DeviceClientIDBelongsTo(clientID, prefix string) bool {
-	return prefix != "" && strings.HasPrefix(clientID, prefix)
-}
-
-// DeviceClientIDIsDeviceShaped reports whether clientID has the three-field shape the
+// deviceClientIDIsDeviceShaped reports whether clientID has the three-field shape the
 // callout admits, whatever instance or tenant it names.
 //
 // It exists so a purge can tell the two reasons it skipped an id apart: a device in
-// ANOTHER tenant (correctly skipped, and someone else's purge will reach it) from an
-// id no tenant owns (correctly skipped, and nobody's purge will ever reach it). Only
-// the second is worth a word in a deletion record, and conflating them would put the
-// edge agent's uplink session into every tenant's ledger forever.
-func DeviceClientIDIsDeviceShaped(clientID string) bool {
+// ANOTHER tenant (someone else's purge will reach it) from an id no tenant owns at all
+// (nobody's ever will). Only the second is worth reporting, and only as a count —
+// conflating them would put the edge agent's permanently-connected uplink session into
+// every tenant's ledger, where it would block every purge on the instance forever.
+func deviceClientIDIsDeviceShaped(clientID string) bool {
 	fields := strings.SplitN(clientID, deviceClientIDSeparator, 4)
 	if len(fields) < 3 {
 		return false
