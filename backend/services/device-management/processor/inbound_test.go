@@ -18,7 +18,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	test "github.com/devicechain-io/dc-microservice/test"
+	"github.com/devicechain-io/dc-microservice/test/msgtest"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
 	"gorm.io/gorm"
@@ -35,9 +35,9 @@ const testTenantSubject = "instance1.tenant1.inbound-events"
 type InboundEventsProcessorTestSuite struct {
 	suite.Suite
 	IP       *InboundEventsProcessor
-	Inbound  *test.MockMessageReader
-	Resolved *test.MockMessageWriter
-	Failed   *test.MockMessageWriter
+	Inbound  *msgtest.MockMessageReader
+	Resolved *msgtest.MockMessageWriter
+	Failed   *msgtest.MockMessageWriter
 	API      *dmtest.MockApi
 }
 
@@ -51,9 +51,9 @@ func (suite *InboundEventsProcessorTestSuite) SetupTest() {
 	prometheus.DefaultRegisterer = registry
 	prometheus.DefaultGatherer = registry
 
-	suite.Inbound = new(test.MockMessageReader)
-	suite.Resolved = new(test.MockMessageWriter)
-	suite.Failed = new(test.MockMessageWriter)
+	suite.Inbound = new(msgtest.MockMessageReader)
+	suite.Resolved = new(msgtest.MockMessageWriter)
+	suite.Failed = new(msgtest.MockMessageWriter)
 	suite.API = new(dmtest.MockApi)
 	suite.IP = NewInboundEventsProcessor(
 		dmtest.DeviceManagementMicroservice,

@@ -237,8 +237,16 @@ func TestTenantPurgeIntervalIsConfigurable(t *testing.T) {
 // TTL is compiled into nats-server with no knob of its own, so this side is the only place
 // the constraint can be enforced.
 func TestASettleWindowShorterThanTheBrokersRetainedCacheIsRefused(t *testing.T) {
+	// 🔑 THE FLOOR IS THE CACHE WINDOW PLUS ONE BROKER PURGE, NOT THE CACHE WINDOW ALONE, and
+	// the second term is the one a reader will be tempted to drop. The settle window is
+	// measured from a clean-since the coordinator stamps BEFORE calling the store, so the
+	// purge that empties the retained stream can land a whole PurgeTimeout later — and the
+	// last moment a retained payload can be stamped into the broker's cache is that purge.
+	// A floor of the cache window alone admits settleSeconds values inside that gap.
+	floor := messaging.RetainedCacheWindow + messaging.PurgeTimeout
+
 	cfg := NewUserManagementConfiguration()
-	cfg.TenantPurge.SettleSeconds = int(messaging.RetainedCacheWindow.Seconds()) - 1
+	cfg.TenantPurge.SettleSeconds = int(floor.Seconds()) - 1
 
 	err := cfg.Validate()
 
@@ -246,13 +254,20 @@ func TestASettleWindowShorterThanTheBrokersRetainedCacheIsRefused(t *testing.T) 
 		"complete while the broker is still serving the deleted tenant's payloads")
 	assert.Contains(t, err.Error(), "retained-message cache")
 
-	// The boundary is inclusive-safe on the other side: exactly the cache window is not
-	// enough, one second more is. Asserting both is what stops the check drifting into
-	// either a no-op or a blanket refusal.
-	cfg.TenantPurge.SettleSeconds = int(messaging.RetainedCacheWindow.Seconds())
+	// The boundary is inclusive-safe on the other side: exactly the floor is not enough, one
+	// second more is. Asserting both is what stops the check drifting into either a no-op or
+	// a blanket refusal.
+	cfg.TenantPurge.SettleSeconds = int(floor.Seconds())
 	assert.Error(t, cfg.Validate(), "equal is not longer")
-	cfg.TenantPurge.SettleSeconds = int(messaging.RetainedCacheWindow.Seconds()) + 1
+	cfg.TenantPurge.SettleSeconds = int(floor.Seconds()) + 1
 	assert.NoError(t, cfg.Validate())
+
+	// And the gap itself: a window that clears the cache but not the purge that fills it was
+	// accepted before the PurgeTimeout term existed, and is exactly the case it was added for.
+	cfg.TenantPurge.SettleSeconds = int(messaging.RetainedCacheWindow.Seconds()) + 1
+	assert.Error(t, cfg.Validate(),
+		"a settle window longer than the cache but shorter than cache+PurgeTimeout still lets a "+
+			"purge complete while a retained payload is servable")
 }
 
 // A negative settle window is refused, and it is NOT the same knob as a negative
@@ -306,9 +321,10 @@ func TestNegativeTokenHoldIsRefused(t *testing.T) {
 func TestTheSettleDefaultOutlastsTheBrokersRetainedCache(t *testing.T) {
 	settle := NewUserManagementConfiguration().TenantPurgeSettle()
 
-	if settle <= messaging.RetainedCacheWindow {
+	if floor := messaging.RetainedCacheWindow + messaging.PurgeTimeout; settle <= floor {
 		t.Fatalf("the settle window (%s) does not outlast the broker's retained-message cache "+
-			"(%s), so a purge can complete while the broker is still delivering this tenant's "+
-			"retained payloads to new subscribers", settle, messaging.RetainedCacheWindow)
+			"(%s) plus the time one broker purge may take (%s), so a purge can complete while the "+
+			"broker is still delivering this tenant's retained payloads to new subscribers",
+			settle, messaging.RetainedCacheWindow, messaging.PurgeTimeout)
 	}
 }

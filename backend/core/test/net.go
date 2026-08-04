@@ -1,6 +1,14 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+// Package test holds test helpers shared across the platform's modules.
+//
+// 🔑 IT IMPORTS NOTHING FROM core, AND THAT CONSTRAINT IS LOAD-BEARING RATHER THAN
+// tidiness. A helper here has to be usable from core's OWN package tests, and Go
+// forbids the cycle that appears the moment this package imports one of them — so a
+// fixture that depends on core lives in a subpackage (msgtest) instead. The messaging
+// mocks were moved out for exactly this reason: they made FreeTCPPort unreachable from
+// core/messaging's tests, which is one of the places that most needs it.
 package test
 
 import (

@@ -5,6 +5,7 @@ package messaging
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -176,28 +177,40 @@ func TestAHostileTenantTokenIsRefusedBeforeAnythingIsPurged(t *testing.T) {
 	assert.NotZero(t, res.Messages, "a legitimate token must still purge")
 }
 
-// TestTheDeferralsNameWhatSurvives pins the sentences that go into the deletion record.
+// TestAnUnattributableSessionDoesNotBlockThePurge is the regression test for the defect
+// that nearly shipped in this slice, and it is the most important one in the file.
 //
-// A deferral's whole value is that a reader can act on it. One that named a stream without
-// saying what it holds would still block completion — so nothing would fail — while the
-// record told an auditor a purge is incomplete without telling them what is retained.
-func TestTheDeferralsNameWhatSurvives(t *testing.T) {
-	deferrals := TenantPurgeDeferrals()
-	require.NotEmpty(t, deferrals,
-		"the session streams, the orphaned consumers and the retained cache are all still "+
-			"outstanding; an empty list here would let a purge claim total erasure")
+// 🔴 A SESSION RECORD THAT NO TENANT OWNS MUST NOT STOP A PURGE COMPLETING. An earlier draft
+// reported one as a deferral, which is what Outcome.Clean() reads, which means the broker
+// store could never go clean and no purge could ever finish. That is not a corner case:
+// nats-server writes a session record on EVERY connect, clean sessions included, and clears
+// it only at disconnect — so the edge agent's permanently-connected uplink holds one at all
+// times, and every tenant's purge on every ADR-068 instance would have hung on it forever,
+// reintroducing the exact condition this slice exists to remove.
+//
+// The count is still expected, because the assumption behind leaving it alone (that a
+// non-device-shaped record cannot be inherited by a device) is worth watching.
+func TestAnUnattributableSessionDoesNotBlockThePurge(t *testing.T) {
+	nc, js := purgeRig(t)
+	seedStream(t, js, streams.Suffixes()[0], purgeVictim, purgeBystander)
+	_, err := js.AddStream(&nats.StreamConfig{
+		Name:     MqttSessionStore,
+		Subjects: []string{mqttSessSubjectPrefix + ">"},
+		Storage:  nats.MemoryStorage,
+	})
+	require.NoError(t, err)
+	// The uplink's real shape (edge/dc-edge-agent/agent/uplink.go), not an invented one.
+	rec, err := json.Marshal(mqttSessionRecord{ID: "dc-edge-agent-" + purgeInstance + "-site-42"})
+	require.NoError(t, err)
+	_, err = js.Publish(mqttSessSubjectPrefix+"abcd1234", rec)
+	require.NoError(t, err)
 
-	for _, d := range deferrals {
-		assert.Greaterf(t, len(d), 80, "a deferral must describe the data, not label it: %q", d)
-	}
-	joined := ""
-	for _, d := range deferrals {
-		joined += d
-	}
-	for _, must := range []string{"$MQTT_sess", "$MQTT_qos2in", "consumer", "retained"} {
-		assert.Containsf(t, joined, must,
-			"nothing in the deferrals mentions %q, so that hole is invisible in the record", must)
-	}
+	res, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim)
+	require.NoError(t, err)
+	require.NotZero(t, res.Messages, "the purge must have done something, or this proves nothing")
+	assert.EqualValues(t, 1, res.Gateway.UnownedSessions,
+		"the record must still be counted — it is the canary for a device session filed before "+
+			"the client id was pinned")
 }
 
 // TestTheMqttGatewayStreamsArePurgedByTheirWrappedSubject covers the one leg that cannot

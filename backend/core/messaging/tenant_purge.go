@@ -52,7 +52,15 @@ type TenantPurgeResult struct {
 	// PerStream is the count each stream contributed, keyed by stream name. Streams that
 	// contributed nothing are omitted — a wall of zeroes buries the lines that matter.
 	PerStream map[string]int64
+	// Gateway is what the client-id-keyed sweep removed: MQTT sessions, their consumers
+	// and their parked QoS 2 packets. Kept apart from Messages because those are counts of
+	// different things, and Rows totals them.
+	Gateway MqttGatewayPurgeResult
 }
+
+// Rows is every kind of thing removed, summed — see MqttGatewayPurgeResult.Total for why
+// the sum rather than the message count is what the coordinator must be told.
+func (r TenantPurgeResult) Rows() int64 { return r.Messages + r.Gateway.Total() }
 
 // mqttTenantStreams are the gateway streams whose SUBJECTS carry the tenant, so a subject
 // filter reaches them exactly the way it reaches a platform stream.
@@ -60,7 +68,8 @@ type TenantPurgeResult struct {
 // Both wrap an original subject: nats-server publishes to "$MQTT.msgs.{subject}" and
 // "$MQTT.rmsgs.{subject}", so a tenant's messages sit under a prefix of our own subject
 // space. The other three gateway streams key on the MQTT CLIENT ID instead and are not
-// reachable this way; see TenantPurgeDeferrals.
+// reachable this way at all; they are erased by reading rather than by filtering, in
+// tenant_purge_mqtt.go.
 var mqttTenantStreams = []struct{ stream, prefix string }{
 	{MqttMessageStore, "$MQTT.msgs."},
 	{MqttRetainedStore, "$MQTT.rmsgs."},
@@ -151,6 +160,15 @@ func PurgeTenant(ctx context.Context, nc *nats.Conn, instanceId, tenant string) 
 		}
 	}
 
+	// The gateway's client-id-keyed state, which no subject filter reaches at all. It runs
+	// LAST so a failure here does not cost the subject purge that already succeeded: the
+	// caller retries the whole thing, and everything above is idempotent.
+	gw, err := PurgeTenantMqttGateway(ctx, nc, instanceId, tenant)
+	if err != nil {
+		return res, err
+	}
+	res.Gateway = gw
+
 	return res, nil
 }
 
@@ -181,11 +199,8 @@ func purgeSubject(ctx context.Context, nc *nats.Conn, stream, filter string) (in
 	}
 
 	var resp struct {
-		Error *struct {
-			ErrCode     uint16 `json:"err_code"`
-			Description string `json:"description"`
-		} `json:"error"`
-		Purged int64 `json:"purged"`
+		Error  *jsAPIError `json:"error"`
+		Purged int64       `json:"purged"`
 	}
 	if err := json.Unmarshal(msg.Data, &resp); err != nil {
 		return 0, fmt.Errorf("reading the purge response for %s: %w", stream, err)
@@ -202,7 +217,16 @@ func purgeSubject(ctx context.Context, nc *nats.Conn, stream, filter string) (in
 	return resp.Purged, nil
 }
 
+// jsAPIError is the error envelope every JetStream API response carries, shared by the
+// hand-issued requests in this package so the wire field names are written once.
+type jsAPIError struct {
+	ErrCode     uint16 `json:"err_code"`
+	Description string `json:"description"`
+}
+
 // streamNotFoundErrCode is JetStream's API error code for a stream that does not exist.
+// The consumer-list endpoint returns it too, which is what lets a sweep treat a gateway
+// stream the server has not created yet as holding nothing.
 const streamNotFoundErrCode = 10059
 
 // PurgeTimeout bounds one whole broker purge, so a broker that goes away mid-pass costs
@@ -217,32 +241,6 @@ const streamNotFoundErrCode = 10059
 // Exported so a caller can reason about it against its own tick.
 const PurgeTimeout = 20 * time.Second
 
-// TenantPurgeDeferrals names the broker state a subject purge does NOT reach, in sentences
-// meant for whoever is deciding whether an erasure claim can be made.
-//
-// 🔴 THESE ARE NOT A BACKLOG. Each one is tenant data that survives a purge, and the
-// coordinator carries them into the deletion record so a completed purge cannot claim
-// total erasure while they stand. They come off this list by being erased, not by being
-// re-worded.
-func TenantPurgeDeferrals() []string {
-	return []string{
-		"the broker still holds this tenant's MQTT SESSION state — one record per persistent " +
-			"session in $MQTT_sess, naming the client's tenant-scoped subscriptions, plus its " +
-			"parked QoS 2 records in $MQTT_qos2in and $MQTT_out. Those streams key on the MQTT " +
-			"client id, which is chosen by device firmware and bound to no tenant, so no subject " +
-			"filter reaches them. A successor at a reused token that presents the same client id " +
-			"inherits the predecessor's subscriptions and its undelivered messages",
-		"the broker still holds this tenant's DURABLE CONSUMERS on $MQTT_msgs and $MQTT_out. A " +
-			"stream purge does not remove a consumer, and $MQTT_msgs is interest-retention — so " +
-			"an orphaned consumer whose filter names this tenant's subjects actively keeps new " +
-			"messages on that subject alive rather than merely lingering",
-		"a purge of the retained-message stream does not take effect immediately: nats-server " +
-			"answers a new subscriber from an in-memory retained cache before it reads JetStream, " +
-			"so this tenant's retained payloads can still be delivered for up to two minutes " +
-			"after the purge. The cache TTL is a compiled-in constant with no configuration knob",
-	}
-}
-
 // RetainedCacheWindow is how long nats-server may keep serving a retained message after it
 // has been purged from JetStream, from its in-memory cache (`mqttRetainedCacheTTL`, a
 // package constant in the server with no configuration knob).
@@ -251,4 +249,37 @@ func TenantPurgeDeferrals() []string {
 // ASSUMED TO COVER IT. A purge that completes inside this window writes a record saying a
 // tenant's data is gone while the broker is still handing its retained payloads to new
 // subscribers — which is exactly the "swept AND FENCED" ack being false.
+// user-management's config validation enforces that floor and refuses to start below it.
+//
+// # 🔑 Why this is no longer a deferral, in full, because the argument is the answer
+//
+// Three facts have to hold together, and each is checkable:
+//
+//   - A cache entry expires a fixed TTL after it was STAMPED, and a cache HIT does not
+//     extend it — nats-server's lookup path deletes an expired entry and never restamps a
+//     live one. So an entry's life is bounded from the moment it was filled.
+//   - An entry is stamped by a JetStream read of the retained message OR by an inbound
+//     retained PUBLISH. 🔴 THE SECOND HALF OF THAT SENTENCE IS A CORRECTION: an earlier
+//     draft claimed a JetStream read was the only filler, which is false. It does not cost
+//     the conclusion, and the reason is worth having rather than the tidier wrong one — a
+//     retained PUBLISH that restamps the cache has also just written a MESSAGE to the
+//     retained stream, so the next pass purges it, counts it, and restarts the window
+//     below. A refill this purge cannot see is a refill that leaves evidence it can.
+//   - A pass that erased anything restarts the settle window (Coordinator.eraseOne), and
+//     completion requires the whole settle window to elapse after that. Since the settle
+//     window is validated to exceed this one plus PurgeTimeout, the cache entry is expired
+//     before the purge can complete.
+//
+// The PurgeTimeout term in that last line is not padding. The coordinator stamps a store's
+// clean-since BEFORE calling it, so the purge that empties the retained stream can land up
+// to a whole PurgeTimeout after the timestamp the settle window is measured from.
+//
+// 🔴 THE THIRD IS THE ONE THAT ROTS. It rests on the coordinator restarting the window on
+// a non-zero row count, and on the config floor. Neither is visible from this file, and
+// both would keep compiling if they changed. Each is pinned by a test on its own side, and
+// this comment is the pointer between them:
+//
+//   - config: TestASettleWindowShorterThanTheBrokersRetainedCacheIsRefused and
+//     TestTheSettleDefaultOutlastsTheBrokersRetainedCache;
+//   - coordinator: TestRowsAppearingLateRestartTheSettleWindow.
 const RetainedCacheWindow = 2 * time.Minute

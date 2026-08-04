@@ -53,8 +53,8 @@ import (
 // So a purge has to recover the exact ids rather than compute them, which it can:
 // the $MQTT_sess record's own payload carries its client id, so the ids are
 // readable even though they are not filterable. That is what the pin makes
-// possible and what it did not make cheap. Until that work lands,
-// TenantPurgeDeferrals still names this state as surviving a purge.
+// possible and what it did not make cheap. tenant_purge_mqtt.go is the work that
+// followed, and it is built entirely on reading rather than computing.
 //
 // # 🔑 Why a PREFIX and not an exact value
 //
@@ -151,4 +151,51 @@ func DeviceClientID(instanceId, tenant, deviceToken string) (string, error) {
 func DeviceClientIDMatches(presented, required string) bool {
 	return presented == required ||
 		strings.HasPrefix(presented, required+deviceClientIDSeparator)
+}
+
+// deviceClientIDTenantPrefix is the string every one of this tenant's device client
+// ids begins with. It is what an ADR-077 purge attributes a recovered client id
+// with, and the only reason the erasure can name an owner for gateway state whose
+// subject says nothing.
+//
+// 🔑 THE TRAILING SEPARATOR IS THE WHOLE POINT. Without it "victim" is a prefix of
+// "victim-2", and a purge of the first would take the second tenant's sessions and
+// parked packets with it — cross-tenant data loss, silently. Unlike the
+// equality-or-prefix test above there is no equality case to admit: the tenant is
+// never the LAST field of a client id, so a legal id can never be exactly this.
+func deviceClientIDTenantPrefix(instanceId, tenant string) (string, error) {
+	for _, f := range []struct{ name, value string }{
+		{"instance id", instanceId},
+		{"tenant", tenant},
+	} {
+		if err := core.ValidateToken(f.value); err != nil {
+			return "", fmt.Errorf("refusing to build an MQTT client id prefix for an invalid %s: %w", f.name, err)
+		}
+	}
+	return instanceId + deviceClientIDSeparator + tenant + deviceClientIDSeparator, nil
+}
+
+// deviceClientIDIsDeviceShaped reports whether clientID has the three-field shape the
+// callout admits, whatever instance or tenant it names.
+//
+// It exists so a purge can tell the two reasons it skipped an id apart: a device in
+// ANOTHER tenant (someone else's purge will reach it) from an id no tenant owns at all
+// (nobody's ever will). Only the second is worth reporting, and only as a count —
+// conflating them would put the edge agent's permanently-connected uplink session into
+// every tenant's ledger, where it would block every purge on the instance forever.
+func deviceClientIDIsDeviceShaped(clientID string) bool {
+	fields := strings.SplitN(clientID, deviceClientIDSeparator, 4)
+	if len(fields) < 3 {
+		return false
+	}
+	// The first three fields are the composed identity, and each must be a token the
+	// grammar admits — which is what stops "a:b:" or "::x" counting as shaped. A
+	// fourth field, if present, is the device's own discriminator and is deliberately
+	// unconstrained.
+	for _, f := range fields[:3] {
+		if core.ValidateToken(f) != nil {
+			return false
+		}
+	}
+	return true
 }

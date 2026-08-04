@@ -20,15 +20,23 @@ import (
 // the same split the telemetry store has, and for the same reason: a filter rebuilt by a
 // caller does not fail when a shape changes, it silently matches nothing.
 //
-// # 🔴 This store is NOT clean, and it is not supposed to be yet
+// # 🔑 This store defers nothing, and that is a claim rather than an omission
 //
-// Three things survive a subject purge, all named in the ledger on every pass
-// (messaging.TenantPurgeDeferrals): MQTT session state, whose streams key on a
-// device-chosen client id that is bound to no tenant; durable consumers, which a purge
-// does not remove and which on an interest-retention stream actively keep the deleted
-// tenant's messages alive; and the retained-message cache, which serves purged payloads
-// for up to two minutes after the purge. Until those are closed this store blocks
-// completion — deliberately, and visibly.
+// Three things used to survive a subject purge and were named in the ledger on every pass,
+// which is what kept this store from ever reporting clean and therefore kept any purge from
+// ever completing. Two are now erased — MQTT session state and the durable consumers that
+// outlive it, both reached by READING the gateway's own records rather than by filtering
+// subjects that never carried the tenant. The third, the retained-message cache, cannot be
+// erased at all (it is in-process in nats-server with no API) and is instead covered by the
+// settle window; messaging.RetainedCacheWindow spells out that argument and names what it
+// rests on.
+//
+// One thing the sweep can still find and not erase: a session record whose client id is not
+// device-shaped, which no tenant can be named for. It is COUNTED AND LOGGED rather than
+// deferred, and MqttGatewayPurgeResult.UnownedSessions carries the reasoning — the short
+// version is that such a record cannot be inherited by any device, so it is not the hazard
+// a deferral exists to hold a purge open for, and deferring on it would deadlock every
+// purge on any instance running an edge agent.
 type Broker struct {
 	conn       messaging.Connection
 	instanceId string
@@ -60,5 +68,5 @@ func (b *Broker) Erase(ctx context.Context, tenant string, _ time.Time) (Outcome
 		return Outcome{}, fmt.Errorf("purging the broker for %q: %w", tenant, err)
 	}
 
-	return Outcome{Rows: res.Messages, Deferred: messaging.TenantPurgeDeferrals()}, nil
+	return Outcome{Rows: res.Rows()}, nil
 }
