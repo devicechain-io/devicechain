@@ -77,6 +77,22 @@ var exemptions = []Exemption{
 		Reason: "instance-wide settings; no tenant dimension.",
 	},
 	{
+		Schema: "user-management", Name: "iam_tenant_purges", Class: ClassExempt,
+		Reason: "the DELETION RECORD, which has to outlive the tenant it records — erasing it would " +
+			"destroy the evidence that the erasure happened, and it is the only durable proof there " +
+			"is once the tenant row is gone. What it retains about the tenant is stated rather than " +
+			"waved at: the token, the purge epoch, a completion timestamp and a row count. No name, " +
+			"no contact, no configuration. The token is unavoidable — a record that cannot say WHICH " +
+			"tenant was erased is not a record.",
+	},
+	{
+		Schema: "user-management", Name: "iam_tenant_purge_stores", Class: ClassExempt,
+		Reason: "the deletion record's per-store ledger: one row per (purge, store) carrying a row " +
+			"count, a completion flag and the text of anything left behind. It names no tenant except " +
+			"through the record it belongs to, and it is the part an auditor reads to see WHAT was " +
+			"erased rather than merely that something was.",
+	},
+	{
 		Schema: "user-management", Name: "iam_tenants", Class: ClassExempt,
 		Reason: "the tenant's OWN row, and the one table the sweep must not touch. It holds the token " +
 			"reservation that stops a successor being created mid-purge, so it is removed by the " +

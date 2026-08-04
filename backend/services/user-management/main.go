@@ -20,9 +20,11 @@ import (
 	"github.com/devicechain-io/dc-user-management/graphql"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/devicechain-io/dc-user-management/identity"
+	"github.com/devicechain-io/dc-user-management/purge"
 	"github.com/devicechain-io/dc-user-management/schema"
 	"github.com/devicechain-io/dc-user-management/settings"
 	"github.com/nats-io/nats.go"
+	"github.com/rs/zerolog/log"
 )
 
 var (
@@ -35,6 +37,10 @@ var (
 	IdentityManager *identity.Manager
 	SettingsService *settings.Service
 	BlobStore       blob.Store
+
+	// PurgeCoordinator reclaims a deleted tenant's data and then releases its token
+	// (ADR-077). nil when disabled by a negative interval.
+	PurgeCoordinator *purge.Coordinator
 )
 
 func main() {
@@ -201,6 +207,23 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// (tenant access tokens), self-scoped to the caller's tenant.
 	graphql.RegisterBrandingLogoHandler(http.DefaultServeMux, BlobStore, IdentityManager, IdentityManager.Validator())
 
+	// The ADR-077 purge coordinator. Deleting a tenant marks its row `purging` and cuts
+	// access; this is what then erases its data across every store and removes the row,
+	// which is what releases its token for reuse. It follows the sweeper shape
+	// notification-management's retention sweep and event-management's anchor sweep
+	// already use — a lifecycle component owning a ticker goroutine, joined on stop. See
+	// the package doc for why the erasure is organised by STORE rather than by area.
+	if interval := Configuration.TenantPurgeInterval(); interval > 0 {
+		PurgeCoordinator = purge.NewCoordinator(Microservice, iam.NewStore(RdbManager), RdbManager,
+			purge.DefaultStores(RdbManager), interval, Configuration.TenantPurgeSettle(),
+			Configuration.TenantPurgeTokenHold(), core.NewNoOpLifecycleCallbacks())
+		if err := PurgeCoordinator.Initialize(ctx); err != nil {
+			return err
+		}
+	} else {
+		log.Info().Msg("Tenant purge coordinator disabled by configuration; deleted tenants stay purging")
+	}
+
 	return nil
 }
 
@@ -366,6 +389,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := NatsManager.Start(ctx); err != nil {
 		return err
 	}
+	if PurgeCoordinator != nil {
+		if err := PurgeCoordinator.Start(ctx); err != nil {
+			return err
+		}
+	}
 	return GraphQLManager.Start(ctx)
 }
 
@@ -373,6 +401,13 @@ func afterMicroserviceStarted(ctx context.Context) error {
 func beforeMicroserviceStopped(ctx context.Context) error {
 	if err := GraphQLManager.Stop(ctx); err != nil {
 		return err
+	}
+	// Before the database it sweeps through and the broker, in the reverse of the start
+	// order: its pass holds an advisory lock on a pooled connection.
+	if PurgeCoordinator != nil {
+		if err := PurgeCoordinator.Stop(ctx); err != nil {
+			return err
+		}
 	}
 	if err := NatsManager.Stop(ctx); err != nil {
 		return err
@@ -384,6 +419,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 func beforeMicroserviceTerminated(ctx context.Context) error {
 	if err := GraphQLManager.Terminate(ctx); err != nil {
 		return err
+	}
+	if PurgeCoordinator != nil {
+		if err := PurgeCoordinator.Terminate(ctx); err != nil {
+			return err
+		}
 	}
 	if err := NatsManager.Terminate(ctx); err != nil {
 		return err

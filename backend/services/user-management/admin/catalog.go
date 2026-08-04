@@ -373,11 +373,13 @@ func (s *Service) SetTenantEnabled(ctx context.Context, token string, enabled bo
 // DeleteTenant cuts a tenant's access and begins its purge (ADR-077).
 //
 // It no longer removes the row. The tenant moves to `purging`, disabled and stamped
-// with an epoch: access is gone immediately, its token is reserved forever, and the
-// reclamation of its rows across the other functional areas happens afterwards. What
-// this returns is therefore "the delete door was walked through", not "the data is
-// gone" — a distinction the console copy has to carry too, since the old wording
-// claimed an irreversible deletion while removing exactly one row.
+// with an epoch: access is gone immediately, its token is reserved FOR AS LONG AS THE
+// PURGE RUNS, and the reclamation of its rows across every store happens afterwards —
+// driven by the purge coordinator, which removes the row once every store has reported
+// clean, and that removal is what releases the token. What this returns is therefore
+// "the delete door was walked through", not "the data is gone" — a distinction the
+// console copy has to carry too, since the old wording claimed an irreversible deletion
+// while removing exactly one row.
 //
 // Idempotent in both directions: a missing tenant and an already-purging one both
 // return (false, nil), so a retry after a partly-failed teardown converges. Still

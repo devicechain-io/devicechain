@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/natsauth"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -69,9 +71,57 @@ type SeedOAuthClientConfig struct {
 	SecretHash   string
 }
 
+// TenantPurgeConfiguration tunes the ADR-077 purge coordinator: the loop that erases a
+// deleted tenant's data across every store and then releases its token.
+//
+// Both fields follow the platform convention — 0 means the default, a negative value
+// disables. Disabling is a real operational lever (a maintenance window where nothing
+// should be deleting rows) and it is safe by construction: the tenant row is the work
+// list, so a disabled coordinator leaves every purge pending rather than losing it, and
+// no token is released while it is off.
+type TenantPurgeConfiguration struct {
+	// IntervalSeconds is how often a pass runs. A pass is cheap when nothing is
+	// purging — one indexed query returning no rows.
+	IntervalSeconds int
+
+	// SettleSeconds is how long EVERY store must keep reporting clean before the purge
+	// completes and the token is released. It is not padding; the derivation of the
+	// default is on defaultTenantPurgeSettleSeconds below.
+	SettleSeconds int
+
+	// TokenHoldSeconds is the minimum age of the purge itself — measured from the cut,
+	// not from when the stores went quiet — before the token may be released.
+	//
+	// It answers a different question from SettleSeconds and neither substitutes for the
+	// other. Settling asks "has everything already written stopped arriving?". This asks
+	// "can anything still be admitted at all?", and the answer outlives the sweep by a
+	// long way: see defaultTenantPurgeTokenHoldSeconds.
+	TokenHoldSeconds int
+}
+
 type UserManagementConfiguration struct {
 	RdbConfiguration config.MicroserviceDatastoreConfiguration
 	Auth             AuthConfiguration
+	TenantPurge      TenantPurgeConfiguration
+}
+
+// TenantPurgeInterval is the coordinator's tick period, or 0 when the coordinator is
+// disabled.
+func (c *UserManagementConfiguration) TenantPurgeInterval() time.Duration {
+	if c.TenantPurge.IntervalSeconds < 0 {
+		return 0
+	}
+	return time.Duration(c.TenantPurge.IntervalSeconds) * time.Second
+}
+
+// TenantPurgeSettle is how long every store must stay clean before completion.
+func (c *UserManagementConfiguration) TenantPurgeSettle() time.Duration {
+	return time.Duration(c.TenantPurge.SettleSeconds) * time.Second
+}
+
+// TenantPurgeTokenHold is the minimum age of a purge before its token may be released.
+func (c *UserManagementConfiguration) TenantPurgeTokenHold() time.Duration {
+	return time.Duration(c.TenantPurge.TokenHoldSeconds) * time.Second
 }
 
 // Creates the default user management configuration
@@ -102,7 +152,60 @@ func (c *UserManagementConfiguration) ApplyDefaults() {
 	if c.Auth.SuperuserPassword == "" {
 		c.Auth.SuperuserPassword = "devicechain"
 	}
+	if c.TenantPurge.IntervalSeconds == 0 {
+		c.TenantPurge.IntervalSeconds = defaultTenantPurgeIntervalSeconds
+	}
+	if c.TenantPurge.SettleSeconds == 0 {
+		c.TenantPurge.SettleSeconds = defaultTenantPurgeSettleSeconds
+	}
+	if c.TenantPurge.TokenHoldSeconds == 0 {
+		c.TenantPurge.TokenHoldSeconds = defaultTenantPurgeTokenHoldSeconds
+	}
 }
+
+const (
+	// defaultTenantPurgeIntervalSeconds ticks the coordinator once a minute. A pass over
+	// nothing is one indexed query returning no rows, and a purge that has work to do
+	// wants to be prompt: an operator who just deleted a tenant is watching.
+	defaultTenantPurgeIntervalSeconds = 60
+
+	// defaultTenantPurgeSettleSeconds is five minutes: long enough for a write that was
+	// ALREADY ADMITTED when the fence closed to finish reaching storage, which is what a
+	// residual scan run straight after a sweep cannot see. The ingest fence's
+	// tenant-lifecycle cache TTL (governance.defaultCacheTTL, 60 seconds) bounds how long
+	// after the cut a straggler can still be let in; this leaves five times that for it
+	// to land. The asymmetry is the point: waiting too long reserves a token for a few
+	// extra minutes, not waiting long enough writes an erasure record that is false.
+	//
+	// 🔴 IT IS NOT THE BOUND ON WHEN THE TOKEN MAY BE RELEASED, and reading it that way
+	// is the misreading governance.TenantLifecycleResolver's own doc warns about: the 60s
+	// TTL bounds how long the gate keeps SAYING "active", not how long the device plane
+	// keeps moving. TokenHoldSeconds is that bound.
+	defaultTenantPurgeSettleSeconds = 300
+)
+
+// defaultTenantPurgeTokenHoldSeconds is how long a purged token stays reserved, and it is
+// tied to the broker credential's own lifetime rather than chosen.
+//
+// 🔴 THE FENCE DIES WITH THE TENANT ROW. Every ADR-077 device-plane gate resolves the
+// tenant's lifecycle through user-management, and an UNKNOWN tenant reads as not deleted —
+// the fail-open posture is deliberate and documented, because failing closed would make
+// user-management a hard dependency of device connectivity. So the instant completion
+// removes the row, all of those gates start admitting the released token again. Nothing
+// downstream is epoch-aware; the data plane knows only tokens.
+//
+// What can still present itself at that point is a session established BEFORE the cut. Its
+// credential rows were swept, so it cannot re-authenticate — but the broker arms its
+// force-close on the JWT's own expiry, so an already-connected device keeps its live
+// connection for up to one credential TTL. Release the token before that elapses and a
+// straggler's writes land under it, to be inherited by the successor: the exact defect
+// ADR-077 exists to close, re-entering through its own completion step.
+//
+// Hence the value, not a round number: natsauth.DefaultUserJWTTTL, read from the constant
+// so the two cannot drift apart silently. Lowering it trades erasure certainty for a token
+// that can be reused sooner, and that is a real operational choice — a deleted tenant's
+// name is unavailable for this long — but it is a choice about correctness, not tidiness.
+var defaultTenantPurgeTokenHoldSeconds = int(natsauth.DefaultUserJWTTTL / time.Second)
 
 // Validate enforces semantic constraints after decoding and defaulting, failing
 // the load closed on an invalid configuration (ADR-022 decision 1). It is
@@ -120,6 +223,21 @@ func (c *UserManagementConfiguration) Validate() error {
 	}
 	if c.Auth.RefreshTokenTtlSeconds <= 0 {
 		return fmt.Errorf("auth.refreshTokenTtlSeconds must be positive (got %d)", c.Auth.RefreshTokenTtlSeconds)
+	}
+	// A negative interval disables the coordinator, which is a supported lever. A
+	// negative SETTLE is not the same kind of knob: it would mean "complete the purge
+	// without ever having observed the stores clean", i.e. release the token and record
+	// an erasure on the strength of a delete returning no error. There is deliberately
+	// no configuration that buys that.
+	if c.TenantPurge.TokenHoldSeconds < 0 {
+		return fmt.Errorf("tenantPurge.tokenHoldSeconds must not be negative (got %d): it is what "+
+			"keeps a token reserved until no pre-deletion device session can still write under it",
+			c.TenantPurge.TokenHoldSeconds)
+	}
+	if c.TenantPurge.SettleSeconds < 0 {
+		return fmt.Errorf("tenantPurge.settleSeconds must not be negative (got %d): the window is what "+
+			"turns one clean residual scan into a sustained one, and a purge cannot complete without it",
+			c.TenantPurge.SettleSeconds)
 	}
 	if c.Auth.IssuerUrl != "" {
 		if err := validateIssuerUrl(c.Auth.IssuerUrl); err != nil {

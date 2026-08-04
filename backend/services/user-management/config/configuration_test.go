@@ -5,8 +5,10 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -181,4 +183,73 @@ func TestValidateSeedClients(t *testing.T) {
 	dup := NewUserManagementConfiguration()
 	dup.Auth.SeedClients = []SeedOAuthClientConfig{ok, ok}
 	assert.Error(t, dup.Validate(), "duplicate clientId rejected")
+}
+
+// The purge coordinator's defaults come from the load path, not just the constructor —
+// an instance whose config document says nothing about tenant purging still gets a
+// coordinator that runs (ADR-077). A deleted tenant that is never swept is the whole
+// defect this exists to fix, so "unset" must not mean "off".
+func TestTenantPurgeDefaultsFromAnEmptyDocument(t *testing.T) {
+	cfg := &UserManagementConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(``), cfg))
+	assert.Equal(t, 60, cfg.TenantPurge.IntervalSeconds)
+	assert.Equal(t, 300, cfg.TenantPurge.SettleSeconds)
+	assert.Equal(t, 60*time.Second, cfg.TenantPurgeInterval())
+	assert.Equal(t, 300*time.Second, cfg.TenantPurgeSettle())
+	assert.NoError(t, cfg.Validate())
+}
+
+// A negative interval disables the coordinator, following the platform's sweep
+// convention. main.go reads a zero duration as "do not construct it", so this is the
+// only value that turns it off — and it is safe, because the tenant row is the work
+// list: nothing is lost, the purges simply wait.
+func TestNegativeTenantPurgeIntervalDisablesTheCoordinator(t *testing.T) {
+	cfg := &UserManagementConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(`{"tenantPurge":{"intervalSeconds":-1}}`), cfg))
+	assert.Equal(t, time.Duration(0), cfg.TenantPurgeInterval())
+	assert.NoError(t, cfg.Validate())
+}
+
+// A configured interval survives defaulting rather than being overwritten by it.
+func TestTenantPurgeIntervalIsConfigurable(t *testing.T) {
+	cfg := &UserManagementConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(`{"tenantPurge":{"intervalSeconds":15,"settleSeconds":30}}`), cfg))
+	assert.Equal(t, 15*time.Second, cfg.TenantPurgeInterval())
+	assert.Equal(t, 30*time.Second, cfg.TenantPurgeSettle())
+	assert.NoError(t, cfg.Validate())
+}
+
+// A negative settle window is refused, and it is NOT the same knob as a negative
+// interval. Disabling the coordinator leaves every purge pending; a negative settle
+// would let one COMPLETE without ever having observed the stores clean — releasing the
+// token and recording an erasure on the strength of a delete that returned no error.
+func TestNegativeSettleWindowIsRefused(t *testing.T) {
+	cfg := NewUserManagementConfiguration()
+	cfg.TenantPurge.SettleSeconds = -1
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "settleSeconds")
+}
+
+// The token-hold default is TIED to the broker credential's lifetime, not chosen to look
+// round. Completion removes the tenant row, and every device-plane gate reads an unknown
+// tenant as not deleted — so releasing the token re-opens the door to any session
+// established before the delete, which survives until its credential expires. Reading the
+// constant means the two cannot drift apart silently.
+func TestTokenHoldDefaultTracksTheBrokerCredentialLifetime(t *testing.T) {
+	cfg := &UserManagementConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(``), cfg))
+	assert.Equal(t, natsauth.DefaultUserJWTTTL, cfg.TenantPurgeTokenHold())
+	assert.Greater(t, cfg.TenantPurgeTokenHold(), cfg.TenantPurgeSettle(),
+		"the hold answers a longer-lived question than settling and must not be the shorter of the two")
+}
+
+// A negative token hold is refused for the same reason a negative settle window is: it
+// would release the token while a pre-deletion session can still write under it.
+func TestNegativeTokenHoldIsRefused(t *testing.T) {
+	cfg := NewUserManagementConfiguration()
+	cfg.TenantPurge.TokenHoldSeconds = -1
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "tokenHoldSeconds")
 }

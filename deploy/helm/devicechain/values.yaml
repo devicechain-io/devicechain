@@ -645,6 +645,28 @@ ingress:
 functionalAreas:
   user-management:
     config: {}
+    # Tenant-purge coordinator. Deleting a tenant cuts its access immediately and
+    # marks its row; this loop then erases its data across every store and removes
+    # the row, which is what releases its token for reuse.
+    #   config:
+    #     tenantPurge:
+    #       intervalSeconds: 60   # pass cadence. A negative value disables the
+    #                             # coordinator — deletions then stay pending rather
+    #                             # than being lost, and no token is released.
+    #       settleSeconds: 300    # how long every store must keep reporting clean
+    #                             # before the purge completes. It covers a write that
+    #                             # was already admitted when the fence closed and is
+    #                             # still on its way to storage. Negative is rejected.
+    #       tokenHoldSeconds: 43200
+    #                             # how long the token stays reserved, measured from the
+    #                             # deletion rather than from when the stores went quiet.
+    #                             # It covers a device session established BEFORE the
+    #                             # delete, which keeps its broker credential until that
+    #                             # credential expires — and completion is what removes
+    #                             # the fence refusing it. Defaults to the credential
+    #                             # lifetime (12h). Lowering it lets a deleted tenant's
+    #                             # name be reused sooner and narrows the guarantee that
+    #                             # its successor inherits nothing. Negative is rejected.
   device-management:
     config:
       # disabled | optional | required. required (the hardened default, ADR-025)

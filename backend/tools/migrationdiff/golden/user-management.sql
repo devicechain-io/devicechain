@@ -3,6 +3,8 @@ ALTER SEQUENCE "user-management".iam_identities_id_seq OWNED BY "user-management
 ALTER SEQUENCE "user-management".iam_memberships_id_seq OWNED BY "user-management".iam_memberships.id;
 ALTER SEQUENCE "user-management".iam_oauth_clients_id_seq OWNED BY "user-management".iam_oauth_clients.id;
 ALTER SEQUENCE "user-management".iam_roles_id_seq OWNED BY "user-management".iam_roles.id;
+ALTER SEQUENCE "user-management".iam_tenant_purge_stores_id_seq OWNED BY "user-management".iam_tenant_purge_stores.id;
+ALTER SEQUENCE "user-management".iam_tenant_purges_id_seq OWNED BY "user-management".iam_tenant_purges.id;
 ALTER SEQUENCE "user-management".iam_tenant_tiers_id_seq OWNED BY "user-management".iam_tenant_tiers.id;
 ALTER SEQUENCE "user-management".iam_tenants_id_seq OWNED BY "user-management".iam_tenants.id;
 ALTER SEQUENCE "user-management".signing_keys_id_seq OWNED BY "user-management".signing_keys.id;
@@ -35,6 +37,14 @@ ALTER TABLE ONLY "user-management".iam_oauth_clients ALTER COLUMN id SET DEFAULT
 ALTER TABLE ONLY "user-management".iam_roles
  ADD CONSTRAINT iam_roles_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "user-management".iam_roles ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_roles_id_seq'::regclass);
+ALTER TABLE ONLY "user-management".iam_tenant_purge_stores
+ ADD CONSTRAINT fk_iam_tenant_purge_stores_tenant_purge FOREIGN KEY (tenant_purge_id) REFERENCES "user-management".iam_tenant_purges(id) ON DELETE CASCADE;
+ALTER TABLE ONLY "user-management".iam_tenant_purge_stores
+ ADD CONSTRAINT iam_tenant_purge_stores_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "user-management".iam_tenant_purge_stores ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_tenant_purge_stores_id_seq'::regclass);
+ALTER TABLE ONLY "user-management".iam_tenant_purges
+ ADD CONSTRAINT iam_tenant_purges_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "user-management".iam_tenant_purges ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_tenant_purges_id_seq'::regclass);
 ALTER TABLE ONLY "user-management".iam_tenant_tiers
  ADD CONSTRAINT iam_tenant_tiers_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "user-management".iam_tenant_tiers ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_tenant_tiers_id_seq'::regclass);
@@ -58,6 +68,7 @@ CREATE INDEX idx_iam_identities_deleted_at ON "user-management".iam_identities U
 CREATE INDEX idx_iam_memberships_deleted_at ON "user-management".iam_memberships USING btree (deleted_at);
 CREATE INDEX idx_iam_oauth_clients_deleted_at ON "user-management".iam_oauth_clients USING btree (deleted_at);
 CREATE INDEX idx_iam_roles_deleted_at ON "user-management".iam_roles USING btree (deleted_at);
+CREATE INDEX idx_iam_tenant_purges_completed_at ON "user-management".iam_tenant_purges USING btree (completed_at);
 CREATE INDEX idx_iam_tenant_tiers_deleted_at ON "user-management".iam_tenant_tiers USING btree (deleted_at);
 CREATE INDEX idx_iam_tenants_deleted_at ON "user-management".iam_tenants USING btree (deleted_at);
 CREATE INDEX idx_iam_tenants_purge_state ON "user-management".iam_tenants USING btree (purge_state);
@@ -88,6 +99,18 @@ CREATE SEQUENCE "user-management".iam_oauth_clients_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "user-management".iam_roles_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "user-management".iam_tenant_purge_stores_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "user-management".iam_tenant_purges_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -175,6 +198,28 @@ CREATE TABLE "user-management".iam_roles (
  token character varying(128) NOT NULL,
  authorities text
 );
+CREATE TABLE "user-management".iam_tenant_purge_stores (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ tenant_purge_id bigint NOT NULL,
+ store character varying(32) NOT NULL,
+ complete boolean DEFAULT false NOT NULL,
+ rows bigint DEFAULT 0 NOT NULL,
+ deferred text,
+ failure text,
+ attempted_at timestamp with time zone,
+ clean_since timestamp with time zone
+);
+CREATE TABLE "user-management".iam_tenant_purges (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ token character varying(128) NOT NULL,
+ epoch timestamp with time zone NOT NULL,
+ completed_at timestamp with time zone,
+ rows bigint DEFAULT 0 NOT NULL
+);
 CREATE TABLE "user-management".iam_tenant_tiers (
  id bigint NOT NULL,
  created_at timestamp with time zone,
@@ -241,3 +286,5 @@ CREATE UNIQUE INDEX idx_iam_oauth_clients_client_id ON "user-management".iam_oau
 CREATE UNIQUE INDEX idx_iam_role_scope_token ON "user-management".iam_roles USING btree (scope, token);
 CREATE UNIQUE INDEX idx_iam_tenant_tiers_token ON "user-management".iam_tenant_tiers USING btree (token);
 CREATE UNIQUE INDEX idx_iam_tenants_token ON "user-management".iam_tenants USING btree (token);
+CREATE UNIQUE INDEX idx_tenant_purge_stores_purge_store ON "user-management".iam_tenant_purge_stores USING btree (tenant_purge_id, store);
+CREATE UNIQUE INDEX idx_tenant_purges_token_epoch ON "user-management".iam_tenant_purges USING btree (token, epoch);
