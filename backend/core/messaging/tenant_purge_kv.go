@@ -151,6 +151,10 @@ func purgeBucket(ctx context.Context, js nats.JetStreamContext, bucket, tenant s
 // tenant followed by the separator. Both halves are load-bearing: without the first,
 // scoped-groups-exist is missed entirely; without the second, every other bucket is.
 //
+// DeviceClientIDMatches applies the same equality-or-prefix-plus-separator test to MQTT
+// client ids, guarding cross-device session takeover rather than cross-tenant data loss.
+// A third instance of the shape is worth extracting; two are worth cross-referencing.
+//
 // 🔑 THE SEPARATOR IS WHAT MAKES THIS SAFE AGAINST A PREFIX COLLISION. Tenants "acme" and
 // "acme-2" share a string prefix, and a naive HasPrefix(plain, tenant) would delete the
 // second's keys while purging the first — cross-tenant data loss, silently. "acme-2|x"

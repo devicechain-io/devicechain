@@ -52,7 +52,8 @@ Cuando una credencial autentica, el dispositivo resuelto es autoritativo: un tok
 La credencial anterior es la verificación **por evento**. Además, las **conexiones** MQTT/NATS se autentican en el propio broker:
 
 - Los listeners de MQTT y NATS son **TLS** — un dispositivo se conecta por TLS con la CA de la instancia.
-- Un **auth-callout** de NATS autentica la conexión y la vincula a subjects por inquilino, de modo que un dispositivo solo puede publicar o suscribirse dentro de su propio inquilino. Para un dispositivo `MQTT_BASIC`, la conexión presenta el usuario MQTT **`{tenant}:{credentialId}`** y la contraseña de la credencial — la misma credencial que autentica sus eventos — de modo que un dispositivo que no puede autenticarse ni siquiera puede conectarse.
+- Un **auth-callout** de NATS autentica la conexión y la vincula a los subjects de **ese único dispositivo** — no a los de su inquilino —, de modo que un dispositivo puede publicar sus propios eventos y leer sus propios comandos, y nada más. Para un dispositivo `MQTT_BASIC`, la conexión presenta el usuario MQTT **`{tenant}:{credentialId}`** y la contraseña de la credencial — la misma credencial que autentica sus eventos — de modo que un dispositivo que no puede autenticarse ni siquiera puede conectarse.
+- La conexión también debe presentar el **client id** de MQTT `{instanceId}:{tenant}:{deviceToken}`; cualquier otro valor es rechazado. El client id es la clave con la que el broker archiva la sesión de un dispositivo, así que dejarlo a elección del dispositivo permitiría que uno se apropiara de la sesión de otro.
 
 Ver [Conexión de un dispositivo](./connecting-a-device.md) para los detalles de transporte.
 

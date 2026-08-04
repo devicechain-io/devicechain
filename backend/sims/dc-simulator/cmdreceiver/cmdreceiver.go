@@ -50,6 +50,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/messaging"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/rs/zerolog/log"
 )
@@ -161,24 +162,21 @@ func (r *Receiver) Subscribe(ctx context.Context, deviceToken, credentialId stri
 		distinct:      make(map[string]int),
 	}
 
+	// The platform requires a device's MQTT client id to be its own — the auth callout
+	// refuses anything else — so build it from the shared definition rather than a
+	// literal. One session per device is all this receiver wants, so it takes the plain
+	// form rather than appending a discriminator.
+	clientID, err := messaging.DeviceClientID(r.instanceId, r.tenant, deviceToken)
+	if err != nil {
+		return fmt.Errorf("cmdreceiver cannot subscribe device %q: %w", deviceToken, err)
+	}
+
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(r.broker)
-	// The MQTT client id must be TENANT-QUALIFIED, not the bare device token. NATS
-	// keys a persistent MQTT session by (account, client id) and every tenant on an
-	// instance shares one NATS account, while device tokens are deterministic and
-	// identical across runs (harness-cmd-probe-001…). A bare token would make a fresh
-	// tenant's run resume the PRIOR tenant's persisted session — whose stored
-	// subscription names the old tenant's subject, now a permission violation under
-	// the new JWT — and let two runs fight via MQTT session takeover. Qualifying with
-	// the tenant makes each run's session id unique. The separator is a HYPHEN, not a
-	// dot: NATS embeds the client id in a "$MQTT.sess.<id>" subject and rejects a "."
-	// (or " "/"*"/">") in it at CONNECT parse — before the auth callout even runs — so
-	// a dot-separated id fails the connection outright. Tenant and token are both ADR-042
-	// tokens (hyphen-safe, dot-free), so a hyphen join stays a valid client id.
 	// CleanSession false + auto-reconnect keeps the session so a brief blip does not
 	// lose a QoS-1 command (the broker queues it) — the receiver is load-bearing, so
 	// it favors delivery.
-	opts.SetClientID(r.tenant + "-" + deviceToken)
+	opts.SetClientID(clientID)
 	opts.SetUsername(fmt.Sprintf("%s:%s", r.tenant, credentialId))
 	opts.SetPassword("")
 	opts.SetCleanSession(false)

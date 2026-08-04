@@ -5,12 +5,12 @@ package processor
 
 import (
 	"fmt"
-	"net"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
@@ -32,12 +32,7 @@ const testInstance = "inst-1"
 func startGateway(t *testing.T) (*nats.Conn, int) {
 	t.Helper()
 
-	// The gateway needs a fixed port: the server exposes no accessor for an
-	// ephemerally-bound MQTT listener the way it does for the client one.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err, "pick a free port")
-	mqttPort := ln.Addr().(*net.TCPAddr).Port
-	require.NoError(t, ln.Close())
+	mqttPort := dctest.FreeTCPPort(t)
 
 	srv, err := natsserver.NewServer(&natsserver.Options{
 		Host:       "127.0.0.1",
