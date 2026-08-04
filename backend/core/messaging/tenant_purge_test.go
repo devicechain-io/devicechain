@@ -139,21 +139,27 @@ func TestPurgingAnAbsentStreamIsNotAnError(t *testing.T) {
 	assert.Zero(t, res.Messages)
 }
 
-// TestAnEmptyTenantIsRefusedBeforeAnythingIsPurged is the guard that cannot be walked back.
+// TestAHostileTenantTokenIsRefusedBeforeAnythingIsPurged is the guard that cannot be
+// walked back.
 //
-// 🔴 A STREAM PURGE WITH NO SUBJECT FILTER DELETES EVERY TENANT'S MESSAGES, and JetStream
-// does it without complaint. An empty token is how that happens by accident — it builds a
-// filter of `inst1..>`, or worse gets trimmed away entirely — so it is refused before any
-// request is sent, and the bystander's messages are asserted still present afterwards
-// rather than the refusal being taken on trust.
-func TestAnEmptyTenantIsRefusedBeforeAnythingIsPurged(t *testing.T) {
+// 🔴 A PURGE THAT MATCHES TOO MUCH DELETES OTHER TENANTS' MESSAGES, and JetStream does it
+// without complaint or undo. The failure mode is not a filter that breaks — it is one that
+// WIDENS. So the token is refused before any filter is built, and the bystander's messages
+// are asserted still present afterwards rather than the refusal being taken on trust.
+func TestAHostileTenantTokenIsRefusedBeforeAnythingIsPurged(t *testing.T) {
 	nc, js := purgeRig(t)
 	suffix := streams.Suffixes()[0]
 	name := seedStream(t, js, suffix, purgeVictim, purgeBystander)
 
-	for _, empty := range []string{"", "   "} {
-		_, err := PurgeTenant(context.Background(), nc, purgeInstance, empty)
-		require.Errorf(t, err, "an empty tenant token must never reach a purge filter (%q)", empty)
+	// 🔴 EVERY ONE OF THESE WIDENS THE FILTER RATHER THAN BREAKING IT. `>` matches the rest
+	// of the subject, `*` matches a token, a `.` adds a level, and an empty token collapses
+	// the tenant level entirely — so each would purge messages belonging to tenants that
+	// were never deleted, irrecoverably. ADR-042's grammar stops them reaching storage;
+	// this asserts they are also stopped at the point of use, because "unreachable" is a
+	// claim about every write path that has ever existed.
+	for _, hostile := range []string{"", "   ", ">", "*", "acme.>", "acme.*", "acme evil"} {
+		_, err := PurgeTenant(context.Background(), nc, purgeInstance, hostile)
+		require.Errorf(t, err, "%q must never reach a purge filter", hostile)
 	}
 	_, err := PurgeTenant(context.Background(), nc, "", purgeVictim)
 	require.Error(t, err, "every subject is rooted at the instance id; without one nothing matches")
@@ -161,6 +167,12 @@ func TestAnEmptyTenantIsRefusedBeforeAnythingIsPurged(t *testing.T) {
 	assert.Equal(t, uint64(2), streamMsgs(t, js, name),
 		"the refusals must have happened BEFORE any request was sent — both tenants' messages "+
 			"are still there, which is what proves nothing was purged on the way to the error")
+
+	// And the control: a well-formed token is not caught by the same guard, or the guard
+	// would be refusing every purge and this test would pass over a store that never works.
+	res, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim)
+	require.NoError(t, err)
+	assert.NotZero(t, res.Messages, "a legitimate token must still purge")
 }
 
 // TestTheDeferralsNameWhatSurvives pins the sentences that go into the deletion record.

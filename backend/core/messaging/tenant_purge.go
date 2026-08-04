@@ -12,6 +12,8 @@ import (
 
 	nats "github.com/nats-io/nats.go"
 
+	"github.com/devicechain-io/dc-microservice/core"
+
 	"github.com/devicechain-io/dc-microservice/streams"
 )
 
@@ -77,9 +79,18 @@ var mqttTenantStreams = []struct{ stream, prefix string }{
 // for an erasure.
 func PurgeTenant(ctx context.Context, nc *nats.Conn, instanceId, tenant string) (TenantPurgeResult, error) {
 	res := TenantPurgeResult{PerStream: map[string]int64{}}
-	if strings.TrimSpace(tenant) == "" {
-		return res, fmt.Errorf("refusing to purge the broker for an empty tenant token: the filter " +
-			"would be built from it, and a purge with no filter deletes EVERY tenant's messages")
+	// 🔴 THE TOKEN IS VALIDATED HERE EVEN THOUGH IT CANNOT REACH STORAGE INVALID.
+	// ADR-042's grammar callback rejects a NATS metacharacter at create/update, so this
+	// should be unreachable — but "should be unreachable" is a claim about every write path
+	// that has ever existed, and what it is guarding is not recoverable. A token carrying a
+	// `>` or a `.` does not make this purge fail; it makes it match MORE, and a stream purge
+	// has no undo. The same check already guards the publish path (nats.go), which is the
+	// weaker consequence of the two. It also subsumes the empty case: an empty token is the
+	// most direct way to end up with no filter at all.
+	if err := core.ValidateToken(tenant); err != nil {
+		return res, fmt.Errorf("refusing to purge the broker for tenant %q: %w — a token that is "+
+			"not a plain identifier can widen the subject filter, and a widened purge deletes "+
+			"other tenants' messages irrecoverably", tenant, err)
 	}
 	if strings.TrimSpace(instanceId) == "" {
 		return res, fmt.Errorf("refusing to purge the broker with no instance id: every subject is " +
