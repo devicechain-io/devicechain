@@ -62,6 +62,19 @@ const (
 	// all is detected far sooner than this: the broker replies "no responders" to the
 	// request itself.
 	DetectPurgeWindow = 5 * time.Second
+
+	// detectPurgeQuiesce is how long the gather keeps listening AFTER the first reply.
+	//
+	// It exists because the full window is the wrong wait once something has answered. With
+	// no expected partitions there is nothing for a reply to satisfy, so without this the
+	// call always runs to the deadline — five seconds per pass, per purging tenant, on the
+	// coordinator's goroutine under the instance-wide advisory lock, on any instance whose
+	// engine has never committed a checkpoint. Every responder on a broker sees the same
+	// request at the same time, so a peer that has not answered within this of the first one
+	// is not merely slower; something is wrong with it. The consequence of guessing short is
+	// bounded and safe: the partition is reported as not having answered, which DEFERS the
+	// purge rather than completing it, and the next pass asks again.
+	detectPurgeQuiesce = 300 * time.Millisecond
 )
 
 // DetectPurgeSubject is the request subject for one instance's DETECT tenant eviction.
@@ -169,12 +182,14 @@ func PurgeTenantDetect(ctx context.Context, nc *nats.Conn, instanceId, tenant st
 		return res, fmt.Errorf("subscribing to the DETECT eviction reply inbox: %w", err)
 	}
 	defer func() { _ = sub.Unsubscribe() }()
-	// Flush before publishing so the inbox subscription is registered at the server first;
-	// otherwise a fast responder can reply into a subject the server is not yet routing.
-	if err := nc.Flush(); err != nil {
-		return res, fmt.Errorf("registering the DETECT eviction reply inbox: %w", err)
-	}
 
+	// No Flush between the subscribe and the publish. An earlier draft had one, justified by
+	// "otherwise a fast responder replies into a subject the server is not yet routing" —
+	// which is not how the client works: both calls append to the same connection write
+	// buffer under the same lock, so the server reads SUB before PUB regardless. nats.go's
+	// own request path does exactly this (subscribe, publish, wait) with no flush. What the
+	// flush actually bought was a broker round trip per pass, on the coordinator's goroutine,
+	// under the instance-wide advisory lock.
 	if err := nc.PublishRequest(DetectPurgeSubject(instanceId), inbox, payload); err != nil {
 		return res, fmt.Errorf("publishing the DETECT eviction request for %q: %w", tenant, err)
 	}
@@ -183,8 +198,23 @@ func PurgeTenantDetect(ctx context.Context, nc *nats.Conn, instanceId, tenant st
 	for _, p := range partitions {
 		awaited[p] = true
 	}
+	// 🔴 THE QUIESCENCE WINDOW IS WHAT STOPS THIS COSTING FIVE SECONDS EVERY PASS.
+	//
+	// The gather has no count on the wire to tell it when it has heard from everyone, so with
+	// no expected partitions there is nothing to satisfy and the loop can only end on the
+	// deadline. That is not a rare shape: a partition appears in the expected set only once
+	// it has committed a checkpoint, and an engine that has processed nothing never sets
+	// dirty and so never writes a row. On a quiet instance the responder answers in under a
+	// millisecond and the call then blocks for the rest of DetectPurgeWindow — every pass,
+	// per purging tenant, holding the advisory lock the whole time.
+	//
+	// So once ANY reply has arrived, stop waiting on the full window and give stragglers a
+	// short one instead. It is a heuristic, and it is bounded in the direction that matters:
+	// a partition that misses it is reported as not having answered, which DEFERS the purge
+	// rather than completing it, and the next pass asks again.
+	gather := ctx
 	for {
-		msg, err := sub.NextMsgWithContext(ctx)
+		msg, err := sub.NextMsgWithContext(gather)
 		if errors.Is(err, nats.ErrNoResponders) {
 			// 🔴 THIS ARRIVES AS AN ERROR, NOT AS A MESSAGE, and the difference is the whole
 			// value of separating it from the branch below. nats-server answers a request with
@@ -220,11 +250,20 @@ func PurgeTenantDetect(ctx context.Context, nc *nats.Conn, instanceId, tenant st
 		// would carry "this tenant's windows are still in its checkpoint" about a partition
 		// that had just erased them. Deterministic, self-repeating, and clearable only by
 		// noticing a pod that looks healthy.
-		if reply.Error == "" {
+		if reply.Error == "" && awaited[reply.PartitionId] {
 			delete(awaited, reply.PartitionId)
+			if len(awaited) == 0 {
+				return res, nil // the last partition we were waiting on has committed
+			}
 		}
-		if len(partitions) > 0 && len(awaited) == 0 {
-			return res, nil
+		if gather == ctx {
+			// First reply: something is alive and answering, so drop from the full window to
+			// the straggler window. Derived from ctx rather than the caller's context, so it
+			// can only ever shorten the wait — never outlive DetectPurgeWindow, and still
+			// cancelled the moment the caller is.
+			quiesced, cancelQuiesce := context.WithTimeout(ctx, detectPurgeQuiesce)
+			defer cancelQuiesce()
+			gather = quiesced
 		}
 	}
 }

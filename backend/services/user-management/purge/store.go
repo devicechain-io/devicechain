@@ -5,11 +5,11 @@
 //
 // # What the unit of erasure is, and why it is not the functional area
 //
-// A tenant's data lives in STORAGE SYSTEMS, not in services. The platform has five —
-// the relational database, the telemetry database, the broker, the key-value store and
-// the object store — plus state that is only ever in a running process. A functional
-// area is a code boundary; it is not a place data is, and several areas share one
-// storage system while one area (event-management) is alone in another.
+// A tenant's data lives in STORAGE SYSTEMS, not in services: the relational database, the
+// telemetry database, the broker, the key-value store, the object store, and the DETECT
+// engine's own memory. A functional area is a code boundary; it is not a place data is,
+// and several areas share one storage system while one area (event-management) is alone
+// in another.
 //
 // So the erasure is organised by store. That is a deliberate refinement of ADR-077
 // decision 5, which had each AREA reconcile its own rows, and it follows that ADR's own
@@ -27,12 +27,24 @@
 // (core/tenantpurge), and a store that is registered but not yet built reports what it
 // is still holding on every single pass.
 //
-// # What is still a participant
+// # The store that is a running process
 //
-// State no SQL predicate can reach — the DETECT engine's in-process windows and timers,
-// checkpointed as one opaque blob per partition — cannot be erased from here at any
-// price. That is carried as a deferral by the relational store's own plan, which is
-// where it becomes visible, and it is what stops a purge completing today.
+// One of the six is not a database, and it is the reason the Store contract asks for an
+// outcome rather than a delete. The DETECT engine's windows, timers and dead-man armings
+// live in one process's memory and are checkpointed as a single opaque blob per partition
+// holding every tenant at once, with tenancy carried INSIDE it. No predicate reaches that,
+// and deleting the row would not be an erasure but a corruption — it is the checkpoint
+// every other tenant's replay-correct recovery depends on. So the `detect` store asks the
+// process that owns the state to evict the tenant and re-checkpoint, and the row is
+// rewritten without it.
+//
+// That table is classified ClassExternal rather than swept, which is a claim the sweep
+// cannot check on its own — core cannot see this package. It is checked from this side
+// instead: TestExternalTablesNameARegisteredStore asserts the store the registry names is
+// one of the stores actually registered below. The check is narrower than it sounds, and
+// worth being exact about — it proves the NAME exists, not that the store still covers
+// that table — but the failure it closes is the one that would otherwise be silent, since
+// an unswept external table completes every purge without complaint.
 package purge
 
 import (

@@ -326,3 +326,35 @@ func TestAFailedReplyDoesNotSatisfyItsPartition(t *testing.T) {
 	require.NotZerof(t, cleanReplies, "the gather returned on the failed reply and never read "+
 		"the committed one: %+v", res.Replies)
 }
+
+// TestAGatherWithNoExpectedPartitionsStillEndsPromptly is the regression for a stall that
+// no other test in this file could see.
+//
+// 🔴 EVERY OTHER TEST HERE SUPPLIES EITHER AN EXPECTED PARTITION OR A SHORT CALLER DEADLINE,
+// and both hide this. With neither, the gather has nothing to satisfy and can only end on
+// DetectPurgeWindow — so a responder that answers in under a millisecond still costs five
+// seconds, every pass, per purging tenant, on the coordinator's single goroutine while it
+// holds the instance-wide advisory lock.
+//
+// It is not an unusual shape. A partition joins the expected set only once it has committed
+// a checkpoint, and an engine that has processed nothing never marks itself dirty and so
+// never writes a row — which is the steady state of a quiet instance that nonetheless has a
+// DETECT engine running and subscribed.
+//
+// The bound asserted here is deliberately much looser than the quiescence window itself:
+// the property is "this does not wait out the full window", not "it waits exactly 300ms",
+// so tuning the constant does not require touching the test.
+func TestAGatherWithNoExpectedPartitionsStillEndsPromptly(t *testing.T) {
+	nc := detectRig(t)
+	respondAs(t, nc, DetectPurgeReply{PartitionId: "never-checkpointed", Evicted: 2})
+
+	start := time.Now()
+	res, err := PurgeTenantDetect(context.Background(), nc, detectInstance, "acme", nil)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	require.Len(t, res.Replies, 1, "the responder's reply was not collected")
+	assert.Lessf(t, elapsed, DetectPurgeWindow/2, "a gather with no expected partitions took %s "+
+		"against a responder that answered immediately — it waited out the whole window, which "+
+		"the coordinator pays on every pass while holding the advisory lock", elapsed)
+}

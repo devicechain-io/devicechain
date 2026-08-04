@@ -84,12 +84,11 @@ const (
 	// and leaving it there once a store does would block every purge forever over
 	// data that is in fact gone.
 	//
-	// What separates it from an exemption is that the claim is CHECKABLE: the entry
-	// names a store, the store is registered with the coordinator, and that store
-	// reports its own outcome on every pass. So an external table is not skipped —
-	// it is erased somewhere else and accounted for there. The name is a claim of
-	// its own; see ExternalStores, which is what lets the coordinator's side of the
-	// tree assert that every named store actually exists.
+	// What separates it from an exemption is that the claim has something behind it: the
+	// entry names a store, that store is registered with the coordinator, and it reports
+	// its own outcome on every pass. So an external table is not skipped — it is erased
+	// somewhere else and accounted for there. See ExternalStores, which is what lets the
+	// coordinator's side of the tree assert every named store actually exists.
 	ClassExternal
 )
 

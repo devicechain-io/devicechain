@@ -169,6 +169,7 @@ func newEvictionRig(t *testing.T, store *model.SnapshotStore, tenants ...string)
 	if err := rp.restore(ctx); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
+
 	// One heartbeat per tenant arms that tenant's absence timer: real engine state, minted
 	// through the real fan-out, keyed on an id carrying the tenant.
 	for i, tenant := range tenants {
@@ -551,6 +552,7 @@ func TestTheConstructorWiresTheEvictionChannel(t *testing.T) {
 	if err := rp.restore(ctx); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
+
 	rp.readerWG.Add(1)
 	go rp.run()
 	t.Cleanup(func() { rp.procCancel(); rp.readerWG.Wait() })
@@ -1043,5 +1045,83 @@ func TestEvictingOnlyNonDurableStateDoesNotForceACheckpoint(t *testing.T) {
 	}
 	if evicted != 1 {
 		t.Fatalf("the eviction reported %d entries, want the single attribute recheck", evicted)
+	}
+}
+
+// TestEvictionSweepsTheArmerAndTheAttributeView closes a seam that was covered by nothing.
+//
+// Both sweeps are nil-guarded in applyTenantPurge, and before this test BOTH lines could be
+// deleted with the whole file still green: the units are covered in isolation
+// (internal/runtime/tenant_eviction_test.go) and the wiring that reaches them was not. That
+// is the healthy-neighbour shape — unit-green, seam-blind.
+//
+// 🔴 THE FIRST DRAFT OF THIS TEST DID NOT CLOSE IT EITHER, and the way it failed is the
+// point. It asserted that a SECOND eviction reports zero, which is satisfied whether or not
+// the armer was ever swept: nothing else in the rig counts that tenant's armer entries, so
+// zero is the answer either way. Measured, not assumed — deleting the armer sweep left it
+// green. The oracle has to be a count that the sweep alone can produce.
+//
+// So each view is populated for a tenant the rig gave no rules and no engine state, and the
+// eviction's count IS that view's contribution: 3 for the armer (one active version, one
+// roster entry, one fleet member) and 1 for the attribute view.
+//
+// What is at stake is not durability — both are re-derived from durable projections at
+// startup — but INHERITANCE, which is what this whole epic is about. Their keys are
+// (tenant, device token) pairs, so a successor created with the reused token would find the
+// predecessor's roster membership and attribute values already in memory: a device that
+// never reported would inherit a dead-man arming, and a dynamic threshold would resolve
+// from a value the new tenant never set.
+func TestEvictionSweepsTheArmerAndTheAttributeView(t *testing.T) {
+	rig := newEvictionRig(t, newTestStore(t), "globex")
+	rp := rig.rp
+
+	// 🔴 WIRED HERE RATHER THAN IN THE RIG. publishPending asks the armer whether an absence
+	// detection is still live, so an EMPTY armer declares every one of them stale and
+	// suppresses it — which silently emptied another test's oracle when this was first put in
+	// the shared rig. An armer has to be populated consistently with the engine state around
+	// it, so it belongs to the test that populates it.
+	rp.armer = runtime.NewDeadmanArmer(rp.registry, rp.engine)
+	rp.attrView = runtime.NewDeviceAttributeView()
+
+	// Both tenants under the SAME device token, so a sweep keyed on the token rather than on
+	// (tenant, token) takes the bystander with it.
+	for _, tenant := range []string{"acme", "globex"} {
+		rp.armer.ApplyActiveVersion(runtime.ActiveEntry{
+			Tenant: tenant, ProfileToken: "prof", ActiveVersionToken: "prof@1",
+			PublishedAt: testBase,
+		})
+		rp.armer.ApplyDeviceMembership(runtime.RosterEntry{
+			Tenant: tenant, DeviceToken: "d1", ProfileToken: "prof", ExpectedSince: testBase,
+		}, true)
+		rp.attrView.ReplaceDevice(tenant, "d1", []runtime.AttrEntry{
+			{Tenant: tenant, DeviceToken: "d1", Scope: runtime.AttrScopeServer, Key: "max", Value: 42},
+		})
+	}
+	if rp.attrView.For("acme", "d1") == nil || rp.attrView.For("globex", "d1") == nil {
+		t.Fatal("test bug: the attribute view holds nothing, so the assertions below are vacuous")
+	}
+	rig.start(t)
+
+	// acme has no rules and no engine state in this rig, so the count is exactly the two
+	// views: 3 armer entries + 1 attribute-view entry.
+	const want = 4
+	evicted, err := rig.evict(t, "acme")
+	if err != nil {
+		t.Fatalf("EvictTenant: %v", err)
+	}
+	if evicted != want {
+		t.Fatalf("the eviction reported %d entries, want %d — acme holds nothing else here, so "+
+			"this count is exactly the dead-man armer's three views plus the attribute view. A "+
+			"short count means one of those sweeps did not run", evicted, want)
+	}
+	rig.stop()
+
+	if got := rp.attrView.For("acme", "d1"); got != nil {
+		t.Fatalf("the evicted tenant's attribute values survived: %v — a successor reusing the "+
+			"token would resolve a dynamic threshold from a value it never set", got)
+	}
+	if got := rp.attrView.For("globex", "d1"); got == nil {
+		t.Fatal("the eviction took the surviving tenant's attribute values too, so its dynamic " +
+			"thresholds silently stop resolving")
 	}
 }

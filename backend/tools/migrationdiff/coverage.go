@@ -108,10 +108,10 @@ Every table in an instance database must be one of:
 If the table above holds tenant data, give it a tenant column. If it does not, add a
 ClassExempt entry naming why. If it holds tenant data that some OTHER mechanism erases —
 because no SQL predicate can reach inside it — add it as ClassExternal and name the purge
-store that does; the store's own test asserts the name is registered, so the claim is
-checked rather than taken. Only if it holds tenant data that NOTHING erases is it
-ClassDeferred, which keeps it visible in every purge result and stops any purge on this
-instance completing until it is closed`, len(unclassified), strings.Join(names, "\n  "))
+store that does; a test on the coordinator's side asserts that store is registered, so the
+claim has a failing test behind it rather than being taken on trust. Only if it holds
+tenant data that NOTHING erases is it ClassDeferred, which keeps it visible in every purge
+result and stops any purge on this instance completing until it is closed`, len(unclassified), strings.Join(names, "\n  "))
 }
 
 // assertPlanIsPopulated fails unless every migrated area contributed tables to the plan.

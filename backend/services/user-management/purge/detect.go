@@ -6,9 +6,8 @@ package purge
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -19,21 +18,6 @@ import (
 // detectSchema is the functional area that owns the DETECT engine. Its presence in the
 // catalog is what tells this store whether the area has ever run on this instance.
 const detectSchema = "event-processing"
-
-// detectPartitionsQuery lists the partitions that hold a durable checkpoint.
-//
-// It reads another area's table directly, which the purge does elsewhere too — the
-// relational sweep deletes from every area's tables in this same database. What it must
-// never do is read it through a MODEL: the shape belongs to event-processing, and one
-// column of one table is a far smaller thing to depend on than a struct that area is free
-// to change.
-//
-// The names it does depend on are pinned by TestTheDetectPartitionQueryRunsOnTheRealSchema
-// in the migration drill, which executes this exact string against a database with every
-// area's migrations applied. That test exists because the unit tests CANNOT do it: they
-// build a SQLite twin from this store's own belief about the shape, so a renamed column
-// would agree with itself all the way to a live purge.
-const detectPartitionsQuery = `SELECT partition_id FROM "event-processing"."detect_snapshots"`
 
 // Detect erases a tenant from the DETECT engine's in-process state (ADR-077 slice 2c).
 //
@@ -142,10 +126,9 @@ func (d *Detect) Erase(ctx context.Context, tenant string, _ time.Time) (Outcome
 // state no row names yet, and its first eviction writes the row that names it.
 func (d *Detect) checkpointedPartitions(ctx context.Context) ([]string, error) {
 	var ids []string
-	if err := d.db.DB(ctx).Raw(detectPartitionsQuery).Scan(&ids).Error; err != nil {
+	if err := d.db.DB(ctx).Raw(tenantpurge.DetectPartitionsQuery).Scan(&ids).Error; err != nil {
 		return nil, fmt.Errorf("listing the DETECT partitions holding a checkpoint: %w", err)
 	}
-	sort.Strings(ids) // stable ledger text across passes
 	return ids, nil
 }
 
@@ -175,16 +158,17 @@ func (d *Detect) outcome(tenant string, partitions []string, res messaging.Detec
 	}
 
 	// Every partition that has durable state, plus any that answered only with a failure.
-	held := append([]string{}, partitions...)
-	for id := range failed {
-		if !slices.Contains(held, id) {
-			held = append(held, id)
-		}
+	// Sorted so a ledger sentence reads the same on every pass.
+	held := map[string]bool{}
+	for _, id := range partitions {
+		held[id] = true
 	}
-	sort.Strings(held)
+	for id := range failed {
+		held[id] = true
+	}
 
 	var silent []string
-	for _, id := range held {
+	for _, id := range slices.Sorted(maps.Keys(held)) {
 		if clean[id] {
 			continue
 		}
@@ -198,10 +182,9 @@ func (d *Detect) outcome(tenant string, partitions []string, res messaging.Detec
 	}
 	if len(silent) > 0 {
 		out.Deferred = append(out.Deferred, fmt.Sprintf("no DETECT engine answered for partition(s) "+
-			"%s, whose checkpoint holds this tenant's open detection windows and timers. The engine "+
+			"%q, whose checkpoint holds this tenant's open detection windows and timers. The engine "+
 			"is not running, or did not answer within %s. Nothing else can erase this state; start "+
-			"event-processing and the next pass will.",
-			strings.Join(quoteAll(silent), ", "), messaging.DetectPurgeWindow))
+			"event-processing and the next pass will.", silent, messaging.DetectPurgeWindow))
 	}
 
 	// 🔴 SOMETHING IS SUBSCRIBED AND NOTHING ANSWERED. No partition to name, so neither branch
@@ -211,7 +194,7 @@ func (d *Detect) outcome(tenant string, partitions []string, res messaging.Detec
 	// "nobody said anything" and "there is nothing here" are opposite facts and the code
 	// cannot tell them apart. Deferring is the answer that does not claim what it does not
 	// know; the next pass clears it as soon as the engine answers once.
-	if !res.NoResponders && len(res.Replies) == 0 && len(held) == 0 {
+	if !res.NoResponders && len(res.Replies) == 0 && len(partitions) == 0 {
 		out.Deferred = append(out.Deferred, fmt.Sprintf("a DETECT engine is subscribed on this "+
 			"instance but none answered within %s, and none has committed a checkpoint, so there "+
 			"is no partition to name. An engine that is running holds this tenant's detection "+
@@ -228,15 +211,6 @@ func (d *Detect) outcome(tenant string, partitions []string, res messaging.Detec
 		log.Warn().Str("tenant", tenant).Str("store", StoreDetect).
 			Msg("No DETECT engine is subscribed on this instance and none has committed a " +
 				"checkpoint, so there is no engine state this store can reach; reporting clean.")
-	}
-	return out
-}
-
-// quoteAll renders partition ids for a ledger sentence.
-func quoteAll(ids []string) []string {
-	out := make([]string, 0, len(ids))
-	for _, id := range ids {
-		out = append(out, fmt.Sprintf("%q", id))
 	}
 	return out
 }

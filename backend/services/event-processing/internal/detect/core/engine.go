@@ -381,12 +381,6 @@ func (e *Engine) RemoveMatching(match func(ruleID string) bool) int {
 	return n
 }
 
-// deleteSeriesKeys removes every entry of a SeriesKey-keyed state map whose rule
-// component equals rule — the exact-id form of the per-map primitive.
-func deleteSeriesKeys[V any](m map[SeriesKey]V, rule string) {
-	deleteSeriesKeysMatching(m, func(id string) bool { return id == rule })
-}
-
 // deleteSeriesKeysMatching removes every entry of a SeriesKey-keyed state map whose rule
 // component the predicate selects, returning how many it removed — the per-map primitive
 // RemoveMatching's GC sweep is built from.

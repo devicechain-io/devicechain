@@ -379,15 +379,17 @@ func TestSchemaExistenceIsAnsweredByTheRealCatalog(t *testing.T) {
 // actually applied can say whether that belief is true, and this is the one test that has
 // one.
 //
-// The query is duplicated here as a literal rather than imported: the drill is a maintainer
-// tool in its own module, and importing a service's purge package to reach an unexported
-// constant would invert the dependency for one string. A divergence shows up as this test
-// passing while the store's own statement fails at a purge — so the literal below is
-// asserted to be what the store holds, by the store's comment naming this test back.
+// 🔴 THE QUERY IS IMPORTED, NOT COPIED, and an earlier draft got that wrong on a
+// justification that does not survive checking: it said importing the owning package "would
+// invert the dependency for one string". This module's go.mod already requires
+// dc-user-management, and registry.go already imports both dc-user-management/schema and
+// dc-event-processing/model — there is no dependency to invert. A copy would make the only
+// test that proves the statement runs against a real schema prove it about a DIFFERENT
+// string, kept in step by a comment.
 func TestTheDetectPartitionQueryRunsOnTheRealSchema(t *testing.T) {
 	db, _ := drillConn(t)
 
-	const query = `SELECT partition_id FROM "event-processing"."detect_snapshots"`
+	query := tenantpurge.DetectPartitionsQuery
 	var ids []string
 	require.NoErrorf(t, db.Raw(query).Scan(&ids).Error, "the DETECT partition query does not run "+
 		"against a real migrated schema: %s", query)

@@ -39,8 +39,10 @@ type Exemption struct {
 //   - ClassExempt — it holds no data belonging to any single tenant.
 //   - ClassExternal — it holds this tenant's data, but a named purge store erases it by
 //     a route this sweep cannot take. The store name is not decoration: the coordinator's
-//     side asserts it is registered (see ExternalStores), which is the only thing keeping
-//     "handled elsewhere" from being unfalsifiable.
+//     side asserts that store is registered (see ExternalStores). Be exact about how far
+//     that goes — it establishes that the NAMED store exists, not that it still covers
+//     this table — but it is what turns "handled elsewhere" from an assertion into
+//     something with a failing test behind it.
 //   - ClassDeferred — it holds this tenant's data and NOTHING erases it. The reason must
 //     name what survives, and every purge on the instance stops completing until it does.
 //
@@ -145,6 +147,21 @@ var exemptions = []Exemption{
 			"without it rather than deleted.",
 	},
 }
+
+// DetectPartitionsQuery lists the DETECT partitions that hold a durable checkpoint.
+//
+// It lives here, beside the exemption entry for the same table, because those are two facts
+// about ONE table and they have to move together: the entry says detect_snapshots is erased
+// out of band, and this is the statement the store erasing it uses to find out who owes an
+// answer. The alternative is a literal in the store and a copy of it in the test that proves
+// the literal works — which proves it about the copy.
+//
+// It is a raw statement rather than a model read on purpose. The shape belongs to
+// event-processing; one column of one table is a far smaller thing for another area to
+// depend on than a struct that area is free to change, and the dependency is pinned by
+// TestTheDetectPartitionQueryRunsOnTheRealSchema in the migration drill, which executes it
+// against a database with every area's migrations applied.
+const DetectPartitionsQuery = `SELECT partition_id FROM "event-processing"."detect_snapshots"`
 
 // ExternalStores returns the purge-store names the registry's ClassExternal entries
 // claim their tables are erased by, deduplicated.

@@ -8,12 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	nats "github.com/nats-io/nats.go"
 	"github.com/rs/zerolog/log"
+
+	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 )
 
 // Evicting one tenant from the running DETECT engine (ADR-077 slice 2c).
@@ -126,19 +127,24 @@ func (rp *ResolvedEventsProcessor) applyTenantPurge(tenant string) tenantPurgeRe
 	for _, id := range removed {
 		byID[id] = struct{}{}
 	}
-	prefix := tenant + "/"
 	// victim selects a rule id belonging to this tenant on EITHER axis, and it is applied to
 	// the engine and to the loop's buffers alike — see dropTenantBuffers for why the buffers
-	// cannot use the prefix on its own.
+	// cannot use the id alone.
+	//
+	// 🔴 IT ASKS runtime.RuleTenant RATHER THAN SPELLING THE SEPARATOR HERE. The parse is
+	// anchored by construction — the first segment of the id is the tenant, whole — which is
+	// what rules out both ways a hand-written test goes wrong: a substring match takes
+	// "other/acme@1/…" along with "acme/…", and a prefix with no separator takes "acme-2/…".
+	// More to the point, "/" is that package's own unexported constant, and a copy of it here
+	// would keep matching the old shape if it ever moved — an eviction that erases nothing
+	// while reporting a number. The same question is already asked through RuleTenant twice
+	// more in this changeset; this is the third caller, not a special case.
 	victim := func(ruleID string) bool {
 		if _, ok := byID[ruleID]; ok {
 			return true
 		}
-		// 🔴 HasPrefix on "{tenant}/", never Contains and never a bare token compare. A
-		// substring test would evict "other-tenant/acme/…" along with "acme/…"; a prefix with
-		// no separator would evict "acme-2/…" along with "acme/…". Both leave one tenant's
-		// detection silently dead because another was deleted.
-		return strings.HasPrefix(ruleID, prefix)
+		idTenant, ok := runtime.RuleTenant(ruleID)
+		return ok && idTenant == tenant
 	}
 
 	// 🔴 ONLY THE ENGINE'S COUNT MAY DIRTY THE CHECKPOINT, and separating it from the total
@@ -149,9 +155,12 @@ func (rp *ResolvedEventsProcessor) applyTenantPurge(tenant string) tenantPurgeRe
 	// snapshot rewrite for state a restart discards anyway — and, against a store that cannot
 	// commit, would report "a restart would restore what was removed" about state a restart
 	// provably clears.
-	durable := int64(rp.engine.RemoveMatching(victim))
+	n := int64(len(removed))
+	if evicted := rp.engine.RemoveMatching(victim); evicted > 0 {
+		rp.dirty = true
+		n += int64(evicted)
+	}
 
-	n := durable + int64(len(removed))
 	if rp.armer != nil {
 		n += int64(rp.armer.RemoveTenant(tenant))
 	}
@@ -166,12 +175,6 @@ func (rp *ResolvedEventsProcessor) applyTenantPurge(tenant string) tenantPurgeRe
 		n += int64(rp.publisher.RemoveTenant(tenant))
 	}
 	n += rp.dropTenantBuffers(victim, tenant)
-
-	if durable > 0 {
-		// The eviction changed serializable state, so it MUST be checkpointed — the same
-		// reason applyRuleUpdate marks a rule GC dirty, and here with a caller waiting.
-		rp.dirty = true
-	}
 
 	// 🔴 A CLEAN ANSWER REQUIRES A CLEAN CHECKPOINT, NOT A CLEAN ENGINE — including when this
 	// pass evicted nothing at all.
@@ -285,12 +288,22 @@ func NewTenantPurgeResponder(conn *nats.Conn, instanceId string,
 // failure being invisible precisely because the reply it did get looked complete.
 func (r *TenantPurgeResponder) Start() error {
 	subject := messaging.DetectPurgeSubject(r.instanceId)
-	sub, err := r.conn.Subscribe(subject, func(msg *nats.Msg) {
-		// Handled off the callback goroutine: an eviction takes a database write, and
-		// nats.go dispatches a subscription's callbacks serially, so doing it inline would
-		// block the connection's delivery for this subject.
-		go r.handle(msg)
-	})
+	// 🔴 HANDLED INLINE, NOT ON A GOROUTINE PER REQUEST, and the serial dispatch that costs
+	// is the bound this needs rather than a limitation to work around.
+	//
+	// An earlier draft spawned one, copying the auth callout — where concurrency is the whole
+	// point, because device connects arrive in storms and each is an independent credential
+	// lookup. Nothing here is independent. Every request contends for the SAME single-writer
+	// loop, and each one that reaches it runs a sweep over the whole instance's state plus a
+	// synchronous snapshot and database commit, with detection stopped for every tenant
+	// meanwhile. Spawning let anything that can reach this subject turn a burst of publishes
+	// into that many live goroutines and that many serial checkpoints.
+	//
+	// One is all that is ever legitimately in flight: the coordinator holds an instance-wide
+	// advisory lock for the whole of a purge pass. So nats.go's serial per-subscription
+	// dispatch is exactly the right shape — a second request waits for the first, which is
+	// what it would do anyway at the channel.
+	sub, err := r.conn.Subscribe(subject, r.handle)
 	if err != nil {
 		return fmt.Errorf("subscribing to the DETECT tenant-eviction subject %q: %w", subject, err)
 	}
