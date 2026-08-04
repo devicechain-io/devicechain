@@ -119,7 +119,7 @@ func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// body, so a tenant over its limit is shed with a 429 having spent no decode
 	// CPU. Advise a Retry-After (RFC 6585 §4) so a well-behaved client backs off
 	// rather than immediately re-hitting the gate.
-	if es.allow != nil && !es.allow(es.Id, tenant, time.Time{}) {
+	if es.allow != nil && !es.allow(es.Id, tenant, time.Time{}, false) {
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "ingest rate limit exceeded for tenant", http.StatusTooManyRequests)
 		return

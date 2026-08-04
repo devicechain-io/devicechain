@@ -228,7 +228,7 @@ func (es *MqttEventSource) onMessage(client mqtt.Client, msg mqtt.Message) {
 	// its limit sheds here, spending no decode CPU. MQTT has no per-message
 	// acknowledgement back to the publisher, so an over-limit message is simply
 	// dropped (the HTTP path returns 429 instead).
-	if es.allow != nil && !es.allow(es.Id, tenant, time.Time{}) {
+	if es.allow != nil && !es.allow(es.Id, tenant, time.Time{}, false) {
 		return
 	}
 

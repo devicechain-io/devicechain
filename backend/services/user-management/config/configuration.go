@@ -75,11 +75,14 @@ type SeedOAuthClientConfig struct {
 // TenantPurgeConfiguration tunes the ADR-077 purge coordinator: the loop that erases a
 // deleted tenant's data across every store and then releases its token.
 //
-// Both fields follow the platform convention — 0 means the default, a negative value
-// disables. Disabling is a real operational lever (a maintenance window where nothing
-// should be deleting rows) and it is safe by construction: the tenant row is the work
-// list, so a disabled coordinator leaves every purge pending rather than losing it, and
-// no token is released while it is off.
+// All three fields take 0 to mean the default. 🔴 ONLY IntervalSeconds TAKES A NEGATIVE
+// TO MEAN "DISABLED" — the other two reject one at load, and the asymmetry is the design
+// rather than an oversight. Disabling the loop is a real operational lever (a maintenance
+// window where nothing should be deleting rows) and it is safe by construction: the
+// tenant row is the work list, so a disabled coordinator leaves every purge pending
+// rather than losing it, and no token is released while it is off. Disabling either
+// WINDOW would instead complete purges that were never observed clean, or release a
+// token while a pre-deletion session can still write under it. See Validate.
 type TenantPurgeConfiguration struct {
 	// IntervalSeconds is how often a pass runs. A pass is cheap when nothing is
 	// purging — one indexed query returning no rows.

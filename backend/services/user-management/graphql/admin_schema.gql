@@ -99,10 +99,13 @@ type AdminTenant {
     token: String!
     name: String
     enabled: Boolean!
-    # Where the tenant sits in the deletion lifecycle (ADR-077): "active", "purging"
-    # or "purged". Deleting a tenant does NOT remove it — the row survives so its
-    # token stays reserved, because every functional area keys its rows on that token
-    # and a tenant recreated at a used token would inherit the old one's data.
+    # Where the tenant sits in the deletion lifecycle (ADR-077): "active" or
+    # "purging". There is deliberately no "purged" — it would have to live on a row
+    # that cannot survive its own purge, so the durable deletion record carries that
+    # fact instead. Deleting a tenant does not remove it immediately: the row survives
+    # WHILE THE PURGE RUNS, holding its token reserved, because every functional area
+    # keys its rows on that token and a tenant recreated at a used token would inherit
+    # the old one's data. Completion removes the row and releases the token.
     purgeState: String!
     # When the delete was requested (RFC3339), null while active. It dates the cut,
     # which is what lets a later sweep tell a purged tenant's residue from a
@@ -498,8 +501,12 @@ type Mutation {
     updateTenant(token: String!, request: AdminTenantUpdateRequest!): AdminTenant!
     # Enable or disable a tenant (requires tenant:write).
     setTenantEnabled(token: String!, enabled: Boolean!): AdminTenant!
-    # Delete a tenant by token; returns whether one was removed. Rejected if the
-    # tenant still has memberships (requires tenant:write).
+    # Begin deleting a tenant by token; returns whether the delete was accepted.
+    # It does NOT remove the row: the tenant moves to `purging` with its access cut
+    # immediately, and its data is reclaimed afterwards by the purge coordinator,
+    # which removes the row and releases the token once every store reports clean.
+    # Idempotent in both directions — an unknown or already-purging tenant returns
+    # false. Rejected while the tenant still has memberships (requires tenant:write).
     deleteTenant(token: String!): Boolean!
 
     # Register an OAuth client, enabled by default (requires client:write). Returns

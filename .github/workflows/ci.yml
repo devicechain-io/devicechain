@@ -377,6 +377,17 @@ jobs:
       - name: No ADR references in published docs
         run: hack/check-docs-adr-refs.sh
 
+      # Same reasoning as the guard above: prove it can fail first. This one
+      # greps the tree for names, and a grep that finds everything is
+      # indistinguishable from a tree that still matches.
+      - name: Feature-draft rot guard self-test
+        run: hack/check-docs-drafts-rot.sh --self-test
+
+      # A feature draft's value is that every claim was checked against the code.
+      # That decays silently as files move, and a stale map is worse than none.
+      - name: Feature drafts still match the tree
+        run: hack/check-docs-drafts-rot.sh
+
   # ---------------------------------------------------------------------------
   # Frontend: codegen drift check, typecheck, unit tests, build.
   # ---------------------------------------------------------------------------

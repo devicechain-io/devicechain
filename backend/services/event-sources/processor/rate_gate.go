@@ -34,7 +34,21 @@ import (
 //
 // A zero sentAt is read as now by core.TenantRateLimiter.AllowAt, so "I do not
 // know when this was sent" degrades to today's behaviour rather than to unmetered.
-type RateGate func(source string, tenant string, sentAt time.Time) bool
+//
+// redelivery says the broker is re-offering a message it has already delivered
+// once. 🔴 IT IS A PARAMETER RATHER THAN A CONDITION AT THE CALL SITE, and that
+// is the whole reason it exists. A redelivery is exempt from METERING and from
+// nothing else — but a gate is a composition of independent refusals, so a
+// caller that skips the gate to skip the metering silently skips every other
+// refusal composed in front of it. That is not hypothetical: this parameter
+// replaces a `msg.NumDelivered <= 1 &&` guard on the capture source that was
+// reasoned about purely in metering terms and, once the lifecycle refusal was
+// composed on, quietly stopped refusing a deleted tenant's redeliveries.
+//
+// Passing it in lets each layer answer for itself: the metering layer exempts a
+// redelivery, the lifecycle layer does not, and a layer added later has to make
+// its own decision rather than inherit one made for a different reason.
+type RateGate func(source string, tenant string, sentAt time.Time, redelivery bool) bool
 
 // RefuseDeletedTenants composes the ADR-077 lifecycle refusal in front of an ingest
 // gate, so a tenant an operator has deleted stops ingesting on every transport at once.
@@ -64,14 +78,17 @@ func RefuseDeletedTenants(tenantDeleted func(string) bool, next RateGate, onRefu
 	if tenantDeleted == nil {
 		return next // gate unconfigured; see governance.NewTenantLifecycleGate
 	}
-	return func(source string, tenant string, sentAt time.Time) bool {
+	return func(source string, tenant string, sentAt time.Time, redelivery bool) bool {
+		// Deliberately NOT exempt on a redelivery. Metering is exempt because the
+		// message already paid on delivery 1; this refusal is about whether the
+		// tenant may be written to AT ALL, and that answer can have changed since.
 		if tenantDeleted(tenant) {
 			if onRefused != nil {
 				onRefused(source, tenant)
 			}
 			return false
 		}
-		return next(source, tenant, sentAt)
+		return next(source, tenant, sentAt, redelivery)
 	}
 }
 
@@ -111,7 +128,27 @@ const BacklogThreshold = 5 * time.Second
 // platform already carries from running N replicas with independent limiters.
 func NewRateGate(live *core.TenantRateLimiter, backlog *core.TenantRateLimiter,
 	onShed func(source string, tenant string)) RateGate {
-	return func(source string, tenant string, sentAt time.Time) bool {
+	return func(source string, tenant string, sentAt time.Time, redelivery bool) bool {
+		// A redelivery already paid for its admission on delivery 1 — the broker is
+		// re-offering it because the publish failed and the settler deliberately left
+		// it unacked, not because the tenant sent anything new.
+		//
+		// Metering it again is not merely double-charging. A shed message is
+		// ack-dropped, so re-metering converts a TRANSIENT downstream failure into
+		// permanent loss of a message the broker already PUBACKed. And it bites in the
+		// window that matters most: a post-outage drain runs the tenant's bucket at the
+		// ceiling, so a redelivery arrives precisely when there is no token left to pay
+		// with.
+		//
+		// It is also what keeps the backlog limiter's one-clock invariant true. Stream
+		// order is monotonic in send time, but DELIVERY order is not — a redelivery
+		// carries an older send time than messages already admitted. Feeding that back
+		// into the bucket rewinds its mark and lets the next forward jump re-accrue to
+		// burst, which is the same minting the live/backlog split exists to close.
+		// Exempting redeliveries removes the only way a backward timestamp can reach it.
+		if redelivery {
+			return true
+		}
 		limiter, when := live, time.Time{}
 		if !sentAt.IsZero() && time.Since(sentAt) > BacklogThreshold {
 			limiter, when = backlog, sentAt

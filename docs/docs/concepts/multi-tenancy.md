@@ -21,6 +21,16 @@ Tenants are **not** Kubernetes resources. A tenant is a control-plane **database
 - **Messaging (enforced)** — subjects are scoped per tenant (`{instance}.{tenant}.{suffix}`), so a tenant's traffic is namespaced on the bus. On the **device plane** this is enforced at the broker: the MQTT/NATS listeners are TLS, a NATS auth-callout binds each device connection to its own tenant's subjects, and the messaging write/subscribe points reject a malformed tenant segment — so a device cannot publish into or subscribe to another tenant's subjects.
 - **Auth** — JWTs carry tenant claims that resolve the request tenant; services validate them locally without a per-request network call.
 
+## Deleting a tenant
+
+Because a tenant is a database record rather than a set of pods, removing one is not a
+matter of tearing down infrastructure — it is reclaiming rows, streams, cached lookups and
+uploaded objects that are spread across every storage system the instance uses, all of them
+keyed on the tenant's token. So deletion is a **lifecycle**: access is cut immediately, the
+data is reclaimed in the background, and the token stays reserved until that finishes and
+no connection predating the delete could still write under it. See
+[Tenant Deletion](../deployment/tenant-deletion.md).
+
 ## Why shared microservices
 
 Running one set of services for all tenants keeps the cluster footprint small and the operational model simple, while the enforced row-level scope (plus subject scoping on the bus) provides the isolation that matters. The shared services derive each request's or message's tenant and scope all data access to it automatically.
