@@ -10,6 +10,7 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nats.go"
@@ -46,12 +47,17 @@ const authCalloutQueue = "dc-device-callout"
 const genericAuthFailure = "device authentication failed"
 
 // CalloutResponder answers NATS auth-callout requests for device connections
-// (ADR-025). A device connecting to the MQTT gateway (or NATS) presents
-// username="{tenant}:{credentialId}" / password=secret; this resolves it via the
-// ADR-014 AuthenticateDevice path and, on success, mints a NATS user JWT scoping
-// the connection to its own tenant's subject tree. Internal services present the
-// static service credential and are exempt from the callout, so only device
-// connections ever reach here.
+// (ADR-025). A device connecting to the MQTT gateway presents
+// username="{tenant}:{credentialId}" / password=secret AND an MQTT client id under
+// "{instanceId}:{tenant}:{deviceToken}"; this resolves the credential via the ADR-014
+// AuthenticateDevice path and, on success, mints a NATS user JWT confining the
+// connection to that one device's subjects. Internal services present the static
+// service credential and are exempt from the callout, so only device connections
+// ever reach here.
+//
+// The client id is part of the contract rather than firmware's business because it
+// is the key the broker files a device's MQTT session under — see the comment on
+// the check in authorize, and messaging.DeviceClientID for the shape.
 type CalloutResponder struct {
 	conn       *nats.Conn
 	api        model.DeviceManagementApi
@@ -185,6 +191,44 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 		// Fail closed: without a device token the only grant we could mint would be a
 		// tenant-wide one, which is exactly what this change removes.
 		log.Error().Str("tenant", tenant).Msg("Auth-callout resolved a credential to no device token.")
+		return "", genericAuthFailure
+	}
+
+	// An MQTT client id is a SESSION KEY: unchecked, any device that can authenticate at
+	// all can evict any other device's session, across tenants. The full reasoning — and
+	// why this admits a device-chosen discriminator rather than one exact value — is on
+	// messaging.DeviceClientID.
+	//
+	// Two things about it are local to here, and neither is stated there.
+	//
+	// It is checked at the CALLOUT because nats-server consults the callout before it
+	// looks a session up (mqttProcessConnect authorizes, then createOrRestoreSession), so
+	// a refusal prevents the takeover instead of undoing one. And it cannot move earlier
+	// within this function, however tempting the deleted-tenant gate above makes it look:
+	// the required id is derived from the DEVICE TOKEN, which only AuthenticateDevice
+	// produces. So unlike the lifecycle gate, a wrong client id costs one credential
+	// lookup — the right trade anyway, since refusing sooner would mean refusing on a
+	// value we had not yet earned the right to compare against.
+	//
+	// A raw NATS connection reports an empty client id and is refused by the same
+	// comparison. That is not collateral damage: a device credential is already pinned to
+	// ConnectionTypeMqtt in the grant below, so a non-MQTT device connect could only ever
+	// be rejected one step later — this is the same verdict, reached before a JWT is minted.
+	required, err := messaging.DeviceClientID(c.instanceId, tenant, device.Token)
+	if err != nil {
+		// Unreachable while the ADR-042 grammar guard holds on all three values; a
+		// denial rather than an admission if it ever does not.
+		log.Error().Err(err).Str("tenant", tenant).Msg("Auth-callout could not derive the required MQTT client id.")
+		return "", genericAuthFailure
+	}
+	if !messaging.DeviceClientIDMatches(req.ClientInformation.MQTT, required) {
+		// Logged with both values because "my device will not connect" is otherwise
+		// undiagnosable from the outside — the wire response is the same generic refusal
+		// every other failure returns, deliberately, so the callout does not become an
+		// oracle for which tenants and devices exist. Neither value is a secret.
+		log.Debug().Str("tenant", tenant).Str("presented", req.ClientInformation.MQTT).
+			Str("required", required).
+			Msg("Auth-callout refused a device connect whose MQTT client id is not the device's own.")
 		return "", genericAuthFailure
 	}
 

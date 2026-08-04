@@ -8,7 +8,7 @@ title: Conexión de un dispositivo
 Los dispositivos se conectan a DeviceChain mediante **MQTT** (servido directamente por el servidor MQTT integrado de NATS en el puerto 1883 — sin broker independiente) o **HTTP**. Ambos transportes alimentan el mismo pipeline de decodificación → resolución → persistencia, por lo que el cuerpo del evento JSON es idéntico entre ambos.
 
 :::note Estado
-La ingesta por MQTT y HTTP están disponibles. **Las conexiones se protegen a nivel del broker:** los listeners de MQTT/NATS son **TLS**, y un auth-callout de NATS autentica cada conexión y la vincula a subjects por inquilino, de modo que un dispositivo solo puede publicar o suscribirse dentro de su propio inquilino. La autenticación del dispositivo también se aplica **por evento** mediante credencial, y el modo de autenticación de dispositivo predeterminado es **`required`** — por lo que se espera una credencial tanto en la conexión como en el evento. Consulte [Credenciales de dispositivo](./device-credentials.md). Aún están planificados transportes adicionales (CoAP, WebSocket) y el flujo completo de aprovisionamiento/reclamación de autoservicio.
+La ingesta por MQTT y HTTP están disponibles. **Las conexiones se protegen a nivel del broker:** los listeners de MQTT/NATS son **TLS**, y un auth-callout de NATS autentica cada conexión y la vincula a los subjects de ese único dispositivo, de modo que un dispositivo solo puede publicar sus propios eventos y leer sus propios comandos. La autenticación del dispositivo también se aplica **por evento** mediante credencial, y el modo de autenticación de dispositivo predeterminado es **`required`** — por lo que se espera una credencial tanto en la conexión como en el evento. Consulte [Credenciales de dispositivo](./device-credentials.md). Aún están planificados transportes adicionales (CoAP, WebSocket) y el flujo completo de aprovisionamiento/reclamación de autoservicio.
 :::
 
 ## El cuerpo del evento
@@ -34,12 +34,25 @@ Todo evento entrante — sobre cualquier transporte — es un objeto JSON:
 
 Un topic de MQTT se asigna directamente a un subject de NATS, de modo que una publicación en `{instanceId}/{tenant}/devices/{token}/events` es consumida por `event-sources` como el subject `{instanceId}.{tenant}.devices.{token}.events`. Un dispositivo está autorizado a publicar únicamente en el topic de eventos de **sí mismo** y ningún otro, y el `{token}` en el topic debe coincidir con el `device` en el cuerpo — un evento que dice provenir de un dispositivo distinto es rechazado. El primer segmento es el **id de instancia** (el `instance.id` que desplegó, p. ej. `devicechain`): namespacea el plano de dispositivos para que las instancias que comparten un broker nunca se crucen, y una credencial de dispositivo solo está autorizada para el árbol de subjects de su propia instancia.
 
-El listener es **TLS** y la conexión está **autenticada por el broker**: conéctese por TLS con la CA de la instancia y presente la credencial del dispositivo como nombre de usuario MQTT **`{tenant}:{credentialId}`** y contraseña. Publique el cuerpo del evento en el topic de eventos de su dispositivo:
+El listener es **TLS** y la conexión está **autenticada por el broker**: conéctese por TLS con la CA de la instancia y presente la credencial del dispositivo como nombre de usuario MQTT **`{tenant}:{credentialId}`** y contraseña.
+
+La conexión también debe declarar **qué dispositivo es**: fije el **client id** de MQTT en `{instanceId}:{tenant}:{deviceToken}`. El broker rechaza cualquier otro valor — incluido el valor aleatorio que su biblioteca cliente inventa cuando usted no lo fija.
+
+Ese requisito no es burocracia. Un client id de MQTT es la clave con la que un broker archiva la sesión de un dispositivo, y el protocolo establece que una conexión que presenta un id ya en uso *se apropia de esa sesión*: el dispositivo que la tenía queda desconectado y el recién llegado hereda sus suscripciones. Derivar el id de la identidad que el broker ya autenticó es lo que impide que un dispositivo — del tenant propio o de cualquier otro — expulse a otro, y es lo que permite encontrar y eliminar el estado de sesión de un tenant si alguna vez se elimina ese tenant.
+
+**Si un dispositivo necesita más de una conexión, dé a cada una un sufijo:** `{instanceId}:{tenant}:{deviceToken}:pub`, `…:sub`, y así sucesivamente. Todo lo que vaya después del tercer `:` queda a su elección. Dos conexiones que comparten un mismo client id son dos clientes peleando por una sola sesión — se desconectarán mutuamente en bucle —, de modo que un dispositivo que publica en una conexión y se suscribe a comandos en otra necesita un sufijo distinto para cada una.
+
+:::tip Diagnóstico de un client id rechazado
+Una conexión rechazada se **cierra, no se responde**: el broker corta el socket en lugar de devolver un código MQTT de «no autorizado», por lo que su cliente informa un reinicio de conexión o un EOF inesperado en vez de un fallo de autorización. Un dispositivo que se reconecta automáticamente entrará en bucle. Si un dispositivo que antes se conectaba deja de hacerlo, revise su client id antes que su credencial.
+:::
+
+Publique el cuerpo del evento en el topic de eventos de su dispositivo:
 
 ```bash
 mosquitto_pub \
   --cafile instance-ca.crt \
   -h <mqtt-host> -p 1883 \
+  -i 'devicechain:acme:sensor-001' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
   -t "devicechain/acme/devices/sensor-001/events" \
   -m '{"device":"sensor-001","eventType":"Measurement","credentialType":"MQTT_BASIC","credentialId":"<credentialId>","credentialSecret":"<credentialSecret>","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
@@ -95,6 +108,7 @@ misma credencial usada para publicar eventos:
 mosquitto_sub \
   --cafile instance-ca.crt \
   -h <mqtt-host> -p 1883 \
+  -i 'devicechain:acme:sensor-001:sub' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
   -t "devicechain/acme/device-commands/sensor-001"
 ```
@@ -129,6 +143,7 @@ Reporte el resultado publicando en el topic de respuestas de comando del inquili
 mosquitto_pub \
   --cafile instance-ca.crt \
   -h <mqtt-host> -p 1883 \
+  -i 'devicechain:acme:sensor-001' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
   -t "devicechain/acme/command-responses" \
   -m '{"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","success":true,"payload":"rebooting in 5s"}'

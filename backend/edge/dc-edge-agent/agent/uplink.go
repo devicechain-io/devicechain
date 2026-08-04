@@ -78,6 +78,14 @@ func NewUplink(cfg config.UplinkConfiguration, instanceId, agentId string, log *
 		// Unique per edge box: two agents feeding one Instance must not share an
 		// MQTT client id (takeover would boot each other in a loop). agentId is the
 		// required, operator-set discriminator.
+		//
+		// 🔴 NOT messaging.DeviceClientID, WHICH CONSTRAINS THE UPLINK CREDENTIAL. An
+		// instance's device auth callout refuses any connect whose client id is not the
+		// connecting DEVICE's own — a shape a gateway cannot present, since it forwards
+		// for many device tokens over one connection. So the uplink credential must be
+		// one the broker accepts without routing through that callout. The per-device
+		// grant already made that true; pinning the client id only moves the failure
+		// from the first forwarded event to CONNECT.
 		clientID:       fmt.Sprintf("dc-edge-agent-%s-%s", instanceId, agentId),
 		username:       cfg.Username,
 		password:       password,

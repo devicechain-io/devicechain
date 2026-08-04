@@ -86,7 +86,28 @@ func newTestResponder(t *testing.T, authFn func(context.Context, *model.Presente
 	return r, creds.IssuerPublic
 }
 
+// testClientID is the MQTT client id every fixture in this file connects with. It
+// pairs with the "inst-1" instance every responder here is built for, the
+// "acme-corp" tenant in the usernames below, and the "sensor-001" device token the
+// fakes resolve to — change any of the three and the requests stop being grantable,
+// which is the coupling the responder now enforces.
+//
+// 🔑 IT IS A LITERAL, NOT messaging.DeviceClientID(...). A helper that builds the
+// request with the same function the responder compares against would grant no
+// matter what that function produced: the two would agree on a wrong separator as
+// happily as on the right one, and the suite would stay green while every device
+// in the field was locked out. The composed shape is pinned against literals in
+// core/messaging; here it is stated independently so the two have to match.
+const testClientID = "inst-1:acme-corp:sensor-001"
+
 func testRequest(t *testing.T, user, pass string) jwt.AuthorizationRequest {
+	t.Helper()
+	return testRequestFromClient(t, user, pass, testClientID)
+}
+
+// testRequestFromClient is testRequest with the presented MQTT client id spelled
+// out, for the cases that are about that value.
+func testRequestFromClient(t *testing.T, user, pass, clientID string) jwt.AuthorizationRequest {
 	t.Helper()
 	ukp, _ := nkeys.CreateUser()
 	userNkey, _ := ukp.PublicKey()
@@ -95,6 +116,7 @@ func testRequest(t *testing.T, user, pass string) jwt.AuthorizationRequest {
 	req.Server.ID = "NTESTSERVER"
 	req.ConnectOptions.Username = user
 	req.ConnectOptions.Password = pass
+	req.ClientInformation.MQTT = clientID
 	return req
 }
 
@@ -286,5 +308,95 @@ func TestAuthorizeStillGrantsWhenTheGateIsWiredAndSaysLive(t *testing.T) {
 	userJWT, errMsg := r.authorize(testRequest(t, "acme-corp:dev1", "s3cret"))
 	if errMsg != "" || userJWT == "" {
 		t.Errorf("a live tenant must still be granted, got jwt=%q err=%q", userJWT, errMsg)
+	}
+}
+
+// What THIS layer owns: a mismatched client id mints no JWT, and denies with
+// genericAuthFailure — the same message a bad password gets, so the callout is not
+// an oracle for which devices exist and what they are called.
+//
+// It deliberately does NOT re-prove the admission rule. The full truth table lives
+// on messaging.DeviceClientIDMatches, where a case costs nothing; re-asserting it
+// here would pay a responder round trip per row to learn the same thing.
+func TestAuthorizeRefusesAMismatchedMqttClientID(t *testing.T) {
+	cases := []struct{ name, clientID string }{
+		// The one shape that is genuinely callout-local: the connect username is the
+		// value this function already holds, and it is the plausible confusion.
+		{"the connect username", "acme-corp:dev1"},
+		// One representative mismatch, standing in for the whole table.
+		{"another tenant's device", "other-corp:sensor-001"},
+		// Callout-local too: no MQTT connection reports this, a raw NATS one does,
+		// and the claim that such a connect is refused HERE lives nowhere else.
+		{"empty, as a raw NATS connect reports", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, _ := newTestResponder(t, func(context.Context, *model.PresentedCredential) (*model.Device, error) {
+				d := &model.Device{}
+				d.Token = "sensor-001"
+				return d, nil
+			})
+			userJWT, errMsg := r.authorize(testRequestFromClient(t, "acme-corp:dev1", "s3cret", tc.clientID))
+			if userJWT != "" {
+				t.Errorf("client id %q was granted a JWT; it must be refused", tc.clientID)
+			}
+			if errMsg != genericAuthFailure {
+				t.Errorf("client id %q denied with %q, want the generic failure — a distinct "+
+					"message makes the callout an oracle for device names", tc.clientID, errMsg)
+			}
+		})
+	}
+}
+
+// The negative control for the test above, and the reason it can fail. Without
+// it, a responder that refused EVERY connect would pass the mismatch cases
+// perfectly while taking the whole device plane down.
+//
+// The suffixed forms are here rather than in a separate test because they are the
+// same claim: a device MAY hold more than one session, as long as every one of
+// them is under its own name. Refusing them would break firmware that publishes
+// on one connection and subscribes for commands on another — which is what a
+// reader following the docs does the moment they run mosquitto_sub and
+// mosquitto_pub side by side.
+func TestAuthorizeGrantsTheDevicesOwnMqttClientIDs(t *testing.T) {
+	for _, clientID := range []string{
+		"inst-1:acme-corp:sensor-001",
+		"inst-1:acme-corp:sensor-001:pub",
+	} {
+		t.Run(clientID, func(t *testing.T) {
+			r, _ := newTestResponder(t, func(context.Context, *model.PresentedCredential) (*model.Device, error) {
+				d := &model.Device{}
+				d.Token = "sensor-001"
+				return d, nil
+			})
+			userJWT, errMsg := r.authorize(testRequestFromClient(t, "acme-corp:dev1", "s3cret", clientID))
+			if errMsg != "" || userJWT == "" {
+				t.Fatalf("client id %q is the device's own and must be granted, got jwt=%q err=%q",
+					clientID, userJWT, errMsg)
+			}
+		})
+	}
+}
+
+// The check cannot move earlier than it sits, and this pins the reason: the
+// required id is derived from the DEVICE TOKEN, which only AuthenticateDevice can
+// produce. A future reordering that refuses a bad client id before touching the
+// credential store — tempting, because that is exactly what the ADR-077 deleted-
+// tenant gate does one step above — would have to compare against something it
+// does not yet know, and would refuse every connect.
+func TestAuthorizeResolvesTheDeviceBeforeCheckingTheClientID(t *testing.T) {
+	authenticated := false
+	r, _ := newTestResponder(t, func(context.Context, *model.PresentedCredential) (*model.Device, error) {
+		authenticated = true
+		d := &model.Device{}
+		d.Token = "sensor-001"
+		return d, nil
+	})
+	if _, errMsg := r.authorize(testRequestFromClient(t, "acme-corp:dev1", "s3cret", "wrong-id")); errMsg == "" {
+		t.Fatal("a wrong client id must be denied")
+	}
+	if !authenticated {
+		t.Error("the device was never resolved, so the required client id could not have been " +
+			"derived — the comparison was made against something other than the device token")
 	}
 }

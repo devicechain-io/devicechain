@@ -8,7 +8,7 @@ title: Connecting a Device
 Devices connect to DeviceChain over **MQTT** (served directly by NATS' built-in MQTT server on port 1883 — no separate broker) or **HTTP**. Both transports feed the same decode → resolve → persist pipeline, so the JSON event body is identical between them.
 
 :::note Status
-MQTT and HTTP ingestion are available. **Connections are secured at the broker:** the MQTT/NATS listeners are **TLS**, and a NATS auth-callout authenticates each connection and binds it to per-tenant subjects, so a device can only publish or subscribe within its own tenant. Device authentication is also enforced **per event** by credential, and the default device-auth mode is **`required`** — so a credential is expected on both the connection and the event. See [Device credentials](./device-credentials.md). Additional transports (CoAP, WebSocket) and the full self-service provisioning/claiming flow are still planned.
+MQTT and HTTP ingestion are available. **Connections are secured at the broker:** the MQTT/NATS listeners are **TLS**, and a NATS auth-callout authenticates each connection and binds it to that one device's subjects, so a device can only publish its own events and read its own commands. Device authentication is also enforced **per event** by credential, and the default device-auth mode is **`required`** — so a credential is expected on both the connection and the event. See [Device credentials](./device-credentials.md). Additional transports (CoAP, WebSocket) and the full self-service provisioning/claiming flow are still planned.
 :::
 
 ## The event body
@@ -34,12 +34,25 @@ Every inbound event — over any transport — is a JSON object:
 
 An MQTT topic maps directly to a NATS subject, so a publish on `{instanceId}/{tenant}/devices/{token}/events` is consumed by `event-sources` as the subject `{instanceId}.{tenant}.devices.{token}.events`. A device is authorized to publish on **its own** events topic and no other, and the `{token}` in the topic must match the `device` in the body — an event claiming to be from a different device is rejected. The first segment is the **instance id** (the `instance.id` you deployed, e.g. `devicechain`): it namespaces the device plane so instances sharing a broker never cross over, and a device credential is authorized only for its own instance's subject tree.
 
-The listener is **TLS** and the connection is **broker-authenticated**: connect over TLS with the instance CA and present the device's credential as the MQTT username **`{tenant}:{credentialId}`** and password. Publish the event body to your device's events topic:
+The listener is **TLS** and the connection is **broker-authenticated**: connect over TLS with the instance CA and present the device's credential as the MQTT username **`{tenant}:{credentialId}`** and password.
+
+The connection must also say **which device it is**: set the MQTT **client id** to `{instanceId}:{tenant}:{deviceToken}`. The broker refuses any other value — including the random one your client library invents when you leave it unset.
+
+That requirement is not bookkeeping. An MQTT client id is the key a broker files a device's session under, and the protocol says a connection presenting an id that is already in use *takes that session over*: the device holding it is disconnected and the arrival inherits its subscriptions. Deriving the id from the identity the broker has already authenticated is what stops one device — in your tenant or anyone else's — evicting another, and it is what lets a tenant's session state be found and removed if the tenant is ever deleted.
+
+**If a device needs more than one connection, give each one a suffix:** `{instanceId}:{tenant}:{deviceToken}:pub`, `…:sub`, and so on. Anything after the third `:` is yours to choose. Two connections sharing one client id are two clients fighting over one session — they will disconnect each other in a loop — so a device that publishes on one connection and subscribes for commands on another needs a distinct suffix for each.
+
+:::tip Diagnosing a rejected client id
+A refused connection is **closed, not answered** — the broker drops the socket rather than returning an MQTT "not authorized" code, so your client reports a connection reset or an unexpected EOF rather than an authorization failure. A device that reconnects automatically will loop on it. If a device that used to connect suddenly cannot, check its client id before you check its credential.
+:::
+
+Publish the event body to your device's events topic:
 
 ```bash
 mosquitto_pub \
   --cafile instance-ca.crt \
   -h <mqtt-host> -p 1883 \
+  -i 'devicechain:acme:sensor-001' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
   -t "devicechain/acme/devices/sensor-001/events" \
   -m '{"device":"sensor-001","eventType":"Measurement","credentialType":"MQTT_BASIC","credentialId":"<credentialId>","credentialSecret":"<credentialSecret>","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
@@ -95,6 +108,7 @@ same credential used to publish events:
 mosquitto_sub \
   --cafile instance-ca.crt \
   -h <mqtt-host> -p 1883 \
+  -i 'devicechain:acme:sensor-001:sub' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
   -t "devicechain/acme/device-commands/sensor-001"
 ```
@@ -129,6 +143,7 @@ Report the outcome by publishing to the tenant's command-response topic:
 mosquitto_pub \
   --cafile instance-ca.crt \
   -h <mqtt-host> -p 1883 \
+  -i 'devicechain:acme:sensor-001' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
   -t "devicechain/acme/command-responses" \
   -m '{"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","success":true,"payload":"rebooting in 5s"}'

@@ -52,7 +52,8 @@ When a credential authenticates, the resolved device is authoritative: a `device
 The credential above is the **per-event** check. In addition, MQTT/NATS **connections** are authenticated at the broker itself:
 
 - The MQTT and NATS listeners are **TLS** — a device connects over TLS with the instance CA.
-- A NATS **auth-callout** authenticates the connection and binds it to per-tenant subjects, so a device can only publish or subscribe within its own tenant. For an `MQTT_BASIC` device, the connection presents MQTT username **`{tenant}:{credentialId}`** and the credential password — the same credential that authenticates its events — so a device that can't authenticate can't even connect.
+- A NATS **auth-callout** authenticates the connection and binds it to **that one device's** subjects — not its tenant's — so a device can publish its own events and read its own commands, and nothing else. For an `MQTT_BASIC` device, the connection presents MQTT username **`{tenant}:{credentialId}`** and the credential password — the same credential that authenticates its events — so a device that can't authenticate can't even connect.
+- The connection must also present the MQTT **client id** `{instanceId}:{tenant}:{deviceToken}`; any other value is refused. The client id is the key the broker files a device's session under, so leaving it to the device would let one device take over another's session.
 
 See [Connecting a Device](./connecting-a-device.md) for the transport details.
 
