@@ -57,9 +57,23 @@ type Object struct {
 	tenant tenantReader
 }
 
-// tenantReader is the row lookup this store needs, narrowed to one method.
+// tenantReader is the row access this store needs, narrowed to what it uses.
+//
+// It WRITES as well as reads, and that is the fix for a livelock rather than a convenience
+// — see Erase. The exemption bars the SWEEP from deleting iam_tenants; it does not bar the
+// store that owns a reference column from clearing it once the object behind it is gone.
 type tenantReader interface {
 	TenantByToken(ctx context.Context, token string) (*iam.Tenant, error)
+	UpdateTenantFields(ctx context.Context, t *iam.Tenant, fields map[string]any) error
+}
+
+// objectRef is one object this tenant still has, and the column that names it.
+//
+// The column travels with the ref because clearing it is part of erasing: it is what makes
+// the next pass find nothing.
+type objectRef struct {
+	column string
+	ref    blob.Ref
 }
 
 // NewObject builds the object store. store may be nil, which is what an instance that has
@@ -81,11 +95,28 @@ func (o *Object) Name() string { return StoreObject }
 // retention, not a success. Reporting the second as clean would be the reassuring-silence
 // failure the Pending type exists to prevent, one layer down.
 //
-// # A missing object is success, not failure
+// # 🔴 THE REFERENCE IS CLEARED, AND WITHOUT THAT THIS STORE LIVELOCKS
 //
-// Delete is idempotent by contract, and this runs on every pass until the purge completes,
-// so the second pass necessarily deletes nothing. A backend that reports "not found" is
-// telling us the erasure already holds.
+// Every other store's work list shrinks as it works: the sweep deletes rows, the broker
+// purges messages, and the next pass genuinely finds nothing. This one's does not. The
+// column is exempt from the sweep and survives to completion — which is what makes the work
+// list readable at all — and blob.Delete is idempotent-SILENT by contract, so deleting an
+// object that is already gone succeeds. Leave it there and every pass reports one row
+// erased, forever.
+//
+// That is not merely untidy, it is a purge that can never complete. The coordinator treats
+// rows erased as evidence the store has NOT gone quiet and restarts the settle window — a
+// deliberate rule, and the right one, because rows arriving is exactly what "not settled"
+// means. The two combine into a tenant that reports clean on every pass and never finishes,
+// logging the most reassuring line the coordinator has while doing it.
+//
+// So a successful delete clears the column that named the object, per reference, and the
+// next pass has nothing to find. That also makes a partial failure exact: with two
+// references and the second failing, the first is already cleared, so the retry deletes
+// only what is left rather than counting the first again.
+//
+// The Store contract states the requirement this satisfies in one line — "the second call
+// has nothing to delete and must succeed, reporting zero rows".
 func (o *Object) Erase(ctx context.Context, tenant string, _ time.Time) (Outcome, error) {
 	refs, err := o.refsFor(ctx, tenant)
 	if err != nil {
@@ -102,10 +133,21 @@ func (o *Object) Erase(ctx context.Context, tenant string, _ time.Time) (Outcome
 				"out of band, before treating this tenant's data as erased", len(refs))}}, nil
 	}
 
+	row, err := o.tenant.TenantByToken(ctx, tenant)
+	if err != nil {
+		return Outcome{}, fmt.Errorf("re-reading %q to clear its object references: %w", tenant, err)
+	}
+
 	var erased int64
-	for _, ref := range refs {
-		if err := o.store.Delete(ctx, ref); err != nil {
-			return Outcome{Rows: erased}, fmt.Errorf("deleting %s for %q: %w", ref, tenant, err)
+	for _, r := range refs {
+		if err := o.store.Delete(ctx, r.ref); err != nil {
+			return Outcome{Rows: erased}, fmt.Errorf("deleting %s for %q: %w", r.ref, tenant, err)
+		}
+		// Clear before counting: a count that outlived the reference would be the
+		// double-count this ordering exists to prevent.
+		if err := o.tenant.UpdateTenantFields(ctx, row, map[string]any{r.column: nil}); err != nil {
+			return Outcome{Rows: erased}, fmt.Errorf("clearing %s for %q after deleting %s: %w",
+				r.column, tenant, r.ref, err)
 		}
 		erased++
 	}
@@ -117,7 +159,7 @@ func (o *Object) Erase(ctx context.Context, tenant string, _ time.Time) (Outcome
 // A tenant row that has already gone is not an error: the coordinator re-reads the
 // lifecycle before each pass, but a peer replica can complete a purge in between, and a
 // tenant with no row has no references left to follow.
-func (o *Object) refsFor(ctx context.Context, tenant string) ([]blob.Ref, error) {
+func (o *Object) refsFor(ctx context.Context, tenant string) ([]objectRef, error) {
 	t, err := o.tenant.TenantByToken(ctx, tenant)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -126,22 +168,32 @@ func (o *Object) refsFor(ctx context.Context, tenant string) ([]blob.Ref, error)
 		return nil, fmt.Errorf("reading %q to find its objects: %w", tenant, err)
 	}
 
-	var refs []blob.Ref
+	var refs []objectRef
 	// One column today. It is a loop rather than a line because the second consumer of the
 	// object store — the package doc names firmware and exports — adds a reference
 	// somewhere else, and a purge that erased only the one someone remembered is the shape
 	// this whole subsystem is built to avoid.
-	for _, candidate := range []*string{t.BrandingLogo} {
-		if candidate == nil || *candidate == "" {
+	for _, c := range []struct {
+		column string
+		value  *string
+	}{
+		{brandingLogoColumn, t.BrandingLogo},
+	} {
+		if c.value == nil || *c.value == "" {
 			continue
 		}
-		ref, err := blob.ParseRef(*candidate)
+		ref, err := blob.ParseRef(*c.value)
 		if err != nil {
 			// A Tier-0 https:/data: value: the platform never stored it, so there is
 			// nothing of ours to delete. Not an error, and not a retention.
 			continue
 		}
-		refs = append(refs, ref)
+		refs = append(refs, objectRef{column: c.column, ref: ref})
 	}
 	return refs, nil
 }
+
+// brandingLogoColumn is the database column behind iam.Tenant.BrandingLogo. It is spelled
+// out because it is written through UpdateTenantFields, which takes column names rather
+// than struct fields.
+const brandingLogoColumn = "branding_logo"
