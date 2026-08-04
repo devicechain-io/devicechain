@@ -18,11 +18,11 @@ import (
 // Relational erases a tenant from a Postgres database, across every functional area's
 // schema in it.
 //
-// It serves BOTH clusters — the relational store, where ten areas share a database, and
-// the telemetry store, where event-management is alone in another — because they differ
-// only in the connection and the ledger name: the classification, the delete order and
-// the residual scan are identical, both being one database with one owning role and one
-// catalog that answers for all of it. That is why the name is a parameter rather than a
+// It serves BOTH clusters — the relational store, where every area except
+// event-management shares a database, and the telemetry store, where event-management is
+// alone in another — because they differ only in the connection and the ledger name: the
+// classification, the delete order and the residual scan are identical, both being one
+// database with one owning role and one catalog that answers for all of it. That is why the name is a parameter rather than a
 // constant, and why the handle is an interface rather than the owned-database manager.
 //
 // The telemetry store's two apparent special cases are both handled a layer down, in
@@ -36,15 +36,6 @@ type Relational struct {
 	name string
 	db   Database
 	pre  func(tenant string) tenantpurge.Precondition
-}
-
-// Database is the handle a store sweeps through, narrowed to the one method the sweep
-// uses so that BOTH kinds of connection satisfy it: rdb.RdbManager, for the database
-// this service owns, and rdb.Guest, for one it does not (the telemetry cluster). Taking
-// the interface rather than the concrete manager is what lets the two stores be the same
-// code rather than a copy with the receiver type changed.
-type Database interface {
-	DB(ctx context.Context) *gorm.DB
 }
 
 // NewRelational builds the store for a database. name keys the ledger and is persisted.
@@ -136,7 +127,7 @@ func (r *Relational) handle(ctx context.Context) *gorm.DB {
 func deferrals(res tenantpurge.Result) []string {
 	out := make([]string, 0, len(res.Deferred))
 	for _, e := range res.Deferred {
-		out = append(out, fmt.Sprintf("%s: %s", e.Table, e.Reason))
+		out = append(out, fmt.Sprintf("%s: %s", e.Describe(), e.Reason))
 	}
 	return out
 }
@@ -146,7 +137,7 @@ func deferrals(res tenantpurge.Result) []string {
 func describe(res tenantpurge.Result) string {
 	parts := make([]string, 0, len(res.Tables))
 	for _, t := range res.Tables {
-		parts = append(parts, fmt.Sprintf("%s=%d", t.Table, t.Rows))
+		parts = append(parts, fmt.Sprintf("%s=%d", t.Describe(), t.Rows))
 	}
 	if len(parts) == 0 {
 		return "no table named them, which should be impossible"

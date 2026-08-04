@@ -36,6 +36,24 @@ import (
 // being skipped by a step that only knew about the aggregates that existed the day it was
 // written. It also means the coverage gate — which classifies a database with every
 // area's migrations applied — sees a new aggregate the first time CI runs.
+//
+// admittedRelations is every relation that must be classified despite living in a schema
+// the scan skips, mapped to the sentence explaining where it came from.
+//
+// It is the ONLY thing in this package that knows what a continuous aggregate is: classify
+// takes the resulting map, so adding a second source of hidden row-holding relations means
+// adding to this function and touching nothing else.
+func admittedRelations(ctx context.Context, db *gorm.DB) (admitted, error) {
+	aggs, err := loadContinuousAggregates(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	out := make(admitted, len(aggs))
+	for _, a := range aggs {
+		out[a.materialization()] = a.origin()
+	}
+	return out, nil
+}
 
 // aggregate is one continuous aggregate and the hypertable holding its materialized rows.
 type aggregate struct {
@@ -62,8 +80,8 @@ func (a aggregate) origin() string {
 // loadContinuousAggregates lists every continuous aggregate in the database.
 //
 // The extension probe is not defensive padding. timescaledb_information exists only where
-// the extension is installed, and ten of the eleven functional areas share a plain
-// Postgres cluster where it is not — so querying the view unconditionally would fail the
+// the extension is installed, and every functional area except event-management shares a
+// plain Postgres cluster where it is not — so querying the view unconditionally would fail the
 // purge of the relational store with "relation does not exist", i.e. would break the store
 // that has no aggregates in order to handle the one that does. Probing pg_extension asks
 // the question directly rather than swallowing an error whose text would also cover a

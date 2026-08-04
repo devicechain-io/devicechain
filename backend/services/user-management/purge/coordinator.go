@@ -344,10 +344,23 @@ func (c *Coordinator) eraseOne(ctx context.Context, store Store, tenant string, 
 	}
 
 	line.Complete = true
-	if wasCleanSince != nil {
-		line.CleanSince = wasCleanSince
-	} else {
+	// 🔴 A PASS THAT DELETED ROWS RESTARTS THE SETTLE WINDOW, however clean it ended.
+	//
+	// Clean() means "nothing deferred", not "found nothing" — a store that swept 200k rows
+	// and then read back none is clean by that definition. Carrying an older clean-since
+	// through such a pass would measure the window from a moment the store demonstrably
+	// still held the tenant's data, which is the opposite of what settling is for: the
+	// window exists to establish that everything already admitted has stopped arriving,
+	// and rows arriving IS the evidence it has not.
+	//
+	// It matters more now that a store's clean verdict can legitimately flip back. The
+	// telemetry store reports clean over a database that does not exist yet; when the
+	// cluster is restored underneath it, the next pass finds real rows to erase. Without
+	// this, that pass could complete on a window measured from before the data existed.
+	if outcome.Rows > 0 || wasCleanSince == nil {
 		line.CleanSince = &at
+	} else {
+		line.CleanSince = wasCleanSince
 	}
 	return line
 }

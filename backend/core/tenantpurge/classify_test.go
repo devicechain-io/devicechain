@@ -49,7 +49,6 @@ func TestTheTwoRealTenantColumnSpellingsAreBothDirect(t *testing.T) {
 		col("event-processing", "device_rosters", "tenant", "character varying"),
 		col("event-processing", "device_rosters", "device_token", "character varying"),
 	}, nil, nil)
-
 	require.NoError(t, err)
 
 	embed := classOf(t, plan, "device-management", "devices")
@@ -71,7 +70,6 @@ func TestANumericTenantIdIsNotATenantColumn(t *testing.T) {
 	plan, err := classify([]column{
 		col("some-area", "widgets", "tenant_id", "bigint"),
 	}, nil, nil)
-
 	require.NoError(t, err)
 
 	e := classOf(t, plan, "some-area", "widgets")
@@ -98,7 +96,6 @@ func TestAJoinTableReachesTheTenantThroughItsForeignKey(t *testing.T) {
 		fk("user-management", "iam_membership_tenant_roles", "role_id",
 			"user-management", "iam_roles", "id"),
 	}, nil)
-
 	require.NoError(t, err)
 
 	join := classOf(t, plan, "user-management", "iam_membership_tenant_roles")
@@ -206,7 +203,6 @@ func TestAMaterializedViewIsNeverSweptSilently(t *testing.T) {
 		{Schema: "event-management", Table: "tenant_rollup", Kind: "m",
 			Name: "tenant_id", Type: "character varying"},
 	}, nil, nil)
-
 	require.NoError(t, err)
 
 	e := classOf(t, plan, "event-management", "tenant_rollup")
@@ -223,7 +219,6 @@ func TestAForeignTableIsNeverSweptSilently(t *testing.T) {
 		{Schema: "some-area", Table: "remote_rows", Kind: "f",
 			Name: "tenant_id", Type: "character varying"},
 	}, nil, nil)
-
 	require.NoError(t, err)
 	assert.Equal(t, ClassUnclassified, classOf(t, plan, "some-area", "remote_rows").Class)
 }
@@ -236,7 +231,6 @@ func TestAPartitionedTableIsSweptNormally(t *testing.T) {
 		{Schema: "event-management", Table: "events", Kind: "p",
 			Name: "tenant_id", Type: "character varying"},
 	}, nil, nil)
-
 	require.NoError(t, err)
 	assert.Equal(t, ClassDirect, classOf(t, plan, "event-management", "events").Class)
 }
@@ -263,7 +257,6 @@ func TestChildrenAreDeletedBeforeTheirParents(t *testing.T) {
 		fk("device-management", "areas", "area_type_id",
 			"device-management", "area_types", "id"),
 	}, nil)
-
 	require.NoError(t, err)
 
 	require.Less(t, indexOf(plan, "areas"), indexOf(plan, "area_types"),
@@ -293,7 +286,6 @@ func TestDeleteOrderIsAGraphWalkNotASort(t *testing.T) {
 		fk("a", "alpha", "ref", "a", "zulu", "id"),
 		fk("a", "zebra", "ref", "a", "bravo", "id"),
 	}, nil)
-
 	require.NoError(t, err)
 
 	assert.Less(t, indexOf(plan, "alpha"), indexOf(plan, "zulu"),
@@ -315,7 +307,6 @@ func TestAForeignKeyCycleIsReportedRatherThanBroken(t *testing.T) {
 		fk("a", "x", "y_id", "a", "y", "id"),
 		fk("a", "y", "x_id", "a", "x", "id"),
 	}, nil)
-
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cycle")
 	assert.Contains(t, err.Error(), "a.x", "the message must name the tables involved")
@@ -327,11 +318,10 @@ func TestAForeignKeyCycleIsReportedRatherThanBroken(t *testing.T) {
 // stale entry written when the table was harmless quietly retains data forever.
 func TestTheCatalogOverridesAStaleExemption(t *testing.T) {
 	plan, err := classify([]column{
-
+		// iam_roles is in the exemption registry. Give it a tenant column.
 		col("user-management", "iam_roles", "id", "bigint"),
 		col("user-management", "iam_roles", "tenant_id", "character varying"),
 	}, nil, nil)
-
 	require.NoError(t, err)
 
 	e := classOf(t, plan, "user-management", "iam_roles")
@@ -351,7 +341,6 @@ func TestSystemSchemasAreNotClassified(t *testing.T) {
 		col("_timescaledb_internal", "_hyper_1_1_chunk", "tenant_id", "character varying"),
 		col("event-management", "events", "tenant_id", "character varying"),
 	}, nil, nil)
-
 	require.NoError(t, err)
 
 	require.Len(t, plan.Entries, 1, "only the functional-area table belongs in the plan")
@@ -444,7 +433,6 @@ func TestPlanReportsUnclassifiedTablesByName(t *testing.T) {
 	plan, err := classify([]column{
 		col("new-area", "mystery_rows", "id", "bigint"),
 	}, nil, nil)
-
 	require.NoError(t, err)
 
 	err = checkClassified(plan)

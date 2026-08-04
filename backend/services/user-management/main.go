@@ -45,6 +45,9 @@ var (
 	// TsdbGuest is the purge's connection to the telemetry cluster, which
 	// event-management owns and this service only visits. Built alongside the
 	// coordinator, so it is nil whenever the coordinator is.
+	//
+	// It is deliberately NOT a lifecycle component: it has no start or stop phase, and
+	// the one it used to have made shutdown fail. See rdb.Guest.Initialize.
 	TsdbGuest *rdb.Guest
 )
 
@@ -224,7 +227,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		// RdbManager, which would create a user-management schema inside it. It resolves
 		// its configuration here and connects on first use, so a telemetry cluster that is
 		// down delays a purge instead of blocking every login in the instance (rdb.Guest).
-		TsdbGuest = rdb.NewGuest(Microservice, core.NewNoOpLifecycleCallbacks(), "tsdb",
+		TsdbGuest = rdb.NewGuest(Microservice, "tsdb",
 			Microservice.InstanceConfiguration.Persistence.Tsdb, Configuration.TsdbConfiguration)
 		if err := TsdbGuest.Initialize(ctx); err != nil {
 			return err
@@ -441,11 +444,9 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 			return err
 		}
 	}
-	// After the coordinator, which is its only user, and only if it was built. A guest
-	// that never connected has no pool to close, so this is a no-op on every instance
-	// where no tenant was ever purged.
+	// After the coordinator, which is its only user.
 	if TsdbGuest != nil {
-		if err := TsdbGuest.Terminate(ctx); err != nil {
+		if err := TsdbGuest.Close(); err != nil {
 			return err
 		}
 	}

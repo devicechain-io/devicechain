@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"gorm.io/gorm"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
@@ -50,8 +49,8 @@ type Telemetry struct {
 // separate question, answered against a live server in core/rdb's integration test rather
 // than assumed here.
 type connector interface {
+	Database
 	Connect(ctx context.Context) error
-	DB(ctx context.Context) *gorm.DB
 }
 
 // NewTelemetry builds the telemetry store over a guest connection.

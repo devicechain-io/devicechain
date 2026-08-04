@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -54,7 +53,7 @@ import (
 // forced this type: the erasure is organised by STORE, and the telemetry store is a
 // database no service that runs the coordinator owns.
 //
-// # Connecting is LAZY, and that is a availability decision
+// # Connecting is LAZY, and that is an availability decision
 //
 // Initialize resolves and validates the configuration — so a bad sslMode is still a
 // startup verdict rather than a surprise during a purge — but opens no socket. The
@@ -80,8 +79,6 @@ type Guest struct {
 	instanceConfig     config.DatastoreConfiguration
 	microserviceConfig config.MicroserviceDatastoreConfiguration
 
-	lifecycle core.LifecycleManager
-
 	// mu guards the fields below, which are written on first use rather than at
 	// startup. Connect may be called from any goroutine that needs the connection.
 	mu       sync.Mutex
@@ -96,20 +93,15 @@ type Guest struct {
 // schema. icfg is the instance-level datastore block for the cluster (e.g.
 // InstanceConfiguration.Persistence.Tsdb), which every pod mounts regardless of which
 // areas it runs; cfg supplies this service's own pool sizing for the connection.
-func NewGuest(ms *core.Microservice, callbacks core.LifecycleCallbacks, name string,
-	icfg config.DatastoreConfiguration, cfg config.MicroserviceDatastoreConfiguration) *Guest {
-	g := &Guest{
+func NewGuest(ms *core.Microservice, name string, icfg config.DatastoreConfiguration,
+	cfg config.MicroserviceDatastoreConfiguration) *Guest {
+	return &Guest{
 		name:               name,
 		microservice:       ms,
 		instanceConfig:     icfg,
 		microserviceConfig: cfg,
 	}
-	g.lifecycle = core.NewLifecycleManager(fmt.Sprintf("%s-guest-%s", ms.FunctionalArea, name), g, callbacks)
-	return g
 }
-
-// Name is the label this connection was built with.
-func (g *Guest) Name() string { return g.name }
 
 // Connect opens the connection if it is not already open, and is safe to call before
 // every use. A caller must call it before DB.
@@ -125,7 +117,10 @@ func (g *Guest) Connect(ctx context.Context) error {
 		return fmt.Errorf("guest connection %q was not initialized", g.name)
 	}
 	pg := g.resolved
-	dsn := g.dsn(pg)
+	dsn, err := g.computeGuestDsn(pg)
+	if err != nil {
+		return err
+	}
 
 	log.Info().Str("guest", g.name).Str("username", pg.Username).
 		Str("hostname", pg.Hostname).Int32("port", pg.Port).Str("ssl_mode", pg.SslMode).
@@ -135,33 +130,46 @@ func (g *Guest) Connect(ctx context.Context) error {
 	// No NamingStrategy: a Guest resolves no models, and a TablePrefix here would
 	// silently qualify a raw-SQL caller's table into this service's own schema name in
 	// a database where that schema does not exist.
-	db, err := gorm.Open(postgres.New(postgres.Config{DSN: dsn}), &gorm.Config{})
+	//
+	// DisableAutomaticPing, then ping explicitly with the caller's context. gorm's own
+	// ping is `Ping()`, which takes no context — so on a cluster that BLACKHOLES rather
+	// than refuses (a node gone, a NetworkPolicy dropping packets) it blocks for the OS
+	// TCP timeout, measured at ~127s here. That happens on the purge coordinator's single
+	// goroutine, so it starves every other purging tenant in the pass, and because the
+	// coordinator stops by cancelling a context and joining, it stalls pod SHUTDOWN for
+	// the same two minutes. A context-less wait is not something a caller can get out of.
+	db, err := gorm.Open(postgres.New(postgres.Config{DSN: dsn}),
+		&gorm.Config{DisableAutomaticPing: true})
 	if err != nil {
+		return fmt.Errorf("connecting to the %q database: %w", g.name, err)
+	}
+	sqldb, err := db.DB()
+	if err != nil {
+		return err
+	}
+	if err := sqldb.PingContext(ctx); err != nil {
+		// Close the pool we are abandoning; otherwise every failed pass leaks one.
+		_ = sqldb.Close()
 		return fmt.Errorf("connecting to the %q database: %w", g.name, err)
 	}
 	if g.microserviceConfig.SqlDebug {
 		db = db.Debug()
 	}
 
-	sqldb, err := db.DB()
-	if err != nil {
+	// Same sizing policy as an owned connection, through the same function: a guest's
+	// pool is used by the same kind of caller and must not become a second,
+	// differently-behaved knob.
+	if err := applyPoolSizing(db, g.microserviceConfig, log.Info().Str("guest", g.name)); err != nil {
 		return err
 	}
-	// Same sizing rules as an owned connection, deliberately: a guest's pool is used by
-	// the same kind of caller and should not be a second, differently-behaved knob.
-	maxOpen, maxIdle := poolSizing(g.microserviceConfig.MaxOpenConnections,
-		g.microserviceConfig.MaxIdleConnections)
-	sqldb.SetMaxOpenConns(maxOpen)
-	sqldb.SetMaxIdleConns(maxIdle)
-	sqldb.SetConnMaxLifetime(time.Hour)
-
 	g.database = db
-	log.Info().Str("guest", g.name).Int("max_open_connections", maxOpen).
-		Int("max_idle_connections", maxIdle).Msg("Created guest connection pool.")
 	return nil
 }
 
-// dsn builds the connection string, and the two ways it differs from an owned
+// guestConnectTimeoutSeconds bounds a single connection attempt. See computeGuestDsn.
+const guestConnectTimeoutSeconds = "5"
+
+// computeGuestDsn builds the connection string, and the two ways it differs from an owned
 // connection's are the two ways an RdbManager pointed at another service's cluster would
 // be wrong.
 //
@@ -176,9 +184,27 @@ func (g *Guest) Connect(ctx context.Context) error {
 // functions installed there remain resolvable. Pinning it rather than leaving the server
 // default of `"$user", public` also means a schema sharing the connecting role's name
 // cannot silently shadow anything.
-func (g *Guest) dsn(pg *PostgresConfig) string {
+//
+// It resolves sslMode itself even though ExecuteInitialize already normalised it, and the
+// redundancy is deliberate: this package's connection-string coverage gate holds every
+// builder to the same fail-closed contract, and a builder that trusts its caller to have
+// validated is one refactor away from being the builder that quietly omits sslMode. That
+// is the defect the gate was written for, so being a builder like the others is worth more
+// than saving the call.
+func (g *Guest) computeGuestDsn(pg *PostgresConfig) (string, error) {
+	sslMode, err := resolveSslMode(pg.SslMode)
+	if err != nil {
+		return "", fmt.Errorf("guest connection %q: %w", g.name, err)
+	}
 	return postgresKeywordDSN(pg.Username, pg.Password, pg.Hostname, pg.Port,
-		g.microservice.InstanceId, pg.SslMode, map[string]string{"search_path": "public"})
+		g.microservice.InstanceId, sslMode, map[string]string{
+			"search_path": "public",
+			// connect_timeout bounds the DIAL, which the context above cannot: a
+			// cancelled context unblocks this pod's shutdown but a pass that is merely
+			// slow still has to give up on its own. Five seconds is generous for a
+			// same-cluster hop and short against the coordinator's 60s tick.
+			"connect_timeout": guestConnectTimeoutSeconds,
+		}), nil
 }
 
 // DB returns a gorm handle bound to ctx. Connect must have succeeded first.
@@ -194,12 +220,21 @@ func (g *Guest) DB(ctx context.Context) *gorm.DB {
 	return db.WithContext(ctx)
 }
 
-// Initialize component.
-func (g *Guest) Initialize(ctx context.Context) error { return g.lifecycle.Initialize(ctx) }
-
-// ExecuteInitialize resolves and validates the configuration. It opens no connection —
-// see the type doc.
-func (g *Guest) ExecuteInitialize(context.Context) error {
+// Initialize resolves and validates the configuration. It opens no connection — see the
+// type doc.
+//
+// 🔴 A GUEST HAS NO LIFECYCLE MANAGER, AND THAT IS THE FIX FOR A REAL DEFECT RATHER THAN
+// a simplification. It first copied RdbManager's eight-method lifecycle surface, whose
+// state machine requires Stopped before Terminate. Nothing ever started a guest — there is
+// nothing to start, since connecting is lazy and ExecuteStart/ExecuteStop were both
+// `return nil` — so the shutdown path's Terminate returned "attempting to terminate
+// component that is not stopped", and its caller returned early, leaving the broker and
+// the service's own database un-terminated.
+//
+// Note what let that ship: the tests called the INNER ExecuteInitialize/ExecuteTerminate
+// callbacks directly, so they drove right past the state machine that rejected the
+// sequence. Two methods with no phase between them cannot be sequenced wrongly.
+func (g *Guest) Initialize(context.Context) error {
 	// convertToPostgresConfig rejects unknown keys and normalises sslMode to the value
 	// every later reader sees, so an unusable posture is a verdict at startup rather
 	// than something the first purge discovers.
@@ -213,24 +248,10 @@ func (g *Guest) ExecuteInitialize(context.Context) error {
 	return nil
 }
 
-// Start component.
-func (g *Guest) Start(ctx context.Context) error { return g.lifecycle.Start(ctx) }
-
-// Lifecycle callback that runs startup logic.
-func (g *Guest) ExecuteStart(context.Context) error { return nil }
-
-// Stop component.
-func (g *Guest) Stop(ctx context.Context) error { return g.lifecycle.Stop(ctx) }
-
-// Lifecycle callback that runs shutdown logic.
-func (g *Guest) ExecuteStop(context.Context) error { return nil }
-
-// Terminate component.
-func (g *Guest) Terminate(ctx context.Context) error { return g.lifecycle.Terminate(ctx) }
-
-// Lifecycle callback that runs termination logic. A guest that was never used has
-// nothing to close, which is the common case.
-func (g *Guest) ExecuteTerminate(context.Context) error {
+// Close releases the pool. A guest that never connected has nothing to close, which is
+// the common case: on every instance where no tenant was ever purged, the connection was
+// resolved and never opened.
+func (g *Guest) Close() error {
 	g.mu.Lock()
 	db := g.database
 	g.database = nil

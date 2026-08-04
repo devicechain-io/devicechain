@@ -154,7 +154,6 @@ func TestSweepRefusesAnUnclassifiedPlanBeforeTouchingTheDatabase(t *testing.T) {
 		col("a", "known", "tenant_id", "character varying"),
 		col("a", "mystery", "id", "bigint"),
 	}, nil, nil)
-
 	require.NoError(t, err)
 
 	_, err = Sweep(context.Background(), nil, plan, "acme", nil)
@@ -198,7 +197,6 @@ func TestADeferredTableIsCarriedOnEveryResult(t *testing.T) {
 			col("main", "detect_rules", "tenant", "text"),
 			col("main", "detect_snapshots", "partition_id", "text"),
 		}, nil, nil)
-
 		require.NoError(t, err)
 		for i := range live.Entries {
 			if live.Entries[i].Table.Name == "detect_snapshots" {
@@ -439,4 +437,35 @@ func TestAPassingPreconditionIsTheCounterweight(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, called)
 	assert.Equal(t, int64(1), res.Rows)
+}
+
+// TestAnEmptyClassificationIsRefusedRatherThanReportedClean is the vacuity guard, and it
+// is the one failure in this package that arrives wearing a success.
+//
+// Everything else here fails LOUDLY when it is wrong: an unclassified table stops the
+// purge, a residual row is an error, a cycle is reported. A plan with no tables in it
+// fails at nothing — checkClassified finds no unclassified table, the sweep deletes from
+// no table, Residue reads no table — and the caller is handed "erased, nothing left" for
+// a database it never looked inside. That answer settles, completes the purge, and
+// releases the tenant's token for reuse.
+func TestAnEmptyClassificationIsRefusedRatherThanReportedClean(t *testing.T) {
+	empty, err := classify(nil, nil, nil)
+	require.NoError(t, err)
+	require.Empty(t, empty.Entries, "the premise: an empty catalog yields an empty plan")
+
+	// It passes every other gate, which is exactly why it needs its own.
+	require.NoError(t, checkClassified(empty),
+		"an empty plan has no unclassified table, so the fail-closed gate says nothing")
+
+	err = checkSweepable(empty, "victim")
+	require.Error(t, err, "a sweep of nothing must not be reported as an erasure")
+	assert.Contains(t, err.Error(), "examined nothing")
+
+	// Control: one table is enough to make the classification real, so the guard cannot
+	// be blocking anything else.
+	populated, err := classify([]column{
+		col("device-management", "devices", "tenant_id", "character varying"),
+	}, nil, nil)
+	require.NoError(t, err)
+	assert.NoError(t, checkSweepable(populated, "victim"))
 }

@@ -20,7 +20,9 @@ import (
 //     the aggregate's rows physically.
 //
 // The names are the real ones from the shipped schema (event-management's
-// measurement_rollups), so a reader can check these against a live database.
+// measurement_rollups). The trailing number is assigned by TimescaleDB in
+// hypertable-creation order across the whole database, so it is illustrative rather than
+// stable — nothing here depends on the value.
 const (
 	matSchema = "_timescaledb_internal"
 	matName   = "_materialized_hypertable_7"
@@ -31,6 +33,14 @@ func rollupAggregate() aggregate {
 		ViewSchema: "event-management", ViewName: "measurement_rollups",
 		MatSchema: matSchema, MatName: matName,
 	}
+}
+
+// rollupAdmitted is what admittedRelations would return for that aggregate. It goes
+// through the same two accessors production does, so a test cannot pass by admitting a
+// relation under a name the real path would never produce.
+func rollupAdmitted() admitted {
+	a := rollupAggregate()
+	return admitted{a.materialization(): a.origin()}
 }
 
 // rawAndMaterialization is the catalog for one hypertable and the materialization of one
@@ -70,7 +80,7 @@ func TestAContinuousAggregatesMaterializationIsSwept(t *testing.T) {
 	}
 
 	// And with it, the materialization is classified and swept like any other table.
-	plan, err := classify(cols, nil, []aggregate{rollupAggregate()})
+	plan, err := classify(cols, nil, rollupAdmitted())
 	require.NoError(t, err)
 
 	mat := classOf(t, plan, matSchema, matName)
@@ -98,7 +108,7 @@ func TestAContinuousAggregatesMaterializationIsSwept(t *testing.T) {
 // it belongs to or they cannot act on it at all.
 func TestAMaterializationCarriesItsAggregatesNameIntoEveryMessage(t *testing.T) {
 	plan, err := classify(rawAndMaterialization("tenant_id", "character varying"),
-		nil, []aggregate{rollupAggregate()})
+		nil, rollupAdmitted())
 	require.NoError(t, err)
 
 	mat := classOf(t, plan, matSchema, matName)
@@ -119,7 +129,7 @@ func TestAMaterializationCarriesItsAggregatesNameIntoEveryMessage(t *testing.T) 
 // and here that stops the purge with the aggregate named, instead of being skipped in
 // silence by a step that never heard of it.
 func TestAMaterializationWithNoTenantColumnFailsTheSweepByName(t *testing.T) {
-	plan, err := classify(rawAndMaterialization("", ""), nil, []aggregate{rollupAggregate()})
+	plan, err := classify(rawAndMaterialization("", ""), nil, rollupAdmitted())
 	require.NoError(t, err)
 
 	mat := classOf(t, plan, matSchema, matName)
@@ -146,16 +156,17 @@ func TestAnAggregateWhoseMaterializationIsMissingFailsClosed(t *testing.T) {
 	cols := []column{
 		col("event-management", "measurement_events", "tenant_id", "character varying"),
 	}
-	_, err := classify(cols, nil, []aggregate{rollupAggregate()})
+	_, err := classify(cols, nil, rollupAdmitted())
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "measurement_rollups")
 	assert.Contains(t, err.Error(), matName)
 }
 
-// TestADatabaseWithNoAggregatesIsUnchanged is the other half of the control above: ten of
-// the eleven functional areas share a plain Postgres cluster with no TimescaleDB at all,
-// and this classification must be exactly what it was before aggregates existed.
+// TestADatabaseWithNoAggregatesIsUnchanged is the other half of the control above: every
+// functional area except event-management shares a plain Postgres cluster with no
+// TimescaleDB at all, and that classification must be exactly what it was before
+// aggregates existed.
 func TestADatabaseWithNoAggregatesIsUnchanged(t *testing.T) {
 	cols := []column{
 		col("device-management", "devices", "tenant_id", "character varying"),
@@ -180,7 +191,7 @@ func TestAChunkIsStillExcludedWhenAnAggregateIsPresent(t *testing.T) {
 		col(matSchema, "_hyper_3_41_chunk", "tenant_id", "character varying"),
 		col(matSchema, "compress_hyper_4_42_chunk", "tenant_id", "character varying"),
 	)
-	plan, err := classify(cols, nil, []aggregate{rollupAggregate()})
+	plan, err := classify(cols, nil, rollupAdmitted())
 	require.NoError(t, err)
 
 	for _, e := range plan.Entries {

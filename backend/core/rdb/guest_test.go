@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
@@ -24,7 +25,7 @@ func guestFixture(t *testing.T, cfg map[string]interface{}) *Guest {
 	t.Helper()
 	return NewGuest(
 		&core.Microservice{InstanceId: "prod", FunctionalArea: "user-management"},
-		core.NewNoOpLifecycleCallbacks(), "tsdb",
+		"tsdb",
 		config.DatastoreConfiguration{Configuration: cfg},
 		config.MicroserviceDatastoreConfiguration{},
 	)
@@ -51,9 +52,11 @@ func guestPgConfig() map[string]interface{} {
 // whether a query happened to be schema-qualified.
 func TestAGuestNeverPinsTheVisitingServicesSchema(t *testing.T) {
 	g := guestFixture(t, guestPgConfig())
-	require.NoError(t, g.ExecuteInitialize(context.Background()))
+	require.NoError(t, g.Initialize(context.Background()))
 
-	cfg := parse(t, g.dsn(g.resolved))
+	dsn, err := g.computeGuestDsn(g.resolved)
+	require.NoError(t, err)
+	cfg := parse(t, dsn)
 
 	assert.Equal(t, "public", cfg.RuntimeParams["search_path"],
 		"a guest owns no schema in this database; pinning its own functional area would name "+
@@ -67,14 +70,40 @@ func TestAGuestNeverPinsTheVisitingServicesSchema(t *testing.T) {
 // somewhere that does not exist, or worse, somewhere that does.
 func TestAGuestTargetsTheInstanceDatabaseOnTheOtherCluster(t *testing.T) {
 	g := guestFixture(t, guestPgConfig())
-	require.NoError(t, g.ExecuteInitialize(context.Background()))
+	require.NoError(t, g.Initialize(context.Background()))
 
-	cfg := parse(t, g.dsn(g.resolved))
+	dsn, err := g.computeGuestDsn(g.resolved)
+	require.NoError(t, err)
+	cfg := parse(t, dsn)
 
 	assert.Equal(t, "prod", cfg.Database)
 	assert.Equal(t, "dc-timescaledb-single.dc-system", cfg.Host,
 		"the guest must reach the OTHER cluster, not the one this service owns")
 	assert.Equal(t, "devicechain", cfg.User)
+}
+
+// TestAGuestBoundsHowLongOneConnectionAttemptCanTake pins the dial timeout, and it is not
+// hygiene.
+//
+// A cluster that BLACKHOLES rather than refuses — a node gone, a NetworkPolicy dropping
+// packets — leaves a connect waiting for the OS TCP timeout, ~127s on a default Linux.
+// That happens on the purge coordinator's single goroutine, so it starves every other
+// tenant in the pass; and the coordinator stops by cancelling a context and joining, so
+// it stalls pod shutdown for the same two minutes. Without this bound the type doc's
+// claim that a down telemetry cluster "delays a purge" rather than blocking anything is
+// simply false.
+func TestAGuestBoundsHowLongOneConnectionAttemptCanTake(t *testing.T) {
+	g := guestFixture(t, guestPgConfig())
+	require.NoError(t, g.Initialize(context.Background()))
+
+	dsn, err := g.computeGuestDsn(g.resolved)
+	require.NoError(t, err)
+	cfg := parse(t, dsn)
+
+	require.NotZero(t, cfg.ConnectTimeout,
+		"an unbounded dial blocks the coordinator loop AND pod shutdown on a blackholed cluster")
+	assert.LessOrEqual(t, cfg.ConnectTimeout, 30*time.Second,
+		"the bound must be short against the coordinator's tick, or it is not a bound")
 }
 
 // TestAGuestRejectsAnUnusableConfigurationAtStartup pins where the verdict lands.
@@ -87,7 +116,7 @@ func TestAGuestTargetsTheInstanceDatabaseOnTheOtherCluster(t *testing.T) {
 func TestAGuestRejectsAnUnusableConfigurationAtStartup(t *testing.T) {
 	bad := guestPgConfig()
 	bad["sslMode"] = "requrie"
-	err := guestFixture(t, bad).ExecuteInitialize(context.Background())
+	err := guestFixture(t, bad).Initialize(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "requrie")
 
@@ -96,7 +125,7 @@ func TestAGuestRejectsAnUnusableConfigurationAtStartup(t *testing.T) {
 	// they believe they changed it.
 	unknown := guestPgConfig()
 	unknown["ssl_mode"] = "require"
-	require.Error(t, guestFixture(t, unknown).ExecuteInitialize(context.Background()))
+	require.Error(t, guestFixture(t, unknown).Initialize(context.Background()))
 }
 
 // TestAnUninitializedGuestSaysSoRatherThanPanicking covers the order dependency the lazy
@@ -108,13 +137,23 @@ func TestAnUninitializedGuestSaysSoRatherThanPanicking(t *testing.T) {
 	assert.Contains(t, err.Error(), "not initialized")
 }
 
-// TestTerminatingAGuestThatNeverConnectedIsANoOp is the common case, not an edge one: on
-// every instance where no tenant was ever purged, the telemetry guest is built, resolved
-// and never used. Shutdown must not fail there.
-func TestTerminatingAGuestThatNeverConnectedIsANoOp(t *testing.T) {
+// TestTheSequenceAServiceActuallyUsesSucceeds drives exactly what user-management does:
+// Initialize at startup, Close at shutdown, and nothing in between on an instance where
+// no tenant was ever purged — which is every instance, almost always.
+//
+// 🔴 THIS IS A REGRESSION TEST FOR A DEFECT THE PREVIOUS TESTS WERE SHAPED NOT TO SEE.
+// Guest first carried RdbManager's eight-method lifecycle, whose state machine requires
+// Stopped before Terminate; nothing started a guest, so shutdown failed and its caller
+// returned early, leaving the broker and the service's own database un-terminated. The
+// tests missed it because they called the INNER ExecuteInitialize/ExecuteTerminate
+// callbacks, driving straight past the state machine that was doing the rejecting. The
+// fix was to delete the phase that could be out of order, so what is asserted here is
+// now total rather than one legal path among several.
+func TestTheSequenceAServiceActuallyUsesSucceeds(t *testing.T) {
 	g := guestFixture(t, guestPgConfig())
-	require.NoError(t, g.ExecuteInitialize(context.Background()))
-	require.NoError(t, g.ExecuteTerminate(context.Background()))
+	require.NoError(t, g.Initialize(context.Background()))
+	require.NoError(t, g.Close())
+	require.NoError(t, g.Close(), "shutdown must not care whether it already ran")
 }
 
 // TestOnlyAMissingDatabaseCountsAsAMissingDatabase pins the discrimination a caller draws

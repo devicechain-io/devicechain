@@ -20,6 +20,14 @@
 // sweep, and a residual scan for the bystander is asserted NON-empty, so a scan that
 // always reports clean fails here instead of certifying an erasure that never happened.
 //
+// 🔴 ONE PRODUCTION SHAPE IS PERMANENTLY OUT OF REACH HERE: compressed chunks. Compression
+// is applied by event-management's runtime lifecycle reconciler, not by its migrations
+// (default: on, after 7 days), so a database built from the chains alone never has one —
+// and a DELETE against a compressed chunk is a genuinely different code path in
+// TimescaleDB. It is covered instead by event-management's own integration tests, which
+// compress deliberately and then assert the rows are physically gone from the internal
+// compressed store rather than merely invisible through the hypertable.
+//
 // Run it against a throwaway server (hack/migration-diff.sh starts one; note its port):
 //
 //	DC_IT_PGPORT=$PORT go test -tags integration -count=1 ./... -run PurgeDrill -v
@@ -259,7 +267,7 @@ func TestPurgeDrillErasesOneTenantAndLeavesTheOther(t *testing.T) {
 	assert.Zerof(t, count(t, db, rollupMat, "tenant_id = ?", victim),
 		"%s still holds the victim's aggregate buckets. The raw measurements are gone, so every "+
 			"reading through the aggregate's own view reports clean while the copy survives — and "+
-			"the refresh policy's 30-day trailing window would never revisit a bucket to remove it",
+			"the refresh policy's trailing window would never revisit a bucket to remove it",
 		rollupMat)
 	assert.Zero(t, count(t, db, `"user-management".iam_membership_tenant_roles`,
 		"membership_id = ?", 1005),

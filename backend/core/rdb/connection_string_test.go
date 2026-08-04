@@ -7,6 +7,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -52,17 +54,30 @@ func basePg(sslMode string) *PostgresConfig {
 }
 
 type builder struct {
-	fn    string
-	build func(*RdbManager, *PostgresConfig) (string, error)
+	fn string
+	// build takes only the config, so a builder hanging off a different receiver can
+	// join the table. That matters: the receiver is an implementation detail, and the
+	// one thing this table must never do is exclude a builder for being shaped
+	// differently — that is precisely how the uncovered one shipped.
+	build func(*testing.T, *PostgresConfig) (string, error)
 	// db is the database this builder is expected to target.
 	db string
 }
 
 func builders() []builder {
+	onManager := func(f func(*RdbManager, *PostgresConfig) (string, error)) func(*testing.T, *PostgresConfig) (string, error) {
+		return func(t *testing.T, pg *PostgresConfig) (string, error) { return f(rdbFixture(t, nil), pg) }
+	}
 	return []builder{
-		{"computePostgresDsn", (*RdbManager).computePostgresDsn, "prod"},
-		{"computePostgresRootUrl", (*RdbManager).computePostgresRootUrl, "postgres"},
-		{"computePostgresInstanceDatabaseUrl", (*RdbManager).computePostgresInstanceDatabaseUrl, "prod"},
+		{"computePostgresDsn", onManager((*RdbManager).computePostgresDsn), "prod"},
+		{"computePostgresRootUrl", onManager((*RdbManager).computePostgresRootUrl), "postgres"},
+		{"computePostgresInstanceDatabaseUrl", onManager((*RdbManager).computePostgresInstanceDatabaseUrl), "prod"},
+		// The guest connection (guest.go). It reaches a database this service does not
+		// own, but it is the same hop with the same TLS posture to get wrong, so it is
+		// held to the same contract as the three above.
+		{"computeGuestDsn", func(t *testing.T, pg *PostgresConfig) (string, error) {
+			return guestFixture(t, guestPgConfig()).computeGuestDsn(pg)
+		}, "prod"},
 	}
 }
 
@@ -91,7 +106,7 @@ func TestEveryBuilderCarriesTheConfiguredSslMode(t *testing.T) {
 				{"verify-full", true},
 				{"prefer", true}, // prefer configures TLS with a plaintext fallback
 			} {
-				got, err := b.build(rdbFixture(t, nil), basePg(tc.mode))
+				got, err := b.build(t, basePg(tc.mode))
 				if err != nil {
 					t.Fatalf("%s(%q): %v", b.fn, tc.mode, err)
 				}
@@ -130,7 +145,7 @@ func TestEveryBuilderRoundTripsHostileValues(t *testing.T) {
 			t.Run(b.fn+"/"+h.name, func(t *testing.T) {
 				pg := basePg("require")
 				pg.Password = h.password
-				got, err := b.build(rdbFixture(t, nil), pg)
+				got, err := b.build(t, pg)
 				if err != nil {
 					t.Fatalf("%s: %v", b.fn, err)
 				}
@@ -192,7 +207,7 @@ func TestEveryBuilderFailsClosedOnAnUnusableSslMode(t *testing.T) {
 	for _, b := range builders() {
 		t.Run(b.fn, func(t *testing.T) {
 			pg := basePg("disable sslrootcert=/tmp/attacker.crt")
-			got, err := b.build(rdbFixture(t, nil), pg)
+			got, err := b.build(t, pg)
 			if err == nil {
 				t.Fatalf("%s accepted an injecting sslMode and returned: %s", b.fn, redactForTest(got))
 			}
@@ -205,9 +220,23 @@ func TestEveryBuilderFailsClosedOnAnUnusableSslMode(t *testing.T) {
 
 // 🔑 Test the SET, not the members.
 //
-// The sslMode omission that shipped was a builder nobody remembered existed.
-// This scans the files where connection strings are constructed and requires
-// every function that builds one to be in the table above.
+// The sslMode omission that shipped was a builder nobody remembered existed. This scans
+// the package for functions that construct a connection string and requires every one of
+// them to be in the table above.
+//
+// 🔴 IT SCANS THE WHOLE PACKAGE, AND IT DID NOT ALWAYS. Two things about the earlier
+// version were the same mistake as the defect it guards, and both were found by a builder
+// slipping past it — guest.go's, added for the ADR-077 telemetry connection:
+//
+//   - It walked a HARDCODED list of two filenames. A gate whose coverage is a list
+//     someone has to remember to extend is the thing it exists to prevent, one level up.
+//     The list is now the package's own .go files, so a new file is in scope the moment
+//     it exists.
+//   - It recognised a builder by STRING LITERALS ("sslmode=", "dbname="). Those literals
+//     had already moved into connstring.go's two primitives, so by then the only thing
+//     that reliably identifies a builder is that it CALLS one of them. Both signals are
+//     kept — the literal one still catches a hand-rolled DSN that bypasses the
+//     primitives, which is the older failure and still possible.
 func TestEveryConnectionStringBuilderIsCovered(t *testing.T) {
 	covered := map[string]bool{}
 	for _, b := range builders() {
@@ -215,11 +244,21 @@ func TestEveryConnectionStringBuilderIsCovered(t *testing.T) {
 	}
 	// The low-level helpers in connstring.go are the escaping primitives, not
 	// per-connection builders; they are exercised by the round-trip tests above.
-	covered["postgresURL"] = true
-	covered["postgresKeywordDSN"] = true
+	primitives := map[string]bool{"postgresURL": true, "postgresKeywordDSN": true}
+	for name := range primitives {
+		covered[name] = true
+	}
+
+	sources, err := packageSources(".")
+	if err != nil {
+		t.Fatalf("listing package sources: %v", err)
+	}
+	if len(sources) == 0 {
+		t.Fatal("the scan found no source files, so it is not measuring anything")
+	}
 
 	var found []string
-	for _, src := range []string{"postgres.go", "connstring.go"} {
+	for _, src := range sources {
 		fset := token.NewFileSet()
 		file, err := parser.ParseFile(fset, src, nil, 0)
 		if err != nil {
@@ -232,6 +271,14 @@ func TestEveryConnectionStringBuilderIsCovered(t *testing.T) {
 			}
 			builds := false
 			ast.Inspect(fn.Body, func(inner ast.Node) bool {
+				// Signal 1: it calls one of the escaping primitives.
+				if call, ok := inner.(*ast.CallExpr); ok {
+					if id, ok := call.Fun.(*ast.Ident); ok && primitives[id.Name] {
+						builds = true
+						return false
+					}
+				}
+				// Signal 2: it hand-formats one, bypassing the primitives entirely.
 				lit, ok := inner.(*ast.BasicLit)
 				if !ok || lit.Kind != token.STRING {
 					return true
@@ -266,6 +313,24 @@ func TestEveryConnectionStringBuilderIsCovered(t *testing.T) {
 				"  TLS posture came to differ across three connections on the same hop.", name)
 		}
 	}
+}
+
+// packageSources lists the package's own non-test Go files, so the scan above covers a
+// file added tomorrow without anyone editing this test.
+func packageSources(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		out = append(out, filepath.Join(dir, name))
+	}
+	return out, nil
 }
 
 func redactForTest(connectionString string) string {

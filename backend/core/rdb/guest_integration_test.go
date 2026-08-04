@@ -17,7 +17,10 @@
 //
 // Run it against a throwaway server (hack/migration-diff.sh starts one; note its port):
 //
-//	DC_IT_PGPORT=$PORT go test -tags integration -count=1 ./rdb/... -run Guest -v
+//	DC_IT_PGPORT=$PORT go test -tags integration -count=1 ./rdb/... -v
+//
+// No -run filter: the test that matters most here is not named "Guest", and an earlier
+// version of this line recommended one that skipped it.
 package rdb
 
 import (
@@ -49,7 +52,7 @@ func liveGuest(t *testing.T, instanceId string) *Guest {
 	}
 	g := NewGuest(
 		&core.Microservice{InstanceId: instanceId, FunctionalArea: "user-management"},
-		core.NewNoOpLifecycleCallbacks(), "tsdb",
+		"tsdb",
 		config.DatastoreConfiguration{Configuration: map[string]interface{}{
 			"hostname": host,
 			"port":     port,
@@ -59,8 +62,8 @@ func liveGuest(t *testing.T, instanceId string) *Guest {
 		}},
 		config.MicroserviceDatastoreConfiguration{},
 	)
-	require.NoError(t, g.ExecuteInitialize(context.Background()))
-	t.Cleanup(func() { _ = g.ExecuteTerminate(context.Background()) })
+	require.NoError(t, g.Initialize(context.Background()))
+	t.Cleanup(func() { _ = g.Close() })
 	return g
 }
 
