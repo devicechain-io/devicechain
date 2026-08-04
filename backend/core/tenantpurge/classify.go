@@ -316,6 +316,32 @@ func Classify(ctx context.Context, db *gorm.DB) (*Plan, error) {
 	return classify(cols, fks, admitted)
 }
 
+// SchemaExists reports whether a schema is present in the database behind db.
+//
+// It answers one question a purge caller cannot answer any other way: has a functional
+// area ever run against this database? A schema is created by its own service on first
+// startup and by nothing else, so its absence means the area was never deployed here —
+// which for a store that spans clusters is the difference between "nothing to erase" and
+// "something is wrong". Nothing in a service's configuration carries that fact: the
+// credentials for every cluster reach every pod, and there is no runtime area discovery.
+//
+// 🔴 IT IS ONLY EVER SAFE TO READ AS "NOTHING TO ERASE" WITH A LOGGED REASON. The same
+// answer is returned by a database that is mid-restore, and a purge that completes on it
+// writes an erasure record that is false. The caller owns that judgement; this function
+// only reports the fact.
+func SchemaExists(ctx context.Context, db *gorm.DB, schema string) (bool, error) {
+	var n int64
+	// pg_namespace rather than information_schema.schemata: the latter shows only schemas
+	// the CURRENT ROLE has privileges on, so a schema owned by another service's role
+	// would read as absent — which is exactly the fail-open this is guarding against.
+	err := db.WithContext(ctx).Raw(
+		`SELECT count(*) FROM pg_namespace WHERE nspname = ?`, schema).Scan(&n).Error
+	if err != nil {
+		return false, fmt.Errorf("checking whether the %q schema exists: %w", schema, err)
+	}
+	return n > 0, nil
+}
+
 // loadColumns reads every column of every row-holding relation in every non-system
 // schema.
 //

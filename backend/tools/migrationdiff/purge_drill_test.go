@@ -313,3 +313,31 @@ func TestPurgeDrillErasesOneTenantAndLeavesTheOther(t *testing.T) {
 		"the residual scan reported a tenant with live rows as clean, so it cannot see residue "+
 			"at all and its clean verdict for the victim means nothing")
 }
+
+// TestSchemaExistenceIsAnsweredByTheRealCatalog pins the query the telemetry store bets
+// its "nothing to erase" conclusion on.
+//
+// 🔴 GET THE CATALOG OR COLUMN NAME WRONG AND IT ANSWERS "no schema" FOREVER — which that
+// store reads as "this instance runs no event-management", i.e. reports clean without
+// erasing anything, on every pass, for every tenant. A unit test cannot catch that: any
+// stand-in table answers whatever it was built to answer. Only a real database with the
+// area's migrations applied can, and this is the one test that has one.
+//
+// Both directions are asserted, because a query that always returned true would be just as
+// wrong in the other direction — it would make an instance without the area block forever.
+func TestSchemaExistenceIsAnsweredByTheRealCatalog(t *testing.T) {
+	db, ctx := drillConn(t)
+
+	for _, area := range areas {
+		found, err := tenantpurge.SchemaExists(ctx, db, area.name)
+		require.NoErrorf(t, err, "probing for %s", area.name)
+		assert.Truef(t, found, "%s has been migrated into this database, so the probe the "+
+			"telemetry store trusts must see its schema — if it cannot, that store reports "+
+			"clean without erasing anything", area.name)
+	}
+
+	absent, err := tenantpurge.SchemaExists(ctx, db, "no-such-functional-area")
+	require.NoError(t, err)
+	assert.False(t, absent,
+		"a probe that answers yes for everything makes an instance without the area block forever")
+}
