@@ -47,12 +47,12 @@ func TestPacingLiveTrafficAgainstADrainCannotMintAdmissions(t *testing.T) {
 	base := time.Now().Add(-time.Hour)
 	backlogAdmitted, liveAdmitted := 0, 0
 	for i := 0; i < 1000; i++ {
-		if gate("gw", "acme", base.Add(time.Duration(i)*time.Millisecond)) {
+		if gate("gw", "acme", base.Add(time.Duration(i)*time.Millisecond), false) {
 			backlogAdmitted++
 		}
 		// The interleave: a live post every ten backlog messages, each landing at
 		// wall-clock now and so an hour ahead of the backlog timeline.
-		if i%10 == 0 && gate("http", "acme", time.Time{}) {
+		if i%10 == 0 && gate("http", "acme", time.Time{}, false) {
 			liveAdmitted++
 		}
 	}
@@ -76,11 +76,11 @@ func TestASecondOfConsumerLagIsNotABypass(t *testing.T) {
 	base := time.Now().Add(-time.Second)
 	admitted := 0
 	for i := 0; i < 1000; i++ {
-		if gate("gw", "acme", base.Add(time.Duration(i)*time.Microsecond)) {
+		if gate("gw", "acme", base.Add(time.Duration(i)*time.Microsecond), false) {
 			admitted++
 		}
 		if i%10 == 0 {
-			gate("http", "acme", time.Time{})
+			gate("http", "acme", time.Time{}, false)
 		}
 	}
 
@@ -96,7 +96,7 @@ func TestGateAdmitsACompliantBacklogInFull(t *testing.T) {
 	base := time.Now().Add(-time.Hour)
 	admitted := 0
 	for i := 0; i < 1000; i++ {
-		if gate("gw", "acme", base.Add(time.Duration(i)*10*time.Millisecond)) {
+		if gate("gw", "acme", base.Add(time.Duration(i)*10*time.Millisecond), false) {
 			admitted++
 		}
 	}
@@ -115,7 +115,7 @@ func TestCaughtUpTrafficIsMeteredOnTheLiveLimiter(t *testing.T) {
 	fresh := time.Now().Add(-BacklogThreshold / 2)
 	admitted := 0
 	for i := 0; i < 500; i++ {
-		if gate("gw", "acme", fresh) {
+		if gate("gw", "acme", fresh, false) {
 			admitted++
 		}
 	}
@@ -124,7 +124,7 @@ func TestCaughtUpTrafficIsMeteredOnTheLiveLimiter(t *testing.T) {
 
 	// And having done so, the live bucket is spent — an HTTP post from the same
 	// tenant is shed rather than served from a second, untouched bucket.
-	require.False(t, gate("http", "acme", time.Time{}),
+	require.False(t, gate("http", "acme", time.Time{}, false),
 		"live traffic must share one bucket across transports when nothing is lagging")
 }
 
@@ -135,12 +135,12 @@ func TestBacklogMeteringIsPerTenant(t *testing.T) {
 
 	base := time.Now().Add(-time.Hour)
 	for i := 0; i < 1000; i++ { // acme floods its own backlog bucket
-		gate("gw", "acme", base.Add(time.Duration(i)*time.Millisecond))
+		gate("gw", "acme", base.Add(time.Duration(i)*time.Millisecond), false)
 	}
 
 	admitted := 0
 	for i := 0; i < 100; i++ { // globex sent a compliant backlog over the same window
-		if gate("gw", "globex", base.Add(time.Duration(i)*10*time.Millisecond)) {
+		if gate("gw", "globex", base.Add(time.Duration(i)*10*time.Millisecond), false) {
 			admitted++
 		}
 	}
@@ -157,12 +157,12 @@ func TestBacklogMeteringIsPerTenant(t *testing.T) {
 func TestRefuseDeletedTenants(t *testing.T) {
 	t.Run("a deleted tenant is refused before the rate gate is consulted", func(t *testing.T) {
 		metered := false
-		next := RateGate(func(string, string, time.Time) bool { metered = true; return true })
+		next := RateGate(func(string, string, time.Time, bool) bool { metered = true; return true })
 		var refused []string
 		gate := RefuseDeletedTenants(func(tenant string) bool { return tenant == "acme" }, next,
 			func(_, tenant string) { refused = append(refused, tenant) })
 
-		if gate("http", "acme", time.Time{}) {
+		if gate("http", "acme", time.Time{}, false) {
 			t.Fatal("a deleted tenant's message must not be admitted")
 		}
 		if metered {
@@ -178,9 +178,9 @@ func TestRefuseDeletedTenants(t *testing.T) {
 	// and silently stop all ingest on the instance.
 	t.Run("a live tenant is passed through to the rate gate", func(t *testing.T) {
 		for _, allowed := range []bool{true, false} {
-			next := RateGate(func(string, string, time.Time) bool { return allowed })
+			next := RateGate(func(string, string, time.Time, bool) bool { return allowed })
 			gate := RefuseDeletedTenants(func(string) bool { return false }, next, nil)
-			if got := gate("http", "acme", time.Time{}); got != allowed {
+			if got := gate("http", "acme", time.Time{}, false); got != allowed {
 				t.Errorf("a live tenant must get the rate gate's own answer: got %v want %v", got, allowed)
 			}
 		}
@@ -189,9 +189,64 @@ func TestRefuseDeletedTenants(t *testing.T) {
 	// An unconfigured gate returns the underlying one untouched, so an instance with no
 	// reachable user-management ingests exactly as before rather than refusing everything.
 	t.Run("nil lifecycle gate leaves ingest alone", func(t *testing.T) {
-		next := RateGate(func(string, string, time.Time) bool { return true })
-		if !RefuseDeletedTenants(nil, next, nil)("http", "acme", time.Time{}) {
+		next := RateGate(func(string, string, time.Time, bool) bool { return true })
+		if !RefuseDeletedTenants(nil, next, nil)("http", "acme", time.Time{}, false) {
 			t.Error("an unwired lifecycle gate must not refuse ingest")
 		}
 	})
+
+	// 🔴 THE REGRESSION THAT MADE redelivery A PARAMETER. The capture source used to
+	// skip the whole gate on a redelivery, to avoid metering a message that had already
+	// paid. Once the lifecycle refusal was composed in front of the meter, that skip
+	// silently stopped refusing a deleted tenant's redeliveries too — so a tenant
+	// deleted between delivery 1 and a retry had that retry admitted, into a purge that
+	// was already sweeping.
+	//
+	// Both halves are asserted here, because either alone passes with the bug present:
+	// checking only the refusal passes with metering also unexempted, and checking only
+	// the exemption is what the original code did.
+	t.Run("a redelivery is exempt from metering and not from the lifecycle refusal", func(t *testing.T) {
+		metered := 0
+		next := RateGate(func(_, _ string, _ time.Time, redelivery bool) bool {
+			metered++
+			return true
+		})
+		gate := RefuseDeletedTenants(func(tenant string) bool { return tenant == "acme" }, next, nil)
+
+		if gate("gw", "acme", time.Time{}, true) {
+			t.Error("a deleted tenant's REDELIVERY must be refused, not admitted because it already paid")
+		}
+		if metered != 0 {
+			t.Error("a refused redelivery must not reach the meter at all")
+		}
+		if !gate("gw", "globex", time.Time{}, true) {
+			t.Fatal("a live tenant's redelivery must still be admitted")
+		}
+		if metered != 1 {
+			t.Errorf("a live tenant's redelivery must reach the meter, which exempts it there; "+
+				"got %d meter calls", metered)
+		}
+	})
+}
+
+// TestARedeliveryIsNotMetered pins the exemption in the layer that owns it, which is
+// where it moved to. NewRateGate must admit a redelivery without touching the bucket:
+// asserting through a REAL limiter rather than a stub, because a stub cannot show that
+// the token was never spent.
+func TestARedeliveryIsNotMetered(t *testing.T) {
+	// A ceiling of one token and no refill, so a single metered call exhausts it.
+	limiter := core.NewTenantRateLimiter(func(string) (float64, int) { return 0, 1 })
+	gate := NewRateGate(limiter, limiter, nil)
+
+	for i := 0; i < 5; i++ {
+		if !gate("gw", "acme", time.Time{}, true) {
+			t.Fatalf("redelivery %d was shed; a redelivery must be admitted unmetered", i)
+		}
+	}
+	if !gate("gw", "acme", time.Time{}, false) {
+		t.Error("the redeliveries spent the tenant's only token, so the exemption is not real")
+	}
+	if gate("gw", "acme", time.Time{}, false) {
+		t.Error("the limiter never sheds, so this test cannot show an exemption at all")
+	}
 }

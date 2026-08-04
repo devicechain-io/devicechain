@@ -79,9 +79,11 @@ func NewTenantLifecycleResolver(client *svcclient.Client, umURL string) *TenantL
 // NIL when user-management is not configured, which every caller must treat as "the gate
 // is off" rather than as an error.
 //
-// It exists so the four services carrying this gate — device connect-auth, the two
-// ingest fronts, command dispatch — do not each re-derive the same six lines, because
-// the parts worth getting identical are the parts a copy gets wrong:
+// It exists so the services carrying this gate do not each re-derive the same six
+// lines, because the parts worth getting identical are the parts a copy gets wrong.
+// (Deliberately not counted or enumerated here, for the reason given above: the set
+// has already grown once since this was written, and a number frozen in prose only
+// ever drifts away from the tree. Ask the tree.)
 //
 //   - The service token is minted with tenant:read ALONE. Every one of these services
 //     already holds an svcclient for something else, and reusing it would mean widening

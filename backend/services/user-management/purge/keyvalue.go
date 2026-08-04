@@ -18,13 +18,12 @@ import (
 // this type supplies is the connection, the instance, and the translation into a ledger
 // line.
 //
-// # It is the last store, so it is the one that lets a purge finish
+// # What it holds back, and where that is recorded
 //
-// Every registered store now erases. That does not mean a purge completes today — the
-// broker still carries three deferrals it cannot reach, and event-processing's DETECT
-// checkpoint is still a deferred table — but nothing is Pending any more. What remains is
-// stated in every deletion record rather than missing from it, which is the whole point of
-// the Pending type it replaces.
+// Four buckets are deliberately not swept — refresh tokens, OAuth codes, locks and leases
+// — and they are the reason to read this type's Erase before trusting its ledger line. See
+// the exemption note there: this store reports clean without recording what it declined to
+// look at, which is the same shape as the telemetry store's "no database here".
 type KeyValue struct {
 	conn       messaging.Connection
 	instanceId string

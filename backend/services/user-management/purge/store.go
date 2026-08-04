@@ -118,7 +118,7 @@ func (o Outcome) Reason() string { return strings.Join(o.Deferred, "; ") }
 // impossible until someone replaces it. It is deleted by building the real store, not by
 // removing the registration.
 //
-// No store uses it today — every one of the five is built. That is what it was for, and it
+// No store uses it today — every one of the six is built. That is what it was for, and it
 // stays because the next storage system starts here.
 type Pending struct {
 	// StoreName is the ledger key the real store will inherit, so the history carries

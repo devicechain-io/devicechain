@@ -20,7 +20,7 @@
   "createTenantButton": "Crear inquilino",
   "defaultPlaceholder": "predeterminado",
   "delete": "Eliminar",
-  "deleteTenantConfirm": "¿Eliminar “{{token}}”? Se revoca el inicio de sesión y esta acción no se puede deshacer. El identificador “{{token}}” queda reservado de forma permanente y no se puede reutilizar: toda la plataforma almacena los datos de este inquilino bajo ese identificador. Los dispositivos, paneles e historial del inquilino se borran por separado, una vez completada esta acción.",
+  "deleteTenantConfirm": "¿Eliminar “{{token}}”? El inicio de sesión se revoca de inmediato y esta acción no se puede deshacer. Los dispositivos, paneles e historial del inquilino se borran después en segundo plano, lo que tarda al menos 12 horas. El identificador “{{token}}” queda reservado hasta que eso termine, y vuelve a estar disponible una vez completado.",
   "deleteTenantTitle": "Eliminar inquilino",
   "description": "El registro de inquilinos de la instancia. Un inquilino es un registro del plano de control, no un recurso aprovisionado.",
   "disable": "Deshabilitar",

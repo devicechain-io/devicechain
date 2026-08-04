@@ -68,6 +68,11 @@ type captureHarness struct {
 	lastSeq     uint64
 	received    int
 	allowResult bool
+	// redeliveries records the redelivery flag the source passed on each admission
+	// call, in order. It is what pins that the source REPORTS a redelivery rather
+	// than acting on one itself — the decision moved into the gate, so the source's
+	// remaining obligation is to describe the message accurately.
+	redeliveries []bool
 	// gate, when set, replaces the flat allowResult so a test can drive the real
 	// per-tenant limiter and observe what admission actually depends on. Set it
 	// before the first handle call.
@@ -96,9 +101,20 @@ func newCaptureHarness(t *testing.T) *captureHarness {
 			h.mu.Unlock()
 			return h.failedErr
 		},
-		func(src string, tenant string, sentAt time.Time) bool {
+		func(src string, tenant string, sentAt time.Time, redelivery bool) bool {
+			h.mu.Lock()
+			h.redeliveries = append(h.redeliveries, redelivery)
+			h.mu.Unlock()
 			if h.gate != nil {
-				return h.gate(src, tenant, sentAt)
+				return h.gate(src, tenant, sentAt, redelivery)
+			}
+			// 🔴 THE STUB HONOURS THE REDELIVERY EXEMPTION, because the real gate does.
+			// allowResult models an exhausted rate ceiling, and the real meter admits a
+			// redelivery without consulting the bucket at all. A stub that refused one
+			// anyway would not be a stricter test — it would be a DIFFERENT gate, and
+			// the test would measure the stub.
+			if redelivery {
+				return true
 			}
 			return h.allowResult
 		})
@@ -119,6 +135,13 @@ func (h *captureHarness) counts() (published, failed, received int, seq uint64) 
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.published, h.failedCalls, h.received, h.lastSeq
+}
+
+// flags returns the redelivery flag the source passed on each admission call.
+func (h *captureHarness) flags() []bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]bool(nil), h.redeliveries...)
 }
 
 const captureSubject = "inst-1.acme.devices.sensor-001.events"
@@ -416,7 +439,7 @@ func backlogHarness(t *testing.T, rps float64, burst int) *captureHarness {
 	t.Helper()
 	h := newCaptureHarness(t)
 	limiter := core.NewTenantRateLimiter(func(string) (float64, int) { return rps, burst })
-	h.gate = func(_ string, tenant string, sentAt time.Time) bool {
+	h.gate = func(_ string, tenant string, sentAt time.Time, redelivery bool) bool {
 		return limiter.AllowAt(tenant, sentAt)
 	}
 	return h
@@ -573,9 +596,18 @@ func TestStartingWithoutACaptureReaderFailsLoudly(t *testing.T) {
 // a redelivery carries an older AppendTime than messages already admitted. Feeding
 // that to the bucket rewinds its mark and re-accrues on the next forward jump —
 // the same minting the two-limiter split was introduced to close.
+// 🔴 WHERE THIS TEST'S SUBJECT MOVED TO, AND WHY. The exemption used to be a
+// condition on this source's own call site. It is now a flag the source PASSES, and
+// the meter honours it — because the call site skipped the whole admission gate, and
+// so also skipped the tenant-deleted refusal composed in front of it once that
+// arrived. See RateGate's doc.
+//
+// So this test now pins two things that are still this source's job: that a
+// redelivery is REPORTED as one, and that it still reaches the publisher. The
+// exemption itself is pinned against a real limiter in TestARedeliveryIsNotMetered.
 func TestARedeliveryIsNotMeteredASecondTime(t *testing.T) {
 	h := newCaptureHarness(t)
-	// The gate refuses everything: the tenant's bucket is empty, as it is mid-drain.
+	// The gate refuses everything it meters: the tenant's bucket is empty, mid-drain.
 	h.allowResult = false
 
 	ack := &recordingAck{}
@@ -583,6 +615,9 @@ func TestARedeliveryIsNotMeteredASecondTime(t *testing.T) {
 	h.source.handle(capturedMsg(captureSubject, validEvent, 2, 99, ack))
 
 	require.True(t, ack.settled(t), "message never settled")
+	require.Equal(t, []bool{true}, h.flags(),
+		"the source must tell the gate this is a redelivery; if it reports a first "+
+			"delivery the meter charges it again")
 	published, _, _, _ := h.counts()
 	require.Equal(t, 1, published,
 		"a redelivery was re-metered and shed; it had already been admitted, so this is "+
@@ -590,6 +625,76 @@ func TestARedeliveryIsNotMeteredASecondTime(t *testing.T) {
 
 	acks := ack.counts()
 	require.Equal(t, 1, acks, "a successfully republished redelivery must be acked")
+}
+
+// 🔴 THE REFUSAL THAT THE OLD CALL-SITE SKIP SILENTLY DISABLED. A redelivery must
+// still be consulted against the gate, so a tenant deleted between delivery 1 and the
+// retry has that retry refused rather than written into a purge already in progress.
+//
+// It drives the REAL composed gate rather than the harness stub, because the stub is
+// the thing the old code's behaviour was hidden behind: a stub that answers on its own
+// cannot show that the lifecycle layer was reached.
+func TestADeletedTenantsRedeliveryIsStillRefused(t *testing.T) {
+	h := newCaptureHarness(t)
+	h.gate = RefuseDeletedTenants(
+		func(tenant string) bool { return true }, // this tenant has been deleted
+		NewRateGate(core.NewTenantRateLimiter(func(string) (float64, int) { return 1000, 1000 }),
+			core.NewTenantRateLimiter(func(string) (float64, int) { return 1000, 1000 }), nil),
+		nil)
+
+	ack := &recordingAck{}
+	h.source.handle(capturedMsg(captureSubject, validEvent, 2, 99, ack))
+
+	require.True(t, ack.settled(t), "message never settled")
+	published, _, _, _ := h.counts()
+	require.Zero(t, published,
+		"a deleted tenant's redelivery was admitted — the purge is sweeping underneath it")
+	require.Equal(t, 1, ack.counts(), "a refused message is a deliberate drop and must ack")
+}
+
+// The counterweight to the test above: with the tenant LIVE, the same redelivery
+// through the same real gate is admitted. Without this, refusing everything would
+// satisfy the case above and stop the capture source entirely.
+func TestALiveTenantsRedeliveryIsStillAdmitted(t *testing.T) {
+	h := newCaptureHarness(t)
+	h.gate = RefuseDeletedTenants(
+		func(tenant string) bool { return false }, // live
+		NewRateGate(core.NewTenantRateLimiter(func(string) (float64, int) { return 1000, 1000 }),
+			core.NewTenantRateLimiter(func(string) (float64, int) { return 1000, 1000 }), nil),
+		nil)
+
+	ack := &recordingAck{}
+	h.source.handle(capturedMsg(captureSubject, validEvent, 2, 99, ack))
+
+	require.True(t, ack.settled(t), "message never settled")
+	published, _, _, _ := h.counts()
+	require.Equal(t, 1, published, "a live tenant's redelivery must still be published")
+}
+
+// 🔴 A MESSAGE WITH NO DELIVERY COUNT IS A FIRST DELIVERY, NOT A REDELIVERY.
+//
+// The broker reports NumDelivered as 0 when consumer metadata is unavailable, and the
+// predicate on the admission call has to read that as "meter it" — the degrade
+// direction this source commits to everywhere else is over-shedding, never unmetered.
+//
+// This exists because `!= 1` survived as a mutant: it reads as an equally plausible
+// "not the first delivery" to anyone editing the line later, and under it a
+// metadata-less message flags as a redelivery and is admitted UNMETERED, straight past
+// the tenant's ingest ceiling. Nothing else in the suite drives handle with 0, so
+// nothing else can tell the two predicates apart.
+func TestAMessageWithNoDeliveryCountIsMetered(t *testing.T) {
+	h := newCaptureHarness(t)
+	h.allowResult = false
+
+	ack := &recordingAck{}
+	h.source.handle(capturedMsg(captureSubject, validEvent, 0, 101, ack))
+
+	require.True(t, ack.settled(t), "message never settled")
+	require.Equal(t, []bool{false}, h.flags(),
+		"a message whose delivery count is unavailable must be reported as a FIRST "+
+			"delivery; reported as a redelivery it is exempt from the ceiling entirely")
+	published, _, _, _ := h.counts()
+	require.Zero(t, published, "an unmetered admission got past the tenant's ingest ceiling")
 }
 
 // The counterweight: a FIRST delivery is still metered. Without this, "skip the

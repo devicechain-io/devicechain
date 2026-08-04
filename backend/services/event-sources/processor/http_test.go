@@ -134,7 +134,7 @@ func TestHttpEventSource_MissingTenant(t *testing.T) {
 // A request whose tenant is over its ingest rate limit is shed with 429 before
 // the body is decoded — neither callback fires.
 func TestHttpEventSource_RateLimited(t *testing.T) {
-	es, dec, fail := newTestHttpSource(t, func(string, string, time.Time) bool { return false })
+	es, dec, fail := newTestHttpSource(t, func(string, string, time.Time, bool) bool { return false })
 
 	body := `{"device":"sensor-001","eventType":"Measurement","payload":{"measurements":{"temp":21.5}}}`
 	req := httptest.NewRequest(http.MethodPost, "/inst-1/acme/events", strings.NewReader(body))
