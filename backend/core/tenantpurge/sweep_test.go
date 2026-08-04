@@ -17,7 +17,7 @@ import (
 // planOf classifies a synthetic catalog and fails the test if it will not sweep.
 func planOf(t *testing.T, cols []column, fks []constraint) *Plan {
 	t.Helper()
-	plan, err := classify(cols, fks)
+	plan, err := classify(cols, fks, nil)
 	require.NoError(t, err)
 	require.NoError(t, checkClassified(plan))
 	return plan
@@ -153,7 +153,8 @@ func TestSweepRefusesAnUnclassifiedPlanBeforeTouchingTheDatabase(t *testing.T) {
 	plan, err := classify([]column{
 		col("a", "known", "tenant_id", "character varying"),
 		col("a", "mystery", "id", "bigint"),
-	}, nil)
+	}, nil, nil)
+
 	require.NoError(t, err)
 
 	_, err = Sweep(context.Background(), nil, plan, "acme", nil)
@@ -196,7 +197,8 @@ func TestADeferredTableIsCarriedOnEveryResult(t *testing.T) {
 		live, err := classify([]column{
 			col("main", "detect_rules", "tenant", "text"),
 			col("main", "detect_snapshots", "partition_id", "text"),
-		}, nil)
+		}, nil, nil)
+
 		require.NoError(t, err)
 		for i := range live.Entries {
 			if live.Entries[i].Table.Name == "detect_snapshots" {

@@ -154,6 +154,18 @@ if [ "$MODE" = "verify" ]; then
     -host localhost -port "$HOST_PORT" \
     -user postgres -password "$PASSWORD" \
     -db "$DB"
+
+  # The purge DRILL, which is a different claim from the coverage gate above and the only
+  # one that touches a row. Coverage proves every table is accounted for; this proves a
+  # sweep of the real foreign-key graph erases one tenant and leaves another intact — and
+  # that a continuous aggregate's materialized copy goes with it, which is invisible to a
+  # schema-only check because no ROW appears in a pg_dump.
+  #
+  # It runs here rather than in the `go` CI job because it needs exactly what this script
+  # already has: a real TimescaleDB with every area's chain applied. -count=1 because it
+  # reads a database, and a cached PASS would replay over a broken tree.
+  echo "==> Running the tenant-purge drill"
+  DC_IT_PGPORT="$HOST_PORT" go test -tags integration -count=1 -run PurgeDrill ./...
 fi
 
 echo "==> Done."

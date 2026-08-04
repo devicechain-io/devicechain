@@ -12,24 +12,39 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/tenantpurge"
 )
 
 // Relational erases a tenant from a Postgres database, across every functional area's
 // schema in it.
 //
-// It is built to serve BOTH clusters — the relational store, where ten areas share a
-// database, and the telemetry store, where event-management is alone in another — because
-// they differ only in the connection and the ledger name: the classification, the delete
-// order and the residual scan are identical, both being one database with one owning role
-// and one catalog that answers for all of it. Today only the relational one is
-// registered; the telemetry store is still Pending (see stores.go), which is why the name
-// is a parameter rather than a constant.
+// It serves BOTH clusters — the relational store, where ten areas share a database, and
+// the telemetry store, where event-management is alone in another — because they differ
+// only in the connection and the ledger name: the classification, the delete order and
+// the residual scan are identical, both being one database with one owning role and one
+// catalog that answers for all of it. That is why the name is a parameter rather than a
+// constant, and why the handle is an interface rather than the owned-database manager.
+//
+// The telemetry store's two apparent special cases are both handled a layer down, in
+// core/tenantpurge, and deliberately not here. Its hypertables are ordinary tables to the
+// catalog, so a DELETE on the parent reaches every chunk including the compressed ones.
+// Its continuous aggregate keeps a physical copy of its rows that no schema scan can see;
+// that materialization is admitted to the plan by name from the aggregate catalog, so it
+// is classified and swept like any other table rather than being a step this file knows
+// to run. See Telemetry for what genuinely IS different about that store.
 type Relational struct {
 	name string
-	db   *rdb.RdbManager
+	db   Database
 	pre  func(tenant string) tenantpurge.Precondition
+}
+
+// Database is the handle a store sweeps through, narrowed to the one method the sweep
+// uses so that BOTH kinds of connection satisfy it: rdb.RdbManager, for the database
+// this service owns, and rdb.Guest, for one it does not (the telemetry cluster). Taking
+// the interface rather than the concrete manager is what lets the two stores be the same
+// code rather than a copy with the receiver type changed.
+type Database interface {
+	DB(ctx context.Context) *gorm.DB
 }
 
 // NewRelational builds the store for a database. name keys the ledger and is persisted.
@@ -41,7 +56,7 @@ type Relational struct {
 // The telemetry cluster cannot: iam_tenants is in the other database, so nothing there can
 // read the lifecycle under the deleting transaction's snapshot. That store's interlock is
 // the coordinator's re-read alone, and saying so is better than implying otherwise.
-func NewRelational(name string, db *rdb.RdbManager,
+func NewRelational(name string, db Database,
 	pre func(tenant string) tenantpurge.Precondition) *Relational {
 	return &Relational{name: name, db: db, pre: pre}
 }

@@ -35,17 +35,11 @@ const (
 // store that can fail the whole purge closed — a table it cannot classify stops the pass
 // before a row is touched anywhere — so it is better to learn that before the others have
 // deleted anything.
-func DefaultStores(db *rdb.RdbManager) []Store {
+func DefaultStores(db *rdb.RdbManager, tsdb *rdb.Guest) []Store {
 	return []Store{
 		NewRelational(StoreRelational, db, StillPurging),
+		NewTelemetry(tsdb),
 
-		Pending{
-			StoreName: StoreTelemetry,
-			Holds: "the event store still holds this tenant's telemetry — the raw measurements, " +
-				"locations and alerts in the hypertables, and separately the per-device, per-metric " +
-				"aggregate buckets in the measurement rollups' materialization, which a delete against " +
-				"the raw tables does not reach and whose refresh window would never have removed",
-		},
 		Pending{
 			StoreName: StoreBroker,
 			Holds: "the broker still holds this tenant's retained messages — its per-tenant subjects on " +

@@ -24,7 +24,7 @@ import (
 // with no store", and this test is the honest stand-in, not a replacement.
 func TestTheStoreSetIsTheCoverageClaim(t *testing.T) {
 	var names []string
-	for _, s := range DefaultStores(nil) {
+	for _, s := range DefaultStores(nil, nil) {
 		names = append(names, s.Name())
 	}
 	require.Equal(t, []string{
@@ -40,7 +40,7 @@ func TestTheStoreSetIsTheCoverageClaim(t *testing.T) {
 // would say a purge is incomplete without saying what is retained, which is the report an
 // operator or an auditor actually reads.
 func TestEveryPendingStoreSaysWhatItHolds(t *testing.T) {
-	for _, s := range DefaultStores(nil) {
+	for _, s := range DefaultStores(nil, nil) {
 		p, ok := s.(Pending)
 		if !ok {
 			continue

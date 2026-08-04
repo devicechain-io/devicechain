@@ -101,8 +101,17 @@ type TenantPurgeConfiguration struct {
 
 type UserManagementConfiguration struct {
 	RdbConfiguration config.MicroserviceDatastoreConfiguration
-	Auth             AuthConfiguration
-	TenantPurge      TenantPurgeConfiguration
+
+	// TsdbConfiguration sizes the purge's guest connection to the TELEMETRY cluster
+	// (ADR-077). This service stores nothing there and owns no schema in it; the
+	// connection exists only so a deleted tenant's events can be erased from the one
+	// database no service running the coordinator owns. It is separate from
+	// RdbConfiguration because the two pools serve different work and should not have
+	// to be sized together.
+	TsdbConfiguration config.MicroserviceDatastoreConfiguration
+
+	Auth        AuthConfiguration
+	TenantPurge TenantPurgeConfiguration
 }
 
 // TenantPurgeInterval is the coordinator's tick period, or 0 when the coordinator is

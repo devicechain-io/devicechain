@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -112,6 +113,38 @@ func seedTenant(t *testing.T, db *gorm.DB, tenant string, base int) {
 	             VALUES (?, ?, ?)`, base+5, sharedIdentityID, tenant)
 	mustExec(t, db, `INSERT INTO "user-management".iam_membership_tenant_roles (membership_id, role_id)
 	             VALUES (?, ?)`, base+5, sharedRoleID)
+
+	// Telemetry, which is the shape nothing else here has: a hypertable whose rows are
+	// ALSO copied into a continuous aggregate's materialization. Three buckets a minute
+	// apart, so the aggregate has something to group.
+	for i := 0; i < 3; i++ {
+		mustExec(t, db, `INSERT INTO "event-management".measurement_events
+		               (tenant_id, event_id, payload_id, device_token, event_type,
+		                occurred_time, name, value)
+		             VALUES (?, ?, ?, ?, 1, now() - make_interval(mins => ?), 'temp', 20.5)`,
+			tenant, []byte(fmt.Sprintf("%s-evt-%d", tenant, i)),
+			[]byte(fmt.Sprintf("%s-pay-%d", tenant, i)), tenant+"-dev", 10+i)
+	}
+}
+
+// materializationOf returns the hypertable holding a continuous aggregate's rows.
+//
+// 🔴 EVERY COUNT MUST GO THROUGH THIS, NEVER THROUGH THE AGGREGATE'S VIEW. The view is
+// declared materialized_only = false, so it reads the materialization only BELOW the
+// refresh watermark and recomputes from the raw hypertable above it. A count through the
+// view taken after the raw rows are gone therefore reports zero whether or not the
+// materialized copy survived — which is the precise reading that would certify a purge
+// that retained the tenant's aggregate buckets forever.
+func materializationOf(t *testing.T, db *gorm.DB, viewSchema, viewName string) string {
+	t.Helper()
+	var mat string
+	require.NoError(t, db.Raw(`
+		SELECT format('%I.%I', materialization_hypertable_schema, materialization_hypertable_name)
+		FROM timescaledb_information.continuous_aggregates
+		WHERE view_schema = ? AND view_name = ?`, viewSchema, viewName).Scan(&mat).Error)
+	require.NotEmptyf(t, mat, "%s.%s is not a continuous aggregate in this database — every "+
+		"assertion about its materialization would be vacuous", viewSchema, viewName)
+	return mat
 }
 
 const (
@@ -131,15 +164,24 @@ func seedShared(t *testing.T, db *gorm.DB) {
 	             VALUES (?, 'drill-role', 'tenant')`, sharedRoleID)
 }
 
-// tenantRowCounts is every seeded location, as (label, table, where-clause).
-func tenantRowCounts(tenant string) []struct{ label, table, where string } {
-	return []struct{ label, table, where string }{
-		{"device-management.area_types", `"device-management".area_types`, "tenant_id = ?"},
-		{"device-management.areas", `"device-management".areas`, "tenant_id = ?"},
-		{"device-management.devices", `"device-management".devices`, "tenant_id = ?"},
-		{"device-management.device_credentials", `"device-management".device_credentials`, "tenant_id = ?"},
-		{"event-processing.device_rosters", `"event-processing".device_rosters`, "tenant = ?"},
-		{"user-management.iam_memberships", `"user-management".iam_memberships`, "tenant_id = ?"},
+// seededLocation is one place seedTenant writes, with how many rows it puts there.
+type seededLocation struct {
+	label, table, where string
+	rows                int64
+}
+
+// tenantRowCounts is every seeded location. The row count is carried per location rather
+// than assumed to be one, so a location seeded with several rows cannot quietly pass an
+// assertion written for a single one.
+func tenantRowCounts() []seededLocation {
+	return []seededLocation{
+		{"device-management.area_types", `"device-management".area_types`, "tenant_id = ?", 1},
+		{"device-management.areas", `"device-management".areas`, "tenant_id = ?", 1},
+		{"device-management.devices", `"device-management".devices`, "tenant_id = ?", 1},
+		{"device-management.device_credentials", `"device-management".device_credentials`, "tenant_id = ?", 1},
+		{"event-processing.device_rosters", `"event-processing".device_rosters`, "tenant = ?", 1},
+		{"user-management.iam_memberships", `"user-management".iam_memberships`, "tenant_id = ?", 1},
+		{"event-management.measurement_events", `"event-management".measurement_events`, "tenant_id = ?", 3},
 	}
 }
 
@@ -160,18 +202,48 @@ func TestPurgeDrillErasesOneTenantAndLeavesTheOther(t *testing.T) {
 	seedTenant(t, db, victim, 1000)
 	seedTenant(t, db, bystander, 2000)
 
+	// Materialize the telemetry the seed just wrote, so the continuous aggregate holds a
+	// physical copy of both tenants' buckets BEFORE the sweep runs. Without this the
+	// materialization is empty and every assertion about it below passes for the wrong
+	// reason. The call cannot run inside a transaction, which is why it is a bare Exec.
+	mustExec(t, db, `CALL refresh_continuous_aggregate('event-management.measurement_rollups', NULL, NULL)`)
+	rollupMat := materializationOf(t, db, "event-management", "measurement_rollups")
+
 	// The seed itself has to be proven, or an INSERT that silently did nothing would
 	// make the erasure assertions below pass against an empty database.
-	for _, c := range tenantRowCounts(victim) {
-		require.Equalf(t, int64(1), count(t, db, c.table, c.where, victim),
+	for _, c := range tenantRowCounts() {
+		require.Equalf(t, c.rows, count(t, db, c.table, c.where, victim),
 			"seed did not land in %s — the erasure assertions would be vacuous", c.label)
 	}
+	rollupBefore := count(t, db, rollupMat, "tenant_id = ?", victim)
+	require.NotZero(t, rollupBefore,
+		"the refresh materialized nothing, so the aggregate assertions below would hold over an "+
+			"empty table and prove nothing about the erasure")
+	bystanderRollupBefore := count(t, db, rollupMat, "tenant_id = ?", bystander)
+	require.NotZero(t, bystanderRollupBefore, "the bystander's buckets must exist to be preserved")
 	joinBefore := count(t, db, `"user-management".iam_membership_tenant_roles`,
 		"membership_id IN (SELECT id FROM \"user-management\".iam_memberships WHERE tenant_id = ?)", victim)
 	require.Equal(t, int64(1), joinBefore, "seed did not land in the many2many join")
 
 	plan, err := tenantpurge.Classify(ctx, db)
 	require.NoError(t, err)
+
+	// 🔑 THE MECHANISM, ASSERTED SEPARATELY FROM THE OUTCOME. That the victim's buckets
+	// end up gone is checked below, but a hand-written delete would satisfy that too. The
+	// claim being made here is that the PLAN reaches the materialization — that a purge of
+	// any database with a continuous aggregate in it erases the aggregate's copy without
+	// anyone having written a step naming that aggregate.
+	var matEntry *tenantpurge.Entry
+	for i, e := range plan.Entries {
+		if e.Table.String() == strings.ReplaceAll(rollupMat, `"`, "") {
+			matEntry = &plan.Entries[i]
+		}
+	}
+	require.NotNilf(t, matEntry, "%s is not in the plan: the aggregate's materialized rows are "+
+		"reached by nothing, and a sweep of the raw hypertable leaves them in place forever", rollupMat)
+	require.Equal(t, tenantpurge.ClassDirect, matEntry.Class)
+	assert.Contains(t, matEntry.Describe(), "measurement_rollups",
+		"the generated relation name means nothing on its own; the plan must carry the aggregate")
 
 	res, err := tenantpurge.Sweep(ctx, db, plan, victim, nil)
 	require.NoError(t, err, "the sweep must survive the real foreign-key graph")
@@ -181,19 +253,28 @@ func TestPurgeDrillErasesOneTenantAndLeavesTheOther(t *testing.T) {
 			"complete erasure")
 
 	// The victim is gone everywhere.
-	for _, c := range tenantRowCounts(victim) {
+	for _, c := range tenantRowCounts() {
 		assert.Zerof(t, count(t, db, c.table, c.where, victim), "%s still holds the victim", c.label)
 	}
+	assert.Zerof(t, count(t, db, rollupMat, "tenant_id = ?", victim),
+		"%s still holds the victim's aggregate buckets. The raw measurements are gone, so every "+
+			"reading through the aggregate's own view reports clean while the copy survives — and "+
+			"the refresh policy's 30-day trailing window would never revisit a bucket to remove it",
+		rollupMat)
 	assert.Zero(t, count(t, db, `"user-management".iam_membership_tenant_roles`,
 		"membership_id = ?", 1005),
 		"the many2many join row carries nothing naming a tenant; only the foreign key reaches it")
 
 	// The bystander is untouched. This is the control: a sweep with no predicate at all
 	// would satisfy every assertion above.
-	for _, c := range tenantRowCounts(bystander) {
-		assert.Equalf(t, int64(1), count(t, db, c.table, c.where, bystander),
-			"%s lost the bystander's row — the sweep is not tenant-scoped", c.label)
+	for _, c := range tenantRowCounts() {
+		assert.Equalf(t, c.rows, count(t, db, c.table, c.where, bystander),
+			"%s lost the bystander's rows — the sweep is not tenant-scoped", c.label)
 	}
+	assert.Equalf(t, bystanderRollupBefore, count(t, db, rollupMat, "tenant_id = ?", bystander),
+		"%s lost the bystander's aggregate buckets: the delete against the materialization is not "+
+			"tenant-scoped, which is the failure mode a full-range refresh would also have had",
+		rollupMat)
 	assert.Equal(t, int64(1), count(t, db, `"user-management".iam_membership_tenant_roles`,
 		"membership_id = ?", 2005), "the bystander's join row was taken with the victim's")
 

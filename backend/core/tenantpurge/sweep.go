@@ -45,18 +45,21 @@ type Result struct {
 func (r Result) Complete() bool { return len(r.Deferred) == 0 }
 
 // ErrUnclassified is returned when a plan contains a table this package cannot
-// explain. It carries the offending tables so the message names them.
-type ErrUnclassified struct{ Tables []Table }
+// explain. It carries the offending entries so the message names them — entries rather
+// than tables, because a relation admitted from another catalog (a continuous
+// aggregate's materialization) has a name that means nothing on its own and needs the
+// provenance Entry.Describe carries.
+type ErrUnclassified struct{ Entries []Entry }
 
 func (e *ErrUnclassified) Error() string {
-	names := make([]string, 0, len(e.Tables))
-	for _, t := range e.Tables {
-		names = append(names, t.String())
+	names := make([]string, 0, len(e.Entries))
+	for _, t := range e.Entries {
+		names = append(names, t.Describe())
 	}
 	return fmt.Sprintf("%d table(s) hold rows the tenant purge cannot classify, so a purge would "+
 		"silently retain data: %s. Give each one a tenant column, a foreign key into tenant-bearing "+
 		"data, or an entry in the tenantpurge exemption registry stating why it is safe to skip",
-		len(e.Tables), strings.Join(names, ", "))
+		len(e.Entries), strings.Join(names, ", "))
 }
 
 // checkClassified fails a plan that contains unclassified tables.
@@ -66,14 +69,14 @@ func (e *ErrUnclassified) Error() string {
 // the exact outcome ADR-077 exists to prevent: a purge reporting success while a table
 // nobody classified keeps the tenant's data indefinitely.
 func checkClassified(plan *Plan) error {
-	var bad []Table
+	var bad []Entry
 	for _, e := range plan.Entries {
 		if e.Class == ClassUnclassified {
-			bad = append(bad, e.Table)
+			bad = append(bad, e)
 		}
 	}
 	if len(bad) > 0 {
-		return &ErrUnclassified{Tables: bad}
+		return &ErrUnclassified{Entries: bad}
 	}
 	return nil
 }
