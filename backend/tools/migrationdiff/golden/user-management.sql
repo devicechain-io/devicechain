@@ -209,7 +209,8 @@ CREATE TABLE "user-management".iam_tenant_purge_stores (
  deferred text,
  failure text,
  attempted_at timestamp with time zone,
- clean_since timestamp with time zone
+ clean_since timestamp with time zone,
+ note text
 );
 CREATE TABLE "user-management".iam_tenant_purges (
  id bigint NOT NULL,

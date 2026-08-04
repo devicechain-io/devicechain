@@ -100,13 +100,40 @@ type Outcome struct {
 	// erasure claim can act on. "detect_snapshots" is not an entry; "the DETECT engine's
 	// checkpoint still contains this tenant's open windows and buffered event values" is.
 	Deferred []string
+
+	// Notes name what this store DECIDED NOT TO LOOK AT, or the ground on which it is
+	// reporting clean when it erased nothing. Empty means "the sweep is the whole story".
+	//
+	// 🔑 THIS IS DELIBERATELY NOT A WEAKER Deferred, and the difference is the entire
+	// reason it exists as its own field. A deferral is data that is HERE and blocks
+	// completion. A note blocks nothing — it qualifies a clean pass. Two stores could
+	// previously report clean while having skipped something, and write a ledger line
+	// byte-identical to a store that swept the cluster and found nothing: the telemetry
+	// store when there is no telemetry database to sweep, and the key-value store, which
+	// never mentions its exempted buckets. Both logged a warning and then wrote a record
+	// that did not carry it, which is the worst of both — the judgement existed and the
+	// durable evidence of the erasure did not contain it.
+	//
+	// 🔴 A note must NEVER be used to record something that should have blocked. If the
+	// thing being written down is data this store still holds, it is a Deferred entry and
+	// the purge must not complete on it. The test that keeps these apart is
+	// TestANoteDoesNotBlockCompletion — read it before adding a note anywhere.
+	Notes []string
 }
 
 // Clean reports whether this store erased everything it holds for the tenant.
+//
+// It keys on Deferred ALONE, and Notes is deliberately absent from it. A note that could
+// hold a purge open would be a deferral wearing a different name, and the two stores that
+// motivated notes both MUST complete: an instance with no event-management has no
+// telemetry to erase, and the exempted key-value buckets hold nothing of the tenant's.
 func (o Outcome) Clean() bool { return len(o.Deferred) == 0 }
 
 // Reason renders Deferred for the ledger.
 func (o Outcome) Reason() string { return strings.Join(o.Deferred, "; ") }
+
+// Note renders Notes for the ledger, the same way Reason renders Deferred.
+func (o Outcome) Note() string { return strings.Join(o.Notes, "; ") }
 
 // Pending is a store that is known to hold tenant data and has no erasure yet.
 //

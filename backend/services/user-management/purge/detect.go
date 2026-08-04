@@ -88,9 +88,12 @@ func (d *Detect) Erase(ctx context.Context, tenant string, _ time.Time) (Outcome
 	// anything. A schema is created by its owning service's first startup and by nothing
 	// else, so its absence is the one honest "there is nothing here" this store can get.
 	//
-	// It is logged rather than passed over silently, for the reason the telemetry store
-	// logs the same shape: "the area was never deployed" and "swept and found nothing" both
-	// write Rows=0, Complete=true, and only the log distinguishes them.
+	// It is recorded rather than passed over silently, for the reason the telemetry store
+	// records the same shape: "the area was never deployed" and "swept and found nothing"
+	// both write Rows=0 and Complete=true. It goes in TWO places — the log, for whoever is
+	// watching when the pass runs, and the outcome's NOTE, for whoever reads the deletion
+	// record afterwards to decide whether an erasure claim holds. That second reader is the
+	// one the record exists for, and a judgement that lives only in a log never reaches them.
 	present, err := tenantpurge.SchemaExists(ctx, d.db.DB(ctx), detectSchema)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("checking whether %s has ever run on this instance: %w",
@@ -100,7 +103,11 @@ func (d *Detect) Erase(ctx context.Context, tenant string, _ time.Time) (Outcome
 		log.Info().Str("tenant", tenant).Str("store", StoreDetect).
 			Msg("No event-processing schema on this instance, so there is no DETECT engine and no " +
 				"engine state to evict; reporting clean.")
-		return Outcome{}, nil
+		return Outcome{Notes: []string{
+			"there is no " + detectSchema + " schema on this instance, so no DETECT engine has " +
+				"ever run here and there was no engine state to evict; nothing was erased, and " +
+				"that is correct only for an instance that runs no event-processing",
+		}}, nil
 	}
 
 	partitions, err := d.checkpointedPartitions(ctx)
@@ -205,12 +212,18 @@ func (d *Detect) outcome(tenant string, partitions []string, res messaging.Detec
 	// the claim is narrower than it looks — not "no engine is running", which the broker's
 	// no-responders answer does not establish (it attests to zero INTEREST, and a reconnecting
 	// client briefly has none). What it establishes is that nothing on disk names this tenant
-	// and nothing is reachable that could, which is all this store is asked for. Logged
-	// because it writes Rows=0, Complete=true, byte-identical to a real erasure.
+	// and nothing is reachable that could, which is all this store is asked for. Recorded
+	// because it writes Rows=0, Complete=true, otherwise byte-identical to a real erasure —
+	// and unlike the schema case above, this one CAN occur on an instance that does run
+	// event-processing, with every engine merely down. The note is what lets a reader of the
+	// deletion record tell the two apart afterwards.
 	if res.NoResponders && len(partitions) == 0 {
 		log.Warn().Str("tenant", tenant).Str("store", StoreDetect).
 			Msg("No DETECT engine is subscribed on this instance and none has committed a " +
 				"checkpoint, so there is no engine state this store can reach; reporting clean.")
+		out.Notes = append(out.Notes, "no DETECT engine was subscribed and none had committed a "+
+			"checkpoint, so no engine state was reachable and none was evicted; that is clean if "+
+			"no engine runs here, and is NOT an erasure if event-processing was merely down")
 	}
 	return out
 }

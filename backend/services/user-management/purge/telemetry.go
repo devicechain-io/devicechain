@@ -89,14 +89,19 @@ func (t *Telemetry) Name() string { return StoreTelemetry }
 // same value as the instance id, so on a profile without event-management the database is
 // present and empty and the connect succeeds.
 //
-// # 🔴 Both answers are the most dangerous kind, so both are logged
+// # 🔴 Both answers are the most dangerous kind, so both are RECORDED
 //
-// They let a purge complete without erasing anything, and the record they write is
-// indistinguishable from "swept the cluster and found nothing". The same two conditions are
-// also produced by a cluster that is up and not yet restored, which is NOT a correct reason
-// to complete. Neither can be told apart from the correct case programmatically — so the
-// conclusion goes where an operator can see it on every pass, and an operator running a
-// profile that includes event-management who sees one is looking at a problem.
+// They let a purge complete without erasing anything, and the record they write would
+// otherwise be indistinguishable from "swept the cluster and found nothing". The same two
+// conditions are also produced by a cluster that is up and not yet restored, which is NOT a
+// correct reason to complete. Neither can be told apart from the correct case
+// programmatically — so the conclusion is written down in two places, and an operator
+// running a profile that includes event-management who sees one is looking at a problem.
+//
+// Two places, because they reach different people: the LOG reaches whoever is watching at
+// the moment the pass runs, and the outcome's NOTE reaches whoever reads the deletion record
+// afterwards to decide whether an erasure claim holds. Only the second of those is the
+// reader the record exists for.
 //
 // What is NOT read this way: a database that has the schema but no tables in it. That is a
 // migration or a restore in flight, and core's own empty-classification guard blocks it.
@@ -162,17 +167,24 @@ func (t *Telemetry) hasOwningSchema(ctx context.Context) (bool, error) {
 // nothingHere reports a clean pass for a telemetry store that holds nothing, and says so
 // where an operator can see it.
 //
-// 🔴 THE LOG LINE IS NOT DECORATION. This is the one conclusion in the subsystem that lets
-// a purge complete without erasing anything, and the record it writes is byte-identical to
-// "swept the cluster and found nothing" — Rows=0, Complete=true. The same reasoning also
-// covers a cluster that is up but not yet restored, which is NOT a correct reason to
-// complete. An operator running a profile that includes event-management and seeing this
-// line is looking at a problem, so the line has to name what it concluded and why.
+// 🔴 THE CONCLUSION IS NOT DECORATION. This is the one conclusion in the subsystem that
+// lets a purge complete without erasing anything, and the record it writes would otherwise
+// be byte-identical to "swept the cluster and found nothing" — Rows=0, Complete=true. The
+// same reasoning also covers a cluster that is up but not yet restored, which is NOT a
+// correct reason to complete. An operator running a profile that includes event-management
+// and seeing this line is looking at a problem, so the line has to name what it concluded.
+//
+// It says so in TWO places, and the second is the one that matters. The log reaches whoever
+// is watching at the moment the pass runs; the NOTE reaches whoever reads the deletion
+// record afterwards, which is the person actually deciding whether an erasure claim holds.
+// A judgement that lives only in a log is a judgement the durable evidence does not carry.
 func (t *Telemetry) nothingHere(tenant, because string) Outcome {
+	const consequence = "no telemetry was erased for this tenant; that is correct for an " +
+		"instance that runs no event-management, and is NOT correct for one that does"
 	log.Warn().Str("tenant", tenant).Str("store", StoreTelemetry).
 		Msgf("The telemetry store is reporting clean without erasing anything, because %s. "+
 			"That is correct for an instance that runs no event-management. If this instance "+
 			"DOES run event-management, the purge is about to record an erasure that did not "+
 			"happen — check the telemetry cluster before trusting the deletion record.", because)
-	return Outcome{}
+	return Outcome{Notes: []string{because + ", so " + consequence}}
 }

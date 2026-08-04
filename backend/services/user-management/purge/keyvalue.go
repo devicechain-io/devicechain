@@ -20,10 +20,10 @@ import (
 //
 // # What it holds back, and where that is recorded
 //
-// Four buckets are deliberately not swept — refresh tokens, OAuth codes, locks and leases
-// — and they are the reason to read this type's Erase before trusting its ledger line. See
-// the exemption note there: this store reports clean without recording what it declined to
-// look at, which is the same shape as the telemetry store's "no database here".
+// Four buckets are deliberately not swept — refresh tokens, OAuth codes, locks and leases.
+// They do NOT block completion, because none of them retains this tenant's data, so they
+// cannot be deferrals. They ride in the outcome's Notes instead and land in the deletion
+// record, so a reader of that record sees the judgement and not only its result.
 type KeyValue struct {
 	conn       messaging.Connection
 	instanceId string
@@ -38,18 +38,17 @@ func (k *KeyValue) Name() string { return StoreKeyValue }
 
 // Erase scans the tenant-scoped buckets and deletes what belongs to the tenant.
 //
-// # 🔴 The exemptions do NOT reach the deletion record, and that is a gap
+// # The exemptions reach the deletion record as NOTES
 //
-// messaging.KvPurgeExemptions explains the four buckets this deliberately does not touch —
+// messaging.KvPurgeExemptions explains the buckets this deliberately does not touch —
 // refresh tokens, OAuth codes, locks and leases. None of them retains this tenant's data,
-// so none belongs in Deferred: a deferral blocks completion, and these must not. But
-// Outcome has nowhere else to put them, so today they reach a reader only through that
-// function and the test that pairs it against the platform's bucket inventory. The ledger
-// therefore records this store as clean without recording what it decided not to look at.
+// so none belongs in Deferred: a deferral blocks completion, and these must not. They ride
+// in Outcome.Notes instead, which qualifies a clean pass without holding it open, so the
+// record of the erasure carries the judgement that was made rather than only its result.
 //
-// That is the same shape as the telemetry store's "no database here" — a judgement the
-// record cannot distinguish from an absence — and it has the same fix, a note column that
-// carries text without blocking. Tracked with it rather than papered over here.
+// They are written on EVERY pass rather than once, because the record is read one line at
+// a time — a reader looking at the line that closed the purge would otherwise have to know
+// that an earlier line said something this one does not.
 func (k *KeyValue) Erase(ctx context.Context, tenant string, _ time.Time) (Outcome, error) {
 	nc := k.conn.Conn()
 	if nc == nil {
@@ -67,5 +66,5 @@ func (k *KeyValue) Erase(ctx context.Context, tenant string, _ time.Time) (Outco
 	if err != nil {
 		return Outcome{}, fmt.Errorf("purging the key-value store for %q: %w", tenant, err)
 	}
-	return Outcome{Rows: res.Keys}, nil
+	return Outcome{Rows: res.Keys, Notes: messaging.KvPurgeExemptions()}, nil
 }

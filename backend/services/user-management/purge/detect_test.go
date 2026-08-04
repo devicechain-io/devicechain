@@ -569,3 +569,68 @@ func TestAnEngineThatIsSubscribedButSilentIsDeferredRatherThanClean(t *testing.T
 		"state in memory whether or not a checkpoint row names it")
 	assert.Contains(t, out.Reason(), "subscribed")
 }
+
+// TestTheTwoCleanWithoutEvictingConclusionsSayySoInTheRECORD covers both branches where this
+// store reports clean having evicted nothing.
+//
+// 🔴 IT EXISTS BECAUSE THIS STORE WAS THE INSTANCE THE FIRST FIX MISSED. The note column was
+// built for the telemetry store's "no database here" and the key-value store's exempted
+// buckets, and both were fixed before anyone asked which OTHER store reaches a
+// clean-without-erasing conclusion. This one reaches two, and its own comments SAID SO —
+// "only the log distinguishes them" — which was a description of the gap being read as an
+// explanation of it.
+//
+// The two branches are not equally serious, and the second is the dangerous one. "This
+// instance has no event-processing schema" is checkable and stable. "No engine answered and
+// none has checkpointed" is a statement about a moment: it is clean on an instance that runs
+// no engine, and it is NOT an erasure on an instance whose engines were simply down.
+func TestTheTwoCleanWithoutEvictingConclusionsSaySoInTheRECORD(t *testing.T) {
+	t.Run("no event-processing schema on this instance", func(t *testing.T) {
+		url := detectRig(t)
+		out, err := detectStore(detectDial(t, url), detectCatalog(t, false)).
+			Erase(context.Background(), detectTenant, time.Now())
+
+		require.NoError(t, err)
+		require.True(t, out.Clean(), "the note must not turn this into a deferral — it would block "+
+			"every purge on an ingest-only instance forever")
+		require.NotEmpty(t, out.Note(),
+			"a store reporting clean without evicting anything must say so in the RECORD, not only "+
+				"in the log; the log reaches whoever is watching, the record reaches whoever audits")
+		require.Contains(t, out.Note(), detectSchema,
+			"the note must name the ground it concluded on, so a reader can judge whether it holds")
+	})
+
+	t.Run("no engine subscribed and nothing checkpointed", func(t *testing.T) {
+		url := detectRig(t)
+		// No engine is started against this rig, so the request gets no responders, and the
+		// catalog says the schema exists but has no checkpointed partitions.
+		out, err := detectStore(detectDial(t, url), detectCatalog(t, true)).
+			Erase(context.Background(), detectTenant, time.Now())
+
+		require.NoError(t, err)
+		require.True(t, out.Clean())
+		require.NotEmpty(t, out.Note(),
+			"this conclusion is reachable on an instance that DOES run event-processing with its "+
+				"engines merely down, so the record must carry what it rested on")
+		require.Contains(t, out.Note(), "down",
+			"the note must name the reading that would make this NOT an erasure")
+	})
+}
+
+// TestADetectStoreThatReallyEvictedCarriesNoNote is the counterweight. A note on every line
+// would be worth nothing — its whole value is that its presence distinguishes "we concluded"
+// from "we evicted", so a store that really evicted must produce none.
+func TestADetectStoreThatReallyEvictedCarriesNoNote(t *testing.T) {
+	url := detectRig(t)
+	runEngine(t, detectDial(t, url), answersWith(messaging.DetectPurgeReply{
+		PartitionId: "p1", Evicted: 4,
+	}))
+
+	out, err := detectStore(detectDial(t, url), detectCatalog(t, true, "p1")).
+		Erase(context.Background(), detectTenant, time.Now())
+
+	require.NoError(t, err)
+	require.True(t, out.Clean())
+	require.Empty(t, out.Note(), "a real eviction has nothing to qualify")
+	require.Positive(t, out.Rows)
+}

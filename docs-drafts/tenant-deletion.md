@@ -348,9 +348,41 @@ Two tables in user-management, both exempt from the sweep because they must outl
   customer's details lived.
 - **`iam_tenant_purge_stores`** — one row per `(purge, store)`, **rewritten each pass rather than
   appended**, so a line is a standing claim that gets re-established rather than a log entry that
-  could quietly go stale. It carries what the store deferred, what it failed with (kept apart,
-  because the two mean opposite things about the future), and the timestamp since which it has been
-  continuously clean.
+  could quietly go stale. It carries what the store deferred, what it failed with, what it *noted*,
+  and the timestamp since which it has been continuously clean.
+
+Those three text fields are deliberately three fields and not one, because merging any two of them
+changes the answer to "can I claim this data was erased?":
+
+| Field | Means | Blocks completion? | Expected to clear? |
+| --- | --- | --- | --- |
+| `Deferred` | data this store still HOLDS | **yes** | no — not until someone builds something |
+| `Failure` | the pass could not establish clean | yes, this pass | yes, on the next pass |
+| `Note` | what the store DECLINED TO LOOK AT, or the ground it reported clean on | **no** | only when it stops applying |
+
+`Note` exists because **three of the six stores** could report clean while having skipped something,
+writing a line byte-identical to a store that swept a real cluster and found nothing:
+
+- **telemetry**, when there is no telemetry database to sweep;
+- **key-value**, which never mentioned its exempted buckets (refresh tokens, OAuth codes, locks,
+  leases);
+- **detect**, in two branches — no `event-processing` schema on the instance, and no engine
+  subscribed with nothing checkpointed.
+
+Each logged a warning, which reaches whoever is watching at the moment the pass runs and not the
+person reading the record afterwards to decide whether an erasure claim holds. That reader is who
+the record is for.
+
+🔴 **The detect store was the instance the first fix missed.** The column was built for the first
+two, both were fixed, and only an adversarial review asked which OTHER store reaches a
+clean-without-erasing conclusion — while detect's own comments said *"only the log distinguishes
+them"*, a description of the gap being read as an explanation of it. The last of the three is also
+the most dangerous: "there is no event-processing schema here" is stable and checkable, but "no
+engine answered and none has checkpointed" is a statement about a *moment*, true of an instance that
+runs no engine and equally true of one whose engines are simply down.
+
+A note must never carry something that should have blocked. `Outcome.Clean()` keys on `Deferred`
+alone, and `TestANoteDoesNotBlockCompletion` is what keeps the two apart.
 
 Row counts **accumulate across passes**. An erasure is idempotent by contract and a purge cannot
 complete on its first pass, so a per-pass count would read zero for every real purge.
@@ -358,7 +390,7 @@ complete on its first pass, so a per-pass count would read zero for every real p
 **Neither table is exposed on any API.** An operator can see *that* a tenant is purging and *when*
 the cut was — those two fields are on the admin tenant type and rendered as a badge in the console —
 but not how far along it is or what is blocking it. That is a known gap, not a design decision;
-`Deferred`, `Failure`, `CleanSince` and the per-store row counts are database-only today, visible
+`Deferred`, `Failure`, `Note`, `CleanSince` and the per-store row counts are database-only today, visible
 otherwise only in logs.
 
 ## 9. The device plane during a purge
@@ -490,12 +522,9 @@ Stated here so they are found deliberately rather than discovered:
 1. **No progress API.** The ledger is database-only; the console shows two fields.
 2. **Orphaned objects** whose reference was lost before the purge are unreachable by a row-driven
    work list.
-3. **Exempted key-value buckets** (refresh tokens, OAuth codes, locks, leases) never reach the
-   deletion record — the ledger records that store as clean without recording what it declined to
-   look at. Same shape as the telemetry store's "no database here".
-4. **A false exemption is invisible to CI.** Only the presence of a reason is checked, never its
+3. **A false exemption is invisible to CI.** Only the presence of a reason is checked, never its
    truth.
-5. **Compressed chunks** are out of reach of the purge drill, because compression is applied by a
+4. **Compressed chunks** are out of reach of the purge drill, because compression is applied by a
    runtime reconciler rather than by migrations. Covered instead by event-management's own
    integration tests.
 
