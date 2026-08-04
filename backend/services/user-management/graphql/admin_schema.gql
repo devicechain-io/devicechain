@@ -412,6 +412,96 @@ input AdminOAuthClientUpdateRequest {
     scopes: [String!]!
 }
 
+# One storage system's line in a deletion's ledger (ADR-077).
+#
+# A line is REWRITTEN on every pass rather than appended, so it is a standing claim about
+# the store right now, not a log entry.
+type TenantDeletionStore {
+    # The store's ledger key: rdb, tsdb, broker, kv, detect, blob.
+    store: String!
+    # Whether this store has reported that it holds nothing for the tenant.
+    complete: Boolean!
+    # How much this store has erased, ACCUMULATED ACROSS PASSES. It is evidence the sweep
+    # ran, never a percentage: an erasure is idempotent and a deletion cannot finish on the
+    # pass that erased something, so the per-pass figure is zero on every pass that could
+    # complete one.
+    rowsErased: Int!
+    # Data this store still HOLDS and did not erase, in a sentence. Null means nothing.
+    # This is the field that blocks completion, and it does not clear on its own — it clears
+    # when someone changes something.
+    retaining: String
+    # Why the last pass could not establish that the store is clean. Null on success. Unlike
+    # retaining, this is expected to clear by itself on a later pass.
+    lastError: String
+    # What this store DECLINED TO LOOK AT, or the ground on which it reported clean while
+    # erasing nothing — for example a telemetry database that does not exist on this
+    # instance, or the key-value buckets a purge deliberately exempts.
+    #
+    # It is a QUALIFIER on a clean line and never a problem to act on: a store carrying a
+    # note is working as designed. Present it as a footnote to "clean", not as a warning.
+    note: String
+    # When this store was last asked (RFC3339).
+    attemptedAt: String
+    # When this store FIRST reported clean and has reported clean on every pass since. Null
+    # unless it is clean right now. The settle window is measured from the LATEST of these
+    # across all stores, so one store going clean late holds the whole deletion.
+    cleanSince: String
+}
+
+# What a deletion is currently waiting on (ADR-077).
+#
+# The three waits have different remedies — fix something, wait minutes, wait hours — and a
+# surface that cannot tell them apart teaches an operator to escalate a healthy deletion.
+enum DeletionWait {
+    # At least one storage system has not reported clean. The only one a human can act on;
+    # blockedBy says which and why.
+    STORES
+    # Everything is clean, and has not been clean for long enough yet.
+    SETTLE
+    # Everything is clean and settled; the deletion is not yet old enough to release its
+    # token for reuse.
+    TOKEN_HOLD
+    # Nothing outstanding.
+    NONE
+}
+
+# The durable record of one tenant deletion (ADR-077).
+#
+# 🔴 IT OUTLIVES THE TENANT, BY DESIGN. Completing a deletion removes the tenant row — that
+# removal IS the token release — so a finished deletion has no tenant to hang off, and this
+# record is the only surviving evidence that the erasure happened.
+#
+# A record is identified by (token, epoch) and NEVER by token alone: the token is released on
+# completion and can be taken by a new tenant, so a lookup by token alone would attribute a
+# predecessor's record to whoever holds that name now.
+#
+# It deliberately carries no tenant NAME. A record retaining "Acme Manufacturing GmbH" would
+# leave the erasure's own evidence as the last place the customer's details lived.
+type TenantDeletion {
+    # The deleted tenant's token. Not unique on its own — see the type comment.
+    token: String!
+    # When the deletion was requested (RFC3339). With the token, this identifies the record.
+    epoch: String!
+    # When every storage system had reported clean and the token was released (RFC3339).
+    # Null while the deletion is still in flight.
+    completedAt: String
+    # Total erased across every storage system.
+    rowsErased: Int!
+    # One line per storage system, ordered by name.
+    stores: [TenantDeletionStore!]!
+    # One sentence per storage system that is not clean, in that store's own words. Empty
+    # means nothing is blocking — which is NOT the same as finished, since a deletion with
+    # nothing blocking is still waiting out one of its two windows.
+    blockedBy: [String!]!
+    # Which wait is outstanding.
+    awaiting: DeletionWait!
+    # When the outstanding WINDOW elapses (RFC3339), or null when the wait is not a window.
+    #
+    # Null for STORES deliberately: a storage system holding data does not clear on a timer,
+    # and a countdown there would promise something nothing will deliver.
+    elapsesAt: String
+}
+
 # Admin queries. Each requires a system authority (superusers hold "*").
 type Query {
     # Liveness placeholder.
@@ -444,6 +534,17 @@ type Query {
     # Query the instance audit journal for user-management — auth events plus
     # identity/role/tenant administration, newest first (requires audit:read).
     auditEvents(criteria: AdminAuditEventSearchCriteria!): AdminAuditEventSearchResults!
+    # One tenant deletion record with its per-store ledger (requires tenant:read).
+    #
+    # Omit epoch to ask for the token's IN-FLIGHT deletion, which is unambiguous because at
+    # most one can be in flight at a time. A historical one must name its epoch: the token is
+    # reusable, so token alone does not identify a deletion. Null when there is no such
+    # record.
+    tenantDeletion(token: String!, epoch: String): TenantDeletion
+    # Deletion records newest cut first (requires tenant:read). Instance-wide and
+    # cross-tenant, because a record outlives the tenant it describes — there is no tenant to
+    # scope it to. Pass completed to filter to finished or in-flight deletions.
+    tenantDeletions(completed: Boolean, limit: Int, offset: Int): [TenantDeletion!]!
     # List the OAuth 2.1 client registry (requires client:read).
     oauthClients: [AdminOAuthClient!]!
 }

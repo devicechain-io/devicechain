@@ -253,12 +253,11 @@ func (c *Coordinator) PurgeTenant(ctx context.Context, tenant *iam.Tenant) error
 	}
 
 	total := int64(0)
-	allClean := true
-	// The settle window has to have elapsed for EVERY store, so the constraining
-	// timestamp is the most recent one — the last store to go clean. Taking the earliest
-	// would let a store that only just went clean ride out on a peer that has been clean
-	// for an hour.
-	var lastCleanAt time.Time
+	// The lines this pass wrote, kept so the completion decision is made from them rather
+	// than from a second read: Waiting below is the same function anything reporting purge
+	// progress calls, so the coordinator and that surface cannot drift into two slightly
+	// different readings of the same ledger.
+	lines := make([]iam.TenantPurgeStore, 0, len(c.stores))
 	for _, store := range c.stores {
 		select {
 		case <-ctx.Done():
@@ -277,30 +276,23 @@ func (c *Coordinator) PurgeTenant(ctx context.Context, tenant *iam.Tenant) error
 			return fmt.Errorf("recording %q's ledger line for %q: %w", store.Name(), t.Token, err)
 		}
 		total += line.Rows
-		if line.CleanSince == nil {
-			allClean = false
-			continue
-		}
-		if line.CleanSince.After(lastCleanAt) {
-			lastCleanAt = *line.CleanSince
-		}
+		lines = append(lines, *line)
 	}
 
-	if !allClean {
+	// One decision, shared. The second window is not a longer version of the first:
+	// settling asks whether everything already admitted has finished arriving, the token
+	// hold asks whether anything can still be admitted at all — and completion is what
+	// re-opens that door, because removing the row makes every device-plane gate read the
+	// token as an unknown tenant, which they treat as not deleted.
+	switch p := Waiting(lines, epoch, c.now(), c.settle, c.tokenHold); p.Awaiting {
+	case WaitStores:
 		return nil
-	}
-	if settled := c.now().Sub(lastCleanAt); settled < c.settle {
-		log.Info().Str("tenant", t.Token).Dur("cleanFor", settled).Dur("settle", c.settle).
+	case WaitSettle:
+		log.Info().Str("tenant", t.Token).Time("elapsesAt", *p.ElapsesAt).Dur("settle", c.settle).
 			Msg("Tenant purge is clean, holding for the settle window")
 		return nil
-	}
-	// The second window, and it is not a longer version of the first. Settling asks
-	// whether everything already admitted has finished arriving; this asks whether
-	// anything can still be admitted at all — and completion is what re-opens that door,
-	// because removing the row makes every device-plane gate read the token as an unknown
-	// tenant, which they treat as not deleted.
-	if age := c.now().Sub(epoch); age < c.tokenHold {
-		log.Info().Str("tenant", t.Token).Dur("age", age).Dur("tokenHold", c.tokenHold).
+	case WaitTokenHold:
+		log.Info().Str("tenant", t.Token).Time("elapsesAt", *p.ElapsesAt).Dur("tokenHold", c.tokenHold).
 			Msg("Tenant purge is clean and settled, holding the token until no pre-deletion session can write")
 		return nil
 	}
