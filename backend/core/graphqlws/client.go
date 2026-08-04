@@ -283,18 +283,33 @@ func (c *Client) Subscribe(ctx context.Context, query string, vars map[string]in
 // Close tears down the connection and terminates every live subscription with
 // ErrClientClosed (unless already ended by a server complete/error or a drop).
 func (c *Client) Close() error {
+	// 🔴 ATTRIBUTE THE TERMINAL ERROR BEFORE TOUCHING THE SOCKET AT ALL — before the
+	// close frame, not merely before conn.Close.
+	//
+	// shutdown is first-caller-wins, and there are TWO ways the readLoop can get
+	// there first. conn.Close unblocks it directly; that one an earlier version of
+	// this function already handled by attributing before the close. But writing the
+	// close FRAME also unblocks it, one network round trip later: a well-behaved peer
+	// answers a close with its own, ReadJSON then fails with "close 1000 (normal)",
+	// and the readLoop records a connection drop for what was a deliberate stop.
+	//
+	// That second window is not theoretical — it failed in CI, and it is invisible in
+	// the ordinary case because the round trip is usually slower than the two
+	// statements that used to follow the write. Doing the attribution first removes
+	// the timing question entirely: nothing the peer does can precede a decision made
+	// before the peer was told anything.
+	//
+	// A genuine earlier drop still wins, which is the property that must not regress:
+	// its shutdown ran before this call did. Both paths take c.mu, so -race stays
+	// silent either way — it is an ordering race, not a memory one, which is why it
+	// took a loaded runner to surface it.
+	c.shutdown(ErrClientClosed)
+
 	c.writeMu.Lock()
 	_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 	_ = c.conn.WriteMessage(websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 	c.writeMu.Unlock()
-	// Attribute the terminal error BEFORE closing the socket. conn.Close unblocks
-	// the readLoop, whose own shutdown(connection-closed) would otherwise race this
-	// call and misattribute a deliberate Close as a drop. Both take c.mu, so -race
-	// stays silent — it is an ordering race, not a memory one. shutdown is
-	// first-caller-wins, so running it here first makes a caller-initiated close
-	// deterministically ErrClientClosed, while a genuine earlier drop still wins.
-	c.shutdown(ErrClientClosed)
 	return c.conn.Close()
 }
 
