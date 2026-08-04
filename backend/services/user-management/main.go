@@ -234,7 +234,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		}
 
 		PurgeCoordinator = purge.NewCoordinator(Microservice, iam.NewStore(RdbManager), RdbManager,
-			purge.DefaultStores(RdbManager, TsdbGuest), interval, Configuration.TenantPurgeSettle(),
+			purge.DefaultStores(RdbManager, TsdbGuest, NatsManager, Microservice.InstanceId), interval, Configuration.TenantPurgeSettle(),
 			Configuration.TenantPurgeTokenHold(), core.NewNoOpLifecycleCallbacks())
 		if err := PurgeCoordinator.Initialize(ctx); err != nil {
 			return err
