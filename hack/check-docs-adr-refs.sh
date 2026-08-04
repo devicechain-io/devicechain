@@ -41,6 +41,30 @@ scan() {
   grep -rnE "$PATTERN" "${dirs[@]}" 2>/dev/null || true
 }
 
+# docs-drafts/ holds feature documents for arcs that have reached their
+# GA-claimable state. They are drafts of published pages, so they are written to
+# the docs site's rules from the first sentence rather than converted later — a
+# draft written in the strategy repo's house style cites ADRs freely, and moving
+# it into docs/ is then a rewrite rather than a `git mv`.
+#
+# THE FRONTMATTER IS A DELIBERATE EXCEPTION and the only one. A draft's ADR
+# pointers are worth keeping with it during the holding period; putting them in
+# one machine-strippable block keeps the BODY publishable as-is. So the body is
+# checked exactly as a published page is, and the leading `---` … `---` block is
+# blanked before the scan — blanked rather than deleted, so the line numbers in a
+# failure still address the file as the author sees it.
+scan_drafts() {
+  local base="${1:-docs-drafts}" f
+  [ -d "$base" ] || return 0
+  while IFS= read -r -d '' f; do
+    awk 'NR==1 && $0=="---" { fm=1; print ""; next }
+         fm==1 && $0=="---" { fm=0; print ""; next }
+         fm==1              { print ""; next }
+                            { print }' "$f" |
+      grep -nE "$PATTERN" | sed "s|^|${f}:|" || true
+  done < <(find "$base" -type f -name '*.md' -print0)
+}
+
 # The other published surface, and a much easier one to miss: the `description`
 # of an npm package renders on npmjs.com. frontend/packages/* are slated for
 # publication to the public registry, so their descriptions are read by people
@@ -91,16 +115,43 @@ if [ "${1:-}" = "--self-test" ]; then
   fi
   echo "  ok: clean npm description produces no match"
 
+  # The draft exemption is the one rule here that makes the guard WEAKER, so it
+  # gets both controls: the body must still be caught, and the frontmatter must
+  # still be let through. Checking only the second would pass with the whole
+  # file exempted.
+  mkdir -p "$tmp/drafts"
+  printf -- '---\nadrs: [ADR-077]\n---\n\nThe token is released on completion.\n' \
+    > "$tmp/drafts/example.md"
+  if [ -n "$(scan_drafts "$tmp/drafts")" ]; then
+    echo "  FAIL: the guard reports a match in a draft's frontmatter, which is the one" >&2
+    echo "        place a draft is allowed to name an ADR" >&2
+    exit 1
+  fi
+  echo "  ok: a draft's frontmatter ADR list is exempt"
+
+  printf -- '---\nadrs: [ADR-077]\n---\n\nThe token is released (ADR-077).\n' \
+    > "$tmp/drafts/example.md"
+  planted="$(scan_drafts "$tmp/drafts")"
+  if [ -z "$planted" ]; then
+    echo "  FAIL: the guard did not see an ADR reference in a draft's BODY — the" >&2
+    echo "        frontmatter exemption is swallowing the whole file" >&2
+    exit 1
+  fi
+  case "$planted" in
+    *:5:*) echo "  ok: planted draft body reference detected, at its real line number" ;;
+    *)     echo "  FAIL: draft body reference reported at the wrong line: $planted" >&2; exit 1 ;;
+  esac
+
   echo "==> Self-test passed"
   exit 0
 fi
 
 hits="$(scan "${TARGETS[@]}")"
-pkg_hits="$(scan_package_descriptions)"
-if [ -n "$pkg_hits" ]; then
+for extra in "$(scan_package_descriptions)" "$(scan_drafts)"; do
+  [ -n "$extra" ] || continue
   hits="${hits:+$hits
-}${pkg_hits}"
-fi
+}${extra}"
+done
 
 if [ -n "$hits" ]; then
   cat >&2 <<EOF
