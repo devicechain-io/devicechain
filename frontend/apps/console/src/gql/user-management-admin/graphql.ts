@@ -82,6 +82,12 @@ export type AdminTenantUpdateRequest = {
   tierToken: string;
 };
 
+export type DeletionWait =
+  | 'NONE'
+  | 'SETTLE'
+  | 'STORES'
+  | 'TOKEN_HOLD';
+
 export type IdentitiesQueryVariables = Exact<{ [key: string]: never; }>;
 
 
@@ -288,6 +294,23 @@ export type DeleteTenantMutationVariables = Exact<{
 
 
 export type DeleteTenantMutation = { deleteTenant: boolean };
+
+export type TenantDeletionQueryVariables = Exact<{
+  token: string;
+  epoch?: string | null | undefined;
+}>;
+
+
+export type TenantDeletionQuery = { tenantDeletion: { token: string, epoch: string, completedAt: string | null, rowsErased: number, awaiting: DeletionWait, elapsesAt: string | null, blockedBy: Array<string>, stores: Array<{ store: string, complete: boolean, rowsErased: number, retaining: string | null, lastError: string | null, note: string | null, attemptedAt: string | null, cleanSince: string | null }> } | null };
+
+export type TenantDeletionsQueryVariables = Exact<{
+  completed?: boolean | null | undefined;
+  limit?: number | null | undefined;
+  offset?: number | null | undefined;
+}>;
+
+
+export type TenantDeletionsQuery = { tenantDeletions: Array<{ token: string, epoch: string, completedAt: string | null, rowsErased: number, awaiting: DeletionWait, elapsesAt: string | null, blockedBy: Array<string>, stores: Array<{ store: string, complete: boolean, rowsErased: number, retaining: string | null, lastError: string | null, note: string | null, attemptedAt: string | null, cleanSince: string | null }> }> };
 
 export class TypedDocumentString<TResult, TVariables>
   extends String
@@ -743,3 +766,49 @@ export const DeleteTenantDocument = new TypedDocumentString(`
   deleteTenant(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteTenantMutation, DeleteTenantMutationVariables>;
+export const TenantDeletionDocument = new TypedDocumentString(`
+    query TenantDeletion($token: String!, $epoch: String) {
+  tenantDeletion(token: $token, epoch: $epoch) {
+    token
+    epoch
+    completedAt
+    rowsErased
+    awaiting
+    elapsesAt
+    blockedBy
+    stores {
+      store
+      complete
+      rowsErased
+      retaining
+      lastError
+      note
+      attemptedAt
+      cleanSince
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<TenantDeletionQuery, TenantDeletionQueryVariables>;
+export const TenantDeletionsDocument = new TypedDocumentString(`
+    query TenantDeletions($completed: Boolean, $limit: Int, $offset: Int) {
+  tenantDeletions(completed: $completed, limit: $limit, offset: $offset) {
+    token
+    epoch
+    completedAt
+    rowsErased
+    awaiting
+    elapsesAt
+    blockedBy
+    stores {
+      store
+      complete
+      rowsErased
+      retaining
+      lastError
+      note
+      attemptedAt
+      cleanSince
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<TenantDeletionsQuery, TenantDeletionsQueryVariables>;

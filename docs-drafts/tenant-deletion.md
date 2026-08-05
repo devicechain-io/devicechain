@@ -416,8 +416,37 @@ Two traps this surface has to keep clear of, both proved by tests rather than ar
    and it is looked up by exact match — so publishing it at second precision would publish an
    identifier that identifies nothing.
 
-What is still missing is the UI. `Deferred`, `Failure`, `Note`, `CleanSince` and the per-store row
-counts have an API and no screen.
+### The console surfaces
+
+Two, and the split between them is forced by the mechanism rather than chosen for layout.
+
+**A `Deletion` tab on the tenant detail page**, shown only while a deletion is in flight. It carries
+the one-line answer to *"is it done, and if not, why not"*, the blocking reasons if any, and a
+per-store table. Three store states, never two: `Clean`, `Retaining` and `Retrying` — a deferral
+will not clear until someone changes something, an error clears itself on the next pass, and
+collapsing them tells an operator to act on the half that is already fixing itself. A note renders
+as a muted footnote under `Clean`, never in the column carrying things to act on. It polls every 30s
+while in flight, and stops polling a finished record, which never changes again.
+
+**`/admin/deletions`, an instance-level page**, listing every deletion newest cut first. 🔑 **It
+cannot be a tab on a tenant, and this is structural**: a COMPLETED deletion has no tenant, because
+completion removes the row. A history living on the tenant page would lose each record at the moment
+it became evidence. That also makes this the auditor's page.
+
+Two details the UI has to get right and that the code comments pin:
+
+- **Rows are evidence, never progress.** They accumulate across passes and a deletion cannot
+  complete on the pass that erased something, so a progress bar built on them would sit at zero for
+  every real deletion.
+- **The history is keyed on `(token, epoch)`**, never token alone — one token carries several
+  records over an instance's life.
+
+There are deliberately **no actions**: no retry (the coordinator already retries every pass, and a
+button implies the absence of one) and no force-complete (the single action that could write a
+deletion record that is false).
+
+What is still missing: nothing renders `elapsesAt` as a live countdown, and the history page has no
+total count to page against — `tenantDeletions` is offset/limit with no envelope.
 
 ## 9. The device plane during a purge
 
@@ -545,8 +574,8 @@ Those are two different questions and an operator asking "is it done?" usually m
 
 Stated here so they are found deliberately rather than discovered:
 
-1. **No progress UI.** The ledger is served on the admin plane but nothing renders it; the console
-   still shows only the two lifecycle fields as a badge.
+1. **No purge metrics.** There are no Prometheus metrics for the purge at all — a per-tenant label
+   would be a cardinality hazard, so it wants its own design rather than a line here.
 2. **Orphaned objects** whose reference was lost before the purge are unreachable by a row-driven
    work list.
 3. **A false exemption is invisible to CI.** Only the presence of a reason is checked, never its

@@ -178,11 +178,29 @@ antes de eliminarlo.
 
 ## Qué se puede ver hoy {#visibility}
 
-La consola de administración muestra si un inquilino está activo o en eliminación, y cuándo
-se solicitó la eliminación.
+Un inquilino en proceso de eliminación tiene una pestaña **Eliminación** en su página de
+detalle en la consola de administración. Responde a la pregunta que realmente se hace un
+operador —*¿ha terminado y, si no, por qué no?*— con una línea de estado en lenguaje claro,
+lo que esté bloqueando el proceso, y una fila por sistema de almacenamiento que indica si
+ese sistema está limpio, si todavía retiene datos, o si está reintentando tras un fallo.
+Los tres estados se mantienen separados a propósito: los datos que aún se retienen no se
+liberarán hasta que alguien cambie algo, mientras que un fallo se resuelve por sí solo en
+la siguiente pasada.
 
-**El detalle por sistema todavía no está expuesto.** La plataforma registra, para cada
-eliminación, qué sistemas de almacenamiento han informado de que están limpios, qué
-conserva todavía alguno de ellos y por qué, y cuánto se borró, pero ese registro solo puede
-leerse actualmente en la base de datos y en los registros del servicio. Está previsto
-exponerlo.
+Algunos sistemas añaden una nota breve a una línea limpia, indicando lo que *decidieron no
+revisar* —por ejemplo, una base de datos de telemetría que no existe en esta instancia, o
+las cachés internas que una eliminación exime deliberadamente—. Una nota es una aclaración
+sobre «limpio», no un problema sobre el que haya que actuar.
+
+**Las eliminaciones completadas están en Administración → Eliminaciones**, no en la página
+de un inquilino, y merece la pena saber por qué: al completarse una eliminación se elimina
+el inquilino, de modo que una eliminación terminada ya no tiene página de inquilino donde
+aparecer. Esa lista, a nivel de instancia, es el registro duradero: el token, cuándo se
+solicitó, cuándo se completó, cuánto se borró y qué informó cada sistema de almacenamiento.
+Es la página que hay que abrir cuando alguien pide demostrar que los datos de un cliente se
+borraron.
+
+Hay dos cosas que deliberadamente no ofrece. No hay **reintento**: cada pasada ya
+reintenta, así que un botón daría a entender que no lo hace. Y no hay **forzar la
+finalización**: es la única acción que podría dejar registrada una eliminación que no
+ocurrió.

@@ -40,6 +40,7 @@ import AdminProtectedRoute from '@/routes/admin/AdminProtectedRoute';
 import AdminLayout from '@/routes/admin/AdminLayout';
 import AdminTenantsPage from '@/routes/admin/TenantsPage';
 import AdminNewTenantPage from '@/routes/admin/tenants/NewTenantPage';
+import AdminDeletionsPage from '@/routes/admin/DeletionsPage';
 import AdminTenantDetailPage from '@/routes/admin/tenants/TenantDetailPage';
 import AdminTiersPage from '@/routes/admin/TiersPage';
 import AdminNewTierPage from '@/routes/admin/tiers/NewTierPage';
@@ -135,6 +136,7 @@ export default function App() {
           <Route path="tenants" element={<AdminTenantsPage />} />
           <Route path="tenants/new" element={<AdminNewTenantPage />} />
           <Route path="tenants/:token" element={<AdminTenantDetailPage />} />
+          <Route path="deletions" element={<AdminDeletionsPage />} />
           <Route path="tiers" element={<AdminTiersPage />} />
           <Route path="tiers/new" element={<AdminNewTierPage />} />
           <Route path="tiers/:token" element={<AdminTierDetailPage />} />

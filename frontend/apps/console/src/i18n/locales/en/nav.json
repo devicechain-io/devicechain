@@ -32,5 +32,6 @@
   "adminSettings": "Settings",
   "adminConsole": "Admin Console",
   "adminBadge": "Admin",
-  "adminTooltip": "DeviceChain Admin"
+  "adminTooltip": "DeviceChain Admin",
+  "adminDeletions": "Deletions"
 }

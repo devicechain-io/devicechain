@@ -44,6 +44,8 @@ type Documents = {
     "\n  mutation UpdateTenant($token: String!, $request: AdminTenantUpdateRequest!) {\n    updateTenant(token: $token, request: $request) {\n      id\n      token\n      name\n      enabled\n      tier {\n        token\n        name\n        color\n      }\n      config\n      ingestMessagesPerSecond\n      ingestBurst\n      outboundMessagesPerSecond\n      outboundBurst\n      aiExternalEnabled\n      aiInferenceRequestsPerMinute\n      aiInferenceBurst\n      createdAt\n      updatedAt\n    }\n  }\n": typeof types.UpdateTenantDocument,
     "\n  mutation SetTenantEnabled($token: String!, $enabled: Boolean!) {\n    setTenantEnabled(token: $token, enabled: $enabled) {\n      id\n      token\n      name\n      enabled\n      tier {\n        token\n        name\n        color\n      }\n      config\n      ingestMessagesPerSecond\n      ingestBurst\n      outboundMessagesPerSecond\n      outboundBurst\n      aiExternalEnabled\n      aiInferenceRequestsPerMinute\n      aiInferenceBurst\n      createdAt\n      updatedAt\n    }\n  }\n": typeof types.SetTenantEnabledDocument,
     "\n  mutation DeleteTenant($token: String!) {\n    deleteTenant(token: $token)\n  }\n": typeof types.DeleteTenantDocument,
+    "\n  query TenantDeletion($token: String!, $epoch: String) {\n    tenantDeletion(token: $token, epoch: $epoch) {\n      token\n      epoch\n      completedAt\n      rowsErased\n      awaiting\n      elapsesAt\n      blockedBy\n      stores {\n        store\n        complete\n        rowsErased\n        retaining\n        lastError\n        note\n        attemptedAt\n        cleanSince\n      }\n    }\n  }\n": typeof types.TenantDeletionDocument,
+    "\n  query TenantDeletions($completed: Boolean, $limit: Int, $offset: Int) {\n    tenantDeletions(completed: $completed, limit: $limit, offset: $offset) {\n      token\n      epoch\n      completedAt\n      rowsErased\n      awaiting\n      elapsesAt\n      blockedBy\n      stores {\n        store\n        complete\n        rowsErased\n        retaining\n        lastError\n        note\n        attemptedAt\n        cleanSince\n      }\n    }\n  }\n": typeof types.TenantDeletionsDocument,
 };
 const documents: Documents = {
     "\n  query Identities {\n    identities {\n      id\n      email\n      firstName\n      lastName\n      enabled\n      systemRoles\n      memberships {\n        tenant\n        enabled\n        roles\n      }\n      createdAt\n      updatedAt\n    }\n  }\n": types.IdentitiesDocument,
@@ -75,6 +77,8 @@ const documents: Documents = {
     "\n  mutation UpdateTenant($token: String!, $request: AdminTenantUpdateRequest!) {\n    updateTenant(token: $token, request: $request) {\n      id\n      token\n      name\n      enabled\n      tier {\n        token\n        name\n        color\n      }\n      config\n      ingestMessagesPerSecond\n      ingestBurst\n      outboundMessagesPerSecond\n      outboundBurst\n      aiExternalEnabled\n      aiInferenceRequestsPerMinute\n      aiInferenceBurst\n      createdAt\n      updatedAt\n    }\n  }\n": types.UpdateTenantDocument,
     "\n  mutation SetTenantEnabled($token: String!, $enabled: Boolean!) {\n    setTenantEnabled(token: $token, enabled: $enabled) {\n      id\n      token\n      name\n      enabled\n      tier {\n        token\n        name\n        color\n      }\n      config\n      ingestMessagesPerSecond\n      ingestBurst\n      outboundMessagesPerSecond\n      outboundBurst\n      aiExternalEnabled\n      aiInferenceRequestsPerMinute\n      aiInferenceBurst\n      createdAt\n      updatedAt\n    }\n  }\n": types.SetTenantEnabledDocument,
     "\n  mutation DeleteTenant($token: String!) {\n    deleteTenant(token: $token)\n  }\n": types.DeleteTenantDocument,
+    "\n  query TenantDeletion($token: String!, $epoch: String) {\n    tenantDeletion(token: $token, epoch: $epoch) {\n      token\n      epoch\n      completedAt\n      rowsErased\n      awaiting\n      elapsesAt\n      blockedBy\n      stores {\n        store\n        complete\n        rowsErased\n        retaining\n        lastError\n        note\n        attemptedAt\n        cleanSince\n      }\n    }\n  }\n": types.TenantDeletionDocument,
+    "\n  query TenantDeletions($completed: Boolean, $limit: Int, $offset: Int) {\n    tenantDeletions(completed: $completed, limit: $limit, offset: $offset) {\n      token\n      epoch\n      completedAt\n      rowsErased\n      awaiting\n      elapsesAt\n      blockedBy\n      stores {\n        store\n        complete\n        rowsErased\n        retaining\n        lastError\n        note\n        attemptedAt\n        cleanSince\n      }\n    }\n  }\n": types.TenantDeletionsDocument,
 };
 
 /**
@@ -193,6 +197,14 @@ export function graphql(source: "\n  mutation SetTenantEnabled($token: String!, 
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  mutation DeleteTenant($token: String!) {\n    deleteTenant(token: $token)\n  }\n"): typeof import('./graphql').DeleteTenantDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query TenantDeletion($token: String!, $epoch: String) {\n    tenantDeletion(token: $token, epoch: $epoch) {\n      token\n      epoch\n      completedAt\n      rowsErased\n      awaiting\n      elapsesAt\n      blockedBy\n      stores {\n        store\n        complete\n        rowsErased\n        retaining\n        lastError\n        note\n        attemptedAt\n        cleanSince\n      }\n    }\n  }\n"): typeof import('./graphql').TenantDeletionDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query TenantDeletions($completed: Boolean, $limit: Int, $offset: Int) {\n    tenantDeletions(completed: $completed, limit: $limit, offset: $offset) {\n      token\n      epoch\n      completedAt\n      rowsErased\n      awaiting\n      elapsesAt\n      blockedBy\n      stores {\n        store\n        complete\n        rowsErased\n        retaining\n        lastError\n        note\n        attemptedAt\n        cleanSince\n      }\n    }\n  }\n"): typeof import('./graphql').TenantDeletionsDocument;
 
 
 export function graphql(source: string) {

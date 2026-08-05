@@ -33,6 +33,7 @@ export function TenantForm({
   onDone,
   effectiveSettingsPanel,
   aiModelsPanel,
+  deletionPanel,
 }: {
   tenant?: AdminTenant;
   onDone: (message: string) => void;
@@ -43,6 +44,8 @@ export function TenantForm({
   // tenant (ADR-065 S5c′). Its own mutations, not part of the tenant save — like the
   // Effective tab, the caller passes it in.
   aiModelsPanel?: ReactNode;
+  /** Shown only while a deletion is in flight; see TenantDetailPage. */
+  deletionPanel?: ReactNode;
 }) {
   const { t } = useTranslation('tenants');
   const editing = tenant != null;
@@ -303,6 +306,7 @@ export function TenantForm({
           <TabsTrigger value="settings">{t('tabSettings')}</TabsTrigger>
           <TabsTrigger value="effective">{t('tabEffective')}</TabsTrigger>
           {aiModelsPanel !== undefined && <TabsTrigger value="ai-models">{t('tabAiModels')}</TabsTrigger>}
+        {deletionPanel !== undefined && <TabsTrigger value="deletion">{t('tabDeletion')}</TabsTrigger>}
         </TabsList>
         <TabsContent value="basic">
           <SectionPanel>
@@ -329,6 +333,11 @@ export function TenantForm({
         {aiModelsPanel !== undefined && (
           <TabsContent value="ai-models">
             <SectionPanel title={t('tabAiModels')}>{aiModelsPanel}</SectionPanel>
+          </TabsContent>
+        )}
+        {deletionPanel !== undefined && (
+          <TabsContent value="deletion">
+            <SectionPanel title={t('tabDeletion')}>{deletionPanel}</SectionPanel>
           </TabsContent>
         )}
       </Tabs>

@@ -8,6 +8,7 @@ import {
   Building2,
   ChevronRight,
   Layers,
+  Trash2,
   List,
   ScrollText,
   Settings,
@@ -57,6 +58,9 @@ const NAV: NavNode[] = [
     children: [
       { labelKey: 'adminList', href: '/admin/tenants', icon: List },
       { labelKey: 'adminTiers', href: '/admin/tiers', icon: Layers },
+      // /admin/deletions rather than /admin/tenants/deletions: childActive is a PREFIX
+      // match, so a path under /admin/tenants would light this AND the list entry at once.
+      { labelKey: 'adminDeletions', href: '/admin/deletions', icon: Trash2 },
     ],
   },
   {
