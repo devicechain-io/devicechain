@@ -23,7 +23,7 @@
   "version": "v0.11.0",
   "breaking": false,
   "highlights": [
-    "Upgradeable in place: the first release since v0.8.5 that a plain helm upgrade can reach.",
+    "Upgradeable in place: the first release since v0.8.5 reachable with helm upgrade, no recreate needed.",
     "Deleting a tenant now erases its data — relational, telemetry, broker, object and key-value stores, and the running rule engine.",
     "A deleted tenant's token is held before reuse, so a new tenant cannot inherit its predecessor's data.",
     "The console shows deletion progress and history, with a per-store record of what was erased.",

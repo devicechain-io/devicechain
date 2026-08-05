@@ -109,31 +109,37 @@ running the command:
 
 ```bash
 # Carry the current release's values forward, then change only the version.
-helm get values dc -n default -o yaml > /tmp/dc-values.yaml
+# This file contains your instance's secrets — delete it when you are done.
+helm get values dc -n default -o yaml > dc-values.yaml
 
 helm upgrade dc deploy/helm/devicechain \
   -n default \
-  -f /tmp/dc-values.yaml \
+  -f dc-values.yaml \
   --set image.tag=v1.3.0
+
+rm dc-values.yaml
 ```
 
-:::warning Reuse the release's values — a bare `helm upgrade` will not work
+:::warning Carry the values forward — `--set image.tag=…` on its own will not work
 Your instance's values are not all typed by hand. `dcctl bootstrap` generates several and
-stores them in the release: the instance root key, the NATS service credential and callout
-issuer seed, and the broker's TLS material. A `helm upgrade` that passes only `--set` flags
-starts from the chart defaults and drops every one of them.
+stores them in the release — among them the instance root key, the cross-service auth secret,
+the NATS service credential and callout issuer seed, and the broker's CA.
 
-That does not corrupt anything — the chart refuses to render without the root key:
+Helm's rule is the trap here. An upgrade that passes **no** values at all reuses the ones
+already in the release. But the moment you pass *any* value — including the single `--set`
+that changes the version, which is the whole point of an upgrade — Helm starts from the
+chart's defaults instead, and everything `dcctl bootstrap` generated is gone.
+
+Nothing is corrupted when that happens, because the chart refuses to render without the root
+key:
 
 ```
-Error: UPGRADE FAILED: instance.config.infrastructure.secrets.rootKey is required:
-area "notification-management" owns an envelope-encrypted secret store and cannot
-form its KEK without it, so it would crash-loop.
+Error: UPGRADE FAILED: execution error at (devicechain/templates/instance-config.yaml:27:4): instance.config.infrastructure.secrets.rootKey is required: area "notification-management" owns an envelope-encrypted secret store and cannot form its KEK without it, so it would crash-loop. Set it to a base64 256-bit key (openssl rand -base64 32); dcctl bootstrap mints one automatically.
 ```
 
 The fix is the `helm get values` step above. `--reuse-values` also works, but it silently
-keeps stale entries when the chart's own defaults move between versions, so prefer writing
-the values out and passing them with `-f` where you can see them.
+keeps stale entries when the chart's own defaults move between versions, so prefer writing the
+values out and passing them with `-f`, where you can see them.
 :::
 
 What makes the rollout safe:
@@ -256,16 +262,31 @@ Every tenant that already exists is set to the normal, active state as the colum
 so nothing changes for a running instance until you actually delete a tenant.
 
 :::note What was tested, and what was not
-This upgrade path was exercised end to end before release: a `v0.10.0` instance was built
-from the published `v0.10.0` images, given real tenants and identities, then upgraded with
-the command above. All services rolled out, every pre-existing row survived unchanged, and
-the resulting schema is identical to a fresh `v0.11.0` install. The same check was run for
-every functional area, not only the one that changed.
+Two checks were run before release, and they are worth keeping apart because they measured
+different things.
 
-Two limits are worth stating plainly. Only the databases were verified — broker (JetStream)
-state, object storage and key-value state are not covered by that check. And the upgrade was
-measured on PostgreSQL 16; fresh installs are verified on both supported majors, but the
-upgrade path itself was not.
+**The migrations, against a database with data in it.** A `v0.10.0` schema was built, filled
+with representative rows, and carried forward. Every one of those rows came through
+byte-identical, and the resulting schema is identical to a fresh `v0.11.0` install — for every
+functional area, not only the one that changed.
+
+**The upgrade itself, on a running instance.** A `v0.10.0` instance was built from the
+published `v0.10.0` images, given real tenants and identities, then upgraded with the command
+above. Every service rolled out, row counts across all 67 tables were unchanged apart from the
+new migration entries and the audit records they wrote, signing in still worked for an account
+created under `v0.10.0`, and the new tenant-deletion API answered on the upgraded instance.
+
+Four limits, stated plainly:
+
+- **Only the databases were verified.** Broker (JetStream) state, object storage and key-value
+  state are not covered by either check.
+- **PostgreSQL 16 only.** Fresh installs are verified on both supported majors; the upgrade
+  path itself was measured on 16.
+- **The row-by-row comparison came from the first check, not the second.** The running instance
+  was verified by row *counts*, which would not notice a row altered in place rather than
+  removed.
+- **The web console was left at its `v0.10.0` image** during the second check, so the `v0.11.0`
+  console was not exercised against an upgraded instance.
 :::
 
 ### The one-time durable-ingest cutover

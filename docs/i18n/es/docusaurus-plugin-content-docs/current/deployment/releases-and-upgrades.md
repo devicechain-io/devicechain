@@ -111,26 +111,32 @@ ejecutar el comando:
 
 ```bash
 # Traslade los valores de la versión actual y cambie únicamente la versión.
-helm get values dc -n default -o yaml > /tmp/dc-values.yaml
+# Este archivo contiene los secretos de su instancia: elimínelo cuando termine.
+helm get values dc -n default -o yaml > dc-values.yaml
 
 helm upgrade dc deploy/helm/devicechain \
   -n default \
-  -f /tmp/dc-values.yaml \
+  -f dc-values.yaml \
   --set image.tag=v1.3.0
+
+rm dc-values.yaml
 ```
 
-:::warning Reutilice los valores de la versión: un `helm upgrade` simple no funcionará
+:::warning Traslade los valores: `--set image.tag=…` por sí solo no funcionará
 No todos los valores de su instancia se escriben a mano. `dcctl bootstrap` genera varios y los
-guarda en la versión desplegada: la clave raíz de la instancia, la credencial de servicio de NATS
-y la semilla del emisor de callout, y el material TLS del bróker. Un `helm upgrade` que solo pasa
-opciones `--set` parte de los valores predeterminados del chart y descarta todos ellos.
+guarda en la versión desplegada; entre ellos, la clave raíz de la instancia, el secreto de
+autenticación entre servicios, la credencial de servicio de NATS y la semilla del emisor de
+callout, y la CA del bróker.
 
-Eso no corrompe nada: el chart se niega a renderizar sin la clave raíz:
+La regla de Helm es la trampa. Una actualización que **no** pasa ningún valor reutiliza los que ya
+están en la versión desplegada. Pero en cuanto pasa *cualquier* valor —incluido el único `--set`
+que cambia la versión, que es justamente el objetivo de una actualización— Helm parte de los
+valores predeterminados del chart y todo lo que generó `dcctl bootstrap` desaparece.
+
+Cuando eso ocurre no se corrompe nada, porque el chart se niega a renderizar sin la clave raíz:
 
 ```
-Error: UPGRADE FAILED: instance.config.infrastructure.secrets.rootKey is required:
-area "notification-management" owns an envelope-encrypted secret store and cannot
-form its KEK without it, so it would crash-loop.
+Error: UPGRADE FAILED: execution error at (devicechain/templates/instance-config.yaml:27:4): instance.config.infrastructure.secrets.rootKey is required: area "notification-management" owns an envelope-encrypted secret store and cannot form its KEK without it, so it would crash-loop. Set it to a base64 256-bit key (openssl rand -base64 32); dcctl bootstrap mints one automatically.
 ```
 
 La solución es el paso `helm get values` de arriba. `--reuse-values` también funciona, pero conserva
@@ -260,17 +266,33 @@ Todos los inquilinos que ya existen quedan en el estado activo normal al añadir
 que nada cambia en una instancia en funcionamiento hasta que elimine realmente un inquilino.
 
 :::note Qué se probó y qué no
-Esta ruta de actualización se ejercitó de extremo a extremo antes de la publicación: se construyó
-una instancia `v0.10.0` a partir de las imágenes `v0.10.0` publicadas, se le dieron inquilinos e
-identidades reales y luego se actualizó con el comando de arriba. Todos los servicios se
-desplegaron, todas las filas preexistentes sobrevivieron sin cambios y el esquema resultante es
-idéntico al de una instalación nueva de `v0.11.0`. La misma comprobación se ejecutó para todas las
-áreas funcionales, no solo para la que cambió.
+Antes de la publicación se ejecutaron dos comprobaciones, y conviene mantenerlas separadas porque
+midieron cosas distintas.
 
-Conviene indicar con claridad dos límites. Solo se verificaron las bases de datos: el estado del
-bróker (JetStream), el almacenamiento de objetos y el estado clave-valor no están cubiertos por esa
-comprobación. Y la actualización se midió en PostgreSQL 16; las instalaciones nuevas se verifican en
-ambas versiones principales admitidas, pero la ruta de actualización en sí no.
+**Las migraciones, contra una base de datos con datos dentro.** Se construyó un esquema `v0.10.0`,
+se llenó con filas representativas y se trasladó hacia adelante. Todas esas filas llegaron
+idénticas byte a byte, y el esquema resultante es idéntico al de una instalación nueva de
+`v0.11.0`, para todas las áreas funcionales, no solo para la que cambió.
+
+**La actualización en sí, sobre una instancia en funcionamiento.** Se construyó una instancia
+`v0.10.0` a partir de las imágenes `v0.10.0` publicadas, se le dieron inquilinos e identidades
+reales y luego se actualizó con el comando de arriba. Todos los servicios se desplegaron, el
+recuento de filas de las 67 tablas no varió salvo por las nuevas entradas de migración y los
+registros de auditoría que escribieron, el inicio de sesión siguió funcionando para una cuenta
+creada bajo `v0.10.0`, y la nueva API de eliminación de inquilinos respondió en la instancia
+actualizada.
+
+Cuatro límites, indicados con claridad:
+
+- **Solo se verificaron las bases de datos.** El estado del bróker (JetStream), el almacenamiento
+  de objetos y el estado clave-valor no están cubiertos por ninguna de las dos comprobaciones.
+- **Solo PostgreSQL 16.** Las instalaciones nuevas se verifican en ambas versiones principales
+  admitidas; la ruta de actualización en sí se midió en la 16.
+- **La comparación fila a fila proviene de la primera comprobación, no de la segunda.** La
+  instancia en funcionamiento se verificó por *recuentos* de filas, que no detectarían una fila
+  modificada en el sitio en lugar de eliminada.
+- **La consola web se dejó con su imagen `v0.10.0`** durante la segunda comprobación, así que la
+  consola `v0.11.0` no se ejercitó contra una instancia actualizada.
 :::
 
 ### La transición única a la ingesta duradera
