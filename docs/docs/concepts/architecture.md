@@ -17,7 +17,7 @@ DeviceChain is a set of stateless Go microservices over a shared core library, c
 | **event-management** | Persists resolved events to TimescaleDB, applies the data-lifecycle policies (compression / retention / rollups), and serves time-series queries over GraphQL. |
 | **device-state** | The live last-known-state projection per device — presence and current reading per measurement. |
 | **command-delivery** | Persistent, two-way command dispatch to devices, tracked through a per-command lifecycle. |
-| **dashboard-management** | Versioned dashboard definitions (draft, publish / rollback, export), rendered by the embeddable widget packages. |
+| **dashboard-management** | Versioned dashboard definitions (draft, publish / rollback), stored opaquely and rendered by the React runtime packages in this repository's frontend workspace. Exporting a definition is a console-side feature, not a service operation. |
 | **notification-management** | Routes triggered alarms to humans — per-tenant policy over email (SMTP) and webhook, with per-severity escalation. |
 | **user-management** | Global identities, per-tenant memberships, the role catalog, and JWT issuance/validation. |
 | **sparkplug-ingest** _(opt-in)_ | A stateful Sparkplug B Host Application that connects *out* to per-tenant customer MQTT brokers, runs the Sparkplug session machine, and feeds this pipeline — including authoritative device presence. One replica serves at a time, elected through a fenced lease. See [Sparkplug B](./sparkplug.md). |
