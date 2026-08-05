@@ -1,0 +1,87 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Publish the Artifact Hub repository metadata to the chart's OCI registry.
+#
+# WHY THIS IS NOT PART OF THE RELEASE WORKFLOW. The metadata lives on its own
+# OCI tag (`artifacthub.io`) and is not versioned with the chart — Artifact Hub
+# pulls that one tag whenever it needs the repository's metadata, regardless of
+# which chart versions exist. Pushing an identical artifact on every release tag
+# would be noise, and it would couple an unrelated concern to the release gate.
+# So this runs when the metadata itself changes, or on demand.
+#
+# The `workflow_dispatch` trigger is the one that matters in practice: the file
+# changes about once, when a repository is first registered, and the listing
+# should not have to wait for the next release to be verified.
+name: artifacthub-metadata
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - deploy/helm/artifacthub-repo.yml
+      - .github/workflows/artifacthub-metadata.yml
+
+# Least privilege: read the repo, write the one OCI artifact.
+permissions:
+  contents: read
+  packages: write
+
+# Same shape as release.yml: the owner is baked into REGISTRY, and the bare
+# host is used for login. Keeping the two workflows identical here means the
+# chart and its metadata cannot drift onto different registry paths.
+env:
+  REGISTRY: ghcr.io/devicechain-io
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oras-project/setup-oras@v2
+
+      - name: Log in to ghcr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GITHUB_TOKEN" | oras login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      # Run from the file's own directory so the layer is titled
+      # `artifacthub-repo.yml` rather than `deploy/helm/artifacthub-repo.yml`.
+      # Artifact Hub selects the layer by MEDIA TYPE, so the title is not what
+      # it keys on — but this matches the invocation in its documentation
+      # exactly, and there is nothing to gain from differing.
+      #
+      # The empty config with the artifacthub config media type is REQUIRED,
+      # not decoration: it is how the artifact is identified as Artifact Hub
+      # repository metadata rather than an arbitrary OCI blob.
+      - name: Push repository metadata
+        working-directory: deploy/helm
+        run: |
+          oras push "${REGISTRY}/charts/devicechain:artifacthub.io" \
+            --config /dev/null:application/vnd.cncf.artifacthub.config.v1+yaml \
+            artifacthub-repo.yml:application/vnd.cncf.artifacthub.repository-metadata.layer.v1.yaml
+
+      # Prove the artifact is retrievable and carries the id we think it does.
+      # A push that succeeds but stores the wrong bytes fails SILENTLY here —
+      # Artifact Hub simply never shows the badge, months later, with no error
+      # anywhere to trace it back to. So read it back rather than trusting the
+      # exit code of the push.
+      - name: Verify what was actually stored
+        working-directory: deploy/helm
+        run: |
+          mkdir -p /tmp/ah-verify
+          oras pull "${REGISTRY}/charts/devicechain:artifacthub.io" \
+            --output /tmp/ah-verify
+          echo "--- pulled artifacthub-repo.yml:"
+          cat /tmp/ah-verify/artifacthub-repo.yml
+          expected="$(grep -E '^repositoryID:' artifacthub-repo.yml)"
+          actual="$(grep -E '^repositoryID:' /tmp/ah-verify/artifacthub-repo.yml || true)"
+          if [ "$expected" != "$actual" ]; then
+            echo "::error::stored metadata does not match the committed file" >&2
+            echo "  committed: $expected" >&2
+            echo "  stored:    $actual" >&2
+            exit 1
+          fi
+          echo "==> stored metadata matches the committed file"
