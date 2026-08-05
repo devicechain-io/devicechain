@@ -1,25 +1,36 @@
 # DeviceChain Helm chart
 
-Renders the DeviceChain shared-microservice workloads — one Deployment + Service
-per **enabled functional area**, plus the instance and per-service config
-ConfigMaps — under the shared-microservice model (ADR-001 / ADR-022).
+[DeviceChain](https://devicechain.io) is a cloud-native, self-hosted IoT platform:
+device management, MQTT / Sparkplug / LwM2M ingest, TimescaleDB telemetry, a CEL
+rule engine with alarms and outbound connectors, versioned dashboards, and a web
+console. It is Apache-2.0 and multi-tenant — one shared set of services serves
+every tenant, with isolation enforced in storage and messaging rather than by
+per-tenant pods. Full documentation: [docs.devicechain.io](https://docs.devicechain.io).
+
+This chart renders those workloads — one Deployment + Service per **enabled
+functional area**, plus the instance and per-service config ConfigMaps.
 
 ## Install
 
 ```bash
-helm install dc deploy/helm/devicechain \
-  --set instance.id=devicechain
+helm install dc oci://ghcr.io/devicechain-io/charts/devicechain \
+  --version 1.2.0 \
+  --set instance.id=devicechain \
+  --set image.tag=v1.2.0
 ```
 
-Infrastructure (NATS, TimescaleDB, ingress, TLS) is provisioned separately by
-OpenTofu (ADR-002); this chart assumes it exists and points at it via
+Infrastructure (NATS, TimescaleDB, ingress, TLS) is provisioned separately by the
+OpenTofu modules in
+[`deploy/opentofu`](https://github.com/devicechain-io/devicechain/tree/main/deploy/opentofu);
+this chart assumes it exists and points at it via
 `instance.config.infrastructure` / `.persistence`.
-
-### Installing a released version
 
 Every release is one semver tag (`vX.Y.Z`) covering all images, the operator, the
 chart, and the `dcctl` CLI together. Images are public on `ghcr.io/devicechain-io`
-(multi-arch, distroless nonroot), so nothing is built locally — pin `image.tag`:
+(multi-arch, distroless nonroot), so nothing is built locally. The chart's OCI tag
+is that same version without the leading `v`; `image.tag` keeps it.
+
+### Installing from a checkout
 
 ```bash
 helm install dc deploy/helm/devicechain \
@@ -27,14 +38,7 @@ helm install dc deploy/helm/devicechain \
   --set image.tag=v1.2.0
 ```
 
-The chart is also published as an OCI artifact, installable without a checkout:
-
-```bash
-helm install dc oci://ghcr.io/devicechain-io/charts/devicechain \
-  --version 1.2.0 --set instance.id=devicechain --set image.tag=v1.2.0
-```
-
-## Choosing what to deploy (ADR-022 decision 2)
+## Choosing what to deploy
 
 Set **either** a named `profile` **or** an explicit `enabledFunctionalAreas`
 list (not both). An empty selection resolves to `default`.
@@ -55,15 +59,14 @@ helm install dc deploy/helm/devicechain \
 ```
 
 The chart **fails the render** if the selection omits a required core area
-(`user-management`, `device-management`) or an enabled area's hard dependency —
-the install-time enforcement of the decision-2 dependency gate. `user-management`
-and `device-management` are the required core; the other four are independently
-optional. (The dependency catalog mirrors `backend/k8s/functionalarea`, the Go
-source of truth.)
+(`user-management`, `device-management`) or an enabled area's hard dependency.
+`user-management` and `device-management` are the required core; the other four
+are independently optional. (The dependency catalog mirrors
+`backend/k8s/functionalarea`, the Go source of truth.)
 
 > **Required value.** `instance.config.infrastructure.secrets.rootKey` — a base64
 > 256-bit key (`openssl rand -base64 32`) — is required for any profile carrying an
-> area that owns an envelope-encrypted secret store (ADR-059):
+> area that owns an envelope-encrypted secret store:
 > `notification-management` (in `default`), `outbound-connectors`, and `ai-inference`.
 > Such a service cannot form its KEK and refuses to start without it, so the chart
 > **fails the render** rather than shipping a crash-loop. `dcctl bootstrap` mints one
@@ -82,13 +85,14 @@ they are second-class. Get them with `--set profile=full`, or name them in an ex
 
 | Area | Purpose | Notes |
 |---|---|---|
-| `outbound-connectors` | REACT outbound sink (ADR-060) | hard-depends on `event-processing`; needs `infrastructure.secrets.rootKey` for its ADR-059 credential store |
-| `mcp` | read-only MCP resource server (ADR-047) | needs `resourceUrl` + `issuerUrl`, **derived from the ingress** when one is configured (override under `functionalAreas.mcp.config`). Starts and serves metadata regardless, but a client can only obtain a token once the OAuth AS is on — set `user-management`'s `auth.issuerUrl`, a separate deliberate switch |
-| `ai-inference` | NL→rule authoring proxy (ADR-056) | no hard dep (fails paths closed); needs `infrastructure.secrets.rootKey` for provider keys; external routing needs `serviceAuth.secret` + `userManagement` and is per-tenant opt-in / fail-closed |
+| `outbound-connectors` | outbound rule-action sink (webhooks, MQTT, Kafka, SNS/SQS) | hard-depends on `event-processing`; needs `infrastructure.secrets.rootKey` for its credential store |
+| `mcp` | read-only MCP resource server | needs `resourceUrl` + `issuerUrl`, **derived from the ingress** when one is configured (override under `functionalAreas.mcp.config`). Starts and serves metadata regardless, but a client can only obtain a token once the OAuth AS is on — set `user-management`'s `auth.issuerUrl`, a separate deliberate switch |
+| `ai-inference` | natural-language→rule authoring proxy | no hard dep (fails paths closed); needs `infrastructure.secrets.rootKey` for provider keys; external routing needs `serviceAuth.secret` + `userManagement` and is per-tenant opt-in / fail-closed |
 
 ## Per-service configuration
 
-Each service loads its typed config fail-closed (ADR-022 decision 1). Override it
+Each service loads its typed config fail-closed — an unknown or invalid key is a
+startup failure, not a warning. Override it
 per area under `functionalAreas.<area>.config`; an unset config renders `{}` and
 the service applies its own defaults:
 
@@ -116,7 +120,7 @@ functionalAreas:
 `values.schema.json` validates the deployment-selection envelope (profile enum,
 area names, image/instance shape) at `helm install`/`upgrade` time.
 
-## Object store (ADR-058)
+## Object store
 
 Opaque binaries that don't belong in Postgres (branding logos today; firmware/OTA +
 exports later) go to a pluggable object store, configured under
@@ -124,8 +128,8 @@ exports later) go to a pluggable object store, configured under
 
 - **`s3`** (recommended for production / multi-replica) — AWS S3 or any
   S3-compatible service (MinIO). No volume is needed. Credentials come from the
-  standard AWS chain (env, IRSA, instance profile), **never** from values
-  (ADR-058 §5); set only `bucket` (+ `region`, or `endpoint`/`usePathStyle` for MinIO).
+  standard AWS chain (env, IRSA, instance profile), **never** from values;
+  set only `bucket` (+ `region`, or `endpoint`/`usePathStyle` for MinIO).
 
   ```yaml
   instance:
@@ -194,11 +198,11 @@ with more than one replica. Tune the strategy via `rollingUpdate.maxUnavailable`
 - `dci-<id>-config` — instance config mounted at `/etc/dci-config/instance`.
 - `dct-<id>-config` — per-area config mounted at `/etc/dct-config/<area>`.
 - Per enabled area: a `Deployment` (with `/readyz` readiness + `/healthz`
-  liveness probes, ADR-022 decision 3) and a `Service` on the GraphQL port (plus
+  liveness probes) and a `Service` on the GraphQL port (plus
   any `extraPorts` for the area, e.g. event-sources' HTTP ingest on 8081).
 - Optional (`blobStorage.persistence.enabled=true`, filesystem backend): a
   `PersistentVolumeClaim` (`dci-<id>-blob`) mounted into `blobStorage.mountAreas`
-  at the store directory (ADR-058).
+  at the store directory.
 - The web console (`frontend.enabled=true`, on by default): a static nginx
   `Deployment` + `Service` serving the Vite/React SPA. Disable for
   headless/ingest-only instances.
@@ -207,4 +211,4 @@ with more than one replica. Tune the strategy via `rollingUpdate.maxUnavailable`
   (stripping the `/api/<area>` prefix), and the web ingress serves the console at
   `https://<host>/`. Plus a cert-manager TLS `Issuer` (self-signed by default).
   Requires the ingress-nginx controller + cert-manager from
-  [`deploy/opentofu`](../../opentofu).
+  [`deploy/opentofu`](https://github.com/devicechain-io/devicechain/tree/main/deploy/opentofu).

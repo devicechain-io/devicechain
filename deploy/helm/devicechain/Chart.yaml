@@ -1,16 +1,48 @@
 apiVersion: v2
 name: devicechain
-description: |-
-  DeviceChain — the shared-microservice IoT platform. Renders one Deployment +
-  Service per enabled functional area, plus the instance and per-service config
-  ConfigMaps, under the shared-microservice model (ADR-001/ADR-022). Deployment
-  selection is profile- or set-driven and dependency-gated (ADR-022 decision 2).
+description: >-
+  Cloud-native, self-hosted IoT platform — device management, MQTT/Sparkplug/LwM2M
+  ingest, TimescaleDB telemetry, a CEL rule engine with alarms, dashboards, and a
+  web console. Deploys one Deployment + Service per enabled functional area.
 type: application
 version: 0.1.0
 appVersion: "0.0.1"
+icon: https://devicechain.io/branding/symbol.svg
+home: https://devicechain.io
+sources:
+  - https://github.com/devicechain-io/devicechain
 keywords:
   - iot
   - devicechain
-home: https://github.com/devicechain-io/devicechain
-sources:
-  - https://github.com/devicechain-io/devicechain
+  - iot-platform
+  - device-management
+  - mqtt
+  - sparkplug
+  - lwm2m
+  - telemetry
+  - timescaledb
+  - self-hosted
+maintainers:
+  - name: The DeviceChain Authors
+    url: https://github.com/devicechain-io/devicechain
+# Artifact Hub reads these when the chart is ingested from
+# oci://ghcr.io/devicechain-io/charts. They are the listing's metadata, so
+# they are written for a reader who has never seen this repository.
+#
+# 🔴 Deliberately NOT set: `artifacthub.io/images`. It would have to name an
+# image TAG, and annotations are not templated — `helm package --app-version`
+# rewrites appVersion but leaves annotations untouched, so a tag written here
+# would silently address the wrong release from the next tag onward. Wire it
+# from the release workflow if the security report is ever wanted.
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/category: streaming-messaging
+  artifacthub.io/links: |
+    - name: Homepage
+      url: https://devicechain.io
+    - name: Documentation
+      url: https://docs.devicechain.io
+    - name: Source
+      url: https://github.com/devicechain-io/devicechain
+    - name: Releases
+      url: https://github.com/devicechain-io/devicechain/releases

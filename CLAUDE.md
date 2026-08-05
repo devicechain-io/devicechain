@@ -84,13 +84,23 @@ source, and it advertises a repo nobody outside can open. The line is not "is th
 | --- | --- |
 | `docs/docs`, `docs/i18n`, `docs/blog`, `docs/src`, the website | ❌ never |
 | `frontend/packages/*/package.json` `description`/`keywords` — these publish to npmjs.com | ❌ never |
+| `deploy/helm/*/Chart.yaml` + the chart `README.md` — Artifact Hub renders these as the chart's listing | ❌ never |
 | Console/dashboard **UI strings** (`src/i18n/locales/**`) | ❌ never |
-| Source comments, `hack/`, `deploy/`, READMEs, `docusaurus.config.ts` | ✅ expected — this is the convention above |
+| Source comments, `hack/`, the rest of `deploy/`, READMEs, `docusaurus.config.ts` | ✅ expected — this is the convention above |
 
 Say the thing itself instead, or link to a public page: `secured at the broker (ADR-025)` →
 `secured at the broker`; `[ADR-026](../concepts/architecture.md)` →
 `[data lifecycle](../concepts/architecture.md)`. Enforced by `hack/check-docs-adr-refs.sh` in the
 `docs` CI job — and remember both locales, since `docs/i18n/es` mirrors every English page.
+
+🔴 The chart row is **prose only**, and the boundary is deliberate: `values.yaml`,
+`values.schema.json` and `templates/` are packaged too, and Artifact Hub does expose them under its
+Values and Templates tabs — but they are chart SOURCE, browsed the way this public repo is browsed,
+and they carry ~90 ADR references today. The guard does not check them.
+
+There is one exception the guard also cannot see, so keep it in mind by hand: a `{{ fail }}` message
+in `templates/` is **printed to whoever runs `helm install`**, which makes it served prose no matter
+which file it lives in. The three that cited ADRs have been rewritten; write the next one that way.
 
 Source-of-truth planning docs (maintainer-only) live under `.agent-os/product/`. Consult them before
 designing anything non-trivial; the codebase follows the ADRs.

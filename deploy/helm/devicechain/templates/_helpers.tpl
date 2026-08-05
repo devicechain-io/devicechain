@@ -253,7 +253,7 @@ concern — any install owes a root key.
 {{- if not $rootKey -}}
   {{- range $a := splitList "," (include "devicechain.enabledAreas" .) -}}
     {{- if has $a $needsKey -}}
-      {{- fail (printf "instance.config.infrastructure.secrets.rootKey is required: area %q owns an envelope-encrypted secret store (ADR-059) and cannot form its KEK without it, so it would crash-loop. Set it to a base64 256-bit key (openssl rand -base64 32); dcctl bootstrap mints one automatically." $a) -}}
+      {{- fail (printf "instance.config.infrastructure.secrets.rootKey is required: area %q owns an envelope-encrypted secret store and cannot form its KEK without it, so it would crash-loop. Set it to a base64 256-bit key (openssl rand -base64 32); dcctl bootstrap mints one automatically." $a) -}}
     {{- end -}}
   {{- end -}}
 {{- end -}}

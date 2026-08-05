@@ -89,7 +89,7 @@ spec:
   {{- fail (printf "functionalAreas.%s: strategy Recreate is a single-writer guarantee and requires replicas:1 (got %v)" $area (get $areaCfg "replicas" | default $root.Values.replicas)) }}
   {{- end }}
   {{- if and (eq $strategy "Recreate") (eq $area "event-sources") }}
-  {{- fail "functionalAreas.event-sources: strategy Recreate would silently DROP device telemetry (ADR-030). It terminates the old pod before the new one creates the ingest capture stream, so everything the broker PUBACKs in the gap is accepted and stored nowhere. event-sources is not a single writer and must stay on RollingUpdate." }}
+  {{- fail "functionalAreas.event-sources: strategy Recreate would silently DROP device telemetry. It terminates the old pod before the new one creates the ingest capture stream, so everything the broker PUBACKs in the gap is accepted and stored nowhere. event-sources is not a single writer and must stay on RollingUpdate." }}
   {{- end }}
   strategy:
     type: {{ $strategy }}
