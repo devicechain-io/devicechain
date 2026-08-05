@@ -67,27 +67,17 @@ jobs:
       #
       # Checked HERE, in the first job, deliberately: a forgotten update costs a re-run rather
       # than a release that has already pushed 17 images before anyone notices.
-      # A release CANDIDATE carries the same highlights as the release it is a candidate
-      # for, so `v0.11.0-rc.1` is satisfied by highlights written for `v0.11.0`. Demanding
-      # an exact match would force the file to be edited to the rc version and then edited
-      # back, and the failure mode of that dance is shipping the STABLE release with `-rc.N`
-      # still in the manifest — the precise "confidently wrong" outcome this guard exists to
-      # prevent. The base version must still match exactly, so a forgotten update is caught
-      # on the rc, which is the earliest anyone could catch it.
+      # The rule itself, and why a candidate is allowed to reuse its release's highlights,
+      # lives in the script. Checked HERE, in the first job, deliberately: a forgotten
+      # update costs a re-run rather than a release that has already pushed 17 images
+      # before anyone notices. The script runs its own self-test in CI (`discover`).
+      #
+      # 🔴 Call the SCRIPT, never re-implement the comparison inline. This check used to
+      # exist twice — here and in build-release-manifest.sh — and the copies drifted the
+      # first time the rule changed, which cost a full release run: the rc passed this job,
+      # built every image, passed the load gate, and died in publish-manifest.
       - name: Release highlights match the tag
-        run: |
-          hl=".github/release-highlights.json"
-          want="${GITHUB_REF_NAME}"
-          base="${want%%-*}"
-          got="$(jq -r '.version' "$hl")"
-          if [ "$got" != "$want" ] && [ "$got" != "$base" ]; then
-            echo "::error::$hl is for '$got' but this release is '$want'. Update it (highlights + breaking) before tagging."
-            exit 1
-          fi
-          if [ "$(jq -r '.highlights | length' "$hl")" -eq 0 ]; then
-            echo "::error::$hl carries no highlights for $want."
-            exit 1
-          fi
+        run: hack/check-release-highlights.sh "${GITHUB_REF_NAME}"
 
       - name: Validate tag is strict semver
         id: semver

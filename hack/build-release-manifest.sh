@@ -35,15 +35,15 @@ command -v gh >/dev/null || { echo "gh is required" >&2; exit 1; }
 
 [ -f "$HIGHLIGHTS" ] || { echo "highlights file not found: $HIGHLIGHTS" >&2; exit 1; }
 
-# The version guard also runs in the release workflow's `guard` job, where it fails before
-# any image is pushed. It is repeated here so running this by hand cannot quietly produce a
-# manifest whose highlights belong to a different release.
-HL_VERSION="$(jq -r '.version' "$HIGHLIGHTS")"
-if [ "$HL_VERSION" != "$TAG" ]; then
-  echo "release-highlights.json is for $HL_VERSION but this is $TAG." >&2
-  echo "Update .github/release-highlights.json before releasing." >&2
-  exit 1
-fi
+# The same guard runs in the release workflow's `guard` job, where it fails before any
+# image is pushed. It runs again here so that invoking this script by hand cannot quietly
+# produce a manifest whose highlights belong to a different release.
+#
+# 🔴 It is the SAME SCRIPT in both places, not the same rule written twice. It was written
+# twice, and the copies drifted the moment the rule changed: relaxing it to accept a
+# release candidate was applied to the workflow copy only, so v0.11.0-rc.1 cleared the
+# first job, built every image, passed the load gate, and then died here.
+"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-release-highlights.sh" "$TAG" "$HIGHLIGHTS" >/dev/null
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
