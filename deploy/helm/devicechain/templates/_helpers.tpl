@@ -13,6 +13,24 @@ The catalog below mirrors backend/k8s/functionalarea (the Go source of truth tha
 the operator uses); keep the two in sync. Soft dependencies are intentionally not
 encoded — pub/sub (ADR-003) makes an absent peer safe, so only hard edges gate.
 */}}
+{{/*
+devicechain.areasWithoutPublicApi — functional areas that serve NO external API.
+
+They register only /metrics and the probes on the default mux: no GraphQL schema,
+no bearer-token auth gate. Giving one a public /api/<area> route therefore does not
+expose an API — it exposes an UNAUTHENTICATED PROMETHEUS ENDPOINT, which leaks
+device and tenant counts, error rates and broker topology to anyone who can reach
+the ingress host.
+
+🔴 This is a LIST rather than an inline name check because it was a name check, and
+the second such area was added without it. Adding an area here is the one step that
+keeps a metrics-only service off the public router; if you add an ingest-style area
+that serves no schema, add it here in the same commit.
+*/}}
+{{- define "devicechain.areasWithoutPublicApi" -}}
+sparkplug-ingest,lwm2m-ingest
+{{- end }}
+
 {{- define "devicechain.enabledAreas" -}}
   {{- $standard := list "user-management" "device-management" "event-sources" "event-management" "device-state" "dashboard-management" "command-delivery" "notification-management" "event-processing" -}}
   {{- $profiles := dict

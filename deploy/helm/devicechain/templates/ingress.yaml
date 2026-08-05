@@ -77,11 +77,14 @@ spec:
     - host: {{ .Values.ingress.host | quote }}
       http:
         paths:
-          {{- /* sparkplug-ingest serves no external API (only /metrics + probes on
-                 the default mux), so it gets no public /api route — otherwise the
-                 loop would expose its Prometheus endpoint unauthenticated. */ -}}
+          {{- /* An area that serves no external API gets no public /api route: the
+                 route would expose its Prometheus endpoint unauthenticated rather
+                 than expose an API. The set is named in devicechain.areasWithoutPublicApi
+                 — it used to be an inline "ne sparkplug-ingest" here, and lwm2m-ingest
+                 was added in exactly the same shape without it. */ -}}
+          {{- $noPublicApi := splitList "," (include "devicechain.areasWithoutPublicApi" $root) }}
           {{- range $area := splitList "," (include "devicechain.enabledAreas" $root) }}
-          {{- if ne $area "sparkplug-ingest" }}
+          {{- if not (has $area $noPublicApi) }}
           - path: /api/{{ $area }}(/|$)(.*)
             pathType: ImplementationSpecific
             backend:
