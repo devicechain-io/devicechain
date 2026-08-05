@@ -23,7 +23,7 @@ import (
 // (Api.ApplyAlarmContributorEdge). The integrator reference-counts the rules currently raising the
 // (device, alarmKey) alarm: a raise adds/updates the rule's contribution (max-tier severity over the
 // active set), a resolve removes it, and the alarm clears when the set empties — so a rule-driven
-// alarm is the same first-class Alarm object with the same ack/clear, graph rollup, and
+// alarm is the same first-class Alarm object with the same ack/clear and
 // alarm-events→notification flow (ADR-041/017) as before, now cleared by edge integration rather than
 // the retired measurement evaluator's per-sample re-evaluation.
 //
@@ -34,8 +34,13 @@ import (
 // stale edge and lets a resolve win a raise at an equal event time (RaiseAlarmRequest.OccurredTime), so
 // any order re-derives one deterministic alarm state.
 //
-// SOLE ALARM PATH: since the 6d cutover (ADR-057) deleted the measurement-driven evaluator, this is the
-// only writer of the (device, alarmKey) alarm row — there is no peer to double-raise or auto-clear against.
+// SOLE ALARM-RAISE PATH: since the 6d cutover (ADR-057) deleted the measurement-driven evaluator, this
+// is the only RAISER of the (device, alarmKey) alarm row — there is no peer to double-raise or
+// auto-clear against. It is NOT the only WRITER of that row, and the distinction is load-bearing: an
+// operator ack/clear (api_alarm_state.go) updates it, and an entity delete cascades it away
+// (api_delete.go). That is exactly why the fold runs under an optimistic CAS on (state,
+// contributor_version) rather than a blind write — the CAS exists to lose to those writers, not to
+// paper over a second raiser that does not exist.
 type RaiseAlarmConsumer struct {
 	Microservice *core.Microservice
 	Reader       messaging.MessageReader

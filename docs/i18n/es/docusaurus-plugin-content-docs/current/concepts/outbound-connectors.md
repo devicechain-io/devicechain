@@ -10,18 +10,18 @@ La detección es solo la mitad de la automatización — la otra mitad es **actu
 La entrega de salida la gestiona un servicio dedicado, **outbound-connectors**, mantenido deliberadamente separado del motor de detección: un endpoint externo lento o con mal comportamiento puede acumular retrasos en su propia entrega sin llegar nunca a ralentizar la evaluación de reglas.
 
 :::note Estado
-**Disponible hoy:** la acción de webhook `httpCall`, y una acción `publish` que entrega a **MQTT**, **Apache Kafka**, **AWS SNS** y **AWS SQS** a través de un conector versionado con alcance de inquilino, con credenciales almacenadas en el almacén de secretos cifrado. Están planeados objetivos `publish` adicionales (Google Cloud Pub/Sub, RabbitMQ, Azure, NATS, Redis, Slack, Splunk) y un nodo visual de **publish** en el lienzo de automatización, bajo el mismo modelo — este repositorio es la fuente de verdad de lo que actualmente se construye.
+**Disponible hoy:** la acción de webhook `httpCall`, y una acción `publish` que entrega a **MQTT**, **Apache Kafka**, **AWS SNS** y **AWS SQS** a través de un conector versionado con alcance de inquilino, con credenciales almacenadas en el almacén de secretos cifrado. Ambas acciones de salida se pueden configurar como **nodos de acción en el lienzo de automatización**. Un conector `gcp_pubsub` se puede crear a través de la API pero todavía no se puede despachar — un `publish` hacia uno de ellos se envía a la cola de mensajes no entregados (dead letter) como no soportado, y la consola no ofrece ese tipo. Están planeados objetivos `publish` adicionales (RabbitMQ, Azure, NATS, Redis, Slack, Splunk) bajo el mismo modelo — este repositorio es la fuente de verdad de lo que actualmente se construye.
 :::
 
 ## Las dos acciones de salida
 
-Ambas son [acciones REACT](./event-processing.md#automated-actions) — las agregas a una regla junto a *levantar alarma* y *enviar comando*, y cada una puede estar **protegida (guarded)** por una condición sobre el disparo.
+Ambas son [acciones REACT](./event-processing.md#automated-actions), que se autoran en el **lienzo de automatización** junto a *levantar alarma* y *enviar comando*, y cada una puede estar **protegida (guarded)** por una condición sobre el disparo. El selector de acciones del generador de formularios solo ofrece *levantar alarma* y *enviar comando*; una regla que ya lleva una acción de salida se abre en el formulario con esa acción mostrada en modo de solo lectura y preservada, de modo que cambiar de superficie nunca la descarta.
 
 ### `httpCall` — llamar a un webhook
 
 Una solicitud HTTP directa a un endpoint que especificas. El cuerpo de la solicitud se moldea con una **expresión CEL** sobre el disparo, de modo que envías exactamente los campos que el receptor espera. Todo lo que la acción necesita — URL, método, encabezados, plantilla del cuerpo — vive en la propia acción, así que un webhook puntual no necesita ninguna configuración aparte. La autenticación opcional (un token bearer, un encabezado de clave de API) se almacena en el **almacén de secretos** y se adjunta en el momento del envío.
 
-La entrega de webhooks está **reforzada**: se niega a seguir redirecciones, elimina los encabezados reservados y de plataforma, y — cuando hay un secreto adjunto — no repite el cuerpo de la respuesta en los registros (logs), de modo que un destino mal configurado no puede usarse para sondear direcciones internas ni filtrar la credencial.
+La entrega de webhooks está **reforzada** de maneras concretas: se niega a seguir redirecciones (de modo que un endpoint externo no puede desviar la solicitud con un `3xx` hacia otro sitio), solo admite destinos `http`/`https` y rechaza las credenciales incrustadas en la URL, elimina los encabezados reservados y de plataforma (de modo que un encabezado suministrado por el inquilino no puede falsificar el encabezado de autenticación ni la identidad interna del servicio), valida el nombre y el valor de cada encabezado contra la gramática del protocolo — que prohíbe los CR/LF de los que depende la inyección de encabezados — y, cuando hay un secreto adjunto, no repite el cuerpo de la respuesta en los registros (logs), de modo que un endpoint hostil no puede reflejar la credencial en ellos.
 
 ### `publish` — enviar a un conector
 
@@ -31,7 +31,7 @@ Una única acción `publish` genérica cubre todos los tipos de broker/cola: el 
 
 ## Los conectores son recursos versionados
 
-Un conector es un **recurso con alcance de inquilino** con el mismo ciclo de vida que un [perfil de dispositivo](./domain-model.md) o un [panel](./dashboards.md): editas un **borrador**, **publicas** una versión inmutable y **revocas (roll back)** a una anterior si un cambio se comporta mal. Un conector contiene:
+Un conector es un **recurso con alcance de inquilino** con el mismo ciclo de vida que un [perfil de dispositivo](./domain-model.md) o un [panel](./dashboards.md): editas un **borrador**, **publicas** una versión inmutable y **reviertes (roll back)** a una anterior si un cambio se comporta mal. Un conector contiene:
 
 - un **tipo** (`mqtt`, `kafka`, `aws_sns`, `aws_sqs`),
 - la **configuración de destino** para ese tipo (direcciones de broker, topic/cola/ARN, y opciones como QoS o TLS), y

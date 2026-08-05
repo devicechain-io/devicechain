@@ -51,7 +51,7 @@ var (
 	ResolvedEventsReader    messaging.MessageReader
 	ResolvedEventsProcessor *processor.ResolvedEventsProcessor
 	// ReactDispatcher is the REACT stage's derived-event consumer (ADR-051 slice 5b/5c). Since the
-	// 6d cutover made raise-alarm the sole alarm path, its raise-alarm sink is always wired, so the
+	// 6d cutover made raise-alarm the sole alarm-raise path, its raise-alarm sink is always wired, so the
 	// dispatcher is always started; send-command is the optional sink (nil when unconfigured).
 	ReactDispatcher *processor.ReactDispatcher
 	// TenantPurgeResponder answers the ADR-077 purge coordinator's request to evict a deleted
@@ -205,14 +205,14 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// stream this service also produces, dispatching each detection's authored actions (raise-alarm and
 	// send-command). It resolves each rule's action chain from the durable rule projection by id — the
 	// same projection DETECT rebuilds from — so an action edit takes effect without re-publishing events.
-	// Its raise-alarm sink is always wired (the sole alarm path since 6d), so it always starts; see
+	// Its raise-alarm sink is always wired (the sole alarm-raise path since 6d), so it always starts; see
 	// wireReactDispatcher.
 	return wireReactDispatcher(nmgr)
 }
 
 // wireReactDispatcher builds the REACT dispatcher over its action sinks:
 //   - raise-alarm is ALWAYS wired (its NATS writer is always available) — since the 6d cutover it is
-//     the sole alarm path (ADR-057), publishing edges to device-management's raise-alarm subject.
+//     the sole alarm-raise path (ADR-057), publishing edges to device-management's raise-alarm subject.
 //   - send-command is enabled only when the shared service secret AND command-delivery's coordinate
 //     are set, so a sendCommand action reaches command-delivery over the ADR-044 service-token client
 //     (least-privilege command:write); it stays nil (inert) otherwise.
@@ -239,16 +239,17 @@ func wireReactDispatcher(nmgr *messaging.NatsManager) error {
 
 	// raise-alarm sink: a dedicated tenant-scoped writer on device-management's raise-alarm subject;
 	// the thin device-management consumer folds each edge into the (device, alarmKey) alarm's
-	// contributor set (ADR-057). This is the sole alarm path since the 6d cutover retired the
+	// contributor set (ADR-057). This is the sole alarm-RAISE path since the 6d cutover retired the
 	// measurement-driven evaluator, so it is always wired — there is no longer a peer to double-raise
-	// against. A NATS writer is always available (unlike send-command, which needs an external
+	// against. It is not the sole writer of an alarm: an operator ack/clear mutates the same row in
+	// device-management, which is why the fold there runs under a CAS. A NATS writer is always available (unlike send-command, which needs an external
 	// coordinate), so raise-alarm has no disabled state.
 	writer, err := nmgr.NewWriter(streams.RaiseAlarm)
 	if err != nil {
 		return err
 	}
 	alarms := processor.NewAlarmClient(writer)
-	log.Info().Msg("REACT raise-alarm dispatch ENABLED (ADR-051 slice 5c / ADR-057): the sole alarm path.")
+	log.Info().Msg("REACT raise-alarm dispatch ENABLED (ADR-051 slice 5c / ADR-057): the sole alarm-raise path.")
 
 	// connector sink (ADR-060 §4): a dedicated tenant-scoped writer on the connector-dispatch subject;
 	// the outbound-connectors service (slice C3) consumes it and executes each httpCall/publish action.

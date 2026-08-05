@@ -124,11 +124,18 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		return err
 	}
 
-	// ADR-077 lifecycle gate. This service is the only one that can put a deleted tenant's data
-	// somewhere we can never reach again, so it carries the gate for the same reason the ingest
-	// fronts do, with more at stake: an ingest message admitted a moment too late is a row the sweep
-	// reclaims on its next pass, an outbound dispatch admitted a moment too late is a POST that has
-	// already landed on somebody else's server.
+	// ADR-077 lifecycle gate. This service EMITS rather than retains, so it carries the gate for the
+	// same reason the ingest fronts do, with more at stake: an ingest message admitted a moment too
+	// late is a row the sweep reclaims on its next pass, an outbound dispatch admitted a moment too
+	// late is a POST that has already landed on somebody else's server, where no purge of ours can
+	// reach it.
+	//
+	// It is NOT the only service that can do that. notification-management pages a tenant's humans
+	// over SMTP and webhooks, and its escalation scheduler does so from its OWN rows on a timer,
+	// needing no inbound traffic at all; it carries the same gate at PolicyNotifier. Naming it here
+	// rather than claiming this path is unique is deliberate — that claim was written into several
+	// files and was wrong, and an "only path" comment is exactly what stops the next person looking
+	// for the second one. The consumer's own gate comment carries the full argument.
 	//
 	// Built here rather than beside the rate limiter because this is where the consumer that uses it
 	// is constructed. It mints its own service token (scoped to tenant:read alone) and its own

@@ -241,17 +241,30 @@ type Engine struct {
 // once and then went silent, so a device that never reports at all would otherwise never fire
 // absence, the exact case absence detection exists for.
 //
-// since doubles as the epoch marker, and it is FORWARD-ONLY. Done makes the dead-man fire AT
-// MOST ONCE PER EPOCH: restart reconciliation (slice 4c-2b-2b) re-arms every still-expected
-// series with its recomputed base, and without the latch a series whose dead-man already fired
-// — its wheel timer consumed, its live deadline gone — would be re-armed at the SAME base and
-// fire a second time. A STRICTLY-later base is a different epoch (a re-publish or rollback, which
-// device-management stamps with a fresh publishedAt precisely to grant a fresh grace window):
-// it clears the latch and re-arms. So the latch suppresses a re-arm at the same-or-earlier base
-// only — the once-across-restart guarantee — while honoring a genuinely advanced grace base.
+// since doubles as the epoch marker, and it is FORWARD-ONLY — which is the WHOLE mechanism for
+// firing a dead-man AT MOST ONCE PER EPOCH. Restart reconciliation (slice 4c-2b-2b) re-arms every
+// still-expected series with its recomputed base, so a series whose dead-man already fired — its
+// wheel timer consumed, its live deadline gone — is re-armed at the SAME base and would fire a
+// second time. SetExpected refuses that: it returns early unless the incoming base STRICTLY
+// advances. A strictly-later base is a different epoch (a re-publish or rollback, which
+// device-management stamps with a fresh publishedAt precisely to grant a fresh grace window), and
+// re-arms. So the same comparison delivers both properties — the once-across-restart guarantee at
+// the same-or-earlier base, and an honest re-arm at a genuinely advanced one.
+//
+// 🔴 DO NOT READ THAT AS "the only thing standing between us and a duplicate fire". It is the only
+// thing at the level of ENGINE STATE, and it is the one to preserve — but a duplicate fire would
+// also be swallowed downstream by the raised latch in emit(), which returns early while the series
+// is already raised. That redundancy is why this guard is currently UNTESTABLE: mutating the
+// comparison to allow a same-base re-arm passes the whole module's suite, because the second fire
+// produces no second detection. A test that means to pin THIS guard has to observe engine state
+// (the wheel's live deadline, or the expected entry's base), not the emitted detections.
+//
+// This state carried a separate `done` latch for a while, describing the same guarantee. It was
+// removed because no conditional ever read it: it was set at fire time, snapshotted and restored,
+// and the forward-only comparison did all the work regardless. Do not reintroduce a second marker
+// for this — the epoch IS the base.
 type expectedState struct {
 	since time.Time // grace base = max(device.expectedSince, rule.publishedAt); also the forward-only epoch marker
-	done  bool      // fired at `since`; suppresses a re-arm at the same-or-earlier base, a later base re-arms
 }
 
 // NewEngine builds an empty engine. allowedLateness bounds how far event time is held
@@ -303,12 +316,15 @@ func (e *Engine) UpsertRule(r Rule) {
 // RemoveRule evicts a rule and garbage-collects ALL of its keyed state in place, so the
 // engine keeps running every OTHER rule's live windows and timers untouched. A full
 // NewEngine rebuild would be far simpler but would discard every rule's state — the
-// exact corruption this exists to avoid. A rule's state is scattered across the nine
-// per-key structures below plus the timer wheel, the pane close-heap, and the pending-
-// detection buffer; each is swept for entries whose rule component equals id. Removal is
-// rare (a governance/teardown path, ADR-023/052 — the publish path only ever upserts,
-// since versions are immutable and retained), so an O(live-state) linear sweep, with no
-// reverse index to maintain on the hot path, is the right trade.
+// exact corruption this exists to avoid. A rule's state is scattered across EVERY per-key
+// structure swept in RemoveMatching below, plus the timer wheel, the pane close-heap, and
+// the pending-detection buffer; each is swept for entries whose rule component equals id.
+// Read the sweep for the set rather than a number written here — a count in prose is a
+// hand-count that drifts the moment a structure is added, which is exactly what happened
+// when the presence cursor landed. Removal is rare (a governance/teardown path,
+// ADR-023/052 — the publish path only ever upserts, since versions are immutable and
+// retained), so an O(live-state) linear sweep, with no reverse index to maintain on the
+// hot path, is the right trade.
 func (e *Engine) RemoveRule(id string) {
 	e.RemoveMatching(func(rule string) bool { return rule == id })
 }
@@ -406,10 +422,17 @@ func deleteSeriesKeysMatching[V any](m map[SeriesKey]V, match func(string) bool)
 //
 // Idempotent and cheap in the common case: most events are out of scope for any given scoped
 // rule, and a series with no state and no latch is a no-op. Replay-safe and deterministic: the
-// only input is the immutable event's ScopeMemberships plus snapshotted state. The falling-edge
-// resolve is stale-guarded exactly like resolve() (an out-of-order event older than the rising
-// edge does not clear an alarm the latest reading still supports). Runs on the single-writer
-// loop. Returns whether it changed any state (so the caller can mark the checkpoint dirty).
+// only input is the immutable event's ScopeMemberships plus snapshotted state.
+//
+// 🔴 Its falling edge is NOT stale-guarded the way resolve() is, and the difference is
+// deliberate — see the argument at the resolve below. A descope always emits, clamped to the
+// rising edge. Do not "restore" the guard here to match the value kinds: membership is
+// monotone with stream sequence, so a bounded-late out-of-scope event is still the current
+// word, and suppressing its resolve strands the alarm forever if the device never reports
+// again.
+//
+// Runs on the single-writer loop. Returns whether it changed any state (so the caller can
+// mark the checkpoint dirty).
 func (e *Engine) Descope(ruleID, series string, at time.Time) bool {
 	r, ok := e.rules[ruleID]
 	if !ok {
@@ -443,9 +466,11 @@ func (e *Engine) Descope(ruleID, series string, at time.Time) bool {
 // coincides with that same rule's freshly-buffered raise.
 //
 // It stays O(1) for the overwhelmingly common no-state descope (most events are out of scope for
-// any given scoped rule): the eight SeriesKey maps are direct-key deletes; the pane map + close
-// heap are swept ONLY for Aggregate (the sole kind that opens them), so every other kind skips
-// the O(all-panes)/O(heap) walk; and the timer is cancelled LAZILY (an O(1) generation bump)
+// any given scoped rule): every SeriesKey map swept below is a direct-key delete (read the body
+// for the set rather than trusting a count in prose — one written here went stale the moment the
+// presence cursor was added); the pane map + close heap are swept ONLY for Aggregate (the sole
+// kind that opens them), so every other kind skips the O(all-panes)/O(heap) walk; and the timer
+// is cancelled LAZILY (an O(1) generation bump)
 // only when the key actually has a live timer — the snapshot persists only live timers, so the
 // invalidated entry never reaches durability and popDue discards it when its deadline passes.
 func (e *Engine) dropSeriesKey(key SeriesKey, kind RuleKind) bool {
@@ -551,18 +576,19 @@ func (e *Engine) LiveKeyCounts() map[string]int {
 // It is FORWARD-ONLY on the grace base, which is both the armed deadline's origin and the epoch
 // marker. A base that does not STRICTLY advance is either a restart-reconciliation duplicate of
 // the current epoch or a stale/earlier arming: the recorded base and the forward-only wheel
-// deadline are left untouched. When the current epoch already fired (done), that same guard IS
-// the once-semantics — a reconcile must not re-arm and re-fire a dead-man at the elapsed base. A
-// STRICTLY-later base is a NEW epoch (a re-publish/rollback fresh grace window): it clears any
-// fired latch and re-arms forward (scheduleForward, so a device that later reports still
-// supersedes it with a heartbeat's later deadline and neither ever shrinks a live deadline).
+// deadline are left untouched. When the current epoch already fired, that same guard IS the
+// once-semantics — a reconcile must not re-arm and re-fire a dead-man at the elapsed base, and the
+// base is what tells it so (the fire consumed the wheel timer but left `since` where it was). A
+// STRICTLY-later base is a NEW epoch (a re-publish/rollback fresh grace window): it re-arms
+// forward (scheduleForward, so a device that later reports still supersedes it with a
+// heartbeat's later deadline and neither ever shrinks a live deadline).
 func (e *Engine) SetExpected(key SeriesKey, since time.Time) {
 	r, ok := e.rules[key.Rule]
 	if !ok || r.Kind != Absence {
 		return
 	}
 	if st, armed := e.expected[key]; armed && !since.After(st.since) {
-		return // same-or-earlier base: reconcile duplicate / stale arming (and the once-semantics latch)
+		return // same-or-earlier base: reconcile duplicate / stale arming — and the once-per-epoch guard
 	}
 	e.expected[key] = expectedState{since: since}
 	e.wheel.scheduleForward(key, since.Add(r.Timeout))
@@ -849,17 +875,13 @@ func (e *Engine) fire(key SeriesKey, deadline time.Time) {
 	switch r.Kind {
 	case Absence:
 		e.emit(r, key, deadline) // stamped at the deadline the silence elapsed
-		// Latch this epoch as fired so restart reconciliation (slice 4c-2b-2b) does not re-arm and
-		// re-fire it: the wheel already consumed this timer, so a reconcile-driven SetExpected at
-		// the same, now-elapsed grace base would schedule a fresh timer that fires immediately on
-		// the next advance. The latch is scoped to `since` (the epoch), so a later re-publish base
-		// still clears it and re-arms. done gates ONLY the dead-man arming (SetExpected) path, so
-		// latching a heartbeat-armed absence's entry (if one lingers from before the device first
-		// reported) is harmless — heartbeat re-arming (apply) never consults it.
-		if st, ok := e.expected[key]; ok {
-			st.done = true
-			e.expected[key] = st
-		}
+		// NOTHING is latched here, deliberately. Restart reconciliation (slice 4c-2b-2b) must not
+		// re-arm and re-fire this epoch — the wheel already consumed the timer, so a reconcile-driven
+		// SetExpected at the same, now-elapsed grace base would schedule a fresh timer that fires
+		// immediately on the next advance. What prevents that is the untouched `since`: the entry
+		// keeps its grace base, and SetExpected refuses any base that does not STRICTLY advance. A
+		// later re-publish base is a new epoch and re-arms. Heartbeat re-arming (apply) is a separate
+		// path that sets a deadline directly and never consults the expected entry at all.
 		// one-shot: the wheel already consumed the timer; next heartbeat re-arms.
 	case Duration:
 		// The hold elapsed with the run intact: raise (latched). active is consumed — the raised
@@ -969,11 +991,15 @@ type snapActive struct {
 	Since  time.Time `json:"since"`
 }
 
+// snapExpected persists one dead-man arming: the (rule, series) and its grace base. The base is
+// the entire state — it is both the armed deadline's origin and the forward-only epoch marker that
+// makes a fire happen at most once per epoch (see expectedState). An older snapshot may still
+// carry a "done" key from the retired latch; json.Unmarshal ignores it, which is correct, since
+// nothing read it even when it was written.
 type snapExpected struct {
 	Rule   string    `json:"rule"`
 	Series string    `json:"series"`
 	Since  time.Time `json:"since"`
-	Done   bool      `json:"done"`
 }
 
 // snapRaised persists one entry of the ADR-057 two-edge latch: a (rule, series) currently in its
@@ -1042,7 +1068,7 @@ func (e *Engine) Snapshot() ([]byte, error) {
 	sliding, panes := e.snapshotWindows()
 	expected := make([]snapExpected, 0, len(e.expected))
 	for k, st := range e.expected {
-		expected = append(expected, snapExpected{Rule: k.Rule, Series: k.Series, Since: st.since, Done: st.done})
+		expected = append(expected, snapExpected{Rule: k.Rule, Series: k.Series, Since: st.since})
 	}
 	sort.Slice(expected, func(i, j int) bool {
 		if expected[i].Rule != expected[j].Rule {
@@ -1113,7 +1139,7 @@ func Restore(rules []Rule, allowedLateness time.Duration, data []byte) (*Engine,
 	e.restoreSlides(s.Slides)
 	e.restoreCorr(s.Corr)
 	for _, x := range s.Expected {
-		e.expected[SeriesKey{Rule: x.Rule, Series: x.Series}] = expectedState{since: x.Since, done: x.Done}
+		e.expected[SeriesKey{Rule: x.Rule, Series: x.Series}] = expectedState{since: x.Since}
 	}
 	for _, x := range s.Raised {
 		e.raised[SeriesKey{Rule: x.Rule, Series: x.Series}] = x.At

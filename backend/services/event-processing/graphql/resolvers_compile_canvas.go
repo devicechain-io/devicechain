@@ -64,8 +64,11 @@ func (r *SchemaResolver) CompileCanvas(ctx context.Context, args struct {
 	lr := res.Rules[0]
 	def0 := lr.Definition
 	cost := clampCost(lr.Compiled.Predicate.CostMax())
-	// Carry any non-fatal warnings through (empty today; the lowering has no warning path yet,
-	// but wiring it now means a future warning surfaces on its node instead of being dropped).
+	// Carry the lowering's non-fatal warnings through, so each surfaces on its own node rather than
+	// being dropped. The lowering emits two kinds today — a same-target action pair whose guards may
+	// overlap (a possible double-send), and a branch that routes nothing — both authoring hazards it
+	// deliberately warns about rather than rejecting, since the rejecting version would also forbid
+	// legitimate graphs.
 	diags := make([]*CanvasDiagnosticResolver, 0, len(res.Diagnostics))
 	for _, d := range res.Diagnostics {
 		diags = append(diags, newCanvasDiagnostic(d))

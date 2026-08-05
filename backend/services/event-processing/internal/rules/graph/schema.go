@@ -6,9 +6,11 @@
 // authoring-time only: it adds ONE server compiler pass (graph → rules.Rule) and NO new
 // runtime — a canvas rule and a form rule (slice 7) that express the same logic compile to
 // a byte-identical rules.Rule, because the canvas is a projection onto the same schema and
-// the same rules.Compile + cost gate. Slice 9a lands the DETECT half (Source + the seven
-// condition nodes + the plain Action attachment); the branch/guard REACT chain (9c) and the
-// compute node (9a-2) are folded in; the enrich node remains a follow-up.
+// the same rules.Compile + cost gate. Slice 9a lands the DETECT half (Source + every node the
+// catalog below marks catCondition + the plain Action attachment); the branch/guard REACT chain
+// (9c) and the compute node (9a-2) are folded in; the enrich node remains a follow-up. The
+// catalog is the count — a number written here is a hand-count, and the one that used to be here
+// went stale the moment the connectivity condition landed.
 //
 // The load-bearing idea is the typed port system (§1 of the slice-9 spec): every port
 // carries exactly one of three signals and an edge may only join same-typed ports. A

@@ -5,12 +5,12 @@ title: Autoría Asistida por IA
 
 # Autoría Asistida por IA
 
-Una regla de detección puede crearse de tres maneras en DeviceChain: un **formulario** tipado, un **lienzo de automatización** visual y, con el servicio de IA habilitado, una puerta de **"Describir"** en inglés sencillo. Escribes *"levanta una alarma alta cuando la temperatura de un congelador se mantenga por encima de -15°C durante más de diez minutos"* y la plataforma redacta una regla que puedes revisar, ajustar y publicar.
+Una regla de detección puede crearse de tres maneras en DeviceChain: un **formulario** tipado, un **lienzo de automatización** visual y, con el servicio de IA habilitado, una puerta de **"Describir"** en lenguaje sencillo. Escribes *"levanta una alarma alta cuando la temperatura de un congelador se mantenga por encima de -15°C durante más de diez minutos"* y la plataforma redacta una regla que puedes revisar, ajustar y publicar.
 
 Las tres puertas convergen en el **mismo esquema de reglas estructurado** y pasan por el **mismo compilador**. Ese es todo el diseño: la IA es una puerta de entrada más hacia un único backend determinista — nunca un segundo motor, y nunca parte de la ruta de eventos en vivo.
 
 :::note Estado
-**Disponible hoy:** un servicio `ai-inference` opcional (en el perfil de despliegue `full`); un registro de **proveedores de IA** registrados por el operador con manejadores de clave de solo escritura; una puerta de **"Describir"** en lenguaje natural en la superficie de autoría de reglas del perfil de dispositivo (`draftDetectionRuleFromText`) con un ciclo acotado de compilación y reparación; consentimiento de aceptación por inquilino; y limitación de tasa de IA por inquilino con métricas de gasto. **Planeado:** un **presupuesto de gasto** de IA duradero por inquilino (un tope de costo estricto — la limitación de tasa y la observabilidad de gasto ya están disponibles hoy). Este repositorio es la fuente de verdad de lo que actualmente se construye.
+**Disponible hoy:** un servicio `ai-inference` opcional (en el perfil de despliegue `full`); un registro de **proveedores de IA** registrados por el operador con manejadores de clave de solo escritura; una puerta de **"Describir"** en lenguaje natural en la superficie de autoría de reglas del perfil de dispositivo — la mutación `draftDetectionRuleFromText`, que llama al servicio de IA y ejecuta un ciclo acotado de compilación y reparación (reside en la API que posee el **compilador** de reglas, no en la que las almacena: redactar un borrador es una operación de tiempo de compilación, y el borrador que devuelve se guarda después por la API ordinaria de creación de reglas); consentimiento de aceptación por inquilino; y limitación de tasa de IA por inquilino con métricas de gasto. **Planeado:** un **presupuesto de gasto** de IA duradero por inquilino (un tope de costo estricto — la limitación de tasa y la observabilidad de gasto ya están disponibles hoy). Este repositorio es la fuente de verdad de lo que actualmente se construye.
 :::
 
 ## La IA propone, el compilador dispone
@@ -33,7 +33,7 @@ La clave de API es un **manejador de secreto de solo escritura** ([almacén de s
 
 El uso de modelos externos es de **aceptación por inquilino y falla cerrado**: un inquilino debe dar su consentimiento antes de que se ejecute cualquier inferencia externa en su nombre, y la inferencia **falla cerrado** ante cualquier vacío en la cadena — sin consentimiento, sin proveedor, un proveedor deshabilitado o sin clave, todo se resuelve en "sin inferencia", nunca en un respaldo silencioso.
 
-## La IA es una entitlement escalonada
+## La IA es un derecho de uso escalonado
 
 Qué modelo ejecuta realmente un inquilino está gobernado por su [**nivel de inquilino (tenant tier)**](./tenant-tiers.md), y las reglas son deliberadamente estrictas:
 
@@ -46,7 +46,7 @@ Los usuarios **no** eligen un modelo por tarea. La elección de modelo es config
 
 ## Dónde vive en la consola
 
-- **Puerta Describir** — en la superficie de autoría de reglas de detección del perfil de dispositivo, junto al constructor de formularios y el lienzo de automatización. Escribe una descripción, revisa la regla redactada, publica.
+- **Puerta Describir** — en la superficie de autoría de reglas de detección del perfil de dispositivo, junto al constructor de formularios y el lienzo de automatización, y ofrecida al **crear** una regla nueva (una regla existente se edita en el formulario o en el lienzo). Escribe una descripción, revisa la regla redactada, publica.
 - **Proveedores de IA** — `/admin/ai-providers` (plano de administración): registra proveedores, configura claves, prueba la conectividad.
 - **Empaquetado de IA** — la matriz de concesión entre niveles que mapea qué modelos puede usar cada nivel.
 - **Modelo por inquilino** — configurado en la página de detalle del inquilino, por función, desde el menú derivado del nivel.
@@ -60,5 +60,5 @@ Los usuarios **no** eligen un modelo por tarea. La elección de modelo es config
 ## Ver también
 
 - [Procesamiento de Eventos y Alarmas](./event-processing.md) — el compilador y el motor contra los que redacta la IA.
-- [Niveles y Empaquetado de Inquilinos](./tenant-tiers.md) — cómo se empaqueta la entitlement de modelo de IA.
+- [Niveles y Empaquetado de Inquilinos](./tenant-tiers.md) — cómo se empaqueta el derecho de uso de modelos de IA.
 - [Acceso de IA (MCP)](./mcp.md) — la superficie separada, de solo lectura, para agentes de IA que operan la plataforma.

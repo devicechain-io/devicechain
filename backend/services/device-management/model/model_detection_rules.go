@@ -19,7 +19,10 @@ import (
 //
 // Definition is the OPAQUE authored rule document — the event-processing `rules.Rule`
 // JSON (its v1 taxonomy: threshold / deltaRate / repeating / duration / absence /
-// aggregate / correlation, plus the leaf comparison or raw CEL). Device-management
+// aggregate / correlation / connectivity, plus the leaf comparison or raw CEL). That list
+// is a reader's orientation, not a contract this package enforces — event-processing's
+// rules.RuleType is the authority, and a taxonomy addition there needs no change here
+// precisely because of what the next paragraph says. Device-management
 // stores and versions it but deliberately does NOT parse the taxonomy: the detection
 // schema and its cel-go compilation are single-homed in event-processing (the dependency
 // direction is event-processing → device-management, never the reverse, and the schema

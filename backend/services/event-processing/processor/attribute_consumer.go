@@ -23,8 +23,10 @@ import (
 // permanent error or seed a durable value the eval path (slice 4c-3b-2) would silently mis-handle:
 //
 //   - device/key/scope empty or over-length: the (device, scope, key) tuple is the row identity; an
-//     empty component is unusable and an over-length one overflows the varchar column (a permanent
-//     insert error → wedge). Device and key are ADR-042 tokens (<= core.MaxTokenLen); a threshold
+//     empty component is unusable, and the length bound is the ADR-042 token grammar's own
+//     (core.MaxTokenLen via validRosterToken) rather than the varchar column's — see that function
+//     for why the stricter bound is deliberate, and why the column-overflow wedge it also prevents
+//     is a consequence rather than the reason. Device and key are ADR-042 tokens; a threshold
 //     key beyond that bound simply cannot be a dynamic-threshold source, so it is dropped here (note
 //     device-management does not itself grammar-bound an attribute key today — surfacing that to the
 //     author is a slice 4c-3b-2 concern where the rule-side threshold-key grammar is defined).

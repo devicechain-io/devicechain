@@ -1,7 +1,7 @@
 {
   "name": "@devicechain/dashboards",
   "version": "0.0.1",
-  "description": "DeviceChain dashboard runtime — the DashboardHub (subscription multiplexing over the client wire) and the dashboard-definition/selector types.",
+  "description": "DeviceChain dashboard runtime — the DashboardHub (telemetry subscription multiplexing over the client wire, plus the alarm and command channels) and the dashboard-definition, selector, slot, and binding-manifest types.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./src/index.ts",

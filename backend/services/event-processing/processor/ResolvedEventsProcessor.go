@@ -459,7 +459,7 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 	}
 	// Build the dead-man armer and load its membership views BEFORE replay (ADR-051 slice 4c-2b; the
 	// whole-Slice-4 hardening), symmetric with startAttributeView. The publish-time absence gate
-	// (dropStaleAbsences → AbsenceLive) must be live DURING replay: a replayed watermark advance can
+	// (dropSupersededDetections → AbsenceLive) must be live DURING replay: a replayed watermark advance can
 	// fire a stale heartbeat absence timer for a device deleted or superseded while the process was
 	// down, and replay publishes its detections through checkpoint — so without the gate active here
 	// that false absence escapes before the post-replay reconcile could sweep the timer. This only
@@ -558,7 +558,7 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 
 // catchUpFactProjections drains the membership fact streams (roster, entity-deleted, published-rule) to
 // head and persists each fact to its durable projection BEFORE the dead-man gate loads and replay runs.
-// It closes the down-window staleness the publish-time absence gate (dropStaleAbsences) would otherwise
+// It closes the down-window staleness the publish-time absence gate (dropSupersededDetections) would otherwise
 // hit: a device deleted / re-typed / superseded while THIS deployment was DOWN has its fact sitting
 // unconsumed in the stream, so a projection loaded without draining it is frozen — the gate would then
 // publish a false absence for a departed device (or drop a real one for a created-while-down device)
@@ -677,7 +677,7 @@ func (rp *ResolvedEventsProcessor) drainFactToHead(reader messaging.MessageReade
 }
 
 // startDeadmanGate builds the dead-man armer and loads its membership views from the durable roster +
-// active-version projections BEFORE replay, so the publish-time absence gate (dropStaleAbsences →
+// active-version projections BEFORE replay, so the publish-time absence gate (dropSupersededDetections →
 // AbsenceLive) is live DURING replay (ADR-051 slice 4c-2b; the whole-Slice-4 hardening). It is a no-op
 // unless BOTH read-model stores are wired (the scaffold/test path leaves the armer nil, and every
 // arming and gate site guards on it). It does NOT arm any dead-man — arming needs the final post-replay

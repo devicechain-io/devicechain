@@ -148,8 +148,10 @@ type ActionType string
 
 const (
 	// ActionRaiseAlarm raises/escalates an alarm for the detection's device (ADR-041). The
-	// alarm object, ack/clear, graph rollup, and notify last-mile all stay in device-management;
-	// REACT only signals the raise (slice 5c, gated off until slice 6).
+	// alarm object, its ack/clear transitions, and the notify last-mile all stay in
+	// device-management; REACT only signals the raise. (There is no rollup of alarms along the
+	// relationship graph — an Area carries no alarm field and the alarm query filters a single
+	// originator. Four comments claimed one; this was the fifth.)
 	ActionRaiseAlarm ActionType = "raiseAlarm"
 	// ActionSendCommand enqueues a command to the detection's device via command-delivery
 	// (ADR-043). It has no legacy twin, so it goes live in slice 5b.
@@ -228,15 +230,28 @@ type RaiseAlarmAction struct {
 // SendCommandAction enqueues a command to the detection's device (ADR-043). The device is the
 // detection's series (device token).
 //
-// KNOWN VALIDATION GAP (deferred): the compiler validates only that Command is a grammar-valid
-// token and Payload is a JSON object. It does NOT check that Command names a command actually
-// declared on the profile being published, nor that Payload satisfies that command's parameter
-// schema — both are static facts device-management owns on the same profile aggregate at publish,
-// but the DETECT compiler is deliberately state-free (it never reads device state). command-delivery
-// verifies the device EXISTS at enqueue but likewise does not validate the payload against the
-// command's parameter schema. So a typo'd Command or a schema-invalid Payload passes the publish
-// gate today and fails (silently, post-detection) at dispatch. Closing it is a device-mgmt-side
-// publish cross-check against the profile's command definitions — a follow-up, not this slice.
+// KNOWN VALIDATION GAP, AND WHERE IT IS ACTUALLY CAUGHT. The compiler validates only that Command
+// is a grammar-valid token and Payload is a JSON object. It does NOT check that Command names a
+// command actually declared on the profile being published, nor that Payload satisfies that
+// command's parameter schema — both are static facts device-management owns on the same profile
+// aggregate at publish, but the DETECT compiler is deliberately state-free (it never reads device
+// state). So a typo'd Command or a schema-invalid Payload still passes the PUBLISH gate.
+//
+// It does not, however, reach the device. command-delivery runs an enqueue gate that calls
+// device-management's ValidateCommandEnqueue synchronously: it rejects a command key that is not
+// in the device's published vocabulary, and validates the payload against that command
+// definition's parameter schema. The failure is a RETURNED ERROR, which the REACT dispatcher
+// treats as Retry — so a rule that names a nonexistent command redelivers until the consumer's
+// poison cap and dead-letters, rather than being silently dropped.
+//
+// Two caveats remain true and are the reason this is still labelled a gap. First, a profile that
+// declares NO command vocabulary is deliberately free-form (the documented backward path for an
+// unpublished or definition-less profile), so on those devices there is no validation to fail.
+// Second, the gate is skipped entirely when the enqueue validator is unwired (service secret
+// unconfigured) — that path fails closed on an unreachable device-management, but a deployment
+// that never wires the validator has no check at all. Closing the gap properly is still a
+// device-mgmt-side publish cross-check against the profile's command definitions, which would
+// catch the typo at AUTHORING time instead of at the first firing.
 type SendCommandAction struct {
 	// Command names the command to send — the command definition's CommandKey on the device's
 	// active profile (ADR-043), NOT its free-form display name. Required; must satisfy the ADR-042
@@ -248,7 +263,12 @@ type SendCommandAction struct {
 	// command. NOTE: the payload bytes are stored verbatim and NOT canonicalized, so two authoring
 	// surfaces emitting the same arguments with different whitespace/key-order produce different
 	// rule bytes — the ADR-053 byte-identity contract holds only if the surfaces emit canonical
-	// JSON (a console/canvas concern, since no code compares rule bytes yet).
+	// JSON. This is now load-bearing, not hypothetical: the console DOES compare two rule
+	// definitions on every form save, to decide whether an edit left the rule untouched and the
+	// canvas AuthoringGraph sidecar can be preserved rather than NULLed. It compares them
+	// LOGICALLY (sorted keys, empty object ⇔ absent key) precisely because the form and the
+	// canvas emit different key orders, so it is immune to the whitespace/key-order skew above —
+	// but any comparison that is added on the RAW bytes instead would not be.
 	Payload string `json:"payload,omitempty"`
 }
 
@@ -286,9 +306,16 @@ type HTTPCallAction struct {
 // rules and credentials never live in the rule/graph.
 type PublishAction struct {
 	// ConnectorRef is the token of the Connector to publish through. Required; must satisfy the
-	// ADR-042 token grammar. Its EXISTENCE is validated best-effort at dispatch (a dangling ref
-	// drops-and-logs, the notification "missing channel" precedent); the sync publish-time
-	// cross-service existence check (ADR-044) lands with the Connector resource in slice C4.
+	// ADR-042 token grammar. Its EXISTENCE IS NOT CHECKED HERE — the compiler is state-free and
+	// the Connector is another service's resource.
+	//
+	// What happens to a dangling ref is worth knowing before authoring one, because it is neither
+	// a compile error nor a retry: outbound-connectors classifies both "no such connector" and
+	// "connector has no published version" as TERMINAL (outbound-connectors/processor/executor.go),
+	// so the dispatch is dead-lettered and acked on its FIRST delivery. There is no retry, and
+	// nothing surfaces it to the rule's author — the rule keeps firing and every firing goes
+	// straight to the dead-letter stream. A sync publish-time cross-service existence check
+	// (ADR-044) would close that, and is not built.
 	ConnectorRef string `json:"connectorRef"`
 	// PayloadTemplate is a CEL expression evaluating to the message body STRING, shaped against the
 	// derived event, cost-gated at publish and rendered once in REACT (see HTTPCallAction.BodyTemplate).

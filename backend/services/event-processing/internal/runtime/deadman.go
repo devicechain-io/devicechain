@@ -215,7 +215,7 @@ func (d *DeadmanArmer) BindEngine(e expectedArmer) { d.engine = e }
 
 // AbsenceLive reports whether an ABSENCE detection's (rule, device) key is still a live membership:
 // the device is rostered AND its profile's active version is the exact one that owns the rule. It is
-// the publish-time belt (processor.dropStaleAbsences) and the reconcile heartbeat-sweep predicate that
+// the publish-time belt (processor.dropSupersededDetections) and the reconcile heartbeat-sweep predicate that
 // stop a stale wheel timer emitting a false absence after the device left the rule's scope — deleted
 // (roster row gone), re-typed (roster profile token differs), or version superseded (active version
 // moved past the rule's). It resolves entirely from the loop-owned roster + active views + the

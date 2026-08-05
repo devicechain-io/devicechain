@@ -47,7 +47,8 @@ func TestSetExpectedOnceSemantics(t *testing.T) {
 	if got := e.Drain(); len(got) != 1 {
 		t.Fatalf("expected the dead-man to fire once, got %v", got)
 	}
-	// Reconciliation re-arms with the SAME grace base: the fired latch must swallow it.
+	// Reconciliation re-arms with the SAME grace base: the forward-only `since` comparison in
+	// SetExpected must refuse it.
 	e.SetExpected(key, at(0))
 	e.Advance(at(100))
 	if got := e.Drain(); len(got) != 0 {
@@ -96,7 +97,7 @@ func TestSetExpectedLaterBaseReArmsAcrossRestart(t *testing.T) {
 	e := deadmanEngine()
 	key := absKey("rAbs", "dev")
 	e.SetExpected(key, at(0))
-	e.Advance(at(11)) // raises at 10, latches raised + done at since=0
+	e.Advance(at(11)) // raises at 10; the expected entry keeps since=0, which is what blocks a re-arm
 	e.Drain()
 
 	rules := []Rule{{ID: "rAbs", Kind: Absence, Timeout: 10 * time.Second}}
@@ -210,8 +211,8 @@ func TestRemoveRuleGCsExpected(t *testing.T) {
 }
 
 // TestExpectedSnapshotRoundTripPreservesOnceSemantics is the crux restart test: a snapshot
-// captures both an UNFIRED dead-man (devA, timer still live) and a FIRED one (devB, latched
-// done with no live timer). After Restore + reconciliation (SetExpected for both, as slice
+// captures both an UNFIRED dead-man (devA, timer still live) and a FIRED one (devB, whose entry
+// survives at its elapsed grace base with no live timer). After Restore + reconciliation (SetExpected for both, as slice
 // 4c-2b-2b does), devA still fires exactly once and devB — already fired — does NOT fire again.
 func TestExpectedSnapshotRoundTripPreservesOnceSemantics(t *testing.T) {
 	e := deadmanEngine()

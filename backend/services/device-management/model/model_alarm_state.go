@@ -65,12 +65,27 @@ type Alarm struct {
 	Acknowledged bool   // an operator has acknowledged the alarm
 	Severity     string // one of AlarmSeverity; escalates in place to the highest satisfied tier
 
-	RaisedTime       time.Time       // when the alarm first went (or most recently returned to) ACTIVE
-	ClearedTime      sql.NullTime    // when the condition last resolved; set while CLEARED
-	AcknowledgedTime sql.NullTime    // when an operator acknowledged
-	AcknowledgedBy   sql.NullString  // identity that acknowledged (opaque operator reference)
-	LastValue        sql.NullFloat64 // the measurement value at the most recent evaluation
-	Message          sql.NullString  // human-readable summary (rule-provided or generated)
+	RaisedTime       time.Time      // when the alarm first went (or most recently returned to) ACTIVE
+	ClearedTime      sql.NullTime   // when the condition last resolved; set while CLEARED
+	AcknowledgedTime sql.NullTime   // when an operator acknowledged
+	AcknowledgedBy   sql.NullString // identity that acknowledged (opaque operator reference)
+	// LastValue is the reading that most recently RAISED a contribution to this alarm. There is no
+	// per-sample evaluation any more (that was the retired measurement evaluator), so it is stamped
+	// only from a value-bearing edge and only ever moves forward: an edge with no value — every
+	// resolve, and any silence-driven raise from an absence/duration rule — deliberately leaves the
+	// column as it was rather than NULLing it, so one contributor resolving does not erase a
+	// co-contributor's real reading.
+	LastValue sql.NullFloat64
+	// Message is DEAD: nothing in this service, or any other, ever writes it. It was the retired
+	// measurement evaluator's human-readable summary; the ADR-057 contributor fold that replaced the
+	// evaluator has no equivalent, because a multi-contributor alarm has no single rule to phrase a
+	// summary from. It is still declared, still exposed as Alarm.message in the GraphQL schema, still
+	// resolved, still copied onto every AlarmEvent — and always reads null through all of them,
+	// including the console's alarm list, which renders it when present and therefore never renders
+	// it. Kept rather than removed only because dropping a column is a schema change and the
+	// baselines are frozen; it is a follow-up, not an intentional extension point. Do NOT start
+	// writing it without deciding what a summary means for a contributor SET.
+	Message sql.NullString
 
 	// Contributors is the ADR-057 contributor set: the JSON-encoded {ruleID → AlarmContributor} map
 	// the DETECT+REACT integrator reference-counts to derive State + Severity (raise adds/updates a

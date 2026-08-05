@@ -23,7 +23,7 @@ const (
 // RaiseAlarmRequest is the raise-alarm message event-processing's REACT dispatcher sends to
 // device-management (ADR-051 slice 5c / ADR-054 / ADR-057) when a detection rule's raiseAlarm action
 // fires. device-management folds each edge into the (device, alarmKey) alarm's contributor set
-// (ApplyAlarmContributorEdge), keeping the Alarm object, ack/clear, graph rollup, and
+// (ApplyAlarmContributorEdge), keeping the Alarm object, ack/clear, and the
 // alarm-events→notification last mile all in one place (ADR-041/017).
 //
 // It is a JSON message — like event-processing's derived events (ADR-037), and unlike

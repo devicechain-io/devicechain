@@ -20,9 +20,11 @@ import (
 // (device, alarmKey) alarm by folding it into the row's contributor set and re-deriving the row's
 // state + severity: the alarm is ACTIVE at the max tier over the rules currently raising it and CLEARS
 // when the last one resolves. It REPLACES the retired measurement evaluator's level-triggered
-// clear-on-unsatisfied semantics (api_alarm_eval.go, deleted at slice 6) with edge-integration, so a
-// rule-driven alarm is the same first-class Alarm object with the same ack/clear, graph rollup, and
-// alarm-events→notification flow (ADR-041/017).
+// clear-on-unsatisfied semantics with edge-integration. The evaluator's own files (model/alarm_eval.go
+// and processor/alarm_evaluator.go) were deleted at the 6d cutover — NOT api_alarm_eval.go, which
+// survives and is live: it holds alarmByOriginatorKey, the single-live-alarm lookup this file's fold
+// calls on every edge. So a rule-driven alarm is the same first-class Alarm object with the same
+// ack/clear and the same alarm-events→notification flow (ADR-041/017).
 
 // ApplyAlarmContributorEdge applies one rule's edge to the (device, alarmKey) alarm and persists the
 // re-derived state (ADR-057). It is the KEPT device-management boundary the raise-alarm consumer calls

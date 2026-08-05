@@ -180,9 +180,29 @@ func (iproc *InboundEventsProcessor) ProcessResolvedEvent(ctx context.Context) b
 		bytes, err := proto.MarshalResolvedEvent(&item.event)
 		if err == nil {
 			msg := messaging.Message{
-				// Partition on the source device token so a device's events stay
-				// ordered on one stream partition (ADR-044): the token is 1:1 with the
-				// device, so ordering is preserved and no id crosses the seam.
+				// The source device token, carried as the producer-local Key. Read the
+				// next paragraph before relying on it for anything: this is NOT what
+				// keeps a device's events in order.
+				//
+				// Key was the Kafka partition key, and on Kafka it did order a device's
+				// events by hashing them onto one partition. On JetStream there are no
+				// partitions and Key is not even transmitted — the writer builds the
+				// nats.Msg from Value plus headers only (core/messaging/nats.go), and
+				// nothing on the read side reconstructs it, which is exactly what the
+				// Message doc means by "producer-local and not transmitted, since no
+				// consumer reads it".
+				//
+				// What DETECT actually relies on is the stream's own ordering: this loop
+				// is the single writer of resolved-events, it publishes one event at a
+				// time in resolution order, and JetStream assigns a gapless, monotonic
+				// stream sequence per stream. The engine checkpoints that StreamSeq and
+				// replays from it, so per-device order falls out of per-stream order.
+				// A second concurrent writer into this suffix would break that property
+				// and no partition key would restore it.
+				//
+				// The token is still the right value to put here — it is 1:1 with the
+				// device and no id crosses the seam (ADR-044) — so it stays as fidelity
+				// for a transport that does read a key. It is not load-bearing today.
 				Key:   []byte(item.event.SourceDeviceToken),
 				Value: bytes,
 			}.WithCorrelationID(item.correlation)
