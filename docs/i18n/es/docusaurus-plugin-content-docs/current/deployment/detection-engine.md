@@ -262,7 +262,7 @@ alerta *es* la aplicación del límite.
 | Señal | Significa |
 |---|---|
 | `DetectCheckpointsStalledWithBacklog` | **La alerta más importante de esta página.** Los puntos de control se han detenido mientras hay trabajo esperando. O el motor se ha parado tras perder una carrera de cerebro dividido (split-brain), o su base de datos no está disponible. No se está detectando nada. |
-| `DetectConsumerBacklogHigh` | El motor va con retraso. Mientras lo esté, la detección de ausencias queda suprimida. |
+| `DetectConsumerBacklogHigh` | El motor va con retraso. Mientras lo esté, queda suprimida la detección de ausencias **por silencio**; un evento posterior sigue disparando una ausencia vencida, como se explica arriba. |
 | `DetectWatermarkLagHigh` | El sentido del tiempo del evento del motor se está quedando atrás respecto al tiempo real. |
 | `DetectFanoutEvalErrors` | Una o más reglas publicadas están fallando al evaluarse. Vea la advertencia de arriba. |
 | `ReactPoisonDropping` | Se están descartando acciones tras agotar sus reintentos: se están perdiendo alarmas o comandos. Trátelo como urgente. |

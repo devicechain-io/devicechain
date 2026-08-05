@@ -34,11 +34,17 @@ Group membership is recorded on each event **as it is resolved**, so the engine 
 | **Repeating** | the condition occurs a number of times within a window (e.g. `3 faults in 10 minutes`) | an occurrence count + a window |
 | **Rate of change** | a metric changes too fast between consecutive readings (e.g. `temperature rising > 5°/s`) | the comparison + an optional flag to normalise the change to a per-second rate |
 | **Absence / silence** | a device goes quiet — no qualifying event within a window (a dead-man check) | a silence window |
-| **Connectivity** | a device reports an authoritative disconnect (raise) and reconnects (resolve) — for presence-asserting transports like [Sparkplug-B](./sparkplug.md) and [LwM2M](./lwm2m.md). *Defined through the API today — neither console authoring surface offers it yet.* | none — the [presence](./device-presence.md) edge is the whole signal |
+| **Connectivity** | a device reports an authoritative disconnect (raise) and reconnects (resolve) — for presence-asserting transports like [Sparkplug-B](./sparkplug.md) and [LwM2M](./lwm2m.md). *Defined through the API today — neither console authoring surface offers it yet, and one of them will silently rewrite it (see below).* | none — the [presence](./device-presence.md) edge is the whole signal |
 | **Windowed aggregate** | an aggregate over a window crosses a comparison (e.g. `average > 50 over 10 minutes`) | the function (count/sum/avg/min/max), a window (tumbling, sliding, or session), the comparison + value |
 | **Area correlation** | enough distinct devices in an area meet the condition together (e.g. `≥ 3 devices in a zone report a fault within 5 minutes`) | the area/anchor type, a distinct-device count + window |
 
 Each condition's comparison can be a structured `metric · operator · value` leaf or an advanced **CEL expression** over the event; both are statically type-checked and cost-limited when the profile is published, so a malformed or runaway rule is rejected before it can run.
+
+:::warning Do not open a Connectivity rule in the console's form editor
+Because the form builder does not model the Connectivity type, opening an existing Connectivity rule in it **silently reads the rule back as a Threshold rule**, and saving from that drawer replaces the original definition. Nothing warns you: the form's "could not be read" notice fires only when the stored definition is not valid JSON, which a working Connectivity rule of course is.
+
+The automation canvas is safe — it refuses the rule outright and tells you the type is unsupported. Until the form builder learns the type, edit a Connectivity rule only through the API.
+:::
 
 ### Static and dynamic thresholds
 
@@ -84,7 +90,7 @@ Each alarm carries a **severity** — `CRITICAL`, `MAJOR`, `MINOR`, `WARNING`, o
 
 ## Reaching a human
 
-A raised alarm can notify people through the **notification** system. A per-tenant policy routes alarms to **email (SMTP)** and **webhook** channels, with per-severity **escalation** — an alarm that stays neither acknowledged nor cleared is **re-notified through the same channels** on the policy's schedule, up to a cap — and **throttling**, a minimum gap between notifications for the same alarm so a repeatedly-signalling alarm does not flood a channel. Where two policies route to the same channel and recipients, the duplicate delivery is collapsed and the notification is sent once. Channel credentials (the SMTP password, a webhook bearer token) are held in the platform's **encrypted secret store** — sealed at rest with envelope encryption, write-only over the API, and never returned as cleartext. This machine-to-human path is kept distinct from the machine-to-machine **[outbound connectors](./outbound-connectors.md)** that fan events out to other systems.
+A raised alarm can notify people through the **notification** system. A per-tenant policy routes alarms to **email (SMTP)** and **webhook** channels with **per-severity routing** — each of a policy's rules maps one severity (or any) to a channel and a recipient list. **Escalation is per policy, not per severity**: the policy sets a single interval and cap, and an alarm that stays neither acknowledged nor cleared is **re-notified through the same channels** on that schedule until the cap. An alarm carries one escalation clock and tier however many policies match it, so the shortest interval among them paces all of them — a severity cannot be given a cadence of its own. Policies also support **throttling**, a minimum gap between notifications for the same alarm so a repeatedly-signalling alarm does not flood a channel. Where two policies route to the same channel and an **identical** recipient list, the duplicate delivery is collapsed and the notification is sent once — the same recipients in a different order, or in different letter case, are treated as distinct and both are sent. Channel credentials (the SMTP password, a webhook bearer token) are held in the platform's **encrypted secret store** — sealed at rest with envelope encryption, write-only over the API, and never returned as cleartext. This machine-to-human path is kept distinct from the machine-to-machine **[outbound connectors](./outbound-connectors.md)** that fan events out to other systems.
 
 ## Seeing alarms & rule health
 

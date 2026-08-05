@@ -139,7 +139,9 @@ func Compile(source string, costCeiling uint64) (*Predicate, error) {
 // The error is counted (detect_fanout_eval_errors_total), so the FACT that leaves are erroring
 // is visible rather than silently dead. Note the limit plainly: that counter is UNLABELLED —
 // deliberately, since a per-rule label is unbounded cardinality — so it tells an operator that
-// evaluation is failing somewhere, never WHICH rule. Identifying the rule means going to the
+// evaluation is failing somewhere, never WHICH rule — and NOTHING logs the rule id on this path
+// either, so the logs cannot answer it. The one surface that attributes an eval error to the rule
+// that caused it is the authoring-time preview. Identifying the rule means going to the
 // logs or re-running the predicate against a sample.
 func (p *Predicate) Eval(in Input) (bool, error) {
 	out, _, err := p.program.Eval(in.activation())

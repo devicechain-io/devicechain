@@ -148,8 +148,10 @@ type ActionType string
 
 const (
 	// ActionRaiseAlarm raises/escalates an alarm for the detection's device (ADR-041). The
-	// alarm object, ack/clear, graph rollup, and notify last-mile all stay in device-management;
-	// REACT only signals the raise (slice 5c, gated off until slice 6).
+	// alarm object, its ack/clear transitions, and the notify last-mile all stay in
+	// device-management; REACT only signals the raise. (There is no rollup of alarms along the
+	// relationship graph — an Area carries no alarm field and the alarm query filters a single
+	// originator. Four comments claimed one; this was the fifth.)
 	ActionRaiseAlarm ActionType = "raiseAlarm"
 	// ActionSendCommand enqueues a command to the detection's device via command-delivery
 	// (ADR-043). It has no legacy twin, so it goes live in slice 5b.

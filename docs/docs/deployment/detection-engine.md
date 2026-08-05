@@ -234,7 +234,7 @@ engine's memory. Watch `DetectTenantOverStateBudget` and act on it — the alert
 | Signal | Means |
 |---|---|
 | `DetectCheckpointsStalledWithBacklog` | **The most important alert here.** Checkpoints have stopped while work is waiting. Either the engine has halted after losing a split-brain race, or its database is unavailable. Detection is not happening. |
-| `DetectConsumerBacklogHigh` | The engine is behind. Absence detection is suppressed while it is. |
+| `DetectConsumerBacklogHigh` | The engine is behind. Absence detection **on silence** is suppressed while it is — a later event still fires an overdue absence, as above. |
 | `DetectWatermarkLagHigh` | The engine's sense of event time is falling behind real time. |
 | `DetectFanoutEvalErrors` | One or more published rules are failing to evaluate. See the caution above. |
 | `ReactPoisonDropping` | Actions are being dropped after exhausting their retries — alarms or commands are being lost. Treat as urgent. |

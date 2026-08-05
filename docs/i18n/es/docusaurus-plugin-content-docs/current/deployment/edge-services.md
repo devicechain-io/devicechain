@@ -36,9 +36,17 @@ Conviene saber que son tres argumentos separados, no una misma política aplicad
 | **Agente de borde** | Es dueño de un directorio de almacenamiento local y de una identidad en el enlace ascendente hacia la nube. | Dos sobre un mismo directorio chocan en los bloqueos de archivo; dos que comparten identidad se expulsan mutuamente del enlace en bucle. |
 
 En los dos servicios de ingesta esto no solo está documentado: está impuesto. Cada uno toma un
-**arrendamiento (lease) de propiedad con vallado** con una ventana de 30 segundos: un pod de reemplazo
-no conecta ni enlaza nada hasta que lo tiene, de modo que nunca hay un instante con dos sirviendo. El
-chart, por su parte, se niega a renderizar cualquiera de las dos áreas con más de una réplica.
+**arrendamiento (lease) de propiedad** con una ventana de 30 segundos: un pod de reemplazo no conecta
+ni enlaza nada hasta que lo tiene, de modo que la ventana en la que dos de ellos sirven queda
+**acotada**: por la ventana del arrendamiento más un intervalo de renovación (unos diez segundos),
+porque un líder que ha perdido el arrendamiento se autoexpulsa solo cuando su siguiente renovación lo
+advierte, y aun entonces todavía tiene que deshacer su estado de broker o de DTLS. Está acotada, no
+eliminada, y **nada valla las escrituras de un líder obsoleto en estas dos vías**: el arrendamiento
+lleva su época, pero ninguna vía de ingesta rechaza en función de ella. El chart, por su parte, se
+niega a renderizar cualquiera de las dos áreas con más de una réplica **junto a su estrategia
+`Recreate` predeterminada**; pero `strategy` es un valor por área que se puede sobrescribir, así que
+cambiarlo a `RollingUpdate` desactiva esa comprobación y el área se renderizará con cualquier número
+de réplicas. No lo haga.
 
 :::warning Ningún servicio de ingesta recibe un presupuesto de interrupción de pods
 El chart omite el presupuesto de interrupción para cualquier área que se ejecute con una sola réplica,
@@ -116,7 +124,7 @@ despierte a una persona.
 **Un dispositivo afirmado que muere sin decirlo puede figurar en línea indefinidamente.** El barrido
 de inactividad omite deliberadamente a los dispositivos afirmados —el sentido mismo de un transporte
 que afirma presencia es que el silencio no es prueba de muerte— y **no hay nada más en ese lado que
-tenga un tiempo de vida, un perro guardián ni un barredor.** Solo una señal nueva del propio
+tenga un tiempo de espera, un perro guardián ni un barredor.** Solo una señal nueva del propio
 transporte de ese dispositivo puede limpiarlo.
 
 Las formas concretas en que ocurre:
@@ -188,9 +196,14 @@ contenido se cuentan y se descartan. La consecuencia práctica no es evidente a 
 :::warning Un cliente conforme solo con LwM2M 1.0 obtiene presencia y comandos, pero ninguna telemetría
 SenML llegó con LwM2M 1.1. Un dispositivo que solo habla 1.0 se registrará, mantendrá su sesión,
 impulsará la presencia correctamente y aceptará comandos Read/Write/Execute, y **nunca producirá una
-sola medición**, porque nada de lo que envía por la vía de notificación se puede decodificar. Nada
-falla de forma ruidosa: las lecturas sencillamente no aparecen nunca. Revise
-`notify_unknown_content_format_total` antes de concluir que un dispositivo no está enviando.
+sola medición**. Nada falla de forma ruidosa: las lecturas sencillamente no aparecen nunca.
+
+La métrica que hay que revisar es **`observe_establish_refused_total`**. DeviceChain pide SenML-JSON
+en el propio Observe, así que un cliente conforme solo con 1.0 rechaza el Observe con
+`4.06 Not Acceptable` y luego no envía notificación alguna, lo cual se cuenta aquí y es la causa
+dominante de este contador. `notify_unknown_content_format_total` se queda en **cero** para ese
+dispositivo, porque cuenta el *otro* caso: un dispositivo que sí notifica, en un formato de contenido
+que este adaptador no puede decodificar.
 :::
 
 **Las observaciones están acotadas y las cotas no son configurables.** DeviceChain establece una
@@ -284,9 +297,14 @@ reenviar **más antiguos** para admitir los nuevos, nunca los más recientes. Es
 deliberada: a un dispositivo se le acusa recibo en el momento en que publica, desde la propia
 persistencia del agente, así que descartar lo más nuevo tiraría justo aquello que el agente acaba de
 prometer conservar y le dejaría un búfer obsoleto al final de una interrupción en lugar de uno
-actual. Cada descarte se cuenta, y el conteo se deriva del propio contenido del almacén y no de la
-contabilidad de entrega, de modo que un reinicio del agente no puede borrar en silencio la evidencia
-de que se perdieron datos.
+actual. Cada descarte se cuenta, como la primera secuencia del propio almacén menos el número de
+eventos que este agente ha reenviado y confirmado: el segundo operando es contabilidad de entrega, y
+está *persistido*, que es lo que permite que el conteo sobreviva a un reinicio en lugar de volver a
+cero. Hay un caso que no queda cubierto: cuando ese conteo persistido falta —un primer arranque, o un
+almacén cuyo archivo de progreso se eliminó— se siembra a partir de la primera secuencia actual del
+almacén, así que todo lo ya desalojado se da por contabilizado y un reinicio en ese estado sí borra la
+evidencia. Mantenga intacto el directorio del almacén entre reinicios si el conteo de descartes le
+importa.
 
 :::caution El colapso de duplicados al reconectar solo cubre cargas útiles JSON
 Cuando el enlace ascendente vuelve, el agente reenvía todo lo que había almacenado. Para las **cargas
@@ -333,12 +351,19 @@ en las tablas de abajo se emite y se raspa; nada le avisará de ello hasta que u
 
 **La primera alerta que hay que escribir es una alerta de «sin líder»**, en cada servicio de ingesta:
 
-> `sum(devicechain_sparkplugingest_is_leader) != 1`, y lo mismo para
-> `devicechain_lwm2mingest_is_leader`
+> `sum(devicechain_lwm2mingest_is_leader) != 1`
+>
+> `sum(devicechain_sparkplugingest_is_leader) != 1 or absent(devicechain_sparkplugingest_is_leader)`
 
 Cero significa que nadie está sirviendo ese transporte y que todos los dispositivos que dependen de él
 son inalcanzables en silencio. Cualquier valor distinto de uno merece despertar a alguien. Es la señal
 con más peso de toda esta superficie y es la única de la que hoy nada le informa.
+
+La mitad del `absent()` no es decorativa. El indicador de Sparkplug solo se registra cuando hay al
+menos una fuente configurada, así que un pod que se ejecute sin fuentes no publica la serie **en
+absoluto**, y un `!= 1` sobre un resultado vacío está vacío a su vez: una alerta muda, no una alerta
+que se dispara. Y ese es justo el caso para el que existe la alerta. LwM2M registra su indicador de
+forma incondicional, así que solo la expresión de Sparkplug necesita el emparejamiento.
 :::
 
 Todas las métricas llevan el prefijo `devicechain_` y el segmento de su propio servicio:
@@ -368,7 +393,8 @@ rasparla.
 | `registrations_total` / `registration_updates_total` | Dispositivos que llegan y que mantienen vivas sus sesiones. |
 | `registration_expiries_total` | Registros que caducaron en lugar de darse de baja: dispositivos que se desvanecieron. |
 | `handshake_failures_total` / `auth_errors_total` | Dispositivos que fallan DTLS, e identidades no aprovisionadas. |
-| `notify_unknown_content_format_total` | Telemetría que llega en un formato que no se decodifica. **El síntoma del cliente solo 1.0.** |
+| `observe_establish_refused_total` | Un Observe que el dispositivo rechazó o que falló por otra causa. **El síntoma del cliente solo 1.0**: ese cliente responde al Observe SenML con `4.06` y nunca notifica. |
+| `notify_unknown_content_format_total` | Telemetría que llega en un formato que no se decodifica — un dispositivo que *sí* notifica, de forma indescifrable. Cero para un cliente solo 1.0. |
 | `notify_decode_failures_total` / `notify_samples_truncated_total` | Cargas útiles malformadas o demasiado grandes. |
 | `observation_overflow_total` | Un registro que supera el tope de 32 observaciones. Algunos de sus recursos no se observan. |
 | `ingest_messages_shed_total` / `ingest_samples_shed_total` | Un inquilino por encima de su techo de ingesta. |

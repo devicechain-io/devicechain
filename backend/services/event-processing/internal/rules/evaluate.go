@@ -17,8 +17,10 @@ import (
 //
 // This is the seam the runtime fan-out (slice 4) drives, and the harness the slice-3 tests
 // use to prove each rule type compiles to a config that fires correctly in the real core.
-// An evaluation error (e.g. a raw-CEL leaf tripping the runtime cost limit) is surfaced;
-// the caller counts it and treats the event as a non-match rather than feeding a bad Match.
+// An evaluation error (e.g. a raw-CEL leaf tripping the runtime cost limit) is surfaced rather
+// than swallowed, and the caller SKIPS the sample entirely — it does not synthesise a non-match.
+// The difference is load-bearing for Duration: a false Match would cancel an in-flight hold,
+// where a skip leaves it intact. See the fan-out loop, which is the authority.
 func (cr *CompiledRule) BuildEvent(seq uint64, series, member string, in predicate.Input) (core.Event, error) {
 	match, err := cr.Predicate.Eval(in)
 	if err != nil {

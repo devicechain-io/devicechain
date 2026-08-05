@@ -33,10 +33,16 @@ It is worth knowing that these are three separate arguments, not one policy appl
 | **LwM2M ingestion** | DTLS is a **stateful session over one bound UDP socket**. | A standby that also bound the socket would silently receive — and drop — the share of datagrams sent its way. Traffic disappears rather than failing loudly. |
 | **Edge agent** | It owns a local spool directory and one identity on the cloud uplink. | Two on one directory collide on file locks; two sharing an identity kick each other off the uplink in a loop. |
 
-For the two ingest services this is enforced rather than merely documented. Each takes a **fenced
-ownership lease** with a 30-second window: a replacement pod connects nothing and binds nothing until
-it holds the lease, so there is never a moment with two of them serving. The chart independently
-refuses to render either area at more than one replica.
+For the two ingest services this is enforced rather than merely documented. Each takes an
+**ownership lease** with a 30-second window: a replacement pod connects nothing and binds nothing
+until it holds the lease, so the window in which two of them serve is **bounded** — by the lease
+window plus one renewal interval (about ten seconds), because a leader that has lost the lease
+evicts itself only when its next renewal notices, and then still has to unwind its broker or DTLS
+state. It is bounded, not eliminated, and **nothing fences a stale leader's writes on these two
+paths** — the lease's epoch is carried but no ingest path rejects on it. The chart also refuses to
+render either area at more than one replica **alongside its default `Recreate` strategy** — but
+`strategy` is an overridable per-area value, so overriding it to `RollingUpdate` defeats that guard
+and the area will render at any replica count. Do not.
 
 :::warning Neither ingest service gets a pod disruption budget
 The chart skips a disruption budget for any area running a single replica, because a budget demanding
@@ -168,9 +174,14 @@ discarded. The practical consequence is not obvious from the standard:
 
 :::warning A conformant LwM2M 1.0-only client gets presence and commands but no telemetry
 SenML arrived in LwM2M 1.1. A device that only speaks 1.0 will register, hold its session, drive
-presence correctly and accept Read/Write/Execute commands — and **never produce a single measurement**,
-because nothing it sends on the notify path can be decoded. Nothing fails loudly; the readings simply
-never appear. Check `notify_unknown_content_format_total` before concluding a device is not sending.
+presence correctly and accept Read/Write/Execute commands — and **never produce a single measurement**.
+Nothing fails loudly; the readings simply never appear.
+
+The metric to check is **`observe_establish_refused_total`**. DeviceChain asks for SenML-JSON on the
+Observe itself, so a conformant 1.0-only client refuses the Observe with `4.06 Not Acceptable` and
+then never sends a notification at all — which is counted here, and is this counter's dominant cause.
+`notify_unknown_content_format_total` stays at **zero** for that device, because it counts the *other*
+case: a device that does notify, in a content format this adapter cannot decode.
 :::
 
 **Observations are bounded and the bounds are not configurable.** DeviceChain establishes one
@@ -256,8 +267,13 @@ When it is full it drops the **oldest** un-forwarded events to admit new ones �
 direction is deliberate: a device is acknowledged the moment it publishes, from the agent's own
 persistence, so dropping the newest would discard exactly what the agent has just promised to keep and
 would leave you with a stale buffer at the end of an outage instead of a current one. Every drop is
-counted, and the count is derived from the spool's own contents rather than from delivery bookkeeping,
-so an agent restart cannot quietly erase the evidence that data was lost.
+counted, as the spool's own first sequence minus the count of events this agent has forwarded and
+acknowledged — the second operand is delivery bookkeeping, and it is *persisted*, which is what lets
+the count survive a restart rather than resetting to zero. One case is not covered: when that
+persisted count is missing — a first start, or a store whose progress file was removed — it is
+seeded from the spool's current first sequence, so anything already evicted is treated as
+accounted-for and a restart in that state does reset the evidence. Keep the store directory intact
+across restarts if the drop count matters to you.
 
 :::caution Duplicate collapse on reconnect covers JSON payloads only
 When the uplink returns, the agent re-forwards everything it buffered. For **JSON object payloads** it
@@ -303,12 +319,19 @@ below is emitted and scraped; nothing will page you about any of it until you wr
 
 **The first alert to author is a no-leader alert**, on each ingest service:
 
-> `sum(devicechain_sparkplugingest_is_leader) != 1` — and the same for
-> `devicechain_lwm2mingest_is_leader`
+> `sum(devicechain_lwm2mingest_is_leader) != 1`
+>
+> `sum(devicechain_sparkplugingest_is_leader) != 1 or absent(devicechain_sparkplugingest_is_leader)`
 
 Zero means nobody is serving that transport and every device on it is silently unreachable. Anything
 other than one is worth waking someone. It is the most load-bearing signal on this whole surface and it
 is the one nothing tells you about today.
+
+The `absent()` half is not decoration. The Sparkplug gauge is only registered once at least one
+source is configured, so a pod running with its sources unset publishes the series **not at all** —
+and `!= 1` over an empty result is itself empty, which is a silent alert, not a firing one. That is
+exactly the case the alert exists for. LwM2M registers its gauge unconditionally, so only the
+Sparkplug expression needs the pairing.
 :::
 
 All metrics carry the `devicechain_` prefix and their service's own segment —
@@ -337,7 +360,8 @@ labelled per device or per tenant, so none of them is a cardinality risk to scra
 | `registrations_total` / `registration_updates_total` | Devices arriving and keeping their sessions alive. |
 | `registration_expiries_total` | Registrations that lapsed rather than deregistering — devices that vanished. |
 | `handshake_failures_total` / `auth_errors_total` | Devices failing DTLS, and identities that are not provisioned. |
-| `notify_unknown_content_format_total` | Telemetry arriving in a format that is not decoded. **The 1.0-only client symptom.** |
+| `observe_establish_refused_total` | An Observe the device refused or that otherwise failed. **The 1.0-only client symptom** — such a client answers the SenML Observe with `4.06` and never notifies. |
+| `notify_unknown_content_format_total` | Telemetry arriving in a format that is not decoded — a device that *does* notify, undecodably. Zero for a 1.0-only client. |
 | `notify_decode_failures_total` / `notify_samples_truncated_total` | Malformed or oversized payloads. |
 | `observation_overflow_total` | A registration exceeding the 32-observation cap. Some of its resources are not observed. |
 | `ingest_messages_shed_total` / `ingest_samples_shed_total` | A tenant over its ingest ceiling. |

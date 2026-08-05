@@ -55,7 +55,7 @@ spec:
             devicechain_instance: {{ $ns }}
           annotations:
             summary: "DETECT leaf-predicate evaluation errors"
-            description: "Rule leaf predicates are erroring during fan-out (treated as non-match), so some detections may be silently missed. Check for a bad published rule."
+            description: "Rule leaf predicates are erroring during fan-out. The sample is SKIPPED, not treated as a non-match, so firings may be silently missed. This counter is unlabelled and nothing logs the rule id — use the canvas preview on each suspect rule to attribute the error."
         - alert: ReactPoisonDropping
           expr: sum(rate(devicechain_eventprocessing_react_events_poison_dropped_total{namespace="{{ $ns }}"}[5m])) > 0
           for: 10m
