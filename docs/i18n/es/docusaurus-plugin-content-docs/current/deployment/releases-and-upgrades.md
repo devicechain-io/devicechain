@@ -57,7 +57,7 @@ En concreto, antes de la v1.0.0 debe esperar que una versión pueda:
 - **alterar el esquema de la base de datos** de formas que una reversión no deshará
 - **reemplazar por completo la línea base de migraciones**, lo que elimina por entero la ruta de
   actualización en lugar de limitarse a hacerla unidireccional. Cuando eso ocurre, las notas de la versión lo
-  indican al principio, y la única vía es recrear la instancia. La `v0.9.0` es una versión de este tipo
+  indican al principio, y la única vía es recrear la instancia. La `v0.9.0` y la `v0.10.0` son versiones de este tipo
 
 La propiedad de "actualizar in situ sin tiempo de inactividad" descrita arriba describe la *mecánica* de una
 actualización progresiva. No es una promesa de que sus llamadas a la API existentes conserven el mismo significado
@@ -110,10 +110,39 @@ no se puede actualizar en absoluto**. Consulte las notas de la versión a la que
 ejecutar el comando:
 
 ```bash
+# Traslade los valores de la versión actual y cambie únicamente la versión.
+# Este archivo contiene los secretos de su instancia: elimínelo cuando termine.
+helm get values dc -n default -o yaml > dc-values.yaml
+
 helm upgrade dc deploy/helm/devicechain \
-  --set instance.id=devicechain \
+  -n default \
+  -f dc-values.yaml \
   --set image.tag=v1.3.0
+
+rm dc-values.yaml
 ```
+
+:::warning Traslade los valores: `--set image.tag=…` por sí solo no funcionará
+No todos los valores de su instancia se escriben a mano. `dcctl bootstrap` genera varios y los
+guarda en la versión desplegada; entre ellos, la clave raíz de la instancia, el secreto de
+autenticación entre servicios, la credencial de servicio de NATS y la semilla del emisor de
+callout, y la CA del bróker.
+
+La regla de Helm es la trampa. Una actualización que **no** pasa ningún valor reutiliza los que ya
+están en la versión desplegada. Pero en cuanto pasa *cualquier* valor —incluido el único `--set`
+que cambia la versión, que es justamente el objetivo de una actualización— Helm parte de los
+valores predeterminados del chart y todo lo que generó `dcctl bootstrap` desaparece.
+
+Cuando eso ocurre no se corrompe nada, porque el chart se niega a renderizar sin la clave raíz:
+
+```
+Error: UPGRADE FAILED: execution error at (devicechain/templates/instance-config.yaml:27:4): instance.config.infrastructure.secrets.rootKey is required: area "notification-management" owns an envelope-encrypted secret store and cannot form its KEK without it, so it would crash-loop. Set it to a base64 256-bit key (openssl rand -base64 32); dcctl bootstrap mints one automatically.
+```
+
+La solución es el paso `helm get values` de arriba. `--reuse-values` también funciona, pero conserva
+en silencio entradas obsoletas cuando los valores predeterminados del chart cambian entre versiones,
+así que es preferible volcar los valores y pasarlos con `-f`, donde puede verlos.
+:::
 
 Lo que hace que el despliegue sea seguro:
 
@@ -139,7 +168,8 @@ Configúrelo globalmente con `--set replicas=2`, o por área bajo
 
 ### La compactación de la línea base de la v0.9.0 {#v090-baseline-squash}
 
-La `v0.9.0` es la única versión a la que **no se puede llegar con `helm upgrade`.**
+La `v0.9.0` es la **primera** de las dos versiones a las que no se puede llegar con `helm upgrade`
+(la otra es la [`v0.10.0`](#v0100-event-key)).
 
 Antes de ella, el esquema de cada servicio se construía mediante una cadena de migraciones aplicadas en orden.
 La `v0.9.0` reemplaza todas esas cadenas por una **única línea base congelada**: una migración por servicio que
@@ -219,6 +249,51 @@ La acompañan dos cambios en cómo la API informa del tiempo, y ninguno requiere
   otra persona se comprueban ahora con esa misma precisión. Antes, dos ediciones dentro de un mismo
   segundo podían superar ambas la comprobación, y la posterior sobrescribía en silencio un cambio
   que nunca había visto.
+
+### v0.11.0: de nuevo una actualización normal {#v0110-upgrade}
+
+La `v0.11.0` es la primera versión desde la `v0.8.5` a la que se puede llegar con `helm upgrade`.
+Su cambio de esquema **añade** tres migraciones en lugar de reemplazar una línea base, por lo que
+una base de datos `v0.10.0` existente se traslada con sus filas intactas en vez de tener que
+recrearse.
+
+Lo que llega a la base de datos:
+
+- dos tablas nuevas que registran el progreso y el historial de la eliminación de un inquilino, y
+- dos columnas en la tabla de inquilinos que siguen su estado de ciclo de vida.
+
+Todos los inquilinos que ya existen quedan en el estado activo normal al añadirse la columna, así
+que nada cambia en una instancia en funcionamiento hasta que elimine realmente un inquilino.
+
+:::note Qué se probó y qué no
+Antes de la publicación se ejecutaron dos comprobaciones, y conviene mantenerlas separadas porque
+midieron cosas distintas.
+
+**Las migraciones, contra una base de datos con datos dentro.** Se construyó un esquema `v0.10.0`,
+se llenó con filas representativas y se trasladó hacia adelante. Todas esas filas llegaron
+idénticas byte a byte, y el esquema resultante es idéntico al de una instalación nueva de
+`v0.11.0`, para todas las áreas funcionales, no solo para la que cambió.
+
+**La actualización en sí, sobre una instancia en funcionamiento.** Se construyó una instancia
+`v0.10.0` a partir de las imágenes `v0.10.0` publicadas, se le dieron inquilinos e identidades
+reales y luego se actualizó con el comando de arriba. Todos los servicios se desplegaron, el
+recuento de filas de las 67 tablas no varió salvo por las nuevas entradas de migración y los
+registros de auditoría que escribieron, el inicio de sesión siguió funcionando para una cuenta
+creada bajo `v0.10.0`, y la nueva API de eliminación de inquilinos respondió en la instancia
+actualizada.
+
+Cuatro límites, indicados con claridad:
+
+- **Solo se verificaron las bases de datos.** El estado del bróker (JetStream), el almacenamiento
+  de objetos y el estado clave-valor no están cubiertos por ninguna de las dos comprobaciones.
+- **Solo PostgreSQL 16.** Las instalaciones nuevas se verifican en ambas versiones principales
+  admitidas; la ruta de actualización en sí se midió en la 16.
+- **La comparación fila a fila proviene de la primera comprobación, no de la segunda.** La
+  instancia en funcionamiento se verificó por *recuentos* de filas, que no detectarían una fila
+  modificada en el sitio en lugar de eliminada.
+- **La consola web se dejó con su imagen `v0.10.0`** durante la segunda comprobación, así que la
+  consola `v0.11.0` no se ejercitó contra una instancia actualizada.
+:::
 
 ### La transición única a la ingesta duradera
 

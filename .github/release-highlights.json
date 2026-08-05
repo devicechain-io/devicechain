@@ -20,13 +20,14 @@
     "`breaking` drives an automatic warning on the website and in the docs. Set it true when an",
     "upgrade is not a plain `helm upgrade`, and say so in the first highlight."
   ],
-  "version": "v0.10.0",
-  "breaking": true,
+  "version": "v0.11.0",
+  "breaking": false,
   "highlights": [
-    "Breaking: an existing instance must be recreated (dcctl destroy + bootstrap), not upgraded.",
-    "Events published by one device under the same timestamp are no longer silently discarded.",
-    "Redelivered messages no longer duplicate readings on LwM2M and Sparkplug.",
-    "Timestamps are reported at the precision they were recorded, not rounded to the second.",
-    "The .NET SDK publishes sub-second event times and runs under WebGL."
+    "Upgradeable in place: the first release since v0.8.5 reachable with helm upgrade, no recreate needed.",
+    "Deleting a tenant now erases its data — relational, telemetry, broker, object and key-value stores, and the running rule engine.",
+    "A deleted tenant's token is held before reuse, so a new tenant cannot inherit its predecessor's data.",
+    "The console shows deletion progress and history, with a per-store record of what was erased.",
+    "A device can no longer take over another tenant's MQTT session by reusing its client id.",
+    "The console refuses to publish a dashboard whose widgets are misconfigured."
   ]
 }
