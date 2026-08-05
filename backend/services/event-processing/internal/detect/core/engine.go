@@ -414,10 +414,17 @@ func deleteSeriesKeysMatching[V any](m map[SeriesKey]V, match func(string) bool)
 //
 // Idempotent and cheap in the common case: most events are out of scope for any given scoped
 // rule, and a series with no state and no latch is a no-op. Replay-safe and deterministic: the
-// only input is the immutable event's ScopeMemberships plus snapshotted state. The falling-edge
-// resolve is stale-guarded exactly like resolve() (an out-of-order event older than the rising
-// edge does not clear an alarm the latest reading still supports). Runs on the single-writer
-// loop. Returns whether it changed any state (so the caller can mark the checkpoint dirty).
+// only input is the immutable event's ScopeMemberships plus snapshotted state.
+//
+// 🔴 Its falling edge is NOT stale-guarded the way resolve() is, and the difference is
+// deliberate — see the argument at the resolve below. A descope always emits, clamped to the
+// rising edge. Do not "restore" the guard here to match the value kinds: membership is
+// monotone with stream sequence, so a bounded-late out-of-scope event is still the current
+// word, and suppressing its resolve strands the alarm forever if the device never reports
+// again.
+//
+// Runs on the single-writer loop. Returns whether it changed any state (so the caller can
+// mark the checkpoint dirty).
 func (e *Engine) Descope(ruleID, series string, at time.Time) bool {
 	r, ok := e.rules[ruleID]
 	if !ok {
