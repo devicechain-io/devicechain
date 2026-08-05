@@ -251,6 +251,14 @@ type Engine struct {
 // re-arms. So the same comparison delivers both properties — the once-across-restart guarantee at
 // the same-or-earlier base, and an honest re-arm at a genuinely advanced one.
 //
+// 🔴 DO NOT READ THAT AS "the only thing standing between us and a duplicate fire". It is the only
+// thing at the level of ENGINE STATE, and it is the one to preserve — but a duplicate fire would
+// also be swallowed downstream by the raised latch in emit(), which returns early while the series
+// is already raised. That redundancy is why this guard is currently UNTESTABLE: mutating the
+// comparison to allow a same-base re-arm passes the whole module's suite, because the second fire
+// produces no second detection. A test that means to pin THIS guard has to observe engine state
+// (the wheel's live deadline, or the expected entry's base), not the emitted detections.
+//
 // This state carried a separate `done` latch for a while, describing the same guarantee. It was
 // removed because no conditional ever read it: it was set at fire time, snapshotted and restored,
 // and the forward-only comparison did all the work regardless. Do not reintroduce a second marker

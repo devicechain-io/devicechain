@@ -47,7 +47,8 @@ func TestSetExpectedOnceSemantics(t *testing.T) {
 	if got := e.Drain(); len(got) != 1 {
 		t.Fatalf("expected the dead-man to fire once, got %v", got)
 	}
-	// Reconciliation re-arms with the SAME grace base: the fired latch must swallow it.
+	// Reconciliation re-arms with the SAME grace base: the forward-only `since` comparison in
+	// SetExpected must refuse it.
 	e.SetExpected(key, at(0))
 	e.Advance(at(100))
 	if got := e.Drain(); len(got) != 0 {
