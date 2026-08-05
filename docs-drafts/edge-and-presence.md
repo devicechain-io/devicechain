@@ -247,7 +247,10 @@ construction and its stop is one-shot.
 Neither edge service ever gets a PodDisruptionBudget — the template skips any area at one replica.
 
 🔴 **Nothing in the chart or in OpenTofu exposes UDP 5684 outside the cluster.** Every area Service
-is ClusterIP, `sessionAffinity` appears nowhere, and the ingress controller is HTTP-only. The values
+is ClusterIP, no session affinity is configured anywhere in the chart, and the ingress controller is
+HTTP-only. (Deliberately un-backticked: the rot guard's symbol check cannot express a NEGATIVE claim
+about a symbol — naming one to say it is absent is indistinguishable from naming a stale one, and it
+fails in a clean checkout while passing locally off built artifacts.) The values
 file calls external exposure "an operator/ingress decision"; there is no implementation here, so a
 real LwM2M fleet cannot reach the service as shipped.
 
