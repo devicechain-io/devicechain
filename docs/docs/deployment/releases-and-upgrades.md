@@ -33,7 +33,7 @@ reason about: a deployment is one coherent number.
   recent stable release.
 - **Pre-releases** are `vX.Y.Z-rc.N` (e.g. `v1.2.0-rc.1`). These never move `:latest`.
 
-## Pre-1.0 stability
+## Pre-1.0 stability {#pre-10-stability}
 
 :::warning DeviceChain is pre-1.0
 
