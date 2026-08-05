@@ -22,7 +22,7 @@ The JSON object is a "rules.Rule". Emit only these fields (omit any that do not 
 - type (string, REQUIRED): one of "threshold", "deltaRate", "repeating", "duration", "absence", "aggregate", "correlation", "connectivity".
 - severity (string, optional): one of "critical", "major", "minor", "warning", "indeterminate". REQUIRED when the rule has a raiseAlarm action.
 - when (object): the per-event condition (see below).
-- actions (array, optional): the REACT actions taken when the rule fires (see below).
+- actions (array, optional): the REACT actions taken when the rule fires (see below). Not permitted on a correlation rule.
 - plus the type-specific fields listed under each type.
 
 The "when" condition is exactly ONE of these mutually-exclusive shapes:
@@ -34,19 +34,24 @@ Prefer the structured comparison over raw CEL whenever possible.
 
 Rule types and their fields:
 - threshold: fires while "when" is true. Fields: when (structured), severity/actions. Use for "alarm when a value goes over/under a threshold".
-- deltaRate: compares a metric's rate of change. Fields: metric (the value metric), op, threshold, window (e.g. "5m0s"), rate:true for a per-second rate.
+- deltaRate: compares the change between consecutive readings of a metric. Fields: metric (the value metric), op, threshold, rate:true to normalise the change to a per-second rate. Takes NO window — the comparison is between successive samples, and a "window" field is REJECTED.
 - repeating: fires when a condition recurs N times in a window. Fields: when (optional gate), count (N), window (e.g. "10m0s").
 - duration: fires when "when" stays true for a sustained hold. Fields: when (structured), hold (e.g. "5m0s").
-- absence (dead-man): fires when NO qualifying event arrives within a timeout. Fields: timeout (e.g. "15m0s"), metric (optional — the metric whose absence matters). Takes NO "when".
+- absence (dead-man): fires when NO event of any kind arrives within a timeout. Fields: timeout (e.g. "15m0s"). Takes NO "when" and NO metric — every event counts as a heartbeat, so a metric field is REJECTED.
 - connectivity: raises a "device offline" alarm on an AUTHORITATIVE disconnect (a device that reports its own presence — e.g. Sparkplug or LwM2M — going down) and clears it on reconnect. No fields, takes NO "when". Prefer this over absence for "alert me when a device goes offline/disconnects" when the device reports presence; use absence when offline can only be inferred from data silence (a timeout).
-- aggregate: folds a metric over a window and compares. Fields: agg ("count|sum|avg|min|max"), metric (required unless agg is count), op, threshold, windowMode ("tumbling|sliding|session|count"), and window (time modes) OR count (count mode) OR gap (session mode). "when" is an optional participation gate.
-- correlation: counts DISTINCT devices meeting a condition rolled up to an anchor. Fields: anchorType (the anchor/area), count (distinct N), window, when (participation gate), memberCap (optional).
+- aggregate: folds a metric over a window and compares. Fields: agg ("count|sum|avg|min|max"), metric (required unless agg is count), op, threshold, windowMode ("tumbling|sliding|session|count"), and window (time modes) OR count (count mode) OR gap (session mode). "when" is an optional participation gate. Do NOT pair agg "count" with windowMode "count" — a count over a count window is a constant and is REJECTED; use a time window instead.
+- correlation: counts DISTINCT devices meeting a condition rolled up to an anchor. Fields: anchorType (the anchor/area), count (distinct N), window, when (participation gate), memberCap (optional). It CANNOT carry actions — its series is an area anchor, not a device, and every action targets a device, so any "actions" entry is REJECTED. Emit a correlation rule with no actions; the firing is still visible as a detection.
 
 Durations are Go duration strings: "30s", "5m0s", "1h0m0s".
 
-CEL vocabulary — the ONLY identifiers that exist inside a "when.cel" or an action "guard":
+CEL vocabulary inside a "when.cel" — these are the ONLY identifiers that exist there:
 - device (string device token), occurred (timestamp), m (map of measurement key to number, e.g. m["tempC"]), attr (map of device-attribute key to number), anchors (map of anchor-type to token).
-No other identifiers exist. Prefer the structured "when" over raw CEL.
+
+An action "guard" is evaluated LATER, against the firing rather than the event, so it has a DIFFERENT and much smaller vocabulary — these three and nothing else:
+- value (the number that fired, if the rule produced one), hasValue (bool — false for a silence-driven firing), series (the device or anchor token the firing is keyed on).
+A guard naming device, m, attr, anchors or occurred is REJECTED.
+
+No other identifiers exist in either. Prefer the structured "when" over raw CEL.
 
 Actions — each entry is { "type": "<raiseAlarm|sendCommand|httpCall|publish>", "<variant>": {...}, "guard": "<optional CEL>" } with exactly the matching variant object:
 - raiseAlarm: { "type": "raiseAlarm", "raiseAlarm": { "alarmKey": "<key>" } } — REQUIRES a severity on the rule.

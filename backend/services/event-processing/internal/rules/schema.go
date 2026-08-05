@@ -304,9 +304,16 @@ type HTTPCallAction struct {
 // rules and credentials never live in the rule/graph.
 type PublishAction struct {
 	// ConnectorRef is the token of the Connector to publish through. Required; must satisfy the
-	// ADR-042 token grammar. Its EXISTENCE is validated best-effort at dispatch (a dangling ref
-	// drops-and-logs, the notification "missing channel" precedent); the sync publish-time
-	// cross-service existence check (ADR-044) lands with the Connector resource in slice C4.
+	// ADR-042 token grammar. Its EXISTENCE IS NOT CHECKED HERE — the compiler is state-free and
+	// the Connector is another service's resource.
+	//
+	// What happens to a dangling ref is worth knowing before authoring one, because it is neither
+	// a compile error nor a retry: outbound-connectors classifies both "no such connector" and
+	// "connector has no published version" as TERMINAL (outbound-connectors/processor/executor.go),
+	// so the dispatch is dead-lettered and acked on its FIRST delivery. There is no retry, and
+	// nothing surfaces it to the rule's author — the rule keeps firing and every firing goes
+	// straight to the dead-letter stream. A sync publish-time cross-service existence check
+	// (ADR-044) would close that, and is not built.
 	ConnectorRef string `json:"connectorRef"`
 	// PayloadTemplate is a CEL expression evaluating to the message body STRING, shaped against the
 	// derived event, cost-gated at publish and rendered once in REACT (see HTTPCallAction.BodyTemplate).
