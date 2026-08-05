@@ -34,7 +34,7 @@ del que preocuparse: un despliegue es un único número coherente.
   versión estable más reciente.
 - Las **versiones preliminares** son `vX.Y.Z-rc.N` (por ejemplo, `v1.2.0-rc.1`). Estas nunca mueven `:latest`.
 
-## Estabilidad previa a 1.0
+## Estabilidad previa a 1.0 {#pre-10-stability}
 
 :::warning DeviceChain es previo a 1.0
 
