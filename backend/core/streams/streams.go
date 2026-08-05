@@ -321,7 +321,7 @@ var All = []Stream{
 	// for a longer covered outage; it does not remove the residual.
 	{Suffix: InboundEvents, Areas: []string{"device-management", "event-sources", "lwm2m-ingest", "sparkplug-ingest"}, Tier: Hot, DuplicateWindowSeconds: 1800,
 		Why: "raw device telemetry — the primary ingest path"},
-	{Suffix: ResolvedEvents, Areas: []string{"device-management", "device-state", "event-management", "event-processing"}, Tier: Hot, Why: "every ingested event after resolution; fans out to four consumers"},
+	{Suffix: ResolvedEvents, Areas: []string{"device-management", "device-state", "event-management", "event-processing"}, Tier: Hot, Why: "every ingested event after resolution; device-management produces it, every other area listed is a durable reader"},
 
 	// One message per detection, and a subscribe-able product in its own right
 	// (ADR-037): clients live-subscribe by tenant like any other event feed.

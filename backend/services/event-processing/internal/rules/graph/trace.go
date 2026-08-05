@@ -39,8 +39,9 @@ type NodeTracePlan struct {
 type ActionPath struct {
 	// NodeID is the action node's canvas id.
 	NodeID string
-	// Type is "raiseAlarm" | "sendCommand" (rules.ActionType) — it selects the trace disposition
-	// (raised/sent on a rising edge, cleared/inert on a falling one).
+	// Type is the action's rules.ActionType as a string — every type buildAction can produce, not
+	// just the two alarm/command ones (the connector actions lower here too). It selects the trace
+	// disposition (raised/sent on a rising edge, cleared/inert on a falling one).
 	Type string
 	// Branches are the branch nodes on the signal path from the condition to this action, in
 	// condition→action order — the order they gate in. A firing's trace evaluates each in turn and

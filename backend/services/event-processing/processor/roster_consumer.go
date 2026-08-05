@@ -40,12 +40,22 @@ func (rp *ResolvedEventsProcessor) signalArmRecheck(tenant, deviceToken string) 
 }
 
 // validRosterToken bounds a token decoded from a fact before it becomes a durable projection
-// column. A well-formed producer only ever emits ADR-042 tokens (<= core.MaxTokenLen), but the
-// proto imposes no length, so a forged or buggy-producer fact could carry an over-long token that
-// overflows the varchar(256) column on postgres — a PERMANENT insert error that would wedge the
-// persist-before-ack retry forever and head-of-line-block the whole projection. Bounds-checking at
-// consume turns that poison into a drop-and-ack, mirroring the decode-poison path. Empty is allowed
-// for a profile token (a device whose type has no profile) but not where noted (a device token).
+// column. The bound is the ADR-042 TOKEN GRAMMAR's own length limit (core.MaxTokenLen), not the
+// projection column's width: a well-formed producer only ever emits tokens inside it, but the proto
+// imposes no length at all, so a forged or buggy-producer fact can carry anything.
+//
+// Being the grammar bound makes this STRICTER than storage, which is worth stating so nobody
+// "corrects" it to the column size. The projection columns are varchar(256) while MaxTokenLen is
+// 128, so a 129–256 character token is dropped here even though it would have inserted cleanly.
+// That is the intended direction: such a value is not a valid token in the first place, and the
+// only producer that could emit one is already forged or broken. As a consequence the check also
+// covers the storage hazard — a token longer than the column is a PERMANENT insert error, which
+// would wedge the persist-before-ack retry forever and head-of-line-block the whole projection —
+// but that is the wider net catching a case, not the reason the net is this size.
+//
+// Bounds-checking at consume turns the whole class into a drop-and-ack, mirroring the decode-poison
+// path. Empty is allowed for a profile token (a device whose type has no profile) but not where
+// noted (a device token).
 func validRosterToken(tok string) bool { return len(tok) <= core.MaxTokenLen }
 
 // persistBeforeAck retries op until it commits or the loop shuts down, capping the backoff at

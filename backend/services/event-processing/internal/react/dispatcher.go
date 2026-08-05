@@ -10,10 +10,14 @@
 // REACT is deliberately separate from the DETECT single-writer engine: DETECT is a stateful,
 // replay-correct keyed-streaming loop; REACT is a queue-group-ready, at-least-once consumer whose
 // only durability requirement is that each action dispatch be idempotent under redelivery. That
-// idempotency is carried by a DETERMINISTIC per-(detection, action-index) token the downstream
-// sink dedups on (command-delivery is idempotent on the command token, ADR-051 slice 5b-1) — so a
-// redelivered event, a DETECT replay that re-publishes the same detection, and a retry after a
-// transient failure all collapse downstream rather than double-acting. There is no permanent-vs-
+// idempotency is carried by a DETERMINISTIC token the downstream sink dedups on (command-delivery
+// is idempotent on the command token, ADR-051 slice 5b-1) — so a redelivered event, a DETECT replay
+// that re-publishes the same detection, and a retry after a transient failure all collapse
+// downstream rather than double-acting. The token is derived from the detection's dedup identity
+// plus the action's CONTENT, deliberately NOT its index in the action list: the rule is resolved
+// fresh per attempt, so an author reordering the chain between attempts would, under an index-keyed
+// token, re-send whichever action now sits at the old index under the old action's token. See
+// idempotencyToken for the full argument. There is no permanent-vs-
 // transient error classification here: any dispatch failure is retried (the event is not acked),
 // and a genuinely un-dispatchable event is bounded by the consumer's redelivery cap (poison), not
 // by fragile per-error interpretation.
@@ -109,8 +113,10 @@ type AlarmRequest struct {
 // ADR-057), implemented by publishing an alarm request to device-management (slice 5c / 6d-pre-2c).
 // Dispatch returns a non-nil error on any failure; the dispatcher retries every error (the event
 // redelivers, the idempotent contributor upsert makes the re-run safe). A nil AlarmSink means alarm
-// dispatch is DISABLED (the default until slice 6), and the dispatcher treats a raiseAlarm action
-// (and its paired resolve) as recognized-but-inert.
+// dispatch is DISABLED, and the dispatcher treats a raiseAlarm action (and its paired resolve) as
+// recognized-but-inert. That is a TEST-ONLY configuration now: since the 6d cutover the sink is
+// always wired in production (see NewDispatcher), because it needs only a NATS writer and there is
+// no peer evaluator left to double-raise against.
 type AlarmSink interface {
 	Dispatch(ctx context.Context, req AlarmRequest) error
 }
@@ -191,8 +197,10 @@ type Metrics interface {
 	RecordDispatched(action string)
 	// RecordOrphan: one derived event whose rule was gone from the projection (nothing dispatched).
 	RecordOrphan()
-	// RecordNotEnabled: one action recognized but whose sink is disabled (nil) — raiseAlarm/clearAlarm
-	// before slice 6, or send-command on a deploy without command-delivery configured.
+	// RecordNotEnabled: one action recognized but whose sink is disabled (nil) — in production that
+	// means send-command on a deploy without command-delivery configured, or a connector action
+	// (httpCall/publish) on a deploy without the connector writer. The alarm sink is always wired
+	// since the 6d cutover, so raiseAlarm/clearAlarm reach this only in a test configuration.
 	RecordNotEnabled(action string)
 	// RecordConnectorShed: one connector dispatch ATTEMPT (httpCall/publish) shed at the source for
 	// being over the tenant's outbound egress quota (ADR-060 SD-3). Per-attempt, not per permanently-
@@ -204,8 +212,12 @@ type Metrics interface {
 
 // Dispatcher turns a derived event into its authored actions. It holds no per-detection state —
 // idempotency lives entirely in the deterministic token the command sink dedups on (and the
-// upsert-keyed alarm) — so it is safe to run as a queue group once the DETECT singleton constraint
-// is lifted (slice 6). Each action kind has its own sink; a nil sink means that kind is DISABLED and
+// upsert-keyed alarm) — so it would be safe to run as a queue group. It is not run that way today:
+// the DETECT loop is still a single writer over one partition ("singleton"), fenced by a stale-
+// checkpoint check at startup, and REACT rides the same deployment. That constraint has outlived
+// the slice this comment used to blame for it, so do not read the singleton as imminent — read it
+// as the current design, which REACT's idempotency does not depend on.
+// Each action kind has its own sink; a nil sink means that kind is DISABLED and
 // its actions are recognized-but-inert (RecordNotEnabled), so send-command and raise-alarm are
 // independently gateable.
 type Dispatcher struct {
@@ -241,7 +253,7 @@ type Dispatcher struct {
 // NewDispatcher builds a REACT dispatcher over a rule resolver and its action sinks. Any sink may be
 // nil to disable that action kind: a nil commands sink disables send-command, a nil alarms sink
 // disables raise-alarm, a nil connectors sink disables httpCall/publish (ADR-060). In production since
-// 6d the alarms sink is always wired (the sole alarm path); a nil alarms sink is a test-only
+// 6d the alarms sink is always wired (the sole alarm-raise path); a nil alarms sink is a test-only
 // configuration. A dispatcher with all sinks nil dispatches nothing (every action inert). connectorRate
 // is the SOURCE-side outbound egress cost-gate (ADR-060 SD-3); a nil gate disables source-charging
 // (every connector dispatch admitted, metered only by the downstream outbound-connectors egress limiter).

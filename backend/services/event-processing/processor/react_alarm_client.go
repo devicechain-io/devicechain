@@ -33,7 +33,8 @@ func wireAlarmEdge(edge string) string {
 //
 // It carries no idempotency token: the downstream contributor-set fold is keyed on (device, alarmKey)
 // with a per-contributor monotonic decision-ts, so an at-least-once redelivery is safe without one.
-// Since the 6d cutover it is always wired (the sole alarm path).
+// Since the 6d cutover it is always wired (the sole alarm-RAISE path; an operator ack/clear still
+// mutates the same alarm row in device-management).
 type alarmClient struct {
 	writer messaging.MessageWriter
 }

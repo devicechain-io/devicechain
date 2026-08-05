@@ -220,8 +220,9 @@ func (p *Publisher) Publish(ctx context.Context, det core.Detection) error {
 	// and publish is the one skew case: a detection already buffered (pendingDets) when the rule's
 	// body changed is stamped with the NEW type here. It is a pre-GA, vanishingly-rare edge (RemoveRule
 	// drops the engine's UNdrained e.out on a def change, so only detections already drained into the
-	// processor's buffer are exposed), and downstream dedups on (rule, series, kind, time) — so the
-	// skew is a mis-typed straggler, not a correctness break. Accepted; noted for honesty.
+	// processor's buffer are exposed), and downstream dedups on (rule, series, kind, time, edge) —
+	// the full key documented on DerivedEvent, edge included — so the skew is a mis-typed straggler,
+	// not a correctness break. Accepted; noted for honesty.
 	de := DerivedEvent{
 		RuleID:       det.RuleID,
 		Tenant:       sr.Tenant,

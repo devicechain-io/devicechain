@@ -41,16 +41,21 @@ const (
 	// Numeric-only and absent-like `m` — a device that has not set the attribute is simply not a
 	// key, so a dynamic comparison must guard presence (`"tempLimit" in attr`), which the
 	// structured generator always does. The runtime populates it from the device-attribute
-	// projection (slice 4c-3b-2-ii); until then it is always empty.
+	// projection: the loop owns a flattened per-device view (runtime.DeviceAttributeView),
+	// resolves it once per message, and binds it onto every sample's Input in the fan-out.
 	//
-	// SCOPE OF THE "empty until 2-ii" GUARANTEE. Because the STRUCTURED generator only ever emits
-	// a POSITIVE presence guard (`"k" in attr && …`), every structured dynamic rule cleanly does
-	// NOT fire while attr is empty — it cannot mis-fire on absent state. A RAW-CEL leaf is not
-	// bound by that: an author who writes a NEGATED presence (`!("k" in attr) && …`) gets an
-	// always-true guard while attr is empty, so such a raw rule fires as if no device has the
-	// attribute, then changes behavior once 2-ii populates the map. This is the same "raw-CEL
-	// author owns totality" contract the Duration trap documents (compile.go): the structured
-	// path is the safe one; a raw leaf referencing attr owns its own correctness across the go-live.
+	// WHAT AN EMPTY attr MEANS, AND WHY IT IS STILL THE INTERESTING CASE. attr is empty for any
+	// device that has set no numeric SERVER/SHARED attribute, and on the scaffold path where no
+	// view is wired — so "empty" is a normal steady state, not a pre-go-live one. Because the
+	// STRUCTURED generator only ever emits a POSITIVE presence guard (`"k" in attr && …`), a
+	// structured dynamic rule cleanly does NOT fire against an empty map: it cannot mis-fire on
+	// absent state. A RAW-CEL leaf is not bound by that. An author who writes a NEGATED presence
+	// (`!("k" in attr) && …`) gets an always-true guard for exactly the devices that have not set
+	// the attribute, so the rule fires across the part of the fleet that has no bound — and stops
+	// firing per-device as each one's attribute arrives. That is live behaviour today, not a
+	// transitional window that closes. It is the same "raw-CEL author owns totality" contract the
+	// Duration trap documents (compile.go): the structured path is the safe one; a raw leaf
+	// referencing attr owns its own correctness on devices where the key is absent.
 	VarAttr = "attr"
 )
 

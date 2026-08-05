@@ -48,7 +48,7 @@ var (
 	// RaiseAlarmConsumer consumes REACT raise-alarm requests (ADR-051 slice 5c / ADR-057) from
 	// event-processing's dispatcher and folds each edge into the (device, alarmKey) alarm's
 	// contributor set — the sole alarm-raise path since the 6d cutover retired the measurement
-	// evaluator; a rule-driven alarm shares the Alarm object, ack/clear, rollup, and notification flow.
+	// evaluator; a rule-driven alarm shares the Alarm object, ack/clear, and notification flow.
 	RaiseAlarmReader   messaging.MessageReader
 	RaiseAlarmConsumer *processor.RaiseAlarmConsumer
 

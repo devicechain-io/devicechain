@@ -127,8 +127,20 @@ func Compile(source string, costCeiling uint64) (*Predicate, error) {
 
 // Eval evaluates the predicate against one event. An evaluation error (e.g. the runtime
 // cost limit tripped, or a raw-CEL leaf that indexed a guaranteed-present key that was
-// absent) is returned to the caller; the runtime treats an eval error as "did not match"
-// but counts it, so a persistently-erroring rule is visible rather than silently dead.
+// absent) is returned to the caller.
+//
+// The runtime does NOT treat an eval error as "did not match" — it SKIPS the sample for that
+// rule, feeding the engine no leaf at all, and the difference is load-bearing. A false leaf is
+// a positive statement that the condition does not hold, which for a Duration rule CANCELS an
+// in-flight hold; a skip leaves the hold intact so a transient error cannot silently reset a
+// timer that was most of the way to firing. See runtime.PlanResult.EvalErrors and the fan-out
+// loop, which are the authority on this.
+//
+// The error is counted (detect_fanout_eval_errors_total), so the FACT that leaves are erroring
+// is visible rather than silently dead. Note the limit plainly: that counter is UNLABELLED —
+// deliberately, since a per-rule label is unbounded cardinality — so it tells an operator that
+// evaluation is failing somewhere, never WHICH rule. Identifying the rule means going to the
+// logs or re-running the predicate against a sample.
 func (p *Predicate) Eval(in Input) (bool, error) {
 	out, _, err := p.program.Eval(in.activation())
 	if err != nil {

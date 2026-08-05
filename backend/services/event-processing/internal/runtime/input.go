@@ -34,10 +34,14 @@ import (
 // heartbeat for an absence rule. The common one-sample event yields exactly one Input.
 //
 // A presence StateChange (ADR-067) is the exception: it is authoritative connectivity, not a data
-// heartbeat, so it yields NO input. Feeding it as a heartbeat would let a DISCONNECTED silently
-// reset an absence/dead-man timer — masking the very disconnect it reports. It stays inert for
-// DETECT until the S3 connectivity trigger lands; the caller still advances the frontier on its
-// sequence, it just feeds no rule.
+// heartbeat, so it yields NO input HERE. Feeding it as a heartbeat would let a DISCONNECTED silently
+// reset an absence/dead-man timer — masking the very disconnect it reports.
+//
+// That does NOT mean it is inert for DETECT. It never enters the measurement/heartbeat path this
+// function builds, but Plan intercepts it before calling here and routes it to planConnectivity,
+// which turns it into a typed connect/disconnect edge for Connectivity rules only; the engine folds
+// those edges into alarms. So a StateChange feeds exactly one rule kind, by a path that cannot touch
+// an absence timer — which is the whole point of keeping it out of the Input stream.
 func BuildInputs(ev *dmmodel.ResolvedEvent, occurred time.Time) []predicate.Input {
 	if ev.EventType == esmodel.StateChange {
 		return nil

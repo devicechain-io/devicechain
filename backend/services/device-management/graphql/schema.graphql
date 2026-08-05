@@ -84,8 +84,10 @@ enum DeviceFacet {
 
 # Represents a device profile (ADR-045) — the reusable, tenant-scoped capability
 # contract a device type adopts. Distinct from the type's taxonomy/appearance; many
-# types may share one profile. It is the home for the metric/command/alarm
-# definitions (ADR-045 slice b).
+# types may share one profile. It is the home for the metric and command
+# definitions (ADR-045 slice b) and for the profile's detection rules (ADR-051),
+# which are the one alarm-authoring path since the standalone alarm-definition
+# model was torn down.
 type DeviceProfile implements Model & TokenReference & NamedEntity & MetadataEntity {
     id: ID!
     createdAt: String
@@ -264,7 +266,8 @@ type CommandDefinitionSearchResults {
 # device-management versions it with the profile but does not parse the detection taxonomy
 # (that stays single-homed in event-processing, which compiles and cost-gates it at
 # publish). DetectionRule is the one alarm-authoring path (ADR-057); its edge-triggered rules
-# raise/resolve alarms through the contributor-set integrator, the sole alarm path since the 6d cutover.
+# raise/resolve alarms through the contributor-set integrator, the sole alarm-raise path since the 6d
+# cutover. (An alarm is still acknowledged and cleared by an operator through the mutations below.)
 type DetectionRule implements Model & TokenReference & NamedEntity & MetadataEntity {
     id: ID!
     createdAt: String

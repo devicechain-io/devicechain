@@ -19,11 +19,11 @@ import (
 // tests) leaves metrics nil and the loop runs unmeasured rather than panicking on a
 // global-registry double-registration.
 //
-// Consumer lag (the #1 falling-behind signal) is derivable at the dashboard as
-// (stream last-seq, from the messaging stream-metrics sampler) − applied stream seq
-// below; a first-class consumer NumPending gauge is owned by the NATS layer and is
-// a Slice-8 follow-up rather than something this loop can read without a
-// ConsumerInfo call.
+// Consumer lag (the #1 falling-behind signal) is NOT derivable at the dashboard from
+// the series this loop emits — the stream-metrics sampler exposes stream message COUNT,
+// not the last sequence, so there is no last-seq to subtract applied_stream_seq from.
+// It is first-classed instead as the consumerPending/consumerAckPending gauges below,
+// read from the resolved-events durable's broker-reported backlog.
 type detectMetrics struct {
 	checkpointsTotal    prometheus.Counter
 	eventsAppliedTotal  prometheus.Counter
@@ -34,11 +34,12 @@ type detectMetrics struct {
 	restoreSeconds      prometheus.Gauge
 
 	// Slice-8 consumer-lag gauges (ADR-051 observability thread; the operations board's #1
-	// "falling behind" signal). The comment above earmarked this as a Slice-8 follow-up: consumer
-	// lag is NOT in fact derivable at the dashboard from the emitted series (the stream-metrics
-	// sampler exposes stream message COUNT, not the last sequence, so there is no last-seq to
-	// subtract applied_stream_seq from), so the resolved-events durable's broker-reported backlog
-	// is first-classed here instead. consumerPending is UNDELIVERED work waiting on the consumer
+	// "falling behind" signal). These exist because the derived-at-the-dashboard alternative does
+	// not work: the stream-metrics sampler exposes stream message COUNT, not the last sequence, so
+	// there is no last-seq to subtract applied_stream_seq from. The resolved-events durable's
+	// broker-reported backlog is first-classed here instead — which is why this loop pays for a
+	// Backlog probe rather than leaving the arithmetic to a dashboard that cannot do it.
+	// consumerPending is UNDELIVERED work waiting on the consumer
 	// (the primary lag signal); consumerAckPending is DELIVERED-BUT-UNACKED (in-flight, and a
 	// peer's during a rolling-update overlap). Sampled on the single-writer ticker at the
 	// checkpoint cadence off the same Backlog probe idle-advance uses (safe to call concurrently
@@ -67,7 +68,7 @@ type detectMetrics struct {
 
 	// Slice-4 hardening: absence detections dropped at publish because the device left the rule's
 	// scope after the timer was armed (deleted / re-typed / version superseded) — the stale-timer
-	// membership gate (dropStaleAbsences). Bounded cardinality (no labels). A persistently rising
+	// membership gate (dropSupersededDetections). Bounded cardinality (no labels). A persistently rising
 	// value signals stale wheel timers surviving a rolling-update overlap (pre-Slice-6).
 	staleAbsenceDropped prometheus.Counter
 
@@ -105,7 +106,7 @@ func newDetectMetrics(ms *core.Microservice) *detectMetrics {
 
 		rulesActive:       ms.NewGauge("detect_rules_active", "Rules loaded into the DETECT engine.", nil),
 		fanoutEventsTotal: ms.NewCounter("detect_fanout_events_total", "Per-rule core events produced by the resolved-event fan-out.", nil),
-		fanoutEvalErrors:  ms.NewCounter("detect_fanout_eval_errors_total", "Leaf-predicate evaluation errors during fan-out (rule treated as non-match).", nil),
+		fanoutEvalErrors:  ms.NewCounter("detect_fanout_eval_errors_total", "Leaf-predicate evaluation errors during fan-out (the sample is skipped for that rule, not fed as a non-match).", nil),
 		derivedPublished:  ms.NewCounter("detect_derived_events_published_total", "Derived signal events published (ADR-037).", nil),
 		derivedRejected:   ms.NewCounterVec("detect_derived_events_rejected_total", "Detections dropped before publish, by reason (bounded enum).", []string{"reason"}),
 
@@ -151,9 +152,11 @@ func (m *detectMetrics) recordSupersededFrontierDropped() {
 }
 
 // reactMetrics are the Slice-5 REACT-dispatcher observability counters (ADR-051 REACT stage). Like
-// detectMetrics they are bounded-cardinality: the one label is "action", a fixed small enum
-// (sendCommand/raiseAlarm/clearAlarm — the last is the structural falling-edge clear, ADR-057), never
-// a tenant or rule value (the ADR-023 G.3 lesson). Every recorder is nil-safe so a dispatcher built
+// detectMetrics they are bounded-cardinality: the one label is "action", a fixed small enum —
+// sendCommand, raiseAlarm, clearAlarm (the structural falling-edge clear, ADR-057), and the two
+// connector actions httpCall and publish (ADR-060), which reach RecordDispatched/RecordNotEnabled
+// under their own rules.ActionType string. Never a tenant or rule value (the ADR-023 G.3 lesson).
+// Every recorder is nil-safe so a dispatcher built
 // without a Microservice (unit tests) runs unmeasured.
 type reactMetrics struct {
 	dispatched    *prometheus.CounterVec
@@ -172,7 +175,7 @@ func newReactMetrics(ms *core.Microservice) *reactMetrics {
 	}
 	return &reactMetrics{
 		dispatched:    ms.NewCounterVec("react_actions_dispatched_total", "REACT actions handed to their sink, by action type (includes idempotent replays).", []string{"action"}),
-		notEnabled:    ms.NewCounterVec("react_actions_not_enabled_total", "REACT actions recognized but not yet wired, by action type (raiseAlarm/clearAlarm before slice 6).", []string{"action"}),
+		notEnabled:    ms.NewCounterVec("react_actions_not_enabled_total", "REACT actions recognized but dropped because this deployment has no sink for them, by action type: sendCommand without command-delivery configured, or httpCall/publish without outbound connectors enabled. The alarm sink is always wired, so raiseAlarm/clearAlarm should never appear here.", []string{"action"}),
 		connectorShed: ms.NewCounterVec("react_connector_egress_shed_total", "Connector dispatch ATTEMPTS (httpCall/publish) shed at the source for being over the tenant's outbound egress quota (ADR-060 SD-3). Per-attempt: a sibling-failure redelivery may shed then later admit the same action, so this is not a count of permanently-dropped actions.", []string{"action"}),
 		orphan:        ms.NewCounter("react_events_orphaned_total", "Derived events whose rule was gone from the projection (nothing dispatched).", nil),
 		poisonDropped: ms.NewCounter("react_events_poison_dropped_total", "Derived events dropped after the redelivery cap (a persistently-failing dispatch).", nil),
