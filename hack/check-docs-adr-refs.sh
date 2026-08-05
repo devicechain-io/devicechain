@@ -14,10 +14,15 @@
 # The line this draws:
 #
 #   Rendered documentation   docs/docs, docs/i18n, docs/blog, docs/src  -> NO ADR refs
+#   Draft feature docs       docs-drafts/**/*.md, body only            -> NO ADR refs
+#   npm registry metadata    frontend/packages/*/package.json          -> NO ADR refs
+#   Helm listing prose       deploy/helm/*/{Chart.yaml,README.md}      -> NO ADR refs
 #   Source and maintainer    everything else, incl. docusaurus.config.ts -> ADR refs fine
 #
 # The distinguishing question is not "is this file public?" — the whole repo is
-# public. It is "does a READER of the published site see this?".
+# public. It is "does a READER of the published site see this?". Each row above
+# is a place where a stranger is SERVED this prose by some other host — the docs
+# site, npmjs.com, Artifact Hub — with no way to follow an ADR citation.
 #
 #   hack/check-docs-adr-refs.sh              # check
 #   hack/check-docs-adr-refs.sh --self-test  # prove the check can fail
@@ -76,6 +81,31 @@ scan_package_descriptions() {
   for f in "$base"/*/package.json; do
     [ -f "$f" ] || continue
     grep -nE "\"(description|keywords)\".*${PATTERN}" "$f" 2>/dev/null | sed "s|^|${f}:|" || true
+  done
+}
+
+# The third published surface: the Helm chart's LISTING on Artifact Hub, which
+# ingests oci://ghcr.io/devicechain-io/charts (pushed by the release workflow).
+# Artifact Hub renders the packaged chart's `README.md` as the package page and
+# the `Chart.yaml` metadata as its header — so both are read by people who have
+# never seen this repository, exactly like an npm description.
+#
+# 🔴 SCOPE, stated so the guard's existence is not mistaken for a broader claim:
+# this covers the chart's PROSE only. `values.yaml`, `values.schema.json` and
+# `templates/` are also packaged, and Artifact Hub does expose them under its
+# Values and Templates tabs — but those are chart SOURCE, browsed the same way
+# this public repo is browsed, and CLAUDE.md's table deliberately keeps ADR
+# citations in `deploy/`. They carry ~90 references today and are NOT checked.
+# If that line ever moves, it moves as a decision, not by widening this glob.
+scan_chart_listing() {
+  local base="${1:-deploy/helm}" d f
+  for d in "$base"/*/; do
+    d="${d%/}"
+    [ -f "$d/Chart.yaml" ] || continue
+    for f in "$d/Chart.yaml" "$d/README.md"; do
+      [ -f "$f" ] || continue
+      grep -nE "$PATTERN" "$f" 2>/dev/null | sed "s|^|${f}:|" || true
+    done
   done
 }
 
@@ -142,12 +172,59 @@ if [ "${1:-}" = "--self-test" ]; then
     *)     echo "  FAIL: draft body reference reported at the wrong line: $planted" >&2; exit 1 ;;
   esac
 
+  # The chart listing is TWO files, and the failure that matters is covering one
+  # and not the other — a guard that only ever sees README.md would pass a
+  # Chart.yaml description full of ADR refs, which is the string Artifact Hub
+  # puts on the search-results card. So each file gets its own planted case,
+  # with the other held clean, rather than one case planting in both.
+  mkdir -p "$tmp/helm/example"
+  clean_chart() {
+    printf 'apiVersion: v2\nname: example\ndescription: A thing.\n' > "$tmp/helm/example/Chart.yaml"
+    printf '# Example\n\nRenders a thing.\n' > "$tmp/helm/example/README.md"
+  }
+
+  clean_chart
+  if [ -n "$(scan_chart_listing "$tmp/helm")" ]; then
+    echo "  FAIL: the guard reports a match in a clean chart listing" >&2
+    exit 1
+  fi
+  echo "  ok: clean chart listing produces no match"
+
+  clean_chart
+  printf 'apiVersion: v2\nname: example\ndescription: A thing (ADR-022).\n' \
+    > "$tmp/helm/example/Chart.yaml"
+  if [ -z "$(scan_chart_listing "$tmp/helm")" ]; then
+    echo "  FAIL: the guard did not see a planted ADR reference in a chart description" >&2
+    exit 1
+  fi
+  echo "  ok: planted chart description detected"
+
+  clean_chart
+  printf '# Example\n\nRenders a thing (ADR-022).\n' > "$tmp/helm/example/README.md"
+  if [ -z "$(scan_chart_listing "$tmp/helm")" ]; then
+    echo "  FAIL: the guard did not see a planted ADR reference in a chart README —" >&2
+    echo "        that file IS the Artifact Hub package page" >&2
+    exit 1
+  fi
+  echo "  ok: planted chart README reference detected"
+
+  # A directory with a README but no Chart.yaml is not a chart, and scanning it
+  # would quietly widen the guard past the surface it documents.
+  mkdir -p "$tmp/helm/notachart"
+  printf '# Notes\n\nSee ADR-022.\n' > "$tmp/helm/notachart/README.md"
+  clean_chart
+  if [ -n "$(scan_chart_listing "$tmp/helm")" ]; then
+    echo "  FAIL: the guard scanned a directory that has no Chart.yaml" >&2
+    exit 1
+  fi
+  echo "  ok: a non-chart directory is not scanned"
+
   echo "==> Self-test passed"
   exit 0
 fi
 
 hits="$(scan "${TARGETS[@]}")"
-for extra in "$(scan_package_descriptions)" "$(scan_drafts)"; do
+for extra in "$(scan_package_descriptions)" "$(scan_drafts)" "$(scan_chart_listing)"; do
   [ -n "$extra" ] || continue
   hits="${hits:+$hits
 }${extra}"
@@ -168,8 +245,12 @@ a public page that explains it:
   "[ADR-026](../concepts/architecture.md)"
                                      ->  "[data lifecycle](../concepts/architecture.md)"
 
-ADR citations remain correct in source comments and maintainer-facing files —
-this guard covers ${TARGETS[*]} only.
+ADR citations remain correct in source comments and maintainer-facing files.
+This guard covers only the surfaces a stranger is SERVED by another host:
+${TARGETS[*]}, docs-drafts (body), frontend/packages/*/package.json
+(description/keywords), and deploy/helm/*/{Chart.yaml,README.md} — the prose
+Artifact Hub renders as a chart's listing. Chart values/templates are source
+and are NOT covered.
 
 EOF
   exit 1

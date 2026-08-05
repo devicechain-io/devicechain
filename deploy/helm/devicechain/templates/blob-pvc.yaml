@@ -59,7 +59,7 @@ catalog in _helpers.tpl mirrors backend/k8s/functionalarea — keep it in sync a
 {{- if and $wantVolume (eq $backend "filesystem") (ne $path "") -}}
 {{-   range $c := $blobConsumers -}}
 {{-     if and (has $c $enabledAreas) (not (has $c $mountAreas)) -}}
-{{-       fail (printf "blobStorage: area %q consumes the object store (ADR-058) but is not in blobStorage.mountAreas — it would start with a configured filesystem store and no writable volume and crash-loop; add %q to blobStorage.mountAreas" $c $c) -}}
+{{-       fail (printf "blobStorage: area %q consumes the object store but is not in blobStorage.mountAreas — it would start with a configured filesystem store and no writable volume and crash-loop; add %q to blobStorage.mountAreas" $c $c) -}}
 {{-     end -}}
 {{-   end -}}
 {{- end -}}
