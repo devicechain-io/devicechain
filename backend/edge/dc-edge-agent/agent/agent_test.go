@@ -273,9 +273,13 @@ func TestBridgeForwardsDeviceTransparently(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("cloud did not receive the forwarded event within 15s")
 	}
-	if a.forwarded.Load() == 0 {
-		t.Error("forwarded counter is 0 after a successful forward")
-	}
+	// 🔴 POLLED, NOT READ ONCE. The cloud subscriber above and this counter are two
+	// different observations of the same forward, and they are not ordered: the agent
+	// increments only AFTER forwardOne returns, so the message can be sitting in `got`
+	// while the forwarding goroutine has not yet run `forwarded.Add(1)`. Reading the
+	// counter straight after the receive fails whenever that goroutine is scheduled
+	// late, which is a coin-flip on a loaded CI runner and never on an idle laptop.
+	waitUntil(t, 5*time.Second, func() bool { return a.forwarded.Load() > 0 })
 	// A correctly-addressed event must NOT be counted as an instance mismatch — this
 	// keeps the mismatch counter honest (paired with TestInstanceMismatchIsCounted, it
 	// pins that the predicate discriminates rather than counting everything).
