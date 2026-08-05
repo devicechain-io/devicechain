@@ -52,6 +52,13 @@ jobs:
       - name: dependabot covers every workspace module
         run: hack/check-dependabot-modules.sh
 
+      # The release pipeline calls this guard from two places (the workflow's first job
+      # and build-release-manifest.sh), and it only runs on a tag — so without this the
+      # first time anyone learns it is broken is mid-release. The self-test is the part
+      # that runs on every PR; the guard itself has nothing to check until there is a tag.
+      - name: release-highlights guard self-test
+        run: hack/check-release-highlights.sh --self-test
+
       - name: Discover services
         id: svc
         run: |
