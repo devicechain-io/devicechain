@@ -182,6 +182,58 @@ func (s *Store) RecordPurgeStore(ctx context.Context, line *TenantPurgeStore) er
 	}).Create(line).Error
 }
 
+// PurgeRecords lists deletion records newest cut first, optionally filtered by whether they
+// have completed.
+//
+// Newest first because this is read by a human asking "what happened recently", which is the
+// opposite order from the coordinator's work queue (TenantsPurging, oldest first, so a backlog
+// drains in the order the deletions were asked for). The two orderings are deliberate and
+// neither is the other's mistake.
+//
+// It is instance-wide and cross-tenant by construction: a record OUTLIVES its tenant, so there
+// is no tenant to scope it to, and scoping it to one would hide exactly the records an auditor
+// is looking for.
+func (s *Store) PurgeRecords(ctx context.Context, completed *bool, limit, offset int) ([]TenantPurge, error) {
+	q := s.sys(ctx).Order("epoch DESC, id DESC")
+	if completed != nil {
+		if *completed {
+			q = q.Where("completed_at IS NOT NULL")
+		} else {
+			q = q.Where("completed_at IS NULL")
+		}
+	}
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	if offset > 0 {
+		q = q.Offset(offset)
+	}
+	var out []TenantPurge
+	err := q.Find(&out).Error
+	return out, err
+}
+
+// PurgeRecordForToken reads the IN-FLIGHT record for a token — the one whose purge has not
+// completed.
+//
+// 🔴 IT DELIBERATELY REFUSES TO GUESS WHEN THERE IS MORE THAN ONE THING A TOKEN COULD MEAN.
+// A token is reusable: completion releases it, so one token can carry several records over an
+// instance's life, and only the identity PAIR (token, epoch) names a deletion. Returning "the
+// latest record at this token" would silently attribute a predecessor's erasure evidence to
+// whatever tenant now holds that name — the same cross-tenant confusion the epoch exists to
+// prevent, re-entering through the surface built to audit it. At most one record per token can
+// be in flight at a time, so asking for THAT one is unambiguous; anything historical must name
+// its epoch.
+func (s *Store) PurgeRecordForToken(ctx context.Context, token string) (*TenantPurge, error) {
+	var out TenantPurge
+	err := s.sys(ctx).Where("token = ? AND completed_at IS NULL", token).
+		Order("epoch DESC").First(&out).Error
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // PurgeStores returns a purge's ledger lines, ordered by store name for a stable report.
 func (s *Store) PurgeStores(ctx context.Context, purgeID uint) ([]TenantPurgeStore, error) {
 	var out []TenantPurgeStore

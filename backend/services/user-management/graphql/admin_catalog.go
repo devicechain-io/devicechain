@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	util "github.com/devicechain-io/dc-microservice/graphql"
@@ -64,13 +63,13 @@ func (r *AdminTenantResolver) OutboundBurst() *int32 {
 // the console say something true about a deleted tenant: the row is still here, it
 // admits nobody, its token is reserved, and its data is being reclaimed separately.
 func (r *AdminTenantResolver) PurgeState() string { return string(r.M.PurgeState) }
-func (r *AdminTenantResolver) PurgeEpoch() *string {
-	if r.M.PurgeEpoch == nil {
-		return nil
-	}
-	s := r.M.PurgeEpoch.UTC().Format(time.RFC3339)
-	return &s
-}
+
+// PurgeEpoch goes through formatPurgeTime, the SAME formatter the deletion record's own
+// `epoch` uses. That is load-bearing rather than tidiness: the epoch is half of a deletion's
+// identity, and a console correlating this badge with a record in the deletion history
+// compares these two strings. Two call sites formatting "the same way" is the arrangement in
+// which one later gains a nanosecond and the two silently stop matching.
+func (r *AdminTenantResolver) PurgeEpoch() *string { return formatPurgeTimePtr(r.M.PurgeEpoch) }
 
 // AiExternalEnabled resolves the per-tenant external-AI consent (ADR-056 §6) for
 // the operator's visibility/edit: the raw nullable column, where null (or false)

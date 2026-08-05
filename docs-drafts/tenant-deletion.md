@@ -387,11 +387,37 @@ alone, and `TestANoteDoesNotBlockCompletion` is what keeps the two apart.
 Row counts **accumulate across passes**. An erasure is idempotent by contract and a purge cannot
 complete on its first pass, so a per-pass count would read zero for every real purge.
 
-**Neither table is exposed on any API.** An operator can see *that* a tenant is purging and *when*
-the cut was — those two fields are on the admin tenant type and rendered as a badge in the console —
-but not how far along it is or what is blocking it. That is a known gap, not a design decision;
-`Deferred`, `Failure`, `Note`, `CleanSince` and the per-store row counts are database-only today, visible
-otherwise only in logs.
+**Both tables are now served on the admin plane, and nothing renders them yet.** Two queries on
+`/admin/graphql`, both gated on `tenant:read`:
+
+- `tenantDeletion(token, epoch)` — one record with its per-store ledger. Omit the epoch to ask for
+  the token's **in-flight** deletion.
+- `tenantDeletions(completed, limit, offset)` — instance-wide history, newest cut first.
+
+Two computed fields answer the questions the raw ledger does not. `blockedBy` is one sentence per
+store that is not clean, in that store's own words — a note never appears, because a note is a
+qualifier and its store is working as designed. `awaiting` names which of the three waits is
+outstanding (`STORES` / `SETTLE` / `TOKEN_HOLD` / `NONE`) with `elapsesAt` for the two that are
+windows, and null for `STORES` — a store holding data does not clear on a timer.
+
+🔑 **`awaiting` is not a restatement of the completion rule; it IS the completion rule.**
+`purge.Waiting` was extracted from the coordinator, and the coordinator now calls it to decide
+whether to complete. A resolver that reproduced the arithmetic instead would have been easy to get
+subtly wrong — and would have silently stopped tracking the real rule the moment either window
+moved.
+
+Two traps this surface has to keep clear of, both proved by tests rather than argued:
+
+1. **A lookup by token alone must resolve to the deletion IN FLIGHT, never to the newest record.**
+   The token is released on completion and can be taken by a live tenant, so "the newest record at
+   this token" can be a *predecessor's* — attributing one tenant's erasure evidence to another, the
+   same cross-tenant confusion the epoch exists to prevent, re-entering through the audit view.
+2. **The published epoch must round-trip.** It is `time.Now().UTC()` at the cut, truncated nowhere,
+   and it is looked up by exact match — so publishing it at second precision would publish an
+   identifier that identifies nothing.
+
+What is still missing is the UI. `Deferred`, `Failure`, `Note`, `CleanSince` and the per-store row
+counts have an API and no screen.
 
 ## 9. The device plane during a purge
 
@@ -519,7 +545,8 @@ Those are two different questions and an operator asking "is it done?" usually m
 
 Stated here so they are found deliberately rather than discovered:
 
-1. **No progress API.** The ledger is database-only; the console shows two fields.
+1. **No progress UI.** The ledger is served on the admin plane but nothing renders it; the console
+   still shows only the two lifecycle fields as a badge.
 2. **Orphaned objects** whose reference was lost before the purge are unreachable by a row-driven
    work list.
 3. **A false exemption is invisible to CI.** Only the presence of a reason is checked, never its

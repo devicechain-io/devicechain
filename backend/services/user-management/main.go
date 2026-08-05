@@ -291,7 +291,8 @@ func buildBlobStore(ctx context.Context) (blob.Store, error) {
 // handler on the default mux (ADR-033). The admin Service shares the instance
 // RdbManager via its own iam store wrapper.
 func registerAdminHandler() {
-	adminSvc := admin.NewService(iam.NewStore(RdbManager))
+	adminSvc := admin.NewService(iam.NewStore(RdbManager),
+		Configuration.TenantPurgeSettle(), Configuration.TenantPurgeTokenHold())
 	adminProviders := map[gqlcore.ContextKey]interface{}{
 		graphql.ContextAdminKey: adminSvc,
 	}
