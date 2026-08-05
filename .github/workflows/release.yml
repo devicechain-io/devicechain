@@ -67,12 +67,20 @@ jobs:
       #
       # Checked HERE, in the first job, deliberately: a forgotten update costs a re-run rather
       # than a release that has already pushed 17 images before anyone notices.
+      # A release CANDIDATE carries the same highlights as the release it is a candidate
+      # for, so `v0.11.0-rc.1` is satisfied by highlights written for `v0.11.0`. Demanding
+      # an exact match would force the file to be edited to the rc version and then edited
+      # back, and the failure mode of that dance is shipping the STABLE release with `-rc.N`
+      # still in the manifest — the precise "confidently wrong" outcome this guard exists to
+      # prevent. The base version must still match exactly, so a forgotten update is caught
+      # on the rc, which is the earliest anyone could catch it.
       - name: Release highlights match the tag
         run: |
           hl=".github/release-highlights.json"
           want="${GITHUB_REF_NAME}"
+          base="${want%%-*}"
           got="$(jq -r '.version' "$hl")"
-          if [ "$got" != "$want" ]; then
+          if [ "$got" != "$want" ] && [ "$got" != "$base" ]; then
             echo "::error::$hl is for '$got' but this release is '$want'. Update it (highlights + breaking) before tagging."
             exit 1
           fi
@@ -536,7 +544,16 @@ jobs:
           hack/build-release-manifest.sh "$TAG" releases.json
           jq . releases.json
 
+      # 🔴 NOT run for a prerelease. devicechain.io/releases.json is what the site's download
+      # menu and the docs banner read, so publishing an rc there would advertise a release
+      # candidate as the current version — and an rc exists precisely to be discarded. The
+      # step below this one already said a prerelease "is deliberately not what
+      # devicechain.io should advertise"; only the VERIFICATION was skipped, while the push
+      # ran regardless, so the intent was written down and never implemented. The manifest is
+      # still BUILT above on an rc, which is the half worth exercising: it proves the script,
+      # the highlights and goreleaser's checksums all line up before the stable tag.
       - name: Publish to the website repo
+        if: needs.guard.outputs.is_prerelease == 'false'
         env:
           TOKEN: ${{ secrets.WEBSITE_PUBLISH_TOKEN }}
           TAG: ${{ github.ref_name }}
@@ -559,17 +576,14 @@ jobs:
           git commit -m "Publish release manifest for $TAG"
           git push origin HEAD:main
 
+      # Netlify deploys on push; give it a moment, then verify the PUBLISHED file rather
+      # than trusting that a green push means a live site. Skipped for a prerelease because
+      # nothing was pushed — see the step above.
       - name: Confirm the site serves it
+        if: needs.guard.outputs.is_prerelease == 'false'
         env:
           TAG: ${{ github.ref_name }}
-        # Netlify deploys on push; give it a moment, then verify the PUBLISHED file rather
-        # than trusting that a green push means a live site. A prerelease is skipped: it is
-        # deliberately not what devicechain.io should advertise.
         run: |
-          if [ "${{ needs.guard.outputs.is_prerelease }}" = "true" ]; then
-            echo "Prerelease — manifest pushed, skipping the live check."
-            exit 0
-          fi
           for i in $(seq 1 20); do
             live="$(curl -fsS https://devicechain.io/releases.json | jq -r '.version' 2>/dev/null || true)"
             if [ "$live" = "$TAG" ]; then
