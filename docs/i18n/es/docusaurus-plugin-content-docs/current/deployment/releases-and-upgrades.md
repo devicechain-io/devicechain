@@ -57,7 +57,7 @@ En concreto, antes de la v1.0.0 debe esperar que una versión pueda:
 - **alterar el esquema de la base de datos** de formas que una reversión no deshará
 - **reemplazar por completo la línea base de migraciones**, lo que elimina por entero la ruta de
   actualización en lugar de limitarse a hacerla unidireccional. Cuando eso ocurre, las notas de la versión lo
-  indican al principio, y la única vía es recrear la instancia. La `v0.9.0` es una versión de este tipo
+  indican al principio, y la única vía es recrear la instancia. La `v0.9.0` y la `v0.10.0` son versiones de este tipo
 
 La propiedad de "actualizar in situ sin tiempo de inactividad" descrita arriba describe la *mecánica* de una
 actualización progresiva. No es una promesa de que sus llamadas a la API existentes conserven el mismo significado
@@ -110,10 +110,33 @@ no se puede actualizar en absoluto**. Consulte las notas de la versión a la que
 ejecutar el comando:
 
 ```bash
+# Traslade los valores de la versión actual y cambie únicamente la versión.
+helm get values dc -n default -o yaml > /tmp/dc-values.yaml
+
 helm upgrade dc deploy/helm/devicechain \
-  --set instance.id=devicechain \
+  -n default \
+  -f /tmp/dc-values.yaml \
   --set image.tag=v1.3.0
 ```
+
+:::warning Reutilice los valores de la versión: un `helm upgrade` simple no funcionará
+No todos los valores de su instancia se escriben a mano. `dcctl bootstrap` genera varios y los
+guarda en la versión desplegada: la clave raíz de la instancia, la credencial de servicio de NATS
+y la semilla del emisor de callout, y el material TLS del bróker. Un `helm upgrade` que solo pasa
+opciones `--set` parte de los valores predeterminados del chart y descarta todos ellos.
+
+Eso no corrompe nada: el chart se niega a renderizar sin la clave raíz:
+
+```
+Error: UPGRADE FAILED: instance.config.infrastructure.secrets.rootKey is required:
+area "notification-management" owns an envelope-encrypted secret store and cannot
+form its KEK without it, so it would crash-loop.
+```
+
+La solución es el paso `helm get values` de arriba. `--reuse-values` también funciona, pero conserva
+en silencio entradas obsoletas cuando los valores predeterminados del chart cambian entre versiones,
+así que es preferible volcar los valores y pasarlos con `-f`, donde puede verlos.
+:::
 
 Lo que hace que el despliegue sea seguro:
 
@@ -139,7 +162,8 @@ Configúrelo globalmente con `--set replicas=2`, o por área bajo
 
 ### La compactación de la línea base de la v0.9.0 {#v090-baseline-squash}
 
-La `v0.9.0` es la única versión a la que **no se puede llegar con `helm upgrade`.**
+La `v0.9.0` es la **primera** de las dos versiones a las que no se puede llegar con `helm upgrade`
+(la otra es la [`v0.10.0`](#v0100-event-key)).
 
 Antes de ella, el esquema de cada servicio se construía mediante una cadena de migraciones aplicadas en orden.
 La `v0.9.0` reemplaza todas esas cadenas por una **única línea base congelada**: una migración por servicio que
@@ -219,6 +243,35 @@ La acompañan dos cambios en cómo la API informa del tiempo, y ninguno requiere
   otra persona se comprueban ahora con esa misma precisión. Antes, dos ediciones dentro de un mismo
   segundo podían superar ambas la comprobación, y la posterior sobrescribía en silencio un cambio
   que nunca había visto.
+
+### v0.11.0: de nuevo una actualización normal {#v0110-upgrade}
+
+La `v0.11.0` es la primera versión desde la `v0.8.5` a la que se puede llegar con `helm upgrade`.
+Su cambio de esquema **añade** tres migraciones en lugar de reemplazar una línea base, por lo que
+una base de datos `v0.10.0` existente se traslada con sus filas intactas en vez de tener que
+recrearse.
+
+Lo que llega a la base de datos:
+
+- dos tablas nuevas que registran el progreso y el historial de la eliminación de un inquilino, y
+- dos columnas en la tabla de inquilinos que siguen su estado de ciclo de vida.
+
+Todos los inquilinos que ya existen quedan en el estado activo normal al añadirse la columna, así
+que nada cambia en una instancia en funcionamiento hasta que elimine realmente un inquilino.
+
+:::note Qué se probó y qué no
+Esta ruta de actualización se ejercitó de extremo a extremo antes de la publicación: se construyó
+una instancia `v0.10.0` a partir de las imágenes `v0.10.0` publicadas, se le dieron inquilinos e
+identidades reales y luego se actualizó con el comando de arriba. Todos los servicios se
+desplegaron, todas las filas preexistentes sobrevivieron sin cambios y el esquema resultante es
+idéntico al de una instalación nueva de `v0.11.0`. La misma comprobación se ejecutó para todas las
+áreas funcionales, no solo para la que cambió.
+
+Conviene indicar con claridad dos límites. Solo se verificaron las bases de datos: el estado del
+bróker (JetStream), el almacenamiento de objetos y el estado clave-valor no están cubiertos por esa
+comprobación. Y la actualización se midió en PostgreSQL 16; las instalaciones nuevas se verifican en
+ambas versiones principales admitidas, pero la ruta de actualización en sí no.
+:::
 
 ### La transición única a la ingesta duradera
 

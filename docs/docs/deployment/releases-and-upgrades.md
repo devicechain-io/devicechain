@@ -55,7 +55,7 @@ Concretely, before v1.0.0 you should expect that a release may:
 - **alter database schema** in ways that a downgrade will not undo
 - **replace the migration baseline outright**, which removes the upgrade path entirely rather
   than merely making it one-way. When that happens the release notes say so at the top, and
-  the only route forward is to recreate the instance. `v0.9.0` is such a release
+  the only route forward is to recreate the instance. `v0.9.0` and `v0.10.0` are such releases
 
 The "upgrade in place with zero downtime" property above describes the *mechanics* of a
 rolling upgrade. It is not a promise that your existing API calls keep the same meaning
@@ -108,10 +108,33 @@ upgraded into at all**. Check the release notes for the version you are moving t
 running the command:
 
 ```bash
+# Carry the current release's values forward, then change only the version.
+helm get values dc -n default -o yaml > /tmp/dc-values.yaml
+
 helm upgrade dc deploy/helm/devicechain \
-  --set instance.id=devicechain \
+  -n default \
+  -f /tmp/dc-values.yaml \
   --set image.tag=v1.3.0
 ```
+
+:::warning Reuse the release's values — a bare `helm upgrade` will not work
+Your instance's values are not all typed by hand. `dcctl bootstrap` generates several and
+stores them in the release: the instance root key, the NATS service credential and callout
+issuer seed, and the broker's TLS material. A `helm upgrade` that passes only `--set` flags
+starts from the chart defaults and drops every one of them.
+
+That does not corrupt anything — the chart refuses to render without the root key:
+
+```
+Error: UPGRADE FAILED: instance.config.infrastructure.secrets.rootKey is required:
+area "notification-management" owns an envelope-encrypted secret store and cannot
+form its KEK without it, so it would crash-loop.
+```
+
+The fix is the `helm get values` step above. `--reuse-values` also works, but it silently
+keeps stale entries when the chart's own defaults move between versions, so prefer writing
+the values out and passing them with `-f` where you can see them.
+:::
 
 What makes the rollout safe:
 
@@ -137,7 +160,8 @@ area with more than one replica, so node drains can't evict every replica at onc
 
 ### The v0.9.0 baseline squash {#v090-baseline-squash}
 
-`v0.9.0` is the one release that **cannot be reached with `helm upgrade`.**
+`v0.9.0` is the **first** of the two releases that cannot be reached with `helm upgrade`
+(the other is [`v0.10.0`](#v0100-event-key)).
 
 Before it, each service's schema was built by a chain of migrations applied in order. `v0.9.0`
 replaces every one of those chains with a **single frozen baseline** — one migration per
@@ -216,6 +240,33 @@ Two changes to how the API reports time come with it, and neither needs any acti
 - Requests that use a record's `updatedAt` value to avoid overwriting someone else's edit
   are now checked at that same precision. Two edits inside one second could previously both
   pass the check, and the later one silently overwrote a change it had never seen.
+
+### v0.11.0 — a normal upgrade again {#v0110-upgrade}
+
+`v0.11.0` is the first release since `v0.8.5` that can be reached with `helm upgrade`. Its
+schema change **adds** three migrations rather than replacing a baseline, so an existing
+`v0.10.0` database is carried forward with its rows intact instead of having to be recreated.
+
+What lands in the database:
+
+- two new tables recording the progress and history of a tenant deletion, and
+- two columns on the tenant table tracking its lifecycle state.
+
+Every tenant that already exists is set to the normal, active state as the column is added,
+so nothing changes for a running instance until you actually delete a tenant.
+
+:::note What was tested, and what was not
+This upgrade path was exercised end to end before release: a `v0.10.0` instance was built
+from the published `v0.10.0` images, given real tenants and identities, then upgraded with
+the command above. All services rolled out, every pre-existing row survived unchanged, and
+the resulting schema is identical to a fresh `v0.11.0` install. The same check was run for
+every functional area, not only the one that changed.
+
+Two limits are worth stating plainly. Only the databases were verified — broker (JetStream)
+state, object storage and key-value state are not covered by that check. And the upgrade was
+measured on PostgreSQL 16; fresh installs are verified on both supported majors, but the
+upgrade path itself was not.
+:::
 
 ### The one-time durable-ingest cutover
 
