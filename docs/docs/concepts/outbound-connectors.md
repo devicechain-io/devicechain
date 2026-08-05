@@ -10,18 +10,18 @@ Detection is only half of automation — the other half is **acting on the outsi
 Outbound delivery is handled by a dedicated **outbound-connectors** service, kept separate from the detection engine on purpose: a slow or misbehaving external endpoint can back up its own delivery without ever slowing down rule evaluation.
 
 :::note Status
-**Available today:** the `httpCall` webhook action, and a `publish` action delivering to **MQTT**, **Apache Kafka**, **AWS SNS**, and **AWS SQS** through a tenant-scoped, versioned connector with credentials held in the encrypted secret store. Additional `publish` targets (Google Cloud Pub/Sub, RabbitMQ, Azure, NATS, Redis, Slack, Splunk) and a visual **publish** node in the automation canvas are planned behind the same model — this repository is the source of truth for what currently builds.
+**Available today:** the `httpCall` webhook action, and a `publish` action delivering to **MQTT**, **Apache Kafka**, **AWS SNS**, and **AWS SQS** through a tenant-scoped, versioned connector with credentials held in the encrypted secret store. Both outbound actions are configurable as **action nodes on the automation canvas**. A `gcp_pubsub` connector can be created through the API but cannot be dispatched yet — a `publish` to one is dead-lettered as unsupported, and the console does not offer the type. Additional `publish` targets (RabbitMQ, Azure, NATS, Redis, Slack, Splunk) are planned behind the same model — this repository is the source of truth for what currently builds.
 :::
 
 ## The two outbound actions
 
-Both are [REACT actions](./event-processing.md#automated-actions) — you add them to a rule alongside *raise alarm* and *send command*, and each can be **guarded** by a condition on the firing.
+Both are [REACT actions](./event-processing.md#automated-actions), authored on the **automation canvas** alongside *raise alarm* and *send command*, and each can be **guarded** by a condition on the firing. The form builder's action picker offers only *raise alarm* and *send command*; a rule that already carries an outbound action opens in the form with that action shown read-only and preserved, so switching surfaces never drops it.
 
 ### `httpCall` — call a webhook
 
 A direct HTTP request to an endpoint you specify. The request body is shaped with a **CEL expression** over the firing, so you send exactly the fields the receiver expects. Everything the action needs — URL, method, headers, body template — lives on the action itself, so a one-off webhook needs no separate setup. Optional authentication (a bearer token, an API key header) is stored in the **secret store** and attached at send time.
 
-Webhook delivery is **hardened**: it refuses to follow redirects, strips reserved and platform headers, and — when a secret is attached — does not echo the response body back into logs, so a misconfigured target can't be used to probe internal addresses or leak the credential.
+Webhook delivery is **hardened** in four specific ways: it refuses to follow redirects (so an external endpoint cannot `3xx` the request somewhere else), allows only `http`/`https` targets and rejects URL-embedded credentials, strips reserved and platform headers (so a tenant-supplied header cannot forge the auth header or the internal service identity), and — when a secret is attached — does not echo the response body back into logs, so a hostile endpoint cannot reflect the credential into them.
 
 ### `publish` — send to a connector
 

@@ -40,14 +40,27 @@ sigue el protocolo de sesión de Sparkplug.
   DeviceChain. Si habilitas el autorregistro para una fuente, se crea un
   dispositivo automáticamente la primera vez que se lo ve; en caso contrario,
   las identidades desconocidas se descartan y se contabilizan, así que
-  mantienes el control de qué entra en tu registro.
+  mantienes el control de qué entra en tu registro. El tráfico de un inquilino
+  que ha sido **eliminado** también se descarta mientras se recuperan sus datos,
+  y se contabiliza por separado —así un operador que vigila los descartes puede
+  distinguir "no está en el registro" de "el inquilino ya no existe".
 
 - **Produce presencia autoritativa.** Un BIRTH de nodo o dispositivo marca al
   dispositivo correspondiente como **en línea**, y un DEATH lo marca como
-  **fuera de línea** —inmediata y explícitamente. Esto hace de Sparkplug el
-  primer transporte que impulsa la [**presencia de dispositivo asertada**](./device-presence.md):
-  el estado en línea de un dispositivo Sparkplug es autoritativo, no inferido
-  a partir de un tiempo de espera (timeout).
+  **fuera de línea** —inmediata y explícitamente. Esto hace de Sparkplug un
+  transporte que [**afirma presencia**](./device-presence.md), al igual que
+  [LwM2M](./lwm2m.md): el estado en línea de un dispositivo Sparkplug es
+  autoritativo, no inferido a partir de un tiempo de espera (timeout).
+
+  DeviceChain es deliberadamente estricto sobre qué muertes aplica. Un DEATH se
+  acepta solo cuando su número de secuencia de nacimiento se correlaciona con la
+  sesión que está viva en ese momento, de modo que un will obsoleto o duplicado
+  que quedó de una conexión anterior se **ignora** en lugar de derribar una
+  sesión que un BIRTH más nuevo ya restableció. Un DEATH de dispositivo para un
+  dispositivo que nunca nació no emite nada en absoluto —no hay presencia que
+  terminar. Y la muerte de un *nodo* se **propaga en cascada**: marca fuera de
+  línea al nodo y a todos los dispositivos conocidos bajo él, porque en
+  Sparkplug la muerte de un nodo implica que sus dispositivos se van con él.
 
 - **Alimenta la misma canalización.** Las mediciones decodificadas y los
   cambios de presencia fluyen hacia la canalización normal de
@@ -98,3 +111,11 @@ configurada. Un segundo protocolo de borde nativo de estándares,
 [LwM2M](./lwm2m.md), también está disponible. El CA personalizado / mTLS hacia
 un broker privado está planificado.
 :::
+
+## Cómo se opera
+
+La conexión al broker es propiedad de una única réplica, lo que le da a la ingesta de Sparkplug
+algunas propiedades operativas que conviene conocer antes de depender de ella en producción: qué
+cuesta un relevo, por qué un dispositivo puede quedarse mostrando en línea, y qué te están diciendo
+los contadores de descartes. Todo ello se cubre en
+**[Cómo operar los servicios de borde](../deployment/edge-services.md)**.

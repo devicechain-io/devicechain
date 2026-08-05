@@ -10,7 +10,7 @@ DeviceChain turns raw device telemetry into meaningful signals. A dedicated **ev
 The service is built for **replay-correctness**: it evaluates on event time and persists its state, so a restart re-derives identical firings — none missed, none duplicated.
 
 :::note Status
-**Available today:** the DETECT + REACT pipeline is the platform's live detection engine. Detection covers **threshold**, **held-for-duration**, **repeating-occurrence**, **rate-of-change**, **silence/absence**, **windowed-aggregate**, and **area/group correlation** conditions (with static or attribute-driven thresholds); REACT actions are **raise alarm** and **send command**, with per-action guards. Rules are authored two ways over one schema — a **typed form builder** and a **visual automation canvas** — both validated by the same compiler before publish, and the canvas can **preview a draft against replayed history** before it goes live. The four-state alarm lifecycle, severity tiers with in-place escalation, propagation across the relationship graph, live alarm and detection subscriptions, and email/webhook notification with escalation are all in place.
+**Available today:** the DETECT + REACT pipeline is the platform's live detection engine. Detection covers **threshold**, **held-for-duration**, **repeating-occurrence**, **rate-of-change**, **silence/absence**, **connectivity**, **windowed-aggregate**, and **area/group correlation** conditions (with static or attribute-driven thresholds); REACT actions are **raise alarm**, **send command**, **call a webhook**, and **publish to a connector**, with per-action guards. Rules are authored three ways over one schema — a **typed form builder**, a **visual automation canvas**, and, with the AI service enabled, a natural-language **"Describe" door** — all validated by the same compiler before publish, and the canvas can **preview a draft against replayed history** before it goes live. The four-state alarm lifecycle, severity tiers with in-place escalation, live alarm and detection subscriptions, and email/webhook notification with escalation are all in place.
 :::
 
 ## Where rules live
@@ -32,9 +32,9 @@ Group membership is recorded on each event **as it is resolved**, so the engine 
 | **Threshold** | a reading crosses a comparison (e.g. `temperature > 80`) | the comparison + a threshold value |
 | **Duration** | the condition holds continuously for at least a set time (e.g. `pressure low for 5 minutes`) | a hold time |
 | **Repeating** | the condition occurs a number of times within a window (e.g. `3 faults in 10 minutes`) | an occurrence count + a window |
-| **Rate of change** | a metric moves too fast (e.g. `temperature rising > 5°/min`) | the comparison + a window (optional per-second rate) |
+| **Rate of change** | a metric changes too fast between consecutive readings (e.g. `temperature rising > 5°/s`) | the comparison + an optional flag to normalise the change to a per-second rate |
 | **Absence / silence** | a device goes quiet — no qualifying event within a window (a dead-man check) | a silence window |
-| **Connectivity** | a device reports an authoritative disconnect (raise) and reconnects (resolve) — for presence-asserting transports like [Sparkplug-B](./sparkplug.md) and [LwM2M](./lwm2m.md) | none — the [presence](./device-presence.md) edge is the whole signal |
+| **Connectivity** | a device reports an authoritative disconnect (raise) and reconnects (resolve) — for presence-asserting transports like [Sparkplug-B](./sparkplug.md) and [LwM2M](./lwm2m.md). *Defined through the API today — neither console authoring surface offers it yet.* | none — the [presence](./device-presence.md) edge is the whole signal |
 | **Windowed aggregate** | an aggregate over a window crosses a comparison (e.g. `average > 50 over 10 minutes`) | the function (count/sum/avg/min/max), a window (tumbling, sliding, or session), the comparison + value |
 | **Area correlation** | enough distinct devices in an area meet the condition together (e.g. `≥ 3 devices in a zone report a fault within 5 minutes`) | the area/anchor type, a distinct-device count + window |
 
@@ -50,7 +50,7 @@ When a rule fires, its **REACT** actions run. The built-in actions are:
 
 - **Raise alarm** — open (or escalate) a stateful alarm for the device, described below. This is the default and needs no target beyond a severity.
 - **Send command** — enqueue a command back to the device through the persistent command pipeline (dispatch is idempotent, so a replay or retry never double-sends).
-- **Call a webhook** (`httpCall`) — POST a CEL-shaped payload to an external HTTP endpoint, with SSRF-hardened delivery and optional secret-store auth.
+- **Call a webhook** (`httpCall`) — POST a CEL-shaped payload to an external HTTP endpoint, with hardened delivery (redirects refused, reserved headers stripped) and optional secret-store auth.
 - **Publish to a connector** (`publish`) — hand a CEL-shaped payload to an **[outbound connector](./outbound-connectors.md)** that fans it out to a message broker or cloud queue (MQTT, Kafka, AWS SNS/SQS).
 
 The last two — the outbound actions — are described in **[Outbound Connectors](./outbound-connectors.md)**; they are delivered by a separate service so a slow external system never slows detection.
@@ -59,10 +59,11 @@ A rule can carry several actions (up to a small fixed limit), and each action ca
 
 ## Authoring & previewing rules
 
-Rules are authored in the console two ways, both over the same schema and both validated by the **same server-side compiler** before publish:
+Rules are authored in the console three ways, all over the same schema and all validated by the **same server-side compiler** before publish:
 
 - A **form builder** — a typed form per condition type, the quickest path for a single rule. As you edit, it shows the compiler's type and cost feedback inline, before you publish.
 - A **visual automation canvas** — a node graph (source → condition → optional branches → actions) for richer flows. The canvas **compiles to the same rule** a form would produce; it is an authoring surface, not a second engine. It adds **branch** nodes (route a firing to different actions by a guard) and **compute** nodes (name a reusable derived value and reference it in a condition or guard).
+- A natural-language **"Describe" door** — where the AI service is enabled, describe the rule in words and have a candidate drafted for you to review and publish. It is offered when you create a new rule, and it produces a rule in the same schema the other two doors produce. See [AI-Assisted Authoring](./ai-authoring.md).
 
 The canvas's standout is **preview against history**: run a *draft* rule over the profile's replayed event history and see the raise/resolve edges it *would* have produced over a chosen window — without publishing anything. Selecting a firing overlays a **per-node trace** onto the canvas, showing the path that event took (which condition matched, which branch it took, which action fired). You can edit and re-preview until the rule does what you expect, then publish.
 
@@ -75,17 +76,15 @@ A raised alarm is a **stateful object**, not a one-off message. Its state is a c
 
 So an alarm moves through `ACTIVE/unacknowledged` → `ACTIVE/acknowledged` → `CLEARED`, and a flapping condition re-activates the *same* alarm rather than spawning duplicates.
 
+An alarm names the device that raised it, and alarms are queried tenant-wide with filters (state, severity, acknowledgement, originating device) rather than read off a parent entity.
+
 ### Severity and escalation
 
 Each alarm carries a **severity** — `CRITICAL`, `MAJOR`, `MINOR`, `WARNING`, or `INDETERMINATE`. A single condition can declare rules at several severity tiers (for example `temp > 80 → MAJOR`, `temp > 100 → CRITICAL`); the engine **escalates a single active alarm in place** to the highest tier currently met, and de-escalates as conditions ease — rather than opening a separate alarm per tier.
 
-## Propagation across the relationship graph
-
-Because DeviceChain models device context as a **[typed relationship graph](./domain-model.md)**, an alarm on a device is visible in the context of what that device is related to — its customer, area, or asset. Alarm counts roll up along the graph, so an operator looking at an area sees the alarms of the devices within it without each device having to report upward explicitly.
-
 ## Reaching a human
 
-A raised alarm can notify people through the **notification** system. A per-tenant policy routes alarms to **email (SMTP)** and **webhook** channels, with per-severity **escalation** (notify a wider audience if an alarm is not acknowledged in time) and throttling/deduplication so a noisy condition does not flood a channel. Channel credentials (the SMTP password, a webhook bearer token) are held in the platform's **encrypted secret store** — sealed at rest with envelope encryption, write-only over the API, and never returned as cleartext. This machine-to-human path is kept distinct from the machine-to-machine **[outbound connectors](./outbound-connectors.md)** that fan events out to other systems.
+A raised alarm can notify people through the **notification** system. A per-tenant policy routes alarms to **email (SMTP)** and **webhook** channels, with per-severity **escalation** — an alarm that stays neither acknowledged nor cleared is **re-notified through the same channels** on the policy's schedule, up to a cap — and **throttling**, a minimum gap between notifications for the same alarm so a repeatedly-signalling alarm does not flood a channel. Where two policies route to the same channel and recipients, the duplicate delivery is collapsed and the notification is sent once. Channel credentials (the SMTP password, a webhook bearer token) are held in the platform's **encrypted secret store** — sealed at rest with envelope encryption, write-only over the API, and never returned as cleartext. This machine-to-human path is kept distinct from the machine-to-machine **[outbound connectors](./outbound-connectors.md)** that fan events out to other systems.
 
 ## Seeing alarms & rule health
 
@@ -97,3 +96,11 @@ Alarms surface live in two places without any extra wiring:
 Both are fed by live subscriptions, so state changes appear as they happen.
 
 A profile's own editor also shows **rule health** — per-rule status, last-fired time, and fire count — alongside a **live feed** of detections as they occur, so you can confirm a newly published rule is behaving before it ever raises an alarm.
+
+## Running it
+
+The service that evaluates rules holds live state in memory and runs as a single instance, which
+gives it a few operational properties worth knowing before you depend on it in production — what a
+restart costs, how quickly a silence rule can fire, why an alarm might not clear, and how to find a
+rule that is failing to evaluate. Those are covered in
+**[Running the Detection Engine](../deployment/detection-engine.md)**.

@@ -15,9 +15,11 @@ Unlike plain MQTT — where DeviceChain *is* the broker — Sparkplug ingestion 
 
 - **Follows the Sparkplug session.** Sparkplug is a stateful protocol — edge nodes send a **BIRTH** certificate that defines their metrics (and compact aliases), then a stream of **DATA** messages that reference them, and a **DEATH** when they go offline. DeviceChain runs the full session machine: it tracks each node's aliases and message sequence, detects a gap or a missed birth, and asks the node to re-announce (a *rebirth*) when it needs to resynchronize — so a dropped message never silently corrupts what it decodes.
 
-- **Maps edge identities to devices.** Each Sparkplug `{group}/{node}` (or `{group}/{node}/{device}` for a device under a node) becomes the [`externalId`](./domain-model.md) of a DeviceChain device. If you enable auto-registration for a source, a device is created automatically the first time it's seen; otherwise unknown identities are dropped and counted, so you stay in control of what enters your registry.
+- **Maps edge identities to devices.** Each Sparkplug `{group}/{node}` (or `{group}/{node}/{device}` for a device under a node) becomes the [`externalId`](./domain-model.md) of a DeviceChain device. If you enable auto-registration for a source, a device is created automatically the first time it's seen; otherwise unknown identities are dropped and counted, so you stay in control of what enters your registry. Traffic for a tenant that has been **deleted** is also dropped while its data is being reclaimed, and counted separately — so an operator watching drops can tell "not in the registry" from "the tenant is gone."
 
-- **Produces authoritative presence.** A node or device BIRTH marks the corresponding device **online**, and a DEATH marks it **offline** — immediately and explicitly. This makes Sparkplug the first transport to drive [**asserted device presence**](./device-presence.md): a Sparkplug device's online state is authoritative, not inferred from a timeout.
+- **Produces authoritative presence.** A node or device BIRTH marks the corresponding device **online**, and a DEATH marks it **offline** — immediately and explicitly. This makes Sparkplug a [**presence-asserting**](./device-presence.md) transport, as is [LwM2M](./lwm2m.md): a Sparkplug device's online state is authoritative, not inferred from a timeout.
+
+  DeviceChain is deliberately strict about which deaths it applies. A DEATH is accepted only when its birth sequence number correlates with the session that is currently live, so a stale or duplicate will left over from an earlier connection is **ignored** rather than tearing down a session a newer BIRTH has already re-established. A device DEATH for a device that was never born emits nothing at all — there is no presence to end. And a *node* death **cascades**: it marks the node offline and every known device beneath it, because in Sparkplug a node's death implies its devices are gone with it.
 
 - **Feeds the same pipeline.** Decoded measurements and presence changes flow into the normal decode → resolve → persist pipeline, so everything downstream — history, live state, dashboards, and the detection engine — treats Sparkplug telemetry exactly like any other.
 
@@ -36,3 +38,10 @@ Recovery is therefore automatic but not instantaneous: it takes as long as the r
 :::note Status
 Sparkplug-B ingestion is available as an opt-in service. It ingests measurements and drives authoritative [device presence](./device-presence.md); it connects to a broker over TLS or plaintext per the configured URL. A second standards-native edge protocol, [LwM2M](./lwm2m.md), is also available. Custom-CA / mutual-TLS to a private broker is planned.
 :::
+
+## Running it
+
+The broker connection is owned by a single replica, which gives Sparkplug ingestion a few
+operational properties worth knowing before you depend on it in production — what a changeover
+costs, why a device can be left showing online, and what the drop counters are telling you. Those
+are covered in **[Running the Edge Services](../deployment/edge-services.md)**.

@@ -10,7 +10,7 @@ A detection rule can be authored three ways in DeviceChain — a typed **form**,
 All three doors lower to the **same structured rule schema** and pass through the **same compiler**. That is the whole design: the AI is one more front door onto a single, deterministic back end — never a second engine, and never part of the live event path.
 
 :::note Status
-**Available today:** an opt-in `ai-inference` service (in the `full` deployment profile); an operator-registered **AI provider** registry with write-only key handles; a natural-language **"Describe"** door on the device-profile rule authoring surface (`draftDetectionRuleFromText`) with a bounded compile-and-repair loop; per-tenant opt-in consent; and per-tenant AI rate limiting with spend metrics. **Planned:** a durable per-tenant AI **spend budget** (a hard cost ceiling — rate limiting and spend observability ship today). This repository is the source of truth for what currently builds.
+**Available today:** an opt-in `ai-inference` service (in the `full` deployment profile); an operator-registered **AI provider** registry with write-only key handles; a natural-language **"Describe"** door on the device-profile rule authoring surface — the `draftDetectionRuleFromText` mutation on the detection-rule API, which calls the AI service and runs a bounded compile-and-repair loop; per-tenant opt-in consent; and per-tenant AI rate limiting with spend metrics. **Planned:** a durable per-tenant AI **spend budget** (a hard cost ceiling — rate limiting and spend observability ship today). This repository is the source of truth for what currently builds.
 :::
 
 ## AI proposes, the compiler disposes
@@ -46,7 +46,7 @@ Users do **not** pick a model per task. Model choice is operator configuration s
 
 ## Where it lives in the console
 
-- **Describe door** — on the device profile's detection-rule authoring surface, alongside the form builder and the automation canvas. Type a description, review the drafted rule, publish.
+- **Describe door** — on the device profile's detection-rule authoring surface, alongside the form builder and the automation canvas, and offered when you **create** a new rule (an existing rule is edited in the form or on the canvas). Type a description, review the drafted rule, publish.
 - **AI providers** — `/admin/ai-providers` (admin plane): register providers, set keys, test connectivity.
 - **AI packaging** — the cross-tier grant matrix that maps which models each tier may use.
 - **Per-tenant model** — set on the tenant detail page, per function, from the tier-derived menu.
