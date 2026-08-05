@@ -98,6 +98,10 @@ helm install dc oci://ghcr.io/devicechain-io/charts/devicechain \
   --set image.tag=v1.2.0
 ```
 
+The chart is also listed on
+[Artifact Hub](https://artifacthub.io/packages/helm/devicechain/devicechain), which
+shows every published version alongside its default values and rendered templates.
+
 ## Zero-downtime upgrades
 
 Upgrading to a new version is normally a plain `helm upgrade`, and the chart and services are
