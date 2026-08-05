@@ -52,10 +52,21 @@ updates:
     commit-message:
       prefix: "chore(deps)"
 
-  # ---- Frontend (npm workspace: apps/* + packages/*) ---------------------
-  # A single lockfile at frontend/ covers the whole workspace.
+  # ---- npm trees (one entry per lockfile) --------------------------------
+  # /frontend is the app workspace — a single lockfile at frontend/ covers all of
+  # apps/* and packages/*. /docs is the Docusaurus site, with its own lockfile.
+  #
+  # 🔴 EVERY LOCKFILE IN THE REPO MUST BE LISTED HERE, and for a reason that is easy
+  # to miss: security updates and version updates are different subsystems. Security
+  # updates are driven by the dependency graph and need no entry at all, so a tree
+  # left out of this list still raises alerts and still gets its transitive CVEs
+  # fixed — it just never gets a freshness bump, and nothing says so. /docs sat
+  # exactly there: five security PRs arrived while Docusaurus itself quietly aged,
+  # and the queue looked alive the whole time.
   - package-ecosystem: "npm"
-    directory: "/frontend"
+    directories:
+      - "/frontend"
+      - "/docs"
     schedule:
       interval: "weekly"
       day: "monday"
