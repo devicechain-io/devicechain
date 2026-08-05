@@ -165,10 +165,25 @@ recipient, disable the tenant's connectors and notification policies before dele
 
 ## What you can see today {#visibility}
 
-The admin console shows whether a tenant is active or being deleted, and when the delete
-was requested.
+A tenant that is being deleted carries a **Deletion** tab on its detail page in the admin
+console. It answers the question an operator actually has — *is it done, and if not, why
+not* — with a plain-language status line, anything that is blocking, and a row per storage
+system showing whether that system is clean, still holding data, or retrying after a
+failure. Those three are kept apart on purpose: data still held will not clear until
+someone changes something, while a failure clears itself on the next sweep.
 
-**The per-system detail is not yet exposed.** The platform records, for every deletion,
-which storage systems have reported clean, what any of them is still holding and why, and
-how much was erased — but that record is currently readable only in the database and in
-the service logs. Surfacing it is planned.
+Some systems add a short note to a clean line, saying what they *declined* to look at — a
+telemetry database that does not exist on this instance, for example, or the internal
+caches a deletion deliberately exempts. A note is a footnote to "clean", not a problem to
+act on.
+
+**Completed deletions live at Admin → Deletions**, not on a tenant page, and the reason is
+worth knowing: finishing a deletion removes the tenant, so a finished deletion has no
+tenant page left to appear on. That instance-wide list is the durable record — token, when
+it was requested, when it completed, how much was erased, and what each storage system
+reported. It is the page to open when someone asks you to show that a customer's data was
+erased.
+
+Two things it deliberately does not offer. There is no **retry**: every sweep already
+retries, so a button would imply the absence of one. And there is no **force-complete**: it
+is the one action that could record an erasure that did not happen.

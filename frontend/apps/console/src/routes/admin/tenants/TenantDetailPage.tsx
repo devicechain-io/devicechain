@@ -16,6 +16,7 @@ import { listTenants, setTenantEnabled, deleteTenant } from '@/lib/api/admin';
 import { PurgeBadge, StatusBadge, errMessage, useReload } from '@/routes/common';
 import { TenantForm } from '@/routes/admin/tenants/TenantForm';
 import { TenantSettingsPanel } from '@/routes/admin/tenants/TenantSettingsPanel';
+import { TenantDeletionPanel } from './TenantDeletionPanel';
 import { TenantAiModelsPanel } from '@/routes/admin/tenants/TenantAiModelsPanel';
 import { TierPill } from '@/components/tiers/TierPill';
 
@@ -146,6 +147,10 @@ export default function TenantDetailPage() {
         }}
         effectiveSettingsPanel={<TenantSettingsPanel tenant={tenant} />}
         aiModelsPanel={<TenantAiModelsPanel tenant={tenant} />}
+        // Only while a deletion is running. On an active tenant the tab would be an empty
+        // room, and on a FINISHED deletion there is no tenant page left to show it on —
+        // completion removes the row, which is why the history lives at /admin/deletions.
+        deletionPanel={purged ? <TenantDeletionPanel token={tenant.token} /> : undefined}
       />
     </PageShell>
   );

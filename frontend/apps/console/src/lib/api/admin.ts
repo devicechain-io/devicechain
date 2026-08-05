@@ -27,6 +27,7 @@ import type {
   AdminTenantTierCreateRequest,
   AdminTenantTierUpdateRequest,
   CreateTenantMutation,
+  TenantDeletionQuery,
 } from '@/gql/user-management-admin/graphql';
 
 // Public types derive from the generated operation results so they can never
@@ -226,6 +227,11 @@ const TENANT_TIER_CATALOG = graphql(`
 `);
 
 export type AdminTenantTierDetail = TenantTierCatalogQuery['tenantTiers'][number];
+
+/** One tenant deletion record with its per-store ledger (ADR-077). */
+export type AdminTenantDeletion = NonNullable<TenantDeletionQuery['tenantDeletion']>;
+/** One storage system's line in a deletion's ledger. */
+export type AdminTenantDeletionStore = AdminTenantDeletion['stores'][number];
 
 export async function listTenantTierCatalog(): Promise<AdminTenantTierDetail[]> {
   const data = await gql('user-management/admin', TENANT_TIER_CATALOG, undefined, { identity: true });
@@ -755,4 +761,99 @@ const DELETE_TENANT = graphql(`
 export async function deleteTenant(token: string): Promise<boolean> {
   const data = await gql('user-management/admin', DELETE_TENANT, { token }, { identity: true });
   return data.deleteTenant;
+}
+
+// ---------------------------------------------------------------------------
+// Tenant deletion records (ADR-077).
+//
+// A deletion record OUTLIVES its tenant: completing a deletion removes the tenant row,
+// and that removal IS the token release. So the history below is instance-level and not a
+// field on a tenant — the moment a deletion finishes, the tenant page it would have lived
+// on ceases to exist.
+
+const TENANT_DELETION = graphql(`
+  query TenantDeletion($token: String!, $epoch: String) {
+    tenantDeletion(token: $token, epoch: $epoch) {
+      token
+      epoch
+      completedAt
+      rowsErased
+      awaiting
+      elapsesAt
+      blockedBy
+      stores {
+        store
+        complete
+        rowsErased
+        retaining
+        lastError
+        note
+        attemptedAt
+        cleanSince
+      }
+    }
+  }
+`);
+
+const TENANT_DELETIONS = graphql(`
+  query TenantDeletions($completed: Boolean, $limit: Int, $offset: Int) {
+    tenantDeletions(completed: $completed, limit: $limit, offset: $offset) {
+      token
+      epoch
+      completedAt
+      rowsErased
+      awaiting
+      elapsesAt
+      blockedBy
+      stores {
+        store
+        complete
+        rowsErased
+        retaining
+        lastError
+        note
+        attemptedAt
+        cleanSince
+      }
+    }
+  }
+`);
+
+/**
+ * Reads a tenant's deletion record.
+ *
+ * Omitting the epoch asks for the tenant's IN-FLIGHT deletion, which is what the tenant
+ * detail panel wants and is unambiguous because at most one can be in flight at a time.
+ * A historical record must name its epoch: the token is released on completion and can be
+ * held by a live tenant, so token alone does not identify a deletion.
+ *
+ * Returns null when there is no such record — including for the first minute or so of a
+ * deletion, before the purge coordinator's first pass has written one.
+ */
+export async function getTenantDeletion(
+  token: string,
+  epoch?: string,
+): Promise<AdminTenantDeletion | null> {
+  const data = await gql(
+    'user-management/admin',
+    TENANT_DELETION,
+    { token, epoch: epoch ?? null },
+    { identity: true },
+  );
+  return data.tenantDeletion ?? null;
+}
+
+/** Lists deletion records newest cut first, optionally filtered by completion. */
+export async function listTenantDeletions(
+  completed?: boolean,
+  limit?: number,
+  offset?: number,
+): Promise<AdminTenantDeletion[]> {
+  const data = await gql(
+    'user-management/admin',
+    TENANT_DELETIONS,
+    { completed: completed ?? null, limit: limit ?? null, offset: offset ?? null },
+    { identity: true },
+  );
+  return data.tenantDeletions;
 }
