@@ -1,0 +1,21 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Artifact Hub repository metadata.
+#
+# Claims the chart repository at https://artifacthub.io/packages/helm/devicechain/devicechain
+# as ours, which is what earns the "Verified Publisher" label on the listing.
+# Artifact Hub matches the id below against the repository registered in the
+# control panel; if they agree, it accepts that whoever can publish to the
+# registry also controls the listing.
+#
+# The id is NOT a secret — Artifact Hub displays it in its own control panel and
+# its documented workflow is to commit it to a public repository.
+#
+# 🔴 This file deliberately sits BESIDE the chart directory, not inside it.
+# `helm package` sweeps everything under deploy/helm/devicechain, so a copy in
+# there would ship inside every chart tarball, where it means nothing.
+#
+# It is published to its own OCI tag (`artifacthub.io`) rather than travelling
+# with a chart version — see .github/workflows/artifacthub-metadata.yml.
+repositoryID: 41550ca6-de32-458c-aae2-d9df801c5c5a
