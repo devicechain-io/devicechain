@@ -67,13 +67,23 @@ DeviceChain favors open, widely-implemented standards over bespoke protocols, so
 existing tools and off-the-shelf device clients work without a special SDK:
 
 - **Device transport** — devices connect over standard **MQTT** (the built-in NATS
-  MQTT server on port 1883); HTTP, CoAP, and WebSocket transports are planned. Any
-  conformant MQTT client works unchanged.
+  MQTT server on port 1883) or **CoAP/UDP secured with DTLS** (see LwM2M below);
+  HTTP and WebSocket transports are planned. Any conformant MQTT client works
+  unchanged.
 - **Edge ingestion** — a dedicated adapter ingests **[Eclipse Sparkplug B](https://sparkplug.eclipse.org/)**
   by joining your existing Sparkplug MQTT environment as a Host Application, so
   brownfield edge fleets stream in without changing anything on the device side. It
   also drives **authoritative device presence** — online/offline taken from the
   Sparkplug birth/death handshake rather than inferred from an activity timeout.
+- **Constrained and cellular fleets** — DeviceChain terminates **[OMA LwM2M](https://lwm2m.openmobilealliance.org/)**
+  directly. Devices connect in over CoAP/UDP with DTLS and are authenticated at the
+  handshake by a pre-shared-key identity, which resolves to a tenant and a device
+  before any application traffic flows; roaming clients keep their session across an
+  IP change via DTLS Connection ID. Like Sparkplug, it is **presence-asserting** —
+  online/offline comes from the LwM2M registration lifecycle. Observed IPSO sensor
+  objects decode into ordinary measurements. *Telemetry decoding currently covers
+  SenML-JSON only, so an LwM2M 1.0-only client registers, drives presence, and
+  accepts commands but reports no measurements; TLV decoding is planned.*
 - **API** — **GraphQL** for all external APIs (one introspectable schema per
   service). Internal service-to-service communication is asynchronous over NATS.
 - **Authentication** — native **RS256 JSON Web Tokens** (RFC 7519) with a
@@ -106,6 +116,7 @@ per tenant.
 |---|---|
 | **event-sources** | Inbound device transports. Decodes raw messages and publishes them onto the pipeline. |
 | **sparkplug-ingest** | An opt-in, stateful [Eclipse Sparkplug B](https://sparkplug.eclipse.org/) Host Application: connects out to per-tenant customer brokers, runs the Sparkplug session machine, maps `{group}/{node}[/{device}]` identities to devices, and feeds the same pipeline — the first transport to assert authoritative device presence. Leader-elected so exactly one replica connects. |
+| **lwm2m-ingest** | An opt-in [OMA LwM2M](https://lwm2m.openmobilealliance.org/) server: terminates CoAP/UDP over DTLS, authenticates each device by its pre-shared-key identity before any application traffic flows, drives presence from the registration lifecycle, and decodes observed IPSO sensor objects into the same measurement envelope every other transport uses. |
 | **device-management** | Devices, device types + versioned device profiles, the typed relationship graph, alarm objects (level-state integration), and event resolution. |
 | **event-management** | Persists resolved events to TimescaleDB and serves time-series queries over GraphQL. |
 | **user-management** | Identities, per-tenant memberships, roles, and two-tier JWT issuance / validation (JWKS). |

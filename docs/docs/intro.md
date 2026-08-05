@@ -24,7 +24,9 @@ It is a ground-up rebuild of the SiteWhere platform that keeps the proven domain
 
 DeviceChain is a set of cooperating microservices over a shared core library:
 
-- **event-sources** — pluggable inbound transports (MQTT today; HTTP, CoAP, WebSocket planned) that decode raw device messages onto the pipeline.
+- **event-sources** — pluggable inbound transports (MQTT and HTTP today; WebSocket planned) that decode raw device messages onto the pipeline.
+- **sparkplug-ingest** _(opt-in)_ — an [Eclipse Sparkplug B](./concepts/sparkplug.md) Host Application that joins your existing Sparkplug MQTT environment and feeds the same pipeline, asserting authoritative device presence from the birth/death handshake.
+- **lwm2m-ingest** _(opt-in)_ — an [OMA LwM2M](./concepts/lwm2m.md) server terminating CoAP/UDP over DTLS, authenticating each device by its pre-shared-key identity and asserting presence from the registration lifecycle.
 - **device-management** — devices, device types + versioned device profiles, the relationship graph, the alarm object and its lifecycle, and event resolution.
 - **event-processing** — the detection + action pipeline over resolved events: replay-correct streaming rules (threshold, duration, repeating, rate-of-change, absence, windowed aggregate, area correlation) and automated responses (raise alarm, send command, and outbound connectors). Detection lives here; the alarm object it raises stays in device-management.
 - **event-management** — persists resolved events to TimescaleDB and serves time-series queries (including live subscriptions over a graphql-ws bridge).
