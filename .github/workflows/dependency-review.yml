@@ -1,0 +1,63 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Block a pull request that ADDS a dependency with a known advisory.
+#
+# This is deliberately a different question from the `govulncheck` step in ci.yml,
+# and the two are not redundant:
+#
+#   govulncheck asks "is anything we already ship exploitable from our code?" — it
+#   scans the resolved Go graph and reports only what it believes is REACHABLE.
+#   dependency-review asks "does this diff introduce a package with a known
+#   advisory?" — it compares the base and head dependency graphs and does not
+#   reason about reachability at all.
+#
+# So govulncheck will stay green on a newly added vulnerable library nobody calls
+# yet, and this gate will not: the point is to refuse the dependency at the door,
+# while the change is one revert away, rather than after it has grown callers.
+# It also covers ecosystems govulncheck cannot see — the npm frontend workspace,
+# the NuGet packages under sdks/csharp, and GitHub Actions themselves.
+#
+# PR-only by design. It has nothing to compare against on a push to main (there is
+# no base graph), which is why this is its own workflow rather than a job in ci.yml.
+name: dependency-review
+
+on:
+  pull_request:
+
+# Least privilege: read the diff and the dependency graph. No comment-summary is
+# requested, so no pull-requests: write is needed.
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # fail-on-severity: moderate — not the action's default (`low`), and not a
+      # rubber stamp either. Chosen because `low` in the GitHub Advisory Database
+      # sweeps in a long tail of advisories against transitive dev-only packages
+      # that cannot be actioned in the PR that trips them, and a gate people learn
+      # to re-run until it passes is worse than no gate. Moderate and above must be
+      # dealt with; tighten this if the noise turns out to be tolerable.
+      #
+      # NOTE the deliberate absence of `continue-on-error` and of an `allow-*`
+      # escape hatch. If this blocks a PR, the fix is to change the dependency or
+      # to add a reviewed, dated entry here — not to make the check advisory.
+      - name: Dependency review
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: moderate
+          # Deny licenses that are incompatible with shipping under Apache-2.0.
+          # This repo is Apache-2.0 (see LICENSE/NOTICE) and vendors no copyleft
+          # runtime dependencies today; the list keeps it that way by accident
+          # rather than by vigilance. AGPL/GPL/SSPL only — LGPL is omitted because
+          # dynamic linking makes it situational rather than flatly disqualifying,
+          # and a false block here is expensive.
+          deny-licenses: AGPL-1.0-only, AGPL-1.0-or-later, AGPL-3.0-only, AGPL-3.0-or-later, GPL-1.0-only, GPL-1.0-or-later, GPL-2.0-only, GPL-2.0-or-later, GPL-3.0-only, GPL-3.0-or-later, SSPL-1.0

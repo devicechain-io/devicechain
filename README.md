@@ -9,6 +9,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/devicechain)](https://artifacthub.io/packages/search?repo=devicechain)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/devicechain-io/devicechain/badge)](https://scorecard.dev/viewer/?uri=github.com/devicechain-io/devicechain)
 
 DeviceChain™ connects, manages, and processes data from large, heterogeneous device
 fleets — covering device lifecycle, telemetry ingestion, command & control,

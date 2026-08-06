@@ -1,0 +1,123 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# CodeQL static analysis for Go.
+#
+# Go only, deliberately, to start: it is where essentially all of this repo's
+# authored logic and its whole attack surface live (ingest decoding, auth, the
+# GraphQL layer, the SSRF-hardened outbound webhook path). Adding
+# javascript-typescript for the frontend and csharp for the SDK is a later,
+# separate decision — each is another full analysis job, and a scanner nobody
+# reads the output of is worse than no scanner.
+#
+# ---------------------------------------------------------------------------
+# WHY build-mode: manual, AND WHY `paths-ignore` IS NOT THE ANSWER. Both of these
+# are non-obvious and both were checked against the extractor's own source rather
+# than assumed.
+#
+# 1. `build-mode: none` DOES NOT EXIST FOR GO. CodeQL's Go extractor declares
+#    exactly two build modes (autobuild, manual); the no-build path is available
+#    for C/C++, C#, Java and Rust, and not for Go. So the code has to be built.
+#
+# 2. AUTOBUILD WOULD SCAN `_legacy/`. The Go autobuilder does not run
+#    `go build ./...` at the root (which fails here — the root is not a module).
+#    It finds go.work, extracts each `use` entry, AND THEN adds every stray
+#    go.mod not referenced by go.work as its own workspace. `_legacy/` — the
+#    archived pre-migration SiteWhere tree that CLAUDE.md says not to edit —
+#    holds 7 such go.mod files. Autobuild would extract all of them: 22 modules
+#    become 29, and the extra alerts are against code we deliberately do not
+#    maintain and would never fix.
+#
+# 3. 🔴 `paths-ignore` CANNOT FIX THAT. It applies only to interpreted languages
+#    and to compiled languages analyzed WITHOUT building. For a compiled language
+#    that is built — Go, here — GitHub's documented answer is "specify
+#    appropriate build steps"; the filter is simply not consulted. A
+#    `paths-ignore: [_legacy/**]` here would parse, validate, look correct in
+#    review, and exclude nothing. It is a cannot-fail configuration, so it is
+#    absent on purpose. Do not add it.
+#
+# Manual mode makes the build the filter. Go extraction is TRACER-based: CodeQL
+# intercepts each `go` invocation, so whatever we build is exactly what gets
+# analyzed. `go list -m` reads go.work, so `_legacy/` is never built and
+# therefore never extracted — by construction, with nothing to keep in step.
+# ---------------------------------------------------------------------------
+name: codeql
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, Wednesday 05:17 UTC. A scheduled run matters even though this also
+    # runs per-PR: new QUERIES ship continuously, so the same unchanged code gets
+    # re-analyzed against rules that did not exist when it merged.
+    - cron: "17 5 * * 3"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze Go
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      security-events: write # upload results — required for every CodeQL workflow
+      packages: read # fetch CodeQL packs
+      actions: read
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      # Enumerate the modules BEFORE init, on purpose. Between init and analyze
+      # every `go` invocation is intercepted by the CodeQL tracer; `go list -m` is
+      # a query, not a build, and there is no reason to make the extractor reason
+      # about it. Resolving the list up front keeps the traced region to actual
+      # compilation.
+      - name: Enumerate workspace modules
+        run: |
+          go list -m -f '{{.Dir}}' > "${RUNNER_TEMP}/modules.txt"
+          echo "Modules to analyze: $(wc -l < "${RUNNER_TEMP}/modules.txt")"
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        with:
+          languages: go
+          build-mode: manual
+
+      # The repo's own full-build idiom. Two details are load-bearing and are the
+      # same trap CLAUDE.md documents for the local sweep:
+      #
+      #   - `rc=1` is accumulated rather than written as `... || echo "FAILED: $m"`.
+      #     That obvious form makes the loop's exit status the status of the last
+      #     `echo`, i.e. always 0 — every module could fail to compile and this
+      #     step would still pass, leaving CodeQL to analyze whatever fragment did
+      #     build and report success.
+      #   - the subshell `( cd ... )` keeps each module's cd from leaking into the
+      #     next iteration.
+      - name: Build every workspace module
+        run: |
+          rc=0
+          while read -r m; do
+            echo "::group::go build $m"
+            ( cd "$m" && go build ./... ) || { echo "FAILED: $m"; rc=1; }
+            echo "::endgroup::"
+          done < "${RUNNER_TEMP}/modules.txt"
+          exit "$rc"
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        with:
+          category: "/language:go"

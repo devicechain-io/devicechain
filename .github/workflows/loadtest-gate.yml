@@ -124,14 +124,14 @@ jobs:
     # allow more headroom; a genuine hang still trips the timeout well before the cap.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # Build dcctl (and later the driver) from the checked-out ref. With the default
       # --build image source, the server images are ALSO built from this same ref, so
       # dcctl, server, and driver are one consistent commit -- no admin-schema skew
       # (a HEAD dcctl sending shedPriority to a pre-#480 published server is the skew
       # this avoids). On the pull path, consistency instead comes from checkout==tag.
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.work
           cache: true
@@ -152,7 +152,7 @@ jobs:
       # OpenTofu: dcctl's "Apply infrastructure" step shells out to `tofu`
       # (preferred over terraform) for the postgres/timescale modules. tofu_wrapper
       # off so `exec.LookPath("tofu")` finds the real binary, not the action's shim.
-      - uses: opentofu/setup-opentofu@v2
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2
         with:
           tofu_version: 1.9.1
           tofu_wrapper: false
@@ -169,7 +169,7 @@ jobs:
         # `github.event_name` is `push` under workflow_call (the caller's tag event),
         # so an event-name test would WRONGLY install ko on the release pull path.
         if: ${{ inputs.build }}
-        uses: ko-build/setup-ko@v0.10
+        uses: ko-build/setup-ko@61b4d1d396f5b2e7d6bb6fefdce3dc38d1a13445 # v0.10
         with:
           version: v0.19.1
 
@@ -430,7 +430,7 @@ jobs:
 
       - name: Upload L1 report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: l1-report
           path: ${{ runner.temp }}/l1-report.json
@@ -473,7 +473,7 @@ jobs:
 
       - name: Upload detection report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: detection-report
           path: ${{ runner.temp }}/detection-report.json
@@ -541,7 +541,7 @@ jobs:
 
       - name: Upload command report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: command-report
           path: ${{ runner.temp }}/command-report.json
@@ -735,7 +735,7 @@ jobs:
 
       - name: Upload L3 reports
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: l3-reports
           path: ${{ runner.temp }}/l3-*-report.json
@@ -881,7 +881,7 @@ jobs:
 
       - name: Upload load-test baseline
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: loadtest-baseline
           path: ${{ runner.temp }}/loadtest-baseline.json
