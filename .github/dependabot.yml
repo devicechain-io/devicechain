@@ -80,6 +80,30 @@ updates:
       prefix: "chore(deps)"
 
   # ---- Container base images --------------------------------------------
+  #
+  # 🔴 SAME COVERAGE TRAP AS THE TWO ECOSYSTEMS ABOVE, and it already bit here:
+  # this list held only /backend/k8s and /frontend while the repo has FOUR
+  # Dockerfiles. Measured rather than assumed — every docker PR Dependabot has
+  # ever opened says "across 2 directories", and the other two have never
+  # received a single bump. The two below are the shipped images, and both are
+  # now digest-pinned, which makes the coverage load-bearing rather than merely
+  # nice: an unwatched digest pin is a base image frozen at whatever was current
+  # the day it was written, which is worse than the floating tag it replaced.
+  #
+  # The other two Dockerfiles are deliberately absent, not overlooked:
+  #   - backend/services/lwm2m-ingest/interop/leshan-client — an interop test
+  #     harness that ships nowhere, deliberately on Temurin 11 because Leshan
+  #     2.0.0-M15 is Java-8 bytecode. Bumps there would be churn against a pin
+  #     that exists on purpose.
+  #   - deploy/images/timescaledb — reaches its base through
+  #     `ARG PG_IMAGE=... ` + `FROM ${PG_IMAGE}`, and whether Dependabot follows
+  #     that indirection is UNVERIFIED. Adding it blind would be a config that
+  #     cannot fail: it would look like coverage and might update nothing.
+  #     Worth an experiment, but it must be confirmed against a real weekly run
+  #     before anyone counts it as covered. Note also that digest-pinning THAT
+  #     file is blocked on a separate defect — operand-image.yml derives the PG
+  #     minor with `${PG_IMAGE##*:}`, which returns the digest hex once a
+  #     `@sha256:` suffix is present.
   - package-ecosystem: "docker"
     directories:
       - "/backend/k8s"

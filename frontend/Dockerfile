@@ -9,8 +9,16 @@
 # which the cluster ingress routes to each functional-area service. Nothing is
 # baked in at build time, so one image serves any instance.
 
+# Base images are pinned by digest as well as tag: a tag is mutable, so an
+# unpinned rebuild of an unchanged commit can pick up a different base. The
+# digests below are the multi-arch INDEX digests, so pinning them still lets this
+# image build for both amd64 and arm64. Dependabot's `docker` ecosystem covers
+# this directory and rolls both the tag and the digest forward weekly — without
+# that, a digest pin would freeze the base at whatever was current when it was
+# written, which is worse for security than a floating tag.
+
 # --- build stage: produce frontend/dist ------------------------------------
-FROM node:26-alpine AS build
+FROM node:26-alpine@sha256:aadf416b2cdce311a8811ba3f0608a61b77dbf997500e2eafe781b51f6a0b019 AS build
 WORKDIR /app
 
 # Install deps against the lockfile first so the layer caches across source-only
@@ -40,7 +48,7 @@ RUN npm run build
 # Both SPAs ship in one image: the console at the web root, the dashboard app under
 # /dash (its own SPA-fallback tree). The shared ingress routes everything non-/api
 # here, so /dash needs no separate ingress rule.
-FROM nginxinc/nginx-unprivileged:1.31-alpine
+FROM nginxinc/nginx-unprivileged:1.31-alpine@sha256:a6c3ec0c0d249d68b0682df854d4a9e222b90fb607dc3fcf2f1d2fcbc85d347e
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/apps/console/dist /usr/share/nginx/html
 COPY --from=build /app/apps/dashboard/dist /usr/share/nginx/html/dash
