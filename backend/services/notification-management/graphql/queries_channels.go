@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	util "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-notification-management/model"
 )
 
@@ -18,7 +19,7 @@ func (r *SchemaResolver) NotificationChannelsById(ctx context.Context, args stru
 		return nil, err
 	}
 	api := r.GetApi(ctx)
-	ids, err := r.asUintIds(args.Ids)
+	ids, err := util.AsUintIds(args.Ids)
 	if err != nil {
 		return nil, err
 	}

@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	"github.com/devicechain-io/dc-microservice/auth"
+	util "github.com/devicechain-io/dc-microservice/graphql"
 
 	"github.com/devicechain-io/dc-device-management/model"
 )
@@ -19,7 +20,7 @@ func (r *SchemaResolver) EntityRelationshipTypesById(ctx context.Context, args s
 	}
 
 	api := r.GetApi(ctx)
-	ids, err := r.asUintIds(args.Ids)
+	ids, err := util.AsUintIds(args.Ids)
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +80,7 @@ func (r *SchemaResolver) EntityRelationshipsById(ctx context.Context, args struc
 	}
 
 	api := r.GetApi(ctx)
-	ids, err := r.asUintIds(args.Ids)
+	ids, err := util.AsUintIds(args.Ids)
 	if err != nil {
 		return nil, err
 	}

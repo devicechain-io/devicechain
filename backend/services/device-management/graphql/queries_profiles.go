@@ -8,6 +8,7 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/auth"
+	util "github.com/devicechain-io/dc-microservice/graphql"
 )
 
 // Find device profiles by unique id.
@@ -18,7 +19,7 @@ func (r *SchemaResolver) DeviceProfilesById(ctx context.Context, args struct {
 		return nil, err
 	}
 
-	ids, err := r.asUintIds(args.Ids)
+	ids, err := util.AsUintIds(args.Ids)
 	if err != nil {
 		return nil, err
 	}

@@ -6,7 +6,6 @@ package graphql
 import (
 	"context"
 	_ "embed"
-	"strconv"
 
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -30,19 +29,6 @@ func (s *SchemaResolver) GetRdbManager(ctx context.Context) *rdb.RdbManager {
 // GetApi returns the notification Api from the request context.
 func (s *SchemaResolver) GetApi(ctx context.Context) *model.Api {
 	return ctx.Value(gqlcore.ContextApiKey).(*model.Api)
-}
-
-// asUintIds converts string ids to uint ids.
-func (s *SchemaResolver) asUintIds(val []string) ([]uint, error) {
-	ids := make([]uint, 0, len(val))
-	for _, sid := range val {
-		id, err := strconv.ParseUint(sid, 0, 64)
-		if err != nil {
-			return nil, err
-		}
-		ids = append(ids, uint(id))
-	}
-	return ids, nil
 }
 
 // NotificationChannelTypes returns the static catalog of channel-adapter types the
