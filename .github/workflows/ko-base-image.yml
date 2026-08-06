@@ -1,0 +1,243 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Keeps `.ko.yaml`'s digest-pinned base image current.
+#
+# `defaultBaseImage` is the base of every artifact DeviceChain publishes — all
+# the service images, the operator and the edge agent. It is pinned by digest so
+# a build is reproducible and the base cannot change without a pull request.
+#
+# 🔴 THIS WORKFLOW IS THE OTHER HALF OF THAT PIN, not a nicety. Chainguard
+# rebuilds the base to ship its CVE fixes, so a digest nobody advances quietly
+# serves a stale base while the config reads "pinned and secure" — strictly worse
+# than the mutable tag it replaced. Dependabot does not parse `.ko.yaml` and
+# neither does Scorecard, which is why no scanner ever flagged that line and why
+# this has to exist at all.
+#
+# A successful run is ALSO the liveness heartbeat that `hack/check-ko-base-pin.sh`
+# reads: it records success whether or not the digest moved, so CI can tell
+# "the pin is current" from "the bumper died and the pin is frozen".
+#
+# ⚠️ KNOWN LIMITATION, stated because it is invisible otherwise: a pull request
+# opened with GITHUB_TOKEN does not trigger other workflows, so the bump PR
+# arrives with NO CI checks. That is why this workflow smoke-builds an image
+# against the new base itself before opening anything — the build is the
+# evidence, since the PR will not carry any. Full CI still runs on the merge to
+# main. If you would rather have checks on the PR, that needs a PAT, which is a
+# credential to rotate; the smoke build was judged the better trade.
+
+name: ko base image
+
+on:
+  schedule:
+    # Wednesday, deliberately not Monday: Dependabot's four ecosystems all land
+    # then, and a bump PR that arrives in the middle of that batch is the one
+    # that gets skimmed.
+    - cron: '17 6 * * 3'
+  workflow_dispatch:
+
+# Least privilege: the job reads the repo and, only when the digest moved, needs
+# to push a branch and open a pull request.
+permissions:
+  contents: read
+
+concurrency:
+  group: ko-base-image
+  cancel-in-progress: false
+
+env:
+  KO_FILE: .ko.yaml
+  BRANCH: ci/ko-base-image
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the bump branch
+      pull-requests: write # open/refresh the bump PR
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Resolve the tag's current digest
+        id: resolve
+        run: |
+          set -euo pipefail
+
+          # The pinned reference, and the tag half of it. The tag is kept in the
+          # file next to the digest precisely so this step has something to
+          # resolve; ko itself only uses the digest.
+          pinned="$(awk '/^defaultBaseImage:/ {
+                           sub(/^defaultBaseImage:[[:space:]]*/, "")
+                           sub(/[[:space:]]*$/, ""); print; exit }' "$KO_FILE")"
+          if [ -z "$pinned" ]; then
+            echo "::error::no defaultBaseImage in $KO_FILE"; exit 1
+          fi
+          ref="${pinned%@*}"          # cgr.dev/chainguard/static:latest
+          old="${pinned##*@}"         # sha256:...
+          repo="${ref%:*}"            # cgr.dev/chainguard/static
+          tag="${ref##*:}"            # latest
+          path="${repo#*/}"           # chainguard/static
+          host="${repo%%/*}"          # cgr.dev
+
+          # Resolved through the registry API rather than a third-party action:
+          # this workflow exists to harden the supply chain, so it should not add
+          # a new action to it. curl and jq are both on ubuntu-latest.
+          token="$(curl -fsS "https://${host}/token?scope=repository:${path}:pull&service=${host}" | jq -r '.token // empty')"
+          if [ -z "$token" ]; then
+            echo "::error::could not obtain an anonymous pull token for ${repo}"; exit 1
+          fi
+
+          # The DIGEST OF THE INDEX, which is what a multi-arch pin must be — ask
+          # for the index media types explicitly, or a registry may hand back a
+          # single-platform manifest and we would pin amd64 for everyone.
+          new="$(curl -fsS -o /dev/null -D - \
+                   -H "Authorization: Bearer ${token}" \
+                   -H 'Accept: application/vnd.oci.image.index.v1+json' \
+                   -H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json' \
+                   "https://${host}/v2/${path}/manifests/${tag}" \
+                 | tr -d '\r' | awk -F': ' 'tolower($1)=="docker-content-digest" {print $2; exit}')"
+
+          case "$new" in
+            sha256:[0-9a-f]*) ;;
+            *) echo "::error::did not get a digest for ${ref} (got '${new}')"; exit 1 ;;
+          esac
+
+          if [ "$old" = "$new" ]; then
+            changed=false
+            echo "Base image is current: ${ref}@${new}"
+          else
+            changed=true
+            echo "Base image moved:"
+            echo "  from ${old}"
+            echo "  to   ${new}"
+          fi
+
+          {
+            echo "ref=$ref"
+            echo "old=$old"
+            echo "new=$new"
+            echo "changed=$changed"
+          } >> "$GITHUB_OUTPUT"
+
+      # Everything below is skipped when the digest has not moved. The run still
+      # completes successfully, and THAT is what the liveness guard reads.
+      - name: Apply the new digest
+        if: steps.resolve.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          old='${{ steps.resolve.outputs.old }}'
+          new='${{ steps.resolve.outputs.new }}'
+          # Rewrite only the defaultBaseImage line, so the surrounding rationale
+          # comments (which are the reason anyone can follow this design later)
+          # survive untouched.
+          awk -v old="$old" -v new="$new" '
+            /^defaultBaseImage:/ { sub(old, new) } { print }' "$KO_FILE" > "$KO_FILE.tmp"
+          mv "$KO_FILE.tmp" "$KO_FILE"
+          grep -q "$new" "$KO_FILE" || { echo "::error::rewrite did not take"; exit 1; }
+          git diff --stat
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        if: steps.resolve.outputs.changed == 'true'
+        with:
+          go-version-file: backend/core/go.mod
+          cache: false
+
+      - uses: ko-build/setup-ko@61b4d1d396f5b2e7d6bb6fefdce3dc38d1a13445 # v0.10
+        if: steps.resolve.outputs.changed == 'true'
+        with:
+          version: v0.19.1
+
+      - name: Smoke-build an image against the new base
+        if: steps.resolve.outputs.changed == 'true'
+        env:
+          KO_DOCKER_REPO: ghcr.io/devicechain-io
+        run: |
+          set -euo pipefail
+          # One representative service, DERIVED rather than named, so this does
+          # not rot when the service list changes.
+          svc="$(hack/list-services.sh | jq -r '.[0]')"
+          if [ -z "$svc" ] || [ "$svc" = "null" ]; then
+            echo "::error::no services discovered — cannot smoke-build the new base"
+            exit 1
+          fi
+          echo "smoke-building backend/services/${svc} on the new base"
+          cd "backend/services/${svc}"
+          # This is the PR's only evidence — see the GITHUB_TOKEN note at the top
+          # of this file. A base that cannot build must never be proposed.
+          ko build --local --bare ./
+
+      - name: Open or refresh the bump pull request
+        if: steps.resolve.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          old='${{ steps.resolve.outputs.old }}'
+          new='${{ steps.resolve.outputs.new }}'
+          ref='${{ steps.resolve.outputs.ref }}'
+
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+
+          # A fixed branch, force-pushed: successive weeks refresh ONE pull
+          # request instead of stacking a new one every time the base moves.
+          git checkout -B "$BRANCH"
+          git add "$KO_FILE"
+
+          # Heredocs, not `-m "…"`: every line here has to stay indented inside
+          # the YAML block scalar, and a message written inline drifts back to
+          # column 0 and silently breaks the workflow's own parse.
+          cat >"${RUNNER_TEMP}/commit.txt" <<EOF
+          chore(ci): bump the ko base image
+
+          ${ref} moved from
+            ${old}
+          to
+            ${new}
+
+          Opened automatically by .github/workflows/ko-base-image.yml. The digest
+          pin in .ko.yaml is the base for every published image, and Chainguard's
+          rebuilds are how that base ships its CVE fixes - a pin nobody advances
+          is worse than the mutable tag it replaced.
+
+          This pull request carries no checks: it was opened with GITHUB_TOKEN,
+          which does not trigger workflows. The evidence is the smoke build in
+          the run that produced it, plus full CI on the merge.
+          EOF
+          # Strip the YAML-level indentation the heredoc had to carry.
+          sed -i 's/^          //' "${RUNNER_TEMP}/commit.txt"
+          git commit -F "${RUNNER_TEMP}/commit.txt"
+          git push --force-with-lease origin "$BRANCH"
+
+          if gh pr view "$BRANCH" --json number -q .number >/dev/null 2>&1; then
+            echo "existing pull request refreshed by the force-push"
+            exit 0
+          fi
+
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          cat >"${RUNNER_TEMP}/body.md" <<EOF
+          \`${ref}\` moved.
+
+          | | digest |
+          |---|---|
+          | from | \`${old}\` |
+          | to | \`${new}\` |
+
+          This is the base image of **every artifact we publish** - all service
+          images, the operator and the edge agent. Chainguard rebuilds it to ship
+          CVE fixes, so advancing the pin is how those reach us; a digest nobody
+          moves is worse than the mutable tag it replaced.
+
+          > [!WARNING]
+          > **This pull request has no checks.** It was opened with
+          > \`GITHUB_TOKEN\`, which does not trigger workflows. The evidence is the
+          > ko smoke build in [the run that produced it](${run_url}) - a base that
+          > cannot build is never proposed. Full CI runs on the merge to \`main\`.
+
+          Opened by \`.github/workflows/ko-base-image.yml\`.
+          EOF
+          sed -i 's/^          //' "${RUNNER_TEMP}/body.md"
+
+          gh pr create --base main --head "$BRANCH" \
+            --title "chore(ci): bump the ko base image" \
+            --body-file "${RUNNER_TEMP}/body.md"
