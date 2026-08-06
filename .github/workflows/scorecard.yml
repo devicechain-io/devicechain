@@ -19,6 +19,11 @@
 name: scorecard
 
 on:
+  # On demand. Without this the only ways to get a score are to wait for Tuesday
+  # or to push to main, which makes the first run — the one that establishes
+  # whether publishing actually works and whether the README badge resolves —
+  # unverifiable until well after the change that introduced it has merged.
+  workflow_dispatch:
   # Scorecard reads branch-protection settings, so re-score when they change.
   branch_protection_rule:
   schedule:

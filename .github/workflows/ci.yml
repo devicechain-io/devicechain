@@ -59,6 +59,14 @@ jobs:
       - name: release-highlights guard self-test
         run: hack/check-release-highlights.sh --self-test
 
+      # The govulncheck wrapper decides which findings are allowed to pass. Its
+      # allowlist is the one place in CI where a known vulnerability is waved
+      # through on purpose, so proving the checker can still fail — on an
+      # unreviewed finding AND on an exception that has gone stale — matters more
+      # here than anywhere else. Runs in discover, before the matrix fans out.
+      - name: govulncheck wrapper self-test
+        run: hack/govulncheck.sh --self-test
+
       - name: Discover services
         id: svc
         run: |
@@ -214,32 +222,29 @@ jobs:
       # Known-vulnerability scan of this module's dependency graph. It lives here,
       # in the go matrix, rather than in a workflow of its own because govulncheck
       # has to run INSIDE a module (same constraint as every other Go gate here) and
-      # this job already provides both a module working-directory and a warm,
-      # per-module build cache. Measured on a warm cache: 3.4s for core, 4.7s for
-      # outbound-connectors — the Bento tree, the slowest module in the tree.
+      # this job already provides a warm per-module build cache. Measured on a warm
+      # cache: 3.4s for core, 4.7s for outbound-connectors — the Bento tree, and the
+      # slowest module here.
       #
-      # 🔑 A GREEN RUN DOES NOT MEAN "no vulnerable dependencies". govulncheck's
-      # default symbol mode reports only vulnerabilities it believes are REACHABLE
-      # from this module's code, and exits non-zero (3) only for those. Today core
-      # requires golang.org/x/crypto@v0.54.0, which carries GO-2026-5932
-      # (x/crypto/openpgp is unmaintained and unsafe by design) — it is reported as
-      # unreachable, and this step passes. That is the intended reading, not a hole:
-      # GO-2026-5932 is "Fixed in: N/A", so `-scan module` would paint every module
-      # permanently red over a package we do not call and cannot upgrade away from.
-      # A gate that can never be green teaches people to ignore it.
+      # 🔑 A GREEN RUN DOES NOT MEAN "no vulnerable dependencies". It means nothing
+      # REACHABLE — govulncheck resolves advisories down to the call graph, and a
+      # vulnerability in a module we require but never call is reported and does not
+      # fail. That is deliberate: core requires x/crypto@v0.54.0 carrying
+      # GO-2026-5932 with "Fixed in: N/A", so failing on require-but-do-not-call
+      # would paint the whole tree permanently red over a package nobody can
+      # upgrade away from.
+      #
+      # The wrapper exists for the one module where that advisory IS reachable —
+      # backend/cli, via helm's package-init chain — and it carries a reviewed,
+      # justified, per-module exception that FAILS ONCE IT GOES STALE. The full
+      # reasoning, and the JSON-mode exit-code trap that shapes the script, are in
+      # hack/govulncheck.sh. Note the deliberate absence of continue-on-error.
       #
       # The vulnerability DB is fetched at run time, so this step can start failing
       # with no change to this repo. That is the point of it — a newly published
       # advisory against a dependency we already ship is exactly the news we want.
-      #
-      # The scanner version is pinned for reproducibility. Dependabot does NOT track
-      # a `go install pkg@version` written in a workflow, so bump it by hand; the DB
-      # it queries is always current regardless of the scanner's age.
       - name: govulncheck (reachable vulnerabilities)
-        working-directory: ${{ matrix.module }}
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
-          "$(go env GOPATH)/bin/govulncheck" ./...
+        run: hack/govulncheck.sh "${{ matrix.module }}"
 
       - name: go test
         working-directory: ${{ matrix.module }}
