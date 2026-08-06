@@ -8,6 +8,7 @@ import (
 	_ "embed"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	util "github.com/devicechain-io/dc-microservice/graphql"
 
 	"github.com/devicechain-io/dc-device-management/model"
 )
@@ -21,7 +22,7 @@ func (r *SchemaResolver) CommandDefinitionsById(ctx context.Context, args struct
 	}
 
 	api := r.GetApi(ctx)
-	ids, err := r.asUintIds(args.Ids)
+	ids, err := util.AsUintIds(args.Ids)
 	if err != nil {
 		return nil, err
 	}

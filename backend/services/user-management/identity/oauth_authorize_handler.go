@@ -141,6 +141,24 @@ func authorizeValues(w http.ResponseWriter, r *http.Request) (url.Values, error)
 
 // redirectAuthorizeCode 302-redirects to the (already validated) redirect_uri with
 // the authorization code + state (RFC 6749 §4.1.2).
+//
+// Both redirect helpers are reachable ONLY from step 3 of AuthorizeHandler, i.e.
+// only after step 1 resolved the client and proved this redirect_uri is a member of
+// that client's registered allowlist — an exact string match, with the RFC 8252
+// §7.3 loopback-port exception applied only when both sides are loopback, and with
+// userinfo and fragments refused on both sides. A failure there renders an error
+// page and never redirects. IssueAuthorizationCode re-asserts membership at the
+// mint point.
+//
+// Static analysis flags this as an open redirect (go/unvalidated-url-redirection)
+// and cannot be made to see otherwise: the sanitizer is a database-backed allowlist
+// lookup behind the AuthorizeService interface, which taint tracking will not model.
+// The alerts are dismissed against this comment. What actually holds the property is
+// TestRedirectURIMatches — 20 hostile inputs (lookalike host, userinfo, fragment,
+// added subpath, scheme/port/query variance) — plus the handler test asserting an
+// empty Location for an unresolved client. Both fail if the matcher is forced to
+// return true, so they are load-bearing rather than decorative. If you weaken
+// redirectURIMatches, this endpoint becomes the classic code-stealing open redirect.
 func redirectAuthorizeCode(w http.ResponseWriter, r *http.Request, redirectURI, code, state string) {
 	http.Redirect(w, r, buildRedirect(redirectURI, map[string]string{"code": code, "state": state}), http.StatusFound)
 }

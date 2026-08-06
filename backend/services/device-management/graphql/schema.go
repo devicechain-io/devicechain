@@ -6,7 +6,6 @@ package graphql
 import (
 	"context"
 	_ "embed"
-	"strconv"
 
 	"github.com/devicechain-io/dc-device-management/model"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
@@ -48,17 +47,4 @@ func (s *SchemaResolver) GetCachedApi(ctx context.Context) *model.CachedApi {
 // (SubscribeLive); injected as a provider in main.go once the manager is connected.
 func (s *SchemaResolver) GetNats(ctx context.Context) *messaging.NatsManager {
 	return ctx.Value(gqlcore.ContextNatsKey).(*messaging.NatsManager)
-}
-
-// Convert string ids to uint ids.
-func (r *SchemaResolver) asUintIds(val []string) ([]uint, error) {
-	ids := make([]uint, 0)
-	for _, sid := range val {
-		id, err := strconv.ParseUint(sid, 0, 64)
-		if err != nil {
-			return nil, err
-		}
-		ids = append(ids, uint(id))
-	}
-	return ids, nil
 }
