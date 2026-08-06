@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/detect/predicate"
@@ -27,12 +29,43 @@ type Limits struct {
 	// DefaultCorrelationMemberCap is the retained-member backstop applied to a correlation
 	// rule that does not set its own MemberCap.
 	DefaultCorrelationMemberCap int
+	// MaxRuleDuration is the longest temporal extent an authored rule may declare — the
+	// ceiling on window, hold, timeout and gap alike.
+	//
+	// It exists because a window-shaped rule retains ONE RECORD PER SAMPLE for the whole
+	// window: slidingState.buf (SlidingAgg) and the Repeating times slice both keep every
+	// qualifying sample until it ages out. state.go's comment bounds peak memory at "~2× the
+	// live window", which is only a bound if the WINDOW is bounded — and until this field
+	// nothing bounded it. The arithmetic is why the ceiling is not cosmetic: a device
+	// reporting every 10s produces 8,640 samples/day, a sample is ~32 bytes, so ONE series on
+	// a 7-day window retains ~2MB — and a rule runs per series. A thousand devices on that one
+	// rule is ~2GB of live heap in a process shared by every tenant. The authored duration is
+	// the only knob that bounds it before the memory is allocated.
+	//
+	// The timer-shaped kinds (Duration's hold, Absence's timeout, Session's gap) retain no
+	// samples — but the ceiling is NOT a courtesy extension to them. Absence and Session reset
+	// their deadline on every qualifying event, and a reset PUSHES a new entry onto the timer
+	// wheel's heap while the superseded one lingers there until its deadline passes (it is
+	// invalidated by a generation bump, not removed). So a series holds about
+	// timeout/reporting-interval stale heap entries in steady state: a 3-day absence timeout on
+	// a device reporting every 10s is ~26k of them, per device. A timer-shaped duration costs
+	// heap in DIRECT PROPORTION to its length, exactly like a window — the allocation just lives
+	// in the wheel instead of a sample buffer, which is why neither map-based gauge sees it and
+	// core.PendingTimerCount exists.
+	MaxRuleDuration time.Duration
 }
 
 // Built-in floors used when a Limits field is left zero, so Compile is never uncapped.
 const (
 	defaultPredicateCostCeiling      uint64 = 100
 	defaultCorrelationMemberCapFloor        = 1024
+	// defaultMaxRuleDuration is a day. It is deliberately the same order as the 24h cap the
+	// PREVIEW path has always enforced (preview.DefaultMaxWindow): previewing a rule over more
+	// than a day was already refused as too expensive, while PUBLISHING one — the path that
+	// allocates retained heap for as long as the rule lives — was unbounded. That asymmetry,
+	// not a memory target, is what fixes the value here; the platform operator raises it for a
+	// genuinely long-window tenant via maxRuleDurationSeconds.
+	defaultMaxRuleDuration = 24 * time.Hour
 )
 
 // DefaultLimits is the platform-default compile budget applied to a published detection
@@ -44,7 +77,27 @@ const (
 // this is never uncapped (ADR-023 never-unlimited). When per-tenant governance overrides
 // land (ADR-023, slice 6) BOTH sites resolve the caller's tenant limits from one source,
 // replacing this.
-func DefaultLimits() Limits { return Limits{} }
+func DefaultLimits() Limits {
+	return Limits{MaxRuleDuration: time.Duration(platformMaxRuleDuration.Load())}
+}
+
+// platformMaxRuleDuration is the operator-configured MaxRuleDuration DefaultLimits hands to
+// every compile site, in nanoseconds.
+//
+// It is process-global ON PURPOSE. DefaultLimits' entire job is to be the ONE budget the
+// publish gate and the runtime fact consumer share, and threading a config value through the
+// nine call sites — one of which (runtime.CompilePublishedRules) is a free function on the
+// fact-consume path with no config in scope — is exactly how those two drift apart and a rule
+// starts passing publish only to be refused on load. A zero value (never configured: every
+// unit test, and any process that fails to call the setter) floors to defaultMaxRuleDuration
+// inside withDefaults, so an unconfigured process is capped at a day, never uncapped.
+var platformMaxRuleDuration atomic.Int64
+
+// SetPlatformMaxRuleDuration installs the operator-configured maximum rule duration
+// (maxRuleDurationSeconds). main calls it once during startup, before the GraphQL schema is
+// served or the fact consumer binds, so every compile in the process sees the same ceiling.
+// A non-positive value leaves the built-in day in force (ADR-023: never unlimited).
+func SetPlatformMaxRuleDuration(d time.Duration) { platformMaxRuleDuration.Store(int64(d)) }
 
 // WithDefaults returns the limits with every zero field floored to its built-in cap — the same
 // resolution Compile applies internally, exported so a caller that must cost-gate against the
@@ -60,6 +113,12 @@ func (l Limits) withDefaults() Limits {
 		// <= 0, not == 0: a negative caller misconfig must also floor, else every
 		// default-cap correlation rule is rejected downstream with a confusing message.
 		l.DefaultCorrelationMemberCap = defaultCorrelationMemberCapFloor
+	}
+	if l.MaxRuleDuration <= 0 {
+		// <= 0 for the same reason as the member cap: a negative override is a caller
+		// misconfiguration, and flooring it to the platform default is the ADR-023 fail-safe
+		// (never unlimited). A negative CONFIGURED value is rejected earlier, at config Validate.
+		l.MaxRuleDuration = defaultMaxRuleDuration
 	}
 	return l
 }
@@ -171,6 +230,12 @@ func Compile(r Rule, limits Limits) (*CompiledRule, error) {
 	}
 	if r.Name == "" {
 		return nil, invalid(r.ID, "name", "a rule name is required")
+	}
+	// Bound the rule's temporal extent BEFORE lowering, once, for every kind — see
+	// checkDurationCeiling. A per-kind check would have to be remembered by each new kind,
+	// and the per-kind lowerings below are exactly where it was forgotten.
+	if err := checkDurationCeiling(r, limits.MaxRuleDuration); err != nil {
+		return nil, err
 	}
 
 	cr := &CompiledRule{ID: r.ID, Type: r.Type}

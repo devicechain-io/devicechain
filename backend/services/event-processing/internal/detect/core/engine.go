@@ -518,9 +518,19 @@ func countSeriesKeys[V any](counts map[string]int, m map[SeriesKey]V) {
 }
 
 // LiveKeyCounts returns, per rule id, the number of live keyed-state ENTRIES the rule holds — its
-// open windows, running timers, and accumulators. This is the rule's contribution to the engine's
-// memory footprint, which the per-tenant runtime state budget (ADR-023 amendment, ADR-051 slice 6c)
-// is measured against; the caller rolls rule ids up to tenants via the id's tenant prefix.
+// open windows, running timers, and accumulators. This is the rule's KEY CARDINALITY, which the
+// per-tenant runtime state budget (ADR-023 amendment, ADR-051 slice 6c) is measured against; the
+// caller rolls rule ids up to tenants via the id's tenant prefix.
+//
+// 🔴 It is NOT a measure of the rule's memory footprint, and must not be described as one. Most
+// entries are O(1) — a timestamp, an accumulator, a latch — so for those kinds the two track each
+// other. But three maps hold ONE RECORD PER RETAINED SAMPLE, and their entry count is flat in the
+// data they hold: a Repeating or SlidingAgg rule with a 30-day window on one chatty series is a
+// single entry here no matter how many samples that window retains, and correlation's members hang
+// off one anchor entry. A budget watching only this number cannot see the long-window overrun that
+// actually exhausts the heap. RetainedSampleCounts is the companion that measures that axis; the
+// state budget consults BOTH, because they fail in different directions — many cheap keys, or few
+// enormous ones.
 //
 // It counts ENTRIES (a memory proxy), NOT distinct series: a timer-bearing key is counted BOTH in
 // its state map AND in the timer wheel's LIVE set, because each is a real, separately-allocated entry
@@ -559,6 +569,76 @@ func (e *Engine) LiveKeyCounts() map[string]int {
 	}
 	return counts
 }
+
+// RetainedSampleCounts returns, per rule id, the number of PER-SAMPLE RECORDS the rule currently
+// retains — the axis LiveKeyCounts is structurally blind to. Only three maps grow with the data
+// rather than with the key set, and this counts exactly those:
+//
+//   - sliding  (Repeating)   — one time.Time per matching event still inside the window
+//   - slides   (SlidingAgg)  — slidingState.buf, one sample (time + value) per event in the window
+//   - corr     (Correlation) — one entry per retained distinct member under an anchor
+//
+// Every other MAP folds its events into a fixed-size accumulator or latch, so its retention is
+// already fully described by its key count and adding it here would double-count the same memory
+// under a second name.
+//
+// 🔴 It is NOT the whole of the engine's per-event retention, and must not be described as such.
+// The timer wheel's pending-deadline HEAP also grows per event (Absence/Session push a fresh
+// timer on every reset and the superseded entry lingers until its deadline passes), and this
+// gauge reads 0 for it. PendingTimerCount is that axis; the state budget reads all three.
+//
+// One known under-count within what it does cover: slidingState keeps minDq/maxDq alongside buf,
+// so a min/max sliding aggregate over monotone data holds up to ~3× the counted records. Those
+// grow in the same class as buf, so the gauge still MOVES on the overrun — it is a constant
+// factor, not a blind spot, and buf is the honest unit to count.
+//
+// This is what makes a long-window overrun visible: a 30-day window on one busy series is a single
+// live key but hundreds of thousands of retained samples, so the number that should alarm is this
+// one. It is the measurement counterpart to the publish-time rules.MaxRuleDuration ceiling —
+// the ceiling bounds what a tenant can newly commit to, this reports what is committed now
+// (including by rules published before a ceiling was lowered).
+//
+// Correlation is counted in BOTH maps deliberately, and it is not a bug: LiveKeyCounts counts a
+// member as a live key because it is a separately-allocated entry, and this counts it as a retained
+// record because it is per-datum. The two gauges answer different questions about the same bytes.
+//
+// Computed on demand on the single-writer loop (no lock, no hot-path cost), the same as
+// LiveKeyCounts. Cost is O(number of series), not O(number of samples) — len() is O(1).
+func (e *Engine) RetainedSampleCounts() map[string]int {
+	counts := make(map[string]int)
+	for k, times := range e.sliding {
+		counts[k.Rule] += len(times)
+	}
+	for k, st := range e.slides {
+		counts[k.Rule] += len(st.buf)
+	}
+	for k, members := range e.corr {
+		counts[k.Rule] += len(members)
+	}
+	return counts
+}
+
+// PendingTimerCount returns the total number of entries in the timer wheel's pending-deadline
+// heap — the THIRD memory axis, and the one neither map-based gauge above can see.
+//
+// It is separate because the heap grows with EVENTS, not with keys or with retained samples.
+// Absence and Session reset their deadline on every qualifying event via scheduleForward, and a
+// reset PUSHES a new timer while the superseded one stays in the heap until popDue reaches its
+// deadline (it is invalidated by a generation bump, not removed — see timers.go). So a series
+// holds roughly timeout/reporting-interval stale entries in steady state: an Absence rule at a
+// 24h timeout on a device reporting every 10s carries ~8,640 of them, while LiveKeyCounts reads
+// 1 for that series and RetainedSampleCounts reads 0 (it retains no samples).
+//
+// That is the same shape as the defect the retained-sample gauge was added for, one structure
+// over, which is why it gets its own number rather than a comment. It is also the real reason
+// the rules.MaxRuleDuration ceiling applies to the TIMER-shaped kinds and not only the
+// window-shaped ones: a longer absence timeout costs heap in direct proportion to its length.
+//
+// It is an AGGREGATE only — no per-rule or per-tenant breakdown. Attributing heap entries would
+// mean walking the whole heap on every checkpoint (O(pq), the very thing that is large when this
+// matters); Len() is O(1). An operator who sees this climb finds the offender through the rule
+// inventory, not through a label.
+func (e *Engine) PendingTimerCount() int { return e.wheel.pq.Len() }
 
 // SetExpected arms (or refreshes) the dead-man absence timer for a series the runtime resolved
 // from the roster + active-version read-models — the (Absence rule, device) pair a rostered

@@ -168,15 +168,16 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// non-positive value as disabled, so a negative seconds value maps straight through.
 	idleGuard := time.Duration(Configuration.IdleAdvanceGuardSeconds) * time.Second
 	cfg := processor.Config{
-		PartitionId:          singletonPartition,
-		Suffix:               streams.ResolvedEvents,
-		CheckpointEvents:     Configuration.CheckpointEvents,
-		CheckpointInterval:   time.Duration(Configuration.CheckpointIntervalSeconds) * time.Second,
-		MaxFutureSkew:        time.Duration(Configuration.MaxEventFutureSkewSeconds) * time.Second,
-		Lateness:             lateness,
-		IdleAdvanceGuard:     idleGuard,
-		MaxRulesPerTenant:    Configuration.MaxRulesPerTenant,
-		MaxLiveKeysPerTenant: Configuration.MaxLiveKeysPerTenant,
+		PartitionId:                 singletonPartition,
+		Suffix:                      streams.ResolvedEvents,
+		CheckpointEvents:            Configuration.CheckpointEvents,
+		CheckpointInterval:          time.Duration(Configuration.CheckpointIntervalSeconds) * time.Second,
+		MaxFutureSkew:               time.Duration(Configuration.MaxEventFutureSkewSeconds) * time.Second,
+		Lateness:                    lateness,
+		IdleAdvanceGuard:            idleGuard,
+		MaxRulesPerTenant:           Configuration.MaxRulesPerTenant,
+		MaxLiveKeysPerTenant:        Configuration.MaxLiveKeysPerTenant,
+		MaxRetainedSamplesPerTenant: Configuration.MaxRetainedSamplesPerTenant,
 	}
 	ResolvedEventsProcessor = processor.NewResolvedEventsProcessor(Microservice, ResolvedEventsReader,
 		nmgr, SnapshotStore, RuleRegistry, derivedWriter, RuleStatStore, cfg, core.NewNoOpLifecycleCallbacks())
@@ -335,6 +336,12 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	if err := parseConfiguration(); err != nil {
 		return err
 	}
+	// Install the operator-configured rule-duration ceiling into rules.DefaultLimits BEFORE
+	// anything can compile a rule — the GraphQL publish gate is not serving yet and the fact
+	// consumer has not bound — so the publish gate and the runtime fact consumer are guaranteed
+	// to enforce the same ceiling. ApplyDefaults has already floored an unset value to the
+	// platform default, so this is never a zero that would silently mean "unlimited".
+	rules.SetPlatformMaxRuleDuration(time.Duration(Configuration.MaxRuleDurationSeconds) * time.Second)
 
 	// Create and initialize the rdb manager (runs the snapshot-store migrations under
 	// the startup advisory lock). It must be initialized before the NATS manager so

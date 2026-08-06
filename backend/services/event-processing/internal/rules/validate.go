@@ -3,6 +3,34 @@
 
 package rules
 
+import "time"
+
+// checkDurationCeiling rejects a rule whose temporal extent exceeds the compile budget's
+// MaxRuleDuration. It checks the AUTHORED fields rather than the lowered core rule, and Compile
+// calls it ONCE for every rule type rather than from each per-type lowering — so a new rule kind
+// inherits the ceiling instead of having to remember it. That is precisely the failure mode that
+// left this unbounded: `forbid` below only ever asserts a duration is UNSET on the kinds that do
+// not use it, and no per-type lowering ever asserted an upper bound on the kinds that do.
+//
+// Field names match the authored JSON keys (and `forbid`'s), so the console anchors the error to
+// the input the author actually typed.
+func checkDurationCeiling(r Rule, max time.Duration) error {
+	for _, c := range []struct {
+		d     time.Duration
+		field string
+	}{
+		{r.Window.D(), "window"},
+		{r.Hold.D(), "hold"},
+		{r.Ttl.D(), "timeout"},
+		{r.Gap.D(), "gap"},
+	} {
+		if c.d > max {
+			return invalid(r.ID, c.field, "%s exceeds the maximum rule duration of %s", c.d, max)
+		}
+	}
+	return nil
+}
+
 // forbidden marks which schema fields a rule type does NOT use. Compile rejects a rule
 // that sets any forbidden field (fail-closed on an ill-formed rule, matching the project's
 // "reject unknown/invalid keys" convention) — this is the guard that catches a form or a

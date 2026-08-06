@@ -40,6 +40,29 @@ La membresía del grupo se registra en cada evento **en el momento en que se res
 
 La comparación de cada condición puede ser una hoja estructurada `metric · operator · value` o una **expresión CEL** avanzada sobre el evento; ambas se verifican de tipos de forma estática y se limitan en costo cuando se publica el perfil, de modo que una regla mal formada o desbocada se rechaza antes de poder ejecutarse.
 
+:::note Las ventanas tienen un techo
+Todo lapso de tiempo que declare una regla —una ventana, un tiempo de retención, un tiempo de espera
+de silencio, un hueco de sesión— está limitado a **24 horas** de forma predeterminada. Una regla que
+pida más se rechaza al publicar el perfil, nombrando el campo y el límite.
+
+El techo existe porque una regla con ventana guarda **un registro por lectura** durante toda la
+ventana, por dispositivo, en un motor compartido por todos los inquilinos. Una ventana de varios días
+sobre una flota que reporta cada pocos segundos es una gran cantidad de memoria retenida
+indefinidamente, y el costo lo paga todo el mundo en la instancia, no el inquilino que autoró la
+regla.
+
+Los tiempos de espera de silencio y los huecos de sesión también están limitados, aunque no retengan
+lecturas: esas reglas rearman un temporizador cada vez que un dispositivo reporta, y los
+temporizadores sustituidos no se liberan hasta que vence su plazo, así que un tiempo de espera largo
+con reportes frecuentes se acumula de la misma manera.
+
+Si necesita un lapso mayor, un operador puede subir el límite de la instancia
+([`maxRuleDurationSeconds`](../deployment/detection-engine.md#configuration)) tras dimensionar la
+memoria. Antes de pedirlo, considere si la pregunta trata en realidad de *retención* más que de
+*detección*: una pregunta del tipo «comparar contra el mes pasado» suele responderse mejor
+consultando el historial almacenado que reteniendo un mes de lecturas en memoria.
+:::
+
 :::warning No abra una regla de Conectividad en el editor de formulario de la consola
 Como el constructor de formularios no modela el tipo Conectividad, abrir en él una regla de Conectividad existente **la lee en silencio como una regla de Umbral**, y guardar desde ese panel reemplaza la definición original. Nada se lo advierte: el aviso de «no se pudo leer» del formulario solo aparece cuando la definición almacenada no es JSON válido, cosa que una regla de Conectividad en funcionamiento evidentemente sí es.
 

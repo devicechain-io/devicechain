@@ -78,13 +78,14 @@ spec:
           expr: |
             max(devicechain_eventprocessing_detect_tenants_over_rule_budget{namespace="{{ $ns }}"}) > 0
             or max(devicechain_eventprocessing_detect_tenants_over_live_key_budget{namespace="{{ $ns }}"}) > 0
+            or max(devicechain_eventprocessing_detect_tenants_over_retained_sample_budget{namespace="{{ $ns }}"}) > 0
           for: 30m
           labels:
             severity: warning
             devicechain_instance: {{ $ns }}
           annotations:
             summary: "A tenant is over its DETECT state budget"
-            description: "One or more tenants exceed the per-tenant rule-count or live-key budget (ADR-023) for 30m. Find the offender in the event-processing warn log."
+            description: "One or more tenants exceed the per-tenant rule-count, live-key or retained-sample budget (ADR-023) for 30m. Find the offender in the event-processing warn log. Check all three memory gauges before concluding memory is fine — devicechain_eventprocessing_detect_live_keys stays FLAT for the two shapes that fill the heap fastest: a long-window rule on one busy device moves detect_retained_samples only, and a long absence/session timeout under frequent reporting moves detect_pending_timers only (that one is instance-wide, not per-tenant, and has no budget arm here)."
         - alert: EventProcessingStreamNearFull
           expr: |
             max by (stream) (
