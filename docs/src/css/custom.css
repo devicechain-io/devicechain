@@ -46,3 +46,75 @@
   background-attachment: fixed;
   background-repeat: no-repeat;
 }
+
+/*
+ * Social links in the navbar, rendered as icons.
+ *
+ * Docusaurus has no icon field on a navbar item, so the glyph is a ::before on
+ * the link and the label text is collapsed. Four things here are deliberate:
+ *
+ *  - `mask-image` + `background-color: currentColor`, rather than an <img> or a
+ *    background-image. The glyph then inherits the navbar's own link color, so
+ *    it tracks light/dark and :hover for free instead of needing a second
+ *    hard-coded copy per theme.
+ *  - The SVG is an inline data: URI. Nothing is fetched, which keeps this
+ *    working under a strict CSP and offline.
+ *  - The label stays a REAL word in the config rather than ''. Below Docusaurus's
+ *    996px navbar breakpoint these same items are re-rendered as text rows inside
+ *    the collapsed hamburger sidebar, where there is no room for an icon-only
+ *    control and an empty label would leave a blank, untappable-looking row. So
+ *    the icon-only treatment is scoped to the desktop navbar and the sidebar gets
+ *    icon + text.
+ *  - `.navbar__items--right` and the min-width query are belt AND braces: the
+ *    sidebar links live outside that container, so either alone would do. The
+ *    pair means a future Docusaurus reshuffle of one has to break the other too
+ *    before the mobile menu regresses to blank rows.
+ */
+.navbar-social {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.navbar-social::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 1.25rem;
+  height: 1.25rem;
+  background-color: currentColor;
+  -webkit-mask: var(--dc-social-icon) center / contain no-repeat;
+  mask: var(--dc-social-icon) center / contain no-repeat;
+}
+
+.navbar-social--github {
+  --dc-social-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12'/%3E%3C/svg%3E");
+}
+
+.navbar-social--x {
+  --dc-social-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z'/%3E%3C/svg%3E");
+}
+
+@media (min-width: 997px) {
+  .navbar__items--right .navbar-social {
+    gap: 0;
+    /* Collapses the label without removing it from the accessibility tree —
+       the ::before is sized in rem, so it is unaffected. */
+    font-size: 0;
+  }
+}
+
+@media (min-width: 997px) {
+  /*
+   * Docusaurus appends its own external-link arrow <svg> after any navbar item
+   * with an href. Collapsing the label does NOT collapse that arrow — it is a
+   * sized SVG, not text — so without this the desktop navbar reads "⌗↗ ✕↗": the
+   * icon-only treatment produces a two-glyph control, which is exactly the
+   * clutter it was meant to avoid. Caught by rendering it, not by reading it.
+   *
+   * Left alone below the breakpoint: in the hamburger sidebar these are ordinary
+   * labelled text rows, where the arrow means what it always means.
+   */
+  .navbar__items--right .navbar-social svg {
+    display: none;
+  }
+}
