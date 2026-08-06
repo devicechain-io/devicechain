@@ -23,10 +23,10 @@ on:
       - deploy/helm/artifacthub-repo.yml
       - .github/workflows/artifacthub-metadata.yml
 
-# Least privilege: read the repo, write the one OCI artifact.
+# Least privilege: read the repo by default; the one job that pushes the OCI
+# artifact re-grants `packages: write` on itself.
 permissions:
   contents: read
-  packages: write
 
 # Same shape as release.yml: the owner is baked into REGISTRY, and the bare
 # host is used for login. Keeping the two workflows identical here means the
@@ -37,6 +37,8 @@ env:
 jobs:
   push:
     runs-on: ubuntu-latest
+    permissions:
+      packages: write # oras push of the artifacthub.io metadata tag
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 

@@ -31,10 +31,25 @@ on:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+*'
 
-# contents: write -> create the GitHub Release. packages: write -> push to ghcr.
+# Read-only by DEFAULT; each job re-grants exactly the write it needs, below.
+#
+# The difference is blast radius, not paperwork. A top-level `contents: write` +
+# `packages: write` is handed to EVERY job in the workflow, so a compromised
+# action anywhere in the release — in `guard`, which only reads a tag, or in the
+# manifest publisher — gets a token that can push images and rewrite releases.
+# Declaring the grant on the job that actually publishes means a step can only
+# abuse what its own job was already trusted with.
+#
+# Derived from what each job does, not from what looked safe:
+#   guard             — reads the tag                       -> contents: read
+#   images/chart/     — ko / helm / docker push to ghcr      -> packages: write
+#     frontend
+#   cli               — goreleaser creates the Release       -> contents: write
+#   edge-agent        — gh release upload                    -> contents: write
+#   publish-manifest  — gh release VIEW; the website push
+#                       uses its own PAT, not GITHUB_TOKEN   -> contents: read
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 # Never run two releases for the same tag concurrently.
 concurrency:
@@ -120,6 +135,8 @@ jobs:
   images:
     needs: guard
     runs-on: ubuntu-latest
+    permissions:
+      packages: write # ko push to ghcr
     strategy:
       fail-fast: false
       matrix:
@@ -201,6 +218,8 @@ jobs:
   chart:
     needs: guard
     runs-on: ubuntu-latest
+    permissions:
+      packages: write # helm push (OCI) to ghcr
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -249,6 +268,8 @@ jobs:
   frontend:
     needs: guard
     runs-on: ubuntu-latest
+    permissions:
+      packages: write # docker buildx push to ghcr
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -334,6 +355,8 @@ jobs:
     # artifact, so it is not created unless the correctness-under-load gate passed.
     needs: [guard, images, loadtest-gate]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # goreleaser creates the GitHub Release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -440,6 +463,8 @@ jobs:
   edge-agent:
     needs: [guard, images, loadtest-gate, cli]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # gh release upload
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -519,6 +544,8 @@ jobs:
   publish-manifest:
     needs: [guard, cli, edge-agent]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read  # gh release view; the website push uses its own PAT
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 

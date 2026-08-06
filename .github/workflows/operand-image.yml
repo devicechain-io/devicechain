@@ -24,8 +24,23 @@ on:
   push:
     branches: [main]
     paths:
+      # 🔴 Deliberately NOT '.github/workflows/operand-image.yml' here, though it
+      # IS in the pull_request paths above. `publish` runs on any matching push to
+      # main, so editing this file used to trigger a publish of an image whose
+      # revision had not changed — which the "refuse to overwrite an existing tag"
+      # guard correctly refused, leaving a red run on main that meant nothing and
+      # needed no action. Measured on 424e130, whose only change here was pinning
+      # the actions by SHA.
+      #
+      # That is not a one-off: the pins make this file a Dependabot target, so
+      # every `chore(ci)` bump would reproduce it. A red run nobody is expected to
+      # act on is how people learn to ignore red.
+      #
+      # Edits to this file are still fully exercised — the pull_request trigger
+      # runs compat + smoke on them; only the publish attempt is dropped, and a
+      # publish is meaningless when no image input changed. A real rebuild is a
+      # versions.conf bump (which this path list does catch) or a manual dispatch.
       - 'deploy/images/timescaledb/**'
-      - '.github/workflows/operand-image.yml'
   # Rebuild on demand — a base-image CVE fix lands in the CNPG base without any
   # change here, and the pins in versions.conf are what make that rebuild safe.
   workflow_dispatch:
