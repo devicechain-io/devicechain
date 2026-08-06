@@ -233,7 +233,7 @@ Cuando la previsualización se trunca —porque la ventana quedó fuera de la re
 alcanzó un límite de escaneo—, se lo indica en lugar de devolver en silencio un resultado corto. Lea
 ese aviso antes de concluir que una regla no se dispara.
 
-## Configuración
+## Configuración {#configuration}
 
 Todos estos ajustes son opcionales; los valores predeterminados de fábrica son adecuados para la
 mayoría de los despliegues.
@@ -245,16 +245,75 @@ mayoría de los despliegues.
 | `idleAdvanceGuardSeconds` | 5 | Cuánto tiempo debe estar el motor sin actividad antes de disparar una regla según el reloj de pared. Un valor negativo desactiva esa vía: las reglas de ausencia solo se disparan entonces cuando un *evento posterior* mueve el tiempo del evento más allá de su plazo, de modo que un dispositivo que se queda en silencio y sigue en silencio nunca levanta ninguna. |
 | `checkpointEvents` | 1000 | Máximo de eventos procesados entre puntos de control. |
 | `checkpointIntervalSeconds` | 10 | Tiempo máximo entre puntos de control, para que un flujo tranquilo también confirme. |
+| `maxRuleDurationSeconds` | 86400 | Lapso de tiempo máximo que puede declarar una regla: ventana, retención, tiempo de espera de silencio o hueco de sesión. **Se aplica**: una regla más larga se rechaza al publicar. Vea más abajo. |
 | `maxRulesPerTenant` | 500 | Techo de reglas por inquilino. **Se mide y se reporta, no se aplica**; vea más abajo. |
 | `maxLiveKeysPerTenant` | 1000000 | Techo por inquilino de ventanas y temporizadores vivos. También se mide, no se aplica. |
+| `maxRetainedSamplesPerTenant` | 5000000 | Techo por inquilino de lecturas retenidas dentro de las ventanas abiertas. También se mide, no se aplica. |
 | `outboundMessagesPerSecond` | 100 | Tasa por inquilino a la que se despachan las acciones de conector de salida. |
 | `outboundBurst` | 200 | Margen de ráfaga para lo anterior. |
 
-:::note Los presupuestos de estado se miden, no se aplican
-Los dos techos por inquilino levantan una métrica y una línea de registro cuando un inquilino los
-supera. **Nada detiene al inquilino.** Un solo inquilino que autore reglas patológicas puede agotar
-la memoria del motor compartido. Vigile `DetectTenantOverStateBudget` y actúe en consecuencia: la
-alerta *es* la aplicación del límite.
+### El techo de duración de regla sí se aplica
+
+`maxRuleDurationSeconds` es el único límite de esta página que **rechaza trabajo** en lugar de
+limitarse a informar sobre él. Una regla que declare una ventana, retención, tiempo de espera o
+hueco más largos se rechaza al publicar el perfil, con un error que nombra el campo y el límite, y
+ese mismo techo se vuelve a aplicar cuando el motor carga una regla publicada, de modo que ambos
+puntos nunca pueden discrepar sobre qué es ejecutable.
+
+Existe porque una regla con ventana retiene **un registro por lectura** durante toda la ventana, y
+por dispositivo. Esa memoria queda comprometida mientras viva la regla, en un proceso compartido por
+todos los inquilinos, y es el único coste que no se puede observar a posteriori para luego
+contenerlo: cuando la métrica se mueve, la memoria ya está reservada. Subir este límite aumenta esa
+exposición para toda la instancia, así que dimensiónelo antes de cambiarlo: aproximadamente
+*frecuencia de reporte × ventana × dispositivos × 32 bytes*, sumado sobre las reglas que usan
+ventanas largas.
+
+Los tiempos de espera de silencio y los huecos de sesión están acotados por la misma razón, aunque
+no retengan lecturas. Esas reglas insertan una entrada nueva en el montículo de temporizadores del
+motor cada vez que un dispositivo reporta, y la entrada sustituida no se descarta hasta que vence su
+plazo: un tiempo de espera de tres días sobre un dispositivo que reporta cada diez segundos acumula
+unas 26.000 entradas pendientes *para ese único dispositivo*. Un tiempo de espera largo cuesta
+memoria en proporción directa a su longitud, igual que una ventana larga.
+
+:::danger Una regla por encima del techo NO se ejecuta: se rechaza al arrancar, no se preserva
+El techo se aplica cuando el motor **carga** una regla, no solo cuando se publica una. Una regla
+cuya ventana supere el techo vigente falla al compilar durante la carga y **se omite**: no se
+ejecuta, y la única evidencia es una línea de error en el registro del motor. No se dispara ninguna
+alerta ni se mueve ninguna métrica —una regla omitida no retiene estado que medir.
+
+Hay dos situaciones que producen esto, y ambas son silenciosas:
+
+- **Bajar `maxRuleDurationSeconds`.** Las reglas publicadas bajo el límite anterior, más alto, dejan
+  de funcionar en el siguiente reinicio. No se preservan.
+- **Actualizar a una versión que introduce el techo.** Cualquier regla publicada cuando el límite no
+  existía —por ejemplo, un agregado de siete días— se rechaza la primera vez que arranca el motor
+  actualizado.
+
+Antes de bajar el límite o de actualizar, inventaríe las reglas publicadas con lapsos superiores al
+nuevo valor y acórtelas o retírelas de forma deliberada. Después, revise el registro del motor en
+busca de `failed to compile; skipping` y confirme en la pestaña **Rule Health** del perfil que se
+están ejecutando las reglas que espera.
+:::
+
+:::note Los presupuestos de estado por inquilino se miden, no se aplican
+Los tres techos por inquilino —reglas, claves vivas y lecturas retenidas— levantan una métrica y una
+línea de registro cuando un inquilino los supera. **Nada detiene al inquilino.** Un solo inquilino
+que autore reglas patológicas puede agotar la memoria del motor compartido. Vigile
+`DetectTenantOverStateBudget` y actúe en consecuencia: la alerta *es* la aplicación del límite.
+
+Vigile **las tres** dimensiones de memoria. Fallan en direcciones distintas y ninguna implica a las
+otras, así que cualquiera de ellas leída por separado puede parecer sana mientras el motor se llena:
+
+| Métrica | Cuenta | Se mueve cuando |
+|---|---|---|
+| `devicechain_eventprocessing_detect_live_keys` | ventanas y temporizadores abiertos | muchos dispositivos repartidos sobre muchas reglas |
+| `devicechain_eventprocessing_detect_retained_samples` | lecturas retenidas dentro de las ventanas abiertas | una regla de ventana larga sobre un dispositivo con mucho tráfico: **una** clave viva y cientos de miles de lecturas |
+| `devicechain_eventprocessing_detect_pending_timers` | entradas en el montículo de temporizadores | un tiempo de espera de silencio o un hueco de sesión largos con reportes frecuentes: de nuevo una sola clave viva, y ninguna lectura retenida |
+
+La segunda y la tercera existen porque la primera queda plana precisamente en los casos que agotan
+la memoria más rápido. Solo las dos primeras tienen techos por inquilino; el montículo de
+temporizadores se reporta como un total de toda la instancia, porque atribuirlo a un inquilino
+exigiría recorrerlo entero en cada punto de control.
 :::
 
 ## Qué vigilar
@@ -267,7 +326,7 @@ alerta *es* la aplicación del límite.
 | `DetectFanoutEvalErrors` | Una o más reglas publicadas están fallando al evaluarse. Vea la advertencia de arriba. |
 | `ReactPoisonDropping` | Se están descartando acciones tras agotar sus reintentos: se están perdiendo alarmas o comandos. Trátelo como urgente. |
 | `ReactConnectorEgressShedding` | El despacho de salida supera el límite de tasa del inquilino y se está descartando. |
-| `DetectTenantOverStateBudget` | Un inquilino ha superado un techo que no se aplica. |
+| `DetectTenantOverStateBudget` | Un inquilino ha superado un techo que no se aplica: su número de reglas, sus ventanas y temporizadores vivos, o las lecturas que retienen sus ventanas abiertas. |
 
 :::warning Un motor detenido sigue informando que está sano
 Si el motor se detiene tras perder una carrera de cerebro dividido, sus endpoints de salud siguen

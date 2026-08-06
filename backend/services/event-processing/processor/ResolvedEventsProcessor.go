@@ -78,6 +78,13 @@ type Config struct {
 	// the fail-safe platform ceiling from config.
 	MaxRulesPerTenant    int
 	MaxLiveKeysPerTenant int
+	// MaxRetainedSamplesPerTenant is the second state-budget axis: the per-sample records a
+	// tenant's window-shaped rules may hold (core.RetainedSampleCounts). It is separate from
+	// MaxLiveKeysPerTenant because the two overrun independently — many cheap keys versus a few
+	// windows retaining a very large number of samples — and the key count is flat in the latter.
+	// Non-positive means unmeasured (the tests' default); the service always supplies the
+	// fail-safe platform ceiling from config.
+	MaxRetainedSamplesPerTenant int
 }
 
 // ResolvedEventsProcessor is event-processing's single-writer tap on the
@@ -1783,19 +1790,25 @@ func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) bool {
 }
 
 // stateBudgetStats is the bounded, tenant-label-free result of a per-tenant state-budget sample: the
-// aggregate live-key total plus the COUNTS of tenants over each ceiling (never a per-tenant series —
-// the ADR-023 G.3 DoS lesson). It is what the gauges publish.
+// aggregate totals on both memory axes (live keys and retained samples) plus the COUNTS of tenants
+// over each ceiling (never a per-tenant series — the ADR-023 G.3 DoS lesson). It is what the gauges
+// publish.
 type stateBudgetStats struct {
-	totalLiveKeys    int
-	tenantsOverRules int
-	tenantsOverKeys  int
+	totalLiveKeys        int
+	totalRetainedSamples int
+	// totalPendingTimers is the timer wheel's heap size — the third memory axis, aggregate-only
+	// because attributing it would mean walking the heap (see core.PendingTimerCount). It has no
+	// per-tenant ceiling for the same reason; it is a gauge an operator watches, not a budget.
+	totalPendingTimers int
+	tenantsOverRules   int
+	tenantsOverKeys    int
+	tenantsOverSamples int
 }
 
 // recordStateBudget samples the per-tenant state budget and publishes the bounded gauges. Slice 6c-1
 // measures only; slice 6c-2 acts on these same breaches.
 func (rp *ResolvedEventsProcessor) recordStateBudget() {
-	s := rp.computeStateBudget()
-	rp.metrics.recordStateBudget(s.totalLiveKeys, s.tenantsOverRules, s.tenantsOverKeys)
+	rp.metrics.recordStateBudget(rp.computeStateBudget())
 }
 
 // sampleConsumerLag probes the resolved-events durable consumer's broker backlog and publishes it
@@ -1825,20 +1838,19 @@ func (rp *ResolvedEventsProcessor) sampleConsumerLag(ctx context.Context) {
 // without a high-cardinality metric. It is split from the metric emission so the rollup + over-budget
 // logic is unit-testable without a Prometheus registry (metrics are nil in tests).
 func (rp *ResolvedEventsProcessor) computeStateBudget() stateBudgetStats {
-	liveByRule := rp.engine.LiveKeyCounts()
-	liveByTenant := make(map[string]int, len(liveByRule))
-	total := 0
-	for ruleID, n := range liveByRule {
-		total += n
-		// A rule id with no parseable tenant prefix is a mis-minted rule the backstop already
-		// contains at publish; attribute its keys to the aggregate total but not to any tenant.
-		if tenant, ok := runtime.RuleTenant(ruleID); ok {
-			liveByTenant[tenant] += n
-		}
-	}
+	liveByTenant, totalLiveKeys := rollUpToTenants(rp.engine.LiveKeyCounts())
+	// The retained-sample rollup is the SECOND, independent axis (ADR-051 slice 6c): live keys
+	// count entries, which is flat in the data a long-window rule holds, so a tenant can be far
+	// inside its key budget while its windows retain hundreds of thousands of samples. Watching
+	// only one of the two leaves the other unbounded — see core.RetainedSampleCounts.
+	samplesByTenant, totalSamples := rollUpToTenants(rp.engine.RetainedSampleCounts())
 	rulesByTenant := rp.registry.RuleCountsByTenant()
 
-	stats := stateBudgetStats{totalLiveKeys: total}
+	stats := stateBudgetStats{
+		totalLiveKeys:        totalLiveKeys,
+		totalRetainedSamples: totalSamples,
+		totalPendingTimers:   rp.engine.PendingTimerCount(),
+	}
 	if rp.cfg.MaxRulesPerTenant > 0 {
 		for tenant, n := range rulesByTenant {
 			if n > rp.cfg.MaxRulesPerTenant {
@@ -1857,7 +1869,32 @@ func (rp *ResolvedEventsProcessor) computeStateBudget() stateBudgetStats {
 			}
 		}
 	}
+	if rp.cfg.MaxRetainedSamplesPerTenant > 0 {
+		for tenant, n := range samplesByTenant {
+			if n > rp.cfg.MaxRetainedSamplesPerTenant {
+				stats.tenantsOverSamples++
+				log.Warn().Str("tenant", tenant).Int("retainedSamples", n).Int("budget", rp.cfg.MaxRetainedSamplesPerTenant).
+					Msg("Tenant is over its DETECT retained-sample budget (ADR-023): its rules' windows hold more samples than the platform allows. Every rule counted here is WITHIN the rule-duration ceiling — one over it would not have loaded at all — so this is breadth (many series, or many window rules), not one overlong window. Lowering maxRuleDurationSeconds will not help unless the offending rules are near it.")
+			}
+		}
+	}
 	return stats
+}
+
+// rollUpToTenants sums a per-rule-id count into per-tenant totals, returning the map and the
+// grand total. A rule id with no parseable tenant prefix is a mis-minted rule the publish
+// backstop already contains; its count lands in the aggregate total but is attributed to no
+// tenant, so it can neither be lost from the aggregate nor charged to an innocent tenant.
+func rollUpToTenants(byRule map[string]int) (map[string]int, int) {
+	byTenant := make(map[string]int, len(byRule))
+	total := 0
+	for ruleID, n := range byRule {
+		total += n
+		if tenant, ok := runtime.RuleTenant(ruleID); ok {
+			byTenant[tenant] += n
+		}
+	}
+	return byTenant, total
 }
 
 // dropSupersededDetections is the publish-time version/membership gate for FRONTIER-triggered

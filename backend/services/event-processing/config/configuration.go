@@ -5,6 +5,8 @@ package config
 
 import (
 	"fmt"
+	"math"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/config"
 )
@@ -62,6 +64,29 @@ const (
 	// They are platform-operator tunable (raise for a genuinely large tenant).
 	DefaultMaxRulesPerTenant    = 500
 	DefaultMaxLiveKeysPerTenant = 1_000_000
+
+	// DefaultMaxRuleDurationSeconds is the platform ceiling on an authored rule's temporal
+	// extent — its window, hold, timeout or gap. A window-shaped rule retains one record per
+	// sample for the whole window, so the authored duration is the only knob that bounds that
+	// heap BEFORE it is allocated: at a 10s reporting interval one series on a 7-day window
+	// retains ~2MB, and a rule runs per series, in a process shared by every tenant.
+	//
+	// A day matches the ceiling the rule-PREVIEW path has always enforced. Previewing a rule
+	// over more than a day was already refused as too expensive, while publishing one — the
+	// path that holds the memory for as long as the rule lives — was unbounded; this closes
+	// that asymmetry. Fail-safe per ADR-023: unset (0) defaults to this ceiling, NEVER
+	// unlimited; a negative value is rejected at Validate. Operator-tunable (raise it for a
+	// tenant with a genuinely long-window rule, having sized the retention above).
+	DefaultMaxRuleDurationSeconds = 86400
+
+	// DefaultMaxRetainedSamplesPerTenant is the second runtime state-budget axis: the per-sample
+	// records a tenant's window-shaped rules may hold across the shared engine. It exists because
+	// the live-key ceiling above cannot see this overrun — a 30-day window on one chatty series is
+	// ONE live key and however many samples it retains. A retained sample is ~32 bytes, so this
+	// ceiling is roughly 160MB of window buffers per tenant, the same order as the live-key
+	// ceiling's own footprint. Fail-safe per ADR-023: unset (0) defaults to this ceiling, NEVER
+	// unlimited; a negative value is rejected at Validate.
+	DefaultMaxRetainedSamplesPerTenant = 5_000_000
 
 	// DefaultOutboundMessagesPerSecond and DefaultOutboundBurst are the platform-default
 	// per-tenant OUTBOUND egress ceiling REACT charges at the SOURCE (ADR-060 SD-3): before
@@ -122,6 +147,26 @@ type EventProcessingConfiguration struct {
 	MaxRulesPerTenant    int
 	MaxLiveKeysPerTenant int
 
+	// MaxRuleDurationSeconds is the publish-time ceiling on an authored detection rule's
+	// temporal extent — window, hold, timeout and gap alike. It bounds the retained heap a
+	// window-shaped rule commits to (one record per sample for the whole window) before that
+	// memory is allocated, which is the one thing the live-key budget above cannot see: a
+	// 30-day window on a single chatty series is ONE live key. Unset (0) defaults to the
+	// platform ceiling (DefaultMaxRuleDurationSeconds) — fail-safe: never unlimited; a
+	// negative value is rejected. Enforced by rules.Compile at both the publish gate and the
+	// runtime fact consumer, so a rule refused at publish is also refused on load.
+	MaxRuleDurationSeconds int
+
+	// MaxRetainedSamplesPerTenant is the per-tenant ceiling on retained per-sample records held
+	// by window-shaped rules (repeating / sliding aggregate / correlation members). It is the
+	// measured counterpart to MaxRuleDurationSeconds: the ceiling bounds what a rule may declare,
+	// this reports what the running rules are holding right now. Note it does NOT report rules
+	// that exceed the current ceiling — those do not run at all (CompilePublishedRules skips a
+	// rule that fails to compile, and the startup rebuild goes through that same path), so they
+	// hold nothing to measure. Unset (0) defaults to the platform ceiling
+	// (DefaultMaxRetainedSamplesPerTenant) — fail-safe: never unlimited; negative is rejected.
+	MaxRetainedSamplesPerTenant int
+
 	// OutboundMessagesPerSecond and OutboundBurst are the platform-default per-tenant OUTBOUND
 	// egress ceiling REACT charges at the SOURCE (ADR-060 SD-3): the sustained rate and burst of
 	// connector-dispatch publishes (httpCall/publish actions) a tenant may emit before REACT drops
@@ -164,6 +209,12 @@ func (c *EventProcessingConfiguration) ApplyDefaults() {
 	if c.MaxLiveKeysPerTenant == 0 {
 		c.MaxLiveKeysPerTenant = DefaultMaxLiveKeysPerTenant
 	}
+	if c.MaxRuleDurationSeconds == 0 {
+		c.MaxRuleDurationSeconds = DefaultMaxRuleDurationSeconds
+	}
+	if c.MaxRetainedSamplesPerTenant == 0 {
+		c.MaxRetainedSamplesPerTenant = DefaultMaxRetainedSamplesPerTenant
+	}
 	if c.OutboundMessagesPerSecond == 0 {
 		c.OutboundMessagesPerSecond = DefaultOutboundMessagesPerSecond
 	}
@@ -191,6 +242,22 @@ func (c *EventProcessingConfiguration) Validate() error {
 	}
 	if c.MaxLiveKeysPerTenant < 0 {
 		return fmt.Errorf("maxLiveKeysPerTenant must not be negative, got %d", c.MaxLiveKeysPerTenant)
+	}
+	if c.MaxRuleDurationSeconds < 0 {
+		return fmt.Errorf("maxRuleDurationSeconds must not be negative, got %d", c.MaxRuleDurationSeconds)
+	}
+	// Reject a value that cannot survive the seconds→time.Duration conversion main does. This is
+	// not pedantry: the conversion multiplies by 1e9, so an operator writing a deliberately huge
+	// number to mean "effectively unlimited" WRAPS. It wraps two ways and both are silent —
+	// negative (which withDefaults then floors to the STRICTEST 24h, the exact opposite of the
+	// intent), or small-positive (18446744074 lands on ~290ms, which refuses every real rule at
+	// publish AND drops every published rule at the next restart — detection dead behind a green
+	// config load). Failing at startup is what the fail-closed posture promises.
+	if maxSec := int64(math.MaxInt64) / int64(time.Second); int64(c.MaxRuleDurationSeconds) > maxSec {
+		return fmt.Errorf("maxRuleDurationSeconds must not exceed %d, got %d", maxSec, c.MaxRuleDurationSeconds)
+	}
+	if c.MaxRetainedSamplesPerTenant < 0 {
+		return fmt.Errorf("maxRetainedSamplesPerTenant must not be negative, got %d", c.MaxRetainedSamplesPerTenant)
 	}
 	// The outbound egress ceiling fails closed on a NEGATIVE rate/burst (an operator error, not an
 	// unlimited escape hatch), matching the per-tenant-budget precedent above: an unset (0) value is

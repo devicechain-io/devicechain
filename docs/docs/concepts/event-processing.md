@@ -40,6 +40,27 @@ Group membership is recorded on each event **as it is resolved**, so the engine 
 
 Each condition's comparison can be a structured `metric · operator · value` leaf or an advanced **CEL expression** over the event; both are statically type-checked and cost-limited when the profile is published, so a malformed or runaway rule is rejected before it can run.
 
+:::note Windows have a ceiling
+Every time span a rule declares — a window, a hold time, a silence timeout, a session gap — is
+capped at **24 hours** by default. A rule asking for longer is refused when the profile is
+published, naming the field and the limit.
+
+The cap exists because a windowed rule keeps **one record per reading** for the whole window, per
+device, in an engine shared by every tenant. A multi-day window over a fleet reporting every few
+seconds is a large amount of memory held indefinitely, and the cost is paid by everyone on the
+instance rather than by the tenant that authored it.
+
+Silence timeouts and session gaps are capped too, even though they hold no readings: those rules
+re-arm a timer every time a device reports, and the superseded timers are not released until their
+deadline passes — so a long timeout under frequent reporting accumulates in the same way.
+
+If you need a longer span, an operator can raise the limit for the instance
+([`maxRuleDurationSeconds`](../deployment/detection-engine.md#configuration)) after sizing the
+memory. Before asking for one, consider whether the question is really about *retention* rather
+than *detection* — a "compare against last month" question is usually better answered by querying
+stored history than by holding a month of readings in memory.
+:::
+
 :::warning Do not open a Connectivity rule in the console's form editor
 Because the form builder does not model the Connectivity type, opening an existing Connectivity rule in it **silently reads the rule back as a Threshold rule**, and saving from that drawer replaces the original definition. Nothing warns you: the form's "could not be read" notice fires only when the stored definition is not valid JSON, which a working Connectivity rule of course is.
 

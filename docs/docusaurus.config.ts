@@ -27,6 +27,20 @@ const config: Config = {
   // noticed by eye. Verified zero broken links across both locales when this was
   // flipped, so it starts clean.
   onBrokenLinks: 'throw',
+  // Anchors were left at the default ('warn') when the above was flipped, which meant a link
+  // to a real page with a WRONG FRAGMENT still shipped: verified by planting one — Docusaurus
+  // printed "found broken anchors", then printed [SUCCESS] and exited 0. Netlify would have
+  // deployed it. The reader's experience of that is the same as a broken link (they land on
+  // the page and the section they were sent to is not there), so it gets the same treatment.
+  //
+  // The cross-locale case is the sharp edge, and it is not hypothetical: an English heading
+  // and its Spanish translation generate DIFFERENT slugs ("Configuration" → #configuration,
+  // "Configuración" → #configuración), so a fragment that is correct in one locale is broken
+  // in the other by default. The fix is an explicit `{#anchor}` on both headings — pin the
+  // anchor whenever you link to a section across locales.
+  //
+  // Verified zero broken anchors across both locales when this was flipped, so it starts clean.
+  onBrokenAnchors: 'throw',
 
   markdown: {
     hooks: {

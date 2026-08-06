@@ -207,7 +207,7 @@ When preview truncates — because the window aged out of retention, or a scan l
 tells you so rather than silently returning a short result. Read that notice before concluding a
 rule does not fire.
 
-## Configuration
+## Configuration {#configuration}
 
 All of these are optional; the shipped defaults are appropriate for most deployments.
 
@@ -218,15 +218,70 @@ All of these are optional; the shipped defaults are appropriate for most deploym
 | `idleAdvanceGuardSeconds` | 5 | How long the engine must be quiet before it will fire a rule on wall-clock time. A negative value turns that path off: absence rules then fire only when a *later event* moves event time past their deadline, so a device that goes silent and stays silent never raises one. |
 | `checkpointEvents` | 1000 | Maximum events processed between checkpoints. |
 | `checkpointIntervalSeconds` | 10 | Maximum time between checkpoints, so a quiet stream still commits. |
+| `maxRuleDurationSeconds` | 86400 | Longest time span a rule may declare — window, hold, silence timeout or session gap. **Enforced**: a longer rule is refused at publish. See below. |
 | `maxRulesPerTenant` | 500 | Per-tenant rule ceiling. **Measured and reported, not enforced** — see below. |
 | `maxLiveKeysPerTenant` | 1000000 | Per-tenant ceiling on live windows and timers. Also measured, not enforced. |
+| `maxRetainedSamplesPerTenant` | 5000000 | Per-tenant ceiling on readings held inside open windows. Also measured, not enforced. |
 | `outboundMessagesPerSecond` | 100 | Per-tenant rate at which outbound connector actions are dispatched. |
 | `outboundBurst` | 200 | Burst allowance for the above. |
 
-:::note State budgets are measured, not enforced
-The two per-tenant ceilings raise a metric and a log line when a tenant exceeds them. **Nothing
-stops the tenant.** A single tenant authoring pathological rules can still exhaust the shared
-engine's memory. Watch `DetectTenantOverStateBudget` and act on it — the alert is the enforcement.
+### The rule-duration ceiling is enforced
+
+`maxRuleDurationSeconds` is the one limit here that **refuses work** rather than reporting on it. A
+rule declaring a longer window, hold, timeout or gap is rejected when the profile is published, with
+an error naming the field and the limit, and the same ceiling is applied again when the engine loads
+a published rule — so the two can never disagree about what is runnable.
+
+It exists because a windowed rule retains **one record per reading** for the length of its window,
+per device. That memory is committed for as long as the rule lives, in a process shared by every
+tenant, and it is the one cost that cannot be observed after the fact and then reined in — by the
+time the metric moves, the memory is already allocated. Raising this limit raises that exposure for
+the whole instance, so size it before you change it: roughly *reporting rate × window × devices ×
+32 bytes*, summed over the rules that use long windows.
+
+Silence timeouts and session gaps are bounded for the same reason, even though they hold no
+readings. Those rules push a new entry onto the engine's timer heap every time a device reports and
+the superseded entry is not discarded until its deadline passes — so a three-day silence timeout on
+a device reporting every ten seconds carries roughly 26,000 pending entries *for that one device*.
+A long timeout costs memory in direct proportion to its length, just as a long window does.
+
+:::danger A rule over the ceiling does not run — it is refused at startup, not grandfathered
+The ceiling is applied when the engine **loads** a rule, not only when one is published. A rule
+whose window exceeds the current ceiling fails to compile on load and is **skipped**: it does not
+run, and the only evidence is an error line in the engine's log. No alert fires, and no metric
+moves — a skipped rule holds no state to be measured.
+
+Two situations produce this, and both are silent:
+
+- **Lowering `maxRuleDurationSeconds`.** Rules published under the old, higher limit stop working at
+  the next restart. They are not grandfathered.
+- **Upgrading to a version that introduces the ceiling.** Any rule published while the limit did not
+  exist — a seven-day aggregate, say — is refused the first time the upgraded engine starts.
+
+Before lowering the limit or upgrading, inventory the published rules for time spans above the new
+value and shorten or retire them deliberately. Afterwards, check the engine log for
+`failed to compile; skipping` and confirm the rules you expect are running on the profile's **Rule
+Health** tab.
+:::
+
+:::note The per-tenant state budgets are measured, not enforced
+The three per-tenant ceilings — rules, live keys, and retained samples — raise a metric and a log
+line when a tenant exceeds them. **Nothing stops the tenant.** A single tenant authoring
+pathological rules can still exhaust the shared engine's memory. Watch
+`DetectTenantOverStateBudget` and act on it — the alert is the enforcement.
+
+Watch **all three** memory dimensions. They fail in different directions and none implies the
+others, so any one of them read alone can look healthy while the engine fills up:
+
+| Metric | Counts | Moves when |
+|---|---|---|
+| `devicechain_eventprocessing_detect_live_keys` | open windows and timers | many devices across many rules |
+| `devicechain_eventprocessing_detect_retained_samples` | readings held inside open windows | one long-window rule on a busy device — **one** live key, hundreds of thousands of readings |
+| `devicechain_eventprocessing_detect_pending_timers` | entries in the timer heap | a long silence timeout or session gap under frequent reporting — again one live key, and no retained readings at all |
+
+The second and third exist because the first is flat in exactly the cases that exhaust memory
+fastest. Only the first two have per-tenant ceilings; the timer heap is reported as an instance-wide
+total, because attributing it to a tenant would mean walking the whole heap on every checkpoint.
 :::
 
 ## What to watch
@@ -239,7 +294,7 @@ engine's memory. Watch `DetectTenantOverStateBudget` and act on it — the alert
 | `DetectFanoutEvalErrors` | One or more published rules are failing to evaluate. See the caution above. |
 | `ReactPoisonDropping` | Actions are being dropped after exhausting their retries — alarms or commands are being lost. Treat as urgent. |
 | `ReactConnectorEgressShedding` | Outbound dispatch is over the tenant's rate limit and is being shed. |
-| `DetectTenantOverStateBudget` | A tenant is over a ceiling that is not enforced. |
+| `DetectTenantOverStateBudget` | A tenant is over a ceiling that is not enforced — its rule count, its live windows and timers, or the readings its open windows retain. |
 
 :::warning A halted engine still reports healthy
 If the engine halts after losing a split-brain race, its health endpoints continue to report ready.

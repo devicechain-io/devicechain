@@ -80,13 +80,21 @@ type detectMetrics struct {
 	supersededFrontierDropped prometheus.Counter
 
 	// Slice-6c per-tenant state-budget gauges (ADR-023 amendment). Bounded cardinality — NO
-	// per-tenant labels (the G.3 DoS lesson): liveKeys is the AGGREGATE live keyed-state count across
-	// all tenants, and the two "over budget" gauges are COUNTS of tenants breaching each ceiling, not
-	// a per-tenant series. The offending tenant is found via the loop's warn log, not a metric label.
-	// Recomputed each checkpoint on the single-writer loop.
-	liveKeys                 prometheus.Gauge
-	tenantsOverRuleBudget    prometheus.Gauge
-	tenantsOverLiveKeyBudget prometheus.Gauge
+	// per-tenant labels (the G.3 DoS lesson): liveKeys/retainedSamples are AGGREGATE totals across
+	// all tenants, and the three "over budget" gauges are COUNTS of tenants breaching each ceiling,
+	// not a per-tenant series. The offending tenant is found via the loop's warn log, not a metric
+	// label. Recomputed each checkpoint on the single-writer loop.
+	//
+	// liveKeys and retainedSamples measure DIFFERENT nouns and are both required: liveKeys counts
+	// state ENTRIES (key cardinality), retainedSamples counts the per-sample records a window-shaped
+	// rule holds. A long-window rule on one busy series moves the second and leaves the first flat,
+	// which is exactly the overrun that used to be invisible.
+	liveKeys                        prometheus.Gauge
+	retainedSamples                 prometheus.Gauge
+	pendingTimers                   prometheus.Gauge
+	tenantsOverRuleBudget           prometheus.Gauge
+	tenantsOverLiveKeyBudget        prometheus.Gauge
+	tenantsOverRetainedSampleBudget prometheus.Gauge
 }
 
 // newDetectMetrics registers the checkpoint-loop metrics under the service's
@@ -119,19 +127,29 @@ func newDetectMetrics(ms *core.Microservice) *detectMetrics {
 		liveKeys:                 ms.NewGauge("detect_live_keys", "Total live keyed window/timer state entries across all tenants (the per-tenant state-budget aggregate).", nil),
 		tenantsOverRuleBudget:    ms.NewGauge("detect_tenants_over_rule_budget", "Tenants currently exceeding the per-tenant rule-count budget (ADR-023).", nil),
 		tenantsOverLiveKeyBudget: ms.NewGauge("detect_tenants_over_live_key_budget", "Tenants currently exceeding the per-tenant live-key budget (ADR-023).", nil),
+
+		// The retained-sample axis (ADR-051 slice 6c). detect_live_keys counts state ENTRIES, which
+		// is flat in the samples a long window holds — a 30-day window on one series is one key. This
+		// pair is what a long-window memory overrun actually moves.
+		retainedSamples:                 ms.NewGauge("detect_retained_samples", "Total per-sample records retained by window-shaped rules across all tenants (repeating/sliding-aggregate windows and correlation members).", nil),
+		pendingTimers:                   ms.NewGauge("detect_pending_timers", "Entries in the timer wheel's pending-deadline heap. Grows per EVENT for absence/session rules (a deadline reset pushes a new entry and the superseded one lingers until its deadline), so neither of the two gauges above can see it.", nil),
+		tenantsOverRetainedSampleBudget: ms.NewGauge("detect_tenants_over_retained_sample_budget", "Tenants currently exceeding the per-tenant retained-sample budget (ADR-023).", nil),
 	}
 }
 
 // recordStateBudget publishes the per-tenant state-budget gauges at a checkpoint (slice 6c): the
 // aggregate live-key total and the counts of tenants over each ceiling. Nil-safe (unit-test loops
 // run unmeasured).
-func (m *detectMetrics) recordStateBudget(totalLiveKeys, tenantsOverRules, tenantsOverKeys int) {
+func (m *detectMetrics) recordStateBudget(s stateBudgetStats) {
 	if m == nil {
 		return
 	}
-	m.liveKeys.Set(float64(totalLiveKeys))
-	m.tenantsOverRuleBudget.Set(float64(tenantsOverRules))
-	m.tenantsOverLiveKeyBudget.Set(float64(tenantsOverKeys))
+	m.liveKeys.Set(float64(s.totalLiveKeys))
+	m.retainedSamples.Set(float64(s.totalRetainedSamples))
+	m.pendingTimers.Set(float64(s.totalPendingTimers))
+	m.tenantsOverRuleBudget.Set(float64(s.tenantsOverRules))
+	m.tenantsOverLiveKeyBudget.Set(float64(s.tenantsOverKeys))
+	m.tenantsOverRetainedSampleBudget.Set(float64(s.tenantsOverSamples))
 }
 
 // recordStaleAbsenceDropped records one absence detection dropped by the publish-time membership gate.
