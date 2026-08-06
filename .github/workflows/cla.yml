@@ -21,15 +21,21 @@ concurrency:
   group: cla-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: false
 
+# Read-only by default; the one job that needs write re-grants it below. This
+# workflow triggers on `pull_request_target`, which runs with a token that has
+# access to repository SECRETS even for a fork PR — so a narrow default matters
+# more here than in a workflow a fork cannot reach.
 permissions:
-  actions: write
-  contents: write
-  pull-requests: write
-  statuses: write
+  contents: read
 
 jobs:
   cla:
     runs-on: ubuntu-latest
+    permissions:
+      actions: write # CLA Assistant Lite re-runs the check workflow after a signature
+      contents: write # signatures are committed to the `cla-signatures` branch
+      pull-requests: write # comment the signing instructions on the PR
+      statuses: write # report the CLA status back onto the PR
     steps:
       - name: CLA Assistant
         if: >
