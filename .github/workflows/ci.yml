@@ -243,6 +243,13 @@ jobs:
       # The vulnerability DB is fetched at run time, so this step can start failing
       # with no change to this repo. That is the point of it — a newly published
       # advisory against a dependency we already ship is exactly the news we want.
+      #
+      # COVERAGE GAP, stated rather than left to be inferred from a green run: this
+      # rides the discover matrix, which globs backend/{cli,core,k8s,edge/*,
+      # services/*,sims/*,tools/*} — 21 modules. `deploy` is the 22nd workspace
+      # module (deploy/assets.go) and no CI job builds, vets or tests it, so it is
+      # not scanned here either. The codeql workflow DOES cover it, because that one
+      # builds from `go list -m` and so follows go.work rather than a glob.
       - name: govulncheck (reachable vulnerabilities)
         run: hack/govulncheck.sh "${{ matrix.module }}"
 
