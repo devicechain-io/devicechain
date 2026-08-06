@@ -1,0 +1,85 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# OpenSSF Scorecard — an outside, automated read of this repo's supply-chain
+# posture (branch protection, pinned dependencies, token permissions, whether a
+# fuzzing/SAST gate exists, whether releases are signed, ...).
+#
+# WHY PUBLISH THE RESULTS. `publish_results: true` sends the score to the public
+# OpenSSF API, which is what makes the README badge resolve and what lets an
+# evaluator check this project without asking us. Running Scorecard privately and
+# keeping the number to ourselves is the common configuration and it is close to
+# pointless: the score's whole value is that a stranger can verify it.
+#
+# EXPECT A LOW FIRST SCORE, and expect some checks to stay low on purpose. A young
+# repo scores badly on `Fuzzing`, on `CII-Best-Practices` (a badge we have not
+# applied for) and on `Signed-Releases`. The number is a starting line to move,
+# not a gate — which is why nothing here fails the build on a score threshold.
+# `Pinned-Dependencies` is the one this PR moves directly.
+name: scorecard
+
+on:
+  # On demand. Without this the only ways to get a score are to wait for Tuesday
+  # or to push to main, which makes the first run — the one that establishes
+  # whether publishing actually works and whether the README badge resolves —
+  # unverifiable until well after the change that introduced it has merged.
+  workflow_dispatch:
+  # Scorecard reads branch-protection settings, so re-score when they change.
+  branch_protection_rule:
+  schedule:
+    # Weekly, Tuesday 07:41 UTC. Deliberately not on the hour and not Monday:
+    # Dependabot already opens its grouped PRs Monday, and an off-peak minute
+    # avoids the top-of-hour scheduling backlog GitHub warns about for cron.
+    - cron: "41 7 * * 2"
+  push:
+    branches: [main]
+
+# Least privilege. Two of these are NOT boilerplate:
+#   id-token: write     — required by publish_results to mint the OIDC token that
+#                         proves to the OpenSSF API this score came from this repo.
+#                         Without it the publish silently degrades and the badge
+#                         never resolves.
+#   security-events: write — required to upload the SARIF into the Security tab.
+permissions:
+  contents: read
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      id-token: write
+      contents: read
+      actions: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      # Keep the raw SARIF for 5 days. The Security tab renders the findings, but
+      # it de-duplicates and ages them out; the artifact is what you diff when a
+      # score moves and the tab does not obviously say why.
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: scorecard-results
+          path: results.sarif
+          retention-days: 5
+
+      # v4, not v3. 🔴 `gh api repos/github/codeql-action/releases/latest` answers
+      # `codeql-bundle-v2.26.2` — the CodeQL CLI BUNDLE version, not the action's.
+      # Reading that as "the action is on v2" is an easy and wrong conclusion; the
+      # tags endpoint is the authority, and v3 is deprecated (December 2026).
+      - name: Upload to code-scanning
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        with:
+          sarif_file: results.sarif

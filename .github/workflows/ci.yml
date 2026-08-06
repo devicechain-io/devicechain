@@ -36,7 +36,7 @@ jobs:
       modules: ${{ steps.mod.outputs.modules }}
       smoke: ${{ steps.smoke.outputs.smoke }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # Proves the coverage check can fail before its green run is used as evidence.
       - name: dependabot module-coverage self-test
@@ -58,6 +58,14 @@ jobs:
       # that runs on every PR; the guard itself has nothing to check until there is a tag.
       - name: release-highlights guard self-test
         run: hack/check-release-highlights.sh --self-test
+
+      # The govulncheck wrapper decides which findings are allowed to pass. Its
+      # allowlist is the one place in CI where a known vulnerability is waved
+      # through on purpose, so proving the checker can still fail — on an
+      # unreviewed finding AND on an exception that has gone stale — matters more
+      # here than anywhere else. Runs in discover, before the matrix fans out.
+      - name: govulncheck wrapper self-test
+        run: hack/govulncheck.sh --self-test
 
       - name: Discover services
         id: svc
@@ -109,9 +117,9 @@ jobs:
       matrix:
         module: ${{ fromJson(needs.discover.outputs.modules) }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.work
           cache: true
@@ -211,6 +219,40 @@ jobs:
               ;;
           esac
 
+      # Known-vulnerability scan of this module's dependency graph. It lives here,
+      # in the go matrix, rather than in a workflow of its own because govulncheck
+      # has to run INSIDE a module (same constraint as every other Go gate here) and
+      # this job already provides a warm per-module build cache. Measured on a warm
+      # cache: 3.4s for core, 4.7s for outbound-connectors — the Bento tree, and the
+      # slowest module here.
+      #
+      # 🔑 A GREEN RUN DOES NOT MEAN "no vulnerable dependencies". It means nothing
+      # REACHABLE — govulncheck resolves advisories down to the call graph, and a
+      # vulnerability in a module we require but never call is reported and does not
+      # fail. That is deliberate: core requires x/crypto@v0.54.0 carrying
+      # GO-2026-5932 with "Fixed in: N/A", so failing on require-but-do-not-call
+      # would paint the whole tree permanently red over a package nobody can
+      # upgrade away from.
+      #
+      # The wrapper exists for the one module where that advisory IS reachable —
+      # backend/cli, via helm's package-init chain — and it carries a reviewed,
+      # justified, per-module exception that FAILS ONCE IT GOES STALE. The full
+      # reasoning, and the JSON-mode exit-code trap that shapes the script, are in
+      # hack/govulncheck.sh. Note the deliberate absence of continue-on-error.
+      #
+      # The vulnerability DB is fetched at run time, so this step can start failing
+      # with no change to this repo. That is the point of it — a newly published
+      # advisory against a dependency we already ship is exactly the news we want.
+      #
+      # COVERAGE GAP, stated rather than left to be inferred from a green run: this
+      # rides the discover matrix, which globs backend/{cli,core,k8s,edge/*,
+      # services/*,sims/*,tools/*} — 21 modules. `deploy` is the 22nd workspace
+      # module (deploy/assets.go) and no CI job builds, vets or tests it, so it is
+      # not scanned here either. The codeql workflow DOES cover it, because that one
+      # builds from `go list -m` and so follows go.work rather than a glob.
+      - name: govulncheck (reachable vulnerabilities)
+        run: hack/govulncheck.sh "${{ matrix.module }}"
+
       - name: go test
         working-directory: ${{ matrix.module }}
         # The operator's controllers suite is a kubebuilder envtest scaffold with
@@ -233,7 +275,13 @@ jobs:
         # cache (the expensive part — outbound-connectors' Bento tree) is untouched.
         run: |
           if [ "${{ matrix.module }}" = "backend/k8s" ]; then
-            go test -count=1 $(go list ./... | grep -v '/controllers$')
+            # Read into an array rather than splitting an unquoted $(...). The
+            # word-splitting was intended, but written that way it is
+            # indistinguishable from the accidental kind — to shellcheck and to a
+            # reader — and it would also glob. The array says "one argument per
+            # package" outright.
+            mapfile -t pkgs < <(go list ./... | grep -v '/controllers$')
+            go test -count=1 "${pkgs[@]}"
           else
             go test -count=1 ./...
           fi
@@ -270,9 +318,9 @@ jobs:
   migrations:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.work
           cache: true
@@ -344,9 +392,9 @@ jobs:
   license:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.work
           cache: true
@@ -367,12 +415,64 @@ jobs:
           -f hack/license-header.txt backend sdks
 
   # ---------------------------------------------------------------------------
+  # Workflow hygiene: the CI configuration is itself un-gated code.
+  #
+  # Nothing else in this repo validates .github/workflows. A typo in a `runs-on`
+  # label, an expression referencing a context field that does not exist, or a
+  # `${{ github.event.* }}` interpolated straight into a `run:` block (a script
+  # INJECTION — attacker-controlled text executing as shell in our runner) all
+  # ship silently and are discovered, at best, on the next run and, at worst,
+  # never. actionlint catches all three statically.
+  # ---------------------------------------------------------------------------
+  actions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # Proves the pin guard can fail before its green run is used as evidence —
+      # same reason the guards in `discover` self-test. This one covers the two
+      # extraction traps that make a pin checker silently vacuous (a substring
+      # match on `statuses: write`, and subpath actions like
+      # github/codeql-action/upload-sarif being skipped by an owner/repo pattern).
+      - name: action-pin guard self-test
+        run: hack/check-action-pins.sh --self-test
+
+      # A mutable `@v4` ref is code an outsider can change without a diff here.
+      - name: Every action is pinned to a commit SHA
+        run: hack/check-action-pins.sh
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: false
+
+      # 🔑 actionlint runs shellcheck against every `run:` block, but ONLY if a
+      # shellcheck binary is on PATH — otherwise it silently skips that entire
+      # class of check and still exits 0. ubuntu-latest ships one, so CI gets the
+      # shell checks; a developer's machine usually does not, so a local green run
+      # is WEAKER than this job and does not predict it. Measured: with shellcheck
+      # absent, actionlint reported nothing on this repo; with it present, it found
+      # two real defects (an unquoted $(...) here and an unquoted ${REGISTRY} in
+      # release.yml). Run it locally as:
+      #   actionlint -shellcheck=/path/to/shellcheck
+      - name: actionlint
+        run: |
+          GOWORK=off go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          command -v shellcheck >/dev/null || {
+            echo "::error::shellcheck is not on PATH; actionlint would silently skip"
+            echo "all shell checks and still pass. Refusing to report a weaker result"
+            echo "than this job promises."
+            exit 1
+          }
+          "$(go env GOPATH)/bin/actionlint"
+
+  # ---------------------------------------------------------------------------
   # Published documentation hygiene.
   # ---------------------------------------------------------------------------
   docs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # Prove the guard can fail before trusting it to pass — it is a grep, and a
       # grep with a typo'd pattern is indistinguishable from a clean tree.
@@ -404,9 +504,9 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           # Matches the frontend Dockerfile build stage (node:26-alpine) and
           # satisfies vite 8's engines floor (^20.19 || ^22.12 || >=24).
@@ -462,9 +562,9 @@ jobs:
       run:
         working-directory: sdks/csharp
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: '8.0.x'
 
@@ -486,9 +586,9 @@ jobs:
   unity-compile-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: '8.0.x'
 
@@ -501,9 +601,9 @@ jobs:
   helm:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: azure/setup-helm@v5
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
 
       - name: helm lint
         run: helm lint deploy/helm/devicechain
@@ -638,9 +738,9 @@ jobs:
       run:
         working-directory: deploy/opentofu
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: opentofu/setup-opentofu@v2
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2
         with:
           # The action's default is to install a Node WRAPPER on the PATH ahead of
           # the real binary, so that a step's tofu output can be read back as step
@@ -713,9 +813,9 @@ jobs:
         # operator at backend/k8s -- assembled by the discover job.
         module: ${{ fromJson(needs.discover.outputs.smoke) }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.work
           cache: true
@@ -746,7 +846,7 @@ jobs:
       # API. It also makes the image build reproducible — the same ko for every run
       # rather than whatever shipped that morning, which is what pinning a build tool
       # is for. Bump this deliberately.
-      - uses: ko-build/setup-ko@v0.10
+      - uses: ko-build/setup-ko@61b4d1d396f5b2e7d6bb6fefdce3dc38d1a13445 # v0.10
         with:
           version: v0.19.1
 

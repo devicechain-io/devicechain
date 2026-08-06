@@ -56,7 +56,7 @@ jobs:
       is_prerelease: ${{ steps.semver.outputs.is_prerelease }}
       smoke: ${{ steps.smoke.outputs.smoke }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # The release highlights are the one part of the published manifest a machine cannot
       # derive: generated from commit subjects they would read as `fix(events): give payload
@@ -127,9 +127,9 @@ jobs:
         # (backend/k8s) -- assembled by the guard job.
         module: ${{ fromJson(needs.guard.outputs.smoke) }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.work
           cache: true
@@ -143,7 +143,7 @@ jobs:
       # reason that has nothing to do with the code. It also means the released images
       # are built by whichever ko happened to be current that day; a release should be
       # reproducible. Keep this in step with ci.yml — bump both together, deliberately.
-      - uses: ko-build/setup-ko@v0.10
+      - uses: ko-build/setup-ko@61b4d1d396f5b2e7d6bb6fefdce3dc38d1a13445 # v0.10
         with:
           version: v0.19.1
 
@@ -202,7 +202,7 @@ jobs:
     needs: guard
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # Pin Helm for the same reproducibility reason as ko above — and, here,
       # for correctness: Helm versions after v3.18.6 regressed OCI push to ghcr
@@ -210,7 +210,7 @@ jobs:
       # AFTER packaging succeeds. The unpinned action installs the latest Helm,
       # so a tag would package a chart it then cannot publish. v3.18.6 is verified
       # to push to ghcr; bump deliberately, and re-verify the OCI push when doing so.
-      - uses: azure/setup-helm@v5
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: v3.18.6
 
@@ -237,7 +237,7 @@ jobs:
             --app-version "$VERSION"
 
           # helm package writes devicechain-<chart_version>.tgz to the cwd.
-          helm push "devicechain-${chart_version}.tgz" oci://${REGISTRY}/charts
+          helm push "devicechain-${chart_version}.tgz" "oci://${REGISTRY}/charts"
 
   # ---------------------------------------------------------------------------
   # Build + push the web console image (static nginx SPA), multi-arch.
@@ -250,13 +250,13 @@ jobs:
     needs: guard
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Log in to ghcr
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -278,7 +278,7 @@ jobs:
           echo "Frontend tags: $tags"
 
       - name: Build + push console image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: frontend
           file: frontend/Dockerfile
@@ -335,12 +335,12 @@ jobs:
     needs: [guard, images, loadtest-gate]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # goreleaser needs full history (tags + commits) for changelog/version.
           fetch-depth: 0
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.work
           cache: true
@@ -350,7 +350,7 @@ jobs:
       # verification below can gate publication. Verifying after `release` would
       # only tell us the broken release is already public.
       - name: goreleaser build (verification target)
-        uses: goreleaser/goreleaser-action@v7
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
         with:
           version: "~> v2"
           args: build --clean --single-target
@@ -404,7 +404,7 @@ jobs:
           echo "OK: ${REGISTRY}/device-management:${tag} resolves."
 
       - name: goreleaser release
-        uses: goreleaser/goreleaser-action@v7
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
         with:
           version: "~> v2"
           args: release --clean
@@ -441,19 +441,19 @@ jobs:
     needs: [guard, images, loadtest-gate, cli]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # goreleaser needs full history (tags + commits) for version/commit stamping.
           fetch-depth: 0
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.work
           cache: true
           cache-dependency-path: "**/go.sum"
 
       - name: goreleaser build (archives + checksums, no publish)
-        uses: goreleaser/goreleaser-action@v7
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
         with:
           version: "~> v2"
           args: release --clean
@@ -520,7 +520,7 @@ jobs:
     needs: [guard, cli, edge-agent]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Build the release manifest
         env:
