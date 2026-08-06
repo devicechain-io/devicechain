@@ -206,9 +206,13 @@ check_npm() {
   compare "npm tree" "npm" "${2:-.github/dependabot.yml}" "$(npm_trees "$root")" "the tree under $root"
 }
 
+# The real run, over the real repo. Takes no arguments on purpose: the self-test
+# drives check_gomod / check_npm directly with its own fixture paths, so the
+# indirection through defaulted positionals here was never exercised by anything
+# and only read as though callers could override it.
 check() {
-  check_gomod "${1:-go.work}" "${2:-.github/dependabot.yml}"
-  check_npm "${3:-.}" "${2:-.github/dependabot.yml}"
+  check_gomod go.work .github/dependabot.yml
+  check_npm . .github/dependabot.yml
 }
 
 if [ "${1:-}" = "--self-test" ]; then

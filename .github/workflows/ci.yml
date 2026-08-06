@@ -466,6 +466,20 @@ jobs:
           }
           "$(go env GOPATH)/bin/actionlint"
 
+      # actionlint above covers the shell INSIDE workflows (`run:` blocks). The
+      # standalone scripts were ungated, and that is where most of this repo's
+      # shell actually lives — both validation rigs, every CI guard, the local
+      # bring-up, the operand-image build.
+      #
+      # Self-test first, for the usual reason: this guard enumerates its own
+      # inputs, and an enumeration that silently returns nothing is the classic
+      # way a check reports "clean" about a tree it never looked at.
+      - name: shellcheck guard self-test
+        run: hack/shellcheck.sh --self-test
+
+      - name: shellcheck every tracked script
+        run: hack/shellcheck.sh
+
   # ---------------------------------------------------------------------------
   # Published documentation hygiene.
   # ---------------------------------------------------------------------------

@@ -766,7 +766,7 @@ from, and every phase after this one would be testing an empty archive.
 # authenticated by uid (26 = postgres) and no secret enters the process table.
 # Twice, because the switch archives the segment that was current when it ran.
 force_wal_archive() {
-  local store="${1:-rdb}" pod i
+  local store="${1:-rdb}" pod
   pod="$(pg_pod "$store")"
 
   # 🔴 THE BASELINE IS TAKEN HERE, immediately before the switch — NOT when the
@@ -790,7 +790,8 @@ force_wal_archive() {
   archive_wal_segments "$store" >"$(wal_baseline_file "$store")"
 
   say "forcing the $store seed into the WAL archive"
-  for i in 1 2; do
+  # `_` rather than `i`: the body does not use the counter, it just runs twice.
+  for _ in 1 2; do
     kubectl --context "$kube_context" -n dc-system exec -i "$pod" -- \
       psql -U postgres -d postgres -q -c 'checkpoint' -c 'select pg_switch_wal()' >/dev/null ||
       fail "could not force a WAL switch on $pod ($store)"
