@@ -96,9 +96,21 @@ const config: Config = {
       items: [
         { type: 'docSidebar', sidebarId: 'docs', position: 'left', label: 'Docs' },
         { type: 'localeDropdown', position: 'right' },
+        // Rendered as icons, not text — see `.navbar-social` in src/css/custom.css
+        // for how, and for why the label below still has to be a real word rather
+        // than an empty string.
         {
           href: 'https://github.com/devicechain-io/devicechain',
           label: 'GitHub',
+          'aria-label': 'DeviceChain on GitHub',
+          className: 'navbar-social navbar-social--github',
+          position: 'right',
+        },
+        {
+          href: 'https://x.com/DeviceChain_IoT',
+          label: 'X',
+          'aria-label': 'DeviceChain on X',
+          className: 'navbar-social navbar-social--x',
           position: 'right',
         },
       ],
@@ -123,6 +135,10 @@ const config: Config = {
               href: 'https://github.com/devicechain-io/devicechain/discussions',
             },
             { label: 'Getting help', to: '/getting-help' },
+            // The navbar icon is unlabelled by design; this is the one place the
+            // handle itself is written out, so someone can find the account by
+            // name rather than only by clicking a glyph.
+            { label: 'Follow @DeviceChain_IoT', href: 'https://x.com/DeviceChain_IoT' },
           ],
         },
       ],
