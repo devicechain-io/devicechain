@@ -480,6 +480,23 @@ jobs:
       - name: shellcheck every tracked script
         run: hack/shellcheck.sh
 
+      # The base image of every artifact we publish lives on one line of
+      # .ko.yaml, and no scanner reads it — Scorecard only parses Dockerfiles,
+      # which is how it came to flag a dead kubebuilder Dockerfile while missing
+      # this. The guard checks the pin is a digest AND that the workflow which
+      # advances it is still alive; a frozen pin is worse than the mutable tag.
+      - name: ko base-image pin guard self-test
+        run: hack/check-ko-base-pin.sh --self-test
+
+      - name: ko base image is pinned and its bumper is alive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # The liveness half needs the API. Without this, a missing token would
+          # make the guard quietly check half of what it advertises — the same
+          # shape as actionlint silently skipping shellcheck.
+          REQUIRE_LIVENESS: '1'
+        run: hack/check-ko-base-pin.sh
+
   # ---------------------------------------------------------------------------
   # Published documentation hygiene.
   # ---------------------------------------------------------------------------

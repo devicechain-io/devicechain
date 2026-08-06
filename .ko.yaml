@@ -3,8 +3,37 @@
 #
 # ko build configuration for DeviceChain images.
 #
-# Pins the nonroot distroless static base so built images match the Helm
-# chart's pod securityContext (runAsUser 65532, read-only root filesystem).
-# Images are published as ghcr.io/devicechain-io/<service> by the (separate)
-# release workflow; this repo's CI only smoke-builds them locally.
-defaultBaseImage: cgr.dev/chainguard/static:latest
+# 🔴 THIS ONE LINE IS THE BASE IMAGE OF EVERY ARTIFACT WE PUBLISH — all the
+# service images, the operator, and the Tier-1 edge agent. Nothing else in the
+# repo sets a base for them; backend/k8s/Dockerfile looks like it does and does
+# not (it is kubebuilder scaffolding that nothing invokes).
+#
+# Chainguard's static base runs as uid 65532 with no shell and no package
+# manager, which is what lets the chart's pod securityContext ask for nonroot +
+# a read-only root filesystem.
+#
+# WHY THE DIGEST IS HERE, AND WHY IT IS NOT ENOUGH ON ITS OWN.
+#
+# A bare `:latest` is not a pin. It cannot be reproduced (rebuilding the same
+# commit can yield a different base), it changes with no pull request to review,
+# and a bad or compromised publish lands in all of those images at once — ko
+# records no base-image label, so afterwards you cannot even tell which base a
+# published image was built on. The digest fixes all of that.
+#
+# But a digest with nothing moving it is WORSE than the tag it replaced.
+# Chainguard rebuilds this image frequently, and those rebuilds are how its CVE
+# fixes ship. A pin nobody advances quietly serves a stale base while the config
+# reads "pinned and secure". Neither Dependabot nor Scorecard parses this file,
+# which is exactly why no scanner ever flagged this line.
+#
+# So the digest is only half of the design. The other half is
+# .github/workflows/ko-base-image.yml, which resolves the tag weekly and opens a
+# pull request when it moves. If that workflow dies, this pin silently freezes —
+# so hack/check-ko-base-pin.sh gates both halves: that the base is
+# digest-pinned at all, and that the bumper has actually run recently.
+#
+# The tag is kept alongside the digest deliberately: it is what makes the line
+# readable, and it is what the bumper matches on. ko resolves the digest and
+# ignores the tag, and a digest that does not exist fails the build outright
+# (MANIFEST_UNKNOWN) rather than falling back to the tag — verified.
+defaultBaseImage: cgr.dev/chainguard/static:latest@sha256:24dd7ff8788fdfadda39eeeaefefb6d1cec6002a545935a5f7e017484053734f
