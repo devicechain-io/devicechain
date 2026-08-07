@@ -106,8 +106,21 @@ func NewCalloutResponder(conn *nats.Conn, api model.DeviceManagementApi, issuerS
 // does not stall the whole queue — nats.go dispatches a subscription's callbacks
 // serially, and a connect storm within the broker's auth window otherwise backs
 // up. The DB connection pool is the natural backpressure on concurrency.
+//
+// 🔴 SYNCED, and this is the sharpest instance of that rule on the platform. A bare
+// QueueSubscribe returns before the server has registered anything, and the publisher
+// here is nats-server ITSELF — no client connection, so no ordering to borrow. A
+// device connecting in that window has its authorization request published to nobody,
+// core NATS drops it, and the device is refused with a bare EOF while the line below
+// says device connections are now authenticated. callout_race_test.go holds the SUB
+// in flight and drives exactly that refusal.
+//
+// The queue group is broker-global (see authCalloutQueue), so during a rolling restart
+// a peer replica already holds the interest and covers the gap. What this closes is
+// the COLD START of the whole responder pool — which is precisely when a fleet-wide
+// reconnect storm arrives.
 func (c *CalloutResponder) Start() error {
-	sub, err := c.conn.QueueSubscribe(AuthCalloutSubject, authCalloutQueue, func(msg *nats.Msg) {
+	sub, err := messaging.QueueSubscribeSynced(c.conn, AuthCalloutSubject, authCalloutQueue, func(msg *nats.Msg) {
 		go c.handle(msg)
 	})
 	if err != nil {

@@ -26,6 +26,11 @@ const (
 	// source this is also the maximum number of messages that can be UNACKED and
 	// therefore redelivered after a crash — bounded loss became bounded REDELIVERY.
 	DECODE_CHANNEL_DEPTH = 100
+	// subscribeTimeout bounds the wait for a SUBACK at startup. Generous, because the
+	// only thing that expires it is a broker that has accepted the connection and then
+	// stopped answering — the point of the bound is that startup fails loudly rather
+	// than hanging for the life of the pod.
+	subscribeTimeout = 30 * time.Second
 )
 
 // GatewayTopic is the MQTT topic filter the NATS-gateway event source subscribes
@@ -311,8 +316,15 @@ func (es *MqttEventSource) ExecuteStart(ctx context.Context) error {
 	es.initializeDecodeWorkers()
 
 	// Create subscription to start receiving messages.
-	token := es.Client.Subscribe(es.Topic, 1, es.onMessage)
-	token.Wait()
+	//
+	// 🔴 CONFIRMED, not merely awaited. This previously called token.Wait() and dropped
+	// the result, so a refused subscription logged that the source was subscribed and
+	// returned nil — an event source that starts cleanly, reports healthy and ingests
+	// nothing for the life of the process. Checking token.Error() is NOT enough to fix
+	// that; see SubscribeMqttConfirmed for why paho leaves it nil on a refusal.
+	if err := messaging.SubscribeMqttConfirmed(es.Client, es.Topic, 1, es.onMessage, subscribeTimeout); err != nil {
+		return fmt.Errorf("this event source would ingest nothing: %w", err)
+	}
 	log.Info().Msg(fmt.Sprintf("MQTT event source subscribed to topic '%s'.", es.Topic))
 	return nil
 }

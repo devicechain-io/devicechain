@@ -303,7 +303,19 @@ func (r *TenantPurgeResponder) Start() error {
 	// advisory lock for the whole of a purge pass. So nats.go's serial per-subscription
 	// dispatch is exactly the right shape — a second request waits for the first, which is
 	// what it would do anyway at the channel.
-	sub, err := r.conn.Subscribe(subject, r.handle)
+	// 🔴 SYNCED, because the window here is not merely a slow start. The requester is
+	// user-management, on its own connection, so nothing orders its publish against our
+	// SUB. A request that lands early gets ErrNoResponders — and while the caller
+	// DEFERS when it knows of checkpointed partitions, the complement does not: with no
+	// partition checkpointed it reports the tenant's DETECT state CLEAN (see the
+	// no-responders branch in user-management/purge/detect.go). That record is
+	// byte-identical to a real erasure. So an unflushed subscribe here can write a
+	// false clean into the tenant-deletion ledger, which nothing later re-checks.
+	//
+	// The comment on that branch already names this shape — it attests to zero INTEREST,
+	// and a reconnecting client briefly has none. Our own startup is the same gap, and
+	// this is the half of it we control.
+	sub, err := messaging.SubscribeSynced(r.conn, subject, r.handle)
 	if err != nil {
 		return fmt.Errorf("subscribing to the DETECT tenant-eviction subject %q: %w", subject, err)
 	}
