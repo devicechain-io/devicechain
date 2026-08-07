@@ -85,6 +85,7 @@ source, and it advertises a repo nobody outside can open. The line is not "is th
 | `docs/docs`, `docs/i18n`, `docs/blog`, `docs/src`, the website | ❌ never |
 | `frontend/packages/*/package.json` `description`/`keywords` — these publish to npmjs.com | ❌ never |
 | `deploy/helm/*/Chart.yaml` + the chart `README.md` — Artifact Hub renders these as the chart's listing | ❌ never |
+| `sdks/**/*.csproj` `<Description>`/`<PackageTags>` — these publish to nuget.org | ❌ never |
 | Console/dashboard **UI strings** (`src/i18n/locales/**`) | ❌ never |
 | Source comments, `hack/`, the rest of `deploy/`, READMEs, `docusaurus.config.ts` | ✅ expected — this is the convention above |
 

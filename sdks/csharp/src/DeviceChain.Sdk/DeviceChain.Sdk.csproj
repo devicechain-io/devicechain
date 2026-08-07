@@ -7,7 +7,10 @@
     <RootNamespace>DeviceChain.Sdk</RootNamespace>
     <AssemblyName>DeviceChain.Sdk</AssemblyName>
     <PackageId>DeviceChain.Sdk</PackageId>
-    <Description>DeviceChain .NET client SDK — auth, GraphQL, live subscriptions, and device-plane telemetry over the platform wire (ADR-035). AOT/IL2CPP-safe.</Description>
+    <!-- Renders on nuget.org, so it is written for a reader who has never seen this
+         repository: no ADR citations, nothing they cannot follow. Guarded by
+         hack/check-docs-adr-refs.sh. -->
+    <Description>DeviceChain .NET client SDK — auth, GraphQL, live subscriptions, MQTT device-plane telemetry and commands. AOT/IL2CPP-safe, for .NET and Unity.</Description>
     <Authors>The DeviceChain Authors</Authors>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
   </PropertyGroup>
