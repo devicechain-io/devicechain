@@ -652,6 +652,25 @@ jobs:
       - name: Test
         run: dotnet test --no-build -c Release
 
+      # The rung the SDK README has been naming as missing. IsAotCompatible only turns on the
+      # trim/AOT ANALYZERS, which read our source; they say nothing about whether the whole
+      # closure — including MQTTnet's un-annotated IL — survives a real AOT compiler.
+      #
+      # 🔴 THE BINARY IS RUN, NOT JUST BUILT. AOT failures are overwhelmingly runtime failures
+      # (a type that cannot be constructed, a path trimmed away), so a publish that is never
+      # executed proves only that the compiler accepted the IL. The host drives a real MQTT
+      # round-trip against an in-process scripted broker and exits non-zero if it breaks —
+      # verified by breaking it deliberately and watching this step fail.
+      #
+      # 🔴 BOUNDARY, so a green run is not over-read: NativeAOT is NOT IL2CPP. They are
+      # different AOT compilers, and dotnet test above runs on CoreCLR/JIT. This job is strong
+      # evidence about the Unity path and proof of nothing about it; only a native Unity player
+      # closes that gap.
+      - name: Native-AOT publish-and-run gate
+        run: |
+          dotnet publish tests/DeviceChain.Sdk.AotHost -c Release -r linux-x64
+          ./tests/DeviceChain.Sdk.AotHost/bin/Release/net8.0/linux-x64/publish/DeviceChain.Sdk.AotHost
+
   # ---------------------------------------------------------------------------
   # Unity package (sdks/unity) tier-1 verification: compile the Runtime + Sample C# against real
   # UnityEngine reference assemblies (UnityEngine.Modules, reference-only) in BOTH platform branches

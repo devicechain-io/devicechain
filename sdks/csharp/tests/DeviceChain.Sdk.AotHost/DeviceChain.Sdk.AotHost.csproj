@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The Native-AOT gate the SDK README has been naming as its missing rung.
+
+    IsAotCompatible=true on the library enables the trim/AOT ANALYZERS, which read source and
+    catch reflection statically. That is not the same as compiling the whole closure — including
+    MQTTnet's IL, which carries no AOT annotations of its own — with a real AOT compiler and
+    seeing whether the result RUNS. This host does the second thing.
+
+    🔴 It must be PUBLISHED AND EXECUTED to be worth anything. A publish that compiles and is
+    never run proves the compiler accepted the IL, not that the program works: AOT failures are
+    overwhelmingly runtime failures (a type that could not be constructed, a code path trimmed
+    away). CI runs the produced binary; see the csharp job.
+
+    🔴 AND THE BOUNDARY IS REAL: NativeAOT is not IL2CPP. They are different AOT compilers, so a
+    green run here is strong evidence and zero proof for Unity. Only a native player closes that.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <PublishAot>true</PublishAot>
+    <!-- Surface every trim/AOT warning individually rather than one rolled-up line, so a new
+         one names the offending call site. -->
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <RootNamespace>DeviceChain.Sdk.AotHost</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/DeviceChain.Sdk/DeviceChain.Sdk.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Source-linked rather than copied: the round-trip must be driven by the SAME scripted
+         broker the unit tests use, or the gate and the tests could drift into proving different
+         things. -->
+    <Compile Include="../DeviceChain.Sdk.Tests/ScriptedMqttBroker.cs" Link="ScriptedMqttBroker.cs" />
+  </ItemGroup>
+
+</Project>
