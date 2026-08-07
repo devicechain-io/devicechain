@@ -17,12 +17,14 @@
 #   Draft feature docs       docs-drafts/**/*.md, body only            -> NO ADR refs
 #   npm registry metadata    frontend/packages/*/package.json          -> NO ADR refs
 #   Helm listing prose       deploy/helm/*/{Chart.yaml,README.md}      -> NO ADR refs
+#   NuGet registry metadata  sdks/**/*.csproj <Description>/<PackageTags> -> NO ADR refs
 #   Source and maintainer    everything else, incl. docusaurus.config.ts -> ADR refs fine
 #
 # The distinguishing question is not "is this file public?" — the whole repo is
 # public. It is "does a READER of the published site see this?". Each row above
 # is a place where a stranger is SERVED this prose by some other host — the docs
-# site, npmjs.com, Artifact Hub — with no way to follow an ADR citation.
+# site, npmjs.com, Artifact Hub, nuget.org — with no way to follow an ADR
+# citation.
 #
 #   hack/check-docs-adr-refs.sh              # check
 #   hack/check-docs-adr-refs.sh --self-test  # prove the check can fail
@@ -107,6 +109,29 @@ scan_chart_listing() {
       grep -nE "$PATTERN" "$f" 2>/dev/null | sed "s|^|${f}:|" || true
     done
   done
+}
+
+# The fourth published surface, and the one this guard was missing: a NuGet
+# package's <Description> and <PackageTags> render on nuget.org exactly as an
+# npm `description` renders on npmjs.com. Same shape, same reader — someone who
+# has never seen this repository — so the same rule applies.
+#
+# It was found the way these usually are: the C# SDK's own Description carried
+# "(ADR-035)" while every npm description was clean, because npm had a guard and
+# NuGet did not. The packages are not published yet, which is exactly why this is
+# worth closing now rather than after a prefix reservation turns it into a public
+# page.
+#
+# 🔴 SCOPE, drawn on the same line as the chart rule: this covers the PACKAGE
+# METADATA a registry renders, not the project file as a whole. A comment on a
+# <PackageReference> explaining why a dependency is pinned is source, is browsed
+# the way this repo is browsed, and stays free to cite an ADR.
+scan_nuget_metadata() {
+  local base="${1:-sdks}" f
+  [ -d "$base" ] || return 0
+  while IFS= read -r -d '' f; do
+    grep -nE "<(Description|PackageTags)>[^<]*${PATTERN}" "$f" 2>/dev/null | sed "s|^|${f}:|" || true
+  done < <(find "$base" -type f -name '*.csproj' -print0)
 }
 
 if [ "${1:-}" = "--self-test" ]; then
@@ -219,12 +244,43 @@ if [ "${1:-}" = "--self-test" ]; then
   fi
   echo "  ok: a non-chart directory is not scanned"
 
+  # NuGet metadata gets both directions, and one extra case that matters more
+  # here than elsewhere: a csproj is mostly SOURCE, so a guard that scanned the
+  # whole file would flag the pin comments this repo deliberately writes. The
+  # third case holds an ADR reference in a comment and requires it to pass.
+  mkdir -p "$tmp/sdks/example"
+  printf '<Project><PropertyGroup><Description>A thing.</Description></PropertyGroup></Project>\n' \
+    > "$tmp/sdks/example/Example.csproj"
+  if [ -n "$(scan_nuget_metadata "$tmp/sdks")" ]; then
+    echo "  FAIL: the guard reports a match in a clean NuGet description" >&2
+    exit 1
+  fi
+  echo "  ok: clean NuGet description produces no match"
+
+  printf '<Project><PropertyGroup><Description>A thing (ADR-035).</Description></PropertyGroup></Project>\n' \
+    > "$tmp/sdks/example/Example.csproj"
+  if [ -z "$(scan_nuget_metadata "$tmp/sdks")" ]; then
+    echo "  FAIL: the guard did not see a planted ADR reference in a NuGet description —" >&2
+    echo "        that string is what nuget.org puts on the package page" >&2
+    exit 1
+  fi
+  echo "  ok: planted NuGet description detected"
+
+  printf '<Project>\n  <!-- Pinned deliberately (ADR-035). -->\n  <PropertyGroup><Description>A thing.</Description></PropertyGroup>\n</Project>\n' \
+    > "$tmp/sdks/example/Example.csproj"
+  if [ -n "$(scan_nuget_metadata "$tmp/sdks")" ]; then
+    echo "  FAIL: the guard flagged an ADR reference in a csproj COMMENT — that is source," >&2
+    echo "        not registry metadata, and CLAUDE.md keeps such citations deliberately" >&2
+    exit 1
+  fi
+  echo "  ok: an ADR reference in a csproj comment is left alone"
+
   echo "==> Self-test passed"
   exit 0
 fi
 
 hits="$(scan "${TARGETS[@]}")"
-for extra in "$(scan_package_descriptions)" "$(scan_drafts)" "$(scan_chart_listing)"; do
+for extra in "$(scan_package_descriptions)" "$(scan_drafts)" "$(scan_chart_listing)" "$(scan_nuget_metadata)"; do
   [ -n "$extra" ] || continue
   hits="${hits:+$hits
 }${extra}"
@@ -248,9 +304,10 @@ a public page that explains it:
 ADR citations remain correct in source comments and maintainer-facing files.
 This guard covers only the surfaces a stranger is SERVED by another host:
 ${TARGETS[*]}, docs-drafts (body), frontend/packages/*/package.json
-(description/keywords), and deploy/helm/*/{Chart.yaml,README.md} — the prose
-Artifact Hub renders as a chart's listing. Chart values/templates are source
-and are NOT covered.
+(description/keywords), deploy/helm/*/{Chart.yaml,README.md} — the prose
+Artifact Hub renders as a chart's listing — and sdks/**/*.csproj
+<Description>/<PackageTags>, which nuget.org renders the same way. Chart
+values/templates, and csproj comments, are source and are NOT covered.
 
 EOF
   exit 1
