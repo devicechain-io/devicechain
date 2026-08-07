@@ -224,13 +224,14 @@ func (r *Receiver) Subscribe(ctx context.Context, deviceToken, credentialId stri
 // signals the first SUBACK result on ds.ready exactly once.
 func (r *Receiver) onConnect(ds *deviceState) mqtt.OnConnectHandler {
 	return func(c mqtt.Client) {
-		tok := c.Subscribe(ds.commandTopic, 1, r.onMessage(ds))
-		var suberr error
-		if !tok.WaitTimeout(subscribeTimeout) {
-			suberr = fmt.Errorf("SUBACK timed out")
-		} else {
-			suberr = tok.Error()
-		}
+		// 🔴 Read the SUBACK, do not merely wait for it. A device's minted JWT grants
+		// SUB only to its own command subject, so the failure this receiver is most
+		// likely to meet is a REFUSAL (0x80) rather than an error — and paho reports a
+		// refusal as success. Waiting on the token and reading its Error() marks the
+		// device subscribed, unblocks the caller, and then delivers nothing: the
+		// harness reconciles wire evidence that never arrives against durable commands
+		// that really were sent, and reads a broker ACL problem as a platform defect.
+		suberr := messaging.SubscribeMqttConfirmed(c, ds.commandTopic, 1, r.onMessage(ds), subscribeTimeout)
 		if suberr == nil {
 			ds.mu.Lock()
 			ds.subscribed = true

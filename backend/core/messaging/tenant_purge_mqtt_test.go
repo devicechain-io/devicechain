@@ -107,9 +107,9 @@ func connectDevice(t *testing.T, broker, tenant, device string) string {
 	require.NoErrorf(t, tok.Error(), "connecting %q", clientID)
 
 	topic := fmt.Sprintf("%s/%s/devices/%s/commands", mqttInstance, tenant, device)
-	sub := c.Subscribe(topic, 1, func(mqtt.Client, mqtt.Message) {})
-	require.True(t, sub.WaitTimeout(10*time.Second), "subscribing %q timed out", clientID)
-	require.NoErrorf(t, sub.Error(), "subscribing %q to %q", clientID, topic)
+	require.NoErrorf(t,
+		SubscribeMqttConfirmed(c, topic, 1, func(mqtt.Client, mqtt.Message) {}, 10*time.Second),
+		"subscribing %q to %q", clientID, topic)
 
 	c.Disconnect(250)
 	return clientID
@@ -472,14 +472,12 @@ func deliverQoS2(t *testing.T, broker, tenant, device string) (mqtt.Client, stri
 	t.Cleanup(func() { c.Disconnect(250) })
 
 	topic := fmt.Sprintf("%s/%s/devices/%s/commands", mqttInstance, tenant, device)
-	sub := c.Subscribe(topic, 2, func(mqtt.Client, mqtt.Message) {
+	require.NoError(t, SubscribeMqttConfirmed(c, topic, 2, func(mqtt.Client, mqtt.Message) {
 		select {
 		case delivered <- struct{}{}:
 		default:
 		}
-	})
-	require.True(t, sub.WaitTimeout(10*time.Second))
-	require.NoError(t, sub.Error())
+	}, 10*time.Second))
 
 	pub := c.Publish(topic, 2, false, []byte("qos2"))
 	require.True(t, pub.WaitTimeout(10*time.Second), "publishing QoS 2 to %q timed out", topic)

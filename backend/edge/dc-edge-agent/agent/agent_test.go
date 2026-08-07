@@ -24,6 +24,7 @@ import (
 	"net/http"
 
 	"github.com/devicechain-io/dc-edge-agent/config"
+	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
 func testLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -226,13 +227,15 @@ func startAgent(t *testing.T, cfg config.Configuration) *Agent {
 	return a
 }
 
+// cloudSubscribe uses the confirmed helper because a REFUSED subscription leaves paho's
+// token error nil: the sink would simply stay empty and the bridge would be blamed.
 func cloudSubscribe(t *testing.T, cloudAddr, clientID string, sink chan<- mqtt.Message) {
 	t.Helper()
 	sub := mqttConnect(t, cloudAddr, clientID)
-	if tok := sub.Subscribe("test/+/devices/+/events", 1, func(_ mqtt.Client, m mqtt.Message) {
+	if err := messaging.SubscribeMqttConfirmed(sub, "test/+/devices/+/events", 1, func(_ mqtt.Client, m mqtt.Message) {
 		sink <- m
-	}); !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
-		t.Fatalf("cloud subscribe: %v", tok.Error())
+	}, 5*time.Second); err != nil {
+		t.Fatalf("cloud subscribe: %v", err)
 	}
 }
 
@@ -584,10 +587,13 @@ func TestMintedKeyIsStableAcrossRestart(t *testing.T) {
 // collectSeqs subscribes to the cloud and records the values.seq of every forwarded
 // event (order and multiplicity preserved so the caller can assert no duplicates and a
 // contiguous survivor set).
+//
+// Confirmed, as in cloudSubscribe: an unread 0x80 would present as a store that dropped
+// every event across the restart, which is precisely the claim under test.
 func collectSeqs(t *testing.T, cloudAddr, clientID string, mu *sync.Mutex, seqs *[]int) {
 	t.Helper()
 	sub := mqttConnect(t, cloudAddr, clientID)
-	if tok := sub.Subscribe("test/+/devices/+/events", 1, func(_ mqtt.Client, m mqtt.Message) {
+	if err := messaging.SubscribeMqttConfirmed(sub, "test/+/devices/+/events", 1, func(_ mqtt.Client, m mqtt.Message) {
 		var o struct {
 			Values struct {
 				Seq int `json:"seq"`
@@ -599,8 +605,8 @@ func collectSeqs(t *testing.T, cloudAddr, clientID string, mu *sync.Mutex, seqs 
 		mu.Lock()
 		*seqs = append(*seqs, o.Values.Seq)
 		mu.Unlock()
-	}); !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
-		t.Fatalf("cloud subscribe: %v", tok.Error())
+	}, 5*time.Second); err != nil {
+		t.Fatalf("cloud subscribe: %v", err)
 	}
 }
 

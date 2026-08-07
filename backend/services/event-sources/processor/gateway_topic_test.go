@@ -56,6 +56,10 @@ func startGateway(t *testing.T) (*nats.Conn, int) {
 
 // subscribeGateway connects an MQTT client to the gateway and subscribes with the
 // production topic filter, returning a channel of delivered topics.
+//
+// The subscribe is CONFIRMED because a refused one is invisible in paho's token error,
+// and this test's whole claim is about what does and does not arrive on that filter —
+// a refusal would read as "no internal subject leaked", i.e. as a pass.
 func subscribeGateway(t *testing.T, mqttPort int) <-chan string {
 	t.Helper()
 
@@ -69,11 +73,10 @@ func subscribeGateway(t *testing.T, mqttPort int) <-chan string {
 	t.Cleanup(func() { cl.Disconnect(100) })
 
 	delivered := make(chan string, 64)
-	sub := cl.Subscribe(GatewayTopic(testInstance), 1, func(_ mqtt.Client, m mqtt.Message) {
-		delivered <- m.Topic()
-	})
-	require.True(t, sub.WaitTimeout(15*time.Second), "mqtt subscribe timed out")
-	require.NoError(t, sub.Error())
+	require.NoError(t, messaging.SubscribeMqttConfirmed(cl, GatewayTopic(testInstance), 1,
+		func(_ mqtt.Client, m mqtt.Message) {
+			delivered <- m.Topic()
+		}, 15*time.Second))
 
 	return delivered
 }
