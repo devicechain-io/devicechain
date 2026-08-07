@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using DeviceChain.Sdk.Auth;
 using DeviceChain.Sdk.Ingest;
+using DeviceChain.Sdk.Mqtt;
 
 namespace DeviceChain.Sdk.Json;
 
@@ -30,6 +31,9 @@ namespace DeviceChain.Sdk.Json;
 [JsonSerializable(typeof(AuthToken))]
 // Ingest
 [JsonSerializable(typeof(MeasurementEvent))]
+// MQTT device plane — the command envelopes mirror command-delivery's wire shapes.
+[JsonSerializable(typeof(CommandDeliveryEnvelope))]
+[JsonSerializable(typeof(CommandResponseEnvelope))]
 internal partial class SdkJson : JsonSerializerContext
 {
 }
