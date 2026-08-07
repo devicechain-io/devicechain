@@ -135,6 +135,8 @@ func TestSameConnectionSubscribeThenPublishNeedsNoConfirmation(t *testing.T) {
 	// Run it enough times that an unordered implementation would show up. A single
 	// pass proves nothing here: the claim is about an invariant, not one outcome.
 	for i := 0; i < 200; i++ {
+		//subconfirm:ok the raw call IS the subject: this loop exists to prove it needs no
+		// confirmation when the same connection publishes
 		sub, err := nc.SubscribeSync("ordered.test")
 		if err != nil {
 			t.Fatalf("subscribe: %v", err)

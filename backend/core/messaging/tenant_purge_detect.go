@@ -177,6 +177,8 @@ func PurgeTenantDetect(ctx context.Context, nc *nats.Conn, instanceId, tenant st
 	// hands back the first reply and unsubscribes, which would silently reduce a
 	// multi-partition fleet to whichever engine answered fastest.
 	inbox := nats.NewInbox()
+	//subconfirm:ok the request below goes out on this same connection, so the server reads
+	// SUB before PUB — see the paragraph after the defer for the full reasoning
 	sub, err := nc.SubscribeSync(inbox)
 	if err != nil {
 		return res, fmt.Errorf("subscribing to the DETECT eviction reply inbox: %w", err)

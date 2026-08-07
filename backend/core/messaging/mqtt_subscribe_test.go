@@ -113,6 +113,8 @@ func TestSubscribeMqttConfirmedCatchesARefusal(t *testing.T) {
 	// First: establish that this IS invisible to what the code used to do. Without
 	// this, the assertion below could be satisfied by a helper that rejects
 	// everything, and the finding would be unproven.
+	//subconfirm:ok the unchecked call IS the subject: this is the control that shows the
+	// refusal is invisible to it
 	tok := c.Subscribe("denied/topic", 1, func(mqtt.Client, mqtt.Message) {})
 	if !tok.WaitTimeout(5 * time.Second) {
 		t.Fatal("the fake broker did not answer the control SUBSCRIBE")

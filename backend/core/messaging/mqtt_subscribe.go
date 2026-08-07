@@ -43,6 +43,7 @@ const mqttSubackFailure byte = 0x80
 // The timeout is the other half. A bare Wait() is unbounded, so a broker that accepts
 // the connection and then stops answering hangs startup forever rather than failing it.
 func SubscribeMqttConfirmed(client mqtt.Client, filter string, qos byte, cb mqtt.MessageHandler, timeout time.Duration) error {
+	//subconfirm:ok this IS the confirmed wrapper; the granted-QoS read below is the check
 	token := client.Subscribe(filter, qos, cb)
 	if !token.WaitTimeout(timeout) {
 		return fmt.Errorf("the broker did not acknowledge the subscription to %q within %v", filter, timeout)

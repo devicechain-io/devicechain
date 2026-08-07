@@ -293,6 +293,50 @@ jobs:
   # release ships.
 
   # ---------------------------------------------------------------------------
+  # Subscribe confirmation: a subscription the broker has never confirmed, and an
+  # MQTT SUBACK whose result is never read.
+  #
+  # Both defects are silent by construction. Core NATS DROPS a publish with no
+  # subscriber, so a component that subscribes, reports itself started, and is
+  # handed nothing looks healthy from every side — the auth callout shipped that
+  # way and refused real devices with a bare EOF. paho, meanwhile, never turns a
+  # broker's REFUSAL into an error, so `token.Error()` is nil on a 0x80 and the
+  # obvious spelling of "did my subscribe work" always says yes.
+  #
+  # 🔴 The guard is a go/analysis pass rather than a grep, and that is the point
+  # of it. `.Subscribe(` matches four unrelated APIs in this repo and only two of
+  # them are broken; the first inventory of the sites was done textually and was
+  # wrong in both directions. The receiver's TYPE is the only thing that separates
+  # them. See backend/tools/subconfirm/analyzer for what satisfies the check and
+  # how a deliberate exemption is written.
+  # ---------------------------------------------------------------------------
+  subscriptions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      # Proves the checker can still fail, BEFORE its green run is read as
+      # evidence. It plants a bare subscribe in a package inside backend/core, so
+      # the analyzer is exercised against the REAL nats.go and paho rather than
+      # against a stub that would only prove it agrees with the stub — and then
+      # plants the same code written correctly, because "reports a bad subscribe"
+      # is also satisfied by a checker that reports everything.
+      #
+      # The analyzer's own unit tests are not repeated here: backend/tools/subconfirm
+      # is a workspace module, so the `go` matrix above already runs them.
+      - name: subscribe-confirmation self-test
+        run: hack/check-subscribe-confirmed.sh --self-test
+
+      - name: every subscription is confirmed
+        run: hack/check-subscribe-confirmed.sh
+
+  # ---------------------------------------------------------------------------
   # Migrations: prove every area's chain still reproduces its golden schema.
   #
   # THIS IS THE ONLY THING THAT CHECKS THE MIGRATIONS AT ALL. The unit tests build

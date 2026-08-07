@@ -67,12 +67,14 @@ func ConfirmSubscribed(nc *nats.Conn) error {
 // SubscribeSynced is nats.Conn.Subscribe that does not return until the server can
 // route to the subscription. See ConfirmSubscribed for when this matters.
 func SubscribeSynced(nc *nats.Conn, subject string, cb nats.MsgHandler) (*nats.Subscription, error) {
+	//subconfirm:ok this IS the confirmed wrapper; confirm() below adds the round trip
 	sub, err := nc.Subscribe(subject, cb)
 	return confirm(nc, sub, err)
 }
 
 // QueueSubscribeSynced is nats.Conn.QueueSubscribe with the same guarantee.
 func QueueSubscribeSynced(nc *nats.Conn, subject, queue string, cb nats.MsgHandler) (*nats.Subscription, error) {
+	//subconfirm:ok this IS the confirmed wrapper; confirm() below adds the round trip
 	sub, err := nc.QueueSubscribe(subject, queue, cb)
 	return confirm(nc, sub, err)
 }

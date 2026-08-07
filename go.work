@@ -29,5 +29,6 @@ use (
 	./backend/sims/dc-simulator
 	./backend/tools/drdrill
 	./backend/tools/migrationdiff
+	./backend/tools/subconfirm
 	./deploy
 )
