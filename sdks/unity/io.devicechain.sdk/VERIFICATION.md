@@ -22,9 +22,14 @@ JavaScript), or produce a WebGL build.
 ```bash
 sdks/unity/stage-sdk.sh
 ```
-Produces 10 assemblies in `Runtime/Plugins/`: `DeviceChain.Sdk.dll`, `System.Text.Json.dll`,
+Produces 11 assemblies in `Runtime/Plugins/`: `DeviceChain.Sdk.dll`, `System.Text.Json.dll`,
 `System.Text.Encodings.Web.dll`, `System.Threading.Channels.dll`, `Microsoft.Bcl.AsyncInterfaces.dll`,
-plus the 5 netstandard2.1 facades below.
+`MQTTnet.dll`, plus the 5 netstandard2.1 facades below.
+
+`MQTTnet.dll` backs the MQTT device plane (publish telemetry + receive commands). It adds exactly
+one DLL because MQTTnet has **zero** transitive package dependencies on `netstandard2.1` — measured
+from the restore graph, not assumed — so it needs no change to the staging script and no addition to
+the prune set below (Unity ships nothing that collides with it).
 
 ## 1. Package imports & compiles ✅ (Unity 6/URP)
 
@@ -32,9 +37,10 @@ plus the 5 netstandard2.1 facades below.
 - **Prune the DLLs Unity already ships**, or you get duplicate-assembly errors. On **Unity 6** the
   clean set is: **delete** `System.Buffers`, `System.Memory`, `System.Numerics.Vectors`,
   `System.Runtime.CompilerServices.Unsafe`, `System.Threading.Tasks.Extensions` (all part of Unity's
-  netstandard2.1 profile); **keep** the other 5 (`DeviceChain.Sdk`, `System.Text.Json`,
-  `System.Text.Encodings.Web`, `System.Threading.Channels`, `Microsoft.Bcl.AsyncInterfaces`). This is
-  the classic System.Text.Json-in-Unity conflict set. With that prune the package compiles clean.
+  netstandard2.1 profile); **keep** the other 6 (`DeviceChain.Sdk`, `System.Text.Json`,
+  `System.Text.Encodings.Web`, `System.Threading.Channels`, `Microsoft.Bcl.AsyncInterfaces`,
+  `MQTTnet`). This is the classic System.Text.Json-in-Unity conflict set. With that prune the
+  package compiles clean.
 - `Marshal.PtrToStringUTF8` was replaced by a portable manual decode, so no .NET-profile pin remains.
 
 ## 2. Spinning-logo smoke test (the slice-4 acceptance gate) ✅ (Unity 6/URP)

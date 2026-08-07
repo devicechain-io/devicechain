@@ -26,10 +26,7 @@ public sealed class DeviceEventPublisher
     /// <summary>The device-credential type a token-authenticated device presents (matches the sim + event-sources).</summary>
     public const string AccessTokenCredential = "ACCESS_TOKEN";
 
-    private readonly IHttpTransport _transport;
-    private readonly Uri _ingressOrigin;
-    private readonly string _instanceId;
-    private readonly string _tenant;
+    private readonly IDeviceEventCarrier _carrier;
 
     /// <param name="transport">The HTTP transport (default <see cref="HttpClientTransport"/>; Unity WebGL injects its own).</param>
     /// <param name="ingressOrigin">
@@ -40,11 +37,21 @@ public sealed class DeviceEventPublisher
     /// <param name="instanceId">The instance segment (ADR-048).</param>
     /// <param name="tenant">The tenant segment.</param>
     public DeviceEventPublisher(IHttpTransport transport, Uri ingressOrigin, string instanceId, string tenant)
+        : this(new HttpDeviceEventCarrier(transport, ingressOrigin, instanceId, tenant))
     {
-        _transport = transport ?? throw new ArgumentNullException(nameof(transport));
-        _ingressOrigin = ingressOrigin ?? throw new ArgumentNullException(nameof(ingressOrigin));
-        _instanceId = instanceId ?? throw new ArgumentNullException(nameof(instanceId));
-        _tenant = tenant ?? throw new ArgumentNullException(nameof(tenant));
+    }
+
+    /// <summary>
+    /// Publishes over an explicit carrier — HTTP (the default above) or MQTT.
+    /// </summary>
+    /// <remarks>
+    /// The publisher builds the body once and hands it to whichever carrier moves it, so the two
+    /// wires cannot drift. Only the MQTT carrier reaches the durability capture stream.
+    /// </remarks>
+    /// <param name="carrier">The carrier that moves the serialized event.</param>
+    public DeviceEventPublisher(IDeviceEventCarrier carrier)
+    {
+        _carrier = carrier ?? throw new ArgumentNullException(nameof(carrier));
     }
 
     /// <summary>Convenience overload for the plain-.NET path: wraps a shared <see cref="HttpClient"/>.</summary>
@@ -92,42 +99,17 @@ public sealed class DeviceEventPublisher
             CredentialType = AccessTokenCredential,
             CredentialId = credentialId,
         };
-        return PostAsync(evt, cancellationToken);
+        return SendAsync(deviceToken, evt, cancellationToken);
     }
 
-    private async Task PostAsync(MeasurementEvent evt, CancellationToken cancellationToken)
-    {
-        byte[] body = JsonSerializer.SerializeToUtf8Bytes(evt, SdkJson.Default.MeasurementEvent);
-        string path = $"/{_instanceId}/{_tenant}/events";
-
-        // No Authorization header — a device authenticates by presenting its credential IN the body
-        // (credentialType + credentialId), not a Bearer (ADR-014).
-        var request = new HttpTransportRequest
-        {
-            Uri = new Uri(_ingressOrigin, path),
-            Body = body,
-            ContentType = "application/json",
-        };
-
-        HttpTransportResponse response;
-        try
-        {
-            response = await _transport.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
-        {
-            throw new GraphQlRequestException(ex.Message, 0);
-        }
-
-        const int accepted = 202;
-        if (response.Status != accepted)
-        {
-            string detail = response.Body.Length == 0 ? "" : Encoding.UTF8.GetString(response.Body);
-            throw new GraphQlRequestException(
-                $"ingress {path} returned {response.Status}: {detail.Trim()}",
-                response.Status);
-        }
-    }
+    // The body is built HERE, once, and handed to whichever carrier moves it — which is what makes
+    // "identical payload, different carrier" true by construction rather than by discipline. The
+    // equality is pinned by a test that captures what reached each carrier and compares the bytes.
+    private Task SendAsync(string deviceToken, MeasurementEvent evt, CancellationToken cancellationToken) =>
+        _carrier.SendAsync(
+            deviceToken,
+            JsonSerializer.SerializeToUtf8Bytes(evt, SdkJson.Default.MeasurementEvent),
+            cancellationToken);
 
     // RFC3339 in UTC WITH fractional seconds ("O" is .NET's round-trip form: always Z,
     // always seven fractional digits, and Go's time.Parse accepts it).

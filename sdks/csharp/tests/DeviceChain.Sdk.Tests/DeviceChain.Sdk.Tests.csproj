@@ -11,6 +11,10 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <!-- Lets the real-broker tests SKIP visibly when no broker is present, rather than passing
+         vacuously. A skip that reads as a pass is how "no findings" comes to mean "never ran";
+         MqttRealBrokerGuardTests is what stops that happening in CI. -->
+    <PackageReference Include="Xunit.SkippableFact" Version="1.4.13" />
   </ItemGroup>
 
   <ItemGroup>

@@ -89,6 +89,37 @@ dotnet test  -c Release
 
 ## Not yet (documented follow-ups)
 
-- Subscription **auto-reconnect** on a dropped socket (a consumer re-subscribes today).
+- Subscription **auto-reconnect** on a dropped socket (a consumer re-subscribes today). The MQTT
+  device session does reconnect, and re-reads the broker's grant when it does.
 - Provisioning mutation helpers (the Go `dcctl sim` runner provisions; a twin is read + subscribe + emit).
-- Native-AOT `PublishAot` validation beyond the analyzer (needs the ILCompiler toolchain in CI).
+
+## MQTT device plane
+
+`MqttDeviceSession` speaks the device plane the way a device does: it publishes telemetry and
+receives commands over MQTT, which is the only carrier commands travel on. One session is one
+device — MQTT 3.1.1 has no shared subscriptions and the broker grant confines a connection to a
+single device — so a scene with 18 machines holds 18 connections.
+
+Two properties are worth knowing before you use it:
+
+- **A subscribe is not a subscription until the broker grants it.** `StartAsync` returns only after
+  a confirmed SUBACK, and a refusal leaves the session `Blind` rather than `Ready`. This is not
+  defensive coding: `SubscribeAsync` in the underlying client completes *successfully* on a refusal,
+  so the naive spelling yields a device that connects, reports healthy, and receives nothing.
+- **A command is answered for what the device did, not for what arrived.** The handler's returned
+  outcome becomes the response; acknowledging on receipt would report that a machine acted when
+  only the network did.
+
+Telemetry can go over either carrier. Only the MQTT one reaches the ingest durability capture
+stream, which the HTTP ingress does not feed.
+
+### What the gates cover, and what they do not
+
+`dotnet test` runs against a real `nats-server` MQTT gateway in CI — the broker the platform ships,
+built from the version the backend pins — plus a scripted broker for the wire outcomes a
+cooperative broker will not produce on demand (a refused subscription). A Native-AOT gate publishes
+a native binary **and runs it** through a real round-trip.
+
+🔴 None of that is evidence about IL2CPP. NativeAOT and IL2CPP are different AOT compilers and
+`dotnet test` runs on CoreCLR, so a green job is strong evidence for the Unity path and proof of
+nothing about it. Only a native Unity player closes that gap.

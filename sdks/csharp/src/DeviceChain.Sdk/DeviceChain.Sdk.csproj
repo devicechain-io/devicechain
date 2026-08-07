@@ -24,6 +24,22 @@
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
     <!-- Channels backs the subscribe stream's per-operation buffering (AOT-safe, no codegen). -->
     <PackageReference Include="System.Threading.Channels" Version="8.0.0" />
+    <!-- MQTT device plane (publish telemetry + receive commands). PINNED TO THE 4.x LINE ON
+         PURPOSE: MQTTnet 5 targets net8.0/net10.0 only, having dropped netstandard2.1 — the
+         target Unity/IL2CPP consumes — so "upgrade to 5" would silently delete the Unity half
+         of this SDK. 4.3.7 has ZERO transitive dependencies on both our targets, so it stages
+         into a Unity project as a single DLL, and carries no reflection, which is what keeps
+         the AOT guarantee intact. See Transport/MqttNetConnection.cs. -->
+    <PackageReference Include="MQTTnet" Version="4.3.7.1207" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The pinned-root TLS decision is internal but must be directly testable: it is the only
+         security decision the SDK makes on its own, it is hand-built because the one-line API is
+         missing on netstandard2.1, and a live TLS handshake was otherwise its only exerciser. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>DeviceChain.Sdk.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 </Project>

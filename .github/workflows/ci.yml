@@ -643,14 +643,91 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      # The MQTT client is tested against the broker the platform actually ships, not a
+      # generic one — nats-server's MQTT gateway has its own behaviour (3.1.1 only, session
+      # handling, client-id rules) and a different broker would prove the wrong thing.
+      #
+      # It is BUILT FROM THE VERSION THE BACKEND ALREADY PINS rather than downloaded: nats-server
+      # is a direct dependency of backend/core, so `go build` yields exactly the version that
+      # ships, with no second pin to keep in step and no checksum to maintain. A downloaded
+      # release binary would be a version claim that drifts away from go.mod silently.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      - name: Start the MQTT broker the platform ships
+        working-directory: backend/core
+        run: |
+          go build -o "$RUNNER_TEMP/nats-server" github.com/nats-io/nats-server/v2
+          "$RUNNER_TEMP/nats-server" --version
+          mkdir -p "$RUNNER_TEMP/js"
+          # ack_wait is how long the broker waits for a PUBACK before REDELIVERING a QoS-1
+          # message, and it is set here because it is the only knob that makes redelivery
+          # observable in a test: the default is 30 seconds, so a redelivery test on the default
+          # either runs for half a minute or silently proves nothing. The SDK's redelivery test
+          # FAILS rather than skips if no redelivery arrives, so dropping this line breaks the
+          # csharp job loudly instead of quietly reducing what it covers.
+          cat > "$RUNNER_TEMP/nats.conf" <<CONF
+          port: 4222
+          jetstream { store_dir: "$RUNNER_TEMP/js" }
+          mqtt { port: 1883, ack_wait: "1s" }
+          CONF
+          "$RUNNER_TEMP/nats-server" -c "$RUNNER_TEMP/nats.conf" > "$RUNNER_TEMP/nats.log" 2>&1 &
+          for _ in $(seq 1 30); do
+            if timeout 1 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/1883' 2>/dev/null; then
+              echo "MQTT gateway is accepting connections"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "the MQTT gateway never came up:"; cat "$RUNNER_TEMP/nats.log"; exit 1
+
       - name: Restore
         run: dotnet restore
 
       - name: Build
         run: dotnet build --no-restore -c Release
 
+      # DC_REQUIRE_MQTT_BROKER is the half that stops a broken broker step from going unnoticed:
+      # the real-broker tests skip themselves when DC_MQTT_BROKER is unset, and a skip reads as a
+      # pass, so without this a silently-dead broker would leave the job green while testing
+      # nothing. MqttRealBrokerGuardTests turns that into a failure.
       - name: Test
+        env:
+          DC_MQTT_BROKER: tcp://127.0.0.1:1883
+          DC_REQUIRE_MQTT_BROKER: '1'
         run: dotnet test --no-build -c Release
+
+      # The rung the SDK README has been naming as missing. IsAotCompatible only turns on the
+      # trim/AOT ANALYZERS, which read our source; they say nothing about whether the whole
+      # closure — including MQTTnet's un-annotated IL — survives a real AOT compiler.
+      #
+      # 🔴 THE BINARY IS RUN, NOT JUST BUILT. AOT failures are overwhelmingly runtime failures
+      # (a type that cannot be constructed, a path trimmed away), so a publish that is never
+      # executed proves only that the compiler accepted the IL. The host drives a real MQTT
+      # round-trip against an in-process scripted broker and exits non-zero if it breaks —
+      # verified by breaking it deliberately and watching this step fail.
+      #
+      # 🔴 BOUNDARY, so a green run is not over-read: NativeAOT is NOT IL2CPP. They are
+      # different AOT compilers, and dotnet test above runs on CoreCLR/JIT. This job is strong
+      # evidence about the Unity path and proof of nothing about it; only a native Unity player
+      # closes that gap.
+      #
+      # The broker started above is still running, so the native binary drives a REAL round-trip
+      # rather than only the in-process scripted one — which is the strongest rung available here:
+      # the platform's own broker, exercised by natively-compiled code.
+      - name: Native-AOT publish-and-run gate
+        env:
+          DC_MQTT_BROKER: tcp://127.0.0.1:1883
+          # Same reason as the Test step: this host skips its real-broker leg when the variable is
+          # unset, and a skip reads as a pass. Without this the gate would quietly degrade to
+          # scripted-only if the broker step ever broke.
+          DC_REQUIRE_MQTT_BROKER: '1'
+        run: |
+          dotnet publish tests/DeviceChain.Sdk.AotHost -c Release -r linux-x64
+          ./tests/DeviceChain.Sdk.AotHost/bin/Release/net8.0/linux-x64/publish/DeviceChain.Sdk.AotHost
 
   # ---------------------------------------------------------------------------
   # Unity package (sdks/unity) tier-1 verification: compile the Runtime + Sample C# against real
