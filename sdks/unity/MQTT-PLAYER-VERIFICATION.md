@@ -29,15 +29,57 @@ because the WebGL path was learned the expensive way.
 
 ## 0. Prerequisites
 
-- A local DeviceChain cluster (`deploy/local/`), bootstrapped. On a local kube context `dcctl
-  bootstrap` sets the MQTT node port automatically and the kind cluster maps host `1883`, so the
-  broker answers at **`ssl://127.0.0.1:1883` with no port-forward**. Confirm before you build
-  anything:
+- A local DeviceChain cluster (`deploy/local/`), bootstrapped. **A full `dcctl bootstrap` is all you
+  need — there is no separate step and no port-forward.** On a context matching the local heuristic
+  (`kind-`, `minikube`, `k3d-`, `docker-desktop`, `rancher-desktop`) `dcctl` passes
+  `nats_mqtt_node_port=31883`, which creates a NodePort Service alongside the chart's ClusterIP one,
+  and the kind config it embeds maps host `1883` → node `31883`. The broker answers at
+  **`ssl://localhost:1883`**.
+
+  > 🔴 **The one way this breaks is a kind cluster that predates the host map.** `dcctl bootstrap`
+  > *reuses* an existing `kind-<instance>` cluster ("Using existing kind cluster") rather than
+  > recreating it, and **kind fixes `extraPortMappings` at cluster-create time — they cannot be added
+  > to a running cluster.** So the NodePort Service appears, `kubectl get svc` looks perfect, and
+  > host `:1883` is still a dead route. The symptom is a connection reset / EOF, not a refusal. Check
+  > the binding itself rather than the Service:
+  >
+  > ```bash
+  > docker inspect <instance>-control-plane --format '{{json .NetworkSettings.Ports}}' | grep 31883
+  > # want: "31883/tcp":[{"HostIp":"0.0.0.0","HostPort":"1883"}]
+  > ```
+  >
+  > If it is absent, `kind delete cluster --name <instance>` and let `dcctl bootstrap` recreate it.
+
+  Then confirm the route end to end — it answers TLS, not plaintext:
 
   ```bash
-  # Should connect and stay open. If it refuses, the rest of this page cannot work.
-  timeout 2 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/1883' && echo "broker reachable"
+  timeout 2 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/1883' && echo "TCP reachable"
+  timeout 8 openssl s_client -connect localhost:1883 </dev/null 2>&1 | grep -E "subject=|Cipher is"
+  # want: subject=... CN = dc-nats.dc-system   and a negotiated cipher
   ```
+
+- **The broker's CA**, so the player can pin it. The bring-up mints a private CA; extract it once:
+
+  ```bash
+  kubectl -n dc-system get secret dc-nats-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > nats-ca.pem
+  ```
+
+  > 🔑 **Use `localhost`, never `127.0.0.1`.** Measured against a live bring-up: the broker leaf
+  > carries `DNS:dc-nats`, `DNS:dc-nats.dc-system`, `DNS:dc-nats.dc-system.svc`,
+  > `DNS:dc-nats.dc-system.svc.cluster.local`, `DNS:localhost` — and **no IP SAN at all.** An IP
+  > literal is matched only against IP SANs, so `ssl://127.0.0.1:1883` is a hostname mismatch that
+  > `PinnedCa` correctly refuses (`ANameMismatchIsRefusedEvenUnderThePinnedRoot` pins that
+  > behaviour). Verified both ways against the extracted CA:
+  >
+  > | Target | `openssl` verdict |
+  > | --- | --- |
+  > | `localhost` | `Verify return code: 0 (ok)` |
+  > | `127.0.0.1` | `Verify return code: 64 (IP address mismatch)` |
+  >
+  > This matters beyond a URI typo: reaching for the accept-anything mode to get past the mismatch
+  > would leave the pinned-trust path — the one piece of security logic hand-built because the
+  > one-line API is missing on `netstandard2.1` — unexercised by the only check that runs under
+  > IL2CPP.
 
 - A provisioned device, and its **credential id**. The session needs `instanceId`, `tenant`,
   `deviceToken`, `credentialId` — nothing else.
@@ -89,24 +131,42 @@ using UnityEngine;
 
 public sealed class MqttSmokeTest : MonoBehaviour
 {
-    [SerializeField] private string brokerUri = "ssl://127.0.0.1:1883";
+    // localhost, NOT 127.0.0.1 — the broker certificate has no IP SAN. See §0.
+    [SerializeField] private string brokerUri = "ssl://localhost:1883";
     [SerializeField] private string instanceId = "devicechain";
     [SerializeField] private string tenant = "acme";
     [SerializeField] private string deviceToken = "sensor-001";
     [SerializeField] private string credentialId = "REPLACE-ME";
+
+    // Drop nats-ca.pem into Assets/ renamed to `nats-ca.bytes` and drag it here. The `.bytes`
+    // extension is what makes Unity import an arbitrary file as a TextAsset; a `.pem`/`.crt`
+    // is not imported at all, so the field silently stays null.
+    [SerializeField] private TextAsset pinnedCaPem;
 
     private MqttDeviceSession _session;
     private readonly CancellationTokenSource _cts = new();
 
     private async void Start()
     {
+        // An unassigned TextAsset would otherwise surface as a NullReferenceException thrown out
+        // of `async void`, where Unity may swallow it — a silent no-op is the worst outcome for a
+        // page whose entire job is to distinguish "worked" from "did nothing".
+        if (pinnedCaPem == null)
+        {
+            Debug.LogError("[dc] pinnedCaPem is not assigned — see §0 and §3");
+            return;
+        }
+
         var options = new MqttSessionOptions(
             new Uri(brokerUri), instanceId, tenant, deviceToken, credentialId)
         {
-            // A local bring-up presents a self-signed certificate. PinnedCa is the RIGHT answer
-            // (it still verifies the chain); the accept-anything mode is named the way it is so
-            // that shipping it by accident is impossible to describe as anything else.
-            Trust = MqttTrust.DangerouslyAcceptAnyServerCertificate(),
+            // A local bring-up presents a privately-issued certificate, so the OS root store
+            // cannot verify it — but pinning its CA still verifies the whole chain, and it is
+            // the ONLY mode that exercises the hand-built validation under IL2CPP. Do not
+            // substitute MqttTrust.DangerouslyAcceptAnyServerCertificate() here: it would make
+            // the run pass while validating nothing, which is the exact false green this page
+            // exists to avoid. (It is a legitimate BISECTION tool — see §6.)
+            Trust = MqttTrust.PinnedCa(pinnedCaPem.bytes),
         };
 
         _session = new MqttDeviceSession(options);
@@ -187,7 +247,12 @@ valuable thing this page can catch.
 
 Bisect in this order; each step separates causes that look identical from the log:
 
-1. **Same binary, `tcp://` against a plaintext broker.** Isolates TLS from MQTT.
+1. **Same binary, `MqttTrust.DangerouslyAcceptAnyServerCertificate()`.** Isolates *certificate
+   validation* from TLS-and-MQTT: if it now works, the transport is fine and the problem is the
+   pinned-chain code or the CA you supplied. Start here rather than with a plaintext broker — the
+   bring-up terminates TLS on 1883 and offers **no plaintext listener**, so "try `tcp://`" is not a
+   one-line change on a local cluster. **A pass in this mode is a diagnostic, never the result** —
+   §4 is only satisfied under `PinnedCa`.
 2. **Stripping level to `Low`** (if it was higher). Isolates the linker from IL2CPP.
 3. **Mono player build.** If Mono works and IL2CPP does not, it is genuinely the AOT compiler —
    the case the whole lane was de-risked against, and the point at which the hand-rolled MQTT 3.1.1
