@@ -304,6 +304,24 @@ public class MqttConnectionException : Exception
 }
 
 /// <summary>
+/// Thrown when the broker REFUSED the connection outright (a CONNACK return code other than
+/// "accepted") — a revoked credential, or a client id the auth callout will not admit.
+/// </summary>
+/// <remarks>
+/// Distinct from a dial failure for the same reason a refused subscription is: retrying a dial
+/// failure is right, and retrying a refusal is a hammering loop against a decision that will not
+/// change. A caller that cannot tell them apart does the wrong one forever.
+/// </remarks>
+public sealed class MqttConnectRefusedException : MqttConnectionException
+{
+    /// <summary>Creates the exception.</summary>
+    public MqttConnectRefusedException(string message)
+        : base(message)
+    {
+    }
+}
+
+/// <summary>
 /// Thrown when the broker REFUSED a subscription (SUBACK return code 0x80 or above).
 /// </summary>
 /// <remarks>

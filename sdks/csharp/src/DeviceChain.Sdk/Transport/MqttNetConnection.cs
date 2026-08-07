@@ -152,7 +152,7 @@ public sealed class MqttNetConnection : IMqttConnection
             var result = await _client.ConnectAsync(builder.Build(), cancellationToken).ConfigureAwait(false);
             if (result.ResultCode != MqttClientConnectResultCode.Success)
             {
-                throw new MqttConnectionException(
+                throw new MqttConnectRefusedException(
                     $"the broker refused the connection for client id \"{options.ClientId}\": {result.ResultCode}");
             }
         }
@@ -300,19 +300,37 @@ public sealed class MqttNetConnection : IMqttConnection
     /// </remarks>
     private static bool ValidateAgainstPinnedRoot(MqttClientCertificateValidationEventArgs ctx, X509Certificate2 pinned)
     {
-        // A missing certificate or a hostname that does not match is fatal regardless of which
-        // root signed it — pinning replaces the trust anchor, not the rest of validation.
-        if ((ctx.SslPolicyErrors & SslPolicyErrors.RemoteCertificateNotAvailable) != 0 ||
-            (ctx.SslPolicyErrors & SslPolicyErrors.RemoteCertificateNameMismatch) != 0)
-        {
-            return false;
-        }
-
         if (ctx.Certificate == null)
         {
             return false;
         }
 
+        var leaf = ctx.Certificate as X509Certificate2 ?? new X509Certificate2(ctx.Certificate);
+        return IsChainPinnedTo(leaf, ctx.Chain, ctx.SslPolicyErrors, pinned);
+    }
+
+    /// <summary>
+    /// The pinned-root decision, separated from MQTTnet's callback so it can be driven directly by
+    /// tests with generated certificate chains.
+    /// </summary>
+    /// <remarks>
+    /// It is <c>internal</c> rather than private for exactly that reason. This is the only
+    /// security decision the SDK makes on its own, it is hand-built because the one-line API does
+    /// not exist on Unity's runtime, and leaving it reachable only through a live TLS handshake
+    /// meant its sole exerciser would have been production.
+    /// </remarks>
+    internal static bool IsChainPinnedTo(
+        X509Certificate2 leaf, X509Chain? peerChain, SslPolicyErrors sslPolicyErrors, X509Certificate2 pinned)
+    {
+        // A missing certificate or a hostname that does not match is fatal regardless of which
+        // root signed it — pinning replaces the trust anchor, not the rest of validation.
+        if ((sslPolicyErrors & SslPolicyErrors.RemoteCertificateNotAvailable) != 0 ||
+            (sslPolicyErrors & SslPolicyErrors.RemoteCertificateNameMismatch) != 0)
+        {
+            return false;
+        }
+
+        var ctx = peerChain;
         using var chain = new X509Chain();
         chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
         // Tolerating an unknown authority is what allows a privately-rooted chain to build;
@@ -320,7 +338,24 @@ public sealed class MqttNetConnection : IMqttConnection
         chain.ChainPolicy.VerificationFlags = X509VerificationFlags.AllowUnknownCertificateAuthority;
         chain.ChainPolicy.ExtraStore.Add(pinned);
 
-        var leaf = ctx.Certificate as X509Certificate2 ?? new X509Certificate2(ctx.Certificate);
+        // 🔑 THE PEER'S OWN INTERMEDIATES MUST GO IN TOO, or pinning only ever works for a chain
+        // exactly one link long. Building from the leaf alone stops at PartialChain when the
+        // broker's certificate was issued by an intermediate under the pinned root — the normal
+        // CA hygiene arrangement — and the terminal element is then the LEAF, so the identity
+        // check below fails and a perfectly valid deployment gets an opaque connect failure.
+        // These are attacker-suppliable, which is safe here precisely because they only help a
+        // chain BUILD; it still has to terminate at the pin, and every signature is still checked.
+        if (ctx != null)
+        {
+            foreach (var element in ctx.ChainElements)
+            {
+                if (element.Certificate != null)
+                {
+                    chain.ChainPolicy.ExtraStore.Add(element.Certificate);
+                }
+            }
+        }
+
         if (!chain.Build(leaf))
         {
             return false;

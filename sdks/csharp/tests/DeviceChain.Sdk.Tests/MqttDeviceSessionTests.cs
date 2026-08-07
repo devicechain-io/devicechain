@@ -77,6 +77,15 @@ public class MqttDeviceSessionTests
         await start.WaitAsync(Timeout);
 
         Assert.Equal("inst/acme/device-commands/sensor-001", connection.SubscribedFilter);
+
+        // 🔴 QoS 1 IS THE WHOLE cleanSession=false PROMISE. At QoS 0 the broker queues nothing
+        // while the device is away and never redelivers, so a command issued during a blip is
+        // simply lost — the exact failure persistence exists to prevent. An adversarial pass
+        // flipped this to AtMostOnce and every gate stayed green, including the real-broker
+        // persistence test, because that test subscribes with its own raw connection rather than
+        // through the session.
+        Assert.Equal(MqttQos.AtLeastOnce, connection.SubscribedQos);
+
         Assert.Equal("inst:acme:sensor-001", connection.Options!.ClientId);
         Assert.Equal("acme:cred-1", connection.Options!.Username);
         // Empty, not null: it is what selects access-token credential mode at the callout.
@@ -183,6 +192,26 @@ public class MqttDeviceSessionTests
         Assert.Equal("cmd-1", connection.LastResponse().CommandToken);
     }
 
+    // 🔑 AND THE REDELIVERY MUST REPEAT THE ORIGINAL OUTCOME, NOT A FABRICATED SUCCESS. The
+    // earlier test redelivers a SUCCEEDED command and asserts only the token, so answering every
+    // redelivery `success:true` escaped it — which would drive a command the machine REFUSED all
+    // the way to SUCCESSFUL.
+    [Fact]
+    public async Task ARedeliveredFailedCommandIsAnsweredAsFailedAgain()
+    {
+        var connection = new FakeMqttConnection();
+        await using var session = new MqttDeviceSession(Options(), new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, (_, _) => Task.FromResult(CommandOutcome.Failed("the dozer is stuck")));
+
+        await connection.DeliverCommandAsync("cmd-1", "goRefuel");
+        await connection.DeliverCommandAsync("cmd-1", "goRefuel");
+
+        Assert.Equal(2, connection.Published.Count);
+        var response = connection.LastResponse();
+        Assert.False(response.Success);
+        Assert.Equal("the dozer is stuck", response.Error);
+    }
+
     // Distinct commands must each be handled — the dedupe must key on the token, not merely
     // suppress everything after the first.
     [Fact]
@@ -248,6 +277,112 @@ public class MqttDeviceSessionTests
         Assert.Empty(connection.Published);
     }
 
+    // 🔴 THE WINDOW A COMPLETED-ONLY CACHE MISSES. The broker redelivers precisely when the first
+    // delivery has NOT been answered yet — a handler still working, or a response lost — which is
+    // exactly when a cache of finished commands holds nothing. A duplicate arriving then must
+    // coalesce onto the first execution, not start a second one: a dozer that receives "go refuel"
+    // twice mid-move drives twice.
+    [Fact]
+    public async Task ADuplicateArrivingWhileTheHandlerIsStillRunningDoesNotRunItAgain()
+    {
+        var connection = new FakeMqttConnection();
+        var invocations = 0;
+        var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var session = new MqttDeviceSession(Options(), new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, async (_, _) =>
+        {
+            Interlocked.Increment(ref invocations);
+            entered.TrySetResult(true);
+            await release.Task;
+            return CommandOutcome.Succeeded();
+        });
+
+        var first = connection.DeliverCommandAsync("cmd-1", "goRefuel");
+        await entered.Task.WaitAsync(Timeout);
+
+        // The redelivery lands while the handler is still in flight.
+        var duplicate = connection.DeliverCommandAsync("cmd-1", "goRefuel");
+        release.TrySetResult(true);
+        await Task.WhenAll(first, duplicate).WaitAsync(Timeout);
+
+        Assert.Equal(1, invocations);
+        // Still answered twice: the redelivery was probably caused by a lost response.
+        Assert.Equal(2, connection.Published.Count);
+    }
+
+    // ── what the session tells the outside world ─────────────────────────────
+
+    // The public StateChanged event had NO subscriber anywhere in the suite, so raising it with a
+    // wrong value went unnoticed — a Blind session could announce Ready.
+    [Fact]
+    public async Task StateChangedReportsTheStateItActuallyReached()
+    {
+        var connection = new FakeMqttConnection { RefuseSubscribe = true };
+        var observed = new List<MqttSessionState>();
+        await using var session = new MqttDeviceSession(Options(), new FakeMqttClientFactory(connection));
+        session.StateChanged += state => observed.Add(state);
+
+        await Assert.ThrowsAsync<MqttSubscribeRefusedException>(
+            () => session.StartAsync((_, _) => Task.FromResult(CommandOutcome.Succeeded()), CancellationToken.None));
+
+        Assert.Contains(MqttSessionState.Blind, observed);
+        Assert.DoesNotContain(MqttSessionState.Ready, observed);
+    }
+
+    // The topic filter's only exerciser is this test. It matters the day the session subscribes to
+    // anything else: without it, every inbound frame would be parsed as a command.
+    [Fact]
+    public async Task AFrameOnAnotherTopicIsIgnoredEntirely()
+    {
+        var connection = new FakeMqttConnection();
+        var invocations = 0;
+        await using var session = new MqttDeviceSession(Options(), new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, (_, _) =>
+        {
+            Interlocked.Increment(ref invocations);
+            return Task.FromResult(CommandOutcome.Succeeded());
+        });
+
+        await connection.DeliverRawAsync(
+            "inst/acme/device-commands/SOMEONE-ELSE",
+            "{\"token\":\"cmd-1\",\"deviceToken\":\"other\",\"name\":\"goRefuel\"}");
+
+        Assert.Equal(0, invocations);
+        Assert.Empty(connection.Published);
+        // Not a malformed frame either — it decoded fine, it simply was not ours.
+        Assert.Equal(0, session.MalformedFrames);
+    }
+
+    // Starting twice would leave the first connection live, still wired to the handler, and both
+    // present the same client id — so the broker would evict one with the other.
+    [Fact]
+    public async Task StartingTwiceIsRefused()
+    {
+        var connection = new FakeMqttConnection();
+        await using var session = new MqttDeviceSession(Options(), new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, (_, _) => Task.FromResult(CommandOutcome.Succeeded()));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => session.StartAsync((_, _) => Task.FromResult(CommandOutcome.Succeeded()), CancellationToken.None));
+    }
+
+    // The SESSION must impose its own deadline. Relying on the caller's token means a broker that
+    // accepts the connection and then goes quiet hangs startup forever.
+    [Fact]
+    public async Task StartIsBoundedByTheSessionsOwnOperationTimeout()
+    {
+        var connection = new FakeMqttConnection();
+        var options = Options();
+        options.OperationTimeout = TimeSpan.FromMilliseconds(250);
+        await using var session = new MqttDeviceSession(options, new FakeMqttClientFactory(connection));
+
+        // CancellationToken.None: only the session's own timeout can end this.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => session.StartAsync((_, _) => Task.FromResult(CommandOutcome.Succeeded()), CancellationToken.None));
+    }
+
     // ── reconnect ────────────────────────────────────────────────────────────
 
     // A dropped connection must be re-established AND re-subscribed. Asserting the subscribe on
@@ -295,6 +430,46 @@ public class MqttDeviceSessionTests
         Assert.Equal(MqttSessionState.Blind, session.State);
     }
 
+    // 🔴 THE RECONNECT-STORM TEST. MQTTnet raises its disconnected event for a connection that was
+    // NEVER ESTABLISHED — measured against the real library — so an implementation that wires the
+    // lost-connection handler before connecting spawns a new reconnect loop per FAILED ATTEMPT and
+    // the loops multiply: ~1,100 dials per second against a down broker, where one backed-off loop
+    // should manage about two. With 18 machines that is a self-inflicted denial of service on the
+    // gateway during exactly the outage the reconnect exists to survive.
+    //
+    // The fake reproduces the behaviour that causes it (a failed connect raises ConnectionLost),
+    // so this measures the session's structure rather than a fixture that cannot storm.
+    //
+    // 🔑 TWO INDEPENDENT DEFENCES STOP IT, AND EITHER ONE ALONE IS SUFFICIENT — measured, so the
+    // claim is not louder than the evidence: wiring ConnectionLost only after a successful connect,
+    // and the single-loop interlock. Removing either leaves this test passing; removing BOTH — the
+    // shape the code originally had — produces 5,377 dial attempts in 1.2 seconds. So this test
+    // pins the pair rather than either mechanism, which is why both carry their own comment.
+    [Fact]
+    public async Task AFailingReconnectDoesNotMultiplyIntoAStorm()
+    {
+        var first = new FakeMqttConnection();
+        var factory = new StormFactory(first);
+        var options = Options();
+        options.ReconnectInitialDelay = TimeSpan.FromMilliseconds(50);
+        options.ReconnectMaxDelay = TimeSpan.FromMilliseconds(200);
+
+        await using var session = new MqttDeviceSession(options, factory);
+        await StartAsync(session, first, (_, _) => Task.FromResult(CommandOutcome.Succeeded()));
+
+        first.DropConnection(new Exception("broker went away"));
+        await Task.Delay(1200);
+
+        // One backed-off loop over ~1.2s at 50→200ms with jitter is a handful of attempts. A
+        // multiplying implementation reaches the hundreds or thousands.
+        var attempts = factory.FailedAttempts;
+        Assert.InRange(attempts, 1, 40);
+
+        // And every failed attempt must be disposed: _connection is only assigned on success, so
+        // without explicit cleanup each retry leaks a client for the length of the outage.
+        Assert.Equal(attempts, factory.DisposedFailures);
+    }
+
     // ── client id and topic composition ──────────────────────────────────────
 
     [Theory]
@@ -318,6 +493,21 @@ public class MqttDeviceSessionTests
     public void DeviceClientIdRefusesAnUnsafeField(string instance, string tenant, string device)
     {
         Assert.Throws<ArgumentException>(() => DevicePlane.DeviceClientId(instance, tenant, device));
+    }
+
+    // The discriminator is deliberately NOT held to the token grammar — it is chosen inside a
+    // namespace the broker already authenticated — but it must still not carry the characters that
+    // would stop the composed id being a single NATS subject token. That guard had no test, so
+    // deleting it entirely passed every gate.
+    [Theory]
+    [InlineData("has.dot")]
+    [InlineData("has*star")]
+    [InlineData("has>gt")]
+    [InlineData("has space")]
+    public void DeviceClientIdRefusesADiscriminatorThatBreaksTheSubjectToken(string discriminator)
+    {
+        Assert.Throws<ArgumentException>(
+            () => DevicePlane.DeviceClientId("inst", "acme", "sensor-001", discriminator));
     }
 
     [Fact]
@@ -382,6 +572,69 @@ public class MqttDeviceSessionTests
 
     // A connection whose every confirmation is driven by the TEST. Nothing here completes a
     // subscribe on its own — that is the step under test.
+    // Hands out one working connection, then connections that always FAIL to connect — and, like
+    // the real library, raise ConnectionLost when they do.
+    private sealed class StormFactory : IMqttClientFactory
+    {
+        private readonly FakeMqttConnection _first;
+        private int _served;
+        private int _failed;
+        private int _disposedFailures;
+
+        public StormFactory(FakeMqttConnection first) => _first = first;
+
+        public int FailedAttempts => Volatile.Read(ref _failed);
+
+        public int DisposedFailures => Volatile.Read(ref _disposedFailures);
+
+        public IMqttConnection Create()
+        {
+            if (Interlocked.Exchange(ref _served, 1) == 0)
+            {
+                return _first;
+            }
+
+            Interlocked.Increment(ref _failed);
+            return new FailingConnection(() => Interlocked.Increment(ref _disposedFailures));
+        }
+    }
+
+    private sealed class FailingConnection : IMqttConnection
+    {
+        private readonly Action _onDispose;
+
+        public FailingConnection(Action onDispose) => _onDispose = onDispose;
+
+        public bool IsConnected => false;
+
+        public event Func<MqttInbound, Task>? MessageReceived;
+
+        public event Action<Exception?>? ConnectionLost;
+
+        public Task ConnectAsync(MqttConnectOptions options, CancellationToken cancellationToken)
+        {
+            // The real library raises its disconnected event even for a connection that never
+            // came up. Reproducing that is the whole point of this fake.
+            ConnectionLost?.Invoke(new Exception("connect failed"));
+            _ = MessageReceived;
+            throw new MqttConnectionException("connect failed");
+        }
+
+        public Task SubscribeAsync(string topicFilter, MqttQos qos, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task PublishAsync(string topic, byte[] payload, MqttQos qos, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task DisconnectAsync(TimeSpan quiesce, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public ValueTask DisposeAsync()
+        {
+            _onDispose();
+            return default;
+        }
+    }
+
     private sealed class FakeMqttConnection : IMqttConnection
     {
         private readonly TaskCompletionSource<bool> _subackGate =
@@ -395,6 +648,10 @@ public class MqttDeviceSessionTests
         public MqttConnectOptions? Options { get; private set; }
 
         public string? SubscribedFilter { get; private set; }
+
+        // Recorded because discarding it is exactly how the command subscription's QoS came to be
+        // mutable to 0 with every gate green.
+        public MqttQos? SubscribedQos { get; private set; }
 
         public List<(string Topic, byte[] Payload, MqttQos Qos)> Published { get; } = new();
 
@@ -414,6 +671,7 @@ public class MqttDeviceSessionTests
         public async Task SubscribeAsync(string topicFilter, MqttQos qos, CancellationToken cancellationToken)
         {
             SubscribedFilter = topicFilter;
+            SubscribedQos = qos;
             SubscribeCalled.TrySetResult(true);
 
             if (RefuseSubscribe)

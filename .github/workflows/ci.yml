@@ -715,6 +715,10 @@ jobs:
       - name: Native-AOT publish-and-run gate
         env:
           DC_MQTT_BROKER: tcp://127.0.0.1:1883
+          # Same reason as the Test step: this host skips its real-broker leg when the variable is
+          # unset, and a skip reads as a pass. Without this the gate would quietly degrade to
+          # scripted-only if the broker step ever broke.
+          DC_REQUIRE_MQTT_BROKER: '1'
         run: |
           dotnet publish tests/DeviceChain.Sdk.AotHost -c Release -r linux-x64
           ./tests/DeviceChain.Sdk.AotHost/bin/Release/net8.0/linux-x64/publish/DeviceChain.Sdk.AotHost

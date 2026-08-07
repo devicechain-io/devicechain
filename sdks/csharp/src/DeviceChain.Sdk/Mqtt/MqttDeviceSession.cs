@@ -25,8 +25,9 @@ public enum MqttSessionState
     Reconnecting,
 
     /// <summary>
-    /// Connected, but the broker REFUSED the command subscription — so no command will ever
-    /// arrive and the silence is not clean.
+    /// The broker REFUSED this device — either the connection or the command subscription — so no
+    /// command will ever arrive and the silence is not clean. Terminal: a refusal is not transient,
+    /// so the session stops retrying rather than hammering forever.
     /// </summary>
     Blind,
 
@@ -67,10 +68,22 @@ public sealed class MqttDeviceSession : IAsyncDisposable
     private readonly CommandHistory _history;
     private readonly CancellationTokenSource _stopped = new();
 
+    // A dedicated lock object rather than locking something disposable that this class also owns.
+    private readonly object _stateLock = new();
+
+    // Commands whose handler is RUNNING RIGHT NOW, keyed by command token. See OnMessageAsync.
+    private readonly Dictionary<string, Task<CommandResponseEnvelope>> _inFlight =
+        new(StringComparer.Ordinal);
+
+    private readonly object _inFlightLock = new();
+
     private IMqttConnection? _connection;
     private CommandHandler? _handler;
     private MqttSessionState _state = MqttSessionState.Starting;
     private int _disposed;
+    private int _started;
+    private int _reconnectRunning;
+    private int _malformedFrames;
 
     /// <summary>Creates a session for one device.</summary>
     /// <param name="options">The device's session options.</param>
@@ -95,7 +108,7 @@ public sealed class MqttDeviceSession : IAsyncDisposable
     {
         get
         {
-            lock (_stopped)
+            lock (_stateLock)
             {
                 return _state;
             }
@@ -111,21 +124,50 @@ public sealed class MqttDeviceSession : IAsyncDisposable
     /// <summary>The topic this device publishes telemetry to.</summary>
     public string EventsTopic => _eventsTopic;
 
+    /// <summary>How many inbound frames could not be decoded into a command.</summary>
+    /// <remarks>
+    /// Exposed as a count rather than logged-and-forgotten because it is the only evidence that a
+    /// device is receiving something it cannot act on.
+    /// </remarks>
+    public int MalformedFrames => Volatile.Read(ref _malformedFrames);
+
     /// <summary>
     /// Connects, subscribes to this device's command topic, and returns ONLY once the broker has
     /// GRANTED that subscription.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// 🔴 THE RETURN IS THE PROMISE, AND IT IS FAIL-CLOSED ABOUT ITS OWN BLINDNESS. If the broker
     /// refuses the subscription the session goes <see cref="MqttSessionState.Blind"/> and this
     /// throws, rather than returning a session that is connected, looks healthy, and will never
     /// receive anything. A device that never got a confirmed grant is reported un-subscribed, so
     /// its silence is never read as clean.
+    /// </para>
+    /// <para>
+    /// 🔑 AND WHEN IT THROWS, NOTHING IS LEFT RUNNING. A failed start leaves no connection and no
+    /// background reconnect, so a caller told that startup failed does not silently own a session
+    /// that dials on and later starts executing commands it believes never started.
+    /// </para>
     /// </remarks>
     /// <exception cref="MqttSubscribeRefusedException">The broker refused the command subscription.</exception>
+    /// <exception cref="InvalidOperationException">The session was already started, or is disposed.</exception>
     public async Task StartAsync(CommandHandler handler, CancellationToken cancellationToken)
     {
         _handler = handler ?? throw new ArgumentNullException(nameof(handler));
+
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            throw new InvalidOperationException("this MQTT session has been disposed");
+        }
+
+        // 🔑 STARTING TWICE WOULD LEAK THE FIRST CONNECTION — still connected, still wired to the
+        // command handler — and, because both present the same client id, the broker would evict
+        // one with the other. Refusing is the only sane reading of a second start.
+        if (Interlocked.Exchange(ref _started, 1) != 0)
+        {
+            throw new InvalidOperationException(
+                $"the MQTT session for device \"{_options.DeviceToken}\" has already been started");
+        }
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -150,7 +192,7 @@ public sealed class MqttDeviceSession : IAsyncDisposable
     /// </remarks>
     public async Task PublishEventAsync(byte[] jsonEvent, CancellationToken cancellationToken)
     {
-        var connection = _connection;
+        var connection = Volatile.Read(ref _connection);
         if (connection == null || !connection.IsConnected)
         {
             throw new MqttConnectionException(
@@ -164,8 +206,7 @@ public sealed class MqttDeviceSession : IAsyncDisposable
     private async Task ConnectAndSubscribeAsync(CancellationToken cancellationToken)
     {
         var connection = _factory.Create();
-        connection.MessageReceived += OnMessageAsync;
-        connection.ConnectionLost += OnConnectionLost;
+        var established = false;
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _stopped.Token);
         timeout.CancelAfter(_options.OperationTimeout);
@@ -183,14 +224,31 @@ public sealed class MqttDeviceSession : IAsyncDisposable
             Trust = _options.Trust,
         };
 
-        await connection.ConnectAsync(options, timeout.Token).ConfigureAwait(false);
-        _connection = connection;
-
         try
         {
+            await connection.ConnectAsync(options, timeout.Token).ConfigureAwait(false);
+
+            // Wired only AFTER the connect succeeded, so a message cannot arrive unobserved
+            // between subscribing and handling.
+            connection.MessageReceived += OnMessageAsync;
+
             // Inside the connect path on EVERY (re)connect, so a reconnect re-establishes the
             // subscription by the same code that established it — and re-reads the grant.
             await connection.SubscribeAsync(_commandsTopic, MqttQos.AtLeastOnce, timeout.Token).ConfigureAwait(false);
+
+            // 🔴 THE LOST-CONNECTION HANDLER IS WIRED LAST, AND THAT ORDERING IS LOAD-BEARING.
+            // MQTTnet raises its disconnected event for a connection that was NEVER ESTABLISHED —
+            // measured, not assumed: a socket-level connect failure and a refused CONNACK each
+            // raise it once. Wiring it before the connect therefore made every FAILED reconnect
+            // attempt spawn another reconnect loop, and the loops multiplied: ~1,100 connect
+            // attempts per second against a down broker, where one backed-off loop should manage
+            // about two. With 18 machines in a scene that is a self-inflicted denial of service on
+            // the gateway during exactly the outage the reconnect exists to survive.
+            connection.ConnectionLost += OnConnectionLost;
+            established = true;
+
+            _connection = connection;
+            SetState(MqttSessionState.Ready);
         }
         catch (MqttSubscribeRefusedException)
         {
@@ -199,13 +257,28 @@ public sealed class MqttDeviceSession : IAsyncDisposable
             SetState(MqttSessionState.Blind);
             throw;
         }
-
-        SetState(MqttSessionState.Ready);
+        finally
+        {
+            if (!established)
+            {
+                // Nothing else will ever dispose it: _connection is assigned only on success, so
+                // without this every failed attempt leaks a client object — thousands of them over
+                // a long outage.
+                await DetachAndDisposeAsync(connection).ConfigureAwait(false);
+            }
+        }
     }
 
     private void OnConnectionLost(Exception? cause)
     {
-        if (_disposed != 0 || _stopped.IsCancellationRequested)
+        if (Volatile.Read(ref _disposed) != 0 || _stopped.IsCancellationRequested)
+        {
+            return;
+        }
+
+        // One reconnect loop at a time. Even with the wiring order above, a connection can raise
+        // its lost event more than once, and each extra loop would double the dial rate.
+        if (Interlocked.CompareExchange(ref _reconnectRunning, 1, 0) != 0)
         {
             return;
         }
@@ -216,66 +289,88 @@ public sealed class MqttDeviceSession : IAsyncDisposable
 
     private async Task ReconnectLoopAsync()
     {
-        var delay = _options.ReconnectInitialDelay;
-
-        // Jittered so a scene's worth of devices reconnecting after one broker restart do not
-        // arrive as a synchronised thundering herd — 18 machines is enough to notice.
-        var jitter = new Random(_clientId.GetHashCode());
-
-        while (!_stopped.IsCancellationRequested && _disposed == 0)
+        try
         {
-            var scaled = TimeSpan.FromMilliseconds(delay.TotalMilliseconds * (0.5 + jitter.NextDouble()));
-            try
-            {
-                await Task.Delay(scaled, _stopped.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
+            var delay = _options.ReconnectInitialDelay;
 
-            try
-            {
-                await _gate.WaitAsync(_stopped.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
+            // Jittered so a scene's worth of devices reconnecting after one broker restart do not
+            // arrive as a synchronised thundering herd — 18 machines is enough to notice. Seeded
+            // per client id so two devices do not share a sequence.
+            var jitter = new Random(StringComparer.Ordinal.GetHashCode(_clientId));
 
-            try
+            while (!_stopped.IsCancellationRequested && Volatile.Read(ref _disposed) == 0)
             {
-                var previous = _connection;
-                _connection = null;
-                if (previous != null)
+                var scaled = TimeSpan.FromMilliseconds(delay.TotalMilliseconds * (0.5 + jitter.NextDouble()));
+                try
                 {
-                    await previous.DisposeAsync().ConfigureAwait(false);
+                    await Task.Delay(scaled, _stopped.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
                 }
 
-                await ConnectAndSubscribeAsync(_stopped.Token).ConfigureAwait(false);
-                return;
+                try
+                {
+                    await _gate.WaitAsync(_stopped.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+
+                try
+                {
+                    var previous = Interlocked.Exchange(ref _connection, null);
+                    if (previous != null)
+                    {
+                        await DetachAndDisposeAsync(previous).ConfigureAwait(false);
+                    }
+
+                    await ConnectAndSubscribeAsync(_stopped.Token).ConfigureAwait(false);
+                    return;
+                }
+                catch (MqttSubscribeRefusedException)
+                {
+                    // A refusal is not transient: the credential is not permitted to read that
+                    // topic, so retrying forever would change nothing while looking like progress.
+                    // Stay Blind and stop — the state is the report.
+                    return;
+                }
+                catch (MqttConnectRefusedException)
+                {
+                    // Likewise for a broker that REFUSED the connection (a revoked credential, a
+                    // client id the callout will not admit). Retrying that is not resilience, it
+                    // is a hammering loop against a decision that will not change.
+                    SetState(MqttSessionState.Blind);
+                    return;
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+                catch (Exception)
+                {
+                    delay = TimeSpan.FromMilliseconds(Math.Min(
+                        delay.TotalMilliseconds * 2, _options.ReconnectMaxDelay.TotalMilliseconds));
+                }
+                finally
+                {
+                    _gate.Release();
+                }
             }
-            catch (MqttSubscribeRefusedException)
-            {
-                // A refusal is not transient: the credential is not permitted to read that topic,
-                // so retrying forever would change nothing while looking like progress. Stay
-                // Blind and stop — the state is the report.
-                return;
-            }
-            catch (Exception)
-            {
-                delay = TimeSpan.FromMilliseconds(Math.Min(
-                    delay.TotalMilliseconds * 2, _options.ReconnectMaxDelay.TotalMilliseconds));
-            }
-            finally
-            {
-                _gate.Release();
-            }
+        }
+        finally
+        {
+            Volatile.Write(ref _reconnectRunning, 0);
         }
     }
 
     private async Task OnMessageAsync(MqttInbound inbound)
     {
+        // A connection carries only this device's command subscription today, but the filter is
+        // what keeps that true: anything else this session ever subscribes to would otherwise be
+        // parsed as a command.
         if (!string.Equals(inbound.Topic, _commandsTopic, StringComparison.Ordinal))
         {
             return;
@@ -292,29 +387,58 @@ public sealed class MqttDeviceSession : IAsyncDisposable
             // A frame that cannot be decoded is counted and dropped, never answered. Answering it
             // is impossible anyway — the answer is keyed by a command token we could not read —
             // and re-raising here would only make the broker redeliver a poison frame forever.
-            MalformedFrames++;
+            Interlocked.Increment(ref _malformedFrames);
             return;
         }
 
         if (envelope?.Token == null || envelope.Token.Length == 0)
         {
-            MalformedFrames++;
-            return;
-        }
-
-        // 🔴 DE-DUPE BY COMMAND TOKEN. Delivery is at-least-once, so the same token can arrive
-        // more than once — a redelivery must NOT run the handler again (a device would move
-        // twice), but it must still be ANSWERED, or the redelivery was caused by a lost response
-        // and dropping it silently guarantees the command never completes.
-        if (_history.TryGet(envelope.Token, out var cached))
-        {
-            await PublishResponseAsync(cached!).ConfigureAwait(false);
+            Interlocked.Increment(ref _malformedFrames);
             return;
         }
 
         var handler = _handler;
         if (handler == null)
         {
+            return;
+        }
+
+        // 🔴 DE-DUPE BY COMMAND TOKEN, INCLUDING WHILE THE HANDLER IS STILL RUNNING. Delivery is
+        // at-least-once, so the same token can arrive more than once — a redelivery must NOT run
+        // the handler again (a machine would move twice), but it must still be ANSWERED, or the
+        // redelivery was caused by a lost response and dropping it guarantees the command never
+        // completes.
+        //
+        // 🔑 THE IN-FLIGHT MAP IS THE HALF A COMPLETED-ONLY CACHE MISSES, and it is not a corner
+        // case: the broker redelivers precisely when the first delivery has not been answered
+        // yet — a handler still working, or a response lost — which is exactly the window in
+        // which a completed-only cache holds nothing. A duplicate arriving then coalesces onto
+        // the first execution and answers with its outcome instead of starting a second one.
+        Task<CommandResponseEnvelope>? existing = null;
+        TaskCompletionSource<CommandResponseEnvelope>? owned = null;
+
+        lock (_inFlightLock)
+        {
+            if (_history.TryGet(envelope.Token, out var cached))
+            {
+                existing = Task.FromResult(cached!);
+            }
+            else if (_inFlight.TryGetValue(envelope.Token, out var running))
+            {
+                existing = running;
+            }
+            else
+            {
+                owned = new TaskCompletionSource<CommandResponseEnvelope>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                _inFlight[envelope.Token] = owned.Task;
+            }
+        }
+
+        if (existing != null)
+        {
+            var previous = await existing.ConfigureAwait(false);
+            await PublishResponseAsync(previous).ConfigureAwait(false);
             return;
         }
 
@@ -341,13 +465,19 @@ public sealed class MqttDeviceSession : IAsyncDisposable
             Error = outcome.Error,
         };
 
-        _history.Add(envelope.Token, response);
+        lock (_inFlightLock)
+        {
+            _history.Add(envelope.Token, response);
+            _inFlight.Remove(envelope.Token);
+        }
+
+        owned!.TrySetResult(response);
         await PublishResponseAsync(response).ConfigureAwait(false);
     }
 
     private async Task PublishResponseAsync(CommandResponseEnvelope response)
     {
-        var connection = _connection;
+        var connection = Volatile.Read(ref _connection);
         if (connection == null || !connection.IsConnected)
         {
             return;
@@ -368,17 +498,30 @@ public sealed class MqttDeviceSession : IAsyncDisposable
         }
     }
 
-    /// <summary>How many inbound frames could not be decoded into a command.</summary>
-    /// <remarks>
-    /// Exposed as a count rather than logged-and-forgotten because it is the only evidence that a
-    /// device is receiving something it cannot act on.
-    /// </remarks>
-    public int MalformedFrames { get; private set; }
+    private async Task DetachAndDisposeAsync(IMqttConnection connection)
+    {
+        // Detach FIRST: a connection being torn down still raises its lost-connection event, and
+        // acting on that would start a reconnect for a connection we are deliberately discarding.
+        connection.MessageReceived -= OnMessageAsync;
+        connection.ConnectionLost -= OnConnectionLost;
+
+        try
+        {
+            await connection.DisconnectAsync(TimeSpan.FromMilliseconds(250), CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Teardown; a failure here has still achieved the goal.
+        }
+
+        await connection.DisposeAsync().ConfigureAwait(false);
+    }
 
     private void SetState(MqttSessionState state)
     {
         bool changed;
-        lock (_stopped)
+        lock (_stateLock)
         {
             changed = _state != state;
             _state = state;
@@ -401,17 +544,41 @@ public sealed class MqttDeviceSession : IAsyncDisposable
         _stopped.Cancel();
         SetState(MqttSessionState.Stopped);
 
-        var connection = _connection;
-        _connection = null;
-        if (connection != null)
+        // 🔴 TAKE THE GATE. Without it, disposal races an in-flight reconnect: the loop nulls
+        // _connection before dialing, so a dispose landing in that window sees nothing to close,
+        // and the connect it did not wait for then completes — leaving a live, connected socket
+        // with keepalive running forever on a session that reports Stopped.
+        var acquired = false;
+        try
         {
-            using var quiesce = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            await connection.DisconnectAsync(TimeSpan.FromMilliseconds(250), quiesce.Token).ConfigureAwait(false);
-            await connection.DisposeAsync().ConfigureAwait(false);
+            acquired = await _gate.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Fall through and tear down what we can see.
         }
 
-        _gate.Dispose();
-        _stopped.Dispose();
+        try
+        {
+            var connection = Interlocked.Exchange(ref _connection, null);
+            if (connection != null)
+            {
+                await DetachAndDisposeAsync(connection).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            if (acquired)
+            {
+                _gate.Release();
+            }
+        }
+
+        // 🔑 _gate AND _stopped ARE DELIBERATELY NOT DISPOSED. A reconnect loop may still be
+        // awaiting either one, and disposing them turns that into an ObjectDisposedException
+        // thrown into an unobserved background task — while every later read of _stopped.Token
+        // (message handling, response publishing) throws too. Neither holds an unmanaged resource
+        // or a timer here, so letting the GC take them is strictly safer than a tidy Dispose.
     }
 
     /// <summary>

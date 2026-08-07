@@ -38,6 +38,16 @@ public static class Program
                 await RealBrokerRoundTripAsync(broker!).ConfigureAwait(false);
                 Console.WriteLine($"PASS real-broker round-trip against {broker}");
             }
+            else if (Requires("DC_REQUIRE_MQTT_BROKER"))
+            {
+                // 🔴 THE SAME SILENT-SKIP TRAP THE TEST SUITE GUARDS AGAINST, AND IT WAS LEFT OPEN
+                // HERE. This host is the second consumer of the broker CI starts; without this
+                // branch, dropping the env line from the CI step would quietly degrade the gate to
+                // scripted-only and it would stay green forever.
+                throw new InvalidOperationException(
+                    "DC_REQUIRE_MQTT_BROKER is set but DC_MQTT_BROKER is not, so the real-broker leg " +
+                    "of this gate would silently skip. Fix the step that starts nats-server.");
+            }
             else
             {
                 Console.WriteLine("SKIP real-broker round-trip (DC_MQTT_BROKER unset)");
@@ -53,6 +63,12 @@ public static class Program
             Console.Error.WriteLine(ex.StackTrace);
             return 1;
         }
+    }
+
+    private static bool Requires(string variable)
+    {
+        var value = Environment.GetEnvironmentVariable(variable);
+        return !string.IsNullOrEmpty(value) && value != "0";
     }
 
     private static async Task ScriptedRoundTripAsync()
