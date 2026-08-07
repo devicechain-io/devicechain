@@ -663,10 +663,16 @@ jobs:
           go build -o "$RUNNER_TEMP/nats-server" github.com/nats-io/nats-server/v2
           "$RUNNER_TEMP/nats-server" --version
           mkdir -p "$RUNNER_TEMP/js"
+          # ack_wait is how long the broker waits for a PUBACK before REDELIVERING a QoS-1
+          # message, and it is set here because it is the only knob that makes redelivery
+          # observable in a test: the default is 30 seconds, so a redelivery test on the default
+          # either runs for half a minute or silently proves nothing. The SDK's redelivery test
+          # FAILS rather than skips if no redelivery arrives, so dropping this line breaks the
+          # csharp job loudly instead of quietly reducing what it covers.
           cat > "$RUNNER_TEMP/nats.conf" <<CONF
           port: 4222
           jetstream { store_dir: "$RUNNER_TEMP/js" }
-          mqtt { port: 1883 }
+          mqtt { port: 1883, ack_wait: "1s" }
           CONF
           "$RUNNER_TEMP/nats-server" -c "$RUNNER_TEMP/nats.conf" > "$RUNNER_TEMP/nats.log" 2>&1 &
           for _ in $(seq 1 30); do

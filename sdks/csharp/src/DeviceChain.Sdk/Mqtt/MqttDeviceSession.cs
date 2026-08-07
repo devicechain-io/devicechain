@@ -409,11 +409,26 @@ public sealed class MqttDeviceSession : IAsyncDisposable
         // redelivery was caused by a lost response and dropping it guarantees the command never
         // completes.
         //
-        // 🔑 THE IN-FLIGHT MAP IS THE HALF A COMPLETED-ONLY CACHE MISSES, and it is not a corner
-        // case: the broker redelivers precisely when the first delivery has not been answered
-        // yet — a handler still working, or a response lost — which is exactly the window in
-        // which a completed-only cache holds nothing. A duplicate arriving then coalesces onto
-        // the first execution and answers with its outcome instead of starting a second one.
+        // The in-flight map is the half a completed-only cache would miss: a duplicate arriving
+        // while the handler is still working coalesces onto that execution instead of starting a
+        // second one.
+        //
+        // 🔴 BUT BE HONEST ABOUT WHEN IT IS REACHABLE — AN EARLIER VERSION OF THIS COMMENT WAS
+        // NOT. Over the shipped MQTTnet transport that window CANNOT OCCUR: MQTTnet dispatches
+        // inbound PUBLISHes strictly SEQUENTIALLY, measured — with a handler blocked, a second
+        // command published at t=85ms was not dispatched until the first handler returned at
+        // t=1587ms. So a real redelivery always arrives AFTER the handler finished and is
+        // answered from the completed-command cache above; only the fake reaches this branch.
+        //
+        // It stays because the seam admits other transports — the hand-rolled MQTT 3.1.1 client
+        // that is the stated fallback would be free to dispatch concurrently — and because the
+        // cost is a dictionary lookup. It is defence in depth, not a live guard, and saying so is
+        // better than leaving a comment that implies coverage the shipped path does not exercise.
+        //
+        // 🔑 THE SEQUENTIAL DISPATCH HAS A CONSEQUENCE WORTH KNOWING: a slow command handler
+        // HEAD-OF-LINE BLOCKS every later command for that device. A machine part-way through a
+        // multi-second command cannot be redirected until it finishes. That is a property to
+        // design scenes around, not a defect to fix here.
         Task<CommandResponseEnvelope>? existing = null;
         TaskCompletionSource<CommandResponseEnvelope>? owned = null;
 
