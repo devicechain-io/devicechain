@@ -41,11 +41,16 @@ import (
 // exact failure an empty ClientInformation.MQTT would cause — would satisfy every
 // refusal assertion perfectly.
 
-// startCalloutBroker runs an embedded nats-server configured exactly the way the
+// startCalloutServer runs an embedded nats-server configured exactly the way the
 // deployed one is (deploy/opentofu/modules/nats): an APP account holding the static
 // service login, and an auth_callout delegating everything else. It returns the
-// service connection the responder answers on, and the gateway's MQTT port.
-func startCalloutBroker(t *testing.T, creds natsauth.Credentials) (*nats.Conn, int) {
+// server and the gateway's MQTT port.
+//
+// authTimeout is the authorization block's timeout — how long the server waits for a
+// callout reply before refusing the connection. It is a parameter rather than a
+// constant because callout_race_test.go needs a window it can outlast without adding
+// five seconds to the suite.
+func startCalloutServer(t *testing.T, creds natsauth.Credentials, authTimeout time.Duration) (*natsserver.Server, int) {
 	t.Helper()
 
 	mqttPort := dctest.FreeTCPPort(t)
@@ -67,11 +72,12 @@ func startCalloutBroker(t *testing.T, creds natsauth.Credentials) (*nats.Conn, i
 		  SYS {}
 		}
 		authorization {
-		  timeout: 5
+		  timeout: %v
 		  auth_callout { issuer: %q, auth_users: [%q], account: "APP" }
 		}
 	`, filepath.Join(dir, "js"), mqttPort,
 		natsauth.ServiceUser, creds.ServicePasswordBcrypt,
+		authTimeout.Seconds(),
 		creds.IssuerPublic, natsauth.ServiceUser)
 	if err := os.WriteFile(conf, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -91,6 +97,14 @@ func startCalloutBroker(t *testing.T, creds natsauth.Credentials) (*nats.Conn, i
 		t.Fatal("embedded nats server not ready")
 	}
 	t.Cleanup(srv.Shutdown)
+	return srv, mqttPort
+}
+
+// startCalloutBroker is startCalloutServer plus the service connection the responder
+// answers on, at the deployed authorization timeout.
+func startCalloutBroker(t *testing.T, creds natsauth.Credentials) (*nats.Conn, int) {
+	t.Helper()
+	srv, mqttPort := startCalloutServer(t, creds, 5*time.Second)
 
 	// The responder's own connection presents the static service credential, which
 	// auth_users exempts from the callout — otherwise it would have to answer the

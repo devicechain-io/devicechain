@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/messaging"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
@@ -403,7 +404,12 @@ func (c *Client) onConnected(client mqtt.Client, sessionTs int64) {
 	asserted := c.establishEpochFloor(c.currentSessionCtx())
 
 	for _, filter := range c.subscriptions() {
-		if err := mqtt.WaitTokenTimeout(client.Subscribe(filter, 1, c.onMessage), subscribeTimeout); err != nil {
+		// Confirmed rather than merely awaited: paho's WaitTokenTimeout returns the
+		// token's Error(), which a broker REFUSAL leaves nil (see
+		// SubscribeMqttConfirmed). Unconfirmed, a host whose credential may not read a
+		// group's topics logs that it subscribed to all of them and then sits silent —
+		// indistinguishable from a group with no devices publishing.
+		if err := messaging.SubscribeMqttConfirmed(client, filter, 1, c.onMessage, subscribeTimeout); err != nil {
 			log.Error().Err(err).Str("tenant", c.tenant).Str("filter", filter).Msg("Failed to subscribe to Sparkplug group traffic.")
 			continue
 		}

@@ -698,7 +698,13 @@ func (a *Agent) publish(topic string, payload []byte) error {
 // otherwise looks like a healthy agent forwarding nothing, F9) visible.
 func (a *Agent) watchInstanceMismatch() {
 	// {instance}.{tenant}.devices.{token}.events across ANY instance/tenant/device.
-	_, err := a.nc.Subscribe("*.*.devices.*.events", func(m *nats.Msg) {
+	//
+	// Synced: the device MQTT listener is already accepting by the time this runs, so
+	// publishes can be in flight before the SUB lands. The stake is small — the counter
+	// is cumulative and any ONGOING misconfiguration is caught by the next publish — but
+	// a device that publishes exactly once, on the wrong instance, inside the window is
+	// invisible forever, and that is the single-shot case this watch exists to catch.
+	_, err := messaging.SubscribeSynced(a.nc, "*.*.devices.*.events", func(m *nats.Msg) {
 		instance, _, _ := strings.Cut(m.Subject, ".")
 		if instance != a.cfg.InstanceId {
 			a.mismatched.Add(1)

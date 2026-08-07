@@ -1313,6 +1313,23 @@ func (nmgr *NatsManager) SubscribeLive(ctx context.Context, tenant string, suffi
 	if err != nil {
 		return nil, err
 	}
+	// 🔴 Confirmed with the server before this returns, because a live feed has no
+	// replay to fall back on: a client sees events from subscribe time onward, there
+	// are no acks and no gap detection, so an event missed in the window is
+	// indistinguishable from one that never happened.
+	//
+	// This narrows the window to the earliest point the server can close it; it does
+	// NOT create a happens-before edge with the client. graphql-ws has no "subscribed"
+	// acknowledgement, so a console that opens a subscription and immediately issues a
+	// mutation still races our handling of its ws frame, and can miss the event for its
+	// own mutation. Closing that fully needs an ack in the protocol, which is a
+	// separate change; what this removes is the part we were adding for free.
+	//
+	// The cost is one round trip per subscription open, which is a human-scale event.
+	if err := ConfirmSubscribed(nmgr.nc); err != nil {
+		_ = sub.Unsubscribe()
+		return nil, err
+	}
 	out := make(chan Message)
 	go func() {
 		defer close(out)
