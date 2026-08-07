@@ -86,6 +86,40 @@ because the WebGL path was learned the expensive way.
 - Unity 6 (the version `VERIFICATION.md` records) with **IL2CPP** and the platform module for your
   target. Mono will *not* answer the question this page exists to ask.
 
+## 0.5 Prove the transport on the desktop first
+
+**Do not open Unity until this passes.** The runbook's own rule — validate against the smallest
+possible scene — has a smaller rung than a scene: a console app. `DeviceChain.Sdk.TrustProbe` drives
+the shipped transport against your live broker and separates the two things that otherwise fail
+identically from a player log ("it didn't connect"): a TLS/pinning problem and an auth problem.
+
+```bash
+kubectl -n dc-system get secret dc-nats-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/ca.pem
+dotnet run --project sdks/csharp/tools/DeviceChain.Sdk.TrustProbe -- /tmp/ca.pem
+```
+
+It provisions nothing and connects with a deliberately bogus credential, so the *best* outcome is a
+completed TLS handshake followed by the broker's own refusal. Expect `4/4 as expected`:
+
+| | case | expected |
+| --- | --- | --- |
+| A | `localhost` + correct pinned CA | TLS **OK**, then `NotAuthorized` at CONNACK |
+| A′ | `localhost` + accept-any | the *same* refusal — so A's failure was auth, not TLS |
+| B | `127.0.0.1` + correct pinned CA | TLS **fails** — no IP SAN on the leaf |
+| C | `localhost` + wrong pinned CA | TLS **fails** — the pin is not vacuously accepting |
+
+Measured on a live bring-up, 4/4. Two things that result establishes, neither of which CI can:
+
+- **`PinnedCa` completes a real TLS handshake.** CI's real-broker rung runs a *plaintext*
+  nats-server, and the unit tests call the validation callback directly with synthesized chains — so
+  before this rig, the hand-built pinned path had production as its only exerciser.
+- **A bogus credential is refused at connect**, against the real auth callout. That is §5's negative
+  case, already confirmed on the desktop; if the player behaves differently, the difference is
+  IL2CPP and nothing else.
+
+A and C are the load-bearing pair: A alone would score identically against a validator that simply
+returned `true`.
+
 ## 1. Stage the assemblies
 
 ```bash

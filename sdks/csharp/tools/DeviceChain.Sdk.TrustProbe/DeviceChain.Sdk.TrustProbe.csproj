@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- net8.0 only: this is a maintainer rig run from a desktop against a live cluster, never
+         shipped and never consumed by Unity, so it has no reason to carry the netstandard2.1
+         target the SDK itself must. -->
+    <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>DeviceChain.Sdk.TrustProbe</RootNamespace>
+    <AssemblyName>DeviceChain.Sdk.TrustProbe</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/DeviceChain.Sdk/DeviceChain.Sdk.csproj" />
+  </ItemGroup>
+
+</Project>
