@@ -72,6 +72,30 @@ somebody adds to it.
 A reason is required, and a directive that no longer suppresses anything is itself
 reported. A suppression that outlives its subject is how a guard quietly stops guarding.
 
+## Known limits
+
+Written down rather than left to be discovered, because a guard that looks thorough is
+worse than one whose edges are stated. None of these has an instance in the tree today;
+all were found by attacking the pass rather than by it failing.
+
+**It matches a declared type, so a type it cannot name escapes.** A method *value*
+(`f := nc.Subscribe; f(...)`) resolves to a variable, not a method, and is not reported.
+Neither is a call through a hand-declared local interface that *redeclares* the
+signature — a test seam is the plausible way that appears. An interface that **embeds**
+`nats.Conn` or `mqtt.Client`, and a struct that embeds `*nats.Conn` (promoted method),
+both **are** reported.
+
+**It reads position, not execution order.** `defer nc.Subscribe(...)` followed by a
+flush looks confirmed and is not; a deferred flush looks unconfirmed and is not. Both
+are contrived, and the second errs toward reporting.
+
+**Confirmation must be in the same function.** A helper that subscribes and returns,
+with the caller doing one `ConfirmSubscribed`, is reported — as is a subscribe followed
+by a `SubscribeSynced` on the same connection, whose internal flush genuinely does
+confirm the earlier one. Both are correct code, and the answer today is a directive
+saying so. If either becomes a common shape, teach `isConfirmer` about it rather than
+letting directives accumulate.
+
 ## Running it
 
 ```bash

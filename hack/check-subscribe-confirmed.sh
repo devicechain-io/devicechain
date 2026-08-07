@@ -66,7 +66,18 @@ go build -o "$BIN" ./backend/tools/subconfirm/cmd/subconfirm
 #     changing the instrument.
 check() {
   local rc=0 dir out status
-  for dir in $(go list -m -f '{{.Dir}}'); do
+  local -a modules
+  # 🔴 Enumerated into a variable first, and asserted non-empty. `for dir in $(go
+  # list ...)` looks equivalent and is not: a command substitution that fails in a
+  # for-list does NOT trip set -e, so a broken toolchain or an unreadable go.work
+  # yields a loop over nothing and a clean exit — a check reporting "clean" about a
+  # tree it never looked at.
+  mapfile -t modules < <(go list -m -f '{{.Dir}}') || true
+  if [ "${#modules[@]}" -eq 0 ]; then
+    echo "ERROR: could not enumerate workspace modules; nothing was checked." >&2
+    return 1
+  fi
+  for dir in "${modules[@]}"; do
     status=0
     out="$(cd "$dir" && "$BIN" ./... 2>&1)" || status=$?
     if [ -n "$out" ]; then
@@ -102,13 +113,23 @@ check() {
 # 🔴 It checks BOTH directions. "The checker reports a bad subscribe" is satisfied
 # by a checker that reports everything, which is why the second half — the same
 # file written correctly, reported by nothing — is not optional.
-self_test() {
-  local pkg
-  pkg="$(mktemp -d "$ROOT/backend/core/subconfirm_selftest_XXXXXX")"
-  trap 'rm -rf "$TMP" "$pkg"' EXIT
+# 🔴 PKG IS GLOBAL ON PURPOSE, and `${PKG:-}` in the trap is the other half.
+# It was a function-local, and the EXIT trap expands its body at exit time — by
+# which point the function frame is gone, so under `set -u` the trap itself died
+# on an unbound variable and removed NOTHING. Every failing self-test left a
+# package containing a deliberately bad subscribe sitting in backend/core, where
+# it fails every later run with findings that look real. In a working tree shared
+# by more than one session, that is a file somebody else can commit.
+PKG=""
+trap 'rm -rf "$TMP" ${PKG:+"$PKG"}' EXIT
 
+self_test() {
+  PKG="$(mktemp -d "$ROOT/backend/core/subconfirm_selftest_XXXXXX")"
+
+  # One caveat, local-only: while this is planting, a CONCURRENT plain run in the
+  # same tree scans backend/core and sees the plant. CI runs them in sequence.
   echo "==> Self-test: an unconfirmed subscribe must be reported"
-  cat > "$pkg/planted.go" <<'EOF'
+  cat > "$PKG/planted.go" <<'EOF'
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
@@ -130,7 +151,7 @@ func mqttBare(c mqtt.Client, h mqtt.MessageHandler) {
 EOF
 
   local out status=0
-  out="$(cd "$ROOT/backend/core" && "$BIN" "./$(basename "$pkg")/" 2>&1)" || status=$?
+  out="$(cd "$ROOT/backend/core" && "$BIN" "./$(basename "$PKG")/" 2>&1)" || status=$?
   if [ "$status" -ne 3 ]; then
     echo "SELF-TEST FAILED: the analyzer exited $status (want 3) on a planted bare subscribe." >&2
     echo "$out" >&2
@@ -139,14 +160,14 @@ EOF
   # Both rules, not just whichever one fires first: they match different packages
   # and a regression in one is invisible behind the other.
   local n
-  n="$(printf '%s\n' "$out" | grep -c 'core NATS DROPS a publish')"
+  n="$(printf '%s\n' "$out" | grep -c 'core NATS DROPS a publish' || true)"
   [ "$n" -eq 1 ] || { echo "SELF-TEST FAILED: NATS rule fired $n times, want 1" >&2; echo "$out" >&2; return 1; }
-  n="$(printf '%s\n' "$out" | grep -c 'paho never reports a REFUSAL')"
+  n="$(printf '%s\n' "$out" | grep -c 'paho never reports a REFUSAL' || true)"
   [ "$n" -eq 1 ] || { echo "SELF-TEST FAILED: MQTT rule fired $n times, want 1" >&2; echo "$out" >&2; return 1; }
   echo "    both rules fired"
 
   echo "==> Self-test: the same code written correctly must be reported by nothing"
-  cat > "$pkg/planted.go" <<'EOF'
+  cat > "$PKG/planted.go" <<'EOF'
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
@@ -171,7 +192,7 @@ func mqttConfirmed(c mqtt.Client, h mqtt.MessageHandler) error {
 EOF
 
   status=0
-  out="$(cd "$ROOT/backend/core" && "$BIN" "./$(basename "$pkg")/" 2>&1)" || status=$?
+  out="$(cd "$ROOT/backend/core" && "$BIN" "./$(basename "$PKG")/" 2>&1)" || status=$?
   if [ "$status" -ne 0 ]; then
     echo "SELF-TEST FAILED: the analyzer exited $status (want 0) on correctly written code." >&2
     echo "$out" >&2
@@ -179,13 +200,13 @@ EOF
   fi
   echo "    clean"
 
-  rm -rf "$pkg"
-  trap 'rm -rf "$TMP"' EXIT
+  rm -rf "$PKG"
+  PKG=""
   echo "==> Self-test passed."
 }
 
-case "${1:-}" in
-  "")           check ;;
-  --self-test)  self_test ;;
+case "$#:${1:-}" in
+  0:)           check ;;
+  1:--self-test) self_test ;;
   *)            usage ;;
 esac

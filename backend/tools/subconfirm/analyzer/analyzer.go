@@ -59,6 +59,15 @@
 // too long for one line can run on underneath it. A reason is
 // required, and a directive that no longer suppresses anything is itself reported —
 // a suppression that outlives its subject is how a guard quietly stops guarding.
+//
+// # Known limits
+//
+// Stated rather than left to be found. The pass matches a DECLARED type, so a type it
+// cannot name escapes it: a method value (f := nc.Subscribe), or a call through a
+// hand-declared local interface that redeclares the signature rather than embedding
+// nats.Conn or mqtt.Client. It also reads position rather than execution order, so a
+// deferred subscribe followed by a flush reads as confirmed. See the README for the
+// full list and for the shapes that ARE covered (embedding, promotion, aliases).
 package analyzer
 
 import (
@@ -130,6 +139,23 @@ var rules = []rule{
 				"reporting this component started. If the SAME connection publishes what this "+
 				"subscription is waiting for, the two are already ordered: say so with "+
 				"`%s <reason>`.", method, Directive)
+		},
+	},
+	{
+		// EncodedConn wraps the same asynchronous SUB path. Nothing in this repo
+		// uses it and the API is deprecated upstream, so this rule is defensive:
+		// it is here so that reaching for it does not quietly bypass the check.
+		// It carries no flushable exemption because EncodedConn's own Flush is a
+		// distinct method that receiverName would not match to this receiver.
+		pkgPath: natsPkg,
+		recv:    "EncodedConn",
+		methods: []string{"Subscribe", "QueueSubscribe"},
+		advise: func(method string) string {
+			return fmt.Sprintf("(*nats.EncodedConn).%s is the same asynchronous subscribe as "+
+				"(*nats.Conn).%s and has the same consequence: core NATS DROPS a publish that "+
+				"arrives before the server has registered the subscription. Nothing in this "+
+				"repo uses EncodedConn — prefer the plain connection and "+
+				"messaging.SubscribeSynced.", method, method)
 		},
 	},
 	{
@@ -213,8 +239,8 @@ func matchRule(pass *analysis.Pass, call *ast.CallExpr) (rule, string, bool) {
 	return rule{}, "", false
 }
 
-// confirmedLater reports whether the enclosing function asks the server for an
-// acknowledgement AFTER this subscribe.
+// confirmedLater reports whether the enclosing function asks the server, ON THIS
+// CONNECTION, for an acknowledgement after this subscribe.
 //
 // The diagnostic itself points at messaging.ConfirmSubscribed, so a pass that then
 // reported its correct use would be telling people to do something it treats as
@@ -222,20 +248,35 @@ func matchRule(pass *analysis.Pass, call *ast.CallExpr) (rule, string, bool) {
 // or several subscribes confirmed together by one round trip, which is what a flush
 // actually does.
 //
-// The window is the whole enclosing function body rather than the next statement.
-// That is deliberately loose: a flush confirms every subscription issued on the
-// connection so far, so its position within the function is not what makes it
-// correct, and demanding adjacency would reject the multi-subscribe shape this
-// exists for. What the pass is looking for is the site with NO confirmation
-// anywhere, which is every site it has ever actually found.
+// The window is the whole enclosing function body rather than the next statement,
+// because a flush confirms every subscription issued on the connection so far, so
+// its position is not what makes it correct and demanding adjacency would reject the
+// multi-subscribe shape this exists for. But "later in the body" is the only thing
+// that stays loose. Two narrower conditions are load-bearing, and an earlier version
+// of this that had neither accepted three confirmations that provably confirm
+// nothing:
+//
+//   - SAME CONNECTION. A service commonly holds more than one — an ingest
+//     connection and a control-plane one — and flushing the second says nothing
+//     about a subscription on the first.
+//   - NOT INSIDE A NESTED CLOSURE. A closure does not run where the subscribe runs,
+//     and the worst case is circular: a flush inside the SUBSCRIBE'S OWN HANDLER,
+//     which can only ever fire if the subscription was already confirmed.
 func confirmedLater(pass *analysis.Pass, call *ast.CallExpr, stack []ast.Node) bool {
 	body := enclosingBody(stack)
 	if body == nil {
 		return false
 	}
+	conn := receiverExpr(call)
+	if conn == nil {
+		return false
+	}
 	found := false
 	ast.Inspect(body, func(n ast.Node) bool {
 		if found {
+			return false
+		}
+		if _, nested := n.(*ast.FuncLit); nested {
 			return false
 		}
 		c, ok := n.(*ast.CallExpr)
@@ -244,29 +285,76 @@ func confirmedLater(pass *analysis.Pass, call *ast.CallExpr, stack []ast.Node) b
 		if !ok || c.Pos() < call.End() {
 			return true
 		}
-		found = isConfirmer(pass, c)
+		if target := confirmerTarget(pass, c); target != nil {
+			found = sameExpr(pass, conn, target)
+		}
 		return true
 	})
 	return found
 }
 
-func isConfirmer(pass *analysis.Pass, call *ast.CallExpr) bool {
+// confirmerTarget returns the expression naming the connection a call confirms, or
+// nil if the call confirms nothing.
+func confirmerTarget(pass *analysis.Pass, call *ast.CallExpr) ast.Expr {
 	fn, _ := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
 	if fn == nil || fn.Pkg() == nil {
-		return false
+		return nil
 	}
-	if fn.Pkg().Path() == corePkg && fn.Name() == "ConfirmSubscribed" {
-		return true
+	if fn.Pkg().Path() == corePkg && fn.Name() == "ConfirmSubscribed" && len(call.Args) == 1 {
+		return call.Args[0]
 	}
 	recv, ok := receiverName(fn)
 	if !ok || fn.Pkg().Path() != natsPkg || recv != "Conn" {
-		return false
+		return nil
 	}
 	switch fn.Name() {
 	case "Flush", "FlushTimeout", "FlushWithContext":
-		return true
+		return receiverExpr(call)
+	}
+	return nil
+}
+
+// receiverExpr is the expression a method was called on: the `nc` of nc.Subscribe.
+func receiverExpr(call *ast.CallExpr) ast.Expr {
+	sel, ok := unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok {
+		return nil
+	}
+	return sel.X
+}
+
+// sameExpr reports whether two expressions denote the same connection.
+//
+// It handles the two spellings that occur — a local (`nc`) and a field path
+// (`r.conn`, `nmgr.nc`) — by comparing the objects the type checker resolved, not
+// the source text. Anything else (a call result, an index) answers NO, which errs
+// toward reporting: a false positive here is a diagnostic on code somebody can look
+// at, and a false negative is the defect this whole pass exists to catch.
+func sameExpr(pass *analysis.Pass, a, b ast.Expr) bool {
+	a, b = unparen(a), unparen(b)
+	switch x := a.(type) {
+	case *ast.Ident:
+		y, ok := b.(*ast.Ident)
+		if !ok {
+			return false
+		}
+		obj := pass.TypesInfo.ObjectOf(x)
+		return obj != nil && obj == pass.TypesInfo.ObjectOf(y)
+	case *ast.SelectorExpr:
+		y, ok := b.(*ast.SelectorExpr)
+		return ok && sameExpr(pass, x.Sel, y.Sel) && sameExpr(pass, x.X, y.X)
 	}
 	return false
+}
+
+func unparen(e ast.Expr) ast.Expr {
+	for {
+		p, ok := e.(*ast.ParenExpr)
+		if !ok {
+			return e
+		}
+		e = p.X
+	}
 }
 
 // enclosingBody is the body of the innermost function or closure containing the
@@ -367,13 +455,22 @@ func (d *directives) suppress(pass *analysis.Pass, call *ast.CallExpr, stack []a
 	if len(marks) == 0 {
 		return false
 	}
-	first := pass.Fset.Position(enclosingStmt(stack).Pos()).Line
-	last := pass.Fset.Position(call.End()).Line
+	stmtStart := pass.Fset.Position(enclosingStmt(stack).Pos()).Line
+	callStart := pass.Fset.Position(call.Pos()).Line
+	callEnd := pass.Fset.Position(call.End()).Line
 
 	found := false
 	for _, m := range marks {
-		above := m.groupEnd == first-1
-		trailing := m.line >= first && m.line <= last
+		above := m.groupEnd == stmtStart-1
+		// The TRAILING form is scoped to the matched call's own lines, not the
+		// statement's. Scoped to the statement, one directive on the opening line of
+		//
+		//	consume(sub(nc.Subscribe("a", h)),
+		//	        sub(nc.Subscribe("b", h)))
+		//
+		// silenced both — and pre-exempted a third that somebody adds later, which is
+		// the whole-function over-reach this design refuses, shrunk to one statement.
+		trailing := m.line >= callStart && m.line <= callEnd
 		if above || trailing {
 			m.used = true
 			found = true

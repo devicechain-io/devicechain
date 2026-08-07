@@ -18,6 +18,8 @@
 // hack/check-subscribe-confirmed.sh.
 package nats
 
+import "context"
+
 // Msg is a message delivered to a subscription.
 type Msg struct {
 	Subject string
@@ -58,7 +60,21 @@ func (c *Conn) ChanQueueSubscribe(subj, queue string, ch chan *Msg) (*Subscripti
 
 func (c *Conn) Publish(subj string, data []byte) error { return nil }
 
+func (c *Conn) Flush() error { return nil }
+
 func (c *Conn) FlushTimeout(d int64) error { return nil }
+
+func (c *Conn) FlushWithContext(ctx context.Context) error { return nil }
+
+// EncodedConn is the deprecated codec wrapper. Its subscribes are asynchronous in
+// exactly the same way, on a receiver the analyzer has to name separately.
+type EncodedConn struct{}
+
+func (c *EncodedConn) Subscribe(subj string, cb any) (*Subscription, error) { return nil, nil }
+
+func (c *EncodedConn) QueueSubscribe(subj, queue string, cb any) (*Subscription, error) {
+	return nil, nil
+}
 
 // JetStreamContext creates its consumer through a request to the JetStream API, so
 // its Subscribe is confirmed by construction. It is spelled exactly like the broken
