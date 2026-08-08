@@ -94,9 +94,23 @@ the shipped transport against your live broker and separates the two things that
 identically from a player log ("it didn't connect"): a TLS/pinning problem and an auth problem.
 
 ```bash
+# A dotnet installed by dotnet-install.sh lands in ~/.dotnet and is NOT on PATH; the shell then
+# suggests `snap install dotnet`, which would put a SECOND SDK on the box. Check before installing:
+#   ls ~/.dotnet/dotnet && ~/.dotnet/dotnet --version
+export PATH="$HOME/.dotnet:$PATH"
+
+# --project is relative to the CWD, so run this from the repository root.
+cd /path/to/devicechain
+
 kubectl -n dc-system get secret dc-nats-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/ca.pem
 dotnet run --project sdks/csharp/tools/DeviceChain.Sdk.TrustProbe -- /tmp/ca.pem
 ```
+
+> 🔴 **`MSBUILD : error MSB1009: Project file does not exist` means you are not at the root**, not
+> that anything is missing. Watch for one specific way of being somewhere else: **`.agent-os` is a
+> symlink to a separate repository**, so a shell sitting there looks like it is inside this tree and
+> is not — and `git rev-parse --show-toplevel` confirms the wrong root rather than catching it. `pwd -P`
+> is the honest check.
 
 It provisions nothing and connects with a deliberately bogus credential, so the *best* outcome is a
 completed TLS handshake followed by the broker's own refusal. Expect `4/4 as expected`:
