@@ -37,12 +37,16 @@ type Lifecycle struct {
 	sim Sim
 	rt  *Runtime
 
-	// name and farEndDeclared are read off the manifest ONCE, at construction.
+	// name and farEndMode are read off the manifest ONCE, at construction.
 	// Manifest() is pure but not cheap — a scenario builds its dashboards there, and
 	// /status is polled — so re-deriving a constant on every poll would marshal two
 	// board definitions a second to answer a boolean.
-	name           string
-	farEndDeclared bool
+	//
+	// farEndMode is stored NORMALIZED (SimManifest.FarEndMode, so never ""), which is
+	// what lets attachCommandFarEnd and commandFarEndStatus switch on it exhaustively
+	// instead of each re-deciding what an empty mode meant.
+	name       string
+	farEndMode CommandFarEndMode
 
 	mu         sync.Mutex
 	state      State
@@ -68,9 +72,10 @@ type Lifecycle struct {
 	// other way round.
 	bootstrapMu sync.Mutex
 
-	// farEnd is the scenario's command receiver once Bootstrap attached one (nil
-	// for a scenario that declares none, or when it is explicitly disabled). It
-	// outlives Stop deliberately — see Close.
+	// farEnd is the scenario's IN-PROCESS command receiver once Bootstrap attached
+	// one — so nil for FarEndNone, for FarEndExternal (whose far end is another
+	// process entirely), and for a FarEndInternal scenario started with the explicit
+	// opt-out. It outlives Stop deliberately — see Close.
 	farEnd CommandFarEnd
 	// tickDone is closed by runTickLoop as it exits, so Stop can WAIT for the
 	// loop rather than merely signalling it. Without the join, a Stop/Start
@@ -82,7 +87,7 @@ type Lifecycle struct {
 // NewLifecycle builds a Lifecycle in the CREATED state.
 func NewLifecycle(s Sim, rt *Runtime) *Lifecycle {
 	m := s.Manifest()
-	return &Lifecycle{sim: s, rt: rt, state: StateCreated, name: m.Name, farEndDeclared: m.CommandFarEnd}
+	return &Lifecycle{sim: s, rt: rt, state: StateCreated, name: m.Name, farEndMode: m.FarEndMode()}
 }
 
 // State returns the current FSM state.

@@ -27,7 +27,7 @@ import (
 //
 // All four channels complete. Telemetry goes out over the one-way HTTP ingress like
 // every other scenario's; the CONTROL channel is the exception, and it is why this
-// manifest declares CommandFarEnd: an HTTP-ingress-only device cannot receive
+// manifest declares CommandFarEnd: FarEndInternal — an HTTP-ingress-only device cannot receive
 // anything, so a command-button on the board would enqueue against a real published
 // definition, dispatch correctly, and sit at SENT until it expired a week later —
 // the scenario permanently demonstrating the very failure the board exists to
@@ -205,8 +205,10 @@ func (s *widgetlab) Manifest() SimManifest {
 		// would leave a dashboard pointing at a device that no longer exists.
 		FixedTopology: true,
 		// The gallery carries a command-button, so these devices must LISTEN, not
-		// only report. Manifest.Validate refuses the board without this.
-		CommandFarEnd: true,
+		// only report. Manifest.Validate refuses the board without this. INTERNAL
+		// because widgetlab's devices are this process's own simulated ones: there is
+		// no client anywhere else that could answer for them.
+		CommandFarEnd: FarEndInternal,
 		CustomerTypes: []CustomerTypeSpec{
 			{Token: "wl-operator", Name: "Operator"},
 		},

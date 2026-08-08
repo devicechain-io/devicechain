@@ -11,11 +11,18 @@
 //
 //   - loadtest (ADR-064 L2d-3) drives a bounded probe cohort and reconciles the
 //     durable command status against this receiver's wire-level evidence.
-//   - a SCENARIO whose manifest declares CommandFarEnd (widgetlab) attaches one
-//     for its whole device set at bootstrap, so a command issued from a dashboard's
-//     command-button widget completes QUEUED -> SENT -> SUCCESSFUL instead of
-//     sitting at SENT until it expires. Without it the widget renders a plausible
-//     round trip that never happens.
+//
+//   - a SCENARIO whose manifest sets CommandFarEnd to the INTERNAL mode (widgetlab)
+//     attaches one for its whole device set at bootstrap, so a command issued from a
+//     dashboard's command-button widget completes QUEUED -> SENT -> SUCCESSFUL
+//     instead of sitting at SENT until it expires. Without it the widget renders a
+//     plausible round trip that never happens.
+//
+//     Only that mode. A scenario whose far end is a presentation client in another
+//     process (the EXTERNAL mode) attaches none of this: a receiver running
+//     alongside the real device would answer SUCCESSFUL for work it neither did nor
+//     can observe, which is the same lie as the expiring command with the sign
+//     flipped.
 //
 // A DeviceChain device receives commands over MQTT on the NATS built-in MQTT
 // gateway. Each device is its own MQTT connection (MQTT 3.1.1 has no shared
