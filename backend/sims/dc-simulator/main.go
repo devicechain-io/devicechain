@@ -51,7 +51,9 @@ func main() {
 		"port the control API and presentation page listen on (or set DC_SIM_PORT)")
 	bind := flag.String("bind", envOr("DC_SIM_BIND", "127.0.0.1"),
 		"address to bind the control API + presentation page. Defaults to loopback because "+
-			"/config.json serves a live tenant access token; only widen this on a trusted host.")
+			"/config.json is unauthenticated and serves a live TENANT-ADMIN access token — full "+
+			"create/read/delete over the tenant's devices, credentials and dashboards — alongside "+
+			"the MQTT broker address and instance id; only widen this on a trusted host.")
 	devices := flag.Int("devices", envIntOr("DC_SIM_DEVICES", 0),
 		"override the scenario's device count (0 keeps its own demo sizing)")
 	emitInterval := flag.Duration("emit-interval", envDurationOr("DC_SIM_EMIT_INTERVAL", 0),

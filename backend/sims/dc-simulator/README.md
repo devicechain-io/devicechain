@@ -295,6 +295,55 @@ On startup the process bootstraps its manifest, starts emitting immediately,
 and serves the control API + presentation page on `--port` (default `8090`).
 Open `http://localhost:8090/` to watch measurements arrive live.
 
+### `GET /config.json`
+
+The presentation page — and, for an `external` far end, the out-of-process client
+that IS the device — fetches this on load. It is the only channel between this
+process and a client that is not this process:
+
+```json
+{
+  "tenant": "acme",
+  "manifestId": "sitepulse",
+  "wsUrl": "ws://localhost/api/event-management/graphql",
+  "token": "<tenant-admin access token>",
+  "instanceId": "dc",
+  "mqttBroker": "ssl://localhost:1883",
+  "mqttTLSInsecure": true
+}
+```
+
+The token is minted per request, so a page opened long after startup still gets a
+live one. The last three fields are what an `external` far end needs to hold its own
+MQTT session: the gateway's auth callout accepts only the client id
+`{instanceId}:{tenant}:{deviceToken}`, `mqttBroker` is the address `dcctl sim create`
+resolved, and `mqttTLSInsecure` is the trust decision it recorded. Two of the three
+are also visible on `GET /status` — `instanceId` at the top level and `mqttBroker` as
+`commandFarEnd.broker` — so they are here for a client's convenience, not because
+this is the only way to reach them; only `mqttTLSInsecure` is served nowhere else.
+`mqttTLSInsecure` is always present, including when it is `false` — an absent key
+would be indistinguishable from a build that does not send one, and that is not a
+distinction to leave to a client's default.
+
+**This endpoint is unauthenticated, and the token in it is tenant-admin.** The sim
+identity is provisioned with the `tenant-admin` role, so `token` is not a scoped
+reader — it carries full create/read/delete over the tenant's devices, credentials
+and dashboards. Together with `mqttBroker` and `instanceId` in the same body, anyone
+who can GET it has what they need to impersonate any device on the MQTT plane. The
+only control is the loopback `--bind` default. Widen it on a trusted host or not at
+all.
+
+**Device credentials are deliberately not served here**, and the reason is not that
+the caller cannot get them — given the above, it can. It is that they are the one
+thing in reach that does not expire: a device's `ACCESS_TOKEN` bearer is derived from
+the manifest seed and never rotates, so writing it into this body puts a permanent
+secret somewhere an ephemeral one leaves on its own. A client resolves its own
+instead, using the token already in this body: `devicesByExternalId` maps the scene's
+business id to a device token, and `deviceCredentialsByToken` on `{deviceToken}-cred`
+returns the `credentialId`, which for an `ACCESS_TOKEN` credential *is* the bearer.
+That also survives `POST /reset` re-provisioning the fleet, which a snapshot taken at
+page load would not.
+
 ## Package layout
 
 - `sim/manifest.go` — `SimManifest` / `ProfileSpec` / `DeviceTypeSpec` /
