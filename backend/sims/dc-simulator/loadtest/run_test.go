@@ -5,6 +5,7 @@ package loadtest
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -59,6 +60,75 @@ func TestDriveKeepsLedgerExactAndFreezes(t *testing.T) {
 	s2 := rt.Stats.Snapshot(time.Now())
 	if s1.Seconds != s2.Seconds {
 		t.Fatalf("elapsed not frozen after drive: %v then %v", s1.Seconds, s2.Seconds)
+	}
+}
+
+// ---- The harness refuses a scenario that generates nothing ----------------------
+
+// 🔴 THE FAILURE THIS PREVENTS IS NOT A WASTED RUN, IT IS A MISREPORTED ONE. A scenario
+// whose devices publish their own telemetry emits nothing from Sim.Tick, so a load run
+// against it provisions, holds for its whole window, accepts zero events, and then
+// fails on the MinAccepted floor — whose message is about a job that lost its load
+// flags. The operator goes looking for a missing --devices, and nothing anywhere names
+// the scenario, because by then the only evidence left is a zero.
+//
+// Two paths reach that with nobody having chosen the scenario: cmd/loadtest-contention
+// builds its --manifest offering from the registry, and cmd/loadtest, -monitor and
+// -selftest default the id from the HANDSHAKE — so pointing any of them at an existing
+// sim is enough.
+//
+// Asserted through Profile.Validate rather than through Run, because Validate is the
+// one gate every harness shares, and asserting it here is what makes the refusal cover
+// harnesses nobody has written yet.
+func TestProfileRefusesAScenarioWhoseDevicesPublishTheirOwnTelemetry(t *testing.T) {
+	// Find one from the registry rather than naming sitepulse: the property is what
+	// matters, and a named scenario would make this test a description of today's
+	// registry instead of of the rule.
+	var selfPublishing string
+	for _, id := range sim.ManifestIds() {
+		if m, ok := sim.ScenarioManifest(id); ok && m.DevicesPublishTheirOwnTelemetry {
+			selfPublishing = id
+			break
+		}
+	}
+	if selfPublishing == "" {
+		t.Skip("no registered scenario declares DevicesPublishTheirOwnTelemetry")
+	}
+
+	err := Profile{Manifest: selfPublishing}.withDefaults().Validate()
+	if err == nil {
+		t.Fatalf("a load run against %q was accepted; it would hold for %s, accept zero events, "+
+			"and fail the min-accepted floor as though its load flags had been lost",
+			selfPublishing, DefaultHold)
+	}
+	// The message has to name the real cause, since the whole point is that the floor's
+	// message does not.
+	for _, want := range []string{selfPublishing, "zero events"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not mention %q, so it sends the reader to the same "+
+				"wrong place the floor failure would", err, want)
+		}
+	}
+
+	// The counterweight, and it matters as much as the refusal: every LOAD-DRIVABLE
+	// scenario must still validate, or the gate would have closed the harness entirely
+	// while looking like a careful check.
+	drivable := sim.LoadDrivableManifestIds()
+	if len(drivable) == 0 {
+		t.Fatal("no load-drivable scenarios remain, so the refusal above has closed the harness")
+	}
+	for _, id := range drivable {
+		if err := (Profile{Manifest: id}).withDefaults().Validate(); err != nil {
+			t.Errorf("load-drivable scenario %q was refused: %v", id, err)
+		}
+	}
+
+	// An UNREGISTERED id is not this check's business — it belongs to sim.NewSim, which
+	// reports it with the known-ids list. Two voices for one mistake is how a caller
+	// learns to read neither.
+	if err := (Profile{Manifest: "no-such-scenario"}).withDefaults().Validate(); err != nil {
+		t.Errorf("an unregistered manifest was rejected by Validate (%v); that refusal belongs "+
+			"to NewSim, which names the known ids", err)
 	}
 }
 

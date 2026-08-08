@@ -4,8 +4,14 @@
 package sim
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -127,6 +133,152 @@ func TestEveryScenarioIsResizableOrSaysWhyNot(t *testing.T) {
 				"should size several and teach withDeviceCount that rule, or declare "+
 				"it FixedTopology if resizing it is meaningless", id, err)
 		}
+	}
+}
+
+// ---- Resizable is NOT load-drivable --------------------------------------------
+
+// The two lists must stay distinguishable for the same reason the two resize refusals
+// must, and this is the harder case because the two lists were IDENTICAL for three
+// scenarios running — so every consumer that wanted one and reached for the other was
+// correct by coincidence, and stayed correct until a scenario broke the tie.
+//
+// sitepulse is that scenario: resizable (its population is a genuine scale knob) and
+// NOT load-drivable (its devices publish their own telemetry, so Sim.Tick emits
+// nothing). A load tool offering the resizable list would advertise it, and a run
+// against it holds for its whole window, applies zero load, and fails the min-accepted
+// floor with a message about lost load flags.
+func TestLoadDrivableIsAStrictlyStrongerPropertyThanResizable(t *testing.T) {
+	resizable := ResizableManifestIds()
+	drivable := LoadDrivableManifestIds()
+
+	// Negative controls first: either list empty would make every check below vacuous,
+	// and an EQUAL pair would mean the distinction is currently untested by any real
+	// scenario — which is precisely the state that let the conflation ship.
+	if len(resizable) == 0 || len(drivable) == 0 {
+		t.Fatalf("resizable %v / load-drivable %v: an empty list makes this test vacuous",
+			resizable, drivable)
+	}
+	if slices.Equal(resizable, drivable) {
+		t.Fatalf("every resizable scenario is also load-drivable (%v), so nothing in the "+
+			"registry distinguishes the two lists and a consumer reaching for the wrong one "+
+			"would be right by coincidence", resizable)
+	}
+
+	// Load-drivable must be a SUBSET of resizable — it is resizable plus a further
+	// condition, so a member of neither direction's difference may appear here.
+	for _, id := range drivable {
+		if !slices.Contains(resizable, id) {
+			t.Errorf("scenario %q is load-drivable but not resizable; a load run sizes its own "+
+				"population, so it could never be started", id)
+		}
+	}
+
+	// And every excluded scenario must be excluded for a REASON the manifest states,
+	// rather than by an accident of the derivation.
+	for _, id := range resizable {
+		m, ok := ScenarioManifest(id)
+		if !ok {
+			t.Fatalf("ResizableManifestIds offered unregistered id %q", id)
+		}
+		if got, want := slices.Contains(drivable, id), !m.DevicesPublishTheirOwnTelemetry; got != want {
+			t.Errorf("scenario %q: load-drivable=%v but DevicesPublishTheirOwnTelemetry=%v — the "+
+				"list and the declaration disagree", id, got, m.DevicesPublishTheirOwnTelemetry)
+		}
+	}
+}
+
+// No load tool may build its --manifest offering from the RESIZABLE list.
+//
+// This is the regression the whole DevicesPublishTheirOwnTelemetry change exists for,
+// and without a gate it reverts in one character: `ResizableManifestIds` and
+// `LoadDrivableManifestIds` differ by six letters, both compile, and the wrong one
+// produces help text that advertises a scenario whose run holds for its full window and
+// then fails the min-accepted floor. Nothing else would notice — the tools are `main`
+// packages, so no test can import one and call its flag setup.
+//
+// A source scan is therefore the instrument available, and it is the same one
+// TestDcctlKnowsEveryRegisteredScenario uses for the same reason. It scans ALL of cmd/
+// rather than naming loadtest-contention, so a tool added later is covered by existing.
+//
+// 🔴 go/parser RATHER THAN A GREP, and this file learned that the hard way: the first
+// version used strings.Contains and immediately failed on the WORD "ResizableManifestIds"
+// sitting in loadtest-contention's own explanatory comment. A regex over source cannot
+// tell code from prose — the same defect TestEveryHarnessRuleBuilderIsCollected calls
+// out — and it cuts both ways: here it produced a false failure, but the mirror image is
+// a gate satisfied by documentation. The AST carries no comments, so a call is a call.
+func TestNoLoadToolOffersTheResizableListInsteadOfTheLoadDrivableOne(t *testing.T) {
+	const cmdDir = "../cmd"
+	entries, err := os.ReadDir(cmdDir)
+	if err != nil {
+		t.Fatalf("read %s: %v (if the tools moved, re-point this check rather than deleting "+
+			"it — it is the only thing standing between a one-word edit and help text that "+
+			"advertises an impossible run)", cmdDir, err)
+	}
+
+	scanned, offersDrivable := 0, false
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(cmdDir, entry.Name(), "main.go")
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			continue
+		}
+		scanned++
+		ast.Inspect(file, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			switch sel.Sel.Name {
+			case "ResizableManifestIds":
+				t.Errorf("%s CALLS ResizableManifestIds. A load tool must offer "+
+					"LoadDrivableManifestIds: resizable only says --devices can change the "+
+					"topology, while a scenario whose devices publish their own telemetry emits "+
+					"nothing from Sim.Tick and fails the min-accepted floor however it is sized",
+					path)
+			case "LoadDrivableManifestIds":
+				offersDrivable = true
+			}
+			return true
+		})
+	}
+	// Two negative controls, because the check has two ways to become vacuous: a scan
+	// that parsed nothing, and a tree where no tool offers a scenario list at all — at
+	// which point "nobody calls the wrong one" is true and means nothing.
+	if scanned == 0 {
+		t.Fatalf("parsed no main.go under %s; the check has rotted and would accept anything", cmdDir)
+	}
+	if !offersDrivable {
+		t.Error("no tool under ../cmd calls LoadDrivableManifestIds, so this test is asserting " +
+			"the absence of a call in a tree that makes no such calls either way")
+	}
+}
+
+// ScenarioManifest must answer about the scenario AS DECLARED. If it ever applied a
+// caller's override, every question asked through it — is this fixed-topology, does it
+// self-publish — would be answered about a topology the caller chose.
+func TestScenarioManifestAnswersAboutTheUnoverriddenScenario(t *testing.T) {
+	for _, id := range ManifestIds() {
+		m, ok := ScenarioManifest(id)
+		if !ok {
+			t.Fatalf("registered scenario %q is not resolvable through ScenarioManifest", id)
+		}
+		if m.Name == "" {
+			t.Errorf("scenario %q resolved to a manifest with no name", id)
+		}
+		// Its population must be the scenario's own, i.e. what a zero Load renders.
+		own := Registry[id](1, Load{}).Manifest()
+		if DeviceCount(m) != DeviceCount(own) {
+			t.Errorf("scenario %q resolved to %d devices but declares %d",
+				id, DeviceCount(m), DeviceCount(own))
+		}
+	}
+	if _, ok := ScenarioManifest("no-such-scenario"); ok {
+		t.Error("an unregistered id resolved; a caller would then read a zero manifest as a " +
+			"scenario that declares nothing, which is every flag's safe-looking value")
 	}
 }
 

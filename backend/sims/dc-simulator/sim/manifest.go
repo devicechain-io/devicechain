@@ -308,6 +308,31 @@ type SimManifest struct {
 	// silently un-resizable the day it grows a second population for an
 	// unrelated reason.
 	FixedTopology bool
+	// DevicesPublishTheirOwnTelemetry marks a scenario whose devices are NOT this
+	// process: they hold their own device-plane sessions and publish their own
+	// measurements, so its Sim.Tick is bootstrap-only and emits nothing BY DESIGN.
+	//
+	// 🔴 IT EXISTS BECAUSE "RESIZABLE" SILENTLY MEANT "LOAD-DRIVABLE" until the first
+	// such scenario joined the registry, and the failure is a true one reported as the
+	// wrong cause. A load run drives Sim.Tick directly and reconciles what the DRIVER
+	// accepted; against a scenario that emits nothing it provisions, holds for the full
+	// window, applies zero load, and fails the MinAccepted floor with a message about a
+	// job that lost its load flags. Nothing in that chain mentions the scenario, and the
+	// operator had no way to know not to start it — cmd/loadtest-contention builds its
+	// --manifest offering FROM THE REGISTRY, and cmd/loadtest, -monitor and -selftest
+	// default the id from the HANDSHAKE, so both paths reach it with nobody having
+	// chosen it.
+	//
+	// Declared rather than inferred from CommandFarEnd, and conflating the two would be
+	// a second boolean wearing the first one's clothes: an external far end says who
+	// ANSWERS COMMANDS, not who PUBLISHES TELEMETRY. A scenario may perfectly well
+	// generate its telemetry here and hand only its command channel to a presentation
+	// client, and inferring one from the other would refuse that scenario's load run on
+	// the day someone writes it — silently, since the refusal would look correct.
+	//
+	// Read by LoadDrivableManifestIds (what a load tool may OFFER) and by
+	// loadtest.Profile.Validate (what a load run may START).
+	DevicesPublishTheirOwnTelemetry bool
 	// CommandFarEnd says WHO answers this scenario's commands — see
 	// CommandFarEndMode for what each setting means and why the answer cannot be
 	// a boolean. Read it through FarEndMode(), never directly: the zero value is
