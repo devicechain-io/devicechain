@@ -65,18 +65,56 @@ type MetadataEntity struct {
 	Metadata *datatypes.JSON
 }
 
-// Create JSON value from string input.
+// MetadataStrOf creates a JSON column value from a string, returning nil when the
+// string is not valid JSON.
+//
+// 🔴 THE GUARD HERE USED TO BE UNABLE TO FIRE. It checked the error from
+// json.RawMessage.UnmarshalJSON, which only copies its input — it returns an error
+// solely on a nil receiver, never for malformed JSON. So every invalid value sailed
+// through and became a JSON column write that Postgres rejected at execution time:
+//
+//	ERROR: invalid input syntax for type json (SQLSTATE 22P02)
+//
+// Found end to end, not by reading: a device answered a command with the plain text
+// "acknowledged by livedevice", which left the UPDATE failing, the command stuck in
+// SENT, and the redelivery sweep retrying the same doomed write once a minute
+// forever. json.Valid is the check the original was reaching for.
 func MetadataStrOf(value *string) *datatypes.JSON {
-	if value != nil {
-		result := json.RawMessage{}
-		err := result.UnmarshalJSON([]byte(*value))
-		if err != nil {
-			return nil
-		}
-		conv := datatypes.JSON(result)
+	if value == nil || !json.Valid([]byte(*value)) {
+		return nil
+	}
+
+	conv := datatypes.JSON(json.RawMessage(*value))
+	return &conv
+}
+
+// JSONTextOf creates a JSON column value from a string that is NOT required to be
+// JSON: a valid JSON document is stored as-is, and anything else is stored as a JSON
+// string, losslessly.
+//
+// It exists for values supplied by a DEVICE rather than by an API caller. A device
+// reporting "bucket raised" is answering correctly, and the alternative readings are
+// both worse than encoding it: dropping the payload discards what the device said,
+// and rejecting it strands a command that was in fact carried out. An API caller who
+// sends malformed JSON should still be told so — that is MetadataStrOf's job, and
+// this deliberately does not replace it.
+func JSONTextOf(value *string) *datatypes.JSON {
+	if value == nil {
+		return nil
+	}
+	if json.Valid([]byte(*value)) {
+		conv := datatypes.JSON(json.RawMessage(*value))
 		return &conv
 	}
-	return nil
+
+	// Marshal cannot fail for a string: any Go string encodes, with invalid UTF-8
+	// replaced by U+FFFD rather than erroring.
+	encoded, err := json.Marshal(*value)
+	if err != nil {
+		return nil
+	}
+	conv := datatypes.JSON(encoded)
+	return &conv
 }
 
 // Creates a sql.NullString from a string constant.

@@ -285,8 +285,14 @@ func (api *Api) MarkResponse(ctx context.Context, commandToken string, success b
 	}
 
 	updates := map[string]any{
-		"responded_time":   sql.NullTime{Time: time.Now(), Valid: true},
-		"response_payload": rdb.MetadataStrOf(payload),
+		"responded_time": sql.NullTime{Time: time.Now(), Valid: true},
+		// JSONTextOf, not MetadataStrOf: this value comes from the DEVICE, and the wire
+		// contract for it is a plain string (responseEnvelope.Payload is *string). A device
+		// answering "bucket raised" is answering correctly, so its text is encoded as a JSON
+		// string rather than dropped — which is what MetadataStrOf would now do, and what
+		// previously produced a JSON column write Postgres refused, stranding the command in
+		// SENT while the sweep retried the same doomed UPDATE every minute.
+		"response_payload": rdb.JSONTextOf(payload),
 	}
 	if success {
 		updates["status"] = CommandSuccessful.String()
