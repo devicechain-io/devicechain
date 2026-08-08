@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
+using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -24,6 +25,58 @@ public class MqttNetConnectionTests
             Password = string.Empty,
             CleanSession = false,
         };
+
+    // ── address family ───────────────────────────────────────────────────────
+    //
+    // 🔴 THESE PIN THE PLUMBING, NOT THE BEHAVIOUR THAT MOTIVATED IT. The bug was a Unity/Mono
+    // player dialling `localhost`, getting ::1 first (Windows' resolver order) and failing against
+    // a container port published IPv4-only. That needs a DUAL-STACK host to reproduce and Mono to
+    // observe — CI is neither, and a self-contained .NET 8 console app CANNOT reproduce it at all,
+    // because .NET 5+ already tries every resolved address. It was confirmed the only way it could
+    // be: by mutation on a real Mono player, where removing the fallback brought the failure back.
+    // What follows is what a CI host can honestly assert — that the option exists, defaults to the
+    // resolver's own order, and that pinning a family does not break an ordinary connect.
+    [Fact]
+    public void TheAddressFamilyDefaultsToTheResolversOwnOrder()
+    {
+        Assert.Equal(AddressFamily.Unspecified, new MqttConnectOptions(new Uri("tcp://broker:1883"), "id").AddressFamily);
+    }
+
+    [Fact]
+    public async Task PinningAnAddressFamilyStillConnects()
+    {
+        using var broker = new ScriptedMqttBroker();
+        var options = OptionsFor(broker);
+        options.AddressFamily = AddressFamily.InterNetwork;   // the loopback broker is IPv4
+
+        await using var connection = new MqttNetClientFactory().Create();
+        using var cts = new CancellationTokenSource(Timeout);
+        await connection.ConnectAsync(options, cts.Token);
+
+        // Reaching the broker at all is the assertion: a family set on the wrong object, or set
+        // to a family the socket cannot use, fails the connect outright.
+        Assert.Equal("inst:acme:sensor-001", broker.ClientId);
+    }
+
+    // 🔑 THE ONE THAT CAN ACTUALLY FAIL. The test above passes whether or not the family is
+    // applied at all — the loopback broker answers over IPv4 regardless — so on its own it is a
+    // control that cannot fail, and it would score a no-op ApplyAddressFamily as a pass. Pinning
+    // IPv6 against an IPv4-only listener must therefore REFUSE: if the option is silently dropped
+    // the connect succeeds over IPv4 and this test fails, which is exactly the signal wanted.
+    // Note the caller pinned a family, so the IPv4 fallback deliberately does NOT rescue it.
+    [Fact]
+    public async Task PinningAFamilyTheListenerDoesNotSpeakIsNotSilentlyIgnored()
+    {
+        using var broker = new ScriptedMqttBroker();   // binds IPv4 loopback only
+        var options = OptionsFor(broker);
+        options.AddressFamily = AddressFamily.InterNetworkV6;
+
+        await using var connection = new MqttNetClientFactory().Create();
+        using var cts = new CancellationTokenSource(Timeout);
+
+        await Assert.ThrowsAsync<MqttConnectionException>(
+            () => connection.ConnectAsync(options, cts.Token));
+    }
 
     // 🔴 THE #668 TEST. MQTTnet's SubscribeAsync completes SUCCESSFULLY on a refusal — it exposes
     // the code on the result and throws nothing — so a wrapper that does not read the code

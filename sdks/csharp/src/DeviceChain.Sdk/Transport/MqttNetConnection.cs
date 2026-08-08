@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
+using System.Net;
 using System.Net.Security;
+using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
@@ -147,14 +149,12 @@ public sealed class MqttNetConnection : IMqttConnection
             });
         }
 
+        var built = builder.Build();
+        ApplyAddressFamily(built, options.AddressFamily);
+
         try
         {
-            var result = await _client.ConnectAsync(builder.Build(), cancellationToken).ConfigureAwait(false);
-            if (result.ResultCode != MqttClientConnectResultCode.Success)
-            {
-                throw new MqttConnectRefusedException(
-                    $"the broker refused the connection for client id \"{options.ClientId}\": {result.ResultCode}");
-            }
+            await ConnectOnceAsync(built, options, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (!(ex is MqttConnectionException) && !(ex is OperationCanceledException))
         {
@@ -165,8 +165,80 @@ public sealed class MqttNetConnection : IMqttConnection
             // see it. Re-assert the convention before wrapping. (Found by the bounded-subscribe
             // test, which is why it asserts the type rather than merely that something was thrown.)
             cancellationToken.ThrowIfCancellationRequested();
+
+            // 🔴 THE DUAL-STACK RETRY. A host resolving to both families is dialled in the
+            // resolver's order, and on Windows `localhost` yields ::1 first while a container
+            // runtime publishes on 0.0.0.0 — IPv4 only. Retrying once over IPv4 turns that from an
+            // opaque socket error into a connection. Bounded to one extra attempt, attempted only
+            // when the caller did NOT pin a family, and only when the host genuinely has both — so
+            // a real IPv6 deployment is never quietly downgraded.
+            if (options.AddressFamily == AddressFamily.Unspecified &&
+                await HasBothFamiliesAsync(options.BrokerUri.Host).ConfigureAwait(false))
+            {
+                ApplyAddressFamily(built, AddressFamily.InterNetwork);
+                try
+                {
+                    await ConnectOnceAsync(built, options, cancellationToken).ConfigureAwait(false);
+                    return;
+                }
+                catch (Exception retry) when (!(retry is OperationCanceledException))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    throw new MqttConnectionException(
+                        $"connecting to {options.BrokerUri} as \"{options.ClientId}\" failed over both " +
+                        $"address families (resolver order: {ex.Message}; IPv4: {retry.Message})", retry);
+                }
+            }
+
             throw new MqttConnectionException(
                 $"connecting to {options.BrokerUri} as \"{options.ClientId}\" failed: {ex.Message}", ex);
+        }
+    }
+
+    private async Task ConnectOnceAsync(
+        MqttClientOptions built, MqttConnectOptions options, CancellationToken cancellationToken)
+    {
+        var result = await _client.ConnectAsync(built, cancellationToken).ConfigureAwait(false);
+        if (result.ResultCode != MqttClientConnectResultCode.Success)
+        {
+            throw new MqttConnectRefusedException(
+                $"the broker refused the connection for client id \"{options.ClientId}\": {result.ResultCode}");
+        }
+    }
+
+    private static void ApplyAddressFamily(MqttClientOptions built, AddressFamily family)
+    {
+        if (built.ChannelOptions is MqttClientTcpOptions tcp)
+        {
+            tcp.AddressFamily = family;
+        }
+    }
+
+    /// <summary>
+    /// Whether the host resolves to addresses in BOTH families — the only case where retrying over
+    /// IPv4 could succeed where the resolver's own order did not.
+    /// </summary>
+    private static async Task<bool> HasBothFamiliesAsync(string host)
+    {
+        try
+        {
+            var addresses = await Dns.GetHostAddressesAsync(host).ConfigureAwait(false);
+            var v4 = false;
+            var v6 = false;
+            foreach (var address in addresses)
+            {
+                if (address.AddressFamily == AddressFamily.InterNetwork) v4 = true;
+                else if (address.AddressFamily == AddressFamily.InterNetworkV6) v6 = true;
+            }
+
+            return v4 && v6;
+        }
+        catch (Exception)
+        {
+            // A resolver failure is not this method's business to report — the original connect
+            // error already says the host could not be reached, and inventing a second one here
+            // would replace it with a worse message.
+            return false;
         }
     }
 
