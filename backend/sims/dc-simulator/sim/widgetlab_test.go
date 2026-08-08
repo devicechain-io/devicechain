@@ -1598,8 +1598,9 @@ func TestValidateRefusesAControlBoardWithNoFarEnd(t *testing.T) {
 	if err := m.Validate(); err != nil {
 		t.Fatalf("widgetlab's own manifest is invalid: %v", err)
 	}
-	if !m.CommandFarEnd {
-		t.Fatal("widgetlab does not declare CommandFarEnd, so the check below asserts nothing")
+	if m.FarEndMode() != FarEndInternal {
+		t.Fatalf("widgetlab declares CommandFarEnd %q, not %q, so the check below asserts nothing",
+			m.FarEndMode(), FarEndInternal)
 	}
 
 	// Negative control on the fixture itself: this test is only about the far end if
@@ -1610,7 +1611,7 @@ func TestValidateRefusesAControlBoardWithNoFarEnd(t *testing.T) {
 	}
 
 	stripped := m
-	stripped.CommandFarEnd = false
+	stripped.CommandFarEnd = FarEndNone
 	err := stripped.Validate()
 	if err == nil {
 		t.Fatal("a board carrying a command widget was accepted with no far end: its commands " +
@@ -1618,6 +1619,39 @@ func TestValidateRefusesAControlBoardWithNoFarEnd(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "CommandFarEnd") {
 		t.Errorf("error %q does not name the manifest field a reader has to set", err)
+	}
+}
+
+// The control-board gate is about whether ANYONE answers, not about whether this
+// process does — so a scenario whose far end is an external presentation client (a
+// Unity player being the device) keeps its command widget. Refusing it would leave
+// that scenario with no way to dispatch a command at all, and the only alternative
+// available before the mode existed was to claim an internal far end, which answers
+// SUCCESSFUL while the real device never acts.
+//
+// 🔑 BOTH HALVES are asserted against the SAME board, and that is the point: "the
+// widget is allowed" passes trivially if the gate stopped firing altogether. Only
+// the pair — external accepted, none rejected, same definition — distinguishes a
+// gate that learned a third mode from one that was switched off.
+func TestValidateAllowsAControlBoardForAnExternalFarEnd(t *testing.T) {
+	m := NewWidgetlab(1, Load{}).Manifest()
+	if !boardCarriesACommandWidget(t, m) {
+		t.Fatal("no board in the manifest carries a command widget; neither half below " +
+			"would be about the control-board gate")
+	}
+
+	external := m
+	external.CommandFarEnd = FarEndExternal
+	if err := external.Validate(); err != nil {
+		t.Fatalf("a control board was refused for an external far end: %v — the scenario's "+
+			"command widget is exactly how a Unity player receives its commands", err)
+	}
+
+	none := m
+	none.CommandFarEnd = FarEndNone
+	if err := none.Validate(); err == nil {
+		t.Fatal("the same control board was accepted with no far end at all: its commands " +
+			"would reach SENT and expire unanswered, and the check above proves nothing")
 	}
 }
 

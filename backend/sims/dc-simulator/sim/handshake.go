@@ -69,9 +69,16 @@ type Endpoints struct {
 	//
 	// Optional in the handshake like EventProcessingWS and CommandMgmtGraphQL, and
 	// for the same reason: a pre-widgetlab handshake never carried it. It is NOT
-	// optional at bootstrap for a scenario that declares CommandFarEnd — that case
-	// fails loudly rather than running a scenario whose command widget can only
-	// ever demonstrate a command expiring.
+	// optional at bootstrap for EITHER far-end mode — both fail loudly rather than
+	// running a scenario whose command widget can only ever demonstrate a command
+	// expiring.
+	//
+	// 🔴 Including FarEndExternal, which is the case that looks exempt: this process
+	// does not dial the broker there, but it is where the external presentation
+	// client LEARNS the address, so an empty value here is an empty value in the
+	// scene. And it fails worse — an unreachable internal far end stops the bootstrap
+	// in front of the operator, while an unreachable external one is a scene quietly
+	// receiving nothing while this side stays green.
 	MqttBroker string `json:"mqttBroker"`
 }
 

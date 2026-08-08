@@ -5,6 +5,7 @@ package sim
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -354,5 +355,97 @@ func TestRegistry(t *testing.T) {
 	}
 	if _, ok := Registry["no-such-manifest"]; ok {
 		t.Fatal("expected an unknown manifest id to be absent from the registry")
+	}
+}
+
+// ---- The command far-end MODE --------------------------------------------------
+
+// The zero value has to resolve, and it has to resolve HERE rather than at each
+// reader. A manifest that never mentions commands leaves the field "", which equals
+// none of the mode constants — so every consumer comparing against them takes
+// neither the none branch nor a far-end branch, and lands in whatever the code does
+// when it matched nothing. That is the majority of manifests in this package, so the
+// unhandled value would be the common case rather than the exotic one.
+func TestFarEndModeNormalizesTheZeroValueToNone(t *testing.T) {
+	m := testManifest()
+	if m.CommandFarEnd != "" {
+		t.Fatalf("the fixture sets CommandFarEnd %q, so this test is not about the zero value",
+			m.CommandFarEnd)
+	}
+	if got := m.FarEndMode(); got != FarEndNone {
+		t.Errorf("an omitted CommandFarEnd reads as %q, want %q", got, FarEndNone)
+	}
+	// And the accessor is not simply "return none": a set mode must survive it, or
+	// normalization would erase the very distinction it exists to preserve.
+	for _, mode := range []CommandFarEndMode{FarEndNone, FarEndInternal, FarEndExternal} {
+		m.CommandFarEnd = mode
+		if got := m.FarEndMode(); got != mode {
+			t.Errorf("CommandFarEnd %q reads back as %q", mode, got)
+		}
+	}
+}
+
+// Fail closed on a mode this build does not know. A typo — "externl" — normalizes to
+// itself, matches no branch anywhere, and leaves a scenario behaving as none while
+// its manifest claims an external far end: no attach, and its command widget refused
+// with an error about a mode it does not have. Validate is the only place that can
+// catch it, because everything downstream reads the value through comparisons that
+// all simply miss.
+func TestValidateRejectsAnUnknownCommandFarEndMode(t *testing.T) {
+	m := testManifest()
+	m.CommandFarEnd = "externl"
+	// 🔴 The command definition is here to keep this test HONEST, and it was missing
+	// on the first draft: without it the far-end-vocabulary check fires first, and
+	// its message quotes the mode too — so the test passed with the mode allow-list
+	// deleted entirely. A mutation proved it. The typo must be caught AS a typo.
+	m.Profiles[0].Commands = []CommandSpec{{Token: "test-cmd", CommandKey: "doThing"}}
+
+	err := m.Validate()
+	if err == nil {
+		t.Fatal("a manifest with CommandFarEnd \"externl\" was accepted; it would run as though " +
+			"it had no far end while claiming one")
+	}
+	if !strings.Contains(err.Error(), "externl") {
+		t.Errorf("error %q does not quote the offending value, so a reader cannot see the typo", err)
+	}
+	if strings.Contains(err.Error(), "nothing for the far end to answer") {
+		t.Errorf("error %q is the no-command-vocabulary rejection, not the unknown-mode one: "+
+			"this test would pass with the mode check gone", err)
+	}
+	// The counterweight: rejecting garbage is only meaningful while every real mode
+	// still passes. A check written as "reject anything unfamiliar" that also
+	// rejected "external" would look identical from the test above.
+	for _, mode := range []CommandFarEndMode{"", FarEndNone, FarEndInternal, FarEndExternal} {
+		ok := testManifest()
+		ok.CommandFarEnd = mode
+		if mode != "" && mode != FarEndNone {
+			ok.Profiles[0].Commands = []CommandSpec{{Token: "test-cmd", CommandKey: "doThing"}}
+		}
+		if err := ok.Validate(); err != nil {
+			t.Errorf("CommandFarEnd %q was rejected: %v", mode, err)
+		}
+	}
+}
+
+// A far end with no command vocabulary is refused in BOTH modes, and external is the
+// one that needed saying: there the CommandDefinitions are the entire contract with a
+// client in another process. With none published there is nothing for that client to
+// subscribe for and nothing for a board's widget to enqueue against, so the manifest
+// declares a far end that could not be reached even with the Unity player running.
+func TestValidateRequiresACommandDefinitionForEveryFarEndMode(t *testing.T) {
+	for _, mode := range []CommandFarEndMode{FarEndInternal, FarEndExternal} {
+		m := testManifest()
+		m.CommandFarEnd = mode
+		if len(m.Profiles[0].Commands) != 0 {
+			t.Fatalf("the fixture already declares commands, so mode %q would pass for the "+
+				"wrong reason", mode)
+		}
+		err := m.Validate()
+		if err == nil {
+			t.Fatalf("mode %q was accepted with no command definition anywhere", mode)
+		}
+		if !strings.Contains(err.Error(), "nothing for the far end to answer") {
+			t.Errorf("mode %q: error %q is not the far-end-with-no-commands rejection", mode, err)
+		}
 	}
 }

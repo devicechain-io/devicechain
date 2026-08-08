@@ -113,13 +113,9 @@ func run(handshakePath, bind, port string, load sim.Load, noFarEnd bool) error {
 		return err
 	}
 	rt.FarEndDisabled = noFarEnd
-	if noFarEnd && driver.Manifest().CommandFarEnd {
-		// WARN rather than a one-line info, and stated as the consequence rather
-		// than as the flag that was passed: the operator who set this is not
-		// necessarily the person later reading a board whose Send button does nothing.
+	if noFarEnd {
 		log.Warn().Str("manifestId", manifestId).
-			Msg("--no-command-far-end: this scenario's devices will NOT receive commands; " +
-				"a command issued from its dashboard reaches SENT and expires unanswered")
+			Msg(farEndOptOutWarning(driver.Manifest().FarEndMode()))
 	}
 
 	lc := sim.NewLifecycle(driver, rt)
@@ -169,6 +165,34 @@ func run(handshakePath, bind, port string, load sim.Load, noFarEnd bool) error {
 		return err
 	}
 	return nil
+}
+
+// farEndOptOutWarning is what --no-command-far-end actually DID, per far-end mode.
+//
+// It is a pure function, and split out for exactly that reason: it is the only report
+// of the flag for a scenario that declares no far end, /status having nothing to say
+// there — so the branch that matters most is the one an operator sees least, and it
+// has to be reachable by a test rather than buried in a log call inside run().
+//
+// EVERY mode warns, including the one where the flag changes nothing. A flag that
+// silently has no effect is the same class of defect as the rest of this seam: the
+// operator believes they changed the run, and reads everything that happens next
+// through that belief. And all three state the CONSEQUENCE rather than the flag that
+// was passed, because the person who set it is not necessarily the person later
+// reading a board whose Send button appears to do nothing.
+func farEndOptOutWarning(mode sim.CommandFarEndMode) string {
+	switch mode {
+	case sim.FarEndInternal:
+		return "--no-command-far-end: this scenario's devices will NOT receive commands; " +
+			"a command issued from its dashboard reaches SENT and expires unanswered"
+	case sim.FarEndExternal:
+		return "--no-command-far-end: this scenario's far end is an external presentation " +
+			"client, and the broker address it would be handed is no longer required, so a " +
+			"command issued from its dashboard reaches SENT and expires unanswered"
+	default:
+		return "--no-command-far-end has nothing to disable: this scenario declares no command " +
+			"far end at all, so the flag changes nothing about how it runs"
+	}
 }
 
 func envOr(key, fallback string) string {

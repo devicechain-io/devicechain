@@ -100,13 +100,17 @@ func (f *fakeFarEnd) closeCount() int {
 // devices, report attached:true, and reinstate the original defect behind a green
 // status. A fake that skips the step under test measures the fixture, not the code.
 type farEndSim struct {
-	declare bool
+	mode    CommandFarEndMode
 	devices []DeviceInstance
 }
 
 func (s *farEndSim) Manifest() SimManifest {
-	m := SimManifest{Name: "farend-fake", CommandFarEnd: s.declare}
-	if s.declare {
+	m := SimManifest{Name: "farend-fake", CommandFarEnd: s.mode}
+	// The command vocabulary belongs to BOTH far-end modes, not just the internal
+	// one: Validate refuses either without it, so a fake that carried commands only
+	// for internal would be a manifest Validate rejects — an invalid fixture for the
+	// external tests, which are about what a VALID external scenario does.
+	if m.FarEndMode() != FarEndNone {
 		m.Profiles = []ProfileSpec{{
 			Token:    "fe-profile",
 			Commands: []CommandSpec{{Token: "fe-cmd", CommandKey: "doThing"}},
@@ -123,7 +127,7 @@ func (s *farEndSim) Tick(context.Context, *Runtime) error { return nil }
 
 // farEndFixture builds a Lifecycle with a fake far-end factory over a scenario that
 // provisions two devices, returning both so a test can assert what was attached.
-func farEndFixture(t *testing.T, declare bool, mutate func(*Runtime)) (*Lifecycle, *fakeFarEnd) {
+func farEndFixture(t *testing.T, mode CommandFarEndMode, mutate func(*Runtime)) (*Lifecycle, *fakeFarEnd) {
 	t.Helper()
 	fe := &fakeFarEnd{}
 	rt := &Runtime{
@@ -138,7 +142,7 @@ func farEndFixture(t *testing.T, declare bool, mutate func(*Runtime)) (*Lifecycl
 	if mutate != nil {
 		mutate(rt)
 	}
-	driver := &farEndSim{declare: declare, devices: []DeviceInstance{
+	driver := &farEndSim{mode: mode, devices: []DeviceInstance{
 		{Token: "dev-001", CredentialId: "cred-001"},
 		{Token: "dev-002", CredentialId: "cred-002"},
 	}}
@@ -150,7 +154,7 @@ func farEndFixture(t *testing.T, declare bool, mutate func(*Runtime)) (*Lifecycl
 // command widget works for the device someone happened to test with and expires
 // for the rest.
 func TestBootstrapAttachesTheFarEndToEveryDevice(t *testing.T) {
-	lc, fe := farEndFixture(t, true, nil)
+	lc, fe := farEndFixture(t, FarEndInternal, nil)
 	if err := lc.Bootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
@@ -176,7 +180,7 @@ func TestBootstrapAttachesTheFarEndToEveryDevice(t *testing.T) {
 // command issued from it reaches SENT and expires a week later with nothing
 // anywhere reporting a problem.
 func TestBootstrapRefusesADeclaredFarEndWithNoBroker(t *testing.T) {
-	lc, fe := farEndFixture(t, true, func(rt *Runtime) { rt.MqttBroker = "  " })
+	lc, fe := farEndFixture(t, FarEndInternal, func(rt *Runtime) { rt.MqttBroker = "  " })
 	err := lc.Bootstrap(context.Background())
 	if err == nil {
 		t.Fatal("bootstrap succeeded with no MQTT broker for a scenario that declares a far end")
@@ -198,7 +202,7 @@ func TestBootstrapRefusesADeclaredFarEndWithNoBroker(t *testing.T) {
 // attach is disconnected rather than left holding broker connections across a
 // Reset loop.
 func TestBootstrapFailsWhenADeviceCannotSubscribe(t *testing.T) {
-	lc, fe := farEndFixture(t, true, nil)
+	lc, fe := farEndFixture(t, FarEndInternal, nil)
 	fe.failOn = "dev-002"
 
 	err := lc.Bootstrap(context.Background())
@@ -218,7 +222,7 @@ func TestBootstrapFailsWhenADeviceCannotSubscribe(t *testing.T) {
 // The point of the flag is that the degrade becomes a reported decision instead of
 // an invisible one.
 func TestFarEndDisabledSkipsAttachAndIsReported(t *testing.T) {
-	lc, fe := farEndFixture(t, true, func(rt *Runtime) { rt.FarEndDisabled = true })
+	lc, fe := farEndFixture(t, FarEndInternal, func(rt *Runtime) { rt.FarEndDisabled = true })
 	if err := lc.Bootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
@@ -242,7 +246,7 @@ func TestFarEndDisabledSkipsAttachAndIsReported(t *testing.T) {
 // property under test is that the opt-out is checked BEFORE the broker, so a host
 // that cannot reach the gateway has a working escape hatch.
 func TestFarEndDisabledDoesNotNeedABroker(t *testing.T) {
-	lc, _ := farEndFixture(t, true, func(rt *Runtime) {
+	lc, _ := farEndFixture(t, FarEndInternal, func(rt *Runtime) {
 		rt.FarEndDisabled = true
 		rt.MqttBroker = ""
 	})
@@ -254,7 +258,7 @@ func TestFarEndDisabledDoesNotNeedABroker(t *testing.T) {
 // A scenario that declares no far end needs no broker and gets no connection.
 // Without this, adding the seam would break devicepulse and buildingpulse.
 func TestAScenarioWithNoFarEndNeedsNoBroker(t *testing.T) {
-	lc, fe := farEndFixture(t, false, func(rt *Runtime) { rt.MqttBroker = "" })
+	lc, fe := farEndFixture(t, FarEndNone, func(rt *Runtime) { rt.MqttBroker = "" })
 	if err := lc.Bootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
@@ -266,12 +270,184 @@ func TestAScenarioWithNoFarEndNeedsNoBroker(t *testing.T) {
 	}
 }
 
+// 🔑 THE EXTERNAL-MODE GATE. A scenario whose far end is a presentation client in
+// another process must get NO in-process receiver — and the failure this refuses is
+// worse than the one the whole seam was built for. A cmdreceiver attached alongside
+// the real device answers SUCCESSFUL for work it did not do and cannot see: the
+// command shows as completed, the machine on screen never moved, and every layer
+// reports success. A command stuck at SENT at least looks broken.
+//
+// It must also not ERROR: external is a legal, complete scenario, and a bootstrap
+// failure here would make the mode unusable rather than merely un-attached.
+func TestExternalFarEndAttachesNoInProcessReceiver(t *testing.T) {
+	lc, fe := farEndFixture(t, FarEndExternal, nil)
+	if err := lc.Bootstrap(context.Background()); err != nil {
+		t.Fatalf("bootstrap of an external-far-end scenario: %v", err)
+	}
+	if got := fe.tokens(); len(got) != 0 {
+		t.Errorf("a Go far end subscribed %v for an external-far-end scenario; it would answer "+
+			"SUCCESSFUL for commands only the external client can act on", got)
+	}
+	if st := lc.commandFarEndStatus(); st.Attached {
+		t.Error("status reports an in-process far end attached in external mode")
+	}
+	// The scenario is fully bootstrapped, not half-failed: BOOTSTRAPPED is what lets
+	// Start run it at all.
+	if st := lc.State(); st != StateBootstrapped {
+		t.Errorf("state is %s after bootstrapping an external-far-end scenario, want %s",
+			st, StateBootstrapped)
+	}
+}
+
+// 🔴 External REQUIRES the broker, and this test replaced one asserting the exact
+// opposite. The earlier reasoning — "this process dials nothing in external mode, so
+// it needs no address" — is wrong about where the address goes: it is handed to the
+// presentation client with the rest of the scenario's config, so an empty value here
+// is an empty value in the scene.
+//
+// And the polarity runs the other way from the intuition. An internal far end that
+// cannot dial fails right here, in the log the operator is watching. An external one
+// that cannot dial fails in ANOTHER PROCESS: the scene subscribes to nothing while
+// this side's bootstrap, /status and board are all green, and every command the board
+// dispatches reaches SENT and expires a week later. Waiving the check is the precise
+// fail-open the whole seam exists to remove, moved one process further away where
+// nothing reports it.
+func TestExternalFarEndRefusesToBootstrapWithNoBroker(t *testing.T) {
+	lc, fe := farEndFixture(t, FarEndExternal, func(rt *Runtime) { rt.MqttBroker = "  " })
+	err := lc.Bootstrap(context.Background())
+	if err == nil {
+		t.Fatal("an external-far-end scenario bootstrapped with no broker: the presentation " +
+			"client would be handed an empty address, dial nothing, and every command from " +
+			"its board would expire unanswered with everything here reporting green")
+	}
+	if !strings.Contains(err.Error(), "mqttBroker") {
+		t.Errorf("error %q does not name the handshake field a reader has to fix", err)
+	}
+	if len(fe.tokens()) != 0 {
+		t.Error("a Go far end was attached in external mode")
+	}
+	// The refusal must reach the FSM, not just the caller: BOOTSTRAPPED would let
+	// Start run the scenario anyway.
+	if st := lc.State(); st != StateCreated {
+		t.Errorf("state is %s after a refused bootstrap, want %s", st, StateCreated)
+	}
+}
+
+// The counterweight to the test above, and it is what keeps that one from being
+// satisfied by a guard that simply always refuses: the operator's explicit opt-out
+// still runs an external scenario on a host with no gateway address, exactly as it
+// does an internal one. Without this the broker gate would have no escape hatch in
+// the mode that gained it.
+func TestFarEndDisabledLetsAnExternalScenarioRunWithNoBroker(t *testing.T) {
+	lc, fe := farEndFixture(t, FarEndExternal, func(rt *Runtime) {
+		rt.FarEndDisabled = true
+		rt.MqttBroker = ""
+	})
+	if err := lc.Bootstrap(context.Background()); err != nil {
+		t.Fatalf("bootstrap of an external scenario with the far end disabled and no broker: %v", err)
+	}
+	if len(fe.tokens()) != 0 {
+		t.Error("a far end was attached in external mode")
+	}
+}
+
+// 🔴 The distinction /status exists to carry. attached:false has two causes once a
+// far end can live elsewhere — "nothing is answering" and "something outside this
+// process is answering" — and they are opposite verdicts on the same Send button.
+// From inside the simulator both are the same absence, so if the report cannot tell
+// them apart, nothing can.
+//
+// Asserted as a DIFFERENCE between the two modes rather than as a field's value, so
+// a report that hard-codes a mode, or drops the field, fails here.
+func TestStatusDistinguishesAnExternalFarEndFromNothingAnswering(t *testing.T) {
+	external, _ := farEndFixture(t, FarEndExternal, nil)
+	if err := external.Bootstrap(context.Background()); err != nil {
+		t.Fatalf("bootstrap external: %v", err)
+	}
+	none, _ := farEndFixture(t, FarEndNone, nil)
+	if err := none.Bootstrap(context.Background()); err != nil {
+		t.Fatalf("bootstrap none: %v", err)
+	}
+
+	ext, non := external.commandFarEndStatus(), none.commandFarEndStatus()
+	if ext.Attached || non.Attached {
+		t.Fatalf("a far end attached in one of the un-attached modes (external=%v none=%v); "+
+			"the comparison below would be about the wrong thing", ext.Attached, non.Attached)
+	}
+	if ext.Mode == non.Mode {
+		t.Fatalf("/status reports mode %q for both external and none: a scenario answered by a "+
+			"Unity player is indistinguishable from one nothing answers", ext.Mode)
+	}
+	if ext.Mode != FarEndExternal || non.Mode != FarEndNone {
+		t.Errorf("/status reports mode external=%q none=%q, want %q and %q",
+			ext.Mode, non.Mode, FarEndExternal, FarEndNone)
+	}
+	// Declared is the other half: external DOES expect an answer, so a reader who
+	// only looks at declared/attached still sees "wanted, not attached here" rather
+	// than "never wanted one".
+	if !ext.Declared {
+		t.Error("/status reports an external far end as undeclared, so the board's Send button " +
+			"reads as decorative")
+	}
+	if non.Declared {
+		t.Error("/status declares a far end for a scenario that has none")
+	}
+}
+
+// --no-command-far-end means ONE thing wherever there is a far end to give up: the
+// operator accepts that this scenario's commands go unanswered. So it is reported
+// identically for internal and external, and withheld for none — where the flag
+// accepts nothing, because that scenario never had a command channel and reporting
+// it as "disabled" would invent a control surface it does not have.
+//
+// All three are asserted together. Each half is trivially satisfiable alone: a report
+// that always sets disabled passes the first two, and one that never sets it passes
+// the third.
+func TestFarEndDisabledIsReportedForEveryDeclaredFarEndAndOnlyThose(t *testing.T) {
+	for _, mode := range []CommandFarEndMode{FarEndInternal, FarEndExternal} {
+		lc, _ := farEndFixture(t, mode, func(rt *Runtime) { rt.FarEndDisabled = true })
+		if err := lc.Bootstrap(context.Background()); err != nil {
+			t.Fatalf("bootstrap %q with the far end disabled: %v", mode, err)
+		}
+		st := lc.commandFarEndStatus()
+		if !st.Disabled {
+			t.Errorf("mode %q: /status does not report the far end as disabled, so an operator "+
+				"reading it cannot tell a dead Send button from a live one", mode)
+		}
+		if !st.Declared {
+			t.Errorf("mode %q: /status reports the scenario as declaring no far end; it does", mode)
+		}
+		if st.Attached {
+			t.Errorf("mode %q: /status reports a far end attached despite the opt-out", mode)
+		}
+	}
+
+	none, _ := farEndFixture(t, FarEndNone, func(rt *Runtime) { rt.FarEndDisabled = true })
+	if err := none.Bootstrap(context.Background()); err != nil {
+		t.Fatalf("bootstrap none with the far end disabled: %v", err)
+	}
+	if st := none.commandFarEndStatus(); st.Disabled {
+		t.Error("/status reports a disabled far end for a scenario that declares none, which " +
+			"describes a control channel it never had")
+	}
+
+	// The other direction: the flag must not be reported when it was never passed, or
+	// "disabled" says nothing about what the operator chose.
+	on, _ := farEndFixture(t, FarEndInternal, nil)
+	if err := on.Bootstrap(context.Background()); err != nil {
+		t.Fatalf("bootstrap internal: %v", err)
+	}
+	if st := on.commandFarEndStatus(); st.Disabled {
+		t.Error("/status reports the far end as disabled without --no-command-far-end")
+	}
+}
+
 // Reset re-runs Bootstrap, and Bootstrap attaches the far end — so a Reset loop
 // must not open a second connection per device. Left unguarded this is unbounded:
 // dcctl's reset verb is the documented "start over".
 func TestResetDoesNotReattachTheFarEnd(t *testing.T) {
 	built := 0
-	lc, fe := farEndFixture(t, true, nil)
+	lc, fe := farEndFixture(t, FarEndInternal, nil)
 	inner := lc.rt.NewFarEnd
 	lc.rt.NewFarEnd = func(instanceId, tenant, broker string, tlsConfig *tls.Config) CommandFarEnd {
 		built++
@@ -301,7 +477,7 @@ func TestResetDoesNotReattachTheFarEnd(t *testing.T) {
 // would make a command issued against a stopped sim expire — the same failure this
 // seam removes, in a narrower window. Close is what ends it.
 func TestStopKeepsTheFarEndAndCloseReleasesIt(t *testing.T) {
-	lc, fe := farEndFixture(t, true, nil)
+	lc, fe := farEndFixture(t, FarEndInternal, nil)
 	ctx := context.Background()
 	if err := lc.Bootstrap(ctx); err != nil {
 		t.Fatalf("bootstrap: %v", err)
@@ -337,7 +513,7 @@ func TestStopKeepsTheFarEndAndCloseReleasesIt(t *testing.T) {
 // script reads to answer "does the Send button on this board do anything", and
 // until now there was no such surface at all.
 func TestStatusReportsTheCommandFarEnd(t *testing.T) {
-	lc, _ := farEndFixture(t, true, nil)
+	lc, _ := farEndFixture(t, FarEndInternal, nil)
 	if err := lc.Bootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
@@ -369,6 +545,99 @@ func TestStatusReportsTheCommandFarEnd(t *testing.T) {
 	}
 	if body.CommandFarEnd.Evidence == nil || len(body.CommandFarEnd.Evidence.Devices) != 2 {
 		t.Error("/status carries no per-device far-end evidence, so a blind device is invisible")
+	}
+}
+
+// statusFarEndMap does what a real reader of /status does: it takes the response
+// bytes and looks up KEYS, with no Go type in between to quietly translate them.
+func statusFarEndMap(t *testing.T, lc *Lifecycle) map[string]any {
+	t.Helper()
+	mux := http.NewServeMux()
+	NewControlServer(lc, lc.rt).Register(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/status", nil))
+
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode /status: %v", err)
+	}
+	fe, ok := body["commandFarEnd"].(map[string]any)
+	if !ok {
+		t.Fatalf("/status has no object under the key %q; it carries %v", "commandFarEnd", keysOf(body))
+	}
+	return fe
+}
+
+func keysOf(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// 🔴 THE WIRE NAMES ARE THE CONTRACT, and nothing else in this file pins them. Every
+// other assertion here goes through commandFarEndStatus, i.e. through the Go struct,
+// where a renamed json tag is invisible — the README sells `mode` as the field an
+// outside reader uses to tell "answered elsewhere" from "answered by nobody", and
+// renaming it breaks dcctl and every curl script while compiling cleanly.
+//
+// It decodes into a map rather than a struct with tags DELIBERATELY. encoding/json
+// matches field names case-insensitively and falls back to the Go field name, so a
+// tagged struct still decodes a body emitting "Mode" — a test written that way stays
+// green with the tag deleted outright, which is most of the ways this can break.
+func TestStatusWireNamesAreTheContract(t *testing.T) {
+	lc, _ := farEndFixture(t, FarEndInternal, nil)
+	if err := lc.Bootstrap(context.Background()); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	fe := statusFarEndMap(t, lc)
+
+	for key, want := range map[string]any{
+		"mode":     string(FarEndInternal),
+		"declared": true,
+		"attached": true,
+	} {
+		got, ok := fe[key]
+		if !ok {
+			t.Errorf("/status carries no %q key; commandFarEnd has %v", key, keysOf(fe))
+			continue
+		}
+		if got != want {
+			t.Errorf("/status %q is %v, want %v", key, got, want)
+		}
+	}
+	if broker, _ := fe["broker"].(string); broker == "" {
+		t.Errorf("/status carries no %q key naming the broker; commandFarEnd has %v",
+			"broker", keysOf(fe))
+	}
+	if _, ok := fe["evidence"].(map[string]any); !ok {
+		t.Errorf("/status carries no %q object, so per-device far-end evidence is unreadable "+
+			"to anything outside this process; commandFarEnd has %v", "evidence", keysOf(fe))
+	}
+	// disabled is omitempty, so its ABSENCE is the report for a far end nobody
+	// suppressed — and asserting that is what stops "always emit disabled:false" from
+	// passing for the disabled case below.
+	if _, ok := fe["disabled"]; ok {
+		t.Errorf("/status carries %q for a far end that was never disabled, so the key stops "+
+			"meaning the operator chose something", "disabled")
+	}
+
+	// The external + opt-out shape, on the wire, is the one a reader most needs to
+	// read correctly: a mode that says who was supposed to answer and a flag that says
+	// the operator gave that up.
+	ext, _ := farEndFixture(t, FarEndExternal, func(rt *Runtime) { rt.FarEndDisabled = true })
+	if err := ext.Bootstrap(context.Background()); err != nil {
+		t.Fatalf("bootstrap external: %v", err)
+	}
+	extFE := statusFarEndMap(t, ext)
+	if got := extFE["mode"]; got != string(FarEndExternal) {
+		t.Errorf("/status %q is %v for an external far end, want %q", "mode", got, FarEndExternal)
+	}
+	if got, ok := extFE["disabled"]; !ok || got != true {
+		t.Errorf("/status %q is %v (present=%v) for a disabled external far end, want true",
+			"disabled", got, ok)
 	}
 }
 
@@ -413,7 +682,7 @@ func TestBootstrapRefusesAFarEndOverNoDevices(t *testing.T) {
 		NewFarEnd: func(_, _, _ string, _ *tls.Config) CommandFarEnd { return fe },
 	}
 	// A scenario that declares a far end and provisions nothing.
-	lc := NewLifecycle(&farEndSim{declare: true}, rt)
+	lc := NewLifecycle(&farEndSim{mode: FarEndInternal}, rt)
 
 	err := lc.Bootstrap(context.Background())
 	if err == nil {
@@ -447,7 +716,7 @@ func TestConcurrentBootstrapsAttachExactlyOneFarEnd(t *testing.T) {
 			return fe
 		},
 	}
-	driver := &farEndSim{declare: true, devices: []DeviceInstance{
+	driver := &farEndSim{mode: FarEndInternal, devices: []DeviceInstance{
 		{Token: "dev-001", CredentialId: "cred-001"},
 	}}
 	lc := NewLifecycle(driver, rt)

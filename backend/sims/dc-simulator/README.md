@@ -154,8 +154,36 @@ A device that only POSTs telemetry cannot receive anything, so a scenario with a
 control widget on its board needs a second connection: every device subscribed to
 `{instance}/{tenant}/device-commands/{token}` on the NATS MQTT gateway, answering
 on `{instance}/{tenant}/command-responses` (the `cmdreceiver` package, shared with
-the load-test command harness). A scenario opts in with `CommandFarEnd` on its
-manifest; widgetlab does, devicepulse and buildingpulse do not.
+the load-test command harness). A scenario declares WHO answers with `CommandFarEnd`
+on its manifest, which has three settings:
+
+| mode | who answers | in-process receiver | command widget on a board |
+| --- | --- | --- | --- |
+| `none` (the default, and what an omitted field means) | nobody | no | **refused** by `Manifest.Validate` |
+| `internal` | this process, per device | yes | allowed |
+| `external` | a presentation client in another process — a Unity player that IS the device | no | allowed |
+
+widgetlab is `internal`; devicepulse and buildingpulse are `none`. Both far-end modes
+must still declare a command vocabulary on a profile: for `external` that vocabulary
+is the whole contract with the other process, since it is what that client subscribes
+for and what the board's widget enqueues against.
+
+`external` attaches nothing here on purpose. A Go receiver running alongside the real
+device would answer `SUCCESSFUL` for a command only that client can act on — the
+machine on screen never moves and every layer reports success, which is worse than
+the expiring command this seam was built to remove, because it looks like it worked.
+The cost is that the simulator cannot see whether anyone is out there: `GET /status`
+reports the far end's `mode`, so `attached: false` can be read as "answered
+elsewhere" rather than "answered by nobody", but it is a statement of intent, never
+evidence.
+
+It does **not** waive the broker address, and the polarity reads backwards until you
+follow where that address goes: this process does not dial the broker in `external`
+mode, but it is where the presentation client learns the URI, so an empty value here
+is an empty value in the scene. An unreachable `internal` far end fails the bootstrap
+in front of the operator; an unreachable `external` one fails in another process, as
+a scene that never receives anything while this side's bootstrap, `/status` and board
+are all green. Both modes therefore refuse to bootstrap without `endpoints.mqttBroker`.
 
 `dcctl sim create` resolves the gateway address into the handshake
 (`endpoints.mqttBroker`, default `ssl://<server>:1883` — the broker terminates TLS
@@ -163,7 +191,7 @@ independently of the HTTP ingress) and records whether to verify its certificate
 (`mqttTLSInsecure`, on by default without `--tls`, since a local bring-up's gateway
 cert is self-signed). Override either with `--mqtt-broker` / `--mqtt-insecure`.
 
-**Bootstrap FAILS if a declared far end cannot be brought up** — no broker
+**Bootstrap FAILS if an `internal` far end cannot be brought up** — no broker
 configured, or any device that does not come back subscribed. Degrading to "run
 without it" is the failure the seam exists to remove: the scenario would come up
 green and its Send button would enqueue commands that expire unanswered. On a host
@@ -171,6 +199,17 @@ that genuinely cannot reach the gateway, `--no-command-far-end` accepts that
 knowingly; it logs a warning at startup and `GET /status` reports the channel as
 `declared` but `disabled`, alongside per-device receive/respond evidence when one
 is attached.
+
+The flag means one thing in every mode that has a far end: **the operator accepts
+that this scenario's commands will not be answered.** For `internal` it skips the
+attach; for `external` there was never an attach to skip, but the acceptance is the
+same — and in both it relaxes the broker requirement, which is what makes it an
+escape hatch on a host that cannot reach the gateway rather than a flag that helps
+only one mode. `/status` reports `disabled: true` for both.
+
+Against a `none` scenario it accepts nothing, so `/status` stays silent — but startup
+still warns that the flag changed nothing, because a flag that silently does nothing
+is read as one that worked.
 
 ⚠️ **Run one process per handshake.** An MQTT session is keyed by client id, which
 is derived from `(tenant, deviceToken)` — both fixed by the handshake — so two

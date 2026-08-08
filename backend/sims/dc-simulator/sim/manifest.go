@@ -224,6 +224,67 @@ type DeviceInstance struct {
 	Assignments     []Assignment
 }
 
+// CommandFarEndMode says WHO answers a scenario's commands. It is a mode rather
+// than a boolean because "does this scenario answer commands" and "does THIS
+// PROCESS answer them" are different questions, and a boolean can only carry one
+// of them — which forces a scenario whose far end is a presentation client (a
+// Unity player being the device, sitepulse) to pick between two settings that are
+// both wrong: off refuses its command widget outright, and on attaches the Go
+// cmdreceiver, which answers SUCCESSFUL while the real far end never acted. The
+// second is the false-success the whole seam exists to prevent, running backwards
+// — and it is worse than the original defect, because a command that expires at
+// SENT at least looks broken.
+type CommandFarEndMode string
+
+const (
+	// FarEndNone: nothing answers. The devices only emit telemetry, and Validate
+	// refuses a board carrying a command widget — the button would enqueue a real
+	// command that reaches SENT and expires unanswered a week later.
+	FarEndNone CommandFarEndMode = "none"
+	// FarEndInternal: this process answers. Bootstrap attaches a cmdreceiver to
+	// every expanded device over the MQTT gateway, so a command issued against any
+	// of them completes QUEUED -> SENT -> SUCCESSFUL, and REFUSES to come up if it
+	// cannot — see attachCommandFarEnd.
+	FarEndInternal CommandFarEndMode = "internal"
+	// FarEndExternal: a presentation client outside the simulator is the device —
+	// it holds the MQTT session, receives the command and acts on it. This process
+	// attaches NOTHING; attaching a Go receiver alongside it would answer for a
+	// device it has no idea what happened to. The scenario must still declare a
+	// command vocabulary on a profile (Validate enforces it), because that is what
+	// the external client subscribes for and what the board's widget enqueues
+	// against.
+	//
+	// 🔴 The simulator cannot tell "an external client is listening" from "nothing
+	// is listening" — both are the absence of a local subscription — so this mode
+	// is a STATEMENT OF INTENT that /status reports as such, never evidence that
+	// anyone is there. See farEndStatus.
+	FarEndExternal CommandFarEndMode = "external"
+)
+
+// validFarEndModes is the closed set Validate admits, "" included because the zero
+// value of an omitted field means FarEndNone. Kept as a set rather than a switch in
+// Validate so the mode constants and the accepted values cannot drift apart.
+var validFarEndModes = map[CommandFarEndMode]bool{
+	"": true, FarEndNone: true, FarEndInternal: true, FarEndExternal: true,
+}
+
+// FarEndMode is the manifest's far-end mode with the zero value resolved, and it is
+// how EVERY consumer must read the field.
+//
+// The normalization exists to keep "" from crossing the boundary at all: a manifest
+// that omits the field is a scenario with no far end, but `m.CommandFarEnd ==
+// FarEndNone` is false for it. A caller comparing against the constants would then
+// take neither the none branch nor the internal one — the code path nobody wrote a
+// case for, reached by every manifest that simply did not mention commands. Validate
+// is the one exception: it reads the RAW field, because "" is only legal on the way
+// in, and normalizing before checking would accept any garbage that normalized.
+func (m SimManifest) FarEndMode() CommandFarEndMode {
+	if m.CommandFarEnd == "" {
+		return FarEndNone
+	}
+	return m.CommandFarEnd
+}
+
 // SimManifest is the whole declarative shape of one sim scenario: the static
 // singletons (profiles + device types + the customer/area/asset hierarchies +
 // dashboards) provisioned once, and the populations that fan out into concrete
@@ -247,10 +308,11 @@ type SimManifest struct {
 	// silently un-resizable the day it grows a second population for an
 	// unrelated reason.
 	FixedTopology bool
-	// CommandFarEnd marks a scenario whose devices must LISTEN for commands and
-	// answer them, not merely emit telemetry. Bootstrap attaches a cmdreceiver to
-	// every expanded device, so a command issued against any of them completes
-	// QUEUED -> SENT -> SUCCESSFUL.
+	// CommandFarEnd says WHO answers this scenario's commands — see
+	// CommandFarEndMode for what each setting means and why the answer cannot be
+	// a boolean. Read it through FarEndMode(), never directly: the zero value is
+	// "none" and every consumer that compares against a constant has to see the
+	// normalized value, not "".
 	//
 	// It exists because the sim's device model is otherwise one-way: it POSTs to
 	// the HTTP ingress and subscribes to nothing. A scenario that provisions
@@ -265,7 +327,7 @@ type SimManifest struct {
 	// for provisioning coverage without the scenario intending to answer one, and
 	// attaching a broker connection per device is not something to acquire by
 	// accident. Validate refuses the inverse — a far end with nothing to answer.
-	CommandFarEnd bool
+	CommandFarEnd CommandFarEndMode
 	CustomerTypes []CustomerTypeSpec
 	Customers     []CustomerSpec
 	AreaTypes     []AreaTypeSpec
@@ -410,6 +472,17 @@ var entityAssignmentTargetTypes = map[string]bool{
 // assignment to an area that doesn't exist) fails fast at bootstrap rather than
 // surfacing as an opaque GraphQL error deep in provisioning.
 func (m SimManifest) Validate() error {
+	// Fail closed on the far-end mode before anything reads it. A mode this package
+	// does not know is not a scenario with an unusual far end, it is a typo —
+	// "externl" — and every consumer below reads through FarEndMode(), which passes
+	// an unknown value straight through to comparisons that all miss. The scenario
+	// would then behave as none (no attach, no widget) while its manifest says it
+	// has an external far end, and nothing anywhere would mention the typo.
+	if !validFarEndModes[m.CommandFarEnd] {
+		return fmt.Errorf("manifest %q has CommandFarEnd %q, which is not one of %q, %q or %q",
+			m.Name, m.CommandFarEnd, FarEndNone, FarEndInternal, FarEndExternal)
+	}
+
 	customerTypeTokens := make(map[string]bool, len(m.CustomerTypes))
 	for _, ct := range m.CustomerTypes {
 		if err := core.ValidateToken(ct.Token); err != nil {
@@ -604,14 +677,21 @@ func (m SimManifest) Validate() error {
 		// definition, "these devices answer" is in the manifest — so nothing else
 		// can see both. A definition that does not parse is left to the dashboard
 		// tests, not re-reported here.
-		if !m.CommandFarEnd {
+		//
+		// The gate is on FarEndNone specifically, not on "no cmdreceiver will
+		// attach": FarEndExternal attaches nothing in this process either, but a
+		// board offering control is exactly right for it — the presentation client
+		// IS the device. What the gate refuses is a control surface no one at all
+		// stands behind.
+		if m.FarEndMode() == FarEndNone {
 			var parsed dashboardDefinition
 			if err := json.Unmarshal([]byte(ds.Definition), &parsed); err == nil {
 				for _, w := range parsed.Widgets {
 					if w.Type == commandWidgetType {
 						return fmt.Errorf("dashboard %q carries a %s widget (%q) but the manifest "+
-							"does not declare CommandFarEnd: nothing in the scenario would answer "+
-							"the command, so it would reach SENT and expire", ds.Token, commandWidgetType, w.Id)
+							"declares CommandFarEnd %q: nothing in the scenario would answer "+
+							"the command, so it would reach SENT and expire",
+							ds.Token, commandWidgetType, w.Id, m.FarEndMode())
 					}
 				}
 			}
@@ -621,14 +701,23 @@ func (m SimManifest) Validate() error {
 	// The inverse: a far end is a live broker connection per device. Acquiring one
 	// for a scenario that publishes no command vocabulary means every device
 	// subscribes to a topic nothing can ever publish to.
-	if m.CommandFarEnd {
+	//
+	// It applies to BOTH far-end modes, and external is the case that needs saying
+	// out loud, because there the cost is not a wasted connection: the command
+	// vocabulary is the entire contract between this manifest and a client that
+	// lives in another process. With no CommandDefinition published there is nothing
+	// for the external client to subscribe for and nothing for a board's widget to
+	// enqueue against, so the mode declares a far end that could not be reached even
+	// if it were running.
+	if m.FarEndMode() != FarEndNone {
 		commands := 0
 		for _, p := range m.Profiles {
 			commands += len(p.Commands)
 		}
 		if commands == 0 {
-			return fmt.Errorf("manifest %q declares CommandFarEnd but no profile declares a "+
-				"command definition, so there is nothing for the far end to answer", m.Name)
+			return fmt.Errorf("manifest %q declares CommandFarEnd %q but no profile declares a "+
+				"command definition, so there is nothing for the far end to answer",
+				m.Name, m.FarEndMode())
 		}
 	}
 

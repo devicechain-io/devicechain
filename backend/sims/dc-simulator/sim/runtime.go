@@ -205,6 +205,18 @@ type Runtime struct {
 	// than the absence of a broker because the two are different situations and only
 	// one of them is a decision: /status reports this one as disabled, and the other
 	// never gets that far.
+	//
+	// It means ONE thing in every mode that declares a far end: the operator accepts
+	// that this scenario's commands will not be answered. For FarEndInternal that
+	// skips the attach; for FarEndExternal there was never an attach to skip, but the
+	// acceptance is the same, and in both it relaxes the bootstrap's requirement for
+	// a broker address — which is what makes it a usable escape hatch on a host that
+	// cannot reach the gateway rather than a flag that only helps one mode. /status
+	// reports it as `disabled` for both.
+	//
+	// Against a FarEndNone scenario it accepts nothing, because there is no command
+	// channel to give up: /status stays silent and main.go warns that the flag
+	// changed nothing, so it is never simply ignored.
 	FarEndDisabled bool
 
 	// NewFarEnd builds the command far end. Nil in production (the real MQTT
