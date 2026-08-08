@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
+using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -256,6 +257,24 @@ public sealed class MqttConnectOptions
 
     /// <summary>The broker address.</summary>
     public Uri BrokerUri { get; }
+
+    /// <summary>
+    /// Which IP address family to dial, when the broker host resolves to more than one.
+    /// </summary>
+    /// <remarks>
+    /// 🔴 THIS EXISTS BECAUSE A DUAL-STACK HOST SILENTLY PICKS THE WRONG ONE. On Windows,
+    /// <c>localhost</c> resolves to <c>::1</c> BEFORE <c>127.0.0.1</c>, while a container runtime
+    /// publishes its ports on <c>0.0.0.0</c> — IPv4 only. The IPv6 attempt is refused and the
+    /// caller sees an opaque socket error naming a host that is demonstrably reachable, which
+    /// sends you looking at TLS or credentials instead of at name resolution.
+    /// <para>
+    /// Left <see cref="System.Net.Sockets.AddressFamily.Unspecified"/> the connection tries the
+    /// resolver's own order and, if that fails while the host has addresses in both families,
+    /// retries ONCE over IPv4 — so the common case heals itself rather than requiring the caller
+    /// to have diagnosed it first. Set it explicitly to pin the choice and skip the fallback.
+    /// </para>
+    /// </remarks>
+    public AddressFamily AddressFamily { get; set; } = AddressFamily.Unspecified;
 
     /// <summary>The client id presented in CONNECT.</summary>
     public string ClientId { get; }
