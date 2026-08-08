@@ -1,5 +1,33 @@
 # MQTT device plane — native player verification
 
+> ## ✅ PASSED — 2026-08-08
+>
+> A **native Windows player on IL2CPP** completed the whole device plane against a live cluster:
+>
+> ```
+> [dc] starting — scripting backend: IL2CPP (this is the gate)
+> [dc] READY — connected, authenticated, command subscribe GRANTED
+> [dc] PUBLISHED a measurement (the broker PUBACKed it)
+> [dc] COMMAND received: name=raiseBucket token=il2cpp-gate-132207
+> ```
+> ```
+> sentTime 17:23:01.375 · respondedTime 17:23:01.397 (+22ms) · status SUCCESSFUL
+> responsePayload "acknowledged by the Unity player"
+> ```
+>
+> **Unity 6000.5.3f1 · IL2CPP · StandaloneWindows64 · .NET Standard · Managed Stripping `Low` · URP.**
+> A pass is a statement about that combination and nothing wider — rerun this page for any other one.
+>
+> What it retires: IL2CPP runs MQTTnet's socket and buffer code, the hand-built pinned-CA X.509
+> validator, source-generated JSON and the async state machines across a background dispatch thread,
+> with nothing stripped and no `MissingMethodException`. **The hand-rolled MQTT 3.1.1 fallback the
+> spec held in reserve is not needed.** The `IMqttConnection` seam keeps its other virtues; it is no
+> longer an escape hatch.
+>
+> Two platform defects were found by running this page, both since fixed: a Unity/Mono player could
+> not reach a broker its own host could (dual-stack resolution), and every command response was
+> rejected by a JSON column, stranding commands in `SENT` forever.
+
 **This is the only check that closes the IL2CPP gap, and nothing in CI can substitute for it.**
 
 The C# SDK's MQTT client is gated three ways in CI: unit tests over a fake transport, the real
@@ -15,8 +43,11 @@ of them is proof about Unity:
 
 So a fully green build tells you the code is correct and AOT-shaped. It does not tell you a Unity
 player can open a TLS socket, run MQTTnet's buffer code under IL2CPP's generic sharing, or complete
-a command round trip. **Until the steps below have been run, the MQTT lane is CI-complete and
-player-unverified.** Say it that way; do not round it up.
+a command round trip. **Until the steps below have been run for a given Unity version and platform,
+the MQTT lane is CI-complete and player-unverified for it.** Say it that way; do not round it up.
+
+That wording is not caution for its own sake: running this page found two real defects that every
+CI rung passed straight over, and one of them could only be seen from a player at all.
 
 ## The rule that governs this page
 
@@ -290,6 +321,44 @@ The expected result is a **failure at startup**, not a session that connects and
 never receives a command, the fail-closed subscribe has been lost somewhere between the SDK and
 IL2CPP — and that is precisely the defect this lane was built to prevent, so it is the single most
 valuable thing this page can catch.
+
+## 5.5 The traps this page cost to find
+
+Every one of these produced a run that *looked* like a failure and was not, or a change that looked
+applied and was not. They are listed because each cost real time on 2026-08-08.
+
+- 🔴 **An existing project's embedded package is probably STALE.** `DeviceChainTest`'s copy predated
+  MQTT entirely — no `MQTTnet.dll` at all. Re-stage the **6** assemblies Unity 6 does not ship
+  (`DeviceChain.Sdk`, `MQTTnet`, `Microsoft.Bcl.AsyncInterfaces`, `System.Text.Encodings.Web`,
+  `System.Text.Json`, `System.Threading.Channels`) and never the 5 facades from the prune set. Check
+  the assembly's *contents*, not its timestamp: `strings DeviceChain.Sdk.dll | grep -x MqttDeviceSession`.
+- 🔴 **Unity 6 renamed Build Settings to `File → Build Profiles`** — and **your scene must be in the
+  Scene List**. A build with only `SampleScene` enabled produces a player that starts, does nothing,
+  and is indistinguishable from a failed connection.
+- 🔴 **A `[SerializeField]` default cannot be changed from code.** The scene keeps the value saved
+  with it, so editing the default is a silent no-op that reads as "the fix didn't work". The wait
+  window is a `const` for exactly this reason.
+- 🔴 **A fullscreen player gets closed mid-connect**, and the truncated log reads as a failure. The
+  sample forces windowed and quits itself.
+- 🔴 **Timing: a command is published 10–20s after enqueue**, on a delivery sweep that ticks about
+  every 15s. Four runs missed because a 45s window closed seconds before the command arrived — none
+  of them a defect. Give the player minutes, not seconds.
+- 🔴 **`md5` of the DLL inside `_Data/Managed/` will NOT match the staged one** — Unity re-processes
+  assemblies at build time. Compare behaviour, or hash what you stage rather than what ships.
+- 🔴 **IL2CPP needs a real C++ toolchain, and "installed" is not the same as "usable".** VS 2022
+  Community was present with **no `VC/Tools/MSVC` directory at all**, and `Windows Kits\10` held
+  `Catalogs`/`Redist`/`UnionMetadata` but no `Include/` or `Lib/`. Install the **Desktop development
+  with C++** workload — *not* "Game development with Unity", which is the tempting wrong answer and
+  brings no compiler. Unity 6000.5.3f1 wants **VS 2022**; a VS 2026 install did not satisfy it.
+  Verify all three paths before building:
+
+  ```bash
+  ls "/c/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC"   # e.g. 14.44.35207
+  ls "/c/Program Files (x86)/Windows Kits/10/Include"                          # e.g. 10.0.26100.0
+  ls "/c/Program Files (x86)/Windows Kits/10/Lib"                              # e.g. 10.0.26100.0
+  ```
+
+  Restart Unity afterwards — it probes for the toolchain at startup.
 
 ## 6. If it fails
 
