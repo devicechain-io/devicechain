@@ -449,3 +449,192 @@ func TestValidateRequiresACommandDefinitionForEveryFarEndMode(t *testing.T) {
 		}
 	}
 }
+
+// ---- The sendCommand command-key cross-check ------------------------------------
+
+// The fixture the command-key tests share. It carries TWO profiles, and both of the things
+// that makes possible are load-bearing — a one-profile fixture cannot fail either way:
+//
+//   - The rule lives on the SECOND profile while the FIRST declares a command of its own.
+//     With one profile, a manifest-wide lookup and a per-profile one are the same function,
+//     so the scoping decision Validate argues for at length would be pinned by nothing.
+//     Hoisting `commandKeys` above the profile loop must break this fixture.
+//   - Each command's Token, CommandKey and Name are three DIFFERENT strings, so a probe can
+//     name the wrong one of the three. That is the conflation the whole check exists for.
+//     A fixture where they coincide would pass against a lookup that accepted all three.
+//
+// Command tokens share one namespace across the manifest (Validate rejects a repeat), so
+// the two profiles' commands are deliberately distinct in every field.
+//
+// The rule is built through ThresholdAlarmRule rather than a hand-written JSON literal on
+// purpose. A literal would let the fixture and the producer drift — the check would keep
+// passing against a document shape nothing actually emits — which is the same
+// measure-the-fixture failure the decode mirror in detectionrule_test.go warns about.
+const (
+	// Declared on the rule's OWN profile: the one key that must be accepted.
+	ownCmdToken = "own-cmd"
+	ownCmdKey   = "raiseBucket"
+	ownCmdName  = "Raise Bucket"
+	// Declared on the OTHER profile: a real, published, grammar-valid command key that
+	// this rule still cannot reach.
+	farCmdKey = "gotoRefuel"
+)
+
+func commandRuleManifest(commandKey string) SimManifest {
+	m := testManifest()
+	m.Profiles[0].Commands = []CommandSpec{
+		{Token: "far-cmd", CommandKey: farCmdKey, Name: "Go Refuel"},
+	}
+	m.Profiles = append(m.Profiles, ProfileSpec{
+		Token:    "other-profile",
+		Name:     "Other Profile",
+		Category: "test",
+		Metrics:  []MetricSpec{{Key: "speed_kph", Name: "Speed", DataType: "DOUBLE", Unit: "kph"}},
+		Commands: []CommandSpec{
+			{Token: ownCmdToken, CommandKey: ownCmdKey, Name: ownCmdName},
+		},
+		DetectionRules: []DetectionRuleSpec{
+			ThresholdAlarmRule{
+				Token:      "test-rule",
+				Name:       "Test rule",
+				Metric:     "speed_kph",
+				Op:         OpLt,
+				Threshold:  15,
+				Severity:   SeverityMajor,
+				AlarmKey:   "test-alarm",
+				CommandKey: commandKey,
+				Enabled:    true,
+			}.Spec(),
+		},
+	})
+	return m
+}
+
+// 🔴 THE SEAM: nothing on either side of the wire compares a rule's sendCommand key against
+// a command vocabulary. event-processing's compiler is state-free by design and checks only
+// that the key is a grammar-valid token; this manifest otherwise treats Definition as
+// opaque JSON. So "gotoRefue1" publishes clean, lands in the authored-rules fixture,
+// compiles, and reports ACTIVE to the liveness assert — which proves the rule COMPILED and
+// says nothing about whether it can act. It fails for the first time when the rule FIRES,
+// as a dead-letter in another service with nothing naming the manifest line that wrote it.
+//
+// BOTH HALVES ARE HERE and neither is optional: a cross-check that rejects every key looks
+// exactly like a working one from the typo half alone, and one that accepts every key looks
+// exactly like a working one from the good half alone.
+func TestValidateRejectsARuleSendingACommandTheProfileDoesNotDeclare(t *testing.T) {
+	// Every string here is a way of being wrong that PUBLISHES CLEAN, and each one is a
+	// different mistake — which is why one probe would not do. A lookup widened to accept
+	// the Token, or to span the whole manifest, satisfies a single-probe test exactly as
+	// well as the correct one does.
+	for _, tc := range []struct {
+		name string
+		key  string
+	}{
+		// A transposed character. The classic typo, and the only one a careless
+		// eyeballing catches.
+		{"a typo'd key", "gotoRefue1"},
+		// 🔴 A REAL, DECLARED, PUBLISHED command key — on the OTHER profile. This is the
+		// case a manifest-wide lookup blesses, and it dead-letters identically to the
+		// typo: the rule fires for devices carrying ITS profile, and the command goes to
+		// the device the detection fired for, which has no such key in its vocabulary.
+		{"a key declared only on another profile", farCmdKey},
+		// 🔴 The CommandSpec's own Token, from the rule's own profile. Three different
+		// strings sit on that struct and all three are grammar-valid tokens, so a lookup
+		// that "helpfully" accepted the token too would take this and produce a rule that
+		// compiles, reports ACTIVE and cannot act. This is the motivating conflation.
+		{"the command's Token instead of its CommandKey", ownCmdToken},
+		// The display Name, same profile — the other half of that conflation, and the one
+		// an author copying from the console UI is most likely to reach for.
+		{"the command's display Name instead of its CommandKey", ownCmdName},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := commandRuleManifest(tc.key).Validate()
+			if err == nil {
+				t.Fatalf("a rule sending %q was accepted; it would publish, compile, report "+
+					"%s, and dead-letter on its first firing", tc.key, RuleStatusActiveWire)
+			}
+			if !strings.Contains(err.Error(), tc.key) {
+				t.Errorf("error %q does not quote the offending command key %q, so an author "+
+					"cannot see which of the similar strings is wrong", err, tc.key)
+			}
+			if !strings.Contains(err.Error(), "test-rule") {
+				t.Errorf("error %q does not name the rule, so an author cannot find the line", err)
+			}
+		})
+	}
+
+	// The good half. The key declared on the rule's OWN profile must pass, or every
+	// manifest in the module is rejected and every rejection above reads identically.
+	if err := commandRuleManifest(ownCmdKey).Validate(); err != nil {
+		t.Errorf("a rule sending its own profile's declared command key %q was rejected: %v",
+			ownCmdKey, err)
+	}
+
+	// And the check must not fire on a rule with NO sendCommand at all — the shape every
+	// existing scenario publishes. A check that treated "no command action" as "an
+	// undeclared command" would reject widgetlab and buildingpulse outright.
+	none := commandRuleManifest("")
+	for i := range none.Profiles {
+		none.Profiles[i].Commands = nil
+	}
+	none.CommandFarEnd = FarEndNone
+	if err := none.Validate(); err != nil {
+		t.Errorf("a rule with no sendCommand action was rejected: %v", err)
+	}
+}
+
+// The unit under the manifest check, exercised directly for the shapes Validate cannot
+// easily hand it: a definition that does not parse, and action lists ThresholdAlarmRule
+// cannot build — in particular the two REACT action types it does not render at all
+// (httpCall, publish), which are what pin the discriminator match to == sendCommand rather
+// than to != raiseAlarm.
+//
+// The non-parsing case must return NO OPINION rather than an error. json.Valid in Validate
+// already owns malformed JSON, and a second complaint here would give one mistake two
+// messages — the same reasoning ruleTopLevelMetric states for returning "".
+func TestRuleSendCommandKeysReadsOnlySendCommandActions(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		definition string
+		want       []string
+	}{
+		{"not JSON at all", "{not json", nil},
+		{"no actions key", `{"name":"r","type":"threshold"}`, nil},
+		{"only a raiseAlarm", `{"actions":[{"type":"raiseAlarm","raiseAlarm":{"alarmKey":"a"}}]}`, nil},
+		// 🔴 THE MATCH RUNS ON THE DISCRIMINATOR, AND IT MUST BE == sendCommand RATHER THAN
+		// != raiseAlarm. rules.ActionType has FOUR values, not two; a chain containing an
+		// httpCall or a publish is a well-formed rule that names no command at all. Written
+		// the negative way, each of these yields "" as a command key and Validate then
+		// rejects a perfectly good manifest for sending a command it never sent. That is
+		// the loud direction, which is exactly why it needs a test — a wrong-but-loud check
+		// still survives every mutation aimed at the silent one.
+		{"an httpCall contributes nothing",
+			`{"actions":[{"type":"httpCall","httpCall":{"url":"https://example.invalid/hook"}}]}`, nil},
+		{"a publish contributes nothing",
+			`{"actions":[{"type":"publish","publish":{"connectorRef":"conn-a"}}]}`, nil},
+		{"all four action types, only the sendCommand counted",
+			`{"actions":[{"type":"raiseAlarm","raiseAlarm":{"alarmKey":"a"}},` +
+				`{"type":"httpCall","httpCall":{"url":"https://example.invalid/hook"}},` +
+				`{"type":"sendCommand","sendCommand":{"command":"doThing"}},` +
+				`{"type":"publish","publish":{"connectorRef":"conn-a"}}]}`,
+			[]string{"doThing"}},
+		{"one sendCommand", `{"actions":[{"type":"sendCommand","sendCommand":{"command":"doThing"}}]}`,
+			[]string{"doThing"}},
+		{"mixed chain, in either order",
+			`{"actions":[{"type":"sendCommand","sendCommand":{"command":"a"}},` +
+				`{"type":"raiseAlarm","raiseAlarm":{"alarmKey":"k"}},` +
+				`{"type":"sendCommand","sendCommand":{"command":"b"}}]}`,
+			[]string{"a", "b"}},
+		// An empty command is REPORTED, not skipped. Skipping it would make "a sendCommand
+		// naming nothing" the one action shape this check has no opinion about, which is
+		// the quietest place in the document for it to hide.
+		{"a sendCommand naming nothing", `{"actions":[{"type":"sendCommand","sendCommand":{}}]}`,
+			[]string{""}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ruleSendCommandKeys(tc.definition); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("ruleSendCommandKeys(%s) = %#v, want %#v", tc.definition, got, tc.want)
+			}
+		})
+	}
+}
