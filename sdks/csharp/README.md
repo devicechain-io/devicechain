@@ -87,6 +87,16 @@ dotnet build -c Release   # both TFMs; warnings are errors
 dotnet test  -c Release
 ```
 
+> If `dotnet` is "not found", check `ls ~/.dotnet/dotnet` before installing anything — an SDK placed
+> there by `dotnet-install.sh` is not on `PATH`, and the shell's suggestion to `snap install dotnet`
+> would add a second one beside it. `export PATH="$HOME/.dotnet:$PATH"`.
+
+There is also a manual rig, `tools/DeviceChain.Sdk.TrustProbe`, which drives the MQTT transport's
+pinned-CA trust decision against a **real** broker. It needs a live cluster, so it is not a CI gate
+(CI compiles it, and its real-broker test rung runs over plaintext) — but it is the only thing that
+exercises that path through an actual TLS handshake, and it is the cheapest pre-flight before the
+Unity player check. See [`sdks/unity/MQTT-PLAYER-VERIFICATION.md`](../unity/MQTT-PLAYER-VERIFICATION.md).
+
 ## Not yet (documented follow-ups)
 
 - Subscription **auto-reconnect** on a dropped socket (a consumer re-subscribes today). The MQTT

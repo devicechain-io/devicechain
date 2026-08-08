@@ -94,6 +94,11 @@ the shipped transport against your live broker and separates the two things that
 identically from a player log ("it didn't connect"): a TLS/pinning problem and an auth problem.
 
 ```bash
+# A dotnet installed by dotnet-install.sh lands in ~/.dotnet and is NOT on PATH; the shell then
+# suggests `snap install dotnet`, which would put a SECOND SDK on the box. Check before installing:
+#   ls ~/.dotnet/dotnet && ~/.dotnet/dotnet --version
+export PATH="$HOME/.dotnet:$PATH"
+
 kubectl -n dc-system get secret dc-nats-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/ca.pem
 dotnet run --project sdks/csharp/tools/DeviceChain.Sdk.TrustProbe -- /tmp/ca.pem
 ```

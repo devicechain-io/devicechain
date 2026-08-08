@@ -172,6 +172,10 @@ cd backend/cli && make build
 cd frontend && npm ci && npm run codegen && npm run typecheck && npm run build
 
 # C# SDK (public .NET/Unity client SDK — sdks/csharp, ADR-035 slice 3; AOT/IL2CPP-safe)
+# An SDK installed by dotnet-install.sh lands in ~/.dotnet and is NOT on PATH. When it is missing
+# the shell helpfully suggests `snap install dotnet`, which installs a SECOND SDK alongside the one
+# already there — check `ls ~/.dotnet/dotnet` before believing "not found" means "not installed".
+export PATH="$HOME/.dotnet:$PATH"
 cd sdks/csharp && dotnet build -c Release && dotnet test -c Release
 
 # Unity package tier-1 check (sdks/unity, ADR-035 slice 4): compile the package C# against real
