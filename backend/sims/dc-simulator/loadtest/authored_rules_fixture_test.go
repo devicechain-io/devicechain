@@ -216,6 +216,7 @@ var harnessRuleBuilders = []harnessRuleBuilder{
 var mirroredAlarmSeverityWire = map[string]string{
 	"buildingpulse": sim.BuildingpulseAlarmSeverityWire,
 	"widgetlab":     sim.WidgetlabAlarmSeverityWire,
+	"sitepulse":     sim.SitepulseAlarmSeverityWire,
 	"loadtest":      harnessAlarmSeverityWire,
 }
 

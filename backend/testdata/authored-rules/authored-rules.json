@@ -25,6 +25,14 @@
       "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"harness-overtemp\"},\"type\":\"raiseAlarm\"}],\"name\":\"Load-test harness over-temp\",\"severity\":\"major\",\"type\":\"threshold\",\"when\":{\"metric\":\"temp\",\"op\":\"gt\",\"threshold\":30}}"
     },
     {
+      "producer": "sitepulse",
+      "ruleToken": "sp-rule-lowfuel",
+      "profileToken": "sp-equipment-profile",
+      "enabled": true,
+      "alarmSeverityWire": "MAJOR",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"low-fuel\"},\"type\":\"raiseAlarm\"},{\"sendCommand\":{\"command\":\"goto-refuel\"},\"type\":\"sendCommand\"}],\"name\":\"Site Pulse low fuel\",\"severity\":\"major\",\"type\":\"threshold\",\"when\":{\"metric\":\"fuel_pct\",\"op\":\"lt\",\"threshold\":15}}"
+    },
+    {
       "producer": "widgetlab",
       "ruleToken": "wl-over-temp",
       "profileToken": "wl-sensor-profile",

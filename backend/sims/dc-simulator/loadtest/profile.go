@@ -131,6 +131,30 @@ func (p Profile) Validate() error {
 	if p.Manifest == "" {
 		return fmt.Errorf("manifest is required")
 	}
+	// 🔴 REFUSE A SCENARIO THAT GENERATES NOTHING, UP FRONT — before Run provisions a
+	// topology, before NewRuntime opens a session, and above all before the hold window.
+	//
+	// Without this the run is not merely wasted, it MISREPORTS ITS OWN FAILURE: the
+	// driver emits nothing, the oracle reconciles 0 persisted against 0 accepted (which
+	// passes), and the verdict turns on the MinAccepted floor, whose message is about a
+	// job that lost its load flags. An operator reading it goes looking for a missing
+	// --devices. Nothing downstream can name the real cause, because by then the only
+	// evidence left is a zero.
+	//
+	// It lives HERE rather than in Run because Validate is the one gate every harness
+	// shares — Run, RunMonitored, RunSelftest and the contention config all call it —
+	// so a harness added later inherits the refusal instead of having to remember it.
+	//
+	// An UNREGISTERED id is deliberately not this check's business: it falls through to
+	// sim.NewSim, which already reports it with the known-ids list. Reporting it twice
+	// in two voices is how a caller learns to read neither.
+	if m, ok := sim.ScenarioManifest(p.Manifest); ok && m.DevicesPublishTheirOwnTelemetry {
+		return fmt.Errorf("scenario %q publishes its telemetry from its own devices, not from "+
+			"Sim.Tick, so a load run would drive it for the whole hold and accept zero events — "+
+			"failing the min-accepted floor as though its load flags had been lost, rather than "+
+			"reporting the scenario that emits nothing by design. Load-drivable scenarios: %v",
+			p.Manifest, sim.LoadDrivableManifestIds())
+	}
 	if p.Hold < 0 {
 		return fmt.Errorf("hold %s is negative", p.Hold)
 	}

@@ -438,6 +438,7 @@ var Registry = map[string]func(int64, Load) Sim{
 	"devicepulse":   NewDevicepulse,
 	"buildingpulse": NewBuildingpulse,
 	"widgetlab":     NewWidgetlab,
+	"sitepulse":     NewSitepulse,
 }
 
 // ManifestIds returns the Registry's known manifest ids, sorted — a single
@@ -452,19 +453,71 @@ func ManifestIds() []string {
 	return ids
 }
 
+// ScenarioManifest returns a registered scenario's manifest AS DECLARED, and whether
+// the id is registered at all.
+//
+// It is how code outside this package asks a scenario a question about itself without
+// hand-rolling a Registry lookup. The lookups had already been written by hand in
+// several places, each free to disagree about what "the scenario's own shape" means —
+// a seed, a Load, or an override already applied — and a caller that accidentally
+// asked the OVERRIDDEN manifest would get an answer its own argument determined.
+//
+// A zero Load deliberately, for exactly that reason: every question asked through here
+// is about the scenario as its author declared it. The seed is fixed and arbitrary
+// because nothing reachable this way depends on it — a manifest's flags, profiles and
+// populations are seed-independent, and only Expand's rendered credentials are not.
+func ScenarioManifest(manifestId string) (SimManifest, bool) {
+	newDriver, ok := Registry[manifestId]
+	if !ok {
+		return SimManifest{}, false
+	}
+	return newDriver(1, Load{}).Manifest(), true
+}
+
 // ResizableManifestIds returns the manifest ids a device-count override applies
 // to — every registered scenario except the composed fixtures, which refuse one
 // (see SimManifest.FixedTopology).
 //
-// It exists because "the scenarios that exist" and "the scenarios a load tool can
-// drive" stopped being the same set. A tool that sizes its own runs must offer
-// THIS list: naming a fixed-topology scenario in help text advertises a run that
-// fails at startup, which is a worse form of the stale list that deriving from
-// the registry was meant to fix.
+// It exists because "the scenarios that exist" and "the scenarios a tool can size"
+// stopped being the same set. A tool that sizes its own runs must offer THIS list:
+// naming a fixed-topology scenario in help text advertises a run that fails at
+// startup, which is a worse form of the stale list that deriving from the registry
+// was meant to fix.
+//
+// 🔴 IT IS NOT THE LIST A LOAD TOOL WANTS, and reading it as one is the mistake this
+// comment now exists to stop. Resizable answers "can --devices change its topology",
+// which is a strictly weaker property than "a load run can drive it" — see
+// LoadDrivableManifestIds, which is what an offering of SCENARIOS TO MEASURE must be
+// built from.
 func ResizableManifestIds() []string {
 	ids := make([]string, 0, len(Registry))
-	for id, newDriver := range Registry {
-		if !newDriver(1, Load{}).Manifest().FixedTopology {
+	for id := range Registry {
+		if m, _ := ScenarioManifest(id); !m.FixedTopology {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// LoadDrivableManifestIds returns the manifest ids a LOAD RUN can actually drive:
+// resizable, AND generating its telemetry inside this process.
+//
+// The second condition is the one that was missing. A load harness calls Sim.Tick
+// directly and reconciles what the DRIVER accepted, so a scenario whose devices
+// publish their own telemetry (SimManifest.DevicesPublishTheirOwnTelemetry) applies
+// zero load however it is sized — it holds for the full window and then fails the
+// MinAccepted floor as though its load flags had been lost.
+//
+// A SECOND list rather than a narrowing of ResizableManifestIds, because the two
+// answer different questions for different callers and collapsing them would leave
+// the resize tests silently no longer covering a scenario that IS resizable. Both are
+// derived from the registry for the same reason: a hand-kept list of either goes stale
+// on the next scenario, which is the specific failure both of them replaced.
+func LoadDrivableManifestIds() []string {
+	ids := make([]string, 0, len(Registry))
+	for _, id := range ResizableManifestIds() {
+		if m, _ := ScenarioManifest(id); !m.DevicesPublishTheirOwnTelemetry {
 			ids = append(ids, id)
 		}
 	}

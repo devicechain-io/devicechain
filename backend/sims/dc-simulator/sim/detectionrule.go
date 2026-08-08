@@ -122,15 +122,6 @@ type ThresholdAlarmRule struct {
 	// dead-letters — with nothing anywhere pointing back at the manifest line that wrote it.
 	// Manifest.Validate closes that seam on this side; see ruleSendCommandKeys.
 	//
-	// 🔴 NO REGISTERED SCENARIO SETS THIS YET, so backend/testdata/authored-rules contains
-	// no two-action document and event-processing's real publish gate never sees this shape
-	// in CI. The fixture is the usual judge of whether a rendered rule is valid, and on this
-	// one field it is currently silent — the only compiler verdict the two-action form has
-	// ever had is a by-hand run of ValidateDetectionRules during review (valid, alongside
-	// seven negative controls that were correctly rejected). The first scenario to set this
-	// field restores the normal gate; until then the tests in this package are the whole of
-	// it. Delete this paragraph when a scenario lands in the registry with a CommandKey.
-	//
 	// ONE command, not a slice. A rule sending two commands is not a modelled case, and a
 	// slice invites the failure that is: event-processing rejects an exact-duplicate action
 	// at publish, so a [x, x] slice takes the whole profile version down with it.

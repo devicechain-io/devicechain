@@ -52,11 +52,16 @@ func main() {
 		"the ADR-063 contention manual_floor the operator set on event-sources (0..3). 0 = negative control (no tenant may shed)")
 	// Built from the registry rather than spelled out, because the hardcoded list
 	// this replaces had already gone stale by one scenario. It offers only the
-	// RESIZABLE scenarios: withDefaults forces a device count on every run, so a
-	// fixed-topology scenario is refused at startup — listing one would be help
-	// text advertising a run that cannot happen.
+	// LOAD-DRIVABLE scenarios, which is two conditions and not one: withDefaults
+	// forces a device count on every run, so a fixed-topology scenario is refused at
+	// startup; and a scenario whose devices publish their own telemetry emits nothing
+	// from Sim.Tick, so it would hold for the full window, apply zero load and fail the
+	// min-accepted floor. Either way, listing it would be help text advertising a run
+	// that cannot pass — which is precisely what deriving this list from the registry
+	// was meant to prevent, and what ResizableManifestIds alone stopped preventing the
+	// day the first such scenario registered.
 	manifest := flag.String("manifest", envOr("DC_LOADTEST_MANIFEST", "devicepulse"),
-		"scenario each probe tenant drives ("+strings.Join(sim.ResizableManifestIds(), ", ")+")")
+		"scenario each probe tenant drives ("+strings.Join(sim.LoadDrivableManifestIds(), ", ")+")")
 	devices := flag.Int("devices", envIntOr("DC_LOADTEST_DEVICES", 0),
 		"devices per probe tenant (0 = default; sizes the drive rate)")
 	emitInterval := flag.Duration("emit-interval", envDurationOr("DC_LOADTEST_EMIT_INTERVAL", 0),

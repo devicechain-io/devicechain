@@ -160,42 +160,171 @@ func TestAuthoredSimRulesPassThePublishGate(t *testing.T) {
 	}
 }
 
-// 🔴 The gate above is worth exactly what the validator rejects. If the rule reader ever
-// stopped failing closed — a DisallowUnknownFields dropped, a switch to a plain
-// json.Unmarshal — every fixture rule would still pass and the typo class this whole
-// arrangement exists to catch would sail through green.
+// 🔴 The gate above is worth exactly what the validator rejects. If it ever stopped
+// rejecting a mistyped key, every fixture rule would still pass and the typo class this
+// whole arrangement exists to catch would sail through green.
 //
 // So mutate the REAL fixture definition, not a hand-written stand-in: the mutation is
 // applied to the same bytes the gate just accepted, or it proves something about a
 // string literal in this file instead.
 //
-// Note the mutation targets `"threshold":` WITH ITS COLON. Replacing bare `"threshold"`
-// looks equivalent and is not — `"type":"threshold"` carries the same quoted text as a
-// VALUE, so the first replacement lands there, produces an unknown rule TYPE rather than
-// an unknown FIELD, and tests a different rejection path entirely. It did exactly that
-// on the first run of this file.
+// 🔴 WHAT REJECTS A MISTYPED KEY IS TWO LAYERS, NOT ONE — measured, and this paragraph
+// replaces one that named only the first. An earlier version said the control stood
+// behind `DisallowUnknownFields` specifically, so that dropping it would turn this test
+// green. Deleting `dec.DisallowUnknownFields()` from rules.Decode was tried, and the
+// misspelling mutations below stayed RED: the strict decode rejects the unknown field,
+// and failing that, the dropped field leaves a hole SEMANTIC validation rejects on its
+// own (`when: a structured comparison needs a threshold…`, `actions: action N command:
+// identifier "" is not valid…`).
+//
+// That is defence in depth and it is welcome, but it means neither misspelling mutation
+// pins the decode by itself. The third entry in the table below exists to close that: it
+// injects an unknown field rather than corrupting a known one, so there is no hole for
+// semantics to find and the fail-closed decode is the only thing left that can say no.
+// Anyone tempted to relax either layer on the grounds that "the other one covers it"
+// should note that this file now measures both.
+//
+// 🔴 EVERY KEY IS TARGETED WITH ITS COLON, and that is not a style choice — it is the
+// difference between testing the unknown-FIELD path and testing something else entirely.
+// Replacing bare `"threshold"` looks equivalent and is not: `"type":"threshold"` carries
+// the same quoted text as a VALUE, so the first replacement lands there and produces an
+// unknown rule TYPE. It did exactly that on the first run of this file. The `survives`
+// list below is how each mutation now PROVES it missed its own decoy rather than
+// asserting it in a comment.
+//
+// 🔴 AND IT COVERS EVERY RULE, NOT THE FIRST ONE. This loop used to `return` after the
+// first match, which was buildingpulse — so the two-action documents (sitepulse's
+// low-fuel rule and the load-test command harness's) had NO committed fail-closed
+// control at all, while the loop read exactly as though it covered them. A control that
+// stops at the first subject is a control over one subject.
+type strayKeyMutation struct {
+	// what names the rule shape this mutation exercises, for the failure message.
+	what string
+	// key is the field key, WITH its colon; typo is the misspelling swapped in.
+	key, typo string
+	// survives are substrings that must be present BEFORE and UNCHANGED AFTER the
+	// replacement — the decoys this mutation must not have hit. For the command key
+	// those are the sendCommand discriminator in both of its spellings, since the
+	// envelope repeats it as a key AND as a value and either would be the wrong target.
+	survives []string
+}
+
+var strayKeyMutations = []strayKeyMutation{
+	{
+		what: "the leaf comparison's bound",
+		key:  `"threshold":`, typo: `"treshold":`,
+		survives: []string{`"type":"threshold"`},
+	},
+	{
+		// The two-action shape. It reached the fixture with sitepulse and is carried by
+		// the load-test command harness too; before this entry existed, neither had a
+		// per-rule control and the only verdict the shape had ever had was a by-hand run.
+		what: "sendCommand's command key",
+		key:  `"command":`, typo: `"commnd":`,
+		survives: []string{`"sendCommand":`, `"type":"sendCommand"`},
+	},
+	{
+		// 🔴 THE ONLY ONE OF THE THREE THAT ISOLATES THE STRICT DECODE, and it is here
+		// because MEASUREMENT contradicted this file's own long-standing claim. The header
+		// above says that if the reader "stopped failing closed — a DisallowUnknownFields
+		// dropped — every fixture rule would still pass". That was tested by deleting
+		// `dec.DisallowUnknownFields()` from rules.Decode, and BOTH mutations above stayed
+		// red, so the control did not do what it said.
+		//
+		// The reason is defence in depth that nobody had written down: a MISSPELLED key is
+		// caught twice over. The strict decode rejects the unknown field; and if it did
+		// not, dropping the field leaves a hole that SEMANTIC validation then rejects on
+		// its own — measured as `when: a structured comparison needs a threshold or a
+		// threshold attribute` and `actions: action N command: identifier "" is not valid`.
+		// Good news for the platform, useless for a control that means to pin one layer.
+		//
+		// So this mutation INJECTS a wholly unknown field instead of misspelling a known
+		// one. It has no semantic footprint — nothing downstream misses a value, because
+		// nothing was taken away — which leaves the fail-closed decode as the only thing
+		// that can reject it. Delete DisallowUnknownFields and THIS entry goes red alone.
+		//
+		// `{"actions":` is the anchor because the definitions are marshalled from a Go map,
+		// so their keys are sorted and "actions" is first. If a rule ever gains a key
+		// sorting ahead of it the anchor stops matching, and the counter control below
+		// fails loudly rather than quietly exercising nothing.
+		what: "a wholly unknown top-level field, which only the strict decode can reject",
+		key:  `{"actions":`, typo: `{"strayField":true,"actions":`,
+		survives: []string{`"actions":`, `"type":"threshold"`},
+	},
+}
+
 func TestThePublishGateStillRejectsAStrayKey(t *testing.T) {
-	for _, r := range loadAuthoredSimRules(t) {
-		const key = `"threshold":`
-		if !strings.Contains(r.Definition, key) {
-			continue
+	rules := loadAuthoredSimRules(t)
+
+	for _, m := range strayKeyMutations {
+		mutated := 0
+		for _, r := range rules {
+			// Exactly one occurrence, or `strings.Replace(..., 1)` is choosing between
+			// candidates. Two occurrences would leave the second one valid, so the document
+			// might be rejected for a reason this test did not author — and the count is
+			// cheap, so there is no reason to find out later.
+			switch n := strings.Count(r.Definition, m.key); n {
+			case 0:
+				continue
+			case 1:
+			default:
+				t.Fatalf("%s/%s carries %s %d times; a single-replacement mutation would be "+
+					"ambiguous about which one it hit", r.Producer, r.RuleToken, m.key, n)
+			}
+
+			// The decoys must be present before the replacement, or "unchanged after" is a
+			// claim about nothing.
+			before := map[string]int{}
+			for _, s := range m.survives {
+				before[s] = strings.Count(r.Definition, s)
+			}
+
+			def := strings.Replace(r.Definition, m.key, m.typo, 1)
+			// Prove the bytes moved, rather than trusting the replace.
+			if def == r.Definition {
+				t.Fatalf("the %s mutation did not change %s/%s, so it proved nothing",
+					m.key, r.Producer, r.RuleToken)
+			}
+			if !strings.Contains(def, m.typo) {
+				t.Fatalf("the %s mutation did not leave %s in %s/%s", m.key, m.typo, r.Producer, r.RuleToken)
+			}
+			// Prove it hit the FIELD KEY and not a decoy carrying the same text.
+			for _, s := range m.survives {
+				if got := strings.Count(def, s); got != before[s] {
+					t.Fatalf("the %s mutation changed %q in %s/%s (%d -> %d): it landed on the "+
+						"decoy rather than the field key, so this exercises a different "+
+						"rejection path than the unknown-field one it claims to",
+						m.key, s, r.Producer, r.RuleToken, before[s], got)
+				}
+			}
+			mutated++
+
+			if res := validateAuthored(t, []authoredRule{{
+				Producer: r.Producer, RuleToken: r.RuleToken,
+				ProfileToken: r.ProfileToken, Enabled: r.Enabled, Definition: def,
+			}}); res.Valid() {
+				// Worded for BOTH kinds this table now carries — two of the entries misspell
+				// an existing key and the third injects one that was never there, and calling
+				// the injection a "misspelling" would send a reader looking for a typo that
+				// is not in the document.
+				t.Errorf("the publish gate ACCEPTED a mutated rule: %s (%s -> %s, %s/%s) — it "+
+					"is no longer failing closed, so TestAuthoredSimRulesPassThePublishGate is "+
+					"now green over anything:\n%s",
+					m.what, m.key, m.typo, r.Producer, r.RuleToken, def)
+			}
 		}
-		mutated := r
-		mutated.Definition = strings.Replace(r.Definition, key, `"treshold":`, 1)
-		if mutated.Definition == r.Definition {
-			t.Fatalf("the mutation did not apply to %s/%s, so this proved nothing",
-				r.Producer, r.RuleToken)
+
+		// 🔴 THE COUNTER-BASED NEGATIVE CONTROL. A mutation whose key no longer appears in
+		// any authored rule silently exercises nothing, and the loop above reports success
+		// by having found nothing to complain about — the precise shape of vacuous green
+		// this whole file exists to refuse. It has to say so about ITSELF.
+		if mutated == 0 {
+			t.Errorf("no authored rule carries %s (%s), so that stray-key control never ran "+
+				"and the gate's fail-closed behaviour is unpinned for this rule shape. Either "+
+				"the producer stopped emitting the key, or the fixture is stale.", m.key, m.what)
 		}
-		if res := validateAuthored(t, []authoredRule{mutated}); res.Valid() {
-			t.Errorf("the publish gate ACCEPTED a rule with a misspelled threshold key "+
-				"(%s/%s) — it is no longer failing closed on unknown fields, so "+
-				"TestAuthoredSimRulesPassThePublishGate is now green over anything:\n%s",
-				r.Producer, r.RuleToken, mutated.Definition)
-		}
-		return
+		t.Logf("%s (%s): mutated and rejected %d of %d authored rules", m.key, m.what, mutated, len(rules))
 	}
-	t.Fatal("no authored rule carries a threshold key, so the stray-key control never ran " +
-		"and the gate's fail-closed behaviour is unpinned")
 }
 
 // The sim's post-publish liveness assert accepts exactly one rule-health status and
