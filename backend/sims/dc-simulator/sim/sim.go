@@ -287,6 +287,7 @@ func (s *buildingpulse) Manifest() SimManifest {
 						Token:     BuildingpulseRuleToken,
 						Name:      buildingpulseRuleName,
 						Metric:    BuildingpulseTemperatureKey,
+						Op:        OpGt,
 						Threshold: BuildingpulseAlarmThreshold,
 						Severity:  BuildingpulseSeverity,
 						AlarmKey:  BuildingpulseAlarmKey,

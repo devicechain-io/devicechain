@@ -260,6 +260,7 @@ func (s *widgetlab) Manifest() SimManifest {
 						Token:     WidgetlabRuleToken,
 						Name:      "Widget Lab over-temperature",
 						Metric:    WidgetlabTemperatureKey,
+						Op:        OpGt,
 						Threshold: WidgetlabAlarmThreshold,
 						Severity:  WidgetlabSeverity,
 						AlarmKey:  WidgetlabAlarmKey,

@@ -549,6 +549,11 @@ func (m SimManifest) Validate() error {
 		for _, mx := range p.Metrics {
 			metricKeys[mx.Key] = true
 		}
+		// The keys a sendCommand action on THIS profile's rules may name — the CommandKey,
+		// which is a different string from the CommandSpec.Token validated just below and
+		// from the display Name. Collected here so the rule loop further down can check
+		// against it; see the cross-check there for why the scope is one profile.
+		commandKeys := make(map[string]bool, len(p.Commands))
 		for _, c := range p.Commands {
 			if err := core.ValidateToken(c.Token); err != nil {
 				return fmt.Errorf("command definition token: %w", err)
@@ -578,6 +583,7 @@ func (m SimManifest) Validate() error {
 					"silently publish without it", c.Token)
 			}
 			versionContentTokens[c.Token] = true
+			commandKeys[c.CommandKey] = true
 		}
 		for _, r := range p.DetectionRules {
 			if err := core.ValidateToken(r.Token); err != nil {
@@ -615,6 +621,34 @@ func (m SimManifest) Validate() error {
 				return fmt.Errorf("detection rule %q declares metric %q but its predicate reads %q; "+
 					"the declared one is what Validate checks against the profile, so the rule "+
 					"would pass this check and still never fire", r.Token, r.Metric, predicate)
+			}
+			// The sendCommand twin of the metric checks above, and the seam it closes is
+			// open on BOTH sides of the wire: nothing anywhere else compares a rule's
+			// command key against a command vocabulary. event-processing's compiler is
+			// deliberately state-free and validates only that the key is a grammar-valid
+			// token; this manifest otherwise judges Definition as "is it JSON". So a typo
+			// publishes clean, lands in the authored-rules fixture, compiles, and reports
+			// ACTIVE to the post-publish liveness assert — which proves the rule COMPILED
+			// and nothing more. It fails for the first time when the rule FIRES, as a
+			// dead-letter several services away from the line that caused it.
+			//
+			// SCOPE: the rule's OWN profile, not every command key in the manifest — the
+			// same scope as the metric check above, for the same reason. A rule is
+			// profile-version content, it fires for devices carrying that profile, and its
+			// sendCommand goes to the device the detection fired for; a key declared on
+			// some OTHER profile is therefore just as dead as one declared nowhere, and a
+			// manifest-wide lookup would bless exactly that case. The cost of the narrower
+			// scope is a false positive should a scenario ever legitimately need a
+			// cross-profile command — and that direction is the safe one: a loud bootstrap
+			// error naming the rule and the key, not a silent misbehaviour, with widening
+			// the lookup then a deliberate change rather than a gap nobody knew was there.
+			for _, key := range ruleSendCommandKeys(r.Definition) {
+				if !commandKeys[key] {
+					return fmt.Errorf("detection rule %q sends command %q, which profile %q does "+
+						"not declare as a commandKey — the rule would publish, compile and report "+
+						"%s, then dead-letter on its first firing when the enqueue gate rejects "+
+						"the key", r.Token, key, p.Token, RuleStatusActiveWire)
+				}
 			}
 		}
 		for _, mx := range p.Metrics {
@@ -763,6 +797,48 @@ func ruleTopLevelMetric(definition string) string {
 		return rule.When.Metric
 	}
 	return rule.Metric
+}
+
+// ruleSendCommandKeys reads the command keys a rules.Rule's sendCommand actions name, or
+// nil when the definition names none at a depth this package is willing to look.
+//
+// Same posture as ruleTopLevelMetric above, and the same justification: this package treats
+// Definition as opaque, and reaches inside it only where the alternative is a fact NOTHING
+// anywhere checks. This is such a place. Both sides genuinely decline to check it —
+// event-processing's compiler is state-free by design and never reads a profile, and the
+// manifest holds the command vocabulary — so a command key belongs to the same
+// two-facts-on-opposite-sides-of-a-boundary shape as the dashboard control-widget gate.
+//
+// A definition that does not parse returns nil rather than an error: json.Valid in Validate
+// already owns that failure, and re-reporting it here would give one mistake two messages.
+// A definition with no actions at all likewise returns nil — "no opinion", never "no
+// command", exactly as ruleTopLevelMetric's "" is.
+func ruleSendCommandKeys(definition string) []string {
+	var rule struct {
+		Actions []struct {
+			Type        string `json:"type"`
+			SendCommand struct {
+				Command string `json:"command"`
+			} `json:"sendCommand"`
+		} `json:"actions"`
+	}
+	if err := json.Unmarshal([]byte(definition), &rule); err != nil {
+		return nil
+	}
+	var keys []string
+	for _, a := range rule.Actions {
+		// Gated on the DISCRIMINATOR rather than on a non-empty payload. An action whose
+		// type disagrees with its populated variant is rejected at publish, so reading the
+		// variant of an action that does not claim to be one would be forming an opinion
+		// about a document that cannot exist. An EMPTY command is returned rather than
+		// skipped for the same reason: skipping it would make a sendCommand naming nothing
+		// the one action shape this check has no opinion on, which is the quietest
+		// possible place for it to hide.
+		if a.Type == actionTypeSendCommand {
+			keys = append(keys, a.SendCommand.Command)
+		}
+	}
+	return keys
 }
 
 // validateAssignments checks one device's rendered Assignment set: token
