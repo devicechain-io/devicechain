@@ -3,6 +3,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Net;
+using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -21,20 +23,30 @@ public class DeviceEventCarrierTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
 
-    // 🔑 THE CLAIM THE WHOLE DESIGN RESTS ON, PINNED — AND IT HAS TO CROSS A REAL BOUNDARY TO MEAN
-    // ANYTHING. Comparing two capturing fakes would only prove the publisher does not branch on
-    // carrier type, which it visibly does not; that check cannot fail for any interesting reason.
-    // So the MQTT side here runs the REAL carrier and the REAL session, and the bytes compared are
-    // the ones that reached the wire. A carrier that re-serialized, wrapped, or re-encoded the
-    // body would fail this; a carrier that merely forwards it passes.
+    // 🔑 THE CLAIM THE WHOLE DESIGN RESTS ON, PINNED — AND IT HAS TO CROSS A REAL BOUNDARY ON BOTH
+    // SIDES TO MEAN ANYTHING. Comparing two capturing fakes would only prove the publisher does not
+    // branch on carrier type, which it visibly does not; that check cannot fail for any interesting
+    // reason. So BOTH sides run the real carrier: the HTTP side goes through
+    // HttpDeviceEventCarrier over a stub message handler, and the MQTT side through the real
+    // carrier and the real session. The bytes compared are the ones that reached each wire.
+    //
+    // 🔴 The HTTP side used to be a CapturingCarrier fake, and that gap was found by mutation
+    // rather than by reading: a publisher that built a DIFFERENT body when its carrier was the HTTP
+    // one survived the entire 45-test suite. The fake stood exactly where the mutation lived, so
+    // the pair actually compared was (fake, real-MQTT) and the branch was invisible from both ends.
+    // The comment above it claimed the comparison "crosses a real boundary" — true of one side, and
+    // the untrue half was the half being tested. A fake that stands in for the subject measures the
+    // fixture.
     [Fact]
     public async Task TheBytesThatReachTheMqttWireAreIdenticalToTheHttpBody()
     {
         var occurred = new DateTimeOffset(2026, 8, 7, 12, 0, 0, TimeSpan.Zero);
         var metrics = new Dictionary<string, double> { ["fuelPct"] = 12.5, ["engineTempC"] = 91 };
 
-        var http = new CapturingCarrier();
-        await new DeviceEventPublisher(http).EmitMeasurementsAsync("sensor-001", "cred-1", metrics, occurred);
+        var handler = new StubHandler((_, _) => (HttpStatusCode.Accepted, ""));
+        await new DeviceEventPublisher(new HttpClient(handler), new Uri("https://ingress.local"), "inst", "acme")
+            .EmitMeasurementsAsync("sensor-001", "cred-1", metrics, occurred);
+        byte[] overHttp = Encoding.UTF8.GetBytes(Assert.Single(handler.Calls).Body);
 
         var connection = new RecordingConnection();
         await using var session = new MqttDeviceSession(
@@ -46,7 +58,7 @@ public class DeviceEventCarrierTests
             .EmitMeasurementsAsync("sensor-001", "cred-1", metrics, occurred);
 
         var onTheWire = Assert.Single(connection.Published).Payload;
-        Assert.Equal(http.LastBody, onTheWire);
+        Assert.Equal(overHttp, onTheWire);
 
         // And the body must still carry its own credentials on the MQTT wire: the device-plane
         // gateway does not stamp events as transport-authenticated (only the LwM2M and Sparkplug
@@ -55,6 +67,43 @@ public class DeviceEventCarrierTests
         Assert.Equal("ACCESS_TOKEN", document.RootElement.GetProperty("credentialType").GetString());
         Assert.Equal("cred-1", document.RootElement.GetProperty("credentialId").GetString());
         Assert.Equal("sensor-001", document.RootElement.GetProperty("device").GetString());
+    }
+
+    // The same claim for the Location leg, and it is not redundant with the measurement one: the
+    // property is "the publisher builds ONE body and hands it to a carrier", and a second event
+    // type is exactly how that stops being true — a second serialize-and-send path would satisfy
+    // the measurement test above forever while quietly diverging here.
+    [Fact]
+    public async Task TheLocationBytesThatReachTheMqttWireAreIdenticalToTheHttpBody()
+    {
+        var occurred = new DateTimeOffset(2026, 8, 7, 12, 0, 0, TimeSpan.Zero);
+        var fix = new LocationFix(33.74912345, -84.38812345) { Elevation = 320.53, Heading = 271.53 };
+
+        var handler = new StubHandler((_, _) => (HttpStatusCode.Accepted, ""));
+        await new DeviceEventPublisher(new HttpClient(handler), new Uri("https://ingress.local"), "inst", "acme")
+            .EmitLocationAsync("sensor-001", "cred-1", fix, occurred);
+        byte[] overHttp = Encoding.UTF8.GetBytes(Assert.Single(handler.Calls).Body);
+
+        var connection = new RecordingConnection();
+        await using var session = new MqttDeviceSession(
+            new MqttSessionOptions(new Uri("tcp://127.0.0.1:1883"), "inst", "acme", "sensor-001", "cred-1"),
+            new SingleConnectionFactory(connection));
+        await session.StartAsync((_, _) => Task.FromResult(CommandOutcome.Succeeded()), CancellationToken.None);
+
+        await new DeviceEventPublisher(new MqttDeviceEventCarrier(session, "sensor-001"))
+            .EmitLocationAsync("sensor-001", "cred-1", fix, occurred);
+
+        var onTheWire = Assert.Single(connection.Published).Payload;
+        Assert.Equal(overHttp, onTheWire);
+
+        using var document = JsonDocument.Parse(onTheWire);
+        Assert.Equal("Location", document.RootElement.GetProperty("eventType").GetString());
+        Assert.Equal("ACCESS_TOKEN", document.RootElement.GetProperty("credentialType").GetString());
+        Assert.Equal("cred-1", document.RootElement.GetProperty("credentialId").GetString());
+        // And the unreported optionals are absent on the MQTT wire too, not zeroed by a second path.
+        JsonElement entry = document.RootElement.GetProperty("payload").GetProperty("entries")[0];
+        Assert.False(entry.TryGetProperty("accuracy", out _));
+        Assert.False(entry.TryGetProperty("speed", out _));
     }
 
     // The MQTT carrier is device-scoped where the HTTP one is not. Emitting another device's event

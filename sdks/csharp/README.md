@@ -23,7 +23,7 @@ and the library builds with `TreatWarningsAsErrors` + `IsAotCompatible`. It mult
 | Auth state machine | `Auth.AuthSession` | `login → selectTenant → refresh` (ADR-033), with proactive near-expiry refresh; the `TokenProvider` a client plugs in |
 | GraphQL over HTTP | `GraphQlClient` | typed query/mutate against `/api/{area}/graphql`; caller supplies its own `JsonTypeInfo` (AOT-safe) |
 | Live subscriptions | `Subscriptions.GraphQlWsClient` | `graphql-transport-ws`, one multiplexed socket per area; token in `connection_init` |
-| Device-plane emit | `Ingest.DeviceEventPublisher` | telemetry over `POST /{instanceId}/{tenant}/events` (the `JsonEvent` shape, in-body credential per ADR-014/025) |
+| Device-plane emit | `Ingest.DeviceEventPublisher` | Measurement + Location over `POST /{instanceId}/{tenant}/events` or MQTT (the `JsonEvent` shape, in-body credential per ADR-014/025) |
 | Transport seam | `Transport.IHttpTransport` / `Transport.IWebSocketFactory` | pluggable HTTP + WebSocket, so the SDK runs where `HttpClient`/`ClientWebSocket` don't (Unity WebGL) |
 | Facade | `DeviceChainClient` | wires all of the above against one origin |
 
@@ -55,6 +55,17 @@ var publisher = client.DevicePublisher(
     ingressOrigin: new Uri("https://ingress.demo.devicechain.io"), instanceId: "dc", tenant: "acme");
 await publisher.EmitMeasurementsAsync("car-42", credentialId,
     new Dictionary<string, double> { ["speed"] = 55.0 });
+
+// …and where it is. Latitude/longitude are required; the rest are optional and are OMITTED from
+// the wire when null — send what the receiver actually knows rather than a placeholder, because a
+// zero heading is stored as "due north" and can never be told apart from a measured one afterwards.
+await publisher.EmitLocationAsync("car-42", credentialId,
+    new LocationFix(33.74912345, -84.38812345)
+    {
+        Elevation = 320.5,                                  // metres above the WGS84 ELLIPSOID
+        Speed = 24.6,                                       // metres per second
+        Heading = LocationFix.CanonicalHeading(bearing),     // degrees clockwise from true north
+    });
 ```
 
 ## Custom transports (Unity WebGL)

@@ -31,6 +31,7 @@ namespace DeviceChain.Sdk.Json;
 [JsonSerializable(typeof(AuthToken))]
 // Ingest
 [JsonSerializable(typeof(MeasurementEvent))]
+[JsonSerializable(typeof(LocationEvent))]
 // MQTT device plane — the command envelopes mirror command-delivery's wire shapes.
 [JsonSerializable(typeof(CommandDeliveryEnvelope))]
 [JsonSerializable(typeof(CommandResponseEnvelope))]
