@@ -21,10 +21,16 @@ vi.mock('./echart', () => ({
   EChart: ({ option }: { option: any }) => <div data-testid="echart" data-option={JSON.stringify(option)} />,
 }));
 
-import type { AlarmStreamState, CommandStreamState, MeasurementStreamState } from './hooks';
+import type {
+  AlarmStreamState,
+  CommandStreamState,
+  LocationStreamState,
+  MeasurementStreamState,
+} from './hooks';
 import {
   ALARM_WIDGET_REGISTRY,
   CONTROL_WIDGET_REGISTRY,
+  LOCATION_WIDGET_REGISTRY,
   SELECTION_WIDGET_REGISTRY,
   WIDGET_CHANNEL,
   WIDGET_REGISTRY,
@@ -160,6 +166,29 @@ const commandRow: CommandRow = {
 };
 
 const alarmData: AlarmStreamState = { alarms: [alarmRow], total: 1, loading: false, error: null };
+// A located device, carrying a position AND leaving two optionals unreported —
+// because a fixture where every field is present cannot show that an absent one is
+// omitted rather than rendered as a zero.
+const locationData: LocationStreamState = {
+  locations: [
+    {
+      id: 'wl-loc-1',
+      deviceToken: 'wl-sensor-01',
+      latitude: 33.749,
+      longitude: -84.388,
+      elevation: 320.5,
+      accuracy: 4.2,
+      speed: null,
+      heading: null,
+      occurredTime: '2026-08-09T12:00:00Z',
+    },
+  ],
+  deviceTokens: ['wl-sensor-01'],
+  forbidden: false,
+  loading: false,
+  error: null,
+};
+
 const commandData: CommandStreamState = {
   deviceToken: 'wl-sensor-01',
   commands: [commandRow],
@@ -182,6 +211,16 @@ function renderWidget(widget: WidgetInstance) {
     case 'selection': {
       const Component = SELECTION_WIDGET_REGISTRY[widget.type as keyof typeof SELECTION_WIDGET_REGISTRY];
       return render(<Component widget={widget} data={null} />);
+    }
+    // 🔴 A channel with no case here does NOT fail loudly — it falls through to the
+    // default and looks its widget up in the MEASUREMENT registry, where it is
+    // absent, so React is handed `undefined` and reports an invalid element type
+    // rather than a missing channel. That is how the location channel arrived: the
+    // registry existed and this switch had never heard of it. Adding a sixth channel
+    // means adding a case here too.
+    case 'location': {
+      const Component = LOCATION_WIDGET_REGISTRY[widget.type as keyof typeof LOCATION_WIDGET_REGISTRY];
+      return render(<Component widget={widget} data={locationData} />);
     }
     default: {
       const Component = WIDGET_REGISTRY[widget.type as keyof typeof WIDGET_REGISTRY];

@@ -89,6 +89,20 @@ type dashboardDatasource struct {
 	Slot         string   `json:"slot,omitempty"`
 	DeviceToken  string   `json:"deviceToken,omitempty"`
 	Measurements []string `json:"measurements"`
+	// Location names the location series the selector binds, and is OMITTED when
+	// unset — deliberately, and it is the opposite convention from Measurements
+	// above. An empty measurements array means "every measurement", so writing it
+	// explicitly makes the widening visible; an absent location means the selector
+	// names NO location series, which is exactly what every definition authored
+	// before the location channel carries. Emitting `"location":null` instead would
+	// make a measurement widget serialize differently than it always has, and the
+	// fixture gate would report the churn as a change nobody made.
+	Location *dashboardLocationSelection `json:"location,omitempty"`
+}
+
+// dashboardLocationSelection mirrors the frontend's LocationSelection.
+type dashboardLocationSelection struct {
+	Series string `json:"series"`
 }
 
 // dashboardSlot mirrors SlotDefinition: a named entity role widgets reference via a

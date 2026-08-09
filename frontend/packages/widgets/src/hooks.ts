@@ -11,6 +11,8 @@ import type {
   DashboardDefinition,
   DatasourceSelector,
   EntityCandidateLister,
+  LocationSample,
+  LocationSubscription,
   MemberResolver,
   MeasurementSample,
   SelectionCandidate,
@@ -203,6 +205,23 @@ export interface CommandStreamState {
   error: unknown | null;
 }
 
+// The state a map widget renders from: the located devices' positions, the device
+// tokens the selector resolved to (a never-located device has no position, so the two
+// lists differ), whether the viewer was REFUSED, and load/error flags.
+//
+// 🔴 `forbidden` is a field of its own and not an `error`. `location:read` is
+// deliberately outside the read-only viewer baseline, so being refused is the ordinary
+// case for an ordinary member — an error state would show an outage where the platform
+// is working exactly as designed, and an empty `locations` would blame the devices for
+// a fact about the caller.
+export interface LocationStreamState {
+  locations: LocationSample[];
+  deviceTokens: string[];
+  forbidden: boolean;
+  loading: boolean;
+  error: unknown | null;
+}
+
 export interface MeasurementStreamOptions {
   // Max samples retained in the rolling window (oldest dropped past this).
   window?: number;
@@ -337,6 +356,58 @@ export function useCommandStream(
           loading: false,
           error: null,
         }),
+      error: (err) => setState((prev) => ({ ...prev, loading: false, error: err })),
+    });
+    // `subscription` is intentionally read via `key` (value identity), not reference.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hub, key]);
+
+  return state;
+}
+
+const EMPTY_LOCATIONS: LocationStreamState = {
+  locations: [],
+  deviceTokens: [],
+  forbidden: false,
+  loading: true,
+  error: null,
+};
+
+// useLocationStream binds a map widget's selector through the hub's location channel and
+// keeps the latest position snapshot. It re-subscribes when the subscription changes
+// (value-compared, so a re-rendered-but-equal object doesn't churn) and tears down on
+// unmount. The hub delivers whole snapshots (poll-then-emit), so this holds the last one
+// rather than accumulating.
+//
+// A `forbidden` snapshot CLEARS the positions as it sets the flag: an authority can be
+// revoked mid-session, and keeping the last-seen coordinates on screen under a
+// permission banner would leave a refused viewer looking at the very data they were
+// just refused.
+export function useLocationStream(
+  hub: WidgetDataSource,
+  subscription: LocationSubscription,
+): LocationStreamState {
+  const [state, setState] = useState<LocationStreamState>(EMPTY_LOCATIONS);
+
+  // Value-compare the subscription so an unchanged-but-new object reference doesn't
+  // resubscribe every render.
+  const key = JSON.stringify(subscription);
+
+  useEffect(() => {
+    setState(EMPTY_LOCATIONS); // reset to loading whenever the subscription changes
+    return hub.subscribeLocations(subscription, {
+      next: (snapshot) =>
+        setState(
+          snapshot.kind === 'forbidden'
+            ? { locations: [], deviceTokens: [], forbidden: true, loading: false, error: null }
+            : {
+                locations: snapshot.locations,
+                deviceTokens: snapshot.deviceTokens,
+                forbidden: false,
+                loading: false,
+                error: null,
+              },
+        ),
       error: (err) => setState((prev) => ({ ...prev, loading: false, error: err })),
     });
     // `subscription` is intentionally read via `key` (value identity), not reference.

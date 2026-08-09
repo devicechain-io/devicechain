@@ -48,6 +48,12 @@ const (
 type widgetSubject struct {
 	Slot         string
 	Measurements []string
+	// Location names the location series this subject binds, when it binds one.
+	// Empty means the selector names NO location series — which is the correct wire
+	// form for every widget that is not a map, and is what every definition authored
+	// before the location channel existed carries. The field is emitted only when
+	// set, so a measurement widget serializes byte-identically to how it always did.
+	Location string
 }
 
 func (s widgetSubject) datasource() *dashboardDatasource {
@@ -65,7 +71,11 @@ func (s widgetSubject) datasource() *dashboardDatasource {
 	if measurements == nil {
 		measurements = []string{}
 	}
-	return &dashboardDatasource{Kind: "slot", Slot: s.Slot, Measurements: measurements}
+	ds := &dashboardDatasource{Kind: "slot", Slot: s.Slot, Measurements: measurements}
+	if s.Location != "" {
+		ds.Location = &dashboardLocationSelection{Series: s.Location}
+	}
+	return ds
 }
 
 // box is a widget's placement, named so a board reads as a layout rather than as
@@ -177,6 +187,26 @@ func buildCommandButtonWidget(id string, b box, s widgetSubject, title string) d
 			"title": title, "commandName": WidgetlabCommandKey, "commandLabel": "Set Setpoint",
 			"parameterSchema": widgetlabParameterSchema, "maxRows": 10,
 		},
+	}
+}
+
+// buildMapWidget renders the bound subject's LAST KNOWN POSITION.
+//
+// The subject names the location series explicitly: the hub resolves a location
+// scope only for a selector that asks for one, so a map bound to a measurement-only
+// subject renders its empty state forever. That is deliberate on the frontend side
+// — it keeps the field observable — and it means this datasource is the thing being
+// exercised, not decoration.
+//
+// No tileUrl is set, and that is the point rather than an omission. The platform
+// ships NO default tile source: the library is not the map, tiles are, and they
+// carry their own terms. So the gallery renders positions on the plain panel, which
+// is exactly what an operator sees before they configure one — the honest default
+// state, and the one worth having in a catalog of every widget.
+func buildMapWidget(id string, b box, s widgetSubject, title string) dashboardWidget {
+	return dashboardWidget{
+		Id: id, Type: "map", Layout: b.layout(), Datasource: s.datasource(),
+		Options: map[string]any{"title": title},
 	}
 }
 
@@ -312,8 +342,11 @@ func buildWidgetlabGallery(devices []DeviceInstance) (string, error) {
 			buildCommandButtonWidget("wl-command", box{14, 10, 14, 6},
 				widgetSubject{Slot: widgetlabSlotSensor}, "Setpoint"),
 
-			buildEntitySelectorWidget("wl-zone-select", box{0, 12, 20, 2}, "Zone", widgetlabSlotZone),
-			buildEntitySelectorWidget("wl-sensor-select", box{12, 12, 20, 2}, "Sensor", widgetlabSlotSensor),
+			buildMapWidget("wl-map", box{0, 24, 20, 6},
+				widgetSubject{Slot: widgetlabSlotSensor, Location: "latest"}, "Where the sensors are"),
+
+			buildEntitySelectorWidget("wl-zone-select", box{0, 12, 26, 2}, "Zone", widgetlabSlotZone),
+			buildEntitySelectorWidget("wl-sensor-select", box{12, 12, 26, 2}, "Sensor", widgetlabSlotSensor),
 		},
 	}
 

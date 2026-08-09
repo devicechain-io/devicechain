@@ -320,3 +320,157 @@ describe('canScopeSlot', () => {
     expect(parsed.slots!.therm.scope).toEqual({ parent: 'building', strategy: 'manual' });
   });
 });
+
+// ---- The location series selector (additive) --------------------------------
+//
+// 🔴 THIS BLOCK IS THE REGRESSION GUARD FOR THE SELECTOR CHANGE, and the tests that
+// matter most are the ones about definitions that carry NO location field at all.
+//
+// Every dashboard stored before the location channel existed is a measurement-only
+// document, and the whole justification for putting the location series in its own
+// field — rather than overloading `measurements` — is that none of those documents
+// change meaning, change shape, or change bytes. The parse tests below hold that
+// directly: a stored definition round-trips byte-identically, so a load/save is not a
+// diff, and isDirty stays quiet on a dashboard nobody edited.
+describe('parseDashboardDefinition — location series selection', () => {
+  const located = (kind: string, extra: Record<string, unknown>) => ({
+    widgets: [
+      {
+        id: 'w1',
+        type: 'map',
+        layout: { base: box() },
+        datasource: { kind, ...extra, location: { series: 'latest' } },
+      },
+    ],
+  });
+
+  it('carries a location series on a device selector', () => {
+    const def = parseDashboardDefinition(located('device', { deviceToken: 'dozer-1', measurements: [] }));
+    expect(def.widgets[0].datasource).toEqual({
+      kind: 'device',
+      deviceToken: 'dozer-1',
+      measurements: [],
+      location: { series: 'latest' },
+    });
+  });
+
+  it('carries a location series on an anchor selector', () => {
+    const def = parseDashboardDefinition(
+      located('anchor', { anchor: { relationship: 'monitors', targetType: 'area', targetToken: 'site-1' } }),
+    );
+    expect(def.widgets[0].datasource).toMatchObject({
+      kind: 'anchor',
+      location: { series: 'latest' },
+    });
+  });
+
+  it('carries a location series on a slot selector', () => {
+    const def = parseDashboardDefinition(located('slot', { slot: 'fleet' }));
+    expect(def.widgets[0].datasource).toEqual({
+      kind: 'slot',
+      slot: 'fleet',
+      measurements: [],
+      location: { series: 'latest' },
+    });
+  });
+
+  it('drops an unrecognized location series rather than carrying it through', () => {
+    // The vocabulary is closed. Carrying an unknown series would give the author a
+    // widget that looks configured and reads nothing; dropping it makes the widget's
+    // empty state honest.
+    const def = parseDashboardDefinition(located('device', { deviceToken: 'd1', measurements: [] }));
+    expect(def.widgets[0].datasource).toHaveProperty('location');
+    const bogus = parseDashboardDefinition({
+      widgets: [
+        {
+          type: 'map',
+          layout: { base: box() },
+          datasource: { kind: 'device', deviceToken: 'd1', measurements: [], location: { series: 'track' } },
+        },
+      ],
+    });
+    expect(bogus.widgets[0].datasource).not.toHaveProperty('location');
+  });
+
+  it('drops a malformed location field without failing the whole definition', () => {
+    const def = parseDashboardDefinition({
+      widgets: [
+        {
+          type: 'map',
+          layout: { base: box() },
+          datasource: { kind: 'device', deviceToken: 'd1', measurements: [], location: 'latest' },
+        },
+      ],
+    });
+    expect(def.widgets[0].datasource).toEqual({ kind: 'device', deviceToken: 'd1', measurements: [] });
+  });
+
+  // ---- The additive guarantee ------------------------------------------------
+
+  it('leaves a pre-existing measurement-only definition byte-identical', () => {
+    // A representative board of every selector kind, none of which names a location
+    // series — i.e. every dashboard stored before this field existed.
+    const stored = {
+      schemaVersion: 1,
+      title: 'Zone A',
+      canvas: {
+        grid: { columns: 24, gap: 8, rowHeight: 40 },
+        sizing: 'fill',
+        breakpoints: { base: 0, lg: 1024 },
+      },
+      widgets: [
+        {
+          id: 'w1',
+          type: 'gauge',
+          layout: { base: box() },
+          datasource: { kind: 'device', deviceToken: 'therm-001', measurements: ['temperature'] },
+          options: { unit: '°C' },
+        },
+        {
+          id: 'w2',
+          type: 'timeseries-chart',
+          layout: { base: box() },
+          datasource: {
+            kind: 'anchor',
+            anchor: { relationship: 'monitors', targetType: 'area', targetToken: 'zone-a' },
+            measurements: ['temperature', 'humidity'],
+          },
+        },
+        {
+          id: 'w3',
+          type: 'latest-card',
+          layout: { base: box() },
+          datasource: { kind: 'slot', slot: 'primary', measurements: ['temperature'] },
+        },
+        { id: 'w4', type: 'alarm-table', layout: { base: box() }, options: { state: 'ACTIVE' } },
+      ],
+      slots: { primary: { type: 'device', defaultBinding: { kind: 'device', deviceToken: 'therm-001' } } },
+    };
+
+    const parsed = parseDashboardDefinition(stored);
+
+    // No selector gained a location key…
+    for (const widget of parsed.widgets) {
+      expect(widget.datasource == null || !('location' in widget.datasource)).toBe(true);
+    }
+    // …and the whole document serializes to exactly what was stored, so a load/save
+    // round trip is not a diff and an untouched dashboard is never dirty.
+    expect(serializeDefinition(parsed)).toBe(JSON.stringify(stored));
+    expect(isDirty(parsed, parseDashboardDefinition(JSON.parse(serializeDefinition(parsed))))).toBe(false);
+  });
+
+  it('round-trips a definition that DOES name a location series', () => {
+    // The counterweight to the byte-identity test above: leaving old documents alone is
+    // only useful while a new one survives the same round trip.
+    const stored = located('device', { deviceToken: 'dozer-1', measurements: [] });
+    const parsed = parseDashboardDefinition(stored);
+    const reparsed = parseDashboardDefinition(JSON.parse(serializeDefinition(parsed)));
+    expect(reparsed.widgets[0].datasource).toEqual({
+      kind: 'device',
+      deviceToken: 'dozer-1',
+      measurements: [],
+      location: { series: 'latest' },
+    });
+    expect(isDirty(parsed, reparsed)).toBe(false);
+  });
+});
