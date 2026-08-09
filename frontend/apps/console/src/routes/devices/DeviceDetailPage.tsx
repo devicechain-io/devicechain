@@ -36,6 +36,8 @@ import { DeviceForm } from '@/routes/devices/DeviceForm';
 import { DeviceCommandsPanel } from '@/routes/devices/DeviceCommandsPanel';
 import { DeviceCredentialsPanel } from '@/routes/devices/DeviceCredentialsPanel';
 import { DeviceAssignmentPanel } from '@/routes/devices/DeviceAssignmentPanel';
+import { DeviceLocationPanel } from '@/routes/devices/DeviceLocationPanel';
+import { EventTypeLabel } from '@/components/EventTypeLabel';
 
 export default function DeviceDetailPage() {
   const { t } = useTranslation('devices');
@@ -147,6 +149,9 @@ export default function DeviceDetailPage() {
             </SectionPanel>
             <SectionPanel title={t('latestReadingsTitle')}>
               <DeviceReadingsPanel deviceToken={device.token} />
+            </SectionPanel>
+            <SectionPanel title={t('latestPositionTitle')}>
+              <DeviceLocationPanel deviceToken={device.token} />
             </SectionPanel>
           </div>
         </TabsContent>
@@ -284,8 +289,8 @@ function DeviceEventsPanel({ deviceToken }: { deviceToken: string }) {
               <DataTableCell className="text-muted-foreground">
                 {formatTime(event.occurredTime)}
               </DataTableCell>
-              <DataTableCell className="font-mono text-xs text-foreground">
-                #{event.eventType}
+              <DataTableCell className="text-foreground">
+                <EventTypeLabel eventType={event.eventType} />
               </DataTableCell>
               <DataTableCell className="text-muted-foreground">{event.source}</DataTableCell>
             </DataTableRow>

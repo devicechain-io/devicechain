@@ -18,6 +18,13 @@ export type LatestMeasurementsQueryVariables = Exact<{
 
 export type LatestMeasurementsQuery = { latestMeasurements: Array<{ id: string, name: string, value: number | null, occurredTime: string }> };
 
+export type LatestLocationQueryVariables = Exact<{
+  deviceToken: string;
+}>;
+
+
+export type LatestLocationQuery = { latestLocation: { id: string, deviceToken: string, latitude: number | null, longitude: number | null, elevation: number | null, accuracy: number | null, speed: number | null, heading: number | null, occurredTime: string } | null };
+
 export class TypedDocumentString<TResult, TVariables>
   extends String
   implements DocumentTypeDecoration<TResult, TVariables>
@@ -60,3 +67,18 @@ export const LatestMeasurementsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<LatestMeasurementsQuery, LatestMeasurementsQueryVariables>;
+export const LatestLocationDocument = new TypedDocumentString(`
+    query LatestLocation($deviceToken: String!) {
+  latestLocation(deviceToken: $deviceToken) {
+    id
+    deviceToken
+    latitude
+    longitude
+    elevation
+    accuracy
+    speed
+    heading
+    occurredTime
+  }
+}
+    `) as unknown as TypedDocumentString<LatestLocationQuery, LatestLocationQueryVariables>;
