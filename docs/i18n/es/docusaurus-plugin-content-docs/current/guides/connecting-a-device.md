@@ -33,7 +33,9 @@ Todo evento entrante — sobre cualquier transporte — es un objeto JSON:
 ### Formas del payload
 
 **Todo payload envuelve su contenido en un arreglo `entries`**, y todo valor numérico es una **cadena
-de texto JSON**. Ambas reglas se aplican: un payload sin entradas, una entrada vacía, o un número
+de texto JSON**. Una entrada también puede llevar su propio `occurredTime`; se acepta, pero la lectura
+almacenada toma la marca de tiempo del sobre, así que envíe una entrada por evento en lugar de
+agruparlas. Ambas reglas se aplican: un payload sin entradas, una entrada vacía, o un número
 suelto donde se espera una cadena es **rechazado** — HTTP responde `400` y una publicación MQTT va a
 la cola de mensajes fallidos en lugar de aceptarse en silencio. Envíe una entrada por evento.
 

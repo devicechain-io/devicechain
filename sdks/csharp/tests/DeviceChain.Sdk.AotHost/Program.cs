@@ -5,6 +5,7 @@ using System;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using DeviceChain.Sdk.Ingest;
 using DeviceChain.Sdk.Tests;
 using DeviceChain.Sdk.Transport;
 
@@ -31,6 +32,9 @@ public static class Program
 
             await RefusalIsSurfacedAsync().ConfigureAwait(false);
             Console.WriteLine("PASS refused subscription surfaced under AOT");
+
+            await LocationEmitAsync().ConfigureAwait(false);
+            Console.WriteLine("PASS location emit serialized + validated under AOT");
 
             var broker = Environment.GetEnvironmentVariable("DC_MQTT_BROKER");
             if (!string.IsNullOrEmpty(broker))
@@ -121,6 +125,67 @@ public static class Program
 
         throw new InvalidOperationException(
             "a refused subscription did NOT throw under AOT — the SUBACK read was lost in compilation");
+    }
+
+    /// <summary>
+    /// Drives the Location emit path under real AOT compilation.
+    /// </summary>
+    /// <remarks>
+    /// The MQTT legs above prove the transport survives; they say nothing about the emit path, which
+    /// is where the AOT-sensitive machinery actually lives: source-generated JSON metadata for a
+    /// second root type, reached through a GENERIC send taking a <c>JsonTypeInfo&lt;T&gt;</c>. If the
+    /// generator's metadata for <c>LocationEvent</c> were trimmed away, or the generic instantiation
+    /// were not rooted, this fails HERE at runtime — which is how AOT failures present — rather than
+    /// at publish time. The unreported-optional and range-check assertions are included for the same
+    /// reason: both are behaviour that would go SILENT rather than loud if a code path vanished.
+    /// </remarks>
+    private static async Task LocationEmitAsync()
+    {
+        var carrier = new CapturingCarrier();
+        var publisher = new DeviceEventPublisher(carrier);
+        var fix = new LocationFix(33.74912345, -84.38812345) { Elevation = 320.53, Heading = 271.53 };
+
+        await publisher.EmitLocationAsync(
+            "sensor-001", "cred-1", fix, new DateTimeOffset(2026, 8, 7, 12, 0, 0, TimeSpan.Zero))
+            .ConfigureAwait(false);
+
+        var body = Encoding.UTF8.GetString(carrier.LastBody ?? Array.Empty<byte>());
+        Require(body.Contains("\"eventType\":\"Location\""), $"the Location envelope did not serialize: {body}");
+        Require(body.Contains("\"entries\":["), $"the entries wrapper is missing: {body}");
+        Require(body.Contains("\"latitude\":\"33.74912345\""), $"latitude did not serialize as a string: {body}");
+        Require(body.Contains("\"longitude\":\"-84.38812345\""), $"longitude did not serialize as a string: {body}");
+        Require(body.Contains("\"heading\":\"271.53\""), $"heading did not serialize as a string: {body}");
+        Require(!body.Contains("accuracy"), $"an UNREPORTED optional reached the wire: {body}");
+        Require(!body.Contains("speed"), $"an UNREPORTED optional reached the wire: {body}");
+
+        // Small magnitudes must not fall back to exponent notation under this runtime's formatter.
+        await publisher.EmitLocationAsync("sensor-001", "cred-1", new LocationFix(1e-7, -1.234e-7))
+            .ConfigureAwait(false);
+        var small = Encoding.UTF8.GetString(carrier.LastBody ?? Array.Empty<byte>());
+        Require(small.Contains("\"latitude\":\"0.0000001\""), $"a small latitude used exponent notation: {small}");
+
+        var refused = false;
+        try
+        {
+            await publisher.EmitLocationAsync("sensor-001", "cred-1", new LocationFix(91, 0)).ConfigureAwait(false);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            refused = true;
+        }
+
+        Require(refused, "an out-of-range latitude was NOT refused under AOT");
+    }
+
+    private sealed class CapturingCarrier : IDeviceEventCarrier
+    {
+        public byte[]? LastBody { get; private set; }
+
+        public Task SendAsync(string deviceToken, byte[] jsonEvent, CancellationToken cancellationToken)
+        {
+            LastBody = jsonEvent;
+            return Task.CompletedTask;
+        }
     }
 
     private static async Task RealBrokerRoundTripAsync(string brokerUri)

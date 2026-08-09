@@ -33,7 +33,9 @@ Every inbound event — over any transport — is a JSON object:
 ### Payload shapes
 
 **Every payload wraps its content in an `entries` array**, and every numeric value is a **JSON
-string**. Both rules are enforced: a payload with no entries, an entry with nothing in it, or a bare
+string**. An entry may also carry its own `occurredTime`; it is accepted, but the stored reading
+takes the envelope's timestamp, so send one entry per event rather than batching. Both rules are
+enforced: a payload with no entries, an entry with nothing in it, or a bare
 number where a string is expected is **rejected** — HTTP answers `400` and an MQTT publish is
 dead-lettered rather than silently accepted. Send one entry per event.
 
