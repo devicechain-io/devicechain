@@ -16,6 +16,7 @@ import (
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-processing/internal/detect/predicate"
+	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 )
 
@@ -54,6 +55,23 @@ func BuildInputs(ev *dmmodel.ResolvedEvent, occurred time.Time) []predicate.Inpu
 	}
 	base := predicate.Input{Device: ev.SourceDeviceToken, Anchors: anchors, Occurred: occurred}
 
+	// A LOCATION event is the one non-measurement event that carries data a rule can read: the
+	// reported position a geofence leaf tests (ADR-078). It fans out per entry exactly as a
+	// measurement batch does — a store-and-forward tracker uploads a run of buffered fixes as one
+	// message, and folding them to one Input would evaluate only whichever fix survived, so a
+	// device that entered and left a fence between two uploads would never trip it. Each entry
+	// keeps nil M (a location carries no measurement), so it is still a heartbeat for an absence
+	// rule, and the batch's entries share the message's clamped time like every other batch.
+	if loc, ok := ev.Payload.(*dmmodel.ResolvedLocationsPayload); ok && len(loc.Entries) > 0 {
+		out := make([]predicate.Input, 0, len(loc.Entries))
+		for _, entry := range loc.Entries {
+			in := base
+			in.Position = entryPosition(entry)
+			out = append(out, in)
+		}
+		return out
+	}
+
 	p, ok := ev.Payload.(*dmmodel.ResolvedMeasurementsPayload)
 	if !ok || len(p.Entries) == 0 {
 		return []predicate.Input{base} // heartbeat: nil M
@@ -65,6 +83,42 @@ func BuildInputs(ev *dmmodel.ResolvedEvent, occurred time.Time) []predicate.Inpu
 		out = append(out, in)
 	}
 	return out
+}
+
+// entryPosition parses one location entry's reported position, or returns nil when it does not
+// carry a usable one. Latitude and longitude are BOTH required — a fix with only one of them
+// names no point — while elevation is optional (no implemented fence kind reads it; the reserved
+// 2.5D/3D kinds will). The values were range-checked at decode against the platform-wide
+// coordinate contract, so this parses rather than re-validates; a value that will not parse
+// yields no position, which the position-scoped feed reads as "this sample cannot answer a fence
+// question" rather than as a position at (0, 0) off the coast of Africa.
+func entryPosition(entry dmmodel.ResolvedLocationEntry) *geofence.Position {
+	lat, ok := parseCoord(entry.Latitude)
+	if !ok {
+		return nil
+	}
+	lon, ok := parseCoord(entry.Longitude)
+	if !ok {
+		return nil
+	}
+	pos := &geofence.Position{Lat: lat, Lon: lon}
+	if elev, ok := parseCoord(entry.Elevation); ok {
+		pos.Elevation, pos.HasElevation = elev, true
+	}
+	return pos
+}
+
+// parseCoord parses one optional coordinate component, rejecting a missing, unparseable, or
+// non-finite value.
+func parseCoord(raw *string) (float64, bool) {
+	if raw == nil || *raw == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(*raw, 64)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, false
+	}
+	return v, true
 }
 
 // sampleMetrics folds one sample's numeric readings into an M map. ADR-016: measurements are

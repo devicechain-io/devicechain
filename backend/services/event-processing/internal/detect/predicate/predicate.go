@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	"github.com/google/cel-go/cel"
 )
 
@@ -21,6 +22,17 @@ type Input struct {
 	Occurred time.Time
 	M        map[string]float64
 	Attr     map[string]float64
+	// Position is the position this sample reports, or nil for an event that reports none
+	// (every non-location event, and a location entry whose latitude/longitude did not parse).
+	// A rule whose leaf calls inFence is fed ONLY samples that carry one — see
+	// rules.CompiledRule.RequiresPosition — so a nil here reaching a fence predicate is an error,
+	// never a quiet false.
+	Position *geofence.Position
+	// Fences is the FROZEN fence set of the fence-set version stamped on the event (ADR-078),
+	// resolved by the caller from (the event's tenant, that version). Nil means the set could not
+	// be resolved at all, which inFence reports as an error rather than as "no fences" — a tenant
+	// that has never authored a fence gets a known-EMPTY set instead.
+	Fences *geofence.FenceSet
 }
 
 // activation renders the input as the CEL variable bindings. A nil map is passed as an
@@ -44,6 +56,10 @@ func (in Input) activation() map[string]any {
 		VarOccurred: in.Occurred,
 		VarM:        m,
 		VarAttr:     attr,
+		// The geo binding is always present so `geo.inFence(…)` is never an unbound-identifier
+		// failure; what varies is what it CARRIES. A nil position or a nil fence set makes the
+		// call an error the runtime skips the sample on — never a false, and never a crash.
+		VarGeo: geoValue{position: in.Position, fences: in.Fences},
 	}
 }
 
@@ -64,6 +80,12 @@ type Predicate struct {
 	metrics         []string
 	metricsComplete bool
 	scopeSafe       bool
+
+	// referencesFences records whether the leaf calls inFence at all, computed once at compile
+	// from the type-checked AST. It drives the position-scoped feed (rules.CompiledRule
+	// RequiresPosition): a fence leaf must see only events that report a position, exactly as a
+	// metric-gated leaf must see only events carrying its measurement.
+	referencesFences bool
 }
 
 // Source is the CEL text the predicate compiled from (generated or raw). Useful for
@@ -109,6 +131,7 @@ func Compile(source string, costCeiling uint64) (*Predicate, error) {
 		return nil, &CompileError{Source: source, Err: fmt.Errorf("build program: %w", err)}
 	}
 	p := &Predicate{source: source, program: program, costMax: est.Max}
+	p.referencesFences = referencesFences(ast.NativeRep())
 
 	// Metric-scoped-feed analysis (review D4), computed once here where the AST and env are in
 	// hand. First derive which measurements the leaf reads via constant keys; then, only if that

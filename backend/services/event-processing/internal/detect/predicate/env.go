@@ -57,7 +57,20 @@ const (
 	// Duration trap documents (compile.go): the structured path is the safe one; a raw leaf
 	// referencing attr owns its own correctness on devices where the key is absent.
 	VarAttr = "attr"
+	// VarGeo is the event's GEO BINDING: an OPAQUE value carrying the reporting device's
+	// position and the frozen fence set of the fence-set version stamped on that event (ADR-078).
+	// It has exactly one operation — the containment function below — and no readable structure:
+	// a rule cannot get a latitude, a fence list, or a fence's geometry out of it. It is bound per
+	// evaluation from ONE resolved event, which is what confines a rule to its own tenant's
+	// fences (see geoValue).
+	VarGeo = "geo"
 )
+
+// FuncInFence is the SOLE geofence containment function: `geo.inFence("<fence token>")`, true
+// when the event's position is inside the named fence of the event's own frozen fence set.
+// One function for every geometry kind — see inFenceOverload for why that is the load-bearing
+// decision and not a convenience.
+const FuncInFence = "inFence"
 
 // SchemaVersion is the version of the declared event shape. Nothing consumes it yet: it is
 // the seam a future compiled-program cache would key on (recompiling a rule when the schema
@@ -66,7 +79,18 @@ const (
 //
 //   - v1: device, anchors, occurred, m.
 //   - v2: + attr (device-attribute map, dynamic thresholds, ADR-051 slice 4c-3b).
-const SchemaVersion = 2
+//   - v3: + geo and its inFence containment function (geofences, ADR-078).
+//
+// v3 IS A BUMP AND THE REASONING IS WORTH KEEPING, because "the addition is purely additive, so
+// nothing needs to change" is the tempting and wrong conclusion. Additive-ness is about existing
+// rules — every rule that compiled under v2 compiles byte-identically under v3, because nothing
+// was removed, renamed or retyped. The version is about the ENVIRONMENT a compiled artifact was
+// CHECKED AGAINST, and that is now a strictly larger vocabulary: a rule written today can name
+// `geo`, and that rule does NOT compile under v2. A cache keyed on a stale version would serve a
+// program built against an environment the source no longer type-checks in — which is precisely
+// the confusion the field exists to prevent. Compare ext.Bindings(), which was NOT a bump: it
+// added a scoping MACRO with no new identifier, so the declared shape was unchanged.
+const SchemaVersion = 3
 
 var (
 	sharedEnv     *cel.Env
@@ -94,6 +118,34 @@ func Env() (*cel.Env, error) {
 			// hand-typed raw-CEL leaf that never writes `cel.bind(...)` compiles byte-identically, so
 			// the live rule set is unaffected. No new data access or side-effecting function enters.
 			ext.Bindings(),
+			// The geofence surface (ADR-078): one opaque variable and one function on it.
+			//
+			// WHAT BECOMES REACHABLE. Exactly one new fact: for the event being evaluated, whether
+			// its reported position lies inside a fence named by a token the rule spells out. That
+			// is it.
+			//
+			// WHAT DOES NOT. `geo` is an OPAQUE type, so a rule cannot read the position out of it,
+			// cannot enumerate the tenant's fences, cannot read a fence's geometry, cannot compare
+			// two geo values, and cannot convert one to anything. There is no query, no list, no
+			// wildcard: a fence is reachable only by naming its exact token, and only through
+			// inFence. No I/O, no clock, no state, no mutation enters the environment — inFence is a
+			// pure function of the values already bound into the activation.
+			//
+			// WHY IT CANNOT REACH ANOTHER TENANT'S FENCES. It has nothing to reach WITH. The
+			// function's Go binding closes over NOTHING — no view, no store, no map of tenants — and
+			// it could not usefully close over anything, because this env is a process-wide
+			// singleton built once for every tenant. The only fence set in play is the one hanging
+			// off the activation value, and the runtime builds that per event from the pair
+			// (the event's tenant, the fence-set version stamped on that event). A rule that could
+			// see across tenants would require the fan-out to hand it the wrong set, which is a
+			// caller bug in one place rather than an environment-wide capability — the same shape as
+			// `attr`, which likewise carries only the source device's own values.
+			//
+			// AND WHY IT IS NOT A LIVE READ. inFence answers against the FROZEN set the event was
+			// stamped with, never the fences that exist now, so the determinism boundary does not
+			// move: replaying an event a week later produces the same answer it produced live.
+			cel.Variable(VarGeo, geoCelType),
+			inFenceOverload(),
 		)
 	})
 	if sharedEnvErr != nil {
