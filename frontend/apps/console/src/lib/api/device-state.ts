@@ -4,15 +4,18 @@
 // Typed GraphQL operations against the device-state service.
 import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/device-state';
+import { isForbiddenError } from '@/lib/api/errors';
 import type {
   DeviceStatesByDeviceTokenQuery,
   LatestMeasurementsQuery,
+  LatestLocationQuery,
 } from '@/gql/device-state/graphql';
 
 // Public types derived from the generated operation results so they always
 // reflect the actual selection set and can never drift from the schema.
 export type DeviceState = DeviceStatesByDeviceTokenQuery['deviceStatesByDeviceToken'][number];
 export type LatestMeasurement = LatestMeasurementsQuery['latestMeasurements'][number];
+export type LatestLocation = NonNullable<LatestLocationQuery['latestLocation']>;
 
 const DEVICE_STATES_BY_DEVICE_TOKEN = graphql(`
   query DeviceStatesByDeviceToken($deviceTokens: [String!]!) {
@@ -57,4 +60,55 @@ const LATEST_MEASUREMENTS = graphql(`
 export async function getLatestMeasurements(deviceToken: string): Promise<LatestMeasurement[]> {
   const data = await gql('device-state', LATEST_MEASUREMENTS, { deviceToken });
   return data.latestMeasurements;
+}
+
+const LATEST_LOCATION = graphql(`
+  query LatestLocation($deviceToken: String!) {
+    latestLocation(deviceToken: $deviceToken) {
+      id
+      deviceToken
+      latitude
+      longitude
+      elevation
+      accuracy
+      speed
+      heading
+      occurredTime
+    }
+  }
+`);
+
+/**
+ * The three distinct answers to "where is this device?", as a value rather than
+ * as an exception.
+ *
+ * 🔴 `forbidden` is not an error case. A device's POSITION is gated on its own
+ * `location:read` authority, deliberately absent from the read-only viewer
+ * baseline, so an ordinary member who can see all of a device's telemetry is
+ * routinely refused here. Folding that into `never-located` would tell the
+ * operator the device has no position — a claim about the DEVICE — when the
+ * truth is a claim about the CALLER. Folding it into a thrown error would show
+ * an outage where the platform is working exactly as designed.
+ */
+export type LatestLocationResult =
+  | { kind: 'located'; location: LatestLocation }
+  | { kind: 'never-located' }
+  | { kind: 'forbidden' };
+
+/**
+ * getLatestLocation returns a device's last-known position — the O(1)
+ * projection, not a scan of its history. Requires location:read.
+ */
+export async function getLatestLocation(deviceToken: string): Promise<LatestLocationResult> {
+  try {
+    const data = await gql('device-state', LATEST_LOCATION, { deviceToken });
+    return data.latestLocation
+      ? { kind: 'located', location: data.latestLocation }
+      : { kind: 'never-located' };
+  } catch (err) {
+    // Only a refusal becomes a value; every other failure stays a failure, so a
+    // broken service is never dressed up as a permission boundary.
+    if (isForbiddenError(err)) return { kind: 'forbidden' };
+    throw err;
+  }
 }
