@@ -854,6 +854,13 @@ export type DeviceCommandVocabularyQueryVariables = Exact<{
 
 export type DeviceCommandVocabularyQuery = { deviceCommandVocabulary: { constrained: boolean, commands: Array<{ commandKey: string, name: string | null, description: string | null, parameterSchema: string | null }> } | null };
 
+export type DeviceLocationDeclarationQueryVariables = Exact<{
+  deviceToken: string;
+}>;
+
+
+export type DeviceLocationDeclarationQuery = { deviceLocationDeclaration: { declared: boolean, declaration: { expectedAccuracyMeters: number | null, expectedUpdateIntervalSeconds: number | null } | null } | null };
+
 export type CreateCommandDefinitionMutationVariables = Exact<{
   request?: CommandDefinitionCreateRequest | null | undefined;
 }>;
@@ -2115,6 +2122,17 @@ export const DeviceCommandVocabularyDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<DeviceCommandVocabularyQuery, DeviceCommandVocabularyQueryVariables>;
+export const DeviceLocationDeclarationDocument = new TypedDocumentString(`
+    query DeviceLocationDeclaration($deviceToken: String!) {
+  deviceLocationDeclaration(deviceToken: $deviceToken) {
+    declared
+    declaration {
+      expectedAccuracyMeters
+      expectedUpdateIntervalSeconds
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceLocationDeclarationQuery, DeviceLocationDeclarationQueryVariables>;
 export const CreateCommandDefinitionDocument = new TypedDocumentString(`
     mutation CreateCommandDefinition($request: CommandDefinitionCreateRequest) {
   createCommandDefinition(request: $request) {

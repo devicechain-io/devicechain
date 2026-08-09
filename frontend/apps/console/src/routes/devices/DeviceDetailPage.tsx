@@ -150,9 +150,12 @@ export default function DeviceDetailPage() {
             <SectionPanel title={t('latestReadingsTitle')}>
               <DeviceReadingsPanel deviceToken={device.token} />
             </SectionPanel>
-            <SectionPanel title={t('latestPositionTitle')}>
-              <DeviceLocationPanel deviceToken={device.token} />
-            </SectionPanel>
+            {/* No SectionPanel wrapper here, deliberately: the position panel owns
+                its own card because it can decide to render NOTHING. A device whose
+                profile declares no position — and which has no stored position —
+                gets no panel at all, and a wrapper here would leave its heading
+                stranded above an empty box. */}
+            <DeviceLocationPanel deviceToken={device.token} />
           </div>
         </TabsContent>
         <TabsContent value="events">

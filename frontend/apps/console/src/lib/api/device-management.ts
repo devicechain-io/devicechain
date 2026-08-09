@@ -20,6 +20,7 @@ import type {
   MetricDefinitionCreateRequest,
   CommandDefinitionsQuery,
   DeviceCommandVocabularyQuery,
+  DeviceLocationDeclarationQuery,
   CommandDefinitionCreateRequest,
   DetectionRulesQuery,
   DetectionRuleCreateRequest,
@@ -55,6 +56,13 @@ export type CommandDefinition = CommandDefinitionsQuery['commandDefinitions']['r
 // Null when the token resolves to no device — a saved view can outlive its device.
 export type DeviceCommandVocabulary = DeviceCommandVocabularyQuery['deviceCommandVocabulary'];
 export type PublishedCommand = NonNullable<DeviceCommandVocabulary>['commands'][number];
+// Whether a device reports its own position, resolved through the profile version the
+// device ACTUALLY RESOLVES (its type's profile's active PUBLISHED version) — NOT the
+// draft on DeviceProfile.location, which is what an author is editing. Null when the
+// token resolves to no device; `declared: false` is the different, real answer that a
+// live device's profile says nothing about position.
+export type DeviceLocationCapability =
+  DeviceLocationDeclarationQuery['deviceLocationDeclaration'];
 export type DetectionRule = DetectionRulesQuery['detectionRules']['results'][number];
 
 // Re-export the generated request inputs so forms can type their request objects
@@ -871,6 +879,36 @@ export async function getDeviceCommandVocabulary(
 ): Promise<DeviceCommandVocabulary> {
   const data = await gql('device-management', DEVICE_COMMAND_VOCABULARY, { deviceToken });
   return data.deviceCommandVocabulary;
+}
+
+const DEVICE_LOCATION_DECLARATION = graphql(`
+  query DeviceLocationDeclaration($deviceToken: String!) {
+    deviceLocationDeclaration(deviceToken: $deviceToken) {
+      declared
+      declaration {
+        expectedAccuracyMeters
+        expectedUpdateIntervalSeconds
+      }
+    }
+  }
+`);
+
+// getDeviceLocationDeclaration answers "does THIS device report its position?" in one
+// hop, through the profile version the device actually resolves.
+//
+// 🔴 Do NOT reach for `getDeviceProfile(...).location` instead. That is the editable
+// DRAFT: a surface keyed off it appears and disappears on an unpublished edit, and it
+// costs two extra sequential round-trips to reach (device → type → profile).
+//
+// 🔴 `declared: false` means "nothing on record says this device reports a position".
+// It does NOT mean the device has no position — ingest never gates on the declaration,
+// so an undeclared device's fixes are stored like any other. Never render this as "no
+// position"; check for a stored position too.
+export async function getDeviceLocationDeclaration(
+  deviceToken: string,
+): Promise<DeviceLocationCapability> {
+  const data = await gql('device-management', DEVICE_LOCATION_DECLARATION, { deviceToken });
+  return data.deviceLocationDeclaration ?? null;
 }
 
 // listCommandDefinitionsForDevice resolves a device to the command definitions AUTHORED

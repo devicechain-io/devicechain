@@ -249,6 +249,15 @@ func (api *MockApi) LocationDeclarationByDeviceType(ctx context.Context, deviceT
 	return api.LocationDeclarationResult, nil
 }
 
+// DeviceLocationDeclaration (ADR-078) is the per-device-token read of the same
+// published declaration. It uses testify expectations rather than the plain fields
+// above because nothing in the ingest path calls it — it is a query surface, so a
+// test that exercises it is asserting on it deliberately.
+func (api *MockApi) DeviceLocationDeclaration(ctx context.Context, deviceToken string) (*model.DeviceLocationCapability, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.DeviceLocationCapability), args.Error(1)
+}
+
 func (api *MockApi) CreateCommandDefinition(ctx context.Context, request *model.CommandDefinitionCreateRequest) (*model.CommandDefinition, error) {
 	args := api.Mock.Called()
 	return args.Get(0).(*model.CommandDefinition), args.Error(1)

@@ -19,19 +19,61 @@
 // recorded" would be a statement about the DEVICE; the truth is a statement
 // about the CALLER, so the refusal gets its own copy and its own look — neither
 // the empty state's wording nor the error state's alarm.
+//
+// 🔴 UNDECLARED IS NOT "NO POSITION" EITHER — and this is why the panel owns its
+// own SectionPanel and can render NOTHING. A profile may declare that its devices
+// do not report position, and a device of that kind should not get a position
+// panel at all. But the declaration is DESCRIPTIVE: ingest never gates on it, so a
+// device that reports a fix before anyone declares it keeps every fix it sent.
+// Hiding on the declaration alone would therefore hide REAL, STORED DATA behind an
+// unedited profile — the exact failure the platform refuses to make at ingest, and
+// it must not be reintroduced one layer up in the UI. Hence the rule below.
 import { useTranslation } from 'react-i18next';
 import { Lock } from 'lucide-react';
 import { hasAuthority } from '@devicechain/client';
 import { useAuth } from '@/auth/AuthProvider';
 import { useQuery } from '@/lib/hooks/use-query';
+import { SectionPanel } from '@/components/ui/section-panel';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { getLatestLocation, type LatestLocation, type LatestLocationResult } from '@/lib/api/device-state';
+import { getDeviceLocationDeclaration, type DeviceLocationCapability } from '@/lib/api/device-management';
 import { formatTime } from '@/lib/utils';
 
 // The authority that gates every position surface on the platform.
 const LOCATION_READ = 'location:read';
+
+/**
+ * THE HIDE RULE, stated once.
+ *
+ * The panel disappears only when BOTH are true:
+ *
+ *   1. the device's profile — its ACTIVE PUBLISHED version, never the draft —
+ *      declares no position, AND
+ *   2. the server positively answered that no position is stored.
+ *
+ * Both halves are load-bearing:
+ *
+ *   - Without (1) the panel would show for every device on the platform, which is
+ *     the state this slice exists to end.
+ *   - Without (2) an undeclared device that IS reporting position would have its
+ *     real, stored fixes hidden by an unedited profile. A declaration is metadata
+ *     an operator may simply not have written yet; data is data.
+ *
+ * Everything that is not a definite "no" keeps the panel: a `forbidden` position
+ * read is NOT evidence of absence (it says the CALLER may not look, not that the
+ * device never moved), a still-loading or failed declaration read is not evidence
+ * either, and a null capability (the token resolved to no device) says nothing
+ * about position at all. The rule fails OPEN toward showing, because showing an
+ * empty panel is a cosmetic cost and hiding a fix is a correctness one.
+ */
+function panelIsHidden(
+  capability: DeviceLocationCapability | null,
+  position: LatestLocationResult | null,
+): boolean {
+  return capability?.declared === false && position?.kind === 'never-located';
+}
 
 export function DeviceLocationPanel({ deviceToken }: { deviceToken: string }) {
   const { t } = useTranslation('devices');
@@ -49,6 +91,47 @@ export function DeviceLocationPanel({ deviceToken }: { deviceToken: string }) {
         : Promise.resolve<LatestLocationResult>({ kind: 'forbidden' }),
     [deviceToken, mayReadLocation],
   );
+
+  // Whether this KIND of device reports position at all, read through the published
+  // profile version. Gated on device:read, so every viewer can ask — a user who may
+  // not see coordinates can still be told the panel is irrelevant here.
+  //
+  // Its failure is swallowed on purpose: this query only ever decides whether to
+  // HIDE, so a failed metadata lookup must degrade to showing the position panel,
+  // never to an error where the position itself loaded fine.
+  const { data: capability, loading: capabilityLoading } = useQuery<DeviceLocationCapability>(
+    () => getDeviceLocationDeclaration(deviceToken).catch(() => null),
+    [deviceToken],
+  );
+
+  // The hide decision is still open while the declaration is in flight, so render
+  // nothing rather than flashing a panel that is about to be removed. Once the
+  // declaration says the device DOES report position the panel is staying, so the
+  // position's own load shows a spinner inside it as before; only an undeclared
+  // device has to wait for the position too, because that is the one case where the
+  // answer can still go either way.
+  if (capabilityLoading) return null;
+  if (capability?.declared === false && loading) return null;
+  if (panelIsHidden(capability, data)) return null;
+
+  return (
+    <SectionPanel title={t('latestPositionTitle')}>
+      <LocationBody data={data} loading={loading} error={error} />
+    </SectionPanel>
+  );
+}
+
+// LocationBody renders the position itself, once the panel has decided it exists.
+function LocationBody({
+  data,
+  loading,
+  error,
+}: {
+  data: LatestLocationResult | null;
+  loading: boolean;
+  error: string | null;
+}) {
+  const { t } = useTranslation('devices');
 
   if (loading) return <LoadingState description={t('loadingLocation')} />;
   if (error) return <ErrorState description={error} />;

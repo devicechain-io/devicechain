@@ -254,6 +254,30 @@ type DeviceCommandVocabulary {
     commands: [PublishedCommand!]!
 }
 
+# Whether a device reports its own position, resolved through the profile version the
+# device ACTUALLY RESOLVES (ADR-078 / ADR-045) — its type's profile's active PUBLISHED
+# version, never the editable draft on DeviceProfile.location.
+#
+# That distinction is the whole reason this type exists. A client that read the draft
+# would show and hide a position panel on an unpublished edit, which is the same
+# publish-boundary confusion deviceCommandVocabulary was added to prevent for commands.
+#
+# 🔴 UNDECLARED IS NOT "NO POSITION". The declaration describes and displays; it never
+# permits, and ingest never gates on it, so a device that reports a position before
+# anyone declares it keeps every fix it sent. A consumer must not render `declared:
+# false` as "this device has no position" — check for a stored position too.
+type DeviceLocationCapability {
+    # Whether the resolved published version declares that this device reports position.
+    # False covers three sources that mean one thing to a reader — the type has no
+    # profile, the profile was never published, or the published version declares no
+    # location.
+    declared: Boolean!
+    # The declaration itself, or null when `declared` is false. A present object with
+    # neither field set is a real, distinct answer — "reports position, nothing stated
+    # about it" — and is NOT the same claim as null.
+    declaration: DeviceLocationDeclaration
+}
+
 # Represents a typed command declared on a device profile (ADR-043/ADR-045). parameterSchema
 # is the ordered []CommandParameter argument contract as a JSON string, which drives the
 # console command form and constrains an issued command's payload at enqueue (the
@@ -1285,6 +1309,16 @@ type Query {
     # deleted, and erroring would take the rest of a batched query down with it. It
     # matches devicesByToken, which omits tokens it cannot resolve.
     deviceCommandVocabulary(deviceToken: String!): DeviceCommandVocabulary
+    # Answer "does THIS device report its position?" (ADR-078) in one hop: resolves
+    # device -> its type -> its profile's active PUBLISHED version -> the position
+    # declaration frozen into it. The published resolution is the point — the draft on
+    # DeviceProfile.location is what an author is editing, not what a device resolves.
+    #
+    # Null when the token resolves to no device, matching deviceCommandVocabulary: a
+    # saved view can outlive its device, and erroring would null out every sibling in a
+    # batched document. A real device that declares nothing answers `declared: false`,
+    # which is a different fact and stays distinguishable from this null.
+    deviceLocationDeclaration(deviceToken: String!): DeviceLocationCapability
     # Find detection rules by unique id.
     detectionRulesById(ids: [ID!]!): [DetectionRule!]!
     # Find detection rules by unique token.

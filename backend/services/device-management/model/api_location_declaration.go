@@ -49,3 +49,38 @@ func (api *Api) LocationDeclarationByDeviceType(ctx context.Context, deviceTypeI
 	}
 	return snap.Location, nil
 }
+
+// DeviceLocationDeclaration resolves device → type → the profile's active PUBLISHED
+// position declaration (ADR-078), the listing surface a console needs to decide
+// whether a device gets a position panel at all.
+//
+// It is built ON TOP of LocationDeclarationByDeviceType rather than resolving the
+// snapshot itself, exactly as ValidateCommandEnqueue is built on
+// DeviceCommandVocabulary: what the console is told and what the ingest warning
+// judges against are then the same reading, and cannot drift into a console that
+// hides a panel for a device the platform is meanwhile recording positions for.
+//
+// A token that resolves to no device returns DeviceExists=false rather than an error.
+// That is a state a client legitimately holds — a saved view outlives the device it
+// was pointed at — and it stays distinct from a real device that simply declares
+// nothing, which is the distinction the whole nullable design rests on.
+//
+// 🔴 Still DESCRIPTIVE. An undeclared device's positions are stored anyway, so a
+// consumer must never read "undeclared" as "has no position" — see the console
+// panel, which hides itself only when the declaration is absent AND no position
+// exists.
+func (api *Api) DeviceLocationDeclaration(ctx context.Context, deviceToken string) (*DeviceLocationCapability, error) {
+	devices, err := api.DevicesByToken(ctx, []string{deviceToken})
+	if err != nil {
+		return nil, err
+	}
+	if len(devices) == 0 {
+		return &DeviceLocationCapability{DeviceExists: false}, nil
+	}
+
+	declaration, err := api.LocationDeclarationByDeviceType(ctx, devices[0].DeviceTypeId)
+	if err != nil {
+		return nil, err
+	}
+	return &DeviceLocationCapability{DeviceExists: true, Declaration: declaration}, nil
+}
