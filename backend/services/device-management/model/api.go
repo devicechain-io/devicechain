@@ -240,6 +240,12 @@ type DeviceManagementApi interface {
 	// onto resolved events (ADR-051).
 	ProfileScopeByDeviceType(ctx context.Context, deviceTypeId uint) (*ProfileScope, error)
 
+	// LocationDeclarationByDeviceType resolves whether a device type's active PUBLISHED
+	// profile version declares that its devices report their own position (ADR-078),
+	// and with what expectations. nil means undeclared. 🔴 Descriptive only — ingest
+	// never gates on it; a location event from an undeclared device is stored.
+	LocationDeclarationByDeviceType(ctx context.Context, deviceTypeId uint) (*LocationDeclaration, error)
+
 	// Command definitions (ADR-043).
 	CreateCommandDefinition(ctx context.Context, request *CommandDefinitionCreateRequest) (*CommandDefinition, error)
 	UpdateCommandDefinition(ctx context.Context, token string, request *CommandDefinitionCreateRequest) (*CommandDefinition, error)

@@ -45,6 +45,10 @@ type EventResolver struct {
 	// E13). It is shared across all workers and may be nil in tests; Start() is
 	// nil-safe so a nil value no-ops.
 	metrics *core.ProcessorMetrics
+	// locationMemo bounds the undeclared-position warning to one line per (device,
+	// profile version) (ADR-078). It is SHARED across the whole worker pool — see
+	// newUndeclaredLocationMemo — so the bound is per process, not per worker.
+	locationMemo *undeclaredLocationMemo
 }
 
 // Results of event resolution process.
@@ -54,21 +58,34 @@ type EventResolutionResults struct {
 }
 
 // Create a new event resolver.
+//
+// locationMemo bounds the undeclared-position warning (ADR-078). The pool builds ONE
+// and hands the same instance to every worker, which makes the "at most one warning
+// per (device, profile version)" bound hold per PROCESS. Passing nil is supported and
+// gives this resolver a private memo: still bounded, still never per-event, but the
+// bound becomes per-worker — correct for a lone resolver (as in tests), wrong by a
+// factor of the pool width for the real pool, which is why initializeEventResolvers
+// shares one explicitly rather than letting each worker default.
 func NewEventResolver(workerId int, api model.DeviceManagementApi, authMode string,
 	unrez <-chan messaging.Message,
 	invalid func(error, messaging.Message),
 	resolved func(messaging.Message, string, []EventResolutionResults),
 	failed func(string, uint, esmodel.UnresolvedEvent, error, string),
-	metrics *core.ProcessorMetrics) *EventResolver {
+	metrics *core.ProcessorMetrics,
+	locationMemo *undeclaredLocationMemo) *EventResolver {
+	if locationMemo == nil {
+		locationMemo = newUndeclaredLocationMemo()
+	}
 	return &EventResolver{
-		WorkerId:   workerId,
-		Api:        api,
-		AuthMode:   authMode,
-		Unresolved: unrez,
-		Invalid:    invalid,
-		Resolved:   resolved,
-		Failed:     failed,
-		metrics:    metrics,
+		WorkerId:     workerId,
+		Api:          api,
+		AuthMode:     authMode,
+		Unresolved:   unrez,
+		Invalid:      invalid,
+		Resolved:     resolved,
+		Failed:       failed,
+		metrics:      metrics,
+		locationMemo: locationMemo,
 	}
 }
 
@@ -497,8 +514,83 @@ func (rez *EventResolver) HandleStandardEvent(ctx context.Context,
 		return nil, reason, err
 	}
 
+	// Surface a position reported by a device whose profile never declared one
+	// (ADR-078). Deliberately AFTER the payload has already resolved and with no
+	// return value: it observes, it never gates. Note it does not appear next to the
+	// measurement validation above, which CAN fail the event — putting it there would
+	// invite the next reader to give it the same power.
+	if event.EventType == esmodel.Location {
+		rez.warnIfLocationUndeclared(ctx, device, scope)
+	}
+
 	result := rez.MergeToResolveEvent(device, anchors, memberships, event, resolved, scope)
 	return []EventResolutionResults{*result}, 0, nil
+}
+
+// warnIfLocationUndeclared reports, at most once per (device, profile version), that a
+// device is sending positions its profile does not declare (ADR-078).
+//
+// 🔴 It cannot reject, filter or alter anything, and that is the point. An undeclared
+// position is a description gap, never a permission failure: the fix is stored in
+// full, exactly as a declared one would be, because a device that started reporting
+// its position before someone got around to editing the profile must not lose data
+// over an unedited form. Everything here is therefore side-effect-free apart from a
+// log line — no error is returned, and a failure to even determine the answer is
+// swallowed at debug level rather than escalated.
+//
+// Precedent note, because it is easy to copy the wrong one: the nearest existing
+// warning, dropMeasurement, fires only when an entry is DISCARDED — an undeclared but
+// numeric measurement is stored SILENTLY, with no warning at all. So there is no
+// "stored with a warning" behaviour in this file to imitate; this adds one, and the
+// per-(device, version) bound is what makes adding it safe.
+func (rez *EventResolver) warnIfLocationUndeclared(ctx context.Context,
+	device *model.Device, scope *model.ProfileScope) {
+	versionToken := ""
+	if scope != nil {
+		versionToken = scope.ProfileVersionToken
+	}
+	// Tenant is part of the key because device tokens are unique per tenant, not
+	// globally. No tenant in context means no key that could isolate two tenants'
+	// identically-named devices, so skip the memo's bookkeeping rather than risk one
+	// tenant's device muting another's.
+	tenant, hasTenant := core.TenantFromContext(ctx)
+	if !hasTenant {
+		return
+	}
+
+	// The cheap gate first: a (device, version) already reported never reaches the
+	// declaration lookup, so the steady-state cost of a chatty undeclared device is a
+	// map probe, not a query.
+	if rez.locationMemo.alreadyWarned(tenant, device.Token, versionToken) {
+		return
+	}
+
+	declared, cached := rez.locationMemo.declared(device.DeviceTypeId, versionToken)
+	if !cached {
+		decl, err := rez.Api.LocationDeclarationByDeviceType(ctx, device.DeviceTypeId)
+		if err != nil {
+			// Nothing is cached and nothing is claimed, so a transient failure is retried
+			// on the device's next fix instead of permanently suppressing the warning.
+			// Debug, not warn: failing to describe an event is not worth a warning of its
+			// own on a path whose job is to reduce log volume.
+			log.Debug().Err(err).Str("device", device.Token).
+				Msg("Unable to resolve the profile's location declaration; skipping the undeclared-position check")
+			return
+		}
+		declared = decl != nil
+		rez.locationMemo.rememberDeclared(device.DeviceTypeId, versionToken, declared)
+	}
+	if declared {
+		return
+	}
+
+	// Claim under one lock so two workers handling two fixes from the same device
+	// concurrently produce one warning between them, not one each.
+	if !rez.locationMemo.claimWarning(tenant, device.Token, versionToken) {
+		return
+	}
+	log.Warn().Str("device", device.Token).Str("profileVersion", versionToken).
+		Msg("Device reported a position its profile does not declare; the position was stored — declare a location on the profile and publish it to describe the expected accuracy and update rate (this is reported once per device per profile version)")
 }
 
 // deviceAnchors returns the device's tracked-relationship targets as anchors —

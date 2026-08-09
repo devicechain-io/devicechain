@@ -260,9 +260,15 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 	// Make channels and workers for distributed processing.
 	iproc.messages = make(chan messaging.Message, MESSAGE_BACKLOG_SIZE)
 	iproc.resolvers = make([]*EventResolver, 0)
+	// ONE memo for the whole pool (ADR-078). The workers all read the same channel, so
+	// successive events from one device land on arbitrary workers; a per-worker memo
+	// would bound the undeclared-position warning per worker and report the same
+	// misconfiguration once per worker instead of once.
+	locationMemo := newUndeclaredLocationMemo()
 	for w := 1; w <= EVENT_RESOLVER_COUNT; w++ {
 		resolver := NewEventResolver(w, iproc.Api, iproc.AuthMode, iproc.messages,
-			iproc.OnInvalidEvent, iproc.OnResolvedEvent, iproc.OnUnresolvedEvent, iproc.metrics)
+			iproc.OnInvalidEvent, iproc.OnResolvedEvent, iproc.OnUnresolvedEvent, iproc.metrics,
+			locationMemo)
 		iproc.resolvers = append(iproc.resolvers, resolver)
 		// Resolvers run on a background context (not the cancelable read context)
 		// so that on shutdown they drain the remaining buffered messages to

@@ -58,4 +58,15 @@ type ProfileSnapshot struct {
 	// other lists they are captured whole; event-processing compiles them when it
 	// consumes the published-rule fact.
 	Rules []*DetectionRule `json:"rules"`
+	// Location is the profile's position declaration (ADR-078) frozen into this
+	// version. 🔴 It is NOT a fourth list: it is a nullable SINGULAR struct, because a
+	// device reports ITS OWN position once. nil means the profile does not declare
+	// that its devices report position, and that nil is a real value the console reads
+	// (no location declared ⇒ no map, no track, no last-fix panel) — so unlike the
+	// three lists above it is deliberately NOT normalized away by
+	// parseProfileSnapshot. `omitempty` keeps an undeclared profile's snapshot free of
+	// a `"location":null` key, but absent and null both parse back to nil, so the
+	// distinction that matters — nil versus a declared-but-empty `{}` — survives
+	// either encoding.
+	Location *LocationDeclaration `json:"location,omitempty"`
 }

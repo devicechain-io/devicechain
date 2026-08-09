@@ -112,6 +112,43 @@ type DeviceProfile implements Model & TokenReference & NamedEntity & MetadataEnt
     metricDefinitions: [MetricDefinition!]!
     commandDefinitions: [CommandDefinition!]!
     detectionRules: [DetectionRule!]!
+    # The profile's DRAFT position declaration, or null when devices built on this
+    # profile do not report their own position. Note this is a single nullable object
+    # and not a list — a device reports its position once — so null is the whole
+    # display rule: no declaration means no map, no track, no last-fix panel.
+    location: DeviceLocationDeclaration
+}
+
+# Declares that devices built on a profile report THEIR OWN position, and what an
+# operator should expect of it. Its presence is the declaration; both fields inside
+# are optional refinements, so an object with neither set still means "this device
+# reports position" and is a different statement from a null declaration.
+#
+# It describes and displays — it never permits. A device that reports a position
+# before anyone declares it keeps every fix it sent; the platform stores the data and
+# surfaces the gap, rather than discarding data on the strength of an unedited
+# profile.
+#
+# The coordinate contract is fixed platform-wide and cannot be overridden per device
+# or per profile: WGS84 / EPSG:4326 decimal degrees, elevation in metres above the
+# ellipsoid, accuracy in metres, speed in metres per second, heading in degrees
+# clockwise from true north in [0, 360).
+type DeviceLocationDeclaration {
+    # Horizontal accuracy an operator should expect from this kind of device, in
+    # metres. Descriptive: a worse fix is still stored, unchanged.
+    expectedAccuracyMeters: Float
+    # How often a fix is expected to arrive, in seconds. Descriptive: nothing alarms
+    # on it here — an absence rule on the profile is the mechanism for that.
+    expectedUpdateIntervalSeconds: Int
+}
+
+# Sets a profile's position declaration. Supplying it declares that these devices
+# report their own position; omitting it (or passing null) on an update CLEARS an
+# existing declaration, which is how a profile stops declaring position. Both fields
+# are optional, so `{}` is the valid "reports position, no expectations stated" form.
+input DeviceLocationDeclarationInput {
+    expectedAccuracyMeters: Float
+    expectedUpdateIntervalSeconds: Int
 }
 
 # An immutable published snapshot of a device profile's whole capability set
@@ -503,6 +540,10 @@ input DeviceProfileCreateRequest {
     description: String
     category: String
     metadata: String
+    # Whether devices built on this profile report their own position, and what to
+    # expect of it. Replaced wholesale on update like every other field here, so
+    # leaving it out of an update clears an existing declaration.
+    location: DeviceLocationDeclarationInput
 }
 
 # Criteria used when searching for device profiles.

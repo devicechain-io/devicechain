@@ -113,6 +113,39 @@ func (r *DeviceProfileResolver) DetectionRules() ([]*DetectionRuleResolver, erro
 	return result, nil
 }
 
+// Location is the profile's DRAFT position declaration (ADR-078), or null when
+// devices built on this profile do not report their own position. The null is a real
+// answer the console acts on, not a missing value: it is what tells the UI to render
+// no map for this kind of device.
+func (r *DeviceProfileResolver) Location() (*DeviceLocationDeclarationResolver, error) {
+	decl, err := r.M.Location()
+	if err != nil {
+		return nil, err
+	}
+	if decl == nil {
+		return nil, nil
+	}
+	return &DeviceLocationDeclarationResolver{M: *decl, S: r.S, C: r.C}, nil
+}
+
+// -----------------------------------
+// Location declaration resolver
+// -----------------------------------
+
+type DeviceLocationDeclarationResolver struct {
+	M model.LocationDeclaration
+	S *SchemaResolver
+	C context.Context
+}
+
+func (r *DeviceLocationDeclarationResolver) ExpectedAccuracyMeters() *float64 {
+	return r.M.ExpectedAccuracyMeters
+}
+
+func (r *DeviceLocationDeclarationResolver) ExpectedUpdateIntervalSeconds() *int32 {
+	return r.M.ExpectedUpdateIntervalSeconds
+}
+
 // --------------------------------------
 // Device profile search results resolver
 // --------------------------------------
