@@ -447,6 +447,31 @@ type GeoFenceSearchResults {
     pagination: SearchResultsPagination!
 }
 
+# The FROZEN fence set of one fence-set version: the fences that were live at the instant
+# an event stamped with that version was resolved. It is not an entity — it has no id and
+# cannot be edited or deleted — it is the immutable content of a version.
+#
+# This is what makes replaying history CORRECT rather than vacuous. Evaluating last week's
+# events against today's fences would answer a different question; each of those events
+# names the version whose snapshot holds the geometry it was actually resolved against.
+type GeoFenceSetSnapshot {
+    # The version this set is the frozen state of. 0 means the tenant had never created a
+    # fence when the event was resolved — an empty fence set as knowledge, not as absence.
+    version: Int!
+    # The fences as of this version, ordered by token.
+    fences: [GeoFenceSnapshotEntry!]!
+}
+
+# One fence inside a frozen snapshot. Name and description are deliberately absent: the
+# snapshot freezes only what changes what a rule computes, so a typo fix in a fence's name
+# does not make history read differently.
+type GeoFenceSnapshotEntry {
+    # The stable per-tenant token a rule names this fence by.
+    token: String!
+    # The geometry envelope as it stood at this version — NOT the fence's current geometry.
+    geometry: String!
+}
+
 # A raised alarm (ADR-041) — the operational alarm object. Raised when a DETECT rule's
 # condition fires (ADR-057, via the contributor-set integrator), keyed by (originator,
 # alarmKey): there is at most one live alarm per key, so re-crossings dedup into the
@@ -1395,6 +1420,16 @@ type Query {
     # change (create, edit, delete) mints the next one. 0 means the tenant has never had a
     # fence, which is distinct from a minted version whose fence set happens to be empty.
     currentFenceSetVersion: Int!
+    # The FROZEN fence set of one fence-set version — the fences that were live when an
+    # event stamped with that version was resolved. This is how a consumer resolves a
+    # version it no longer holds in memory: an authoring preview replaying last week, a
+    # late redelivery, a cold start. An unknown non-zero version is an error, because a
+    # stamp naming a version that is not on record means the history was truncated and
+    # answering "empty" would read as "no fences" rather than "cannot know".
+    geoFenceSetSnapshot(version: Int!): GeoFenceSetSnapshot!
+    # The frozen fence set of the tenant's CURRENT version — the version and its fences
+    # read together, so the two cannot disagree across a concurrent fence edit.
+    currentGeoFenceSet: GeoFenceSetSnapshot!
     # Find raised alarms by unique id.
     alarmsById(ids: [ID!]!): [Alarm!]!
     # Find raised alarms by unique token.

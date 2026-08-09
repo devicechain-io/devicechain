@@ -8,6 +8,7 @@ import (
 	_ "embed"
 
 	"github.com/devicechain-io/dc-event-processing/internal/nldraft"
+	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
 )
 
@@ -32,6 +33,15 @@ type SchemaResolver struct {
 	// inference path is not wired (ai-inference is an opt-in area); the draft resolver
 	// nil-checks it and returns an unavailable result rather than panicking.
 	Drafter *nldraft.Drafter
+	// FenceSets resolves a fence-set version's FROZEN geofence snapshot from device-management
+	// (ADR-078). The replay preview needs it because a previewed rule's containment calls are
+	// stamped with the versions those events carried — often ones the live projection has long
+	// evicted — so without a source a geofence preview would report eval errors instead of the
+	// answer the rule would really have given. It is off the single-writer loop and may block,
+	// which is exactly why the preview may hold it and the fan-out may not. Nil when the seam is
+	// not wired (no service secret / no device-management coordinate), in which case a geofence
+	// preview degrades loudly rather than silently reporting "never fires".
+	FenceSets runtime.FenceSetSource
 }
 
 // EventProcessingInfo resolves the scaffold identity query.

@@ -183,6 +183,25 @@ type ResolvedEventsProcessor struct {
 	// (slice 4c-3b-2). Nil disables persistence + the dynamic-threshold view (the scaffold/test path).
 	AttributeStore *model.DeviceAttributeStore
 
+	// FenceSetReader is the durable consumer of device-management's geofence-set fact stream
+	// (ADR-078). When set, a goroutine drains it and marshals each newly-minted version's FROZEN
+	// fence set onto the single-writer loop, where it enters the loop-owned fenceView — so a
+	// location event's containment predicate resolves from memory and the loop never blocks on a
+	// read back into device-management. Nil disables live fence updates (the scaffold/test path).
+	FenceSetReader messaging.MessageReader
+
+	// FenceSets is the OFF-LOOP seam onto device-management's frozen fence-set archive, used to
+	// re-seed fenceView at startup (CurrentFenceSet) — a live cache survives no restart, and the
+	// fact stream carries only changes from now on, so without this a restarted engine would be
+	// blind to every tenant's fences until their next fence edit.
+	//
+	// 🔴 IT IS NEVER CONSULTED ON THE LOOP. The hot path reads fenceView and nothing else; a
+	// version the view does not hold is reported as a loud counted eval error, never resolved by
+	// a network call taken while every tenant's event processing waits behind it. Nil leaves the
+	// view disabled entirely (the scaffold/test path), which is the honest state: an unfed
+	// projection that errors is visible, an empty one that answers "outside" would not be.
+	FenceSets runtime.CurrentFenceSetSource
+
 	// armer arms dead-man absence timers for never-seen devices, cross-referencing the roster +
 	// active-version read-models (ADR-051 slice 4c-2b-2b). It is built in ExecuteStart once the
 	// engine is final (after replay), reconciled from the durable projections, then driven live on
@@ -220,13 +239,25 @@ type ResolvedEventsProcessor struct {
 	// retains SUPERSEDED versions — see runtime.MaxRetainedFenceSetVersions for the bound and why
 	// it is the design's real obligation.
 	//
-	// 🔴 NOTHING FEEDS IT YET. Populating it needs the frozen snapshot to cross the service seam,
-	// and device-management publishes no fence fact and exposes GeoFenceSetSnapshotAt on no
-	// GraphQL door — so wiring a runtime.FenceSetSource is a device-management change and is
-	// deliberately NOT made here. Until then this is nil, the fan-out passes a nil fence set, and
-	// a rule calling inFence errors (ErrNoFenceSet, counted on the eval-error metric) rather than
-	// quietly answering "outside". That is the fail-closed direction: an unfed projection is
-	// visible, an empty one would be invisible.
+	// It is fed from BOTH directions, and it needs both. The live feed is the geofence-set fact
+	// stream (FenceSetReader → applyFenceSet): a fence edit mints a version and announces its
+	// frozen set, so the loop's next event evaluates against it with no read at all. The startup
+	// feed is the reconcile (FenceSets → reconcileFenceView), which re-seeds the tenants' current
+	// sets from device-management's archive — because a live cache survives no restart and a fact
+	// stream carries only changes from now on, so the feed alone would leave a restarted engine
+	// blind until somebody happened to edit a fence.
+	//
+	// Neither feed can be complete, and the view does not pretend otherwise: an event may name a
+	// version the reconcile did not seed and no fact announced (a replay, a late redelivery, a
+	// preview of last week). Such a miss stays nil here, the fan-out passes a nil fence set, and a
+	// rule calling inFence errors (ErrNoFenceSet, counted on the eval-error metric) rather than
+	// quietly answering "outside". That is the fail-closed direction and it is deliberately NOT
+	// repaired by an on-demand fetch from the loop: an unfed projection is visible, an empty one
+	// would be invisible, and a blocking read here would stall every tenant behind one round trip.
+	// The off-loop callers that MAY block — the authoring preview, a replay — resolve such a
+	// version through a FenceSetSource instead (runtime.LoadingFenceSets).
+	//
+	// Nil on the scaffold/test path (no FenceSets source), where every containment call errors.
 	fenceView *runtime.FenceSetView
 	// attrUpdates carries a device-identity RECHECK (NOT a value delta) from the attribute /
 	// entity-deleted consumers to the single-writer loop, where applyAttrRecheck re-reads the
@@ -242,6 +273,13 @@ type ResolvedEventsProcessor struct {
 	// (only applyAttrRecheck / retryAttrRechecks touch it); bounded by distinct devices, so an outage
 	// cannot grow it with event volume.
 	attrRetries map[attrUpdate]struct{}
+	// fenceUpdates carries one tenant's newly-minted FROZEN fence set from the geofence-set fact
+	// consumer to the single-writer loop, where applyFenceSet installs it in fenceView. Unlike
+	// armUpdates/attrUpdates it carries the VALUE rather than a recheck identity — see
+	// signalFenceSet for why an immutable versioned snapshot needs no re-read to converge.
+	// Buffered modestly: fence edits are human authoring actions, so they do not burst the way a
+	// fleet provisioning run or a config push does.
+	fenceUpdates chan fenceUpdate
 
 	cfg       Config
 	registry  *runtime.RuleRegistry
@@ -361,6 +399,19 @@ type attrUpdate struct {
 	deviceToken string
 }
 
+// fenceUpdate is one tenant's FROZEN fence set, compiled off-loop by the geofence-set fact
+// consumer and installed on the single-writer loop by applyFenceSet (ADR-078).
+//
+// It is the one loop signal in this file that carries a VALUE rather than an identity to re-read.
+// armUpdate and attrUpdate carry identities because the state they mirror is mutable and two
+// consumers over reorderable streams could otherwise install a stale observation; a fence-set
+// version is immutable once minted, so there is no ordering in which two of these could disagree
+// about what version N is, and the set is filed under the version it carries.
+type fenceUpdate struct {
+	tenant string
+	set    *geofence.FenceSet
+}
+
 // NewResolvedEventsProcessor creates a checkpointing resolved-events processor. The
 // engine is built (or restored) from the registry's core rule set at ExecuteStart; the
 // registry (built from a RuleSource) and the derived-event writer are supplied by the
@@ -398,6 +449,9 @@ func NewResolvedEventsProcessor(ms *core.Microservice, reader messaging.MessageR
 		// Buffered generously for the same reason as armUpdates: an attribute config push across a
 		// fleet bursts, and the loop drains one recheck per resolved-event-batch iteration.
 		attrUpdates: make(chan attrUpdate, 256),
+		// Buffered modestly: a fence edit is a human authoring action, so these arrive at
+		// authoring rates rather than at fleet rates, and the loop drains one per iteration.
+		fenceUpdates: make(chan fenceUpdate, 32),
 		// Unbuffered on purpose, unlike the three fact channels. A sender here is a request
 		// waiting for an answer, so buffering would only let it queue behind other purges
 		// while its own deadline ran down; the responder already bounds its wait on the
@@ -491,6 +545,20 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 	if err := rp.startDeadmanGate(ctx); err != nil {
 		return err
 	}
+	// Build the geofence projection BEFORE replay (ADR-078), for the same reason startAttributeView
+	// runs here: replayToHead re-feeds events through applyResolved, which reads fenceView to
+	// resolve the fence set each event was stamped with. Built after replay, every replayed
+	// containment call would report an unresolvable fence set and be skipped — and a skipped sample
+	// on a Duration rule leaves an in-flight hold intact rather than re-deriving it, so the replay
+	// would not reproduce the state the pre-restart engine had.
+	//
+	// Unlike the attribute view, seeding this one is NOT a determinism compromise: the view is keyed
+	// on the VERSION the event carries, so a replayed event resolves the fences that were live when
+	// it happened or nothing at all — never today's fences under yesterday's stamp. What the current-
+	// version seed cannot do is resolve a SUPERSEDED version; that is a miss, reported as such.
+	if err := rp.startFenceView(ctx); err != nil {
+		return err
+	}
 	if err := rp.replayToHead(); err != nil {
 		return err
 	}
@@ -545,6 +613,13 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 	if err := rp.reconcileDeadmanArming(ctx); err != nil {
 		return err
 	}
+	// Re-seed the geofence projection from the freshest archive now replay is done — AFTER
+	// reconcileRegistry, so a tenant whose fence rule only became visible in that reconcile (a
+	// rolling-update overlap in which a peer acked its published-rule fact) is seeded too. Same
+	// freshness the attribute view and the registry take, on this startup goroutine before the loop.
+	if err := rp.reconcileFenceView(ctx); err != nil {
+		return err
+	}
 	rp.readerWG.Add(1)
 	go rp.run()
 	// Launch the live rule-update consumer after the loop is running (so the ruleUpdates
@@ -575,6 +650,13 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 	if rp.AttributeReader != nil {
 		rp.readerWG.Add(1)
 		go rp.runAttributeConsumer()
+	}
+	// The geofence-set consumer keeps the containment projection live (ADR-078): a fence edit mints
+	// a version and announces its frozen set, which this consumer compiles off-loop and hands to the
+	// loop. It stops on procCancel and is joined by readerWG.
+	if rp.FenceSetReader != nil {
+		rp.readerWG.Add(1)
+		go rp.runFenceSetConsumer()
 	}
 	return nil
 }
@@ -898,6 +980,85 @@ func toAttrEntries(rows []model.DeviceAttribute) []runtime.AttrEntry {
 	return out
 }
 
+// startFenceView builds the loop-owned geofence projection and seeds it from device-management's
+// frozen fence-set archive (ADR-078), parallel to startAttributeView. It is a no-op unless a fence
+// source is wired (the scaffold/test path leaves fenceView nil, and every read/put site guards on
+// it) — and leaving it nil there is the honest state, since a view that exists but holds nothing
+// would answer "unresolvable" identically while looking configured.
+//
+// Like the armer's and the attribute view's reconciles it forces no checkpoint: the view is fully
+// re-derivable from device-management's durable snapshots on every restart, so nothing here needs
+// to be persisted.
+func (rp *ResolvedEventsProcessor) startFenceView(ctx context.Context) error {
+	if rp.FenceSets == nil {
+		return nil
+	}
+	rp.fenceView = runtime.NewFenceSetView()
+	return rp.reconcileFenceView(ctx)
+}
+
+// reconcileFenceView seeds (or re-seeds) each fence-rule tenant's CURRENT frozen fence set into
+// the loop-owned projection, reading device-management's archive over the off-loop source.
+//
+// WHY IT EXISTS AT ALL: the projection is an in-memory cache, and the fact stream that feeds it
+// live carries only changes from now on. A restarted engine with no reconcile therefore holds
+// nothing until some human happens to edit a fence — every containment call in between is a
+// counted eval error, i.e. every geofence rule in the instance is silently non-functional for an
+// unbounded stretch after a rollout. That is the gap this closes, and it is the reason a live feed
+// alone was never sufficient.
+//
+// WHY THE CURRENT VERSION IS THE RIGHT THING TO SEED: an event resolved from now on is stamped
+// with the version that is current NOW, so seeding the current set makes the live path whole
+// immediately. It does NOT make replay whole — a replayed event stamped with a superseded version
+// is a miss until a fact or a preview resolves it — and that residual is deliberate: it is
+// reported as a loud counted error rather than papered over with "no fences", and the off-loop
+// callers that can afford to block resolve it through FenceSetSource instead.
+//
+// It runs TWICE at startup, before and after replay, for the same reason reconcileAttributeView
+// does: the pre-replay seed makes replayed containment evaluable, and the post-replay one picks up
+// a peer pod's fence edit committed during our replay (a rolling-update overlap) and any tenant
+// the post-replay registry reconcile has only just revealed to have a fence rule.
+//
+// A per-tenant read failure is logged and skipped rather than failing startup. Refusing to start
+// on it would be the wrong trade: the fence sets are one input to one rule kind, and a
+// device-management blip would otherwise take the whole DETECT engine down for every tenant and
+// every rule. A skipped tenant's containment reports its miss loudly, which is the same fail-safe
+// posture as any other unresolvable version.
+func (rp *ResolvedEventsProcessor) reconcileFenceView(ctx context.Context) error {
+	if rp.fenceView == nil {
+		return nil
+	}
+	tenants := rp.registry.TenantsWithFenceRules()
+	seeded := 0
+	for _, tenant := range tenants {
+		set, err := rp.FenceSets.CurrentFenceSet(ctx, tenant)
+		if err != nil {
+			log.Error().Err(err).Str("tenant", tenant).
+				Msg("Unable to seed the DETECT geofence projection for a tenant; its containment calls report unresolvable until a fence edit.")
+			continue
+		}
+		if set == nil {
+			continue
+		}
+		rp.fenceView.Put(tenant, set)
+		seeded++
+	}
+	log.Info().Int("tenants", len(tenants)).Int("seeded", seeded).
+		Msg("Reconciled the DETECT geofence projection from device-management's frozen fence sets.")
+	return nil
+}
+
+// applyFenceSet installs one tenant's FROZEN fence set in the loop-owned projection, on the
+// single-writer loop. It mutates only the in-memory view — never engine state or the checkpoint
+// sequence (the view is re-derived from device-management's durable snapshots on restart, never
+// snapshotted here) — so it needs no checkpoint of its own.
+func (rp *ResolvedEventsProcessor) applyFenceSet(fu fenceUpdate) {
+	if rp.fenceView == nil {
+		return
+	}
+	rp.fenceView.Put(fu.tenant, fu.set)
+}
+
 // restore loads the durable checkpoint and rebuilds the engine from it, or builds a
 // fresh empty engine when none exists (a new Instance). It runs before any loop, so
 // it needs no synchronization.
@@ -1033,6 +1194,13 @@ func (rp *ResolvedEventsProcessor) run() {
 			// the in-memory view — NOT engine state or the checkpoint sequence (the view is re-derived
 			// from the durable projection on restart, never snapshotted) — so it needs no checkpoint.
 			rp.applyAttrRecheck(at)
+		case fu := <-rp.fenceUpdates:
+			// A newly-minted FROZEN fence set on the single writer: file it under its version in the
+			// containment projection (ADR-078). Like the rechecks above it mutates only an in-memory
+			// view — never engine state or the checkpoint sequence — so it needs no checkpoint; the
+			// view is re-derived from device-management's durable snapshots on restart. A nil
+			// fenceUpdates channel (scaffold path) never selects here.
+			rp.applyFenceSet(fu)
 		case tp := <-rp.tenantPurges:
 			// ADR-077 tenant eviction on the single writer. Unlike every other case here it
 			// answers, and unlike every other case it FORCES a checkpoint: the eviction is not

@@ -180,9 +180,13 @@ type GeoFenceSetVersion struct {
 }
 
 // GeoFenceSetSnapshot is the serialized fence set frozen into a
-// GeoFenceSetVersion.Snapshot. Like ProfileSnapshot it is Go-internal — marshaled and
-// unmarshaled only here, never SQL-built and never exposed as a GraphQL field — so the
-// encoding need only be self-consistent.
+// GeoFenceSetVersion.Snapshot. Like ProfileSnapshot it is never SQL-built, so the encoding
+// need only be self-consistent — but unlike ProfileSnapshot it is no longer Go-internal:
+// it is READ BACK on two seams, the geoFenceSetSnapshot / currentGeoFenceSet GraphQL doors
+// and the fence-set fact (GeoFenceSetMintedEvent), because event-processing's containment
+// projection is a live cache and this service is the archive it re-seeds from. Both seams
+// hand out this document's CONTENT (token + geometry), never its bytes, so the encoding
+// itself is still an implementation detail.
 type GeoFenceSetSnapshot struct {
 	Version int32                 `json:"version"`
 	Fences  []GeoFenceSnapshotRef `json:"fences"`
