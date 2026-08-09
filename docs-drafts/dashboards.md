@@ -251,8 +251,11 @@ tenant. And **no test in dashboard-management reaches an authorization gate**: d
 ## 7. Known gaps
 
 1. 🔴 **`dashboard:read` is not in the default tenant-member baseline.** The `viewerAuthorities` list
-   is commented "read access to all domain objects" and omits it — along with `notification:read`,
-   `connector:read` and `audit:read` (`backend/services/user-management/identity/manager.go:586-592`).
+   is commented "read access to the domain objects" and omits it — along with `notification:read`,
+   `connector:read` and `audit:read` (`backend/services/user-management/identity/manager.go`). Note
+   the comment used to claim "**all** domain objects", which was already untrue of these four and
+   became untrue of a fifth when device credentials moved behind `device:write`; the wording was
+   corrected rather than the list widened.
    An ordinary member with no explicitly assigned role cannot list or open a dashboard, and neither
    can an OAuth read-only-scoped token.
 2. 🔴 **The runtime packages cannot be consumed outside this repo.** All four are version `0.0.1`,

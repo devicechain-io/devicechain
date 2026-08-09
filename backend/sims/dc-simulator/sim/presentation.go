@@ -50,14 +50,17 @@ import (
 //     bearers derived from the manifest seed: permanent, non-rotating, one per device,
 //     and unlike the token beside them they do not expire out of a stale page, a log, a
 //     proxy cache or a screenshot.
+//
 //  2. It would go STALE. POST /reset re-runs Bootstrap, which re-provisions and
 //     REASSIGNS rt.Devices; a config fetched before a reset would then be silently
 //     wrong rather than visibly absent — the client would keep authenticating with
 //     credentials for a cohort that no longer exists.
+//
 //  3. Reading rt.Devices from this handler is an UNSYNCHRONIZED read. Lifecycle's
 //     bootstrapMu serializes WRITERS only; nothing here holds it, so a /config.json
 //     served concurrently with a reset races the slice header the race detector would
 //     be right to flag.
+//
 //  4. It is REDUNDANT, which is what makes the other three unnecessary to trade off.
 //     Given (1) — the caller already holds a tenant-admin token — serving credentials
 //     grants no capability the caller lacks; it only writes a permanent secret into a
@@ -67,6 +70,14 @@ import (
 //     credential the bearer IS the credentialId, not the withheld value. So the client
 //     resolves its own credentials over GraphQL and reads the DATABASE rather than a
 //     snapshot taken at page load, which fixes (2) as a side effect.
+//
+//     Note what (1) is carrying here. The queries returning a DeviceCredential are
+//     gated on device:WRITE, not device:read, precisely because credentialId is the
+//     bearer for an ACCESS_TOKEN — so this round trip works because the token issued
+//     by dcctl carries tenant-admin (seeded with the super-authority), not because
+//     credentials are broadly readable. A presentation client handed a narrower
+//     token would fail the second query, and the right answer then is a scoped
+//     self-lookup, never widening the gate or reinstating (4).
 //
 // The round trip that (4) refers to, written down so it is discoverable from the file
 // that declines to shortcut it — a client that knows a device by its scene-side business

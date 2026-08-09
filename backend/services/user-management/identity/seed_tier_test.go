@@ -4,6 +4,7 @@
 package identity
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -32,6 +33,41 @@ func TestViewerAuthoritiesAreAllTenantTier(t *testing.T) {
 		if !tiers.Has(auth.TierTenant) {
 			t.Errorf("viewer grants %q, which is %v — the read-only baseline every "+
 				"tenant member receives must be satisfiable from a tenant access token", a, tiers)
+		}
+	}
+}
+
+// The viewer baseline grants read authorities only.
+//
+// This is the invariant a security property in ANOTHER service leans on.
+// device-management gates the three queries returning a DeviceCredential on
+// device:write rather than device:read, because for an ACCESS_TOKEN the readable
+// credentialId IS the bearer the device authenticates with — so whoever may read
+// a credential can impersonate that device. That gate is only meaningful while
+// device:write stays out of the baseline every enabled tenant member receives.
+//
+// Nothing else would notice the regression. Adding a write authority here does
+// not break any test in this package: the baseline is a plain list, unioned onto
+// every access token, and device-management's own tests spell the baseline out
+// as a literal rather than importing it across the module boundary. The failure
+// would surface as a read-only user quietly acquiring write capability.
+//
+// Widening the baseline is not forbidden — it has to be a decision. If an entry
+// here legitimately does not end in ":read", change this test deliberately and
+// re-check what elsewhere assumed the baseline was harmless.
+func TestViewerAuthoritiesAreReadOnly(t *testing.T) {
+	if len(viewerAuthorities) == 0 {
+		t.Fatal("precondition: the viewer baseline is empty")
+	}
+	for _, a := range viewerAuthorities {
+		if a == string(auth.AuthorityAll) {
+			t.Errorf("viewer grants the super-authority %q — the read-only baseline would grant everything", a)
+			continue
+		}
+		if !strings.HasSuffix(a, ":read") {
+			t.Errorf("viewer grants %q, which is not a read authority; the baseline every enabled "+
+				"tenant member receives must stay read-only (device-management gates credential "+
+				"reads on device:write on the strength of that)", a)
 		}
 	}
 }
