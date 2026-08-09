@@ -114,8 +114,13 @@ type ReplayOpener interface {
 // resolved-events stream suffix. lateness is the engine's allowed lateness (0 for a deterministic
 // preview). maxScan bounds the in-scope events processed and maxRead the TOTAL messages delivered
 // (0 ⇒ the defaults); either cap degrades (truncates) rather than running unbounded.
+//
+// fences is the seam onto the FROZEN geofence snapshots (ADR-078) and may be nil when no source
+// is wired. It is what makes a geofence preview CORRECT rather than vacuous — see the fenceSets
+// resolution below, and note that it is deliberately NOT modelled on the nil-attr degradation.
 func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.RuleRegistry,
-	tenant, profileVersion string, tr TimeRange, lateness time.Duration, maxScan, maxRead int) (Result, error) {
+	tenant, profileVersion string, tr TimeRange, lateness time.Duration, maxScan, maxRead int,
+	fences runtime.FenceSetSource) (Result, error) {
 	if maxScan <= 0 {
 		maxScan = DefaultMaxScan
 	}
@@ -123,6 +128,10 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 		maxRead = DefaultMaxRead
 	}
 	engine := core.NewEngine(reg.Cores(), lateness)
+	// The fence-set resolver for this preview: one memoizing reader over the frozen snapshots,
+	// scoped to this tenant for its whole life, so no replayed event can reach another tenant's
+	// fences however it is stamped.
+	fenceSets := runtime.NewLoadingFenceSets(fences, tenant)
 
 	reader, firstTime, err := opener.NewReplayReaderFromTime(suffix, tr.Start)
 	if err != nil {
@@ -188,7 +197,17 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 		res.Stats.EventsScanned++
 		// nil attr: a preview resolves no device attributes, so a dynamic-threshold rule cleanly does
 		// not fire (its presence-guarded comparison reads absent state as a non-match) — documented.
-		plan := reg.Plan(msg.StreamSeq, tenant, event, occurred, nil)
+		//
+		// 🔴 FENCES DO NOT DEGRADE THE SAME WAY, AND THE ASYMMETRY IS THE POINT. attr degrades
+		// because a device attribute is CURRENT state with no historical record: there is no way to
+		// know what a threshold was last Tuesday, so the honest preview is "does not fire". A fence
+		// set is different in kind — the event NAMES the version it was resolved against, and that
+		// version's fences are frozen and still on record — so the exact set that was live is
+		// recoverable and the preview can be CORRECT. Copying attr's degradation here would render
+		// every geofence rule as never-firing, which for a preview whose entire job is "what would
+		// this rule have done" is worse than useless: it is a confident wrong answer about the
+		// headline feature.
+		plan := reg.Plan(msg.StreamSeq, tenant, event, occurred, nil, fenceSets.Resolve(ctx, event.FenceSetVersion))
 		res.Stats.EvalErrors += plan.EvalErrors
 		engine.ProcessResolved(msg.StreamSeq, occurred, plan.Events)
 		res.Firings = appendFirings(res.Firings, engine.Drain(), tr)

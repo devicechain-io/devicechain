@@ -139,8 +139,12 @@ func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input pre
 	}})
 
 	startedAt := time.Now()
+	// nil fence source: nothing in this service can read device-management's frozen fence-set
+	// snapshots yet (no fact stream, no GraphQL door for GeoFenceSetSnapshotAt), so a preview of a
+	// rule that calls inFence reports eval errors and a degraded result rather than a silent
+	// never-fires. The seam is here so wiring one is an adapter, not a change to this path.
 	res, err := preview.Run(ctx, r.GetNats(ctx), streams.ResolvedEvents, reg,
-		tenant, active.ActiveVersionToken, preview.TimeRange{Start: start, End: end}, 0, preview.DefaultMaxScan, preview.DefaultMaxRead)
+		tenant, active.ActiveVersionToken, preview.TimeRange{Start: start, End: end}, 0, preview.DefaultMaxScan, preview.DefaultMaxRead, nil)
 	if err != nil {
 		return nil, err
 	}

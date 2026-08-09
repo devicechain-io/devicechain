@@ -167,6 +167,12 @@ func (rp *ResolvedEventsProcessor) applyTenantPurge(tenant string) tenantPurgeRe
 	if rp.attrView != nil {
 		n += int64(rp.attrView.RemoveTenant(tenant))
 	}
+	if rp.fenceView != nil {
+		// Fence geometry is the tenant's own configuration — the coordinates of its sites, which
+		// are about as identifying as a tenant's data gets — so the retained frozen fence sets go
+		// with the tenant. Nothing else clears them before a restart.
+		n += int64(rp.fenceView.RemoveTenant(tenant))
+	}
 	if rp.publisher != nil {
 		// The dead-letter ring is the one thing swept here that the loop does not own — it is
 		// mutex-guarded and shared with the publish path — and the one whose contents are pure

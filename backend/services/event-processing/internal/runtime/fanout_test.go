@@ -16,12 +16,12 @@ func fptr(f float64) *float64 { return &f }
 // planEv fans an event out using its own occurred time as the (already-clamped) event time, with no
 // dynamic-threshold attributes bound (the common no-attr path).
 func planEv(reg *RuleRegistry, seq uint64, tenant string, ev *dmmodel.ResolvedEvent) PlanResult {
-	return reg.Plan(seq, tenant, ev, ev.OccurredTime, nil)
+	return reg.Plan(seq, tenant, ev, ev.OccurredTime, nil, nil)
 }
 
 // planEvAttr is planEv with the source device's flattened attribute map bound (dynamic-threshold path).
 func planEvAttr(reg *RuleRegistry, seq uint64, tenant string, ev *dmmodel.ResolvedEvent, attr map[string]float64) PlanResult {
-	return reg.Plan(seq, tenant, ev, ev.OccurredTime, attr)
+	return reg.Plan(seq, tenant, ev, ev.OccurredTime, attr, nil)
 }
 
 // measured builds a resolved measurement event for a device under a profile version,

@@ -207,6 +207,16 @@ type CompiledRule struct {
 	// by an immediate non-match — a milder residual accepted here, steered by the console (slice 7).
 	FeedMetrics []string
 
+	// RequiresPosition is the POSITION-SCOPED FEED (ADR-078): true when the leaf calls the
+	// geofence containment function, in which case the runtime feeds the rule only samples that
+	// carry a reported position. It is the geofence sibling of FeedMetrics and exists for the same
+	// hazard — a fence leaf evaluated against a positionless event would either claim the device
+	// is outside (cancelling a Duration hold) or error on every routine measurement. Unlike
+	// FeedMetrics it needs no soundness proof and applies to EVERY rule type: a leaf that calls
+	// inFence cannot be true for an event with no position under any assignment, so a skipped
+	// positionless event could never have raised. See predicate.ReferencesFences.
+	RequiresPosition bool
+
 	// AnchorType is the anchor a correlation rule keys its series on; the runtime resolves
 	// the event's anchor of this type to the series token and uses the device as the
 	// distinct member. Empty for every non-correlation rule (series = the device token).
@@ -287,6 +297,11 @@ func Compile(r Rule, limits Limits) (*CompiledRule, error) {
 			cr.FeedMetrics = metrics
 		}
 	}
+
+	// Position-scope a geofence leaf (ADR-078). Unconditional on rule type, unlike the metric
+	// scope above: the argument for it is not "this kind flips a latch on one non-match" but "this
+	// leaf cannot answer at all without a position", which is true for every kind.
+	cr.RequiresPosition = pred.ReferencesFences()
 
 	// Validate the REACT layer (severity + action chain) and carry the severity through. This is
 	// the same publish-time gate the detection fields pass: a malformed action or an alarm without

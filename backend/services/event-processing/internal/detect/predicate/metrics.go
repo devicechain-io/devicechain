@@ -63,6 +63,12 @@ func falseWhenMetricsAbsent(env *cel.Env, ast *cel.Ast) (bool, error) {
 		cel.AttributePattern(VarAnchors),
 		cel.AttributePattern(VarOccurred),
 		cel.AttributePattern(VarAttr),
+		// `geo` is held unknown for the same reason as the rest: the question is whether the leaf
+		// is false for EVERY event that carries none of its metrics, and a leaf mixing fences with
+		// measurements must not be judged against one particular position. Left out, `geo` would
+		// be an unbound identifier and every such leaf would fall to the not-scoped (feed
+		// everything) branch — safe, but it would silently un-scope a whole class of rules.
+		cel.AttributePattern(VarGeo),
 	)
 	if err != nil {
 		return false, err

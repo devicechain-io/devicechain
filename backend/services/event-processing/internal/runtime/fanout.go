@@ -9,6 +9,7 @@ import (
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/detect/predicate"
+	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 )
@@ -90,7 +91,15 @@ func scopeMembershipSet(ev *dmmodel.ResolvedEvent) map[scopeMemberKey]struct{} {
 // slice 4c-3b-2) resolves the bound from the device's own attribute. It is the SAME per-device map
 // for every sample (attributes are device-, not sample-scoped); nil when the device has none, which
 // the presence-guarded comparison reads as a clean non-match. The predicate never mutates it.
-func (reg *RuleRegistry) Plan(seq uint64, tenant string, ev *dmmodel.ResolvedEvent, occurred time.Time, attr map[string]float64) PlanResult {
+//
+// fences is the FROZEN fence set of the version stamped on THIS event (ADR-078), which the caller
+// resolved from (tenant, ev.FenceSetVersion) — a live lookup in FenceSetView on the hot path, a
+// source read for a preview. It is the ONLY fence data any predicate on this event can reach, so
+// resolving it here from the event's own tenant is what confines containment to that tenant. Nil
+// means unresolvable — inFence then errors rather than answering "outside" — which is a different
+// state from a tenant with no fences (a known-EMPTY set).
+func (reg *RuleRegistry) Plan(seq uint64, tenant string, ev *dmmodel.ResolvedEvent, occurred time.Time,
+	attr map[string]float64, fences *geofence.FenceSet) PlanResult {
 	profileRules := reg.RulesFor(tenant, ev.ProfileVersionToken)
 	if len(profileRules) == 0 {
 		return PlanResult{}
@@ -141,6 +150,7 @@ func (reg *RuleRegistry) Plan(seq uint64, tenant string, ev *dmmodel.ResolvedEve
 	inputs := BuildInputs(ev, occurred)
 	for i := range inputs {
 		inputs[i].Attr = attr
+		inputs[i].Fences = fences
 	}
 	for _, in := range inputs {
 		for _, sr := range scoped {
@@ -168,6 +178,14 @@ func (reg *RuleRegistry) Plan(seq uint64, tenant string, ev *dmmodel.ResolvedEve
 				}
 			}
 			if feed := cr.FeedMetrics; len(feed) > 0 && !anyMetricPresent(in.M, feed) {
+				continue
+			}
+			// Position-scoped feed (ADR-078), the geofence sibling of the metric scope above: a
+			// leaf that calls inFence is fed ONLY samples that report a position. Without this a
+			// device's routine battery reading would evaluate its fence leaf — to a false that
+			// cancels a Duration hold, or to an error on every event it sends. Skipping drops no
+			// raise: the leaf cannot be true without a position. See predicate.ReferencesFences.
+			if cr.RequiresPosition && in.Position == nil {
 				continue
 			}
 

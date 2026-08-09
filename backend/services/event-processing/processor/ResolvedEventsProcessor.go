@@ -13,6 +13,7 @@ import (
 
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
+	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -212,6 +213,21 @@ type ResolvedEventsProcessor struct {
 	// scaffold/test path (no AttributeStore), where every dynamic threshold reads an empty map (a
 	// presence-guarded clean non-match).
 	attrView *runtime.DeviceAttributeView
+	// fenceView is the loop-owned in-memory geofence projection (ADR-078): each tenant's FROZEN
+	// fence sets keyed by fence-set version, which the fan-out binds as predicate.Input.Fences so
+	// a location event's containment predicate evaluates against the fences that were live when
+	// the event was resolved rather than the ones live now. Unlike every other view here it
+	// retains SUPERSEDED versions — see runtime.MaxRetainedFenceSetVersions for the bound and why
+	// it is the design's real obligation.
+	//
+	// 🔴 NOTHING FEEDS IT YET. Populating it needs the frozen snapshot to cross the service seam,
+	// and device-management publishes no fence fact and exposes GeoFenceSetSnapshotAt on no
+	// GraphQL door — so wiring a runtime.FenceSetSource is a device-management change and is
+	// deliberately NOT made here. Until then this is nil, the fan-out passes a nil fence set, and
+	// a rule calling inFence errors (ErrNoFenceSet, counted on the eval-error metric) rather than
+	// quietly answering "outside". That is the fail-closed direction: an unfed projection is
+	// visible, an empty one would be invisible.
+	fenceView *runtime.FenceSetView
 	// attrUpdates carries a device-identity RECHECK (NOT a value delta) from the attribute /
 	// entity-deleted consumers to the single-writer loop, where applyAttrRecheck re-reads the
 	// authoritative projection for that device and REPLACES its view entry. Same convergence
@@ -1177,11 +1193,20 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 	if rp.attrView != nil {
 		attr = rp.attrView.For(tenant, event.SourceDeviceToken)
 	}
+	// Resolve the frozen fence set THIS event was stamped with (ADR-078), once for the whole
+	// fan-out: a pure in-memory read of the loop-owned projection, keyed on the event's own tenant
+	// and its own stamped version — which is what makes one tenant's fences unreachable from
+	// another's evaluation. Nil when the view is unwired or has evicted that version, which
+	// inFence reports as an error (the sample is skipped and counted) rather than as "outside".
+	var fences *geofence.FenceSet
+	if rp.fenceView != nil {
+		fences = rp.fenceView.ForEvent(tenant, event)
+	}
 	// Fan out: select the rules this event feeds (by tenant + profile version) and build one
 	// core event per applicable rule per sample it carries. The batch shares the message
 	// sequence — the single idempotency + checkpoint unit — so N same-seq events cannot each
 	// trip the guard; all events share the clamped event time.
-	plan := rp.registry.Plan(msg.StreamSeq, tenant, event, occurred, attr)
+	plan := rp.registry.Plan(msg.StreamSeq, tenant, event, occurred, attr, fences)
 	rp.metrics.RecordFanout(len(plan.Events), plan.EvalErrors)
 	prev := rp.engine.LastSeq()
 	// ADR-062 S4 membership-flip: apply descopes for the rules this event is OUT of scope
