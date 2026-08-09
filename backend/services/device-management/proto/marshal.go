@@ -87,6 +87,9 @@ func MarshalPayloadForLocationsEvent(payload *model.ResolvedLocationsPayload) ([
 			Latitude:     entry.Latitude,
 			Longitude:    entry.Longitude,
 			Elevation:    entry.Elevation,
+			Accuracy:     entry.Accuracy,
+			Speed:        entry.Speed,
+			Heading:      entry.Heading,
 			OccurredTime: entry.OccurredTime,
 		}
 		pbpayload.Entries = append(pbpayload.Entries, pbentry)
@@ -176,6 +179,9 @@ func UnmarshalPayloadForLocationsEvent(encoded []byte) (*model.ResolvedLocations
 			Latitude:     pbentry.Latitude,
 			Longitude:    pbentry.Longitude,
 			Elevation:    pbentry.Elevation,
+			Accuracy:     pbentry.Accuracy,
+			Speed:        pbentry.Speed,
+			Heading:      pbentry.Heading,
 			OccurredTime: pbentry.OccurredTime,
 		}
 		entries = append(entries, entry)
@@ -285,12 +291,12 @@ func MarshalResolvedPayload(etype esmodel.EventType, payload interface{}) ([]byt
 		if mxpayload, ok := payload.(*model.ResolvedMeasurementsPayload); ok {
 			return MarshalPayloadForMeasurementsEvent(mxpayload)
 		}
-		return nil, fmt.Errorf("invalid location payload: %+v", payload)
+		return nil, fmt.Errorf("invalid measurement payload: %+v", payload)
 	case esmodel.Alert:
 		if apayload, ok := payload.(*model.ResolvedAlertsPayload); ok {
 			return MarshalPayloadForAlertsEvent(apayload)
 		}
-		return nil, fmt.Errorf("invalid location payload: %+v", payload)
+		return nil, fmt.Errorf("invalid alert payload: %+v", payload)
 	case esmodel.StateChange:
 		if scpayload, ok := payload.(*model.ResolvedStateChangePayload); ok {
 			return MarshalPayloadForStateChangeEvent(scpayload)

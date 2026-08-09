@@ -17,11 +17,19 @@ type ResolvedNewRelationshipPayload struct {
 	TargetId           *uint64
 }
 
-// Entry with resolved location information.
+// Entry with resolved location information. The coordinate contract is fixed
+// platform-wide and never per-device (ADR-078 d.4b): WGS84 / EPSG:4326 decimal
+// degrees, elevation and accuracy in metres (elevation above the ELLIPSOID, not
+// mean sea level), speed in metres per second, heading in degrees clockwise from
+// true north in [0, 360). Values arrive as strings and have already been
+// range-checked at decode, so nothing downstream re-validates them.
 type ResolvedLocationEntry struct {
 	Latitude     *string
 	Longitude    *string
 	Elevation    *string
+	Accuracy     *string
+	Speed        *string
+	Heading      *string
 	OccurredTime *string
 }
 

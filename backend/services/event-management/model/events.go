@@ -94,6 +94,21 @@ type LocationEvent struct {
 	Latitude  sql.NullFloat64 `gorm:"type:decimal(10,8);"`
 	Longitude sql.NullFloat64 `gorm:"type:decimal(11,8);"`
 	Elevation sql.NullFloat64 `gorm:"type:decimal(12,4);"`
+	// Accuracy (horizontal, metres), Speed (metres per second) and Heading
+	// (degrees clockwise from true north, [0, 360)) complete the GPS fix. They are
+	// LAST in the struct because they arrived in an appended migration and
+	// AutoMigrate appends — physical column order is asserted by the golden schema
+	// diff, so moving them up here would make a fresh install disagree with an
+	// upgraded one.
+	//
+	// Speed and heading are stored as REPORTED. They are derivable from
+	// consecutive fixes and the two can legitimately disagree — a stationary
+	// device with a noisy compass still reports a heading, and a device that
+	// batches or drops fixes reports a speed no pair of stored positions would
+	// reproduce — so nothing here recomputes or reconciles them.
+	Accuracy sql.NullFloat64 `gorm:"type:decimal(12,4);"`
+	Speed    sql.NullFloat64 `gorm:"type:decimal(12,4);"`
+	Heading  sql.NullFloat64 `gorm:"type:decimal(7,4);"`
 }
 
 // Information required to create a location event.
@@ -102,6 +117,9 @@ type LocationEventCreateRequest struct {
 	Latitude  *float64
 	Longitude *float64
 	Elevation *float64
+	Accuracy  *float64
+	Speed     *float64
+	Heading   *float64
 }
 
 // Measurement event fields. Unit and DataType are denormalized from the bound

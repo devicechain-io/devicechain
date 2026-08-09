@@ -80,12 +80,40 @@ func (api *Api) AnchorsForEvent(ctx context.Context, eventId []byte,
 	return anchors, nil
 }
 
+// newestFirst orders an event read newest-first, with a tie-break that makes the
+// order TOTAL.
+//
+// 🔴 Every event read in this file used to issue LIMIT/OFFSET with no ORDER BY at
+// all. Postgres row order is unspecified without one, so the defect was not merely
+// "results look shuffled": pagination could repeat a row on one page and skip
+// another entirely, and `pageSize: 1` — the obvious way to ask for the most recent
+// reading — returned an ARBITRARY row rather than the latest. That made "where is
+// this device now" silently wrong rather than slow, and the same was true of "what
+// did this sensor last report".
+//
+// occurred_time alone is NOT a total order: a device that samples two sensors and
+// publishes each under one shared timestamp produces rows that tie, and a tie under
+// LIMIT/OFFSET reintroduces the repeat-and-skip in miniature. The tie-break column
+// is each table's own row identity — event_id for the base events, payload_id for
+// the three payload tables — which is unique within (tenant, occurred_time) by
+// construction.
+//
+// The leading column matches idx_events_tenant_device_type_time, which is already
+// declared (tenant_id, device_token, event_type, occurred_time DESC), so the common
+// per-device query stays index-ordered.
+func newestFirst(identity string) func(*gorm.DB) *gorm.DB {
+	return func(result *gorm.DB) *gorm.DB {
+		return result.Order("occurred_time DESC").Order(identity + " DESC")
+	}
+}
+
 // Search for base events that meet criteria. The anchor filter joins through the
 // event_anchors set table (the base event no longer carries a single anchor).
 func (api *Api) Events(ctx context.Context, criteria EventSearchCriteria) (*EventSearchResults, error) {
 	results := make([]Event, 0)
 	db, pag := api.RDB.ListOf(ctx, &Event{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
+		result = newestFirst("event_id")(result)
 		return api.anchorFilter(ctx, criteria, result)
 	}, criteria.Pagination)
 	db.Find(&results)
@@ -100,6 +128,7 @@ func (api *Api) LocationEvents(ctx context.Context, criteria EventSearchCriteria
 	results := make([]LocationEvent, 0)
 	db, pag := api.RDB.ListOf(ctx, &LocationEvent{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
+		result = newestFirst("payload_id")(result)
 		return api.anchorFilter(ctx, criteria, result)
 	}, criteria.Pagination)
 	db.Find(&results)
@@ -114,6 +143,7 @@ func (api *Api) MeasurementEvents(ctx context.Context, criteria EventSearchCrite
 	results := make([]MeasurementEvent, 0)
 	db, pag := api.RDB.ListOf(ctx, &MeasurementEvent{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
+		result = newestFirst("payload_id")(result)
 		return api.anchorFilter(ctx, criteria, result)
 	}, criteria.Pagination)
 	db.Find(&results)
@@ -259,6 +289,7 @@ func (api *Api) AlertEvents(ctx context.Context, criteria EventSearchCriteria) (
 	results := make([]AlertEvent, 0)
 	db, pag := api.RDB.ListOf(ctx, &AlertEvent{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
+		result = newestFirst("payload_id")(result)
 		return api.anchorFilter(ctx, criteria, result)
 	}, criteria.Pagination)
 	db.Find(&results)

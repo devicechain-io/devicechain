@@ -28,7 +28,70 @@ Todo evento entrante — sobre cualquier transporte — es un objeto JSON:
 - `device` — el token estable del dispositivo.
 - `eventType` — `Measurement`, `Location` o `Alert` (también `NewRelationship`).
 - `credentialType` / `credentialId` — la credencial que presenta el dispositivo. `MQTT_BASIC` además incluye `credentialSecret`. Omita esto solo cuando el modo de autenticación de dispositivo de la instancia esté configurado como `disabled` u `optional`; el **valor predeterminado es `required`**, por lo que se espera una credencial.
-- `payload` — la forma depende de `eventType`; los valores de medición son cadenas de texto.
+- `payload` — la forma depende de `eventType`, y todas las formas son `{ "entries": [ … ] }`. Vea a continuación.
+
+### Formas del payload
+
+**Todo payload envuelve su contenido en un arreglo `entries`**, y todo valor numérico es una **cadena
+de texto JSON**. Ambas reglas se aplican: un payload sin entradas, una entrada vacía, o un número
+suelto donde se espera una cadena es **rechazado** — HTTP responde `400` y una publicación MQTT va a
+la cola de mensajes fallidos en lugar de aceptarse en silencio. Envíe una entrada por evento.
+
+**`Measurement`** — una o más lecturas con nombre:
+
+```json
+"payload": { "entries": [ { "measurements": { "temperature": "21.5", "humidity": "48" } } ] }
+```
+
+**`Location`** — dónde está el dispositivo:
+
+```json
+"payload": {
+  "entries": [
+    {
+      "latitude":  "33.74900000",
+      "longitude": "-84.38800000",
+      "elevation": "320.5",
+      "accuracy":  "4.2",
+      "speed":     "0.0",
+      "heading":   "271.5"
+    }
+  ]
+}
+```
+
+`latitude` y `longitude` son **obligatorios**; el resto son opcionales — envíe lo que el receptor
+realmente conoce en lugar de un valor de relleno. Las unidades son fijas para toda la plataforma y
+**no** se configuran por dispositivo:
+
+| Campo | Unidad | Rango |
+| --- | --- | --- |
+| `latitude` / `longitude` | grados decimales WGS84 (EPSG:4326) | ±90 / ±180 |
+| `elevation` | metros sobre el **elipsoide** WGS84 — no sobre el nivel medio del mar | — |
+| `accuracy` | precisión horizontal, metros | 0 o mayor |
+| `speed` | metros por segundo | 0 o mayor |
+| `heading` | grados en sentido horario desde el norte verdadero | de 0 hasta 360 sin incluirlo |
+
+:::caution La elevación es sobre el elipsoide, no sobre el nivel del mar
+Un receptor que reporta altura sobre el nivel medio del mar debe convertirla antes de enviarla. Las
+dos difieren en decenas de metros en terreno real — suficiente para situar una máquina del lado
+equivocado de una geocerca — y como ambos valores parecen igual de plausibles, equivocarse produce
+una posición incorrecta con toda seguridad en lugar de un error visible.
+:::
+
+Un valor fuera de su rango se rechaza como dato inválido en la primera entrega en lugar de
+reintentarse. Es deliberado: el error más común es enviar grados escalados por 10⁷ (la convención que
+usan algunas pilas GPS y LwM2M), y `337490000` no es una latitud en ninguna escala.
+
+**`Alert`** — algo que el dispositivo quiere que vea una persona o una regla:
+
+```json
+"payload": { "entries": [ { "type": "overheat", "level": 5, "message": "coolant over limit", "source": "ecu" } ] }
+```
+
+`type` es **obligatorio** — es el clasificador por el que enrutan las políticas de notificación, las
+reglas y los filtros de la consola, así que una alerta sin tipo es un registro sobre el que nada
+puede actuar. `level`, `message` y `source` son opcionales.
 
 ## MQTT
 

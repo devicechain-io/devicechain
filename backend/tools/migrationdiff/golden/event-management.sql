@@ -89,7 +89,10 @@ CREATE TABLE "event-management".location_events (
  occurred_time timestamp with time zone NOT NULL,
  latitude numeric(10,8),
  longitude numeric(11,8),
- elevation numeric(12,4)
+ elevation numeric(12,4),
+ accuracy numeric(12,4),
+ speed numeric(12,4),
+ heading numeric(7,4)
 );
 CREATE TABLE "event-management".measurement_events (
  tenant_id character varying(128) NOT NULL,

@@ -53,6 +53,9 @@ message PUnresolvedLocationEntry {
     optional string longitude = 2;
     optional string elevation = 3;
     optional string occurred_time = 4;
+    optional string accuracy = 5;
+    optional string speed = 6;
+    optional string heading = 7;
 }
 
 /**

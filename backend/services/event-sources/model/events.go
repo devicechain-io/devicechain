@@ -69,11 +69,38 @@ type UnresolvedNewRelationshipPayload struct {
 	Target           string
 }
 
-// Information for a location entry.
+// Information for a location entry. A fix is the full GPS vocabulary, not the
+// minimum: position plus the quality and motion a device already knows.
+//
+// The coordinate contract is fixed platform-wide and is NEVER per-device
+// (ADR-078 d.4b): Latitude/Longitude are WGS84 / EPSG:4326 decimal degrees,
+// Elevation is metres above the WGS84 ELLIPSOID (not above mean sea level),
+// Accuracy is horizontal metres, Speed is metres per second, and Heading is
+// degrees clockwise from true north in [0, 360). A device whose sensor reports
+// MSL converts before sending. Letting the profile declare a datum instead was
+// rejected because getting it wrong is SILENT spatial error — a position drawn
+// confidently in the wrong place — and ellipsoid-vs-geoid is tens of metres,
+// comfortably enough to put a machine on the wrong side of a geofence.
+//
+// Every field is a JSON STRING, including the numeric ones, matching the
+// measurement convention: a bare `"latitude": 33.749` fails the whole decode.
+// Latitude and Longitude are required; the rest are optional. All of it is
+// range-checked at decode (see validateLocationEntry) rather than at the
+// database, so a units bug is rejected as BAD DATA on first delivery instead of
+// surfacing as an unclassified Postgres overflow that retries to MaxDeliver.
+//
+// Speed and Heading are stored as REPORTED and are never recomputed or
+// reconciled against consecutive fixes. The two can legitimately disagree — a
+// stationary device with a noisy compass still reports a heading, and a device
+// that batches or drops fixes reports a speed no pair of stored positions would
+// reproduce. A consumer needing a value it can defend derives it itself.
 type UnresolvedLocationEntry struct {
 	Latitude     *string
 	Longitude    *string
 	Elevation    *string
+	Accuracy     *string
+	Speed        *string
+	Heading      *string
 	OccurredTime *string
 }
 
