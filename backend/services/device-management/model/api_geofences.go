@@ -11,6 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/rs/zerolog/log"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -48,6 +49,7 @@ func (api *Api) CreateGeoFence(ctx context.Context, request *GeoFenceCreateReque
 		MetadataEntity: rdb.MetadataEntity{Metadata: rdb.MetadataStrOf(request.Metadata)},
 		Geometry:       datatypes.JSON(request.Geometry),
 	}
+	var minted *GeoFenceSetVersion
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		// The fences-per-tenant bound (see MaxGeoFencesPerTenant) is checked inside the
 		// transaction so it reads the same state the insert lands in. It is still a
@@ -67,13 +69,15 @@ func (api *Api) CreateGeoFence(ctx context.Context, request *GeoFenceCreateReque
 		if err := tx.Create(created).Error; err != nil {
 			return err
 		}
-		_, err := api.mintGeoFenceSetVersion(tx, time.Now())
+		var err error
+		minted, err = api.mintGeoFenceSetVersion(tx, time.Now())
 		return err
 	})
 	if err != nil {
 		return nil, err
 	}
 	api.evictFenceSetVersion(ctx)
+	api.emitMintedGeoFenceSet(ctx, minted)
 	return created, nil
 }
 
@@ -106,17 +110,20 @@ func (api *Api) UpdateGeoFence(ctx context.Context, token string,
 	updated.Metadata = rdb.MetadataStrOf(request.Metadata)
 	updated.Geometry = datatypes.JSON(request.Geometry)
 
+	var minted *GeoFenceSetVersion
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Save(updated).Error; err != nil {
 			return err
 		}
-		_, err := api.mintGeoFenceSetVersion(tx, time.Now())
+		var err error
+		minted, err = api.mintGeoFenceSetVersion(tx, time.Now())
 		return err
 	})
 	if err != nil {
 		return nil, err
 	}
 	api.evictFenceSetVersion(ctx)
+	api.emitMintedGeoFenceSet(ctx, minted)
 	return updated, nil
 }
 
@@ -127,6 +134,7 @@ func (api *Api) UpdateGeoFence(ctx context.Context, token string,
 // case, since nothing changed.
 func (api *Api) DeleteGeoFence(ctx context.Context, token string) (bool, error) {
 	deleted := false
+	var minted *GeoFenceSetVersion
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		result := tx.Unscoped().Where("token = ?", token).Delete(&GeoFence{})
 		if result.Error != nil {
@@ -136,7 +144,8 @@ func (api *Api) DeleteGeoFence(ctx context.Context, token string) (bool, error) 
 			return nil
 		}
 		deleted = true
-		_, err := api.mintGeoFenceSetVersion(tx, time.Now())
+		var err error
+		minted, err = api.mintGeoFenceSetVersion(tx, time.Now())
 		return err
 	})
 	if err != nil {
@@ -144,8 +153,40 @@ func (api *Api) DeleteGeoFence(ctx context.Context, token string) (bool, error) 
 	}
 	if deleted {
 		api.evictFenceSetVersion(ctx)
+		api.emitMintedGeoFenceSet(ctx, minted)
 	}
 	return deleted, nil
+}
+
+// emitMintedGeoFenceSet decodes a just-committed fence-set version's frozen snapshot and
+// publishes it as a fact (ADR-078). It is the ONE place the three authoring paths funnel
+// through, so a fourth mutation cannot mint a version and forget to announce it.
+//
+// It reads the fences back out of the SNAPSHOT COLUMN rather than re-querying the live
+// fences, and that is the whole point: the snapshot is what a replay will later resolve
+// this version to, so the fact and the archive are the same bytes by construction. Re-
+// reading the live table would look identical in every test and would silently publish a
+// LATER fence set under this version's number the moment two edits interleave.
+//
+// A nil version (nothing was minted) or an undecodable snapshot publishes nothing: the
+// projection then simply does not hold this version, which its own miss path reports as a
+// loud unresolvable rather than as "no fences". Best-effort throughout — the authoring
+// action has already committed and must not be failed by a wire problem.
+func (api *Api) emitMintedGeoFenceSet(ctx context.Context, minted *GeoFenceSetVersion) {
+	if api.GeoFenceSetPublisher == nil || minted == nil {
+		return
+	}
+	snapshot, err := parseGeoFenceSetSnapshot(minted.Snapshot)
+	if err != nil {
+		log.Error().Err(err).Int32("version", minted.Version).
+			Msg("Unable to decode a just-minted geofence set snapshot; publishing no fence-set fact")
+		return
+	}
+	api.emitGeoFenceSet(ctx, &GeoFenceSetMintedEvent{
+		Version:  minted.Version,
+		Fences:   snapshot.Fences,
+		MintedAt: minted.MintedAt,
+	})
 }
 
 // Get geofences by id.
@@ -228,6 +269,40 @@ func (api *Api) GeoFenceSetSnapshotAt(ctx context.Context, version int32) (*GeoF
 		return nil, gorm.ErrRecordNotFound
 	}
 	return parseGeoFenceSetSnapshot(found[0].Snapshot)
+}
+
+// CurrentGeoFenceSetSnapshot returns the frozen fence set of the tenant's CURRENT
+// fence-set version — the version a location event resolved right now would be stamped
+// with, together with the fences that version froze.
+//
+// It exists for event-processing's startup reconcile, which has to re-seed a live
+// containment cache that survives no restart. That caller could instead read
+// CurrentFenceSetVersion and then GeoFenceSetSnapshotAt, and the difference is not
+// convenience: those are two statements about a moving target, so a fence edit landing
+// between them yields a snapshot whose version is not the one the caller was told is
+// current — a set filed under the wrong number, which is precisely the failure the
+// version stamp exists to prevent. One read of one row cannot disagree with itself.
+//
+// A tenant that has never had a fence yields version 0 with an empty fence list, matching
+// the stamp such a tenant's events carry (see CurrentFenceSetVersion for why 0 is
+// knowledge rather than absence).
+func (api *Api) CurrentGeoFenceSetSnapshot(ctx context.Context) (*GeoFenceSetSnapshot, error) {
+	found := make([]GeoFenceSetVersion, 0, 1)
+	if err := api.RDB.DB(ctx).Order("version desc").Limit(1).Find(&found).Error; err != nil {
+		return nil, err
+	}
+	if len(found) == 0 {
+		return &GeoFenceSetSnapshot{Version: 0, Fences: []GeoFenceSnapshotRef{}}, nil
+	}
+	snapshot, err := parseGeoFenceSetSnapshot(found[0].Snapshot)
+	if err != nil {
+		return nil, err
+	}
+	// The row's own Version is authoritative over the number embedded in the snapshot
+	// document: they are written together and agree, but only one of them is the column
+	// the ordering above selected on.
+	snapshot.Version = found[0].Version
+	return snapshot, nil
 }
 
 // parseGeoFenceSetSnapshot decodes a stored snapshot, normalizing a missing fence list

@@ -187,6 +187,7 @@ const (
 
 	DetectionRulesPublished = "detection-rules-published"
 	DeviceRoster            = "device-roster"
+	GeoFenceSet             = "geofence-set"
 	EntityDeleted           = "entity-deleted"
 	AlarmEvents             = "alarm-events"
 	RaiseAlarm              = "raise-alarm"
@@ -378,6 +379,16 @@ var All = []Stream{
 	// a device that has NEVER reported (the dead-man roster). Removal rides the
 	// entity-deleted fact rather than this one. At-most-once.
 	{Suffix: DeviceRoster, Areas: []string{"device-management", "event-processing"}, Tier: Cold, Why: "roster projection updates"},
+
+	// Emitted post-commit whenever a geofence change mints a new fence-set version,
+	// carrying the FROZEN fence set of that version so event-processing's live
+	// containment projection can hold it without reading back into device-management on
+	// the hot path. At-most-once, and unlike the other control-plane facts its consumer
+	// keeps NO durable projection: the frozen snapshots are already durable in
+	// device-management (the archive), so a restarted processor re-seeds its live cache
+	// by READING them back rather than from a second copy of its own. A fact that never
+	// reaches the stream is therefore recovered by that startup reconcile, not by replay.
+	{Suffix: GeoFenceSet, Areas: []string{"device-management", "event-processing"}, Tier: Cold, Why: "a fence edit — a human authoring action"},
 
 	// ADR-044. Emitted when an edge entity (device, customer, area, asset, and
 	// their groups) is deleted, so cross-service reference holders — such as

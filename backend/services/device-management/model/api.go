@@ -64,6 +64,14 @@ type Api struct {
 	// before wiring — disabling emission. Emission is post-commit and best-effort
 	// (at-most-once), like the other fact publishers.
 	DeviceAttributePublisher DeviceAttributePublisher
+
+	// GeoFenceSetPublisher emits the frozen fence set of each newly-minted fence-set
+	// version (ADR-078) so event-processing's live containment projection tracks fence
+	// edits without reading back into this service on the hot path. Injected at wiring
+	// time (the concrete publisher owns a NATS writer) and may be nil — in tests, or
+	// before wiring — disabling emission. Emission is post-commit and best-effort
+	// (at-most-once), like the other fact publishers.
+	GeoFenceSetPublisher GeoFenceSetPublisher
 }
 
 // CacheEvictor drops the hot-path caches (ADR-022 B2) that a mutation makes stale.
@@ -161,6 +169,17 @@ func (api *Api) emitDeviceRoster(ctx context.Context, event *DeviceRosterEvent) 
 func (api *Api) emitDeviceAttribute(ctx context.Context, event *DeviceAttributeEvent) {
 	if api.DeviceAttributePublisher != nil {
 		api.DeviceAttributePublisher.PublishDeviceAttribute(ctx, event)
+	}
+}
+
+// emitGeoFenceSet publishes a fence-set fact when a publisher is wired, and is a no-op
+// otherwise (ADR-078). Like the other emit helpers it is best-effort and must be called
+// AFTER the minting transaction has committed: the geofence create/update/delete paths
+// emit only once their transaction returns nil, so the fact never announces a fence set
+// that was rolled back.
+func (api *Api) emitGeoFenceSet(ctx context.Context, event *GeoFenceSetMintedEvent) {
+	if api.GeoFenceSetPublisher != nil {
+		api.GeoFenceSetPublisher.PublishGeoFenceSet(ctx, event)
 	}
 }
 

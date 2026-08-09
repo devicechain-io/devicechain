@@ -279,6 +279,36 @@ func (reg *RuleRegistry) IDs() []string {
 	return ids
 }
 
+// TenantsWithFenceRules returns the tenants holding at least one rule whose leaf calls the
+// containment predicate (CompiledRule.RequiresPosition — set by the same compile-time analysis
+// that drives the position-scoped feed). Order is unspecified.
+//
+// It exists so the startup fence reconcile seeds only the tenants whose evaluation can actually
+// need a fence set, rather than issuing a cross-service read per tenant that merely has a rule.
+// A tenant with no fence-referencing rule cannot produce a containment miss, so seeding it would
+// buy nothing and cost a round trip per restart.
+//
+// The consequence to be honest about: a tenant that gains its FIRST fence rule after startup is
+// not seeded by this reconcile. It does not need to be — the rule arrives as a published-rule
+// fact, and any fence edit from then on arrives as a fence-set fact; and if neither has happened
+// yet, an event stamped with a version the view does not hold reports a loud counted error rather
+// than a silent "outside". The reconcile narrows a real window; it does not pretend to close one
+// that only a synchronous read on the hot path could.
+func (reg *RuleRegistry) TenantsWithFenceRules() []string {
+	seen := make(map[string]struct{})
+	for _, sr := range reg.byID {
+		if sr.Tenant == "" || sr.Compiled == nil || !sr.Compiled.RequiresPosition {
+			continue
+		}
+		seen[sr.Tenant] = struct{}{}
+	}
+	tenants := make([]string, 0, len(seen))
+	for t := range seen {
+		tenants = append(tenants, t)
+	}
+	return tenants
+}
+
 // Count is the number of admitted rules (bounded, tenant-label-free — the aggregate the
 // Slice-4 rule-count gauge reports; a per-tenant breakdown is an ADR-023 governance concern
 // where the cardinality is budgeted, not a hot-path metric).

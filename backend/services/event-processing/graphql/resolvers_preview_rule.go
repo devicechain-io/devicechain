@@ -95,6 +95,20 @@ func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input pre
 		return failedPreview(cerr...), nil
 	}
 
+	// A draft whose leaf calls inFence cannot be previewed without the frozen fence-set archive
+	// (ADR-078): every containment call would report an unresolvable set, so the replay would burn
+	// a whole window to produce a timeline of eval errors and no firings. Say so BEFORE replaying
+	// anything — an author told "geofence evaluation is unavailable" can act on it, where an empty
+	// timeline with an eval-error count reads as "my rule never fires".
+	//
+	// RequiresPosition is exactly "this leaf calls the containment predicate" (set by the same
+	// compile-time analysis that drives the position-scoped feed), so this fires for the drafts
+	// that need fences and for no others.
+	if compiled.RequiresPosition && r.FenceSets == nil {
+		return degradedPreview("this rule tests geofence containment, and the geofence archive is not " +
+			"reachable from this service, so the rule cannot be previewed"), nil
+	}
+
 	// Parse and bound the occurred-time window.
 	start, err := time.Parse(time.RFC3339, in.Start)
 	if err != nil {
@@ -139,12 +153,20 @@ func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input pre
 	}})
 
 	startedAt := time.Now()
-	// nil fence source: nothing in this service can read device-management's frozen fence-set
-	// snapshots yet (no fact stream, no GraphQL door for GeoFenceSetSnapshotAt), so a preview of a
-	// rule that calls inFence reports eval errors and a degraded result rather than a silent
-	// never-fires. The seam is here so wiring one is an adapter, not a change to this path.
+	// The fence source is what makes a geofence preview CORRECT rather than vacuous (ADR-078). A
+	// replayed event names the fence-set version that was current when IT was resolved, which the
+	// live projection has usually evicted — so the preview resolves those versions from
+	// device-management's frozen archive instead, one blocking read per distinct version, memoized
+	// for the run. This path is off the single-writer loop, which is precisely why it may do that
+	// and the fan-out may not.
+	//
+	// It is scoped to the CALLER's tenant, taken from the request context above and carried for the
+	// resolver's whole life (runtime.NewLoadingFenceSets binds it once), so no replayed event can
+	// reach another tenant's fences however it is stamped. A nil source (the seam unwired) resolves
+	// everything to "unavailable", which surfaces as counted eval errors rather than as a rule that
+	// quietly never fires.
 	res, err := preview.Run(ctx, r.GetNats(ctx), streams.ResolvedEvents, reg,
-		tenant, active.ActiveVersionToken, preview.TimeRange{Start: start, End: end}, 0, preview.DefaultMaxScan, preview.DefaultMaxRead, nil)
+		tenant, active.ActiveVersionToken, preview.TimeRange{Start: start, End: end}, 0, preview.DefaultMaxScan, preview.DefaultMaxRead, r.FenceSets)
 	if err != nil {
 		return nil, err
 	}

@@ -54,6 +54,24 @@ type FenceSetSource interface {
 	FenceSetAt(ctx context.Context, tenant string, version int32) (*geofence.FenceSet, error)
 }
 
+// CurrentFenceSetSource resolves a tenant's CURRENT frozen fence set — the version a
+// location event resolved right now would be stamped with, and the fences that version froze.
+//
+// It is a SEPARATE interface from FenceSetSource, not a second method on it, because the two
+// have different callers and only one of them is allowed to exist. FenceSetSource answers
+// "what was true at version N", which is the question a preview or a replay asks and the only
+// question that is deterministic. This one answers "what is true now", which is a question the
+// evaluation path must NEVER ask — it is the exact mistake the version stamp exists to prevent.
+// Its one legitimate caller is the STARTUP RECONCILE, which is seeding a live cache rather than
+// evaluating anything, so a type that cannot be reached from the fan-out keeps the distinction
+// enforced by the compiler rather than by a comment.
+//
+// 🔴 IT IS A BLOCKING READ AND MUST NEVER BE CALLED FROM THE SINGLE-WRITER LOOP, for the same
+// reason FenceSetSource must not be.
+type CurrentFenceSetSource interface {
+	CurrentFenceSet(ctx context.Context, tenant string) (*geofence.FenceSet, error)
+}
+
 // FenceSetView is the loop-owned in-memory projection of tenants' frozen geofence sets, keyed on
 // (tenant, fence-set version) — the read side a location event's containment predicate resolves
 // against. It is the geofence sibling of DeviceAttributeView and shares its concurrency contract:

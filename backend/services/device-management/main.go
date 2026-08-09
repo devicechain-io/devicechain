@@ -162,6 +162,17 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	Api.DeviceAttributePublisher = processor.NewDeviceAttributeWriter(attrpub)
 
+	// Add the geofence-set writer and inject a publisher into the shared Api (ADR-078): a
+	// fence create/edit/delete mints a new fence-set version, and this fact carries that
+	// version's FROZEN fence set to event-processing's live containment projection — so a
+	// location event's inFence resolves from memory and never blocks the DETECT loop on a
+	// read back into this service.
+	fencepub, err := nmgr.NewWriter(streams.GeoFenceSet)
+	if err != nil {
+		return err
+	}
+	Api.GeoFenceSetPublisher = processor.NewGeoFenceSetWriter(fencepub)
+
 	// Add and initialize inbound events processor.
 	InboundEventsProcessor = processor.NewInboundEventsProcessor(Microservice, InboundEventsReader,
 		ResolvedEventsWriter, FailedEventsWriter, core.NewNoOpLifecycleCallbacks(), CachedApi, Configuration.DeviceAuthMode)

@@ -66,6 +66,21 @@ func callGeoFenceReads(t *testing.T, ctx context.Context, check func(name string
 
 	_, err = r.CurrentFenceSetVersion(ctx)
 	check("currentFenceSetVersion", err)
+
+	// The frozen-snapshot doors carry the SAME material as the live fences — a fence's
+	// geometry is where the tenant's sites are — so they take the same gate. They are the
+	// ones a cross-service caller uses, which makes an ungated one a map of the tenant's
+	// operations reachable by anything that can reach the pod.
+	//
+	// geoFenceSetSnapshot is asked for version 0, which is the ONE version that resolves
+	// without a row (the known-empty set). That is deliberate: an authorized caller must get
+	// past the gate and return a real result here, so the "device:read is admitted" half of
+	// the table is not passing merely because the query errored for a different reason.
+	_, err = r.GeoFenceSetSnapshot(ctx, struct{ Version int32 }{Version: 0})
+	check("geoFenceSetSnapshot", err)
+
+	_, err = r.CurrentGeoFenceSet(ctx)
+	check("currentGeoFenceSet", err)
 }
 
 // callGeoFenceWrites invokes every geofence write door.
