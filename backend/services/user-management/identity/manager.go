@@ -578,8 +578,17 @@ func (m *Manager) resolveTenantGrant(ctx context.Context, tenant string, mem *ia
 }
 
 // viewerAuthorities is the read-only baseline every enabled tenant member
-// receives in addition to their assigned roles: read access to all domain
-// objects (ADR-008). Writes stay role-gated. This one list is the single source
+// receives in addition to their assigned roles: read access to the domain
+// objects (ADR-008). Writes stay role-gated.
+//
+// Device CREDENTIALS are the documented exception, and it is not an oversight:
+// device-management gates the queries returning one on device:write, because for
+// an ACCESS_TOKEN the readable credentialId IS the bearer the device
+// authenticates with, so reading a credential confers impersonation. That gate
+// holds only while this list stays free of write authorities —
+// TestViewerAuthoritiesAreReadOnly enforces it.
+//
+// This one list is the single source
 // of truth — it both backs the token-issuance grant (issueTenantTokens) and
 // seeds the built-in `viewer` role (re-synced from it on every startup, see
 // seed), so the access is visible in the admin catalog and can't drift.
@@ -611,8 +620,9 @@ func unionStrings(a, b []string) []string {
 // issueTenantTokens mints a tenant access + refresh pair for a global identity
 // and records the refresh jti in the server-side store.
 func (m *Manager) issueTenantTokens(tenant, email string, roles, authorities []string, sudo bool) (*TokenPair, error) {
-	// Every enabled tenant member can view all domain objects by default (the
-	// `viewer` baseline); writes stay role-gated. Superusers already hold `*`.
+	// Every enabled tenant member can view the domain objects by default (the
+	// `viewer` baseline); writes stay role-gated, as does reading a device
+	// credential (see viewerAuthorities). Superusers already hold `*`.
 	if !sudo {
 		authorities = unionStrings(authorities, viewerAuthorities)
 	}

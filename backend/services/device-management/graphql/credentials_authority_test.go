@@ -305,3 +305,80 @@ func TestDeviceCredentialIsReachableOnlyThroughTheGatedQueries(t *testing.T) {
 		}
 	}
 }
+
+// -----------------------------------------------------------------------------
+// The mutation gates, which the read gate's justification rests on
+// -----------------------------------------------------------------------------
+
+// Registering, updating and removing a credential all require device:write.
+//
+// This is not incidental coverage of a neighbouring resolver. It is the premise
+// the READ gate above is chosen on: gating credential reads at device:write is
+// argued to grant that holder nothing new BECAUSE they can already mint a bearer
+// for any device in the tenant through createDeviceCredential. If that mutation
+// ever weakens to device:read, two things break at once and neither is loud —
+// the impersonation escalation reopens, and the reasoning behind the read gate
+// becomes false while the read gate still looks correct.
+//
+// Nothing else notices. Before this test the mutation gate could be reverted to
+// device:read and the entire module suite stayed green, including every test in
+// this file: the structural guard names these mutations "gated on device:write"
+// in its allowlist and never checks that they are.
+func TestCredentialMutationsRequireDeviceWrite(t *testing.T) {
+	ctx := withAuthorities(credentialTestCtx(t), viewerBaseline...)
+	seedAccessTokenCredential(t, ctx)
+
+	r := &SchemaResolver{}
+	request := &model.DeviceCredentialCreateRequest{
+		Token:          "dozer-02-cred",
+		DeviceToken:    "dozer-01",
+		CredentialType: string(model.CredentialAccessToken),
+		CredentialId:   "a-minted-bearer",
+	}
+
+	_, err := r.CreateDeviceCredential(ctx, struct {
+		Request *model.DeviceCredentialCreateRequest
+	}{Request: request})
+	if err != auth.ErrForbidden {
+		t.Errorf("createDeviceCredential answered a read-only caller with %v, want ErrForbidden — "+
+			"a viewer who can mint a credential can impersonate any device in the tenant", err)
+	}
+
+	_, err = r.UpdateDeviceCredential(ctx, struct {
+		Token   string
+		Request *model.DeviceCredentialCreateRequest
+	}{Token: "dozer-01-cred", Request: request})
+	if err != auth.ErrForbidden {
+		t.Errorf("updateDeviceCredential answered a read-only caller with %v, want ErrForbidden", err)
+	}
+
+	if _, err = r.DeleteDeviceCredential(ctx, struct{ Token string }{Token: "dozer-01-cred"}); err != auth.ErrForbidden {
+		t.Errorf("deleteDeviceCredential answered a read-only caller with %v, want ErrForbidden", err)
+	}
+}
+
+// The counterweight: device:write really can mint a bearer for a device it does
+// not otherwise own. This is the capability the read gate's justification asserts
+// that holder already has, asserted rather than assumed — if credential creation
+// were scoped more narrowly than "any device in the tenant", gating reads at
+// device:write would be granting something new after all.
+func TestDeviceWriteCanMintABearerForAnyDeviceInTheTenant(t *testing.T) {
+	ctx := withAuthorities(credentialTestCtx(t), append(viewerBaseline, auth.DeviceWrite)...)
+	seedAccessTokenCredential(t, ctx) // creates device dozer-01, owned by nobody in particular
+
+	r := &SchemaResolver{}
+	created, err := r.CreateDeviceCredential(ctx, struct {
+		Request *model.DeviceCredentialCreateRequest
+	}{Request: &model.DeviceCredentialCreateRequest{
+		Token:          "dozer-01-cred-2",
+		DeviceToken:    "dozer-01",
+		CredentialType: string(model.CredentialAccessToken),
+		CredentialId:   "a-minted-bearer",
+	}})
+	if err != nil {
+		t.Fatalf("createDeviceCredential refused a device:write caller: %v", err)
+	}
+	if got := created.CredentialId(); got != "a-minted-bearer" {
+		t.Errorf("credentialId = %q, want the minted bearer", got)
+	}
+}
