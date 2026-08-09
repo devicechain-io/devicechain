@@ -19,7 +19,8 @@ identity and drives the same tenant-facing surfaces a real integration would.
    type; one device with an `externalId` (ADR-049) and an `ACCESS_TOKEN`
    credential (ADR-014). Every step is create-or-ignore-if-exists, so bootstrap
    (and `reset`, which just re-runs it) is idempotent.
-4. **Emits** measurements over the real device-plane HTTP ingress
+4. **Emits** measurements — and, for a scenario that reports position,
+   **locations** — over the real device-plane HTTP ingress
    (`POST /{instanceId}/{tenant}/events`), authenticated by the provisioned
    credential — exactly the path a physical device uses. The cadence and
    population default to the scenario's own demo sizing (~5s) and are
@@ -47,9 +48,9 @@ go run . --handshake /path/to/handshake.json [--port 8090]
 ### Driving load
 
 The built-in scenarios are sized as **demos** — devicepulse is 1 device,
-buildingpulse is 12 and widgetlab is 7, all at a 5s cadence, which is the right
-default for watching the presentation page and far too small to measure what an
-instance costs. Three flags override that; each also reads an env var, and each
+buildingpulse is 12, widgetlab is 7 and fleetpulse is 6, all at a 5s cadence, which is
+the right default for watching the presentation page and far too small to measure what
+an instance costs. Three flags override that; each also reads an env var, and each
 defaults to the scenario's own sizing:
 
 | Flag | Env | Purpose |
@@ -62,7 +63,7 @@ defaults to the scenario's own sizing:
 named devices is a composed fixture, not a scale vehicle: resizing it would leave
 its boards pointing at devices the run never provisions, so it refuses the flag at
 startup rather than provisioning a topology its own boards do not match. widgetlab
-is one. devicepulse and buildingpulse take any size.
+is one. devicepulse, buildingpulse and fleetpulse take any size.
 
 ⚠️ **A small buildingpulse is a quieter demo, not a broken one.** Every device raises and
 clears at any size, but below a handful the tenant-wide view has moments with no active
@@ -74,6 +75,33 @@ because the curve's constants decide it.
 # 500 devices every 200ms = a 2500 events/sec target
 go run . --handshake ./hs.json --devices 500 --emit-interval 200ms
 ```
+
+### Location events
+
+`fleetpulse` is the scenario that reports position: a small fleet driving a closed
+loop, emitting a **Location** and a **Measurement** per device per tick as two separate
+events. It exists because the platform's location spine — decoder, resolver,
+hypertable, GraphQL — had no in-repo producer at all, and a wire shape nothing emits is
+a wire shape nobody has had to be right about.
+
+The contract the emitter holds to, all of it enforced at decode rather than shrugged
+off:
+
+- content lives under `payload.entries[]`; a payload with no entries is a decode error,
+  not an empty success;
+- **every value is a JSON string**, including the numbers — a bare `33.749` fails the
+  whole decode;
+- `latitude` and `longitude` are required per entry, the rest optional, and an
+  unreported optional is **absent** rather than `"0"` (a device with no compass has not
+  reported due north);
+- units are fixed platform-wide: WGS84 decimal degrees, elevation above the ellipsoid
+  and accuracy in **metres**, speed in **metres per second**, heading in degrees
+  clockwise from true north in `[0, 360)`;
+- **one entry per event** — the per-entry time is discarded at persistence and
+  identical positions in one batch collide, so batching loses data.
+
+The emitter's tests run the exact bytes it produces through event-sources' own JSON
+decoder, so a change to that contract fails here rather than against a live cluster.
 
 ### Detection rules are proven live, not assumed
 

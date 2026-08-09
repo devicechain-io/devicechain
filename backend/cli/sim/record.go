@@ -74,7 +74,7 @@ type Record struct {
 // lists that must agree, so dc-simulator's TestDcctlKnowsEveryRegisteredScenario
 // reads this file and fails when they diverge — a comment asking the next person
 // to remember would not have survived the third scenario, and did not.
-var KnownManifestIds = []string{"devicepulse", "buildingpulse", "widgetlab", "sitepulse"}
+var KnownManifestIds = []string{"devicepulse", "buildingpulse", "widgetlab", "sitepulse", "fleetpulse"}
 
 // ValidateManifestId rejects a --manifest value dc-simulator's registry
 // doesn't know.
