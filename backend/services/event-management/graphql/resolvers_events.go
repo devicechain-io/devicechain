@@ -167,6 +167,18 @@ func (r *LocationEventResolver) Elevation() *float64 {
 	return nullFloat(r.M.Elevation)
 }
 
+func (r *LocationEventResolver) Accuracy() *float64 {
+	return nullFloat(r.M.Accuracy)
+}
+
+func (r *LocationEventResolver) Speed() *float64 {
+	return nullFloat(r.M.Speed)
+}
+
+func (r *LocationEventResolver) Heading() *float64 {
+	return nullFloat(r.M.Heading)
+}
+
 type LocationEventSearchResultsResolver struct {
 	M model.LocationEventSearchResults
 	S *SchemaResolver

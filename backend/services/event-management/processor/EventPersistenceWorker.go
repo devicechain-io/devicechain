@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
@@ -17,6 +18,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
@@ -68,6 +70,40 @@ func NewEventPersistenceWorker(workerId int, api model.EventManagementApi,
 // keeps the retry path.
 var ErrDeterministic = errors.New("deterministic persistence failure")
 
+// classifyPersistFailure re-classifies a database error that no redelivery can fix.
+//
+// 🔴 This is the BACKSTOP the decode-time range check cannot be. Validation lives in
+// the JSON decoder, so it covers every device-facing JSON event and NOTHING that
+// reaches this service another way — lwm2m-ingest and sparkplug-ingest build their
+// payload structs directly and marshal protobuf, bypassing the decoder entirely, and
+// measurement values are not range-checked anywhere at all (the column is
+// numeric(20,8), so "1e13" parses cleanly and overflows at the INSERT).
+//
+// Without this, such a value comes back from the driver unwrapped, falls to the
+// dispatch default as "transient", and burns its whole MaxDeliver budget before
+// being filed as a downstream API failure rather than as invalid data. That is the
+// exact poison loop the location range check was written to prevent, still reachable
+// on every path the decoder does not sit on.
+//
+// The test is SQLSTATE class 22 — "data exception" — and it is deliberately no wider.
+// A class-22 error is a statement about the VALUE (out of range, bad syntax for the
+// type, string too long), so the same bytes reproduce it on every delivery forever.
+// Integrity-constraint classes are not included: some of those genuinely do resolve
+// on retry once a concurrent writer commits, and misfiling a transient failure as
+// deterministic discards data rather than merely delaying it. When in doubt this
+// stays on the retry path, because that error is recoverable and the other is not.
+func classifyPersistFailure(err error) error {
+	if err == nil || errors.Is(err, ErrDeterministic) {
+		return err
+	}
+	var pgerr *pgconn.PgError
+	if errors.As(err, &pgerr) && strings.HasPrefix(pgerr.Code, "22") {
+		return fmt.Errorf("%w: database rejected the value (SQLSTATE %s): %w",
+			ErrDeterministic, pgerr.Code, err)
+	}
+	return err
+}
+
 // Parse a (possibly null) string into a float64. A non-numeric value is a
 // deterministic failure (the value can never be stored in the numeric column), so
 // the error is wrapped as such rather than left to retry (unacked) pointlessly.
@@ -101,11 +137,26 @@ func (ep *EventPersistenceWorker) PersistLocationEvents(ctx context.Context, db 
 		if err != nil {
 			return nil, err
 		}
+		acc, err := parseNullableFloat64(location.Accuracy)
+		if err != nil {
+			return nil, err
+		}
+		spd, err := parseNullableFloat64(location.Speed)
+		if err != nil {
+			return nil, err
+		}
+		hdg, err := parseNullableFloat64(location.Heading)
+		if err != nil {
+			return nil, err
+		}
 		requests = append(requests, &model.LocationEventCreateRequest{
 			Event:     event,
 			Latitude:  lat,
 			Longitude: lon,
 			Elevation: ele,
+			Accuracy:  acc,
+			Speed:     spd,
+			Heading:   hdg,
 		})
 	}
 	created, err := ep.Api.CreateLocationEvents(ctx, db, requests)
@@ -277,24 +328,31 @@ func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmode
 			}
 		}
 
+		// A payload whose Go type does not match its event type is as deterministic as
+		// a failure gets — the same bytes produce the same mismatch on every delivery —
+		// but these four returned a BARE error, which the dispatch below classifies by
+		// its default branch as transient. So the event was redelivered until it burned
+		// its whole MaxDeliver budget and was then filed as a downstream API failure
+		// rather than as invalid data. Wrapping ErrDeterministic dead-letters it on the
+		// first delivery, with the right reason attached.
 		var perr error
 		switch event.EventType {
 		case esmodel.Location:
 			payload, ok := event.Payload.(*dmmodel.ResolvedLocationsPayload)
 			if !ok {
-				return fmt.Errorf("non-location payload in location event")
+				return fmt.Errorf("%w: non-location payload in location event", ErrDeterministic)
 			}
 			results, perr = ep.PersistLocationEvents(ctx, tx, pevent, *payload)
 		case esmodel.Measurement:
 			payload, ok := event.Payload.(*dmmodel.ResolvedMeasurementsPayload)
 			if !ok {
-				return fmt.Errorf("non-measurement payload in measurement event")
+				return fmt.Errorf("%w: non-measurement payload in measurement event", ErrDeterministic)
 			}
 			results, perr = ep.PersistMeasurementEvents(ctx, tx, pevent, *payload)
 		case esmodel.Alert:
 			payload, ok := event.Payload.(*dmmodel.ResolvedAlertsPayload)
 			if !ok {
-				return fmt.Errorf("non-alert payload in alert event")
+				return fmt.Errorf("%w: non-alert payload in alert event", ErrDeterministic)
 			}
 			results, perr = ep.PersistAlertEvents(ctx, tx, pevent, *payload)
 		case esmodel.StateChange:
@@ -304,7 +362,7 @@ func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmode
 			// presence is device-state's projection; this is the queryable timeline.
 			payload, ok := event.Payload.(*dmmodel.ResolvedStateChangePayload)
 			if !ok {
-				return fmt.Errorf("non-state-change payload in state change event")
+				return fmt.Errorf("%w: non-state-change payload in state change event", ErrDeterministic)
 			}
 			results, perr = ep.PersistStateChangeEvents(ctx, tx, pevent, *payload)
 		default:
@@ -398,6 +456,7 @@ func (ep *EventPersistenceWorker) Process(ctx context.Context) {
 
 			// Persist the event using the per-message tenant context.
 			if _, err := ep.PersistEvent(msgctx, *event); err != nil {
+				err = classifyPersistFailure(err)
 				// A deterministic failure (bad data) can never succeed on redelivery,
 				// so dead-letter it on the first failure (ADR-024). A transient
 				// failure is retried via redelivery up to the cap, then dead-lettered.

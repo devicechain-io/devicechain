@@ -38,5 +38,8 @@ import (
 var (
 	Migrations = []*gormigrate.Migration{
 		NewBaselineSchema(),
+		// The first migration appended after the baseline, and therefore the worked
+		// example for the next one — read its doc comment before adding another.
+		NewLocationFixFieldsSchema(),
 	}
 )

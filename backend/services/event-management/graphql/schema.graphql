@@ -46,6 +46,12 @@ type LocationEvent {
     latitude: Float
     longitude: Float
     elevation: Float
+    # Horizontal accuracy in metres, ground speed in metres per second, and
+    # heading in degrees clockwise from true north in [0, 360). All optional:
+    # a device reports what its receiver knows.
+    accuracy: Float
+    speed: Float
+    heading: Float
 }
 
 # A persisted measurement event (one row per measurement entry). unit and dataType

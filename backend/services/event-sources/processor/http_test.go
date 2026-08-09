@@ -59,12 +59,25 @@ type capturedFailure struct {
 	err    error
 }
 
+// canonicalMeasurementBody is the wire shape the published contract specifies:
+// entries under "payload", values as strings.
+//
+// Every body in this file was FLAT until the decoder was made to fail closed —
+// measurements directly under "payload" with no entries wrapper — which decoded to
+// zero entries and persisted nothing. That made the test named DecodeSuccess assert
+// 202 for a body that stored none of its data, the exact silent success this
+// transport's other tests exist to prevent. Hoisting it to one constant is
+// deliberate: three copies is how the wrong shape survived three chances to be
+// noticed.
+const canonicalMeasurementBody = `{"device":"sensor-001","eventType":"Measurement",` +
+	`"payload":{"entries":[{"measurements":{"temp":"21.5"}}]}}`
+
 // A well-formed measurement event posted to /{instanceId}/{tenant}/events is
 // decoded, the tenant is taken from the path, and the response is 202 Accepted.
 func TestHttpEventSource_DecodeSuccess(t *testing.T) {
 	es, dec, fail := newTestHttpSource(t, nil)
 
-	body := `{"device":"sensor-001","eventType":"Measurement","payload":{"measurements":{"temp":21.5}}}`
+	body := canonicalMeasurementBody
 	req := httptest.NewRequest(http.MethodPost, "/inst-1/acme/events", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	es.handler().ServeHTTP(rec, req)
@@ -90,7 +103,7 @@ func TestHttpEventSource_PublishFailureIsNotReportedAsAccepted(t *testing.T) {
 	es, dec, fail := newTestHttpSource(t, nil)
 	dec.publishErr = errors.New("jetstream unavailable")
 
-	body := `{"device":"sensor-001","eventType":"Measurement","payload":{"measurements":{"temp":21.5}}}`
+	body := canonicalMeasurementBody
 	req := httptest.NewRequest(http.MethodPost, "/inst-1/acme/events", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	es.handler().ServeHTTP(rec, req)
@@ -136,7 +149,7 @@ func TestHttpEventSource_MissingTenant(t *testing.T) {
 func TestHttpEventSource_RateLimited(t *testing.T) {
 	es, dec, fail := newTestHttpSource(t, func(string, string, time.Time, bool) bool { return false })
 
-	body := `{"device":"sensor-001","eventType":"Measurement","payload":{"measurements":{"temp":21.5}}}`
+	body := canonicalMeasurementBody
 	req := httptest.NewRequest(http.MethodPost, "/inst-1/acme/events", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	es.handler().ServeHTTP(rec, req)

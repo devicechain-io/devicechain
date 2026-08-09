@@ -33,6 +33,9 @@ func MarshalPayloadForLocationsEvent(payload *model.UnresolvedLocationsPayload) 
 			Latitude:     entry.Latitude,
 			Longitude:    entry.Longitude,
 			Elevation:    entry.Elevation,
+			Accuracy:     entry.Accuracy,
+			Speed:        entry.Speed,
+			Heading:      entry.Heading,
 			OccurredTime: entry.OccurredTime,
 		}
 		pbpayload.Entries = append(pbpayload.Entries, pbentry)
@@ -124,6 +127,9 @@ func UnmarshalPayloadForLocationsEvent(encoded []byte) (*model.UnresolvedLocatio
 			Latitude:     pbentry.Latitude,
 			Longitude:    pbentry.Longitude,
 			Elevation:    pbentry.Elevation,
+			Accuracy:     pbentry.Accuracy,
+			Speed:        pbentry.Speed,
+			Heading:      pbentry.Heading,
 			OccurredTime: pbentry.OccurredTime,
 		}
 		entries = append(entries, entry)
@@ -197,7 +203,7 @@ func MarshalUnresolvedPayload(etype model.EventType, payload interface{}) ([]byt
 		if napayload, ok := payload.(*model.UnresolvedNewRelationshipPayload); ok {
 			return MarshalPayloadForNewRelationshipEvent(napayload)
 		}
-		return nil, fmt.Errorf("invalid location payload: %+v", payload)
+		return nil, fmt.Errorf("invalid new-relationship payload: %+v", payload)
 	case model.Location:
 		if locpayload, ok := payload.(*model.UnresolvedLocationsPayload); ok {
 			return MarshalPayloadForLocationsEvent(locpayload)
@@ -207,12 +213,12 @@ func MarshalUnresolvedPayload(etype model.EventType, payload interface{}) ([]byt
 		if mxpayload, ok := payload.(*model.UnresolvedMeasurementsPayload); ok {
 			return MarshalPayloadForMeasurementsEvent(mxpayload)
 		}
-		return nil, fmt.Errorf("invalid location payload: %+v", payload)
+		return nil, fmt.Errorf("invalid measurement payload: %+v", payload)
 	case model.Alert:
 		if apayload, ok := payload.(*model.UnresolvedAlertsPayload); ok {
 			return MarshalPayloadForAlertsEvent(apayload)
 		}
-		return nil, fmt.Errorf("invalid location payload: %+v", payload)
+		return nil, fmt.Errorf("invalid alert payload: %+v", payload)
 	case model.StateChange:
 		if scpayload, ok := payload.(*model.UnresolvedStateChangePayload); ok {
 			return MarshalPayloadForStateChangeEvent(scpayload)

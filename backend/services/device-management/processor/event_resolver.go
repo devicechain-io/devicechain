@@ -251,6 +251,9 @@ func (rez *EventResolver) ResolveLocationsEventPayload(ctx context.Context, devi
 				Latitude:     ulentry.Latitude,
 				Longitude:    ulentry.Longitude,
 				Elevation:    ulentry.Elevation,
+				Accuracy:     ulentry.Accuracy,
+				Speed:        ulentry.Speed,
+				Heading:      ulentry.Heading,
 				OccurredTime: ulentry.OccurredTime,
 			}
 			rlentries = append(rlentries, rlentry)

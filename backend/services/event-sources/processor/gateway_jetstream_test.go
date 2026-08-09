@@ -161,7 +161,19 @@ func capturedMsgAt(subject string, body string, seq uint64, appendTime time.Time
 	return m
 }
 
-const validEvent = `{"device":"sensor-001","eventType":"Location","occurredTime":"2026-07-20T10:30:00Z","latitude":1,"longitude":2,"elevation":3}`
+// validEvent is the CANONICAL location body, and it is worth being pedantic about
+// because the version it replaced was not valid at all.
+//
+// It used to put latitude/longitude/elevation at the ENVELOPE top level as JSON
+// numbers. That is wrong twice over: coordinates belong under payload.entries[],
+// and every field is a string (a bare number fails the whole decode). The old form
+// decoded SUCCESSFULLY into a payload with zero entries, so every test below
+// exercised transport, ack and redelivery semantics against a location event
+// carrying no location — and would have kept passing if the entire coordinate
+// path were deleted. The decoder now rejects it, which is what makes this fixture
+// a specification rather than a decoration.
+const validEvent = `{"device":"sensor-001","eventType":"Location","occurredTime":"2026-07-20T10:30:00Z",` +
+	`"payload":{"entries":[{"latitude":"33.74900000","longitude":"-84.38800000","elevation":"320.5"}]}}`
 
 // ============================ THE ACK TRAP ============================
 //
@@ -205,7 +217,8 @@ func TestEveryDeliberateDropAcknowledgesTheCaptureStream(t *testing.T) {
 		{
 			name:    "payload claims a device the transport did not authorize",
 			subject: captureSubject,
-			body:    `{"device":"someone-else","eventType":"Location","occurredTime":"2026-07-20T10:30:00Z","latitude":1,"longitude":2,"elevation":3}`,
+			body: `{"device":"someone-else","eventType":"Location","occurredTime":"2026-07-20T10:30:00Z",` +
+				`"payload":{"entries":[{"latitude":"33.74900000","longitude":"-84.38800000","elevation":"320.5"}]}}`,
 		},
 	}
 

@@ -28,7 +28,69 @@ Every inbound event — over any transport — is a JSON object:
 - `device` — the device's stable token.
 - `eventType` — `Measurement`, `Location`, or `Alert` (also `NewRelationship`).
 - `credentialType` / `credentialId` — the credential the device presents. `MQTT_BASIC` additionally carries `credentialSecret`. Omit these only when the instance's device-auth mode is set to `disabled` or `optional`; the **default is `required`**, so a credential is expected.
-- `payload` — shape depends on `eventType`; measurement values are strings.
+- `payload` — shape depends on `eventType`, and every shape is `{ "entries": [ … ] }`. See below.
+
+### Payload shapes
+
+**Every payload wraps its content in an `entries` array**, and every numeric value is a **JSON
+string**. Both rules are enforced: a payload with no entries, an entry with nothing in it, or a bare
+number where a string is expected is **rejected** — HTTP answers `400` and an MQTT publish is
+dead-lettered rather than silently accepted. Send one entry per event.
+
+**`Measurement`** — one or more named readings:
+
+```json
+"payload": { "entries": [ { "measurements": { "temperature": "21.5", "humidity": "48" } } ] }
+```
+
+**`Location`** — where the device is:
+
+```json
+"payload": {
+  "entries": [
+    {
+      "latitude":  "33.74900000",
+      "longitude": "-84.38800000",
+      "elevation": "320.5",
+      "accuracy":  "4.2",
+      "speed":     "0.0",
+      "heading":   "271.5"
+    }
+  ]
+}
+```
+
+`latitude` and `longitude` are **required**; the rest are optional — send what the receiver actually
+knows rather than a placeholder. The units are fixed platform-wide and are **not** configurable per
+device:
+
+| Field | Unit | Range |
+| --- | --- | --- |
+| `latitude` / `longitude` | WGS84 (EPSG:4326) decimal degrees | ±90 / ±180 |
+| `elevation` | metres above the WGS84 **ellipsoid** — not above mean sea level | — |
+| `accuracy` | horizontal accuracy, metres | 0 or greater |
+| `speed` | metres per second | 0 or greater |
+| `heading` | degrees clockwise from true north | 0 up to but not including 360 |
+
+:::caution Elevation is above the ellipsoid, not sea level
+A receiver that reports height above mean sea level must convert before sending. The two differ by
+tens of metres in real terrain — comfortably enough to place a machine on the wrong side of a
+geofence — and because both values look equally plausible, getting it wrong produces a confidently
+wrong position rather than a visible error.
+:::
+
+A value outside its range is rejected as bad data on the first delivery rather than retried. That is
+deliberate: the most common mistake is sending degrees scaled by 10⁷ (the convention some GPS and
+LwM2M stacks use), and `337490000` is not a latitude at any scale.
+
+**`Alert`** — something the device wants a human or a rule to see:
+
+```json
+"payload": { "entries": [ { "type": "overheat", "level": 5, "message": "coolant over limit", "source": "ecu" } ] }
+```
+
+`type` is **required** — it is the classifier notification policies, rules and console filters route
+on, so an untyped alert is a record nothing can act on. `level`, `message` and `source` are optional.
 
 ## MQTT
 

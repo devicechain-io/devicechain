@@ -214,10 +214,24 @@ func (api *Api) CreateLocationEvents(ctx context.Context, db *gorm.DB, requests 
 	created := make([]*LocationEvent, 0, len(requests))
 	for _, request := range requests {
 		parents = append(parents, &request.Event)
+		// Every stored field of the fix takes part in the row's identity, including
+		// the three that arrived later. A fix is not identified by position alone: two
+		// readings at the same coordinates with different reported accuracy or heading
+		// are different readings, and leaving those out of the hash would let
+		// ON CONFLICT DO NOTHING silently swallow the second one.
+		//
+		// 🔴 THE FIELD NAMES BELOW ARE FROZEN. json.Marshal writes them into the
+		// preimage, so they are part of a content-addressed identity rather than local
+		// style — renaming one changes every location row's payload_id. That is not a
+		// cosmetic diff: the same fix redelivered across the deploy boundary hashes
+		// differently, misses the idempotency index, and inserts a duplicate row. If a
+		// name here ever has to change, it is a data migration, not a rename.
 		entry, cerr := canonicalPayloadEntry(struct {
-			Lat, Lon, Elev *float64
-			Occurred       time.Time
-		}{request.Latitude, request.Longitude, request.Elevation, request.OccurredTime})
+			Lat, Lon, Elev           *float64
+			Accuracy, Speed, Heading *float64
+			Occurred                 time.Time
+		}{request.Latitude, request.Longitude, request.Elevation,
+			request.Accuracy, request.Speed, request.Heading, request.OccurredTime})
 		if cerr != nil {
 			return nil, fmt.Errorf("canonicalizing a LocationEvent for its payload identity: %w", cerr)
 		}
@@ -230,6 +244,9 @@ func (api *Api) CreateLocationEvents(ctx context.Context, db *gorm.DB, requests 
 			Latitude:     rdb.NullFloat64Of(request.Latitude),
 			Longitude:    rdb.NullFloat64Of(request.Longitude),
 			Elevation:    rdb.NullFloat64Of(request.Elevation),
+			Accuracy:     rdb.NullFloat64Of(request.Accuracy),
+			Speed:        rdb.NullFloat64Of(request.Speed),
+			Heading:      rdb.NullFloat64Of(request.Heading),
 		})
 	}
 	if err := upsertParentEvents(ctx, db, parents); err != nil {

@@ -152,7 +152,8 @@ func TestCaptureSurvivesASourceRestartEndToEnd(t *testing.T) {
 	// one the subject addresses, or checkDeviceMatchesTransport would fail-decode it.
 	event := func(seq int) string {
 		return fmt.Sprintf(
-			`{"device":%q,"eventType":"Location","occurredTime":"2026-07-20T10:30:%02dZ","latitude":1,"longitude":2,"elevation":3}`,
+			`{"device":%q,"eventType":"Location","occurredTime":"2026-07-20T10:30:%02dZ",`+
+				`"payload":{"entries":[{"latitude":"33.74900000","longitude":"-84.38800000","elevation":"320.5"}]}}`,
 			device, seq)
 	}
 	recv := func(t *testing.T, out <-chan decodedEvent, who string) decodedEvent {

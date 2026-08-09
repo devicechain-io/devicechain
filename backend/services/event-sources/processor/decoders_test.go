@@ -40,7 +40,14 @@ func TestJsonDecoderRejectsDeviceStateChange(t *testing.T) {
 func TestJsonDecoderCannotSetAuthenticatedTransport(t *testing.T) {
 	jd := NewJsonDecoder(map[string]string{})
 	// A well-formed device Measurement event that ALSO tries to inject the marker.
-	payload := []byte(`{"device":"sensor-001","eventType":"Measurement","authenticatedTransport":true,"payload":{"measurements":{"temp":21.5}}}`)
+	//
+	// The payload was FLAT until the decoder was made to fail closed — measurements
+	// directly under "payload" with no entries wrapper — so this security pin was
+	// being asserted against a body that decoded to zero entries and stored nothing.
+	// The assertion below never depended on the payload, so the property held; but a
+	// fixture calling itself well-formed is how the wrong shape spreads.
+	payload := []byte(`{"device":"sensor-001","eventType":"Measurement","authenticatedTransport":true,` +
+		`"payload":{"entries":[{"measurements":{"temp":"21.5"}}]}}`)
 
 	event, _, err := jd.Decode(payload)
 	require.NoError(t, err)
