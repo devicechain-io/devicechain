@@ -20,6 +20,7 @@ export {
   ALARM_WIDGET_REGISTRY,
   CONTROL_WIDGET_REGISTRY,
   SELECTION_WIDGET_REGISTRY,
+  LOCATION_WIDGET_REGISTRY,
   WIDGET_CHANNEL,
   WIDGET_BINDS_DATASOURCE,
   type WidgetChannel,
@@ -75,6 +76,18 @@ export { AlarmTable } from './widgets/alarm-table';
 export { AlarmCount } from './widgets/alarm-count';
 export { CommandButton } from './widgets/command-button';
 export { EntitySelector } from './widgets/entity-selector';
+export { MapWidget } from './widgets/map';
+// The map's pure parts: which samples can be placed, where they land on a tile-less
+// panel, and how a fix is described without inventing the fields it does not carry.
+export {
+  placeable,
+  projectToPanel,
+  describePosition,
+  formatDegrees,
+  rasterStyleFor,
+  type PlaceableLocation,
+  type PanelPoint,
+} from './widgets/map-geometry';
 export {
   severityColor,
   severityLabel,
@@ -107,6 +120,7 @@ export {
   useMeasurementStream,
   useAlarmStream,
   useCommandStream,
+  useLocationStream,
   useDatasourceAvailability,
   useResolvedBindings,
   useSlotCandidates,
@@ -115,6 +129,7 @@ export {
   type MeasurementStreamState,
   type AlarmStreamState,
   type CommandStreamState,
+  type LocationStreamState,
   type CandidatesState,
   type DatasourceAvailability,
 } from './hooks';

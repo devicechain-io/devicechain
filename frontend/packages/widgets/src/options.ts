@@ -300,6 +300,25 @@ export const WIDGET_OPTIONS = {
     title: TITLE,
     selectionTarget: { ...SELECTION_TARGET, required: true },
   },
+
+  // 🔴 tileUrl is NOT `required`, and that is the decision rather than an oversight.
+  // `required` means "absent leaves the widget with nothing to show", and a map without
+  // a basemap still shows every position it was asked to — on a plain panel, saying why
+  // there is no map behind them. Marking it required would report a correctly-rendering
+  // widget as broken on every board that has not chosen a tile provider yet, which is
+  // every board on a fresh instance: there is deliberately NO default tile source,
+  // because tiles carry terms the platform cannot accept on an operator's behalf.
+  map: {
+    title: TITLE,
+    tileUrl: {
+      kind: 'string',
+      doc: 'Raster tile URL template, e.g. https://tiles.example.com/{z}/{x}/{y}.png. Without one, positions are drawn on a plain background.',
+    },
+    attribution: {
+      kind: 'string',
+      doc: 'Credit line the tile source requires, shown on the map. Set whatever the provider you chose asks for.',
+    },
+  },
 } as const satisfies Record<WidgetType, WidgetOptionSpecs>;
 
 // ---- Derived compile-time types ---------------------------------------------

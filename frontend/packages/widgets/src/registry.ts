@@ -4,12 +4,12 @@
 // The widget registries + the channel classifier. A renderer (ConnectedWidget) looks a
 // widget up by `widget.type`, but FIRST reads WIDGET_CHANNEL to decide which data
 // channel — and therefore which registry + hook — binds it: measurement widgets stream
-// telemetry samples; alarm widgets consume the raised-alarm surface. Custom widgets
-// extend these same maps.
+// telemetry samples; alarm widgets consume the raised-alarm surface; location widgets
+// read the bound devices' positions. Custom widgets extend these same maps.
 
 import type { WidgetType } from '@devicechain/dashboards';
 
-import type { AlarmStreamState, CommandStreamState } from './hooks';
+import type { AlarmStreamState, CommandStreamState, LocationStreamState } from './hooks';
 import type { WidgetComponent } from './widget';
 import { AlarmCount } from './widgets/alarm-count';
 import { AlarmTable } from './widgets/alarm-table';
@@ -19,6 +19,7 @@ import { Gauge } from './widgets/gauge';
 import { Image } from './widgets/image';
 import { Label } from './widgets/label';
 import { LatestCard } from './widgets/latest-card';
+import { MapWidget } from './widgets/map';
 import { Table } from './widgets/table';
 import { TimeSeriesChart } from './widgets/time-series-chart';
 
@@ -27,7 +28,7 @@ import { TimeSeriesChart } from './widgets/time-series-chart';
 // exhaustive over WidgetType (a new type won't compile without a channel), and the
 // per-channel type subsets are DERIVED from it, so the channel map and the two
 // registries can't drift out of sync.
-export type WidgetChannel = 'measurement' | 'alarm' | 'control' | 'selection';
+export type WidgetChannel = 'measurement' | 'alarm' | 'control' | 'selection' | 'location';
 
 export const WIDGET_CHANNEL = {
   'timeseries-chart': 'measurement',
@@ -40,6 +41,7 @@ export const WIDGET_CHANNEL = {
   'alarm-count': 'alarm',
   'command-button': 'control',
   'entity-selector': 'selection',
+  map: 'location',
 } as const satisfies Record<WidgetType, WidgetChannel>;
 
 // The widget types on each channel, derived from WIDGET_CHANNEL so the registries below
@@ -53,6 +55,7 @@ type MeasurementWidgetType = WidgetTypeOn<'measurement'>;
 type AlarmWidgetType = WidgetTypeOn<'alarm'>;
 type ControlWidgetType = WidgetTypeOn<'control'>;
 type SelectionWidgetType = WidgetTypeOn<'selection'>;
+type LocationWidgetType = WidgetTypeOn<'location'>;
 
 export const WIDGET_REGISTRY: Record<MeasurementWidgetType, WidgetComponent> = {
   'timeseries-chart': TimeSeriesChart,
@@ -78,6 +81,12 @@ export const SELECTION_WIDGET_REGISTRY: Record<SelectionWidgetType, WidgetCompon
   'entity-selector': EntitySelector,
 };
 
+// Location widgets read the hub's location channel: the bound devices' last-known
+// positions, plus the refusal state the `location:read` authority produces.
+export const LOCATION_WIDGET_REGISTRY: Record<LocationWidgetType, WidgetComponent<LocationStreamState>> = {
+  map: MapWidget,
+};
+
 // Whether a widget type binds a DATASOURCE — the entity whose data it reads.
 //
 // Not derivable from the channel: label and image sit on the measurement channel
@@ -100,4 +109,7 @@ export const WIDGET_BINDS_DATASOURCE = {
   'alarm-count': true,
   'command-button': true,
   'entity-selector': false,
+  // A map binds a datasource, and needs it: the selector names both the devices whose
+  // positions to plot and (in its own field) the location series to read.
+  map: true,
 } as const satisfies Record<WidgetType, boolean>;

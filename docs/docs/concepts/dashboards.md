@@ -17,7 +17,7 @@ A dashboard lays widgets out on a **fluid CSS grid**: a high-resolution column g
 
 ## Widgets
 
-Built-in widgets span four channels — **telemetry**, **alarm**, **control**, and **selection**. The time-series chart and the gauge render over [Apache ECharts](https://echarts.apache.org/); the rest are plain DOM:
+Built-in widgets span five channels — **telemetry**, **alarm**, **control**, **selection**, and **location**. The time-series chart and the gauge render over [Apache ECharts](https://echarts.apache.org/), the map over [MapLibre GL](https://maplibre.org/); the rest are plain DOM:
 
 | Widget | Channel | Shows |
 |---|---|---|
@@ -31,6 +31,15 @@ Built-in widgets span four channels — **telemetry**, **alarm**, **control**, a
 | **Alarm count** | alarm | a rolled-up count of open alarms |
 | **Command / control** | control | a typed parameter form that dispatches a command and shows its live delivery lifecycle |
 | **Entity selector** | selection | a picker that re-points a named slot, so a viewer chooses which entity the dashboard — or one widget within it — shows |
+| **Map** | location | the last known position of the bound devices |
+
+:::note The map needs a tile source, and DeviceChain does not pick one for you
+The map widget renders device positions over a **tile source you configure on the widget**. There is no default, deliberately: the map library is not the map — the tiles are, and they come from a provider whose terms are separate from the platform's. Defaulting to a public tile service would quietly make someone else's usage policy a runtime dependency of your instance.
+
+With no tile source configured the widget still works: it plots the devices' relative positions on a plain background and says that no tiles are configured. Point it at a commercial provider, or at tiles you host yourself.
+
+Reading positions also requires the `location:read` authority, which is **not** granted by the read-only baseline every member receives — see [device location](../guides/connecting-a-device.md). A viewer without it is told so, rather than shown an empty map.
+:::
 
 Widgets are themed with CSS custom properties, so an embedding application controls their appearance without modifying widget code.
 

@@ -243,7 +243,10 @@ function applyDatasource(
     ds.kind === 'device'
       ? { kind: 'device', deviceToken: ds.deviceToken }
       : { kind: 'anchor', anchor: ds.anchor };
-  return pruneSlots(bindWidgetSlot(def, widgetId, binding, ds.measurements));
+  // `ds.location` names the location series the widget reads (a map's), and must cross
+  // into the slot selector with the measurement names: slotting moves the ENTITY onto a
+  // slot, and must not change WHAT the widget reads from it.
+  return pruneSlots(bindWidgetSlot(def, widgetId, binding, ds.measurements, ds.location));
 }
 
 export function DashboardWorkspace({

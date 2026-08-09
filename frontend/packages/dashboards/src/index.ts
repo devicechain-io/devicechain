@@ -35,6 +35,9 @@ export type {
   EntityCandidateLister,
   EntityListKind,
   MeasurementSample,
+  LocationSample,
+  LocationSeries,
+  LocationSelection,
   AlarmRow,
   CommandRow,
   CommandParameter,
@@ -90,6 +93,9 @@ export {
   type CommandSnapshot,
   type CommandStreamSink,
   type CommandDispatch,
+  type LocationSubscription,
+  type LocationSnapshot,
+  type LocationStreamSink,
   type WidgetActions,
 } from './hub';
 

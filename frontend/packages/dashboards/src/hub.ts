@@ -10,7 +10,7 @@
 // model fans out badly on a crowded board. The Hub owns the subscription
 // lifecycle; widgets just hand it a datasource selector and a sink.
 
-import { gql, subscribe, type Area, type SubscriptionSink } from '@devicechain/client';
+import { gql, isForbiddenError, subscribe, type Area, type SubscriptionSink } from '@devicechain/client';
 
 import {
   ACKNOWLEDGE_ALARM,
@@ -24,6 +24,7 @@ import {
   COMMANDS_QUERY,
   CREATE_COMMAND,
 } from './internal/command-doc';
+import { LATEST_LOCATIONS_QUERY } from './internal/location-doc';
 import {
   MEASUREMENT_STREAM,
   type MeasurementStreamResult,
@@ -34,6 +35,7 @@ import type {
   AnchorTarget,
   CommandRow,
   DatasourceSelector,
+  LocationSample,
   MeasurementSample,
   SlotBinding,
 } from './types';
@@ -41,6 +43,7 @@ import type {
 const EVENT_AREA: Area = 'event-management';
 const DEVICE_AREA: Area = 'device-management';
 const COMMAND_AREA: Area = 'command-delivery';
+const STATE_AREA: Area = 'device-state';
 
 // randomToken mints a command dispatch token (its idempotency key + cancel handle).
 // crypto.randomUUID is only defined in a secure context, so fall back to a random-hex
@@ -64,6 +67,25 @@ const ALARM_POLL_MS = 30_000;
 // resolves in seconds, so it polls far faster than the alarm channel. An issued command
 // reconciles immediately (not on the next tick) so the operator sees it appear at once.
 const COMMAND_POLL_MS = 4_000;
+
+// Location channel cadence. device-state exposes NO location subscription either, so
+// like the control channel this is poll-only — but the two poll for opposite reasons,
+// and the cadence follows from that rather than from copying a number:
+//
+//   • the control channel polls FAST (4s) for a SHORT time: a command's lifecycle is a
+//     burst that reaches a terminal status in seconds and then stops changing.
+//   • the alarm channel polls SLOWLY (30s) because it is only a backstop — the live
+//     ALARM_STREAM does the real work and the poll exists for what the socket missed.
+//
+// A fleet's positions have neither property: they change continuously, for as long as
+// the board is open, with nothing else watching them. So this poll is not a backstop,
+// it IS the channel, and its cost is a standing one. What makes a middle cadence
+// affordable is the BATCH query: one `latestLocations` round trip per tick covers
+// every device on the widget, so the cost is per-poll, not per-marker, and a 200-device
+// map costs what a 2-device map costs. Anything materially faster than this wants a
+// subscription rather than a tighter poll — a tighter poll would multiply a whole
+// board's queries against a projection that is only written when a device moves.
+const LOCATION_POLL_MS = 15_000;
 
 // DeviceResolver turns the graph references in a dashboard definition into the
 // device tokens event-management keys on (measurementStream(deviceToken:), per
@@ -156,6 +178,47 @@ export interface CommandDispatch {
   token: string;
 }
 
+// ── Location channel ─────────────────────────────────────────────────────
+//
+// The map widget consumes a fifth surface: where the bound devices ARE. Like the
+// control channel there is no live subscription to ride (device-state exposes none for
+// position), so it is query-then-poll — the alarm and command channels are the
+// precedent here, not the measurement channel.
+//
+// What is different from all three is the REFUSAL. Position is gated on its own
+// `location:read` authority, which is deliberately absent from the read-only viewer
+// baseline, so an ordinary member with full telemetry access is routinely refused. The
+// channel therefore turns a refusal into a VALUE rather than an error: it is not a
+// fault, and it is not emptiness either.
+
+// LocationSubscription is one map widget's interest: the selector naming both the
+// devices and the location series to read. There is no page size — a map shows every
+// device it is bound to, and the bound set is the selector's own resolution.
+export interface LocationSubscription {
+  datasource?: DatasourceSelector;
+}
+
+// A location snapshot, discriminated so the refusal cannot be mistaken for emptiness.
+//
+// 🔴 `positions` with an empty `locations` and `forbidden` are OPPOSITE facts, and only
+// one of them is actionable. "No device here has ever reported a position" is a claim
+// about the DEVICES; "you may not view location" is a claim about the CALLER. Folding
+// them together (a bare `locations: []`) would tell an operator their fleet is
+// unlocated when the truth is that they need a role — which is the exact mistake the
+// device-detail position panel was built to avoid, held here in the type.
+//
+// `deviceTokens` is the set the selector resolved to, carried alongside the positions
+// because a never-located device is ABSENT from the query result: without it, "bound to
+// nothing" and "bound to devices that have never moved" are indistinguishable.
+export type LocationSnapshot =
+  | { kind: 'positions'; deviceTokens: string[]; locations: LocationSample[] }
+  | { kind: 'forbidden' };
+
+export interface LocationStreamSink {
+  next: (snapshot: LocationSnapshot) => void;
+  error?: (err: unknown) => void;
+}
+
 // ── Action seam (writes) ─────────────────────────────────────────────────
 //
 // Read widgets are pure `(widget, data)`; a widget that ACTS (acknowledge/clear an
@@ -215,6 +278,11 @@ export interface WidgetDataSource {
   // command-history snapshots on a poll (command-delivery has no subscription).
   // Implemented by both the live hub and the synthetic preview source.
   subscribeCommands(subscription: CommandSubscription, sink: CommandStreamSink): () => void;
+  // Bind a map widget's selector to a sink; returns a disposer. Delivers whole
+  // position snapshots on a poll (device-state has no location subscription), and
+  // reports a `location:read` refusal as a snapshot state rather than an error.
+  // Implemented by both the live hub and the synthetic preview source.
+  subscribeLocations(subscription: LocationSubscription, sink: LocationStreamSink): () => void;
   // Whether a widget's bound entity still exists. Optimistic + async: a widget renders
   // from its stream immediately, and this resolves separately — only a device selector
   // (or a slot bound to a device) whose token no longer resolves reports false, so the
@@ -259,6 +327,10 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
   // channel holds a poll per subscription, not a shared device stream), so disposeAll()
   // can tear down every command widget's poll.
   private readonly commandDisposers = new Set<() => void>();
+  // Live location-subscription disposers (same rationale as alarmDisposers/
+  // commandDisposers — the location channel holds a poll per subscription, not a shared
+  // device stream), so disposeAll() can tear down every map widget's poll.
+  private readonly locationDisposers = new Set<() => void>();
   // slot name → concrete entity binding. Consulted when a widget's selector is a
   // `slot`. Mutable so the authoring host can rebind live (setBindings).
   private bindings: Record<string, SlotBinding>;
@@ -527,6 +599,97 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
     };
   }
 
+  // ── Location channel ─────────────────────────────────────────────────────
+
+  // subscribeLocations binds a map widget's selector to a sink and returns a disposer.
+  // Poll-only (device-state has no location subscription): resolve the bound devices
+  // once, then re-read their last-known positions on an interval. Scope resolution is
+  // async; the disposer is returned synchronously and cancels a still-pending
+  // resolution, matching every other channel.
+  subscribeLocations(subscription: LocationSubscription, sink: LocationStreamSink): () => void {
+    let disposed = false;
+    let poll: ReturnType<typeof setInterval> | undefined;
+    let deviceTokens: string[] = [];
+    // Monotonic generation: a slow poll that resolves after a newer one can't overwrite
+    // fresher positions.
+    let generation = 0;
+
+    const dispose = (): void => {
+      disposed = true;
+      if (poll) clearInterval(poll);
+      this.locationDisposers.delete(dispose);
+    };
+    this.locationDisposers.add(dispose);
+
+    const reconcile = (): void => {
+      const gen = ++generation;
+      this.queryLocations(deviceTokens)
+        .then((snapshot) => {
+          if (!disposed && gen === generation) sink.next(snapshot);
+        })
+        .catch((err) => {
+          if (!disposed && gen === generation) sink.error?.(err);
+        });
+    };
+
+    this.resolveLocationScope(subscription.datasource)
+      .then((tokens) => {
+        if (disposed) return;
+        deviceTokens = tokens;
+        // A widget that names no location series, carries no datasource, or resolves to
+        // no device has nothing to place on a map. Emit the empty POSITIONS snapshot —
+        // never `forbidden`, which would claim a permission problem that does not
+        // exist — and open no poll.
+        if (deviceTokens.length === 0) {
+          sink.next({ kind: 'positions', deviceTokens: [], locations: [] });
+          return;
+        }
+        poll = setInterval(reconcile, LOCATION_POLL_MS);
+        reconcile(); // initial load
+      })
+      .catch((err) => {
+        if (!disposed) sink.error?.(err);
+      });
+
+    return dispose;
+  }
+
+  // resolveLocationScope turns a map widget's selector into the device tokens whose
+  // positions to read.
+  //
+  // 🔴 It resolves NOTHING unless the selector NAMES A LOCATION SERIES. That is the
+  // point of the separate field: a device selector carrying only `measurements` is a
+  // telemetry binding, and quietly reading its device's position because a map widget
+  // happens to hold it would make the location field decorative — authored or not, the
+  // behaviour would be identical, so nothing would ever hold it. A map bound to a
+  // measurement-only selector shows its empty state, which is the honest answer.
+  private async resolveLocationScope(
+    datasource: DatasourceSelector | undefined,
+  ): Promise<string[]> {
+    if (!datasource?.location) return [];
+    const groups = await this.resolveDevices(datasource);
+    return groups.map((g) => g.deviceToken);
+  }
+
+  // queryLocations reads the last-known position of each bound device in ONE batch
+  // round trip. A device that has never been located is absent from the result (the
+  // service's contract), so the caller reads "how many are located" from the returned
+  // rows and "how many are bound" from the tokens.
+  private async queryLocations(deviceTokens: string[]): Promise<LocationSnapshot> {
+    if (deviceTokens.length === 0) return { kind: 'positions', deviceTokens, locations: [] };
+    try {
+      const data = await gql(STATE_AREA, LATEST_LOCATIONS_QUERY, { deviceTokens });
+      return { kind: 'positions', deviceTokens, locations: data.latestLocations };
+    } catch (err) {
+      // Only a REFUSAL becomes a value; every other failure stays a failure, so a broken
+      // device-state is never dressed up as a permission boundary (and vice versa — a
+      // permission boundary is never dressed up as an outage the operator should page
+      // someone about).
+      if (isForbiddenError(err)) return { kind: 'forbidden' };
+      throw err;
+    }
+  }
+
   // ── WidgetActions (the write seam) ───────────────────────────────────────
 
   // can reports whether the viewer holds an authority ('*' grants all). Drives whether
@@ -576,8 +739,9 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
   }
 
   // disposeAll tears down every upstream stream (e.g. on dashboard close): the
-  // ref-counted measurement device streams AND every alarm/command subscription's poll +
-  // trigger. Iterate a copy of the disposer sets since each removes itself as it runs.
+  // ref-counted measurement device streams AND every alarm/command/location
+  // subscription's poll + trigger. Iterate a copy of the disposer sets since each
+  // removes itself as it runs.
   disposeAll(): void {
     for (const stream of this.streams.values()) stream.unsubscribe();
     this.streams.clear();
@@ -585,6 +749,8 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
     this.alarmDisposers.clear();
     for (const dispose of [...this.commandDisposers]) dispose();
     this.commandDisposers.clear();
+    for (const dispose of [...this.locationDisposers]) dispose();
+    this.locationDisposers.clear();
   }
 
   // The number of distinct upstream device streams currently open (observability

@@ -13,11 +13,43 @@
 // remaining kinds are reserved — present so definitions stay forward-compatible,
 // but the Hub rejects them until implemented.
 
-// device — one device's measurements (latest-card, gauge, single-series chart).
+// ---- Location series selection (ADR-078 decision 9) -------------------------
+//
+// A selector's `measurements: string[]` names NAMED SCALAR SERIES, and a position is
+// not one of those: it is an atomic triple on its own event class and its own
+// hypertable, deliberately never a metric. Naming a location through `measurements`
+// would therefore be a lie the whole way down — the hub would resolve it against the
+// measurement stream, which carries no coordinates at all.
+//
+// So a selector names a location series in its own field. The vocabulary is CLOSED
+// rather than free text: a device has exactly one position track, so there is nothing
+// to disambiguate by name, and an open string would invite an author to type a
+// measurement name here and get silence.
+//
+//   'latest' — the last-known position, read from device-state's O(1) projection.
+//
+// A second member ('track', the position history from event-management) is the shape
+// this exists to leave room for; the map widget reads 'latest' only.
+export type LocationSeries = 'latest';
+
+// The location series a selector names. An OBJECT rather than a bare string so a
+// future member can carry its own parameters (a track's window) without changing
+// every selector again.
+export interface LocationSelection {
+  series: LocationSeries;
+}
+
+// device — one device's measurements (latest-card, gauge, single-series chart), and/or
+// its position when the selector names a location series.
 export interface DeviceSelector {
   kind: 'device';
   deviceToken: string;
   measurements: string[];
+  // Additive and OPTIONAL, deliberately: every dashboard definition stored before the
+  // location channel existed carries no `location`, and must keep parsing and
+  // rendering exactly as it did. Absence means "this selector names no location
+  // series", which is the correct reading of every one of them.
+  location?: LocationSelection;
 }
 
 // The dimension a dashboard aggregates over — a tracked relationship to a
@@ -39,6 +71,7 @@ export interface AnchorSelector {
   kind: 'anchor';
   anchor: AnchorTarget;
   measurements: string[];
+  location?: LocationSelection;
   // RESERVED (Phase 2): server-side aggregation of the member devices into one
   // series. Phase 1 resolves an anchor to its member devices and streams each
   // one's raw samples; the Hub does NOT read this field yet. Present so a
@@ -54,6 +87,7 @@ export interface DevicesSelector {
   kind: 'devices';
   deviceTokens: string[];
   measurements: string[];
+  location?: LocationSelection;
 }
 
 export interface RelatedTraversalSelector {
@@ -61,6 +95,7 @@ export interface RelatedTraversalSelector {
   from: string;
   relationship: string;
   measurements: string[];
+  location?: LocationSelection;
 }
 
 // slot — a NAMED reference into the dashboard's `slots` section, resolved to a
@@ -74,6 +109,7 @@ export interface SlotSelector {
   kind: 'slot';
   slot: string;
   measurements: string[];
+  location?: LocationSelection;
 }
 
 export type DatasourceSelector =
@@ -91,7 +127,8 @@ export type DatasourceSelector =
 // Widgets fall into data CHANNELS (see WIDGET_CHANNEL in @devicechain/widgets): the
 // measurement widgets stream telemetry samples; the alarm widgets consume the raised-
 // alarm surface (ADR-041) via the hub's alarm channel; the control widget (command-
-// button) issues commands and tracks their delivery lifecycle via the command channel.
+// button) issues commands and tracks their delivery lifecycle via the command channel;
+// the map widget reads device positions via the location channel (ADR-078 decision 9).
 // A widget's channel decides which hook/registry the renderer binds it through.
 export const WIDGET_TYPES = [
   'timeseries-chart',
@@ -104,6 +141,7 @@ export const WIDGET_TYPES = [
   'alarm-count',
   'command-button',
   'entity-selector',
+  'map',
 ] as const;
 
 export type WidgetType = (typeof WIDGET_TYPES)[number];
@@ -298,6 +336,41 @@ export interface AlarmRow {
   acknowledgedBy: string | null;
   lastValue: number | null;
   message: string | null;
+}
+
+// ---- Locations (location channel) -------------------------------------------
+
+// A device's position as a map widget sees it. Mirrors device-state's LatestLocation
+// projection row (the O(1) "where is it now" answer, not a scan of the history), kept
+// decoupled from the device-state GraphQL types so the widget layer carries no service
+// coupling — the same rule the alarm and command rows follow.
+//
+// 🔴 EVERY OPTIONAL IS NULLABLE AND ABSENT IS NOT ZERO. A device reports what its
+// receiver knows: a fix with no heading has not reported due north, one with no speed
+// has not reported stationary, one with no elevation has not reported sea level.
+// Rendering any of those as 0 would invent a fact the platform deliberately declined
+// to store, and the operator could not tell the invented value from a real one. Every
+// consumer tests `!= null` (which admits a genuine 0 and rejects an absence) and shows
+// NOTHING for an absent field.
+//
+// latitude/longitude are typed nullable because the projection's columns are — a row
+// is never written without them, but the schema does not promise it, and a consumer
+// that assumed non-null would place a marker at (0, 0), the Gulf of Guinea, rather
+// than declining to place one at all.
+//
+// Units are fixed platform-wide and never per-device: WGS84 decimal degrees;
+// elevation and accuracy in metres; speed in metres per second; heading in degrees
+// clockwise from true north, [0, 360).
+export interface LocationSample {
+  id: string;
+  deviceToken: string;
+  latitude: number | null;
+  longitude: number | null;
+  elevation: number | null;
+  accuracy: number | null;
+  speed: number | null;
+  heading: number | null;
+  occurredTime: string | null;
 }
 
 // ---- Commands (control channel) ---------------------------------------------

@@ -11,6 +11,7 @@
 import type {
   AlarmSubscription,
   CommandSubscription,
+  LocationSubscription,
   MeasurementSample,
   WidgetActions,
   WidgetDataSource,
@@ -19,10 +20,17 @@ import type {
 import type { ReactNode } from 'react';
 
 import { WidgetFrame } from './frame';
-import { useAlarmStream, useCommandStream, useDatasourceAvailability, useMeasurementStream } from './hooks';
+import {
+  useAlarmStream,
+  useCommandStream,
+  useDatasourceAvailability,
+  useLocationStream,
+  useMeasurementStream,
+} from './hooks';
 import {
   ALARM_WIDGET_REGISTRY,
   CONTROL_WIDGET_REGISTRY,
+  LOCATION_WIDGET_REGISTRY,
   SELECTION_WIDGET_REGISTRY,
   WIDGET_CHANNEL,
   WIDGET_REGISTRY,
@@ -66,6 +74,9 @@ export function ConnectedWidget({ widget, hub, actions, initialSamples }: Connec
   }
   if (channel === 'selection') {
     return <SelectionConnectedWidget widget={widget} />;
+  }
+  if (channel === 'location') {
+    return <LocationConnectedWidget widget={widget} hub={hub} />;
   }
   return <MeasurementConnectedWidget widget={widget} hub={hub} initialSamples={initialSamples} />;
 }
@@ -134,6 +145,41 @@ function ControlConnectedWidget({
   const Component = CONTROL_WIDGET_REGISTRY[widget.type as keyof typeof CONTROL_WIDGET_REGISTRY];
   if (!Component) return null;
   return <Component widget={widget} data={data} actions={actions} />;
+}
+
+function LocationConnectedWidget({
+  widget,
+  hub,
+}: {
+  widget: WidgetInstance;
+  hub: WidgetDataSource;
+}) {
+  const data = useLocationStream(hub, locationSubscription(widget));
+
+  // Same rule as the alarm channel: show the error pane ONLY when there is nothing to
+  // display. Once a snapshot has loaded, a later transient poll error keeps the last
+  // known positions on screen — the channel re-polls and self-heals, and blanking a
+  // populated map on one blip is worse than a marker being a few seconds stale.
+  //
+  // 🔴 A REFUSAL IS NOT AN ERROR AND MUST NOT REACH THIS BRANCH. The hub delivers it as
+  // a snapshot state with `error` null, so the widget renders its own permission copy —
+  // if it were surfaced as an error, every ordinary member would see "Data unavailable"
+  // where the platform is working exactly as designed.
+  if (data.error && data.locations.length === 0) {
+    return <WidgetErrorFrame widget={widget} error={data.error} />;
+  }
+
+  const Component = LOCATION_WIDGET_REGISTRY[widget.type as keyof typeof LOCATION_WIDGET_REGISTRY];
+  if (!Component) return null;
+  return <Component widget={widget} data={data} />;
+}
+
+// locationSubscription reads a map widget's selector from its definition: the devices to
+// plot AND the location series to read (the selector's own `location` field). The tile
+// source lives in the widget's options, not here — it is a rendering choice, not part of
+// what the widget asks the platform for.
+function locationSubscription(widget: WidgetInstance): LocationSubscription {
+  return { datasource: widget.datasource };
 }
 
 // commandSubscription reads a command widget's scope (the target device) from its

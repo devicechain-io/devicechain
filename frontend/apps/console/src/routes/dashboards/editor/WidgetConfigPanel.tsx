@@ -18,6 +18,7 @@ import type {
   ConcreteSelector,
   DatasourceSelector,
   DeviceSelector,
+  LocationSelection,
   SlotDefinition,
   SlotScope,
   WidgetInstance,
@@ -76,6 +77,31 @@ const OPTION_ACKNOWLEDGED = 'acknowledged';
 
 const ALARM_WIDGETS = widgetTypesOn('alarm');
 const CONTROL_WIDGETS = widgetTypesOn('control');
+const LOCATION_WIDGETS = widgetTypesOn('location');
+
+// The location series a map widget reads. Stamped onto the selector the panel emits
+// rather than offered as a choice: the vocabulary has exactly one member today, so a
+// dropdown would be a control with nothing to decide.
+//
+// It must be stamped SOMEWHERE, though, and here is the only place that knows both the
+// widget type and the entity the author just picked. The hub reads positions only for a
+// selector that NAMES a location series — deliberately, so the field cannot be
+// decorative — which means a map bound through a panel that forgot this would show its
+// empty state forever with nothing failing to say why.
+const LATEST_LOCATION: LocationSelection = { series: 'latest' };
+
+// withLocationSeries stamps (or leaves off) the location series on the selector the
+// datasource form produced. Applied at the panel's edge so every path through the form —
+// picking a kind, picking an entity, editing an anchor — carries it, rather than each
+// field component having to remember.
+function withLocationSeries(
+  ds: DatasourceSelector | undefined,
+  isLocationWidget: boolean,
+): DatasourceSelector | undefined {
+  if (!ds || !isLocationWidget) return ds;
+  if (ds.kind !== 'device' && ds.kind !== 'anchor') return ds;
+  return { ...ds, location: LATEST_LOCATION };
+}
 const DATA_WIDGETS = new Set<WidgetType>(
   (Object.keys(WIDGET_BINDS_DATASOURCE) as WidgetType[]).filter((type) => WIDGET_BINDS_DATASOURCE[type]),
 );
@@ -308,9 +334,20 @@ export function WidgetConfigPanel({
                         ? t('widgetLabelScope')
                         : t('widgetLabelDataSource')
                   }
-                  showMeasurements={!ALARM_WIDGETS.has(widget.type) && !CONTROL_WIDGETS.has(widget.type)}
+                  // A map reads a LOCATION series, not named scalar series, so it hides
+                  // the measurements field for the same reason the alarm widgets do —
+                  // measurement names on a map selector would be read by nothing.
+                  showMeasurements={
+                    !ALARM_WIDGETS.has(widget.type) &&
+                    !CONTROL_WIDGETS.has(widget.type) &&
+                    !LOCATION_WIDGETS.has(widget.type)
+                  }
                   deviceOnly={CONTROL_WIDGETS.has(widget.type)}
-                  onChange={(ds) => onDatasource(ds as ConcreteSelector | undefined)}
+                  onChange={(ds) =>
+                    onDatasource(
+                      withLocationSeries(ds, LOCATION_WIDGETS.has(widget.type)) as ConcreteSelector | undefined,
+                    )
+                  }
                 />
                 {datasource && slotName && (
                   <p className="text-xs text-muted-foreground">
@@ -519,6 +556,21 @@ function TypeOptions({
           />
         </FormField>
         <FlashToggle widget={widget} setOption={setOption} />
+      </>
+    );
+  }
+  if (widget.type === 'map') {
+    return (
+      <>
+        <FormField label={t('widgetLabelTileUrl')} description={t('widgetTileUrlHint')}>
+          {/* 'tileUrl' is the widget.options field key, not user text. */}
+          {/* eslint-disable-next-line i18next/no-literal-string */}
+          <Input value={optString(widget, 'tileUrl')} onChange={(e) => setOption('tileUrl', e.target.value)} />
+        </FormField>
+        <FormField label={t('widgetLabelAttribution')} description={t('widgetAttributionHint')}>
+          {/* eslint-disable-next-line i18next/no-literal-string */}
+          <Input value={optString(widget, 'attribution')} onChange={(e) => setOption('attribution', e.target.value)} />
+        </FormField>
       </>
     );
   }

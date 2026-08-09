@@ -287,3 +287,85 @@ describe('setSlotScope', () => {
     expect(setSlotScope(def, 'nope', { parent: 'building', strategy: 'first' })).toBe(def);
   });
 });
+
+// ---- The location series survives the slot pipeline -------------------------
+//
+// A slot carries the ENTITY; the selector carries the SERIES. Slotting therefore changes
+// WHICH DEVICE a widget reads, never WHAT it reads from it — and a transform that drops
+// the location series would blank every map on the board the moment the console loaded
+// it (migrate) or the author repointed it (rebind), with nothing failing to say so.
+describe('slot transforms carry the location series', () => {
+  const LATEST = { series: 'latest' } as const;
+
+  it('migrateToSlots moves the entity onto a slot and keeps the location series', () => {
+    const def: DashboardDefinition = {
+      schemaVersion: 1,
+      title: '',
+      canvas: { grid: { columns: 24, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
+      widgets: [
+        widget('m1', { kind: 'device', deviceToken: 'dozer-1', measurements: [], location: LATEST }),
+      ],
+    };
+    const migrated = migrateToSlots(def);
+    expect(migrated.widgets[0].datasource).toEqual({
+      kind: 'slot',
+      slot: 'slot-1',
+      measurements: [],
+      location: LATEST,
+    });
+    expect(migrated.slots?.['slot-1'].defaultBinding).toEqual({ kind: 'device', deviceToken: 'dozer-1' });
+  });
+
+  it('bindWidgetSlot writes the location series when the caller names one', () => {
+    const def: DashboardDefinition = {
+      schemaVersion: 1,
+      title: '',
+      canvas: { grid: { columns: 24, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
+      widgets: [widget('m1')],
+    };
+    const bound = bindWidgetSlot(def, 'm1', { kind: 'device', deviceToken: 'dozer-1' }, [], LATEST);
+    expect(bound.widgets[0].datasource).toEqual({
+      kind: 'slot',
+      slot: 'slot-1',
+      measurements: [],
+      location: LATEST,
+    });
+  });
+
+  it('resolveConcrete gives the config panel the entity AND the location series back', () => {
+    const def = parseDashboardDefinition({
+      widgets: [
+        {
+          id: 'm1',
+          type: 'map',
+          layout: { base: box },
+          datasource: { kind: 'slot', slot: 'fleet', measurements: [], location: { series: 'latest' } },
+        },
+      ],
+      slots: { fleet: { type: 'device', defaultBinding: { kind: 'device', deviceToken: 'dozer-1' } } },
+    });
+    expect(resolveConcrete(def, def.widgets[0])).toEqual({
+      kind: 'device',
+      deviceToken: 'dozer-1',
+      measurements: [],
+      location: LATEST,
+    });
+  });
+
+  // The additive counterweight: a measurement widget must come out of every transform
+  // with no location key at all, so a pre-existing board still serializes unchanged.
+  it('omits the key entirely for a measurement-only widget', () => {
+    const def: DashboardDefinition = {
+      schemaVersion: 1,
+      title: '',
+      canvas: { grid: { columns: 24, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
+      widgets: [widget('g1', { kind: 'device', deviceToken: 'therm-1', measurements: ['t'] })],
+    };
+    const migrated = migrateToSlots(def);
+    expect(serializeDefinition(migrated)).toContain('"measurements":["t"]');
+    expect(serializeDefinition(migrated)).not.toContain('location');
+    const bound = bindWidgetSlot(def, 'g1', { kind: 'device', deviceToken: 'therm-2' }, ['t']);
+    expect(serializeDefinition(bound)).not.toContain('location');
+    expect(resolveConcrete(migrated, migrated.widgets[0])).not.toHaveProperty('location');
+  });
+});

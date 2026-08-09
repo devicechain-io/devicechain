@@ -14,11 +14,29 @@ import type {
   AnchorTarget,
   DashboardDefinition,
   DatasourceSelector,
+  LocationSelection,
   SlotBinding,
   SlotDefinition,
   SlotScope,
   WidgetInstance,
 } from './types';
+
+// slotSelector builds the slot selector these transforms write, carrying the SERIES the
+// widget reads (measurement names, and the location series when one is named) while the
+// ENTITY moves onto the slot.
+//
+// The location key is omitted when absent rather than written as undefined, so a
+// measurement-only widget serializes exactly as it did before the location channel
+// existed — a migration must not make every stored dashboard dirty.
+function slotSelector(
+  slot: string,
+  measurements: string[],
+  location: LocationSelection | undefined,
+): DatasourceSelector {
+  return location
+    ? { kind: 'slot', slot, measurements, location }
+    : { kind: 'slot', slot, measurements };
+}
 
 // sameBinding — value equality of two entity bindings (drives dedup).
 export function sameBinding(a: SlotBinding | undefined, b: SlotBinding | undefined): boolean {
@@ -92,7 +110,10 @@ export function migrateToSlots(def: DashboardDefinition): DashboardDefinition {
     if (!binding || !ds) return w;
     changed = true;
     const slot = findOrAddSlot(slots, binding);
-    return { ...w, datasource: { kind: 'slot' as const, slot, measurements: ds.measurements } };
+    // The location series moves across with the measurement names: it says WHICH SERIES
+    // the widget reads, and slotting changes only WHICH ENTITY it reads them from.
+    // Dropping it here would silently blank every map on the board at load time.
+    return { ...w, datasource: slotSelector(slot, ds.measurements, ds.location) };
   });
   // Return the SAME reference (no spurious `slots:{}`) when nothing migrated, so the
   // early-out is a true no-op and the result round-trips byte-identically.
@@ -106,11 +127,17 @@ export function migrateToSlots(def: DashboardDefinition): DashboardDefinition {
 // alone. A measurements-only edit (binding unchanged) KEEPS the widget's own slot even
 // when another slot shares the binding — so a distinct slot the host may override
 // separately (I-3 templates) isn't silently collapsed away.
+// `location` names the location series the widget reads, when it reads one. It is a
+// parameter rather than something preserved from the widget's current selector for the
+// same reason `measurements` is: the caller (the config panel) is the one that knows
+// which series the widget wants, and a map widget's FIRST datasource has no previous
+// selector to preserve it from.
 export function bindWidgetSlot(
   def: DashboardDefinition,
   widgetId: string,
   binding: SlotBinding,
   measurements: string[],
+  location?: LocationSelection,
 ): DashboardDefinition {
   const slots: Record<string, SlotDefinition> = { ...(def.slots ?? {}) };
   const current = def.widgets.find((w) => w.id === widgetId)?.datasource;
@@ -124,7 +151,7 @@ export function bindWidgetSlot(
       ? currentSlot
       : findOrAddSlot(slots, binding);
   const widgets = def.widgets.map((w) =>
-    w.id === widgetId ? { ...w, datasource: { kind: 'slot' as const, slot, measurements } } : w,
+    w.id === widgetId ? { ...w, datasource: slotSelector(slot, measurements, location) } : w,
   );
   return { ...def, widgets, slots };
 }
@@ -226,11 +253,12 @@ export function widgetSlotName(widget: WidgetInstance): string | undefined {
 // A concrete device/anchor selector — what the config panel edits (slot-agnostic).
 // Rebuilt into slot storage by the workspace via bindWidgetSlot.
 export type ConcreteSelector =
-  | { kind: 'device'; deviceToken: string; measurements: string[] }
-  | { kind: 'anchor'; anchor: AnchorTarget; measurements: string[] };
+  | { kind: 'device'; deviceToken: string; measurements: string[]; location?: LocationSelection }
+  | { kind: 'anchor'; anchor: AnchorTarget; measurements: string[]; location?: LocationSelection };
 
 // resolveConcrete gives the config panel a slot-free view of a widget's data source:
-// the bound entity + the widget's measurements, or undefined when unbound.
+// the bound entity + the series the widget reads (measurement names, and the location
+// series when it names one), or undefined when unbound.
 export function resolveConcrete(
   def: DashboardDefinition,
   widget: WidgetInstance,
@@ -238,7 +266,9 @@ export function resolveConcrete(
   const binding = widgetBinding(def, widget);
   if (!binding) return undefined;
   const measurements = widget.datasource?.measurements ?? [];
+  const location = widget.datasource?.location;
+  const base = location ? { measurements, location } : { measurements };
   return binding.kind === 'device'
-    ? { kind: 'device', deviceToken: binding.deviceToken, measurements }
-    : { kind: 'anchor', anchor: binding.anchor, measurements };
+    ? { kind: 'device', deviceToken: binding.deviceToken, ...base }
+    : { kind: 'anchor', anchor: binding.anchor, ...base };
 }

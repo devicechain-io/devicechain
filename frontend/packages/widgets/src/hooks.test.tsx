@@ -11,6 +11,10 @@ import type {
   CommandSubscription,
   DashboardHub,
   DatasourceSelector,
+  LocationSample,
+  LocationSnapshot,
+  LocationStreamSink,
+  LocationSubscription,
   MeasurementSample,
   WidgetStreamSink,
 } from '@devicechain/dashboards';
@@ -24,6 +28,7 @@ import {
   useAlarmStream,
   useCommandStream,
   useDatasourceAvailability,
+  useLocationStream,
   useMeasurementStream,
   useResolvedBindings,
 } from './hooks';
@@ -369,5 +374,119 @@ describe('useResolvedBindings', () => {
     const { result } = renderHook(() => useResolvedBindings(def, base, {}, resolver));
     await waitFor(() => expect(result.current.therm).toEqual({ kind: 'device', deviceToken: 't1' }));
     expect(result.current.building).toEqual(areaBinding);
+  });
+});
+
+// ---- useLocationStream ------------------------------------------------------
+
+function fakeLocationHub() {
+  let sink: LocationStreamSink | null = null;
+  const unsub = vi.fn();
+  const hub = {
+    // Only the method the location hook path touches; the others are inert no-ops.
+    subscribeWidget: () => () => {},
+    subscribeLocations: (_subscription: LocationSubscription, s: LocationStreamSink) => {
+      sink = s;
+      return unsub;
+    },
+  } as unknown as DashboardHub;
+  return {
+    hub,
+    unsub,
+    push: (snapshot: LocationSnapshot) => act(() => sink?.next(snapshot)),
+    fail: (err: unknown) => act(() => sink?.error?.(err)),
+  };
+}
+
+const locationSub: LocationSubscription = {
+  datasource: { kind: 'device', deviceToken: 'dozer-1', measurements: [], location: { series: 'latest' } },
+};
+
+const position = (over: Partial<LocationSample> = {}): LocationSample => ({
+  id: 'loc-1',
+  deviceToken: 'dozer-1',
+  latitude: 33.749,
+  longitude: -84.388,
+  elevation: 320.5,
+  accuracy: 4.2,
+  speed: 0,
+  heading: 271.5,
+  occurredTime: '2026-08-09T12:00:00Z',
+  ...over,
+});
+
+describe('useLocationStream', () => {
+  it('starts loading, with no positions and no refusal claimed', () => {
+    const f = fakeLocationHub();
+    const { result } = renderHook(() => useLocationStream(f.hub, locationSub));
+    expect(result.current.loading).toBe(true);
+    expect(result.current.locations).toEqual([]);
+    expect(result.current.forbidden).toBe(false);
+  });
+
+  it('holds the latest snapshot and clears loading', () => {
+    const f = fakeLocationHub();
+    const { result } = renderHook(() => useLocationStream(f.hub, locationSub));
+
+    f.push({ kind: 'positions', deviceTokens: ['dozer-1'], locations: [position()] });
+    expect(result.current.loading).toBe(false);
+    expect(result.current.deviceTokens).toEqual(['dozer-1']);
+    expect(result.current.locations.map((l) => l.deviceToken)).toEqual(['dozer-1']);
+    expect(result.current.forbidden).toBe(false);
+  });
+
+  // 🔴 A refusal sets a FLAG, never an error — the widget's permission copy is keyed on
+  // it, and an `error` would take it through the "Data unavailable" pane instead.
+  it('turns a forbidden snapshot into the flag, not an error', () => {
+    const f = fakeLocationHub();
+    const { result } = renderHook(() => useLocationStream(f.hub, locationSub));
+
+    f.push({ kind: 'forbidden' });
+    expect(result.current.forbidden).toBe(true);
+    expect(result.current.error).toBeNull();
+    expect(result.current.loading).toBe(false);
+  });
+
+  // An authority can be revoked mid-session. Keeping the last-seen coordinates on screen
+  // under a permission banner would leave a refused viewer looking at the very data they
+  // were just refused.
+  it('clears the positions it was holding when a refusal arrives', () => {
+    const f = fakeLocationHub();
+    const { result } = renderHook(() => useLocationStream(f.hub, locationSub));
+
+    f.push({ kind: 'positions', deviceTokens: ['dozer-1'], locations: [position()] });
+    expect(result.current.locations).toHaveLength(1); // the control
+
+    f.push({ kind: 'forbidden' });
+    expect(result.current.locations).toEqual([]);
+    expect(result.current.deviceTokens).toEqual([]);
+  });
+
+  it('surfaces a stream error while keeping the last-known positions', () => {
+    const f = fakeLocationHub();
+    const { result } = renderHook(() => useLocationStream(f.hub, locationSub));
+
+    f.push({ kind: 'positions', deviceTokens: ['dozer-1'], locations: [position()] });
+    f.fail(new Error('boom'));
+
+    expect((result.current.error as Error).message).toBe('boom');
+    expect(result.current.locations).toHaveLength(1); // not blanked on one blip
+    expect(result.current.forbidden).toBe(false);
+  });
+
+  it('disposes on unmount', () => {
+    const f = fakeLocationHub();
+    const { unmount } = renderHook(() => useLocationStream(f.hub, locationSub));
+    unmount();
+    expect(f.unsub).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not resubscribe for an equal-but-new subscription object', () => {
+    const f = fakeLocationHub();
+    const { rerender } = renderHook(({ sub }) => useLocationStream(f.hub, sub), {
+      initialProps: { sub: { ...locationSub } },
+    });
+    rerender({ sub: { ...locationSub } });
+    expect(f.unsub).not.toHaveBeenCalled();
   });
 });

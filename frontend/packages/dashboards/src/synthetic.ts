@@ -17,11 +17,19 @@ import type {
   CommandDispatch,
   CommandStreamSink,
   CommandSubscription,
+  LocationStreamSink,
+  LocationSubscription,
   WidgetActions,
   WidgetDataSource,
   WidgetStreamSink,
 } from './hub';
-import type { AlarmRow, CommandRow, DatasourceSelector, MeasurementSample } from './types';
+import type {
+  AlarmRow,
+  CommandRow,
+  DatasourceSelector,
+  LocationSample,
+  MeasurementSample,
+} from './types';
 
 // The waveforms an author can preview with. Sine is the default (smooth, obviously
 // synthetic); ramp is a sawtooth; random-walk drifts within range.
@@ -83,6 +91,25 @@ const SYNTHETIC_COMMANDS: ReadonlyArray<Pick<CommandRow, 'name' | 'status' | 'pa
 // The device a synthetic command-button reports as its target, so the Send control
 // renders (a real widget needs a bound device to issue against).
 const SYNTHETIC_COMMAND_DEVICE = 'synthetic-device';
+
+// A canonical spread of synthetic positions so an author previewing a map sees markers
+// laid out the way a real fleet would be — several devices a short distance apart, at a
+// zoom a map actually renders at, rather than one dot in the middle.
+//
+// 🔴 THE OPTIONALS ARE DELIBERATELY MIXED, INCLUDING NULLS AND A GENUINE ZERO. Preview
+// is where an author decides what a marker looks like, so it must show the real range:
+// `sp-loader-03` reports no heading and no speed at all (a receiver that does not supply
+// them), while `sp-dozer-01` reports speed 0 — parked, which is a reading, not an
+// absence. A preview that filled every optional in would teach an author that a marker
+// always has a heading, and the first real fleet would prove otherwise.
+const SYNTHETIC_LOCATIONS: ReadonlyArray<
+  Pick<LocationSample, 'deviceToken' | 'latitude' | 'longitude' | 'elevation' | 'accuracy' | 'speed' | 'heading'>
+> = [
+  { deviceToken: 'sp-dozer-01', latitude: 33.749, longitude: -84.388, elevation: 320.5, accuracy: 4.2, speed: 0, heading: 271.5 },
+  { deviceToken: 'sp-excavator-02', latitude: 33.7512, longitude: -84.3858, elevation: 318.1, accuracy: 3.1, speed: 1.4, heading: 88 },
+  { deviceToken: 'sp-loader-03', latitude: 33.7468, longitude: -84.3903, elevation: null, accuracy: 9.8, speed: null, heading: null },
+  { deviceToken: 'sp-truck-04', latitude: 33.7481, longitude: -84.3841, elevation: 315.9, accuracy: 2.5, speed: 8.3, heading: 12.25 },
+];
 
 // Deterministic small hash of a name → a stable phase offset, so multiple series on
 // one dashboard are visibly out of phase rather than overlapping identically.
@@ -230,6 +257,50 @@ export class SyntheticDataSource implements WidgetDataSource, WidgetActions {
         deviceToken: SYNTHETIC_COMMAND_DEVICE,
         commands: commands.slice(0, subscription.pageSize),
         total: commands.length,
+      });
+    };
+
+    emit();
+    const timer = setInterval(emit, this.intervalMs);
+    this.timers.add(timer);
+    return () => {
+      if (this.timers.delete(timer)) clearInterval(timer);
+    };
+  }
+
+  // subscribeLocations emits a synthetic position snapshot for preview so a map shows a
+  // populated, representative fleet before any device has reported one. Scope
+  // (datasource) is ignored — preview never resolves a device — but the LOCATION SERIES
+  // is honored: a selector that names none gets the empty snapshot, exactly as the live
+  // hub gives it, so an author who has not bound the map sees preview agree with
+  // production rather than paper over the omission with fake markers.
+  //
+  // Preview NEVER reports `forbidden`: it reaches no backend, so there is no authority
+  // to be refused, and inventing a permission state would show an author a wall their
+  // viewers may not actually hit.
+  subscribeLocations(subscription: LocationSubscription, sink: LocationStreamSink): () => void {
+    if (!subscription.datasource?.location) {
+      sink.next({ kind: 'positions', deviceTokens: [], locations: [] });
+      return () => {};
+    }
+
+    const emit = (): void => {
+      const now = Date.now();
+      const locations: LocationSample[] = SYNTHETIC_LOCATIONS.map((l, i) => ({
+        id: `syn-location-${i}`,
+        deviceToken: l.deviceToken,
+        latitude: l.latitude,
+        longitude: l.longitude,
+        elevation: l.elevation,
+        accuracy: l.accuracy,
+        speed: l.speed,
+        heading: l.heading,
+        occurredTime: new Date(now - i * 30_000).toISOString(),
+      }));
+      sink.next({
+        kind: 'positions',
+        deviceTokens: locations.map((l) => l.deviceToken),
+        locations,
       });
     };
 

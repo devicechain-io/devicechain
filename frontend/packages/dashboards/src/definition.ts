@@ -19,6 +19,7 @@ import {
   type CanvasGrid,
   type CanvasSizing,
   type DashboardDefinition,
+  type LocationSelection,
   type SlotBinding,
   type SlotDefinition,
   type SlotScope,
@@ -309,6 +310,32 @@ function stringArrayAt(rec: Record<string, unknown>, key: string): string[] {
   return Array.isArray(v) ? v.filter((m): m is string => typeof m === 'string') : [];
 }
 
+// parseLocationSelection reads a selector's OPTIONAL location-series field.
+//
+// 🔴 Additive, and it has to stay that way: every definition stored before the location
+// channel existed carries no `location`, and undefined here is exactly right for all of
+// them — the selector names no location series, which is true. Nothing about the
+// measurement path is touched, so the regression risk is confined to what an author
+// deliberately adds.
+//
+// The vocabulary is closed, so an unrecognized series is DROPPED rather than carried
+// through: the hub resolves a location scope only for a selector naming a series it
+// understands, and carrying an unknown one would produce a widget that looks configured
+// and reads nothing. Dropping it makes the widget's empty state honest.
+function parseLocationSelection(raw: unknown): LocationSelection | undefined {
+  if (!isRecord(raw)) return undefined;
+  return raw.series === 'latest' ? { series: 'latest' } : undefined;
+}
+
+// withLocation attaches a parsed location selection to a selector, and OMITS the key
+// entirely when there is none — so a measurement-only definition serializes byte-for-
+// byte as it did before this field existed (no spurious `"location":undefined` in the
+// diff, and isDirty stays quiet on a load/save round trip).
+function withLocation<S extends object>(selector: S, raw: Record<string, unknown>): S {
+  const location = parseLocationSelection(raw.location);
+  return location ? { ...selector, location } : selector;
+}
+
 // parseDatasource coerces a raw datasource into a normalized selector, or drops it
 // (returns undefined) when it is absent or its `kind` is not a non-empty string.
 function parseDatasource(raw: unknown): WidgetInstance['datasource'] | undefined {
@@ -317,21 +344,27 @@ function parseDatasource(raw: unknown): WidgetInstance['datasource'] | undefined
   if (typeof kind !== 'string' || kind.length === 0) return undefined;
 
   if (kind === 'device') {
-    return { kind: 'device', deviceToken: stringAt(raw, 'deviceToken'), measurements: stringArrayAt(raw, 'measurements') };
+    return withLocation(
+      { kind: 'device' as const, deviceToken: stringAt(raw, 'deviceToken'), measurements: stringArrayAt(raw, 'measurements') },
+      raw,
+    );
   }
   if (kind === 'anchor') {
     const anchorRec = isRecord(raw.anchor) ? raw.anchor : {};
-    const selector: WidgetInstance['datasource'] = {
-      kind: 'anchor',
-      anchor: {
-        relationship: stringAt(anchorRec, 'relationship'),
-        // targetType defaults to '' (the config panel constrains it to the union;
-        // a hand-edited/empty value round-trips rather than being silently coerced).
-        targetType: stringAt(anchorRec, 'targetType') as AnchorTarget['targetType'],
-        targetToken: stringAt(anchorRec, 'targetToken'),
+    const selector: WidgetInstance['datasource'] = withLocation(
+      {
+        kind: 'anchor' as const,
+        anchor: {
+          relationship: stringAt(anchorRec, 'relationship'),
+          // targetType defaults to '' (the config panel constrains it to the union;
+          // a hand-edited/empty value round-trips rather than being silently coerced).
+          targetType: stringAt(anchorRec, 'targetType') as AnchorTarget['targetType'],
+          targetToken: stringAt(anchorRec, 'targetToken'),
+        },
+        measurements: stringArrayAt(raw, 'measurements'),
       },
-      measurements: stringArrayAt(raw, 'measurements'),
-    };
+      raw,
+    );
     if (isRecord(raw.aggregation)) {
       (selector as { aggregation?: unknown }).aggregation = raw.aggregation;
     }
@@ -340,8 +373,12 @@ function parseDatasource(raw: unknown): WidgetInstance['datasource'] | undefined
 
   if (kind === 'slot') {
     // Runtime-binding kind: the entity is resolved at mount via the Hub's binding
-    // manifest; the widget carries only the slot name + the measurements it wants.
-    return { kind: 'slot', slot: stringAt(raw, 'slot'), measurements: stringArrayAt(raw, 'measurements') };
+    // manifest; the widget carries only the slot name + the series it wants (the
+    // measurement names, and/or the location series).
+    return withLocation(
+      { kind: 'slot' as const, slot: stringAt(raw, 'slot'), measurements: stringArrayAt(raw, 'measurements') },
+      raw,
+    );
   }
 
   // Reserved/other kinds: carry through opaquely (the hub rejects them).

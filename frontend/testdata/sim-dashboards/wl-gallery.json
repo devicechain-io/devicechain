@@ -253,12 +253,36 @@
       "type": "command-button"
     },
     {
+      "datasource": {
+        "kind": "slot",
+        "location": {
+          "series": "latest"
+        },
+        "measurements": [],
+        "slot": "sensor"
+      },
+      "id": "wl-map",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 24,
+          "row": 20,
+          "rowSpan": 6,
+          "z": 0
+        }
+      },
+      "options": {
+        "title": "Where the sensors are"
+      },
+      "type": "map"
+    },
+    {
       "id": "wl-zone-select",
       "layout": {
         "base": {
           "col": 0,
           "colSpan": 12,
-          "row": 20,
+          "row": 26,
           "rowSpan": 2,
           "z": 0
         }
@@ -275,7 +299,7 @@
         "base": {
           "col": 12,
           "colSpan": 12,
-          "row": 20,
+          "row": 26,
           "rowSpan": 2,
           "z": 0
         }

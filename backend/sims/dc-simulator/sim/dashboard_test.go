@@ -22,6 +22,7 @@ var wireWidgetTypes = map[string]bool{
 	"alarm-count":      true,
 	"command-button":   true,
 	"entity-selector":  true,
+	"map":              true,
 }
 
 // heroDevices is the minimal population buildBuildingpulseDashboard needs: a hero

@@ -20,6 +20,8 @@ export {
   type TypedDocument,
 } from './transport';
 
+export { isForbiddenError } from './errors';
+
 export { subscribe, disposeSubscriptions, type SubscriptionSink } from './subscribe';
 
 export {

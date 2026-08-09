@@ -62,6 +62,7 @@ const WIDGET_SOURCES: Record<WidgetType, string> = {
   'alarm-count': 'widgets/alarm-count.tsx',
   'command-button': 'widgets/command-button.tsx',
   'entity-selector': 'widgets/entity-selector.tsx',
+  map: 'widgets/map.tsx',
 };
 
 // Files that read options on behalf of MORE THAN ONE widget type — the channel wrapper,
@@ -265,6 +266,11 @@ const VALID: { [T in WidgetType]: WidgetOptions<T> } = {
     maxRows: 10,
   },
   'entity-selector': { title: 'Thermostat', selectionTarget: 'thermostat' },
+  map: {
+    title: 'Fleet',
+    tileUrl: 'https://tiles.example.invalid/{z}/{x}/{y}.png',
+    attribution: '© Example Tiles',
+  },
 };
 
 describe('validateWidgetOptions', () => {

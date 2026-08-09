@@ -17,7 +17,7 @@ Un panel distribuye widgets en una **cuadrícula CSS fluida**: una cuadrícula d
 
 ## Widgets
 
-Los widgets integrados abarcan cuatro canales — **telemetría**, **alarma**, **control** y **selección**. El gráfico de series temporales y el medidor se renderizan sobre [Apache ECharts](https://echarts.apache.org/); el resto son DOM simple:
+Los widgets integrados abarcan cinco canales — **telemetría**, **alarma**, **control**, **selección** y **ubicación**. El gráfico de series temporales y el medidor se renderizan sobre [Apache ECharts](https://echarts.apache.org/), el mapa sobre [MapLibre GL](https://maplibre.org/); el resto son DOM simple:
 
 | Widget | Canal | Muestra |
 |---|---|---|
@@ -31,6 +31,15 @@ Los widgets integrados abarcan cuatro canales — **telemetría**, **alarma**, *
 | **Conteo de alarmas** | alarma | un recuento acumulado de alarmas abiertas |
 | **Comando / control** | control | un formulario de parámetros tipado que despacha un comando y muestra su ciclo de vida de entrega en vivo |
 | **Selector de entidad** | selección | un selector que reapunta un slot con nombre, de modo que un visor elige qué entidad muestra el panel — o un widget dentro de él |
+| **Mapa** | ubicación | la última posición conocida de los dispositivos vinculados |
+
+:::note El mapa necesita una fuente de teselas, y DeviceChain no elige una por usted
+El widget de mapa renderiza las posiciones de los dispositivos sobre una **fuente de teselas que usted configura en el widget**. No hay valor predeterminado, y es deliberado: la biblioteca de mapas no es el mapa — las teselas lo son, y provienen de un proveedor cuyos términos son ajenos a los de la plataforma. Usar un servicio público de teselas por defecto convertiría en silencio la política de uso de un tercero en una dependencia de ejecución de su instancia.
+
+Sin una fuente de teselas configurada el widget sigue funcionando: dibuja las posiciones relativas de los dispositivos sobre un fondo liso e indica que no hay teselas configuradas. Apúntelo a un proveedor comercial, o a teselas que usted mismo aloje.
+
+Leer posiciones también requiere la autoridad `location:read`, que **no** otorga la base de solo lectura que recibe cada miembro — vea [ubicación de dispositivos](../guides/connecting-a-device.md). A un visor que no la tenga se le indica, en lugar de mostrarle un mapa vacío.
+:::
 
 Los widgets se tematizan con propiedades personalizadas de CSS, de modo que una aplicación embebedora controla su apariencia sin modificar el código del widget.
 
