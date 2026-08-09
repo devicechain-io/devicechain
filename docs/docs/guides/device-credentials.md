@@ -19,9 +19,13 @@ Available. Credentials are managed from the device detail page's **Credentials**
 | `MQTT_BASIC` | a username (the credential id) + password | the password |
 | `X509_CERTIFICATE` | a certificate subject/fingerprint (the credential id) | none — possession is proved out of band |
 
-## Secrets are write-only
+## Reading a credential requires `device:write` {#reading-a-credential}
 
-Where a type carries a secret (the `MQTT_BASIC` password), that secret is **write-only**: it is submitted when the credential is registered and is **never returned on read**. The console shows it once, at creation time, and the API returns `null` for it thereafter. A holder of `device:read` cannot exfiltrate secrets.
+Where a type carries a secret (the `MQTT_BASIC` password), that secret is **write-only**: it is submitted when the credential is registered and is **never returned on read**. The console shows it once, at creation time, and the API returns `null` for it thereafter.
+
+That protects the `MQTT_BASIC` password, and nothing else. `ACCESS_TOKEN` and `X509_CERTIFICATE` store no secret to withhold: the **`credentialId` is itself the bearer** — the table above says so for the access token, and the per-event check accepts a certificate credential on its id alone as well — and `credentialId` is a plainly readable field. So reading a device's credentials hands you what you need to authenticate as that device, whatever the type.
+
+Every query that returns a credential is therefore gated on **`device:write`**, not `device:read`: a read-only user cannot list a device's credentials, which is why the console's **Credentials** tab is not shown to one. The gate takes nothing from a `device:write` holder — they can already register a credential for any device in the tenant and impersonate it. What it stops is that capability reaching the read-only baseline every enabled tenant member receives.
 
 ## How a device presents a credential
 
@@ -79,4 +83,4 @@ mutation {
 }
 ```
 
-For `MQTT_BASIC`, also pass `credentialValue: "<password>"` (write-only). Registering requires the `device:write` authority; listing a device's credentials requires `device:read`.
+For `MQTT_BASIC`, also pass `credentialValue: "<password>"` (write-only). Registering a credential and listing a device's credentials both require the `device:write` authority — see [above](#reading-a-credential).

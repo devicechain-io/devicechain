@@ -19,9 +19,13 @@ Disponible. Las credenciales se gestionan desde la pestaña **Credentials** de l
 | `MQTT_BASIC` | un usuario (el id de la credencial) + contraseña | la contraseña |
 | `X509_CERTIFICATE` | un sujeto/huella digital de certificado (el id de la credencial) | ninguno — la posesión se prueba fuera de banda |
 
-## Los secretos son de solo escritura
+## Leer una credencial requiere `device:write` {#reading-a-credential}
 
-Cuando un tipo lleva un secreto (la contraseña de `MQTT_BASIC`), ese secreto es de **solo escritura**: se envía cuando se registra la credencial y **nunca se devuelve en una lectura**. La consola lo muestra una sola vez, en el momento de la creación, y la API devuelve `null` para él en adelante. Un titular de `device:read` no puede exfiltrar secretos.
+Cuando un tipo lleva un secreto (la contraseña de `MQTT_BASIC`), ese secreto es de **solo escritura**: se envía cuando se registra la credencial y **nunca se devuelve en una lectura**. La consola lo muestra una sola vez, en el momento de la creación, y la API devuelve `null` para él en adelante.
+
+Eso protege la contraseña de `MQTT_BASIC`, y nada más. `ACCESS_TOKEN` y `X509_CERTIFICATE` no almacenan ningún secreto que retener: el **`credentialId` es en sí mismo el portador** — así lo dice la tabla anterior para el token de acceso, y la verificación por evento también acepta una credencial de certificado solo con su id —, y `credentialId` es un campo que se lee sin más. Así que leer las credenciales de un dispositivo entrega todo lo necesario para autenticarse como ese dispositivo, sea cual sea el tipo.
+
+Por eso toda consulta que devuelva una credencial está protegida por **`device:write`**, no por `device:read`: un usuario de solo lectura no puede listar las credenciales de un dispositivo, y por eso la consola no le muestra la pestaña **Credentials**. La restricción no le quita nada a quien tiene `device:write` — ya puede registrar una credencial para cualquier dispositivo del inquilino y suplantarlo. Lo que evita es que esa capacidad llegue a la base de solo lectura que recibe todo miembro habilitado del inquilino.
 
 ## Cómo presenta un dispositivo una credencial
 
@@ -79,4 +83,4 @@ mutation {
 }
 ```
 
-Para `MQTT_BASIC`, pasa también `credentialValue: "<password>"` (solo escritura). Registrar requiere la autoridad `device:write`; listar las credenciales de un dispositivo requiere `device:read`.
+Para `MQTT_BASIC`, pasa también `credentialValue: "<password>"` (solo escritura). Tanto registrar una credencial como listar las credenciales de un dispositivo requieren la autoridad `device:write` — ver [más arriba](#reading-a-credential).

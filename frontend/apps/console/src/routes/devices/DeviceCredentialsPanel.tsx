@@ -40,10 +40,20 @@ import {
 const needsSecret = (t: CredentialType) => t === 'MQTT_BASIC';
 
 // DeviceCredentialsPanel lists a device's credentials and registers/removes them
-// (ADR-014). The secret is write-only server-side and never displayed; the
-// credential id (the device-facing identifier, e.g. an access token) is shown
-// with a copy button. Loads independently: without device:read the query errors
-// and this panel degrades to an ErrorState rather than breaking the page.
+// (ADR-014). The stored secret is write-only server-side and never displayed; the
+// credential id (the device-facing identifier, e.g. an access token) is shown with
+// a copy button.
+//
+// 🔴 Every operation here — the list included — requires device:write. For
+// ACCESS_TOKEN and X509_CERTIFICATE the credential id IS the bearer secret, so
+// reading a credential confers device impersonation and the list query is gated on
+// the write authority server-side. This panel therefore assumes its caller has
+// already checked hasAuthority(claims, 'device:write') and renders it only then —
+// DeviceDetailPage hides the whole Credentials tab otherwise. Do not mount it
+// unconditionally; every query and mutation in it would 403.
+//
+// Loads independently of the rest of the page: a query failure degrades to an
+// ErrorState here rather than breaking the device detail page.
 export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string }) {
   const { t } = useTranslation('devices');
   const { toast } = useToast();

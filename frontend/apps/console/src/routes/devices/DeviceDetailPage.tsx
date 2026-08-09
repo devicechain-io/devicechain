@@ -25,6 +25,8 @@ import {
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useQuery } from '@/lib/hooks/use-query';
+import { useAuth } from '@/auth/AuthProvider';
+import { hasAuthority } from '@devicechain/client';
 import { getDevice, deleteDevice } from '@/lib/api/device-management';
 import { getDeviceState, getLatestMeasurements } from '@/lib/api/device-state';
 import { listEvents } from '@/lib/api/event-management';
@@ -42,6 +44,13 @@ export default function DeviceDetailPage() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const confirm = useConfirm();
+  const { claims } = useAuth();
+  // Credentials are device:write, list included: for ACCESS_TOKEN and
+  // X509_CERTIFICATE the readable credential id IS the bearer secret, so reading
+  // one confers device impersonation. The panel only ever managed credentials and
+  // its list content is privileged, so a caller without the authority gets no tab
+  // at all rather than an empty one or a 403.
+  const canManageCredentials = hasAuthority(claims, 'device:write');
 
   const [version, reload] = useReload();
   const { data: device, loading, error } = useQuery(() => getDevice(token), [version]);
@@ -111,7 +120,9 @@ export default function DeviceDetailPage() {
           <TabsTrigger value="connectivity">{t('tabConnectivity')}</TabsTrigger>
           <TabsTrigger value="events">{t('tabEvents')}</TabsTrigger>
           <TabsTrigger value="commands">{t('tabCommands')}</TabsTrigger>
-          <TabsTrigger value="credentials">{t('tabCredentials')}</TabsTrigger>
+          {canManageCredentials && (
+            <TabsTrigger value="credentials">{t('tabCredentials')}</TabsTrigger>
+          )}
         </TabsList>
         <TabsContent value="basic">
           <SectionPanel>
@@ -149,11 +160,13 @@ export default function DeviceDetailPage() {
             <DeviceCommandsPanel deviceToken={device.token} />
           </SectionPanel>
         </TabsContent>
-        <TabsContent value="credentials">
-          <SectionPanel>
-            <DeviceCredentialsPanel deviceToken={device.token} />
-          </SectionPanel>
-        </TabsContent>
+        {canManageCredentials && (
+          <TabsContent value="credentials">
+            <SectionPanel>
+              <DeviceCredentialsPanel deviceToken={device.token} />
+            </SectionPanel>
+          </TabsContent>
+        )}
       </Tabs>
     </PageShell>
   );

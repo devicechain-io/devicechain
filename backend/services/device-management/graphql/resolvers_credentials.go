@@ -51,14 +51,25 @@ func (r *DeviceCredentialResolver) CredentialType() string {
 	return r.M.CredentialType
 }
 
+// CredentialId is readable, and for ACCESS_TOKEN and X509_CERTIFICATE it IS the
+// bearer — those types prove possession out of band and compare no stored secret
+// (model.credentialRequiresSecret). That is why the queries returning this type
+// are gated on device:WRITE rather than device:read; see queries_credentials.go
+// for the reasoning. Do not relax that gate on the assumption that withholding
+// credentialValue below is what protects a credential: for two of the three
+// types there is nothing in credentialValue to withhold.
 func (r *DeviceCredentialResolver) CredentialId() string {
 	return r.M.CredentialId
 }
 
-// CredentialValue is write-only: the stored secret (e.g. an MQTT_BASIC password)
-// is never returned on read, so a device:read holder cannot exfiltrate secrets
-// through the API. It is accepted on create/update and shown once, client-side,
-// by whoever submitted it.
+// CredentialValue is write-only: the stored secret is never returned on read. It
+// is accepted on create/update and shown once, client-side, by whoever submitted
+// it.
+//
+// Note what this does and does not buy. Only MQTT_BASIC keeps a comparable secret
+// here, so this defends the MQTT_BASIC password and nothing else — it is not, on
+// its own, a guarantee that a credential cannot be exfiltrated. The authority gate
+// on the queries is what makes that true for the other types.
 func (r *DeviceCredentialResolver) CredentialValue() *string {
 	return nil
 }

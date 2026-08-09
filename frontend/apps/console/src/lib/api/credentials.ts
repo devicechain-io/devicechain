@@ -56,7 +56,8 @@ const DELETE_DEVICE_CREDENTIAL = graphql(`
 `);
 
 // List a device's credentials (newest-first is not guaranteed; the set is small).
-// Requires device:read.
+// Requires device:write, not device:read: the returned credentialId is the bearer
+// secret for ACCESS_TOKEN and X509_CERTIFICATE, so reading confers impersonation.
 export async function listDeviceCredentials(deviceToken: string): Promise<DeviceCredential[]> {
   const data = await gql('device-management', DEVICE_CREDENTIALS, {
     criteria: { pageNumber: 1, pageSize: 100, device: deviceToken },
