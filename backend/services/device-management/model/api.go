@@ -245,6 +245,11 @@ type DeviceManagementApi interface {
 	// and with what expectations. nil means undeclared. 🔴 Descriptive only — ingest
 	// never gates on it; a location event from an undeclared device is stored.
 	LocationDeclarationByDeviceType(ctx context.Context, deviceTypeId uint) (*LocationDeclaration, error)
+	// DeviceLocationDeclaration answers the same question for ONE DEVICE TOKEN, through
+	// the same published resolution (ADR-078) — what a console asks to decide whether a
+	// device gets a position panel. Distinguishes "no such device" from "declares
+	// nothing"; both of which differ again from a declared-but-empty declaration.
+	DeviceLocationDeclaration(ctx context.Context, deviceToken string) (*DeviceLocationCapability, error)
 
 	// Command definitions (ADR-043).
 	CreateCommandDefinition(ctx context.Context, request *CommandDefinitionCreateRequest) (*CommandDefinition, error)

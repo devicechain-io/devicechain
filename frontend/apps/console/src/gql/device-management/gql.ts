@@ -87,6 +87,7 @@ type Documents = {
     "\n  mutation DeleteMetricDefinition($token: String!) {\n    deleteMetricDefinition(token: $token)\n  }\n": typeof types.DeleteMetricDefinitionDocument,
     "\n  query CommandDefinitions($criteria: CommandDefinitionSearchCriteria!) {\n    commandDefinitions(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        commandKey\n        parameterSchema\n        metadata\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.CommandDefinitionsDocument,
     "\n  query DeviceCommandVocabulary($deviceToken: String!) {\n    deviceCommandVocabulary(deviceToken: $deviceToken) {\n      constrained\n      commands {\n        commandKey\n        name\n        description\n        parameterSchema\n      }\n    }\n  }\n": typeof types.DeviceCommandVocabularyDocument,
+    "\n  query DeviceLocationDeclaration($deviceToken: String!) {\n    deviceLocationDeclaration(deviceToken: $deviceToken) {\n      declared\n      declaration {\n        expectedAccuracyMeters\n        expectedUpdateIntervalSeconds\n      }\n    }\n  }\n": typeof types.DeviceLocationDeclarationDocument,
     "\n  mutation CreateCommandDefinition($request: CommandDefinitionCreateRequest) {\n    createCommandDefinition(request: $request) {\n      id\n      token\n    }\n  }\n": typeof types.CreateCommandDefinitionDocument,
     "\n  mutation UpdateCommandDefinition($token: String!, $request: CommandDefinitionCreateRequest) {\n    updateCommandDefinition(token: $token, request: $request) {\n      id\n      token\n    }\n  }\n": typeof types.UpdateCommandDefinitionDocument,
     "\n  mutation DeleteCommandDefinition($token: String!) {\n    deleteCommandDefinition(token: $token)\n  }\n": typeof types.DeleteCommandDefinitionDocument,
@@ -176,6 +177,7 @@ const documents: Documents = {
     "\n  mutation DeleteMetricDefinition($token: String!) {\n    deleteMetricDefinition(token: $token)\n  }\n": types.DeleteMetricDefinitionDocument,
     "\n  query CommandDefinitions($criteria: CommandDefinitionSearchCriteria!) {\n    commandDefinitions(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        commandKey\n        parameterSchema\n        metadata\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.CommandDefinitionsDocument,
     "\n  query DeviceCommandVocabulary($deviceToken: String!) {\n    deviceCommandVocabulary(deviceToken: $deviceToken) {\n      constrained\n      commands {\n        commandKey\n        name\n        description\n        parameterSchema\n      }\n    }\n  }\n": types.DeviceCommandVocabularyDocument,
+    "\n  query DeviceLocationDeclaration($deviceToken: String!) {\n    deviceLocationDeclaration(deviceToken: $deviceToken) {\n      declared\n      declaration {\n        expectedAccuracyMeters\n        expectedUpdateIntervalSeconds\n      }\n    }\n  }\n": types.DeviceLocationDeclarationDocument,
     "\n  mutation CreateCommandDefinition($request: CommandDefinitionCreateRequest) {\n    createCommandDefinition(request: $request) {\n      id\n      token\n    }\n  }\n": types.CreateCommandDefinitionDocument,
     "\n  mutation UpdateCommandDefinition($token: String!, $request: CommandDefinitionCreateRequest) {\n    updateCommandDefinition(token: $token, request: $request) {\n      id\n      token\n    }\n  }\n": types.UpdateCommandDefinitionDocument,
     "\n  mutation DeleteCommandDefinition($token: String!) {\n    deleteCommandDefinition(token: $token)\n  }\n": types.DeleteCommandDefinitionDocument,
@@ -481,6 +483,10 @@ export function graphql(source: "\n  query CommandDefinitions($criteria: Command
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  query DeviceCommandVocabulary($deviceToken: String!) {\n    deviceCommandVocabulary(deviceToken: $deviceToken) {\n      constrained\n      commands {\n        commandKey\n        name\n        description\n        parameterSchema\n      }\n    }\n  }\n"): typeof import('./graphql').DeviceCommandVocabularyDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query DeviceLocationDeclaration($deviceToken: String!) {\n    deviceLocationDeclaration(deviceToken: $deviceToken) {\n      declared\n      declaration {\n        expectedAccuracyMeters\n        expectedUpdateIntervalSeconds\n      }\n    }\n  }\n"): typeof import('./graphql').DeviceLocationDeclarationDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

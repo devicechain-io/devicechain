@@ -60,6 +60,43 @@ type LocationDeclaration struct {
 	ExpectedUpdateIntervalSeconds *int32 `json:"expectedUpdateIntervalSeconds,omitempty"`
 }
 
+// DeviceLocationCapability answers "does THIS device report its position?" for one
+// device token (ADR-078) — the location counterpart of CommandVocabulary, and built
+// the same way and for the same reason: the console must be told what a device
+// RESOLVES, which is its type's profile's active PUBLISHED version, never the draft
+// an author happens to be editing.
+//
+// It exists because the draft is the only location surface a client could otherwise
+// read (DeviceProfile.location), and reading it would make a location panel appear
+// and disappear on an unpublished edit — the publish-boundary confusion
+// DeviceCommandVocabulary was added to prevent for commands. It also collapses the
+// three sequential round-trips a client would need (device → type → profile) into
+// one hop.
+type DeviceLocationCapability struct {
+	// DeviceExists reports whether the token resolved to a live device. False makes
+	// Declaration meaningless, and is what lets the GraphQL layer answer null for an
+	// unresolvable token while still answering "undeclared" for a real device.
+	DeviceExists bool
+	// Declaration is the position declaration frozen into the profile version the
+	// device currently resolves, or nil when nothing on record says this device
+	// reports a position.
+	//
+	// 🔴 nil has three indistinguishable sources — the type has no profile, the
+	// profile was never published, or the published version declares no location —
+	// and they are deliberately one answer: all three mean the same thing to a
+	// reader. A non-nil declaration with both fields unset is NOT one of them; it is
+	// the "reports position, no expectations stated" claim, and it must survive
+	// distinct from nil all the way to the client.
+	Declaration *LocationDeclaration
+}
+
+// Declared reports whether the device's resolved profile version declares that it
+// reports position. It is derived HERE, from the same pointer the declaration itself
+// is read from, so a client's boolean and its object can never disagree.
+func (c *DeviceLocationCapability) Declared() bool {
+	return c != nil && c.Declaration != nil
+}
+
 // Location decodes the profile's stored position declaration (ADR-078), returning
 // nil when the profile does not declare that its devices report position. It is the
 // only way outside this package to read the declaration — the JSON column itself is
