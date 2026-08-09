@@ -226,7 +226,7 @@ func TestIntegrationTenantPurgeCostOnCompressedChunks(t *testing.T) {
 	// The REAL policies, at the shipped defaults (24h chunks, compress after 7 days,
 	// retention off) — not a hand-rolled ALTER, so segmentby/orderby are whatever the
 	// platform actually deploys.
-	require.NoError(t, ApplyDataLifecyclePolicies(context.Background(), mgr, 24, 7, 0),
+	require.NoError(t, ApplyDataLifecyclePolicies(context.Background(), mgr, DataLifecyclePolicy{ChunkIntervalHours: 24, CompressAfterDays: 7}),
 		"apply the real ADR-026 lifecycle policies")
 
 	dropAllChunks(t, db, "measurement_events")
@@ -320,7 +320,7 @@ func TestIntegrationTenantPurgeCostDropSchemaComparison(t *testing.T) {
 	ctx := core.WithSystemContext(context.Background())
 	db := mgr.DB(ctx)
 
-	require.NoError(t, ApplyDataLifecyclePolicies(context.Background(), mgr, 24, 7, 0))
+	require.NoError(t, ApplyDataLifecyclePolicies(context.Background(), mgr, DataLifecyclePolicy{ChunkIntervalHours: 24, CompressAfterDays: 7}))
 
 	// Same shape as the real table (INCLUDING ALL carries the indexes), made a hypertable
 	// and compressed with the same segmentby the platform deploys — so the only difference

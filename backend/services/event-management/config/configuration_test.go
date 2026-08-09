@@ -62,3 +62,57 @@ func TestNegativeLifecycleRejected(t *testing.T) {
 		assert.Error(t, err, "should reject: %s", doc)
 	}
 }
+
+// The location retention override is UNSET by default: nil means "inherit
+// RetentionDays", which is what keeps an operator who never sets it on exactly the
+// previous behavior. A defaulting hook that filled it in would erase the
+// distinction between "inherit" and "an explicit window that happens to match".
+func TestLocationRetentionUnsetByDefault(t *testing.T) {
+	cfg := &EventManagementConfiguration{}
+	err := core.LoadConfiguration([]byte(``), cfg)
+
+	assert.NoError(t, err)
+	assert.Nil(t, cfg.Lifecycle.LocationRetentionDays,
+		"an unset location override must stay nil so location inherits the uniform window")
+}
+
+// An explicit location window survives loading, independently of the uniform one.
+func TestLoadExplicitLocationRetention(t *testing.T) {
+	cfg := &EventManagementConfiguration{}
+	err := core.LoadConfiguration([]byte(`{"Lifecycle":{"RetentionDays":365,"LocationRetentionDays":30}}`), cfg)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 365, cfg.Lifecycle.RetentionDays)
+	if assert.NotNil(t, cfg.Lifecycle.LocationRetentionDays) {
+		assert.Equal(t, 30, *cfg.Lifecycle.LocationRetentionDays)
+	}
+}
+
+// An explicit 0 is a real setting — retention off for location alone — and must not
+// be re-read as "unset".
+func TestExplicitZeroLocationRetentionIsNotUnset(t *testing.T) {
+	cfg := &EventManagementConfiguration{}
+	err := core.LoadConfiguration([]byte(`{"Lifecycle":{"RetentionDays":365,"LocationRetentionDays":0}}`), cfg)
+
+	assert.NoError(t, err)
+	if assert.NotNil(t, cfg.Lifecycle.LocationRetentionDays, "an explicit 0 must not collapse to unset") {
+		assert.Equal(t, 0, *cfg.Lifecycle.LocationRetentionDays)
+	}
+}
+
+// A negative location window is rejected at startup, the same fail-closed posture
+// the uniform windows already have.
+func TestNegativeLocationRetentionRejected(t *testing.T) {
+	cfg := &EventManagementConfiguration{}
+	err := core.LoadConfiguration([]byte(`{"Lifecycle":{"LocationRetentionDays":-1}}`), cfg)
+	assert.Error(t, err, "a negative location retention window must be rejected")
+}
+
+// Typed config fails closed on an unknown key, so a misspelled override cannot be
+// silently ignored — which would leave position on the uniform window while the
+// operator believes it is shortened.
+func TestMisspelledLocationRetentionRejected(t *testing.T) {
+	cfg := &EventManagementConfiguration{}
+	err := core.LoadConfiguration([]byte(`{"Lifecycle":{"LocationRetentionDay":30}}`), cfg)
+	assert.Error(t, err, "an unknown lifecycle key must be rejected at startup")
+}

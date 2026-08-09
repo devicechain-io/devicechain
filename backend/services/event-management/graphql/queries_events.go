@@ -167,10 +167,21 @@ func (r *SchemaResolver) Events(ctx context.Context, args struct {
 }
 
 // List location events that match the given criteria.
+//
+// Gated on LocationRead — NOT EventRead — because a device's position is a distinct
+// capability from its telemetry: knowing where a vehicle or a person is differs in
+// kind from knowing how warm it is, and location:read is deliberately absent from
+// the read-only viewer baseline so it is only ever held by deliberate grant.
+//
+// 🔴 The check is location:read ALONE, never "event:read AND location:read". A
+// subject granted only location access must be able to read position, and a subject
+// holding only event:read must not — an added conjunction would break the first and
+// an AuthorizeAny would break the second, quietly restoring the very equivalence the
+// separate authority exists to end.
 func (r *SchemaResolver) LocationEvents(ctx context.Context, args struct {
 	Criteria EventSearchCriteriaInput
 }) (*LocationEventSearchResultsResolver, error) {
-	if err := auth.Authorize(ctx, auth.EventRead); err != nil {
+	if err := auth.Authorize(ctx, auth.LocationRead); err != nil {
 		return nil, err
 	}
 

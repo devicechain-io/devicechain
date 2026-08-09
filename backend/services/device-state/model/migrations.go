@@ -26,5 +26,6 @@ import (
 var (
 	Migrations = []*gormigrate.Migration{
 		NewBaselineSchema(),
+		NewLatestLocationSchema(),
 	}
 )

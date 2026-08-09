@@ -32,6 +32,11 @@ var LifecycleHypertables = []string{
 	"state_change_events",
 }
 
+// LocationHypertable is the one hypertable holding device POSITIONS, and the only
+// member of LifecycleHypertables that can carry a retention window of its own (see
+// DataLifecyclePolicy.LocationRetentionDays).
+const LocationHypertable = "location_events"
+
 // lifecycleLockName namespaces the startup advisory lock that serializes policy
 // reconciliation across concurrently-rolling replicas (distinct from the migration
 // lock, so the two never block each other).
@@ -98,6 +103,77 @@ func addRetentionPolicyStmt(table string) string {
 		qualifiedHypertable(table))
 }
 
+// DataLifecyclePolicy is the resolved set of TimescaleDB lifecycle windows to
+// reconcile (ADR-026). It is built from configuration in main and passed whole so
+// that adding a per-table window is a field rather than another positional int.
+type DataLifecyclePolicy struct {
+	// ChunkIntervalHours sizes future chunks on every hypertable.
+	ChunkIntervalHours int
+
+	// CompressAfterDays is the compression window applied uniformly to every
+	// hypertable; 0 disables the compression policy. It is deliberately NOT
+	// per-table: compression is lossless, so it changes how the rows are stored and
+	// never whether they are still held. Only retention answers "for how long".
+	CompressAfterDays int
+
+	// RetentionDays is the uniform retention window across every hypertable; 0 (the
+	// default) means retention is off and nothing is ever dropped.
+	RetentionDays int
+
+	// LocationRetentionDays optionally overrides RetentionDays for location_events
+	// ALONE. nil means "no override" — location ages out on the uniform window, so
+	// an operator who never sets it sees exactly the previous behavior.
+	//
+	// The reason it exists is regulatory rather than technical. A vehicle track, or
+	// a lone-worker's badge trail, is personal data in a way a temperature series is
+	// not: it is about a PERSON, and the lawful basis for holding it is usually
+	// narrower and shorter than the basis for holding telemetry. With one uniform
+	// window a tenant asked "how long do you keep position data?" can only answer by
+	// quoting the window it keeps everything for — and the only lever it has is to
+	// delete everything or nothing. That is the first question a data-protection
+	// review asks, and "we shorten it for locations" is the expected answer.
+	//
+	// An explicit 0 is meaningful and distinct from nil: it turns retention OFF for
+	// location while leaving it on elsewhere. That direction is unusual but it is a
+	// real configuration (a tenant under a legal hold on positions), so the pointer
+	// carries "unset" rather than overloading 0 to mean it.
+	//
+	// What it drops is the COORDINATES: location_events is the payload hypertable, and
+	// the base `events` row for the same reading ages out on the uniform window. So a
+	// shorter location window removes where the device was while leaving the fact that
+	// it reported a position at that time. That is the intended split — the position is
+	// the personal data — but state it that way to an auditor rather than claiming the
+	// reading vanishes entirely.
+	//
+	// 🔴 PER-DEVICE (and per-subject) ERASURE IS DELIBERATELY OUT OF SCOPE HERE, and
+	// this is the place someone will come looking for it. Retention is a per-chunk
+	// policy: TimescaleDB drops a whole chunk once every row in it is older than the
+	// window, which is why it is cheap. A targeted `DELETE ... WHERE device_token =`
+	// is the opposite shape — against compressed chunks it is a decompress, rewrite
+	// and recompress maintenance operation, not a query, with a cost set by the
+	// chunk's size rather than by the number of rows being erased. It needs its own
+	// design (a batched, resumable, rate-limited job with its own request/audit
+	// record), and squeezing it in behind a config knob would produce an erasure
+	// promise the storage engine cannot keep under load. It is an unbuilt feature,
+	// not an oversight.
+	//
+	// TENANT-level deletion is already covered and needs nothing here: the tenant
+	// purge is catalog-driven and sweeps every table carrying a tenant_id column, so
+	// location_events is included by construction rather than by being listed.
+	LocationRetentionDays *int
+}
+
+// retentionDaysFor resolves the retention window for one hypertable: the location
+// override when the table is location_events AND an override is set, the uniform
+// window otherwise. Kept as a pure method so both directions — override applied,
+// override absent — are assertable without a database.
+func (p DataLifecyclePolicy) retentionDaysFor(table string) int {
+	if table == LocationHypertable && p.LocationRetentionDays != nil {
+		return *p.LocationRetentionDays
+	}
+	return p.RetentionDays
+}
+
 // ApplyDataLifecyclePolicies reconciles the TimescaleDB chunk-sizing, compression,
 // and retention policies (ADR-026) across every event hypertable, to the values
 // resolved from configuration. It is idempotent — safe to run on every startup —
@@ -115,15 +191,13 @@ func addRetentionPolicyStmt(table string) string {
 // down ingest. Callers should treat a returned error as "could not even attempt"
 // (e.g. the advisory lock could not be acquired), not "a policy failed".
 func ApplyDataLifecyclePolicies(ctx context.Context, mgr *rdb.RdbManager,
-	chunkIntervalHours, compressAfterDays, retentionDays int) error {
-	compressionEnabled := compressAfterDays > 0
-	retentionEnabled := retentionDays > 0
+	policy DataLifecyclePolicy) error {
+	compressionEnabled := policy.CompressAfterDays > 0
 
 	return mgr.WithAdvisoryLock(ctx, rdb.AdvisoryLockKey(lifecycleLockName), func() error {
 		db := mgr.DB(core.WithSystemContext(ctx))
 		for _, table := range LifecycleHypertables {
-			if err := applyOne(db, table, chunkIntervalHours, compressAfterDays,
-				compressionEnabled, retentionDays, retentionEnabled); err != nil {
+			if err := applyOne(db, table, policy); err != nil {
 				// The only error applyOne returns is a failed retention-policy removal
 				// while retention is disabled — a data-safety-critical case (a lingering
 				// job would keep dropping data against explicit operator intent). Fail
@@ -131,14 +205,19 @@ func ApplyDataLifecyclePolicies(ctx context.Context, mgr *rdb.RdbManager,
 				return err
 			}
 		}
-		log.Info().
-			Int("chunkIntervalHours", chunkIntervalHours).
+		event := log.Info().
+			Int("chunkIntervalHours", policy.ChunkIntervalHours).
 			Bool("compressionEnabled", compressionEnabled).
-			Int("compressAfterDays", compressAfterDays).
-			Bool("retentionEnabled", retentionEnabled).
-			Int("retentionDays", retentionDays).
-			Int("hypertables", len(LifecycleHypertables)).
-			Msg("Applied TimescaleDB data-lifecycle policies (ADR-026).")
+			Int("compressAfterDays", policy.CompressAfterDays).
+			Bool("retentionEnabled", policy.RetentionDays > 0).
+			Int("retentionDays", policy.RetentionDays).
+			Int("hypertables", len(LifecycleHypertables))
+		// Logged only when an override is in force, so the absence of the field means
+		// "location ages out with everything else" rather than "unknown".
+		if policy.LocationRetentionDays != nil {
+			event = event.Int("locationRetentionDays", *policy.LocationRetentionDays)
+		}
+		event.Msg("Applied TimescaleDB data-lifecycle policies (ADR-026).")
 		return nil
 	})
 }
@@ -152,8 +231,16 @@ func ApplyDataLifecyclePolicies(ctx context.Context, mgr *rdb.RdbManager,
 // retention-policy removal while retention is disabled (see below). Every other
 // statement is best-effort — logged at ERROR and skipped — because chunk sizing and
 // compression only degrade a guarantee, they never destroy data.
-func applyOne(db *gorm.DB, table string, chunkIntervalHours, compressAfterDays int,
-	compressionEnabled bool, retentionDays int, retentionEnabled bool) error {
+//
+// The retention window is resolved PER TABLE (retentionDaysFor), so location_events
+// can age out on a shorter window than the telemetry beside it; every other policy
+// is uniform.
+func applyOne(db *gorm.DB, table string, policy DataLifecyclePolicy) error {
+	compressAfterDays := policy.CompressAfterDays
+	compressionEnabled := compressAfterDays > 0
+	retentionDays := policy.retentionDaysFor(table)
+	retentionEnabled := retentionDays > 0
+
 	exec := func(step, stmt string, args ...interface{}) {
 		if err := db.Exec(stmt, args...).Error; err != nil {
 			log.Error().Err(err).Str("hypertable", table).Str("step", step).
@@ -162,7 +249,7 @@ func applyOne(db *gorm.DB, table string, chunkIntervalHours, compressAfterDays i
 	}
 
 	// Chunk sizing.
-	exec("chunk-interval", setChunkIntervalStmt(table), chunkIntervalHours)
+	exec("chunk-interval", setChunkIntervalStmt(table), policy.ChunkIntervalHours)
 
 	// Compression: reconcile the policy (remove first so a changed window replaces it),
 	// then enable + (re-)add when compression is on. Compression is lossless, so a
