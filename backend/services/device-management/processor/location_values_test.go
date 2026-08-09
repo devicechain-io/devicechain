@@ -26,7 +26,7 @@ import (
 // deliberately nil: a resolver that started needing one would fail here loudly
 // rather than being quietly satisfied by a mock.
 func locationResolver() *EventResolver {
-	return NewEventResolver(1, nil, "", nil, nil, nil, nil, nil)
+	return NewEventResolver(1, nil, "", nil, nil, nil, nil, nil, nil)
 }
 
 // strptr is a local helper so each literal below reads as its own distinct value.

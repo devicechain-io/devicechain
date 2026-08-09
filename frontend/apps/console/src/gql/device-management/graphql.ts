@@ -200,9 +200,15 @@ export type DeviceFacet =
   | 'MANUFACTURER'
   | 'MODEL';
 
+export type DeviceLocationDeclarationInput = {
+  expectedAccuracyMeters?: number | null | undefined;
+  expectedUpdateIntervalSeconds?: number | null | undefined;
+};
+
 export type DeviceProfileCreateRequest = {
   category?: string | null | undefined;
   description?: string | null | undefined;
+  location?: DeviceLocationDeclarationInput | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
   token: string;

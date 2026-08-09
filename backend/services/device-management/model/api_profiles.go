@@ -13,6 +13,10 @@ import (
 
 // Create a new device profile.
 func (api *Api) CreateDeviceProfile(ctx context.Context, request *DeviceProfileCreateRequest) (*DeviceProfile, error) {
+	location, err := encodeLocationDeclaration(request.Location)
+	if err != nil {
+		return nil, err
+	}
 	created := &DeviceProfile{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -24,7 +28,8 @@ func (api *Api) CreateDeviceProfile(ctx context.Context, request *DeviceProfileC
 		MetadataEntity: rdb.MetadataEntity{
 			Metadata: rdb.MetadataStrOf(request.Metadata),
 		},
-		Category: rdb.NullStrOf(request.Category),
+		Category:            rdb.NullStrOf(request.Category),
+		LocationDeclaration: location,
 	}
 	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
@@ -80,6 +85,24 @@ func (api *Api) UpdateDeviceProfile(ctx context.Context, token string,
 	found.Description = rdb.NullStrOf(request.Description)
 	found.Category = rdb.NullStrOf(request.Category)
 	found.Metadata = rdb.MetadataStrOf(request.Metadata)
+
+	// The position declaration (ADR-078) is replaced wholesale like every other field
+	// on this request, so a request carrying no declaration CLEARS one that was there.
+	// That is the clear operation — there is no separate mutation for it — and it is
+	// the same replace semantics Name/Category/Metadata already have, so the editor
+	// has one rule rather than a per-field exception. The Save below writes a nil
+	// pointer as SQL NULL (Metadata already depends on this), which restores exactly
+	// the never-declared state in the DRAFT — as it should, since a device that no
+	// longer reports position should display exactly like one that never did. What
+	// distinguishes a cleared profile from one that never declared is the append-only
+	// version history: the version published while it was declared still carries the
+	// declaration, so the clear is visible as a change between versions rather than as
+	// a tombstone in the draft.
+	location, err := encodeLocationDeclaration(request.Location)
+	if err != nil {
+		return nil, err
+	}
+	found.LocationDeclaration = location
 
 	// Omit active_version: a draft/metadata edit must never write the version pointer
 	// back. `found` was loaded before this Save, so writing it whole would let an edit

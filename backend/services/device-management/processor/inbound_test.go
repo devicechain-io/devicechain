@@ -353,6 +353,14 @@ func (suite *InboundEventsProcessorTestSuite) TestValidAlertsEvent() {
 
 // Run all tests.
 func TestInboundEventsProcessorTestSuite(t *testing.T) {
+	// This suite is noisy, so it silences the logger — but it must put it back. A
+	// global level left at Disabled leaks into every test that runs afterwards in this
+	// package, and a muted logger makes any test that COUNTS log output pass vacuously:
+	// "no warnings were emitted" and "warnings cannot be emitted" produce the same
+	// measurement. (Found exactly that way: the undeclared-location tests passed alone
+	// and reported zero warnings in a full-package run.)
+	prevLevel := zerolog.GlobalLevel()
+	t.Cleanup(func() { zerolog.SetGlobalLevel(prevLevel) })
 	zerolog.SetGlobalLevel(zerolog.Disabled)
 	suite.Run(t, new(InboundEventsProcessorTestSuite))
 }

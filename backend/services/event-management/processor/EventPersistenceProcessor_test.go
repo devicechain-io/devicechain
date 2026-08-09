@@ -330,6 +330,16 @@ func (suite *EventPersistenceProcessorTestSuite) TestStateChangeRedeliverySkipsA
 
 // Run all tests.
 func TestEventPersistenceProcessorTestSuite(t *testing.T) {
+	// 🔴 RESTORE IT. The global level is process-wide, so silencing it and walking
+	// away mutes every test that runs AFTER this one in the package — and the damage
+	// is asymmetric in the dangerous direction: an assertion that something must NOT
+	// be logged passes vacuously against a muted logger, while only the assertions
+	// demanding a log notice. Nothing in this package reads log output today, so
+	// nothing is vacuous right now; this is the trap disarmed rather than a bug
+	// fixed. The identical pattern in device-management's inbound_test.go DID make
+	// three sibling tests pass for the wrong reason, which is how it was found.
+	prev := zerolog.GlobalLevel()
+	t.Cleanup(func() { zerolog.SetGlobalLevel(prev) })
 	zerolog.SetGlobalLevel(zerolog.Disabled)
 	suite.Run(t, new(EventPersistenceProcessorTestSuite))
 }

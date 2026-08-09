@@ -596,7 +596,8 @@ CREATE TABLE "device-management".device_profiles (
  metadata jsonb,
  category character varying(64),
  provenance character varying(256),
- active_version integer
+ active_version integer,
+ location_declaration jsonb
 );
 CREATE TABLE "device-management".device_types (
  id bigint NOT NULL,

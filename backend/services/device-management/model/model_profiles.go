@@ -7,6 +7,7 @@ import (
 	"database/sql"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -21,6 +22,11 @@ type DeviceProfileCreateRequest struct {
 	// vocabulary without a field migration.
 	Category *string
 	Metadata *string
+	// Location is the profile's position declaration (ADR-078), or nil for "these
+	// devices do not report their own position". Replace semantics on update, exactly
+	// like every other field here: passing nil CLEARS an existing declaration, which
+	// is how the API expresses "this kind of device stopped reporting position".
+	Location *LocationDeclaration
 }
 
 // Represents a device profile (ADR-045): the reusable, tenant-scoped capability
@@ -38,6 +44,16 @@ type DeviceProfile struct {
 	// device this profile describes. Coherent under sharing (a shared profile is
 	// shared because the devices are functionally the same).
 	Category sql.NullString `gorm:"size:64;index"`
+	// LocationDeclaration is the SINGULAR, NULLABLE position declaration (ADR-078) —
+	// see LocationDeclaration for why it is not a fourth definition list. It is stored
+	// as one nullable JSON document rather than a spread of nullable columns for a
+	// reason the design depends on: a set of columns would need a separate "declared"
+	// flag to tell an undeclared profile from one declared with no stated
+	// expectations, and that flag is precisely the ambiguity the singular-nullable
+	// shape exists to remove. SQL NULL here IS "does not report position"; `{}` is
+	// "reports position, no expectations stated". Read/written through
+	// decodeLocationDeclaration / encodeLocationDeclaration, never touched raw.
+	LocationDeclaration *datatypes.JSON
 	// Provenance is a reserved, nullable link recording that this profile was
 	// fork-adopted from an ADR-046 catalog entry ("catalog-profile@version"). Unset
 	// and unused in v1; present so the future catalog drops in additively.

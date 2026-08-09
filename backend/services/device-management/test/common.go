@@ -46,6 +46,20 @@ type MockApi struct {
 	// assert scope resolution runs (and aborts) before any state mutation.
 	ProfileScopeErr error
 
+	// LocationDeclarationResult is returned by LocationDeclarationByDeviceType
+	// (ADR-078). Nil (the default) means the profile declares no location — the state
+	// the undeclared-position warning fires on.
+	LocationDeclarationResult *model.LocationDeclaration
+	// LocationDeclarationArg captures the deviceTypeId last passed, so a test can
+	// assert the check keys on the device's TYPE rather than its row id.
+	LocationDeclarationArg uint
+	// LocationDeclarationCalls counts the lookups, so a test can prove the memo spares
+	// the hot path a query per event rather than only sparing it a log line.
+	LocationDeclarationCalls int
+	// LocationDeclarationErr, when set, makes the lookup fail — so a test can assert an
+	// unanswerable check degrades to silence and never touches the event.
+	LocationDeclarationErr error
+
 	// MembershipsFn, when set, returns an entity's dynamic-group memberships (ADR-062)
 	// per (entityType, entityId) — so a resolver test can give the device and an anchor
 	// different memberships and assert the stamped union. Nil returns MembershipsResult.
@@ -218,6 +232,21 @@ func (api *MockApi) ProfileScopeByDeviceType(ctx context.Context, deviceTypeId u
 		return api.ProfileScopeResult, nil
 	}
 	return &model.ProfileScope{}, nil
+}
+
+// LocationDeclarationByDeviceType (ADR-078) returns the suite-set declaration, or nil
+// (undeclared) when unset — the default, so every resolver test that predates the
+// declaration behaves as an undeclared profile without setting anything. Plain fields
+// rather than testify expectations, matching ProfileScopeByDeviceType above: the
+// resolver may call this zero or one time per event depending on its memo, and a
+// strict expectation would make the memo's own correctness look like a mock failure.
+func (api *MockApi) LocationDeclarationByDeviceType(ctx context.Context, deviceTypeId uint) (*model.LocationDeclaration, error) {
+	api.LocationDeclarationArg = deviceTypeId
+	api.LocationDeclarationCalls++
+	if api.LocationDeclarationErr != nil {
+		return nil, api.LocationDeclarationErr
+	}
+	return api.LocationDeclarationResult, nil
 }
 
 func (api *MockApi) CreateCommandDefinition(ctx context.Context, request *model.CommandDefinitionCreateRequest) (*model.CommandDefinition, error) {

@@ -26,10 +26,19 @@ import (
 // ActiveVersion at an earlier version (non-destructive; the draft is untouched).
 
 // buildProfileSnapshot serializes a profile's current draft — its metric, command,
-// and detection-rule definitions — into a ProfileSnapshot document. The
+// and detection-rule definitions, plus its singular position declaration (ADR-078) —
+// into a ProfileSnapshot document. The
 // back-reference to the profile is cleared on each definition so the blob stays tight
 // and acyclic. Disabled definitions are captured too (the flag travels with the version).
 func (api *Api) buildProfileSnapshot(ctx context.Context, profileId uint) (datatypes.JSON, error) {
+	// The position declaration lives on the profile row itself (it is singular, so it
+	// has no table of its own), so capturing it means reading the profile back rather
+	// than a definition list. An undeclared profile yields a nil Location, which is a
+	// value the snapshot must carry faithfully — see ProfileSnapshot.Location.
+	location, err := api.locationDeclarationForProfile(ctx, profileId)
+	if err != nil {
+		return nil, err
+	}
 	metrics, err := api.MetricDefinitionsByDeviceProfile(ctx, profileId)
 	if err != nil {
 		return nil, err
@@ -51,7 +60,7 @@ func (api *Api) buildProfileSnapshot(ctx context.Context, profileId uint) (datat
 	for _, dr := range rules {
 		dr.DeviceProfile = nil
 	}
-	raw, err := json.Marshal(ProfileSnapshot{Metrics: metrics, Commands: commands, Rules: rules})
+	raw, err := json.Marshal(ProfileSnapshot{Metrics: metrics, Commands: commands, Rules: rules, Location: location})
 	if err != nil {
 		return nil, err
 	}
@@ -60,6 +69,14 @@ func (api *Api) buildProfileSnapshot(ctx context.Context, profileId uint) (datat
 
 // parseProfileSnapshot decodes a version's snapshot blob back into definition
 // lists, normalizing nil lists to empty slices so callers never dereference nil.
+//
+// 🔴 Location is deliberately EXEMPT from that normalization, and the exemption is
+// the point rather than an oversight. An empty list and an absent list mean the same
+// thing (no definitions), so collapsing them loses nothing; a nil Location and a
+// non-nil empty one mean DIFFERENT things (this device kind does not report its
+// position / it does, with no expectations stated), so a "helpful" normalization here
+// would destroy the one distinction the singular-nullable shape exists to preserve —
+// irreversibly, since a published snapshot is immutable.
 func parseProfileSnapshot(raw datatypes.JSON) (*ProfileSnapshot, error) {
 	snap := &ProfileSnapshot{
 		Metrics:  []*MetricDefinition{},
