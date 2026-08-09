@@ -90,6 +90,10 @@ func registerTools(s *mcp.Server, t *Tools) {
 		Description: "Return time-bucketed avg/min/max/sum/count of a device's measurements over a window (intervalSeconds sets the bucket width, e.g. 3600 for hourly). The token-efficient way to read trends — prefer this over query_measurements for anything but a small exact-value lookup. Always bound the query with startTime/endTime: without a window it returns a bucket for the entire history.",
 	}, t.AggregateMeasurements)
 	mcp.AddTool(s, &mcp.Tool{
+		Name:        "query_locations",
+		Description: "Query a device's reported positions over an optional time window (paged). Results are NEWEST FIRST, so the first one is the device's last known position — to answer only \"where is it now\", call with pageSize 1 and no window. Each position carries latitude/longitude and, when the receiver reported them, elevation (metres), accuracy (metres, horizontal), speed (metres per second) and heading (degrees clockwise from true north). A field that is absent was not reported: treat it as unknown, never as zero — a missing speed is not a stationary device and a missing heading is not due north. Reading positions needs the separate location authority, which is not part of the read-only baseline, so this can be refused for a caller whose other read tools all work.",
+	}, t.QueryLocations)
+	mcp.AddTool(s, &mcp.Tool{
 		Name:        "list_alarms",
 		Description: "List alarms in the caller's tenant (paged), optionally filtered by originating device token, state, severity, alarm key, or acknowledged flag. Returns each alarm's token, key, metric, state, severity, acknowledged flag, raised/cleared times, last value, and message.",
 	}, t.ListAlarms)

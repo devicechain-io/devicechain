@@ -581,6 +581,19 @@ func (m *Manager) resolveTenantGrant(ctx context.Context, tenant string, mem *ia
 // receives in addition to their assigned roles: read access to the domain
 // objects (ADR-008). Writes stay role-gated.
 //
+// A device's POSITION is the second documented exception, and like the first it is
+// an absence rather than an entry. location:read exists precisely so that knowing
+// where a vehicle or a person is can be granted separately from knowing how warm it
+// is, and listing it here would make that split ceremonial — every enabled member
+// would receive it on top of their roles and nobody would ever have chosen to grant
+// it. That is the same defect the credential exception below describes, arrived at
+// from the other direction.
+//
+// 🔴 TestViewerAuthoritiesAreReadOnly does NOT protect this. location:read ends in
+// ":read", so it satisfies that test trivially — the test constrains what MAY be in
+// this list, never what must be absent from it. The absence needs its own test, and
+// has one: TestLocationReadIsNotInTheViewerBaseline.
+//
 // Device CREDENTIALS are the documented exception, and it is not an oversight:
 // device-management gates the queries returning one on device:write, because for
 // an ACCESS_TOKEN the readable credentialId IS the bearer the device

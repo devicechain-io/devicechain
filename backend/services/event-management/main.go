@@ -228,8 +228,15 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if lc.CompressAfterDays != nil { // normally set by ApplyDefaults; guard against a nil deref
 		compressAfterDays = *lc.CompressAfterDays
 	}
-	if err := model.ApplyDataLifecyclePolicies(ctx, RdbManager,
-		lc.ChunkIntervalHours, compressAfterDays, lc.RetentionDays); err != nil {
+	if err := model.ApplyDataLifecyclePolicies(ctx, RdbManager, model.DataLifecyclePolicy{
+		ChunkIntervalHours: lc.ChunkIntervalHours,
+		CompressAfterDays:  compressAfterDays,
+		RetentionDays:      lc.RetentionDays,
+		// Passed through as a pointer: nil means "no override", so location inherits
+		// the uniform window. Collapsing it to an int here would lose the distinction
+		// between "unset" and an explicit 0 (retention off for location only).
+		LocationRetentionDays: lc.LocationRetentionDays,
+	}); err != nil {
 		return err
 	}
 

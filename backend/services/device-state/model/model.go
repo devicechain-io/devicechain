@@ -67,9 +67,9 @@ func (DeviceState) AuditExempt() bool { return true }
 // for one device — the O(1) "what is it right now?" projection beside the
 // append-only measurement history in event-management. One row per
 // (tenant, device, name). Numeric measurements only for v1;
-// a non-numeric reading is skipped upstream. Location gets its own sibling
-// projection later. Bounded by (devices × metrics-per-device), so it never grows
-// with history.
+// a non-numeric reading is skipped upstream. Position has its own sibling
+// projection, LatestLocation. Bounded by (devices × metrics-per-device), so it
+// never grows with history.
 type LatestMeasurement struct {
 	gorm.Model
 	rdb.TenantScoped
@@ -99,6 +99,59 @@ type LatestMeasurementInput struct {
 	Classifier   *uint
 	Unit         *string
 	DataType     *string
+	OccurredTime time.Time
+}
+
+// LatestLocation is the current (most-recent) position of one device — the O(1)
+// "where is it right now?" projection beside the append-only location history in
+// event-management. One row per (tenant, device): a device has exactly one current
+// position, so unlike LatestMeasurement there is no per-name dimension. Bounded by
+// the device count, so it never grows with history.
+//
+// The coordinate contract is fixed platform-wide and is NOT restated per row: WGS84 /
+// EPSG:4326 decimal degrees, elevation and accuracy in metres (elevation above the
+// ELLIPSOID, not mean sea level), speed in metres per second, heading in degrees
+// clockwise from true north in [0, 360). Values arrive already range-checked at decode.
+//
+// 🔴 The column widths are the ones event-management's LocationEvent uses, deliberately
+// and not by coincidence: this projection and that history are two views of the same
+// fix, so a fix that round-trips into the history must round-trip into here at the same
+// precision. Widening or narrowing one without the other makes the "current" position
+// disagree with the most recent historical one.
+//
+// Every coordinate is nullable. A fix is not required to carry elevation, accuracy,
+// speed or heading — most do not — and NULL says "not reported", which zero does not.
+type LatestLocation struct {
+	gorm.Model
+	rdb.TenantScoped
+	DeviceToken string
+	Latitude    sql.NullFloat64 `gorm:"type:decimal(10,8)"`
+	Longitude   sql.NullFloat64 `gorm:"type:decimal(11,8)"`
+	Elevation   sql.NullFloat64 `gorm:"type:decimal(12,4)"`
+	Accuracy    sql.NullFloat64 `gorm:"type:decimal(12,4)"`
+	Speed       sql.NullFloat64 `gorm:"type:decimal(12,4)"`
+	Heading     sql.NullFloat64 `gorm:"type:decimal(7,4)"`
+	// OccurredTime is the fix's own event time, and it is the projection's ORDERING
+	// KEY, not decoration: the merge only advances a row when the incoming fix is
+	// strictly newer, so a redelivered or out-of-order fix can never move a device
+	// backwards to a position it has already left.
+	OccurredTime time.Time
+}
+
+// AuditExempt: a high-volume derived position projection, not a control-plane
+// mutation (ADR-019) — same rationale as DeviceState.
+func (LatestLocation) AuditExempt() bool { return true }
+
+// LatestLocationInput is one positional fix to upsert into the last-known-position
+// projection. Every coordinate is a nullable float because a fix reports only what
+// its sensor produced.
+type LatestLocationInput struct {
+	Latitude     sql.NullFloat64
+	Longitude    sql.NullFloat64
+	Elevation    sql.NullFloat64
+	Accuracy     sql.NullFloat64
+	Speed        sql.NullFloat64
+	Heading      sql.NullFloat64
 	OccurredTime time.Time
 }
 

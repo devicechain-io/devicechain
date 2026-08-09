@@ -37,6 +37,8 @@ type DeviceStateApi interface {
 	SweepInactive(ctx context.Context, now time.Time) (int64, error)
 	MergeLatestMeasurements(ctx context.Context, deviceToken string, inputs []LatestMeasurementInput) error
 	LatestMeasurementsByDeviceToken(ctx context.Context, deviceToken string) ([]*LatestMeasurement, error)
+	MergeLatestLocations(ctx context.Context, deviceToken string, inputs []LatestLocationInput) error
+	LatestLocationsByDeviceToken(ctx context.Context, deviceTokens []string) ([]*LatestLocation, error)
 }
 
 // PresenceTransition is an authoritative connectivity edge (ADR-067) carried by a
@@ -258,6 +260,88 @@ func (api *Api) MergeLatestMeasurements(ctx context.Context, deviceToken string,
 		}
 		return nil
 	})
+}
+
+// MergeLatestLocations upserts a device's last-known position from the fixes carried
+// by one resolved location event. One row per (tenant, device) — a device has exactly
+// one current position — so every fix in the event contends for the same row and the
+// newest one wins.
+//
+// 🔴 THE PROJECTION MUST NOT GO BACKWARDS, and that is the whole reason this is a
+// read-modify-write under a row lock rather than a blind upsert. The resolved-events
+// stream redelivers (an unacked message comes back) and does not guarantee order across
+// the five merge workers, so "last write wins" would let a redelivered old fix teleport
+// a device back to where it used to be — silently, and indistinguishably from the device
+// actually having returned there. The guard is therefore on the fix's OCCURRED time, not
+// on arrival: a fix is applied only when it is STRICTLY newer than the stored one, which
+// makes redelivery of the current fix a no-op as well.
+//
+// Same shape as MergeLatestMeasurements deliberately: SELECT … FOR UPDATE serializes the
+// concurrent workers on the row, so the compare-then-write cannot interleave, and all the
+// event's fixes commit together in one transaction.
+func (api *Api) MergeLatestLocations(ctx context.Context, deviceToken string, inputs []LatestLocationInput) error {
+	if len(inputs) == 0 {
+		return nil
+	}
+	return api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, in := range inputs {
+			found := &LatestLocation{}
+			result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("device_token = ?", deviceToken).First(found)
+			if result.Error != nil {
+				if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+					// First fix ever seen for this device: create it. A concurrent first
+					// create loses the (tenant_id, device_token) unique-index race and
+					// errors out (redelivered), rather than producing a duplicate row.
+					created := &LatestLocation{
+						DeviceToken:  deviceToken,
+						Latitude:     in.Latitude,
+						Longitude:    in.Longitude,
+						Elevation:    in.Elevation,
+						Accuracy:     in.Accuracy,
+						Speed:        in.Speed,
+						Heading:      in.Heading,
+						OccurredTime: in.OccurredTime,
+					}
+					if err := tx.Create(created).Error; err != nil {
+						return err
+					}
+					continue
+				}
+				return result.Error
+			}
+			// Existing row: overwrite only when this fix is strictly newer. Every field is
+			// replaced together — a fix is one atomic observation, so carrying forward the
+			// previous fix's speed or heading beside a new position would synthesize a
+			// reading no device ever reported.
+			if in.OccurredTime.After(found.OccurredTime) {
+				found.Latitude = in.Latitude
+				found.Longitude = in.Longitude
+				found.Elevation = in.Elevation
+				found.Accuracy = in.Accuracy
+				found.Speed = in.Speed
+				found.Heading = in.Heading
+				found.OccurredTime = in.OccurredTime
+				if err := tx.Save(found).Error; err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+}
+
+// LatestLocationsByDeviceToken returns the last-known position of each of the given
+// devices, device-token-ordered. A device that has never produced a location event
+// simply has no row, so the result is short rather than carrying a placeholder — the
+// caller distinguishes "never located" from "located here" by absence.
+func (api *Api) LatestLocationsByDeviceToken(ctx context.Context, deviceTokens []string) ([]*LatestLocation, error) {
+	found := make([]*LatestLocation, 0)
+	result := api.RDB.DB(ctx).Where("device_token in ?", deviceTokens).Order("device_token asc").Find(&found)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return found, nil
 }
 
 // LatestMeasurementsByDeviceToken returns the current value of every measurement

@@ -692,6 +692,44 @@ functionalAreas:
     # anchorSweepIntervalSeconds: 3600  # ADR-044 decision 3 reconciliation-sweep
     # cadence. Unset defaults to hourly; a negative value disables the sweep (the
     # entity.deleted consumer remains the primary anchor-cleanup path).
+    #
+    # TimescaleDB data-lifecycle policies (ADR-026), reconciled idempotently at every
+    # startup — change a value, restart the area, and the live policy converges to it.
+    #   config:
+    #     lifecycle:
+    #       chunkIntervalHours: 24  # sizes chunks created from now on; existing
+    #                               # chunks keep the interval they were made with.
+    #       compressAfterDays: 7    # lossless columnar compression of chunks older
+    #                               # than this. 0 disables the policy (already
+    #                               # compressed chunks are left as they are).
+    #       retentionDays: 0        # DROPS chunks older than this, on every event
+    #                               # hypertable. It DELETES telemetry, so it is
+    #                               # opt-in: 0 (the default) keeps data forever.
+    #       locationRetentionDays: 30
+    #                               # retention for DEVICE POSITIONS alone, overriding
+    #                               # retentionDays for that one hypertable. Unset (the
+    #                               # default) means positions age out with everything
+    #                               # else, so leaving it out changes nothing.
+    #                               #
+    #                               # Set it when position must be held for less time
+    #                               # than telemetry. A vehicle track or a worker's
+    #                               # badge trail is personal data in a way a
+    #                               # temperature series is not, and the lawful basis
+    #                               # for keeping it is usually narrower — this is the
+    #                               # knob that lets you answer "how long do you keep
+    #                               # location data?" with something other than the
+    #                               # window you keep everything for.
+    #                               #
+    #                               # An explicit 0 is meaningful and differs from
+    #                               # leaving it unset: it turns retention OFF for
+    #                               # positions while leaving it on elsewhere.
+    #                               #
+    #                               # It is a WINDOW, not an erasure request: it drops
+    #                               # whole chunks once every reading in them is old
+    #                               # enough. Deleting one device's or one person's
+    #                               # history on demand is a separate capability and is
+    #                               # not offered here. Deleting a TENANT already
+    #                               # removes its positions along with everything else.
   device-state:
     config: {}
   dashboard-management:

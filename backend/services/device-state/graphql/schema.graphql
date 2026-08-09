@@ -67,6 +67,32 @@ type LatestMeasurement implements Model {
     occurredTime: String!
 }
 
+# Last-known position of a device — the O(1) "where is it right now?" projection
+# beside the append-only location history. One per device. Coordinates are WGS84 /
+# EPSG:4326 decimal degrees; elevation and accuracy are metres (elevation above the
+# ellipsoid, not mean sea level), speed is metres per second, heading is degrees
+# clockwise from true north in [0, 360). Every coordinate is nullable because a fix
+# reports only what its sensor produced — null means "not reported", which is not the
+# same claim as 0. occurredTime is the RFC3339 time of the fix itself.
+#
+# Reading this requires the location:read authority, which is separate from the
+# state:read that covers the rest of this API and is not part of the read-only
+# baseline: where a device is differs in kind from what it is measuring.
+type LatestLocation implements Model {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    deletedAt: String
+    deviceToken: String!
+    latitude: Float
+    longitude: Float
+    elevation: Float
+    accuracy: Float
+    speed: Float
+    heading: Float
+    occurredTime: String!
+}
+
 # Criteria used when searching for device states. Device-token lookups are served
 # by the deviceStatesByDeviceToken query instead of a criteria field.
 input DeviceStateSearchCriteria {
@@ -98,6 +124,13 @@ type Query {
     deviceStates(criteria: DeviceStateSearchCriteria!): DeviceStateSearchResults!
     # Current value of every measurement name for a device (live readings).
     latestMeasurements(deviceToken: String!): [LatestMeasurement!]!
+    # Last-known position of one device; null when it has never been located.
+    # Requires location:read.
+    latestLocation(deviceToken: String!): LatestLocation
+    # Last-known position of each of the given devices — the fleet-map batch. A device
+    # that has never been located is absent from the result rather than present with
+    # null coordinates. Requires location:read.
+    latestLocations(deviceTokens: [String!]!): [LatestLocation!]!
 }
 
 schema {

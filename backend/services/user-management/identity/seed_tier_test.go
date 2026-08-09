@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"slices"
 )
 
 // TestViewerAuthoritiesAreAllTenantTier guards a path the admin-plane validation
@@ -69,5 +70,46 @@ func TestViewerAuthoritiesAreReadOnly(t *testing.T) {
 				"tenant member receives must stay read-only (device-management gates credential "+
 				"reads on device:write on the strength of that)", a)
 		}
+	}
+}
+
+// location:read is deliberately NOT in the viewer baseline, and that absence is the
+// whole reason the authority exists.
+//
+// 🔴 This needs its own test because TestViewerAuthoritiesAreReadOnly above CANNOT
+// catch it. That test asserts every entry ends in ":read" — and "location:read"
+// does. It constrains what may be in the baseline, never what must be absent from
+// it, so adding location:read here would satisfy it perfectly while dissolving the
+// separation it was introduced to create.
+//
+// The separation is the point. Every event read is otherwise gated on a single
+// event:read, which would give a device's POSITION the same permission as its
+// temperature. Knowing where a vehicle — or a person — is differs in kind, and it
+// is the first question a data-protection review asks. Granting it to every enabled
+// member by default would mean nobody had ever chosen to grant it.
+//
+// This is the same shape as the credential defect the test above guards: a
+// "read-only" baseline silently conferring a capability no one selected. It was
+// found there by audit rather than by test, which is why it is asserted here.
+//
+// Widening the baseline is not forbidden — it has to be a DECISION. If location
+// should become universally readable, delete this test on purpose and say why.
+func TestLocationReadIsNotInTheViewerBaseline(t *testing.T) {
+	if len(viewerAuthorities) == 0 {
+		t.Fatal("precondition: the viewer baseline is empty")
+	}
+	// The precondition that makes the assertion meaningful: the baseline really is
+	// the thing that grants reads, so an absence from it is a real restriction
+	// rather than a vacuous one.
+	if !slices.Contains(viewerAuthorities, string(auth.EventRead)) {
+		t.Fatal("precondition: the baseline no longer grants event:read, so this test is " +
+			"no longer comparing location against the telemetry it is meant to differ from")
+	}
+	if slices.Contains(viewerAuthorities, string(auth.LocationRead)) {
+		t.Fatalf("the viewer baseline grants %q. Every enabled tenant member receives this "+
+			"list on top of their roles, so granting it here makes the separation from "+
+			"event:read ceremonial — a device's position becomes readable by everyone who "+
+			"can read its temperature, which is exactly what the authority exists to prevent",
+			auth.LocationRead)
 	}
 }

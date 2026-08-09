@@ -71,7 +71,7 @@ func TestIntegrationTenantPurgeRollupResidue(t *testing.T) {
 	ctx := core.WithSystemContext(context.Background())
 	db := mgr.DB(ctx)
 
-	require.NoError(t, ApplyDataLifecyclePolicies(context.Background(), mgr, 24, 7, 0))
+	require.NoError(t, ApplyDataLifecyclePolicies(context.Background(), mgr, DataLifecyclePolicy{ChunkIntervalHours: 24, CompressAfterDays: 7}))
 	dropAllChunks(t, db, "measurement_events")
 	seedMeasurements(t, db, "measurement_events", 2, rowsPerTenant)
 
@@ -144,7 +144,7 @@ func TestIntegrationTenantPurgeRollupDirectDelete(t *testing.T) {
 	ctx := core.WithSystemContext(context.Background())
 	db := mgr.DB(ctx)
 
-	require.NoError(t, ApplyDataLifecyclePolicies(context.Background(), mgr, 24, 7, 0))
+	require.NoError(t, ApplyDataLifecyclePolicies(context.Background(), mgr, DataLifecyclePolicy{ChunkIntervalHours: 24, CompressAfterDays: 7}))
 	dropAllChunks(t, db, "measurement_events")
 	seedMeasurements(t, db, "measurement_events", 2, rowsPerTenant)
 	require.NoError(t, db.Exec(

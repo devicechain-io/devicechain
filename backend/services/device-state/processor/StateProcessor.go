@@ -229,6 +229,17 @@ func (sp *StateProcessor) mergeOne(ctx context.Context, msg messaging.Message) {
 		}
 	}
 
+	// For a location event, also advance the last-known-position projection. Note this
+	// is IN ADDITION TO the MergeDeviceState above, not instead of it: a location is a
+	// data event like any other, so it is still a liveness heartbeat. A device that
+	// only ever reports its position must not be swept inactive for saying nothing.
+	if event.EventType == esmodel.Location {
+		if err := sp.mergeLatestLocation(msgctx, event); err != nil {
+			disposeTransient(err, fmt.Sprintf("latest-location projection update for device %s", event.SourceDeviceToken))
+			return
+		}
+	}
+
 	// Projection updated successfully: ack so the message is not redelivered.
 	msg.Ack()
 	done(core.ResultOK)
@@ -275,6 +286,62 @@ func (sp *StateProcessor) mergeLatestMeasurements(ctx context.Context, event *dm
 		}
 	}
 	return sp.Api.MergeLatestMeasurements(ctx, event.SourceDeviceToken, inputs)
+}
+
+// nullableFloat parses one optional coordinate off a resolved location entry. The
+// values arrive as strings and were already range-checked at decode, so a value that
+// is absent OR unparseable here yields NULL rather than a zero: a projection column
+// reading 0.0 is a claim (the equator, sea level, stationary, due north), and NULL is
+// the only honest encoding of "the device did not report this".
+func nullableFloat(val *string) sql.NullFloat64 {
+	if val == nil {
+		return sql.NullFloat64{}
+	}
+	f, err := strconv.ParseFloat(*val, 64)
+	if err != nil {
+		return sql.NullFloat64{}
+	}
+	return sql.NullFloat64{Float64: f, Valid: true}
+}
+
+// mergeLatestLocation extracts the fixes from a resolved location event and upserts
+// them into the last-known-position projection. A per-entry occurred time overrides the
+// event's when present, mirroring the measurement path — it is also the ordering key
+// the merge's newer-wins guard compares on.
+//
+// An entry carrying neither a parseable latitude nor a parseable longitude is skipped:
+// it locates the device nowhere, so storing it would replace a real position with an
+// empty one and stamp it as the newest fix. A location event whose payload is not the
+// expected shape is skipped entirely (connectivity was already updated) rather than
+// treated as a retryable error — redelivery cannot change its shape.
+func (sp *StateProcessor) mergeLatestLocation(ctx context.Context, event *dmmodel.ResolvedEvent) error {
+	payload, ok := event.Payload.(*dmmodel.ResolvedLocationsPayload)
+	if !ok {
+		return nil
+	}
+	inputs := make([]model.LatestLocationInput, 0, len(payload.Entries))
+	for _, entry := range payload.Entries {
+		occurredAt := event.OccurredTime
+		if entry.OccurredTime != nil {
+			if t, err := time.Parse(time.RFC3339, *entry.OccurredTime); err == nil {
+				occurredAt = t
+			}
+		}
+		in := model.LatestLocationInput{
+			Latitude:     nullableFloat(entry.Latitude),
+			Longitude:    nullableFloat(entry.Longitude),
+			Elevation:    nullableFloat(entry.Elevation),
+			Accuracy:     nullableFloat(entry.Accuracy),
+			Speed:        nullableFloat(entry.Speed),
+			Heading:      nullableFloat(entry.Heading),
+			OccurredTime: occurredAt,
+		}
+		if !in.Latitude.Valid && !in.Longitude.Valid {
+			continue
+		}
+		inputs = append(inputs, in)
+	}
+	return sp.Api.MergeLatestLocations(ctx, event.SourceDeviceToken, inputs)
 }
 
 // Lifecycle callback that runs startup logic.

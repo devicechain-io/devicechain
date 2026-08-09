@@ -58,6 +58,22 @@ type LifecycleConfiguration struct {
 	// 0 keeps data forever, and no default can silently start dropping data.
 	RetentionDays int
 
+	// LocationRetentionDays overrides RetentionDays for the location_events
+	// hypertable alone. Unset (nil) inherits RetentionDays, so an operator who does
+	// not set it sees no change at all.
+	//
+	// It exists for a regulatory reason, not a technical one: a vehicle or worker
+	// track is personal data in a way a temperature series is not, and a tenant whose
+	// lawful basis for holding position is shorter than its basis for holding
+	// telemetry otherwise has only "delete everything or nothing" to offer an
+	// auditor. An explicit 0 is a real setting distinct from unset — it disables
+	// retention for location while leaving it on everywhere else.
+	//
+	// Note this is a WINDOW, not an erasure API: per-device/per-subject deletion is
+	// deliberately out of scope (see model.DataLifecyclePolicy for why, and for the
+	// tenant-level deletion that is already covered by construction).
+	LocationRetentionDays *int
+
 	// DisableRollupReads is a kill-switch for the continuous-aggregate read path
 	// (ADR-026): when false (default) bucketed measurement reads whose interval is a
 	// whole multiple of the rollup's base bucket are served from the pre-aggregated
@@ -107,6 +123,12 @@ func (c *EventManagementConfiguration) Validate() error {
 	}
 	if c.Lifecycle.RetentionDays < 0 {
 		return fmt.Errorf("lifecycle.retentionDays cannot be negative, got %d", c.Lifecycle.RetentionDays)
+	}
+	// nil is the "inherit RetentionDays" case and is always valid; only a supplied
+	// value is range-checked, and a negative one is the same typo class as above.
+	if c.Lifecycle.LocationRetentionDays != nil && *c.Lifecycle.LocationRetentionDays < 0 {
+		return fmt.Errorf("lifecycle.locationRetentionDays cannot be negative, got %d",
+			*c.Lifecycle.LocationRetentionDays)
 	}
 	return nil
 }

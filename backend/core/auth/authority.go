@@ -107,6 +107,27 @@ const (
 	EventRead Authority = "event:read"
 	StateRead Authority = "state:read"
 
+	// Position (event-management history + device-state's last-known projection).
+	//
+	// 🔴 SEPARATE FROM EventRead ON PURPOSE, and the separation only works while the
+	// read-only baseline does NOT grant it. Every event read is otherwise gated on a
+	// single event:read, which would make a device's POSITION carry exactly the same
+	// permission as its temperature. Knowing where a vehicle — or a person — is
+	// differs in kind from knowing how warm it is, and fleet and workforce tenants
+	// ask about that distinction immediately.
+	//
+	// It is deliberately absent from viewerAuthorities. Putting it there would make
+	// the split ceremonial: every enabled member would receive it on top of their
+	// roles and nobody would ever have chosen to grant it. Note that it satisfies
+	// TestViewerAuthoritiesAreReadOnly trivially, since it ends in ":read" — that
+	// test constrains what MAY be in the baseline, never what must, so it cannot
+	// catch a later mistake here. The ABSENCE is the decision and it needs its own
+	// test.
+	//
+	// Adding it now is cheap; adding it once roles exist in the wild is a breaking
+	// change to every one of them.
+	LocationRead Authority = "location:read"
+
 	// Alarms (device-management, ADR-041). AlarmRead gates reading raised alarms;
 	// AlarmWrite gates the operator transitions (acknowledge, clear). Distinct from
 	// device:* because acknowledging an alarm is an operational action a monitoring
@@ -238,6 +259,7 @@ var vocabulary = map[Authority]Tiers{
 	DeviceWrite:       tenant,
 	EventRead:         tenant,
 	StateRead:         tenant,
+	LocationRead:      tenant,
 	AlarmRead:         tenant,
 	AlarmWrite:        tenant,
 	CommandRead:       tenant,

@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strconv"
 
@@ -174,6 +175,65 @@ func (r *LatestMeasurementResolver) OccurredTime() string {
 		return *s
 	}
 	return ""
+}
+
+// -----------------------
+// Latest location resolver
+// -----------------------
+
+type LatestLocationResolver struct {
+	M model.LatestLocation
+	S *SchemaResolver
+	C context.Context
+}
+
+func (r *LatestLocationResolver) Id() gql.ID {
+	return gql.ID(fmt.Sprint(r.M.ID))
+}
+
+func (r *LatestLocationResolver) CreatedAt() *string {
+	return util.FormatTime(r.M.CreatedAt)
+}
+
+func (r *LatestLocationResolver) UpdatedAt() *string {
+	return util.FormatTime(r.M.UpdatedAt)
+}
+
+func (r *LatestLocationResolver) DeletedAt() *string {
+	return util.FormatTime(r.M.DeletedAt.Time)
+}
+
+func (r *LatestLocationResolver) DeviceToken() string {
+	return r.M.DeviceToken
+}
+
+// The coordinates are nullable end to end: a fix reports only what its sensor
+// produced, and null must stay null rather than surfacing as 0 — the equator, sea
+// level, stationary and due north are all real values a consumer would believe.
+func (r *LatestLocationResolver) Latitude() *float64  { return nullFloat(r.M.Latitude) }
+func (r *LatestLocationResolver) Longitude() *float64 { return nullFloat(r.M.Longitude) }
+func (r *LatestLocationResolver) Elevation() *float64 { return nullFloat(r.M.Elevation) }
+func (r *LatestLocationResolver) Accuracy() *float64  { return nullFloat(r.M.Accuracy) }
+func (r *LatestLocationResolver) Speed() *float64     { return nullFloat(r.M.Speed) }
+func (r *LatestLocationResolver) Heading() *float64   { return nullFloat(r.M.Heading) }
+
+// OccurredTime is the fix's timestamp; it is a required field and always set.
+func (r *LatestLocationResolver) OccurredTime() string {
+	if s := util.FormatTime(r.M.OccurredTime); s != nil {
+		return *s
+	}
+	return ""
+}
+
+// nullFloat maps a nullable column to a nullable GraphQL Float. It returns a pointer
+// into a COPY, never into r.M — taking the address of a struct field here would let a
+// consumer's write reach the resolver's model.
+func nullFloat(v sql.NullFloat64) *float64 {
+	if !v.Valid {
+		return nil
+	}
+	f := v.Float64
+	return &f
 }
 
 // ------------------------------------
