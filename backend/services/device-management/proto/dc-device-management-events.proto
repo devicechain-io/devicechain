@@ -91,6 +91,17 @@ message PScopeMembership {
 	// time so the device-state presence projection can key a device by its transport-
 	// native identity without a hop back into device-management; empty when unset.
 	optional string external_id = 14;
+	// fence_set_version is the tenant's active geofence-set version at resolve time
+	// (ADR-078), naming the frozen snapshot of the fences that were live when the
+	// position was reported — so containment is replay-correct by construction rather
+	// than re-evaluated against whatever fences exist at replay time.
+	//
+	// 🔴 STAMPED ON LOCATION EVENTS ONLY: nothing but a position can enter a fence, so
+	// any other event type carries 0 here. A plain (non-optional) int32 is deliberate —
+	// 0 is a real answer meaning "this tenant had never created a fence", it is what
+	// every other event type must carry, and proto3 omits it from the wire, so there is
+	// nothing for an `optional` presence bit to distinguish.
+	int32 fence_set_version = 15;
 }
 
 /**

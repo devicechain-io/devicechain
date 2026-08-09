@@ -388,6 +388,65 @@ type DetectionRuleSearchResults {
     pagination: SearchResultsPagination!
 }
 
+# An authored geofence: a region a device's reported position can be tested against by a
+# DETECT rule, which names it by token. Geofencing is evaluated in Go by the detection
+# engine, never in SQL — geometry is an opaque GeoJSON document here, with no spatial
+# column, no spatial index and no PostGIS.
+#
+# The reason is replay determinism, not performance. A containment test issued at replay
+# time would answer against the fences that exist NOW rather than the fences that existed
+# when the position was reported. Instead, the tenant's active fence-set version is
+# stamped onto each resolved LOCATION event at resolve time (see currentFenceSetVersion),
+# so the fence set an event is evaluated against is frozen into the event itself. A fence
+# edit mints a new version; it is not a rule migration, and rules need not be republished.
+type GeoFence implements Model & TokenReference & NamedEntity & MetadataEntity {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    deletedAt: String
+    token: String!
+    name: String
+    description: String
+    # The geometry as a self-describing JSON document: a kind discriminator plus a GeoJSON
+    # geometry object, e.g.
+    # {"kind":"POLYGON_2D","geometry":{"type":"Polygon","coordinates":[[[lon,lat],...]]}}.
+    # Coordinates follow the platform-wide contract: WGS84 / EPSG:4326 decimal degrees.
+    geometry: String!
+    # The geometry kind, derived from the document above rather than stored separately.
+    # POLYGON_2D today; POLYGON_2_5D (polygon + altitude band) and VOXEL_3D are reserved
+    # names that are rejected on write until the engine can evaluate them. The kind belongs
+    # to the FENCE, not to the rule language — a rule asks whether a device is inside a
+    # fence, and that question does not change when the fence gains a third dimension.
+    kind: String!
+    metadata: String
+}
+
+# Data required to create or update a geofence. geometry is the JSON document described
+# above; it is validated on write (kind, GeoJSON shape, coordinate ranges, and a vertex
+# bound). Two limits are enforced at authoring time because nothing downstream can see
+# them: a fence may carry at most 512 positions, and a tenant at most 100 fences. The
+# publish-time rule cost gate estimates cost from the expression alone, so it cannot price
+# a containment call whose real cost is the fence's vertex count times the fences in scope.
+input GeoFenceCreateRequest {
+    token: String!
+    name: String
+    description: String
+    geometry: String!
+    metadata: String
+}
+
+# Criteria used when searching for geofences.
+input GeoFenceSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+}
+
+# Search results returned from geofence query.
+type GeoFenceSearchResults {
+    results: [GeoFence!]!
+    pagination: SearchResultsPagination!
+}
+
 # A raised alarm (ADR-041) — the operational alarm object. Raised when a DETECT rule's
 # condition fires (ADR-057, via the contributor-set integrator), keyed by (originator,
 # alarmKey): there is at most one live alarm per key, so re-crossings dedup into the
@@ -1325,6 +1384,17 @@ type Query {
     detectionRulesByToken(tokens: [String!]!): [DetectionRule!]!
     # List detection rules that meet criteria.
     detectionRules(criteria: DetectionRuleSearchCriteria!): DetectionRuleSearchResults!
+    # Find geofences by unique id.
+    geoFencesById(ids: [ID!]!): [GeoFence!]!
+    # Find geofences by unique token.
+    geoFencesByToken(tokens: [String!]!): [GeoFence!]!
+    # List geofences that meet criteria.
+    geoFences(criteria: GeoFenceSearchCriteria!): GeoFenceSearchResults!
+    # The tenant's active fence-set version — the number stamped onto resolved location
+    # events, naming the frozen snapshot of the fences live at that moment. Any fence
+    # change (create, edit, delete) mints the next one. 0 means the tenant has never had a
+    # fence, which is distinct from a minted version whose fence set happens to be empty.
+    currentFenceSetVersion: Int!
     # Find raised alarms by unique id.
     alarmsById(ids: [ID!]!): [Alarm!]!
     # Find raised alarms by unique token.
@@ -1472,6 +1542,12 @@ type Mutation {
     updateDetectionRule(token: String!, request: DetectionRuleCreateRequest!): DetectionRule!
     # Delete a single detection rule.
     deleteDetectionRule(token: String!): Boolean!
+    # Create a new geofence.
+    createGeoFence(request: GeoFenceCreateRequest!): GeoFence!
+    # Update an existing geofence.
+    updateGeoFence(token: String!, request: GeoFenceCreateRequest!): GeoFence!
+    # Delete a single geofence.
+    deleteGeoFence(token: String!): Boolean!
     # Acknowledge a raised alarm (operator action). The acknowledging identity is the
     # authenticated subject, recorded server-side — not a client-supplied value.
     acknowledgeAlarm(token: String!): Alarm!

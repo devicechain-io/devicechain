@@ -583,10 +583,13 @@ func MarshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
 		ProfileVersionToken: optionalString(event.ProfileVersionToken),
 		ScopeMemberships:    memberships,
 		ExternalId:          optionalString(event.ExternalId),
-		OccurredTime:        event.OccurredTime.Format(time.RFC3339Nano),
-		ProcessedTime:       event.ProcessedTime.Format(time.RFC3339Nano),
-		EventType:           int64(event.EventType),
-		Payload:             pybytes,
+		// The geofence stamp (ADR-078). Carried straight through: it is 0 on every event
+		// type but Location, and proto3 simply omits a zero scalar from the wire.
+		FenceSetVersion: event.FenceSetVersion,
+		OccurredTime:    event.OccurredTime.Format(time.RFC3339Nano),
+		ProcessedTime:   event.ProcessedTime.Format(time.RFC3339Nano),
+		EventType:       int64(event.EventType),
+		Payload:         pybytes,
 	}
 
 	// Marshal event to bytes.
@@ -647,6 +650,7 @@ func UnmarshalResolvedEvent(encoded []byte) (*model.ResolvedEvent, error) {
 		ProfileVersionToken: pbevent.GetProfileVersionToken(),
 		ScopeMemberships:    memberships,
 		ExternalId:          pbevent.GetExternalId(),
+		FenceSetVersion:     pbevent.GetFenceSetVersion(),
 		OccurredTime:        occurred,
 		ProcessedTime:       processed,
 		EventType:           esmodel.EventType(pbevent.EventType),

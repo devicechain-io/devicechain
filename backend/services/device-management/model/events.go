@@ -123,10 +123,23 @@ type ResolvedEvent struct {
 	// at the instant it happened, never re-queried on replay). Empty when no rule
 	// references any group the device or its anchors belong to (the pay-nothing case).
 	ScopeMemberships []GroupRef
-	OccurredTime     time.Time
-	ProcessedTime    time.Time
-	EventType        esmodel.EventType
-	Payload          interface{}
+	// FenceSetVersion denormalizes, at resolve time, the tenant's ACTIVE geofence-set
+	// version (ADR-078) — the version whose frozen snapshot names the fences that were
+	// live at the instant this event happened. Geofence containment is therefore
+	// replay-correct BY CONSTRUCTION, the same way ScopeMemberships makes group scope
+	// replay-correct: the fence set is frozen into the immutable event, never re-queried
+	// against whatever fences exist at replay time.
+	//
+	// 🔴 STAMPED ON LOCATION EVENTS ONLY, and that restriction is the point rather than an
+	// optimization. Nothing but a position can enter or leave a fence, so stamping a
+	// measurement or a presence transition would put a version on rows that can never use
+	// it — and once such a row exists, the next reader has to guess whether the field is
+	// meaningful there. 0 on a location event means the tenant had never created a fence.
+	FenceSetVersion int32
+	OccurredTime    time.Time
+	ProcessedTime   time.Time
+	EventType       esmodel.EventType
+	Payload         interface{}
 }
 
 // GroupRef is one rule-scoped dynamic-group version an event is stamped as belonging

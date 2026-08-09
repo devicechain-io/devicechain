@@ -90,6 +90,10 @@ type captureEvictor struct {
 	relSources         [][]uint
 	membershipEvicts   []membershipEvict
 	scopedGroupsEvicts int
+	// fenceSetEvicts counts EvictFenceSetVersion calls (ADR-078). Shared by the geofence
+	// tests, which assert every fence mutation evicts exactly once — the fence-set version
+	// rides in the cached ProfileScope, so a missed eviction keeps stamping the old one.
+	fenceSetEvicts int
 }
 
 func (c *captureEvictor) EvictEntityDelete(_ context.Context, etype entity.Type, id uint, token string, sources []uint) {
@@ -106,6 +110,10 @@ func (c *captureEvictor) EvictMemberships(_ context.Context, entityType string, 
 
 func (c *captureEvictor) EvictScopedGroupsExist(_ context.Context) {
 	c.scopedGroupsEvicts++
+}
+
+func (c *captureEvictor) EvictFenceSetVersion(_ context.Context) {
+	c.fenceSetEvicts++
 }
 
 // Deleting an entity evicts the hot-path caches (ADR-044 F2): the deleted device's
