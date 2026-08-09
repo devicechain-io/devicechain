@@ -109,6 +109,32 @@ func (capi *CachedApi) EvictScopedGroupsExist(ctx context.Context) {
 	_ = capi.caches.ScopedGroupsExist.Delete(ctx, tenant)
 }
 
+// EvictFenceSetVersion satisfies model.CacheEvictor (ADR-078): a geofence create,
+// update or delete minted a new tenant fence-set version, and that version is carried
+// in the cached ProfileScope, so every device type of the tenant holds a stale copy.
+//
+// 🔴 THIS FANS OUT ACROSS THE TENANT'S DEVICE TYPES BECAUSE THE VERSION IS TENANT-WIDE
+// WHILE ITS CACHE KEY IS PER-TYPE. That mismatch is the deliberate cost of reusing the
+// resolve path's existing lookup instead of adding a second cache: the fan-out runs once
+// per authoring action over a set measured in tens, while the alternative would add a
+// per-event cache read and a second bucket to keep coherent. Missing a type is bounded
+// by the ProfileScope cache TTL and is stale-but-coherent (see the interface comment),
+// which is why a read failure here is swallowed rather than surfaced — the fence write
+// has already committed and must not be reported as failed over a cache sweep.
+func (capi *CachedApi) EvictFenceSetVersion(ctx context.Context) {
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		return
+	}
+	typeIds, err := capi.Api.deviceTypeIdsForTenant(ctx)
+	if err != nil {
+		return
+	}
+	for _, typeId := range typeIds {
+		_ = capi.caches.ProfileScopeByType.Delete(ctx, profileScopeByTypeKey(tenant, typeId))
+	}
+}
+
 // AnyScopedGroups serves the resolver's pay-nothing gate (ADR-062 Decision 7) from a
 // per-tenant cache: whether the tenant has any rule-scoped group. A lookup without a
 // tenant in context bypasses the cache and goes straight to the DB.

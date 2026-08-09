@@ -215,3 +215,45 @@ func assertLocationEntry(t *testing.T, got model.ResolvedLocationEntry,
 	require.NotNil(t, got.OccurredTime, "occurred time missing")
 	assert.Equal(t, occurred, *got.OccurredTime, "occurred time")
 }
+
+// The geofence stamp (ADR-078) must survive the wire, or event-processing has no way to
+// know which fence set an event was resolved against and geofence replay silently
+// degrades to "whatever fences exist now".
+//
+// The measurement half is the anchor: with only the location assertion, a marshal that
+// dropped the field entirely would still fail — but a marshal that stamped every event
+// would pass, and stamping every event is the specific mistake this field's LOCATION-only
+// rule exists to prevent.
+func TestResolvedEventRoundTripCarriesFenceSetVersion(t *testing.T) {
+	occurred := "2026-08-09T14:32:07.125Z"
+	location := &model.ResolvedEvent{
+		Source:            "test-source",
+		SourceDeviceToken: "TEST-123",
+		EventType:         esmodel.Location,
+		FenceSetVersion:   19,
+		Payload: &model.ResolvedLocationsPayload{
+			Entries: []model.ResolvedLocationEntry{{Latitude: s("33.749"), Longitude: s("-84.388"), OccurredTime: &occurred}},
+		},
+	}
+	encoded, err := MarshalResolvedEvent(location)
+	require.NoError(t, err)
+	decoded, err := UnmarshalResolvedEvent(encoded)
+	require.NoError(t, err)
+	assert.Equal(t, int32(19), decoded.FenceSetVersion, "the fence set version did not survive the wire")
+
+	measurement := &model.ResolvedEvent{
+		Source:            "test-source",
+		SourceDeviceToken: "TEST-123",
+		EventType:         esmodel.Measurement,
+		Payload: &model.ResolvedMeasurementsPayload{
+			Entries: []model.ResolvedMeasurementsEntry{{
+				Entries: []model.ResolvedMeasurementEntry{{Name: "temperature", Value: "42"}},
+			}},
+		},
+	}
+	mencoded, err := MarshalResolvedEvent(measurement)
+	require.NoError(t, err)
+	mdecoded, err := UnmarshalResolvedEvent(mencoded)
+	require.NoError(t, err)
+	assert.Equal(t, int32(0), mdecoded.FenceSetVersion, "a measurement event arrived carrying a fence set version")
+}

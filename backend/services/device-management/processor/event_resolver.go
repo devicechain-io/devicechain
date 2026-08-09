@@ -116,6 +116,18 @@ func (rez *EventResolver) MergeToResolveEvent(device *model.Device, anchors []mo
 		EventType:           event.EventType,
 		Payload:             rezPayload,
 	}
+	// The geofence stamp (ADR-078), at the same site and for the same reason as
+	// ProfileVersionToken above: the fence set an event is evaluated against is frozen
+	// into the event, so a replay a week later answers containment against the fences
+	// that were live when the position was reported rather than the ones that exist now.
+	//
+	// 🔴 LOCATION ONLY. Nothing but a position can enter or leave a fence. This is the one
+	// line that stops the stamp spreading to every event type, and it is guarded by a test
+	// that anchors a location event carrying a version against sibling event types that
+	// must not — an assertion on the absence alone would pass for the wrong reasons.
+	if event.EventType == esmodel.Location {
+		resolved.FenceSetVersion = scope.FenceSetVersion
+	}
 	return &EventResolutionResults{Device: device, Resolved: resolved}
 }
 

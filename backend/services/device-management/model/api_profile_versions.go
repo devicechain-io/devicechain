@@ -461,6 +461,18 @@ func (api *Api) activeProfileSnapshot(ctx context.Context, profileId uint) (*Pro
 type ProfileScope struct {
 	DeviceTypeToken     string
 	ProfileVersionToken string
+	// FenceSetVersion is the tenant's ACTIVE geofence-set version at resolve time
+	// (ADR-078), stamped onto resolved LOCATION events only. It rides here rather than in
+	// a cache of its own precisely because the resolve path already fetches this struct
+	// once per event: adding a field costs nothing on the hot path, while a second
+	// per-tenant lookup would be a second cache to keep coherent. The price is that a
+	// fence change must evict the scope of every device type of the tenant, which is an
+	// authoring-time fan-out over a small set (CachedApi.EvictFenceSetVersion).
+	//
+	// It is NOT part of the "rule-scoping identity" the rest of this struct denormalizes,
+	// and deliberately so: it changes on a fence edit, which is not a profile publish.
+	// 0 means the tenant has never had a fence.
+	FenceSetVersion int32
 }
 
 // ProfileScopeByDeviceType resolves a device type to its ProfileScope (ADR-051).
@@ -471,14 +483,22 @@ type ProfileScope struct {
 // unpublished/absent profile yields an empty ProfileVersionToken rather than an
 // error: the device simply has no resolvable rules.
 func (api *Api) ProfileScopeByDeviceType(ctx context.Context, deviceTypeId uint) (*ProfileScope, error) {
+	// The fence-set version (ADR-078) is resolved FIRST and on every path, including the
+	// "no such device type" early return below. A device whose type has been deleted still
+	// reports positions, and stamping it with 0 would claim the tenant has no fences when
+	// it may have a hundred — a lie that survives into the immutable event.
+	fenceSetVersion, err := api.CurrentFenceSetVersion(ctx)
+	if err != nil {
+		return nil, err
+	}
 	types, err := api.DeviceTypesById(ctx, []uint{deviceTypeId})
 	if err != nil {
 		return nil, err
 	}
 	if len(types) == 0 {
-		return &ProfileScope{}, nil
+		return &ProfileScope{FenceSetVersion: fenceSetVersion}, nil
 	}
-	scope := &ProfileScope{DeviceTypeToken: types[0].Token}
+	scope := &ProfileScope{DeviceTypeToken: types[0].Token, FenceSetVersion: fenceSetVersion}
 	if types[0].ProfileId == nil {
 		return scope, nil
 	}

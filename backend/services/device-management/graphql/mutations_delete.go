@@ -152,6 +152,16 @@ func (r *SchemaResolver) DeleteDetectionRule(ctx context.Context, args struct{ T
 	return r.GetApi(ctx).DeleteDetectionRule(ctx, args.Token)
 }
 
+// Delete a single geofence. The delete mints a new fence-set version like any other
+// fence change — a removed fence changes what containment answers, so events resolved
+// after it must not keep naming a snapshot that still contains it.
+func (r *SchemaResolver) DeleteGeoFence(ctx context.Context, args struct{ Token string }) (bool, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return false, err
+	}
+	return r.GetApi(ctx).DeleteGeoFence(ctx, args.Token)
+}
+
 // Delete a single provisioning profile.
 func (r *SchemaResolver) DeleteProvisioningProfile(ctx context.Context, args struct{ Token string }) (bool, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
