@@ -11,6 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	util "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-user-management/basemap"
 	"github.com/devicechain-io/dc-user-management/branding"
 	"github.com/devicechain-io/dc-user-management/settings"
 )
@@ -103,6 +104,15 @@ func (r *SettingsResolver) SetSetting(ctx context.Context, args struct {
 			return nil, err
 		}
 	}
+	// Same reasoning for the basemap default (ADR-079), with one addition: this value
+	// is served to every non-overriding TENANT, so an unvalidated one would put a
+	// malformed tile template — or an uncredited tile source — on every map in the
+	// instance at once.
+	if args.Key == settings.KeyBasemapDefault {
+		if err := validateBasemapDefault(args.Value); err != nil {
+			return nil, err
+		}
+	}
 	eff, err := r.getSettingsService(ctx).Set(ctx, args.Key, []byte(args.Value), actingUser(ctx))
 	if err != nil {
 		return nil, err
@@ -134,6 +144,26 @@ func validateBrandingDefault(value string) error {
 		return fmt.Errorf("branding.default is not a valid branding object: %w", err)
 	}
 	return branding.Validate(b)
+}
+
+// validateBasemapDefault rejects a basemap.default value that is not a shape-valid,
+// rule-valid basemap override (ADR-079). DisallowUnknownFields so a typo'd key
+// surfaces instead of silently no-op'ing — the same gate the branding default gets,
+// and worth more here because a mistyped key would leave the operator staring at a
+// stored value that renders nothing.
+//
+// 🔴 Note what that does NOT cover: encoding/json matches names case-insensitively,
+// so `tileURL` is not an unknown field — it binds to TileURL and works. Only a
+// genuinely different key (`tile_url`) is refused. Pinned by
+// TestKeyCasingIsAcceptedBecauseTheJsonDecoderIsCaseInsensitive.
+func validateBasemapDefault(value string) error {
+	dec := json.NewDecoder(strings.NewReader(value))
+	dec.DisallowUnknownFields()
+	var b basemap.Basemap
+	if err := dec.Decode(&b); err != nil {
+		return fmt.Errorf("basemap.default is not a valid basemap object: %w", err)
+	}
+	return basemap.Validate(b)
 }
 
 // actingUser returns the authenticated caller's username for audit stamping, or

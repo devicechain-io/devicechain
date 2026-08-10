@@ -37,11 +37,15 @@ import { MAX_FENCE_VERTICES, type Vertex } from './geometry';
 
 // vi.mock factories are hoisted above the imports, so the doubles they close over
 // have to be created in a hoisted block or they are still in their TDZ.
-const { gqlMock, staged } = vi.hoisted(() => ({
+const { gqlMock, staged, tenantBasemap } = vi.hoisted(() => ({
   gqlMock: vi.fn(),
   // What the fake map will emit on its next click. The TEST supplies the ring;
   // the fake invents nothing.
   staged: { vertices: [] as { lng: number; lat: number }[] },
+  // The tenant's effective basemap, as the context would hand it over.
+  tenantBasemap: {
+    value: null as { tileUrl?: string | null; attribution?: string | null; centerLat?: number | null; centerLon?: number | null; zoom?: number | null } | null,
+  },
 }));
 
 vi.mock('@devicechain/client', async (importOriginal) => {
@@ -49,17 +53,42 @@ vi.mock('@devicechain/client', async (importOriginal) => {
   return { ...actual, gql: (...args: unknown[]) => gqlMock(...args) };
 });
 
+// The tenant basemap arrives through context in the real app. Only the HOOK is
+// faked — resolveBasemap/fallbackView above are the real ones, so the precedence
+// rules run for real here rather than being reimplemented by a double.
+vi.mock('@/auth/TenantProvider', () => ({
+  useTenantBasemap: () => tenantBasemap.value,
+}));
+
 // The fake reflects `disabled` and exposes `onClose` as a button. Both were
 // props the form silently failed to wire, and a fake that ignored them could not
 // have shown that — it would have made the form's omission invisible, which is
 // the exact failure mode this file's header warns about.
+//
+// 🔴 That is why EVERY prop the form is responsible for computing is reflected here,
+// including the ones no test asserted when they were added. `attribution` and the
+// opening camera were the next two to arrive (ADR-079); a fake that took `tileUrl`
+// alone would have let the form pass the tenant's credit line under a personal tile
+// URL, and nothing here would have noticed.
 vi.mock('./FenceMap', () => ({
-  FenceMap: ({ onChange, onClose, disabled, closed, tileUrl }: FenceMapProps) => (
+  FenceMap: ({
+    onChange,
+    onClose,
+    disabled,
+    closed,
+    tileUrl,
+    attribution,
+    initialCenter,
+    initialZoom,
+  }: FenceMapProps) => (
     <div
       data-testid="fake-map"
       data-disabled={String(!!disabled)}
       data-closed={String(!!closed)}
       data-tile-url={tileUrl ?? ''}
+      data-attribution={attribution ?? ''}
+      data-initial-center={initialCenter ? initialCenter.join(',') : ''}
+      data-initial-zoom={initialZoom === undefined ? '' : String(initialZoom)}
     >
       <button type="button" data-testid="fake-map-emit" onClick={() => onChange(staged.vertices)}>
         draw
@@ -79,6 +108,7 @@ afterEach(cleanup);
 beforeEach(() => {
   gqlMock.mockReset();
   staged.vertices = [];
+  tenantBasemap.value = null;
   // 🔴 The form seeds its basemap fields from localStorage AT MOUNT, so a test
   // that applies a tile URL would otherwise hand it to every test after it —
   // including ones asserting the no-basemap path. vitest.setup.ts installs a
@@ -519,5 +549,78 @@ describe('the edit hint', () => {
     staged.vertices = ROME;
     fireEvent.click(await screen.findByTestId('fake-map-emit'));
     expect(screen.getByTestId('fence-edit-hint')).toBeTruthy();
+  });
+});
+
+// ── The basemap cascade (ADR-079) ───────────────────────────────────────────
+//
+// The editor's own two fields are a PERSONAL override, kept in localStorage, sitting
+// on top of the tenant's basemap. What these assert is what the form hands the map —
+// the real resolveBasemap/fallbackView run underneath, so the precedence rules are
+// exercised rather than restated.
+
+const TENANT_TILES = 'https://tenant.example.invalid/{z}/{x}/{y}.png';
+const PERSONAL_TILES = 'https://personal.example.invalid/{z}/{x}/{y}.png';
+
+describe('the tenant basemap', () => {
+  it('is used when this browser has no personal override', async () => {
+    tenantBasemap.value = { tileUrl: TENANT_TILES, attribution: '© Tenant Tiles' };
+    render(<GeoFenceForm onDone={vi.fn()} />);
+
+    const fake = await screen.findByTestId('fake-map');
+    expect(fake.getAttribute('data-tile-url')).toBe(TENANT_TILES);
+    expect(fake.getAttribute('data-attribution')).toBe('© Tenant Tiles');
+  });
+
+  it('is overridden by this browser’s own tile URL', async () => {
+    tenantBasemap.value = { tileUrl: TENANT_TILES, attribution: '© Tenant Tiles' };
+    window.localStorage.setItem('dc.geofence.tileUrl', PERSONAL_TILES);
+    window.localStorage.setItem('dc.geofence.tileAttribution', '© Mine');
+    render(<GeoFenceForm onDone={vi.fn()} />);
+
+    const fake = await screen.findByTestId('fake-map');
+    expect(fake.getAttribute('data-tile-url')).toBe(PERSONAL_TILES);
+    expect(fake.getAttribute('data-attribution')).toBe('© Mine');
+  });
+
+  // 🔴 The licence rule, at the surface an author actually types into. Pasting a tile
+  // URL into the personal field must not leave the TENANT's credit line under it.
+  it('does not keep the tenant credit line under a personal tile URL', async () => {
+    tenantBasemap.value = { tileUrl: TENANT_TILES, attribution: '© Tenant Tiles' };
+    window.localStorage.setItem('dc.geofence.tileUrl', PERSONAL_TILES);
+    render(<GeoFenceForm onDone={vi.fn()} />);
+
+    const fake = await screen.findByTestId('fake-map');
+    expect(fake.getAttribute('data-tile-url')).toBe(PERSONAL_TILES);
+    expect(fake.getAttribute('data-attribution')).toBe('');
+  });
+
+  it('opens a NEW fence at the tenant centre, in [longitude, latitude] order', async () => {
+    tenantBasemap.value = { tileUrl: TENANT_TILES, attribution: '© T', centerLat: 33.7468, centerLon: -84.3903, zoom: 12 };
+    render(<GeoFenceForm onDone={vi.fn()} />);
+
+    const fake = await screen.findByTestId('fake-map');
+    expect(fake.getAttribute('data-initial-center')).toBe('-84.3903,33.7468');
+    expect(fake.getAttribute('data-initial-zoom')).toBe('12');
+  });
+
+  // 🔴 A fallback, never an override. Editing a fence in Rome from a tenant centred on
+  // Atlanta must not open on Atlanta — the existing ring's bounds win.
+  it('does NOT apply the tenant centre to a fence that already has a ring', async () => {
+    tenantBasemap.value = { tileUrl: TENANT_TILES, attribution: '© T', centerLat: 33.7468, centerLon: -84.3903, zoom: 12 };
+    render(<GeoFenceForm entity={fence({ geometry: polygonDoc([OUTER_RING]) })} onDone={vi.fn()} />);
+
+    const fake = await screen.findByTestId('fake-map');
+    expect(fake.getAttribute('data-initial-center')).toBe('');
+  });
+
+  // The counterweight: with nothing configured anywhere, the editor behaves exactly as
+  // it did before this feature existed.
+  it('passes no basemap at all when neither tier has one', async () => {
+    render(<GeoFenceForm onDone={vi.fn()} />);
+
+    const fake = await screen.findByTestId('fake-map');
+    expect(fake.getAttribute('data-tile-url')).toBe('');
+    expect(fake.getAttribute('data-initial-center')).toBe('');
   });
 });

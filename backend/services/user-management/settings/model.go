@@ -37,6 +37,18 @@ const KeyTokenMasks = "entity.token_masks"
 // un-rebranded tenant keeps the shipped palette rather than a re-derived one.
 const KeyBrandingDefault = "branding.default"
 
+// KeyBasemapDefault is the instance-wide basemap default (ADR-079): the JSON
+// basemap shape (tileUrl/attribution/centerLat/centerLon/zoom) an operator can set
+// platform-wide, sitting below any per-tenant override. Same cascade shape as the
+// branding default above, and treated as opaque JSON here — the value shape and its
+// rules are owned by the basemap package.
+//
+// 🔴 The code default is EMPTY, and that is a decision rather than a placeholder.
+// Shipping a tile source would point every self-hosted instance at a public tile
+// service that never agreed to serve it, and would credit a provider nobody chose.
+// An instance with no basemap draws positions on a plain panel and says why.
+const KeyBasemapDefault = "basemap.default"
+
 // Definition is a known system setting: its key, its code default value, and a
 // human description for the settings UI. The set of Definitions is the whole
 // vocabulary — a write to an unknown key is rejected (fail-closed, like typed
@@ -60,6 +72,11 @@ func Definitions() []Definition {
 			Key:         KeyBrandingDefault,
 			Default:     json.RawMessage(`{"title":"DeviceChain","logoMaxHeight":28}`),
 			Description: `Instance-wide white-labeling default (ADR-038): title, logo, logoMaxHeight, and hex colors (primary/background/foreground/accent). Sits below any per-tenant override. Omitted colors keep the console's built-in palette.`,
+		},
+		{
+			Key:         KeyBasemapDefault,
+			Default:     json.RawMessage(`{}`),
+			Description: `Instance-wide basemap default (ADR-079): tileUrl, attribution, and a fallback view (centerLat/centerLon/zoom). Sits below any per-tenant override. tileUrl and attribution resolve TOGETHER — a tenant that sets its own tile URL never inherits this attribution — and neither may be set without the other. Empty by default: the platform ships no tile source.`,
 		},
 	}
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-user-management/basemap"
 	"github.com/devicechain-io/dc-user-management/branding"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/google/uuid"
@@ -405,6 +406,36 @@ func (m *Manager) SetTenantBranding(ctx context.Context, token string, b brandin
 		"branding_background":      b.Background,
 		"branding_foreground":      b.Foreground,
 		"branding_accent":          b.Accent,
+	}
+	if err := m.iam.UpdateTenantFields(ctx, t, fields); err != nil {
+		return nil, err
+	}
+	return m.iam.TenantByToken(ctx, token)
+}
+
+// SetTenantBasemap writes the caller's own tenant basemap override (ADR-079), keyed
+// by the tenant token from the caller's access token — so it is inherently
+// self-scoped, exactly like SetTenantBranding above. It is a full replace of the five
+// basemap columns: a nil field CLEARS that column, re-inheriting the operator's
+// `basemap.default`.
+//
+// 🔴 Full replace is the RIGHT semantics here specifically because the tile source is
+// atomic. A partial update that could set tileUrl while leaving attribution untouched
+// is the one shape this feature must not have: it would leave a stored credit line
+// describing a provider the tenant just stopped using. The whole value moves at once,
+// and basemap.Validate has already refused any combination where one half is set
+// without the other.
+func (m *Manager) SetTenantBasemap(ctx context.Context, token string, b basemap.Basemap) (*iam.Tenant, error) {
+	t, err := m.iam.TenantByToken(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	fields := map[string]any{
+		"basemap_tile_url":    b.TileURL,
+		"basemap_attribution": b.Attribution,
+		"basemap_center_lat":  b.CenterLat,
+		"basemap_center_lon":  b.CenterLon,
+		"basemap_zoom":        b.Zoom,
 	}
 	if err := m.iam.UpdateTenantFields(ctx, t, fields); err != nil {
 		return nil, err

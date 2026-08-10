@@ -38,6 +38,51 @@ type Tenant {
     # the default). The editor reads this to show set-vs-inherited per field; it is
     # NOT for applying to the shell. Self-scoped, like `branding`.
     brandingOverride: TenantBranding!
+    # The tenant's EFFECTIVE basemap: its override folded over the operator's
+    # `basemap.default`. Always present; every field is null when nothing sets it,
+    # and the surface then draws positions on a plain panel and says why — the
+    # platform ships no default tile source. Requires no authority beyond being a
+    # member, like `branding`: gating it would blank the map for the people who
+    # need it.
+    basemap: TenantBasemap!
+    # The tenant's RAW basemap override — the stored columns with no cascade, so a
+    # null field means "this tenant inherits" (vs `basemap`, which fills it from the
+    # operator default). The editor reads this to show set-vs-inherited.
+    basemapOverride: TenantBasemap!
+}
+
+# The tile source a tenant's maps draw on, and the view they open at when there is
+# nothing to fit to.
+#
+# tileUrl is a raster tile TEMPLATE ({z}/{x}/{y}, or {bbox-epsg-3857}, or {quadkey})
+# and attribution is the credit line its provider's licence requires. The two
+# RESOLVE TOGETHER: a tenant that names its own tile source never inherits the
+# operator's credit line, because crediting one provider for another's tiles is a
+# licence violation rather than a cosmetic mismatch. Neither may be set without the
+# other.
+#
+# centerLat/centerLon/zoom are a FALLBACK view, not an override — a surface that has
+# something of its own to fit to (an existing fence's bounds, a widget's markers)
+# fits it and ignores these.
+type TenantBasemap {
+    tileUrl: String
+    attribution: String
+    centerLat: Float
+    centerLon: Float
+    zoom: Float
+}
+
+# A basemap override for setTenantBasemap. Every field is optional and this is a full
+# replace: a null field CLEARS that override, re-inheriting the operator default.
+# Validated server-side (fail-closed): an https tile template carrying a real
+# placeholder, a non-empty attribution whose only permitted markup is
+# <a href="https://…">…</a>, in-range coordinates, and a zoom between 0 and 24.
+input TenantBasemapInput {
+    tileUrl: String
+    attribution: String
+    centerLat: Float
+    centerLon: Float
+    zoom: Float
 }
 
 # The resolved white-labeling applied to the console shell (ADR-038). A null field
@@ -179,6 +224,13 @@ type Mutation {
     # /branding/logo (ADR-058); both paths garbage-collect a replaced object-store
     # logo. A blob storage reference is never accepted here (clients never hold one).
     setTenantLogo(logo: String): Tenant!
+    # Set the caller's OWN tenant basemap (ADR-079): tile source, credit line, and
+    # fallback view. Self-scoped to the tenant in the access token; requires
+    # basemap:write — NOT branding:write, because the tile URL carries the tenant's
+    # own provider credential and neither grant should imply the other. A full
+    # replace: a null field clears that override. Returns the tenant with its freshly
+    # resolved basemap so the editing client can write it straight into cache.
+    setTenantBasemap(input: TenantBasemapInput!): Tenant!
 }
 
 schema {

@@ -112,35 +112,64 @@ export async function refresh(refreshToken: string): Promise<AuthToken> {
 // the access token, so it takes no arguments. Backs the console's tenant header
 // (name + token); the shape will grow to carry branding.
 
-// The query and the setTenantBranding mutation select an identical Tenant shape
-// (token/name/description + the resolved branding) so the editor can write the
-// mutation result straight into the tenant cache (ADR-038 §1.2).
+// The query and every tenant mutation select the SAME Tenant shape through this one
+// fragment, so a mutation result can be written straight into the tenant cache
+// (ADR-038 §1.2) and no surface can drift from the others.
+//
+// 🔴 It is a FRAGMENT rather than four hand-copied selection sets, and that is a
+// direct lesson from #704: the console was deleting fields on save precisely because
+// the same selection existed in several places and a new field landed in some of
+// them. A field added here reaches the query and all three mutations at once, or it
+// reaches none of them.
+// Declared as a bare call rather than bound to a name: codegen finds it by scanning
+// for graphql() templates, and every document below refers to it by its GraphQL name,
+// so a binding would only be an unused local.
+graphql(`
+  fragment TenantFields on Tenant {
+    token
+    name
+    description
+    branding {
+      title
+      logo
+      logoMaxHeight
+      primary
+      background
+      foreground
+      accent
+      updatedAt
+    }
+    brandingOverride {
+      title
+      logo
+      logoMaxHeight
+      primary
+      background
+      foreground
+      accent
+      updatedAt
+    }
+    basemap {
+      tileUrl
+      attribution
+      centerLat
+      centerLon
+      zoom
+    }
+    basemapOverride {
+      tileUrl
+      attribution
+      centerLat
+      centerLon
+      zoom
+    }
+  }
+`);
+
 const CURRENT_TENANT = graphql(`
   query CurrentTenant {
     tenant {
-      token
-      name
-      description
-      branding {
-        title
-        logo
-        logoMaxHeight
-        primary
-        background
-        foreground
-        accent
-        updatedAt
-      }
-      brandingOverride {
-        title
-        logo
-        logoMaxHeight
-        primary
-        background
-        foreground
-        accent
-        updatedAt
-      }
+      ...TenantFields
     }
   }
 `);
@@ -160,29 +189,7 @@ export type TenantBranding = CurrentTenant['branding'];
 const SET_TENANT_BRANDING = graphql(`
   mutation SetTenantBranding($input: TenantBrandingInput!) {
     setTenantBranding(input: $input) {
-      token
-      name
-      description
-      branding {
-        title
-        logo
-        logoMaxHeight
-        primary
-        background
-        foreground
-        accent
-        updatedAt
-      }
-      brandingOverride {
-        title
-        logo
-        logoMaxHeight
-        primary
-        background
-        foreground
-        accent
-        updatedAt
-      }
+      ...TenantFields
     }
   }
 `);
@@ -220,29 +227,7 @@ export async function setTenantBranding(input: TenantBrandingInput): Promise<Cur
 const SET_TENANT_LOGO = graphql(`
   mutation SetTenantLogo($logo: String) {
     setTenantLogo(logo: $logo) {
-      token
-      name
-      description
-      branding {
-        title
-        logo
-        logoMaxHeight
-        primary
-        background
-        foreground
-        accent
-        updatedAt
-      }
-      brandingOverride {
-        title
-        logo
-        logoMaxHeight
-        primary
-        background
-        foreground
-        accent
-        updatedAt
-      }
+      ...TenantFields
     }
   }
 `);
@@ -250,6 +235,44 @@ const SET_TENANT_LOGO = graphql(`
 export async function setTenantLogo(logo: string | null): Promise<CurrentTenant> {
   const data = await gql('user-management', SET_TENANT_LOGO, { logo });
   return data.setTenantLogo;
+}
+
+// The tenant's EFFECTIVE basemap: its own override folded over the operator default.
+// Every field may be null — the platform ships no tile source, so an instance nobody
+// has configured resolves to nothing and the surfaces draw a plain panel.
+export type TenantBasemap = CurrentTenant['basemap'];
+
+// Self-service basemap for the caller's OWN tenant (requires basemap:write — NOT
+// branding:write, because the tile URL carries the tenant's provider credential).
+// Returns the tenant with a freshly-resolved basemap for an immediate cache write.
+const SET_TENANT_BASEMAP = graphql(`
+  mutation SetTenantBasemap($input: TenantBasemapInput!) {
+    setTenantBasemap(input: $input) {
+      ...TenantFields
+    }
+  }
+`);
+
+// A basemap override to submit. Every field is optional and this is a FULL REPLACE:
+// an omitted field clears that override.
+//
+// 🔴 `Required<>` on the argument of setTenantBasemap below is the #704 fix applied
+// up front: it makes each field mandatory AND strips `undefined`, so a caller that
+// forgets one does not compile rather than silently clearing it. Pass an explicit
+// null to clear.
+export interface TenantBasemapInput {
+  tileUrl: string | null;
+  attribution: string | null;
+  centerLat: number | null;
+  centerLon: number | null;
+  zoom: number | null;
+}
+
+export async function setTenantBasemap(
+  input: Required<TenantBasemapInput>,
+): Promise<CurrentTenant> {
+  const data = await gql('user-management', SET_TENANT_BASEMAP, { input });
+  return data.setTenantBasemap;
 }
 
 // uploadTenantLogo uploads a raster logo file to the object store (ADR-058 Tier-1)

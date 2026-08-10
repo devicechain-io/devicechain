@@ -26,11 +26,18 @@ import {
   type SelectionTarget,
   type SlotBinding,
 } from '@devicechain/dashboards';
-import { DashboardRenderer, useResolvedBindings, useSlotCandidates } from '@devicechain/widgets';
+import {
+  DashboardRenderer,
+  TenantBasemapProvider,
+  useResolvedBindings,
+  useSlotCandidates,
+} from '@devicechain/widgets';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import type { Basemap } from '@devicechain/client';
+
 import { errorMessage, loadDashboard, type Loaded } from './load';
-import { LOGIN, type Membership, SELECT_TENANT } from './queries';
+import { LOGIN, type Membership, SELECT_TENANT, TENANT_BASEMAP } from './queries';
 
 export default function App() {
   // The tenant access token, once signed in. Kept in state (to drive the UI) AND a
@@ -308,6 +315,7 @@ function View({
   useEffect(() => () => hub.disposeAll(), [hub]);
 
   const title = definition.title || 'Dashboard';
+  const basemap = useTenantBasemapQuery();
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -327,17 +335,45 @@ function View({
       </header>
 
       <main style={{ flex: '1 1 auto', minHeight: 0 }}>
-        <DashboardRenderer
-          definition={definition}
-          hub={hub}
-          actions={hub}
-          bindings={bindings}
-          select={select}
-          candidates={candidates}
-        />
+        <TenantBasemapProvider basemap={basemap}>
+          <DashboardRenderer
+            definition={definition}
+            hub={hub}
+            actions={hub}
+            bindings={bindings}
+            select={select}
+            candidates={candidates}
+          />
+        </TenantBasemapProvider>
       </main>
     </div>
   );
+}
+
+// useTenantBasemapQuery fetches the tenant's effective basemap once the viewer is
+// signed in, so a map widget on an embedded board draws on the same tiles it would in
+// the console.
+//
+// 🔴 It degrades to null and never surfaces an error. A basemap is decoration on top
+// of the data a viewer came for: failing the whole board because the tile source could
+// not be read would be a strictly worse outcome than a plain panel. The widget already
+// has a good answer for "no basemap" and says why.
+function useTenantBasemapQuery(): Basemap | null {
+  const [basemap, setBasemap] = useState<Basemap | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    gql('user-management', TENANT_BASEMAP)
+      .then((r) => {
+        if (!cancelled) setBasemap(r.tenant.basemap);
+      })
+      .catch(() => {
+        /* decoration, not data — see above */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return basemap;
 }
 
 // ── Presentational helpers (inline styles + CSS vars — no Tailwind/shadcn) ────

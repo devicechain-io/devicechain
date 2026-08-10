@@ -74,6 +74,7 @@ vi.mock('maplibre-gl', () => {
 });
 
 import type { LocationStreamState } from '../hooks';
+import { TenantBasemapProvider } from '../basemap-context';
 import { MapWidget } from './map';
 
 afterEach(cleanup);
@@ -391,6 +392,81 @@ describe('MapWidget — the empty and loading states', () => {
     const markers = screen.getAllByTestId('map-marker');
     expect(markers).toHaveLength(1);
     expect(markers[0].getAttribute('data-device')).toBe('dozer-1');
+  });
+});
+
+// ---- The tenant basemap (ADR-079) -------------------------------------------
+//
+// Precedence is per-widget override → tenant → plain panel. These drive the REAL
+// style document the widget hands MapLibre, so they see the tile URL and the credit
+// line the map would actually request — not just which branch was taken.
+
+const TENANT_TILES = 'https://tenant.example.invalid/{z}/{x}/{y}.png';
+
+function basemapOf(index = 0) {
+  return (m.maps[index].style as { sources: { basemap: { tiles: string[]; attribution?: string } } })
+    .sources.basemap;
+}
+
+describe('MapWidget — the tenant basemap', () => {
+  it('inherits the tenant tile source when the widget configures none', async () => {
+    render(
+      <TenantBasemapProvider basemap={{ tileUrl: TENANT_TILES, attribution: '© Tenant Tiles' }}>
+        <MapWidget widget={widget()} data={twoDevices()} />
+      </TenantBasemapProvider>,
+    );
+
+    await waitFor(() => expect(m.markers).toHaveLength(2));
+    expect(basemapOf().tiles).toEqual([TENANT_TILES]);
+    expect(basemapOf().attribution).toBe('© Tenant Tiles');
+  });
+
+  it('lets a per-widget tile source win over the tenant', async () => {
+    render(
+      <TenantBasemapProvider basemap={{ tileUrl: TENANT_TILES, attribution: '© Tenant Tiles' }}>
+        <MapWidget widget={widget({ tileUrl: TILE_URL, attribution: '© Example' })} data={twoDevices()} />
+      </TenantBasemapProvider>,
+    );
+
+    await waitFor(() => expect(m.markers).toHaveLength(2));
+    expect(basemapOf().tiles).toEqual([TILE_URL]);
+    expect(basemapOf().attribution).toBe('© Example');
+  });
+
+  // 🔴 The licence rule, asserted on the document MapLibre actually renders. A
+  // per-field fold would put "© Tenant Tiles" under tiles the tenant never served.
+  it('does not credit the tenant provider for a per-widget tile source', async () => {
+    render(
+      <TenantBasemapProvider basemap={{ tileUrl: TENANT_TILES, attribution: '© Tenant Tiles' }}>
+        <MapWidget widget={widget({ tileUrl: TILE_URL })} data={twoDevices()} />
+      </TenantBasemapProvider>,
+    );
+
+    await waitFor(() => expect(m.markers).toHaveLength(2));
+    expect(basemapOf().tiles).toEqual([TILE_URL]);
+    expect(basemapOf().attribution).toBeUndefined();
+  });
+
+  // The counterweight: the whole point of the plain panel is that it still means
+  // something. A provider that supplied a default would delete that state.
+  it('still draws the plain panel when no tier has a tile source', () => {
+    render(
+      <TenantBasemapProvider basemap={{ centerLat: 33.75, centerLon: -84.39, zoom: 10 }}>
+        <MapWidget widget={widget()} data={twoDevices()} />
+      </TenantBasemapProvider>,
+    );
+
+    expect(screen.getByTestId('map-plain-panel')).toBeTruthy();
+    expect(screen.getByTestId('map-no-tiles-note').textContent).toContain('No tile source configured');
+  });
+
+  // A host that installs no provider must behave exactly as it did before this
+  // feature existed — which is what makes widgetlab and the synthetic preview safe.
+  it('falls back to per-widget options with no provider at all', async () => {
+    render(<MapWidget widget={widget({ tileUrl: TILE_URL, attribution: '© Example' })} data={twoDevices()} />);
+
+    await waitFor(() => expect(m.markers).toHaveLength(2));
+    expect(basemapOf().tiles).toEqual([TILE_URL]);
   });
 });
 

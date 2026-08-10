@@ -27,6 +27,9 @@ export {
 } from './registry';
 export { pickSample, optBoolean, type WidgetProps, type WidgetComponent } from './widget';
 
+// The tenant basemap seam. A host installs the provider; map widgets read it.
+export { TenantBasemapProvider, useTenantBasemap } from './basemap-context';
+
 // The typed schema for each widget's options bag: what the renderer reads, at what type,
 // with what legal values. WidgetOptions<T> types code that BUILDS options;
 // validateWidgetOptions reports where a stored bag disagrees with the renderer.
