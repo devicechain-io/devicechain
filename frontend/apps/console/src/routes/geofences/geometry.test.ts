@@ -13,6 +13,7 @@ import {
   countPositions,
   fromGeometryDocument,
   isCloseGesture,
+  segmentsIntersect,
   roundCoord,
   toGeometryDocument,
   toVertex,
@@ -40,6 +41,21 @@ const VALID_RING = [
   [12.495, 41.9],
   [12.49, 41.89],
 ];
+
+/**
+ * n distinct vertices on an actual circle — convex, therefore simple.
+ *
+ * 🔴 The budget fixtures used to be `lng: 12.49 + i/1e6, lat: 41.89`, which is a
+ * straight LINE, not a ring. It passed every check that only counted positions,
+ * and only failed once something looked at the SHAPE. A fixture that is not the
+ * thing it claims to be will pass for as long as nothing asks.
+ */
+function circleOf(n: number): Vertex[] {
+  return Array.from({ length: n }, (_, i) => {
+    const theta = (2 * Math.PI * i) / n;
+    return { lng: 12.49 + 0.01 * Math.cos(theta), lat: 41.89 + 0.01 * Math.sin(theta) };
+  });
+}
 
 function ringOf(doc: string): number[][] {
   return JSON.parse(doc).geometry.coordinates[0];
@@ -161,19 +177,13 @@ describe('checkGeometry', () => {
   // vertex than the limit. A check written against vertices instead of
   // positions passes the first of these and fails the second.
   it('accepts a ring whose closed form is exactly at the limit', () => {
-    const vertices = Array.from({ length: MAX_FENCE_POSITIONS - 1 }, (_, i) => ({
-      lng: 12.49 + i / 1e6,
-      lat: 41.89,
-    }));
+    const vertices = circleOf(MAX_FENCE_POSITIONS - 1);
     expect(countPositions(vertices)).toBe(MAX_FENCE_POSITIONS);
     expect(checkGeometry(vertices).ok).toBe(true);
   });
 
   it('refuses the ring one vertex beyond it', () => {
-    const vertices = Array.from({ length: MAX_FENCE_POSITIONS }, (_, i) => ({
-      lng: 12.49 + i / 1e6,
-      lat: 41.89,
-    }));
+    const vertices = circleOf(MAX_FENCE_POSITIONS);
     const check = checkGeometry(vertices);
     expect(check.problem).toBe('tooManyPositions');
     // The reported number is what the wire would carry, not what was clicked —
@@ -228,11 +238,12 @@ describe('checkGeometry', () => {
     expect(checkGeometry([...TRIANGLE, TRIANGLE[0]]).problem).toBe('repeatedVertex');
   });
 
-  it('allows a repeat between NON-adjacent vertices, which is a different defect', () => {
-    // A pinched ring is refused by the engine but is not what this check is for;
-    // claiming it here would make the check's name a lie and mask the real gap.
+  it('attributes a NON-adjacent repeat to the crossing check, not to this one', () => {
+    // A pinched ring is refused — but by crossingEdges, not by the adjacency
+    // check, whose name would be a lie if it claimed this. Asserting the problem
+    // CODE rather than merely `ok === false` is what separates the two.
     const pinched: Vertex[] = [TRIANGLE[0], TRIANGLE[1], TRIANGLE[0], TRIANGLE[2]];
-    expect(checkGeometry(pinched).ok).toBe(true);
+    expect(checkGeometry(pinched).problem).toBe('selfIntersecting');
   });
 });
 
@@ -444,10 +455,8 @@ describe('MAX_FENCE_VERTICES', () => {
     // Ties the number the UI SHOWS to the number the checker ENFORCES. Without
     // this they are two independent constants that agree today by coincidence,
     // and the UI would go on offering a corner the server refuses.
-    const ring = (n: number) =>
-      Array.from({ length: n }, (_, i) => ({ lng: 12.49 + i / 1e6, lat: 41.89 }));
-    expect(checkGeometry(ring(MAX_FENCE_VERTICES)).ok).toBe(true);
-    expect(checkGeometry(ring(MAX_FENCE_VERTICES + 1)).ok).toBe(false);
+    expect(checkGeometry(circleOf(MAX_FENCE_VERTICES)).ok).toBe(true);
+    expect(checkGeometry(circleOf(MAX_FENCE_VERTICES + 1)).ok).toBe(false);
   });
 });
 
@@ -527,5 +536,175 @@ describe('boundsOf', () => {
         { lng: -0.2, lat: 51.4 },
       ]),
     ).toEqual([-0.2, 51.4, -0.12, 51.5]);
+  });
+});
+
+describe('self-intersection (planar approximation)', () => {
+  const bowtie: Vertex[] = [
+    { lng: 0, lat: 0 },
+    { lng: 1, lat: 1 },
+    { lng: 1, lat: 0 },
+    { lng: 0, lat: 1 },
+  ];
+
+  it('reports a bow-tie', () => {
+    expect(checkGeometry(bowtie).problem).toBe('selfIntersecting');
+  });
+
+  // 🔴 ADVISORY, NOT BLOCKING — and the distinction is load-bearing, so it is
+  // asserted rather than described. The planar test disagrees with the server's
+  // spherical one near the antimeridian, and it disagrees by refusing rings the
+  // server ACCEPTS. Gating the save on it would make any non-rectangular fence
+  // over Fiji or the Aleutians unsaveable with no override.
+  it('does not block the save, because the approximation can be wrong', () => {
+    expect(checkGeometry(bowtie).ok).toBe(true);
+  });
+
+  it('still blocks the save for problems that are NOT approximations', () => {
+    // The counterweight: without it, the assertion above would also pass against
+    // a checkGeometry that had stopped blocking anything at all.
+    expect(checkGeometry(bowtie.slice(0, 2)).ok).toBe(false);
+    expect(checkGeometry([bowtie[0], bowtie[0], bowtie[1], bowtie[2]]).ok).toBe(false);
+  });
+
+  it('reports a ring spanning the antimeridian, and still lets it be saved', () => {
+    // Measured against the real server predicate: this shape IS accepted there.
+    // Reading raw longitudes as planar x turns its 3°-wide edge into one sweeping
+    // 357° across the rest of the ring, so the client sees a crossing that is not
+    // there. This test exists to pin that the disagreement costs a WARNING and
+    // never a refusal.
+    const chevron: Vertex[] = [
+      { lng: 178, lat: 0 },
+      { lng: -179, lat: 0.5 },
+      { lng: 178, lat: 1 },
+      { lng: 177, lat: 1 },
+      { lng: 177, lat: 0.5 },
+      { lng: 177, lat: 0 },
+    ];
+    const check = checkGeometry(chevron);
+    expect(check.problem).toBe('selfIntersecting');
+    expect(check.ok).toBe(true);
+  });
+
+  it('accepts a convex ring', () => {
+    // The counterweight: without it, every refusal below could be satisfied by a
+    // check that calls everything self-intersecting.
+    const square: Vertex[] = [
+      { lng: 0, lat: 0 },
+      { lng: 1, lat: 0 },
+      { lng: 1, lat: 1 },
+      { lng: 0, lat: 1 },
+    ];
+    expect(checkGeometry(square).ok).toBe(true);
+  });
+
+  it('accepts a CONCAVE ring, which is legal and is the obvious false positive', () => {
+    // An L-shape. A naive crossing test that compared adjacent edges, or that
+    // treated a shared vertex as a crossing, would refuse this — and refusing a
+    // legal fence mid-draw is worse than the gap this check closes.
+    const ell: Vertex[] = [
+      { lng: 0, lat: 0 },
+      { lng: 2, lat: 0 },
+      { lng: 2, lat: 1 },
+      { lng: 1, lat: 1 },
+      { lng: 1, lat: 2 },
+      { lng: 0, lat: 2 },
+    ];
+    expect(checkGeometry(ell).ok).toBe(true);
+  });
+
+  it('sees a crossing on the CLOSING edge, not just between drawn edges', () => {
+    // 🔴 The wrap-around edge is the one a naive scan misses, and it is not
+    // hypothetical: a Go test fixture in this repo built a sawtooth whose closing
+    // edge ran back across the teeth, called itself a circle, and went unnoticed
+    // until an authoring gate started refusing self-intersecting rings.
+    //
+    // Longitude increases monotonically here, so no two DRAWN edges can cross;
+    // the only crossing is the closing edge running back across the zigzag.
+    const sawtooth: Vertex[] = [
+      { lng: 0, lat: 0 },
+      { lng: 1, lat: 1 },
+      { lng: 2, lat: 0 },
+      { lng: 3, lat: 1 },
+      { lng: 4, lat: 2 },
+    ];
+    // The closing edge runs y = x/2; edge (1,1)-(2,0) runs y = 2 - x. They meet at
+    // (1.333, 0.667), which lies inside both segments. Worked out rather than
+    // eyeballed, because a fixture that does not actually cross would make this
+    // test pass only while the check was broken.
+    expect(checkGeometry(sawtooth).problem).toBe('selfIntersecting');
+  });
+
+  it('refuses a ring pinched at a shared corner', () => {
+    const pinched: Vertex[] = [
+      { lng: 0, lat: 0 },
+      { lng: 1, lat: 0 },
+      { lng: 0.5, lat: 1 },
+      { lng: 1.5, lat: 1 },
+      { lng: 0.5, lat: 1 },
+      { lng: 0, lat: 1.5 },
+    ];
+    expect(checkGeometry(pinched).problem).toBe('selfIntersecting');
+  });
+
+  it('never reports a triangle, whose edges are all mutually adjacent', () => {
+    // Not a gap: with three edges every pair shares a vertex, so there is nothing
+    // a crossing scan could legitimately compare.
+    expect(checkGeometry(TRIANGLE).ok).toBe(true);
+  });
+
+  it('is checked AFTER the budget, so an over-limit ring costs no quadratic scan', () => {
+    // Ordering, asserted through the reported problem: a ring that is both
+    // over-limit and self-intersecting must report the cheap failure.
+    const many: Vertex[] = Array.from({ length: MAX_FENCE_POSITIONS }, (_, i) => ({
+      lng: i % 2 === 0 ? 0 : 1,
+      lat: (i % 60) * 0.01,
+    }));
+    expect(checkGeometry(many).problem).toBe('tooManyPositions');
+  });
+});
+
+describe('segmentsIntersect', () => {
+  const at = (lng: number, lat: number): Vertex => ({ lng, lat });
+
+  it('sees a proper crossing', () => {
+    expect(segmentsIntersect(at(0, 0), at(2, 2), at(0, 2), at(2, 0))).toBe(true);
+  });
+
+  it('says no to segments that miss', () => {
+    // The counterweight: without it every case here would pass against a
+    // predicate that always returns true.
+    expect(segmentsIntersect(at(0, 0), at(1, 0), at(0, 1), at(1, 1))).toBe(false);
+    expect(segmentsIntersect(at(0, 0), at(1, 0), at(2, 0), at(3, 0))).toBe(false);
+  });
+
+  // 🔴 THE FOUR COLLINEAR BRANCHES ARE INDIVIDUALLY REDUNDANT — measured, and the
+  // tests that used to sit here were wrong about it.
+  //
+  // They claimed one case per branch (c on ab, d on ab, a on cd, b on cd). Every
+  // one of those cases has orientations that DIFFER, so the proper-crossing test
+  // above catches them and the branch named in the test never runs: disabling any
+  // single branch left all four green. The only input that reaches them is a full
+  // collinear overlap, where all four orientations are zero — and there any ONE
+  // branch suffices, so no single-branch mutation can be killed.
+  //
+  // So they are tested collectively, which is what they actually are: together
+  // they are the difference between agreeing and disagreeing with the server,
+  // whose CrossingSign reports a shared point as MaybeCross and refuses it.
+  it('sees a collinear overlap that no proper-crossing test can', () => {
+    // Every orientation is zero here, so the proper-crossing test is false and
+    // only the collinear handling is left. Removing ALL FOUR branches turns this
+    // red; removing any one does not.
+    expect(segmentsIntersect(at(0, 0), at(3, 0), at(1, 0), at(2, 0))).toBe(true);
+    expect(segmentsIntersect(at(0, 0), at(0, 3), at(0, 1), at(0, 2))).toBe(true);
+  });
+
+  it('does not join collinear segments that are merely on the same line', () => {
+    // 🔴 Vertical and DISJOINT. The bounds check has to look at BOTH axes: here
+    // every longitude is identical, so a check that compared only longitude would
+    // call these overlapping and refuse a perfectly good ring.
+    expect(segmentsIntersect(at(0, 0), at(0, 3), at(0, 5), at(0, 7))).toBe(false);
+    // ...and the horizontal mirror, so neither axis can be the one that is dropped.
+    expect(segmentsIntersect(at(0, 0), at(3, 0), at(5, 0), at(7, 0))).toBe(false);
   });
 });

@@ -10,6 +10,8 @@ import (
 
 	"github.com/golang/geo/s1"
 	"github.com/golang/geo/s2"
+
+	"github.com/devicechain-io/dc-microservice/geo"
 )
 
 // 🔴 THE MATHS IS SPHERICAL, NOT PLANAR, AND THAT IS NOT A REFINEMENT. Treating longitude and
@@ -132,44 +134,16 @@ func loopFromRing(ring [][]float64) (*s2.Loop, error) {
 	if err := loop.Validate(); err != nil {
 		return nil, err
 	}
-	if i, j, ok := selfIntersects(loop); ok {
+	if i, j, ok := geo.LoopSelfIntersects(loop); ok {
 		return nil, fmt.Errorf("the ring is self-intersecting (edges %d and %d cross)", i, j)
 	}
 	return loop, nil
 }
 
-// selfIntersects reports the first pair of NON-ADJACENT edges of the loop that cross, if any.
-// Adjacent edges are skipped because they legitimately share a vertex — including the wrap-around
-// pair (last, first), which is adjacent on a closed loop and is the pair a naive index comparison
-// misses.
-//
-// It is O(V²) with V bounded at 512 by the authoring vertex limit, so the worst case is ~131k
-// orientation tests. That is a COMPILE-time cost paid once per fence per fence-set version, never
-// per event, which is what makes the quadratic acceptable rather than a hazard.
-func selfIntersects(loop *s2.Loop) (int, int, bool) {
-	n := loop.NumVertices()
-	for i := 0; i < n; i++ {
-		a, b := loop.Vertex(i), loop.Vertex(i+1)
-		for j := i + 1; j < n; j++ {
-			if adjacentEdges(i, j, n) {
-				continue
-			}
-			c, d := loop.Vertex(j), loop.Vertex(j+1)
-			// Cross is a proper interior crossing. MaybeCross means two edges SHARE a vertex,
-			// which for non-adjacent edges is a pinched ring — also not a simple polygon, so it is
-			// refused too rather than left to answer from a shape with two interiors.
-			if s := s2.CrossingSign(a, b, c, d); s != s2.DoNotCross {
-				return i, j, true
-			}
-		}
-	}
-	return 0, 0, false
-}
-
-// adjacentEdges reports whether edges i and j of an n-edge closed loop share a vertex by position.
-func adjacentEdges(i, j, n int) bool {
-	return j == i+1 || (i == 0 && j == n-1)
-}
+// The crossing scan and its adjacency helper moved to core/geo so the AUTHORING side
+// (device-management) can refuse the same rings this evaluator refuses, instead of
+// accepting a bow-tie that then fails here at compile time. The reasoning, the
+// measurement behind it, and the O(V²) budget live with the code in that package.
 
 // contains answers 2D containment: inside the exterior ring (boundary included) and not strictly
 // inside any hole (a hole's own boundary counts as inside the fence, because it IS part of the
@@ -222,5 +196,5 @@ func onLoopBoundary(loop *s2.Loop, pt s2.Point) bool {
 // flip: GeoJSON positions are [longitude, latitude] while s2.LatLngFromDegrees takes (lat, lng),
 // which is exactly the transposition that produces a fence in the wrong hemisphere.
 func pointOf(lat, lon float64) s2.Point {
-	return s2.PointFromLatLng(s2.LatLngFromDegrees(lat, lon))
+	return geo.PointFromDegrees(lat, lon)
 }

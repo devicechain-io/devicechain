@@ -134,6 +134,7 @@
   "geofenceErrTooManyPositions": "This boundary has {{count}} corners; the limit is {{max}}.",
   "geofenceErrCoordinateRange": "A corner falls outside the valid range of coordinates.",
   "geofenceErrRepeatedVertex": "Two corners sit in the same place. Undo the last one, or place it somewhere else.",
+  "geofenceErrSelfIntersecting": "The boundary crosses itself. A shape with crossing edges has no clear inside, so it cannot be used as a fence — move a corner so the edges do not overlap.",
   "geofenceBasemap": "Basemap",
   "geofenceTileUrl": "Tile URL",
   "geofenceTileUrlPlaceholder": "https://tiles.example.com/{z}/{x}/{y}.png",
