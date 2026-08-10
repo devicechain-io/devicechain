@@ -53,6 +53,7 @@ const FILL_LAYER = 'fence-fill';
 const LINE_LAYER = 'fence-outline';
 const VERTEX_LAYER = 'fence-vertices';
 const MIDPOINT_LAYER = 'fence-midpoints';
+const GHOST_LAYER = 'fence-ghost';
 
 /**
  * The style used when no tile URL is configured. MapLibre is still what renders
@@ -73,7 +74,7 @@ function blankStyle(): unknown {
   };
 }
 
-function ringFeature(vertices: readonly Vertex[]) {
+function ringFeature(vertices: readonly Vertex[], ghost: readonly Vertex[] = []) {
   // A polygon needs a closed ring to render a fill; while drawing there are
   // often too few vertices for one, so the fill is fed a closed copy and the
   // outline is fed the open path. Feeding both from one geometry would either
@@ -81,9 +82,20 @@ function ringFeature(vertices: readonly Vertex[]) {
   // first click onward.
   const path = vertices.map((v) => [v.lng, v.lat]);
   const closed = path.length >= 3 ? [...path, path[0]] : [];
+  // The comparison ring, drawn as an outline only so the two never read as one
+  // filled shape. It carries no vertex or midpoint handles: it is a picture of
+  // another version, not something that can be edited.
+  const ghostPath = ghost.map((v) => [v.lng, v.lat]);
+  const ghostClosed = ghostPath.length >= 3 ? [...ghostPath, ghostPath[0]] : ghostPath;
+
   return {
     type: 'FeatureCollection',
     features: [
+      {
+        type: 'Feature',
+        properties: { part: 'ghost' },
+        geometry: { type: 'LineString', coordinates: ghostClosed },
+      },
       {
         type: 'Feature',
         properties: { part: 'fill' },
@@ -135,6 +147,12 @@ export interface FenceMapProps {
   closed?: boolean;
   /** Saving is in flight: nothing responds. */
   disabled?: boolean;
+  /**
+   * A second ring drawn as a muted outline for comparison — the same fence at
+   * another version. Never editable, and deliberately outline-only: two filled
+   * shapes read as one.
+   */
+  ghost?: Vertex[];
 }
 
 export function FenceMap({
@@ -145,6 +163,7 @@ export function FenceMap({
   onClose,
   closed = false,
   disabled = false,
+  ghost,
 }: FenceMapProps) {
   const { t } = useTranslation(['entities', 'common']);
   const container = useRef<HTMLDivElement | null>(null);
@@ -154,7 +173,7 @@ export function FenceMap({
   // The click handler is registered once, but needs the CURRENT ring and
   // callbacks. Reading them from refs keeps the handler stable, so a vertex
   // added mid-draw cannot detach the listener that added it.
-  const live = useRef({ vertices, onChange, onClose, closed, disabled });
+  const live = useRef({ vertices, onChange, onClose, closed, disabled, ghost });
   /**
    * The pointer gesture in progress on a vertex, if any.
    *
@@ -186,7 +205,7 @@ export function FenceMap({
   // unobservable — but that is a property of the CALLER, and this component
   // should not depend on it.
   useLayoutEffect(() => {
-    live.current = { vertices, onChange, onClose, closed, disabled };
+    live.current = { vertices, onChange, onClose, closed, disabled, ghost };
   });
 
   const handleClick = useCallback((event: MapMouseEvent) => {
@@ -377,7 +396,19 @@ export function FenceMap({
           if (cancelled) return;
           instance.addSource(SOURCE, {
             type: 'geojson',
-            data: ringFeature(live.current.vertices) as never,
+            data: ringFeature(live.current.vertices, live.current.ghost) as never,
+          });
+          instance.addLayer({
+            id: GHOST_LAYER,
+            type: 'line',
+            source: SOURCE,
+            filter: ['==', ['get', 'part'], 'ghost'],
+            paint: {
+              'line-color': '#f59e0b',
+              'line-width': 2,
+              'line-dasharray': [2, 2],
+              'line-opacity': 0.9,
+            },
           });
           instance.addLayer({
             id: FILL_LAYER,
@@ -419,7 +450,7 @@ export function FenceMap({
             },
           });
 
-          const bounds = boundsOf(live.current.vertices);
+          const bounds = boundsOf([...live.current.vertices, ...(live.current.ghost ?? [])]);
           if (bounds) instance.fitBounds(bounds, { padding: 48, animate: false, maxZoom: 17 });
         });
         // 🔴 ORDER IS LOAD-BEARING: MapLibre invokes listeners in REGISTRATION
@@ -480,8 +511,8 @@ export function FenceMap({
     const instance = map.current;
     if (!instance) return;
     const source = instance.getSource(SOURCE) as { setData?: (d: unknown) => void } | undefined;
-    source?.setData?.(ringFeature(vertices));
-  }, [vertices]);
+    source?.setData?.(ringFeature(vertices, ghost));
+  }, [vertices, ghost]);
 
   return (
     <div className="relative">

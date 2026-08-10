@@ -18,6 +18,7 @@ import {
   hasMovedEnough,
   insertVertexOnEdge,
   isCloseGesture,
+  lookupInSnapshot,
   moveVertex,
   removeVertex,
   segmentsIntersect,
@@ -898,5 +899,73 @@ describe('clickIntent', () => {
     expect(
       clickIntent({ ...base, vertices: ring.slice(0, 2), clickPoint: firstAt }),
     ).toBe('append');
+  });
+});
+
+describe('lookupInSnapshot', () => {
+  const good = JSON.stringify({
+    kind: POLYGON_2D,
+    geometry: { type: 'Polygon', coordinates: [VALID_RING] },
+  });
+  const holed = JSON.stringify({
+    kind: POLYGON_2D,
+    geometry: {
+      type: 'Polygon',
+      coordinates: [
+        VALID_RING,
+        [
+          [12.492, 41.892],
+          [12.494, 41.892],
+          [12.493, 41.894],
+          [12.492, 41.892],
+        ],
+      ],
+    },
+  });
+
+  it('returns the ring the engine saw', () => {
+    const got = lookupInSnapshot([{ token: 'yard', geometry: good }], 'yard');
+    expect(got.kind).toBe('present');
+    expect(got.kind === 'present' && got.vertices).toHaveLength(3);
+  });
+
+  // 🔴 The three outcomes are distinct on purpose, and each collapse tells an
+  // operator something false. Asserting the KIND rather than merely "no vertices"
+  // is what separates them — a test that only checked for an empty result would
+  // pass with all three folded into one.
+  it('says ABSENT when the fence was not in that version', () => {
+    expect(lookupInSnapshot([{ token: 'other', geometry: good }], 'yard')).toEqual({
+      kind: 'absent',
+    });
+    expect(lookupInSnapshot([], 'yard')).toEqual({ kind: 'absent' });
+  });
+
+  it('says UNREADABLE when it was there but this viewer cannot draw it', () => {
+    // Present in the set, and the engine could read it — only this editor cannot.
+    // Reporting that as "absent" would claim the fence did not exist, and as an
+    // empty ring would claim it enclosed nothing.
+    expect(lookupInSnapshot([{ token: 'yard', geometry: holed }], 'yard')).toEqual({
+      kind: 'unreadable',
+    });
+    expect(lookupInSnapshot([{ token: 'yard', geometry: 'not json' }], 'yard')).toEqual({
+      kind: 'unreadable',
+    });
+  });
+
+  it('matches on the exact token, not a prefix', () => {
+    expect(lookupInSnapshot([{ token: 'yard-north', geometry: good }], 'yard').kind).toBe('absent');
+  });
+
+  it('takes the first entry when a token somehow repeats', () => {
+    // The server keys on (tenant, token) so this should be impossible; pinning it
+    // means the reader is deterministic if it ever is not.
+    const got = lookupInSnapshot(
+      [
+        { token: 'yard', geometry: good },
+        { token: 'yard', geometry: holed },
+      ],
+      'yard',
+    );
+    expect(got.kind).toBe('present');
   });
 });

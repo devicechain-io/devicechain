@@ -105,6 +105,8 @@ type Documents = {
     "\n  mutation CreateGeoFence($request: GeoFenceCreateRequest!) {\n    createGeoFence(request: $request) {\n      id\n      token\n      name\n      description\n      geometry\n      kind\n      metadata\n      createdAt\n    }\n  }\n": typeof types.CreateGeoFenceDocument,
     "\n  mutation UpdateGeoFence($token: String!, $request: GeoFenceCreateRequest!) {\n    updateGeoFence(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      geometry\n      kind\n      metadata\n      createdAt\n    }\n  }\n": typeof types.UpdateGeoFenceDocument,
     "\n  mutation DeleteGeoFence($token: String!) {\n    deleteGeoFence(token: $token)\n  }\n": typeof types.DeleteGeoFenceDocument,
+    "\n  query CurrentFenceSetVersion {\n    currentFenceSetVersion\n  }\n": typeof types.CurrentFenceSetVersionDocument,
+    "\n  query GeoFenceSetSnapshot($version: Int!) {\n    geoFenceSetSnapshot(version: $version) {\n      version\n      fences {\n        token\n        geometry\n      }\n    }\n  }\n": typeof types.GeoFenceSetSnapshotDocument,
     "\n  query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {\n    entityRelationships(criteria: $criteria) {\n      results {\n        id\n        token\n        targetType\n        target {\n          id\n          token\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.EntityRelationshipsDocument,
     "\n  mutation CreateEntityRelationships($requests: [EntityRelationshipCreateRequest!]!) {\n    createEntityRelationships(requests: $requests) {\n      id\n      token\n    }\n  }\n": typeof types.CreateEntityRelationshipsDocument,
     "\n  mutation RemoveEntityRelationships($tokens: [String!]!) {\n    removeEntityRelationships(tokens: $tokens)\n  }\n": typeof types.RemoveEntityRelationshipsDocument,
@@ -200,6 +202,8 @@ const documents: Documents = {
     "\n  mutation CreateGeoFence($request: GeoFenceCreateRequest!) {\n    createGeoFence(request: $request) {\n      id\n      token\n      name\n      description\n      geometry\n      kind\n      metadata\n      createdAt\n    }\n  }\n": types.CreateGeoFenceDocument,
     "\n  mutation UpdateGeoFence($token: String!, $request: GeoFenceCreateRequest!) {\n    updateGeoFence(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      geometry\n      kind\n      metadata\n      createdAt\n    }\n  }\n": types.UpdateGeoFenceDocument,
     "\n  mutation DeleteGeoFence($token: String!) {\n    deleteGeoFence(token: $token)\n  }\n": types.DeleteGeoFenceDocument,
+    "\n  query CurrentFenceSetVersion {\n    currentFenceSetVersion\n  }\n": types.CurrentFenceSetVersionDocument,
+    "\n  query GeoFenceSetSnapshot($version: Int!) {\n    geoFenceSetSnapshot(version: $version) {\n      version\n      fences {\n        token\n        geometry\n      }\n    }\n  }\n": types.GeoFenceSetSnapshotDocument,
     "\n  query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {\n    entityRelationships(criteria: $criteria) {\n      results {\n        id\n        token\n        targetType\n        target {\n          id\n          token\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.EntityRelationshipsDocument,
     "\n  mutation CreateEntityRelationships($requests: [EntityRelationshipCreateRequest!]!) {\n    createEntityRelationships(requests: $requests) {\n      id\n      token\n    }\n  }\n": types.CreateEntityRelationshipsDocument,
     "\n  mutation RemoveEntityRelationships($tokens: [String!]!) {\n    removeEntityRelationships(tokens: $tokens)\n  }\n": types.RemoveEntityRelationshipsDocument,
@@ -565,6 +569,14 @@ export function graphql(source: "\n  mutation UpdateGeoFence($token: String!, $r
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  mutation DeleteGeoFence($token: String!) {\n    deleteGeoFence(token: $token)\n  }\n"): typeof import('./graphql').DeleteGeoFenceDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query CurrentFenceSetVersion {\n    currentFenceSetVersion\n  }\n"): typeof import('./graphql').CurrentFenceSetVersionDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query GeoFenceSetSnapshot($version: Int!) {\n    geoFenceSetSnapshot(version: $version) {\n      version\n      fences {\n        token\n        geometry\n      }\n    }\n  }\n"): typeof import('./graphql').GeoFenceSetSnapshotDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
