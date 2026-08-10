@@ -131,10 +131,29 @@ const UPDATE_GEO_FENCE = graphql(`
  */
 export async function updateGeoFence(
   token: string,
-  request: GeoFenceCreateRequest,
+  request: Required<GeoFenceCreateRequest>,
 ): Promise<GeoFence> {
   const data = await gql('device-management', UPDATE_GEO_FENCE, { token, request });
   return data.updateGeoFence;
+}
+
+// The projection of everything a fence already is, for an editor that edits only
+// some of it. The geofence form was the one that FOUND the full-replace defect and
+// carried metadata by hand from the start — this exists so it stays carried by the
+// compiler instead: returning `Required<…>` means the next field added to
+// GeoFenceCreateRequest breaks here rather than beginning to be erased.
+//
+// `geometry` is preserved like the rest even though the form always overrides it.
+// It is the field with the most to lose, and a projection that quietly left a hole
+// where the biggest one goes would be a strange thing to reach for next time.
+export function geoFencePreserved(f: GeoFence): Required<GeoFenceCreateRequest> {
+  return {
+    token: f.token,
+    name: f.name ?? null,
+    description: f.description ?? null,
+    geometry: f.geometry,
+    metadata: f.metadata ?? null,
+  };
 }
 
 const DELETE_GEO_FENCE = graphql(`

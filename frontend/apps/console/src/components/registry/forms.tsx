@@ -7,6 +7,31 @@
 // device/asset/customer/area families. A resource adapts the normalized form
 // values to its own typed create/update request in its config (see resource.tsx).
 //
+// 🔴 EVERY REGISTRY UPDATE IS A FULL REPLACE, AND THESE FORMS EDIT A SUBSET.
+//
+// The request a resource sends rebuilds the stored record, so a field the request
+// leaves out is not "unchanged" — it is DELETED. These forms only ever collect a
+// name and a description, which means an adapter that maps them straight onto a
+// create request quietly erases everything else the entity had: its metadata, a
+// device's externalId, a type's icon and colours. Nothing about it looks wrong —
+// the save succeeds, the toast is cheerful, and the audit trail says the operator
+// edited the thing.
+//
+// So every `update` adapter must start from its family's `…Preserved(entity)`
+// projection (see lib/api/*.ts) and override only the fields collected here. Two
+// gates hold that in place, and they catch different mistakes:
+//
+//   * every `update*` in the API layer takes `Required<…CreateRequest>`, so an
+//     adapter that OMITS a field no longer compiles, and each `…Preserved` helper
+//     RETURNS `Required<…>`, so a field added to the schema breaks the helper
+//     until someone decides what an edit should do with it;
+//   * `routes/resources.test.tsx` walks every registry resource, renames the
+//     entity, saves, and then asserts that the ONLY fields that changed are the
+//     ones this form edits. That is what catches the mistakes a type cannot see:
+//     an adapter that names a field and sends the wrong value, a projection with
+//     two fields crossed, or a spread written the other way round so the operator's
+//     edit is the thing that gets discarded.
+//
 // Noun-bearing prose is resolved from the `entities` catalog by the family's
 // `i18nKey` prefix (`${i18nKey}CreateAction`, `${i18nKey}CreatedToast`, …), so the
 // engine never builds a sentence by interpolating a noun — each locale writes
@@ -36,10 +61,15 @@ interface NamedEntity {
   description?: string | null;
 }
 
+// 🔴 `null`, not `undefined`, for a cleared field. Against a full-replace endpoint
+// the two are not synonyms in intent even though the server maps both to a nil
+// column: `undefined` is what an omission looks like, and an omission is the bug
+// this file's header describes. Saying null is the form stating, in the request,
+// that it means for the field to be empty.
 export interface TypeRequest {
   token: string;
-  name?: string;
-  description?: string;
+  name: string | null;
+  description: string | null;
 }
 
 export interface InstanceRequest extends TypeRequest {
@@ -81,7 +111,7 @@ export function RegistryTypeForm<T extends NamedEntity>({
     setFormError(null);
     setBusy(true);
     try {
-      const fields = { name: name.trim() || undefined, description: description.trim() || undefined };
+      const fields = { name: name.trim() || null, description: description.trim() || null };
       if (editing) {
         await update(entity.token, { token: entity.token, ...fields });
         onDone(e('UpdatedToast', { token: entity.token }));
@@ -183,8 +213,8 @@ export function RegistryInstanceForm<T extends NamedEntity>({
     setBusy(true);
     try {
       const fields = {
-        name: name.trim() || undefined,
-        description: description.trim() || undefined,
+        name: name.trim() || null,
+        description: description.trim() || null,
         typeToken,
       };
       if (editing) {

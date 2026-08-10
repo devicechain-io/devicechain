@@ -12,6 +12,9 @@ import {
   listAssets,
   type AssetGroup,
 } from '@/lib/api/assets';
+// Groups of every family are the one uniform EntityGroup, so the projection
+// that keeps an edit from erasing its unedited fields is shared too.
+import { groupPreserved } from '@/lib/api/device-management';
 
 // The asset-group registry, described once for the generic list/detail/new pages.
 export const assetGroupResource: RegistryResource<AssetGroup> = {
@@ -31,7 +34,14 @@ export const assetGroupResource: RegistryResource<AssetGroup> = {
       i18nKey="assetGroup"
       entityType="asset-group"
       create={(req) => createAssetGroup(req)}
-      update={(token, req) => updateAssetGroup(token, req)}
+      // RegistryTypeForm calls update only when editing, so g is set. A group
+      // update replaces every field it names, so an edit that sent only the name
+      // erased the group's appearance and its metadata. (Its membership mode and
+      // selector survive — the server never takes those from a request that omits
+      // them — so a dynamic group kept working while its metadata did not.)
+      update={(token, req) =>
+        updateAssetGroup(token, { ...groupPreserved(g!), name: req.name, description: req.description })
+      }
       onDone={onDone}
     />
   ),

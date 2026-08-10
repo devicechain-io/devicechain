@@ -9,6 +9,7 @@ import {
   deleteAsset,
   createAsset,
   updateAsset,
+  assetPreserved,
   listAssetTypes,
   type Asset,
 } from '@/lib/api/assets';
@@ -55,8 +56,11 @@ export const assetResource: RegistryResource<Asset> = {
         })
       }
       update={(token, req) =>
+        // RegistryInstanceForm calls update only when editing, so a is set.
+        // Start from everything the asset already is (assetPreserved) — the update is a
+        // full replace, so anything left out is deleted rather than left alone.
         updateAsset(token, {
-          token: req.token,
+          ...assetPreserved(a!),
           name: req.name,
           description: req.description,
           assetTypeToken: req.typeToken,

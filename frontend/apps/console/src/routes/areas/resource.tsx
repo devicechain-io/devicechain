@@ -9,6 +9,7 @@ import {
   deleteArea,
   createArea,
   updateArea,
+  areaPreserved,
   listAreaTypes,
   type Area,
 } from '@/lib/api/areas';
@@ -54,8 +55,11 @@ export const areaResource: RegistryResource<Area> = {
         })
       }
       update={(token, req) =>
+        // RegistryInstanceForm calls update only when editing, so a is set.
+        // Start from everything the area already is (areaPreserved) — the update is a
+        // full replace, so anything left out is deleted rather than left alone.
         updateArea(token, {
-          token: req.token,
+          ...areaPreserved(a!),
           name: req.name,
           description: req.description,
           areaTypeToken: req.typeToken,

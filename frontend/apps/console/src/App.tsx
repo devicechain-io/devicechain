@@ -22,21 +22,8 @@ import AuditPage from '@/routes/audit/AuditPage';
 import FacetKeysPage from '@/routes/facets/FacetKeysPage';
 import BrowsePage from '@/routes/browse/BrowsePage';
 import BrandingPage from '@/routes/BrandingPage';
-import { ResourceListPage, ResourceDetailPage, type RegistryResource } from '@/components/registry';
+import { ResourceListPage, ResourceDetailPage } from '@/components/registry';
 import { ErrorBoundary } from '@/components/ui/error-boundary';
-import { deviceTypeResource } from '@/routes/device-types/resource';
-import { deviceProfileResource } from '@/routes/device-profiles/resource';
-import { deviceGroupResource } from '@/routes/device-groups/resource';
-import { assetResource } from '@/routes/assets/resource';
-import { assetTypeResource } from '@/routes/asset-types/resource';
-import { assetGroupResource } from '@/routes/asset-groups/resource';
-import { customerResource } from '@/routes/customers/resource';
-import { customerTypeResource } from '@/routes/customer-types/resource';
-import { customerGroupResource } from '@/routes/customer-groups/resource';
-import { areaResource } from '@/routes/areas/resource';
-import { areaTypeResource } from '@/routes/area-types/resource';
-import { areaGroupResource } from '@/routes/area-groups/resource';
-import { geofenceResource } from '@/routes/geofences/resource';
 import AdminProtectedRoute from '@/routes/admin/AdminProtectedRoute';
 import AdminLayout from '@/routes/admin/AdminLayout';
 import AdminTenantsPage from '@/routes/admin/TenantsPage';
@@ -54,25 +41,8 @@ import AdminAuditPage from '@/routes/admin/AuditPage';
 import AdminNewRolePage from '@/routes/admin/roles/NewRolePage';
 import AdminRoleDetailPage from '@/routes/admin/roles/RoleDetailPage';
 import AdminSettingsPage from '@/routes/admin/SettingsPage';
+import { REGISTRY_RESOURCES } from '@/routes/resources';
 
-// Registry families served by the generic list/detail pages. `any` because the
-// array mixes RegistryResource<DeviceType | Asset | Customer | …> and the
-// element T is invariant; each is consumed by a generic page that re-narrows it.
-const REGISTRY_RESOURCES: RegistryResource<any>[] = [
-  deviceTypeResource,
-  deviceProfileResource,
-  deviceGroupResource,
-  assetResource,
-  assetTypeResource,
-  assetGroupResource,
-  customerResource,
-  customerTypeResource,
-  customerGroupResource,
-  areaResource,
-  areaTypeResource,
-  areaGroupResource,
-  geofenceResource,
-];
 
 function ProtectedRoute() {
   const { t } = useTranslation('common');

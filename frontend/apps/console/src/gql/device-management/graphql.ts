@@ -379,21 +379,21 @@ export type AreasQueryVariables = Exact<{
 }>;
 
 
-export type AreasQuery = { areas: { results: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type AreasQuery = { areas: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type AreaByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type AreaByTokenQuery = { areasByToken: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
+export type AreaByTokenQuery = { areasByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
 
 export type CreateAreaMutationVariables = Exact<{
   request?: AreaCreateRequest | null | undefined;
 }>;
 
 
-export type CreateAreaMutation = { createArea: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type CreateAreaMutation = { createArea: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type UpdateAreaMutationVariables = Exact<{
   token: string;
@@ -401,7 +401,7 @@ export type UpdateAreaMutationVariables = Exact<{
 }>;
 
 
-export type UpdateAreaMutation = { updateArea: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type UpdateAreaMutation = { updateArea: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type DeleteAreaMutationVariables = Exact<{
   token: string;
@@ -415,21 +415,21 @@ export type AreaTypesQueryVariables = Exact<{
 }>;
 
 
-export type AreaTypesQuery = { areaTypes: { results: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, createdAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type AreaTypesQuery = { areaTypes: { results: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type AreaTypeByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type AreaTypeByTokenQuery = { areaTypesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, createdAt: string | null }> };
+export type AreaTypeByTokenQuery = { areaTypesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null }> };
 
 export type CreateAreaTypeMutationVariables = Exact<{
   request?: AreaTypeCreateRequest | null | undefined;
 }>;
 
 
-export type CreateAreaTypeMutation = { createAreaType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, createdAt: string | null } };
+export type CreateAreaTypeMutation = { createAreaType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null } };
 
 export type UpdateAreaTypeMutationVariables = Exact<{
   token: string;
@@ -437,7 +437,7 @@ export type UpdateAreaTypeMutationVariables = Exact<{
 }>;
 
 
-export type UpdateAreaTypeMutation = { updateAreaType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, createdAt: string | null } };
+export type UpdateAreaTypeMutation = { updateAreaType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null } };
 
 export type DeleteAreaTypeMutationVariables = Exact<{
   token: string;
@@ -451,21 +451,21 @@ export type AssetsQueryVariables = Exact<{
 }>;
 
 
-export type AssetsQuery = { assets: { results: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type AssetsQuery = { assets: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type AssetByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type AssetByTokenQuery = { assetsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
+export type AssetByTokenQuery = { assetsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
 
 export type CreateAssetMutationVariables = Exact<{
   request?: AssetCreateRequest | null | undefined;
 }>;
 
 
-export type CreateAssetMutation = { createAsset: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type CreateAssetMutation = { createAsset: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type UpdateAssetMutationVariables = Exact<{
   token: string;
@@ -473,7 +473,7 @@ export type UpdateAssetMutationVariables = Exact<{
 }>;
 
 
-export type UpdateAssetMutation = { updateAsset: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type UpdateAssetMutation = { updateAsset: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type DeleteAssetMutationVariables = Exact<{
   token: string;
@@ -487,21 +487,21 @@ export type AssetTypesQueryVariables = Exact<{
 }>;
 
 
-export type AssetTypesQuery = { assetTypes: { results: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, createdAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type AssetTypesQuery = { assetTypes: { results: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type AssetTypeByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type AssetTypeByTokenQuery = { assetTypesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, createdAt: string | null }> };
+export type AssetTypeByTokenQuery = { assetTypesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null }> };
 
 export type CreateAssetTypeMutationVariables = Exact<{
   request?: AssetTypeCreateRequest | null | undefined;
 }>;
 
 
-export type CreateAssetTypeMutation = { createAssetType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, createdAt: string | null } };
+export type CreateAssetTypeMutation = { createAssetType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null } };
 
 export type UpdateAssetTypeMutationVariables = Exact<{
   token: string;
@@ -509,7 +509,7 @@ export type UpdateAssetTypeMutationVariables = Exact<{
 }>;
 
 
-export type UpdateAssetTypeMutation = { updateAssetType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, createdAt: string | null } };
+export type UpdateAssetTypeMutation = { updateAssetType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null } };
 
 export type DeleteAssetTypeMutationVariables = Exact<{
   token: string;
@@ -575,21 +575,21 @@ export type CustomersQueryVariables = Exact<{
 }>;
 
 
-export type CustomersQuery = { customers: { results: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type CustomersQuery = { customers: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type CustomerByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type CustomerByTokenQuery = { customersByToken: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
+export type CustomerByTokenQuery = { customersByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
 
 export type CreateCustomerMutationVariables = Exact<{
   request?: CustomerCreateRequest | null | undefined;
 }>;
 
 
-export type CreateCustomerMutation = { createCustomer: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type CreateCustomerMutation = { createCustomer: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type UpdateCustomerMutationVariables = Exact<{
   token: string;
@@ -597,7 +597,7 @@ export type UpdateCustomerMutationVariables = Exact<{
 }>;
 
 
-export type UpdateCustomerMutation = { updateCustomer: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type UpdateCustomerMutation = { updateCustomer: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type DeleteCustomerMutationVariables = Exact<{
   token: string;
@@ -611,21 +611,21 @@ export type CustomerTypesQueryVariables = Exact<{
 }>;
 
 
-export type CustomerTypesQuery = { customerTypes: { results: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, createdAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type CustomerTypesQuery = { customerTypes: { results: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type CustomerTypeByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type CustomerTypeByTokenQuery = { customerTypesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, createdAt: string | null }> };
+export type CustomerTypeByTokenQuery = { customerTypesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null }> };
 
 export type CreateCustomerTypeMutationVariables = Exact<{
   request?: CustomerTypeCreateRequest | null | undefined;
 }>;
 
 
-export type CreateCustomerTypeMutation = { createCustomerType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, createdAt: string | null } };
+export type CreateCustomerTypeMutation = { createCustomerType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null } };
 
 export type UpdateCustomerTypeMutationVariables = Exact<{
   token: string;
@@ -633,7 +633,7 @@ export type UpdateCustomerTypeMutationVariables = Exact<{
 }>;
 
 
-export type UpdateCustomerTypeMutation = { updateCustomerType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, createdAt: string | null } };
+export type UpdateCustomerTypeMutation = { updateCustomerType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null } };
 
 export type DeleteCustomerTypeMutationVariables = Exact<{
   token: string;
@@ -647,21 +647,21 @@ export type DevicesQueryVariables = Exact<{
 }>;
 
 
-export type DevicesQuery = { devices: { results: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type DevicesQuery = { devices: { results: Array<{ id: string, token: string, name: string | null, description: string | null, externalId: string | null, metadata: string | null, createdAt: string | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type DeviceByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type DeviceByTokenQuery = { devicesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
+export type DeviceByTokenQuery = { devicesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, externalId: string | null, metadata: string | null, createdAt: string | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
 
 export type CreateDeviceMutationVariables = Exact<{
   request?: DeviceCreateRequest | null | undefined;
 }>;
 
 
-export type CreateDeviceMutation = { createDevice: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type CreateDeviceMutation = { createDevice: { id: string, token: string, name: string | null, description: string | null, externalId: string | null, metadata: string | null, createdAt: string | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type CreateDevicesMutationVariables = Exact<{
   request: DeviceBulkCreateRequest;
@@ -676,7 +676,7 @@ export type UpdateDeviceMutationVariables = Exact<{
 }>;
 
 
-export type UpdateDeviceMutation = { updateDevice: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type UpdateDeviceMutation = { updateDevice: { id: string, token: string, name: string | null, description: string | null, externalId: string | null, metadata: string | null, createdAt: string | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type DeleteDeviceMutationVariables = Exact<{
   token: string;
@@ -726,21 +726,21 @@ export type EntityGroupsQueryVariables = Exact<{
 }>;
 
 
-export type EntityGroupsQuery = { entityGroups: { results: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, memberType: string }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type EntityGroupsQuery = { entityGroups: { results: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, memberType: string }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type EntityGroupByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type EntityGroupByTokenQuery = { entityGroupsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, memberType: string }> };
+export type EntityGroupByTokenQuery = { entityGroupsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, memberType: string }> };
 
 export type CreateEntityGroupMutationVariables = Exact<{
   request?: EntityGroupCreateRequest | null | undefined;
 }>;
 
 
-export type CreateEntityGroupMutation = { createEntityGroup: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, memberType: string } };
+export type CreateEntityGroupMutation = { createEntityGroup: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, memberType: string } };
 
 export type UpdateEntityGroupMutationVariables = Exact<{
   token: string;
@@ -748,7 +748,7 @@ export type UpdateEntityGroupMutationVariables = Exact<{
 }>;
 
 
-export type UpdateEntityGroupMutation = { updateEntityGroup: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, memberType: string } };
+export type UpdateEntityGroupMutation = { updateEntityGroup: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, memberType: string } };
 
 export type DeleteEntityGroupMutationVariables = Exact<{
   token: string;
@@ -762,21 +762,21 @@ export type DeviceProfilesQueryVariables = Exact<{
 }>;
 
 
-export type DeviceProfilesQuery = { deviceProfiles: { results: Array<{ id: string, token: string, name: string | null, description: string | null, category: string | null, activeVersion: number | null, deviceTypeCount: number, metadata: string | null, createdAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type DeviceProfilesQuery = { deviceProfiles: { results: Array<{ id: string, token: string, name: string | null, description: string | null, category: string | null, activeVersion: number | null, deviceTypeCount: number, metadata: string | null, createdAt: string | null, location: { expectedAccuracyMeters: number | null, expectedUpdateIntervalSeconds: number | null } | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type DeviceProfileByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type DeviceProfileByTokenQuery = { deviceProfilesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, category: string | null, activeVersion: number | null, deviceTypeCount: number, metadata: string | null, createdAt: string | null }> };
+export type DeviceProfileByTokenQuery = { deviceProfilesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, category: string | null, activeVersion: number | null, deviceTypeCount: number, metadata: string | null, createdAt: string | null, location: { expectedAccuracyMeters: number | null, expectedUpdateIntervalSeconds: number | null } | null }> };
 
 export type CreateDeviceProfileMutationVariables = Exact<{
   request?: DeviceProfileCreateRequest | null | undefined;
 }>;
 
 
-export type CreateDeviceProfileMutation = { createDeviceProfile: { id: string, token: string, name: string | null, description: string | null, category: string | null, activeVersion: number | null, deviceTypeCount: number, metadata: string | null, createdAt: string | null } };
+export type CreateDeviceProfileMutation = { createDeviceProfile: { id: string, token: string, name: string | null, description: string | null, category: string | null, activeVersion: number | null, deviceTypeCount: number, metadata: string | null, createdAt: string | null, location: { expectedAccuracyMeters: number | null, expectedUpdateIntervalSeconds: number | null } | null } };
 
 export type UpdateDeviceProfileMutationVariables = Exact<{
   token: string;
@@ -784,7 +784,7 @@ export type UpdateDeviceProfileMutationVariables = Exact<{
 }>;
 
 
-export type UpdateDeviceProfileMutation = { updateDeviceProfile: { id: string, token: string, name: string | null, description: string | null, category: string | null, activeVersion: number | null, deviceTypeCount: number, metadata: string | null, createdAt: string | null } };
+export type UpdateDeviceProfileMutation = { updateDeviceProfile: { id: string, token: string, name: string | null, description: string | null, category: string | null, activeVersion: number | null, deviceTypeCount: number, metadata: string | null, createdAt: string | null, location: { expectedAccuracyMeters: number | null, expectedUpdateIntervalSeconds: number | null } | null } };
 
 export type DeleteDeviceProfileMutationVariables = Exact<{
   token: string;
@@ -1132,6 +1132,7 @@ export const AreasDocument = new TypedDocumentString(`
       token
       name
       description
+      metadata
       createdAt
       areaType {
         id
@@ -1158,6 +1159,7 @@ export const AreaByTokenDocument = new TypedDocumentString(`
     token
     name
     description
+    metadata
     createdAt
     areaType {
       id
@@ -1178,6 +1180,7 @@ export const CreateAreaDocument = new TypedDocumentString(`
     token
     name
     description
+    metadata
     createdAt
     areaType {
       id
@@ -1198,6 +1201,7 @@ export const UpdateAreaDocument = new TypedDocumentString(`
     token
     name
     description
+    metadata
     createdAt
     areaType {
       id
@@ -1228,6 +1232,8 @@ export const AreaTypesDocument = new TypedDocumentString(`
       backgroundColor
       foregroundColor
       borderColor
+      imageUrl
+      metadata
       createdAt
     }
     pagination {
@@ -1249,6 +1255,8 @@ export const AreaTypeByTokenDocument = new TypedDocumentString(`
     backgroundColor
     foregroundColor
     borderColor
+    imageUrl
+    metadata
     createdAt
   }
 }
@@ -1264,6 +1272,8 @@ export const CreateAreaTypeDocument = new TypedDocumentString(`
     backgroundColor
     foregroundColor
     borderColor
+    imageUrl
+    metadata
     createdAt
   }
 }
@@ -1279,6 +1289,8 @@ export const UpdateAreaTypeDocument = new TypedDocumentString(`
     backgroundColor
     foregroundColor
     borderColor
+    imageUrl
+    metadata
     createdAt
   }
 }
@@ -1296,6 +1308,7 @@ export const AssetsDocument = new TypedDocumentString(`
       token
       name
       description
+      metadata
       createdAt
       assetType {
         id
@@ -1322,6 +1335,7 @@ export const AssetByTokenDocument = new TypedDocumentString(`
     token
     name
     description
+    metadata
     createdAt
     assetType {
       id
@@ -1342,6 +1356,7 @@ export const CreateAssetDocument = new TypedDocumentString(`
     token
     name
     description
+    metadata
     createdAt
     assetType {
       id
@@ -1362,6 +1377,7 @@ export const UpdateAssetDocument = new TypedDocumentString(`
     token
     name
     description
+    metadata
     createdAt
     assetType {
       id
@@ -1392,6 +1408,8 @@ export const AssetTypesDocument = new TypedDocumentString(`
       backgroundColor
       foregroundColor
       borderColor
+      imageUrl
+      metadata
       createdAt
     }
     pagination {
@@ -1413,6 +1431,8 @@ export const AssetTypeByTokenDocument = new TypedDocumentString(`
     backgroundColor
     foregroundColor
     borderColor
+    imageUrl
+    metadata
     createdAt
   }
 }
@@ -1428,6 +1448,8 @@ export const CreateAssetTypeDocument = new TypedDocumentString(`
     backgroundColor
     foregroundColor
     borderColor
+    imageUrl
+    metadata
     createdAt
   }
 }
@@ -1443,6 +1465,8 @@ export const UpdateAssetTypeDocument = new TypedDocumentString(`
     backgroundColor
     foregroundColor
     borderColor
+    imageUrl
+    metadata
     createdAt
   }
 }
@@ -1576,6 +1600,7 @@ export const CustomersDocument = new TypedDocumentString(`
       token
       name
       description
+      metadata
       createdAt
       customerType {
         id
@@ -1602,6 +1627,7 @@ export const CustomerByTokenDocument = new TypedDocumentString(`
     token
     name
     description
+    metadata
     createdAt
     customerType {
       id
@@ -1622,6 +1648,7 @@ export const CreateCustomerDocument = new TypedDocumentString(`
     token
     name
     description
+    metadata
     createdAt
     customerType {
       id
@@ -1642,6 +1669,7 @@ export const UpdateCustomerDocument = new TypedDocumentString(`
     token
     name
     description
+    metadata
     createdAt
     customerType {
       id
@@ -1672,6 +1700,8 @@ export const CustomerTypesDocument = new TypedDocumentString(`
       backgroundColor
       foregroundColor
       borderColor
+      imageUrl
+      metadata
       createdAt
     }
     pagination {
@@ -1693,6 +1723,8 @@ export const CustomerTypeByTokenDocument = new TypedDocumentString(`
     backgroundColor
     foregroundColor
     borderColor
+    imageUrl
+    metadata
     createdAt
   }
 }
@@ -1708,6 +1740,8 @@ export const CreateCustomerTypeDocument = new TypedDocumentString(`
     backgroundColor
     foregroundColor
     borderColor
+    imageUrl
+    metadata
     createdAt
   }
 }
@@ -1723,6 +1757,8 @@ export const UpdateCustomerTypeDocument = new TypedDocumentString(`
     backgroundColor
     foregroundColor
     borderColor
+    imageUrl
+    metadata
     createdAt
   }
 }
@@ -1740,6 +1776,8 @@ export const DevicesDocument = new TypedDocumentString(`
       token
       name
       description
+      externalId
+      metadata
       createdAt
       deviceType {
         id
@@ -1766,6 +1804,8 @@ export const DeviceByTokenDocument = new TypedDocumentString(`
     token
     name
     description
+    externalId
+    metadata
     createdAt
     deviceType {
       id
@@ -1786,6 +1826,8 @@ export const CreateDeviceDocument = new TypedDocumentString(`
     token
     name
     description
+    externalId
+    metadata
     createdAt
     deviceType {
       id
@@ -1815,6 +1857,8 @@ export const UpdateDeviceDocument = new TypedDocumentString(`
     token
     name
     description
+    externalId
+    metadata
     createdAt
     deviceType {
       id
@@ -1949,6 +1993,12 @@ export const EntityGroupsDocument = new TypedDocumentString(`
       token
       name
       description
+      icon
+      backgroundColor
+      foregroundColor
+      borderColor
+      imageUrl
+      metadata
       createdAt
       memberType
     }
@@ -1967,6 +2017,12 @@ export const EntityGroupByTokenDocument = new TypedDocumentString(`
     token
     name
     description
+    icon
+    backgroundColor
+    foregroundColor
+    borderColor
+    imageUrl
+    metadata
     createdAt
     memberType
   }
@@ -1979,6 +2035,12 @@ export const CreateEntityGroupDocument = new TypedDocumentString(`
     token
     name
     description
+    icon
+    backgroundColor
+    foregroundColor
+    borderColor
+    imageUrl
+    metadata
     createdAt
     memberType
   }
@@ -1991,6 +2053,12 @@ export const UpdateEntityGroupDocument = new TypedDocumentString(`
     token
     name
     description
+    icon
+    backgroundColor
+    foregroundColor
+    borderColor
+    imageUrl
+    metadata
     createdAt
     memberType
   }
@@ -2013,6 +2081,10 @@ export const DeviceProfilesDocument = new TypedDocumentString(`
       activeVersion
       deviceTypeCount
       metadata
+      location {
+        expectedAccuracyMeters
+        expectedUpdateIntervalSeconds
+      }
       createdAt
     }
     pagination {
@@ -2034,6 +2106,10 @@ export const DeviceProfileByTokenDocument = new TypedDocumentString(`
     activeVersion
     deviceTypeCount
     metadata
+    location {
+      expectedAccuracyMeters
+      expectedUpdateIntervalSeconds
+    }
     createdAt
   }
 }
@@ -2049,6 +2125,10 @@ export const CreateDeviceProfileDocument = new TypedDocumentString(`
     activeVersion
     deviceTypeCount
     metadata
+    location {
+      expectedAccuracyMeters
+      expectedUpdateIntervalSeconds
+    }
     createdAt
   }
 }
@@ -2064,6 +2144,10 @@ export const UpdateDeviceProfileDocument = new TypedDocumentString(`
     activeVersion
     deviceTypeCount
     metadata
+    location {
+      expectedAccuracyMeters
+      expectedUpdateIntervalSeconds
+    }
     createdAt
   }
 }

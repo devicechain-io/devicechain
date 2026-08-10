@@ -14,14 +14,26 @@ import { FormField } from '@/components/ui/form-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { useToast } from '@/components/ui/toast';
 import { errMessage } from '@/routes/common';
-import { TypeCapsule, type TypeAppearance } from '@/components/TypeCapsule';
+import { TypeCapsule } from '@/components/TypeCapsule';
 import { TYPE_ICONS, TYPE_ICON_KEYS } from '@/lib/type-icons';
 
-// A type's appearance plus the description the form preserves on save (the type
-// update is a full replace, so both the read entity and the sent update carry it).
-// Structurally a <X>TypeCreateRequest.
-export interface AppearanceUpdate extends TypeAppearance {
-  description?: string | null;
+// What this form sends back: the appearance it edits, plus the name and
+// description it does not, so a colour change does not erase them.
+//
+// 🔴 Every field is REQUIRED and non-undefined, deliberately. The type update is a
+// full replace and the caller spreads this over its family's `…Preserved(entity)`
+// projection — an optional field here would spread as `undefined` and clear the
+// preserved value, which is the same deletion by omission the projection exists to
+// stop, just one layer further in. imageUrl and metadata are absent because this
+// form neither edits nor reads them; the projection underneath carries them.
+export interface AppearanceUpdate {
+  token: string;
+  name: string | null;
+  description: string | null;
+  icon: string | null;
+  backgroundColor: string | null;
+  foregroundColor: string | null;
+  borderColor: string | null;
 }
 
 function ColorField({
@@ -89,12 +101,12 @@ export function TypeAppearanceForm({
     try {
       await update({
         token: entity.token,
-        name: entity.name ?? undefined,
-        description: entity.description ?? undefined,
-        icon,
-        backgroundColor,
-        foregroundColor,
-        borderColor,
+        name: entity.name ?? null,
+        description: entity.description ?? null,
+        icon: icon ?? null,
+        backgroundColor: backgroundColor ?? null,
+        foregroundColor: foregroundColor ?? null,
+        borderColor: borderColor ?? null,
       });
       toast(t('appearanceSaved'));
       onSaved();

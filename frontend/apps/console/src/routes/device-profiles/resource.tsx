@@ -35,6 +35,7 @@ import {
   getDeviceProfile,
   createDeviceProfile,
   updateDeviceProfile,
+  deviceProfilePreserved,
   deleteDeviceProfile,
   listMetricDefinitions,
   deleteMetricDefinition,
@@ -92,13 +93,27 @@ function ProfileForm({ entity, onDone }: { entity?: DeviceProfile; onDone: (mess
     setFormError(null);
     setBusy(true);
     try {
-      const request: DeviceProfileCreateRequest = {
-        token: editing ? entity.token : token.trim(),
-        name: name.trim() || undefined,
-        description: description.trim() || undefined,
-        category: category.trim() || undefined,
-        metadata: entity?.metadata ?? undefined,
-      };
+      // 🔴 `location` is why this starts from deviceProfilePreserved rather than
+      // listing fields. It is the profile's position declaration, no form on this
+      // page edits it, and the schema says in as many words that leaving it out of
+      // an update clears it — so a rename here used to silently un-declare position
+      // for every device built on the profile, and the only symptom would have been
+      // its map surfaces going quiet.
+      const request: Required<DeviceProfileCreateRequest> = editing
+        ? {
+            ...deviceProfilePreserved(entity),
+            name: name.trim() || null,
+            description: description.trim() || null,
+            category: category.trim() || null,
+          }
+        : {
+            token: token.trim(),
+            name: name.trim() || null,
+            description: description.trim() || null,
+            category: category.trim() || null,
+            metadata: null,
+            location: null,
+          };
       if (editing) {
         await updateDeviceProfile(entity.token, request);
         onDone(t('deviceProfiles:profileUpdatedToast', { token: entity.token }));
