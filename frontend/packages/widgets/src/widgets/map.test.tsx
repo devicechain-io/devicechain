@@ -18,6 +18,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const m = vi.hoisted(() => ({
   maps: [] as Array<{ style: unknown; removed: boolean }>,
   markers: [] as Array<{ lngLat: [number, number]; element: HTMLElement; removed: boolean }>,
+  // The worker URL the loader handed MapLibre. Recorded rather than ignored: see
+  // the test at the bottom of this file for why a fake that swallowed this call
+  // would be hiding the one failure mode nothing else here can see.
+  workerUrls: [] as string[],
 }));
 
 vi.mock('maplibre-gl', () => {
@@ -61,7 +65,12 @@ vi.mock('maplibre-gl', () => {
       return this;
     }
   }
-  return { Map: FakeMap, Marker: FakeMarker, LngLatBounds: FakeLngLatBounds };
+  return {
+    Map: FakeMap,
+    Marker: FakeMarker,
+    LngLatBounds: FakeLngLatBounds,
+    setWorkerUrl: (url: string) => m.workerUrls.push(url),
+  };
 });
 
 import type { LocationStreamState } from '../hooks';
@@ -261,6 +270,42 @@ describe('MapWidget — no tile source configured', () => {
     expect(label).not.toContain('°');
     expect(label).not.toContain('m/s');
     expect(label).not.toMatch(/\b0 m\b/);
+  });
+});
+
+// 🔴 THE ONE FAILURE MODE NOTHING ELSE HERE CAN SEE.
+//
+// MapLibre 6 parses tiles and geometry in a web worker whose URL it derives AT
+// RUNTIME from its own module URL. That is a string no bundler can follow, so
+// nothing emits the worker file and the browser resolves it to a 404 — and
+// `new Worker()` does not throw on one, the failure arrives later as an async
+// error event. The result is a map that builds, type-checks, passes every other
+// test in this file, and then renders nothing.
+//
+// The loader defeats that by importing the worker through Vite's `?worker&url`
+// entry and handing the emitted URL to `setWorkerUrl`. This is the assertion that
+// the loader still does it — deliberately BEFORE anything is drawn, because the
+// fake map draws happily either way and would never notice.
+describe('the MapLibre worker', () => {
+  // 🔴 `workerUrls` is deliberately NOT cleared in the beforeEach above, unlike
+  // `maps` and `markers`. The loader memoizes its import for the whole module, so
+  // `setWorkerUrl` can only ever be called ONCE per test file — reset the array and
+  // every assertion here would depend on being the first test to render a map,
+  // which is the kind of order-coupling that reads as a passing test right up until
+  // someone reorders the file. Written this way the assertion holds wherever it runs.
+  it('is pointed once at a URL the bundler emitted, however many maps a board holds', async () => {
+    render(<MapWidget widget={widget({ tileUrl: TILE_URL })} data={twoDevices()} />);
+    render(<MapWidget widget={widget({ tileUrl: TILE_URL })} data={twoDevices()} />);
+
+    await waitFor(() => expect(m.maps.length).toBeGreaterThanOrEqual(2));
+
+    // Exactly one call for two maps: the memoized loader is what stops several map
+    // widgets on one board racing to rewrite a global config.
+    expect(m.workerUrls).toHaveLength(1);
+    // And it is a real reference, not the empty string MapLibre falls back to when
+    // it cannot work one out for itself — which is precisely the broken state.
+    expect(m.workerUrls[0]).toBeTruthy();
+    expect(typeof m.workerUrls[0]).toBe('string');
   });
 });
 

@@ -35,14 +35,16 @@ function loadMapLibre(): Promise<typeof import('maplibre-gl')> {
   if (!mapLibrePromise) {
     mapLibrePromise = Promise.all([
       import('maplibre-gl'),
+      // Same worker bootstrap the dashboard map widget carries, and for the same
+      // reason: MapLibre derives its worker URL at runtime from its own module URL,
+      // which no bundler can see, so without this the file is never emitted and the
+      // map renders nothing while every gate stays green. The long-form explanation
+      // lives next to the widget's copy (packages/widgets/src/widgets/map.tsx).
+      import('maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'),
       import('maplibre-gl/dist/maplibre-gl.css'),
-    ]).then(([mod]) => {
-      // Same UMD-interop shim the dashboard map widget carries: some bundlers
-      // hand back the namespace, others the default export.
-      const lib = mod as unknown as Record<string, unknown>;
-      return typeof lib.Map === 'function'
-        ? mod
-        : (lib.default as typeof import('maplibre-gl'));
+    ]).then(([mod, worker]) => {
+      mod.setWorkerUrl(worker.default);
+      return mod;
     });
   }
   return mapLibrePromise;
