@@ -351,6 +351,79 @@ export function fromGeometryDocument(raw: string): Vertex[] | null {
   return vertices;
 }
 
+// ── Editing an existing ring ────────────────────────────────────────────────
+//
+// These are the whole of what a drag or a delete does to the model. Keeping them
+// here rather than inside the map component means the RULES are testable without
+// a DOM, a WebGL context, or a pointer — and the component is left holding only
+// the part that genuinely needs MapLibre: turning a pixel into a coordinate.
+
+/**
+ * Moves one vertex, leaving every other position untouched.
+ *
+ * Out-of-range indices return the ring unchanged rather than appending or
+ * throwing. A drag whose vertex was removed underneath it — by an undo, or by a
+ * concurrent edit — should end quietly, not corrupt the ring or crash the editor
+ * mid-gesture.
+ */
+export function moveVertex(
+  vertices: readonly Vertex[],
+  index: number,
+  next: Vertex,
+): Vertex[] {
+  if (index < 0 || index >= vertices.length) return [...vertices];
+  const out = [...vertices];
+  out[index] = next;
+  return out;
+}
+
+/**
+ * Removes one vertex.
+ *
+ * 🔴 It does NOT refuse to go below three. Blocking the removal would leave an
+ * operator stuck with a corner they cannot delete, and checkGeometry already
+ * reports `tooFewVertices` and blocks the save.
+ *
+ * "Recoverable by placing another corner" is only true because the FORM reopens
+ * a ring that drops below MIN_VERTICES — while a ring is closed, a map click
+ * adds nothing. Without that reset this function would strand the editor, so the
+ * two belong together even though they live apart.
+ */
+export function removeVertex(vertices: readonly Vertex[], index: number): Vertex[] {
+  if (index < 0 || index >= vertices.length) return [...vertices];
+  return vertices.filter((_, i) => i !== index);
+}
+
+/**
+ * Inserts a vertex into the edge that starts at `edgeIndex`, so a drawn ring can
+ * gain detail without being redrawn.
+ *
+ * Edge i runs from vertex i to vertex i+1, and the LAST edge runs from the last
+ * vertex back to the first — inserting into that one appends, which is why this
+ * takes an edge index rather than a vertex index. Getting that wrong puts the new
+ * corner at the start of the ring instead of the end, which looks like the shape
+ * turning inside out.
+ */
+export function insertVertexOnEdge(
+  vertices: readonly Vertex[],
+  edgeIndex: number,
+  v: Vertex,
+): Vertex[] {
+  if (edgeIndex < 0 || edgeIndex >= vertices.length) return [...vertices];
+  const out = [...vertices];
+  out.splice(edgeIndex + 1, 0, v);
+  return out;
+}
+
+/** The midpoint of each edge, in ring order — where an insert handle belongs. */
+export function edgeMidpoints(vertices: readonly Vertex[]): Vertex[] {
+  if (vertices.length < 2) return [];
+  return vertices.map((a, i) => {
+    const b = vertices[(i + 1) % vertices.length];
+    return { lng: roundCoord((a.lng + b.lng) / 2), lat: roundCoord((a.lat + b.lat) / 2) };
+  });
+}
+
 // ── The close gesture ───────────────────────────────────────────────────────
 
 /** A point in screen space, as MapLibre's `project` and `MapMouseEvent.point` give it. */
@@ -382,6 +455,69 @@ export function isCloseGesture(
 ): boolean {
   if (vertexCount < MIN_VERTICES) return false;
   return Math.hypot(first.x - click.x, first.y - click.y) <= radius;
+}
+
+/**
+ * Whether a press has travelled far enough to be a DRAG rather than a click.
+ *
+ * Pixels, for the same reason isCloseGesture uses pixels: a degree tolerance is a
+ * different real distance at every zoom.
+ */
+export function hasMovedEnough(
+  start: ScreenPoint,
+  current: ScreenPoint,
+  threshold: number = DRAG_THRESHOLD_PX,
+): boolean {
+  return Math.hypot(current.x - start.x, current.y - start.y) > threshold;
+}
+
+/** Pixels a press must travel before it becomes a drag. */
+export const DRAG_THRESHOLD_PX = 3;
+
+/** What a click on the map should be taken to mean. */
+export type ClickIntent = 'ignored' | 'close' | 'append';
+
+/**
+ * The decision a click on the drawing surface resolves to.
+ *
+ * 🔴 EXTRACTED BECAUSE IT BROKE WHILE IT LIVED INSIDE THE MAP COMPONENT, where
+ * no test could reach it. Vertex dragging was added without a movement
+ * threshold, so a plain click on a corner entered the drag machinery and its
+ * trailing click was discarded — which silently disabled "click the first corner
+ * to close the shape", the one gesture the map's own instructions describe. Every
+ * unit test still passed, because the click never reached the rule they cover.
+ *
+ * The three suppressors are ordered by how they arise, and each is distinct:
+ *   justDragged     a drag that MOVED just ended; its trailing click is not one.
+ *   consumedByLayer a handle already answered this exact click.
+ *   closed          the ring is finished, so nothing is appended — but a click
+ *                   may still CLOSE it, which is why this is checked last.
+ */
+export function clickIntent(input: {
+  justDragged: boolean;
+  consumedByLayer: boolean;
+  closed: boolean;
+  vertices: readonly Vertex[];
+  /** Where the first vertex sits on screen, or null if there is no ring yet. */
+  firstVertexPoint: ScreenPoint | null;
+  clickPoint: ScreenPoint;
+}): ClickIntent {
+  if (input.justDragged || input.consumedByLayer) return 'ignored';
+
+  if (
+    input.firstVertexPoint &&
+    isCloseGesture(input.vertices.length, input.firstVertexPoint, input.clickPoint)
+  ) {
+    return 'close';
+  }
+
+  // Checked AFTER the close test: a finished ring takes no new corners, but
+  // closing an already-closed ring is a no-op rather than something to forbid,
+  // and ordering it the other way round would make the first corner of a closed
+  // ring the only dead spot on the map for no reason a user could infer.
+  if (input.closed) return 'ignored';
+
+  return 'append';
 }
 
 // ── Camera ──────────────────────────────────────────────────────────────────

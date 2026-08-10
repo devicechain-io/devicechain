@@ -54,10 +54,11 @@ vi.mock('@devicechain/client', async (importOriginal) => {
 // have shown that — it would have made the form's omission invisible, which is
 // the exact failure mode this file's header warns about.
 vi.mock('./FenceMap', () => ({
-  FenceMap: ({ onChange, onClose, disabled, tileUrl }: FenceMapProps) => (
+  FenceMap: ({ onChange, onClose, disabled, closed, tileUrl }: FenceMapProps) => (
     <div
       data-testid="fake-map"
       data-disabled={String(!!disabled)}
+      data-closed={String(!!closed)}
       data-tile-url={tileUrl ?? ''}
     >
       <button type="button" data-testid="fake-map-emit" onClick={() => onChange(staged.vertices)}>
@@ -93,7 +94,7 @@ beforeEach(() => {
 });
 
 // ── Strings, exactly as an operator reads them ──────────────────────────────
-const CLOSED_HINT = 'Shape closed. Undo a corner to keep drawing.';
+const CLOSED_HINT = "Shape closed. Drag a corner to move it, or undo a corner to keep drawing.";
 const UNDO_ACTION = 'Undo last point';
 const UNREADABLE =
   'This geofence uses a shape this editor cannot draw. It is stored intact and is still ' +
@@ -328,13 +329,16 @@ describe('closing the ring', () => {
   it('stops the map taking further corners and says so', async () => {
     render(<GeoFenceForm onDone={vi.fn()} />);
     // Before: drawing is live and nothing claims otherwise.
-    expect((await screen.findByTestId('fake-map')).getAttribute('data-disabled')).toBe('false');
+    expect((await screen.findByTestId('fake-map')).getAttribute('data-closed')).toBe('false');
     expect(screen.queryByText(CLOSED_HINT)).toBeNull();
 
     await closeIt();
 
-    expect(screen.getByTestId('fake-map').getAttribute('data-disabled')).toBe('true');
+    expect(screen.getByTestId('fake-map').getAttribute('data-closed')).toBe('true');
     expect(screen.getByText(CLOSED_HINT)).toBeTruthy();
+    // 🔴 And it is still EDITABLE. Closing must not freeze the shape — an earlier
+    // version conflated the two and made a finished ring unmodifiable.
+    expect(screen.getByTestId('fake-map').getAttribute('data-disabled')).toBe('false');
   });
 
   it('does not discard the ring — a closed shape is still saveable', async () => {
@@ -351,11 +355,11 @@ describe('closing the ring', () => {
   it('reopens for drawing when a corner is undone', async () => {
     render(<GeoFenceForm onDone={vi.fn()} />);
     await closeIt();
-    expect(screen.getByTestId('fake-map').getAttribute('data-disabled')).toBe('true');
+    expect(screen.getByTestId('fake-map').getAttribute('data-closed')).toBe('true');
 
     fireEvent.click(screen.getByRole('button', { name: UNDO_ACTION }));
 
-    expect(screen.getByTestId('fake-map').getAttribute('data-disabled')).toBe('false');
+    expect(screen.getByTestId('fake-map').getAttribute('data-closed')).toBe('false');
     expect(screen.queryByText(CLOSED_HINT)).toBeNull();
   });
 
@@ -363,7 +367,38 @@ describe('closing the ring', () => {
     // The counterweight to the create tests above, which all start open: the
     // initial state is derived, not hardcoded to either value.
     render(<GeoFenceForm entity={fence({ geometry: polygonDoc([OUTER_RING]) })} onDone={vi.fn()} />);
-    expect((await screen.findByTestId('fake-map')).getAttribute('data-disabled')).toBe('true');
+    expect((await screen.findByTestId('fake-map')).getAttribute('data-closed')).toBe('true');
+  });
+
+  // 🔴 THE REGRESSION THIS SEPARATION EXISTS TO PREVENT. The form used to pass
+  // `busy || closed` as `disabled`, so a saved fence — which opens closed —
+  // arrived with every corner frozen. Nothing could be dragged, nothing removed;
+  // the only way to change a stored shape was to clear it and start again. No
+  // test noticed, because the fake ignored both props.
+  it('leaves an existing fence EDITABLE even though it opens closed', async () => {
+    render(<GeoFenceForm entity={fence({ geometry: polygonDoc([OUTER_RING]) })} onDone={vi.fn()} />);
+    const fake = await screen.findByTestId('fake-map');
+    expect(fake.getAttribute('data-closed')).toBe('true');
+    expect(fake.getAttribute('data-disabled')).toBe('false');
+  });
+
+  it('freezes the map only while a save is in flight', async () => {
+    let release: (v: unknown) => void = () => {};
+    gqlMock.mockImplementation((service: string) => {
+      if (service === 'user-management/settings') return Promise.resolve({ tokenMasks: '{}' });
+      return new Promise((res) => {
+        release = res;
+      });
+    });
+    render(<GeoFenceForm entity={fence({ geometry: polygonDoc([OUTER_RING]) })} onDone={vi.fn()} />);
+    const save = await screen.findByRole('button', { name: SAVE_ACTION });
+    expect(screen.getByTestId('fake-map').getAttribute('data-disabled')).toBe('false');
+
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(screen.getByTestId('fake-map').getAttribute('data-disabled')).toBe('true'),
+    );
+    release({ updateGeoFence: {} });
   });
 });
 
@@ -427,5 +462,62 @@ describe('the basemap fields', () => {
     expect(window.localStorage.getItem('dc.geofence.tileUrl')).toBe(
       'https://tiles.example.com/a.png',
     );
+  });
+});
+
+// ── Escapability ────────────────────────────────────────────────────────────
+describe('a closed ring that loses corners', () => {
+  // 🔴 THE DEAD-EDITOR TRAP. While closed, a map click does not add a corner.
+  // Alt-remove the corners of a saved fence one by one and, without the reset,
+  // the operator reaches an empty map with clicks inert, Undo and Clear both
+  // disabled (nothing to undo), and no control anywhere that reopens drawing.
+  // The form has to be abandoned. Removal happens on the MAP, so no button test
+  // would have found this.
+  it('reopens for drawing when it falls below three corners', async () => {
+    render(<GeoFenceForm entity={fence({ geometry: polygonDoc([OUTER_RING]) })} onDone={vi.fn()} />);
+    expect((await screen.findByTestId('fake-map')).getAttribute('data-closed')).toBe('true');
+
+    staged.vertices = ROME.slice(0, 2); // what a removal leaves behind
+    fireEvent.click(screen.getByTestId('fake-map-emit'));
+
+    expect(screen.getByTestId('fake-map').getAttribute('data-closed')).toBe('false');
+  });
+
+  it('stays closed while it still encloses something', async () => {
+    // The counterweight: without it, the test above would also pass against a
+    // form that had simply stopped closing rings at all.
+    render(<GeoFenceForm entity={fence({ geometry: polygonDoc([OUTER_RING]) })} onDone={vi.fn()} />);
+    expect((await screen.findByTestId('fake-map')).getAttribute('data-closed')).toBe('true');
+
+    staged.vertices = ROME; // still three corners
+    fireEvent.click(screen.getByTestId('fake-map-emit'));
+
+    expect(screen.getByTestId('fake-map').getAttribute('data-closed')).toBe('true');
+  });
+
+  it('leaves an emptied ring drawable rather than inert', async () => {
+    render(<GeoFenceForm entity={fence({ geometry: polygonDoc([OUTER_RING]) })} onDone={vi.fn()} />);
+    await screen.findByTestId('fake-map');
+    staged.vertices = [];
+    fireEvent.click(screen.getByTestId('fake-map-emit'));
+
+    const fake = screen.getByTestId('fake-map');
+    expect(fake.getAttribute('data-closed')).toBe('false');
+    expect(fake.getAttribute('data-disabled')).toBe('false');
+  });
+});
+
+describe('the edit hint', () => {
+  it('is absent on an untouched map, where its gestures have no target', async () => {
+    render(<GeoFenceForm onDone={vi.fn()} />);
+    await screen.findByTestId('fake-map');
+    expect(screen.queryByTestId('fence-edit-hint')).toBeNull();
+  });
+
+  it('appears once there is a corner to edit', async () => {
+    render(<GeoFenceForm onDone={vi.fn()} />);
+    staged.vertices = ROME;
+    fireEvent.click(await screen.findByTestId('fake-map-emit'));
+    expect(screen.getByTestId('fence-edit-hint')).toBeTruthy();
   });
 });
