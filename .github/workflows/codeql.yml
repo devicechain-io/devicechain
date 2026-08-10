@@ -44,14 +44,67 @@
 name: codeql
 
 on:
+  # 🔴 DELIBERATELY UNFILTERED. Every commit that lands on main is analyzed, so
+  # main's code-scanning state always describes main's actual HEAD rather than
+  # whatever was last considered worth analyzing. This run blocks nobody — it
+  # happens after the merge — so its cost is not the cost anyone was complaining
+  # about, and paying it keeps the branch authoritative.
   push:
     branches: [main]
+
+  # The PR run IS on the critical path, and it is the expensive one: measured at
+  # ~9-11 min against ~5 min for the whole `ci` workflow. The split is not what it
+  # looks like — 422s of that is "Build every workspace module" and only 87s is
+  # the analysis. Go extraction is TRACER-based, so the compiler genuinely has to
+  # run; the caches already hit (setup-go reports a hit, zero `go: downloading`),
+  # and no amount of further caching removes a build CodeQL must observe.
+  #
+  # So the only lever is not running it when there is nothing to analyze. Measured
+  # over the last 20 merges: 8 touched no Go at all — docs, frontend, CI, chart
+  # prose. Each of those paid ~10 minutes to analyze an unchanged tree.
+  #
+  # 🔴 DO NOT CONFUSE THIS WITH `paths-ignore` IN THE CODEQL CONFIG. The header
+  # above explains at length that CodeQL's OWN path filtering does not apply to a
+  # compiled language that gets built, and that adding it would silently exclude
+  # nothing. That warning is about a different mechanism and does NOT transfer
+  # here: `paths` on a workflow trigger is evaluated by Actions before the job is
+  # ever created, so it genuinely skips. The two look alike and behave oppositely.
+  #
+  # 🔴 A WORKFLOW SKIPPED BY A PATH FILTER LEAVES ITS CHECKS "PENDING", NOT
+  # "SKIPPED" — GitHub's documented behaviour. That is harmless today because
+  # `main` carries no branch protection and nothing lists "Analyze Go" as a
+  # required status check. It becomes a deadlock the day someone adds one: every
+  # docs-only PR would wait forever on a check that is never going to report. If
+  # you protect this branch, either leave "Analyze Go" out of the required set or
+  # pair this with a job that reports success on the skipped path.
   pull_request:
     branches: [main]
+    paths:
+      # Anything the extractor could see. `**/*.go` is exhaustive by construction,
+      # so this cannot miss a Go file by living somewhere unexpected.
+      - "**/*.go"
+      - "**/go.mod"
+      - "**/go.sum"
+      - "go.work"
+      - "go.work.sum"
+      # A change to the analysis itself must re-run the analysis. Without this,
+      # editing this file is the one change guaranteed not to be tested.
+      - ".github/workflows/codeql.yml"
+      # Negation LAST — order decides, and a later negative overrides an earlier
+      # positive. `_legacy/` is the archived pre-migration tree that go.work does
+      # not reference, so the build step never compiles it and the extractor never
+      # sees it. A PR touching only `_legacy/**` would otherwise trigger ten
+      # minutes of analysis over a tree whose Go files are not analyzed at all.
+      - "!_legacy/**"
+
   schedule:
     # Weekly, Wednesday 05:17 UTC. A scheduled run matters even though this also
     # runs per-PR: new QUERIES ship continuously, so the same unchanged code gets
     # re-analyzed against rules that did not exist when it merged.
+    #
+    # It is also the backstop for the PR filter above — `paths` is not evaluated
+    # for scheduled events, so this run always analyzes the whole tree regardless
+    # of what any recent PR touched.
     - cron: "17 5 * * 3"
 
 permissions:
