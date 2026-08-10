@@ -29,9 +29,9 @@ export interface TenantInfo {
   // editor reads it to seed its per-field set/inherit state. Null pre-fetch.
   brandingOverride: TenantBranding | null;
   // The tenant's EFFECTIVE basemap: its override folded over the operator default.
-  // Every field inside may be null — the platform ships no tile source, so an
-  // instance nobody has configured resolves to nothing and the map surfaces draw a
-  // plain panel rather than inventing a provider.
+  // The instance default ships a real tile source, so this normally arrives set —
+  // but every field inside may still be null, because an operator can clear it. The
+  // map surfaces then draw a plain panel rather than inventing a provider.
   basemap: TenantBasemap | null;
   // The RAW basemap override, for the editor's set-vs-inherited display.
   basemapOverride: TenantBasemap | null;

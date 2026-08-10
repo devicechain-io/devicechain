@@ -8,11 +8,14 @@
 //
 // A Basemap is an OVERRIDE: every field is optional, and a nil field inherits the
 // next tier down (a tenant's override, then the operator's `basemap.default`
-// system setting, then nothing at all). There is deliberately NO shipped default
-// tile source — one would point every self-hosted instance at a public tile
-// service that never agreed to serve it — so a basemap that is unset at every
-// tier resolves to nothing, and the consumer draws its positions on a plain
-// panel and says why.
+// system setting). That bottom tier ships a real value — the OpenStreetMap
+// standard tile layer, see settings.DefaultBasemapJSON — so an instance nobody
+// has configured still draws a map.
+//
+// A basemap unset at EVERY tier is still reachable, and is what the plain-panel
+// path exists for: an operator gets there by storing `{}` as the instance default.
+// 🔴 Not by CLEARING it — settings.Clear drops the override and reverts to the code
+// default above, which now means "Reset to default" turns maps back ON.
 package basemap
 
 import (
@@ -89,9 +92,9 @@ var tilePlaceholders = [][]string{
 // TileURL and Attribution independently would let a tenant that sets only a tile URL
 // inherit the OPERATOR's attribution — pairing one provider's tiles with another
 // provider's credit line. That is not a cosmetic mismatch, it is a licence violation
-// manufactured by the merge, in the one system whose stated reason for shipping no
-// default basemap is that tiles carry terms the platform cannot accept on anyone's
-// behalf.
+// manufactured by the merge — in the one system whose whole premise is that tiles
+// carry terms, and that getting the credit right is the platform's job rather than
+// the operator's to remember.
 //
 // The CAMERA FALLBACK carries no licence weight and merges per field, so an operator
 // can set a sensible instance-wide starting view that a tenant refines without having
@@ -192,7 +195,7 @@ func validateTileSource(b Basemap) error {
 	case !hasURL && !hasAttr:
 		return nil
 	case hasURL && !hasAttr:
-		return fmt.Errorf("basemap.attribution is required when basemap.tileUrl is set: a basemap without the credit line its provider requires is a licence violation, which is why the platform ships no default basemap")
+		return fmt.Errorf("basemap.attribution is required when basemap.tileUrl is set: showing a provider's tiles without the credit line their licence requires is a licence violation, so the two are stored as one value or not at all")
 	case !hasURL && hasAttr:
 		return fmt.Errorf("basemap.attribution requires basemap.tileUrl: the tile source and its credit line are one value, and an attribution alone would be applied to a tile source it does not describe")
 	}

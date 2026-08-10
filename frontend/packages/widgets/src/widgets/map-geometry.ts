@@ -118,14 +118,16 @@ export function describePosition(sample: PlaceableLocation): string {
 // rasterStyleFor builds the MapLibre style document for a user-supplied raster tile
 // source.
 //
-// 🔴 THERE IS NO DEFAULT TILE SOURCE, AND THAT IS A DECISION RATHER THAN AN OMISSION.
-// The library is not the map — the TILES are, and they carry their own terms. Defaulting
-// to OpenStreetMap's public tile servers would put every self-hosted instance in breach
-// of the OSM tile usage policy the moment it had real traffic, silently, on donated
-// bandwidth nobody agreed to spend. So the URL is part of the widget's own config, and
-// with none set the widget draws positions on a plain panel and says so. An
-// INSTANCE-level default (an operator naming their own tile service once, for every
-// board) is a deliberate follow-up, not part of this.
+// 🔴 THIS PACKAGE HARDCODES NO TILE SOURCE, AND THAT IS A DECISION RATHER THAN AN
+// OMISSION. The library is not the map — the TILES are, and they carry their own terms,
+// so a widget library is the wrong place to choose a provider on an operator's behalf.
+// The URL arrives as config, and with none set the widget draws positions on a plain
+// panel and says so.
+//
+// The PLATFORM does ship a default (ADR-079): an instance-wide setting a tenant can
+// override, which a board then inherits when its own options name nothing. That is a
+// named, visible, replaceable choice made once by an operator — a different thing from
+// this module quietly baking a host into every build of the library.
 //
 // `attribution` is passed to the source rather than hidden: a tile source's licence
 // commonly REQUIRES visible credit, so it is a property of the data, not decoration a

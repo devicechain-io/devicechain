@@ -305,14 +305,14 @@ export const WIDGET_OPTIONS = {
   // `required` means "absent leaves the widget with nothing to show", and a map without
   // a basemap still shows every position it was asked to — on a plain panel, saying why
   // there is no map behind them. Marking it required would report a correctly-rendering
-  // widget as broken on every board that has not chosen a tile provider yet, which is
-  // every board on a fresh instance: there is deliberately NO default tile source,
-  // because tiles carry terms the platform cannot accept on an operator's behalf.
+  // widget as broken on every board that names no provider of its own — which is most
+  // of them, because the usual and recommended answer is to inherit the tenant's
+  // basemap rather than to configure tiles per board.
   map: {
     title: TITLE,
     tileUrl: {
       kind: 'string',
-      doc: 'Raster tile URL template, e.g. https://tiles.example.com/{z}/{x}/{y}.png. Without one, positions are drawn on a plain background.',
+      doc: "Raster tile URL template, e.g. https://tiles.example.com/{z}/{x}/{y}.png. Leave empty to inherit the tenant's basemap; setting one overrides it for this board only.",
     },
     attribution: {
       kind: 'string',

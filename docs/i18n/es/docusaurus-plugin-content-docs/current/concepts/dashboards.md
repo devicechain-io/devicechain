@@ -33,10 +33,12 @@ Los widgets integrados abarcan cinco canales — **telemetría**, **alarma**, **
 | **Selector de entidad** | selección | un selector que reapunta un slot con nombre, de modo que un visor elige qué entidad muestra el panel — o un widget dentro de él |
 | **Mapa** | ubicación | la última posición conocida de los dispositivos vinculados |
 
-:::note El mapa necesita una fuente de teselas, y DeviceChain no elige una por usted
-El widget de mapa renderiza las posiciones de los dispositivos sobre una **fuente de teselas que usted configura en el widget**. No hay valor predeterminado, y es deliberado: la biblioteca de mapas no es el mapa — las teselas lo son, y provienen de un proveedor cuyos términos son ajenos a los de la plataforma. Usar un servicio público de teselas por defecto convertiría en silencio la política de uso de un tercero en una dependencia de ejecución de su instancia.
+:::note Las teselas del mapa vienen del inquilino, no del widget
+El widget de mapa renderiza las posiciones de los dispositivos sobre el **mapa base** del inquilino, que en una instancia nueva ya viene configurado, de modo que un widget de mapa dibuja teselas sin que nadie tenga que prepararlo. Las opciones `tileUrl` y `attribution` del propio widget son una anulación para ese panel concreto, útil para probar un proveedor antes de aplicarlo a todo el inquilino.
 
-Sin una fuente de teselas configurada el widget sigue funcionando: dibuja las posiciones relativas de los dispositivos sobre un fondo liso e indica que no hay teselas configuradas. Apúntelo a un proveedor comercial, o a teselas que usted mismo aloje.
+Qué proveedor conviene usar realmente es una decisión a nivel de inquilino, no por widget: vea [Mapas base](./basemaps.md).
+
+Si ningún nivel tiene una fuente de teselas —un operador definió el valor por defecto de la instancia como `{}` y el inquilino no definió nada— el widget sigue funcionando: dibuja las posiciones relativas de los dispositivos sobre un fondo liso e indica que no hay teselas configuradas.
 
 Leer posiciones también requiere la autoridad `location:read`, que **no** otorga la base de solo lectura que recibe cada miembro — vea [ubicación de dispositivos](../guides/connecting-a-device.md). A un visor que no la tenga se le indica, en lugar de mostrarle un mapa vacío.
 :::

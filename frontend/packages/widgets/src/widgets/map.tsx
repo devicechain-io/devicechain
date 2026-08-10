@@ -12,13 +12,14 @@
 // allowed to see this" are opposite facts and only one of them is actionable, so the
 // refusal gets its own copy and its own look — never a blank map.
 //
-// 🔴 NO TILE SOURCE IS NOT A BROKEN MAP. There is no default tile URL (see
-// rasterStyleFor), so an unconfigured widget still draws every position, on a plain
-// panel, and says why there is no basemap. It loads no map library and issues no
-// request to any host, because there is no host it would be entitled to ask. What
-// HAS changed (ADR-079) is where the tile source can come from: a widget with no
-// options of its own now inherits the tenant's, so the plain panel means "nobody has
-// configured one anywhere" rather than "nobody configured THIS widget".
+// 🔴 NO TILE SOURCE IS NOT A BROKEN MAP. This package hardcodes no tile URL (see
+// rasterStyleFor) and inherits one from the tenant (ADR-079), whose instance-wide
+// default now ships a real provider — so in practice this branch is rare. It is not
+// dead, though: an operator can empty that default, and a viewer can be looking at a
+// board on such an instance. When nothing supplies a tile source the widget still
+// draws every position, on a plain panel, and says why there is no basemap. It loads
+// no map library and issues no request to any host, because it has been given no
+// host it would be entitled to ask.
 //
 // 🔴 ABSENT IS NOT ZERO. A marker describes only what its device reported; an
 // unreported heading is not due north. See describePosition.

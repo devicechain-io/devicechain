@@ -122,8 +122,8 @@ const twoDevices = () =>
     ],
   });
 
-// Network reachers jsdom exposes. The tile-less widget must touch none of them: there is
-// no default tile source, so there is no host it would be entitled to ask.
+// Network reachers jsdom exposes. The tile-less widget must touch none of them: this
+// package hardcodes no tile source, so given none it has no host it may ask.
 let fetchSpy: ReturnType<typeof vi.fn>;
 let xhrOpenSpy: ReturnType<typeof vi.spyOn>;
 

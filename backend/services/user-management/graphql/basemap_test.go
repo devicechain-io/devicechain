@@ -5,6 +5,9 @@ package graphql
 
 import (
 	"context"
+	"net"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -205,10 +208,159 @@ func TestATenantTileSourceNeverPicksUpTheOperatorCreditLine(t *testing.T) {
 		"a tenant that named its own tile source must not inherit %q — that credits the operator's provider for the tenant's tiles", opCred)
 }
 
-func TestTheShippedDefaultResolvesToNoBasemapAtAll(t *testing.T) {
+// An operator who deliberately stores `{}` as the instance default lands here. It is
+// no longer the shipped state (see TestShippedBasemapDefault) but it is still a
+// reachable one, and the renderers' plain-panel path exists for it.
+//
+// 🔴 "Stores {}", not "clears": settings.Clear REMOVES the override and reverts to the
+// code default, which is now a real tile source. The two words mean opposite things
+// here, and the console's button is the one labelled "Reset to default".
+func TestAnEmptiedOperatorDefaultResolvesToNoBasemapAtAll(t *testing.T) {
 	got := resolveBasemap(basemap.Basemap{}, []byte(`{}`))
 	require.False(t, basemap.IsSet(got),
-		"the platform ships no tile source, so an instance nobody has configured must resolve to none")
+		"an instance default stored as {} must yield no tile source, not a stale one")
+}
+
+// TestShippedBasemapDefault checks the registered default through the CASCADE FOLD,
+// on a tenant that overrides nothing.
+//
+// 🔴 Asserting the constant's bytes would not be enough: the value has to survive JSON
+// unmarshalling, basemap.Validate and the fold before a console ever sees it, and a
+// default that is rejected by one of those degrades to nothing (resolveBasemap
+// swallows it by design) — a blank map again, with a log line the only evidence.
+//
+// It stops at the fold, though, and that gap is covered separately: this hands
+// `shipped` to resolveBasemap directly, so it cannot see a resolver that stopped
+// consulting the settings store at all. TestABareTenantResolvesToTheShippedDefault
+// drives that half through TenantResolver.Basemap.
+func TestShippedBasemapDefault(t *testing.T) {
+	var shipped []byte
+	for _, d := range settings.Definitions() {
+		if d.Key == settings.KeyBasemapDefault {
+			shipped = d.Default
+		}
+	}
+	require.NotEmpty(t, shipped, "basemap.default must be a registered setting")
+
+	got := resolveBasemap(basemap.Basemap{}, shipped)
+
+	require.True(t, basemap.IsSet(got),
+		"a new install must draw a map: an empty canvas is the defect this default exists to fix")
+	require.NotNil(t, got.TileURL)
+	require.NotNil(t, got.Attribution, "the shipped tile source must arrive with its credit line")
+
+	// The specific provider is a decision, not an accident: OpenStreetMap needs no
+	// credentials, which is what makes it viable as a zero-config default and is the
+	// parity bar. Changing it is fine — changing it without also changing the credit
+	// line below is not, which is what the cross-check after this enforces.
+	require.Equal(t, "https://tile.openstreetmap.org/{z}/{x}/{y}.png", *got.TileURL)
+	require.Contains(t, *got.Attribution, "https://www.openstreetmap.org/copyright",
+		"OSM's attribution guidelines require the credit to link to the copyright page")
+	require.Contains(t, *got.Attribution, "OpenStreetMap",
+		"OSM's attribution guidelines require the credit to name OpenStreetMap")
+}
+
+// TestABareTenantResolvesToTheShippedDefault drives the whole read path a console's
+// boot query drives: TenantResolver.Basemap → the settings store → the code default →
+// the fold. No override at either tier, which is what a fresh install looks like.
+//
+// 🔴 This exists because every other test in this file hands resolveBasemap its
+// operator default as an argument. That makes them blind to the ONE mutation that
+// reproduces the defect this whole change fixes: a resolver that stops consulting the
+// settings store and folds against nothing. Rewriting Basemap's body to
+// `resolveBasemap(basemapFromTenant(r.t), []byte("{}"))` leaves every other test in
+// the module green and every fresh install blank.
+func TestABareTenantResolvesToTheShippedDefault(t *testing.T) {
+	// No authorities: reading a basemap is deliberately ungated, because gating it
+	// blanks the map for exactly the people who need to see one.
+	ctx, _ := newSettingsCtx(t)
+	r := &TenantResolver{t: &iam.Tenant{}, svc: &SchemaResolver{}}
+
+	got, err := r.Basemap(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, got.TileUrl(),
+		"a tenant that overrides nothing must inherit the instance default — with no override and no default reaching it, a new install is blank")
+	require.Equal(t, "https://tile.openstreetmap.org/{z}/{x}/{y}.png", *got.TileUrl())
+	require.NotNil(t, got.Attribution(), "the inherited tile source must arrive with its credit line")
+	require.Contains(t, *got.Attribution(), "OpenStreetMap")
+}
+
+// The licence property, at the one tier that reaches every tenant on the instance.
+//
+// 🔴 This is the failure mode worth a test rather than a comment: repointing the
+// default at another provider is a one-line edit to a URL, and the credit line
+// sitting on the next line is easy not to think about. The result ships a licence
+// violation, prefilled and trusted, to every install that takes the default — the
+// exact defect basemap.Merge refuses to manufacture, reintroduced by hand.
+//
+// The check is that the host serving the tiles is credited BY A LINK IN THE
+// ATTRIBUTION. Deliberately scoped to the shipped default and not generalised: a
+// composited basemap legitimately credits a data source it does not fetch from
+// (Carto's tiles come from cartocdn.com and credit OpenStreetMap), so this exact
+// rule would be wrong applied to the whole provider catalog. It is right here,
+// where there is one provider and it serves its own credit page.
+func TestTheShippedDefaultCreditsTheHostItFetchesTilesFrom(t *testing.T) {
+	var shipped []byte
+	for _, d := range settings.Definitions() {
+		if d.Key == settings.KeyBasemapDefault {
+			shipped = d.Default
+		}
+	}
+	got := resolveBasemap(basemap.Basemap{}, shipped)
+	require.NotNil(t, got.TileURL)
+	require.NotNil(t, got.Attribution)
+
+	tileHost, err := url.Parse(*got.TileURL)
+	require.NoError(t, err)
+	want := registrableDomain(tileHost.Host)
+	require.NotEmpty(t, want)
+
+	var credited []string
+	for _, href := range hrefsIn(*got.Attribution) {
+		u, err := url.Parse(href)
+		require.NoErrorf(t, err, "attribution link is not a URL: %s", href)
+		credited = append(credited, registrableDomain(u.Host))
+	}
+	require.Containsf(t, credited, want,
+		"the default fetches tiles from %s but its credit line links only to %v — "+
+			"a tile source and the attribution its licence requires are ONE value, "+
+			"and this is the tier that reaches every tenant", tileHost.Host, credited)
+}
+
+// registrableDomain reduces a host to its last two labels, so tile.example.org and
+// www.example.org compare equal. Crude by intent — it is not a public-suffix list and
+// would be wrong for a host under a multi-label suffix (foo.co.uk), which is why its
+// only caller is the single-provider check above.
+func registrableDomain(host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	parts := strings.Split(strings.ToLower(host), ".")
+	if len(parts) < 2 {
+		return host
+	}
+	return strings.Join(parts[len(parts)-2:], ".")
+}
+
+// hrefsIn pulls the href values out of an attribution. It relies on the shape the
+// validator already enforces — links written exactly as <a href="https://…"> — so it
+// needs no HTML parser and cannot drift from what is storable.
+func hrefsIn(attr string) []string {
+	var out []string
+	const open = `<a href="`
+	for {
+		i := strings.Index(attr, open)
+		if i < 0 {
+			return out
+		}
+		attr = attr[i+len(open):]
+		j := strings.IndexByte(attr, '"')
+		if j < 0 {
+			return out
+		}
+		out = append(out, attr[:j])
+		attr = attr[j:]
+	}
 }
 
 // ---- resolveBasemap: degrade, never fail -----------------------------------
