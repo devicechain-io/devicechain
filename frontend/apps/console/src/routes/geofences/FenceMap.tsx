@@ -150,6 +150,26 @@ export interface FenceMapProps {
   /** Saving is in flight: nothing responds. */
   disabled?: boolean;
   /**
+   * Where the camera opens, as MapLibre's [longitude, latitude], when there is
+   * nothing to fit to (ADR-079).
+   *
+   * 🔴 A FALLBACK, not an override. An existing ring's bounds always win — the fit
+   * below runs after this and supersedes it — so a tenant centred on Atlanta never
+   * drags an author editing a fence in Rome back across the Atlantic. Absent keeps
+   * the whole-world view, which is the right answer when nobody has said otherwise.
+   *
+   * 🔴 Read ONLY at construction, through a ref, and deliberately absent from the
+   * lifecycle effect's dependencies. Both alternatives are worse: a fresh
+   * `[lng, lat]` array in the deps rebuilds the map on every render, and depending on
+   * it "correctly" would tear the map down mid-draw the moment the fallback stops
+   * applying — it goes null as soon as the first corner is placed. The map already
+   * rebuilds when the tile URL changes, which is when a late-arriving tenant basemap
+   * lands, so the ordinary path picks this up anyway.
+   */
+  initialCenter?: [number, number];
+  /** Zoom to pair with initialCenter. Ignored without one. */
+  initialZoom?: number;
+  /**
    * A second ring drawn as a muted outline for comparison — the same fence at
    * another version. Never editable, and deliberately outline-only: two filled
    * shapes read as one.
@@ -165,6 +185,8 @@ export function FenceMap({
   onClose,
   closed = false,
   disabled = false,
+  initialCenter,
+  initialZoom,
   ghost,
 }: FenceMapProps) {
   const { t } = useTranslation(['entities', 'common']);
@@ -176,6 +198,9 @@ export function FenceMap({
   // callbacks. Reading them from refs keeps the handler stable, so a vertex
   // added mid-draw cannot detach the listener that added it.
   const live = useRef({ vertices, onChange, onClose, closed, disabled, ghost });
+  // The opening camera, read once at construction — see initialCenter's note above.
+  const initialView = useRef({ center: initialCenter, zoom: initialZoom });
+  initialView.current = { center: initialCenter, zoom: initialZoom };
   /**
    * The pointer gesture in progress on a vertex, if any.
    *
@@ -382,8 +407,10 @@ export function FenceMap({
         const instance = new maplibre.Map({
           container: container.current,
           style: (tileUrl ? rasterStyleFor(tileUrl, attribution) : blankStyle()) as never,
-          center: [0, 20],
-          zoom: 1.5,
+          // The whole-world view is the floor: it is what "nobody has told us where
+          // this tenant works" should look like, rather than a guess at a country.
+          center: initialView.current.center ?? [0, 20],
+          zoom: initialView.current.center ? (initialView.current.zoom ?? 12) : 1.5,
           // 🔴 No repeated worlds. With copies on (the default) the world repeats
           // across a wide viewport at this zoom, and a click on a copy returns an
           // unwrapped longitude — 372.49 for Rome one world over — which the ring

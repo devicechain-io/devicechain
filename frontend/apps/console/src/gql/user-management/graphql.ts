@@ -4,6 +4,14 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+export type TenantBasemapInput = {
+  attribution?: string | null | undefined;
+  centerLat?: number | null | undefined;
+  centerLon?: number | null | undefined;
+  tileUrl?: string | null | undefined;
+  zoom?: number | null | undefined;
+};
+
 export type TenantBrandingInput = {
   accent?: string | null | undefined;
   background?: string | null | undefined;
@@ -43,24 +51,33 @@ export type RefreshMutationVariables = Exact<{
 
 export type RefreshMutation = { refresh: { accessToken: string, refreshToken: string, expiresAt: string } };
 
+export type TenantFieldsFragment = { token: string, name: string | null, description: string | null, branding: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null }, brandingOverride: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null }, basemap: { tileUrl: string | null, attribution: string | null, centerLat: number | null, centerLon: number | null, zoom: number | null }, basemapOverride: { tileUrl: string | null, attribution: string | null, centerLat: number | null, centerLon: number | null, zoom: number | null } };
+
 export type CurrentTenantQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type CurrentTenantQuery = { tenant: { token: string, name: string | null, description: string | null, branding: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null }, brandingOverride: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null } } };
+export type CurrentTenantQuery = { tenant: { token: string, name: string | null, description: string | null, branding: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null }, brandingOverride: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null }, basemap: { tileUrl: string | null, attribution: string | null, centerLat: number | null, centerLon: number | null, zoom: number | null }, basemapOverride: { tileUrl: string | null, attribution: string | null, centerLat: number | null, centerLon: number | null, zoom: number | null } } };
 
 export type SetTenantBrandingMutationVariables = Exact<{
   input: TenantBrandingInput;
 }>;
 
 
-export type SetTenantBrandingMutation = { setTenantBranding: { token: string, name: string | null, description: string | null, branding: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null }, brandingOverride: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null } } };
+export type SetTenantBrandingMutation = { setTenantBranding: { token: string, name: string | null, description: string | null, branding: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null }, brandingOverride: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null }, basemap: { tileUrl: string | null, attribution: string | null, centerLat: number | null, centerLon: number | null, zoom: number | null }, basemapOverride: { tileUrl: string | null, attribution: string | null, centerLat: number | null, centerLon: number | null, zoom: number | null } } };
 
 export type SetTenantLogoMutationVariables = Exact<{
   logo?: string | null | undefined;
 }>;
 
 
-export type SetTenantLogoMutation = { setTenantLogo: { token: string, name: string | null, description: string | null, branding: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null }, brandingOverride: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null } } };
+export type SetTenantLogoMutation = { setTenantLogo: { token: string, name: string | null, description: string | null, branding: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null }, brandingOverride: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null }, basemap: { tileUrl: string | null, attribution: string | null, centerLat: number | null, centerLon: number | null, zoom: number | null }, basemapOverride: { tileUrl: string | null, attribution: string | null, centerLat: number | null, centerLon: number | null, zoom: number | null } } };
+
+export type SetTenantBasemapMutationVariables = Exact<{
+  input: TenantBasemapInput;
+}>;
+
+
+export type SetTenantBasemapMutation = { setTenantBasemap: { token: string, name: string | null, description: string | null, branding: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null }, brandingOverride: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null }, basemap: { tileUrl: string | null, attribution: string | null, centerLat: number | null, centerLon: number | null, zoom: number | null }, basemapOverride: { tileUrl: string | null, attribution: string | null, centerLat: number | null, centerLon: number | null, zoom: number | null } } };
 
 export type MeQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -93,7 +110,47 @@ export class TypedDocumentString<TResult, TVariables>
     return this.value;
   }
 }
-
+export const TenantFieldsFragmentDoc = new TypedDocumentString(`
+    fragment TenantFields on Tenant {
+  token
+  name
+  description
+  branding {
+    title
+    logo
+    logoMaxHeight
+    primary
+    background
+    foreground
+    accent
+    updatedAt
+  }
+  brandingOverride {
+    title
+    logo
+    logoMaxHeight
+    primary
+    background
+    foreground
+    accent
+    updatedAt
+  }
+  basemap {
+    tileUrl
+    attribution
+    centerLat
+    centerLon
+    zoom
+  }
+  basemapOverride {
+    tileUrl
+    attribution
+    centerLat
+    centerLon
+    zoom
+  }
+}
+    `, {"fragmentName":"TenantFields"}) as unknown as TypedDocumentString<TenantFieldsFragment, unknown>;
 export const LoginDocument = new TypedDocumentString(`
     mutation Login($email: String!, $password: String!) {
   login(email: $email, password: $password) {
@@ -136,90 +193,183 @@ export const RefreshDocument = new TypedDocumentString(`
 export const CurrentTenantDocument = new TypedDocumentString(`
     query CurrentTenant {
   tenant {
-    token
-    name
-    description
-    branding {
-      title
-      logo
-      logoMaxHeight
-      primary
-      background
-      foreground
-      accent
-      updatedAt
-    }
-    brandingOverride {
-      title
-      logo
-      logoMaxHeight
-      primary
-      background
-      foreground
-      accent
-      updatedAt
-    }
+    ...TenantFields
   }
 }
-    `) as unknown as TypedDocumentString<CurrentTenantQuery, CurrentTenantQueryVariables>;
+    fragment TenantFields on Tenant {
+  token
+  name
+  description
+  branding {
+    title
+    logo
+    logoMaxHeight
+    primary
+    background
+    foreground
+    accent
+    updatedAt
+  }
+  brandingOverride {
+    title
+    logo
+    logoMaxHeight
+    primary
+    background
+    foreground
+    accent
+    updatedAt
+  }
+  basemap {
+    tileUrl
+    attribution
+    centerLat
+    centerLon
+    zoom
+  }
+  basemapOverride {
+    tileUrl
+    attribution
+    centerLat
+    centerLon
+    zoom
+  }
+}`) as unknown as TypedDocumentString<CurrentTenantQuery, CurrentTenantQueryVariables>;
 export const SetTenantBrandingDocument = new TypedDocumentString(`
     mutation SetTenantBranding($input: TenantBrandingInput!) {
   setTenantBranding(input: $input) {
-    token
-    name
-    description
-    branding {
-      title
-      logo
-      logoMaxHeight
-      primary
-      background
-      foreground
-      accent
-      updatedAt
-    }
-    brandingOverride {
-      title
-      logo
-      logoMaxHeight
-      primary
-      background
-      foreground
-      accent
-      updatedAt
-    }
+    ...TenantFields
   }
 }
-    `) as unknown as TypedDocumentString<SetTenantBrandingMutation, SetTenantBrandingMutationVariables>;
+    fragment TenantFields on Tenant {
+  token
+  name
+  description
+  branding {
+    title
+    logo
+    logoMaxHeight
+    primary
+    background
+    foreground
+    accent
+    updatedAt
+  }
+  brandingOverride {
+    title
+    logo
+    logoMaxHeight
+    primary
+    background
+    foreground
+    accent
+    updatedAt
+  }
+  basemap {
+    tileUrl
+    attribution
+    centerLat
+    centerLon
+    zoom
+  }
+  basemapOverride {
+    tileUrl
+    attribution
+    centerLat
+    centerLon
+    zoom
+  }
+}`) as unknown as TypedDocumentString<SetTenantBrandingMutation, SetTenantBrandingMutationVariables>;
 export const SetTenantLogoDocument = new TypedDocumentString(`
     mutation SetTenantLogo($logo: String) {
   setTenantLogo(logo: $logo) {
-    token
-    name
-    description
-    branding {
-      title
-      logo
-      logoMaxHeight
-      primary
-      background
-      foreground
-      accent
-      updatedAt
-    }
-    brandingOverride {
-      title
-      logo
-      logoMaxHeight
-      primary
-      background
-      foreground
-      accent
-      updatedAt
-    }
+    ...TenantFields
   }
 }
-    `) as unknown as TypedDocumentString<SetTenantLogoMutation, SetTenantLogoMutationVariables>;
+    fragment TenantFields on Tenant {
+  token
+  name
+  description
+  branding {
+    title
+    logo
+    logoMaxHeight
+    primary
+    background
+    foreground
+    accent
+    updatedAt
+  }
+  brandingOverride {
+    title
+    logo
+    logoMaxHeight
+    primary
+    background
+    foreground
+    accent
+    updatedAt
+  }
+  basemap {
+    tileUrl
+    attribution
+    centerLat
+    centerLon
+    zoom
+  }
+  basemapOverride {
+    tileUrl
+    attribution
+    centerLat
+    centerLon
+    zoom
+  }
+}`) as unknown as TypedDocumentString<SetTenantLogoMutation, SetTenantLogoMutationVariables>;
+export const SetTenantBasemapDocument = new TypedDocumentString(`
+    mutation SetTenantBasemap($input: TenantBasemapInput!) {
+  setTenantBasemap(input: $input) {
+    ...TenantFields
+  }
+}
+    fragment TenantFields on Tenant {
+  token
+  name
+  description
+  branding {
+    title
+    logo
+    logoMaxHeight
+    primary
+    background
+    foreground
+    accent
+    updatedAt
+  }
+  brandingOverride {
+    title
+    logo
+    logoMaxHeight
+    primary
+    background
+    foreground
+    accent
+    updatedAt
+  }
+  basemap {
+    tileUrl
+    attribution
+    centerLat
+    centerLon
+    zoom
+  }
+  basemapOverride {
+    tileUrl
+    attribution
+    centerLat
+    centerLon
+    zoom
+  }
+}`) as unknown as TypedDocumentString<SetTenantBasemapMutation, SetTenantBasemapMutationVariables>;
 export const MeDocument = new TypedDocumentString(`
     query Me {
   me {

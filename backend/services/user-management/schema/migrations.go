@@ -44,5 +44,9 @@ var (
 		// ADR-077 the ledger's note column: what a store DECIDED NOT TO LOOK AT, which
 		// two of them could previously omit while reporting clean.
 		NewTenantPurgeNoteMigration(),
+		// ADR-079 the per-tenant basemap override: the tile source, its credit line, and
+		// a fallback view. Moves the basemap off every browser's localStorage and onto
+		// the tenant that owns the provider credential.
+		NewTenantBasemapMigration(),
 	}
 )

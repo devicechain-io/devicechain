@@ -20,6 +20,8 @@ import {
   type GeoFence,
   type GeoFenceCreateRequest,
 } from '@/lib/api/geofences';
+import { fallbackView, renderableBasemap, resolveBasemap } from '@devicechain/client';
+import { useTenantBasemap } from '@/auth/TenantProvider';
 import { FenceMap } from './FenceMap';
 import {
   MAX_FENCE_VERTICES,
@@ -31,11 +33,14 @@ import {
   type Vertex,
 } from './geometry';
 
-// The basemap is a per-BROWSER preference, not a tenant setting and not a
-// per-fence field. There is deliberately no platform default tile source —
-// shipping one would point every self-hosted instance at a public tile service
-// that never agreed to serve it — so until an instance-level default exists, the
-// operator supplies their own and it is remembered here.
+// The basemap now cascades (ADR-079): the tenant owns one, and these two keys are a
+// PERSONAL override on top of it — how someone tries a provider in their own browser
+// before committing it tenant-wide. They are not a per-fence field and never were.
+//
+// There is still deliberately no platform default tile source: shipping one would
+// point every self-hosted instance at a public tile service that never agreed to
+// serve it. What changed is that a blank field no longer means a blank map — it
+// means "use whatever the tenant configured".
 const TILE_URL_KEY = 'dc.geofence.tileUrl';
 const TILE_ATTRIBUTION_KEY = 'dc.geofence.tileAttribution';
 
@@ -74,6 +79,7 @@ export function GeoFenceForm({
   onDone: (message: string) => void;
 }) {
   const { t } = useTranslation(['entities', 'common']);
+  const tenantBasemap = useTenantBasemap();
   const editing = entity != null;
 
   const [token, setToken] = useState(entity?.token ?? '');
@@ -163,6 +169,18 @@ export function GeoFenceForm({
     }
   };
 
+  // Precedence: this browser's personal override → the tenant's basemap → nothing
+  // (ADR-079 §9). 🔴 resolveBasemap is not a per-field fold: typing a tile URL here
+  // does NOT keep the tenant's credit line underneath it, because that would credit
+  // the tenant's provider for tiles it is not serving.
+  const basemap = renderableBasemap(
+    resolveBasemap({ tileUrl, attribution }, tenantBasemap),
+  );
+  // The tenant's centre is a FALLBACK, used only when there is no ring to fit to. An
+  // existing fence always wins — editing a fence in Rome from a tenant centred on
+  // Atlanta would otherwise open on Atlanta every time.
+  const initialView = vertices.length === 0 ? fallbackView(tenantBasemap) : null;
+
   const commitTileUrl = () => {
     setTileUrl(tileUrlDraft);
     writePreference(TILE_URL_KEY, tileUrlDraft);
@@ -224,8 +242,10 @@ export function GeoFenceForm({
             vertices={vertices}
             onChange={applyVertices}
             onClose={() => setClosed(true)}
-            tileUrl={tileUrl || undefined}
-            attribution={attribution || undefined}
+            tileUrl={basemap?.tileUrl}
+            attribution={basemap?.attribution ?? undefined}
+            initialCenter={initialView?.center}
+            initialZoom={initialView?.zoom ?? undefined}
             // 🔴 Two props, not one. Passing `busy || closed` as `disabled` — which
             // is what this did — froze every corner of an existing fence, because
             // a saved ring opens closed. Finished means "no new corners"; it must

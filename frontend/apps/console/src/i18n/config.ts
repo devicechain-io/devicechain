@@ -28,6 +28,7 @@ import enTenants from './locales/en/tenants.json';
 import enTiers from './locales/en/tiers.json';
 import enConnectors from './locales/en/connectors.json';
 import enBranding from './locales/en/branding.json';
+import enBasemap from './locales/en/basemap.json';
 import enBrowse from './locales/en/browse.json';
 import enFacets from './locales/en/facets.json';
 import enAudit from './locales/en/audit.json';
@@ -52,6 +53,7 @@ import esTenants from './locales/es/tenants.json';
 import esTiers from './locales/es/tiers.json';
 import esConnectors from './locales/es/connectors.json';
 import esBranding from './locales/es/branding.json';
+import esBasemap from './locales/es/basemap.json';
 import esBrowse from './locales/es/browse.json';
 import esFacets from './locales/es/facets.json';
 import esAudit from './locales/es/audit.json';
@@ -121,6 +123,7 @@ export const NAMESPACES = [
   'tiers',
   'connectors',
   'branding',
+  'basemap',
   'browse',
   'facets',
   'audit',
@@ -155,6 +158,7 @@ const resources = {
     tiers: enTiers,
     connectors: enConnectors,
     branding: enBranding,
+    basemap: enBasemap,
     browse: enBrowse,
     facets: enFacets,
     audit: enAudit,
@@ -180,6 +184,7 @@ const resources = {
     tiers: esTiers,
     connectors: esConnectors,
     branding: esBranding,
+    basemap: esBasemap,
     browse: esBrowse,
     facets: esFacets,
     audit: esAudit,

@@ -19,7 +19,9 @@ Una geocerca lleva un **token** — el identificador con el que las reglas la no
 
 ### No hay mapa base predeterminado {#no-default-basemap}
 
-El mapa se entrega **sin ninguna fuente de teselas configurada**, y eso es deliberado en lugar de una omisión: apuntar cada instancia autoalojada a un servicio público de teselas pondría a cada una de ellas en incumplimiento de una política de uso que nunca aceptó. Dibujar funciona sin ella — las coordenadas que usted coloca son exactas en cualquier caso — y puede establecer una URL de teselas y su atribución obligatoria en el editor, recordada únicamente en su navegador.
+DeviceChain se entrega **sin ninguna fuente de teselas configurada**, y eso es deliberado en lugar de una omisión: apuntar cada instancia autoalojada a un servicio público de teselas pondría a cada una de ellas en incumplimiento de una política de uso que nunca aceptó. Dibujar funciona sin ella: las coordenadas que usted coloca son exactas en cualquier caso.
+
+Un administrador del inquilino define la fuente de teselas una sola vez, para todos, en **Mapa base**; los campos de este editor son una anulación personal sobre ese valor, recordada únicamente en su navegador, para probar un proveedor antes de aplicarlo a todo el inquilino. Consulte [Mapas base](./basemaps.md) para ver cómo se resuelven los niveles, por qué la URL de teselas y su atribución se mueven juntas, y cómo proteger la clave de API de un proveedor.
 
 ## Qué puede ser un contorno {#what-a-boundary-may-be}
 

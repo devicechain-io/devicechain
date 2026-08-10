@@ -59,3 +59,38 @@ export const SELECT_TENANT = `
     }
   }
 ` as unknown as TypedDocument<SelectTenantResult, SelectTenantVariables>;
+
+// ── user-management: the tenant's effective basemap ──────────────────────────
+// Authenticated (rides the access token), self-scoped, and requires no authority —
+// the tenant query resolves whichever tenant the token names.
+//
+// 🔴 This viewer needs it for the same reason the console does, and it is the surface
+// most likely to be forgotten: it has its OWN login and its own render tree, so a
+// basemap wired only into the console produces "works in the console, blank when
+// embedded" — reported by whoever embedded the board, not by whoever configured it.
+
+export interface TenantBasemapResult {
+  tenant: {
+    basemap: {
+      tileUrl: string | null;
+      attribution: string | null;
+      centerLat: number | null;
+      centerLon: number | null;
+      zoom: number | null;
+    };
+  };
+}
+
+export const TENANT_BASEMAP = `
+  query TenantBasemap {
+    tenant {
+      basemap {
+        tileUrl
+        attribution
+        centerLat
+        centerLon
+        zoom
+      }
+    }
+  }
+` as unknown as TypedDocument<TenantBasemapResult, Record<string, never>>;

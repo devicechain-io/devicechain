@@ -19,7 +19,9 @@ A fence carries a **token** — the identifier rules use to name it — plus an 
 
 ### There is no default basemap {#no-default-basemap}
 
-The map ships with **no tile source configured**, and that is deliberate rather than an omission: pointing every self-hosted instance at a public tile service would put each of them in breach of a usage policy they never agreed to. Drawing works without one — the coordinates you place are exact either way — and you can set a tile URL and its required attribution in the editor, remembered in your browser only.
+DeviceChain ships with **no tile source configured**, and that is deliberate rather than an omission: pointing every self-hosted instance at a public tile service would put each of them in breach of a usage policy they never agreed to. Drawing works without one — the coordinates you place are exact either way.
+
+A tenant admin sets the tile source once, for everyone, under **Basemap**; the fields in this editor are a personal override on top of that, remembered in your browser only, for trying a provider before committing it tenant-wide. See [Basemaps](./basemaps.md) for how the tiers resolve, why the tile URL and its attribution move together, and how to protect a provider API key.
 
 ## What a boundary may be {#what-a-boundary-may-be}
 

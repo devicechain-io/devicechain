@@ -14,6 +14,7 @@ import {
   Layers,
   LayoutDashboard,
   LayoutGrid,
+  Map,
   MapPin,
   Pentagon,
   Package,
@@ -125,6 +126,10 @@ const NAV: NavNode[] = [
   { labelKey: 'browse', href: '/browse', icon: Filter, requires: 'device:read' },
   { labelKey: 'audit', href: '/audit', icon: ScrollText, requires: 'audit:read' },
   { labelKey: 'branding', href: '/branding', icon: Palette, requires: 'branding:write' },
+  // The tenant's map tiles (ADR-079). Its own authority, not branding:write: the
+  // tile URL carries the tenant's provider credential, so restyling the console and
+  // holding the map key are deliberately separate grants.
+  { labelKey: 'basemap', href: '/basemap', icon: Map, requires: 'basemap:write' },
   // Inference providers for NL→rule authoring (ADR-056) are NOT here: they are
   // instance config an operator owns, so they live in the admin console (ADR-065). A
   // tenant's only say over AI is its external-routing consent, set per tenant by an

@@ -22,6 +22,18 @@ export {
 
 export { isForbiddenError } from './errors';
 
+// The client half of the basemap cascade (ADR-079). Lives in the SDK because the
+// console's fence editor, the map widget and the /dash viewer app must all resolve a
+// per-surface override over the tenant value the SAME way — and /dash, with its own
+// login, is the one most likely to quietly disagree.
+export {
+  resolveBasemap,
+  renderableBasemap,
+  fallbackView,
+  type Basemap,
+  type ResolvedBasemap,
+} from './basemap';
+
 export { subscribe, disposeSubscriptions, type SubscriptionSink } from './subscribe';
 
 export {

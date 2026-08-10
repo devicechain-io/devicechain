@@ -188,6 +188,19 @@ const (
 	// instance-scoped operator authority over any tenant's control-plane record.
 	BrandingWrite Authority = "branding:write"
 
+	// Tenant basemap self-service (user-management, ADR-079). Gates the self-scoped
+	// setTenantBasemap mutation — a tenant choosing the tile source, credit line and
+	// fallback view its maps draw on. Reads need no authority, exactly as for
+	// branding: the resolved basemap rides the self-scoped `tenant` query, and gating
+	// it would leave the map blank for precisely the people who need it.
+	//
+	// 🔴 Deliberately NOT folded into branding:write, though both are "how this tenant
+	// looks". The tile URL carries the tenant's own PROVIDER CREDENTIAL, so sharing one
+	// authority would make each grant imply the other in both directions: whoever
+	// restyles the logo could read the map key, and whoever configures maps could
+	// restyle the console. Separating them costs one constant and one vocabulary entry.
+	BasemapWrite Authority = "basemap:write"
+
 	// AI inference provider administration (ai-inference, ADR-056). Gates the
 	// INSTANCE-scoped, operator-managed AIProvider CRUD — the registered inference
 	// providers (kind, endpoint, model, write-only API key) NL→rule authoring routes
@@ -271,6 +284,7 @@ var vocabulary = map[Authority]Tiers{
 	ConnectorRead:     tenant,
 	ConnectorWrite:    tenant,
 	BrandingWrite:     tenant,
+	BasemapWrite:      tenant,
 	// audit:read is the one DUAL-tier authority, and it has to be: two different
 	// resolvers on two different planes gate on it. A tenant reads its own journal on
 	// device-management's data plane (tenant-tier), and an operator reads the instance

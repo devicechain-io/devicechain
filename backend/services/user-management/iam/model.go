@@ -309,6 +309,26 @@ type Tenant struct {
 	BrandingForeground    *string
 	BrandingAccent        *string
 
+	// Per-tenant BASEMAP override (ADR-079). Same cascading-column pattern as the
+	// branding block above — nil means "inherit the operator's `basemap.default`
+	// setting" — and resolved onto the same self-scoped `tenant` query.
+	//
+	// 🔴 The two halves of the TILE SOURCE do not inherit independently. A tenant that
+	// sets BasemapTileURL and leaves BasemapAttribution null does NOT pick up the
+	// operator's credit line; it resolves to no attribution, and the write path
+	// refuses that combination up front. Crediting provider A for provider B's tiles
+	// is a licence violation, not a cosmetic mismatch — see basemap.Merge, which owns
+	// the rule.
+	//
+	// The camera fields are a FALLBACK view, used only when a surface has nothing of
+	// its own to fit to (the fence editor fits an existing ring's bounds; the map
+	// widget fits its markers). They are never an override on a real fit.
+	BasemapTileURL     *string
+	BasemapAttribution *string
+	BasemapCenterLat   *float64
+	BasemapCenterLon   *float64
+	BasemapZoom        *float64
+
 	// Per-tenant external-AI consent (ADR-056 §6, an ADR-023 governance flag). Gates
 	// whether THIS tenant's data — NL rule-authoring prompts + the device schema they
 	// carry — may be routed to an EXTERNAL frontier model by the ai-inference service.

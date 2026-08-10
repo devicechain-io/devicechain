@@ -15,7 +15,10 @@
 // 🔴 NO TILE SOURCE IS NOT A BROKEN MAP. There is no default tile URL (see
 // rasterStyleFor), so an unconfigured widget still draws every position, on a plain
 // panel, and says why there is no basemap. It loads no map library and issues no
-// request to any host, because there is no host it would be entitled to ask.
+// request to any host, because there is no host it would be entitled to ask. What
+// HAS changed (ADR-079) is where the tile source can come from: a widget with no
+// options of its own now inherits the tenant's, so the plain panel means "nobody has
+// configured one anywhere" rather than "nobody configured THIS widget".
 //
 // 🔴 ABSENT IS NOT ZERO. A marker describes only what its device reported; an
 // unreported heading is not due north. See describePosition.
@@ -23,7 +26,9 @@
 /// <reference path="../css-modules.d.ts" />
 
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { renderableBasemap, resolveBasemap } from '@devicechain/client';
 
+import { useTenantBasemap } from '../basemap-context';
 import { WidgetFrame } from '../frame';
 import type { LocationStreamState } from '../hooks';
 import { css } from '../theme';
@@ -90,9 +95,25 @@ const SINGLE_DEVICE_ZOOM = 14;
 
 export function MapWidget({ widget, data }: WidgetProps<LocationStreamState>) {
   const title = optString(widget.options, 'title');
-  const tileUrl = optString(widget.options, 'tileUrl');
-  const attribution = optString(widget.options, 'attribution');
   const positions = placeable(data.locations);
+
+  // Precedence is per-widget override → tenant → no basemap (ADR-079 §9). The
+  // per-widget options are kept, not replaced: they are how someone tries a provider
+  // on one board before committing it tenant-wide.
+  //
+  // 🔴 resolveBasemap is NOT `override ?? tenant` per field. A widget that names its
+  // own tile URL does not inherit the tenant's credit line, because that would credit
+  // the tenant's provider for tiles it did not serve. The SDK owns that rule so the
+  // fence editor and the /dash app cannot disagree with this widget about it.
+  const basemap = renderableBasemap(
+    resolveBasemap(
+      {
+        tileUrl: optString(widget.options, 'tileUrl'),
+        attribution: optString(widget.options, 'attribution'),
+      },
+      useTenantBasemap(),
+    ),
+  );
 
   // The refusal is checked FIRST and unconditionally: it is a fact about the caller, so
   // it outranks anything about the data, and it must not be reachable only through some
@@ -136,8 +157,12 @@ export function MapWidget({ widget, data }: WidgetProps<LocationStreamState>) {
 
   return (
     <WidgetFrame title={title} bodyStyle={{ padding: 0 }}>
-      {tileUrl ? (
-        <TiledMap tileUrl={tileUrl} attribution={attribution} positions={positions} />
+      {basemap ? (
+        <TiledMap
+          tileUrl={basemap.tileUrl}
+          attribution={basemap.attribution ?? undefined}
+          positions={positions}
+        />
       ) : (
         <PlainPanel
           positions={positions}

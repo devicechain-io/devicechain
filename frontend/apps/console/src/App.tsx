@@ -22,6 +22,7 @@ import AuditPage from '@/routes/audit/AuditPage';
 import FacetKeysPage from '@/routes/facets/FacetKeysPage';
 import BrowsePage from '@/routes/browse/BrowsePage';
 import BrandingPage from '@/routes/BrandingPage';
+import BasemapPage from '@/routes/BasemapPage';
 import { ResourceListPage, ResourceDetailPage } from '@/components/registry';
 import { ErrorBoundary } from '@/components/ui/error-boundary';
 import AdminProtectedRoute from '@/routes/admin/AdminProtectedRoute';
@@ -81,6 +82,7 @@ export default function App() {
           <Route path="facets" element={<FacetKeysPage />} />
           <Route path="browse" element={<BrowsePage />} />
           <Route path="branding" element={<BrandingPage />} />
+          <Route path="basemap" element={<BasemapPage />} />
           {/* Every registry list/detail renders through the one generic page
               component, so React reuses the instance across routes. Key each
               element by its resource's base path to force a fresh mount on

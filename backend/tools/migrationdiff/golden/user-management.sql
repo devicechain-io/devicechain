@@ -260,7 +260,12 @@ CREATE TABLE "user-management".iam_tenants (
  ai_inference_burst bigint,
  shed_priority bigint,
  purge_state character varying(16) DEFAULT 'active'::character varying NOT NULL,
- purge_epoch timestamp with time zone
+ purge_epoch timestamp with time zone,
+ basemap_tile_url text,
+ basemap_attribution text,
+ basemap_center_lat numeric,
+ basemap_center_lon numeric,
+ basemap_zoom numeric
 );
 CREATE TABLE "user-management".signing_keys (
  id bigint NOT NULL,
