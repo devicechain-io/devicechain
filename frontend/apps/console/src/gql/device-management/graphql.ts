@@ -995,11 +995,6 @@ export type DeleteGeoFenceMutationVariables = Exact<{
 
 export type DeleteGeoFenceMutation = { deleteGeoFence: boolean };
 
-export type CurrentFenceSetVersionQueryVariables = Exact<{ [key: string]: never; }>;
-
-
-export type CurrentFenceSetVersionQuery = { currentFenceSetVersion: number };
-
 export type EntityRelationshipsQueryVariables = Exact<{
   criteria: EntityRelationshipSearchCriteria;
 }>;
@@ -2377,11 +2372,6 @@ export const DeleteGeoFenceDocument = new TypedDocumentString(`
   deleteGeoFence(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteGeoFenceMutation, DeleteGeoFenceMutationVariables>;
-export const CurrentFenceSetVersionDocument = new TypedDocumentString(`
-    query CurrentFenceSetVersion {
-  currentFenceSetVersion
-}
-    `) as unknown as TypedDocumentString<CurrentFenceSetVersionQuery, CurrentFenceSetVersionQueryVariables>;
 export const EntityRelationshipsDocument = new TypedDocumentString(`
     query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {
   entityRelationships(criteria: $criteria) {
