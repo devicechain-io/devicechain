@@ -36,6 +36,7 @@ import { customerGroupResource } from '@/routes/customer-groups/resource';
 import { areaResource } from '@/routes/areas/resource';
 import { areaTypeResource } from '@/routes/area-types/resource';
 import { areaGroupResource } from '@/routes/area-groups/resource';
+import { geofenceResource } from '@/routes/geofences/resource';
 import AdminProtectedRoute from '@/routes/admin/AdminProtectedRoute';
 import AdminLayout from '@/routes/admin/AdminLayout';
 import AdminTenantsPage from '@/routes/admin/TenantsPage';
@@ -70,6 +71,7 @@ const REGISTRY_RESOURCES: RegistryResource<any>[] = [
   areaResource,
   areaTypeResource,
   areaGroupResource,
+  geofenceResource,
 ];
 
 function ProtectedRoute() {

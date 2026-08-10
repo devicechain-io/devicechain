@@ -100,6 +100,12 @@ type Documents = {
     "\n  query FacetKeys($criteria: FacetKeySearchCriteria!) {\n    facetKeys(criteria: $criteria) {\n      results {\n        id\n        memberType\n        key\n        valueType\n        source\n        values\n        label\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.FacetKeysDocument,
     "\n  mutation SetFacetKey($request: FacetKeySetRequest!) {\n    setFacetKey(request: $request) {\n      memberType\n      key\n    }\n  }\n": typeof types.SetFacetKeyDocument,
     "\n  mutation DeleteFacetKey($memberType: String!, $key: String!) {\n    deleteFacetKey(memberType: $memberType, key: $key)\n  }\n": typeof types.DeleteFacetKeyDocument,
+    "\n  query GeoFences($criteria: GeoFenceSearchCriteria!) {\n    geoFences(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        geometry\n        kind\n        metadata\n        createdAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.GeoFencesDocument,
+    "\n  query GeoFenceByToken($tokens: [String!]!) {\n    geoFencesByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      geometry\n      kind\n      metadata\n      createdAt\n    }\n  }\n": typeof types.GeoFenceByTokenDocument,
+    "\n  mutation CreateGeoFence($request: GeoFenceCreateRequest!) {\n    createGeoFence(request: $request) {\n      id\n      token\n      name\n      description\n      geometry\n      kind\n      metadata\n      createdAt\n    }\n  }\n": typeof types.CreateGeoFenceDocument,
+    "\n  mutation UpdateGeoFence($token: String!, $request: GeoFenceCreateRequest!) {\n    updateGeoFence(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      geometry\n      kind\n      metadata\n      createdAt\n    }\n  }\n": typeof types.UpdateGeoFenceDocument,
+    "\n  mutation DeleteGeoFence($token: String!) {\n    deleteGeoFence(token: $token)\n  }\n": typeof types.DeleteGeoFenceDocument,
+    "\n  query CurrentFenceSetVersion {\n    currentFenceSetVersion\n  }\n": typeof types.CurrentFenceSetVersionDocument,
     "\n  query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {\n    entityRelationships(criteria: $criteria) {\n      results {\n        id\n        token\n        targetType\n        target {\n          id\n          token\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.EntityRelationshipsDocument,
     "\n  mutation CreateEntityRelationships($requests: [EntityRelationshipCreateRequest!]!) {\n    createEntityRelationships(requests: $requests) {\n      id\n      token\n    }\n  }\n": typeof types.CreateEntityRelationshipsDocument,
     "\n  mutation RemoveEntityRelationships($tokens: [String!]!) {\n    removeEntityRelationships(tokens: $tokens)\n  }\n": typeof types.RemoveEntityRelationshipsDocument,
@@ -190,6 +196,12 @@ const documents: Documents = {
     "\n  query FacetKeys($criteria: FacetKeySearchCriteria!) {\n    facetKeys(criteria: $criteria) {\n      results {\n        id\n        memberType\n        key\n        valueType\n        source\n        values\n        label\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.FacetKeysDocument,
     "\n  mutation SetFacetKey($request: FacetKeySetRequest!) {\n    setFacetKey(request: $request) {\n      memberType\n      key\n    }\n  }\n": types.SetFacetKeyDocument,
     "\n  mutation DeleteFacetKey($memberType: String!, $key: String!) {\n    deleteFacetKey(memberType: $memberType, key: $key)\n  }\n": types.DeleteFacetKeyDocument,
+    "\n  query GeoFences($criteria: GeoFenceSearchCriteria!) {\n    geoFences(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        geometry\n        kind\n        metadata\n        createdAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.GeoFencesDocument,
+    "\n  query GeoFenceByToken($tokens: [String!]!) {\n    geoFencesByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      geometry\n      kind\n      metadata\n      createdAt\n    }\n  }\n": types.GeoFenceByTokenDocument,
+    "\n  mutation CreateGeoFence($request: GeoFenceCreateRequest!) {\n    createGeoFence(request: $request) {\n      id\n      token\n      name\n      description\n      geometry\n      kind\n      metadata\n      createdAt\n    }\n  }\n": types.CreateGeoFenceDocument,
+    "\n  mutation UpdateGeoFence($token: String!, $request: GeoFenceCreateRequest!) {\n    updateGeoFence(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      geometry\n      kind\n      metadata\n      createdAt\n    }\n  }\n": types.UpdateGeoFenceDocument,
+    "\n  mutation DeleteGeoFence($token: String!) {\n    deleteGeoFence(token: $token)\n  }\n": types.DeleteGeoFenceDocument,
+    "\n  query CurrentFenceSetVersion {\n    currentFenceSetVersion\n  }\n": types.CurrentFenceSetVersionDocument,
     "\n  query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {\n    entityRelationships(criteria: $criteria) {\n      results {\n        id\n        token\n        targetType\n        target {\n          id\n          token\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.EntityRelationshipsDocument,
     "\n  mutation CreateEntityRelationships($requests: [EntityRelationshipCreateRequest!]!) {\n    createEntityRelationships(requests: $requests) {\n      id\n      token\n    }\n  }\n": types.CreateEntityRelationshipsDocument,
     "\n  mutation RemoveEntityRelationships($tokens: [String!]!) {\n    removeEntityRelationships(tokens: $tokens)\n  }\n": types.RemoveEntityRelationshipsDocument,
@@ -535,6 +547,30 @@ export function graphql(source: "\n  mutation SetFacetKey($request: FacetKeySetR
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  mutation DeleteFacetKey($memberType: String!, $key: String!) {\n    deleteFacetKey(memberType: $memberType, key: $key)\n  }\n"): typeof import('./graphql').DeleteFacetKeyDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query GeoFences($criteria: GeoFenceSearchCriteria!) {\n    geoFences(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        geometry\n        kind\n        metadata\n        createdAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').GeoFencesDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query GeoFenceByToken($tokens: [String!]!) {\n    geoFencesByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      geometry\n      kind\n      metadata\n      createdAt\n    }\n  }\n"): typeof import('./graphql').GeoFenceByTokenDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation CreateGeoFence($request: GeoFenceCreateRequest!) {\n    createGeoFence(request: $request) {\n      id\n      token\n      name\n      description\n      geometry\n      kind\n      metadata\n      createdAt\n    }\n  }\n"): typeof import('./graphql').CreateGeoFenceDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation UpdateGeoFence($token: String!, $request: GeoFenceCreateRequest!) {\n    updateGeoFence(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      geometry\n      kind\n      metadata\n      createdAt\n    }\n  }\n"): typeof import('./graphql').UpdateGeoFenceDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation DeleteGeoFence($token: String!) {\n    deleteGeoFence(token: $token)\n  }\n"): typeof import('./graphql').DeleteGeoFenceDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query CurrentFenceSetVersion {\n    currentFenceSetVersion\n  }\n"): typeof import('./graphql').CurrentFenceSetVersionDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
