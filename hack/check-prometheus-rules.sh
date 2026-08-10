@@ -56,6 +56,32 @@ if command -v promtool >/dev/null 2>&1; then
 else
   command -v docker >/dev/null 2>&1 ||
     fail "neither promtool nor docker is on PATH; this check cannot run and will not pretend it passed"
+
+  # 🔴 OBTAINING THE TOOL IS A SEPARATE FAILURE FROM THE TOOL'S VERDICT, and the
+  # two used to be the same message. Measured on PR #708: Docker Hub timed out,
+  # the image never pulled, and this script reported
+  #   "FAIL: promtool rejected a rule group."
+  # about rules promtool had never seen.
+  #
+  # It fails CLOSED either way, so this was never a false pass. The damage is to
+  # trust: a gate that blames your rules when a registry is slow teaches the next
+  # maintainer that it is flaky, and "re-run it, probably docker again" is the
+  # reflex that then gets applied to the run where a rule really is broken. That
+  # is the same failure this whole script exists to prevent, one level up — a
+  # result that does not mean what it says.
+  #
+  # So the pull happens HERE, once, with its own wording. Anything after this
+  # point that exits non-zero is genuinely promtool speaking.
+  if ! docker image inspect "$promtool_image" >/dev/null 2>&1; then
+    say "pulling $promtool_image"
+    docker pull "$promtool_image" >/dev/null 2>&1 ||
+      fail "could not obtain promtool ($promtool_image) -- THE RULES WERE NOT CHECKED.
+
+This is a failure to get the tool, not a verdict about the rules. The registry
+may be unreachable or the tag may have moved. Re-run, or set PROMTOOL_IMAGE to
+an image you already have."
+  fi
+
   run_promtool() {
     local files=("$@") mounted=()
     for f in "${files[@]}"; do mounted+=("/w/$(basename "$f")"); done
