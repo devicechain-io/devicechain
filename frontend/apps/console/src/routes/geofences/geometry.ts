@@ -382,10 +382,12 @@ export function moveVertex(
  *
  * 🔴 It does NOT refuse to go below three. Blocking the removal would leave an
  * operator stuck with a corner they cannot delete, and checkGeometry already
- * reports `tooFewVertices` and blocks the save — so the ring is recoverable by
- * placing another corner, which is the state they were in before they drew the
- * third. Refusing here would be a rule enforced in two places that could then
- * disagree.
+ * reports `tooFewVertices` and blocks the save.
+ *
+ * "Recoverable by placing another corner" is only true because the FORM reopens
+ * a ring that drops below MIN_VERTICES — while a ring is closed, a map click
+ * adds nothing. Without that reset this function would strand the editor, so the
+ * two belong together even though they live apart.
  */
 export function removeVertex(vertices: readonly Vertex[], index: number): Vertex[] {
   if (index < 0 || index >= vertices.length) return [...vertices];
@@ -453,6 +455,69 @@ export function isCloseGesture(
 ): boolean {
   if (vertexCount < MIN_VERTICES) return false;
   return Math.hypot(first.x - click.x, first.y - click.y) <= radius;
+}
+
+/**
+ * Whether a press has travelled far enough to be a DRAG rather than a click.
+ *
+ * Pixels, for the same reason isCloseGesture uses pixels: a degree tolerance is a
+ * different real distance at every zoom.
+ */
+export function hasMovedEnough(
+  start: ScreenPoint,
+  current: ScreenPoint,
+  threshold: number = DRAG_THRESHOLD_PX,
+): boolean {
+  return Math.hypot(current.x - start.x, current.y - start.y) > threshold;
+}
+
+/** Pixels a press must travel before it becomes a drag. */
+export const DRAG_THRESHOLD_PX = 3;
+
+/** What a click on the map should be taken to mean. */
+export type ClickIntent = 'ignored' | 'close' | 'append';
+
+/**
+ * The decision a click on the drawing surface resolves to.
+ *
+ * 🔴 EXTRACTED BECAUSE IT BROKE WHILE IT LIVED INSIDE THE MAP COMPONENT, where
+ * no test could reach it. Vertex dragging was added without a movement
+ * threshold, so a plain click on a corner entered the drag machinery and its
+ * trailing click was discarded — which silently disabled "click the first corner
+ * to close the shape", the one gesture the map's own instructions describe. Every
+ * unit test still passed, because the click never reached the rule they cover.
+ *
+ * The three suppressors are ordered by how they arise, and each is distinct:
+ *   justDragged     a drag that MOVED just ended; its trailing click is not one.
+ *   consumedByLayer a handle already answered this exact click.
+ *   closed          the ring is finished, so nothing is appended — but a click
+ *                   may still CLOSE it, which is why this is checked last.
+ */
+export function clickIntent(input: {
+  justDragged: boolean;
+  consumedByLayer: boolean;
+  closed: boolean;
+  vertices: readonly Vertex[];
+  /** Where the first vertex sits on screen, or null if there is no ring yet. */
+  firstVertexPoint: ScreenPoint | null;
+  clickPoint: ScreenPoint;
+}): ClickIntent {
+  if (input.justDragged || input.consumedByLayer) return 'ignored';
+
+  if (
+    input.firstVertexPoint &&
+    isCloseGesture(input.vertices.length, input.firstVertexPoint, input.clickPoint)
+  ) {
+    return 'close';
+  }
+
+  // Checked AFTER the close test: a finished ring takes no new corners, but
+  // closing an already-closed ring is a no-op rather than something to forbid,
+  // and ordering it the other way round would make the first corner of a closed
+  // ring the only dead spot on the map for no reason a user could infer.
+  if (input.closed) return 'ignored';
+
+  return 'append';
 }
 
 // ── Camera ──────────────────────────────────────────────────────────────────

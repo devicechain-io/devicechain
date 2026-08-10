@@ -107,6 +107,28 @@ export function GeoFenceForm({
   // with nothing. Refusing to edit is the only safe reading of "cannot parse".
   const unreadable = editing && entity.geometry !== '' && fromGeometryDocument(entity.geometry) === null;
 
+  /**
+   * 🔴 A ring that falls below three corners cannot still be "finished", and the
+   * reset is what keeps the editor escapable.
+   *
+   * While closed, a map click does not add a corner. Remove corners one by one
+   * from a closed fence and, without this, the operator reaches an empty map with
+   * clicks inert, Undo and Clear both disabled (nothing to undo), and no control
+   * anywhere that reopens drawing — the form has to be abandoned. Reopening on
+   * the way down is also what makes removeVertex's promise true: the ring really
+   * is recoverable by placing another corner.
+   */
+  const applyVertices = (next: Vertex[]) => {
+    setVertices(next);
+    if (next.length < MIN_VERTICES) setClosed(false);
+  };
+
+  /** Undo and Clear are "keep drawing" actions, so they always reopen the ring. */
+  const redraw = (next: Vertex[]) => {
+    setVertices(next);
+    setClosed(false);
+  };
+
   const check = checkGeometry(vertices);
 
   const submit = async () => {
@@ -196,7 +218,7 @@ export function GeoFenceForm({
         <div className="space-y-2">
           <FenceMap
             vertices={vertices}
-            onChange={setVertices}
+            onChange={applyVertices}
             onClose={() => setClosed(true)}
             tileUrl={tileUrl || undefined}
             attribution={attribution || undefined}
@@ -218,10 +240,7 @@ export function GeoFenceForm({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => {
-                setVertices(vertices.slice(0, -1));
-                setClosed(false);
-              }}
+              onClick={() => redraw(vertices.slice(0, -1))}
               disabled={busy || vertices.length === 0}
             >
               {t('entities:geofenceUndo')}
@@ -229,26 +248,26 @@ export function GeoFenceForm({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => {
-                setVertices([]);
-                setClosed(false);
-              }}
+              onClick={() => redraw([])}
               disabled={busy || vertices.length === 0}
             >
               {t('entities:geofenceClear')}
             </Button>
           </div>
-          {/* The problem is shown only once something is drawn: "too few
-              vertices" on an untouched map is a description of an empty form,
-              not a mistake the operator made. */}
-          <p className="text-muted-foreground text-xs" data-testid="fence-edit-hint">
-            {t('entities:geofenceEditHint')}
-          </p>
+          {/* Only once there is something to edit: on an untouched map none of
+              the three gestures it describes has a target. */}
+          {vertices.length > 0 && (
+            <p className="text-muted-foreground text-xs" data-testid="fence-edit-hint">
+              {t('entities:geofenceEditHint')}
+            </p>
+          )}
           {closed && (
             <p className="text-muted-foreground text-xs" data-testid="fence-closed">
               {t('entities:geofenceClosedHint')}
             </p>
           )}
+          {/* Shown only once something is drawn: "too few corners" on an
+              untouched map describes an empty form, not a mistake. */}
           {vertices.length > 0 && check.problem && (
             <p className="text-destructive text-xs" data-testid="fence-geometry-problem">
               {t(PROBLEM_KEYS[check.problem], {

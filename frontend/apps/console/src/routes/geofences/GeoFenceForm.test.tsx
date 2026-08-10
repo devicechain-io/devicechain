@@ -464,3 +464,60 @@ describe('the basemap fields', () => {
     );
   });
 });
+
+// ── Escapability ────────────────────────────────────────────────────────────
+describe('a closed ring that loses corners', () => {
+  // 🔴 THE DEAD-EDITOR TRAP. While closed, a map click does not add a corner.
+  // Alt-remove the corners of a saved fence one by one and, without the reset,
+  // the operator reaches an empty map with clicks inert, Undo and Clear both
+  // disabled (nothing to undo), and no control anywhere that reopens drawing.
+  // The form has to be abandoned. Removal happens on the MAP, so no button test
+  // would have found this.
+  it('reopens for drawing when it falls below three corners', async () => {
+    render(<GeoFenceForm entity={fence({ geometry: polygonDoc([OUTER_RING]) })} onDone={vi.fn()} />);
+    expect((await screen.findByTestId('fake-map')).getAttribute('data-closed')).toBe('true');
+
+    staged.vertices = ROME.slice(0, 2); // what a removal leaves behind
+    fireEvent.click(screen.getByTestId('fake-map-emit'));
+
+    expect(screen.getByTestId('fake-map').getAttribute('data-closed')).toBe('false');
+  });
+
+  it('stays closed while it still encloses something', async () => {
+    // The counterweight: without it, the test above would also pass against a
+    // form that had simply stopped closing rings at all.
+    render(<GeoFenceForm entity={fence({ geometry: polygonDoc([OUTER_RING]) })} onDone={vi.fn()} />);
+    expect((await screen.findByTestId('fake-map')).getAttribute('data-closed')).toBe('true');
+
+    staged.vertices = ROME; // still three corners
+    fireEvent.click(screen.getByTestId('fake-map-emit'));
+
+    expect(screen.getByTestId('fake-map').getAttribute('data-closed')).toBe('true');
+  });
+
+  it('leaves an emptied ring drawable rather than inert', async () => {
+    render(<GeoFenceForm entity={fence({ geometry: polygonDoc([OUTER_RING]) })} onDone={vi.fn()} />);
+    await screen.findByTestId('fake-map');
+    staged.vertices = [];
+    fireEvent.click(screen.getByTestId('fake-map-emit'));
+
+    const fake = screen.getByTestId('fake-map');
+    expect(fake.getAttribute('data-closed')).toBe('false');
+    expect(fake.getAttribute('data-disabled')).toBe('false');
+  });
+});
+
+describe('the edit hint', () => {
+  it('is absent on an untouched map, where its gestures have no target', async () => {
+    render(<GeoFenceForm onDone={vi.fn()} />);
+    await screen.findByTestId('fake-map');
+    expect(screen.queryByTestId('fence-edit-hint')).toBeNull();
+  });
+
+  it('appears once there is a corner to edit', async () => {
+    render(<GeoFenceForm onDone={vi.fn()} />);
+    staged.vertices = ROME;
+    fireEvent.click(await screen.findByTestId('fake-map-emit'));
+    expect(screen.getByTestId('fence-edit-hint')).toBeTruthy();
+  });
+});

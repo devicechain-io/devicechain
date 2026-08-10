@@ -15,10 +15,12 @@ import { useTranslation } from 'react-i18next';
 import { rasterStyleFor } from '@devicechain/widgets';
 import type { Map as MapLibreMap, MapMouseEvent } from 'maplibre-gl';
 import {
+  DRAG_THRESHOLD_PX,
   boundsOf,
+  clickIntent,
   edgeMidpoints,
+  hasMovedEnough,
   insertVertexOnEdge,
-  isCloseGesture,
   moveVertex,
   removeVertex,
   toVertex,
@@ -153,14 +155,31 @@ export function FenceMap({
   // callbacks. Reading them from refs keeps the handler stable, so a vertex
   // added mid-draw cannot detach the listener that added it.
   const live = useRef({ vertices, onChange, onClose, closed, disabled });
-  /** Index of the vertex under an active drag, or null. */
-  const dragging = useRef<number | null>(null);
   /**
-   * A drag ends with a `mouseup`, and MapLibre then fires `click` at the same
-   * point. Without this the corner an operator just finished dragging would also
-   * place a NEW corner on top of itself.
+   * The pointer gesture in progress on a vertex, if any.
+   *
+   * 🔴 `moved` is the load-bearing field, and its absence broke the close gesture
+   * outright. Without a movement threshold, a plain CLICK on a corner entered the
+   * drag machinery, which then swallowed the click that followed — so clicking
+   * the first corner, the one gesture the map's own instructions describe, did
+   * nothing at all unless the operator MISSED the dot by a few pixels and landed
+   * in the gap between it and the close radius.
    */
-  const swallowNextClick = useRef(false);
+  const drag = useRef<{ index: number; startX: number; startY: number; moved: boolean } | null>(
+    null,
+  );
+  /** A drag that actually moved just ended; its trailing click is not a click. */
+  const justDragged = useRef(false);
+  /**
+   * A layer-scoped handler has already acted on the click being processed.
+   *
+   * Layer handlers are registered BEFORE the general one so they run first and
+   * can say so. An earlier version registered them after and set a
+   * "swallow the NEXT click" flag instead, which could not protect the current
+   * click and instead ate the operator's following one — every alt-removal and
+   * every edge insert silently cost the next click.
+   */
+  const consumedByLayer = useRef(false);
   // Assigned in a layout effect rather than during render: a render React throws
   // away must not leave its props behind for a click handler to read. Nothing in
   // the console suspends above this form today, so the difference is currently
@@ -174,11 +193,8 @@ export function FenceMap({
     const { vertices: current, onChange: emit, onClose: close, closed: done, disabled: off } =
       live.current;
     if (off) return;
-    if (swallowNextClick.current) {
-      swallowNextClick.current = false;
-      return;
-    }
 
+    const instance = map.current;
     // 🔴 wrap() is belt to renderWorldCopies:false's braces. maplibre derives
     // lngLat from an unwrapped mercator inverse, so any path that lets the view
     // run past the antimeridian hands back a longitude outside [-180, 180]. Left
@@ -186,79 +202,119 @@ export function FenceMap({
     // the operator for a click on land the map itself drew.
     const { lng, lat } = event.lngLat.wrap();
 
-    // Closing the ring is a click ON the first vertex. The rule itself lives in
-    // geometry.ts so it can be tested without a map; all this does is supply the
-    // projection, which is the one part that genuinely needs MapLibre.
-    if (map.current && current.length > 0) {
-      // Unambiguous because renderWorldCopies is off (see the Map options): with
-      // one world on screen there is exactly one pixel position for a lng/lat, so
-      // this cannot compare a stored vertex against a click on a neighbouring copy.
-      const first = map.current.project([current[0].lng, current[0].lat]);
-      if (isCloseGesture(current.length, first, event.point)) {
-        close?.();
-        return;
-      }
+    // Projecting the first vertex is the only part of the decision that needs
+    // MapLibre. WHAT the click means is decided by clickIntent, which lives in
+    // geometry.ts and is tested there — because that decision broke once while it
+    // lived here, where nothing could see it.
+    //
+    // Unambiguous because renderWorldCopies is off: with one world on screen
+    // there is exactly one pixel position for a lng/lat.
+    const firstVertexPoint =
+      instance && current.length > 0
+        ? instance.project([current[0].lng, current[0].lat])
+        : null;
+
+    const intent = clickIntent({
+      justDragged: justDragged.current,
+      consumedByLayer: consumedByLayer.current,
+      closed: done,
+      vertices: current,
+      firstVertexPoint,
+      clickPoint: event.point,
+    });
+
+    // Cleared here rather than where they are set: this runs last, so it is the
+    // only place that knows the click is over.
+    justDragged.current = false;
+    consumedByLayer.current = false;
+
+    if (intent === 'close') {
+      close?.();
+      return;
     }
-
-    // A finished ring takes no new corners from a click on open map. Dragging,
-    // removing and splitting an edge all still work — that is the whole point of
-    // `closed` being separate from `disabled`.
-    if (done) return;
-
-    emit([...current, toVertex(lng, lat)]);
+    if (intent === 'append') emit([...current, toVertex(lng, lat)]);
   }, []);
 
-
-  /** Which vertex, if any, is under the pointer at this event. */
+  /** Which vertex, if any, is under the pointer — null before the layers exist. */
   const vertexIndexAt = (instance: MapLibreMap, event: MapMouseEvent): number | null => {
+    if (!instance.getLayer(VERTEX_LAYER)) return null;
     const hits = instance.queryRenderedFeatures(event.point, { layers: [VERTEX_LAYER] });
     const index = hits[0]?.properties?.index;
     return typeof index === 'number' ? index : null;
   };
 
+  /**
+   * Any new pointer gesture clears the leftovers of the previous one.
+   *
+   * A drag released off-canvas produces no click, so a flag set at mouseup would
+   * survive to eat an unrelated click later — invisibly, and possibly the very
+   * click the operator meant as "close the ring". Every gesture starts with a
+   * mousedown, so clearing here bounds staleness to nothing.
+   */
+  const handleMapMouseDown = useCallback(() => {
+    justDragged.current = false;
+    consumedByLayer.current = false;
+  }, []);
+
   const handleVertexMouseDown = useCallback((event: MapMouseEvent) => {
     if (live.current.disabled) return;
+    // Left button only. Right-clicking a corner otherwise ran the whole drag
+    // machinery while also opening the context menu.
+    if (event.originalEvent.button !== 0) return;
     const instance = map.current;
     if (!instance) return;
     const index = vertexIndexAt(instance, event);
     if (index === null) return;
-    // Take the gesture away from the map, or dragging a corner pans the world
-    // instead of moving the corner.
+    // Take the gesture from the map now, not at the movement threshold: by the
+    // time the threshold is crossed the map would already have panned.
     event.preventDefault();
-    dragging.current = index;
     instance.dragPan.disable();
-    instance.getCanvas().style.cursor = 'grabbing';
+    drag.current = { index, startX: event.point.x, startY: event.point.y, moved: false };
   }, []);
 
   const handleMouseMove = useCallback((event: MapMouseEvent) => {
     const instance = map.current;
     if (!instance) return;
-    const index = dragging.current;
+    const active = drag.current;
 
-    if (index === null) {
-      // Not dragging: just tell the pointer that these handles are grabbable.
-      const over = instance.queryRenderedFeatures(event.point, {
-        layers: [VERTEX_LAYER, MIDPOINT_LAYER],
-      });
-      instance.getCanvas().style.cursor = over.length
-        ? 'grab'
-        : live.current.closed || live.current.disabled
-          ? ''
-          : 'crosshair';
+    if (!active) {
+      // Not dragging: advertise what is grabbable. Guarded on the layers
+      // existing — before `load` this query fires a MapLibre ErrorEvent on every
+      // mousemove, which the default handler logs.
+      if (live.current.disabled) {
+        instance.getCanvas().style.cursor = '';
+        return;
+      }
+      const ready = instance.getLayer(VERTEX_LAYER) && instance.getLayer(MIDPOINT_LAYER);
+      const over =
+        ready && instance.queryRenderedFeatures(event.point, {
+          layers: [VERTEX_LAYER, MIDPOINT_LAYER],
+        }).length > 0;
+      instance.getCanvas().style.cursor = over ? 'grab' : live.current.closed ? '' : 'crosshair';
       return;
     }
 
+    if (!active.moved) {
+      if (!hasMovedEnough({ x: active.startX, y: active.startY }, event.point, DRAG_THRESHOLD_PX)) {
+        return; // still a click, as far as anyone knows
+      }
+      active.moved = true;
+      instance.getCanvas().style.cursor = 'grabbing';
+    }
+
     const { lng, lat } = event.lngLat.wrap();
-    live.current.onChange(moveVertex(live.current.vertices, index, toVertex(lng, lat)));
+    live.current.onChange(moveVertex(live.current.vertices, active.index, toVertex(lng, lat)));
   }, []);
 
   const handleMouseUp = useCallback(() => {
+    const active = drag.current;
+    if (!active) return;
+    drag.current = null;
+    // Only a gesture that MOVED produces a trailing click worth ignoring. A press
+    // that never crossed the threshold is a click, and must be left to mean
+    // whatever a click on that corner means — including closing the ring.
+    justDragged.current = active.moved;
     const instance = map.current;
-    if (dragging.current === null) return;
-    dragging.current = null;
-    // The click that follows this mouseup would otherwise drop a NEW corner on
-    // the one just dropped.
-    swallowNextClick.current = true;
     if (instance) {
       instance.dragPan.enable();
       instance.getCanvas().style.cursor = '';
@@ -267,29 +323,29 @@ export function FenceMap({
 
   const handleVertexClick = useCallback((event: MapMouseEvent) => {
     const { disabled: off, vertices: current, onChange: emit } = live.current;
-    if (off) return;
+    if (off || justDragged.current) return;
     const instance = map.current;
     if (!instance) return;
-    // Alt/Option removes. It is a modifier rather than a plain click because a
-    // plain click on the FIRST vertex already means "close the ring", and one
-    // gesture cannot mean two things.
+    // Alt/Option removes. A modifier rather than a plain click because a plain
+    // click on the FIRST corner already means "close the ring", and one gesture
+    // cannot mean two things.
     if (!event.originalEvent.altKey) return;
     const index = vertexIndexAt(instance, event);
     if (index === null) return;
-    swallowNextClick.current = true;
+    consumedByLayer.current = true;
     emit(removeVertex(current, index));
   }, []);
 
   const handleMidpointClick = useCallback((event: MapMouseEvent) => {
     const { disabled: off, vertices: current, onChange: emit } = live.current;
-    if (off) return;
+    if (off || justDragged.current) return;
     const instance = map.current;
-    if (!instance) return;
+    if (!instance || !instance.getLayer(MIDPOINT_LAYER)) return;
     const hits = instance.queryRenderedFeatures(event.point, { layers: [MIDPOINT_LAYER] });
     const edge = hits[0]?.properties?.edge;
     if (typeof edge !== 'number') return;
     const { lng, lat } = event.lngLat.wrap();
-    swallowNextClick.current = true;
+    consumedByLayer.current = true;
     emit(insertVertexOnEdge(current, edge, toVertex(lng, lat)));
   }, []);
 
@@ -366,15 +422,27 @@ export function FenceMap({
           const bounds = boundsOf(live.current.vertices);
           if (bounds) instance.fitBounds(bounds, { padding: 48, animate: false, maxZoom: 17 });
         });
-        instance.on('click', handleClick);
-        // Layer-scoped first, so a click that lands on a handle is consumed by the
-        // handle rather than also being read as a click on open map.
-        instance.on('mousedown', VERTEX_LAYER, handleVertexMouseDown);
+        // 🔴 ORDER IS LOAD-BEARING: MapLibre invokes listeners in REGISTRATION
+        // order, so the layer-scoped click handlers must be registered BEFORE the
+        // general one. That is what lets a handle answer the click and tell the
+        // general handler, via consumedByLayer, not to answer it again. Registered
+        // the other way round — which is how this first shipped — the general
+        // handler runs first, appends a corner for a click meant as an edge split,
+        // and the flag can only poison the operator's NEXT click.
         instance.on('click', VERTEX_LAYER, handleVertexClick);
         instance.on('click', MIDPOINT_LAYER, handleMidpointClick);
+        instance.on('click', handleClick);
+        instance.on('mousedown', VERTEX_LAYER, handleVertexMouseDown);
+        instance.on('mousedown', handleMapMouseDown);
         instance.on('mousemove', handleMouseMove);
-        // On the WINDOW, not the map: a drag that leaves the canvas still ends,
-        // instead of leaving the pointer glued to a corner it no longer owns.
+        // On the WINDOW as well as the map, so a drag released outside the canvas
+        // still ends instead of gluing the pointer to a corner it no longer owns.
+        // Both fire for an on-canvas release; handleMouseUp is idempotent.
+        //
+        // 🔴 Not a complete guarantee, and the earlier wording claimed it was:
+        // releasing outside the BROWSER WINDOW delivers no mouseup at all, so the
+        // corner keeps following the pointer until the next press. Pointer capture
+        // would close that; it is not wired here.
         instance.on('mouseup', handleMouseUp);
         window.addEventListener('mouseup', handleMouseUp);
         map.current = instance;
@@ -395,7 +463,17 @@ export function FenceMap({
     };
     // Rebuilding the map when the tile URL changes is intended — a style swap
     // mid-draw is rarer and less surprising than a stale basemap.
-  }, [tileUrl, attribution, handleClick, handleVertexMouseDown, handleVertexClick, handleMidpointClick, handleMouseMove, handleMouseUp]);
+  }, [
+    tileUrl,
+    attribution,
+    handleClick,
+    handleMapMouseDown,
+    handleVertexMouseDown,
+    handleVertexClick,
+    handleMidpointClick,
+    handleMouseMove,
+    handleMouseUp,
+  ]);
 
   // ── Ring updates: push into the existing source, never rebuild the map ──
   useEffect(() => {
