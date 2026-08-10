@@ -520,6 +520,54 @@ export function clickIntent(input: {
   return 'append';
 }
 
+// ── Reading the frozen archive ──────────────────────────────────────────────
+
+/** One fence as it was frozen into a set version. */
+export interface SnapshotEntry {
+  token: string;
+  geometry: string;
+}
+
+/**
+ * How a fence appeared in a given fence-set version.
+ *
+ * 🔴 THREE OUTCOMES, NOT TWO, and collapsing any pair of them tells an operator
+ * something false:
+ *
+ *   'absent'     the fence was not in the set then — created later, or deleted
+ *                and its token reused. NOT the same as having no shape.
+ *   'unreadable' it was there, and this editor cannot draw what was stored (a
+ *                reserved kind, a ring with holes). The engine could read it;
+ *                only this viewer cannot.
+ *   'present'    here is the ring, as the engine saw it.
+ *
+ * "Not in this version" rendered as an empty map would claim the fence existed
+ * and enclosed nothing, which is a statement about the FENCE. The truth is a
+ * statement about the VERSION.
+ *
+ * 🔴 A KNOWN LIMIT OF THE ARCHIVE, not of this function: snapshot entries carry
+ * token and geometry only, and fence deletes are hard with tokens reusable. So an
+ * old version's entry for a token may belong to a DIFFERENT fence that held it
+ * then, and nothing here can tell. That is why the caller says "the shape stored
+ * under this token" rather than "this fence's shape". Closing it properly means
+ * freezing a stable fence identity into the snapshot, server-side.
+ */
+export type SnapshotLookup =
+  | { kind: 'absent' }
+  | { kind: 'unreadable' }
+  | { kind: 'present'; vertices: Vertex[] };
+
+export function lookupInSnapshot(
+  entries: readonly SnapshotEntry[],
+  token: string,
+): SnapshotLookup {
+  const entry = entries.find((e) => e.token === token);
+  if (!entry) return { kind: 'absent' };
+  const vertices = fromGeometryDocument(entry.geometry);
+  if (!vertices) return { kind: 'unreadable' };
+  return { kind: 'present', vertices };
+}
+
 // ── Camera ──────────────────────────────────────────────────────────────────
 
 /** [west, south, east, north] — MapLibre's fitBounds order. */

@@ -9,6 +9,7 @@ import {
 } from '@/components/registry';
 import { listGeoFences, getGeoFence, deleteGeoFence, type GeoFence } from '@/lib/api/geofences';
 import { GeoFenceForm } from './GeoFenceForm';
+import { FenceHistoryPanel } from './FenceHistoryPanel';
 import { fromGeometryDocument } from './geometry';
 
 /** The vertex count an operator drew — the closing position is not one of them. */
@@ -54,4 +55,13 @@ export const geofenceResource: RegistryResource<GeoFence> = {
   renderForm: (fence, onDone) => (
     <GeoFenceForm key={fence?.id ?? 'new'} entity={fence} onDone={onDone} />
   ),
+  detailTabs: [
+    {
+      value: 'history',
+      label: 'entities:geofenceHistoryTab',
+      // Keyed like the form: the panel holds a chosen version in state, and a
+      // different fence must not inherit it.
+      render: (fence) => <FenceHistoryPanel key={fence.id} entity={fence} />,
+    },
+  ],
 };
