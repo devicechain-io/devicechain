@@ -62,6 +62,7 @@ const PROBLEM_KEYS: Record<GeometryProblem, string> = {
   coordinateOutOfRange: 'entities:geofenceErrCoordinateRange',
   coordinateNotFinite: 'entities:geofenceErrCoordinateRange',
   repeatedVertex: 'entities:geofenceErrRepeatedVertex',
+  selfIntersecting: 'entities:geofenceErrSelfIntersecting',
 };
 
 export function GeoFenceForm({

@@ -134,6 +134,7 @@
   "geofenceErrTooManyPositions": "Este límite tiene {{count}} vértices; el máximo es {{max}}.",
   "geofenceErrCoordinateRange": "Un vértice queda fuera del rango válido de coordenadas.",
   "geofenceErrRepeatedVertex": "Dos vértices están en el mismo lugar. Deshaga el último o sitúelo en otro punto.",
+  "geofenceErrSelfIntersecting": "El límite se cruza a sí mismo. Una figura con aristas que se cruzan no tiene un interior definido, por lo que no puede usarse como geocerca: mueva un vértice para que las aristas no se solapen.",
   "geofenceBasemap": "Mapa base",
   "geofenceTileUrl": "URL de teselas",
   "geofenceTileUrlPlaceholder": "https://tiles.example.com/{z}/{x}/{y}.png",

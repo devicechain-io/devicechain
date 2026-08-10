@@ -306,10 +306,13 @@ func TestOneBadFenceDoesNotDisableTheSet(t *testing.T) {
 	}
 }
 
-// TestSelfIntersectingRingIsRefused: s2's loop validation is stricter than device-management's
-// authoring validation (which checks GeoJSON structure and coordinate ranges, not self-
-// intersection). A bow-tie has no well-defined interior, so it errors rather than answering
-// confidently.
+// TestSelfIntersectingRingIsRefused: a bow-tie has no well-defined interior, so it errors rather
+// than answering confidently.
+//
+// 🔴 The refusal is NOT s2's doing, and an earlier version of this comment said it was. s2's
+// Loop.Validate passes a bow-tie — the Go port's crossing check is commented out upstream behind a
+// TODO. What refuses it is core/geo's own scan, which device-management now runs at authoring time
+// too, so this is no longer the first place an author finds out.
 func TestSelfIntersectingRingIsRefused(t *testing.T) {
 	bowtie := [][2]float64{{0, 0}, {1, 1}, {1, 0}, {0, 1}, {0, 0}}
 	fs := NewFenceSet(1, []SnapshotFence{polygonFence("bowtie", bowtie)})

@@ -9,6 +9,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/geo"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -320,7 +321,29 @@ func validatePolygon2D(raw json.RawMessage) error {
 		return fmt.Errorf("a Polygon requires at least an exterior ring")
 	}
 
+	// 🔴 THE BUDGET IS ENFORCED FIRST, BEFORE ANYTHING QUADRATIC RUNS, and that
+	// ordering is the whole point of this block being separate from the loop below.
+	//
+	// ValidateClosedRing does an O(V²) crossing scan. Counting positions is O(V).
+	// With the scan ahead of the budget, a single authenticated create carrying an
+	// oversized ring burns CPU proportional to the square of whatever fits in the
+	// request body — measured on this predicate: 512 positions 11.6ms, 4k 0.72s,
+	// 16k 11.5s, 32k 48.7s, and the 4 MiB GraphQL body limit admits ~170k, i.e.
+	// tens of minutes per request, repeatable. Refusing on the cheap count first
+	// makes the expensive scan reachable only for rings small enough to store.
+	//
+	// An earlier version of this function had the two the other way round while
+	// carrying a comment claiming this exact virtue.
 	total := 0
+	for _, ring := range rings {
+		total += len(ring)
+	}
+	if total > MaxGeoFenceVertices {
+		return fmt.Errorf("geofence has %d positions across its rings; the limit is %d (containment is "+
+			"O(vertices) per location event and the publish-time cost gate cannot see this number)",
+			total, MaxGeoFenceVertices)
+	}
+
 	for i, ring := range rings {
 		// Four positions is the GeoJSON minimum for a closed linear ring: a triangle
 		// plus the repeated closing position.
@@ -343,12 +366,23 @@ func validatePolygon2D(raw json.RawMessage) error {
 		if first[0] != last[0] || first[1] != last[1] {
 			return fmt.Errorf("polygon ring %d is not closed: first position %v != last %v", i, first, last)
 		}
-		total += len(ring)
-	}
-	if total > MaxGeoFenceVertices {
-		return fmt.Errorf("geofence has %d positions across its rings; the limit is %d (containment is "+
-			"O(vertices) per location event and the publish-time cost gate cannot see this number)",
-			total, MaxGeoFenceVertices)
+		// Everything above is STRUCTURE — the ring is well-formed JSON describing
+		// positions in range. This asks the separate question of whether the shape
+		// it describes bounds an area at all, and it is the same predicate the
+		// detection engine applies when it compiles the fence.
+		//
+		// 🔴 Placed HERE deliberately: after the range checks above, which is what
+		// keeps out-of-range degrees away from the spherical conversion, and after
+		// the position budget above, which is what keeps the quadratic scan off
+		// rings too big to store.
+		//
+		// Until this existed, a bow-tie saved cleanly and failed only later, when a
+		// rule named the fence — so the author learned at detection time about a
+		// mistake made at draw time, and the fence sat in the registry looking
+		// healthy while answering nothing.
+		if err := geo.ValidateClosedRing(ring); err != nil {
+			return fmt.Errorf("polygon ring %d: %w", i, err)
+		}
 	}
 	return nil
 }

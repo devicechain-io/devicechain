@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -408,15 +409,25 @@ func TestGeoFenceVertexBound(t *testing.T) {
 	api := newGeoFenceTestApi(t)
 	ctx := core.WithTenant(context.Background(), "acme")
 
-	// A closed ring of exactly n positions, sitting on a circle so no two coincide.
+	// A closed ring of exactly n positions on an actual circle, so the shape is
+	// convex and therefore simple.
+	//
+	// 🔴 It did NOT used to be. The previous version marched longitude steadily
+	// right while cycling latitude through seven values — a sawtooth, not a circle,
+	// whatever its comment said — and its closing edge ran back across the teeth.
+	// It was a self-intersecting ring all along, and nothing noticed until the
+	// authoring gate started refusing those. A fixture describing a shape it does
+	// not build is the quiet kind of wrong: this test was measuring the vertex
+	// BOUND, so any ring of the right length passed for it.
 	ring := func(n int) string {
 		coords := make([]float64, 0, n*2)
+		lonOf := func(theta float64) float64 { return -84.0 + 0.01*math.Cos(theta) }
+		latOf := func(theta float64) float64 { return 33.0 + 0.01*math.Sin(theta) }
 		for i := 0; i < n-1; i++ {
-			lon := -84.0 + float64(i)*0.0001
-			lat := 33.0 + float64(i%7)*0.0001
-			coords = append(coords, lon, lat)
+			theta := 2 * math.Pi * float64(i) / float64(n-1)
+			coords = append(coords, lonOf(theta), latOf(theta))
 		}
-		coords = append(coords, -84.0, 33.0) // close on the first position
+		coords = append(coords, lonOf(0), latOf(0)) // close on the first position
 		return polygonGeometry(coords...)
 	}
 
@@ -461,6 +472,40 @@ func TestGeoFenceVertexBound(t *testing.T) {
 
 // The fences-per-tenant bound is enforced at authoring, and one tenant filling up does
 // not block another. Everything up to the limit is accepted — the counterweight again.
+// 🔴 THE ORDERING IS THE SECURITY PROPERTY, so it gets its own test rather than
+// being left to a comment — the previous comment claimed this ordering while the
+// code did the reverse.
+//
+// ValidateClosedRing is O(V²); counting positions is O(V). If the crossing scan
+// ran before the budget, one authenticated create carrying an oversized ring
+// would burn CPU proportional to the square of whatever fits in the request body
+// (measured on this predicate: 32k positions ≈ 49s, and the 4 MiB GraphQL body
+// limit admits several times that). The budget has to refuse first.
+//
+// Asserted through the error MESSAGE rather than through timing, which would be
+// flaky: the ring below is both over-limit and self-intersecting, so whichever
+// check runs first names itself in the failure.
+func TestPositionBudgetIsEnforcedBeforeTheCrossingScan(t *testing.T) {
+	// A zigzag whose closing edge crosses it — self-intersecting AND over-limit.
+	n := MaxGeoFenceVertices + 10
+	coords := make([]float64, 0, n*2)
+	for i := 0; i < n-1; i++ {
+		coords = append(coords, -84.0+float64(i)*1e-5, 33.0+float64(i%2)*1e-3)
+	}
+	coords = append(coords, -84.0, 33.0)
+
+	_, err := validateGeoFenceGeometry(polygonGeometry(coords...))
+	if err == nil {
+		t.Fatal("an over-limit, self-intersecting ring was accepted")
+	}
+	if !strings.Contains(err.Error(), "the limit is") {
+		t.Errorf("the crossing scan ran before the position budget: %v", err)
+	}
+	if strings.Contains(err.Error(), "self-intersecting") {
+		t.Errorf("refused by the quadratic scan rather than the cheap count: %v", err)
+	}
+}
+
 func TestGeoFencesPerTenantBound(t *testing.T) {
 	api := newGeoFenceTestApi(t)
 	acme := core.WithTenant(context.Background(), "acme")
@@ -568,6 +613,17 @@ func TestValidateGeoFenceGeometry(t *testing.T) {
 		{"latitude out of range", polygonGeometry(-84.0, 91, -84.1, 33.1, -84.2, 33.0, -84.0, 91), false},
 		{"one-dimensional position", `{"kind":"POLYGON_2D","geometry":{"type":"Polygon","coordinates":` +
 			`[[[-84.0],[-84.1,33.1],[-84.2,33.0],[-84.0]]]}}`, false},
+
+		// 🔴 Shapes that are structurally perfect and geometrically impossible.
+		// Every case above is caught by reading the JSON; none of these is. Until
+		// authoring ran the engine's own predicate they all SAVED, and failed only
+		// later when a rule named the fence.
+		{"bow-tie", polygonGeometry(0, 0, 1, 1, 1, 0, 0, 1, 0, 0), false},
+		{"bow-tie as a hole", `{"kind":"POLYGON_2D","geometry":{"type":"Polygon","coordinates":[` +
+			closed + `,[[0,0],[1,1],[1,0],[0,1],[0,0]]]}}`, false},
+		{"pinched at a repeated corner", polygonGeometry(0, 0, 1, 0, 0, 0, 1, 1, 0, 0), false},
+		{"a duplicated corner", polygonGeometry(-84.0, 33.0, -84.1, 33.1, -84.1, 33.1, -84.2, 33.0, -84.0, 33.0), false},
+		{"only two distinct corners", polygonGeometry(-84.0, 33.0, -84.1, 33.1, -84.0, 33.0, -84.0, 33.0), false},
 	}
 	for _, tc := range cases {
 		_, err := validateGeoFenceGeometry(tc.doc)

@@ -105,9 +105,14 @@ export type GeometryProblem =
   | 'tooManyPositions'
   | 'coordinateOutOfRange'
   | 'coordinateNotFinite'
-  | 'repeatedVertex';
+  | 'repeatedVertex'
+  | 'selfIntersecting';
 
 export interface GeometryCheck {
+  /**
+   * Whether the ring may be SAVED. Not the same as "has no problem": a problem
+   * can be advisory, and exactly one is (see `selfIntersecting`).
+   */
   ok: boolean;
   problem?: GeometryProblem;
   /** For tooManyPositions: what the ring would actually send. */
@@ -136,11 +141,81 @@ function samePosition(a: Vertex, b: Vertex): boolean {
 }
 
 /**
- * Checks what this slice can check. Ring SIMPLICITY (self-intersection) is NOT
- * checked here — device-management accepts a self-intersecting ring today and
- * only the detection engine refuses it, so a fence can be saved and then fail
- * when a rule names it. Closing that is its own slice, on BOTH sides; a
- * client-only check would be no check at all, since nothing forces a client.
+ * Whether two edges of the ring cross, treating the coordinates as PLANAR.
+ *
+ * 🔴 This is an APPROXIMATION and is not the answer that counts. The server does
+ * the same test on the sphere, where the shortest path between two points bows
+ * poleward and a ring spanning the antimeridian is not what its numbers look
+ * like — so on a large or high-latitude fence the two can legitimately disagree.
+ * The server's answer decides; this exists only to tell an operator mid-draw,
+ * before they press save. It is NOT used to gate the save — see the advisory note
+ * at its call site — precisely because it can be wrong in the direction of
+ * refusing a legal ring near the antimeridian.
+ *
+ * Adjacent edges are skipped because they legitimately share a vertex —
+ * including the wrap-around pair (last, first), which is adjacent on a closed
+ * ring and is exactly the pair a naive index comparison misses.
+ */
+function crossingEdges(vertices: readonly Vertex[]): boolean {
+  const n = vertices.length;
+  if (n < 4) return false; // a triangle's edges are all mutually adjacent
+  for (let i = 0; i < n; i++) {
+    const a = vertices[i];
+    const b = vertices[(i + 1) % n];
+    for (let j = i + 1; j < n; j++) {
+      if (j === i + 1 || (i === 0 && j === n - 1)) continue;
+      const c = vertices[j];
+      const d = vertices[(j + 1) % n];
+      if (segmentsIntersect(a, b, c, d)) return true;
+    }
+  }
+  return false;
+}
+
+/** Orientation of the ordered triple, by the sign of the cross product. */
+function orientation(p: Vertex, q: Vertex, r: Vertex): number {
+  const v = (q.lng - p.lng) * (r.lat - p.lat) - (q.lat - p.lat) * (r.lng - p.lng);
+  return v > 0 ? 1 : v < 0 ? -1 : 0;
+}
+
+function onSegment(p: Vertex, q: Vertex, r: Vertex): boolean {
+  return (
+    Math.min(p.lng, r.lng) <= q.lng &&
+    q.lng <= Math.max(p.lng, r.lng) &&
+    Math.min(p.lat, r.lat) <= q.lat &&
+    q.lat <= Math.max(p.lat, r.lat)
+  );
+}
+
+/**
+ * Whether segments ab and cd meet, counting collinear TOUCHES as meeting.
+ *
+ * Exported for its own tests. The four collinear branches below are shadowed, for
+ * every ring the editor can realistically produce, by the proper-crossing test
+ * above them — a mutation disabling any one of them leaves the ring-level suite
+ * green. They are kept, and tested here directly, because the server does the same
+ * test on the sphere via CrossingSign, which reports a shared point as MaybeCross
+ * and refuses it; dropping them would make the client quietly more permissive than
+ * the server on degenerate overlaps.
+ */
+export function segmentsIntersect(a: Vertex, b: Vertex, c: Vertex, d: Vertex): boolean {
+  const o1 = orientation(a, b, c);
+  const o2 = orientation(a, b, d);
+  const o3 = orientation(c, d, a);
+  const o4 = orientation(c, d, b);
+  if (o1 !== o2 && o3 !== o4) return true;
+  // Collinear touches count. Two NON-adjacent edges sharing a point is a pinched
+  // ring — still not a shape with one interior, and the server refuses it too, so
+  // treating it as merely touching would let it through here alone.
+  if (o1 === 0 && onSegment(a, c, b)) return true;
+  if (o2 === 0 && onSegment(a, d, b)) return true;
+  if (o3 === 0 && onSegment(c, a, d)) return true;
+  if (o4 === 0 && onSegment(c, b, d)) return true;
+  return false;
+}
+
+/**
+ * Checks what can be checked without a map or a network.
  */
 export function checkGeometry(vertices: readonly Vertex[]): GeometryCheck {
   const positions = countPositions(vertices);
@@ -164,6 +239,27 @@ export function checkGeometry(vertices: readonly Vertex[]): GeometryCheck {
   if (vertices.length < MIN_VERTICES) return { ok: false, problem: 'tooFewVertices', positions };
   if (positions > MAX_FENCE_POSITIONS) {
     return { ok: false, problem: 'tooManyPositions', positions };
+  }
+
+  // Last, deliberately: it is the only O(V²) check here and it runs on every
+  // render while drawing. Placing it behind the budget gate means an over-limit
+  // ring is rejected before anything quadratic runs on it.
+  //
+  // 🔴 ADVISORY — `ok` stays true. This is the one problem that does not block a
+  // save, and that is not a softening, it is the only correct answer: the planar
+  // test DISAGREES with the server on rings spanning the antimeridian, and it
+  // disagrees in the direction of refusing shapes the server accepts. Measured —
+  // an antimeridian chevron (178,0 → -179,0.5 → 178,1 → 177,1 → 177,0.5 → 177,0)
+  // is "crossing" here and perfectly fine there, because reading raw longitudes
+  // as planar x turns a 3°-wide edge into one sweeping 357° across the ring.
+  //
+  // Blocking on that would make any non-rectangular fence over Fiji, Chukotka or
+  // the Aleutians unsaveable with no override, to catch a mistake the server
+  // catches anyway with a clear message. So: warn while drawing, let the server
+  // decide. An earlier version returned ok:false here while carrying a comment
+  // saying it did not gate anything.
+  if (crossingEdges(vertices)) {
+    return { ok: true, problem: 'selfIntersecting', positions };
   }
 
   return { ok: true, positions };
