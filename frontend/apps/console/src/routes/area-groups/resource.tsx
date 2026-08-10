@@ -12,6 +12,9 @@ import {
   listAreas,
   type AreaGroup,
 } from '@/lib/api/areas';
+// Groups of every family are the one uniform EntityGroup, so the projection
+// that keeps an edit from erasing its unedited fields is shared too.
+import { groupPreserved } from '@/lib/api/device-management';
 
 export const areaGroupResource: RegistryResource<AreaGroup> = {
   basePath: '/area-groups',
@@ -30,7 +33,14 @@ export const areaGroupResource: RegistryResource<AreaGroup> = {
       i18nKey="areaGroup"
       entityType="area-group"
       create={(req) => createAreaGroup(req)}
-      update={(token, req) => updateAreaGroup(token, req)}
+      // RegistryTypeForm calls update only when editing, so g is set. A group
+      // update replaces every field it names, so an edit that sent only the name
+      // erased the group's appearance and its metadata. (Its membership mode and
+      // selector survive — the server never takes those from a request that omits
+      // them — so a dynamic group kept working while its metadata did not.)
+      update={(token, req) =>
+        updateAreaGroup(token, { ...groupPreserved(g!), name: req.name, description: req.description })
+      }
       onDone={onDone}
     />
   ),

@@ -88,6 +88,8 @@ const DEVICES = graphql(`
         token
         name
         description
+        externalId
+        metadata
         createdAt
         deviceType {
           id
@@ -130,6 +132,8 @@ const DEVICE_BY_TOKEN = graphql(`
       token
       name
       description
+      externalId
+      metadata
       createdAt
       deviceType {
         id
@@ -156,6 +160,8 @@ const CREATE_DEVICE = graphql(`
       token
       name
       description
+      externalId
+      metadata
       createdAt
       deviceType {
         id
@@ -200,6 +206,8 @@ const UPDATE_DEVICE = graphql(`
       token
       name
       description
+      externalId
+      metadata
       createdAt
       deviceType {
         id
@@ -214,9 +222,34 @@ const UPDATE_DEVICE = graphql(`
   }
 `);
 
-export async function updateDevice(token: string, request: DeviceCreateRequest): Promise<Device> {
+// 🔴 `Required<…>` is not decoration: it makes the OMISSION a compile error. The
+// update is a full replace, so the defect this guards against is a caller that
+// simply does not mention a field — which the plain request type, where every
+// field is optional, compiles happily. See areaPreserved for the whole argument.
+export async function updateDevice(
+  token: string,
+  request: Required<DeviceCreateRequest>,
+): Promise<Device> {
   const data = await gql('device-management', UPDATE_DEVICE, { token, request });
   return data.updateDevice;
+}
+
+// 🔴 A device update is a FULL REPLACE, so a field the request omits is DELETED.
+// externalId is the one that hurts most here: it is the handle an external system
+// correlates this device by, no console form edits it, and renaming a device used
+// to erase it — the device kept working and simply stopped being findable from
+// wherever it came from. The `Required<…>` return type is the gate; see areaPreserved.
+//
+// deviceTypeToken is not preserved: the form always supplies it, and the request
+// type refuses to compile without it.
+export function devicePreserved(d: Device): Required<Omit<DeviceCreateRequest, 'deviceTypeToken'>> {
+  return {
+    token: d.token,
+    name: d.name ?? null,
+    description: d.description ?? null,
+    externalId: d.externalId ?? null,
+    metadata: d.metadata ?? null,
+  };
 }
 
 const DELETE_DEVICE = graphql(`
@@ -366,7 +399,7 @@ const UPDATE_DEVICE_TYPE = graphql(`
 
 export async function updateDeviceType(
   token: string,
-  request: DeviceTypeCreateRequest,
+  request: Required<DeviceTypeCreateRequest>,
 ): Promise<DeviceType> {
   const data = await gql('device-management', UPDATE_DEVICE_TYPE, { token, request });
   return data.updateDeviceType;
@@ -379,12 +412,12 @@ export async function updateDeviceType(
 // instead of each maintaining a copy that can drift (the ADR-045 preservation
 // trap). Callers spread it and override only what they change.
 //
-// The `satisfies` guard makes a future field added to DeviceTypeCreateRequest a
+// The `Required<…>` return type makes a future field added to DeviceTypeCreateRequest a
 // compile error here until it is carried forward too — the whole point of a single
 // source of truth. Every request field must therefore be listed (the DeviceType
 // selection sets carry them all so this can), so `profileToken` maps from the
 // nested `profile` object.
-export function deviceTypePreserved(dt: DeviceType): DeviceTypeCreateRequest {
+export function deviceTypePreserved(dt: DeviceType): Required<DeviceTypeCreateRequest> {
   // Values use `?? null` (not undefined): the generated input fields are
   // `string | null`, and for a full replace an explicit null and an omitted field
   // both land as a nil *string server-side.
@@ -401,7 +434,7 @@ export function deviceTypePreserved(dt: DeviceType): DeviceTypeCreateRequest {
     manufacturer: dt.manufacturer ?? null,
     model: dt.model ?? null,
     metadata: dt.metadata ?? null,
-  } satisfies Required<DeviceTypeCreateRequest>;
+  };
 }
 
 const DELETE_DEVICE_TYPE = graphql(`
@@ -438,6 +471,12 @@ const ENTITY_GROUPS = graphql(`
         token
         name
         description
+        icon
+        backgroundColor
+        foregroundColor
+        borderColor
+        imageUrl
+        metadata
         createdAt
         memberType
       }
@@ -474,6 +513,12 @@ const ENTITY_GROUP_BY_TOKEN = graphql(`
       token
       name
       description
+      icon
+      backgroundColor
+      foregroundColor
+      borderColor
+      imageUrl
+      metadata
       createdAt
       memberType
     }
@@ -504,6 +549,12 @@ const CREATE_ENTITY_GROUP = graphql(`
       token
       name
       description
+      icon
+      backgroundColor
+      foregroundColor
+      borderColor
+      imageUrl
+      metadata
       createdAt
       memberType
     }
@@ -522,6 +573,12 @@ const UPDATE_ENTITY_GROUP = graphql(`
       token
       name
       description
+      icon
+      backgroundColor
+      foregroundColor
+      borderColor
+      imageUrl
+      metadata
       createdAt
       memberType
     }
@@ -534,6 +591,28 @@ export async function updateEntityGroup(
 ): Promise<EntityGroup> {
   const data = await gql('device-management', UPDATE_ENTITY_GROUP, { token, request });
   return data.updateEntityGroup;
+}
+
+// 🔴 A group update is a full replace over every field the request names, so a
+// group form that sent only token/name/description erased the group's appearance
+// and its metadata on every rename. What it does NOT erase is membershipMode and
+// selector: the server keeps those off the request entirely — mode is immutable
+// and a selector is only replaced when one is sent — which is why a dynamic
+// group's CEL predicate survived this and its metadata did not. GroupFormRequest
+// omits all three, so returning `Required<GroupFormRequest>` is the gate over
+// exactly the fields a form is allowed to write.
+export function groupPreserved(g: EntityGroup): Required<GroupFormRequest> {
+  return {
+    token: g.token,
+    name: g.name ?? null,
+    description: g.description ?? null,
+    icon: g.icon ?? null,
+    backgroundColor: g.backgroundColor ?? null,
+    foregroundColor: g.foregroundColor ?? null,
+    borderColor: g.borderColor ?? null,
+    imageUrl: g.imageUrl ?? null,
+    metadata: g.metadata ?? null,
+  };
 }
 
 const DELETE_ENTITY_GROUP = graphql(`
@@ -555,7 +634,7 @@ export const listDeviceGroups = (opts: { pageNumber: number; pageSize: number })
 export const getDeviceGroup = (token: string) => getEntityGroupOfType(token, 'device');
 export const createDeviceGroup = (request: GroupFormRequest) =>
   createEntityGroup({ ...request, memberType: 'device' });
-export const updateDeviceGroup = (token: string, request: GroupFormRequest) =>
+export const updateDeviceGroup = (token: string, request: Required<GroupFormRequest>) =>
   updateEntityGroup(token, { ...request, memberType: 'device' });
 export const deleteDeviceGroup = deleteEntityGroup;
 
@@ -573,6 +652,10 @@ const DEVICE_PROFILES = graphql(`
         activeVersion
         deviceTypeCount
         metadata
+        location {
+          expectedAccuracyMeters
+          expectedUpdateIntervalSeconds
+        }
         createdAt
       }
       pagination {
@@ -607,6 +690,10 @@ const DEVICE_PROFILE_BY_TOKEN = graphql(`
       activeVersion
       deviceTypeCount
       metadata
+      location {
+        expectedAccuracyMeters
+        expectedUpdateIntervalSeconds
+      }
       createdAt
     }
   }
@@ -628,6 +715,10 @@ const CREATE_DEVICE_PROFILE = graphql(`
       activeVersion
       deviceTypeCount
       metadata
+      location {
+        expectedAccuracyMeters
+        expectedUpdateIntervalSeconds
+      }
       createdAt
     }
   }
@@ -651,6 +742,10 @@ const UPDATE_DEVICE_PROFILE = graphql(`
       activeVersion
       deviceTypeCount
       metadata
+      location {
+        expectedAccuracyMeters
+        expectedUpdateIntervalSeconds
+      }
       createdAt
     }
   }
@@ -658,10 +753,38 @@ const UPDATE_DEVICE_PROFILE = graphql(`
 
 export async function updateDeviceProfile(
   token: string,
-  request: DeviceProfileCreateRequest,
+  request: Required<DeviceProfileCreateRequest>,
 ): Promise<DeviceProfile> {
   const data = await gql('device-management', UPDATE_DEVICE_PROFILE, { token, request });
   return data.updateDeviceProfile;
+}
+
+// 🔴 The one on this request that is not a string: `location`, the profile's
+// position declaration. It is replaced wholesale like every other field, and the
+// schema says so in as many words — "leaving it out of an update clears an
+// existing declaration". No console form edits it today, which is exactly why it
+// has to be carried: a declaration authored over the API would otherwise be
+// cleared by an operator renaming the profile, and the only visible consequence
+// would be a device's position surfaces quietly disappearing.
+//
+// The declaration is rebuilt field by field rather than spread. It is the one
+// field here that is an OBJECT, and the shape read back is a query result while
+// the shape sent is an input — they line up today, and `...p.location` would keep
+// compiling right up until they stop.
+export function deviceProfilePreserved(p: DeviceProfile): Required<DeviceProfileCreateRequest> {
+  return {
+    token: p.token,
+    name: p.name ?? null,
+    description: p.description ?? null,
+    category: p.category ?? null,
+    metadata: p.metadata ?? null,
+    location: p.location
+      ? {
+          expectedAccuracyMeters: p.location.expectedAccuracyMeters ?? null,
+          expectedUpdateIntervalSeconds: p.location.expectedUpdateIntervalSeconds ?? null,
+        }
+      : null,
+  };
 }
 
 const DELETE_DEVICE_PROFILE = graphql(`
@@ -805,7 +928,7 @@ const UPDATE_METRIC_DEFINITION = graphql(`
 
 export async function updateMetricDefinition(
   token: string,
-  request: MetricDefinitionCreateRequest,
+  request: Required<MetricDefinitionCreateRequest>,
 ): Promise<void> {
   await gql('device-management', UPDATE_METRIC_DEFINITION, { token, request });
 }
@@ -957,7 +1080,7 @@ const UPDATE_COMMAND_DEFINITION = graphql(`
 
 export async function updateCommandDefinition(
   token: string,
-  request: CommandDefinitionCreateRequest,
+  request: Required<CommandDefinitionCreateRequest>,
 ): Promise<void> {
   await gql('device-management', UPDATE_COMMAND_DEFINITION, { token, request });
 }
@@ -1083,7 +1206,7 @@ const UPDATE_DETECTION_RULE = graphql(`
 
 export async function updateDetectionRule(
   token: string,
-  request: DetectionRuleCreateRequest,
+  request: Required<DetectionRuleCreateRequest>,
 ): Promise<void> {
   await gql('device-management', UPDATE_DETECTION_RULE, { token, request });
 }

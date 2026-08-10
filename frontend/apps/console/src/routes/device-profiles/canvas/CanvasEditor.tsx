@@ -298,22 +298,22 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
     setBusy(true);
     try {
       const meta = conditionMeta(nodes);
-      const request: DetectionRuleCreateRequest = {
+      const request: Required<DetectionRuleCreateRequest> = {
         token: editing ? entity.token : token.trim(),
         deviceProfileToken: profileToken,
-        name: meta.name,
-        description: meta.description,
+        name: meta.name ?? null,
+        description: meta.description ?? null,
         definition: result.definition,
         authoringGraph: JSON.stringify(fromReactFlow(nodes, edges)),
         enabled,
-        metadata: entity?.metadata ?? undefined,
+        metadata: entity?.metadata ?? null,
         // Preserve the rule's group scope (ADR-062 S4) verbatim across a canvas save. The scope
         // lives in columns, not the canvas graph, and an update is a full replace — so omitting
         // it here would silently clear the scope and turn a group-scoped rule profile-wide. The
         // scope is authored in the Form tab; the canvas passes it through, mirroring how the
         // form passes a canvas-authored guard/raw action through verbatim.
-        entityGroupToken: entity?.entityGroupToken ?? undefined,
-        entityGroupVersion: entity?.entityGroupVersion ?? undefined,
+        entityGroupToken: entity?.entityGroupToken ?? null,
+        entityGroupVersion: entity?.entityGroupVersion ?? null,
       };
       if (editing) {
         await updateDetectionRule(entity.token, request);

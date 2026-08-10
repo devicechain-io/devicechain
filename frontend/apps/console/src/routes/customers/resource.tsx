@@ -9,6 +9,7 @@ import {
   deleteCustomer,
   createCustomer,
   updateCustomer,
+  customerPreserved,
   listCustomerTypes,
   type Customer,
 } from '@/lib/api/customers';
@@ -54,8 +55,11 @@ export const customerResource: RegistryResource<Customer> = {
         })
       }
       update={(token, req) =>
+        // RegistryInstanceForm calls update only when editing, so c is set.
+        // Start from everything the customer already is (customerPreserved) — the update is a
+        // full replace, so anything left out is deleted rather than left alone.
         updateCustomer(token, {
-          token: req.token,
+          ...customerPreserved(c!),
           name: req.name,
           description: req.description,
           customerTypeToken: req.typeToken,

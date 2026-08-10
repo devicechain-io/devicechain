@@ -587,18 +587,19 @@ export function DetectionRuleForm({
       // reverse round-trip). Comparison is logical (parsed, order-independent), because the
       // form re-emits its own key order, not the canvas's canonical bytes. (Fable 9b-1 MED.)
       const keepGraph = editing && entity.authoringGraph != null && sameLogicalRule(definition, entity.definition);
-      const request: DetectionRuleCreateRequest = {
+      const request: Required<DetectionRuleCreateRequest> = {
         token: editing ? entity.token : token.trim(),
         deviceProfileToken: profileToken,
-        name: name.trim() || undefined,
-        description: description.trim() || undefined,
+        name: name.trim() || null,
+        description: description.trim() || null,
         definition,
-        authoringGraph: keepGraph ? entity!.authoringGraph : undefined,
+        authoringGraph: keepGraph ? entity!.authoringGraph : null,
         enabled,
-        metadata: entity?.metadata ?? undefined,
+        metadata: entity?.metadata ?? null,
         // ADR-062 S4 group scope — sent together or not at all; cleared when un-scoped.
-        entityGroupToken: scoped && scopeGroupToken ? scopeGroupToken : undefined,
-        entityGroupVersion: scoped && scopeGroupToken && scopeGroupVersion != null ? scopeGroupVersion : undefined,
+        entityGroupToken: scoped && scopeGroupToken ? scopeGroupToken : null,
+        entityGroupVersion:
+          scoped && scopeGroupToken && scopeGroupVersion != null ? scopeGroupVersion : null,
       };
       if (editing) {
         await updateDetectionRule(entity.token, request);

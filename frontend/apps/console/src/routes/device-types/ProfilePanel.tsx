@@ -90,8 +90,10 @@ export function ProfilePanel({
   };
 
   // DeviceType update is full-replace; carry everything forward and override only
-  // the profile ref (undefined detaches).
-  const setProfile = (profileToken: string | undefined) =>
+  // the profile ref. null detaches — and it has to be null rather than undefined,
+  // since spreading an undefined over the preserved value is indistinguishable
+  // from never having mentioned the field.
+  const setProfile = (profileToken: string | null) =>
     updateDeviceType(entity.token, { ...deviceTypePreserved(entity), profileToken });
 
   const doAttach = async (token: string) => {
@@ -125,7 +127,7 @@ export function ProfilePanel({
       return;
     setBusy('detach');
     try {
-      await setProfile(undefined);
+      await setProfile(null);
       toast(t('devices:typeProfileDetached'));
       setOverride({ profile: null });
       closePicker();

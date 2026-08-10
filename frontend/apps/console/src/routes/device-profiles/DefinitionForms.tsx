@@ -31,9 +31,11 @@ import {
 } from '@/lib/api/device-management';
 
 // Optional trimmed string → undefined when empty (so the request omits it).
-const opt = (s: string): string | undefined => (s.trim() === '' ? undefined : s.trim());
+// null, not undefined: these requests are full replaces and the update signatures
+// take Required<…>, so "the operator left this blank" has to be SAID.
+const opt = (s: string): string | null => (s.trim() === '' ? null : s.trim());
 // Optional numeric text → number | undefined.
-const optNum = (s: string): number | undefined => (s.trim() === '' ? undefined : Number(s));
+const optNum = (s: string): number | null => (s.trim() === '' ? null : Number(s));
 
 function SubmitRow({
   editing,
@@ -87,7 +89,7 @@ export function MetricDefinitionForm({
     setFormError(null);
     setBusy(true);
     try {
-      const request: MetricDefinitionCreateRequest = {
+      const request: Required<MetricDefinitionCreateRequest> = {
         token: editing ? entity.token : token.trim(),
         deviceProfileToken: profileToken,
         metricKey: metricKey.trim(),
@@ -98,9 +100,9 @@ export function MetricDefinitionForm({
         minValue: optNum(minValue),
         maxValue: optNum(maxValue),
         // Carry forward fields this form doesn't edit (full-replace update).
-        enum: entity?.enum ?? undefined,
-        descriptor: entity?.descriptor ?? undefined,
-        metadata: entity?.metadata ?? undefined,
+        enum: entity?.enum ?? null,
+        descriptor: entity?.descriptor ?? null,
+        metadata: entity?.metadata ?? null,
       };
       if (editing) {
         await updateMetricDefinition(entity.token, request);
@@ -199,14 +201,14 @@ export function CommandDefinitionForm({
     setFormError(null);
     setBusy(true);
     try {
-      const request: CommandDefinitionCreateRequest = {
+      const request: Required<CommandDefinitionCreateRequest> = {
         token: editing ? entity.token : token.trim(),
         deviceProfileToken: profileToken,
         commandKey: commandKey.trim(),
         name: opt(name),
         description: opt(description),
         parameterSchema: opt(parameterSchema),
-        metadata: entity?.metadata ?? undefined,
+        metadata: entity?.metadata ?? null,
       };
       if (editing) {
         await updateCommandDefinition(entity.token, request);

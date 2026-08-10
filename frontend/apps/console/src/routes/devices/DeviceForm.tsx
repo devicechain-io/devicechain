@@ -6,6 +6,7 @@ import {
   listDeviceTypes,
   createDevice,
   updateDevice,
+  devicePreserved,
   getDevice,
   type Device,
 } from '@/lib/api/device-management';
@@ -38,8 +39,12 @@ export function DeviceForm({
         })
       }
       update={(token, req) =>
+        // RegistryInstanceForm calls update only when editing, so `device` is set.
+        // The update is a full replace: before devicePreserved, renaming a device
+        // here deleted its externalId — the handle whatever system provisioned it
+        // correlates it by — and its metadata, with a success toast either way.
         updateDevice(token, {
-          token: req.token,
+          ...devicePreserved(device!),
           name: req.name,
           description: req.description,
           deviceTypeToken: req.typeToken,

@@ -16,6 +16,7 @@ import { Textarea, errMessage } from '@/routes/common';
 import {
   createGeoFence,
   updateGeoFence,
+  geoFencePreserved,
   type GeoFence,
   type GeoFenceCreateRequest,
 } from '@/lib/api/geofences';
@@ -135,16 +136,19 @@ export function GeoFenceForm({
     setFormError(null);
     setBusy(true);
     try {
-      const request: GeoFenceCreateRequest = {
-        token: editing ? entity.token : token.trim(),
-        name: name.trim() || undefined,
-        description: description.trim() || undefined,
+      // 🔴 An edit starts from what the fence ALREADY is. updateGeoFence replaces
+      // the whole record, so a request that leaves a field out does not leave it
+      // alone — it deletes it. geoFencePreserved is that starting point, and it
+      // returns `Required<…>`, which is what makes a field added to the schema
+      // later a compile error here rather than a silent deletion.
+      const edited = {
+        name: name.trim() || null,
+        description: description.trim() || null,
         geometry: toGeometryDocument(vertices),
-        // 🔴 Carried through UNCHANGED rather than omitted. updateGeoFence
-        // replaces the whole record, so a request that leaves metadata out
-        // silently deletes whatever an operator or an integration had set.
-        metadata: entity?.metadata ?? undefined,
       };
+      const request: Required<GeoFenceCreateRequest> = editing
+        ? { ...geoFencePreserved(entity), ...edited }
+        : { token: token.trim(), metadata: null, ...edited };
       if (editing) {
         await updateGeoFence(entity.token, request);
         onDone(t('entities:geofenceUpdatedToast', { token: entity.token }));

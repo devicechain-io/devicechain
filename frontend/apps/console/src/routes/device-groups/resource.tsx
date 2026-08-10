@@ -8,6 +8,7 @@ import {
   getDeviceGroup,
   createDeviceGroup,
   updateDeviceGroup,
+  groupPreserved,
   deleteDeviceGroup,
   listDevices,
   type DeviceGroup,
@@ -30,7 +31,14 @@ export const deviceGroupResource: RegistryResource<DeviceGroup> = {
       i18nKey="deviceGroup"
       entityType="device-group"
       create={(req) => createDeviceGroup(req)}
-      update={(token, req) => updateDeviceGroup(token, req)}
+      // RegistryTypeForm calls update only when editing, so g is set. A group
+      // update replaces every field it names, so an edit that sent only the name
+      // erased the group's appearance and its metadata. (Its membership mode and
+      // selector survive — the server never takes those from a request that omits
+      // them — so a dynamic group kept working while its metadata did not.)
+      update={(token, req) =>
+        updateDeviceGroup(token, { ...groupPreserved(g!), name: req.name, description: req.description })
+      }
       onDone={onDone}
     />
   ),
