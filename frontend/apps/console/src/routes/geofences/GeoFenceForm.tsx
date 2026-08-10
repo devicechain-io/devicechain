@@ -200,7 +200,12 @@ export function GeoFenceForm({
             onClose={() => setClosed(true)}
             tileUrl={tileUrl || undefined}
             attribution={attribution || undefined}
-            disabled={busy || closed}
+            // 🔴 Two props, not one. Passing `busy || closed` as `disabled` — which
+            // is what this did — froze every corner of an existing fence, because
+            // a saved ring opens closed. Finished means "no new corners"; it must
+            // never mean "not editable".
+            closed={closed}
+            disabled={busy}
           />
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-muted-foreground text-xs" data-testid="fence-vertex-count">
@@ -236,6 +241,9 @@ export function GeoFenceForm({
           {/* The problem is shown only once something is drawn: "too few
               vertices" on an untouched map is a description of an empty form,
               not a mistake the operator made. */}
+          <p className="text-muted-foreground text-xs" data-testid="fence-edit-hint">
+            {t('entities:geofenceEditHint')}
+          </p>
           {closed && (
             <p className="text-muted-foreground text-xs" data-testid="fence-closed">
               {t('entities:geofenceClosedHint')}

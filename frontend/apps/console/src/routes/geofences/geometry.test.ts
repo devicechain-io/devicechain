@@ -11,8 +11,12 @@ import {
   boundsOf,
   checkGeometry,
   countPositions,
+  edgeMidpoints,
   fromGeometryDocument,
+  insertVertexOnEdge,
   isCloseGesture,
+  moveVertex,
+  removeVertex,
   segmentsIntersect,
   roundCoord,
   toGeometryDocument,
@@ -706,5 +710,110 @@ describe('segmentsIntersect', () => {
     expect(segmentsIntersect(at(0, 0), at(0, 3), at(0, 5), at(0, 7))).toBe(false);
     // ...and the horizontal mirror, so neither axis can be the one that is dropped.
     expect(segmentsIntersect(at(0, 0), at(3, 0), at(5, 0), at(7, 0))).toBe(false);
+  });
+});
+
+describe('editing an existing ring', () => {
+  const A = { lng: 0, lat: 0 };
+  const B = { lng: 2, lat: 0 };
+  const C = { lng: 1, lat: 2 };
+  const ring = [A, B, C];
+
+  describe('moveVertex', () => {
+    it('moves the named vertex and no other', () => {
+      const moved = moveVertex(ring, 1, { lng: 5, lat: 5 });
+      expect(moved).toEqual([A, { lng: 5, lat: 5 }, C]);
+    });
+
+    it('does not mutate the ring it was given', () => {
+      // The form holds the ring in React state; mutating in place would move the
+      // shape without re-rendering, so the map and the model would disagree until
+      // something unrelated triggered a render.
+      const original = [...ring];
+      moveVertex(ring, 1, { lng: 5, lat: 5 });
+      expect(ring).toEqual(original);
+    });
+
+    it.each([-1, 3, 99])('leaves the ring unchanged for out-of-range index %i', (i) => {
+      // A drag whose vertex was removed underneath it must end quietly, not
+      // append a corner or throw mid-gesture.
+      expect(moveVertex(ring, i, { lng: 5, lat: 5 })).toEqual(ring);
+    });
+  });
+
+  describe('removeVertex', () => {
+    it('removes the named vertex, preserving order', () => {
+      expect(removeVertex(ring, 1)).toEqual([A, C]);
+      expect(removeVertex(ring, 0)).toEqual([B, C]);
+      expect(removeVertex(ring, 2)).toEqual([A, B]);
+    });
+
+    it('allows the ring to fall below three corners', () => {
+      // 🔴 Deliberate. Refusing here would strand an operator with a corner they
+      // cannot delete, and checkGeometry already blocks the save — so this is
+      // recoverable by placing another corner. A rule in two places is a rule
+      // that can disagree with itself.
+      const two = removeVertex(ring, 2);
+      expect(two).toHaveLength(2);
+      expect(checkGeometry(two).problem).toBe('tooFewVertices');
+      expect(checkGeometry(two).ok).toBe(false);
+    });
+
+    it.each([-1, 3])('leaves the ring unchanged for out-of-range index %i', (i) => {
+      expect(removeVertex(ring, i)).toEqual(ring);
+    });
+  });
+
+  describe('insertVertexOnEdge', () => {
+    const N = { lng: 9, lat: 9 };
+
+    it('inserts AFTER the vertex the edge starts at', () => {
+      expect(insertVertexOnEdge(ring, 0, N)).toEqual([A, N, B, C]);
+      expect(insertVertexOnEdge(ring, 1, N)).toEqual([A, B, N, C]);
+    });
+
+    it('appends when inserting into the CLOSING edge', () => {
+      // 🔴 The last edge runs from the last vertex back to the first. Treating it
+      // as an ordinary index would put the new corner at position 0 — which reads
+      // on screen as the shape turning inside out, not as a corner in the wrong
+      // place, so it is easy to misdiagnose.
+      expect(insertVertexOnEdge(ring, 2, N)).toEqual([A, B, C, N]);
+    });
+
+    it.each([-1, 3])('leaves the ring unchanged for out-of-range edge %i', (i) => {
+      expect(insertVertexOnEdge(ring, i, N)).toEqual(ring);
+    });
+  });
+
+  describe('edgeMidpoints', () => {
+    it('gives one midpoint per edge, including the closing edge', () => {
+      // Three corners means THREE edges, not two — the closing edge is an edge.
+      expect(edgeMidpoints(ring)).toEqual([
+        { lng: 1, lat: 0 },
+        { lng: 1.5, lat: 1 },
+        { lng: 0.5, lat: 1 },
+      ]);
+    });
+
+    it('is empty below two corners, because a single point spans no edge', () => {
+      expect(edgeMidpoints([])).toEqual([]);
+      expect(edgeMidpoints([A])).toEqual([]);
+    });
+
+    it('rounds like every other coordinate that enters the model', () => {
+      const mid = edgeMidpoints([{ lng: 0, lat: 0 }, { lng: 0.00000001, lat: 0 }]);
+      expect(mid[0].lng).toBe(roundCoord(mid[0].lng));
+    });
+
+    it('indexes midpoints so that inserting at i lands between i and i+1', () => {
+      // The contract that ties the two together: without it the handle an operator
+      // grabs and the edge it splits can drift apart, and every individual test
+      // above would still pass.
+      const mids = edgeMidpoints(ring);
+      const grown = insertVertexOnEdge(ring, 1, mids[1]);
+      expect(grown[1]).toEqual(B);
+      expect(grown[2]).toEqual(mids[1]);
+      expect(grown[3]).toEqual(C);
+    });
   });
 });

@@ -351,6 +351,77 @@ export function fromGeometryDocument(raw: string): Vertex[] | null {
   return vertices;
 }
 
+// ── Editing an existing ring ────────────────────────────────────────────────
+//
+// These are the whole of what a drag or a delete does to the model. Keeping them
+// here rather than inside the map component means the RULES are testable without
+// a DOM, a WebGL context, or a pointer — and the component is left holding only
+// the part that genuinely needs MapLibre: turning a pixel into a coordinate.
+
+/**
+ * Moves one vertex, leaving every other position untouched.
+ *
+ * Out-of-range indices return the ring unchanged rather than appending or
+ * throwing. A drag whose vertex was removed underneath it — by an undo, or by a
+ * concurrent edit — should end quietly, not corrupt the ring or crash the editor
+ * mid-gesture.
+ */
+export function moveVertex(
+  vertices: readonly Vertex[],
+  index: number,
+  next: Vertex,
+): Vertex[] {
+  if (index < 0 || index >= vertices.length) return [...vertices];
+  const out = [...vertices];
+  out[index] = next;
+  return out;
+}
+
+/**
+ * Removes one vertex.
+ *
+ * 🔴 It does NOT refuse to go below three. Blocking the removal would leave an
+ * operator stuck with a corner they cannot delete, and checkGeometry already
+ * reports `tooFewVertices` and blocks the save — so the ring is recoverable by
+ * placing another corner, which is the state they were in before they drew the
+ * third. Refusing here would be a rule enforced in two places that could then
+ * disagree.
+ */
+export function removeVertex(vertices: readonly Vertex[], index: number): Vertex[] {
+  if (index < 0 || index >= vertices.length) return [...vertices];
+  return vertices.filter((_, i) => i !== index);
+}
+
+/**
+ * Inserts a vertex into the edge that starts at `edgeIndex`, so a drawn ring can
+ * gain detail without being redrawn.
+ *
+ * Edge i runs from vertex i to vertex i+1, and the LAST edge runs from the last
+ * vertex back to the first — inserting into that one appends, which is why this
+ * takes an edge index rather than a vertex index. Getting that wrong puts the new
+ * corner at the start of the ring instead of the end, which looks like the shape
+ * turning inside out.
+ */
+export function insertVertexOnEdge(
+  vertices: readonly Vertex[],
+  edgeIndex: number,
+  v: Vertex,
+): Vertex[] {
+  if (edgeIndex < 0 || edgeIndex >= vertices.length) return [...vertices];
+  const out = [...vertices];
+  out.splice(edgeIndex + 1, 0, v);
+  return out;
+}
+
+/** The midpoint of each edge, in ring order — where an insert handle belongs. */
+export function edgeMidpoints(vertices: readonly Vertex[]): Vertex[] {
+  if (vertices.length < 2) return [];
+  return vertices.map((a, i) => {
+    const b = vertices[(i + 1) % vertices.length];
+    return { lng: roundCoord((a.lng + b.lng) / 2), lat: roundCoord((a.lat + b.lat) / 2) };
+  });
+}
+
 // ── The close gesture ───────────────────────────────────────────────────────
 
 /** A point in screen space, as MapLibre's `project` and `MapMouseEvent.point` give it. */

@@ -14,7 +14,16 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { useTranslation } from 'react-i18next';
 import { rasterStyleFor } from '@devicechain/widgets';
 import type { Map as MapLibreMap, MapMouseEvent } from 'maplibre-gl';
-import { boundsOf, isCloseGesture, toVertex, type Vertex } from './geometry';
+import {
+  boundsOf,
+  edgeMidpoints,
+  insertVertexOnEdge,
+  isCloseGesture,
+  moveVertex,
+  removeVertex,
+  toVertex,
+  type Vertex,
+} from './geometry';
 
 /// <reference path="../../../../../packages/widgets/src/css-modules.d.ts" />
 
@@ -41,6 +50,7 @@ const SOURCE = 'fence';
 const FILL_LAYER = 'fence-fill';
 const LINE_LAYER = 'fence-outline';
 const VERTEX_LAYER = 'fence-vertices';
+const MIDPOINT_LAYER = 'fence-midpoints';
 
 /**
  * The style used when no tile URL is configured. MapLibre is still what renders
@@ -87,6 +97,18 @@ function ringFeature(vertices: readonly Vertex[]) {
         properties: { part: 'vertex', index: i },
         geometry: { type: 'Point', coordinates: [v.lng, v.lat] },
       })),
+      // One handle per EDGE, at its midpoint, carrying the index of the edge it
+      // splits — not the index of a vertex. Clicking one adds a corner there.
+      // Only shown once the ring encloses something; on two corners the "edges"
+      // are the same segment twice and the two handles would sit on top of each
+      // other, each claiming a different edge.
+      ...(vertices.length >= 3
+        ? edgeMidpoints(vertices).map((m, i) => ({
+            type: 'Feature',
+            properties: { part: 'midpoint', edge: i },
+            geometry: { type: 'Point', coordinates: [m.lng, m.lat] },
+          }))
+        : []),
     ],
   };
 }
@@ -99,6 +121,17 @@ export interface FenceMapProps {
   attribution?: string;
   /** Fires when the operator closes the ring by clicking the first vertex. */
   onClose?: () => void;
+  /**
+   * The ring is finished: map clicks no longer APPEND a corner.
+   *
+   * 🔴 Distinct from `disabled` on purpose. In the first version there was only
+   * `disabled`, and the form passed `busy || closed` into it — which meant an
+   * EXISTING fence, which opens closed, could not be edited at all. Every corner
+   * was frozen and the only way to change a saved shape was to clear it and draw
+   * again. Finished must mean "no new corners", never "no editing".
+   */
+  closed?: boolean;
+  /** Saving is in flight: nothing responds. */
   disabled?: boolean;
 }
 
@@ -108,6 +141,7 @@ export function FenceMap({
   tileUrl,
   attribution,
   onClose,
+  closed = false,
   disabled = false,
 }: FenceMapProps) {
   const { t } = useTranslation(['entities', 'common']);
@@ -118,19 +152,32 @@ export function FenceMap({
   // The click handler is registered once, but needs the CURRENT ring and
   // callbacks. Reading them from refs keeps the handler stable, so a vertex
   // added mid-draw cannot detach the listener that added it.
-  const live = useRef({ vertices, onChange, onClose, disabled });
+  const live = useRef({ vertices, onChange, onClose, closed, disabled });
+  /** Index of the vertex under an active drag, or null. */
+  const dragging = useRef<number | null>(null);
+  /**
+   * A drag ends with a `mouseup`, and MapLibre then fires `click` at the same
+   * point. Without this the corner an operator just finished dragging would also
+   * place a NEW corner on top of itself.
+   */
+  const swallowNextClick = useRef(false);
   // Assigned in a layout effect rather than during render: a render React throws
   // away must not leave its props behind for a click handler to read. Nothing in
   // the console suspends above this form today, so the difference is currently
   // unobservable — but that is a property of the CALLER, and this component
   // should not depend on it.
   useLayoutEffect(() => {
-    live.current = { vertices, onChange, onClose, disabled };
+    live.current = { vertices, onChange, onClose, closed, disabled };
   });
 
   const handleClick = useCallback((event: MapMouseEvent) => {
-    const { vertices: current, onChange: emit, onClose: close, disabled: off } = live.current;
+    const { vertices: current, onChange: emit, onClose: close, closed: done, disabled: off } =
+      live.current;
     if (off) return;
+    if (swallowNextClick.current) {
+      swallowNextClick.current = false;
+      return;
+    }
 
     // 🔴 wrap() is belt to renderWorldCopies:false's braces. maplibre derives
     // lngLat from an unwrapped mercator inverse, so any path that lets the view
@@ -153,7 +200,97 @@ export function FenceMap({
       }
     }
 
+    // A finished ring takes no new corners from a click on open map. Dragging,
+    // removing and splitting an edge all still work — that is the whole point of
+    // `closed` being separate from `disabled`.
+    if (done) return;
+
     emit([...current, toVertex(lng, lat)]);
+  }, []);
+
+
+  /** Which vertex, if any, is under the pointer at this event. */
+  const vertexIndexAt = (instance: MapLibreMap, event: MapMouseEvent): number | null => {
+    const hits = instance.queryRenderedFeatures(event.point, { layers: [VERTEX_LAYER] });
+    const index = hits[0]?.properties?.index;
+    return typeof index === 'number' ? index : null;
+  };
+
+  const handleVertexMouseDown = useCallback((event: MapMouseEvent) => {
+    if (live.current.disabled) return;
+    const instance = map.current;
+    if (!instance) return;
+    const index = vertexIndexAt(instance, event);
+    if (index === null) return;
+    // Take the gesture away from the map, or dragging a corner pans the world
+    // instead of moving the corner.
+    event.preventDefault();
+    dragging.current = index;
+    instance.dragPan.disable();
+    instance.getCanvas().style.cursor = 'grabbing';
+  }, []);
+
+  const handleMouseMove = useCallback((event: MapMouseEvent) => {
+    const instance = map.current;
+    if (!instance) return;
+    const index = dragging.current;
+
+    if (index === null) {
+      // Not dragging: just tell the pointer that these handles are grabbable.
+      const over = instance.queryRenderedFeatures(event.point, {
+        layers: [VERTEX_LAYER, MIDPOINT_LAYER],
+      });
+      instance.getCanvas().style.cursor = over.length
+        ? 'grab'
+        : live.current.closed || live.current.disabled
+          ? ''
+          : 'crosshair';
+      return;
+    }
+
+    const { lng, lat } = event.lngLat.wrap();
+    live.current.onChange(moveVertex(live.current.vertices, index, toVertex(lng, lat)));
+  }, []);
+
+  const handleMouseUp = useCallback(() => {
+    const instance = map.current;
+    if (dragging.current === null) return;
+    dragging.current = null;
+    // The click that follows this mouseup would otherwise drop a NEW corner on
+    // the one just dropped.
+    swallowNextClick.current = true;
+    if (instance) {
+      instance.dragPan.enable();
+      instance.getCanvas().style.cursor = '';
+    }
+  }, []);
+
+  const handleVertexClick = useCallback((event: MapMouseEvent) => {
+    const { disabled: off, vertices: current, onChange: emit } = live.current;
+    if (off) return;
+    const instance = map.current;
+    if (!instance) return;
+    // Alt/Option removes. It is a modifier rather than a plain click because a
+    // plain click on the FIRST vertex already means "close the ring", and one
+    // gesture cannot mean two things.
+    if (!event.originalEvent.altKey) return;
+    const index = vertexIndexAt(instance, event);
+    if (index === null) return;
+    swallowNextClick.current = true;
+    emit(removeVertex(current, index));
+  }, []);
+
+  const handleMidpointClick = useCallback((event: MapMouseEvent) => {
+    const { disabled: off, vertices: current, onChange: emit } = live.current;
+    if (off) return;
+    const instance = map.current;
+    if (!instance) return;
+    const hits = instance.queryRenderedFeatures(event.point, { layers: [MIDPOINT_LAYER] });
+    const edge = hits[0]?.properties?.edge;
+    if (typeof edge !== 'number') return;
+    const { lng, lat } = event.lngLat.wrap();
+    swallowNextClick.current = true;
+    emit(insertVertexOnEdge(current, edge, toVertex(lng, lat)));
   }, []);
 
   // ── Map lifecycle: created once, never recreated for a vertex change ──
@@ -201,6 +338,19 @@ export function FenceMap({
             paint: { 'line-color': '#38bdf8', 'line-width': 2 },
           });
           instance.addLayer({
+            id: MIDPOINT_LAYER,
+            type: 'circle',
+            source: SOURCE,
+            filter: ['==', ['get', 'part'], 'midpoint'],
+            paint: {
+              'circle-radius': 4,
+              'circle-color': '#0ea5e9',
+              'circle-opacity': 0.55,
+              'circle-stroke-color': '#f8fafc',
+              'circle-stroke-width': 1,
+            },
+          });
+          instance.addLayer({
             id: VERTEX_LAYER,
             type: 'circle',
             source: SOURCE,
@@ -217,6 +367,16 @@ export function FenceMap({
           if (bounds) instance.fitBounds(bounds, { padding: 48, animate: false, maxZoom: 17 });
         });
         instance.on('click', handleClick);
+        // Layer-scoped first, so a click that lands on a handle is consumed by the
+        // handle rather than also being read as a click on open map.
+        instance.on('mousedown', VERTEX_LAYER, handleVertexMouseDown);
+        instance.on('click', VERTEX_LAYER, handleVertexClick);
+        instance.on('click', MIDPOINT_LAYER, handleMidpointClick);
+        instance.on('mousemove', handleMouseMove);
+        // On the WINDOW, not the map: a drag that leaves the canvas still ends,
+        // instead of leaving the pointer glued to a corner it no longer owns.
+        instance.on('mouseup', handleMouseUp);
+        window.addEventListener('mouseup', handleMouseUp);
         map.current = instance;
       })
       .catch(() => {
@@ -229,12 +389,13 @@ export function FenceMap({
 
     return () => {
       cancelled = true;
+      window.removeEventListener('mouseup', handleMouseUp);
       map.current?.remove();
       map.current = null;
     };
     // Rebuilding the map when the tile URL changes is intended — a style swap
     // mid-draw is rarer and less surprising than a stale basemap.
-  }, [tileUrl, attribution, handleClick]);
+  }, [tileUrl, attribution, handleClick, handleVertexMouseDown, handleVertexClick, handleMidpointClick, handleMouseMove, handleMouseUp]);
 
   // ── Ring updates: push into the existing source, never rebuild the map ──
   useEffect(() => {
@@ -244,15 +405,12 @@ export function FenceMap({
     source?.setData?.(ringFeature(vertices));
   }, [vertices]);
 
-  const cursor = disabled ? 'default' : 'crosshair';
-
   return (
     <div className="relative">
       <div
         ref={container}
         data-testid="fence-map"
         className="h-[380px] w-full overflow-hidden rounded-md border bg-muted"
-        style={{ cursor }}
         role="application"
         aria-label={t('entities:geofenceMapLabel')}
       />
