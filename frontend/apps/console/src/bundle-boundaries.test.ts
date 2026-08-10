@@ -87,6 +87,38 @@ describe('the MapLibre lazy boundary', () => {
     expect(source).toMatch(/import type .*from 'maplibre-gl'/); // erased, so allowed
   });
 
+  // 🔴 THE SIBLING RULE, AND THE ONE WITH NO RUNTIME TEST BEHIND IT.
+  //
+  // Loading MapLibre lazily is only half of loading it correctly. MapLibre 6 parses
+  // tiles and geometry in a web worker whose URL it derives AT RUNTIME from its own
+  // module URL — a string no bundler can follow — so unless the importer asks for the
+  // worker through Vite's `?worker&url` entry and hands the emitted URL to
+  // `setWorkerUrl`, nothing emits the file, the browser resolves it to a 404, and
+  // `new Worker()` does not throw: the failure surfaces later as an async error event
+  // and the map simply renders nothing.
+  //
+  // This is a SOURCE check rather than a behavioural one because FenceMap drives real
+  // MapLibre and cannot run under jsdom, so nothing in this app executes that loader.
+  // (The dashboard map widget's loader has the same rule enforced at runtime, in
+  // packages/widgets/src/widgets/map.test.tsx.) A source check is weaker than running
+  // it — it proves the call is written, not that it works — but the alternative here
+  // was no check at all on the surface an operator actually draws fences with.
+  it('every module that loads MapLibre also points its worker at an emitted URL', () => {
+    const loaders = FILES.filter(([, source]) => /import\(\s*['"]maplibre-gl['"]\s*\)/.test(source));
+    // An absence claim over an empty list again: name the loaders, so a rotted glob
+    // or a moved file reports a failure rather than a clean sweep of nothing.
+    expect(loaders.map(([path]) => path)).toEqual([
+      './routes/geofences/FenceMap.tsx',
+    ]);
+
+    for (const [path, source] of loaders) {
+      expect(source, `${path} does not import the worker entry`).toMatch(
+        /import\(\s*['"]maplibre-gl\/dist\/maplibre-gl-worker\.mjs\?worker&url['"]\s*\)/,
+      );
+      expect(source, `${path} never calls setWorkerUrl`).toMatch(/setWorkerUrl\(/);
+    }
+  });
+
   it('the pattern fires on a value import and stays quiet on a type import', () => {
     // Without this, a regex that matched nothing at all would pass the scan and
     // the control alike.

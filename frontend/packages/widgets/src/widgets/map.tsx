@@ -56,13 +56,28 @@ function loadMapLibre(): Promise<typeof import('maplibre-gl')> {
   if (!mapLibrePromise) {
     mapLibrePromise = Promise.all([
       import('maplibre-gl'),
+      // 🔴 THE WORKER HAS TO BE ASKED FOR BY NAME, and getting this wrong produces a
+      // map that builds, type-checks, passes every test and then renders nothing.
+      //
+      // MapLibre parses tiles and geometry off the main thread. Left to itself it
+      // derives the worker's URL AT RUNTIME from its own module URL — `new
+      // URL('./maplibre-gl-worker.mjs', import.meta.url)` — which is a string a
+      // bundler cannot see, so nothing emits the file and the browser resolves
+      // `/assets/maplibre-gl-worker.mjs` to a 404. `new Worker()` does not throw on
+      // one: the failure arrives later as an async error event, so the map simply
+      // sits there having loaded no tiles.
+      //
+      // `?worker&url` is what makes Vite treat it as a worker ENTRY — bundling the
+      // `./maplibre-gl-shared.mjs` it imports into it, which is why the plain `?url`
+      // form (a verbatim copy, its sibling import dangling) is not enough — and hand
+      // back the emitted, hashed URL. It rides the same dynamic boundary as the
+      // library and the stylesheet, so a viewer who opens no map still downloads none
+      // of it.
+      import('maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'),
       import('maplibre-gl/dist/maplibre-gl.css'),
-    ]).then(([mod]) => {
-      // The published build is UMD, so an interop shim hands it back under `default`;
-      // a bundler that synthesizes named exports hands the classes over directly.
-      // Accept either rather than betting on which one a given host produces.
-      const lib = mod as unknown as Record<string, unknown>;
-      return (typeof lib.Map === 'function' ? mod : (lib.default as typeof import('maplibre-gl')));
+    ]).then(([mod, worker]) => {
+      mod.setWorkerUrl(worker.default);
+      return mod;
     });
   }
   return mapLibrePromise;
