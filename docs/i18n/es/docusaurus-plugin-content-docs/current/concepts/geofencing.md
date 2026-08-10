@@ -17,11 +17,13 @@ En la consola, las geocercas viven en **Áreas → Geocercas**. Haga clic en el 
 
 Una geocerca lleva un **token** — el identificador con el que las reglas la nombran — más un nombre y una descripción opcionales. El token queda fijo una vez creada.
 
-### No hay mapa base predeterminado {#no-default-basemap}
+### El mapa que hay detrás de su geocerca {#no-default-basemap}
 
-DeviceChain se entrega **sin ninguna fuente de teselas configurada**, y eso es deliberado en lugar de una omisión: apuntar cada instancia autoalojada a un servicio público de teselas pondría a cada una de ellas en incumplimiento de una política de uso que nunca aceptó. Dibujar funciona sin ella: las coordenadas que usted coloca son exactas en cualquier caso.
+El editor dibuja sobre el **mapa base** del inquilino, que en una instancia nueva ya viene configurado, de modo que las teselas aparecen sin que nadie tenga que preparar nada.
 
-Un administrador del inquilino define la fuente de teselas una sola vez, para todos, en **Mapa base**; los campos de este editor son una anulación personal sobre ese valor, recordada únicamente en su navegador, para probar un proveedor antes de aplicarlo a todo el inquilino. Consulte [Mapas base](./basemaps.md) para ver cómo se resuelven los niveles, por qué la URL de teselas y su atribución se mueven juntas, y cómo proteger la clave de API de un proveedor.
+Un administrador del inquilino cambia la fuente de teselas una sola vez, para todos, en **Mapa base**; los campos de este editor son una anulación personal sobre ese valor, recordada únicamente en su navegador, para probar un proveedor antes de aplicarlo a todo el inquilino. Consulte [Mapas base](./basemaps.md) para ver cómo se resuelven los niveles, por qué la URL de teselas y su atribución se mueven juntas, qué proveedor viene por defecto, y cómo proteger la clave de API de un proveedor.
+
+Si ningún nivel tiene una fuente de teselas —un operador definió el valor por defecto de la instancia como `{}` y el inquilino no definió nada— el contorno se dibuja sobre un fondo liso. Dibujar sigue funcionando y las coordenadas que usted coloca son exactas en cualquier caso.
 
 ## Qué puede ser un contorno {#what-a-boundary-may-be}
 

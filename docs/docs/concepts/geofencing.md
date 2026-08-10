@@ -17,11 +17,13 @@ In the console, geofences live under **Areas → Geofences**. Click the map to p
 
 A fence carries a **token** — the identifier rules use to name it — plus an optional name and description. The token is fixed once created.
 
-### There is no default basemap {#no-default-basemap}
+### The map behind your fence {#no-default-basemap}
 
-DeviceChain ships with **no tile source configured**, and that is deliberate rather than an omission: pointing every self-hosted instance at a public tile service would put each of them in breach of a usage policy they never agreed to. Drawing works without one — the coordinates you place are exact either way.
+The editor draws on the tenant's **basemap**, which a new instance ships already configured — so tiles appear without anyone setting anything up.
 
-A tenant admin sets the tile source once, for everyone, under **Basemap**; the fields in this editor are a personal override on top of that, remembered in your browser only, for trying a provider before committing it tenant-wide. See [Basemaps](./basemaps.md) for how the tiers resolve, why the tile URL and its attribution move together, and how to protect a provider API key.
+A tenant admin changes the tile source once, for everyone, under **Basemap**; the fields in this editor are a personal override on top of that, remembered in your browser only, for trying a provider before committing it tenant-wide. See [Basemaps](./basemaps.md) for how the tiers resolve, why the tile URL and its attribution move together, which provider ships by default, and how to protect a provider API key.
+
+If no tier has a tile source — an operator set the instance default to `{}` and the tenant set nothing — the boundary is drawn on a plain background instead. Drawing still works and the coordinates you place are exact either way.
 
 ## What a boundary may be {#what-a-boundary-may-be}
 

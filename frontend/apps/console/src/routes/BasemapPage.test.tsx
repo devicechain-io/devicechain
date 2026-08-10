@@ -140,7 +140,11 @@ describe('the tile source is one value', () => {
     type('bm-tile-url', OSM);
 
     expect(saveButton().disabled).toBe(true);
-    expect(screen.getByText(/licence violation/i)).toBeTruthy();
+    // Matched on a phrase only the ERROR uses. The field's help text also explains
+    // that the two halves travel together, and a matcher broad enough to hit both
+    // passes on the help alone — so the error could stop rendering unnoticed. Same
+    // trap as the mixed-content assertion below.
+    expect(screen.getByText(/saved together or not at all/i)).toBeTruthy();
   });
 
   it('blocks a credit line with no tile URL', () => {

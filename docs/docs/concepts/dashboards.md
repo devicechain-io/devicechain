@@ -33,10 +33,12 @@ Built-in widgets span five channels — **telemetry**, **alarm**, **control**, *
 | **Entity selector** | selection | a picker that re-points a named slot, so a viewer chooses which entity the dashboard — or one widget within it — shows |
 | **Map** | location | the last known position of the bound devices |
 
-:::note The map needs a tile source, and DeviceChain does not pick one for you
-The map widget renders device positions over a **tile source you configure on the widget**. There is no default, deliberately: the map library is not the map — the tiles are, and they come from a provider whose terms are separate from the platform's. Defaulting to a public tile service would quietly make someone else's usage policy a runtime dependency of your instance.
+:::note The map's tiles come from the tenant, not from the widget
+The map widget renders device positions over the tenant's **basemap**, which a new instance ships already configured — so a map widget draws tiles without anyone setting one up. The widget's own `tileUrl` and `attribution` options are an override for that one board, useful for trying a provider before committing it tenant-wide.
 
-With no tile source configured the widget still works: it plots the devices' relative positions on a plain background and says that no tiles are configured. Point it at a commercial provider, or at tiles you host yourself.
+Which provider you should actually use is a tenant-level decision, not a per-widget one: see [Basemaps](./basemaps.md).
+
+If no tier has a tile source — an operator set the instance default to `{}` and the tenant set nothing — the widget still works: it plots the devices' relative positions on a plain background and says that no tiles are configured.
 
 Reading positions also requires the `location:read` authority, which is **not** granted by the read-only baseline every member receives — see [device location](../guides/connecting-a-device.md). A viewer without it is told so, rather than shown an empty map.
 :::

@@ -129,7 +129,7 @@
   "widgetMaxRowsCommandHint": "Recent commands shown in the history before scrolling.",
   "widgetPrecisionTableHint": "Decimal places for numeric values (blank = full precision).",
   "widgetLabelTileUrl": "Tile source URL",
-  "widgetTileUrlHint": "Raster tile template, for example https://tiles.example.com/{z}/{x}/{y}.png. There is no default — a tile provider\u2019s terms are yours to accept, not ours. Without one, positions are drawn on a plain background.",
+  "widgetTileUrlHint": "Raster tile template, for example https://tiles.example.com/{z}/{x}/{y}.png. Leave empty to use the tenant's basemap, which is what most boards should do. Setting one here overrides it for this board only — and needs the credit line the provider's licence requires.",
   "widgetLabelAttribution": "Attribution",
   "widgetAttributionHint": "The credit line your tile provider requires. Shown on the map.",
   "widgetPlaceholderAny": "Any",

@@ -7,7 +7,9 @@ title: Mapas base
 
 Todas las superficies con mapa de DeviceChain —el editor de geocercas, el widget de mapa de los paneles y un panel incrustado a través del visor independiente— dibujan sus posiciones sobre un **mapa base**: mosaicos ráster obtenidos del proveedor que elijas.
 
-DeviceChain no incluye **ningún proveedor de mosaicos por defecto**, y eso es una decisión, no un olvido. Los mosaicos de mapa llevan condiciones de licencia, políticas de uso y, a menudo, una factura, y la plataforma no puede aceptar ninguna de esas cosas en tu nombre. Una instancia que nadie ha configurado muestra todas las posiciones que se le pidieron, sobre un panel liso, y explica por qué no hay mapa detrás.
+Una instancia nueva dibuja mapas desde el primer momento: el valor por defecto es la capa de mosaicos estándar de [OpenStreetMap](https://www.openstreetmap.org/), que no necesita cuenta. Nada se adopta en silencio —el valor por defecto tiene nombre, es visible en **Configuración** y se sustituye con una sola edición— y todo nivel que pueda definir un origen de mosaicos debe aportar la línea de crédito que exige la licencia de ese proveedor.
+
+Si es el proveedor adecuado para ti es otra cuestión, y conviene planteársela antes de pasar a producción. Consulta [Elegir un proveedor](#choosing-a-provider).
 
 ## El mapa base pertenece al inquilino {#the-basemap-belongs-to-the-tenant}
 
@@ -52,6 +54,21 @@ El guardado falla de forma cerrada, y cada regla rechaza un valor que si no fall
 - **La atribución es obligatoria, y su marcado es limitado**: texto plano más enlaces escritos exactamente como `<a href="https://…">texto</a>`. Se permiten enlaces porque varias licencias de proveedores exigen que el crédito enlace a su página de derechos de autor; todo lo demás se rechaza.
 
 Hoy solo se admiten mosaicos **ráster**. No se acepta una URL de estilo vectorial.
+
+## Elegir un proveedor {#choosing-a-provider}
+
+El valor por defecto te da un mapa que funciona desde el primer día. No es automáticamente la respuesta correcta para un despliegue en producción, y el factor decisivo suele ser **quién se espera que sirva tu tráfico**.
+
+Los servidores de mosaicos de OpenStreetMap los gestiona una organización sin ánimo de lucro y se financian con donaciones. Su [política de uso de mosaicos](https://operations.osmfoundation.org/policies/tiles/) detalla lo que te piden, y DeviceChain está construido para cumplirla: los mosaicos se obtienen solo a medida que navegas, nunca se descargan por adelantado ni se archivan, y la línea de crédito siempre se muestra. Dos cosas siguen siendo responsabilidad tuya:
+
+- **No pongas una `Referrer-Policy` restrictiva delante de la consola.** La política pide a los clientes de navegador un `Referer` válido, y eliminarlo puede hacer que bloqueen una instancia sin aviso previo y sin más síntoma local que un mapa que ha dejado de dibujarse.
+- **Lee la política antes de crecer.** Se reservan el derecho de bloquear el acceso sin previo aviso cuando el uso degrada el servicio: algo razonable viniendo de una infraestructura donada, y muy inoportuno de descubrir durante una demostración a un cliente.
+
+Si los mapas son importantes para tu operación, apunta un inquilino —o el valor por defecto de la instancia— a un proveedor con el que tengas una relación. Ese es el caso para el que existe el nivel por inquilino, y la sección siguiente sobre claves de API es la que conviene leer a continuación.
+
+:::tip Un mapa en blanco es un estado de configuración, no un error
+Si un operador define el valor por defecto de la instancia como `{}` y un inquilino no define nada, no hay ningún origen de mosaicos. Ten en cuenta que **Restablecer el valor por defecto** hace lo contrario —restaura el proveedor que viene de fábrica—, así que desactivar los mapas es un `{}` explícito, no un restablecimiento. Las superficies con mapa dibujan entonces todas las posiciones que se les pidieron sobre un panel liso y explican por qué, en lugar de fallar. Dibujar una geocerca sigue funcionando y las coordenadas que colocas siguen siendo exactas.
+:::
 
 ## La clave de API de la URL de mosaicos no es un secreto {#the-api-key-is-not-a-secret}
 

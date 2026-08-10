@@ -129,7 +129,7 @@
   "widgetMaxRowsCommandHint": "Comandos recientes mostrados en el historial antes de desplazarse.",
   "widgetPrecisionTableHint": "Decimales para valores numéricos (en blanco = precisión completa).",
   "widgetLabelTileUrl": "URL del origen de teselas",
-  "widgetTileUrlHint": "Plantilla de teselas ráster, por ejemplo https://tiles.example.com/{z}/{x}/{y}.png. No hay valor predeterminado: las condiciones de un proveedor de teselas las acepta usted, no nosotros. Sin ella, las posiciones se dibujan sobre un fondo liso.",
+  "widgetTileUrlHint": "Plantilla de teselas ráster, por ejemplo https://tiles.example.com/{z}/{x}/{y}.png. Déjala vacía para usar el mapa base del inquilino, que es lo que deberían hacer la mayoría de los paneles. Definir una aquí lo anula solo para este panel, y requiere la línea de crédito que exige la licencia del proveedor.",
   "widgetLabelAttribution": "Atribución",
   "widgetAttributionHint": "La línea de créditos que exige su proveedor de teselas. Se muestra en el mapa.",
   "widgetPlaceholderAny": "Cualquiera",

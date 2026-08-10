@@ -43,11 +43,34 @@ const KeyBrandingDefault = "branding.default"
 // branding default above, and treated as opaque JSON here — the value shape and its
 // rules are owned by the basemap package.
 //
-// 🔴 The code default is EMPTY, and that is a decision rather than a placeholder.
-// Shipping a tile source would point every self-hosted instance at a public tile
-// service that never agreed to serve it, and would credit a provider nobody chose.
-// An instance with no basemap draws positions on a plain panel and says why.
+// 🔴 The code default is OpenStreetMap, and that REVERSES an earlier decision to ship
+// nothing. The original reasoning — that the platform must not silently adopt a tile
+// provider's terms on an operator's behalf — was right, but the conclusion drawn from
+// it was not: shipping an empty canvas made a working install look broken on first
+// contact, which is a worse failure than the one it avoided. A named, visible,
+// one-click-replaceable default adopts nothing silently.
+//
+// It is also the parity bar: ThingsBoard ships OpenStreetMap with no credentials.
+// The OSMF tile policy sets meetable requirements rather than a commercial ban — a
+// browser fetching only the tiles a user is looking at, showing the credit line, is
+// exactly the usage it describes. Two obligations ride along and are easy to break
+// silently later, so both are guarded rather than remembered:
+//
+//   - never pre-seed, bulk-fetch or archive tiles (no code does; an "offline area
+//     download" feature must never target these servers);
+//   - never set a restrictive Referrer-Policy, which would strip the Referer the
+//     policy requires from a browser client — hack/check-osm-tile-policy.sh.
 const KeyBasemapDefault = "basemap.default"
+
+// DefaultBasemapJSON is the shipped basemap default: the OpenStreetMap standard tile
+// layer with the attribution its licence requires.
+//
+// 🔴 The two halves are ONE value and must move together. Editing the tile URL to
+// point somewhere else while leaving this credit line in place would ship a licence
+// violation to every instance — the precise defect basemap.Merge exists to prevent,
+// reintroduced at the one tier that reaches everybody. TestShippedBasemapDefault
+// pins the host and the copyright link against each other for that reason.
+const DefaultBasemapJSON = `{"tileUrl":"https://tile.openstreetmap.org/{z}/{x}/{y}.png","attribution":"© <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> contributors"}`
 
 // Definition is a known system setting: its key, its code default value, and a
 // human description for the settings UI. The set of Definitions is the whole
@@ -66,17 +89,17 @@ func Definitions() []Definition {
 		{
 			Key:         KeyTokenMasks,
 			Default:     json.RawMessage(`{"default":"{slug}"}`),
-			Description: `Per-entity-type token mask templates the console uses to generate and normalize tokens (ADR-042). Keys are entity types (or "default"); values are mask templates.`,
+			Description: `Per-entity-type token mask templates the console uses to generate and normalize tokens. Keys are entity types (or "default"); values are mask templates.`,
 		},
 		{
 			Key:         KeyBrandingDefault,
 			Default:     json.RawMessage(`{"title":"DeviceChain","logoMaxHeight":28}`),
-			Description: `Instance-wide white-labeling default (ADR-038): title, logo, logoMaxHeight, and hex colors (primary/background/foreground/accent). Sits below any per-tenant override. Omitted colors keep the console's built-in palette.`,
+			Description: `Instance-wide white-labeling default: title, logo, logoMaxHeight, and hex colors (primary/background/foreground/accent). Sits below any per-tenant override. Omitted colors keep the console's built-in palette.`,
 		},
 		{
 			Key:         KeyBasemapDefault,
-			Default:     json.RawMessage(`{}`),
-			Description: `Instance-wide basemap default (ADR-079): tileUrl, attribution, and a fallback view (centerLat/centerLon/zoom). Sits below any per-tenant override. tileUrl and attribution resolve TOGETHER — a tenant that sets its own tile URL never inherits this attribution — and neither may be set without the other. Empty by default: the platform ships no tile source.`,
+			Default:     json.RawMessage(DefaultBasemapJSON),
+			Description: `Instance-wide basemap default: tileUrl, attribution, and a fallback view (centerLat/centerLon/zoom). Sits below any per-tenant override. tileUrl and attribution resolve TOGETHER — a tenant that sets its own tile URL never inherits this attribution — and neither may be set without the other. Defaults to the OpenStreetMap standard tile layer, which needs no credentials; change it to point at your own provider.`,
 		},
 	}
 }

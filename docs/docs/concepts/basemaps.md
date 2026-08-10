@@ -7,7 +7,9 @@ title: Basemaps
 
 Every map surface in DeviceChain — the geofence editor, the dashboard map widget, and a board embedded through the standalone viewer — draws its positions on a **basemap**: raster map tiles fetched from a provider you choose.
 
-DeviceChain ships **no default tile provider**, and that is a decision rather than an omission. Map tiles carry licence terms, usage policies and often a bill, and the platform cannot accept any of those on your behalf. An instance nobody has configured shows every position it was asked to, on a plain panel, and says why there is no map behind them.
+A new instance draws maps out of the box: the shipped default is the [OpenStreetMap](https://www.openstreetmap.org/) standard tile layer, which needs no account. Nothing is adopted silently — the default is named, visible in **Settings**, and replaceable in one edit — and every tier that can set a tile source must supply the credit line that provider's licence requires.
+
+Whether it is the right provider for you is a separate question, and one worth asking before you go to production. See [Choosing a provider](#choosing-a-provider).
 
 ## The basemap belongs to the tenant {#the-basemap-belongs-to-the-tenant}
 
@@ -52,6 +54,21 @@ Saving is fail-closed, and each rule refuses a value that would otherwise fail s
 - **Attribution is required, and its markup is limited** to plain text plus links written exactly as `<a href="https://…">text</a>`. Links are allowed because several providers' licences require the credit to link to their copyright page; everything else is refused.
 
 Only **raster** tiles are supported today. A vector style URL is not accepted.
+
+## Choosing a provider {#choosing-a-provider}
+
+The default gets you a working map on day one. It is not automatically the right answer for a production deployment, and the deciding factor is usually **who is expected to serve your traffic**.
+
+OpenStreetMap's tile servers are run by a non-profit and funded by donations. Their [tile usage policy](https://operations.osmfoundation.org/policies/tiles/) sets out what they ask of you, and DeviceChain is built to meet it: tiles are fetched only as you browse, never pre-fetched or archived, and the credit line is always shown. Two things stay your responsibility:
+
+- **Do not put a restrictive `Referrer-Policy` in front of the console.** The policy asks browser clients for a valid `Referer`, and stripping it can get an instance blocked with no warning and no local symptom other than a map that stopped drawing.
+- **Read the policy before scaling up.** It reserves the right to block access without prior notice where usage degrades the service — a reasonable thing for donated infrastructure to say, and a poor thing to discover during a customer demo.
+
+If your maps matter to your operation, point a tenant — or the instance default — at a provider you have a relationship with. That is the case the per-tenant tier exists for, and the section below on API keys is the one to read next.
+
+:::tip A blank map is a configuration state, not an error
+If an operator sets the instance default to `{}` and a tenant sets nothing, there is no tile source at all. Note that **Reset to default** does the opposite — it restores the shipped provider — so switching maps off is an explicit `{}`, not a reset. Map surfaces then draw every position they were asked to on a plain panel and say why, rather than failing. Drawing a geofence still works and the coordinates you place are still exact.
+:::
 
 ## The API key in the tile URL is not a secret {#the-api-key-is-not-a-secret}
 

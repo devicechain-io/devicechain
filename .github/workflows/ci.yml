@@ -541,6 +541,18 @@ jobs:
           REQUIRE_LIVENESS: '1'
         run: hack/check-ko-base-pin.sh
 
+      # The default basemap is the OpenStreetMap standard tile layer, whose usage
+      # policy needs a Referer from browser clients. Adding a restrictive
+      # Referrer-Policy is a one-line hardening that breaks nothing HERE and
+      # blanks the map on installs nobody here can see — so the argument has to
+      # meet the person writing that line. Self-test first, as ever: this is a
+      # grep, and a grep with a wrong path reports a clean tree it never read.
+      - name: OSM tile-policy guard self-test
+        run: hack/check-osm-tile-policy.sh --self-test
+
+      - name: No Referrer-Policy strips the Referer the default basemap needs
+        run: hack/check-osm-tile-policy.sh
+
   # ---------------------------------------------------------------------------
   # Published documentation hygiene.
   # ---------------------------------------------------------------------------

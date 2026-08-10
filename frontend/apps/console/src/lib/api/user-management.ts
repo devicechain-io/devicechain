@@ -238,8 +238,9 @@ export async function setTenantLogo(logo: string | null): Promise<CurrentTenant>
 }
 
 // The tenant's EFFECTIVE basemap: its own override folded over the operator default.
-// Every field may be null — the platform ships no tile source, so an instance nobody
-// has configured resolves to nothing and the surfaces draw a plain panel.
+// The instance default ships a real tile source, so this normally arrives set — but
+// every field may still be null, because an operator can clear it, and the surfaces
+// then draw a plain panel.
 export type TenantBasemap = CurrentTenant['basemap'];
 
 // Self-service basemap for the caller's OWN tenant (requires basemap:write — NOT

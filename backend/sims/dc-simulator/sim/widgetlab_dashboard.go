@@ -198,11 +198,11 @@ func buildCommandButtonWidget(id string, b box, s widgetSubject, title string) d
 // — it keeps the field observable — and it means this datasource is the thing being
 // exercised, not decoration.
 //
-// No tileUrl is set, and that is the point rather than an omission. The platform
-// ships NO default tile source: the library is not the map, tiles are, and they
-// carry their own terms. So the gallery renders positions on the plain panel, which
-// is exactly what an operator sees before they configure one — the honest default
-// state, and the one worth having in a catalog of every widget.
+// No tileUrl is set, and that is the point rather than an omission. A board that
+// names no tile source of its own inherits the tenant's basemap (ADR-079), which is
+// what a real board should do and what the gallery should therefore demonstrate —
+// so this widget draws on whatever the instance is actually configured with,
+// including the provider that ships by default.
 func buildMapWidget(id string, b box, s widgetSubject, title string) dashboardWidget {
 	return dashboardWidget{
 		Id: id, Type: "map", Layout: b.layout(), Datasource: s.datasource(),
