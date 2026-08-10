@@ -150,9 +150,9 @@
   "geofenceHistoryOlder": "Anterior",
   "geofenceHistoryNewer": "Siguiente",
   "geofenceHistoryCurrent": "Actual",
-  "geofenceHistoryAbsent": "Esta geocerca no estaba en el conjunto en la versión {{version}}. Se creó después, o se eliminó una geocerca con este id y el id se reutilizó.",
+  "geofenceHistoryAbsent": "Esta geocerca no estaba en el conjunto en la versión {{version}}. Se creó después, o se eliminó una geocerca con este token y el token se reutilizó.",
   "geofenceHistoryUnreadable": "Esta geocerca estaba en el conjunto, pero su figura no se puede dibujar en este visor. Se seguía aplicando.",
-  "geofenceHistoryLegend": "Continua: la figura en la versión {{version}}. Discontinua: la figura actual.",
+  "geofenceHistoryLegend": "Continua: la figura almacenada con este token en la versión {{version}}. Discontinua: la figura actual.",
 
   "assetTitlePlural": "Activos",
   "assetListDescription": "Cosas físicas o lógicas que rastrea",

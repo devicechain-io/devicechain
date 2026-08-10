@@ -150,9 +150,9 @@
   "geofenceHistoryOlder": "Older",
   "geofenceHistoryNewer": "Newer",
   "geofenceHistoryCurrent": "Current",
-  "geofenceHistoryAbsent": "This geofence was not in the set at version {{version}}. It was created later, or a fence with this id was deleted and the id reused.",
+  "geofenceHistoryAbsent": "This geofence was not in the set at version {{version}}. It was created later, or a fence with this token was deleted and the token reused.",
   "geofenceHistoryUnreadable": "This geofence was in the set, but its shape is one this viewer cannot draw. It was still enforced.",
-  "geofenceHistoryLegend": "Solid: the shape at version {{version}}. Dashed: the shape now.",
+  "geofenceHistoryLegend": "Solid: the shape stored under this token at version {{version}}. Dashed: the shape now.",
 
   "assetTitlePlural": "Assets",
   "assetListDescription": "Physical or logical things you track",

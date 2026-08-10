@@ -544,6 +544,13 @@ export interface SnapshotEntry {
  * "Not in this version" rendered as an empty map would claim the fence existed
  * and enclosed nothing, which is a statement about the FENCE. The truth is a
  * statement about the VERSION.
+ *
+ * 🔴 A KNOWN LIMIT OF THE ARCHIVE, not of this function: snapshot entries carry
+ * token and geometry only, and fence deletes are hard with tokens reusable. So an
+ * old version's entry for a token may belong to a DIFFERENT fence that held it
+ * then, and nothing here can tell. That is why the caller says "the shape stored
+ * under this token" rather than "this fence's shape". Closing it properly means
+ * freezing a stable fence identity into the snapshot, server-side.
  */
 export type SnapshotLookup =
   | { kind: 'absent' }
