@@ -46,6 +46,7 @@ const NAV_SECTION_KEY: Record<string, string> = {
   areas: 'areas',
   'area-types': 'areaTypes',
   'area-groups': 'areaGroups',
+  geofences: 'geofences',
   facets: 'facets',
   browse: 'browse',
   audit: 'audit',

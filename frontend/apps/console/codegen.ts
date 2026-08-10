@@ -27,6 +27,7 @@ const config: CodegenConfig = {
         'src/lib/api/alarms.ts',
         'src/lib/api/facet-keys.ts',
         'src/lib/api/browse.ts',
+        'src/lib/api/geofences.ts',
       ],
       preset: 'client',
       presetConfig: { fragmentMasking: false },

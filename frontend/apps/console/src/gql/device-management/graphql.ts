@@ -302,6 +302,19 @@ export type FacetKeySetRequest = {
   values?: Array<string> | null | undefined;
 };
 
+export type GeoFenceCreateRequest = {
+  description?: string | null | undefined;
+  geometry: string;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+  token: string;
+};
+
+export type GeoFenceSearchCriteria = {
+  pageNumber: number;
+  pageSize: number;
+};
+
 export type MetricDefinitionCreateRequest = {
   dataType: string;
   description?: string | null | undefined;
@@ -945,6 +958,42 @@ export type DeleteFacetKeyMutationVariables = Exact<{
 
 
 export type DeleteFacetKeyMutation = { deleteFacetKey: boolean };
+
+export type GeoFencesQueryVariables = Exact<{
+  criteria: GeoFenceSearchCriteria;
+}>;
+
+
+export type GeoFencesQuery = { geoFences: { results: Array<{ id: string, token: string, name: string | null, description: string | null, geometry: string, kind: string, metadata: string | null, createdAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type GeoFenceByTokenQueryVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type GeoFenceByTokenQuery = { geoFencesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, geometry: string, kind: string, metadata: string | null, createdAt: string | null }> };
+
+export type CreateGeoFenceMutationVariables = Exact<{
+  request: GeoFenceCreateRequest;
+}>;
+
+
+export type CreateGeoFenceMutation = { createGeoFence: { id: string, token: string, name: string | null, description: string | null, geometry: string, kind: string, metadata: string | null, createdAt: string | null } };
+
+export type UpdateGeoFenceMutationVariables = Exact<{
+  token: string;
+  request: GeoFenceCreateRequest;
+}>;
+
+
+export type UpdateGeoFenceMutation = { updateGeoFence: { id: string, token: string, name: string | null, description: string | null, geometry: string, kind: string, metadata: string | null, createdAt: string | null } };
+
+export type DeleteGeoFenceMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type DeleteGeoFenceMutation = { deleteGeoFence: boolean };
 
 export type EntityRelationshipsQueryVariables = Exact<{
   criteria: EntityRelationshipSearchCriteria;
@@ -2255,6 +2304,74 @@ export const DeleteFacetKeyDocument = new TypedDocumentString(`
   deleteFacetKey(memberType: $memberType, key: $key)
 }
     `) as unknown as TypedDocumentString<DeleteFacetKeyMutation, DeleteFacetKeyMutationVariables>;
+export const GeoFencesDocument = new TypedDocumentString(`
+    query GeoFences($criteria: GeoFenceSearchCriteria!) {
+  geoFences(criteria: $criteria) {
+    results {
+      id
+      token
+      name
+      description
+      geometry
+      kind
+      metadata
+      createdAt
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<GeoFencesQuery, GeoFencesQueryVariables>;
+export const GeoFenceByTokenDocument = new TypedDocumentString(`
+    query GeoFenceByToken($tokens: [String!]!) {
+  geoFencesByToken(tokens: $tokens) {
+    id
+    token
+    name
+    description
+    geometry
+    kind
+    metadata
+    createdAt
+  }
+}
+    `) as unknown as TypedDocumentString<GeoFenceByTokenQuery, GeoFenceByTokenQueryVariables>;
+export const CreateGeoFenceDocument = new TypedDocumentString(`
+    mutation CreateGeoFence($request: GeoFenceCreateRequest!) {
+  createGeoFence(request: $request) {
+    id
+    token
+    name
+    description
+    geometry
+    kind
+    metadata
+    createdAt
+  }
+}
+    `) as unknown as TypedDocumentString<CreateGeoFenceMutation, CreateGeoFenceMutationVariables>;
+export const UpdateGeoFenceDocument = new TypedDocumentString(`
+    mutation UpdateGeoFence($token: String!, $request: GeoFenceCreateRequest!) {
+  updateGeoFence(token: $token, request: $request) {
+    id
+    token
+    name
+    description
+    geometry
+    kind
+    metadata
+    createdAt
+  }
+}
+    `) as unknown as TypedDocumentString<UpdateGeoFenceMutation, UpdateGeoFenceMutationVariables>;
+export const DeleteGeoFenceDocument = new TypedDocumentString(`
+    mutation DeleteGeoFence($token: String!) {
+  deleteGeoFence(token: $token)
+}
+    `) as unknown as TypedDocumentString<DeleteGeoFenceMutation, DeleteGeoFenceMutationVariables>;
 export const EntityRelationshipsDocument = new TypedDocumentString(`
     query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {
   entityRelationships(criteria: $criteria) {

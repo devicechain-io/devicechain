@@ -380,8 +380,13 @@ describe('the MapLibre lazy boundary', () => {
 
   // A top-level import of the library that is NOT type-only: `import maplibre from …`,
   // `import { Map } from …`, `import * as x from …`, `import '…'`, `export … from …`.
+  // 🔴 `[^;]`, NOT `[^;\n]`. A class excluding newlines cannot match a WRAPPED
+  // import, and a wrapped import is the likely offender: prettier wraps any
+  // binding list past the line width, and a real MapLibre consumer imports
+  // several names. The semicolon is what stops the non-greedy match spanning two
+  // statements — the newline was never doing that job, only hiding offenders.
   const STATIC_VALUE_IMPORT =
-    /^\s*(?:import|export)\s+(?!type\b)[^;\n]*?from\s+['"]maplibre-gl['"]|^\s*import\s+['"]maplibre-gl['"]/m;
+    /^\s*(?:import|export)\s+(?!type\b)[^;]*?from\s*['"]maplibre-gl['"]|^\s*import\s*['"]maplibre-gl['"]/m;
 
   it('is not crossed by any static import in the package', () => {
     const offenders = sourceFiles(SRC).filter((file) =>

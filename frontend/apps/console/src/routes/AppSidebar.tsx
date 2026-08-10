@@ -15,6 +15,7 @@ import {
   LayoutDashboard,
   LayoutGrid,
   MapPin,
+  Pentagon,
   Package,
   Palette,
   ScrollText,
@@ -108,6 +109,11 @@ const NAV: NavNode[] = [
       { labelKey: 'areas', href: '/areas', icon: MapPin, requires: 'device:read' },
       { labelKey: 'areaTypes', href: '/area-types', icon: Boxes, requires: 'device:read' },
       { labelKey: 'areaGroups', href: '/area-groups', icon: Layers, requires: 'device:read' },
+      // Geofences are geometry rather than an organizational construct, but they
+      // answer the same question this group answers — where — and they are served
+      // by device-management under the same authority, so they live here rather
+      // than earning a group of one.
+      { labelKey: 'geofences', href: '/geofences', icon: Pentagon, requires: 'device:read' },
     ],
   },
   // Facets classify every member family (ADR-061), so they are one cross-cutting
