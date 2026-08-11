@@ -298,7 +298,16 @@ describe('the appearance tab carries metadata through a save', () => {
     render(<>{renderTab(ENTITY)}</>);
     // Change a colour, so this is a real appearance save rather than a no-op that
     // would pass against a tab that had stopped sending its own edits.
-    fireEvent.change(screen.getByLabelText('Background'), { target: { value: '#ff0000' } });
+    // The colour control is the kit's ColorPicker (react-colorful in our own popover)
+    // rather than a native <input type="color">, whose OS dialog took none of our
+    // theme. Driving it means opening the popover and typing a hex, which is also the
+    // path a user takes when a brand guide hands them a value.
+    // Popover opens on click (Select opens on pointerdown — the two Radix primitives
+    // differ, which is exactly the kind of detail worth writing down once).
+    fireEvent.click(screen.getByRole('button', { name: 'Background' }));
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Background' }), {
+      target: { value: '#ff0000' },
+    });
     fireEvent.click(await screen.findByRole('button', { name: 'Save appearance' }));
     await waitFor(() => expect(requests().length).toBeGreaterThan(0));
     const request = requests()[requests().length - 1];

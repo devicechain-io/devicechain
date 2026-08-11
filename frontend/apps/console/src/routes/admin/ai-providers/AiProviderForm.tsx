@@ -12,7 +12,8 @@ import type { TFunction } from 'i18next';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { Combobox } from '@/components/ui/combobox';
-import { Textarea } from '@/routes/common';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Textarea } from '@/components/ui/textarea';
 import type { AiProvider } from '@/lib/api/ai-inference-admin';
 
 // How the API key is being edited. On create the meaningful modes are 'set' (type a
@@ -159,12 +160,7 @@ export function ProviderBasicFields({
       </FormField>
 
       <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={state.enabled}
-          onChange={(e) => set({ enabled: e.target.checked })}
-          className="h-4 w-4 rounded border-input"
-        />
+        <Checkbox checked={state.enabled} onCheckedChange={(c) => set({ enabled: (c === true) })} />
         <span>{t('common:enabled')}</span>
         <span className="text-muted-foreground">{t('enabledHint')}</span>
       </label>

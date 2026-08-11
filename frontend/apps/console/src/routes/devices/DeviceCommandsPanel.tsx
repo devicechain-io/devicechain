@@ -31,6 +31,7 @@ import {
   DataTableRow,
 } from '@/components/ui/data-table';
 import { useToast } from '@/components/ui/toast';
+import { Textarea } from '@/components/ui/textarea';
 import { formatTime } from '@/lib/utils';
 import { useQuery } from '@/lib/hooks/use-query';
 import { errMessage, useReload } from '@/routes/common';
@@ -211,8 +212,8 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
                 label={t('payloadLabel')}
                 description={t('payloadStructuredHint')}
               >
-                <textarea
-                  className="min-h-[4rem] w-full rounded-md border border-input bg-background px-3 py-1.5 font-mono text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                <Textarea
+                  className="min-h-[4rem] py-1.5"
                   rows={3}
                   value={payload}
                   placeholder={t('payloadStructuredPlaceholder')}
@@ -251,8 +252,8 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
                 label={t('payloadLabel')}
                 description={t('payloadFreeformHint')}
               >
-                <textarea
-                  className="min-h-[2.25rem] w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                <Textarea
+                  className="min-h-[2.25rem] py-1.5 font-sans"
                   rows={1}
                   value={payload}
                   placeholder={t('payloadFreeformPlaceholder')}

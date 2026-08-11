@@ -78,3 +78,19 @@ if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
       }) as MediaQueryList,
   });
 }
+
+// Radix's overlay primitives (Select, DropdownMenu, Popover) use Pointer Events and
+// scrollIntoView, neither of which jsdom implements. Without these a Select never
+// opens and the failure reads as "the component did not respond" rather than "the
+// environment cannot express a click".
+//
+// 🔴 These are STUBS, not implementations. hasPointerCapture reporting false is what
+// Radix expects for a mouse that has not captured, which is the case a test drives;
+// scrollIntoView doing nothing is fine because jsdom has no layout to scroll. Nothing
+// here makes a positioning or scroll assertion meaningful — those need a real browser.
+if (typeof Element !== 'undefined') {
+  Element.prototype.hasPointerCapture ??= () => false;
+  Element.prototype.setPointerCapture ??= () => {};
+  Element.prototype.releasePointerCapture ??= () => {};
+  Element.prototype.scrollIntoView ??= () => {};
+}

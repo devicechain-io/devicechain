@@ -16,7 +16,8 @@ import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listSettings, setSetting, clearSetting, type Setting } from '@/lib/api/settings';
-import { Textarea, useReload, errMessage } from '@/routes/common';
+import { useReload, errMessage } from '@/routes/common';
+import { Textarea } from '@/components/ui/textarea';
 
 // The token-masks setting gets a live preview of what each entity type's mask
 // generates (ADR-042 P3), so an admin sees the effect of an edit immediately.

@@ -31,6 +31,7 @@ import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { TokenField } from '@/components/ui/token-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
+import { Checkbox } from '@/components/ui/checkbox';
 import { normalizeToken } from '@devicechain/client';
 import { errMessage } from '@/routes/common';
 import {
@@ -345,7 +346,7 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
           )}
         </FormField>
         <label className="flex items-center gap-2 pb-2 text-sm">
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+          <Checkbox checked={enabled} onCheckedChange={(c) => setEnabled(c === true)} />
           {t('common:enabled')}
         </label>
         <div className="flex items-center gap-3 pb-1">

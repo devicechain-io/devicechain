@@ -20,7 +20,8 @@ import {
   listTierColorPalette,
   type AdminTenantTierDetail,
 } from '@/lib/api/admin';
-import { Textarea, errMessage, dimensionLabel, dimensionUnit } from '@/routes/common';
+import { errMessage, dimensionLabel, dimensionUnit } from '@/routes/common';
+import { Textarea } from '@/components/ui/textarea';
 import { parseTierConfig, buildTierConfigPatch } from '@/routes/admin/tiers/tierConfig';
 
 // TierForm creates a tier (tier absent) or edits one (tier present, token fixed).

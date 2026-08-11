@@ -31,7 +31,7 @@ import { useTranslation } from 'react-i18next';
 import { FormField } from '@/components/ui/form-field';
 import { HintText } from '@/components/ui/hint-text';
 import { Input } from '@/components/ui/input';
-import { Select } from '@/components/ui/select';
+import { Select, SelectItem } from '@/components/ui/select';
 import {
   API_KEY_TOKEN,
   CUSTOM_PROVIDER_ID,
@@ -123,11 +123,11 @@ export function BasemapPicker({ tileUrl, attribution, onChange }: BasemapPickerP
     <div className="space-y-4">
       <FormField label={t('provider')} htmlFor="bm-provider" description={t('providerHelp')}>
         <Select id="bm-provider" value={providerId} onChange={pickProvider}>
-          <option value={CUSTOM_PROVIDER_ID}>{t('providerCustom')}</option>
+          <SelectItem value={CUSTOM_PROVIDER_ID}>{t('providerCustom')}</SelectItem>
           {PROVIDERS.map((p) => (
-            <option key={p.id} value={p.id}>
+            <SelectItem key={p.id} value={p.id}>
               {p.name}
-            </option>
+            </SelectItem>
           ))}
         </Select>
       </FormField>
@@ -136,9 +136,9 @@ export function BasemapPicker({ tileUrl, attribution, onChange }: BasemapPickerP
         <FormField label={t('style')} htmlFor="bm-style">
           <Select id="bm-style" value={source?.id ?? ''} onChange={pickSource}>
             {provider.sources.map((s) => (
-              <option key={s.id} value={s.id}>
+              <SelectItem key={s.id} value={s.id}>
                 {s.name}
-              </option>
+              </SelectItem>
             ))}
           </Select>
         </FormField>

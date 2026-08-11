@@ -17,7 +17,8 @@ import { FormField } from '@/components/ui/form-field';
 import { TokenField } from '@/components/ui/token-field';
 import { Combobox } from '@/components/ui/combobox';
 import { ErrorBanner } from '@/components/ui/error-banner';
-import { Textarea, errMessage } from '@/routes/common';
+import { errMessage } from '@/routes/common';
+import { Textarea } from '@/components/ui/textarea';
 import { METRIC_DATA_TYPES } from '@/lib/vocab';
 import {
   createMetricDefinition,

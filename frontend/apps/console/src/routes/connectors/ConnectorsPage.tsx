@@ -31,7 +31,8 @@ import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useAuth } from '@/auth/AuthProvider';
 import { hasAuthority } from '@devicechain/client';
-import { Textarea, errMessage, rowLinkProps, useReload } from '@/routes/common';
+import { errMessage, rowLinkProps, useReload } from '@/routes/common';
+import { Textarea } from '@/components/ui/textarea';
 import { FormDrawer } from '@/components/registry';
 import {
   DataTable,

@@ -39,6 +39,7 @@ import { X } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
+import { Checkbox } from '@/components/ui/checkbox';
 import { useQuery } from '@/lib/hooks/use-query';
 import {
   listCommandDefinitionsForDevice,
@@ -603,12 +604,11 @@ function FlashToggle({
   const checked = widget.options?.flashOnChange === true;
   return (
     <label className="flex cursor-pointer items-start gap-2 text-sm text-foreground">
-      <input
-        type="checkbox"
+      <Checkbox
         className="mt-0.5"
         checked={checked}
         // eslint-disable-next-line i18next/no-literal-string
-        onChange={(e) => setOption('flashOnChange', e.target.checked)}
+        onCheckedChange={(c) => setOption('flashOnChange', c === true)}
       />
       <span>
         <span className="font-medium">{t('widgetFlashOnChange')}</span>

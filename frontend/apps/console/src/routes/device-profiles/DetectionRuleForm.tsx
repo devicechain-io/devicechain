@@ -30,7 +30,9 @@ import { FormField } from '@/components/ui/form-field';
 import { TokenField } from '@/components/ui/token-field';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { ErrorBanner } from '@/components/ui/error-banner';
-import { Textarea, errMessage } from '@/routes/common';
+import { Checkbox } from '@/components/ui/checkbox';
+import { errMessage } from '@/routes/common';
+import { Textarea } from '@/components/ui/textarea';
 import {
   createDetectionRule,
   updateDetectionRule,
@@ -705,7 +707,7 @@ export function DetectionRuleForm({
       </div>
 
       <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="h-4 w-4" />
+        <Checkbox checked={enabled} onCheckedChange={(c) => setEnabled(c === true)} />
         {t('ruleEnabledCheckboxLabel')}
       </label>
 
@@ -713,12 +715,7 @@ export function DetectionRuleForm({
           fires only for member entities (e.g. an area group for "devices in an arid area"). */}
       <div className="space-y-3 rounded-md border border-border/60 p-3">
         <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={scoped}
-            onChange={(e) => setScoped(e.target.checked)}
-            className="h-4 w-4"
-          />
+          <Checkbox checked={scoped} onCheckedChange={(c) => setScoped((c === true))} />
           {t('ruleScopeCheckboxLabel')}
         </label>
         {scoped && (
@@ -815,7 +812,7 @@ export function DetectionRuleForm({
             />
           </FormField>
           <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={rate} onChange={(e) => setRate(e.target.checked)} className="h-4 w-4" />
+            <Checkbox checked={rate} onCheckedChange={(c) => setRate(c === true)} />
             {t('ruleRateCheckboxLabel')}
           </label>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-[auto_1fr]">
