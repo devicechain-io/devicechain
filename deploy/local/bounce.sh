@@ -39,7 +39,12 @@ log() { printf '\n%s==>%s %s%s%s\n' "$G" "$R" "$B" "$1" "$R"; }
 
 log "🏗️  Building $TARGET → $IMG"
 if [ "$TARGET" = "frontend" ]; then
-  docker build -t "$IMG" "$ROOT/frontend" >/dev/null
+  # --network=host works around a docker BRIDGE defect that makes `npm ci` fail with
+  # a reproducible ECONNRESET on at least one WSL2 host here. Local development only;
+  # override with DOCKER_BUILD_NET=default (buildkit rejects `bridge`; it accepts only
+  # default|host|none). build-images.sh carries the full diagnosis,
+  # including why this looked like a regression when the defect had always been there.
+  docker build --network="${DOCKER_BUILD_NET:-host}" -t "$IMG" "$ROOT/frontend" >/dev/null
   docker push "$IMG" >/dev/null
 else
   DIR="$ROOT/backend/services/$TARGET"
