@@ -1,6 +1,6 @@
 {
-  "title": "Mapa base",
-  "description": "Los mosaicos de mapa que utilizan el editor de geocercas y los widgets de mapa de los paneles de este inquilino.",
+  "title": "Mapa",
+  "description": "Los mosaicos de mapa que utilizan el editor de geocercas y los widgets de mapa de los paneles de este inquilino, y la vista con la que se abren.",
   "loading": "Cargando el mapa base…",
   "noPermissionPrefix": "Necesitas la autoridad",
   "noPermissionSuffix": "para cambiar el mapa base de este inquilino.",

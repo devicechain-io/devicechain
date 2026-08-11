@@ -13,7 +13,7 @@ Whether it is the right provider for you is a separate question, and one worth a
 
 ## The basemap belongs to the tenant {#the-basemap-belongs-to-the-tenant}
 
-A basemap is configured **per tenant**, in the console under **Basemap**, by someone holding the `basemap:write` authority.
+A basemap is configured **per tenant**, in the console under **Settings → Map**, by someone holding the `basemap:write` authority.
 
 Pick a provider from the list and DeviceChain fills in its tile template and the credit line its licence requires. Both stay editable underneath, so a provider that is not on the list — an internal tile server, say — is still a matter of typing the two fields in directly; see [Choosing a provider](#choosing-a-provider).
 
@@ -28,7 +28,7 @@ Three tiers, most specific first:
 | Tier | Set by | Where |
 | --- | --- | --- |
 | Per-surface override | Anyone editing that surface | A map widget's own options; the geofence editor's basemap fields, remembered in your browser |
-| **Tenant** | A tenant admin (`basemap:write`) | Console → **Basemap** |
+| **Tenant** | A tenant admin (`basemap:write`) | Console → **Settings** → **Map** |
 | Instance default | An operator (`settings:write`) | Admin console → **Settings** → `basemap.default` |
 
 Each tier fills in what the one above it leaves blank, so a single-tenant or appliance deployment can set the value once at the instance level and never think about it again.

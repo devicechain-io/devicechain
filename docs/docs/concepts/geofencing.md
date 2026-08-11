@@ -21,7 +21,7 @@ A fence carries a **token** — the identifier rules use to name it — plus an 
 
 The editor draws on the tenant's **basemap**, which a new instance ships already configured — so tiles appear without anyone setting anything up.
 
-A tenant admin changes the tile source once, for everyone, under **Basemap**; the fields in this editor are a personal override on top of that, remembered in your browser only, for trying a provider before committing it tenant-wide. See [Basemaps](./basemaps.md) for how the tiers resolve, why the tile URL and its attribution move together, which provider ships by default, and how to protect a provider API key.
+A tenant admin changes the tile source once, for everyone, under **Settings → Map**; the fields in this editor are a personal override on top of that, remembered in your browser only, for trying a provider before committing it tenant-wide. See [Basemaps](./basemaps.md) for how the tiers resolve, why the tile URL and its attribution move together, which provider ships by default, and how to protect a provider API key.
 
 If no tier has a tile source — an operator set the instance default to `{}` and the tenant set nothing — the editor falls back to a bundled world map: public-domain continents and country borders, compiled into the console, showing nothing at street zoom. Drawing still works and the coordinates you place are exact either way, because it is the same projection a tiled map uses.
 
