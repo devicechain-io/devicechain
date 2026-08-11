@@ -22,6 +22,32 @@ REGISTRY=${REGISTRY:-localhost:5000}
 # Default tag from the repo VERSION file (single source of truth).
 TAG=${TAG:-$(cat "$ROOT/VERSION" 2>/dev/null || echo dev)}
 PLATFORM=${PLATFORM:-linux/amd64}
+
+# Network mode for the FRONTEND docker build, and the reason it is not the default.
+#
+# 🔴 LOCAL DEVELOPMENT ONLY. Nothing in CI or the release pipeline reads this — they
+# build the same Dockerfile on their own runners with ordinary bridge networking and
+# have never hit the problem below.
+#
+# On at least one WSL2 host here, `npm ci` inside a container on docker's default
+# BRIDGE network fails with ECONNRESET, reproducibly — 3/3 attempts, not a flake.
+# The same `npm ci` succeeds on the host with a cold cache, and succeeds in a
+# container with `--network=host`. MTU (uniform 1500), conntrack (181/262144) and
+# npm socket concurrency (`--maxsockets 1` fails identically) were each measured and
+# ruled out, so this is the bridge and not the network beyond it.
+#
+# 🔑 IT LOOKED LIKE A REGRESSION AND WAS NOT. The defect was always there; what
+# changed is that a PR edited frontend/packages/widgets/package.json, which the
+# Dockerfile COPYs immediately before `RUN npm ci`. That invalidated a cached layer
+# which had been quietly satisfying the install for months. A build that never runs
+# `npm ci` cannot fail in `npm ci`.
+#
+# Override with DOCKER_BUILD_NET=default to get docker's ordinary networking back —
+# useful on Docker Desktop, where build-time host networking needs an entitlement the
+# classic path does not. 🔴 `default`, NOT `bridge`: buildkit accepts only default|host|none
+# and rejects `bridge` outright with "network mode ... not supported by buildkit". The
+# obvious spelling is the one that does not work, which is why it is named here.
+DOCKER_BUILD_NET=${DOCKER_BUILD_NET:-host}
 export KO_CONFIG_PATH="$ROOT/.ko.yaml"   # pins the chainguard distroless base
 
 # color-aware output (honours NO_COLOR and non-TTY / dumb terminals)
@@ -57,7 +83,7 @@ build_one "$ROOT/backend/k8s" "$REGISTRY/operator"
 # Web console (frontend) — a static nginx SPA, so docker (not ko) builds it. The
 # chart deploys it by default at {REGISTRY}/frontend:{TAG}.
 step "🏗️  $REGISTRY/frontend:$TAG"
-docker build -t "$REGISTRY/frontend:$TAG" "$ROOT/frontend" >/dev/null
+docker build --network="$DOCKER_BUILD_NET" -t "$REGISTRY/frontend:$TAG" "$ROOT/frontend" >/dev/null
 docker push "$REGISTRY/frontend:$TAG" >/dev/null
 
 log "✅ Done — images pushed to $REGISTRY"
