@@ -13,7 +13,7 @@ Si es el proveedor adecuado para ti es otra cuestión, y conviene planteársela 
 
 ## El mapa base pertenece al inquilino {#the-basemap-belongs-to-the-tenant}
 
-El mapa base se configura **por inquilino**, en la consola bajo **Mapa base**, por alguien que tenga la autoridad `basemap:write`.
+El mapa base se configura **por inquilino**, en la consola bajo **Configuración → Mapa**, por alguien que tenga la autoridad `basemap:write`.
 
 Elige un proveedor de la lista y DeviceChain rellena su plantilla de mosaicos y la línea de crédito que exige su licencia. Ambas siguen siendo editables debajo, así que un proveedor que no esté en la lista —un servidor de mosaicos interno, por ejemplo— sigue siendo cuestión de escribir los dos campos directamente; consulta [Elegir un proveedor](#choosing-a-provider).
 
@@ -28,7 +28,7 @@ Tres niveles, del más específico al más general:
 | Nivel | Lo define | Dónde |
 | --- | --- | --- |
 | Anulación por superficie | Quien edite esa superficie | Las opciones del propio widget de mapa; los campos de mapa base del editor de geocercas, recordados en tu navegador |
-| **Inquilino** | Un administrador del inquilino (`basemap:write`) | Consola → **Mapa base** |
+| **Inquilino** | Un administrador del inquilino (`basemap:write`) | Consola → **Configuración** → **Mapa** |
 | Valor por defecto de la instancia | Un operador (`settings:write`) | Consola de administración → **Ajustes** → `basemap.default` |
 
 Cada nivel rellena lo que el anterior deja en blanco, de modo que una implantación de un solo inquilino puede definir el valor una vez a nivel de instancia y no volver a pensar en ello.

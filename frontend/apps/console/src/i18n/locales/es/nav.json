@@ -20,8 +20,8 @@
   "facets": "Facetas",
   "browse": "Explorar",
   "audit": "Auditoría",
-  "basemap": "Mapa base",
   "branding": "Marca",
+  "map": "Mapa",
   "managementConsole": "Consola de gestión",
   "adminPlatform": "Plataforma",
   "adminTenants": "Inquilinos",
@@ -35,5 +35,6 @@
   "adminConsole": "Consola de administración",
   "adminBadge": "Admin",
   "adminTooltip": "Administración de DeviceChain",
-  "adminDeletions": "Eliminaciones"
+  "adminDeletions": "Eliminaciones",
+  "settings": "Configuración"
 }

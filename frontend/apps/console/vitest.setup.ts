@@ -50,3 +50,31 @@ for (const target of [globalThis, typeof window !== 'undefined' ? window : undef
     (target as unknown as { localStorage: Storage }).localStorage = storage;
   }
 }
+
+// jsdom implements no `matchMedia`, and two things the console renders constantly call
+// it: ThemeProvider (`prefers-color-scheme`) and the sidebar's mobile breakpoint hook.
+// Without a stub, any test that renders a layout dies on `window.matchMedia is not a
+// function` — which reads as a bug in the component rather than a missing browser API.
+//
+// It reports `matches: false` for everything, which resolves to the desktop, light
+// defaults. 🔴 That is a CHOICE, not a neutral value: a test that needs the mobile
+// sidebar or the dark theme must override this explicitly rather than assume the
+// environment will produce it.
+if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    writable: true,
+    value: (query: string): MediaQueryList =>
+      ({
+        media: query,
+        matches: false,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        // Deprecated but still called by some libraries; present so they do not throw.
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      }) as MediaQueryList,
+  });
+}

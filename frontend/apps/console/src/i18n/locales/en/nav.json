@@ -20,8 +20,8 @@
   "facets": "Facets",
   "browse": "Browse",
   "audit": "Audit",
-  "basemap": "Basemap",
   "branding": "Branding",
+  "map": "Map",
   "managementConsole": "Management Console",
   "adminPlatform": "Platform",
   "adminTenants": "Tenants",
@@ -35,5 +35,6 @@
   "adminConsole": "Admin Console",
   "adminBadge": "Admin",
   "adminTooltip": "DeviceChain Admin",
-  "adminDeletions": "Deletions"
+  "adminDeletions": "Deletions",
+  "settings": "Settings"
 }

@@ -1,6 +1,6 @@
 {
-  "title": "Basemap",
-  "description": "The map tiles this tenant's geofence editor and dashboard map widgets draw on.",
+  "title": "Map",
+  "description": "The map tiles this tenant's geofence editor and dashboard map widgets draw on, and the view they open at.",
   "loading": "Loading basemap…",
   "noPermissionPrefix": "You need the",
   "noPermissionSuffix": "authority to change this tenant's basemap.",

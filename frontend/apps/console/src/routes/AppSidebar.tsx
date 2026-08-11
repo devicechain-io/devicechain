@@ -125,11 +125,35 @@ const NAV: NavNode[] = [
   // axes, preview matches live, save it as a dynamic group. Cross-cutting like Facets.
   { labelKey: 'browse', href: '/browse', icon: Filter, requires: 'device:read' },
   { labelKey: 'audit', href: '/audit', icon: ScrollText, requires: 'audit:read' },
-  { labelKey: 'branding', href: '/branding', icon: Palette, requires: 'branding:write' },
-  // The tenant's map tiles (ADR-079). Its own authority, not branding:write: the
-  // tile URL carries the tenant's provider credential, so restyling the console and
-  // holding the map key are deliberately separate grants.
-  { labelKey: 'basemap', href: '/basemap', icon: Map, requires: 'basemap:write' },
+  // Everything above this line manages RECORDS; everything in here configures the
+  // TENANT ITSELF. Grouping them separates two genuinely different questions, and the
+  // config half is the half that grows.
+  //
+  // 🔴 A GROUP RATHER THAN A TABBED PAGE, and the reason is the authorities rather
+  // than the aesthetics. `branding:write` and `basemap:write` are deliberately
+  // separate grants — bundling them would make each imply the other, which is the
+  // whole reason basemap:write exists. visibleNav already filters children by
+  // `requires` AND drops a group left with no visible children, so this shape gets
+  // the correct behaviour at every combination for free: one authority shows one
+  // child, neither hides Settings entirely. A tab strip would have to re-derive all
+  // of that, and its failure mode is a tab that renders and then refuses.
+  //
+  // The routes stay flat (/branding, /basemap) like every other group's children —
+  // Areas' children are /areas, /area-types, … — so no bookmark changes and no
+  // nested-route handling.
+  {
+    labelKey: 'settings',
+    icon: SlidersHorizontal,
+    children: [
+      { labelKey: 'branding', href: '/branding', icon: Palette, requires: 'branding:write' },
+      // Labelled "Map", not "Basemap": inside Settings the longer name is redundant,
+      // and the page sets the default view (centre/zoom) as well as the tile source,
+      // which is not a basemap property at all. The DOMAIN vocabulary stays
+      // "basemap" everywhere precision matters — the authority, the GraphQL field,
+      // the docs page — because a nav label is wayfinding and an identifier is not.
+      { labelKey: 'map', href: '/basemap', icon: Map, requires: 'basemap:write' },
+    ],
+  },
   // Inference providers for NL→rule authoring (ADR-056) are NOT here: they are
   // instance config an operator owns, so they live in the admin console (ADR-065). A
   // tenant's only say over AI is its external-routing consent, set per tenant by an
