@@ -1,8 +1,0 @@
-{
-  "label": "Despliegue",
-  "position": 5,
-  "link": {
-    "type": "generated-index",
-    "description": "Cómo operar DeviceChain: el operador de Kubernetes y el aprovisionamiento de infraestructura."
-  }
-}

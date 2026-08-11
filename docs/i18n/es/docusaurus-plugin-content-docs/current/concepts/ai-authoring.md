@@ -1,5 +1,4 @@
 ---
-sidebar_position: 8
 title: Autoría Asistida por IA
 ---
 
