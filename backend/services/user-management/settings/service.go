@@ -23,6 +23,10 @@ var (
 	ErrUnknownSetting = errors.New("unknown setting key")
 	// ErrInvalidValue is returned when a written value is not valid JSON.
 	ErrInvalidValue = errors.New("setting value must be valid JSON")
+	// ErrNoRegistry is returned when a Service was built without one. A nil
+	// registry would otherwise make every key unknown, which reads like a data
+	// problem rather than the wiring mistake it is.
+	ErrNoRegistry = errors.New("settings service has no registry")
 	// ErrValueTooLarge is returned when a written value exceeds MaxValueBytes.
 	ErrValueTooLarge = fmt.Errorf("setting value exceeds the maximum size of %d bytes", MaxValueBytes)
 )
@@ -41,16 +45,37 @@ type Effective struct {
 
 // Service resolves system settings by merging code defaults with stored overrides
 // (ADR-042 P2). It owns the cross-cutting rules the raw store should not: the
-// closed key vocabulary and value validation.
+// closed key vocabulary and value validation, both of which come from the
+// Registry it is built with rather than from anything this package knows about
+// the values themselves.
 type Service struct {
-	store *Store
+	store    *Store
+	registry *Registry
 }
 
-// NewService builds the settings Service over the override store.
-func NewService(store *Store) *Service { return &Service{store: store} }
+// NewService builds the settings Service over the override store and the registry
+// of known settings.
+func NewService(store *Store, registry *Registry) *Service {
+	return &Service{store: store, registry: registry}
+}
+
+// definition looks up a setting definition by key.
+func (s *Service) definition(key string) (Definition, error) {
+	if s.registry == nil {
+		return Definition{}, ErrNoRegistry
+	}
+	d, ok := s.registry.Lookup(key)
+	if !ok {
+		return Definition{}, fmt.Errorf("%w: %q", ErrUnknownSetting, key)
+	}
+	return d, nil
+}
 
 // List returns every known setting with its effective value, in definition order.
 func (s *Service) List(ctx context.Context) ([]Effective, error) {
+	if s.registry == nil {
+		return nil, ErrNoRegistry
+	}
 	rows, err := s.store.Overrides(ctx)
 	if err != nil {
 		return nil, err
@@ -59,7 +84,7 @@ func (s *Service) List(ctx context.Context) ([]Effective, error) {
 	for _, r := range rows {
 		byKey[r.Key] = r
 	}
-	defs := Definitions()
+	defs := s.registry.All()
 	out := make([]Effective, 0, len(defs))
 	for _, d := range defs {
 		out = append(out, merge(d, byKey[d.Key], hasKey(byKey, d.Key)))
@@ -70,9 +95,9 @@ func (s *Service) List(ctx context.Context) ([]Effective, error) {
 // Get returns one known setting's effective value; ErrUnknownSetting for an
 // undefined key.
 func (s *Service) Get(ctx context.Context, key string) (*Effective, error) {
-	def, ok := definition(key)
-	if !ok {
-		return nil, fmt.Errorf("%w: %q", ErrUnknownSetting, key)
+	def, err := s.definition(key)
+	if err != nil {
+		return nil, err
 	}
 	row, err := s.store.Get(ctx, key)
 	if err != nil {
@@ -87,17 +112,30 @@ func (s *Service) Get(ctx context.Context, key string) (*Effective, error) {
 	return &eff, nil
 }
 
-// Set overrides a known setting with a value (opaque, but must be valid JSON) and
-// returns the new effective setting. updatedBy is the acting identity.
+// Set overrides a known setting with a value and returns the new effective
+// setting. updatedBy is the acting identity.
+//
+// The value must be valid JSON, within the size bound, AND legal for its key —
+// the three checks run in that order, because the key's validator is entitled to
+// assume it is being handed parseable JSON of a sane size.
+//
+// 🔴 This is the ONLY write path, which is the point of running the validator
+// here rather than in the resolver above it. The two keys that had rules were
+// checked in the GraphQL mutation, so anything reaching the service another way
+// — a future admin API, dcctl, a migration, a test — bypassed them silently.
 func (s *Service) Set(ctx context.Context, key string, value []byte, updatedBy string) (*Effective, error) {
-	if _, ok := definition(key); !ok {
-		return nil, fmt.Errorf("%w: %q", ErrUnknownSetting, key)
+	def, err := s.definition(key)
+	if err != nil {
+		return nil, err
 	}
 	if len(value) > MaxValueBytes {
 		return nil, ErrValueTooLarge
 	}
 	if !json.Valid(value) {
 		return nil, ErrInvalidValue
+	}
+	if err := def.Validate(value); err != nil {
+		return nil, err
 	}
 	if err := s.store.Set(ctx, key, value, updatedBy); err != nil {
 		return nil, err
@@ -108,8 +146,8 @@ func (s *Service) Set(ctx context.Context, key string, value []byte, updatedBy s
 // Clear removes a known setting's override, reverting it to the code default, and
 // returns the resulting effective (default) setting.
 func (s *Service) Clear(ctx context.Context, key string) (*Effective, error) {
-	if _, ok := definition(key); !ok {
-		return nil, fmt.Errorf("%w: %q", ErrUnknownSetting, key)
+	if _, err := s.definition(key); err != nil {
+		return nil, err
 	}
 	if err := s.store.Clear(ctx, key); err != nil {
 		return nil, err

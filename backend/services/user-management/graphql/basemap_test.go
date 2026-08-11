@@ -15,10 +15,19 @@ import (
 	"github.com/devicechain-io/dc-user-management/basemap"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/devicechain-io/dc-user-management/settings"
+	"github.com/devicechain-io/dc-user-management/settingsdefs"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+// shippedBasemapDefault returns the code default for basemap.default.
+func shippedBasemapDefault(t *testing.T) []byte {
+	t.Helper()
+	d, ok := settingsdefs.Registry().Lookup(settingsdefs.KeyBasemapDefault)
+	require.True(t, ok, "basemap.default must be a registered setting")
+	return d.Default
+}
 
 func sp(v string) *string   { return &v }
 func fp(v float64) *float64 { return &v }
@@ -29,62 +38,6 @@ const (
 	opTiles     = "https://operator.example.invalid/{z}/{x}/{y}.png"
 	opCred      = "© Operator Tiles"
 )
-
-// ---- validateBasemapDefault: the operator tier's mint-point gate ------------
-
-// The counterpart of TestValidateBrandingDefault: a value that would be rejected on
-// the tenant path must not be storable via setSetting either, because this one is
-// served to every non-overriding TENANT.
-func TestValidateBasemapDefault(t *testing.T) {
-	// The shipped code default must always pass its own gate.
-	var shipped string
-	for _, d := range settings.Definitions() {
-		if d.Key == settings.KeyBasemapDefault {
-			shipped = string(d.Default)
-		}
-	}
-	require.NotEmpty(t, shipped, "basemap.default must be a registered setting")
-	require.NoError(t, validateBasemapDefault(shipped), "the shipped code default must pass its own gate")
-
-	valid := []string{
-		`{}`,
-		`{"tileUrl":"https://t.example.invalid/{z}/{x}/{y}.png","attribution":"© Example"}`,
-		`{"centerLat":33.75,"centerLon":-84.39,"zoom":10}`,
-		`{"tileUrl":"https://t.example.invalid/{z}/{x}/{y}.png","attribution":"<a href=\"https://e.invalid\">Example</a>"}`,
-	}
-	for _, v := range valid {
-		require.NoErrorf(t, validateBasemapDefault(v), "valid basemap.default rejected: %s", v)
-	}
-
-	invalid := map[string]string{
-		"a tile URL with no credit line": `{"tileUrl":"https://t.example.invalid/{z}/{x}/{y}.png"}`,
-		"a credit line with no tiles":    `{"attribution":"© Example"}`,
-		"http":                           `{"tileUrl":"http://t.example.invalid/{z}/{x}/{y}.png","attribution":"© E"}`,
-		"not a template":                 `{"tileUrl":"https://t.example.invalid/style.json","attribution":"© E"}`,
-		"script in the attribution":      `{"tileUrl":"https://t.example.invalid/{z}/{x}/{y}.png","attribution":"<script>alert(1)</script>"}`,
-		"out-of-range latitude":          `{"centerLat":91,"centerLon":0}`,
-		"half a coordinate":              `{"centerLat":33.75}`,
-		// 🔴 The typo case is the reason DisallowUnknownFields is set: without it an
-		// operator stores `tile_url`, setSetting reports success, and every map in the
-		// instance stays blank behind a stored value that looks correct.
-		"an unknown key": `{"tile_url":"https://t.example.invalid/{z}/{x}/{y}.png","attribution":"© E"}`,
-		"not json":       `nope`,
-	}
-	for name, v := range invalid {
-		require.Errorf(t, validateBasemapDefault(v), "%s must be refused: %s", name, v)
-	}
-}
-
-// 🔴 MEASURED, not assumed: encoding/json matches field names CASE-INSENSITIVELY, so
-// DisallowUnknownFields does NOT reject `tileURL` — it binds to TileURL and works.
-// Pinned here because the natural reading of "unknown fields are rejected" says the
-// opposite, and someone will eventually write a validator that depends on the strict
-// reading. Only a genuinely different key (see "an unknown key" above) is refused.
-func TestKeyCasingIsAcceptedBecauseTheJsonDecoderIsCaseInsensitive(t *testing.T) {
-	v := `{"tileURL":"https://t.example.invalid/{z}/{x}/{y}.png","attribution":"© E"}`
-	require.NoError(t, validateBasemapDefault(v),
-		"case variation binds to the right field, so it is accepted rather than silently ignored")
-}
 
 // ---- setSetting actually CALLS that validator -------------------------------
 
@@ -100,7 +53,7 @@ func newSettingsCtx(t *testing.T, authorities ...string) (context.Context, *sett
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, rdb.RegisterTokenGrammar(db))
 	require.NoError(t, db.AutoMigrate(&settings.SystemSetting{}))
-	svc := settings.NewService(settings.NewStore(&rdb.RdbManager{Database: db}))
+	svc := settings.NewService(settings.NewStore(&rdb.RdbManager{Database: db}), settingsdefs.Registry())
 
 	// settings:write is SYSTEM tier, so it rides an identity token — a tenant access
 	// token cannot satisfy it however many authorities it lists (ADR-065).
@@ -120,13 +73,13 @@ func TestSetSettingRefusesAnInvalidBasemapDefault(t *testing.T) {
 	_, err := r.SetSetting(ctx, struct {
 		Key   string
 		Value string
-	}{Key: settings.KeyBasemapDefault, Value: `{"tileUrl":"https://t.example.invalid/{z}/{x}/{y}.png"}`})
+	}{Key: settingsdefs.KeyBasemapDefault, Value: `{"tileUrl":"https://t.example.invalid/{z}/{x}/{y}.png"}`})
 
 	require.Error(t, err, "setSetting must run the basemap rules, not just store opaque JSON")
 	require.Contains(t, err.Error(), "attribution")
 
 	// And nothing was stored — a refused write must not land.
-	eff, err := svc.Get(ctx, settings.KeyBasemapDefault)
+	eff, err := svc.Get(ctx, settingsdefs.KeyBasemapDefault)
 	require.NoError(t, err)
 	require.False(t, eff.Overridden, "a refused value must not be persisted")
 }
@@ -141,10 +94,10 @@ func TestSetSettingStoresAValidBasemapDefault(t *testing.T) {
 	_, err := r.SetSetting(ctx, struct {
 		Key   string
 		Value string
-	}{Key: settings.KeyBasemapDefault, Value: value})
+	}{Key: settingsdefs.KeyBasemapDefault, Value: value})
 	require.NoError(t, err)
 
-	eff, err := svc.Get(ctx, settings.KeyBasemapDefault)
+	eff, err := svc.Get(ctx, settingsdefs.KeyBasemapDefault)
 	require.NoError(t, err)
 	require.True(t, eff.Overridden)
 	require.JSONEq(t, value, string(eff.Value))
@@ -159,7 +112,7 @@ func TestSetSettingRequiresSettingsWriteForTheBasemapDefault(t *testing.T) {
 	_, err := r.SetSetting(ctx, struct {
 		Key   string
 		Value string
-	}{Key: settings.KeyBasemapDefault, Value: `{}`})
+	}{Key: settingsdefs.KeyBasemapDefault, Value: `{}`})
 
 	require.ErrorIs(t, err, auth.ErrForbidden)
 }
@@ -234,13 +187,7 @@ func TestAnEmptiedOperatorDefaultResolvesToNoBasemapAtAll(t *testing.T) {
 // consulting the settings store at all. TestABareTenantResolvesToTheShippedDefault
 // drives that half through TenantResolver.Basemap.
 func TestShippedBasemapDefault(t *testing.T) {
-	var shipped []byte
-	for _, d := range settings.Definitions() {
-		if d.Key == settings.KeyBasemapDefault {
-			shipped = d.Default
-		}
-	}
-	require.NotEmpty(t, shipped, "basemap.default must be a registered setting")
+	shipped := shippedBasemapDefault(t)
 
 	got := resolveBasemap(basemap.Basemap{}, shipped)
 
@@ -300,12 +247,7 @@ func TestABareTenantResolvesToTheShippedDefault(t *testing.T) {
 // rule would be wrong applied to the whole provider catalog. It is right here,
 // where there is one provider and it serves its own credit page.
 func TestTheShippedDefaultCreditsTheHostItFetchesTilesFrom(t *testing.T) {
-	var shipped []byte
-	for _, d := range settings.Definitions() {
-		if d.Key == settings.KeyBasemapDefault {
-			shipped = d.Default
-		}
-	}
+	shipped := shippedBasemapDefault(t)
 	got := resolveBasemap(basemap.Basemap{}, shipped)
 	require.NotNil(t, got.TileURL)
 	require.NotNil(t, got.Attribution)

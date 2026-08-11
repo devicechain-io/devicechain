@@ -14,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-user-management/branding"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/devicechain-io/dc-user-management/settings"
+	"github.com/devicechain-io/dc-user-management/settingsdefs"
 	"github.com/rs/zerolog/log"
 )
 
@@ -54,7 +55,7 @@ func (r *TenantBrandingResolver) LogoMaxHeight() *int32 {
 // the cascade always has a floor with no DB seed. A future customer tier inserts
 // one Merge above with no contract change (ADR-038 §3.1).
 func (r *TenantResolver) Branding(ctx context.Context) (*TenantBrandingResolver, error) {
-	def, err := r.svc.getSettingsService(ctx).Get(ctx, settings.KeyBrandingDefault)
+	def, err := r.svc.getSettingsService(ctx).Get(ctx, settingsdefs.KeyBrandingDefault)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +67,7 @@ func (r *TenantResolver) Branding(ctx context.Context) (*TenantBrandingResolver,
 	// override + the console's built-in floor still apply).
 	var systemDefault branding.Branding
 	if err := json.Unmarshal(def.Value, &systemDefault); err != nil || branding.Validate(systemDefault) != nil {
-		log.Warn().Str("setting", settings.KeyBrandingDefault).Msg("ignoring malformed branding.default; using built-in floor")
+		log.Warn().Str("setting", settingsdefs.KeyBrandingDefault).Msg("ignoring malformed branding.default; using built-in floor")
 		systemDefault = branding.Branding{}
 	}
 	resolved := branding.Merge(brandingFromTenant(r.t), systemDefault)
