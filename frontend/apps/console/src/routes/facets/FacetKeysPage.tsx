@@ -37,7 +37,7 @@ import { useAuth } from '@/auth/AuthProvider';
 import { hasAuthority } from '@devicechain/client';
 import { errMessage, useReload } from '@/routes/common';
 import { FormDrawer } from '@/components/registry';
-import { cn } from '@/lib/utils';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import {
   DataTable,
   DataTableBody,
@@ -125,17 +125,20 @@ export default function FacetKeysPage() {
 
       {/* Member-family filter. Facets are declared per family, so the axis picker
           (and this list) scopes to one family at a time; "All" shows every family. */}
-      <div className="mb-4 flex flex-wrap gap-2">
-        <FilterChip label={t('all')} active={filter === undefined} onClick={() => setFilter(undefined)} />
-        {FACET_MEMBER_TYPES.map((mt) => (
-          <FilterChip
-            key={mt}
-            label={familyLabel(mt)}
-            active={filter === mt}
-            onClick={() => setFilter(mt)}
-          />
-        ))}
-      </div>
+      {/* "All" is `undefined` in state but must be an addressable option like any
+          other, so it travels as the empty string and converts at this boundary. */}
+      <SegmentedControl
+        className="mb-4"
+        ariaLabel={t('familyFilter')}
+        tone="loose"
+        size="md"
+        value={filter ?? ''}
+        onValueChange={(v) => setFilter(v === '' ? undefined : v)}
+        options={[
+          { value: '', label: t('all') },
+          ...FACET_MEMBER_TYPES.map((mt) => ({ value: mt, label: familyLabel(mt) })),
+        ]}
+      />
 
       {loading ? (
         <LoadingState description={t('loading')} />
@@ -188,31 +191,6 @@ export default function FacetKeysPage() {
         </DataTable>
       )}
     </PageShell>
-  );
-}
-
-function FilterChip({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'rounded-full border px-3 py-1 text-sm transition-colors',
-        active
-          ? 'border-primary bg-primary/10 font-medium text-primary'
-          : 'border-border text-muted-foreground hover:bg-muted',
-      )}
-    >
-      {label}
-    </button>
   );
 }
 

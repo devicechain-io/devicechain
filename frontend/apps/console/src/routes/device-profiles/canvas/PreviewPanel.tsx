@@ -10,6 +10,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
+import { SegmentedControl } from '@/components/ui/segmented-control';
+import { ToggleButton } from '@/components/ui/toggle-button';
 import { errMessage } from '@/routes/common';
 import { previewRule, type PreviewResult, type NodeTraceStep } from '@/lib/api/event-processing';
 
@@ -109,21 +111,18 @@ export function PreviewPanel({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold">{t('previewTitle')}</span>
-          <div className="flex overflow-hidden rounded-md border">
-            {WINDOWS.map((w) => (
-              <button
-                key={w.hours}
-                type="button"
-                onClick={() => setHours(w.hours)}
-                className={[
-                  'px-2 py-1 text-xs transition-colors',
-                  hours === w.hours ? 'bg-primary text-primary-foreground' : 'bg-transparent hover:bg-muted',
-                ].join(' ')}
-              >
-                {t('previewWindowLabel', { hours: w.hours })}
-              </button>
-            ))}
-          </div>
+          {/* The window is a number in state; a radio group addresses its options by
+              string, so the conversion is confined to this pair of props. */}
+          <SegmentedControl
+            ariaLabel={t('previewWindowPicker')}
+            tone="joined"
+            value={String(hours)}
+            onValueChange={(v) => setHours(Number(v))}
+            options={WINDOWS.map((w) => ({
+              value: String(w.hours),
+              label: t('previewWindowLabel', { hours: w.hours }),
+            }))}
+          />
         </div>
         <Button
           size="sm"
@@ -213,12 +212,16 @@ function PreviewOutcome({
           <ul className="max-h-56 space-y-1 overflow-y-auto">
             {firings.map((f, i) => (
               <li key={i}>
-                <button
-                  type="button"
+                {/* Selecting a firing traces it on the canvas; clicking the selected one
+                    again clears the overlay — an independent on/off, not one-of-N, so
+                    it is a pressed button rather than a segment. The row's shape is its
+                    own (full width, left-aligned, three columns), so it styles itself
+                    over the bare ToggleButton instead of borrowing Chip's pill. */}
+                <ToggleButton
+                  pressed={selected === i}
                   onClick={() => onSelect(i, f.trace)}
-                  aria-pressed={selected === i}
                   className={[
-                    'flex w-full items-center gap-2 rounded px-1.5 py-1 text-left text-xs transition-colors',
+                    'flex w-full items-center gap-2 rounded px-1.5 py-1 text-left text-xs',
                     selected === i ? 'bg-primary/10 ring-1 ring-primary' : 'hover:bg-muted',
                   ].join(' ')}
                 >
@@ -232,7 +235,7 @@ function PreviewOutcome({
                   </span>
                   <span className="font-mono text-muted-foreground">{f.series}</span>
                   <span className="ml-auto tabular-nums text-muted-foreground">{new Date(f.occurredAt).toLocaleString()}</span>
-                </button>
+                </ToggleButton>
               </li>
             ))}
           </ul>

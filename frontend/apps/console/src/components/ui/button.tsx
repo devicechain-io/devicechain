@@ -22,12 +22,24 @@ const buttonVariants = cva(
           "bg-secondary text-secondary-foreground hover:bg-secondary/80 active:bg-secondary/60",
         ghost: "hover:bg-accent hover:text-accent-foreground active:bg-accent/80",
         link: "text-primary underline-offset-4 hover:underline",
+        // The destructive counterpart to `link` — "Clear this key" reads as an inline
+        // action next to "Replace", not as a filled danger button.
+        linkDestructive: "text-destructive underline-offset-4 hover:underline",
+        // A text action that should not compete with the content around it: a "clear"
+        // beside a value, a back link above a heading. No underline, no fill — it
+        // brightens on hover, which is the whole affordance.
+        quiet: "text-muted-foreground hover:text-foreground",
       },
       size: {
         default: "h-10 px-4 py-2",
         sm: "h-9 rounded-md px-3",
         lg: "h-11 rounded-md px-8",
         icon: "h-10 w-10",
+        // For a button that sits IN a line of text rather than beside it: no height
+        // floor and no padding, so it aligns on the text baseline like a word. The
+        // press-scale is cancelled too — nudging a run of text on click reads as a
+        // rendering glitch, not as feedback.
+        inline: "h-auto p-0 active:scale-100",
       },
     },
     defaultVariants: {

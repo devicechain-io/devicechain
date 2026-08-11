@@ -11,6 +11,7 @@
   "deleted": "Facet “{{key}}” deleted",
   "description": "Classification axes for browsing and filtering — declare which attribute keys are facets",
   "empty": "No facets declared yet.",
+  "familyFilter": "Filter by member family",
   "keyPlaceholder": "climate",
   "keyRequired": "A facet needs an attribute key.",
   "labelDescription": "Optional. Display name for the axis; defaults to the key.",

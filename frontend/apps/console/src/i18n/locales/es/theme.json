@@ -1,5 +1,6 @@
 {
   "light": "Claro",
   "dark": "Oscuro",
-  "system": "Sistema"
+  "system": "Sistema",
+  "picker": "Tema"
 }

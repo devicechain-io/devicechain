@@ -40,6 +40,7 @@ import { useAuth } from '@/auth/AuthProvider';
 import { hasAuthority } from '@devicechain/client';
 import { errMessage, useReload } from '@/routes/common';
 import { FormDrawer } from '@/components/registry';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import {
   DataTable,
@@ -152,16 +153,18 @@ export default function BrowsePage() {
     >
       {/* Member-family picker. Facets, the composed selector, and saved dynamic groups
           all scope to one family at a time. */}
-      <div className="mb-6 flex flex-wrap gap-2">
-        {FACET_MEMBER_TYPES.map((mt) => (
-          <FilterChip
-            key={mt}
-            label={t(FAMILY_LABEL_KEY[mt])}
-            active={family === mt}
-            onClick={() => setFamilyAndReset(mt)}
-          />
-        ))}
-      </div>
+      <SegmentedControl
+        className="mb-6"
+        ariaLabel={t('familyPicker')}
+        tone="loose"
+        size="md"
+        value={family}
+        onValueChange={setFamilyAndReset}
+        options={FACET_MEMBER_TYPES.map((mt) => ({
+          value: mt,
+          label: t(FAMILY_LABEL_KEY[mt]),
+        }))}
+      />
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Axes */}
@@ -598,27 +601,3 @@ function SaveGroupForm({
   );
 }
 
-function FilterChip({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'rounded-full border px-3 py-1 text-sm transition-colors',
-        active
-          ? 'border-primary bg-primary/10 font-medium text-primary'
-          : 'border-border text-muted-foreground hover:bg-muted',
-      )}
-    >
-      {label}
-    </button>
-  );
-}

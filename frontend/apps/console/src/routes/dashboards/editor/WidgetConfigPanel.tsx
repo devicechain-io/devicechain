@@ -36,6 +36,7 @@ import { useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { X } from 'lucide-react';
+import { IconButton } from '@/components/ui/icon-button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
@@ -261,13 +262,9 @@ export function WidgetConfigPanel({
     <aside className="w-80 shrink-0 overflow-auto border-l bg-card p-4">
       <div className="mb-4 flex items-center justify-between">
         <div className="text-sm font-semibold">{widget.type}</div>
-        <button
-          onClick={onClose}
-          aria-label={t('widgetClosePanel')}
-          className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-        >
+        <IconButton label={t('widgetClosePanel')} onClick={onClose}>
           <X size={14} />
-        </button>
+        </IconButton>
       </div>
 
       <div className="space-y-4">

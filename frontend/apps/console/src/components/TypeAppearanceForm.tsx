@@ -14,6 +14,7 @@ import { FormField } from '@/components/ui/form-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { useToast } from '@/components/ui/toast';
 import { ColorPicker } from '@/components/ui/color-picker';
+import { ToggleButton } from '@/components/ui/toggle-button';
 import { errMessage } from '@/routes/common';
 import { TypeCapsule } from '@/components/TypeCapsule';
 import { TYPE_ICONS, TYPE_ICON_KEYS } from '@/lib/type-icons';
@@ -62,13 +63,14 @@ function ColorField({
         />
         <span className="font-mono text-xs text-muted-foreground">{value ?? '—'}</span>
         {value && (
-          <button
-            type="button"
+          <Button
+            variant="quiet"
+            size="inline"
+            className="ml-auto text-xs"
             onClick={() => onChange(undefined)}
-            className="ml-auto text-xs text-muted-foreground hover:text-foreground"
           >
             {t('clear')}
-          </button>
+          </Button>
         )}
       </div>
     </FormField>
@@ -143,21 +145,23 @@ export function TypeAppearanceForm({
             const Icon = TYPE_ICONS[key];
             const selected = icon === key;
             return (
-              <button
+              // Clicking the chosen icon CLEARS it, so this is a set of independent
+              // toggles rather than a radio group — a radio group has no way to end up
+              // with nothing selected.
+              <ToggleButton
                 key={key}
-                type="button"
                 aria-label={key}
-                aria-pressed={selected}
+                pressed={selected}
                 onClick={() => setIcon(selected ? undefined : key)}
                 className={cn(
-                  'flex aspect-square items-center justify-center rounded-md border text-foreground transition-colors',
+                  'flex aspect-square items-center justify-center rounded-md border text-foreground',
                   selected
                     ? 'border-primary bg-primary/10 text-primary'
                     : 'border-border hover:bg-accent hover:text-accent-foreground',
                 )}
               >
                 <Icon size={16} />
-              </button>
+              </ToggleButton>
             );
           })}
         </div>

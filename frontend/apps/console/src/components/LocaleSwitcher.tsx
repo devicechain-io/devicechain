@@ -4,7 +4,7 @@
 import { Languages } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { SUPPORTED_LOCALES, setUserLocale } from '@/i18n/config';
-import { cn } from '@/lib/utils';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 
 /**
  * Language picker — a chrome control (sibling of the ThemeToggle), not a form
@@ -21,50 +21,39 @@ export function LocaleSwitcher({ className }: { className?: string }) {
   // `t` (default `common` namespace) localizes the group label — the endonym pill
   // text and title are language names, which are never themselves translated.
   const { t, i18n } = useTranslation();
-  const active = i18n.resolvedLanguage;
+  // Before i18next finishes resolving there is no language in effect; '' matches no
+  // segment, which is the honest rendering of "not yet known".
+  const active = i18n.resolvedLanguage ?? '';
 
   return (
-    <div
-      className={cn(
-        'flex items-center gap-1 rounded-md border border-border bg-background p-0.5',
-        className,
-      )}
-      role="group"
-      aria-label={t('languagePicker')}
-    >
-      <Languages className="ml-1 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-      {SUPPORTED_LOCALES.map(({ code, label, badge }) => {
-        const isActive = active === code;
-        return (
-          <button
-            key={code}
-            type="button"
-            onClick={() => setUserLocale(code)}
-            aria-pressed={isActive}
-            title={label}
-            className={cn(
-              'flex h-7 flex-1 items-center justify-center gap-1.5 rounded-sm px-2 text-xs transition-colors',
-              isActive
-                ? 'bg-primary text-primary-foreground'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
+    <SegmentedControl
+      ariaLabel={t('languagePicker')}
+      value={active}
+      onValueChange={setUserLocale}
+      fill
+      className={className}
+      leading={
+        <Languages className="ml-1 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+      }
+      options={SUPPORTED_LOCALES.map(({ code, label, badge }) => ({
+        value: code,
+        title: label,
+        label: (
+          <>
             {/* The code badge is the quick visual anchor; it is decorative next to
-                the authoritative endonym, so it is aria-hidden (title carries the
-                name). Its chip background adapts to the pill's active state. */}
+                the authoritative endonym, so it is aria-hidden (the endonym beside it
+                is the accessible name). Its chip background follows the segment's
+                selection state, which the segment publishes as `data-state`. */}
             <span
               aria-hidden
-              className={cn(
-                'rounded px-1 py-0.5 font-mono text-[10px] font-semibold leading-none',
-                isActive ? 'bg-primary-foreground/20' : 'bg-muted',
-              )}
+              className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] font-semibold leading-none group-data-[state=checked]:bg-primary-foreground/20"
             >
               {badge}
             </span>
             <span className="truncate">{label}</span>
-          </button>
-        );
-      })}
-    </div>
+          </>
+        ),
+      }))}
+    />
   );
 }

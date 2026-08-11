@@ -412,13 +412,17 @@ function BrandingPreview({ form, logoSrc }: { form: FormState; logoSrc: string |
           )}
         </div>
         <div className="space-y-3 bg-card p-3">
-          <button
-            type="button"
-            className="rounded-md px-3 py-1.5 text-sm font-medium text-white"
+          {/* A PICTURE of a button, not a button: it shows what the tenant's primary
+              colour does to one, so it must carry the tenant's colour rather than the
+              kit's — <Button> would render the console's own styling and preview
+              nothing. Rendering it as a <span> also stops it being a tab stop that
+              does nothing when activated, which is what it was. */}
+          <span
+            className="inline-block rounded-md px-3 py-1.5 text-sm font-medium text-white"
             style={{ background: primary ?? 'hsl(var(--primary))' }}
           >
             {t('primaryButtonSample')}
-          </button>
+          </span>
           <p className="text-xs text-muted-foreground">{t('sampleContent')}</p>
         </div>
       </div>

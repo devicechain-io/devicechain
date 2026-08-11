@@ -29,6 +29,8 @@ import {
 } from '@devicechain/dashboards';
 import { ConnectedWidget, WidgetSubjectProvider, widgetSubjectLabel } from '@devicechain/widgets';
 import { Rnd } from 'react-rnd';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 
 export interface DashboardCanvasProps {
   definition: DashboardDefinition;
@@ -196,21 +198,20 @@ function ToolbarButton({
   danger?: boolean;
 }) {
   return (
-    <button
-      className="rnd-no-drag"
+    <Button
+      variant="outline"
+      size="inline"
+      // rnd-no-drag is react-rnd's cancel selector: without it, pressing the button
+      // starts a drag instead. stopPropagation keeps the mousedown from reaching the
+      // widget beneath.
+      className={cn(
+        'rnd-no-drag rounded border-border bg-card px-2 py-0.5 text-xs',
+        danger && 'text-destructive hover:text-destructive',
+      )}
       onMouseDown={(e) => e.stopPropagation()}
       onClick={onClick}
-      style={{
-        fontSize: 12,
-        padding: '2px 8px',
-        borderRadius: 4,
-        border: '1px solid hsl(var(--border))',
-        cursor: 'pointer',
-        color: danger ? 'hsl(var(--destructive))' : 'hsl(var(--foreground))',
-        background: 'hsl(var(--card))',
-      }}
     >
       {children}
-    </button>
+    </Button>
   );
 }

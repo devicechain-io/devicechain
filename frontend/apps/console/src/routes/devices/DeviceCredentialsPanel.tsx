@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Copy, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Combobox } from '@/components/ui/combobox';
@@ -232,14 +233,14 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
                 <DataTableCell>
                   <div className="flex items-center gap-1.5">
                     <span className="font-mono text-xs text-foreground">{c.credentialId}</span>
-                    <button
-                      type="button"
+                    <IconButton
+                      label={t('copyIdAriaLabel')}
+                      variant="quiet"
+                      size="xs"
                       onClick={() => copy(c.credentialId)}
-                      className="text-muted-foreground transition-colors hover:text-foreground"
-                      aria-label={t('copyIdAriaLabel')}
                     >
                       <Copy size={13} />
-                    </button>
+                    </IconButton>
                   </div>
                 </DataTableCell>
                 <DataTableCell>

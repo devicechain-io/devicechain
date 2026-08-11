@@ -12,7 +12,7 @@
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { cn } from '@/lib/utils';
+import { SegmentedControl, type SegmentedOption } from '@/components/ui/segmented-control';
 import { DetectionRuleForm } from './DetectionRuleForm';
 import { DetectionRuleNLDraft } from './DetectionRuleNLDraft';
 import { CanvasEditor } from './canvas/CanvasEditor';
@@ -36,26 +36,25 @@ export function DetectionRuleAuthoring({
   const [nlDraft, setNlDraft] = useState<string | undefined>();
   const creating = entity == null;
 
+  // Built above the return, not inline in the attribute: 'form'/'canvas'/'nl' are the
+  // Mode discriminant rather than user text, and a literal inside a JSX attribute is
+  // what the i18n lint rule is watching for. The labels beside them ARE display text
+  // and stay translated. The "Describe" door only exists while creating.
+  const modeOptions: SegmentedOption<Mode>[] = [
+    { value: 'form', label: t('ruleModeForm') },
+    { value: 'canvas', label: t('ruleModeCanvas') },
+    ...(creating ? [{ value: 'nl' as const, label: t('ruleModeDescribe') }] : []),
+  ];
+
   return (
     <div className="space-y-4">
-      <div className="inline-flex rounded-md border p-0.5 text-sm">
-        {/* 'form'/'canvas'/'nl' are the Mode discriminant, never user text — only the
-            ModeButton children (translated below) are display text. */}
-        {/* eslint-disable-next-line i18next/no-literal-string */}
-        <ModeButton active={mode === 'form'} onClick={() => setMode('form')}>
-          {t('ruleModeForm')}
-        </ModeButton>
-        {/* eslint-disable-next-line i18next/no-literal-string */}
-        <ModeButton active={mode === 'canvas'} onClick={() => setMode('canvas')}>
-          {t('ruleModeCanvas')}
-        </ModeButton>
-        {creating && (
-          // eslint-disable-next-line i18next/no-literal-string
-          <ModeButton active={mode === 'nl'} onClick={() => setMode('nl')}>
-            {t('ruleModeDescribe')}
-          </ModeButton>
-        )}
-      </div>
+      <SegmentedControl<Mode>
+        ariaLabel={t('ruleModePicker')}
+        value={mode}
+        onValueChange={setMode}
+        size="md"
+        options={modeOptions}
+      />
       {mode === 'nl' ? (
         <DetectionRuleNLDraft
           profileToken={profileToken}
@@ -77,20 +76,5 @@ export function DetectionRuleAuthoring({
         <CanvasEditor profileToken={profileToken} entity={entity} onDone={onDone} />
       )}
     </div>
-  );
-}
-
-function ModeButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'rounded px-3 py-1 transition-colors',
-        active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
-      )}
-    >
-      {children}
-    </button>
   );
 }
