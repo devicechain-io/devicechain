@@ -76,7 +76,7 @@ func (s *Service) List(ctx context.Context) ([]Effective, error) {
 	if s.registry == nil {
 		return nil, ErrNoRegistry
 	}
-	rows, err := s.store.Overrides(ctx)
+	rows, err := s.store.overrides(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +99,7 @@ func (s *Service) Get(ctx context.Context, key string) (*Effective, error) {
 	if err != nil {
 		return nil, err
 	}
-	row, err := s.store.Get(ctx, key)
+	row, err := s.store.get(ctx, key)
 	if err != nil {
 		return nil, err
 	}
@@ -119,10 +119,11 @@ func (s *Service) Get(ctx context.Context, key string) (*Effective, error) {
 // the three checks run in that order, because the key's validator is entitled to
 // assume it is being handed parseable JSON of a sane size.
 //
-// 🔴 This is the ONLY write path, which is the point of running the validator
-// here rather than in the resolver above it. The two keys that had rules were
-// checked in the GraphQL mutation, so anything reaching the service another way
-// — a future admin API, dcctl, a migration, a test — bypassed them silently.
+// 🔴 This is the only write path there is — enforced by construction, not by
+// convention: Store's methods are unexported, so no caller can reach the table
+// without coming through here. The two keys that had rules were checked in the
+// GraphQL mutation, so anything reaching the service another way — a future admin
+// API, dcctl, a migration, a test — bypassed them silently.
 func (s *Service) Set(ctx context.Context, key string, value []byte, updatedBy string) (*Effective, error) {
 	def, err := s.definition(key)
 	if err != nil {
@@ -137,7 +138,7 @@ func (s *Service) Set(ctx context.Context, key string, value []byte, updatedBy s
 	if err := def.Validate(value); err != nil {
 		return nil, err
 	}
-	if err := s.store.Set(ctx, key, value, updatedBy); err != nil {
+	if err := s.store.set(ctx, key, value, updatedBy); err != nil {
 		return nil, err
 	}
 	return s.Get(ctx, key)
@@ -149,7 +150,7 @@ func (s *Service) Clear(ctx context.Context, key string) (*Effective, error) {
 	if _, err := s.definition(key); err != nil {
 		return nil, err
 	}
-	if err := s.store.Clear(ctx, key); err != nil {
+	if err := s.store.clear(ctx, key); err != nil {
 		return nil, err
 	}
 	return s.Get(ctx, key)

@@ -41,27 +41,30 @@ function RawJsonEditor({ value, onChange }: SettingEditorProps<RawForm>) {
 }
 
 /**
- * rawJsonSection builds the fallback section for a key. labelKey is null: the tab
- * is labelled with the setting key itself, because a key with no editor has no
- * name of ours to show.
+ * The fallback section. ONE module-level object, not a per-key factory: a section
+ * built during a render is a new component type every render, which remounts the
+ * textarea and drops focus after every keystroke — which is what a per-key
+ * factory called from the host's render body did. The host already knows the key,
+ * and labelKey is null so the tab is labelled with it.
  */
-export function rawJsonSection(key: string): SettingSection {
-  return defineSetting<RawForm>({
-    key,
-    labelKey: null,
-    icon: Braces,
-    // Never null — this is the terminal fallback, so there is nothing further to
-    // fall back TO. Invalid JSON is reported by validate, not by refusing to render.
-    parse: (json) => ({ text: json }),
-    serialize: (draft) => draft.text,
-    validate: (draft) => {
-      try {
-        JSON.parse(draft.text);
-        return null;
-      } catch {
-        return { key: 'valueMustBeJsonError' };
-      }
-    },
-    Editor: RawJsonEditor,
-  });
-}
+export const RAW_JSON_SECTION: SettingSection = defineSetting<RawForm>({
+  key: '',
+  labelKey: null,
+  icon: Braces,
+  // Never null — this is the terminal fallback, so there is nothing further to
+  // fall back TO. Invalid JSON is reported by validate, not by refusing to render.
+  seed: (json) => ({ text: json }),
+  toJson: (draft) => draft.text,
+  // The degenerate case of the rule, and the clearest statement of it: this
+  // editor's produced JSON is exactly what the operator typed, and the only thing
+  // that can be wrong with it is that it does not parse.
+  validate: (json) => {
+    try {
+      JSON.parse(json);
+      return null;
+    } catch {
+      return { key: 'valueMustBeJsonError' };
+    }
+  },
+  Editor: RawJsonEditor,
+});

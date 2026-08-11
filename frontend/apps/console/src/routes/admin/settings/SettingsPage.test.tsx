@@ -290,3 +290,181 @@ describe('the tab bar', () => {
     ]);
   });
 });
+
+// ── The defects an adversarial review found, each with the symptom it produced ──
+//
+// 🔴 Every one of these passed the suite above before it was fixed. They are here
+// because "the editors render and the save gate works" was never the hard part.
+
+describe('a draft is form state, not re-derived from JSON', () => {
+  // 🔴 The host used to hold serialized JSON and rebuild the form from it on every
+  // keystroke, which required each editor's serializer to round-trip losslessly
+  // through half-typed states. It did not: Number("33.") is 33, so the decimal
+  // point was dropped and fed back into the input as the operator typed it.
+  // Latitude and longitude are inherently decimal — this made them unenterable by
+  // typing at all, only by pasting a complete value.
+  it('lets a decimal coordinate be typed one character at a time', async () => {
+    await renderWith([
+      setting(BASEMAP, '{"tileUrl":"https://a.invalid/{z}/{x}/{y}.png","attribution":"© A"}'),
+    ]);
+    const lat = document.getElementById('bm-center-lat') as HTMLInputElement;
+
+    fireEvent.change(lat, { target: { value: '33' } });
+    fireEvent.change(lat, { target: { value: '33.' } });
+    expect(lat.value).toBe('33.');
+
+    fireEvent.change(lat, { target: { value: '33.7' } });
+    expect(lat.value).toBe('33.7');
+  });
+
+  it('keeps a leading zero and a trailing zero while they are being typed', async () => {
+    await renderWith([setting(BASEMAP, '{}')]);
+    const zoom = document.getElementById('bm-zoom') as HTMLInputElement;
+    fireEvent.change(zoom, { target: { value: '1.50' } });
+    expect(zoom.value).toBe('1.50');
+  });
+
+  // Same root cause, string fields: the serializer trimmed, so a trailing space
+  // was stripped from under the cursor and could never be typed.
+  it('lets a trailing space be typed into the attribution', async () => {
+    await renderWith([setting(BASEMAP, '{}')]);
+    const credit = document.getElementById('bm-attribution') as HTMLInputElement;
+    fireEvent.change(credit, { target: { value: '© A ' } });
+    expect(credit.value).toBe('© A ');
+  });
+
+  // The counterweight: the wire value is still trimmed and coerced. Only the
+  // DRAFT is preserved verbatim — otherwise this would just move the bug.
+  it('still trims and coerces on the way to the server', async () => {
+    await renderWith([setting(BASEMAP, '{}')]);
+    fireEvent.change(document.getElementById('bm-tile-url') as HTMLInputElement, {
+      target: { value: '  https://a.invalid/{z}/{x}/{y}.png  ' },
+    });
+    fireEvent.change(document.getElementById('bm-attribution') as HTMLInputElement, {
+      target: { value: '© A ' },
+    });
+    fireEvent.change(document.getElementById('bm-zoom') as HTMLInputElement, {
+      target: { value: '9' },
+    });
+    await waitFor(() => expect(saveButton().disabled).toBe(false));
+    fireEvent.click(saveButton());
+
+    await waitFor(() => expect(setSettingMock).toHaveBeenCalled());
+    const [, value] = setSettingMock.mock.calls[0] as [string, string];
+    expect(JSON.parse(value)).toEqual({
+      tileUrl: 'https://a.invalid/{z}/{x}/{y}.png',
+      attribution: '© A',
+      zoom: 9,
+    });
+  });
+});
+
+describe('a value the editor cannot fully model', () => {
+  // 🔴 The server decodes these values CASE-INSENSITIVELY, so `tileURL` binds to
+  // the TileURL field and is stored, valid, and serving tiles to every
+  // non-overriding tenant. The console read `v.tileUrl` exactly, saw nothing, and
+  // mounted the typed editor over it — empty fields above real data. Editing the
+  // zoom then saved `{"zoom":10}` and wiped the tile source instance-wide, with no
+  // error at any layer. Pinned server-side by
+  // TestKeyCasingIsAcceptedBecauseTheJsonDecoderIsCaseInsensitive.
+  it('does not load a case-variant key into the typed form', async () => {
+    await renderWith([
+      setting(BASEMAP, '{"tileURL":"https://a.invalid/{z}/{x}/{y}.png","attribution":"© A"}'),
+    ]);
+
+    expect(screen.getByText(/not in the shape this editor understands/i)).toBeTruthy();
+    // The real value is visible and editable, rather than absent from a form that
+    // would then overwrite it.
+    expect(rawJson().value).toContain('tileURL');
+    expect(document.getElementById('bm-tile-url')).toBeNull();
+  });
+
+  // The version-skew case: a field a newer server grew that this console predates.
+  // Loading it into the typed form would drop it on the next save.
+  it('does not load a value carrying a field this build does not know', async () => {
+    await renderWith([setting(BASEMAP, '{"tileUrl":"https://a.invalid/{z}/{x}/{y}.png","attribution":"© A","bearing":45}')]);
+
+    expect(rawJson().value).toContain('bearing');
+    expect(document.getElementById('bm-tile-url')).toBeNull();
+  });
+
+  it('applies the same rule to branding', async () => {
+    await renderWith([setting(BRANDING, '{"Title":"Acme"}')]);
+    expect(rawJson().value).toContain('Title');
+  });
+
+  // The counterweight: a value the editor DOES fully model still gets the form.
+  // Without this, a guard that rejected everything would pass all three above.
+  it('still loads a value it models completely', async () => {
+    await renderWith([
+      setting(BASEMAP, '{"tileUrl":"https://a.invalid/{z}/{x}/{y}.png","attribution":"© A"}'),
+    ]);
+    expect(document.getElementById('bm-tile-url')).toBeTruthy();
+    expect(screen.queryByText(/not in the shape this editor understands/i)).toBeNull();
+  });
+});
+
+describe('the raw JSON editor', () => {
+  // 🔴 The fallback section was built inside the host's render body, so it was a
+  // NEW component type on every render — React remounted the textarea and dropped
+  // focus after each keystroke. The one screen whose purpose is repairing a broken
+  // value needed a mouse click per character. The existing typing test missed it
+  // because it used the unknown-key path, whose section came from a useMemo.
+  it('keeps focus and identity across a keystroke', async () => {
+    await renderWith([setting(MASKS, '{"device":42}')]);
+
+    const before = rawJson();
+    before.focus();
+    expect(document.activeElement).toBe(before);
+
+    fireEvent.change(before, { target: { value: '{"device":"{slug}"}' } });
+
+    const after = rawJson();
+    expect(after).toBe(before);
+    expect(document.activeElement).toBe(after);
+  });
+
+  // It must also not flip out from under the operator the moment their JSON
+  // becomes loadable — the editor is chosen once, when the draft is seeded.
+  it('does not switch to the typed editor mid-edit', async () => {
+    await renderWith([setting(MASKS, '{"device":42}')]);
+    fireEvent.change(rawJson(), { target: { value: '{"device":"{slug}"}' } });
+
+    expect(rawJson()).toBeTruthy();
+  });
+});
+
+describe('what is validated is what would be sent', () => {
+  // 🔴 The editors used to validate the DRAFT while toJson independently decided
+  // what to emit — two descriptions of "acceptable", agreeing only because the
+  // same predicate was written twice. When they disagree the failure is silent:
+  // validate passes a draft, toJson quietly omits the field it could not make
+  // sense of, and the save succeeds having discarded it.
+  //
+  // Validating the produced JSON removes the second description. The obligation
+  // that replaces it is that toJson be TOTAL — everything typed must appear —
+  // which is what this asserts.
+  it('carries a half-typed number into the JSON so it can be refused there', async () => {
+    await renderWith([setting(BASEMAP, '{}')]);
+    fireEvent.change(document.getElementById('bm-zoom') as HTMLInputElement, {
+      target: { value: '9x' },
+    });
+
+    // Refused — and refused because the value REACHED the JSON, not because a
+    // separate check on the form happened to agree with what was emitted.
+    expect(saveButton().disabled).toBe(true);
+    expect(screen.getByText(/not a number|no es un número/i)).toBeTruthy();
+  });
+
+  // 🔴 No branding-height case here, deliberately, and the reason is worth
+  // recording: that state is unreachable from BOTH directions. The field is
+  // <input type="number">, which filters non-numeric text in the browser and in
+  // jsdom, and the server decodes logoMaxHeight into an *int, so a string value
+  // is refused before it could ever be stored. The guard in that editor's
+  // validate is kept as the counterpart of this one — so the rule lives beside
+  // its sibling rather than depending on an input attribute staying put — but a
+  // test asserting it would be asserting against a state nothing can produce.
+  //
+  // The reachable branding equivalent is a non-hex colour, which is a text input
+  // and is covered above.
+});

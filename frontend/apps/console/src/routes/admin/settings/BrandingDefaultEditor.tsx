@@ -21,12 +21,27 @@ import {
   EMPTY_BRANDING_THEME,
   type BrandingThemeState,
 } from '@/components/branding/BrandingThemeFields';
-import { defineSetting, type SettingEditorProps } from './registry';
+import { defineSetting, onlyKnownKeys, parseJson, type SettingEditorProps } from './registry';
 
 /** The form state: the shared theme plus this tier's logo URL. */
 interface BrandingDefaultForm extends BrandingThemeState {
   logo: string;
 }
+
+/**
+ * Every key this editor models. Anything else — a case variant the server's
+ * decoder binds, or a field a newer server grew — drops to the raw JSON editor
+ * instead of being partially loaded and saved over.
+ */
+const KNOWN_KEYS = [
+  'title',
+  'logo',
+  'logoMaxHeight',
+  'primary',
+  'background',
+  'foreground',
+  'accent',
+] as const;
 
 interface BrandingValue {
   title?: string | null;
@@ -42,15 +57,9 @@ function strText(v: unknown): string {
   return typeof v === 'string' ? v : '';
 }
 
-function parse(json: string): BrandingDefaultForm | null {
-  let value: unknown;
-  try {
-    value = JSON.parse(json);
-  } catch {
-    return null;
-  }
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
-  const v = value as BrandingValue;
+function seed(json: string): BrandingDefaultForm | null {
+  const v = onlyKnownKeys<BrandingValue>(parseJson(json), KNOWN_KEYS);
+  if (v === null) return null;
   return {
     ...EMPTY_BRANDING_THEME,
     title: strText(v.title),
@@ -70,26 +79,36 @@ function parse(json: string): BrandingDefaultForm | null {
 
 // An empty field is OMITTED rather than written as null: the server decodes this
 // with DisallowUnknownFields into a struct of pointers, and an absent key is how
-// "inherit the console's built-in look" is expressed.
-function serialize(form: BrandingDefaultForm): string {
+// "inherit the console's built-in look" is expressed. Trimming and coercion are
+// safe here because the result never returns to the editor.
+function toJson(form: BrandingDefaultForm): string {
   const out: BrandingValue = {};
   for (const k of ['title', 'logo', 'primary', 'background', 'foreground', 'accent'] as const) {
     const raw = form[k].trim();
     if (raw !== '') out[k] = raw;
   }
+  // Same rule as the basemap camera fields: toJson is TOTAL, so a half-typed
+  // height is written through as text for validate to refuse. Omitting it would
+  // drop it silently; coercing it would write NaN, which JSON.stringify renders
+  // as null — a height cleared without being asked.
   const height = form.logoMaxHeight.trim();
-  // Same rule as the basemap camera fields: serialize is TOTAL, so a half-typed
-  // height passes through as typed and validate blocks the save. Coercing it
-  // would write NaN, which JSON.stringify turns into null — a height cleared
-  // without being asked.
   if (height !== '') out.logoMaxHeight = Number.isFinite(Number(height)) ? Number(height) : height;
   return JSON.stringify(out);
 }
 
-function validate(form: BrandingDefaultForm) {
-  const bad = brandingBadHex(form);
+// Validates the produced JSON rather than the form, so what is checked is what
+// would be sent.
+function validate(json: string) {
+  const parsed = seed(json);
+  if (parsed === null) return { key: 'valueMustBeJsonError' };
+  const bad = brandingBadHex(parsed);
   if (bad.length > 0) return { key: 'branding:badHexError', values: { fields: bad.join(', ') } };
-  const height = form.logoMaxHeight.trim();
+  // Unreachable today from either direction — the field is <input type="number">
+  // and the server decodes this into an *int, so a non-numeric height is filtered
+  // on the way in and refused on the way out. Kept anyway, as the counterpart of
+  // the basemap camera-field rule: the rule belongs beside its sibling rather
+  // than resting on an input attribute nobody would think to preserve.
+  const height = parsed.logoMaxHeight.trim();
   if (height !== '' && !Number.isFinite(Number(height))) {
     return { key: 'brandingIssueHeightNotANumber' };
   }
@@ -124,8 +143,8 @@ export const brandingDefaultSection = defineSetting<BrandingDefaultForm>({
   key: 'branding.default',
   labelKey: 'tabBranding',
   icon: Palette,
-  parse,
-  serialize,
+  seed,
+  toJson,
   validate,
   Editor: BrandingDefaultEditor,
 });

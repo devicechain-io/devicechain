@@ -15,6 +15,14 @@
 // 🔴 Drafts live HERE, keyed by setting, not inside each panel. Radix Tabs
 // unmounts the inactive panel, so a draft held by the panel would be silently
 // discarded by a glance at another tab.
+//
+// 🔴 A draft is the editor's own FORM STATE, not serialized JSON. Holding JSON and
+// re-deriving the form from it each keystroke is the obvious design and it is
+// wrong: it forces every editor's serializer to round-trip losslessly through
+// half-typed states, which the first three editors all failed to do — a decimal
+// point vanished as it was typed, a trailing space could not be entered, and a
+// stray character silently dropped its whole field. `toJson` now runs only to
+// save and to compare.
 
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -33,7 +41,7 @@ import { useQuery } from '@/lib/hooks/use-query';
 import { listSettings, setSetting, clearSetting, type Setting } from '@/lib/api/settings';
 import { useReload, errMessage } from '@/routes/common';
 import { SECTIONS } from './sections';
-import { rawJsonSection } from './RawJsonEditor';
+import { RAW_JSON_SECTION } from './RawJsonEditor';
 import type { SettingSection } from './registry';
 
 /** Renders a stored JSON value multi-line for editing; an unparseable value is
@@ -57,15 +65,39 @@ function compact(json: string): string {
   }
 }
 
+/**
+ * A setting's in-progress edit: which editor is driving it, and that editor's own
+ * form state.
+ *
+ * 🔴 `section` is decided ONCE, when the draft is seeded, and then held. Deciding
+ * it per render from the current value would flip the operator between the raw
+ * editor and the typed one mid-keystroke as their JSON became parseable — and,
+ * because a section carries a component type, would remount the editor and drop
+ * focus on every character.
+ */
+interface Draft {
+  section: SettingSection;
+  value: unknown;
+}
+
+/** Seeds a setting's draft, falling back to raw JSON when its editor cannot model
+ *  the whole stored value. */
+function seedDraft(setting: Setting, section: SettingSection): Draft {
+  const json = pretty(setting.value);
+  const seeded = section.seed(json);
+  if (seeded !== null) return { section, value: seeded };
+  return { section: RAW_JSON_SECTION, value: RAW_JSON_SECTION.seed(json) };
+}
+
 export default function SettingsPage() {
   const { t } = useTranslation('adminSettings');
   const [version, reload] = useReload();
   const { data: settings, loading, error } = useQuery(listSettings, [version]);
 
-  // Drafts by setting key. A key with no entry is pristine and reads from the
-  // stored value, so a save/reset only has to DELETE its entry to re-seed.
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const setDraft = (key: string, json: string) => setDrafts((d) => ({ ...d, [key]: json }));
+  // Drafts by setting key. A key with no entry is pristine and re-seeds from the
+  // stored value, so a save/reset only has to DELETE its entry.
+  const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+  const setDraft = (key: string, draft: Draft) => setDrafts((d) => ({ ...d, [key]: draft }));
   const clearDraft = (key: string) =>
     setDrafts((d) => {
       const next = { ...d };
@@ -80,7 +112,7 @@ export default function SettingsPage() {
         // A key the server knows and this build has no editor for still gets a
         // tab — raw, but present. Hiding it would make a configured setting
         // invisible to the operator who configured it.
-        section: SECTIONS[setting.key] ?? rawJsonSection(setting.key),
+        section: SECTIONS[setting.key] ?? RAW_JSON_SECTION,
       })),
     [settings],
   );
@@ -123,9 +155,8 @@ export default function SettingsPage() {
           <TabsContent key={setting.key} value={setting.key}>
             <SettingPanel
               setting={setting}
-              section={section}
-              draft={drafts[setting.key]}
-              onDraftChange={(json) => setDraft(setting.key, json)}
+              draft={drafts[setting.key] ?? seedDraft(setting, section)}
+              onDraftChange={(value) => setDraft(setting.key, { ...(drafts[setting.key] ?? seedDraft(setting, section)), value })}
               onSettled={() => {
                 clearDraft(setting.key);
                 reload();
@@ -140,15 +171,13 @@ export default function SettingsPage() {
 
 function SettingPanel({
   setting,
-  section,
   draft,
   onDraftChange,
   onSettled,
 }: {
   setting: Setting;
-  section: SettingSection;
-  draft: string | undefined;
-  onDraftChange: (json: string) => void;
+  draft: Draft;
+  onDraftChange: (value: unknown) => void;
   onSettled: () => void;
 }) {
   const { t } = useTranslation('adminSettings');
@@ -157,15 +186,14 @@ function SettingPanel({
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const json = draft ?? pretty(setting.value);
+  const { section, value } = draft;
+  const json = section.toJson(value);
   const dirty = compact(json) !== compact(setting.value);
-
-  // A stored value this section's editor cannot read drops to raw JSON, so the
-  // operator can see and repair it. The fallback is built fresh here rather than
-  // reused across renders; it holds no state.
-  const unreadable = section.unreadable(json);
-  const effective = unreadable ? rawJsonSection(setting.key) : section;
-  const issue = effective.validateJson(json);
+  const issue = section.validate(json);
+  // The typed editor could not model the whole stored value, so this setting is
+  // being edited as raw JSON — say so, rather than leaving the operator to wonder
+  // why this tab looks different from the others.
+  const unreadable = section === RAW_JSON_SECTION && SECTIONS[setting.key] !== undefined;
 
   const save = async () => {
     setFormError(null);
@@ -222,7 +250,7 @@ function SettingPanel({
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
       {unreadable && <ErrorBanner message={t('unreadableValueWarning')} />}
 
-      <effective.Body json={json} onChange={onDraftChange} />
+      <section.Body draft={value} onChange={onDraftChange} />
 
       {/* The blocking reason is stated even when nothing is dirty yet: an operator
           who opens a tab on a value that is already broken should be told why,

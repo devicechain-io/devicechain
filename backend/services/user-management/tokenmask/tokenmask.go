@@ -37,7 +37,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/devicechain-io/dc-microservice/core"
 )
@@ -91,7 +90,12 @@ type segment struct {
 	known       bool
 	width       int
 	hasWidth    bool
-	raw         string // the placeholder as written, for error messages
+	// widthTooLarge marks a width that could never mint a legal token: past
+	// MaxTokenLen, or too large to be an int at all. It is a separate flag rather
+	// than a big width because Validate must refuse it WITHOUT sampling — see the
+	// bound check there.
+	widthTooLarge bool
+	raw           string // the placeholder as written, for error messages
 }
 
 // parse splits a mask into literal and placeholder segments, mirroring parseMask
@@ -112,10 +116,22 @@ func parse(mask string) []segment {
 		}
 		if m[4] >= 0 {
 			// The pattern only matches digits here, so the only failure Atoi can
-			// report is overflow. A width that does not fit in an int is treated as
-			// absent rather than clamped: it is nonsense either way, and the length
-			// bound in Validate reports it against a sample the operator can read.
-			if n, err := strconv.Atoi(mask[m[4]:m[5]]); err == nil {
+			// report is overflow.
+			//
+			// 🔴 An overflowing width must NOT be treated as absent. It was, and the
+			// consequence was the opposite of the intent: {alphanumeric-99999999999999999999}
+			// fell back to the default width of 8, minted a perfectly legal sample,
+			// and was ACCEPTED — then crashed every console surface that touched it,
+			// because the JS side parses the width as 1e20 and Array.from throws.
+			// A comment here used to claim the length bound in Validate would catch
+			// it; the length bound never saw it, because the sample was 8 characters.
+			n, err := strconv.Atoi(mask[m[4]:m[5]])
+			switch {
+			case err != nil:
+				seg.hasWidth, seg.widthTooLarge = true, true
+			case n > core.MaxTokenLen:
+				seg.width, seg.hasWidth, seg.widthTooLarge = n, true, true
+			default:
 				seg.width, seg.hasWidth = n, true
 			}
 		}
@@ -141,6 +157,15 @@ func Sample(mask string) string {
 	for _, seg := range parse(mask) {
 		if seg.placeholder == "" {
 			b.WriteString(seg.literal)
+			continue
+		}
+		// 🔴 A width past the token-length bound contributes nothing rather than
+		// building the string it asks for. Sample is exported and total, and the
+		// cost of honouring the width is LINEAR IN IT: measured at 1.7s and 1.66GB
+		// allocated for a single ~20-byte mask declaring 1e8, on a code path
+		// reachable from a settings write. Validate refuses such a mask outright;
+		// this keeps Sample from being a way around that.
+		if seg.widthTooLarge {
 			continue
 		}
 		switch seg.placeholder {
@@ -187,16 +212,33 @@ func fill(alphabet string, n int) string {
 // hyphenRuns collapses a run of hyphens to one.
 var hyphenRuns = regexp.MustCompile(`-+`)
 
+// isJSSpace reports whether r is whitespace TO JAVASCRIPT — the `\s` character
+// class — rather than to Go.
+//
+// 🔴 unicode.IsSpace is NOT the same set, and using it made Normalize disagree
+// with normalizeToken in two places, in opposite directions: U+0085 (NEL) is a
+// space to Go but not to JS, and U+FEFF (ZWNBSP) is a space to JS but not to Go.
+// Neither can reach the server today — the only string it normalizes is a fixed
+// sample seed — but these two functions claim to mirror each other, and a claim
+// that is false in a corner is a claim nobody can rely on in the middle.
+func isJSSpace(r rune) bool {
+	switch r {
+	case '\t', '\n', '\v', '\f', '\r', ' ', 0x00a0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff:
+		return true
+	}
+	return r >= 0x2000 && r <= 0x200a
+}
+
 // Normalize kebab-cases a human string into a slug, mirroring normalizeToken in
 // tokens.ts: lower-case, whitespace and underscores to hyphens, drop anything
 // else, collapse and trim hyphens.
 func Normalize(input string) string {
 	var b strings.Builder
-	for _, r := range strings.ToLower(strings.TrimSpace(input)) {
+	for _, r := range strings.ToLower(strings.TrimFunc(input, isJSSpace)) {
 		switch {
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
 			b.WriteRune(r)
-		case unicode.IsSpace(r), r == '_':
+		case isJSSpace(r), r == '_':
 			b.WriteByte('-')
 		}
 	}
@@ -228,6 +270,13 @@ func Validate(mask string) error {
 		}
 		if !seg.known {
 			return fmt.Errorf("mask %q uses unknown placeholder %s — known placeholders are {alphanumeric}, {alphanumeric-N}, {numeric-N}, {slug} and {uuid}; an unknown one silently generates nothing", mask, seg.raw)
+		}
+		// 🔴 Checked BEFORE Sample is called, not after. The obvious ordering — mint
+		// a sample and let the length check refuse it — makes the refusal cost
+		// linear in the number the operator typed, which turns this validator into
+		// a resource-exhaustion vector on the settings write path.
+		if seg.widthTooLarge {
+			return fmt.Errorf("mask %q declares a width in %s larger than the maximum token length of %d, which could never mint a valid token", mask, seg.raw, core.MaxTokenLen)
 		}
 		placeholders++
 	}

@@ -20,12 +20,7 @@ import {
   firstBasemapProblemKey,
   type BasemapFormState,
 } from '@/components/basemap/BasemapFields';
-import { defineSetting, type SettingEditorProps } from './registry';
-
-// The camera fields are numbers on the wire — but serialize has to be lossless
-// over what the operator can TYPE, so a half-written one passes through as the
-// string it is and validate blocks the save. The server never sees it.
-type CameraValue = number | string;
+import { defineSetting, onlyKnownKeys, parseJson, type SettingEditorProps } from './registry';
 
 /**
  * The stored shape. Every field is optional — an unset one means "the console
@@ -34,15 +29,28 @@ type CameraValue = number | string;
 interface BasemapValue {
   tileUrl?: string | null;
   attribution?: string | null;
-  centerLat?: CameraValue | null;
-  centerLon?: CameraValue | null;
-  zoom?: CameraValue | null;
+  // 🔴 `number | string`, because toJson is TOTAL: a camera field the operator is
+  // part-way through typing ("9x", "33.") is written through AS TYPED so that
+  // validate can see it and refuse it. Omitting it would drop the field silently,
+  // and coercing it would write NaN — which JSON.stringify renders as null, a
+  // value cleared without being asked. Neither reaches the server: validate
+  // blocks the save while a string is present.
+  centerLat?: number | string | null;
+  centerLon?: number | string | null;
+  zoom?: number | string | null;
 }
 
-function numText(v: unknown): string {
+/**
+ * Every key this editor models. A stored value carrying anything else — including
+ * a case variant like `tileURL`, which the server's decoder happily binds — drops
+ * to the raw JSON editor rather than being partially loaded and then saved over.
+ */
+const KNOWN_KEYS = ['tileUrl', 'attribution', 'centerLat', 'centerLon', 'zoom'] as const;
+
+/** A camera field as text, whether it arrived as a number or as typed-through
+ *  text that is not one yet. */
+function fieldText(v: unknown): string {
   if (typeof v === 'number' && Number.isFinite(v)) return String(v);
-  // A string here is either a draft mid-edit or a value written through the API
-  // as one. Either way, showing it beats blanking the field.
   return typeof v === 'string' ? v : '';
 }
 
@@ -50,21 +58,15 @@ function strText(v: unknown): string {
   return typeof v === 'string' ? v : '';
 }
 
-function parse(json: string): BasemapFormState | null {
-  let value: unknown;
-  try {
-    value = JSON.parse(json);
-  } catch {
-    return null;
-  }
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
-  const v = value as BasemapValue;
+function seed(json: string): BasemapFormState | null {
+  const v = onlyKnownKeys<BasemapValue>(parseJson(json), KNOWN_KEYS);
+  if (v === null) return null;
   return {
     tileUrl: strText(v.tileUrl),
     attribution: strText(v.attribution),
-    centerLat: numText(v.centerLat),
-    centerLon: numText(v.centerLon),
-    zoom: numText(v.zoom),
+    centerLat: fieldText(v.centerLat),
+    centerLon: fieldText(v.centerLon),
+    zoom: fieldText(v.zoom),
   };
 }
 
@@ -73,21 +75,33 @@ function parse(json: string): BasemapFormState | null {
 // key is how "not set at this tier" is expressed. Writing nulls would store a
 // value whose every key is present and meaningless.
 //
-// A field with CONTENT is always written, even when that content is not yet a
-// number — see CameraValue. Dropping it would delete what the operator is typing.
-function serialize(form: BasemapFormState): string {
+// Trims and normalizes freely — safe because the result never returns to the
+// editor — but never DROPS anything the operator typed. See BasemapValue.
+function toJson(form: BasemapFormState): string {
   const out: BasemapValue = {};
   if (form.tileUrl.trim() !== '') out.tileUrl = form.tileUrl.trim();
   if (form.attribution.trim() !== '') out.attribution = form.attribution.trim();
   for (const k of ['centerLat', 'centerLon', 'zoom'] as const) {
     const raw = form[k].trim();
-    if (raw === '') continue;
-    out[k] = Number.isFinite(Number(raw)) ? Number(raw) : raw;
+    if (raw !== '') out[k] = Number.isFinite(Number(raw)) ? Number(raw) : raw;
   }
   return JSON.stringify(out);
 }
 
-function validate(form: BasemapFormState) {
+// Validates the produced JSON rather than the form, so what is checked is what
+// would be sent. The rules are the tenant editor's, reached through a form-shaped
+// view of the same value — the shared checks are written against field strings,
+// and re-deriving them here would be a second opinion about the same rules.
+function validate(json: string) {
+  const v = onlyKnownKeys<BasemapValue>(parseJson(json), KNOWN_KEYS);
+  if (v === null) return { key: 'valueMustBeJsonError' };
+  const form: BasemapFormState = {
+    tileUrl: strText(v.tileUrl),
+    attribution: strText(v.attribution),
+    centerLat: fieldText(v.centerLat),
+    centerLon: fieldText(v.centerLon),
+    zoom: fieldText(v.zoom),
+  };
   const key = firstBasemapProblemKey(form);
   if (!key) return null;
   // errNotANumber interpolates the offending fields; passing the values for every
@@ -96,16 +110,18 @@ function validate(form: BasemapFormState) {
 }
 
 function BasemapDefaultEditor({ value, onChange }: SettingEditorProps<BasemapFormState>) {
-  // No inheritedTileUrl: this IS the bottom tier.
-  return <BasemapFields value={value} onChange={onChange} />;
+  // No inheritedTileUrl: this IS the bottom tier, so there is nothing to inherit
+  // from. showProblems=false because the settings frame renders the blocking
+  // reason itself, in the same place for every setting.
+  return <BasemapFields value={value} onChange={onChange} showProblems={false} />;
 }
 
 export const basemapDefaultSection = defineSetting<BasemapFormState>({
   key: 'basemap.default',
   labelKey: 'tabBasemap',
   icon: Map,
-  parse,
-  serialize,
+  seed,
+  toJson,
   validate,
   Editor: BasemapDefaultEditor,
 });

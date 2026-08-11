@@ -85,8 +85,17 @@ function randomUUID(): string {
 export function generateToken(mask: string, opts: GenerateOptions = {}): string {
   const rand = opts.random ?? Math.random;
   const uuid = opts.uuid ?? randomUUID;
+  // 🔴 The width is bounded before it is used. A mask may name any width the
+  // regexp matches, and `Array.from({length: 1e20})` THROWS RangeError — which
+  // made this function, called during render by the settings editor and by every
+  // create form, a way to kill the page from a stored value. No width past
+  // MAX_TOKEN_LEN can mint a legal token anyway, so an absurd one contributes
+  // nothing rather than exploding. validateMask refuses such a mask outright;
+  // this keeps generation safe for a mask stored before it did.
   const pick = (alphabet: string, n: number) =>
-    Array.from({ length: n }, () => alphabet[Math.floor(rand() * alphabet.length)]).join('');
+    n > MAX_TOKEN_LEN
+      ? ''
+      : Array.from({ length: n }, () => alphabet[Math.floor(rand() * alphabet.length)]).join('');
 
   return parseMask(mask)
     .map((seg) => {
@@ -183,6 +192,7 @@ export type MaskProblem =
   | { reason: 'empty' }
   | { reason: 'unknownPlaceholder'; placeholder: string }
   | { reason: 'noPlaceholder' }
+  | { reason: 'widthTooLarge'; placeholder: string; max: number }
   | { reason: 'invalidToken'; sample: string };
 
 /**
@@ -205,6 +215,14 @@ export function validateMask(mask: string): MaskProblem | null {
   for (const seg of parseMask(mask)) {
     if (seg.kind !== 'placeholder') continue;
     if (seg.type === 'unknown') return { reason: 'unknownPlaceholder', placeholder: seg.raw };
+    // 🔴 Checked BEFORE anything samples the mask. This function is called during
+    // render, per keystroke — a width of 5e7 froze the tab for seconds building a
+    // string nobody would ever see, and 1e20 threw RangeError and killed the
+    // page. Neither reached the `invalidToken` check below, which is where a
+    // reader would expect an over-long token to be caught.
+    if (seg.n !== undefined && seg.n > MAX_TOKEN_LEN) {
+      return { reason: 'widthTooLarge', placeholder: seg.raw, max: MAX_TOKEN_LEN };
+    }
     placeholders++;
   }
   if (placeholders === 0) return { reason: 'noPlaceholder' };

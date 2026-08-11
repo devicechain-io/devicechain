@@ -10,6 +10,7 @@
   "masksIssueKeyRequired": "Cada máscara necesita un tipo de entidad.",
   "masksIssueNoPlaceholder": "La máscara de «{{key}}» no tiene marcadores, por lo que todas las entidades recibirían el mismo token y solo la primera podría guardarse.",
   "masksIssueUnknownPlaceholder": "La máscara de «{{key}}» usa {{placeholder}}, que no es un marcador: no generaría nada y sin avisar. Use {slug}, {uuid}, {alphanumeric-N} o {numeric-N}.",
+  "masksIssueWidthTooLarge": "La máscara de «{{key}}» usa {{placeholder}}, que pide más caracteres de los que puede tener un token ({{max}}). Un token así de largo nunca podría guardarse.",
   "masksMaskColumn": "Máscara",
   "masksPlaceholderHelp": "Una máscara es texto literal más marcadores: {slug} (a partir del nombre de la entidad), {uuid}, {alphanumeric-N} y {numeric-N}. La entrada «default» se aplica a cualquier tipo que no tenga la suya propia.",
   "masksRemoveRow": "Eliminar la máscara de {{key}}",

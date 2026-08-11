@@ -56,6 +56,17 @@ export interface BasemapProblems {
   badNumbers: string[];
 }
 
+/** Every rule satisfied — what a caller that renders its own messages sees. */
+const NO_PROBLEMS: BasemapProblems = {
+  missingAttribution: false,
+  orphanAttribution: false,
+  badScheme: false,
+  notATemplate: false,
+  unsubstitutedKey: false,
+  halfCoordinate: false,
+  badNumbers: [],
+};
+
 export function basemapProblems(form: BasemapFormState): BasemapProblems {
   const tileUrl = form.tileUrl.trim();
   const attribution = form.attribution.trim();
@@ -108,13 +119,21 @@ export function BasemapFields({
    * inherited — which is the operator tier's truth, not a missing value.
    */
   inheritedTileUrl,
+  /**
+   * Whether to render each rule's message beside its field. Default true, which
+   * is what the tenant page wants. The system-settings editor passes false: its
+   * frame already shows the blocking reason in one place for every setting, and
+   * showing it twice on one screen reads as two problems.
+   */
+  showProblems = true,
 }: {
   value: BasemapFormState;
   onChange: (next: BasemapFormState) => void;
   inheritedTileUrl?: string | null;
+  showProblems?: boolean;
 }) {
   const { t } = useTranslation('basemap');
-  const problems = basemapProblems(value);
+  const problems = showProblems ? basemapProblems(value) : NO_PROBLEMS;
 
   const set = (patch: Partial<BasemapFormState>) => onChange({ ...value, ...patch });
   // Bound per-field setters, defined outside JSX so the literal key never appears

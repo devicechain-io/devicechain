@@ -28,7 +28,7 @@ import { IconButton } from '@/components/ui/icon-button';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ENTITY_TYPES, DEFAULT_MASK_KEY } from '@/lib/entity-types';
-import { defineSetting, type SettingIssue, type SettingEditorProps } from './registry';
+import { defineSetting, parseJson, type SettingIssue, type SettingEditorProps } from './registry';
 
 // The mask key that applies to every entity type without one of its own, plus the
 // closed console vocabulary. `default` leads because it is the one an operator
@@ -45,26 +45,24 @@ interface MasksForm {
   rows: MaskRow[];
 }
 
-// 🔴 The form is an ARRAY but the wire shape is an OBJECT, so two rows with the
-// same key cannot round-trip — the second would vanish mid-edit as the operator
-// typed it. Rather than paper over that, duplicates are made unreachable: the key
-// is a picker, and a key another row already holds is not offered. A key already
-// STORED is still shown (see unknownKey below) so an unrecognised one is visible
-// rather than quietly dropped.
-function parse(json: string): MasksForm | null {
-  let value: unknown;
-  try {
-    value = JSON.parse(json);
-  } catch {
-    return null;
-  }
+// The form is an ARRAY and the wire shape is an OBJECT, so two rows on the same
+// key have nowhere to go. Duplicates are made unreachable rather than papered
+// over: the key is a picker, and a key another row already holds is not offered.
+// A key already STORED is still shown (see unknownKey below) so an unrecognised
+// one stays visible and editable.
+//
+// Unlike the other editors this one models EVERY key by construction — any string
+// is a legal entity type — so there is no known-key guard here. What it cannot
+// model is a non-string VALUE, which drops to the raw editor.
+function seed(json: string): MasksForm | null {
+  const value = parseJson(json);
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
   const entries = Object.entries(value as Record<string, unknown>);
   if (entries.some(([, mask]) => typeof mask !== 'string')) return null;
   return { rows: entries.map(([key, mask]) => ({ key, mask: mask as string })) };
 }
 
-function serialize(form: MasksForm): string {
+function toJson(form: MasksForm): string {
   return JSON.stringify(Object.fromEntries(form.rows.map((r) => [r.key, r.mask])));
 }
 
@@ -80,12 +78,22 @@ function maskIssue(row: MaskRow, problem: MaskProblem): SettingIssue {
       };
     case 'noPlaceholder':
       return { key: 'masksIssueNoPlaceholder', values: { key: row.key } };
+    case 'widthTooLarge':
+      return {
+        key: 'masksIssueWidthTooLarge',
+        values: { key: row.key, placeholder: problem.placeholder, max: problem.max },
+      };
     case 'invalidToken':
       return { key: 'masksIssueInvalidToken', values: { key: row.key, sample: problem.sample } };
   }
 }
 
-function validate(form: MasksForm): SettingIssue | null {
+// Validates the produced JSON rather than the form, so what is checked is what
+// would be sent — and, here, so a pair of rows that collapsed into one object key
+// is judged as the single entry the server would receive.
+function validate(json: string): SettingIssue | null {
+  const form = seed(json);
+  if (form === null) return { key: 'valueMustBeJsonError' };
   for (const row of form.rows) {
     if (row.key.trim() === '') return { key: 'masksIssueKeyRequired' };
     const problem = validateMask(row.mask);
@@ -210,8 +218,8 @@ export const tokenMasksSection = defineSetting<MasksForm>({
   key: 'entity.token_masks',
   labelKey: 'tabTokenMasks',
   icon: Hash,
-  parse,
-  serialize,
+  seed,
+  toJson,
   validate,
   Editor: TokenMasksEditor,
 });

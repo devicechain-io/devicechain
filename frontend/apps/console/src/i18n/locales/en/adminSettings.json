@@ -10,6 +10,7 @@
   "masksIssueKeyRequired": "Every mask needs an entity type.",
   "masksIssueNoPlaceholder": "The mask for “{{key}}” has no placeholder, so every entity would be given the identical token and only the first could be saved.",
   "masksIssueUnknownPlaceholder": "The mask for “{{key}}” uses {{placeholder}}, which is not a placeholder — it would silently generate nothing. Use {slug}, {uuid}, {alphanumeric-N} or {numeric-N}.",
+  "masksIssueWidthTooLarge": "The mask for “{{key}}” uses {{placeholder}}, which asks for more characters than a token may have ({{max}}). No token that long could ever be saved.",
   "masksMaskColumn": "Mask",
   "masksPlaceholderHelp": "A mask is literal text plus placeholders: {slug} (from the entity's name), {uuid}, {alphanumeric-N} and {numeric-N}. The “default” entry applies to any type without one of its own.",
   "masksRemoveRow": "Remove the mask for {{key}}",
