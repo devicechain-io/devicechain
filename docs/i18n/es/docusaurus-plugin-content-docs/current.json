@@ -8,7 +8,7 @@
     "description": "The label for category 'Concepts' in sidebar 'docs'"
   },
   "sidebar.docs.category.Concepts.link.generated-index.description": {
-    "message": "Cómo está diseñado DeviceChain: la arquitectura, el modelo de dominio, la multitenencia, el procesamiento de eventos y alarmas, y los paneles.",
+    "message": "Cómo está diseñado DeviceChain: los fundamentos sobre los que se construye, cómo se conectan los dispositivos, cómo sus eventos se convierten en acciones automatizadas, cómo se visualiza todo ello y los servicios de plataforma que respaldan a un inquilino.",
     "description": "The generated-index page description for category 'Concepts' in sidebar 'docs'"
   },
   "sidebar.docs.category.Guides": {
@@ -34,5 +34,25 @@
   "sidebar.docs.category.Deployment.link.generated-index.description": {
     "message": "Cómo operar DeviceChain: el operador de Kubernetes y el aprovisionamiento de infraestructura.",
     "description": "The generated-index page description for category 'Deployment' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Foundations": {
+    "message": "Fundamentos",
+    "description": "The label for category 'Foundations' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Device Connectivity": {
+    "message": "Conectividad de dispositivos",
+    "description": "The label for category 'Device Connectivity' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Automation": {
+    "message": "Automatización",
+    "description": "The label for category 'Automation' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Visualization": {
+    "message": "Visualización",
+    "description": "The label for category 'Visualization' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Platform Services": {
+    "message": "Servicios de plataforma",
+    "description": "The label for category 'Platform Services' in sidebar 'docs'"
   }
 }

@@ -1,5 +1,4 @@
 ---
-sidebar_position: 10
 title: Marca blanca e identidad de marca
 ---
 

@@ -1,8 +1,0 @@
-{
-  "label": "Conceptos",
-  "position": 2,
-  "link": {
-    "type": "generated-index",
-    "description": "Cómo está diseñado DeviceChain: la arquitectura, el modelo de dominio, la multitenencia, el procesamiento de eventos y alarmas, y los paneles."
-  }
-}
