@@ -9,10 +9,19 @@
 // anywhere in this file folds the whole renderer — several hundred KB — into the
 // console's entry chunk for every operator, including everyone who never opens
 // this page. bundle-boundaries.test.ts is the gate that keeps it honest.
+//
+// 🔴 MAPLIBRE RENDERS THIS EDITOR WHETHER OR NOT A TILE SOURCE IS CONFIGURED, and
+// that is a correctness requirement rather than a preference. An AUTHOR needs the
+// REAL projection: the coordinates a click produces here are the ones that get
+// stored, so drawing on a flat approximation and saving through a different
+// projection would put the fence somewhere the operator never pointed at. The
+// unconfigured branch swaps the STYLE — the bundled Natural Earth world, in place
+// of what used to be an empty void — and touches nothing about the projection.
+// map-geometry.ts declares mercator on both styles for exactly this reason.
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { rasterStyleFor } from '@devicechain/widgets';
+import { loadLandStyle, rasterStyleFor } from '@devicechain/widgets';
 import type { Map as MapLibreMap, MapMouseEvent } from 'maplibre-gl';
 import {
   DRAG_THRESHOLD_PX,
@@ -56,25 +65,6 @@ const LINE_LAYER = 'fence-outline';
 const VERTEX_LAYER = 'fence-vertices';
 const MIDPOINT_LAYER = 'fence-midpoints';
 const GHOST_LAYER = 'fence-ghost';
-
-/**
- * The style used when no tile URL is configured. MapLibre is still what renders
- * it — unlike the dashboard's map widget, which falls back to a static projected
- * panel when it has no tiles.
- *
- * The difference is deliberate: a VIEWER without a basemap can be shown a
- * flat approximation, but an AUTHOR needs the real projection, because the
- * coordinates a click produces are the ones that get stored. Drawing on an
- * approximation and saving through a different projection would put the fence
- * somewhere the operator never pointed at.
- */
-function blankStyle(): unknown {
-  return {
-    version: 8,
-    sources: {},
-    layers: [{ id: 'background', type: 'background', paint: { 'background-color': '#0b1220' } }],
-  };
-}
 
 function ringFeature(vertices: readonly Vertex[], ghost: readonly Vertex[] = []) {
   // A polygon needs a closed ring to render a fill; while drawing there are
@@ -132,7 +122,13 @@ function ringFeature(vertices: readonly Vertex[], ghost: readonly Vertex[] = [])
 export interface FenceMapProps {
   vertices: Vertex[];
   onChange: (vertices: Vertex[]) => void;
-  /** Raster tile template. Absent means draw against a blank background. */
+  /**
+   * Raster tile template. Absent means draw against the BUNDLED world basemap —
+   * public-domain Natural Earth land and country outlines, compiled into the app.
+   * It is schematic and stops being useful long before street zoom, which is the
+   * honest signal to configure a provider; what it is not is the empty void this
+   * used to render, which was indistinguishable from a broken editor.
+   */
   tileUrl?: string;
   attribution?: string;
   /** Fires when the operator closes the ring by clicking the first vertex. */
@@ -401,12 +397,20 @@ export function FenceMap({
     const node = container.current;
     if (!node) return;
 
-    loadMapLibre()
-      .then((maplibre) => {
+    // The style is resolved alongside the renderer rather than inline, because the
+    // unconfigured one now has to be FETCHED — the bundled world geometry lives
+    // behind its own dynamic import so a configured instance never downloads it.
+    // Both arrive before the map is constructed, so there is still exactly one
+    // Map, built once, with its final style; nothing re-styles after the fact.
+    Promise.all([
+      loadMapLibre(),
+      tileUrl ? rasterStyleFor(tileUrl, attribution) : loadLandStyle(),
+    ])
+      .then(([maplibre, style]) => {
         if (cancelled || !container.current) return;
         const instance = new maplibre.Map({
           container: container.current,
-          style: (tileUrl ? rasterStyleFor(tileUrl, attribution) : blankStyle()) as never,
+          style: style as never,
           // The whole-world view is the floor: it is what "nobody has told us where
           // this tenant works" should look like, rather than a guess at a country.
           center: initialView.current.center ?? [0, 20],
@@ -418,7 +422,25 @@ export function FenceMap({
           // ambiguous for the close gesture. A fence is site-scale; seeing three
           // Earths buys an author nothing and costs both of those.
           renderWorldCopies: false,
-          attributionControl: tileUrl ? undefined : false,
+          // 🔴 attributionControl IS DELIBERATELY ABSENT, AND REMOVING IT FIXED A
+          // LICENCE BUG. The line here used to read:
+          //
+          //     attributionControl: tileUrl ? undefined : false
+          //
+          // which reads as "default when configured, off when not" and is not what
+          // it does. MapLibre resolves options as `{...defaultOptions, ...options}`,
+          // and a spread copies an explicitly-undefined property OVER the default —
+          // so the key ended up undefined, `if (resolvedOptions.attributionControl)`
+          // was falsy, and the control was suppressed in BOTH branches.
+          //
+          // The consequence was not cosmetic: the fence editor has never shown its
+          // tile provider's credit line. For OpenStreetMap — now the shipped default
+          // — displaying that credit is a term of their tile usage policy, so an
+          // operator drawing a fence was looking at uncredited tiles.
+          //
+          // Omitting the key entirely is what actually gets the default. Both
+          // branches now show their credit: the provider's for tiles, "Made with
+          // Natural Earth" for the bundled world.
         });
         instance.addControl(new maplibre.NavigationControl({ showCompass: false }), 'top-right');
         instance.on('load', () => {

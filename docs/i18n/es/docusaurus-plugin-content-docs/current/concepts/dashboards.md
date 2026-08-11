@@ -38,7 +38,7 @@ El widget de mapa renderiza las posiciones de los dispositivos sobre el **mapa b
 
 Qué proveedor conviene usar realmente es una decisión a nivel de inquilino, no por widget: vea [Mapas base](./basemaps.md).
 
-Si ningún nivel tiene una fuente de teselas —un operador definió el valor por defecto de la instancia como `{}` y el inquilino no definió nada— el widget sigue funcionando: dibuja las posiciones relativas de los dispositivos sobre un fondo liso e indica que no hay teselas configuradas.
+Si ningún nivel tiene una fuente de teselas —un operador definió el valor por defecto de la instancia como `{}` y el inquilino no definió nada— el widget sigue dibujando un mapa real, sobre un mapa base del mundo incorporado con continentes y fronteras de dominio público. Un panel liso con las posiciones relativas queda reservado únicamente para el caso en que ni siquiera se pueda cargar el motor de mapas, por ejemplo detrás de un proxy que lo bloquea.
 
 Leer posiciones también requiere la autoridad `location:read`, que **no** otorga la base de solo lectura que recibe cada miembro — vea [ubicación de dispositivos](../guides/connecting-a-device.md). A un visor que no la tenga se le indica, en lugar de mostrarle un mapa vacío.
 :::

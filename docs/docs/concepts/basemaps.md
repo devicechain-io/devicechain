@@ -66,8 +66,12 @@ OpenStreetMap's tile servers are run by a non-profit and funded by donations. Th
 
 If your maps matter to your operation, point a tenant — or the instance default — at a provider you have a relationship with. That is the case the per-tenant tier exists for, and the section below on API keys is the one to read next.
 
-:::tip A blank map is a configuration state, not an error
-If an operator sets the instance default to `{}` and a tenant sets nothing, there is no tile source at all. Note that **Reset to default** does the opposite — it restores the shipped provider — so switching maps off is an explicit `{}`, not a reset. Map surfaces then draw every position they were asked to on a plain panel and say why, rather than failing. Drawing a geofence still works and the coordinates you place are still exact.
+:::tip With no tile source you get a schematic world, not a blank one
+If an operator sets the instance default to `{}` and a tenant sets nothing, there is no tile source at all. Note that **Reset to default** does the opposite — it restores the shipped provider — so switching maps off is an explicit `{}`, not a reset.
+
+Map surfaces then fall back to a **bundled world basemap**: public-domain Natural Earth land and country outlines, compiled into the app itself. It requests nothing from any outside host — everything it needs is served from DeviceChain itself — which is what makes it the right answer for an air-gapped install as well as for an operator who has deliberately switched providers off.
+
+It is honestly schematic — continents and borders, nothing at street zoom — so it reads as "configure a provider", not as "this is broken". Everything else keeps working exactly as it does on tiles: drawing a geofence still works, and the coordinates you place are still exact, because the projection is the same one a tiled map uses.
 :::
 
 ## The API key in the tile URL is not a secret {#the-api-key-is-not-a-secret}
@@ -80,4 +84,4 @@ Protect it the way map providers expect: with **HTTP-referrer restrictions** (an
 
 ## Embedded dashboards {#embedded-dashboards}
 
-The standalone dashboard viewer signs in as its own user and reads the same tenant basemap, so a board embedded there draws on the same tiles it does in the console. If a map is blank when embedded but fine in the console, check that the viewer signed in **as a member of the same tenant** — the basemap follows the tenant, not the board.
+The standalone dashboard viewer signs in as its own user and reads the same tenant basemap, so a board embedded there draws on the same tiles it does in the console. If an embedded board shows a different basemap from the console — most tellingly the schematic bundled world where you expected tiles — check that the viewer signed in **as a member of the same tenant**. The basemap follows the tenant, not the board.

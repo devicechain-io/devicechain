@@ -82,12 +82,20 @@ export { EntitySelector } from './widgets/entity-selector';
 export { MapWidget } from './widgets/map';
 // The map's pure parts: which samples can be placed, where they land on a tile-less
 // panel, and how a fix is described without inventing the fields it does not carry.
+//
+// loadLandStyle is the bundled world basemap — the style used when no tile source
+// is configured. Exported so the console's fence editor and this package's map
+// widget cannot end up drawing two different worlds; the geometry itself stays
+// behind a dynamic import inside that module, so naming it here costs nothing.
 export {
   placeable,
   projectToPanel,
   describePosition,
   formatDegrees,
   rasterStyleFor,
+  landStyleFrom,
+  loadLandStyle,
+  BUNDLED_BASEMAP_ATTRIBUTION,
   type PlaceableLocation,
   type PanelPoint,
 } from './widgets/map-geometry';

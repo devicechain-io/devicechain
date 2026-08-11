@@ -123,7 +123,7 @@
   "geofenceBoundary": "Boundary",
   "geofenceColVertices": "Corners",
   "geofenceMapLabel": "Geofence boundary map. Click the map to add a corner; click the first corner to close the shape. Drag a corner to move it, Alt-click a corner to remove it, and click a small handle on an edge to add a corner there.",
-  "geofenceNoTilesHint": "No basemap is set, so the boundary is drawn on a plain background. Drawing still works and the coordinates you place are exact. Set a tile URL below to show map imagery.",
+  "geofenceNoTilesHint": "No tile provider is set, so this is the built-in world map: continents and borders only, with no detail as you zoom in. Drawing still works and the coordinates you place are exact. Set a tile URL below to see real map imagery.",
   "geofenceMapUnavailable": "The map could not be loaded, so the boundary cannot be drawn here. Reload the page to try again.",
   "geofenceVertexCount_one": "{{count}} of {{max}} corners",
   "geofenceVertexCount_other": "{{count}} of {{max}} corners",

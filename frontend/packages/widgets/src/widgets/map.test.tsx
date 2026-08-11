@@ -76,6 +76,7 @@ vi.mock('maplibre-gl', () => {
 import type { LocationStreamState } from '../hooks';
 import { TenantBasemapProvider } from '../basemap-context';
 import { MapWidget } from './map';
+import { BUNDLED_BASEMAP_ATTRIBUTION, landStyleFrom, rasterStyleFor } from './map-geometry';
 
 afterEach(cleanup);
 
@@ -161,11 +162,13 @@ describe('MapWidget — the refusal is a state of its own', () => {
   // The counterweight. Rendering a permission wall is only correct while an AUTHORIZED
   // viewer actually gets their markers — a widget that always refused would pass the
   // test above and be useless.
-  it('an authorized viewer gets markers, not the permission state', () => {
-    render(<MapWidget widget={widget()} data={twoDevices()} />);
+  it('an authorized viewer gets markers, not the permission state', async () => {
+    render(<MapWidget widget={widget({ tileUrl: TILE_URL })} data={twoDevices()} />);
 
     expect(screen.queryByText('Location not permitted')).toBeNull();
-    expect(screen.getAllByTestId('map-marker')).toHaveLength(2);
+    // MapLibre owns the DOM its markers live in, so they are counted through the
+    // stub's registry rather than through the document.
+    await waitFor(() => expect(m.markers).toHaveLength(2));
   });
 
   // A refusal that arrived WITH positions still in hand must clear them: the hub already
@@ -180,66 +183,108 @@ describe('MapWidget — the refusal is a state of its own', () => {
   });
 });
 
-describe('MapWidget — no tile source configured', () => {
-  // 🔴 The library is not the map; the TILES are, and they carry separate terms. With no
-  // tile URL the widget must still answer "where is my fleet" — on a plain panel, saying
-  // why there is no basemap — and must reach no host at all, because there is no host it
-  // was given permission to ask.
-  it('still renders a marker per located device, on a plain panel, with the affordance', () => {
+describe('MapWidget — no tile source: the bundled world basemap', () => {
+  // 🔴 THE HEADLINE OF THIS SLICE. With no tile URL the widget renders a REAL
+  // MapLibre map against public-domain Natural Earth geometry compiled into this
+  // package. It used to render a flat panel and a note, which was honest but read
+  // as breakage — a void is indistinguishable from a failure, and that ambiguity
+  // is the whole reason this exists.
+  //
+  // The two properties that make it safe are asserted separately below: it is a
+  // real map (same renderer, same projection as the configured path), and it still
+  // asks NO host for anything.
+  it('renders a real map, not the flat panel', async () => {
     render(<MapWidget widget={widget()} data={twoDevices()} />);
 
-    // The CONTROL: the markers prove the widget rendered its data, so the absence
-    // assertions below are about a settled render and not about a blank first frame.
-    const markers = screen.getAllByTestId('map-marker');
-    expect(markers).toHaveLength(2);
-    expect(markers.map((el) => el.getAttribute('data-device'))).toEqual(['dozer-1', 'truck-4']);
+    await waitFor(() => expect(m.maps).toHaveLength(1));
+    // The control: the markers prove the widget got as far as drawing its data, so
+    // the absence assertion below is about a settled render rather than a blank
+    // first frame.
+    await waitFor(() => expect(m.markers).toHaveLength(2));
+    expect(m.markers.map((mk) => mk.element.getAttribute('data-device'))).toEqual([
+      'dozer-1',
+      'truck-4',
+    ]);
 
-    expect(screen.getByTestId('map-plain-panel')).toBeTruthy();
-    expect(screen.getByTestId('map-no-tiles-note').textContent).toMatch(/no tile source configured/i);
+    // The panel is GONE from this path. It survives only for a renderer that could
+    // not load, which map-fallback.test.tsx drives.
+    expect(screen.queryByTestId('map-plain-panel')).toBeNull();
+    expect(screen.queryByTestId('map-no-tiles-note')).toBeNull();
   });
 
-  it('issues NO network request and loads NO map library', () => {
+  it('draws land and boundaries from the bundled geometry', async () => {
+    render(<MapWidget widget={widget()} data={twoDevices()} />);
+    await waitFor(() => expect(m.maps).toHaveLength(1));
+
+    const style = m.maps[0].style as {
+      sources: Record<string, { type: string; data?: { features?: unknown[] }; attribution?: string }>;
+      layers: Array<{ id: string; type: string }>;
+    };
+    expect(Object.keys(style.sources).sort()).toEqual(['boundaries', 'land']);
+    expect(style.sources.land.type).toBe('geojson');
+    expect(style.sources.boundaries.type).toBe('geojson');
+
+    // 🔴 NOT just "a land source exists" — a source wired to an EMPTY collection
+    // would satisfy that and render the same void this slice exists to remove. The
+    // real dataset is 127 land polygons and 331 boundary lines; asserting a
+    // generous floor catches an empty or truncated payload without pinning a number
+    // that a data refresh would legitimately move.
+    expect(style.sources.land.data?.features?.length ?? 0).toBeGreaterThan(50);
+    expect(style.sources.boundaries.data?.features?.length ?? 0).toBeGreaterThan(50);
+
+    expect(style.layers.map((l) => l.id)).toEqual(['ocean', 'land', 'boundaries']);
+  });
+
+  // 🔴 THE PROMISE THAT SURVIVED THE REWRITE. The old comment on this widget said it
+  // "issues no request to any host" when unconfigured, and justified it by never
+  // loading a map library at all. Half of that is now false — the library DOES load —
+  // so the half that matters is asserted directly instead of inherited from the other.
+  //
+  // Natural Earth is compiled into the bundle, so a bundled map reaches nowhere. The
+  // strongest form of that available here is over the STYLE DOCUMENT MapLibre was
+  // actually handed: a URL of any kind in it would be a host the operator never chose.
+  it('issues NO network request and names NO host, though it now does load the renderer', async () => {
     render(<MapWidget widget={widget()} data={twoDevices()} />);
 
-    // Anchored on the control first: if the markers are not there, nothing below is
+    // Anchored on the control first: if the map was never built, nothing below is
     // evidence of anything — an unrendered widget also makes no requests.
-    expect(screen.getAllByTestId('map-marker')).toHaveLength(2);
+    await waitFor(() => expect(m.markers).toHaveLength(2));
 
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(xhrOpenSpy).not.toHaveBeenCalled();
-    // The strongest signal jsdom affords: the renderer was never even constructed, so no
-    // tile request could be issued from inside it either.
-    expect(m.maps).toHaveLength(0);
-    expect(m.markers).toHaveLength(0);
-    // And nothing in the DOM points at a host the operator did not configure.
+    expect(JSON.stringify(m.maps[0].style)).not.toMatch(/https?:\/\//);
     expect(document.body.innerHTML).not.toMatch(/https?:\/\//);
+  });
+
+  // Natural Earth requires no attribution — its licence says crediting the authors is
+  // unnecessary — so this credit is OURS, and it earns its place: without it a viewer
+  // cannot tell a deliberately schematic bundled world from a provider that failed to
+  // load, which is the same ambiguity in a new costume.
+  it('credits the bundled data so it cannot be mistaken for a broken provider', async () => {
+    render(<MapWidget widget={widget()} data={twoDevices()} />);
+    await waitFor(() => expect(m.maps).toHaveLength(1));
+
+    const style = m.maps[0].style as { sources: { land: { attribution?: string } } };
+    expect(style.sources.land.attribution).toBe(BUNDLED_BASEMAP_ATTRIBUTION);
+    expect(style.sources.land.attribution).toMatch(/Natural Earth/);
   });
 
   // A blank tileUrl is what a cleared authoring field leaves behind, and it must be
   // treated as "no tile source" rather than as a source whose URL is the empty string —
-  // otherwise the widget reaches the renderer with a style pointing nowhere, which is
-  // the "broken/blank map" this design refuses to show.
-  it('treats a blank tile URL as no tile source at all', () => {
+  // otherwise the widget reaches the renderer with a raster style pointing nowhere,
+  // which is the broken map this design refuses to show.
+  it('treats a blank tile URL as no tile source at all', async () => {
     render(<MapWidget widget={widget({ tileUrl: '' })} data={twoDevices()} />);
 
-    expect(screen.getAllByTestId('map-marker')).toHaveLength(2); // the control
-    expect(screen.getByTestId('map-no-tiles-note')).toBeTruthy();
-    expect(m.maps).toHaveLength(0);
+    await waitFor(() => expect(m.maps).toHaveLength(1));
+    const style = m.maps[0].style as { sources: Record<string, { type: string }> };
+    // The bundled world, NOT a raster source with an empty tile template.
+    expect(style.sources.basemap).toBeUndefined();
+    expect(style.sources.land?.type).toBe('geojson');
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('places each marker at its own coordinates, east right and north up', () => {
-    render(<MapWidget widget={widget()} data={twoDevices()} />);
-    const [dozer, truck] = screen.getAllByTestId('map-marker');
-
-    // truck-4 is east of and north of dozer-1 (larger longitude, larger latitude).
-    // 🔴 A latitude/longitude swap keeps both markers on the panel in a plausible
-    // scatter; only the RELATIVE placement catches it.
-    expect(parseFloat(truck.style.left)).toBeGreaterThan(parseFloat(dozer.style.left));
-    expect(parseFloat(truck.style.top)).toBeLessThan(parseFloat(dozer.style.top));
-  });
-
-  it('describes a marker with only the fields its device reported', () => {
+  it('describes a marker with only the fields its device reported', async () => {
     render(
       <MapWidget
         widget={widget()}
@@ -260,8 +305,8 @@ describe('MapWidget — no tile source configured', () => {
       />,
     );
 
-    const marker = screen.getByTestId('map-marker');
-    const label = marker.getAttribute('aria-label') ?? '';
+    await waitFor(() => expect(m.markers).toHaveLength(1));
+    const label = m.markers[0].element.getAttribute('aria-label') ?? '';
     // The control: the fields it DID report are there…
     expect(label).toContain('loader-3');
     expect(label).toContain('33.746800, -84.390300');
@@ -271,6 +316,33 @@ describe('MapWidget — no tile source configured', () => {
     expect(label).not.toContain('°');
     expect(label).not.toContain('m/s');
     expect(label).not.toMatch(/\b0 m\b/);
+  });
+});
+
+// 🔴 THE PROPERTY THIS WHOLE SLICE HAD TO NOT BREAK.
+//
+// The fence editor stores the coordinates a click produces, so a change to the
+// unconfigured STYLE must never change where a click LANDS. Pixels are not the
+// correctness property; the projection is. A test asserting "the land layer is
+// present" would pass a build that had quietly broken authoring.
+//
+// MapLibre 6 makes this concrete rather than theoretical: `projection` is a root
+// style key whose `type` is a zoom-interpolatable expression, so a style may
+// legally hand back a globe past some zoom — which re-projects the pointer. The
+// two styles are therefore compared to EACH OTHER, not merely inspected.
+//
+// FenceMap.test.tsx carries the end of this argument: it drives the editor's real
+// click handler through both styles and asserts the SAME stored vertex.
+describe('the projection is the same on both styles', () => {
+  it('both declare mercator, and declare it identically', () => {
+    const empty = { type: 'FeatureCollection', features: [] };
+    const tiled = rasterStyleFor(TILE_URL, '© Example') as { projection: unknown };
+    const bundled = landStyleFrom(empty, empty) as { projection: unknown };
+
+    expect(bundled.projection).toEqual({ type: 'mercator' });
+    // The one that matters: not "each is mercator" checked twice, but that the two
+    // AGREE. This is what fails if a later edit gives one of them a globe.
+    expect(bundled.projection).toEqual(tiled.projection);
   });
 });
 
@@ -368,7 +440,7 @@ describe('MapWidget — the empty and loading states', () => {
     expect(screen.getByText('No positions reported')).toBeTruthy();
   });
 
-  it('shows loading only while nothing has arrived', () => {
+  it('shows loading only while nothing has arrived', async () => {
     const { unmount } = render(<MapWidget widget={widget()} data={state({ loading: true })} />);
     expect(screen.getByText('Loading…')).toBeTruthy();
     unmount();
@@ -376,10 +448,10 @@ describe('MapWidget — the empty and loading states', () => {
     // Once positions are in hand a later poll must not blank them back to a spinner.
     render(<MapWidget widget={widget()} data={{ ...twoDevices(), loading: true }} />);
     expect(screen.queryByText('Loading…')).toBeNull();
-    expect(screen.getAllByTestId('map-marker')).toHaveLength(2);
+    await waitFor(() => expect(m.markers).toHaveLength(2));
   });
 
-  it('drops a sample carrying no coordinates rather than placing it at (0, 0)', () => {
+  it('drops a sample carrying no coordinates rather than placing it at (0, 0)', async () => {
     render(
       <MapWidget
         widget={widget()}
@@ -389,9 +461,8 @@ describe('MapWidget — the empty and loading states', () => {
         })}
       />,
     );
-    const markers = screen.getAllByTestId('map-marker');
-    expect(markers).toHaveLength(1);
-    expect(markers[0].getAttribute('data-device')).toBe('dozer-1');
+    await waitFor(() => expect(m.markers).toHaveLength(1));
+    expect(m.markers[0].element.getAttribute('data-device')).toBe('dozer-1');
   });
 });
 
@@ -447,17 +518,22 @@ describe('MapWidget — the tenant basemap', () => {
     expect(basemapOf().attribution).toBeUndefined();
   });
 
-  // The counterweight: the whole point of the plain panel is that it still means
-  // something. A provider that supplied a default would delete that state.
-  it('still draws the plain panel when no tier has a tile source', () => {
+  // The counterweight: a tenant that supplies a CENTRE but no tile source is still a
+  // tenant with no tile source, and must land on the bundled world rather than on a
+  // raster style built from nothing. Without this, "the tenant configured something"
+  // and "the tenant configured a PROVIDER" could quietly fold into each other.
+  it('falls back to the bundled world when no tier supplies a tile source', async () => {
     render(
       <TenantBasemapProvider basemap={{ centerLat: 33.75, centerLon: -84.39, zoom: 10 }}>
         <MapWidget widget={widget()} data={twoDevices()} />
       </TenantBasemapProvider>,
     );
 
-    expect(screen.getByTestId('map-plain-panel')).toBeTruthy();
-    expect(screen.getByTestId('map-no-tiles-note').textContent).toContain('No tile source configured');
+    await waitFor(() => expect(m.maps).toHaveLength(1));
+    const style = m.maps[0].style as { sources: Record<string, { type: string }> };
+    expect(style.sources.basemap).toBeUndefined();
+    expect(style.sources.land?.type).toBe('geojson');
+    expect(screen.queryByTestId('map-plain-panel')).toBeNull();
   });
 
   // A host that installs no provider must behave exactly as it did before this
@@ -537,5 +613,84 @@ describe('the MapLibre lazy boundary', () => {
     // match it, but a value import of the same module must.
     expect(STATIC_VALUE_IMPORT.test("import maplibregl from 'maplibre-gl';")).toBe(true);
     expect(STATIC_VALUE_IMPORT.test("import type { Map } from 'maplibre-gl';")).toBe(false);
+  });
+});
+
+// ---- The SECOND lazy boundary ----------------------------------------------
+//
+// 🔴 THE SAME DEFECT WITH A DIFFERENT PAYLOAD, and it arrived with the bundled
+// world basemap. natural-earth-data is ~150 KiB of coordinates (~44 KiB over the
+// wire) and must stay behind the dynamic import in map-geometry.ts, because the
+// ordinary case is now a CONFIGURED tile source — the platform ships a default
+// provider — and a viewer looking at a provider's tiles must not also download a
+// world map they will never be shown.
+//
+// It is worth its own guard rather than a line in the one above, for the reason
+// that makes this class of bug survive review: `natural-earth-data` exports a
+// plain constant. Importing it statically is the NATURAL thing to write, reads as
+// obviously correct, changes no behaviour whatsoever, and every test in this
+// package keeps passing. Only the bundle moves.
+describe('the bundled-geometry lazy boundary', () => {
+  const SRC = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+  function sourceFiles(dir: string): string[] {
+    return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) return sourceFiles(full);
+      return /\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) ? [full] : [];
+    });
+  }
+
+  // Matches a static import of the data module by any relative spelling, since it
+  // could be reached from a sibling or from a subdirectory. `import type` is
+  // allowed and excluded here: NaturalEarthData is a type, and a type is erased.
+  const STATIC_DATA_IMPORT =
+    /^\s*(?:import|export)\s+(?!type\b)[^;]*?from\s*['"][^'"]*natural-earth-data['"]|^\s*import\s*['"][^'"]*natural-earth-data['"]/m;
+
+  it('is not crossed by any static import in the package', () => {
+    const offenders = sourceFiles(SRC).filter((file) =>
+      STATIC_DATA_IMPORT.test(readFileSync(file, 'utf8')),
+    );
+    expect(
+      offenders,
+      'a static import of natural-earth-data puts a world map in the entry chunk for every viewer',
+    ).toEqual([]);
+  });
+
+  it('the scan reaches the module that loads the geometry, and the pattern can fire', () => {
+    const files = sourceFiles(SRC);
+    const geometry = files.find((f) => f.endsWith(join('widgets', 'map-geometry.ts')));
+    expect(geometry, 'the module that loads the bundled geometry was not found').toBeTruthy();
+
+    const source = readFileSync(geometry as string, 'utf8');
+    expect(source).toMatch(/import\(\s*['"]\.\/natural-earth-data['"]\s*\)/);
+
+    // 🔴 The pattern's own negative control. An absence claim proved by a regex is
+    // only as good as the regex, and one that matched nothing would sweep clean
+    // forever. These are the shapes that must fire…
+    expect(STATIC_DATA_IMPORT.test("import { NATURAL_EARTH } from './natural-earth-data';")).toBe(
+      true,
+    );
+    expect(STATIC_DATA_IMPORT.test("import { NATURAL_EARTH } from '../widgets/natural-earth-data';")).toBe(
+      true,
+    );
+    expect(
+      STATIC_DATA_IMPORT.test("import {\n  NATURAL_EARTH,\n} from './natural-earth-data';"),
+    ).toBe(true);
+    // …and these must not: the erased type import, and the dynamic load itself.
+    expect(
+      STATIC_DATA_IMPORT.test("import type { NaturalEarthData } from './natural-earth-data';"),
+    ).toBe(false);
+    expect(STATIC_DATA_IMPORT.test("  const d = await import('./natural-earth-data');")).toBe(
+      false,
+    );
+  });
+
+  // The data module is only worth guarding while it is actually large. If a future
+  // refresh reduced it to a stub, the guard above would still pass and would be
+  // protecting nothing — and, more to the point, the map would be drawing nothing.
+  it('the bundled geometry is really the size this boundary exists for', () => {
+    const data = readFileSync(join(SRC, 'widgets', 'natural-earth-data.ts'), 'utf8');
+    expect(data.length).toBeGreaterThan(100_000);
   });
 });

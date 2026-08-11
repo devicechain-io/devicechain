@@ -38,7 +38,7 @@ The map widget renders device positions over the tenant's **basemap**, which a n
 
 Which provider you should actually use is a tenant-level decision, not a per-widget one: see [Basemaps](./basemaps.md).
 
-If no tier has a tile source — an operator set the instance default to `{}` and the tenant set nothing — the widget still works: it plots the devices' relative positions on a plain background and says that no tiles are configured.
+If no tier has a tile source — an operator set the instance default to `{}` and the tenant set nothing — the widget still draws a real map, against a bundled world basemap of public-domain continents and borders. A flat panel of relative positions remains only for the case where the map renderer itself cannot be loaded at all, such as behind a proxy that blocks it.
 
 Reading positions also requires the `location:read` authority, which is **not** granted by the read-only baseline every member receives — see [device location](../guides/connecting-a-device.md). A viewer without it is told so, rather than shown an empty map.
 :::
