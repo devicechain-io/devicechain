@@ -6,7 +6,7 @@
 // free-text Input the user has to type exactly. Built on the Popover primitive;
 // no extra dependency beyond @radix-ui/react-popover.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronsUpDown, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -49,6 +49,17 @@ interface ComboboxProps {
   disabled?: boolean;
   // When true (default), a clear button appears once a value is selected.
   allowClear?: boolean;
+  // The control's accessible name, for a combobox with no visible <label> — one
+  // of a repeated row of them, say. The trigger renders the SELECTED VALUE as its
+  // content, so without this a screen reader announces the current choice and
+  // nothing about what is being chosen.
+  //
+  // 🔴 Applied as aria-labelledby pointing at BOTH a hidden label and the trigger
+  // itself, not as a plain aria-label. aria-label REPLACES an element's content
+  // as its accessible name, so naming the control that way would trade one half
+  // of the announcement for the other: "Entity type" with no indication of what
+  // is currently selected. The self-reference is the standard way to keep both.
+  ariaLabel?: string;
   className?: string;
 }
 
@@ -64,9 +75,13 @@ export function Combobox({
   emptyMessage,
   disabled,
   allowClear = true,
+  ariaLabel,
   className,
 }: ComboboxProps) {
   const { t } = useTranslation('common');
+  const generatedId = useId();
+  const triggerId = id ?? `combobox-${generatedId}`;
+  const labelId = `${triggerId}-label`;
   const placeholderText = placeholder ?? t('select');
   const searchPlaceholderText = searchPlaceholder ?? t('search');
   const emptyMessageText = emptyMessage ?? t('noMatches');
@@ -110,9 +125,15 @@ export function Combobox({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
+      {ariaLabel && (
+        <span id={labelId} className="sr-only">
+          {ariaLabel}
+        </span>
+      )}
       <PopoverTrigger
-        id={id}
+        id={triggerId}
         type="button"
+        aria-labelledby={ariaLabel ? `${labelId} ${triggerId}` : undefined}
         disabled={disabled}
         className={cn(triggerClasses, className)}
       >

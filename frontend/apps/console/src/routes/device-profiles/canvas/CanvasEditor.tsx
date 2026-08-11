@@ -30,9 +30,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { TokenField } from '@/components/ui/token-field';
+import { ENTITY_TYPE } from '@/lib/entity-types';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Checkbox } from '@/components/ui/checkbox';
-import { normalizeToken } from '@devicechain/client';
 import { errMessage } from '@/routes/common';
 import {
   createDetectionRule,
@@ -342,7 +342,7 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
           {editing ? (
             <Input id="canvas-token" value={token} disabled />
           ) : (
-            <TokenField id="canvas-token" entityType={normalizeToken('detection rule')} value={token} onChange={setToken} seed={conditionMeta(nodes).name ?? ''} placeholder={t('canvasTokenPlaceholder')} />
+            <TokenField id="canvas-token" entityType={ENTITY_TYPE.detectionRule} value={token} onChange={setToken} seed={conditionMeta(nodes).name ?? ''} placeholder={t('canvasTokenPlaceholder')} />
           )}
         </FormField>
         <label className="flex items-center gap-2 pb-2 text-sm">

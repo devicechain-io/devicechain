@@ -1,0 +1,249 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// The instance system-settings screen (ADR-042 P2). One tab per setting, each
+// with its own editor, over a shared frame that owns everything the editors
+// should not have to repeat: the draft, whether it differs from what is stored,
+// Save, Reset to default, and the override badge.
+//
+// It used to be a column of JSON textareas. The reason that was worth replacing
+// is not that JSON is ugly — it is that a textarea cannot tell an operator they
+// are about to store something broken. Every editor here validates before Save is
+// enabled, and the server validates again on write regardless of which editor (or
+// which client) produced the value.
+//
+// 🔴 Drafts live HERE, keyed by setting, not inside each panel. Radix Tabs
+// unmounts the inactive panel, so a draft held by the panel would be silently
+// discarded by a glance at another tab.
+
+import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { PageShell } from '@/components/ui/page-shell';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { LoadingState } from '@/components/ui/loading-state';
+import { ErrorState } from '@/components/ui/error-state';
+import { EmptyState } from '@/components/ui/empty-state';
+import { ErrorBanner } from '@/components/ui/error-banner';
+import { HintText } from '@/components/ui/hint-text';
+import { useToast } from '@/components/ui/toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
+import { useQuery } from '@/lib/hooks/use-query';
+import { listSettings, setSetting, clearSetting, type Setting } from '@/lib/api/settings';
+import { useReload, errMessage } from '@/routes/common';
+import { SECTIONS } from './sections';
+import { rawJsonSection } from './RawJsonEditor';
+import type { SettingSection } from './registry';
+
+/** Renders a stored JSON value multi-line for editing; an unparseable value is
+ *  shown verbatim rather than lost. */
+function pretty(json: string): string {
+  try {
+    return JSON.stringify(JSON.parse(json), null, 2);
+  } catch {
+    return json;
+  }
+}
+
+/** Compact form for comparison, so formatting alone never reads as an edit.
+ *  Returns the input unchanged when it does not parse — mid-edit raw JSON is
+ *  routinely unparseable, and it is still a change worth enabling Save for. */
+function compact(json: string): string {
+  try {
+    return JSON.stringify(JSON.parse(json));
+  } catch {
+    return json;
+  }
+}
+
+export default function SettingsPage() {
+  const { t } = useTranslation('adminSettings');
+  const [version, reload] = useReload();
+  const { data: settings, loading, error } = useQuery(listSettings, [version]);
+
+  // Drafts by setting key. A key with no entry is pristine and reads from the
+  // stored value, so a save/reset only has to DELETE its entry to re-seed.
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const setDraft = (key: string, json: string) => setDrafts((d) => ({ ...d, [key]: json }));
+  const clearDraft = (key: string) =>
+    setDrafts((d) => {
+      const next = { ...d };
+      delete next[key];
+      return next;
+    });
+
+  const panels = useMemo(
+    () =>
+      (settings ?? []).map((setting) => ({
+        setting,
+        // A key the server knows and this build has no editor for still gets a
+        // tab — raw, but present. Hiding it would make a configured setting
+        // invisible to the operator who configured it.
+        section: SECTIONS[setting.key] ?? rawJsonSection(setting.key),
+      })),
+    [settings],
+  );
+
+  if (loading) {
+    return (
+      <PageShell title={t('title')} description={t('description')}>
+        <LoadingState description={t('loadingSettings')} />
+      </PageShell>
+    );
+  }
+  if (error) {
+    return (
+      <PageShell title={t('title')} description={t('description')}>
+        <ErrorState description={error} />
+      </PageShell>
+    );
+  }
+  if (panels.length === 0) {
+    return (
+      <PageShell title={t('title')} description={t('description')}>
+        <EmptyState description={t('noSettingsDefined')} />
+      </PageShell>
+    );
+  }
+
+  return (
+    <PageShell title={t('title')} description={t('description')}>
+      <Tabs defaultValue={panels[0].setting.key}>
+        <TabsList>
+          {panels.map(({ setting, section }) => (
+            <TabsTrigger key={setting.key} value={setting.key} className="flex items-center gap-1.5">
+              <section.icon size={14} />
+              {section.labelKey ? t(section.labelKey) : setting.key}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+
+        {panels.map(({ setting, section }) => (
+          <TabsContent key={setting.key} value={setting.key}>
+            <SettingPanel
+              setting={setting}
+              section={section}
+              draft={drafts[setting.key]}
+              onDraftChange={(json) => setDraft(setting.key, json)}
+              onSettled={() => {
+                clearDraft(setting.key);
+                reload();
+              }}
+            />
+          </TabsContent>
+        ))}
+      </Tabs>
+    </PageShell>
+  );
+}
+
+function SettingPanel({
+  setting,
+  section,
+  draft,
+  onDraftChange,
+  onSettled,
+}: {
+  setting: Setting;
+  section: SettingSection;
+  draft: string | undefined;
+  onDraftChange: (json: string) => void;
+  onSettled: () => void;
+}) {
+  const { t } = useTranslation('adminSettings');
+  const { toast } = useToast();
+  const confirm = useConfirm();
+  const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const json = draft ?? pretty(setting.value);
+  const dirty = compact(json) !== compact(setting.value);
+
+  // A stored value this section's editor cannot read drops to raw JSON, so the
+  // operator can see and repair it. The fallback is built fresh here rather than
+  // reused across renders; it holds no state.
+  const unreadable = section.unreadable(json);
+  const effective = unreadable ? rawJsonSection(setting.key) : section;
+  const issue = effective.validateJson(json);
+
+  const save = async () => {
+    setFormError(null);
+    setBusy(true);
+    try {
+      await setSetting(setting.key, compact(json));
+      toast(t('settingSavedToast', { key: setting.key }));
+      onSettled();
+    } catch (err) {
+      setFormError(errMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reset = async () => {
+    if (
+      !(await confirm({
+        title: t('resetConfirmTitle'),
+        description: t('resetConfirmDescription', { key: setting.key }),
+        confirmLabel: t('resetConfirmLabel'),
+      }))
+    )
+      return;
+    setFormError(null);
+    setBusy(true);
+    try {
+      await clearSetting(setting.key);
+      toast(t('settingResetToast', { key: setting.key }));
+      onSettled();
+    } catch (err) {
+      setFormError(errMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="max-w-3xl space-y-4">
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-1">
+          <p className="font-mono text-xs text-muted-foreground">{setting.key}</p>
+          <HintText>{setting.description}</HintText>
+        </div>
+        {setting.overridden ? (
+          <Badge variant="default">{t('overriddenBadge')}</Badge>
+        ) : (
+          <Badge variant="outline" className="text-muted-foreground">
+            {t('defaultBadge')}
+          </Badge>
+        )}
+      </div>
+
+      {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
+      {unreadable && <ErrorBanner message={t('unreadableValueWarning')} />}
+
+      <effective.Body json={json} onChange={onDraftChange} />
+
+      {/* The blocking reason is stated even when nothing is dirty yet: an operator
+          who opens a tab on a value that is already broken should be told why,
+          not left to discover it by editing something unrelated. */}
+      {issue && <ErrorBanner message={t(issue.key, issue.values)} />}
+
+      {setting.overridden && setting.updatedBy && (
+        <p className="text-xs text-muted-foreground">
+          {t('overriddenByLabel', { by: setting.updatedBy })}
+          {setting.updatedAt ? ` · ${new Date(setting.updatedAt).toLocaleString()}` : ''}
+        </p>
+      )}
+
+      <div className="flex gap-2">
+        <Button onClick={save} loading={busy} disabled={busy || !dirty || issue !== null}>
+          {t('saveOverrideButton')}
+        </Button>
+        <Button variant="outline" onClick={reset} disabled={busy || !setting.overridden}>
+          {t('resetToDefaultButton')}
+        </Button>
+      </div>
+    </div>
+  );
+}

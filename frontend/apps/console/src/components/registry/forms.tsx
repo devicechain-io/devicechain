@@ -44,6 +44,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { TokenField } from '@/components/ui/token-field';
+import type { EntityType } from '@/lib/entity-types';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { useQuery } from '@/lib/hooks/use-query';
@@ -92,7 +93,7 @@ export function RegistryTypeForm<T extends NamedEntity>({
   /** Family prefix in the `entities` catalog, e.g. "deviceType". */
   i18nKey: string;
   /** Mask key for token generation (ADR-042 P3), e.g. "device-type". */
-  entityType: string;
+  entityType: EntityType;
   checkAvailability?: (token: string) => Promise<boolean>;
   create: (req: TypeRequest) => Promise<unknown>;
   update: (token: string, req: TypeRequest) => Promise<unknown>;
@@ -182,7 +183,7 @@ export function RegistryInstanceForm<T extends NamedEntity>({
   /** Family prefix in the `entities` catalog, e.g. "asset". */
   i18nKey: string;
   /** Mask key for token generation (ADR-042 P3), e.g. "asset". */
-  entityType: string;
+  entityType: EntityType;
   defaultTypeToken?: string;
   checkAvailability?: (token: string) => Promise<boolean>;
   loadTypes: () => Promise<NamedEntity[]>;

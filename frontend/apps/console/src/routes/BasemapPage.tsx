@@ -21,15 +21,16 @@ import { useTranslation } from 'react-i18next';
 import { hasAuthority } from '@devicechain/client';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { FormField } from '@/components/ui/form-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { LoadingState } from '@/components/ui/loading-state';
 import { useToast } from '@/components/ui/toast';
 import { useAuth } from '@/auth/AuthProvider';
 import { useCurrentTenant, useSetCurrentTenant } from '@/auth/TenantProvider';
-import { BasemapPicker, type TileSource } from '@/components/basemap/BasemapPicker';
-import { API_KEY_TOKEN } from '@/components/basemap/catalog';
+import {
+  BasemapFields,
+  basemapProblems,
+  type BasemapFormState,
+} from '@/components/basemap/BasemapFields';
 import {
   setTenantBasemap,
   type TenantBasemap,
@@ -41,32 +42,14 @@ import { errMessage } from '@/routes/common';
 // technical identifier, never localized (mirrors how a token/id is displayed).
 const BASEMAP_WRITE_AUTHORITY = 'basemap:write';
 
-// Client-side pre-checks that MIRROR the server rules (the basemap Go package). They
-// exist for fail-fast feedback only; the server re-validates everything and is the
-// authority. Keeping them in step matters less than keeping them WEAKER — a check
-// stricter than the server's would refuse a value the platform accepts.
-const TILE_PLACEHOLDERS = [['{z}', '{x}', '{y}'], ['{bbox-epsg-3857}'], ['{quadkey}']];
-
-function looksLikeTemplate(url: string): boolean {
-  return TILE_PLACEHOLDERS.some((set) => set.every((token) => url.includes(token)));
-}
-
-// The form's per-field state — strings so "" cleanly represents "inherit".
-interface FormState {
-  tileUrl: string;
-  attribution: string;
-  centerLat: string;
-  centerLon: string;
-  zoom: string;
-}
-
-function initialState(o: TenantBasemap | null): FormState {
+// Seeds the shared form from a fetched tenant override.
+function initialState(o: TenantBasemap): BasemapFormState {
   return {
-    tileUrl: o?.tileUrl ?? '',
-    attribution: o?.attribution ?? '',
-    centerLat: o?.centerLat != null ? String(o.centerLat) : '',
-    centerLon: o?.centerLon != null ? String(o.centerLon) : '',
-    zoom: o?.zoom != null ? String(o.zoom) : '',
+    tileUrl: o.tileUrl ?? '',
+    attribution: o.attribution ?? '',
+    centerLat: o.centerLat != null ? String(o.centerLat) : '',
+    centerLon: o.centerLon != null ? String(o.centerLon) : '',
+    zoom: o.zoom != null ? String(o.zoom) : '',
   };
 }
 
@@ -119,7 +102,7 @@ function BasemapEditor({ override }: { override: TenantBasemap }) {
   const tenant = useCurrentTenant();
   const { toast } = useToast();
 
-  const [form, setForm] = useState<FormState>(() => initialState(override));
+  const [form, setForm] = useState<BasemapFormState>(() => initialState(override));
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // Re-seed a pristine form when a newer override arrives (a stale cached tenant, or
@@ -131,75 +114,27 @@ function BasemapEditor({ override }: { override: TenantBasemap }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [override.tileUrl, override.attribution, override.centerLat, override.centerLon, override.zoom]);
 
-  const set = (k: keyof FormState, v: string) => {
+  const change = (next: BasemapFormState) => {
     setDirty(true);
-    setForm((f) => ({ ...f, [k]: v }));
+    setForm(next);
   };
-  // Bound per-field setters, defined outside JSX so the literal key never appears as a
-  // JSX-attribute call argument (which trips the i18n literal-string lint, even for a
-  // technical identifier).
-  const setTileUrlField = (v: string) => set('tileUrl', v);
-  const setAttributionField = (v: string) => set('attribution', v);
-  // 🔴 The picker writes BOTH halves in ONE update, never two `set` calls.
-  //
-  // Not for a rendering reason — React batches updates within an event handler, so two
-  // calls would produce one render either way. The reason is that the tile source IS
-  // one value: the same rule the server's Merge enforces across tiers, and the reason
-  // an emitted pair can never be split. Writing it as one update means there is no
-  // code path, now or after a refactor that moves one of these calls, in which a URL
-  // is stored under the previous provider's credit line.
-  const setTileSource = (next: TileSource) => {
-    setDirty(true);
-    setForm((f) => ({ ...f, tileUrl: next.tileUrl, attribution: next.attribution }));
-  };
-  const setCenterLatField = (v: string) => set('centerLat', v);
-  const setCenterLonField = (v: string) => set('centerLon', v);
-  const setZoomField = (v: string) => set('zoom', v);
 
-  const tileUrl = form.tileUrl.trim();
-  const attribution = form.attribution.trim();
-
-  // The tile source is ONE value: both halves or neither. This mirrors the server,
-  // and the message says WHY rather than just naming the field — an operator who
-  // reads "attribution is required" and does not know the reason will look for a way
-  // to turn the requirement off.
-  const missingAttribution = tileUrl !== '' && attribution === '';
-  const orphanAttribution = tileUrl === '' && attribution !== '';
-  const badScheme = tileUrl !== '' && !tileUrl.startsWith('https://');
-  const notATemplate = tileUrl !== '' && !badScheme && !looksLikeTemplate(tileUrl);
-  // A catalog provider was chosen but its key was never filled in, so the template
-  // still carries the placeholder. The server refuses this too — {apiKey} is not a
-  // token the renderer substitutes — but catching it here names the actual problem
-  // ("this provider needs a key") instead of reporting an unknown placeholder.
-  const unsubstitutedKey = tileUrl.includes(API_KEY_TOKEN);
-  // A coordinate is a pair; half of one names no point.
-  const halfCoordinate =
-    (form.centerLat.trim() === '') !== (form.centerLon.trim() === '');
-
-  // 🔴 A non-numeric camera field must BLOCK, not fall through. `Number('abc')` is
-  // NaN, JSON.stringify turns NaN into null on the wire, and the mutation is a full
-  // replace — so without this, typing a stray character into Zoom and pressing Save
-  // silently CLEARS the stored zoom and reports success. That is #704's field-loss
-  // shape in miniature: a value the operator never meant to clear, cleared quietly.
-  const badNumbers = (['centerLat', 'centerLon', 'zoom'] as const).filter(
-    (k) => form[k].trim() !== '' && !Number.isFinite(Number(form[k].trim())),
-  );
-
+  const problems = basemapProblems(form);
   const blocked =
-    missingAttribution ||
-    orphanAttribution ||
-    badScheme ||
-    notATemplate ||
-    unsubstitutedKey ||
-    halfCoordinate ||
-    badNumbers.length > 0;
+    problems.missingAttribution ||
+    problems.orphanAttribution ||
+    problems.badScheme ||
+    problems.notATemplate ||
+    problems.unsubstitutedKey ||
+    problems.halfCoordinate ||
+    problems.badNumbers.length > 0;
 
   const submit = async () => {
     setFormError(null);
     if (blocked) return;
     const input: Required<TenantBasemapInput> = {
-      tileUrl: emptyToNull(tileUrl),
-      attribution: emptyToNull(attribution),
+      tileUrl: emptyToNull(form.tileUrl.trim()),
+      attribution: emptyToNull(form.attribution.trim()),
       centerLat: numberOrNull(form.centerLat),
       centerLon: numberOrNull(form.centerLon),
       zoom: numberOrNull(form.zoom),
@@ -224,103 +159,18 @@ function BasemapEditor({ override }: { override: TenantBasemap }) {
   // sees "Inheriting the instance default: <its own URL>", which is wrong twice over:
   // that URL is not the instance default, and saving will not keep it.
   const inherited = tenant?.basemap ?? null;
-  const isInheriting = tileUrl === '' && !override.tileUrl && !!inherited?.tileUrl;
+  const isInheriting = form.tileUrl.trim() === '' && !override.tileUrl && !!inherited?.tileUrl;
 
   return (
     <PageShell title={t('title')} description={t('description')}>
       <div className="max-w-2xl space-y-6">
         {formError && <ErrorBanner message={formError} />}
 
-        <section className="space-y-4">
-          <h2 className="text-sm font-medium">{t('tileSourceHeading')}</h2>
-          <p className="text-muted-foreground text-xs">{t('tileSourceHelp')}</p>
-
-          {/* The picker prefills the two fields below rather than replacing them:
-              choosing a provider is the easy path, and the raw fields stay editable
-              for a private tile server or a provider the catalog does not carry. */}
-          <BasemapPicker
-            tileUrl={form.tileUrl}
-            attribution={form.attribution}
-            onChange={setTileSource}
-          />
-
-          <FormField
-            label={t('tileUrl')}
-            htmlFor="bm-tile-url"
-            description={t('tileUrlHelp')}
-          >
-            <Input
-              id="bm-tile-url"
-              value={form.tileUrl}
-              onChange={(ev) => setTileUrlField(ev.target.value)}
-              placeholder={t('tileUrlPlaceholder')}
-            />
-          </FormField>
-          {badScheme && <ErrorBanner message={t('errHttps')} />}
-          {notATemplate && <ErrorBanner message={t('errNotATemplate')} />}
-          {unsubstitutedKey && <ErrorBanner message={t('errUnsubstitutedKey')} />}
-
-          <FormField
-            label={t('attribution')}
-            htmlFor="bm-attribution"
-            description={t('attributionHelp')}
-          >
-            <Input
-              id="bm-attribution"
-              value={form.attribution}
-              onChange={(ev) => setAttributionField(ev.target.value)}
-              placeholder={t('attributionPlaceholder')}
-            />
-          </FormField>
-          {missingAttribution && <ErrorBanner message={t('errAttributionRequired')} />}
-          {orphanAttribution && <ErrorBanner message={t('errAttributionOrphan')} />}
-
-          {isInheriting && (
-            <p className="text-muted-foreground text-xs" data-testid="basemap-inheriting">
-              {t('inheriting', { tileUrl: inherited?.tileUrl ?? '' })}
-            </p>
-          )}
-          {/* 🔴 Said plainly, because this change makes configuring a provider key
-              far more common than it was: the tile URL is not a secret and cannot be
-              one — the browser has to fetch tiles with it. */}
-          <p className="text-muted-foreground text-xs">{t('keyVisibilityWarning')}</p>
-        </section>
-
-        <section className="space-y-4">
-          <h2 className="text-sm font-medium">{t('viewHeading')}</h2>
-          <p className="text-muted-foreground text-xs">{t('viewHelp')}</p>
-
-          <div className="grid grid-cols-3 gap-3">
-            <FormField label={t('centerLat')} htmlFor="bm-center-lat">
-              <Input
-                id="bm-center-lat"
-                value={form.centerLat}
-                onChange={(ev) => setCenterLatField(ev.target.value)}
-                inputMode="decimal"
-              />
-            </FormField>
-            <FormField label={t('centerLon')} htmlFor="bm-center-lon">
-              <Input
-                id="bm-center-lon"
-                value={form.centerLon}
-                onChange={(ev) => setCenterLonField(ev.target.value)}
-                inputMode="decimal"
-              />
-            </FormField>
-            <FormField label={t('zoom')} htmlFor="bm-zoom">
-              <Input
-                id="bm-zoom"
-                value={form.zoom}
-                onChange={(ev) => setZoomField(ev.target.value)}
-                inputMode="decimal"
-              />
-            </FormField>
-          </div>
-          {halfCoordinate && <ErrorBanner message={t('errHalfCoordinate')} />}
-          {badNumbers.length > 0 && (
-            <ErrorBanner message={t('errNotANumber', { fields: badNumbers.join(', ') })} />
-          )}
-        </section>
+        <BasemapFields
+          value={form}
+          onChange={change}
+          inheritedTileUrl={isInheriting ? (inherited?.tileUrl ?? null) : null}
+        />
 
         <div className="flex gap-2">
           <Button onClick={submit} loading={busy} disabled={blocked}>

@@ -23,11 +23,11 @@
 import { useEffect, useState } from 'react';
 import { useTranslation, Trans } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { normalizeToken } from '@devicechain/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { TokenField } from '@/components/ui/token-field';
+import { ENTITY_TYPE } from '@/lib/entity-types';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -664,7 +664,7 @@ export function DetectionRuleForm({
         ) : (
           <TokenField
             id="dr-token"
-            entityType={normalizeToken('detection rule')}
+            entityType={ENTITY_TYPE.detectionRule}
             value={token}
             onChange={setToken}
             seed={name}

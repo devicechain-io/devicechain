@@ -157,6 +157,62 @@ export function conformsToMask(mask: string, token: string): boolean {
   return maskToRegExp(mask).test(token);
 }
 
+/** The fixed seed sampleToken fills {slug} placeholders from. */
+const SAMPLE_SEED = 'Sample Name';
+
+/**
+ * sampleToken generates the token a mask would mint, deterministically. Same
+ * generator as generateToken — a pinned RNG and uuid rather than a second
+ * implementation, so a sample can never disagree with what a create form
+ * actually produces.
+ */
+export function sampleToken(mask: string, seed: string = SAMPLE_SEED): string {
+  return generateToken(mask, {
+    seed,
+    random: () => 0,
+    uuid: () => '3f2b8c14-9d7e-4a51-b6c2-0e8d5a1f7b93',
+  });
+}
+
+/**
+ * Why a mask cannot mint usable tokens. Structured rather than a message
+ * because this package is consumed by localized apps — the caller maps a reason
+ * to its own wording.
+ */
+export type MaskProblem =
+  | { reason: 'empty' }
+  | { reason: 'unknownPlaceholder'; placeholder: string }
+  | { reason: 'noPlaceholder' }
+  | { reason: 'invalidToken'; sample: string };
+
+/**
+ * validateMask reports why a mask is unusable, or null when it is fine. It
+ * mirrors the server (the tokenmask Go package), which is the authority and
+ * refuses the same four things — every one of which fails SILENTLY otherwise:
+ *
+ *   empty              nothing to mint from
+ *   unknownPlaceholder contributes nothing, so "dev-{sulg}" mints "dev-"
+ *   noPlaceholder      every entity mints the SAME token; the second create collides
+ *   invalidToken       the minted sample is not a legal token (a space, a slash…)
+ *
+ * 🔴 Keep this NO STRICTER than the server. A check the server does not make
+ * would refuse a mask the platform accepts, and the operator would have no way
+ * to get past it.
+ */
+export function validateMask(mask: string): MaskProblem | null {
+  if (mask === '') return { reason: 'empty' };
+  let placeholders = 0;
+  for (const seg of parseMask(mask)) {
+    if (seg.kind !== 'placeholder') continue;
+    if (seg.type === 'unknown') return { reason: 'unknownPlaceholder', placeholder: seg.raw };
+    placeholders++;
+  }
+  if (placeholders === 0) return { reason: 'noPlaceholder' };
+  const sample = sampleToken(mask);
+  if (!isValidToken(sample)) return { reason: 'invalidToken', sample };
+  return null;
+}
+
 /**
  * resolveMask picks the mask for an entity type from a token-masks map, falling
  * back to the "default" entry and finally to a bare {slug}.
