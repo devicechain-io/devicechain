@@ -32,6 +32,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Badge } from '@/components/ui/badge';
 import { TierPill } from '@/components/tiers/TierPill';
 import { LoadingState } from '@/components/ui/loading-state';
@@ -202,18 +203,18 @@ function TierRow({
         {/* The grip is the only drag affordance; stopPropagation so activating it does
             not also open the tier. setActivatorNodeRef tells dnd-kit this is the handle,
             which keeps keyboard focus restoration correct after a drop. */}
-        <button
-          type="button"
+        <IconButton
           ref={setActivatorNodeRef}
-          className="cursor-grab touch-none rounded p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-40"
-          aria-label={t('reorderAriaLabel', { name: tier.name ?? tier.token })}
+          variant="quiet"
+          className="cursor-grab touch-none active:cursor-grabbing"
+          label={t('reorderAriaLabel', { name: tier.name ?? tier.token })}
           disabled={saving}
           onClick={(e) => e.stopPropagation()}
           {...attributes}
           {...listeners}
         >
           <GripVertical size={16} />
-        </button>
+        </IconButton>
       </DataTableCell>
       <DataTableCell>
         <div className="flex items-center gap-3">

@@ -11,6 +11,7 @@
   "deleted": "Faceta “{{key}}” eliminada",
   "description": "Ejes de clasificación para explorar y filtrar — declara qué claves de atributo son facetas",
   "empty": "Aún no hay facetas declaradas.",
+  "familyFilter": "Filtrar por familia de miembros",
   "keyPlaceholder": "clima",
   "keyRequired": "Una faceta necesita una clave de atributo.",
   "labelDescription": "Opcional. Nombre para mostrar del eje; usa la clave de forma predeterminada.",

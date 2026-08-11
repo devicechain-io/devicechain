@@ -11,7 +11,9 @@ import { TokenField } from '@/components/ui/token-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { TierPill, tierSwatch } from '@/components/tiers/TierPill';
+import { cn } from '@/lib/utils';
 import { useQuery } from '@/lib/hooks/use-query';
 import {
   createTenantTier,
@@ -157,25 +159,35 @@ export function TierForm({
 
       <FormField label={t('colorLabel')} description={t('colorDescription')}>
         <div className="flex items-center gap-3">
-          <div className="flex flex-wrap gap-1.5">
-            {/* "No color" is a first-class choice, not the absence of one — a neutral
-                pill, always offered. */}
-            <ColorSwatch
-              color=""
-              selected={color === ''}
-              onSelect={() => setColor('')}
-              title={t('noColorLabel')}
-            />
-            {(palette ?? []).map((c) => (
-              <ColorSwatch
-                key={c}
-                color={c}
-                selected={color === c}
-                onSelect={() => setColor(c)}
-                title={c}
-              />
-            ))}
-          </div>
+          {/* A palette is "pick exactly one", so it is a radio group — one tab stop,
+              arrow keys between swatches. Every swatch looks different by definition,
+              which is what `bare` is for: the group contributes the semantics and each
+              option carries its own colour. */}
+          <SegmentedControl
+            ariaLabel={t('colorLabel')}
+            tone="bare"
+            className="gap-1.5"
+            value={color}
+            onValueChange={setColor}
+            options={[
+              // "No color" is a first-class choice, not the absence of one — a neutral
+              // swatch, always offered, and the empty string is its value.
+              {
+                value: '',
+                label: <SwatchCheck />,
+                ariaLabel: t('noColorLabel'),
+                title: t('noColorLabel'),
+                className: swatchClass(''),
+              },
+              ...(palette ?? []).map((c) => ({
+                value: c,
+                label: <SwatchCheck />,
+                ariaLabel: c,
+                title: c,
+                className: swatchClass(c),
+              })),
+            ]}
+          />
           {/* Live preview: what the pill will actually look like. It carries the token,
               so the preview shows the token, matching how it renders everywhere else. */}
           <TierPill label={token.trim() || t('tierPillFallback')} color={color} />
@@ -279,35 +291,28 @@ export function TierForm({
   );
 }
 
-// ColorSwatch is one clickable palette chip. It reuses tierSwatch so the chip is the
-// exact color the pill will be — a picker that previewed a different shade than it stored
-// would be its own small lie. The selected chip carries a check.
-function ColorSwatch({
-  color,
-  selected,
-  onSelect,
-  title,
-}: {
-  color: string;
-  selected: boolean;
-  onSelect: () => void;
-  title: string;
-}) {
-  const { t } = useTranslation('tiers');
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      title={title}
-      aria-label={color === '' ? t('noColorLabel') : color}
-      aria-pressed={selected}
-      className={`flex size-6 items-center justify-center rounded-full ring-1 ring-inset transition ${tierSwatch(
-        color,
-      )} ${selected ? 'outline outline-2 outline-offset-1 outline-foreground' : 'hover:opacity-80'}`}
-    >
-      {selected && <Check size={12} />}
-    </button>
+// One palette swatch. It reuses tierSwatch so the swatch is the exact color the pill
+// will be — a picker that previewed a different shade than it stored would be its own
+// small lie.
+//
+// Selection is expressed through `data-state`, which the segmented control's underlying
+// radio item publishes, rather than through a `selected` prop: the option list is plain
+// data built once, so the styling has to be a function of the DOM state, not of a value
+// captured at build time.
+function swatchClass(color: string): string {
+  return cn(
+    'size-6 rounded-full ring-1 ring-inset transition',
+    tierSwatch(color),
+    'data-[state=unchecked]:hover:opacity-80',
+    'data-[state=checked]:outline data-[state=checked]:outline-2',
+    'data-[state=checked]:outline-offset-1 data-[state=checked]:outline-foreground',
   );
+}
+
+// The check rides inside every swatch and is revealed by the selected one. `group` is
+// set by the segmented control on each option.
+function SwatchCheck() {
+  return <Check size={12} className="hidden group-data-[state=checked]:block" />;
 }
 
 // FormFieldPair renders one dimension's rate + burst inputs. The labels come from

@@ -622,12 +622,14 @@ export function DashboardWorkspace({
       banner="dashboard"
       description={
         <div className="mt-1">
-          <button
+          <Button
+            variant="quiet"
+            size="inline"
+            className="gap-1 text-sm"
             onClick={() => void leaveGuarded('/dashboards')}
-            className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
           >
             <ArrowLeft size={14} /> {t('title')}
-          </button>
+          </Button>
         </div>
       }
       action={mode === 'edit' ? editActions : viewActions}

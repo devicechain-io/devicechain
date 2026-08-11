@@ -32,8 +32,20 @@ import babelParser from '@babel/eslint-parser';
 //  - callees: classname builders (cn/cva/clsx/…) carry tailwind fragments, and
 //    navigate()/act() carry route paths / enum tokens — none are user text.
 //  - words: the brand name is a proper noun, never localized.
+// 🔴 One asymmetry in this rule is worth knowing before reading the exclusions: it
+// walks literals inside the attribute EXPRESSIONS of a capitalized component
+// (`<Foo onClick={() => go('x')}>`) but NOT of a native lowercase element
+// (`<div onClick={() => go('x')}>`). JSX text and plain attribute strings are caught on
+// both. So replacing native elements with kit components WIDENS this rule's reach —
+// the native-control sweep surfaced a dozen technical literals that had been sitting
+// inside `<button onClick=…>` unseen. None were user-facing text (they are enum
+// discriminants and route paths), but that is a fact about this codebase, not a
+// guarantee: a real string can hide there too.
 const EXTRA_ATTRS = [
   'variant', 'size', 'side', 'sideOffset', 'align', 'alignOffset',
+  // SegmentedControl's `tone` — an enum picking a look ('inset'/'joined'/'loose'/
+  // 'bare'), never display text.
+  'tone',
   'mode', 'axis', 'orientation', 'position', 'collapsible', 'banner',
   'color', 'fill', 'stroke', 'deviceColor', 'defaultTheme',
   'to', 'href', 'target', 'rel', 'role', 'name', 'htmlFor',
@@ -69,7 +81,11 @@ const EXTRA_ATTRS = [
 // `e` is the registry engine's per-resource key resolver (`e('New')` →
 // t(`entities:${i18nKey}New`)); its argument is a key suffix, never user text —
 // the same reason `t` itself is excluded. No other `e('literal')` call exists.
-const EXTRA_CALLEES = ['cn', 'cva', 'clsx', 'cx', 'twMerge', 'tv', 'navigate', 'act', 'e'];
+// leaveGuarded is the dashboard workspace's navigate — it takes a route path through
+// the unsaved-changes prompt — so it is excluded for the same reason navigate is.
+const EXTRA_CALLEES = [
+  'cn', 'cva', 'clsx', 'cx', 'twMerge', 'tv', 'navigate', 'leaveGuarded', 'act', 'e',
+];
 const EXTRA_WORDS = ['^DeviceChain$'];
 
 export default [
@@ -153,32 +169,40 @@ export default [
       // A rule introduced with existing violations either needs a suppression list
       // nobody prunes, or gets demoted to a warning and ignored.
       //
-      // `select`, `input` and `textarea` are all at zero outside components/ui, which
-      // took three new primitives — Textarea (promoted out of routes/common.tsx),
-      // ColorPicker (react-colorful in our own Popover, because `type="color"` opens
-      // an unthemeable OS dialog) and FilePicker (the one case where the native
-      // element is unavoidable, so the kit owns the only part the user sees).
+      // `select`, `input`, `textarea` and `button` are all at zero outside
+      // components/ui. The first three took three new primitives — Textarea (promoted
+      // out of routes/common.tsx), ColorPicker (react-colorful in our own Popover,
+      // because `type="color"` opens an unthemeable OS dialog) and FilePicker (the one
+      // case where the native element is unavoidable, so the kit owns the only part the
+      // user sees).
       //
-      // 🔴 STILL OUTSTANDING: `button`, 19 sites outside components/ui. Deliberately
-      // NOT gated yet, because they are not a mechanical conversion — they are four
-      // primitives waiting to be extracted, and forcing them into <Button> with their
-      // bespoke classes preserved would satisfy the linter while leaving the
-      // duplication the rule exists to prevent:
+      // 🔴 `button` WAS NOT A MECHANICAL CONVERSION, AND THE INTERESTING PART WAS NOT
+      // THE STYLING. Sorting its 19 sites by what they DO rather than by how they look
+      // turned up a defect the duplication was hiding: most of them were pickers where
+      // exactly one option is chosen — theme, locale, authoring mode, preview window,
+      // member family, tier colour — and only three of those announced a selection at
+      // all. A screen reader was told nothing about which segment was current.
       //
-      //   segmented control — LocaleSwitcher, ThemeToggle, PreviewPanel  -> ToggleGroup
-      //   filter pill/chip  — BrowsePage, FacetKeysPage, DetectionRuleAuthoring,
-      //                       PreviewPanel                                -> Chip
-      //   icon button       — WidgetConfigPanel, DeviceCredentialsPanel,
-      //                       TypeAppearanceForm       -> Button variant=ghost size=icon
-      //   link button       — AiProviderForm x3, DashboardWorkspace -> Button variant=link
+      //   pick one of N  -> SegmentedControl (radiogroup: one tab stop, arrow keys)
+      //                     ThemeToggle, LocaleSwitcher, PreviewPanel, TierForm,
+      //                     DetectionRuleAuthoring, BrowsePage, FacetKeysPage
+      //   toggle, clearable -> ToggleButton (aria-pressed, required by the type)
+      //                     TypeAppearanceForm icon grid, PreviewPanel firing row
+      //   icon-only action -> IconButton (`label` required by the type — an icon
+      //                     carries no accessible name of its own)
+      //                     WidgetConfigPanel, DeviceCredentialsPanel, TiersPage grip
+      //   inline text action -> Button variant=link|linkDestructive|quiet size=inline
+      //                     AiProviderForm x3, TypeAppearanceForm, DashboardWorkspace
       //
-      // Genuinely special, and likely to keep justified per-site disables: TiersPage's
-      // dnd-kit drag activator, DashboardCanvas's react-rnd target, TierForm's colour
-      // swatch, BrandingPage's live preview chip.
+      // Two sites resisted the obvious answer, and both were worth the second look:
+      // DashboardCanvas's react-rnd toolbar is an ordinary <Button> once `rnd-no-drag`
+      // rides on className, and BrandingPage's "primary button" preview turned out not
+      // to be a control at all — it is a PICTURE of the tenant's button, so it is now a
+      // <span> and no longer a tab stop that does nothing when activated.
       //
-      // Worth recording how that list was found: a grep counted 7, the AST counted 31.
-      // Multi-line JSX openings are invisible to `<button[ >/]`, which is the argument
-      // for gating in the linter rather than in review.
+      // Worth recording how the worklist was found: a grep counted 7, the AST counted
+      // 27. Multi-line JSX openings are invisible to `<button[ >/]`, which is the
+      // argument for gating in the linter rather than in review.
       'no-restricted-syntax': [
         'error',
         {
@@ -194,6 +218,11 @@ export default [
         {
           selector: 'JSXOpeningElement > JSXIdentifier[name="textarea"]',
           message: "Use <Textarea> from '@/components/ui/textarea'.",
+        },
+        {
+          selector: 'JSXOpeningElement > JSXIdentifier[name="button"]',
+          message:
+            'Use the kit, chosen by what the control DOES: <SegmentedControl> to pick one of N, <ToggleButton> for a clearable on/off, <IconButton> for an icon-only action (it requires an accessible name), or <Button> for everything else — variant=link|linkDestructive|quiet with size=inline for a text action. A control that is not interactive is not a button at all.',
         },
       ],
     },

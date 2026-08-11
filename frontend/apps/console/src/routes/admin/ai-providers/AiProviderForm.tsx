@@ -9,6 +9,7 @@
 
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
+import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { Combobox } from '@/components/ui/combobox';
@@ -269,11 +270,19 @@ export function ProviderApiKeyControl({
   const description = t('apiKeyDescription');
 
   // Hoisted out of the JSX below so the i18next lint rule (jsx-only mode) does not
-  // mistake the SecretMode enum literal for user-facing text — see RoleForm's
-  // SCOPES for the same technique. (Only this one call site tripped the rule; the
-  // sibling `onChange({ mode: 'set', value: '' })` calls below did not, but the
-  // same hazard applies to all of them, so the fix is the shape, not the instance.)
+  // mistake the SecretMode enum literal for user-facing text — see RoleForm's SCOPES
+  // for the same technique.
+  //
+  // 🔴 The three below were NOT hoisted originally, because the rule did not flag
+  // them: it walks the attribute expressions of a capitalized component but not those
+  // of a native element, and they lived on `<button onClick=…>`. Swapping those for
+  // <Button> made them visible — which is the note left here at the time ("the same
+  // hazard applies to all of them, so the fix is the shape, not the instance") coming
+  // due. Hoisting is the shape.
   const setNewValue = (value: string) => onChange({ mode: 'set', value });
+  const replaceSecret = () => onChange({ mode: 'set', value: '' });
+  const clearSecret = () => onChange({ mode: 'clear', value: '' });
+  const undoClear = () => onChange({ mode: existingHasSecret ? 'keep' : 'set', value: '' });
 
   if (mode === 'edit' && existingHasSecret && secret.mode === 'keep') {
     return (
@@ -282,20 +291,20 @@ export function ProviderApiKeyControl({
           <span className="rounded bg-emerald-500/10 px-2 py-1 font-medium text-emerald-600 dark:text-emerald-500">
             {t('apiKeyConfiguredStatus')}
           </span>
-          <button
-            type="button"
-            className="text-primary hover:underline"
-            onClick={() => onChange({ mode: 'set', value: '' })}
+          <Button
+            variant="link"
+            size="inline"
+            onClick={replaceSecret}
           >
             {t('replaceButton')}
-          </button>
-          <button
-            type="button"
-            className="text-destructive hover:underline"
-            onClick={() => onChange({ mode: 'clear', value: '' })}
+          </Button>
+          <Button
+            variant="linkDestructive"
+            size="inline"
+            onClick={clearSecret}
           >
             {t('clearButton')}
-          </button>
+          </Button>
         </div>
       </FormField>
     );
@@ -307,13 +316,13 @@ export function ProviderApiKeyControl({
           <span className="rounded bg-destructive/10 px-2 py-1 font-medium text-destructive">
             {t('apiKeyClearedStatus')}
           </span>
-          <button
-            type="button"
-            className="text-primary hover:underline"
-            onClick={() => onChange({ mode: existingHasSecret ? 'keep' : 'set', value: '' })}
+          <Button
+            variant="link"
+            size="inline"
+            onClick={undoClear}
           >
             {t('undoButton')}
-          </button>
+          </Button>
         </div>
       </FormField>
     );
