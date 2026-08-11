@@ -59,8 +59,23 @@ a guessed slug would have shipped wearing the word *verified*.
 Esri's basemap-service documentation returned 404 at the URL tried; nothing about it was
 established either way.
 
-**What would unblock them:** an actual key (which turns the probe discriminating again), or a
-provider-published list of style IDs. Neither is expensive; both are simply absent today.
+**What would unblock them, corrected after review:**
+
+- **Stadia Maps is addable today, and the sentence that used to sit here was wrong.** It claimed a
+  provider-published style list was "simply absent"; in fact
+  `docs.stadiamaps.com/map-styles/alidade-smooth/` publishes the exact raster template *including*
+  its style ID, and the attribution page publishes the credit line. One wrinkle to handle when
+  adding it: Stadia's published template carries **`{r}`** for retina, which MapLibre does not
+  substitute (its token is `{ratio}`) and which the validator therefore rejects. That is a template
+  adjustment, not a wording change, so it stays inside the rules above.
+- **MapTiler still cannot be added.** Its style list genuinely lives behind the account console; the
+  docs give `streets-v4` only as an example.
+- **Esri** was recorded as "documentation 404'd", which is honest but thin. Its tile endpoints do
+  answer; the substantive obstacle is that Esri's attribution is *dynamic* — it varies by layer and
+  view — which does not fit a single static credit line.
+
+An **absence claim is the kind that expires silently**, which is exactly what happened to the Stadia
+one within a day of being written. Re-check before repeating it.
 
 ## Why CyclOSM and Humanitarian OSM (HOT) are NOT here
 
@@ -93,11 +108,17 @@ validation, that is a signal to drop the entry, not to edit the credit.
 
 ## The keyed template placeholder
 
-Keyed providers carry `{apiKey}` in `tileUrl`. It is **our** token, not MapLibre's: MapLibre
-substitutes `{z}`, `{x}`, `{y}`, `{ratio}`, `{bbox-epsg-3857}` and `{quadkey}` and nothing else, so
-an unsubstituted `{apiKey}` would be sent to the provider literally. The picker composes it away
-before the value is ever stored, and refuses to save while it is still present — see
-`catalog.ts`.
+Keyed providers carry `{apiKey}` in `tileUrl`. It is **our** token, not MapLibre's, so an
+unsubstituted `{apiKey}` would be sent to the provider literally.
+
+🔴 An earlier draft of this paragraph enumerated MapLibre's tokens from memory and **got it wrong**,
+omitting `{prefix}` — which put a false list into the validator, its error message, and the
+published documentation in two languages. The set is now read out of MapLibre's own source by
+`placeholders.test.ts`, which compares it against the Go allow-list directly. Do not restate the
+set here; that restatement is what broke.
+
+The picker composes `{apiKey}` away before the value is ever stored, and refuses to save while it is
+still present — see `catalog.ts`.
 
 ## One subdomain, deliberately
 

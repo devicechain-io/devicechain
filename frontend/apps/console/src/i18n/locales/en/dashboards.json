@@ -11,12 +11,10 @@
   "created": "Dashboard “{{token}}” created",
   "createDashboard": "Create dashboard",
   "createTokenPlaceholder": "ops-overview",
-
   "detailLoading": "Loading dashboard…",
   "detailNotFound": "Dashboard “{{token}}” not found.",
   "detailParseError": "Could not render this dashboard: {{error}}",
   "detailInvalidDefinition": "Invalid dashboard definition.",
-
   "workspaceDiscardTitle": "Discard unsaved changes?",
   "workspaceDiscardDescription": "Your unsaved dashboard edits will be lost.",
   "workspaceDiscardConfirm": "Discard",
@@ -50,9 +48,7 @@
   "workspaceSizeWidth": "Fixed width",
   "workspaceSizeHeight": "Fixed height",
   "workspacePx": "px",
-
   "canvasFront": "Front",
-
   "versionHistoryTitle": "Version history",
   "versionHistoryDescription": "Publish the current draft as an immutable version, or roll the draft back to a previous one. History is append-only.",
   "versionPublishHeading": "Publish current draft",
@@ -84,7 +80,6 @@
   "versionRollbackConfirmTitle": "Roll back to version {{version}}?",
   "versionRollbackConfirmDescription": "This replaces the current draft with that version. The current draft — including saved changes you have not published — will be lost.",
   "versionRolledBack": "Rolled back to version {{version}}",
-
   "pickerSelectDevice": "Select device…",
   "pickerSelectCustomer": "Select customer…",
   "pickerSelectArea": "Select area…",
@@ -101,7 +96,6 @@
   "pickerFailedCustomers": "Failed to load customers.",
   "pickerFailedAreas": "Failed to load areas.",
   "pickerFailedAssets": "Failed to load assets.",
-
   "widgetClosePanel": "Close panel",
   "widgetLabelDataSource": "Data source",
   "widgetLabelTargetDevice": "Target device",
@@ -132,6 +126,7 @@
   "widgetTileUrlHint": "Raster tile template, for example https://tiles.example.com/{z}/{x}/{y}.png. Leave empty to use the tenant's basemap, which is what most boards should do. Setting one here overrides it for this board only — and needs the credit line the provider's licence requires.",
   "widgetLabelAttribution": "Attribution",
   "widgetAttributionHint": "The credit line your tile provider requires. Shown on the map.",
+  "widgetTileUncredited": "This tile URL has no credit line, so it is ignored and the widget draws the tenant basemap instead. A tile source and the attribution its licence requires are used together or not at all.",
   "widgetPlaceholderAny": "Any",
   "widgetFlashOnChange": "Flash on change",
   "widgetFlashOnChangeHint": "Briefly highlight a value green when it rises and red when it falls.",

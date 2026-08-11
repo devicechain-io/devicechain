@@ -140,10 +140,14 @@ function BasemapEditor({ override }: { override: TenantBasemap }) {
   // technical identifier).
   const setTileUrlField = (v: string) => set('tileUrl', v);
   const setAttributionField = (v: string) => set('attribution', v);
-  // 🔴 The picker writes BOTH halves in ONE update, never two `set` calls. Two calls
-  // would leave a render between them in which the new URL is paired with the previous
-  // provider's credit line — and that intermediate state is not merely cosmetic here,
-  // because the Save button's own guards read this state.
+  // 🔴 The picker writes BOTH halves in ONE update, never two `set` calls.
+  //
+  // Not for a rendering reason — React batches updates within an event handler, so two
+  // calls would produce one render either way. The reason is that the tile source IS
+  // one value: the same rule the server's Merge enforces across tiers, and the reason
+  // an emitted pair can never be split. Writing it as one update means there is no
+  // code path, now or after a refactor that moves one of these calls, in which a URL
+  // is stored under the previous provider's credit line.
   const setTileSource = (next: TileSource) => {
     setDirty(true);
     setForm((f) => ({ ...f, tileUrl: next.tileUrl, attribution: next.attribution }));

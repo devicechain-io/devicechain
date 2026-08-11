@@ -607,9 +607,27 @@ describe('the tenant basemap', () => {
     expect(screen.getByTestId('geofence-tile-uncredited')).toBeTruthy();
   });
 
-  // The control: the message must be capable of being absent, and the override must
-  // still work when it is complete. Without this, "always ignore the personal URL"
-  // and "always show the warning" both pass the test above.
+  // 🔴 A SURVIVING MUTATION, found in review, and the more instructive of the two
+  // controls. Dropping the `tileUrl` half of the condition — warning whenever the
+  // ATTRIBUTION is blank, regardless of whether a URL was ever entered — passed the
+  // whole suite, because no test rendered the form in the state nearly every user is
+  // actually in: both fields empty, inheriting the tenant basemap.
+  //
+  // The lesson generalises past this test. A negative control proves a warning CAN be
+  // absent; it does not prove it is absent on the input that will OCCUR. The case
+  // below was picked because it exercises the feature; this one is picked because it
+  // is the default.
+  it('says nothing at all when no personal basemap has been entered', async () => {
+    tenantBasemap.value = { tileUrl: TENANT_TILES, attribution: '© Tenant Tiles' };
+    render(<GeoFenceForm onDone={vi.fn()} />);
+
+    await screen.findByTestId('fake-map');
+    expect(screen.queryByTestId('geofence-tile-uncredited')).toBeNull();
+  });
+
+  // The other control: the message must be capable of being absent WITH a URL set,
+  // and the override must still work when it is complete. Without this, "always
+  // ignore the personal URL" and "always show the warning" both pass.
   it('applies a personal tile source that brings its own credit line, with no warning', async () => {
     tenantBasemap.value = { tileUrl: TENANT_TILES, attribution: '© Tenant Tiles' };
     window.localStorage.setItem('dc.geofence.tileUrl', PERSONAL_TILES);

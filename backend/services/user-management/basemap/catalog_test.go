@@ -85,10 +85,17 @@ func loadCatalog(t *testing.T) catalogFile {
 	return cat
 }
 
-// compose mirrors the console's composeTileUrl. It is restated here rather than
-// shared because the two languages cannot share it — and a divergence is caught by
-// TestCatalogComposedURLsMatchTheConsole in the console suite, which asserts the same
-// composed strings from the other side.
+// compose mirrors the console's composeTileUrl for a key made only of unreserved
+// characters, which is what sampleAPIKeys[0] is.
+//
+// 🔴 IT IS A RESTATEMENT, AND NOTHING PROVES THE TWO AGREE. The console URL-encodes
+// the key; this does a plain replace. They coincide exactly on unreserved characters
+// and nowhere else, which is why the sample keys are chosen the way they are — the
+// second one is pre-escaped so this side never has to encode. Treat that as a bound on
+// what this test can claim: it proves the catalog's TEMPLATES compose into values the
+// validator accepts, not that the console composes them identically. A shared golden
+// artifact would prove the stronger thing; it does not exist yet, and pretending
+// otherwise in this comment is worse than the gap.
 func compose(tileURL, key string) string {
 	return strings.ReplaceAll(tileURL, "{apiKey}", key)
 }
@@ -233,5 +240,57 @@ func TestCatalogIdentifiersAreUnique(t *testing.T) {
 			}
 			urls[s.TileURL] = key
 		}
+	}
+}
+
+// The placeholder allow-list, from the validator's side.
+//
+// 🔴 THE FIRST DRAFT OF THIS RULE REJECTED {prefix}, A REAL MAPLIBRE TOKEN. The
+// allow-list was written from memory rather than read from the renderer, so a guard
+// meant to catch a URL that CANNOT draw also refused one that draws perfectly — and
+// told the operator, in an error message we authored, that their working template
+// would fail on every tile.
+//
+// The instrument that actually keeps the two in step is placeholders.test.ts in the
+// console, which reads MapLibre's own source and this file's map literal and compares
+// them. This test is the cheap local half: it pins the behaviour at the boundary the
+// server owns, so a change here fails in this package rather than only in a frontend
+// job someone may not run.
+func TestTileURLPlaceholderAllowList(t *testing.T) {
+	const attr = "© Example"
+
+	accepted := []struct{ name, url string }{
+		{"plain xyz", "https://t.example.com/{z}/{x}/{y}.png"},
+		{"retina modifier", "https://t.example.com/{z}/{x}/{y}{ratio}.png"},
+		{"quadkey scheme", "https://t.example.com/{quadkey}.png"},
+		{"wms-style bbox", "https://t.example.com/?bbox={bbox-epsg-3857}"},
+		// 🔴 The regression. MapLibre substitutes {prefix} with the low nibbles of x
+		// and y; a server sharded that way is a legitimate, working configuration.
+		{"maplibre {prefix} sharding", "https://t.example.com/{prefix}/{z}/{x}/{y}.png"},
+	}
+	for _, tc := range accepted {
+		t.Run("accepts/"+tc.name, func(t *testing.T) {
+			url, a := tc.url, attr
+			if err := basemap.Validate(basemap.Basemap{TileURL: &url, Attribution: &a}); err != nil {
+				t.Errorf("rejected a template the renderer handles: %v", err)
+			}
+		})
+	}
+
+	// The counterweight. Without these the rule could be deleted entirely and every
+	// case above would still pass.
+	rejected := []struct{ name, url string }{
+		{"leaflet subdomain", "https://{s}.t.example.com/{z}/{x}/{y}.png"},
+		{"leaflet retina", "https://t.example.com/{z}/{x}/{y}{r}.png"},
+		{"unsubstituted catalog key", "https://t.example.com/{z}/{x}/{y}.png?k={apiKey}"},
+		{"someone else's token", "https://t.example.com/{zoom}/{x}/{y}.png"},
+	}
+	for _, tc := range rejected {
+		t.Run("rejects/"+tc.name, func(t *testing.T) {
+			url, a := tc.url, attr
+			if err := basemap.Validate(basemap.Basemap{TileURL: &url, Attribution: &a}); err == nil {
+				t.Errorf("accepted a template that would be requested literally: %s", tc.url)
+			}
+		})
 	}
 }

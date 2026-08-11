@@ -11,11 +11,17 @@
 // provider for the new provider's tiles, which is a licence violation manufactured by
 // the UI rather than a cosmetic mismatch.
 //
-// 🔴 IT HOLDS NO SELECTION STATE. The provider, the style and the key are all DERIVED
-// from the tileUrl prop on every render (catalog.ts `recognize`). That is what keeps
-// the dropdown honest when someone edits the raw Tile URL field underneath it: with a
-// remembered selection, the box would go on naming a provider the URL no longer
+// 🔴 THE SELECTION IS DERIVED, NOT REMEMBERED. The provider and the style are read
+// back out of the tileUrl prop on every render (catalog.ts `recognize`). That is what
+// keeps the dropdown honest when someone edits the raw Tile URL field underneath it:
+// with a remembered selection, the box would go on naming a provider the URL no longer
 // describes, and the next style change would compose from the wrong template.
+//
+// The API key is the ONE exception, and it has to be. Until a key is complete the
+// composed URL still carries the placeholder, so there is nothing in the URL to read
+// it back from — a derived-only key would erase itself on every keystroke. `typedKey`
+// holds that in-progress text and a recognised key always wins over it, so the field
+// can never disagree with the URL it produced.
 //
 // One component, both tiers — the tenant page and (next) the operator's instance
 // default. Two catalogs, or two pickers over one catalog, would drift.

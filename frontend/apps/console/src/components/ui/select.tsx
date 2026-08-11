@@ -10,10 +10,11 @@
 // semantics and the platform's own touch picker for free, none of which a div-based
 // listbox reproduces without effort.
 //
-// This began as three identical local copies — the rules canvas inspector, the
-// connector config form, and the basemap provider picker — the second of which
-// carried the comment "matching the canvas inspector's (there is no shared Select
-// primitive)". There is one now.
+// This began as two identical local copies — the rules canvas inspector and the
+// connector config form — the second of which carried the comment "matching the canvas
+// inspector's (there is no shared Select primitive; the app uses native selects for
+// closed enums)". The basemap provider picker would have been the third. There is one
+// now.
 
 import type { ReactNode } from 'react';
 

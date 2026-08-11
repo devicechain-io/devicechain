@@ -72,8 +72,13 @@ export function resolveBasemap(override: Basemap | null | undefined, tenant: Bas
   //
   // So an override naming tiles without their attribution is discarded whole, and the
   // surface falls back to the tenant's properly-credited basemap. Failing closed to a
-  // map that is credited beats honouring a preference that cannot legally be shown —
-  // and the fallback is a real map, not a blank one.
+  // map that is credited beats honouring a preference that cannot legally be shown.
+  //
+  // On an ordinary instance the fallback is a real map, because a shipped default
+  // means some tier below almost always has one. On an instance whose operator
+  // deliberately stored `{}` there is nothing below, and the surface falls through to
+  // the bundled schematic world — which is the correct outcome for the same reason,
+  // just a less pretty one.
   const overrideAttribution = text(o.attribution);
   const overrideTiles = overrideAttribution === null ? null : text(o.tileUrl);
   const tileUrl = overrideTiles ?? text(t.tileUrl);

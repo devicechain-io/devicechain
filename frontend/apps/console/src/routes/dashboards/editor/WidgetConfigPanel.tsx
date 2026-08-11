@@ -571,6 +571,18 @@ function TypeOptions({
           {/* eslint-disable-next-line i18next/no-literal-string */}
           <Input value={optString(widget, 'attribution')} onChange={(e) => setOption('attribution', e.target.value)} />
         </FormField>
+        {/* 🔴 A widget tile source with no credit line is IGNORED at render — the two
+            halves are one value, and this tier never reaches the server's validation,
+            so the renderer discards the pair rather than drawing a provider's tiles
+            uncredited. Saying so is the whole point: without it the option silently
+            does nothing and reads as broken, which is the complaint the basemap work
+            started from. The geofence editor carries the same message. */}
+        {optString(widget, 'tileUrl').trim() !== '' &&
+          optString(widget, 'attribution').trim() === '' && (
+            <p className="text-destructive text-xs" data-testid="widget-tile-uncredited">
+              {t('widgetTileUncredited')}
+            </p>
+          )}
       </>
     );
   }

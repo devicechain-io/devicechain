@@ -135,7 +135,7 @@
   "geofenceTileUrlHelp": "Se recuerda solo en este navegador; no se comparte con otros usuarios ni se guarda en el servidor.",
   "geofenceTileAttribution": "Atribución",
   "geofenceTileAttributionHelp": "La línea de créditos que su proveedor de teselas exige mostrar.",
-  "geofenceTileUncredited": "Esta URL de mosaicos no tiene línea de crédito, así que se está ignorando y el mapa muestra el mapa base de tu inquilino. Mostrar los mosaicos de un proveedor sin la atribución que exige su licencia es una infracción de licencia, así que ambos se usan juntos o no se usa ninguno.",
+  "geofenceTileUncredited": "Esta URL de teselas no tiene línea de créditos, así que se está ignorando y el mapa muestra el mapa base de su inquilino. Mostrar las teselas de un proveedor sin la atribución que exige su licencia es una infracción de licencia, así que ambas se usan juntas o no se usa ninguna.",
   "geofenceUnreadableGeometry": "Esta geocerca usa una figura que este editor no puede dibujar. Se conserva intacta y se sigue aplicando; lo único que no está disponible es editarla aquí. Déjela como está en lugar de volver a crearla.",
   "geofenceHistoryTab": "Historial",
   "geofenceHistoryNone": "Aún no se ha registrado ningún conjunto de geocercas. Se congela uno cada vez que se crea, modifica o elimina una geocerca.",

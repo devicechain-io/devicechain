@@ -84,6 +84,28 @@ describe('recognize', () => {
     expect(recognize(source.tileUrl)?.apiKey).toBe('');
   });
 
+  // 🔴 A SURVIVING MUTATION, found in review. Every key in the round trip above goes
+  // through composeTileUrl, which produces only WELL-FORMED escapes — so nothing here
+  // ever handed decodeURIComponent something it could choke on, and replacing
+  // safeDecode with a bare decodeURIComponent passed the entire suite.
+  //
+  // A stored tile URL is operator input. It can be hand-edited, and it can predate
+  // this picker entirely. `%zz` is not a valid escape, decodeURIComponent throws a
+  // URIError on it, and recognize is called during RENDER of the settings page — so
+  // the untested path is "the Basemap page crashes on a value someone saved", which
+  // is precisely what safeDecode's comment promises will not happen.
+  it('survives a malformed percent-escape in a stored URL instead of throwing', () => {
+    const { provider, source } = keyedSource();
+    const broken = source.tileUrl.split(API_KEY_TOKEN).join('ab%zzcd');
+
+    // The control first: this really is input that would throw unguarded.
+    expect(() => decodeURIComponent('ab%zzcd')).toThrow();
+
+    const m = recognize(broken);
+    expect(m?.provider.id).toBe(provider.id);
+    expect(m?.apiKey).toBe('ab%zzcd'); // shown raw rather than decoded
+  });
+
   // 🔴 NEGATIVE CONTROL. Every assertion above is "recognize found something". If it
   // matched too eagerly — say by prefix alone — they would all still pass while the
   // picker mislabelled a private tile server as a public provider and, worse, offered
@@ -124,17 +146,29 @@ describe('the catalog data', () => {
     }
   });
 
-  // 🔴 The cross-language contract. The Go gate composes with a plain string replace;
-  // this side URL-encodes. For a key made only of unreserved characters the two must
-  // agree exactly, or the value the backend proved valid is not the value the console
-  // actually stores.
-  it('composes identically to the server-side gate for an unreserved key', () => {
+  // 🔴 The cross-language contract, asserted against LITERALS.
+  //
+  // The obvious way to write this — compare composeTileUrl(t, key) to
+  // t.split(TOKEN).join(key) — is a tautology: it restates the implementation and
+  // agrees with it by construction, including when both are wrong. It was written
+  // that way first and caught in review.
+  //
+  // The Go gate (backend/services/user-management/basemap/catalog_test.go) composes
+  // the same entry with the same key and runs the real validator over the result. The
+  // string below is what BOTH sides must produce; spelling it out is the only thing
+  // that makes the two independent. If a template changes, this fails and points at
+  // the entry, rather than silently agreeing with whatever the new code does.
+  it('composes a known entry to exactly the string the server-side gate validates', () => {
     const key = 'k3y-with_odd.chars~09';
+    // Unreserved throughout, so encoding is a no-op and the two languages coincide.
     expect(encodeURIComponent(key)).toBe(key);
-    for (const p of PROVIDERS) {
-      for (const s of p.sources) {
-        expect(composeTileUrl(s.tileUrl, key)).toBe(s.tileUrl.split(API_KEY_TOKEN).join(key));
-      }
-    }
+
+    const thunderforest = findProvider('thunderforest');
+    const cycle = thunderforest?.sources.find((s) => s.id === 'cycle');
+    expect(cycle, 'the catalog should still carry thunderforest/cycle').toBeTruthy();
+
+    expect(composeTileUrl(cycle!.tileUrl, key)).toBe(
+      'https://tile.thunderforest.com/cycle/{z}/{x}/{y}.png?apikey=k3y-with_odd.chars~09',
+    );
   });
 });

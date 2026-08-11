@@ -41,10 +41,13 @@ export interface CatalogProvider {
 
 export const PROVIDERS: readonly CatalogProvider[] = catalogData.providers;
 
-// 🔴 OUR token, not MapLibre's. MapLibre substitutes {z}, {x}, {y}, {ratio},
-// {bbox-epsg-3857} and {quadkey} — nothing else — so a stored URL still carrying this
-// one would have the literal text "{apiKey}" sent to the provider on every tile
-// request. That is why composeTileUrl leaves it INTACT rather than substituting a
+// 🔴 OUR token, not MapLibre's — so a stored URL still carrying this one would have the
+// literal text "{apiKey}" sent to the provider on every tile request.
+//
+// The set MapLibre DOES substitute is deliberately not written out here. An earlier
+// draft enumerated it from memory, omitted {prefix}, and put that false list into the
+// server's error message and the published docs. The authority is MapLibre's own
+// source, compared against the server's allow-list by placeholders.test.ts. That is why composeTileUrl leaves it INTACT rather than substituting a
 // blank: an intact placeholder is refused by both this form and the server, whereas a
 // blank would compose to `?apikey=` and sail through every check into storage.
 export const API_KEY_TOKEN = '{apiKey}';
@@ -115,8 +118,15 @@ export function recognize(tileUrl: string): Recognized | null {
       const prefix = source.tileUrl.slice(0, idx);
       const suffix = source.tileUrl.slice(idx + API_KEY_TOKEN.length);
       if (!url.startsWith(prefix) || !url.endsWith(suffix)) continue;
-      // Guard the degenerate overlap: with an empty suffix a short URL could satisfy
+      // Guard the degenerate overlap: a URL shorter than prefix+suffix can satisfy
       // both tests using the same characters, yielding a negative-length middle.
+      //
+      // 🔴 Unreachable with the CURRENT catalog and kept deliberately: every keyed
+      // template today ends in {apiKey}, so the suffix is empty and this reduces to
+      // the startsWith check above. It becomes live the first time a provider puts
+      // anything after its key — `?key={apiKey}&format=png` — which is a template
+      // shape several providers use. Noted rather than deleted, and noted rather than
+      // claimed as tested, because nothing in the suite can currently reach it.
       if (url.length < prefix.length + suffix.length) continue;
       const middle = url.slice(prefix.length, url.length - suffix.length);
       if (middle === API_KEY_TOKEN) return { provider, source, apiKey: '' };
