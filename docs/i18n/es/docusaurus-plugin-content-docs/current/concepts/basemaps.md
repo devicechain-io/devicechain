@@ -15,6 +15,8 @@ Si es el proveedor adecuado para ti es otra cuestión, y conviene planteársela 
 
 El mapa base se configura **por inquilino**, en la consola bajo **Mapa base**, por alguien que tenga la autoridad `basemap:write`.
 
+Elige un proveedor de la lista y DeviceChain rellena su plantilla de mosaicos y la línea de crédito que exige su licencia. Ambas siguen siendo editables debajo, así que un proveedor que no esté en la lista —un servidor de mosaicos interno, por ejemplo— sigue siendo cuestión de escribir los dos campos directamente; consulta [Elegir un proveedor](#choosing-a-provider).
+
 Esa ubicación es lo importante. Una URL de mosaicos suele llevar una clave de API, y que la clave pertenezca al inquilino significa que su propia cuenta de mapas se factura, se limita, se restringe y se revoca por separado, sin tocar a nadie más de la instancia. Un inquilino que agote su cuota no puede dejar sin mapas a otro, y un inquilino que ya tenga contrato con un proveedor puede usarlo.
 
 `basemap:write` está deliberadamente **separada de `branding:write`**, aunque ambas definen el aspecto de la consola de un inquilino. Unirlas haría que cada concesión implicara la otra en ambos sentidos: quien cambia el logotipo podría leer la clave del mapa, y quien configura los mapas podría rediseñar la consola.
@@ -37,7 +39,9 @@ Los niveles por superficie no desaparecen: son la forma de probar un proveedor e
 
 Una URL de mosaicos y la atribución que exige su licencia son **un único valor, no dos**. Se validan juntas —ninguna puede guardarse sin la otra— y se heredan juntas.
 
-Esa segunda parte es la que conviene conocer. Si tu inquilino define su propia URL de mosaicos y deja la atribución en blanco, **no** conserva en silencio la línea de crédito del valor por defecto de la instancia: se resuelve como «sin atribución», y de hecho el guardado se rechaza antes de llegar a eso. Mostrar los mosaicos de un proveedor bajo el crédito de otro es una infracción de licencia, así que la cascada no fabricará una.
+Esa segunda parte es la que conviene conocer. Si tu inquilino define su propia URL de mosaicos y deja la atribución en blanco, **no** conserva en silencio la línea de crédito del valor por defecto de la instancia: mostrar los mosaicos de un proveedor bajo el crédito de otro es una infracción de licencia, así que la cascada no fabricará una. En los niveles de inquilino y de instancia el guardado se rechaza antes de llegar a eso.
+
+Los niveles **por superficie** se definen en el navegador y nunca pasan por esa validación, así que aplican la misma regla en el punto de uso: una opción de widget o un campo del editor de geocercas que indique una URL de mosaicos sin línea de crédito se **ignora por completo**, y el mapa recurre al mapa base del inquilino, que sí está acreditado. El editor de geocercas lo indica cuando ocurre. Una anulación a medias se descarta en lugar de aplicarse a medias, porque la alternativa es dibujar los mosaicos de un proveedor sin ningún crédito.
 
 La vista inicial (`centerLat` / `centerLon` / `zoom`) no tiene esa restricción y se hereda campo a campo, de modo que un inquilino puede cambiar el zoom sin volver a declarar un proveedor para conservarlo.
 
@@ -51,6 +55,7 @@ El guardado falla de forma cerrada, y cada regla rechaza un valor que si no fall
 
 - **Solo `https`.** Una consola servida por HTTPS bloquea los mosaicos obtenidos por HTTP como contenido mixto, así que un origen `http://` queda almacenado pero no puede representarse. Si tienes un servidor de mosaicos interno en HTTP simple, ponlo detrás de TLS.
 - **Debe ser una plantilla.** La URL necesita `{z}`, `{x}` e `{y}` —o `{bbox-epsg-3857}`, o `{quadkey}`—. Sin un marcador, todos los mosaicos del mapa solicitan la misma imagen, que es la forma de los dos errores de copiado más habituales: la URL de un único mosaico y la URL de un JSON de estilo.
+- **Solo se admiten los marcadores que el renderizador conoce** —`{prefix}`, `{z}`, `{x}`, `{y}`, `{ratio}`, `{bbox-epsg-3857}` y `{quadkey}`—. Cualquier otra cosa entre llaves se envía al proveedor como texto literal. Esto detecta la copia más habitual de todas: una URL escrita para Leaflet, que lleva un marcador de subdominio `{s}` que el renderizador de DeviceChain no sustituye. Sustitúyelo por un único subdominio —`a.tile.example.com` en lugar de `{s}.tile.example.com`—, que además es lo que recomienda la práctica actual.
 - **La atribución es obligatoria, y su marcado es limitado**: texto plano más enlaces escritos exactamente como `<a href="https://…">texto</a>`. Se permiten enlaces porque varias licencias de proveedores exigen que el crédito enlace a su página de derechos de autor; todo lo demás se rechaza.
 
 Hoy solo se admiten mosaicos **ráster**. No se acepta una URL de estilo vectorial.
@@ -58,6 +63,15 @@ Hoy solo se admiten mosaicos **ráster**. No se acepta una URL de estilo vectori
 ## Elegir un proveedor {#choosing-a-provider}
 
 El valor por defecto te da un mapa que funciona desde el primer día. No es automáticamente la respuesta correcta para un despliegue en producción, y el factor decisivo suele ser **quién se espera que sirva tu tráfico**.
+
+La lista **Proveedor** incluye un conjunto de proveedores cuya plantilla de mosaicos y cuya línea de crédito obligatoria se han contrastado con la documentación del propio proveedor. Al elegir uno se rellenan ambos campos; cuando un proveedor necesita una clave de API, esta tiene su propio campo y se compone dentro de la URL por ti, de modo que la clave puede rotarse después sin volver a pegar la plantilla.
+
+Dos cosas que la lista deliberadamente no hace:
+
+- **No describe los términos de nadie.** Cada entrada enlaza a la página de términos y precios del propio proveedor. Si un nivel es gratuito, si necesita cuenta o si tiene un límite de uso son afirmaciones que pueden cambiar en la web de otra persona sin que nos enteremos, así que la lista apunta a la fuente en lugar de resumirla. Léela antes de depender de un proveedor.
+- **No es exhaustiva, y eso es un listón deliberado, no una lista de pendientes.** Un proveedor solo aparece cuando su línea de crédito obligatoria está publicada por el propio proveedor. Una entrada con una línea de crédito *incorrecta* es peor que una entrada ausente: enviaría una infracción de licencia ya rellenada y con apariencia de fiable, justo en el lugar donde el usuario tiene derecho a suponer que lo hemos hecho bien. Si falta tu proveedor, elige **Personalizado…** e introduce los dos campos tú mismo.
+
+Elegir **Personalizado…** nunca altera lo que ya hay en los campos: significa «esto lo escribo yo», que es exactamente cuando sobrescribir sería más destructivo.
 
 Los servidores de mosaicos de OpenStreetMap los gestiona una organización sin ánimo de lucro y se financian con donaciones. Su [política de uso de mosaicos](https://operations.osmfoundation.org/policies/tiles/) detalla lo que te piden, y DeviceChain está construido para cumplirla: los mosaicos se obtienen solo a medida que navegas, nunca se descargan por adelantado ni se archivan, y la línea de crédito siempre se muestra. Dos cosas siguen siendo responsabilidad tuya:
 
@@ -77,7 +91,7 @@ Es esquemático, y lo es con honestidad: continentes y fronteras, nada con detal
 ## La clave de API de la URL de mosaicos no es un secreto {#the-api-key-is-not-a-secret}
 
 :::warning Es visible para cualquiera que use el inquilino
-Si la URL de mosaicos de tu proveedor lleva una clave de API, **esa clave llega al navegador**: tiene que hacerlo, porque el navegador es quien obtiene los mosaicos. Se almacena como configuración normal, no en el almacén de secretos, porque un valor que el cliente debe leer no puede ocultarse al cliente.
+Si la URL de mosaicos de tu proveedor lleva una clave de API, **esa clave llega al navegador**: tiene que hacerlo, porque el navegador es quien obtiene los mosaicos. Se almacena como configuración normal, no en el almacén de secretos, porque un valor que el cliente debe leer no puede ocultarse al cliente. Su propio campo **Clave de API** existe para colocar la clave en el lugar correcto de la plantilla, no para protegerla.
 
 Protégela como esperan los proveedores de mapas: con **restricciones de referente HTTP** (y, cuando existan, cuotas por clave y restricciones de API) en la consola del propio proveedor, limitadas al nombre de host desde el que se sirve tu consola. Ese es el control que de verdad limita el abuso de una clave así. Trata la rotación como algo rutinario y usa una clave distinta por inquilino, para que revocar una no afecte a nadie más.
 :::

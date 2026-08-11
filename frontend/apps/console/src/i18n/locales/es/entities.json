@@ -14,7 +14,6 @@
   "deviceTypeDeleteTitle": "Eliminar tipo de dispositivo",
   "deviceTypeIdentityTab": "Identidad",
   "deviceTypeProfileTab": "Perfil",
-
   "deviceGroupTitlePlural": "Grupos de dispositivos",
   "deviceGroupListDescription": "Colecciones de dispositivos",
   "deviceGroupNew": "Nuevo grupo de dispositivos",
@@ -28,7 +27,6 @@
   "deviceGroupNotFound": "Grupo de dispositivos “{{token}}” no encontrado.",
   "deviceGroupRemoveConfirm": "¿Eliminar el grupo de dispositivos “{{token}}”? Esta acción no se puede deshacer.",
   "deviceGroupDeleteTitle": "Eliminar grupo de dispositivos",
-
   "deviceAddPlaceholder": "Añadir dispositivos…",
   "deviceEmptyInGroup": "No hay dispositivos en este grupo aún.",
   "deviceAddedCount_one": "Se añadió {{count}} dispositivo",
@@ -41,7 +39,6 @@
   "deviceTypeLabel": "Tipo de dispositivo",
   "deviceTypeSelect": "Seleccione un tipo de dispositivo…",
   "deviceTypeEmpty": "Cree primero un tipo de dispositivo.",
-
   "deviceProfileTitlePlural": "Perfiles de dispositivo",
   "deviceProfileListDescription": "Contratos de capacidad reutilizables — métricas, comandos y reglas de detección — que adoptan los tipos de dispositivo",
   "deviceProfileNew": "Nuevo perfil de dispositivo",
@@ -57,7 +54,6 @@
   "deviceProfileDetectionRulesTab": "Reglas de detección",
   "deviceProfileRuleHealthTab": "Estado de reglas",
   "deviceProfileVersionsTab": "Versiones",
-
   "areaTitlePlural": "Áreas",
   "areaListDescription": "Ubicaciones o zonas por las que organiza",
   "areaNew": "Nueva área",
@@ -78,7 +74,6 @@
   "areaEmptyInGroup": "No hay áreas en este grupo aún.",
   "areaAddedCount_one": "Se añadió {{count}} área",
   "areaAddedCount_other": "Se añadieron {{count}} áreas",
-
   "areaTypeTitlePlural": "Tipos de área",
   "areaTypeListDescription": "Plantillas que clasifican áreas",
   "areaTypeNew": "Nuevo tipo de área",
@@ -92,7 +87,6 @@
   "areaTypeNotFound": "Tipo de área “{{token}}” no encontrado.",
   "areaTypeRemoveConfirm": "¿Eliminar el tipo de área “{{token}}”? Esta acción no se puede deshacer.",
   "areaTypeDeleteTitle": "Eliminar tipo de área",
-
   "areaGroupTitlePlural": "Grupos de áreas",
   "areaGroupListDescription": "Colecciones de áreas",
   "areaGroupNew": "Nuevo grupo de áreas",
@@ -106,7 +100,6 @@
   "areaGroupNotFound": "Grupo de áreas “{{token}}” no encontrado.",
   "areaGroupRemoveConfirm": "¿Eliminar el grupo de áreas “{{token}}”? Esta acción no se puede deshacer.",
   "areaGroupDeleteTitle": "Eliminar grupo de áreas",
-
   "geofenceTitlePlural": "Geocercas",
   "geofenceListDescription": "Límites contra los que se comprueban las posiciones notificadas",
   "geofenceNew": "Nueva geocerca",
@@ -142,6 +135,7 @@
   "geofenceTileUrlHelp": "Se recuerda solo en este navegador; no se comparte con otros usuarios ni se guarda en el servidor.",
   "geofenceTileAttribution": "Atribución",
   "geofenceTileAttributionHelp": "La línea de créditos que su proveedor de teselas exige mostrar.",
+  "geofenceTileUncredited": "Esta URL de teselas no tiene línea de créditos, así que se está ignorando y el mapa muestra el mapa base de su inquilino. Mostrar las teselas de un proveedor sin la atribución que exige su licencia es una infracción de licencia, así que ambas se usan juntas o no se usa ninguna.",
   "geofenceUnreadableGeometry": "Esta geocerca usa una figura que este editor no puede dibujar. Se conserva intacta y se sigue aplicando; lo único que no está disponible es editarla aquí. Déjela como está en lugar de volver a crearla.",
   "geofenceHistoryTab": "Historial",
   "geofenceHistoryNone": "Aún no se ha registrado ningún conjunto de geocercas. Se congela uno cada vez que se crea, modifica o elimina una geocerca.",
@@ -153,7 +147,6 @@
   "geofenceHistoryAbsent": "Esta geocerca no estaba en el conjunto en la versión {{version}}. Se creó después, o se eliminó una geocerca con este token y el token se reutilizó.",
   "geofenceHistoryUnreadable": "Esta geocerca estaba en el conjunto, pero su figura no se puede dibujar en este visor. Se seguía aplicando.",
   "geofenceHistoryLegend": "Continua: la figura almacenada con este token en la versión {{version}}. Discontinua: la figura actual.",
-
   "assetTitlePlural": "Activos",
   "assetListDescription": "Cosas físicas o lógicas que rastrea",
   "assetNew": "Nuevo activo",
@@ -174,7 +167,6 @@
   "assetEmptyInGroup": "No hay activos en este grupo aún.",
   "assetAddedCount_one": "Se añadió {{count}} activo",
   "assetAddedCount_other": "Se añadieron {{count}} activos",
-
   "assetTypeTitlePlural": "Tipos de activo",
   "assetTypeListDescription": "Plantillas que clasifican activos",
   "assetTypeNew": "Nuevo tipo de activo",
@@ -188,7 +180,6 @@
   "assetTypeNotFound": "Tipo de activo “{{token}}” no encontrado.",
   "assetTypeRemoveConfirm": "¿Eliminar el tipo de activo “{{token}}”? Esta acción no se puede deshacer.",
   "assetTypeDeleteTitle": "Eliminar tipo de activo",
-
   "assetGroupTitlePlural": "Grupos de activos",
   "assetGroupListDescription": "Colecciones de activos",
   "assetGroupNew": "Nuevo grupo de activos",
@@ -202,7 +193,6 @@
   "assetGroupNotFound": "Grupo de activos “{{token}}” no encontrado.",
   "assetGroupRemoveConfirm": "¿Eliminar el grupo de activos “{{token}}”? Esta acción no se puede deshacer.",
   "assetGroupDeleteTitle": "Eliminar grupo de activos",
-
   "customerTitlePlural": "Clientes",
   "customerListDescription": "Organizaciones o cuentas a las que atiende",
   "customerNew": "Nuevo cliente",
@@ -223,7 +213,6 @@
   "customerEmptyInGroup": "No hay clientes en este grupo aún.",
   "customerAddedCount_one": "Se añadió {{count}} cliente",
   "customerAddedCount_other": "Se añadieron {{count}} clientes",
-
   "customerTypeTitlePlural": "Tipos de cliente",
   "customerTypeListDescription": "Plantillas que clasifican clientes",
   "customerTypeNew": "Nuevo tipo de cliente",
@@ -237,7 +226,6 @@
   "customerTypeNotFound": "Tipo de cliente “{{token}}” no encontrado.",
   "customerTypeRemoveConfirm": "¿Eliminar el tipo de cliente “{{token}}”? Esta acción no se puede deshacer.",
   "customerTypeDeleteTitle": "Eliminar tipo de cliente",
-
   "customerGroupTitlePlural": "Grupos de clientes",
   "customerGroupListDescription": "Colecciones de clientes",
   "customerGroupNew": "Nuevo grupo de clientes",

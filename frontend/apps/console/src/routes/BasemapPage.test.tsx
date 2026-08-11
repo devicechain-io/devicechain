@@ -193,6 +193,60 @@ describe('the tile URL', () => {
   });
 });
 
+// The picker's own behaviour is proved in components/basemap. What is proved HERE is
+// the wiring: that choosing a provider reaches the fields the save reads, and that a
+// half-made keyed URL cannot leave this page.
+describe('the provider picker', () => {
+  const pickProvider = (id: string) =>
+    fireEvent.change(document.getElementById('bm-provider') as HTMLSelectElement, {
+      target: { value: id },
+    });
+
+  it('fills both fields, and the result saves', async () => {
+    render(<BasemapPage />);
+    pickProvider('openstreetmap');
+
+    const url = (document.getElementById('bm-tile-url') as HTMLInputElement).value;
+    const credit = (document.getElementById('bm-attribution') as HTMLInputElement).value;
+    expect(url).toContain('{z}');
+    expect(credit).not.toBe('');
+    expect(saveButton().disabled).toBe(false);
+
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(setTenantBasemapMock).toHaveBeenCalled());
+    expect(setTenantBasemapMock.mock.calls[0][0]).toMatchObject({
+      tileUrl: url,
+      attribution: credit,
+    });
+  });
+
+  // 🔴 The fail-closed pair. Picking a keyed provider composes a URL that still holds
+  // the placeholder, and that value must not be storable: saved as-is, every tile
+  // request would send the literal text "{apiKey}" instead of a key, and the map
+  // would be uniformly blank with a perfectly valid-looking setting behind it.
+  it('blocks the save while a chosen provider still needs its key', () => {
+    render(<BasemapPage />);
+    pickProvider('thunderforest');
+
+    expect((document.getElementById('bm-tile-url') as HTMLInputElement).value).toContain(
+      '{apiKey}',
+    );
+    expect(saveButton().disabled).toBe(true);
+    expect(screen.getByText(/unfilled API key placeholder/i)).toBeTruthy();
+  });
+
+  it('unblocks once the key is filled in', () => {
+    render(<BasemapPage />);
+    pickProvider('thunderforest');
+    type('bm-api-key', 'a-real-key');
+
+    const url = (document.getElementById('bm-tile-url') as HTMLInputElement).value;
+    expect(url).not.toContain('{apiKey}');
+    expect(url).toContain('a-real-key');
+    expect(saveButton().disabled).toBe(false);
+  });
+});
+
 describe('the fallback view', () => {
   it('blocks half a coordinate', () => {
     render(<BasemapPage />);

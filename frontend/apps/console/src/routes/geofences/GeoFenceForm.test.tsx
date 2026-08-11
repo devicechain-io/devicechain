@@ -470,6 +470,11 @@ describe('the basemap fields', () => {
     // 🔴 The map is torn down and rebuilt whenever its style changes, so applying
     // per keystroke rebuilt it ~40 times while typing a template — each rebuild
     // firing real tile requests at a truncated URL and resetting the camera.
+    // The credit line is seeded first so this test measures the BLUR and nothing else.
+    // Without it the tile URL would be discarded as uncredited on commit, and the
+    // assertion below would be reading the licence rule while claiming to read the
+    // debounce — passing or failing for a reason it never mentions.
+    window.localStorage.setItem('dc.geofence.tileAttribution', '© Mine');
     render(<GeoFenceForm onDone={vi.fn()} />);
     const input = (await screen.findByLabelText('Tile URL')) as HTMLInputElement;
 
@@ -583,16 +588,56 @@ describe('the tenant basemap', () => {
     expect(fake.getAttribute('data-attribution')).toBe('© Mine');
   });
 
-  // 🔴 The licence rule, at the surface an author actually types into. Pasting a tile
-  // URL into the personal field must not leave the TENANT's credit line under it.
-  it('does not keep the tenant credit line under a personal tile URL', async () => {
+  // 🔴 The licence rule, at the surface an author actually types into, and it has TWO
+  // halves. Pasting a tile URL into the personal field must not leave the TENANT's
+  // credit line under it — and must not draw those tiles with no credit line either.
+  // The second half is why the override is discarded whole rather than half-applied:
+  // this tier is entered in the browser and never reaches the server's validation, so
+  // there is nowhere else the pair can be enforced.
+  it('ignores a personal tile URL that arrives with no credit line', async () => {
     tenantBasemap.value = { tileUrl: TENANT_TILES, attribution: '© Tenant Tiles' };
     window.localStorage.setItem('dc.geofence.tileUrl', PERSONAL_TILES);
     render(<GeoFenceForm onDone={vi.fn()} />);
 
     const fake = await screen.findByTestId('fake-map');
+    expect(fake.getAttribute('data-tile-url')).toBe(TENANT_TILES);
+    expect(fake.getAttribute('data-attribution')).toBe('© Tenant Tiles');
+    // 🔴 And SAYS so. A rule this silent is indistinguishable from the field being
+    // broken — which is the complaint that started this whole line of work.
+    expect(screen.getByTestId('geofence-tile-uncredited')).toBeTruthy();
+  });
+
+  // 🔴 A SURVIVING MUTATION, found in review, and the more instructive of the two
+  // controls. Dropping the `tileUrl` half of the condition — warning whenever the
+  // ATTRIBUTION is blank, regardless of whether a URL was ever entered — passed the
+  // whole suite, because no test rendered the form in the state nearly every user is
+  // actually in: both fields empty, inheriting the tenant basemap.
+  //
+  // The lesson generalises past this test. A negative control proves a warning CAN be
+  // absent; it does not prove it is absent on the input that will OCCUR. The case
+  // below was picked because it exercises the feature; this one is picked because it
+  // is the default.
+  it('says nothing at all when no personal basemap has been entered', async () => {
+    tenantBasemap.value = { tileUrl: TENANT_TILES, attribution: '© Tenant Tiles' };
+    render(<GeoFenceForm onDone={vi.fn()} />);
+
+    await screen.findByTestId('fake-map');
+    expect(screen.queryByTestId('geofence-tile-uncredited')).toBeNull();
+  });
+
+  // The other control: the message must be capable of being absent WITH a URL set,
+  // and the override must still work when it is complete. Without this, "always
+  // ignore the personal URL" and "always show the warning" both pass.
+  it('applies a personal tile source that brings its own credit line, with no warning', async () => {
+    tenantBasemap.value = { tileUrl: TENANT_TILES, attribution: '© Tenant Tiles' };
+    window.localStorage.setItem('dc.geofence.tileUrl', PERSONAL_TILES);
+    window.localStorage.setItem('dc.geofence.tileAttribution', '© Mine');
+    render(<GeoFenceForm onDone={vi.fn()} />);
+
+    const fake = await screen.findByTestId('fake-map');
     expect(fake.getAttribute('data-tile-url')).toBe(PERSONAL_TILES);
-    expect(fake.getAttribute('data-attribution')).toBe('');
+    expect(fake.getAttribute('data-attribution')).toBe('© Mine');
+    expect(screen.queryByTestId('geofence-tile-uncredited')).toBeNull();
   });
 
   it('opens a NEW fence at the tenant centre, in [longitude, latitude] order', async () => {

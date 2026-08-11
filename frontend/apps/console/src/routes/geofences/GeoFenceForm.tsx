@@ -172,10 +172,17 @@ export function GeoFenceForm({
   // Precedence: this browser's personal override → the tenant's basemap → nothing
   // (ADR-079 §9). 🔴 resolveBasemap is not a per-field fold: typing a tile URL here
   // does NOT keep the tenant's credit line underneath it, because that would credit
-  // the tenant's provider for tiles it is not serving.
+  // the tenant's provider for tiles it is not serving. It also does not render those
+  // tiles bare — an override missing its credit line is discarded whole, and the
+  // tenant's properly-credited basemap is drawn instead.
   const basemap = renderableBasemap(
     resolveBasemap({ tileUrl, attribution }, tenantBasemap),
   );
+  // 🔴 …which would be SILENT without this. The rule is right and invisible: someone
+  // pastes a tile URL, presses tab, and the map goes on showing the tenant's tiles
+  // with no indication that what they typed was set aside. Saying so is the whole
+  // difference between a licence rule and a bug report.
+  const tileUrlUncredited = tileUrl.trim() !== '' && attribution.trim() === '';
   // The tenant's centre is a FALLBACK, used only when there is no ring to fit to. An
   // existing fence always wins — editing a fence in Rome from a tenant centred on
   // Atlanta would otherwise open on Atlanta every time.
@@ -331,6 +338,11 @@ export function GeoFenceForm({
               onBlur={commitAttribution}
             />
           </FormField>
+          {tileUrlUncredited && (
+            <p className="text-destructive text-xs" data-testid="geofence-tile-uncredited">
+              {t('entities:geofenceTileUncredited')}
+            </p>
+          )}
         </div>
       </details>
 

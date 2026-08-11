@@ -504,9 +504,13 @@ describe('MapWidget — the tenant basemap', () => {
     expect(basemapOf().attribution).toBe('© Example');
   });
 
-  // 🔴 The licence rule, asserted on the document MapLibre actually renders. A
-  // per-field fold would put "© Tenant Tiles" under tiles the tenant never served.
-  it('does not credit the tenant provider for a per-widget tile source', async () => {
+  // 🔴 The licence rule, asserted on the document MapLibre actually renders, and it
+  // rules out BOTH failures rather than only the obvious one. A per-field fold would
+  // put "© Tenant Tiles" under tiles the tenant never served; applying the widget's
+  // URL bare would render a provider's tiles with no credit at all. A widget option
+  // is set in a board's config panel and never passes through the server's
+  // validation, so an incomplete pair is discarded whole here instead.
+  it('ignores a per-widget tile source that carries no credit line of its own', async () => {
     render(
       <TenantBasemapProvider basemap={{ tileUrl: TENANT_TILES, attribution: '© Tenant Tiles' }}>
         <MapWidget widget={widget({ tileUrl: TILE_URL })} data={twoDevices()} />
@@ -514,8 +518,8 @@ describe('MapWidget — the tenant basemap', () => {
     );
 
     await waitFor(() => expect(m.markers).toHaveLength(2));
-    expect(basemapOf().tiles).toEqual([TILE_URL]);
-    expect(basemapOf().attribution).toBeUndefined();
+    expect(basemapOf().tiles).toEqual([TENANT_TILES]);
+    expect(basemapOf().attribution).toBe('© Tenant Tiles');
   });
 
   // The counterweight: a tenant that supplies a CENTRE but no tile source is still a

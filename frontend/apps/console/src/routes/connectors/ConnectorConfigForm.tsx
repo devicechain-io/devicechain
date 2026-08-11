@@ -7,10 +7,11 @@
 // cleartext secret — only whether one exists (`existingHasSecret`) — matching the
 // ADR-059 write-only contract.
 
-import type { ChangeEvent, ReactNode } from 'react';
+import type { ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
+import { Select } from '@/components/ui/select';
 import { Textarea } from '@/routes/common';
 import {
   CONNECTOR_TYPE_SPECS,
@@ -129,30 +130,6 @@ export function editorSecretArg(state: ConnectorEditorState, mode: 'create' | 'e
   return s.value === '' ? undefined : s.value;
 }
 
-// A minimal styled <select>, matching the canvas inspector's (there is no shared
-// Select primitive; the app uses native selects for closed enums).
-function Select({
-  value,
-  onChange,
-  children,
-  id,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  children: ReactNode;
-  id?: string;
-}) {
-  return (
-    <select
-      id={id}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-    >
-      {children}
-    </select>
-  );
-}
 
 export function ConnectorConfigForm({
   state,

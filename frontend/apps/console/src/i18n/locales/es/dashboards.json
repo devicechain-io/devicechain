@@ -11,12 +11,10 @@
   "created": "Panel «{{token}}» creado",
   "createDashboard": "Crear panel",
   "createTokenPlaceholder": "ops-overview",
-
   "detailLoading": "Cargando panel…",
   "detailNotFound": "Panel «{{token}}» no encontrado.",
   "detailParseError": "No se pudo renderizar este panel: {{error}}",
   "detailInvalidDefinition": "Definición de panel no válida.",
-
   "workspaceDiscardTitle": "¿Descartar los cambios sin guardar?",
   "workspaceDiscardDescription": "Se perderán las ediciones del panel sin guardar.",
   "workspaceDiscardConfirm": "Descartar",
@@ -50,9 +48,7 @@
   "workspaceSizeWidth": "Ancho fijo",
   "workspaceSizeHeight": "Alto fijo",
   "workspacePx": "px",
-
   "canvasFront": "Al frente",
-
   "versionHistoryTitle": "Historial de versiones",
   "versionHistoryDescription": "Publique el borrador actual como una versión inmutable, o revierta el borrador a una versión anterior. El historial es de solo adición.",
   "versionPublishHeading": "Publicar borrador actual",
@@ -84,7 +80,6 @@
   "versionRollbackConfirmTitle": "¿Revertir a la versión {{version}}?",
   "versionRollbackConfirmDescription": "Esto reemplaza el borrador actual con esa versión. El borrador actual (incluidos los cambios guardados que no ha publicado) se perderá.",
   "versionRolledBack": "Revertido a la versión {{version}}",
-
   "pickerSelectDevice": "Seleccionar dispositivo…",
   "pickerSelectCustomer": "Seleccionar cliente…",
   "pickerSelectArea": "Seleccionar área…",
@@ -101,7 +96,6 @@
   "pickerFailedCustomers": "No se pudieron cargar los clientes.",
   "pickerFailedAreas": "No se pudieron cargar las áreas.",
   "pickerFailedAssets": "No se pudieron cargar los activos.",
-
   "widgetClosePanel": "Cerrar panel",
   "widgetLabelDataSource": "Fuente de datos",
   "widgetLabelTargetDevice": "Dispositivo de destino",
@@ -132,6 +126,7 @@
   "widgetTileUrlHint": "Plantilla de teselas ráster, por ejemplo https://tiles.example.com/{z}/{x}/{y}.png. Déjala vacía para usar el mapa base del inquilino, que es lo que deberían hacer la mayoría de los paneles. Definir una aquí lo anula solo para este panel, y requiere la línea de crédito que exige la licencia del proveedor.",
   "widgetLabelAttribution": "Atribución",
   "widgetAttributionHint": "La línea de créditos que exige su proveedor de teselas. Se muestra en el mapa.",
+  "widgetTileUncredited": "Esta URL de teselas no tiene línea de créditos, así que se ignora y el widget dibuja el mapa base del inquilino. Un origen de teselas y la atribución que exige su licencia se usan juntos o no se usa ninguno.",
   "widgetPlaceholderAny": "Cualquiera",
   "widgetFlashOnChange": "Destello al cambiar",
   "widgetFlashOnChangeHint": "Resalta brevemente un valor en verde cuando sube y en rojo cuando baja.",

@@ -6,6 +6,17 @@
   "noPermissionSuffix": "authority to change this tenant's basemap.",
   "tileSourceHeading": "Tile source",
   "tileSourceHelp": "Leave this empty to inherit the instance default. To use your own provider instead, paste its tile template together with the credit line its licence requires — neither is saved without the other.",
+  "provider": "Provider",
+  "providerHelp": "Pick a provider and we fill in its tile template and the credit line its licence requires. Both stay editable below.",
+  "providerCustom": "Custom…",
+  "style": "Style",
+  "apiKey": "API key",
+  "apiKeyHelp": "Your own key with this provider. It is composed into the tile URL below, so you can rotate it without re-pasting the template.",
+  "apiKeyPlaceholder": "Paste your provider key",
+  "providerTerms": "{{provider}} terms and pricing",
+  "providerKeyLink": "Where do I get a key?",
+  "errApiKeyRequired": "This provider needs an API key. Until you add one the tile URL still contains {{token}} and cannot be saved.",
+  "errUnsubstitutedKey": "The tile URL still has an unfilled API key placeholder in it. Fill in the API key field above, or edit the URL directly — saved as-is, every tile request would send the placeholder text instead of a key.",
   "tileUrl": "Tile URL template",
   "tileUrlHelp": "An https URL with {z}, {x} and {y} placeholders (or {bbox-epsg-3857}, or {quadkey}). Leave empty to inherit the instance default.",
   "tileUrlPlaceholder": "https://tile.example.com/{z}/{x}/{y}.png",
@@ -26,5 +37,6 @@
   "zoom": "Zoom",
   "save": "Save basemap",
   "savedToast": "Basemap saved.",
-  "errNotANumber": "{{fields}} must be a number. Leave a field empty to clear it — a value that is not a number would silently clear it instead."
+  "errNotANumber": "{{fields}} must be a number. Leave a field empty to clear it — a value that is not a number would silently clear it instead.",
+  "warnAttributionEdited": "The credit line below no longer matches what {{provider}}'s licence requires. That is fine if you meant it — a composited map credits more than one source — but showing a provider's tiles under someone else's credit is a licence violation."
 }

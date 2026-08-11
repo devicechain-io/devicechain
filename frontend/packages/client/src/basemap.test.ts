@@ -18,12 +18,38 @@ const TENANT: Basemap = {
 const WIDGET_TILES = 'https://widget.example.invalid/{z}/{x}/{y}.png';
 
 describe('resolveBasemap — the tile source is atomic', () => {
-  // 🔴 The headline property. A per-field fold passes every other test here.
-  it('does not lend the tenant credit line to an override tile source', () => {
+  // 🔴 The headline property, and the shape a per-field fold gets wrong: the override's
+  // tiles must NEVER appear under the tenant's credit line.
+  //
+  // It is enforced by discarding the incomplete override entirely rather than by
+  // rendering the tiles bare. Both readings satisfy "do not cross-credit"; only this
+  // one also satisfies "do not show a provider's tiles uncredited", which is the same
+  // licence rule seen from the other side. This tier never reaches the server, so it
+  // is the only place the rule can be applied.
+  it('discards an override tile source that arrives without its credit line', () => {
     const got = resolveBasemap({ tileUrl: WIDGET_TILES }, TENANT);
 
+    expect(got.tileUrl).toBe(TENANT.tileUrl);
+    expect(got.attribution).toBe('© Tenant Tiles');
+  });
+
+  // The control on the rule above: it must discard for the RIGHT reason. If the fold
+  // had simply stopped honouring override tile sources, the test above would still
+  // pass and the feature would be gone.
+  it('still honours an override that brings both halves', () => {
+    const got = resolveBasemap({ tileUrl: WIDGET_TILES, attribution: '© Widget' }, TENANT);
+
     expect(got.tileUrl).toBe(WIDGET_TILES);
-    expect(got.attribution).toBeNull();
+    expect(got.attribution).toBe('© Widget');
+  });
+
+  // An orphan credit line is the mirror image and equally wrong: it would caption the
+  // tenant's tiles with a provider that did not serve them.
+  it('ignores an override attribution that names no tile source of its own', () => {
+    const got = resolveBasemap({ attribution: '© Widget' }, TENANT);
+
+    expect(got.tileUrl).toBe(TENANT.tileUrl);
+    expect(got.attribution).toBe('© Tenant Tiles');
   });
 
   it('inherits BOTH halves when the surface overrides nothing', () => {
@@ -31,13 +57,6 @@ describe('resolveBasemap — the tile source is atomic', () => {
 
     expect(got.tileUrl).toBe(TENANT.tileUrl);
     expect(got.attribution).toBe('© Tenant Tiles');
-  });
-
-  it('keeps both halves when the surface sets both', () => {
-    const got = resolveBasemap({ tileUrl: WIDGET_TILES, attribution: '© Widget' }, TENANT);
-
-    expect(got.tileUrl).toBe(WIDGET_TILES);
-    expect(got.attribution).toBe('© Widget');
   });
 
   it('treats a blank override as unset rather than as a choice', () => {
