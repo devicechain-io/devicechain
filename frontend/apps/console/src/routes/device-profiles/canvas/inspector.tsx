@@ -7,11 +7,12 @@
 // mutates the opaque node config; the server-authoritative compileCanvas is what validates it,
 // so this panel is permissive and the diagnostics land on the node.
 
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
+import { Select } from '@/components/ui/select';
 import { Textarea } from '@/routes/common';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listConnectors } from '@/lib/api/connectors';
@@ -25,30 +26,6 @@ import {
   type NodeType,
 } from './model';
 
-// A minimal styled <select> for the fixed rules vocabularies (op/agg/mode/severity/action),
-// which are closed enums — not the free-text Combobox the form uses for open facets.
-function Select({
-  value,
-  onChange,
-  children,
-  id,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  children: ReactNode;
-  id?: string;
-}) {
-  return (
-    <select
-      id={id}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-    >
-      {children}
-    </select>
-  );
-}
 
 const asRecord = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' ? (v as Record<string, unknown>) : {});
 const numVal = (v: unknown): number => (typeof v === 'number' ? v : 0);

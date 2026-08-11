@@ -15,6 +15,8 @@ Whether it is the right provider for you is a separate question, and one worth a
 
 A basemap is configured **per tenant**, in the console under **Basemap**, by someone holding the `basemap:write` authority.
 
+Pick a provider from the list and DeviceChain fills in its tile template and the credit line its licence requires. Both stay editable underneath, so a provider that is not on the list — an internal tile server, say — is still a matter of typing the two fields in directly; see [Choosing a provider](#choosing-a-provider).
+
 That placement is the point. A tile URL usually carries an API key, and a key that belongs to the tenant means the tenant's own map account is separately billed, separately rate-limited, separately restricted, and revocable without touching anyone else on the instance. One tenant exhausting its quota cannot blank another tenant's maps, and a tenant that already has a contract with a provider can bring it.
 
 `basemap:write` is deliberately **separate from `branding:write`**, even though both shape how a tenant's console looks. Bundling them would make each grant imply the other in both directions: whoever restyles the logo could read the map key, and whoever configures maps could restyle the console.
@@ -37,7 +39,9 @@ The per-surface tiers are not going away: they are how you try a provider on one
 
 A tile URL and the attribution its licence requires are **one value, not two**. They are validated together — neither can be saved without the other — and they inherit together.
 
-That second part is the one worth knowing. If your tenant sets its own tile URL and leaves the attribution blank, it does **not** quietly keep the instance default's credit line: it resolves to no attribution, and the save is refused before it gets that far. Showing one provider's tiles under another provider's credit is a licence violation, so the cascade will not manufacture one.
+That second part is the one worth knowing. If your tenant sets its own tile URL and leaves the attribution blank, it does **not** quietly keep the instance default's credit line: showing one provider's tiles under another provider's credit is a licence violation, so the cascade will not manufacture one. At the tenant and instance tiers the save is refused before it gets that far.
+
+The **per-surface** tiers are set in the browser and never reach that validation, so they apply the same rule at the point of use: a widget option or a geofence-editor field naming a tile URL with no credit line is **ignored entirely**, and the map falls back to the tenant's properly-credited basemap. The geofence editor says so when it happens. A half-filled override is discarded rather than half-applied, because the alternative is drawing a provider's tiles with no credit at all.
 
 The starting view (`centerLat` / `centerLon` / `zoom`) carries no such constraint and inherits field by field, so a tenant can move the zoom without restating a provider to keep it.
 
@@ -51,6 +55,7 @@ Saving is fail-closed, and each rule refuses a value that would otherwise fail s
 
 - **`https` only.** A console served over HTTPS blocks tiles fetched over HTTP as mixed content, so an `http://` source is stored-but-unrenderable. If you run an internal tile server on plain HTTP, put it behind TLS.
 - **It must be a template.** The URL needs `{z}`, `{x}` and `{y}` — or `{bbox-epsg-3857}`, or `{quadkey}`. Without a placeholder, every tile on the map requests the same image, which is the shape of the two common paste errors: a single tile's URL, and a style JSON URL.
+- **Only placeholders the renderer knows are allowed** — `{z}`, `{x}`, `{y}`, `{ratio}`, `{bbox-epsg-3857}` and `{quadkey}`. Anything else in braces is sent to the provider as literal text. This catches the most common copy of all: a URL written for Leaflet, which carries an `{s}` subdomain placeholder DeviceChain's renderer does not substitute. Replace it with a single subdomain — `a.tile.example.com` rather than `{s}.tile.example.com` — which is what current practice recommends anyway.
 - **Attribution is required, and its markup is limited** to plain text plus links written exactly as `<a href="https://…">text</a>`. Links are allowed because several providers' licences require the credit to link to their copyright page; everything else is refused.
 
 Only **raster** tiles are supported today. A vector style URL is not accepted.
@@ -58,6 +63,15 @@ Only **raster** tiles are supported today. A vector style URL is not accepted.
 ## Choosing a provider {#choosing-a-provider}
 
 The default gets you a working map on day one. It is not automatically the right answer for a production deployment, and the deciding factor is usually **who is expected to serve your traffic**.
+
+The **Provider** list carries a set of providers whose tile template and required credit line have each been checked against that provider's own documentation. Choosing one fills both fields in; where a provider needs an API key, it gets its own field and is composed into the URL for you, so the key can be rotated later without re-pasting the template.
+
+Two things the list deliberately does not do:
+
+- **It does not describe anyone's terms.** Each entry links to the provider's own terms and pricing page instead. Whether a tier is free, or needs an account, or has a rate limit, is a claim that can change on someone else's website without us noticing — so the list points at the source rather than summarising it. Read it before you rely on a provider.
+- **It is not exhaustive, and that is a deliberate bar rather than a backlog.** A provider is listed only where its required credit line is published by the provider itself. An entry with a *wrong* credit line is worse than a missing one: it would ship a licence violation prefilled and trusted, in the one place a user is entitled to assume we got it right. If your provider is missing, choose **Custom…** and enter the two fields yourself.
+
+Choosing **Custom…** never alters what is already in the fields — it means "I am typing this myself", which is exactly when overwriting would be most destructive.
 
 OpenStreetMap's tile servers are run by a non-profit and funded by donations. Their [tile usage policy](https://operations.osmfoundation.org/policies/tiles/) sets out what they ask of you, and DeviceChain is built to meet it: tiles are fetched only as you browse, never pre-fetched or archived, and the credit line is always shown. Two things stay your responsibility:
 
@@ -77,7 +91,7 @@ It is honestly schematic — continents and borders, nothing at street zoom — 
 ## The API key in the tile URL is not a secret {#the-api-key-is-not-a-secret}
 
 :::warning It is visible to anyone using the tenant
-If your provider's tile URL carries an API key, **that key reaches the browser** — it has to, because the browser is what fetches the tiles. It is stored as ordinary configuration, not in the secret store, because a value the client must read cannot be kept from the client.
+If your provider's tile URL carries an API key, **that key reaches the browser** — it has to, because the browser is what fetches the tiles. It is stored as ordinary configuration, not in the secret store, because a value the client must read cannot be kept from the client. Its own **API key** field exists to put the key in the right place in the template, not to protect it.
 
 Protect it the way map providers expect: with **HTTP-referrer restrictions** (and, where offered, per-key quotas and API restrictions) in the provider's own console, scoped to the hostname your console is served from. That is the control that actually limits abuse of a key like this. Treat rotation as routine, and use a separate key per tenant so revoking one affects nobody else.
 :::

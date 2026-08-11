@@ -83,6 +83,38 @@ var tilePlaceholders = [][]string{
 	{"{quadkey}"},
 }
 
+// knownPlaceholders is every token the RENDERER substitutes. Anything else in braces
+// is passed through to the provider verbatim.
+//
+// 🔴 The renderer is MapLibre, and MapLibre is not Leaflet. Leaflet substitutes an
+// {s} subdomain token, and because Leaflet is what most tile documentation on the
+// internet is written for, the URL an operator copies very often carries one:
+// `{s}.tile.opentopomap.org`, `{s}.basemaps.cartocdn.com`, `{a|b|c}.tile…`. MapLibre
+// requests that host LITERALLY, DNS fails, and every tile 404s — on a value that
+// passed validation, was stored, and looks correct in the form.
+//
+// That is the same defect the template rule below already exists to catch ("a URL
+// with no placeholder requests the same image for every tile"): a stored tile source
+// that cannot draw. So the rule is fail-closed on the token set rather than a
+// blocklist of the one Leaflet-ism we happen to have met — an unknown token is far
+// likelier to be a placeholder from some other library's docs than a brace a provider
+// genuinely wants in its query string.
+//
+// {apiKey} is deliberately ABSENT, and that absence is load-bearing. It is the
+// console catalog's own token for composing a provider key into a template, never
+// MapLibre's; a URL still carrying one means the key was never substituted, which
+// would otherwise be stored and send every tile request the literal text "{apiKey}".
+var knownPlaceholders = map[string]bool{
+	"z": true, "x": true, "y": true,
+	"ratio":          true,
+	"bbox-epsg-3857": true,
+	"quadkey":        true,
+}
+
+// placeholderRe finds each {token} in a tile template. Non-greedy by construction —
+// `[^{}]*` cannot span a brace — so `{a}/{b}` is two tokens rather than one.
+var placeholderRe = regexp.MustCompile(`\{([^{}]*)\}`)
+
 // Merge overlays a higher-priority override onto a lower one (ADR-079 §3).
 //
 // 🔴 It is NOT a uniform per-field merge, and that is the whole point of this
@@ -220,6 +252,15 @@ func validateTileURL(url string) error {
 	}
 	if strings.ContainsAny(url, " \t\r\n<>\"") {
 		return fmt.Errorf("basemap.tileUrl must not contain whitespace or markup characters")
+	}
+	// 🔴 Unknown tokens are rejected BEFORE the required-set check, and the order is
+	// the point. `{s}.tile.example.com/{z}/{x}/{y}.png` already contains {z}, {x} and
+	// {y}, so the loop below would return nil and the {s} would never be looked at —
+	// the exact URL shape this rule exists to catch would pass through the rule.
+	for _, m := range placeholderRe.FindAllStringSubmatch(url, -1) {
+		if !knownPlaceholders[m[1]] {
+			return fmt.Errorf(`basemap.tileUrl contains %s, which the map renderer does not substitute — it would be requested literally and every tile would fail. Only {z}, {x}, {y}, {ratio}, {bbox-epsg-3857} and {quadkey} are replaced; a subdomain placeholder like {s} comes from Leaflet documentation and should be replaced with a single subdomain (for example a.tile.example.com)`, m[0])
+		}
 	}
 	for _, set := range tilePlaceholders {
 		if containsAll(url, set) {

@@ -14,7 +14,6 @@
   "deviceTypeDeleteTitle": "Delete device type",
   "deviceTypeIdentityTab": "Identity",
   "deviceTypeProfileTab": "Profile",
-
   "deviceGroupTitlePlural": "Device Groups",
   "deviceGroupListDescription": "Collections of devices",
   "deviceGroupNew": "New device group",
@@ -28,7 +27,6 @@
   "deviceGroupNotFound": "Device group “{{token}}” not found.",
   "deviceGroupRemoveConfirm": "Delete device group “{{token}}”? This cannot be undone.",
   "deviceGroupDeleteTitle": "Delete device group",
-
   "deviceAddPlaceholder": "Add devices…",
   "deviceEmptyInGroup": "No devices in this group yet.",
   "deviceAddedCount_one": "Added {{count}} device",
@@ -41,7 +39,6 @@
   "deviceTypeLabel": "Device type",
   "deviceTypeSelect": "Select a device type…",
   "deviceTypeEmpty": "Create a device type first.",
-
   "deviceProfileTitlePlural": "Device Profiles",
   "deviceProfileListDescription": "Reusable capability contracts — metrics, commands, and detection rules — that device types adopt",
   "deviceProfileNew": "New device profile",
@@ -57,7 +54,6 @@
   "deviceProfileDetectionRulesTab": "Detection Rules",
   "deviceProfileRuleHealthTab": "Rule Health",
   "deviceProfileVersionsTab": "Versions",
-
   "areaTitlePlural": "Areas",
   "areaListDescription": "Locations or zones you organize by",
   "areaNew": "New area",
@@ -78,7 +74,6 @@
   "areaEmptyInGroup": "No areas in this group yet.",
   "areaAddedCount_one": "Added {{count}} area",
   "areaAddedCount_other": "Added {{count}} areas",
-
   "areaTypeTitlePlural": "Area Types",
   "areaTypeListDescription": "Templates that classify areas",
   "areaTypeNew": "New area type",
@@ -92,7 +87,6 @@
   "areaTypeNotFound": "Area type “{{token}}” not found.",
   "areaTypeRemoveConfirm": "Delete area type “{{token}}”? This cannot be undone.",
   "areaTypeDeleteTitle": "Delete area type",
-
   "areaGroupTitlePlural": "Area Groups",
   "areaGroupListDescription": "Collections of areas",
   "areaGroupNew": "New area group",
@@ -106,7 +100,6 @@
   "areaGroupNotFound": "Area group “{{token}}” not found.",
   "areaGroupRemoveConfirm": "Delete area group “{{token}}”? This cannot be undone.",
   "areaGroupDeleteTitle": "Delete area group",
-
   "geofenceTitlePlural": "Geofences",
   "geofenceListDescription": "Boundaries you test reported positions against",
   "geofenceNew": "New geofence",
@@ -142,6 +135,7 @@
   "geofenceTileUrlHelp": "Remembered in this browser only — it is not shared with other users and is not stored on the server.",
   "geofenceTileAttribution": "Attribution",
   "geofenceTileAttributionHelp": "The credit line your tile provider requires you to display.",
+  "geofenceTileUncredited": "This tile URL has no credit line, so it is being ignored and the map is showing your tenant's basemap instead. Showing a provider's tiles without the attribution their licence requires is a licence violation, so the two are used together or not at all.",
   "geofenceUnreadableGeometry": "This geofence uses a shape this editor cannot draw. It is stored intact and is still enforced — only editing it here is unavailable. Leave it as it is rather than recreating it.",
   "geofenceHistoryTab": "History",
   "geofenceHistoryNone": "No fence set has been recorded yet. One is frozen every time a geofence is created, changed or deleted.",
@@ -153,7 +147,6 @@
   "geofenceHistoryAbsent": "This geofence was not in the set at version {{version}}. It was created later, or a fence with this token was deleted and the token reused.",
   "geofenceHistoryUnreadable": "This geofence was in the set, but its shape is one this viewer cannot draw. It was still enforced.",
   "geofenceHistoryLegend": "Solid: the shape stored under this token at version {{version}}. Dashed: the shape now.",
-
   "assetTitlePlural": "Assets",
   "assetListDescription": "Physical or logical things you track",
   "assetNew": "New asset",
@@ -174,7 +167,6 @@
   "assetEmptyInGroup": "No assets in this group yet.",
   "assetAddedCount_one": "Added {{count}} asset",
   "assetAddedCount_other": "Added {{count}} assets",
-
   "assetTypeTitlePlural": "Asset Types",
   "assetTypeListDescription": "Templates that classify assets",
   "assetTypeNew": "New asset type",
@@ -188,7 +180,6 @@
   "assetTypeNotFound": "Asset type “{{token}}” not found.",
   "assetTypeRemoveConfirm": "Delete asset type “{{token}}”? This cannot be undone.",
   "assetTypeDeleteTitle": "Delete asset type",
-
   "assetGroupTitlePlural": "Asset Groups",
   "assetGroupListDescription": "Collections of assets",
   "assetGroupNew": "New asset group",
@@ -202,7 +193,6 @@
   "assetGroupNotFound": "Asset group “{{token}}” not found.",
   "assetGroupRemoveConfirm": "Delete asset group “{{token}}”? This cannot be undone.",
   "assetGroupDeleteTitle": "Delete asset group",
-
   "customerTitlePlural": "Customers",
   "customerListDescription": "Organizations or accounts you serve",
   "customerNew": "New customer",
@@ -223,7 +213,6 @@
   "customerEmptyInGroup": "No customers in this group yet.",
   "customerAddedCount_one": "Added {{count}} customer",
   "customerAddedCount_other": "Added {{count}} customers",
-
   "customerTypeTitlePlural": "Customer Types",
   "customerTypeListDescription": "Templates that classify customers",
   "customerTypeNew": "New customer type",
@@ -237,7 +226,6 @@
   "customerTypeNotFound": "Customer type “{{token}}” not found.",
   "customerTypeRemoveConfirm": "Delete customer type “{{token}}”? This cannot be undone.",
   "customerTypeDeleteTitle": "Delete customer type",
-
   "customerGroupTitlePlural": "Customer Groups",
   "customerGroupListDescription": "Collections of customers",
   "customerGroupNew": "New customer group",

@@ -1,0 +1,104 @@
+{
+  "providers": [
+    {
+      "id": "openstreetmap",
+      "name": "OpenStreetMap",
+      "termsUrl": "https://operations.osmfoundation.org/policies/tiles/",
+      "templateSource": "https://wiki.openstreetmap.org/wiki/Raster_tile_providers",
+      "attributionSource": "https://www.openstreetmap.org/copyright",
+      "keyUrl": null,
+      "sources": [
+        {
+          "id": "standard",
+          "name": "Standard",
+          "tileUrl": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+          "attribution": "© <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> contributors"
+        }
+      ]
+    },
+    {
+      "id": "opentopomap",
+      "name": "OpenTopoMap",
+      "termsUrl": "https://opentopomap.org/about",
+      "templateSource": "https://wiki.openstreetmap.org/wiki/OpenTopoMap",
+      "attributionSource": "https://opentopomap.org/about",
+      "keyUrl": null,
+      "sources": [
+        {
+          "id": "topo",
+          "name": "Topographic",
+          "tileUrl": "https://tile.opentopomap.org/{z}/{x}/{y}.png",
+          "attribution": "Kartendaten: © <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a>-Mitwirkende, SRTM | Kartendarstellung: © <a href=\"https://opentopomap.org/\">OpenTopoMap</a> (<a href=\"https://creativecommons.org/licenses/by-sa/3.0/\">CC-BY-SA</a>)"
+        }
+      ]
+    },
+    {
+      "id": "carto",
+      "name": "CARTO",
+      "termsUrl": "https://carto.com/basemaps/",
+      "templateSource": "https://github.com/CartoDB/basemap-styles",
+      "attributionSource": "https://github.com/CartoDB/basemap-styles",
+      "keyUrl": null,
+      "sources": [
+        {
+          "id": "positron",
+          "name": "Positron (light)",
+          "tileUrl": "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+          "attribution": "© <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a>, © <a href=\"https://carto.com/attributions\">CARTO</a>"
+        },
+        {
+          "id": "dark-matter",
+          "name": "Dark Matter",
+          "tileUrl": "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+          "attribution": "© <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a>, © <a href=\"https://carto.com/attributions\">CARTO</a>"
+        },
+        {
+          "id": "voyager",
+          "name": "Voyager",
+          "tileUrl": "https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
+          "attribution": "© <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a>, © <a href=\"https://carto.com/attributions\">CARTO</a>"
+        }
+      ]
+    },
+    {
+      "id": "thunderforest",
+      "name": "Thunderforest",
+      "termsUrl": "https://www.thunderforest.com/terms/",
+      "templateSource": "https://www.thunderforest.com/docs/map-tiles-api/",
+      "attributionSource": "https://www.thunderforest.com/terms/",
+      "keyUrl": "https://www.thunderforest.com/pricing/",
+      "sources": [
+        {
+          "id": "cycle",
+          "name": "OpenCycleMap",
+          "tileUrl": "https://tile.thunderforest.com/cycle/{z}/{x}/{y}.png?apikey={apiKey}",
+          "attribution": "Maps © <a href=\"https://www.thunderforest.com\">Thunderforest</a>, Data © <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap contributors</a>"
+        },
+        {
+          "id": "transport",
+          "name": "Transport",
+          "tileUrl": "https://tile.thunderforest.com/transport/{z}/{x}/{y}.png?apikey={apiKey}",
+          "attribution": "Maps © <a href=\"https://www.thunderforest.com\">Thunderforest</a>, Data © <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap contributors</a>"
+        },
+        {
+          "id": "landscape",
+          "name": "Landscape",
+          "tileUrl": "https://tile.thunderforest.com/landscape/{z}/{x}/{y}.png?apikey={apiKey}",
+          "attribution": "Maps © <a href=\"https://www.thunderforest.com\">Thunderforest</a>, Data © <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap contributors</a>"
+        },
+        {
+          "id": "outdoors",
+          "name": "Outdoors",
+          "tileUrl": "https://tile.thunderforest.com/outdoors/{z}/{x}/{y}.png?apikey={apiKey}",
+          "attribution": "Maps © <a href=\"https://www.thunderforest.com\">Thunderforest</a>, Data © <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap contributors</a>"
+        },
+        {
+          "id": "atlas",
+          "name": "Atlas",
+          "tileUrl": "https://tile.thunderforest.com/atlas/{z}/{x}/{y}.png?apikey={apiKey}",
+          "attribution": "Maps © <a href=\"https://www.thunderforest.com\">Thunderforest</a>, Data © <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap contributors</a>"
+        }
+      ]
+    }
+  ]
+}

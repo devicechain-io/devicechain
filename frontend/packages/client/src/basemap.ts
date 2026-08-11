@@ -59,9 +59,25 @@ export function resolveBasemap(override: Basemap | null | undefined, tenant: Bas
   const o = override ?? {};
   const t = tenant ?? {};
 
-  const overrideTiles = text(o.tileUrl);
+  // 🔴 AN INCOMPLETE OVERRIDE IS NOT AN OVERRIDE. A tile URL with no credit line is
+  // refused outright by the server at the tenant and instance tiers — the two halves
+  // are stored as one value or not at all — but THIS tier never reaches the server: a
+  // widget's own options and the fence editor's browser-local fields are entered
+  // client-side and rendered directly.
+  //
+  // Without this the atomic fold below did its job and still produced the defect it
+  // exists to prevent: it correctly refused to lend the tenant's credit line to the
+  // override's tiles, and then drew those tiles with NO credit line at all. Correct
+  // about the cross-crediting, wrong about the licence.
+  //
+  // So an override naming tiles without their attribution is discarded whole, and the
+  // surface falls back to the tenant's properly-credited basemap. Failing closed to a
+  // map that is credited beats honouring a preference that cannot legally be shown —
+  // and the fallback is a real map, not a blank one.
+  const overrideAttribution = text(o.attribution);
+  const overrideTiles = overrideAttribution === null ? null : text(o.tileUrl);
   const tileUrl = overrideTiles ?? text(t.tileUrl);
-  const attribution = overrideTiles ? text(o.attribution) : text(t.attribution);
+  const attribution = overrideTiles ? overrideAttribution : text(t.attribution);
 
   // Latitude and longitude move as a pair for the same reason: half a coordinate
   // from each tier names a point neither one chose.

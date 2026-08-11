@@ -6,6 +6,17 @@
   "noPermissionSuffix": "para cambiar el mapa base de este inquilino.",
   "tileSourceHeading": "Origen de mosaicos",
   "tileSourceHelp": "Déjalo vacío para heredar el valor por defecto de la instancia. Para usar tu propio proveedor, pega su plantilla de mosaicos junto con la línea de crédito que exige su licencia: no se guarda ninguno sin el otro.",
+  "provider": "Proveedor",
+  "providerHelp": "Elige un proveedor y rellenamos su plantilla de mosaicos y la línea de crédito que exige su licencia. Ambas siguen siendo editables abajo.",
+  "providerCustom": "Personalizado…",
+  "style": "Estilo",
+  "apiKey": "Clave de API",
+  "apiKeyHelp": "Tu propia clave con este proveedor. Se compone dentro de la URL de mosaicos de abajo, así que puedes rotarla sin volver a pegar la plantilla.",
+  "apiKeyPlaceholder": "Pega la clave de tu proveedor",
+  "providerTerms": "Términos y precios de {{provider}}",
+  "providerKeyLink": "¿Dónde consigo una clave?",
+  "errApiKeyRequired": "Este proveedor necesita una clave de API. Hasta que añadas una, la URL de mosaicos sigue conteniendo {{token}} y no puede guardarse.",
+  "errUnsubstitutedKey": "La URL de mosaicos todavía contiene un marcador de clave de API sin rellenar. Rellena el campo de clave de API de arriba, o edita la URL directamente: si se guardara tal cual, cada solicitud de mosaico enviaría el texto del marcador en lugar de una clave.",
   "tileUrl": "Plantilla de URL de mosaicos",
   "tileUrlHelp": "Una URL https con los marcadores {z}, {x} e {y} (o {bbox-epsg-3857}, o {quadkey}). Déjala vacía para heredar el valor por defecto de la instancia.",
   "tileUrlPlaceholder": "https://tile.example.com/{z}/{x}/{y}.png",
@@ -26,5 +37,6 @@
   "zoom": "Zoom",
   "save": "Guardar mapa base",
   "savedToast": "Mapa base guardado.",
-  "errNotANumber": "{{fields}} debe ser un número. Deja un campo vacío para borrarlo: un valor que no sea numérico lo borraría en silencio."
+  "errNotANumber": "{{fields}} debe ser un número. Deja un campo vacío para borrarlo: un valor que no sea numérico lo borraría en silencio.",
+  "warnAttributionEdited": "La línea de crédito de abajo ya no coincide con la que exige la licencia de {{provider}}. No hay problema si es intencionado —un mapa compuesto acredita más de una fuente—, pero mostrar los mosaicos de un proveedor bajo el crédito de otro es una infracción de licencia."
 }

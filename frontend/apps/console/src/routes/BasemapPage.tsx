@@ -28,6 +28,8 @@ import { LoadingState } from '@/components/ui/loading-state';
 import { useToast } from '@/components/ui/toast';
 import { useAuth } from '@/auth/AuthProvider';
 import { useCurrentTenant, useSetCurrentTenant } from '@/auth/TenantProvider';
+import { BasemapPicker, type TileSource } from '@/components/basemap/BasemapPicker';
+import { API_KEY_TOKEN } from '@/components/basemap/catalog';
 import {
   setTenantBasemap,
   type TenantBasemap,
@@ -138,6 +140,14 @@ function BasemapEditor({ override }: { override: TenantBasemap }) {
   // technical identifier).
   const setTileUrlField = (v: string) => set('tileUrl', v);
   const setAttributionField = (v: string) => set('attribution', v);
+  // 🔴 The picker writes BOTH halves in ONE update, never two `set` calls. Two calls
+  // would leave a render between them in which the new URL is paired with the previous
+  // provider's credit line — and that intermediate state is not merely cosmetic here,
+  // because the Save button's own guards read this state.
+  const setTileSource = (next: TileSource) => {
+    setDirty(true);
+    setForm((f) => ({ ...f, tileUrl: next.tileUrl, attribution: next.attribution }));
+  };
   const setCenterLatField = (v: string) => set('centerLat', v);
   const setCenterLonField = (v: string) => set('centerLon', v);
   const setZoomField = (v: string) => set('zoom', v);
@@ -153,6 +163,11 @@ function BasemapEditor({ override }: { override: TenantBasemap }) {
   const orphanAttribution = tileUrl === '' && attribution !== '';
   const badScheme = tileUrl !== '' && !tileUrl.startsWith('https://');
   const notATemplate = tileUrl !== '' && !badScheme && !looksLikeTemplate(tileUrl);
+  // A catalog provider was chosen but its key was never filled in, so the template
+  // still carries the placeholder. The server refuses this too — {apiKey} is not a
+  // token the renderer substitutes — but catching it here names the actual problem
+  // ("this provider needs a key") instead of reporting an unknown placeholder.
+  const unsubstitutedKey = tileUrl.includes(API_KEY_TOKEN);
   // A coordinate is a pair; half of one names no point.
   const halfCoordinate =
     (form.centerLat.trim() === '') !== (form.centerLon.trim() === '');
@@ -171,6 +186,7 @@ function BasemapEditor({ override }: { override: TenantBasemap }) {
     orphanAttribution ||
     badScheme ||
     notATemplate ||
+    unsubstitutedKey ||
     halfCoordinate ||
     badNumbers.length > 0;
 
@@ -215,6 +231,15 @@ function BasemapEditor({ override }: { override: TenantBasemap }) {
           <h2 className="text-sm font-medium">{t('tileSourceHeading')}</h2>
           <p className="text-muted-foreground text-xs">{t('tileSourceHelp')}</p>
 
+          {/* The picker prefills the two fields below rather than replacing them:
+              choosing a provider is the easy path, and the raw fields stay editable
+              for a private tile server or a provider the catalog does not carry. */}
+          <BasemapPicker
+            tileUrl={form.tileUrl}
+            attribution={form.attribution}
+            onChange={setTileSource}
+          />
+
           <FormField
             label={t('tileUrl')}
             htmlFor="bm-tile-url"
@@ -229,6 +254,7 @@ function BasemapEditor({ override }: { override: TenantBasemap }) {
           </FormField>
           {badScheme && <ErrorBanner message={t('errHttps')} />}
           {notATemplate && <ErrorBanner message={t('errNotATemplate')} />}
+          {unsubstitutedKey && <ErrorBanner message={t('errUnsubstitutedKey')} />}
 
           <FormField
             label={t('attribution')}
