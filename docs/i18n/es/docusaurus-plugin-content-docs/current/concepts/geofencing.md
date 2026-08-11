@@ -23,7 +23,7 @@ El editor dibuja sobre el **mapa base** del inquilino, que en una instancia nuev
 
 Un administrador del inquilino cambia la fuente de teselas una sola vez, para todos, en **Mapa base**; los campos de este editor son una anulación personal sobre ese valor, recordada únicamente en su navegador, para probar un proveedor antes de aplicarlo a todo el inquilino. Consulte [Mapas base](./basemaps.md) para ver cómo se resuelven los niveles, por qué la URL de teselas y su atribución se mueven juntas, qué proveedor viene por defecto, y cómo proteger la clave de API de un proveedor.
 
-Si ningún nivel tiene una fuente de teselas —un operador definió el valor por defecto de la instancia como `{}` y el inquilino no definió nada— el contorno se dibuja sobre un fondo liso. Dibujar sigue funcionando y las coordenadas que usted coloca son exactas en cualquier caso.
+Si ningún nivel tiene una fuente de teselas —un operador definió el valor por defecto de la instancia como `{}` y el inquilino no definió nada— el editor recurre a un mapa del mundo incorporado: continentes y fronteras de dominio público, compilados dentro de la consola, sin nada con detalle de calle. Dibujar sigue funcionando y las coordenadas que usted coloca son exactas en cualquier caso, porque es la misma proyección que usa un mapa con teselas.
 
 ## Qué puede ser un contorno {#what-a-boundary-may-be}
 

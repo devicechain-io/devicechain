@@ -66,8 +66,12 @@ Los servidores de mosaicos de OpenStreetMap los gestiona una organización sin �
 
 Si los mapas son importantes para tu operación, apunta un inquilino —o el valor por defecto de la instancia— a un proveedor con el que tengas una relación. Ese es el caso para el que existe el nivel por inquilino, y la sección siguiente sobre claves de API es la que conviene leer a continuación.
 
-:::tip Un mapa en blanco es un estado de configuración, no un error
-Si un operador define el valor por defecto de la instancia como `{}` y un inquilino no define nada, no hay ningún origen de mosaicos. Ten en cuenta que **Restablecer el valor por defecto** hace lo contrario —restaura el proveedor que viene de fábrica—, así que desactivar los mapas es un `{}` explícito, no un restablecimiento. Las superficies con mapa dibujan entonces todas las posiciones que se les pidieron sobre un panel liso y explican por qué, en lugar de fallar. Dibujar una geocerca sigue funcionando y las coordenadas que colocas siguen siendo exactas.
+:::tip Sin fuente de teselas obtienes un mundo esquemático, no uno en blanco
+Si un operador define el valor por defecto de la instancia como `{}` y un inquilino no define nada, no hay ningún origen de mosaicos. Ten en cuenta que **Restablecer el valor por defecto** hace lo contrario —restaura el proveedor que viene de fábrica—, así que desactivar los mapas es un `{}` explícito, no un restablecimiento.
+
+Las superficies con mapa recurren entonces a un **mapa base incorporado**: contornos de tierra y fronteras de países de Natural Earth, de dominio público, compilados dentro de la propia aplicación. No solicita nada a ningún servidor externo —todo lo que necesita lo sirve el propio DeviceChain—, y eso es justo lo que lo convierte en la respuesta correcta tanto para una instalación aislada de la red como para un operador que ha desactivado los proveedores a propósito.
+
+Es esquemático, y lo es con honestidad: continentes y fronteras, nada con detalle de calle. Por eso se lee como «configura un proveedor» y no como «esto está roto». Todo lo demás sigue funcionando igual que sobre mosaicos: dibujar una geocerca funciona y las coordenadas que colocas siguen siendo exactas, porque la proyección es la misma que usa un mapa con mosaicos.
 :::
 
 ## La clave de API de la URL de mosaicos no es un secreto {#the-api-key-is-not-a-secret}
@@ -80,4 +84,4 @@ Protégela como esperan los proveedores de mapas: con **restricciones de referen
 
 ## Paneles incrustados {#embedded-dashboards}
 
-El visor de paneles independiente inicia sesión como su propio usuario y lee el mismo mapa base del inquilino, así que un panel incrustado allí se dibuja sobre los mismos mosaicos que en la consola. Si un mapa aparece en blanco al incrustarlo pero funciona en la consola, comprueba que el visor inició sesión **como miembro del mismo inquilino**: el mapa base sigue al inquilino, no al panel.
+El visor de paneles independiente inicia sesión como su propio usuario y lee el mismo mapa base del inquilino, así que un panel incrustado allí se dibuja sobre los mismos mosaicos que en la consola. Si un panel incrustado muestra un mapa base distinto del de la consola —y de forma especialmente reveladora, el mundo esquemático incorporado donde esperabas mosaicos—, comprueba que el visor inició sesión **como miembro del mismo inquilino**. El mapa base sigue al inquilino, no al panel.

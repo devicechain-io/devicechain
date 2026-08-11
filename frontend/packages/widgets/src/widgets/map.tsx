@@ -15,11 +15,19 @@
 // 🔴 NO TILE SOURCE IS NOT A BROKEN MAP. This package hardcodes no tile URL (see
 // rasterStyleFor) and inherits one from the tenant (ADR-079), whose instance-wide
 // default now ships a real provider — so in practice this branch is rare. It is not
-// dead, though: an operator can empty that default, and a viewer can be looking at a
-// board on such an instance. When nothing supplies a tile source the widget still
-// draws every position, on a plain panel, and says why there is no basemap. It loads
-// no map library and issues no request to any host, because it has been given no
-// host it would be entitled to ask.
+// dead, though: an operator can empty that default, an air-gapped install can have no
+// route to any provider at all, and a viewer can be looking at a board on either.
+//
+// That case renders a REAL MapLibre map against the BUNDLED public-domain world
+// (loadLandStyle) — continents and country outlines, compiled into this package.
+//
+// 🔴 Be precise about what survives of the old promise, because an earlier version of
+// this comment was not. It said the widget "issues no request to any host" and backed
+// that with "loads no map library", and the second half is now FALSE: this path loads
+// the renderer and the geometry, two chunks, from the app's OWN origin. What is still
+// true — and is the part that ever mattered — is that it contacts no THIRD-PARTY host,
+// because it has been given none it would be entitled to ask. What it no longer does
+// is show a void that reads as breakage.
 //
 // 🔴 ABSENT IS NOT ZERO. A marker describes only what its device reported; an
 // unreported heading is not due north. See describePosition.
@@ -36,6 +44,7 @@ import { css } from '../theme';
 import { optString, type WidgetProps } from '../widget';
 import {
   describePosition,
+  loadLandStyle,
   placeable,
   projectToPanel,
   rasterStyleFor,
@@ -158,29 +167,27 @@ export function MapWidget({ widget, data }: WidgetProps<LocationStreamState>) {
 
   return (
     <WidgetFrame title={title} bodyStyle={{ padding: 0 }}>
-      {basemap ? (
-        <TiledMap
-          tileUrl={basemap.tileUrl}
-          attribution={basemap.attribution ?? undefined}
-          positions={positions}
-        />
-      ) : (
-        <PlainPanel
-          positions={positions}
-          note="No tile source configured — positions are shown without a basemap."
-        />
-      )}
+      <LiveMap basemap={basemap} positions={positions} />
     </WidgetFrame>
   );
 }
 
 // ---- The tile-less panel ----------------------------------------------------
 
-// PlainPanel draws the positions on a themed background with no basemap: the whole
-// point is that an unconfigured (or unreachable-library) map still answers "where is
-// my fleet, relative to each other" instead of showing nothing. The note says why
-// there is no basemap, so the missing map reads as a configuration state rather than
-// as breakage.
+// PlainPanel draws the positions on a themed background with no basemap at all.
+//
+// 🔴 IT HAS EXACTLY ONE JOB LEFT, AND IT IS NOT THE UNCONFIGURED CASE. Since the
+// bundled world basemap landed, an unconfigured widget renders a REAL MapLibre map
+// against public-domain geometry — so this panel is reached only when the map could
+// not be BUILT at all. Three ways in, not one: the MapLibre chunk fails to load, the
+// bundled-geometry chunk fails to load, or the Map constructor throws (a browser or a
+// context with no usable WebGL). They share a catch because they share an answer.
+//
+// It survives because on that path it is strictly better than an error box. The
+// question a map widget answers is "where is my fleet, relative to each other",
+// and this still answers it when the renderer cannot load. That is also why
+// projectToPanel exists at all, and why deleting either would look like tidying up
+// dead code right until someone's dashboard went blank behind a proxy.
 function PlainPanel({ positions, note }: { positions: PlaceableLocation[]; note: string }) {
   const points = projectToPanel(positions);
   return (
@@ -228,17 +235,23 @@ function PlainPanel({ positions, note }: { positions: PlaceableLocation[]; note:
   );
 }
 
-// ---- The tiled map ----------------------------------------------------------
+// ---- The map ----------------------------------------------------------------
 
 type MapStatus = 'loading' | 'ready' | 'unavailable';
 
-function TiledMap({
-  tileUrl,
-  attribution,
+// LiveMap renders MapLibre for BOTH basemap states.
+//
+// The branch is over the STYLE, not over whether there is a map: a configured tile
+// source gets a raster style, and no tile source gets the bundled public-domain
+// world. Everything downstream of that — the projection, the markers, the fit, the
+// teardown — is the same code on both paths, which is the point. When the two were
+// different components, "unconfigured" was a second rendering path that could drift
+// away from the real one without any test noticing.
+function LiveMap({
+  basemap,
   positions,
 }: {
-  tileUrl: string;
-  attribution: string | undefined;
+  basemap: { tileUrl: string; attribution: string | null } | null;
   positions: PlaceableLocation[];
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -246,19 +259,29 @@ function TiledMap({
   const markersRef = useRef<MapLibreMarker[]>([]);
   const [status, setStatus] = useState<MapStatus>('loading');
 
-  // Init + teardown for this tile source. Re-runs when the source changes, which is the
+  const tileUrl = basemap?.tileUrl ?? null;
+  const attribution = basemap?.attribution ?? null;
+
+  // Init + teardown for this basemap. Re-runs when the source changes, which is the
   // only thing that invalidates the style.
   useEffect(() => {
     let cancelled = false;
     setStatus('loading');
 
-    loadMapLibre()
-      .then((maplibre) => {
+    // 🔴 The bundled style is FETCHED, not built inline: its geometry sits behind a
+    // dynamic import so a configured viewer never downloads a world map they will
+    // not look at. Resolved alongside the renderer so the Map is still constructed
+    // once, with its final style — nothing re-styles after mount.
+    Promise.all([
+      loadMapLibre(),
+      tileUrl ? rasterStyleFor(tileUrl, attribution ?? undefined) : loadLandStyle(),
+    ])
+      .then(([maplibre, style]) => {
         const el = containerRef.current;
         if (cancelled || !el) return;
         const map = new maplibre.Map({
           container: el,
-          style: rasterStyleFor(tileUrl, attribution) as never,
+          style: style as never,
           center: [0, 0],
           zoom: 1,
         });
@@ -266,9 +289,10 @@ function TiledMap({
         setStatus('ready');
       })
       .catch(() => {
-        // The renderer could not be fetched (offline viewer, a CSP that blocks the
-        // chunk). Fall back to the plain panel rather than to nothing: the positions are
-        // what the operator came for, and the basemap is the part that failed.
+        // The renderer or the bundled geometry could not be fetched (offline viewer,
+        // a CSP that blocks the chunk). Fall back to the plain panel rather than to
+        // nothing: the positions are what the operator came for, and the basemap is
+        // the part that failed.
         if (!cancelled) setStatus('unavailable');
       });
 

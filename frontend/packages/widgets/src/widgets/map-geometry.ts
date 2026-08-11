@@ -121,8 +121,11 @@ export function describePosition(sample: PlaceableLocation): string {
 // 🔴 THIS PACKAGE HARDCODES NO TILE SOURCE, AND THAT IS A DECISION RATHER THAN AN
 // OMISSION. The library is not the map — the TILES are, and they carry their own terms,
 // so a widget library is the wrong place to choose a provider on an operator's behalf.
-// The URL arrives as config, and with none set the widget draws positions on a plain
-// panel and says so.
+// The URL arrives as config, and with none set the widget falls back to the BUNDLED
+// world basemap below — public-domain geometry compiled into this package, which asks
+// no host for anything and so adopts nobody's terms. That is the distinction the rule
+// is actually about: not "ship no map", but "make no request on an operator's behalf
+// to a host they never chose".
 //
 // The PLATFORM does ship a default (ADR-079): an instance-wide setting a tenant can
 // override, which a board then inherits when its own options name nothing. That is a
@@ -135,6 +138,7 @@ export function describePosition(sample: PlaceableLocation): string {
 export function rasterStyleFor(tileUrl: string, attribution: string | undefined): unknown {
   return {
     version: 8,
+    projection: PROJECTION,
     sources: {
       basemap: {
         type: 'raster',
@@ -145,4 +149,95 @@ export function rasterStyleFor(tileUrl: string, attribution: string | undefined)
     },
     layers: [{ id: 'basemap', type: 'raster', source: 'basemap' }],
   };
+}
+
+// ---- The bundled world basemap ----------------------------------------------
+
+// 🔴 THE PROJECTION IS THE CORRECTNESS PROPERTY OF THIS WHOLE FILE, and it is
+// declared explicitly — on BOTH styles — rather than left to the default.
+//
+// The fence editor stores the coordinates a click produces, so what a style
+// changes must be what is DRAWN and never where a click LANDS. Mercator is
+// MapLibre's default, so writing it out changes no behaviour today. What it buys
+// is that the two styles now state the same thing in the same words, and a test
+// can compare them: an invariant nobody wrote down is an invariant a later edit
+// breaks without anything going red.
+//
+// This is not hypothetical in MapLibre 6. `projection` is a root style key whose
+// `type` is a ZOOM-INTERPOLATABLE expression, so a style is entitled to hand back
+// a globe past some zoom. A globe re-projects the pointer; every ring an author
+// then drew would be saved somewhere they never pointed at, on a map that looked
+// beautiful throughout.
+const PROJECTION = { type: 'mercator' } as const;
+
+// The bundled basemap's credit line. Natural Earth requires NO attribution — its
+// licence says in as many words that crediting the authors is unnecessary — so
+// this is their own suggested short citation, shown for a reason of ours: a
+// viewer has to be able to tell a schematic bundled world apart from a configured
+// provider, or "no tiles" reads as "broken" all over again.
+export const BUNDLED_BASEMAP_ATTRIBUTION = 'Made with Natural Earth';
+
+// The bundled style's palette. Literal colours, not theme tokens: a MapLibre style
+// document is JSON handed to a WebGL renderer, and it does not resolve the CSS
+// custom properties the rest of this package themes with. These sit close to the
+// dark surface the fence editor already drew, so the change reads as "the void
+// grew continents" rather than as a new skin.
+const OCEAN = '#0b1220';
+const LAND = '#1e293b';
+const BOUNDARY = '#475569';
+
+// landStyleFrom builds the bundled world style from Natural Earth geometry.
+//
+// Kept separate from the loader, and pure, so the style document can be asserted
+// without pulling 150 KiB of coordinates into a test — and so the one thing worth
+// asserting about it (that it projects exactly as the tiled style does) is
+// checkable in isolation.
+export function landStyleFrom(land: unknown, boundaries: unknown): unknown {
+  return {
+    version: 8,
+    projection: PROJECTION,
+    sources: {
+      land: { type: 'geojson', data: land, attribution: BUNDLED_BASEMAP_ATTRIBUTION },
+      boundaries: { type: 'geojson', data: boundaries },
+    },
+    layers: [
+      { id: 'ocean', type: 'background', paint: { 'background-color': OCEAN } },
+      { id: 'land', type: 'fill', source: 'land', paint: { 'fill-color': LAND } },
+      {
+        id: 'boundaries',
+        type: 'line',
+        source: 'boundaries',
+        paint: { 'line-color': BOUNDARY, 'line-width': 0.5 },
+      },
+    ],
+  };
+}
+
+// loadLandStyle fetches the bundled geometry and builds its style.
+//
+// 🔴 THE DYNAMIC IMPORT IS THE WHOLE POINT. natural-earth-data is ~150 KiB (~44
+// KiB over the wire) and it must never enter this package's entry chunk: with a
+// tile source configured — which, since the platform ships a default provider, is
+// the ordinary case — nobody should download a world map they will not see. A
+// static `import { NATURAL_EARTH }` at the top of this file would give every
+// viewer the payload and change nothing observable, which is how it would survive
+// review.
+//
+// Memoized on the promise, so several map widgets on one board parse it once.
+//
+// 🔴 That memoizes a REJECTION too: one transient chunk failure leaves every
+// unconfigured map on the page falling back until a reload. Deliberate, and the same
+// bargain loadMapLibre has always made — a retry-on-failure cache would let N widgets
+// re-request a chunk that is failing for a reason retrying will not fix. Worth knowing
+// that the blast radius grew when this became the DEFAULT unconfigured path rather
+// than a rarity.
+let landStylePromise: Promise<unknown> | undefined;
+
+export function loadLandStyle(): Promise<unknown> {
+  if (!landStylePromise) {
+    landStylePromise = import('./natural-earth-data').then((mod) =>
+      landStyleFrom(mod.NATURAL_EARTH.land, mod.NATURAL_EARTH.boundaries),
+    );
+  }
+  return landStylePromise;
 }

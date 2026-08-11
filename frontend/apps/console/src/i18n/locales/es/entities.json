@@ -123,7 +123,7 @@
   "geofenceBoundary": "Límite",
   "geofenceColVertices": "Vértices",
   "geofenceMapLabel": "Mapa del límite de la geocerca. Haga clic en el mapa para añadir un vértice; haga clic en el primer vértice para cerrar la figura. Arrastre un vértice para moverlo, pulse Alt y haga clic en un vértice para eliminarlo, y haga clic en un tirador pequeño de una arista para añadir un vértice allí.",
-  "geofenceNoTilesHint": "No hay un mapa base configurado, por lo que el límite se dibuja sobre un fondo liso. El trazado sigue funcionando y las coordenadas que sitúa son exactas. Indique abajo una URL de teselas para ver la imagen del mapa.",
+  "geofenceNoTilesHint": "No hay un proveedor de teselas configurado, así que este es el mapa del mundo incorporado: solo continentes y fronteras, sin detalle al acercar. El trazado sigue funcionando y las coordenadas que sitúa son exactas. Indique abajo una URL de teselas para ver la imagen real del mapa.",
   "geofenceMapUnavailable": "No se pudo cargar el mapa, por lo que el límite no se puede dibujar aquí. Recargue la página para intentarlo de nuevo.",
   "geofenceVertexCount_one": "{{count}} de {{max}} vértices",
   "geofenceVertexCount_other": "{{count}} de {{max}} vértices",
