@@ -11,7 +11,7 @@
 // would wipe an uploaded logo. Each write returns the freshly-resolved tenant, which
 // we write straight into the tenant cache so the rebrand shows across the shell.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Upload, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { PageShell } from '@/components/ui/page-shell';
@@ -21,6 +21,8 @@ import { FormField } from '@/components/ui/form-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { LoadingState } from '@/components/ui/loading-state';
 import { useToast } from '@/components/ui/toast';
+import { ColorPicker } from '@/components/ui/color-picker';
+import { FilePicker } from '@/components/ui/file-picker';
 import { useAuth } from '@/auth/AuthProvider';
 import { hasAuthority } from '@devicechain/client';
 import { useCurrentTenant, useSetCurrentTenant } from '@/auth/TenantProvider';
@@ -363,12 +365,10 @@ function ColorField({
   return (
     <FormField label={label} description={hint}>
       <div className="flex items-center gap-2">
-        <input
-          type="color"
-          aria-label={t('colorSwatchAriaLabel', { label })}
+        <ColorPicker
+          ariaLabel={t('colorSwatchAriaLabel', { label })}
           value={valid ? value : '#000000'}
-          onChange={(e) => onChange(e.target.value)}
-          className="size-9 shrink-0 cursor-pointer rounded border border-border bg-transparent p-0.5"
+          onChange={onChange}
         />
         <Input value={value} placeholder={t('inheritPlaceholder')} onChange={(e) => onChange(e.target.value)} className="font-mono" />
         {value !== '' && (
@@ -383,23 +383,11 @@ function ColorField({
 
 function UploadButton({ onPick, disabled }: { onPick: (file: File) => void; disabled?: boolean }) {
   const { t } = useTranslation('branding');
-  const ref = useRef<HTMLInputElement>(null);
   return (
     <>
-      <input
-        ref={ref}
-        type="file"
-        accept="image/png,image/jpeg,image/webp"
-        className="hidden"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) onPick(file);
-          e.target.value = ''; // allow re-picking the same file
-        }}
-      />
-      <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={() => ref.current?.click()}>
+      <FilePicker accept="image/png,image/jpeg,image/webp" disabled={disabled} onPick={onPick}>
         <Upload className="mr-1 size-3.5" /> {t('upload')}
-      </Button>
+      </FilePicker>
     </>
   );
 }

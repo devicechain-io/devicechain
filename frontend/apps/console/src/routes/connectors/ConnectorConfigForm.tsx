@@ -11,8 +11,10 @@ import type { ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
-import { Select } from '@/components/ui/select';
-import { Textarea } from '@/routes/common';
+import { Select, SelectItem } from '@/components/ui/select';
+import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Textarea } from '@/components/ui/textarea';
 import {
   CONNECTOR_TYPE_SPECS,
   SASL_MECHANISMS,
@@ -167,9 +169,9 @@ export function ConnectorConfigForm({
         {mode === 'create' ? (
           <Select id="cx-type" value={state.type} onChange={setType}>
             {CONNECTOR_TYPE_SPECS.map((s) => (
-              <option key={s.type} value={s.type}>
+              <SelectItem key={s.type} value={s.type}>
                 {s.label}
-              </option>
+              </SelectItem>
             ))}
           </Select>
         ) : (
@@ -187,12 +189,7 @@ export function ConnectorConfigForm({
             if (f.kind === 'bool') {
               return (
                 <label key={f.key} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={v === true}
-                    onChange={(e) => setField(f.key, e.target.checked)}
-                    className="h-4 w-4 rounded border-input"
-                  />
+                  <Checkbox checked={v === true} onCheckedChange={(c) => setField(f.key, (c === true))} />
                   <span>{t(f.label)}</span>
                   {f.description && <span className="text-muted-foreground">— {t(f.description)}</span>}
                 </label>
@@ -202,10 +199,10 @@ export function ConnectorConfigForm({
               return (
                 <FormField key={f.key} label={t(f.label)} htmlFor={`cx-${f.key}`} description={f.description ? t(f.description) : undefined}>
                   <Select id={`cx-${f.key}`} value={typeof v === 'string' ? v : ''} onChange={(nv) => setField(f.key, nv)}>
-                    <option value="">{t('qosDefault')}</option>
-                    <option value="0">{t('qos0')}</option>
-                    <option value="1">{t('qos1')}</option>
-                    <option value="2">{t('qos2')}</option>
+                    <SelectItem value="">{t('qosDefault')}</SelectItem>
+                    <SelectItem value="0">{t('qos0')}</SelectItem>
+                    <SelectItem value="1">{t('qos1')}</SelectItem>
+                    <SelectItem value="2">{t('qos2')}</SelectItem>
                   </Select>
                 </FormField>
               );
@@ -248,12 +245,7 @@ export function ConnectorConfigForm({
           {spec.sasl && (
             <div className="space-y-3 rounded-md border border-dashed p-3">
               <label className="flex items-center gap-2 text-sm font-medium">
-                <input
-                  type="checkbox"
-                  checked={state.form.saslEnabled}
-                  onChange={(e) => onChange({ ...state, form: { ...state.form, saslEnabled: e.target.checked } })}
-                  className="h-4 w-4 rounded border-input"
-                />
+                <Checkbox checked={state.form.saslEnabled} onCheckedChange={(c) => onChange({ ...state, form: { ...state.form, saslEnabled: (c === true) } })} />
                 <span>{t('useSasl')}</span>
               </label>
               {state.form.saslEnabled && (
@@ -265,9 +257,9 @@ export function ConnectorConfigForm({
                       onChange={(nv) => onChange({ ...state, form: { ...state.form, saslMechanism: nv } })}
                     >
                       {SASL_MECHANISMS.map((m) => (
-                        <option key={m} value={m}>
+                        <SelectItem key={m} value={m}>
                           {m}
-                        </option>
+                        </SelectItem>
                       ))}
                     </Select>
                   </FormField>
@@ -357,13 +349,13 @@ function SecretControl({
           <span className="rounded bg-emerald-500/10 px-2 py-1 font-medium text-emerald-600 dark:text-emerald-500">
             {t('credentialConfigured')}
           </span>
-          <button type="button" className="text-primary hover:underline" onClick={handleReplace}>
+          <Button type="button" variant="link" size="sm" className="h-auto p-0" onClick={handleReplace}>
             {t('replace')}
-          </button>
+          </Button>
           {!required && (
-            <button type="button" className="text-destructive hover:underline" onClick={handleClear}>
+            <Button type="button" variant="link" size="sm" className="h-auto p-0 text-destructive" onClick={handleClear}>
               {t('clear')}
-            </button>
+            </Button>
           )}
         </div>
       </FormField>
@@ -376,9 +368,9 @@ function SecretControl({
           <span className="rounded bg-destructive/10 px-2 py-1 font-medium text-destructive">
             {t('credentialWillClear')}
           </span>
-          <button type="button" className="text-primary hover:underline" onClick={handleUndo}>
+          <Button type="button" variant="link" size="sm" className="h-auto p-0" onClick={handleUndo}>
             {t('undo')}
-          </button>
+          </Button>
         </div>
       </FormField>
     );

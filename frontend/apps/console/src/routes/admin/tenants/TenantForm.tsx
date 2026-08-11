@@ -11,9 +11,11 @@ import { Combobox } from '@/components/ui/combobox';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Checkbox } from '@/components/ui/checkbox';
 import { useQuery } from '@/lib/hooks/use-query';
 import { createTenant, updateTenant, listTenantTiers, type AdminTenant } from '@/lib/api/admin';
-import { Textarea, errMessage } from '@/routes/common';
+import { errMessage } from '@/routes/common';
+import { Textarea } from '@/components/ui/textarea';
 
 // TenantForm creates a tenant (tenant absent) or edits one (tenant present, with
 // its token fixed). Shared by the new + detail pages.
@@ -231,13 +233,7 @@ export function TenantForm({
       {/* The per-tenant external-model consent gate (ADR-056 §6). */}
       <FormField label={t('aiRoutingLabel')} htmlFor="t-ai-external" description={t('aiRoutingDescription')}>
         <label className="flex items-center gap-2 text-sm">
-          <input
-            id="t-ai-external"
-            type="checkbox"
-            checked={aiExternalEnabled}
-            onChange={(e) => setAiExternalEnabled(e.target.checked)}
-            className="h-4 w-4 rounded border-input"
-          />
+          <Checkbox checked={aiExternalEnabled} onCheckedChange={(c) => setAiExternalEnabled((c === true))} />
           <span>{t('aiRoutingCheckboxLabel')}</span>
         </label>
       </FormField>

@@ -28,7 +28,8 @@ import { FormDrawer } from '@/components/registry';
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useQuery } from '@/lib/hooks/use-query';
-import { Textarea, errMessage, useReload } from '@/routes/common';
+import { errMessage, useReload } from '@/routes/common';
+import { Textarea } from '@/components/ui/textarea';
 import {
   listConnectorVersions,
   publishConnector,

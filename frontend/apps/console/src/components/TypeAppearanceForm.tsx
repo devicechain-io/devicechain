@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { useToast } from '@/components/ui/toast';
+import { ColorPicker } from '@/components/ui/color-picker';
 import { errMessage } from '@/routes/common';
 import { TypeCapsule } from '@/components/TypeCapsule';
 import { TYPE_ICONS, TYPE_ICON_KEYS } from '@/lib/type-icons';
@@ -51,12 +52,13 @@ function ColorField({
   return (
     <FormField label={label} htmlFor={`color-${label}`}>
       <div className="flex items-center gap-2">
-        <input
+        <ColorPicker
           id={`color-${label}`}
-          type="color"
           value={value ?? fallback}
-          onChange={(e) => onChange(e.target.value)}
-          className="h-9 w-12 shrink-0 cursor-pointer rounded border border-input bg-background"
+          fallback={fallback}
+          ariaLabel={label}
+          onChange={onChange}
+          className="w-12"
         />
         <span className="font-mono text-xs text-muted-foreground">{value ?? '—'}</span>
         {value && (

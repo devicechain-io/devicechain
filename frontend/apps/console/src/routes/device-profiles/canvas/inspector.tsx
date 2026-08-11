@@ -12,8 +12,9 @@ import { Link } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
-import { Select } from '@/components/ui/select';
-import { Textarea } from '@/routes/common';
+import { Select, SelectItem } from '@/components/ui/select';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Textarea } from '@/components/ui/textarea';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listConnectors } from '@/lib/api/connectors';
 import {
@@ -52,10 +53,10 @@ function DurationField({ label, id, ms, onChange }: { label: string; id: string;
           onChange={(e) => onChange(Math.round(Math.max(0, Number(e.target.value)) * factor))}
         />
         <Select value={unit} onChange={(u) => onChange(Math.round(shown * (u === 'h' ? 3_600_000 : u === 'm' ? 60_000 : u === 's' ? 1000 : 1)))}>
-          <option value="ms">{t('inspectorUnitMs')}</option>
-          <option value="s">{t('inspectorUnitSec')}</option>
-          <option value="m">{t('inspectorUnitMin')}</option>
-          <option value="h">{t('inspectorUnitHr')}</option>
+          <SelectItem value="ms">{t('inspectorUnitMs')}</SelectItem>
+          <SelectItem value="s">{t('inspectorUnitSec')}</SelectItem>
+          <SelectItem value="m">{t('inspectorUnitMin')}</SelectItem>
+          <SelectItem value="h">{t('inspectorUnitHr')}</SelectItem>
         </Select>
       </div>
     </FormField>
@@ -63,17 +64,17 @@ function DurationField({ label, id, ms, onChange }: { label: string; id: string;
 }
 
 const opOptions = COMPARE_OPS.map((op) => (
-  <option key={op} value={op}>
+  <SelectItem key={op} value={op}>
     {OP_SYMBOL[op]} ({op})
-  </option>
+  </SelectItem>
 ));
 
 // The engine-side aggregate/deltaRate comparison accepts only the four ORDERED operators — the
 // compiler rejects eq/ne there (they are valid only in a predicate leaf, which lowers to CEL).
 const orderedOpOptions = COMPARE_OPS.filter((op) => op !== 'eq' && op !== 'ne').map((op) => (
-  <option key={op} value={op}>
+  <SelectItem key={op} value={op}>
     {OP_SYMBOL[op]} ({op})
-  </option>
+  </SelectItem>
 ));
 
 // LeafEditor edits a when-leaf: none (match every) / structured (metric·op·bound) / raw CEL.
@@ -95,9 +96,9 @@ function LeafEditor({ leaf, allowNone, onChange }: { leaf: unknown; allowNone: b
     <div className="space-y-3 rounded-md border border-dashed p-3">
       <FormField label={t('inspectorConditionLabel')} htmlFor="leaf-mode">
         <Select id="leaf-mode" value={mode} onChange={setMode}>
-          {allowNone && <option value="none">{t('inspectorMatchEveryEvent')}</option>}
-          <option value="structured">{t('inspectorComparison')}</option>
-          <option value="cel">{t('inspectorAdvancedCel')}</option>
+          {allowNone && <SelectItem value="none">{t('inspectorMatchEveryEvent')}</SelectItem>}
+          <SelectItem value="structured">{t('inspectorComparison')}</SelectItem>
+          <SelectItem value="cel">{t('inspectorAdvancedCel')}</SelectItem>
         </Select>
       </FormField>
       {mode === 'structured' && (
@@ -117,8 +118,8 @@ function LeafEditor({ leaf, allowNone, onChange }: { leaf: unknown; allowNone: b
               // eslint-disable-next-line i18next/no-literal-string -- 'attribute'/'literal' are the Bound.kind discriminant, not user text.
               onChange={(k) => onChange({ ...l, threshold: k === 'attribute' ? { kind: 'attribute', attribute: strVal(bound.attribute) } : { kind: 'literal', value: numVal(bound.value) } })}
             >
-              <option value="literal">{t('inspectorLiteral')}</option>
-              <option value="attribute">{t('inspectorDeviceAttribute')}</option>
+              <SelectItem value="literal">{t('inspectorLiteral')}</SelectItem>
+              <SelectItem value="attribute">{t('inspectorDeviceAttribute')}</SelectItem>
             </Select>
           </FormField>
           {boundKind === 'literal' ? (
@@ -153,11 +154,11 @@ function MetaFields({ config, set }: { config: NodeConfig; set: (patch: NodeConf
       </FormField>
       <FormField label={t('inspectorSeverityLabel')} htmlFor="cfg-severity" description={t('inspectorSeverityDescription')}>
         <Select id="cfg-severity" value={strVal(config.severity)} onChange={(v) => set({ severity: v || undefined })}>
-          <option value="">{t('inspectorSeverityNone')}</option>
+          <SelectItem value="">{t('inspectorSeverityNone')}</SelectItem>
           {SEVERITIES.map((s) => (
-            <option key={s} value={s}>
+            <SelectItem key={s} value={s}>
               {s}
-            </option>
+            </SelectItem>
           ))}
         </Select>
       </FormField>
@@ -224,9 +225,9 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
                 }}
               >
                 {AGG_FUNCS.map((a) => (
-                  <option key={a} value={a}>
+                  <SelectItem key={a} value={a}>
                     {a}
-                  </option>
+                  </SelectItem>
                 ))}
               </Select>
             </FormField>
@@ -247,9 +248,9 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
                 }}
               >
                 {WINDOW_MODES.map((m) => (
-                  <option key={m} value={m}>
+                  <SelectItem key={m} value={m}>
                     {m}
-                  </option>
+                  </SelectItem>
                 ))}
               </Select>
             </FormField>
@@ -289,7 +290,7 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
             <Input id="cfg-metric" value={strVal(config.metric)} onChange={(e) => set({ metric: e.target.value })} placeholder={t('inspectorMetricPlaceholder')} />
           </FormField>
           <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={!!config.rate} onChange={(e) => set({ rate: e.target.checked || undefined })} />
+            <Checkbox checked={!!config.rate} onCheckedChange={(c) => set({ rate: c === true || undefined })} />
             {t('inspectorPerSecondRateLabel')}
           </label>
           <div className="grid grid-cols-2 gap-2">
@@ -416,10 +417,10 @@ function ActionFields({
     <div className="space-y-4">
       <FormField label={t('inspectorActionLabel')} htmlFor="cfg-action">
         <Select id="cfg-action" value={kind} onChange={(v) => onChange({ action: v })}>
-          <option value="raiseAlarm">{t('inspectorActionRaiseAlarm')}</option>
-          <option value="sendCommand">{t('inspectorActionSendCommand')}</option>
-          <option value="httpCall">{t('inspectorActionHttpCall')}</option>
-          <option value="publish">{t('inspectorActionPublish')}</option>
+          <SelectItem value="raiseAlarm">{t('inspectorActionRaiseAlarm')}</SelectItem>
+          <SelectItem value="sendCommand">{t('inspectorActionSendCommand')}</SelectItem>
+          <SelectItem value="httpCall">{t('inspectorActionHttpCall')}</SelectItem>
+          <SelectItem value="publish">{t('inspectorActionPublish')}</SelectItem>
         </Select>
       </FormField>
 
@@ -491,14 +492,14 @@ function ConnectorPicker({ value, onChange }: { value: string; onChange: (v: str
   }
   return (
     <Select id="cfg-connectorref" value={value} onChange={onChange}>
-      <option value="">{loading ? t('common:loading') : t('inspectorSelectConnectorPlaceholder')}</option>
+      <SelectItem value="">{loading ? t('common:loading') : t('inspectorSelectConnectorPlaceholder')}</SelectItem>
       {/* Show a "(not found)" row for a value not in the list — but only once loaded, so a valid
           ref doesn't flash as not-found while the query is in flight. */}
-      {!loading && value && !known && <option value={value}>{t('inspectorConnectorNotFound', { token: value })}</option>}
+      {!loading && value && !known && <SelectItem value={value}>{t('inspectorConnectorNotFound', { token: value })}</SelectItem>}
       {connectors.map((c) => (
-        <option key={c.token} value={c.token}>
+        <SelectItem key={c.token} value={c.token}>
           {c.name ? `${c.name} (${c.token})` : c.token}
-        </option>
+        </SelectItem>
       ))}
     </Select>
   );

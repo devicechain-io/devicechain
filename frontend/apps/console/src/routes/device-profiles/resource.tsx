@@ -18,7 +18,8 @@ import { FormField } from '@/components/ui/form-field';
 import { TokenField } from '@/components/ui/token-field';
 import { SuggestField } from '@/components/ui/suggest-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
-import { Textarea, errMessage, typeCountLabel, StatusBadge } from '@/routes/common';
+import { errMessage, typeCountLabel, StatusBadge } from '@/routes/common';
+import { Textarea } from '@/components/ui/textarea';
 import {
   tokenColumn,
   descriptionColumn,

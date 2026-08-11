@@ -38,6 +38,8 @@ const EXTRA_ATTRS = [
   'color', 'fill', 'stroke', 'deviceColor', 'defaultTheme',
   'to', 'href', 'target', 'rel', 'role', 'name', 'htmlFor',
   'autoComplete', 'inputMode', 'dir', 'slot', 'data-testid',
+  // FilePicker's `accept` is a MIME-type list ('image/png,image/jpeg'), never text.
+  'accept',
   // radix/shadcn discriminants — Tabs/Select/RadioGroup `value`/`defaultValue`
   // are enum tokens that pick a pane/option, never display text (the visible
   // label is the element's children). Excluding them avoids forcing every such
@@ -133,6 +135,83 @@ export default [
           },
         },
       ],
+
+      // 🔴 USE THE KIT'S CONTROLS, NOT THE BROWSER'S.
+      //
+      // The reason is not tidiness. A native control's appearance is only partly
+      // ours: `<select>` in particular has its option list drawn by the OPERATING
+      // SYSTEM, which takes none of our theme, so on a dark surface it renders a
+      // white popup with near-invisible text. That shipped, and it shipped from a
+      // considered decision — the a11y argument for a native `<select>` is sound and
+      // is entirely about SEMANTICS, which is why it did not catch a visual defect.
+      //
+      // The durable reason is single-point-of-change: styling and behaviour should
+      // move in `components/ui/` and take the whole console with them, rather than
+      // being chased across every call site that hand-rolled a control.
+      //
+      // 🔴 AN ELEMENT JOINS THIS LIST THE MOMENT ITS SWEEP REACHES ZERO, NOT BEFORE.
+      // A rule introduced with existing violations either needs a suppression list
+      // nobody prunes, or gets demoted to a warning and ignored.
+      //
+      // `select`, `input` and `textarea` are all at zero outside components/ui, which
+      // took three new primitives — Textarea (promoted out of routes/common.tsx),
+      // ColorPicker (react-colorful in our own Popover, because `type="color"` opens
+      // an unthemeable OS dialog) and FilePicker (the one case where the native
+      // element is unavoidable, so the kit owns the only part the user sees).
+      //
+      // 🔴 STILL OUTSTANDING: `button`, 19 sites outside components/ui. Deliberately
+      // NOT gated yet, because they are not a mechanical conversion — they are four
+      // primitives waiting to be extracted, and forcing them into <Button> with their
+      // bespoke classes preserved would satisfy the linter while leaving the
+      // duplication the rule exists to prevent:
+      //
+      //   segmented control — LocaleSwitcher, ThemeToggle, PreviewPanel  -> ToggleGroup
+      //   filter pill/chip  — BrowsePage, FacetKeysPage, DetectionRuleAuthoring,
+      //                       PreviewPanel                                -> Chip
+      //   icon button       — WidgetConfigPanel, DeviceCredentialsPanel,
+      //                       TypeAppearanceForm       -> Button variant=ghost size=icon
+      //   link button       — AiProviderForm x3, DashboardWorkspace -> Button variant=link
+      //
+      // Genuinely special, and likely to keep justified per-site disables: TiersPage's
+      // dnd-kit drag activator, DashboardCanvas's react-rnd target, TierForm's colour
+      // swatch, BrandingPage's live preview chip.
+      //
+      // Worth recording how that list was found: a grep counted 7, the AST counted 31.
+      // Multi-line JSX openings are invisible to `<button[ >/]`, which is the argument
+      // for gating in the linter rather than in review.
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'JSXOpeningElement > JSXIdentifier[name="select"]',
+          message:
+            "Use <Select> from '@/components/ui/select'. A native <select>'s option list is drawn by the OS and cannot be themed — on the dark console it renders an unreadable white popup.",
+        },
+        {
+          selector: 'JSXOpeningElement > JSXIdentifier[name="input"]',
+          message:
+            "Use the kit: <Input>, <Checkbox>, <RadioGroup>, <ColorPicker> or <FilePicker>. A native input cannot be styled consistently across browsers beyond accent-color, and type=\"color\" opens an OS dialog that takes none of our theme.",
+        },
+        {
+          selector: 'JSXOpeningElement > JSXIdentifier[name="textarea"]',
+          message: "Use <Textarea> from '@/components/ui/textarea'.",
+        },
+      ],
     },
+  },
+
+  {
+    // components/ui IS the place native elements are allowed: it is what wraps them.
+    // Without this the primitives could not be written at all.
+    files: ['src/components/ui/**/*.{ts,tsx}'],
+    rules: { 'no-restricted-syntax': 'off' },
+  },
+
+  {
+    // Test doubles may use native elements. A fake map or a stub panel exists to
+    // stand IN for a component, and making it import the real kit couples the double
+    // to the thing it is replacing — which is how a fake starts hiding the defect it
+    // was supposed to expose.
+    files: ['src/**/*.test.{ts,tsx}'],
+    rules: { 'no-restricted-syntax': 'off' },
   },
 ];

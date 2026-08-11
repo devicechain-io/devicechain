@@ -221,3 +221,26 @@
   --text-label: 10px;
   --text-label-lg: 11px;
 }
+/* react-colorful, inside the kit's ColorPicker popover.
+ *
+ * The library ships its own class names and a fixed 200x200 default. These rules
+ * size it to the panel and give its handles the same border treatment as the rest
+ * of the kit — which is the entire reason a third-party picker was chosen over
+ * `<input type="color">`: the OS colour dialog takes none of this. */
+.dc-color-picker {
+  width: 13rem;
+  height: 9rem;
+}
+.dc-color-picker .react-colorful__saturation {
+  border-radius: var(--radius) var(--radius) 0 0;
+  border-bottom: none;
+}
+.dc-color-picker .react-colorful__hue {
+  height: 0.75rem;
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.dc-color-picker .react-colorful__pointer {
+  width: 0.875rem;
+  height: 0.875rem;
+  border-width: 2px;
+}

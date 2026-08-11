@@ -12,7 +12,8 @@ import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { TokenField } from '@/components/ui/token-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
-import { Textarea, errMessage } from '@/routes/common';
+import { errMessage } from '@/routes/common';
+import { Textarea } from '@/components/ui/textarea';
 import {
   createGeoFence,
   updateGeoFence,

@@ -9,7 +9,6 @@ import {
   useState,
   type KeyboardEvent,
   type ReactNode,
-  type TextareaHTMLAttributes,
 } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -17,7 +16,6 @@ import type { TFunction } from 'i18next';
 import { ArrowLeft, CheckCircle2, CircleSlash, Trash2 } from 'lucide-react';
 import { GraphQLRequestError } from '@devicechain/client';
 import { Badge } from '@/components/ui/badge';
-import { cn } from '@/lib/utils';
 
 // useReload returns a version counter and a bump function; pass the version in a
 // useQuery deps array to refetch a list after a mutation.
@@ -62,20 +60,6 @@ export function rowLinkProps(onActivate: () => void) {
       }
     },
   };
-}
-
-// Textarea mirrors the Input primitive's styling for multi-line fields (tenant
-// config JSON, role descriptions).
-export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return (
-    <textarea
-      className={cn(
-        'flex min-h-20 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 font-mono',
-        className,
-      )}
-      {...props}
-    />
-  );
 }
 
 // StatusBadge renders an enabled/disabled pill — green with a check when enabled,

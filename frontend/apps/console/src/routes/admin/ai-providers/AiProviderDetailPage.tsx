@@ -29,7 +29,8 @@ import { ErrorBanner } from '@/components/ui/error-banner';
 import { CopyToken } from '@/components/ui/copy-token';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { Textarea, errMessage } from '@/routes/common';
+import { errMessage } from '@/routes/common';
+import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/toast';
 import { useQuery } from '@/lib/hooks/use-query';
 import {

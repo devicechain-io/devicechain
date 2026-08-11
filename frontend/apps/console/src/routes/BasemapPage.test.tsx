@@ -10,6 +10,7 @@
 
 import '@/i18n/config';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { selectOption } from '@/test/select';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { authorities, tenantState, setTenantBasemapMock, applyTenantMock, toastMock } = vi.hoisted(
@@ -197,14 +198,14 @@ describe('the tile URL', () => {
 // the wiring: that choosing a provider reaches the fields the save reads, and that a
 // half-made keyed URL cannot leave this page.
 describe('the provider picker', () => {
-  const pickProvider = (id: string) =>
-    fireEvent.change(document.getElementById('bm-provider') as HTMLSelectElement, {
-      target: { value: id },
-    });
+  // The kit's Select is a Radix listbox, not a native <select>, so it is driven by
+  // its visible label through the real open-then-choose sequence.
+  const pickProvider = (name: string) =>
+    selectOption(document.getElementById('bm-provider') as HTMLElement, name);
 
   it('fills both fields, and the result saves', async () => {
     render(<BasemapPage />);
-    pickProvider('openstreetmap');
+    await pickProvider('OpenStreetMap');
 
     const url = (document.getElementById('bm-tile-url') as HTMLInputElement).value;
     const credit = (document.getElementById('bm-attribution') as HTMLInputElement).value;
@@ -224,9 +225,9 @@ describe('the provider picker', () => {
   // the placeholder, and that value must not be storable: saved as-is, every tile
   // request would send the literal text "{apiKey}" instead of a key, and the map
   // would be uniformly blank with a perfectly valid-looking setting behind it.
-  it('blocks the save while a chosen provider still needs its key', () => {
+  it('blocks the save while a chosen provider still needs its key', async () => {
     render(<BasemapPage />);
-    pickProvider('thunderforest');
+    await pickProvider('Thunderforest');
 
     expect((document.getElementById('bm-tile-url') as HTMLInputElement).value).toContain(
       '{apiKey}',
@@ -235,9 +236,9 @@ describe('the provider picker', () => {
     expect(screen.getByText(/unfilled API key placeholder/i)).toBeTruthy();
   });
 
-  it('unblocks once the key is filled in', () => {
+  it('unblocks once the key is filled in', async () => {
     render(<BasemapPage />);
-    pickProvider('thunderforest');
+    await pickProvider('Thunderforest');
     type('bm-api-key', 'a-real-key');
 
     const url = (document.getElementById('bm-tile-url') as HTMLInputElement).value;

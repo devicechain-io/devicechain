@@ -47,7 +47,8 @@ import { TokenField } from '@/components/ui/token-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { useQuery } from '@/lib/hooks/use-query';
-import { Textarea, errMessage } from '@/routes/common';
+import { errMessage } from '@/routes/common';
+import { Textarea } from '@/components/ui/textarea';
 
 // Capitalize the first letter. Still used by device-profile definition toasts
 // (DefinitionsPanel) pending that area's sweep; the registry forms below now take
