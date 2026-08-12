@@ -23,6 +23,7 @@ import (
 	"github.com/devicechain-io/dc-user-management/purge"
 	"github.com/devicechain-io/dc-user-management/schema"
 	"github.com/devicechain-io/dc-user-management/settings"
+	"github.com/devicechain-io/dc-user-management/settingsdefs"
 	"github.com/nats-io/nats.go"
 	"github.com/rs/zerolog/log"
 )
@@ -168,7 +169,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// The instance-scoped settings Service (ADR-042 P2). Shared between the
 	// data-plane resolver (which reads the branding.default setting as the cascade's
 	// default tier, ADR-038) and its own /settings/graphql handler.
-	SettingsService = settings.NewService(settings.NewStore(RdbManager))
+	SettingsService = settings.NewService(settings.NewStore(RdbManager), settingsdefs.Registry())
 
 	// The object/asset store (ADR-058) — the branding-logo consumer. Constructed
 	// once; nil when not configured (branding-logo upload/read then 503, Tier-0

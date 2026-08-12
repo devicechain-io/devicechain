@@ -41,7 +41,7 @@ import AdminRolesPage from '@/routes/admin/RolesPage';
 import AdminAuditPage from '@/routes/admin/AuditPage';
 import AdminNewRolePage from '@/routes/admin/roles/NewRolePage';
 import AdminRoleDetailPage from '@/routes/admin/roles/RoleDetailPage';
-import AdminSettingsPage from '@/routes/admin/SettingsPage';
+import AdminSettingsPage from '@/routes/admin/settings/SettingsPage';
 import { REGISTRY_RESOURCES } from '@/routes/resources';
 
 

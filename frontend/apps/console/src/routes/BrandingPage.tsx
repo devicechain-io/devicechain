@@ -11,7 +11,7 @@
 // would wipe an uploaded logo. Each write returns the freshly-resolved tenant, which
 // we write straight into the tenant cache so the rebrand shows across the shell.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Upload, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { PageShell } from '@/components/ui/page-shell';
@@ -21,7 +21,6 @@ import { FormField } from '@/components/ui/form-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { LoadingState } from '@/components/ui/loading-state';
 import { useToast } from '@/components/ui/toast';
-import { ColorPicker } from '@/components/ui/color-picker';
 import { FilePicker } from '@/components/ui/file-picker';
 import { useAuth } from '@/auth/AuthProvider';
 import { hasAuthority } from '@devicechain/client';
@@ -34,7 +33,12 @@ import {
   type TenantBranding,
   type TenantBrandingInput,
 } from '@/lib/api/user-management';
-import { contrastRatio } from '@/lib/branding';
+import {
+  BrandingThemeFields,
+  BrandingPreview,
+  brandingBadHex,
+  type BrandingThemeState,
+} from '@/components/branding/BrandingThemeFields';
 import { useBrandingLogoSrc } from '@/lib/useBrandingLogo';
 import { errMessage } from '@/routes/common';
 
@@ -43,7 +47,6 @@ import { errMessage } from '@/routes/common';
 // UX; the server re-validates (and sniffs the real type).
 const UPLOAD_LOGO_MIME = ['image/png', 'image/jpeg', 'image/webp'];
 const MAX_UPLOAD_LOGO_BYTES = 1024 * 1024; // 1 MiB (branding.MaxUploadedLogoBytes)
-const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 // An object-store logo surfaces to the client as this proxy path, not a URL — the
 // URL field is left blank for one (it is an upload, not a pasted link).
 const PROXY_LOGO_PREFIX = '/branding/logo';
@@ -52,17 +55,7 @@ const PROXY_LOGO_PREFIX = '/branding/logo';
 // a technical identifier, never localized (mirrors how a token/id is displayed).
 const BRANDING_WRITE_AUTHORITY = 'branding:write';
 
-// The theme form's per-field state — strings so "" cleanly represents "inherit".
-interface FormState {
-  title: string;
-  logoMaxHeight: string;
-  primary: string;
-  background: string;
-  foreground: string;
-  accent: string;
-}
-
-function initialState(o: TenantBranding | null): FormState {
+function initialState(o: TenantBranding | null): BrandingThemeState {
   return {
     title: o?.title ?? '',
     logoMaxHeight: o?.logoMaxHeight != null ? String(o.logoMaxHeight) : '',
@@ -115,7 +108,7 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
   const tenant = useCurrentTenant();
   const toast = useToast();
 
-  const [form, setForm] = useState<FormState>(() => initialState(override));
+  const [form, setForm] = useState<BrandingThemeState>(() => initialState(override));
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [logoBusy, setLogoBusy] = useState(false);
@@ -140,20 +133,10 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [override.updatedAt]);
 
-  const set = (k: keyof FormState, v: string) => {
+  const change = (next: BrandingThemeState) => {
     setDirty(true);
-    setForm((f) => ({ ...f, [k]: v }));
+    setForm(next);
   };
-  // Bound per-field setters — each closes over a literal FormState key OUTSIDE any
-  // JSX attribute, so the key itself is a plain identifier by the time it reaches
-  // JSX (a JSX-attribute call argument here would trip the i18n literal-string lint,
-  // even though these keys are technical, never user-facing text).
-  const setTitleField = (v: string) => set('title', v);
-  const setPrimaryField = (v: string) => set('primary', v);
-  const setAccentField = (v: string) => set('accent', v);
-  const setBackgroundField = (v: string) => set('background', v);
-  const setForegroundField = (v: string) => set('foreground', v);
-  const setLogoMaxHeightField = (v: string) => set('logoMaxHeight', v);
 
   // The live resolved logo (updated by the logo actions via the tenant cache), used
   // for the preview. Whether THIS tenant set its own logo — which gates the Remove
@@ -162,20 +145,7 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
   const logoPreviewSrc = useBrandingLogoSrc(tenant?.branding?.logo);
   const hasOwnLogo = !!tenant?.brandingOverride?.logo;
 
-  // Client-side hex validation (fail-fast); the server re-validates.
-  const badHex = (['primary', 'background', 'foreground', 'accent'] as const).filter(
-    (k) => form[k] !== '' && !HEX_RE.test(form[k]),
-  );
-
-  // Non-blocking contrast hints (guidance only, never block a save — ADR-038 §4).
-  const contrast = useMemo(() => {
-    if (!HEX_RE.test(form.foreground) || !HEX_RE.test(form.background)) return null;
-    return contrastRatio(form.foreground, form.background);
-  }, [form.foreground, form.background]);
-  const primaryContrast = useMemo(() => {
-    if (!HEX_RE.test(form.primary)) return null;
-    return contrastRatio(form.primary, '#ffffff');
-  }, [form.primary]);
+  const badHex = brandingBadHex(form);
 
   const submit = async () => {
     setFormError(null);
@@ -287,27 +257,7 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
         <div className="space-y-6">
           {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
 
-          <FormField label={t('appTitleLabel')} htmlFor="b-title" description={t('appTitleDescription')}>
-            <Input id="b-title" value={form.title} maxLength={64} placeholder="DeviceChain" onChange={(e) => setTitleField(e.target.value)} />
-          </FormField>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <ColorField label={t('primaryLabel')} hint={t('primaryHint')} value={form.primary} onChange={setPrimaryField} />
-            <ColorField label={t('accentLabel')} hint={t('accentHint')} value={form.accent} onChange={setAccentField} />
-            <ColorField label={t('sidebarBackgroundLabel')} hint={t('sidebarBackgroundHint')} value={form.background} onChange={setBackgroundField} />
-            <ColorField label={t('sidebarForegroundLabel')} hint={t('sidebarForegroundHint')} value={form.foreground} onChange={setForegroundField} />
-          </div>
-
-          {contrast !== null && contrast < 4.5 && (
-            <p className="text-label-lg text-warning">
-              {t('contrastWarning', { ratio: contrast.toFixed(1) })}
-            </p>
-          )}
-          {primaryContrast !== null && primaryContrast < 4.5 && (
-            <p className="text-label-lg text-warning">
-              {t('primaryContrastWarning', { ratio: primaryContrast.toFixed(1) })}
-            </p>
-          )}
+          <BrandingThemeFields value={form} onChange={change} />
 
           <FormField
             label={t('logoLabel')}
@@ -337,47 +287,11 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
             </div>
           </FormField>
 
-          <FormField label={t('logoMaxHeightLabel')} htmlFor="b-height" description={t('logoMaxHeightDescription')}>
-            <Input id="b-height" type="number" min={16} max={200} value={form.logoMaxHeight} placeholder="28" onChange={(e) => setLogoMaxHeightField(e.target.value)} className="w-32" />
-          </FormField>
         </div>
 
         <BrandingPreview form={form} logoSrc={logoPreviewSrc} />
       </div>
     </PageShell>
-  );
-}
-
-// A color field: a native swatch + a hex text input, with a Clear that re-inherits.
-function ColorField({
-  label,
-  hint,
-  value,
-  onChange,
-}: {
-  label: string;
-  hint: string;
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  const { t } = useTranslation('branding');
-  const valid = HEX_RE.test(value);
-  return (
-    <FormField label={label} description={hint}>
-      <div className="flex items-center gap-2">
-        <ColorPicker
-          ariaLabel={t('colorSwatchAriaLabel', { label })}
-          value={valid ? value : '#000000'}
-          onChange={onChange}
-        />
-        <Input value={value} placeholder={t('inheritPlaceholder')} onChange={(e) => onChange(e.target.value)} className="font-mono" />
-        {value !== '' && (
-          <Button type="button" variant="ghost" size="icon" aria-label={t('clearColorLabel', { label })} onClick={() => onChange('')}>
-            <X className="size-3.5" />
-          </Button>
-        )}
-      </div>
-    </FormField>
   );
 }
 
@@ -389,44 +303,6 @@ function UploadButton({ onPick, disabled }: { onPick: (file: File) => void; disa
         <Upload className="mr-1 size-3.5" /> {t('upload')}
       </FilePicker>
     </>
-  );
-}
-
-// A live preview of the palette + logo. Colors come from the (unsaved) theme form;
-// the logo is the live resolved logo (already applied), shown only in an <img>.
-function BrandingPreview({ form, logoSrc }: { form: FormState; logoSrc: string | null }) {
-  const { t } = useTranslation('branding');
-  const primary = HEX_RE.test(form.primary) ? form.primary : undefined;
-  const bg = HEX_RE.test(form.background) ? form.background : undefined;
-  const fg = HEX_RE.test(form.foreground) ? form.foreground : undefined;
-  const height = form.logoMaxHeight.trim() === '' ? 28 : Number(form.logoMaxHeight);
-  return (
-    <div className="space-y-2">
-      <p className="text-sm font-medium text-foreground">{t('preview')}</p>
-      <div className="overflow-hidden rounded-lg border border-border">
-        <div className="flex items-center gap-2 px-3 py-3" style={{ background: bg, color: fg }}>
-          {logoSrc ? (
-            <img src={logoSrc} alt="" className="w-auto max-w-[70%] object-contain" style={{ maxHeight: height }} />
-          ) : (
-            <span className="text-sm font-semibold">{form.title.trim() || 'DeviceChain'}</span>
-          )}
-        </div>
-        <div className="space-y-3 bg-card p-3">
-          {/* A PICTURE of a button, not a button: it shows what the tenant's primary
-              colour does to one, so it must carry the tenant's colour rather than the
-              kit's — <Button> would render the console's own styling and preview
-              nothing. Rendering it as a <span> also stops it being a tab stop that
-              does nothing when activated, which is what it was. */}
-          <span
-            className="inline-block rounded-md px-3 py-1.5 text-sm font-medium text-white"
-            style={{ background: primary ?? 'hsl(var(--primary))' }}
-          >
-            {t('primaryButtonSample')}
-          </span>
-          <p className="text-xs text-muted-foreground">{t('sampleContent')}</p>
-        </div>
-      </div>
-    </div>
   );
 }
 

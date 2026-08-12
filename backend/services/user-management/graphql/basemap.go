@@ -10,7 +10,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-user-management/basemap"
 	"github.com/devicechain-io/dc-user-management/iam"
-	"github.com/devicechain-io/dc-user-management/settings"
+	"github.com/devicechain-io/dc-user-management/settingsdefs"
 	"github.com/rs/zerolog/log"
 )
 
@@ -35,7 +35,7 @@ func (r *TenantBasemapResolver) Zoom() *float64       { return r.b.Zoom }
 // attribution resolve together, so a tenant that names its own tile source never
 // inherits the operator's credit line for it.
 func (r *TenantResolver) Basemap(ctx context.Context) (*TenantBasemapResolver, error) {
-	def, err := r.svc.getSettingsService(ctx).Get(ctx, settings.KeyBasemapDefault)
+	def, err := r.svc.getSettingsService(ctx).Get(ctx, settingsdefs.KeyBasemapDefault)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +60,7 @@ func resolveBasemap(tenantOverride basemap.Basemap, storedDefault []byte) basema
 	if err := json.Unmarshal(storedDefault, &systemDefault); err != nil || basemap.Validate(systemDefault) != nil {
 		// (Merge normalizes both tiers itself, so a blank stored here cannot mask
 		// anything; this branch is only about a value that is malformed or rule-invalid.)
-		log.Warn().Str("setting", settings.KeyBasemapDefault).Msg("ignoring malformed basemap.default; resolving without an operator default")
+		log.Warn().Str("setting", settingsdefs.KeyBasemapDefault).Msg("ignoring malformed basemap.default; resolving without an operator default")
 		systemDefault = basemap.Basemap{}
 	}
 	return basemap.Merge(tenantOverride, systemDefault)

@@ -85,8 +85,17 @@ function randomUUID(): string {
 export function generateToken(mask: string, opts: GenerateOptions = {}): string {
   const rand = opts.random ?? Math.random;
   const uuid = opts.uuid ?? randomUUID;
+  // 🔴 The width is bounded before it is used. A mask may name any width the
+  // regexp matches, and `Array.from({length: 1e20})` THROWS RangeError — which
+  // made this function, called during render by the settings editor and by every
+  // create form, a way to kill the page from a stored value. No width past
+  // MAX_TOKEN_LEN can mint a legal token anyway, so an absurd one contributes
+  // nothing rather than exploding. validateMask refuses such a mask outright;
+  // this keeps generation safe for a mask stored before it did.
   const pick = (alphabet: string, n: number) =>
-    Array.from({ length: n }, () => alphabet[Math.floor(rand() * alphabet.length)]).join('');
+    n > MAX_TOKEN_LEN
+      ? ''
+      : Array.from({ length: n }, () => alphabet[Math.floor(rand() * alphabet.length)]).join('');
 
   return parseMask(mask)
     .map((seg) => {
@@ -155,6 +164,71 @@ export function maskToRegExp(mask: string): RegExp {
 /** conformsToMask reports whether a token matches the mask's shape (soft check). */
 export function conformsToMask(mask: string, token: string): boolean {
   return maskToRegExp(mask).test(token);
+}
+
+/** The fixed seed sampleToken fills {slug} placeholders from. */
+const SAMPLE_SEED = 'Sample Name';
+
+/**
+ * sampleToken generates the token a mask would mint, deterministically. Same
+ * generator as generateToken — a pinned RNG and uuid rather than a second
+ * implementation, so a sample can never disagree with what a create form
+ * actually produces.
+ */
+export function sampleToken(mask: string, seed: string = SAMPLE_SEED): string {
+  return generateToken(mask, {
+    seed,
+    random: () => 0,
+    uuid: () => '3f2b8c14-9d7e-4a51-b6c2-0e8d5a1f7b93',
+  });
+}
+
+/**
+ * Why a mask cannot mint usable tokens. Structured rather than a message
+ * because this package is consumed by localized apps — the caller maps a reason
+ * to its own wording.
+ */
+export type MaskProblem =
+  | { reason: 'empty' }
+  | { reason: 'unknownPlaceholder'; placeholder: string }
+  | { reason: 'noPlaceholder' }
+  | { reason: 'widthTooLarge'; placeholder: string; max: number }
+  | { reason: 'invalidToken'; sample: string };
+
+/**
+ * validateMask reports why a mask is unusable, or null when it is fine. It
+ * mirrors the server (the tokenmask Go package), which is the authority and
+ * refuses the same four things — every one of which fails SILENTLY otherwise:
+ *
+ *   empty              nothing to mint from
+ *   unknownPlaceholder contributes nothing, so "dev-{sulg}" mints "dev-"
+ *   noPlaceholder      every entity mints the SAME token; the second create collides
+ *   invalidToken       the minted sample is not a legal token (a space, a slash…)
+ *
+ * 🔴 Keep this NO STRICTER than the server. A check the server does not make
+ * would refuse a mask the platform accepts, and the operator would have no way
+ * to get past it.
+ */
+export function validateMask(mask: string): MaskProblem | null {
+  if (mask === '') return { reason: 'empty' };
+  let placeholders = 0;
+  for (const seg of parseMask(mask)) {
+    if (seg.kind !== 'placeholder') continue;
+    if (seg.type === 'unknown') return { reason: 'unknownPlaceholder', placeholder: seg.raw };
+    // 🔴 Checked BEFORE anything samples the mask. This function is called during
+    // render, per keystroke — a width of 5e7 froze the tab for seconds building a
+    // string nobody would ever see, and 1e20 threw RangeError and killed the
+    // page. Neither reached the `invalidToken` check below, which is where a
+    // reader would expect an over-long token to be caught.
+    if (seg.n !== undefined && seg.n > MAX_TOKEN_LEN) {
+      return { reason: 'widthTooLarge', placeholder: seg.raw, max: MAX_TOKEN_LEN };
+    }
+    placeholders++;
+  }
+  if (placeholders === 0) return { reason: 'noPlaceholder' };
+  const sample = sampleToken(mask);
+  if (!isValidToken(sample)) return { reason: 'invalidToken', sample };
+  return null;
 }
 
 /**

@@ -128,7 +128,7 @@ export function TierForm({
         ) : (
           <TokenField
             id="tier-token"
-            entityType="tenant tier"
+            entityType="tenant-tier"
             value={token}
             onChange={setToken}
             seed={name}

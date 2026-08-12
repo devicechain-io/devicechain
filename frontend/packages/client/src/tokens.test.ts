@@ -7,6 +7,9 @@ import {
   conformsToMask,
   generateToken,
   isValidToken,
+  MAX_TOKEN_LEN,
+  validateMask,
+  sampleToken,
   normalizeToken,
   parseMask,
   resolveMask,
@@ -123,5 +126,98 @@ describe('resolveMask', () => {
     expect(resolveMask(masks, 'device')).toBe('device-{alphanumeric-8}');
     expect(resolveMask(masks, 'area')).toBe('{slug}');
     expect(resolveMask({}, 'anything')).toBe('{slug}');
+  });
+});
+
+describe('validateMask', () => {
+  // 🔴 This table is duplicated, case for case, in the tokenmask Go package's
+  // TestValidateAcceptsUsableMasks / TestValidateRefusesMasksThatMintSilentlyBrokenTokens.
+  // Kept in step BY HAND, deliberately, and not hoisted into a fixture both sides
+  // read: a Go test that reads a file outside its own module does not invalidate
+  // the test cache when that file changes, so a drifted shared fixture would
+  // replay a cached PASS — a link that looks stronger than the duplication while
+  // being weaker.
+  it('accepts the masks operators actually write', () => {
+    for (const mask of [
+      '{slug}',
+      'device-{alphanumeric-4}',
+      'area-{slug}',
+      'pin-{numeric-4}',
+      '{uuid}',
+      'dev_{slug}',
+      '{slug}-{numeric-2}',
+    ]) {
+      expect(validateMask(mask), mask).toBeNull();
+    }
+  });
+
+  it('names the placeholder that silently generates nothing', () => {
+    // The defect: an unknown placeholder contributes NOTHING, so this mints "dev-".
+    expect(generateToken('dev-{sulg}', { seed: 'North Yard' })).toBe('dev-');
+    expect(validateMask('dev-{sulg}')).toEqual({
+      reason: 'unknownPlaceholder',
+      placeholder: '{sulg}',
+    });
+  });
+
+  it('refuses a mask that would give every entity the same token', () => {
+    expect(validateMask('device')).toEqual({ reason: 'noPlaceholder' });
+  });
+
+  it('refuses a mask whose minted token breaks the platform grammar', () => {
+    expect(validateMask('my device-{slug}')?.reason).toBe('invalidToken');
+    expect(validateMask('-{slug}')?.reason).toBe('invalidToken');
+    expect(validateMask('area/{slug}')?.reason).toBe('invalidToken');
+    // Was 'invalidToken' — a width of 500 used to be caught only by sampling it
+    // and finding the result too long. It is now caught by the width bound, which
+    // is both cheaper and a more accurate description of what is wrong.
+    expect(validateMask('{alphanumeric-500}')?.reason).toBe('widthTooLarge');
+  });
+
+  it('refuses an empty mask, and a zero-width placeholder that mints one', () => {
+    expect(validateMask('')).toEqual({ reason: 'empty' });
+    // 🔴 "0" is a TRUTHY string in JS, so the parsed 0 survives `seg.n ?? 8` and
+    // this mints "" — where {alphanumeric} mints eight characters.
+    expect(generateToken('{alphanumeric-0}')).toBe('');
+    expect(validateMask('{alphanumeric-0}')?.reason).toBe('invalidToken');
+  });
+});
+
+describe('sampleToken', () => {
+  it('is deterministic, and is the same generator create forms use', () => {
+    expect(sampleToken('area-{slug}')).toBe(sampleToken('area-{slug}'));
+    expect(sampleToken('area-{slug}', 'North Yard')).toBe('area-north-yard');
+    expect(sampleToken('device-{numeric-3}')).toBe('device-000');
+  });
+});
+
+describe('absurd widths', () => {
+  // 🔴 Found by a differential review against the Go implementation. A width the
+  // regexp happily matches can be any size, and `Array.from({length: 1e20})`
+  // THROWS RangeError — so validateMask, which the settings editor calls during
+  // render, killed the page instead of reporting a problem. A merely huge width
+  // did not throw; it froze the tab building a string nobody would ever see
+  // (measured at 4.4s for 5e7, per keystroke).
+  it('reports an over-wide placeholder instead of throwing', () => {
+    expect(validateMask('{alphanumeric-99999999999999999999}')).toEqual({
+      reason: 'widthTooLarge',
+      placeholder: '{alphanumeric-99999999999999999999}',
+      max: MAX_TOKEN_LEN,
+    });
+    expect(validateMask('{numeric-1000000000}')?.reason).toBe('widthTooLarge');
+  });
+
+  it('generates safely from an over-wide mask rather than exploding', () => {
+    // Defensive: validateMask now refuses these, but a mask stored BEFORE the
+    // server gained its bound is still read by every create form.
+    expect(() => generateToken('{alphanumeric-99999999999999999999}')).not.toThrow();
+    expect(generateToken('dev-{alphanumeric-99999999999999999999}')).toBe('dev-');
+  });
+
+  // The counterweight: the bound must not refuse a width that can mint a legal
+  // token, or every mask in the corpus above would fail for the wrong reason.
+  it('accepts a width up to the token length bound', () => {
+    expect(validateMask(`{numeric-${MAX_TOKEN_LEN}}`)).toBeNull();
+    expect(validateMask(`{numeric-${MAX_TOKEN_LEN + 1}}`)?.reason).toBe('widthTooLarge');
   });
 });

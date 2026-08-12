@@ -11,11 +11,11 @@
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { normalizeToken } from '@devicechain/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { TokenField } from '@/components/ui/token-field';
+import { ENTITY_TYPE } from '@/lib/entity-types';
 import { SuggestField } from '@/components/ui/suggest-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { errMessage, typeCountLabel, StatusBadge } from '@/routes/common';
@@ -142,7 +142,7 @@ function ProfileForm({ entity, onDone }: { entity?: DeviceProfile; onDone: (mess
         ) : (
           <TokenField
             id="p-token"
-            entityType={normalizeToken('device profile')}
+            entityType={ENTITY_TYPE.deviceProfile}
             value={token}
             onChange={setToken}
             seed={name}

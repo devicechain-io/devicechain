@@ -9,7 +9,7 @@
 // A Basemap is an OVERRIDE: every field is optional, and a nil field inherits the
 // next tier down (a tenant's override, then the operator's `basemap.default`
 // system setting). That bottom tier ships a real value — the OpenStreetMap
-// standard tile layer, see settings.DefaultBasemapJSON — so an instance nobody
+// standard tile layer, see settingsdefs.DefaultBasemapJSON — so an instance nobody
 // has configured still draws a map.
 //
 // A basemap unset at EVERY tier is still reachable, and is what the plain-panel

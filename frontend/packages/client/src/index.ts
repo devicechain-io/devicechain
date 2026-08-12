@@ -51,7 +51,10 @@ export {
   parseMask,
   resolveMask,
   isValidToken,
+  sampleToken,
+  validateMask,
   MAX_TOKEN_LEN,
   type GenerateOptions,
   type MaskSegment,
+  type MaskProblem,
 } from './tokens';

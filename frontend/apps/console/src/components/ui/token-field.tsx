@@ -15,12 +15,17 @@ import { generateToken, isValidToken, resolveMask } from '@devicechain/client';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { getTokenMasks } from '@/lib/api/settings';
+import type { EntityType } from '@/lib/entity-types';
 
 type Availability = 'idle' | 'checking' | 'available' | 'taken';
 
 interface TokenFieldProps {
-  /** The entity type whose mask drives generation (e.g. "device", "dashboard"). */
-  entityType: string;
+  /**
+   * The entity type whose mask drives generation. A closed vocabulary (ADR-042
+   * P3): the string IS the operator's mask key, so a typo here would silently
+   * fall through to the "default" mask rather than fail.
+   */
+  entityType: EntityType;
   value: string;
   onChange: (value: string) => void;
   /** A human string (usually the entity's name) used to fill {slug} placeholders. */
