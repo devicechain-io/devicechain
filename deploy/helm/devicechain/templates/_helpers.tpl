@@ -403,3 +403,42 @@ turns out to want an unbounded heap more than a small one.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+devicechain.instanceConfig renders the instance-wide configuration document, with
+coordinates for areas this deployment did not enable removed.
+
+It exists as a helper rather than inline in instance-config.yaml because TWO
+templates must see the same bytes: the Secret that carries the config, and the
+`checksum/instance-secret` pod annotation that rolls pods when it changes
+(templates/deployment.yaml). Computing the filter in only one of them makes the
+annotation describe a document nobody is served — an operator who enables
+ai-inference would get the new Secret with no pod roll, so the coordinate would
+sit unread until some unrelated change restarted the pod, and the feature would
+stay dead. Same reasoning as devicechain.microserviceConfig on the next line of
+that annotation block.
+
+WHY ANYTHING IS FILTERED. values.yaml ships
+infrastructure.aiInference.hostname non-empty by default and the whole
+instance.config rides through verbatim, so a profile that never deploys
+ai-inference still handed every service a hostname for it. The effect was not a
+missing feature but a MISLEADING one: event-processing saw a non-empty hostname,
+built its natural-language rule drafter, failed at DNS, and told the user "the
+inference provider is unavailable, or this tenant has not enabled external AI
+routing" — blaming tenant consent for a service the operator never deployed. The
+honest message ("not enabled on this deployment") fires only when the drafter is
+nil, so it could never appear on the profile that needed it. Unsetting the key
+restores that path.
+
+deepCopy keeps .Values untouched, so nothing else that reads instance.config sees
+the filtered document by accident.
+*/}}
+{{- define "devicechain.instanceConfig" -}}
+{{- $cfg := deepCopy .Values.instance.config -}}
+{{- if not (has "ai-inference" (splitList "," (include "devicechain.enabledAreas" .))) -}}
+  {{- if hasKey $cfg "infrastructure" -}}
+    {{- $_ := unset (index $cfg "infrastructure") "aiInference" -}}
+  {{- end -}}
+{{- end -}}
+{{- $cfg | toJson -}}
+{{- end }}

@@ -339,3 +339,24 @@ export async function updateProfile(input: {
   });
   return data.updateProfile;
 }
+
+// ── Deployed functional areas ───────────────────────────────────────────
+//
+// Which areas this instance deployed, so the console can tell "this feature was
+// never deployed here" apart from "the server is broken". The ingress emits a
+// rule only for enabled areas, so a call to an absent one falls through to the
+// SPA's static nginx and returns 405 — a status describing nginx's routing
+// rather than the request. Served on the tenant plane AND the admin plane
+// (listAdminFunctionalAreas) because the affected surfaces straddle both and
+// neither token subsumes the other. See lib/capabilities.tsx.
+
+const FUNCTIONAL_AREAS = graphql(`
+  query FunctionalAreas {
+    functionalAreas
+  }
+`);
+
+export async function listFunctionalAreas(): Promise<string[]> {
+  const data = await gql('user-management', FUNCTIONAL_AREAS);
+  return data.functionalAreas;
+}

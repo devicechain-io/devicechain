@@ -506,6 +506,11 @@ type TenantDeletion {
 type Query {
     # Liveness placeholder.
     ping: String!
+    # The functional areas this instance deployed, so the admin console can tell
+    # "this feature was never deployed here" apart from "the server is broken"
+    # instead of surfacing a raw HTTP status. Reports DESIRED state (what the
+    # operator deployed), never health.
+    functionalAreas: [String!]!
     # List the full identity directory (requires user:read).
     identities: [AdminIdentity!]!
     # List every tenant (requires tenant:read).

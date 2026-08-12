@@ -1,6 +1,8 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { AreaGate } from '@/components/AreaUnavailable';
+import { AREA } from '@/lib/capabilities';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Ban, Power, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -146,7 +148,16 @@ export default function TenantDetailPage() {
           reload();
         }}
         effectiveSettingsPanel={<TenantSettingsPanel tenant={tenant} />}
-        aiModelsPanel={<TenantAiModelsPanel tenant={tenant} />}
+        aiModelsPanel={
+          // Gated at the MOUNT SITE, not inside the panel: React never mounts an
+          // element it does not render, so the panel's fetch-on-mount — four
+          // ai-inference admin reads — never fires on an instance without the
+          // area. A guard inside the panel would have to sit above every hook to
+          // do the same, and would still have constructed the request.
+          <AreaGate area={AREA.aiInferenceAdmin}>
+            <TenantAiModelsPanel tenant={tenant} />
+          </AreaGate>
+        }
         // Only while a deletion is running. On an active tenant the tab would be an empty
         // room, and on a FINISHED deletion there is no tenant page left to show it on —
         // completion removes the row, which is why the history lives at /admin/deletions.

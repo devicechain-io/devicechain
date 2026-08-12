@@ -7,6 +7,8 @@
 // mutates the opaque node config; the server-authoritative compileCanvas is what validates it,
 // so this panel is permissive and the diagnostics land on the node.
 
+import { AreaUnavailableInline } from '@/components/AreaUnavailable';
+import { AREA, useAreaAbsent } from '@/lib/capabilities';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
@@ -413,6 +415,7 @@ function ActionFields({
 }) {
   const { t } = useTranslation('deviceProfiles');
   const kind = strVal(config.action) || 'raiseAlarm';
+  const connectorsAbsent = useAreaAbsent(AREA.outboundConnectors);
   return (
     <div className="space-y-4">
       <FormField label={t('inspectorActionLabel')} htmlFor="cfg-action">
@@ -458,7 +461,14 @@ function ActionFields({
         </>
       )}
 
-      {kind === 'publish' && (
+      {kind === 'publish' && connectorsAbsent && (
+        // The publish action stays SELECTABLE on an instance without
+        // outbound-connectors — this explains the dead end rather than letting the
+        // picker below fire a request that 405s and renders a transport error. The
+        // author can still see they picked something that cannot work here.
+        <AreaUnavailableInline area={AREA.outboundConnectors} />
+      )}
+      {kind === 'publish' && !connectorsAbsent && (
         <>
           <FormField label={t('inspectorConnectorLabel')} htmlFor="cfg-connectorref" description={t('inspectorConnectorDescription')}>
             <ConnectorPicker value={strVal(config.connectorRef)} onChange={(v) => set({ connectorRef: v || undefined })} />

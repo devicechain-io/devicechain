@@ -199,6 +199,12 @@ type Query {
     # re-login. The token is validated internally (like selectTenant), so this
     # runs before a tenant is selected.
     identityMemberships(identityToken: String!): [Membership!]!
+    # The functional areas this instance deployed, so the console can tell "this
+    # feature was never deployed here" apart from "the server is broken" instead
+    # of surfacing a raw HTTP status. Requires only an authenticated caller.
+    # Reports DESIRED state (what the operator deployed), never health: an area
+    # that is enabled but failing still appears here.
+    functionalAreas: [String!]!
 }
 
 type Mutation {

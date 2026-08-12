@@ -284,7 +284,7 @@ func (ms *Microservice) LoadMicroserviceConfiguration() error {
 	}
 
 	// Read config from filesystem.
-	cfgbytes, err := os.ReadFile(fmt.Sprintf("/etc/dct-config/%s", fa))
+	cfgbytes, err := os.ReadFile(fmt.Sprintf("%s/%s", MicroserviceConfigDir, fa))
 	if err != nil {
 		return err
 	}
