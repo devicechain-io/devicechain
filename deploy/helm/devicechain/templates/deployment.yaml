@@ -109,7 +109,7 @@ spec:
         PSK): that changes neither the instance config nor the per-area config, so
         without it an in-place rotation would leave the running pod on its old key
         (secretKeyRef env resolves at container start). A hash, never the value. */}}
-        checksum/instance-secret: {{ $root.Values.instance.config | toJson | sha256sum }}
+        checksum/instance-secret: {{ include "devicechain.instanceConfig" $root | sha256sum }}
         checksum/microservice-config: {{ include "devicechain.microserviceConfig" $root | sha256sum }}
         checksum/extra-secrets: {{ $root.Values.extraSecrets | default list | toJson | sha256sum }}
       labels:

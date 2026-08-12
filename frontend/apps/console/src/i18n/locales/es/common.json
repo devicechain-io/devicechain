@@ -3,6 +3,8 @@
   "appearanceIcon": "Icono",
   "appearancePreview": "Vista previa",
   "appearanceSaved": "Apariencia guardada",
+  "areaUnavailableBody": "Esta instancia se desplegó sin el servicio {{area}}, por lo que esta función no está disponible aquí. No hay ningún problema con tu sesión: un administrador decide qué servicios ejecuta cada instancia.",
+  "areaUnavailableTitle": "No desplegado",
   "back": "Volver",
   "basicTab": "Básico",
   "cancel": "Cancelar",

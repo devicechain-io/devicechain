@@ -18,18 +18,26 @@ import type { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
 // surface a console would call: its data plane serves exactly one mutation, reached
 // by event-processing's service token, never by a browser. Its whole console-facing
 // surface is the operator provider list (ADR-065).
-export type Area =
-  | 'user-management'
-  | 'user-management/admin'
-  | 'user-management/settings'
-  | 'device-management'
-  | 'event-management'
-  | 'event-processing'
-  | 'device-state'
-  | 'command-delivery'
-  | 'dashboard-management'
-  | 'outbound-connectors'
-  | 'ai-inference/admin';
+// Declared as a const array with the type derived from it, rather than as a bare
+// union, so the set is enumerable at RUNTIME. That is what lets a test walk every
+// member and check it against the deployment catalog the Helm chart uses — a
+// union alone erases at compile time, leaving the check to a hand-kept copy of
+// this list, which is the drift this whole mechanism exists to prevent.
+export const AREAS = [
+  'user-management',
+  'user-management/admin',
+  'user-management/settings',
+  'device-management',
+  'event-management',
+  'event-processing',
+  'device-state',
+  'command-delivery',
+  'dashboard-management',
+  'outbound-connectors',
+  'ai-inference/admin',
+] as const;
+
+export type Area = (typeof AREAS)[number];
 
 // Relative URL matching the cluster ingress contract: the ingress routes
 // https://<host>/api/<area>/graphql to each functional-area service and serves
@@ -37,6 +45,23 @@ export type Area =
 // 'user-management/admin' resolves to /api/user-management/admin/graphql.
 export function areaPath(area: Area): string {
   return `/api/${area}/graphql`;
+}
+
+/**
+ * The deployed functional area an Area is served by — the segment before the
+ * first slash, since a suffix like `/admin` or `/settings` names a PLANE of an
+ * area rather than an area of its own.
+ *
+ * This is the join between an Area (a client-side routing convention) and the
+ * area vocabulary the server reports from what the chart actually deployed, so
+ * the console can tell "never deployed here" apart from a transport failure.
+ * Note it is deliberately many-to-one: `user-management`,
+ * `user-management/admin` and `user-management/settings` all key to
+ * `user-management`, and the reverse direction does not exist — plenty of
+ * deployed areas (event-sources, notification-management) have no Area member.
+ */
+export function areaKey(area: Area): string {
+  return area.split('/')[0];
 }
 
 // Whether an area is served on an instance-scoped lane that authenticates with the

@@ -26,5 +26,5 @@ metadata:
 type: Opaque
 {{- include "devicechain.validateSecretsRootKey" . }}
 stringData:
-  instance: {{ .Values.instance.config | toJson | quote }}
+  instance: {{ include "devicechain.instanceConfig" . | quote }}
 {{- end }}

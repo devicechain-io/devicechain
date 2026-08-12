@@ -46,6 +46,7 @@ type Documents = {
     "\n  mutation DeleteTenant($token: String!) {\n    deleteTenant(token: $token)\n  }\n": typeof types.DeleteTenantDocument,
     "\n  query TenantDeletion($token: String!, $epoch: String) {\n    tenantDeletion(token: $token, epoch: $epoch) {\n      token\n      epoch\n      completedAt\n      rowsErased\n      awaiting\n      elapsesAt\n      blockedBy\n      stores {\n        store\n        complete\n        rowsErased\n        retaining\n        lastError\n        note\n        attemptedAt\n        cleanSince\n      }\n    }\n  }\n": typeof types.TenantDeletionDocument,
     "\n  query TenantDeletions($completed: Boolean, $limit: Int, $offset: Int) {\n    tenantDeletions(completed: $completed, limit: $limit, offset: $offset) {\n      token\n      epoch\n      completedAt\n      rowsErased\n      awaiting\n      elapsesAt\n      blockedBy\n      stores {\n        store\n        complete\n        rowsErased\n        retaining\n        lastError\n        note\n        attemptedAt\n        cleanSince\n      }\n    }\n  }\n": typeof types.TenantDeletionsDocument,
+    "\n  query AdminFunctionalAreas {\n    functionalAreas\n  }\n": typeof types.AdminFunctionalAreasDocument,
 };
 const documents: Documents = {
     "\n  query Identities {\n    identities {\n      id\n      email\n      firstName\n      lastName\n      enabled\n      systemRoles\n      memberships {\n        tenant\n        enabled\n        roles\n      }\n      createdAt\n      updatedAt\n    }\n  }\n": types.IdentitiesDocument,
@@ -79,6 +80,7 @@ const documents: Documents = {
     "\n  mutation DeleteTenant($token: String!) {\n    deleteTenant(token: $token)\n  }\n": types.DeleteTenantDocument,
     "\n  query TenantDeletion($token: String!, $epoch: String) {\n    tenantDeletion(token: $token, epoch: $epoch) {\n      token\n      epoch\n      completedAt\n      rowsErased\n      awaiting\n      elapsesAt\n      blockedBy\n      stores {\n        store\n        complete\n        rowsErased\n        retaining\n        lastError\n        note\n        attemptedAt\n        cleanSince\n      }\n    }\n  }\n": types.TenantDeletionDocument,
     "\n  query TenantDeletions($completed: Boolean, $limit: Int, $offset: Int) {\n    tenantDeletions(completed: $completed, limit: $limit, offset: $offset) {\n      token\n      epoch\n      completedAt\n      rowsErased\n      awaiting\n      elapsesAt\n      blockedBy\n      stores {\n        store\n        complete\n        rowsErased\n        retaining\n        lastError\n        note\n        attemptedAt\n        cleanSince\n      }\n    }\n  }\n": types.TenantDeletionsDocument,
+    "\n  query AdminFunctionalAreas {\n    functionalAreas\n  }\n": types.AdminFunctionalAreasDocument,
 };
 
 /**
@@ -205,6 +207,10 @@ export function graphql(source: "\n  query TenantDeletion($token: String!, $epoc
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  query TenantDeletions($completed: Boolean, $limit: Int, $offset: Int) {\n    tenantDeletions(completed: $completed, limit: $limit, offset: $offset) {\n      token\n      epoch\n      completedAt\n      rowsErased\n      awaiting\n      elapsesAt\n      blockedBy\n      stores {\n        store\n        complete\n        rowsErased\n        retaining\n        lastError\n        note\n        attemptedAt\n        cleanSince\n      }\n    }\n  }\n"): typeof import('./graphql').TenantDeletionsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query AdminFunctionalAreas {\n    functionalAreas\n  }\n"): typeof import('./graphql').AdminFunctionalAreasDocument;
 
 
 export function graphql(source: string) {

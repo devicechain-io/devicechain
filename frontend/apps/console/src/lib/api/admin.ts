@@ -857,3 +857,20 @@ export async function listTenantDeletions(
   );
   return data.tenantDeletions;
 }
+
+// The deployed functional areas, over the IDENTITY session. The tenant-plane twin
+// is listFunctionalAreas in user-management.ts; both exist because the identity
+// token has no refresh and is dropped once expired, while the tenant session
+// persists — and an operator browsing a tenant they are not a member of may hold
+// no tenant session at all. See lib/capabilities.tsx.
+
+const ADMIN_FUNCTIONAL_AREAS = graphql(`
+  query AdminFunctionalAreas {
+    functionalAreas
+  }
+`);
+
+export async function listAdminFunctionalAreas(): Promise<string[]> {
+  const data = await gql('user-management/admin', ADMIN_FUNCTIONAL_AREAS);
+  return data.functionalAreas;
+}

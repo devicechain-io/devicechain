@@ -92,6 +92,11 @@ export type UpdateProfileMutationVariables = Exact<{
 
 export type UpdateProfileMutation = { updateProfile: { email: string, firstName: string | null, lastName: string | null } };
 
+export type FunctionalAreasQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type FunctionalAreasQuery = { functionalAreas: Array<string> };
+
 export class TypedDocumentString<TResult, TVariables>
   extends String
   implements DocumentTypeDecoration<TResult, TVariables>
@@ -388,3 +393,8 @@ export const UpdateProfileDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<UpdateProfileMutation, UpdateProfileMutationVariables>;
+export const FunctionalAreasDocument = new TypedDocumentString(`
+    query FunctionalAreas {
+  functionalAreas
+}
+    `) as unknown as TypedDocumentString<FunctionalAreasQuery, FunctionalAreasQueryVariables>;

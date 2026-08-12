@@ -11,6 +11,8 @@
 export {
   gql,
   areaPath,
+  areaKey,
+  AREAS,
   resolveAuthToken,
   setAuthTokenGetter,
   setIdentityTokenGetter,

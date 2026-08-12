@@ -1,7 +1,7 @@
 // defineConfig from vitest/config (a superset of vite's) so the `test` block
 // below is typed; it is otherwise the same config Vite consumes for the build.
 import { defineConfig } from 'vitest/config';
-import { loadEnv } from 'vite';
+import { loadEnv, searchForWorkspaceRoot } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'path';
@@ -43,6 +43,23 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       port: 5173,
+      fs: {
+        // The area-catalog test reads the Helm chart's own `$known` list to check
+        // the client's Area vocabulary against the areas the chart can actually
+        // deploy, rather than keeping a third copy of that list here for the two
+        // to drift away from. The chart sits above the npm workspace root, which
+        // Vite denies by default, so it needs an explicit entry.
+        //
+        // 🔴 searchForWorkspaceRoot is not decoration. Setting `fs.allow` at all
+        // REPLACES Vite's automatic workspace-root allowance, so a hand-written
+        // list silently revokes access to frontend/packages/* — every page
+        // importing @devicechain/{client,dashboards,widgets} then 403s in
+        // `npm run dev`. Measured: with allow: ['..', <helm>], a request for
+        // /@fs/.../packages/client/src/index.ts returned 403 while the chart
+        // returned 200. Nothing catches this — fs.allow governs only the dev
+        // server, so build, typecheck, lint and vitest all stay green.
+        allow: [searchForWorkspaceRoot(process.cwd()), path.resolve(__dirname, '../../../deploy/helm')],
+      },
       proxy: {
         '/api': {
           target: env.VITE_GATEWAY_TARGET || 'http://localhost:8080',

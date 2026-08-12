@@ -1,6 +1,8 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { AreaGate } from '@/components/AreaUnavailable';
+import { AREA } from '@/lib/capabilities';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Trash2, Users } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -128,7 +130,9 @@ export default function TierDetailPage() {
             reload();
           }}
           aiModelsPanel={
-            <TierAiModelsPanel token={tier.token} name={tier.name} tenantCount={tier.tenantCount} />
+            <AreaGate area={AREA.aiInferenceAdmin}>
+              <TierAiModelsPanel token={tier.token} name={tier.name} tenantCount={tier.tenantCount} />
+            </AreaGate>
           }
         />
       </div>

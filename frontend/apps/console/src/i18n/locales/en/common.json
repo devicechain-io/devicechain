@@ -3,6 +3,8 @@
   "appearanceIcon": "Icon",
   "appearancePreview": "Preview",
   "appearanceSaved": "Appearance saved",
+  "areaUnavailableBody": "This instance was deployed without the {{area}} service, so this feature is unavailable here. Nothing is wrong with your session — an administrator chooses which services an instance runs.",
+  "areaUnavailableTitle": "Not deployed",
   "back": "Back",
   "basicTab": "Basic",
   "cancel": "Cancel",

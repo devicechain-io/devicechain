@@ -26,6 +26,7 @@ type Documents = {
     "\n  mutation SetTenantBasemap($input: TenantBasemapInput!) {\n    setTenantBasemap(input: $input) {\n      ...TenantFields\n    }\n  }\n": typeof types.SetTenantBasemapDocument,
     "\n  query Me {\n    me {\n      email\n      firstName\n      lastName\n    }\n  }\n": typeof types.MeDocument,
     "\n  mutation UpdateProfile($firstName: String, $lastName: String) {\n    updateProfile(firstName: $firstName, lastName: $lastName) {\n      email\n      firstName\n      lastName\n    }\n  }\n": typeof types.UpdateProfileDocument,
+    "\n  query FunctionalAreas {\n    functionalAreas\n  }\n": typeof types.FunctionalAreasDocument,
 };
 const documents: Documents = {
     "\n  mutation Login($email: String!, $password: String!) {\n    login(email: $email, password: $password) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n      }\n    }\n  }\n": types.LoginDocument,
@@ -39,6 +40,7 @@ const documents: Documents = {
     "\n  mutation SetTenantBasemap($input: TenantBasemapInput!) {\n    setTenantBasemap(input: $input) {\n      ...TenantFields\n    }\n  }\n": types.SetTenantBasemapDocument,
     "\n  query Me {\n    me {\n      email\n      firstName\n      lastName\n    }\n  }\n": types.MeDocument,
     "\n  mutation UpdateProfile($firstName: String, $lastName: String) {\n    updateProfile(firstName: $firstName, lastName: $lastName) {\n      email\n      firstName\n      lastName\n    }\n  }\n": types.UpdateProfileDocument,
+    "\n  query FunctionalAreas {\n    functionalAreas\n  }\n": types.FunctionalAreasDocument,
 };
 
 /**
@@ -85,6 +87,10 @@ export function graphql(source: "\n  query Me {\n    me {\n      email\n      fi
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  mutation UpdateProfile($firstName: String, $lastName: String) {\n    updateProfile(firstName: $firstName, lastName: $lastName) {\n      email\n      firstName\n      lastName\n    }\n  }\n"): typeof import('./graphql').UpdateProfileDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query FunctionalAreas {\n    functionalAreas\n  }\n"): typeof import('./graphql').FunctionalAreasDocument;
 
 
 export function graphql(source: string) {

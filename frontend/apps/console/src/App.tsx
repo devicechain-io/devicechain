@@ -13,6 +13,8 @@ import DeviceDetailPage from '@/routes/devices/DeviceDetailPage';
 import DashboardsPage from '@/routes/dashboards/DashboardsPage';
 import DashboardDetailPage from '@/routes/dashboards/DashboardDetailPage';
 import AlarmsPage from '@/routes/alarms/AlarmsPage';
+import { AreaGate } from '@/components/AreaUnavailable';
+import { AREA } from '@/lib/capabilities';
 import ConnectorsPage from '@/routes/connectors/ConnectorsPage';
 import ConnectorDetailPage from '@/routes/connectors/ConnectorDetailPage';
 import AiProvidersPage from '@/routes/admin/ai-providers/AiProvidersPage';
@@ -76,8 +78,8 @@ export default function App() {
           <Route path="dashboards" element={<DashboardsPage />} />
           <Route path="dashboards/:token" element={<DashboardDetailPage />} />
           <Route path="alarms" element={<AlarmsPage />} />
-          <Route path="connectors" element={<ConnectorsPage />} />
-          <Route path="connectors/:token" element={<ConnectorDetailPage />} />
+          <Route path="connectors" element={<AreaGate area={AREA.outboundConnectors}><ConnectorsPage /></AreaGate>} />
+          <Route path="connectors/:token" element={<AreaGate area={AREA.outboundConnectors}><ConnectorDetailPage /></AreaGate>} />
           <Route path="audit" element={<AuditPage />} />
           <Route path="facets" element={<FacetKeysPage />} />
           <Route path="browse" element={<BrowsePage />} />
@@ -123,9 +125,9 @@ export default function App() {
           <Route path="audit" element={<AdminAuditPage />} />
           {/* Instance-scoped AI provider config: an operator resource, so it lives
               on the admin plane rather than inside a tenant (ADR-065). */}
-          <Route path="ai-providers" element={<AiProvidersPage />} />
-          <Route path="ai-providers/:token" element={<AiProviderDetailPage />} />
-          <Route path="ai-packaging" element={<AiPackagingPage />} />
+          <Route path="ai-providers" element={<AreaGate area={AREA.aiInferenceAdmin}><AiProvidersPage /></AreaGate>} />
+          <Route path="ai-providers/:token" element={<AreaGate area={AREA.aiInferenceAdmin}><AiProviderDetailPage /></AreaGate>} />
+          <Route path="ai-packaging" element={<AreaGate area={AREA.aiInferenceAdmin}><AiPackagingPage /></AreaGate>} />
           <Route path="settings" element={<AdminSettingsPage />} />
         </Route>
       </Route>

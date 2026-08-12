@@ -8,6 +8,7 @@ import { ThemeProvider } from '@/components/ThemeProvider';
 import { ToastProvider } from '@/components/ui/toast';
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 import { AuthProvider } from '@/auth/AuthProvider';
+import { AreaCapabilityProvider } from '@/lib/capabilities';
 import App from './App';
 // Initializes the shared i18next instance (ADR-066) as a side effect, before any
 // component renders — react-i18next reads it through context/useTranslation.
@@ -22,7 +23,11 @@ createRoot(document.getElementById('root')!).render(
         <AuthProvider>
           <ConfirmProvider>
             <BrowserRouter>
-              <App />
+              {/* Inside the router because it retries on navigation, and inside
+                  AuthProvider because it asks over the caller's own session. */}
+              <AreaCapabilityProvider>
+                <App />
+              </AreaCapabilityProvider>
             </BrowserRouter>
           </ConfirmProvider>
         </AuthProvider>

@@ -312,6 +312,11 @@ export type TenantDeletionsQueryVariables = Exact<{
 
 export type TenantDeletionsQuery = { tenantDeletions: Array<{ token: string, epoch: string, completedAt: string | null, rowsErased: number, awaiting: DeletionWait, elapsesAt: string | null, blockedBy: Array<string>, stores: Array<{ store: string, complete: boolean, rowsErased: number, retaining: string | null, lastError: string | null, note: string | null, attemptedAt: string | null, cleanSince: string | null }> }> };
 
+export type AdminFunctionalAreasQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type AdminFunctionalAreasQuery = { functionalAreas: Array<string> };
+
 export class TypedDocumentString<TResult, TVariables>
   extends String
   implements DocumentTypeDecoration<TResult, TVariables>
@@ -812,3 +817,8 @@ export const TenantDeletionsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<TenantDeletionsQuery, TenantDeletionsQueryVariables>;
+export const AdminFunctionalAreasDocument = new TypedDocumentString(`
+    query AdminFunctionalAreas {
+  functionalAreas
+}
+    `) as unknown as TypedDocumentString<AdminFunctionalAreasQuery, AdminFunctionalAreasQueryVariables>;
