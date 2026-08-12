@@ -38,6 +38,16 @@ const (
 // is why there is no size to configure here. The TTL still matters to the budget
 // even so — it is what bounds the working set, since a bucket only ever holds
 // entries that have not yet expired.
+// DefaultMaxEventFutureSkewSeconds bounds how far a device-reported occurred time may
+// lead the server-stamped processed time before resolution replaces it with the ceiling.
+// Generous enough for legitimate device/server clock drift, and small enough that a
+// device cannot poison a shared, strictly-newer projection with a timestamp years out.
+//
+// It lives in device-management because resolution is the ONE place the platform decides
+// what instant a reading happened at — the resolved event then travels with an already-
+// bounded time, so no consumer configures or re-applies this (see core/eventtime).
+const DefaultMaxEventFutureSkewSeconds = 300
+
 const (
 	DefaultDeviceCacheTtlSeconds       = 60
 	DefaultRelationshipCacheTtlSeconds = 60
@@ -67,6 +77,24 @@ type DeviceManagementConfiguration struct {
 	// TTL is a self-healing backstop behind the explicit per-entity eviction on every
 	// membership mutation.
 	MembershipCacheTtlSeconds int
+
+	// MaxEventFutureSkewSeconds bounds how far a device-reported occurred time may lead
+	// the server-stamped processed time; a reading past that ceiling is stored AT the
+	// ceiling. Unset (0) defaults to 300s; a negative value disables the bound, which
+	// lets any device freeze its own presence and poison every strictly-newer projection
+	// it feeds — see core/eventtime for what that costs.
+	//
+	// 🔴 UPGRADE ORDER MATTERS ONCE, AT THE RELEASE THAT MOVED THIS KEY HERE. The bound
+	// used to be applied downstream, by the detection engine, on events it read off the
+	// resolved stream; it is now applied here, before they are published. So a resolved
+	// event published by an OLDER device-management and consumed by a NEWER
+	// event-processing is bounded by neither — and if such an event carries a far-future
+	// time it advances DETECT's shared, snapshotted watermark and fires every tenant's
+	// timers, persistently. The exposure is the in-flight tail at the upgrade, or the
+	// whole consumer backlog if detection was lagging; recovery is a snapshot reset.
+	// Pre-GA an instance is recreated rather than upgraded in place, which is why this is
+	// recorded rather than mitigated with a transitional bound.
+	MaxEventFutureSkewSeconds int
 }
 
 // Creates the default device management configuration
@@ -97,6 +125,9 @@ func (c *DeviceManagementConfiguration) ApplyDefaults() {
 	}
 	if c.MembershipCacheTtlSeconds == 0 {
 		c.MembershipCacheTtlSeconds = DefaultMembershipCacheTtlSeconds
+	}
+	if c.MaxEventFutureSkewSeconds == 0 {
+		c.MaxEventFutureSkewSeconds = DefaultMaxEventFutureSkewSeconds
 	}
 }
 

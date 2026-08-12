@@ -76,13 +76,29 @@ func str(s string) *string { return &s }
 func locationMessage(t *testing.T, deviceToken string, occurredAt time.Time,
 	entries []dmmodel.ResolvedLocationEntry) messaging.Message {
 	t.Helper()
+	// Stand in for the resolver's entry-versus-envelope rule: a fix that names no instant
+	// of its own is stamped with the message's, because that is what a real resolved event
+	// arriving here always carries. A fixture that left it zero would build an event this
+	// pipeline can no longer receive, and every assertion below would be measuring a shape
+	// that does not exist. A test needing DISTINCT per-fix instants sets them explicitly.
+	stamped := make([]dmmodel.ResolvedLocationEntry, len(entries))
+	for i, entry := range entries {
+		if entry.OccurredTime.IsZero() {
+			entry.OccurredTime = occurredAt
+		}
+		stamped[i] = entry
+	}
 	event := &dmmodel.ResolvedEvent{
 		Source:            "mqtt",
 		SourceDeviceToken: deviceToken,
 		EventType:         esmodel.Location,
 		OccurredTime:      occurredAt,
-		ProcessedTime:     occurredAt,
-		Payload:           &dmmodel.ResolvedLocationsPayload{Entries: entries},
+		// DISTINCT from the occurred time on purpose. With the two equal, an assertion that
+		// a projection advanced to "the message's time" cannot tell which of them it read,
+		// and the connectivity projection reading the SERVER's processed time instead of the
+		// device's reported one would go unnoticed.
+		ProcessedTime: occurredAt.Add(250 * time.Millisecond),
+		Payload:       &dmmodel.ResolvedLocationsPayload{Entries: stamped},
 	}
 	encoded, err := dmproto.MarshalResolvedEvent(event)
 	if err != nil {

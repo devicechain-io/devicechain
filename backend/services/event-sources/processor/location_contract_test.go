@@ -6,6 +6,7 @@ package processor
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
 )
@@ -91,7 +92,19 @@ func TestTheCanonicalLocationBodyDecodesToEveryField(t *testing.T) {
 	str(t, "accuracy", entry.Accuracy, "4.2")
 	str(t, "speed", entry.Speed, "1.75")
 	str(t, "heading", entry.Heading, "271.5")
-	str(t, "occurredTime", entry.OccurredTime, "2026-08-09T12:00:00.1234567Z")
+	// The sample's own time arrives PARSED, at full nanosecond precision. It is the one
+	// field the decoder converts rather than carries, because it is the one field
+	// everything downstream orders on.
+	if entry.OccurredTime == nil {
+		t.Fatalf("occurredTime: got nil, want a parsed time")
+	}
+	wantTime, err := time.Parse(time.RFC3339Nano, "2026-08-09T12:00:00.1234567Z")
+	if err != nil {
+		t.Fatalf("fixture time: %v", err)
+	}
+	if !entry.OccurredTime.Equal(wantTime) {
+		t.Fatalf("occurredTime: got %v, want %v", *entry.OccurredTime, wantTime)
+	}
 }
 
 // Only latitude and longitude are required, and an absent optional stays ABSENT.
@@ -113,12 +126,18 @@ func TestAMinimalLocationDecodesAndLeavesOptionalsNil(t *testing.T) {
 		{"accuracy", entry.Accuracy},
 		{"speed", entry.Speed},
 		{"heading", entry.Heading},
-		{"occurredTime", entry.OccurredTime},
 	} {
 		if absent.value != nil {
 			t.Fatalf("%s: got %q, want nil — an unreported field must not be invented",
 				absent.name, *absent.value)
 		}
+	}
+	// occurredTime is checked apart from the table because it is a *time.Time, and it
+	// matters for the same reason: absent means "the device timed only the message", and
+	// inventing a value here would silently answer a question the device never answered.
+	if entry.OccurredTime != nil {
+		t.Fatalf("occurredTime: got %v, want nil — an unreported sample time must not be invented",
+			*entry.OccurredTime)
 	}
 }
 

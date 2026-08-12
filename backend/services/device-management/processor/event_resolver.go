@@ -19,10 +19,12 @@ import (
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/proto"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
 
@@ -49,6 +51,48 @@ type EventResolver struct {
 	// profile version) (ADR-078). It is SHARED across the whole worker pool — see
 	// newUndeclaredLocationMemo — so the bound is per process, not per worker.
 	locationMemo *undeclaredLocationMemo
+	// eventTime is the platform's event-time policy, applied HERE and nowhere else.
+	eventTime EventTimePolicy
+}
+
+// EventTimePolicy is the resolution-time event-time policy: the tolerance a
+// device-reported instant is bounded against, and the counter that reports how often
+// the bound bites.
+//
+// 🔴 THIS IS THE ONLY PLACE IN THE PLATFORM THAT DECIDES WHAT INSTANT A READING
+// HAPPENED AT. Resolution is upstream of the resolved-events stream, so a bounded time
+// is what every consumer receives — the historian, both live projections, live
+// detection, the streamed subscription and the replay preview all read one already-
+// decided value. See package eventtime for why the rule is applied once rather than
+// per-consumer, and what a device could do to the shared projections if it were not
+// applied at all.
+type EventTimePolicy struct {
+	// MaxFutureSkew bounds how far a reported time may lead the server-stamped
+	// processed time. Non-positive disables the bound.
+	MaxFutureSkew time.Duration
+	// Bounded counts readings whose reported time was refused and replaced with the
+	// ceiling — one increment per bounded time, entry or envelope. It is label-free
+	// (never per-tenant, ADR-023 G.3) and may be nil in tests.
+	Bounded prometheus.Counter
+}
+
+// bound applies the policy to one reported instant, counting a bite.
+func (p EventTimePolicy) bound(occurred, processed time.Time) time.Time {
+	effective, bounded := eventtime.Effective(occurred, processed, p.MaxFutureSkew)
+	if bounded && p.Bounded != nil {
+		p.Bounded.Inc()
+	}
+	return effective
+}
+
+// boundEntry resolves one sample's instant — its own when it reported one, else the
+// message envelope's — and bounds it.
+func (p EventTimePolicy) boundEntry(entry *time.Time, envelope, processed time.Time) time.Time {
+	effective, bounded := eventtime.ForEntry(entry, envelope, processed, p.MaxFutureSkew)
+	if bounded && p.Bounded != nil {
+		p.Bounded.Inc()
+	}
+	return effective
 }
 
 // Results of event resolution process.
@@ -67,6 +111,7 @@ type EventResolutionResults struct {
 // factor of the pool width for the real pool, which is why initializeEventResolvers
 // shares one explicitly rather than letting each worker default.
 func NewEventResolver(workerId int, api model.DeviceManagementApi, authMode string,
+	eventTime EventTimePolicy,
 	unrez <-chan messaging.Message,
 	invalid func(error, messaging.Message),
 	resolved func(messaging.Message, string, []EventResolutionResults),
@@ -80,6 +125,7 @@ func NewEventResolver(workerId int, api model.DeviceManagementApi, authMode stri
 		WorkerId:     workerId,
 		Api:          api,
 		AuthMode:     authMode,
+		eventTime:    eventTime,
 		Unresolved:   unrez,
 		Invalid:      invalid,
 		Resolved:     resolved,
@@ -111,10 +157,16 @@ func (rez *EventResolver) MergeToResolveEvent(device *model.Device, anchors []mo
 		ProfileVersionToken: scope.ProfileVersionToken,
 		Anchors:             anchors,
 		ScopeMemberships:    memberships,
-		OccurredTime:        event.OccurredTime,
-		ProcessedTime:       event.ProcessedTime,
-		EventType:           event.EventType,
-		Payload:             rezPayload,
+		// The envelope's time, bounded. This is the value the connectivity projection
+		// advances last-activity on, so leaving it unbounded would let one event dated
+		// 2099 pin a device's presence forever — its inactivity sweep would never fire
+		// again and the device could never be seen to go offline, with no repair path
+		// short of dropping the row. Bounding it here means presence cannot be frozen
+		// by a device's own clock.
+		OccurredTime:  rez.eventTime.bound(event.OccurredTime, event.ProcessedTime),
+		ProcessedTime: event.ProcessedTime,
+		EventType:     event.EventType,
+		Payload:       rezPayload,
 	}
 	// The geofence stamp (ADR-078), at the same site and for the same reason as
 	// ProfileVersionToken above: the fence set an event is evaluated against is frozen
@@ -283,7 +335,7 @@ func (rez *EventResolver) ResolveLocationsEventPayload(ctx context.Context, devi
 				Accuracy:     ulentry.Accuracy,
 				Speed:        ulentry.Speed,
 				Heading:      ulentry.Heading,
-				OccurredTime: ulentry.OccurredTime,
+				OccurredTime: rez.eventTime.boundEntry(ulentry.OccurredTime, event.OccurredTime, event.ProcessedTime),
 			}
 			rlentries = append(rlentries, rlentry)
 		}
@@ -363,7 +415,7 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 		}
 		rmsentry := model.ResolvedMeasurementsEntry{
 			Entries:      rmentries,
-			OccurredTime: umsentry.OccurredTime,
+			OccurredTime: rez.eventTime.boundEntry(umsentry.OccurredTime, event.OccurredTime, event.ProcessedTime),
 		}
 		rmsentries = append(rmsentries, rmsentry)
 	}
@@ -422,7 +474,7 @@ func (rez *EventResolver) ResolveAlertsEventPayload(ctx context.Context, device 
 				Level:        uaentry.Level,
 				Message:      uaentry.Message,
 				Source:       uaentry.Source,
-				OccurredTime: uaentry.OccurredTime,
+				OccurredTime: rez.eventTime.boundEntry(uaentry.OccurredTime, event.OccurredTime, event.ProcessedTime),
 			}
 			raentries = append(raentries, raentry)
 		}

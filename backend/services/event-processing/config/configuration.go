@@ -21,11 +21,6 @@ import (
 const (
 	DefaultCheckpointEvents          = 1000
 	DefaultCheckpointIntervalSeconds = 10
-	// DefaultMaxEventFutureSkewSeconds bounds how far a device-reported occurred time may
-	// lead the server-stamped processed time before DETECT clamps it (so one bad device clock
-	// cannot advance the shared, snapshotted watermark far into the future and fire every
-	// tenant's timers). Generous enough for legitimate device/server clock drift.
-	DefaultMaxEventFutureSkewSeconds = 300
 	// DefaultWatermarkLatenessSeconds is how far the event-time watermark is held back from
 	// the newest event before windows close and timers fire — the out-of-orderness tolerance.
 	// The resolved stream is largely ordered, but network/ingest reordering is real; a small
@@ -122,11 +117,6 @@ type EventProcessingConfiguration struct {
 	// commits, so a quiet stream still checkpoints. Unset (0) defaults to 10s.
 	CheckpointIntervalSeconds int
 
-	// MaxEventFutureSkewSeconds bounds device-reported future clock skew against the
-	// server-stamped processed time (ADR-051 watermark integrity). Unset (0) defaults to
-	// 300s; a negative value disables the clamp.
-	MaxEventFutureSkewSeconds int
-
 	// WatermarkLatenessSeconds is the event-time out-of-orderness tolerance: how far the
 	// watermark lags the newest event before windows close and timers fire. Unset (0)
 	// defaults to 5s; a negative value is treated as zero (no tolerance).
@@ -193,9 +183,6 @@ func (c *EventProcessingConfiguration) ApplyDefaults() {
 	}
 	if c.CheckpointIntervalSeconds == 0 {
 		c.CheckpointIntervalSeconds = DefaultCheckpointIntervalSeconds
-	}
-	if c.MaxEventFutureSkewSeconds == 0 {
-		c.MaxEventFutureSkewSeconds = DefaultMaxEventFutureSkewSeconds
 	}
 	if c.WatermarkLatenessSeconds == 0 {
 		c.WatermarkLatenessSeconds = DefaultWatermarkLatenessSeconds

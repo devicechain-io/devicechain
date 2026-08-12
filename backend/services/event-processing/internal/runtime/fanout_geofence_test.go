@@ -23,7 +23,11 @@ func located(device, profileVersion string, fenceSetVersion int32, occurred time
 	for _, f := range fixes {
 		lon := strconv.FormatFloat(f[0], 'f', -1, 64)
 		lat := strconv.FormatFloat(f[1], 'f', -1, 64)
-		entries = append(entries, dmmodel.ResolvedLocationEntry{Latitude: &lat, Longitude: &lon})
+		// Every resolved entry carries its own instant (the resolver guarantees it), so a
+		// fixture that left it zero would build an event this pipeline can no longer
+		// receive. These fixes share the message's time, which is the single-fix shape.
+		entries = append(entries, dmmodel.ResolvedLocationEntry{
+			Latitude: &lat, Longitude: &lon, OccurredTime: occurred})
 	}
 	return &dmmodel.ResolvedEvent{
 		SourceDeviceToken:   device,
@@ -292,6 +296,11 @@ func TestLocationEventWithUnparseablePositionIsSkipped(t *testing.T) {
 // with N fixes now yields N inputs where it previously yielded one heartbeat. That is deliberate
 // (each fix is a sample, exactly as each measurement entry is), and it is stated here because it
 // changes what a count aggregate over location events counts — fixes, not messages.
+//
+// The fixture gives every fix the message's own time, so this asserts only the pass-through. The
+// per-fix case — fixes carrying DIFFERENT instants — is TestBuildInputsBatchedLocationFixes in
+// input_test.go, and it had to be written: until it existed, deleting the per-fix stamp left this
+// whole module green, because every location fixture here sets fix time == message time.
 func TestLocationInputsStayHeartbeats(t *testing.T) {
 	one := BuildInputs(located("d1", "p@1", 1, geoBase, [2]float64{0.5, 0.5}), geoBase)
 	if len(one) != 1 {
@@ -314,7 +323,7 @@ func TestLocationInputsStayHeartbeats(t *testing.T) {
 			t.Errorf("fix %d carries measurements: %v", i, in.M)
 		}
 		if !in.Occurred.Equal(geoBase) {
-			t.Errorf("fix %d is stamped %v, want the message's clamped time %v", i, in.Occurred, geoBase)
+			t.Errorf("fix %d is stamped %v, want its own reported time %v", i, in.Occurred, geoBase)
 		}
 	}
 }

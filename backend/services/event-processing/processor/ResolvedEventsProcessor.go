@@ -58,10 +58,6 @@ type Config struct {
 	// Lateness bounds how far event time is held back before advancing the watermark
 	// (out-of-orderness tolerance).
 	Lateness time.Duration
-	// MaxFutureSkew bounds how far a device-reported occurred time may lead the server's
-	// processed time before it is clamped, so one bad device clock cannot advance the shared
-	// watermark far into the future. Non-positive disables the clamp.
-	MaxFutureSkew time.Duration
 	// IdleAdvanceGuard is how long the read loop must be quiet (no delivery) before the loop
 	// tests broker emptiness and, if caught up, advances the watermark off the wall clock so a
 	// silent series' absence/duration/session timer fires (ADR-051 slice 4c). It is one of
@@ -1346,12 +1342,14 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 		return false // duplicate/replayed message — acked, but no re-fan-out
 	}
 
-	// Bound device-reported future skew against the server-stamped processed time before it
-	// drives the shared watermark: an unclamped far-future occurred time would advance the one
-	// frontier decades forward and fire every tenant's timers at once (persistently — the
-	// watermark is snapshotted). The clamp is deterministic under replay (both times are
-	// immutable in the payload).
-	occurred := runtime.EffectiveEventTime(event.OccurredTime, event.ProcessedTime, rp.cfg.MaxFutureSkew)
+	// The event's own time, bounded against the server clock at RESOLUTION and travelling
+	// immutably ever since. DETECT does not bound it again and holds no tolerance to bound it
+	// with: the watermark it drives is a shared, snapshotted, monotonic frontier, so a
+	// far-future value would advance it decades and fire every tenant's timers at once — which
+	// is exactly why the bound is applied before the value is ever published, where every
+	// consumer inherits it, rather than by each consumer that happens to remember. See
+	// core/eventtime.
+	occurred := event.OccurredTime
 
 	// Resolve the source device's dynamic-threshold attributes (SERVER-over-SHARED, slice 4c-3b-2)
 	// once for the whole fan-out: the flattened map the loop-owned view holds, bound onto every

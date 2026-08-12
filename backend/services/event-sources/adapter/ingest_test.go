@@ -207,7 +207,8 @@ func TestEmitterProducesResolverReadableEvent(t *testing.T) {
 	require.Len(t, payload.Entries, 1)
 	assert.Equal(t, "21.5", payload.Entries[0].Measurements["temperature"])
 	require.NotNil(t, payload.Entries[0].OccurredTime)
-	assert.Equal(t, time.UnixMilli(ts).UTC().Format(time.RFC3339Nano), *payload.Entries[0].OccurredTime)
+	assert.True(t, payload.Entries[0].OccurredTime.Equal(time.UnixMilli(ts).UTC()),
+		"the sample keeps its OWN instant through the wire hop: %v", *payload.Entries[0].OccurredTime)
 
 	// The tenant flows from the connection into the write context (the connection-scoped
 	// tenancy invariant) — never parsed from the source's own addressing.
@@ -402,4 +403,49 @@ func TestEmitterStampsAuthenticatedTransport(t *testing.T) {
 			assert.Equal(t, marked, ev.AuthenticatedTransport, "msg %d (marked=%v)", i, marked)
 		}
 	}
+}
+
+// A store-and-forward BATCH keeps every sample's own instant, and the envelope carries the
+// newest of them.
+//
+// 🔴 THE SINGLE-SAMPLE TEST ABOVE CANNOT TELL THESE APART. With one sample the envelope
+// (the newest sample's time) IS that sample's time, so an emitter that stamped the envelope
+// into every entry passes it — and batching is the entire reason this emitter exists.
+// Sparkplug and LwM2M both build it, and both upload buffered history: this is where a
+// minute of readings becomes a minute of readings rather than one instant.
+func TestEmitterKeepsEachSamplesInstantInABatch(t *testing.T) {
+	w := &fakeWriter{}
+	e := NewEmitter(w, fixedNow, "sp", false)
+
+	oldest := int64(1_700_000_000_000)
+	newest := oldest + 90_000 // 90s later
+	// 🔴 NEWEST FIRST, and the order is load-bearing. The envelope is computed as a
+	// running maximum while the entries are built, so on an ascending batch "this sample's
+	// time" and "the newest time SO FAR" happen to agree entry for entry — an emitter that
+	// stamped the running envelope into every entry would pass. Newest-first breaks that
+	// coincidence, and is a real upload order besides.
+	err := e.Emit(context.Background(), "acme", "sparkplug:h1", "dev-1", []Sample{
+		{Name: "temperature", Value: 22.5, Time: newest},
+		{Name: "temperature", Value: 21.5, Time: oldest},
+	})
+	require.NoError(t, err)
+	require.Len(t, w.msgs, 1)
+
+	ev, err := esproto.UnmarshalUnresolvedEvent(w.msgs[0].Value)
+	require.NoError(t, err)
+	payload, ok := ev.Payload.(*esmodel.UnresolvedMeasurementsPayload)
+	require.True(t, ok)
+	require.Len(t, payload.Entries, 2)
+
+	require.NotNil(t, payload.Entries[0].OccurredTime)
+	assert.True(t, payload.Entries[0].OccurredTime.Equal(time.UnixMilli(newest).UTC()),
+		"the live sample kept %v, want its own instant", *payload.Entries[0].OccurredTime)
+	require.NotNil(t, payload.Entries[1].OccurredTime)
+	assert.True(t, payload.Entries[1].OccurredTime.Equal(time.UnixMilli(oldest).UTC()),
+		"the buffered sample kept %v, want its own instant", *payload.Entries[1].OccurredTime)
+
+	// The envelope is the NEWEST sample, not the oldest and not now: it is when the batch
+	// was current, which is what a liveness projection reads off it.
+	assert.True(t, ev.OccurredTime.Equal(time.UnixMilli(newest).UTC()),
+		"the envelope is %v, want the newest sample's instant", ev.OccurredTime)
 }

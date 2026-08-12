@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -134,9 +135,11 @@ func canonicalPayloadEntry(v any) ([]byte, error) {
 }
 
 // upsertParentEvents inserts the parent `events` rows for a batch of child event
-// requests (location/measurement/alert) before the children, so a reader joining a
-// payload row to its base event on the natural key (device_token, event_type,
-// occurred_time) always finds the parent. The rows are deduped on that natural key
+// requests (location/measurement/alert) before the children, so a reader resolving a
+// payload row's parent by event_id always finds it. (There is no natural-key join left
+// to preserve: a payload row carries the SAMPLE's instant while its parent carries the
+// message's, so the two agree on occurred_time only for an unbatched event.) The rows
+// are deduped on the event's own identity
 // and inserted ON CONFLICT DO NOTHING: multiple measurements in one message share a
 // single parent event, and a redelivered message re-presents the same key.
 //
@@ -173,6 +176,31 @@ func upsertParentEvents(ctx context.Context, db *gorm.DB, events []*Event) error
 		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "event_id"}, {Name: "occurred_time"}},
 		DoNothing: true,
 	}).Create(distinct).Error
+}
+
+// ErrZeroEntryTime is the fail-closed rejection for a payload create request whose own
+// instant was never set.
+//
+// 🔴 IT IS AN ERROR RATHER THAN A FALLBACK TO THE PARENT'S TIME, and that is deliberate.
+// Falling back would restore, silently and one layer down, exactly the defect this field
+// exists to remove: a batch of samples spanning a minute stored at a single instant. The
+// value is always available (resolution sets one on every entry), so a zero here is a
+// caller that forgot the field, and the loud failure is what makes that a test failure
+// instead of a slow corruption of the history table.
+//
+// 🔴 IT IS A SENTINEL SO THE CALLER CAN CLASSIFY IT AS DETERMINISTIC. The same bytes
+// reproduce it on every delivery — a zero instant cannot become non-zero on retry — so
+// treating it as transient would burn the message's whole redelivery budget and then
+// dead-letter it under the wrong reason. That matters more here than for a plain caller
+// bug, because the zero instant is reachable from the wire: it is a valid RFC 3339 string
+// ("0001-01-01T00:00:00Z") that happens to be Go's zero time. The device-facing decoder
+// refuses it, which is where a device gets told; this is the layer that must not spin if
+// one ever arrives by another route.
+var ErrZeroEntryTime = errors.New("payload create request carries no entry occurred time")
+
+func errZeroEntryTime(kind string) error {
+	return fmt.Errorf("%w: a %s row needs the sample's own instant, which is never inherited "+
+		"from the parent event", ErrZeroEntryTime, kind)
 }
 
 // Create a new location event.
@@ -213,6 +241,9 @@ func (api *Api) CreateLocationEvents(ctx context.Context, db *gorm.DB, requests 
 	parents := make([]*Event, 0, len(requests))
 	created := make([]*LocationEvent, 0, len(requests))
 	for _, request := range requests {
+		if request.EntryOccurredTime.IsZero() {
+			return nil, errZeroEntryTime("location")
+		}
 		parents = append(parents, &request.Event)
 		// Every stored field of the fix takes part in the row's identity, including
 		// the three that arrived later. A fix is not identified by position alone: two
@@ -226,12 +257,19 @@ func (api *Api) CreateLocationEvents(ctx context.Context, db *gorm.DB, requests 
 		// cosmetic diff: the same fix redelivered across the deploy boundary hashes
 		// differently, misses the idempotency index, and inserts a duplicate row. If a
 		// name here ever has to change, it is a data migration, not a rename.
+		//
+		// The same applies to the VALUES, and Occurred changed once: it used to be the
+		// envelope's time and is now the sample's own. An event published before that
+		// change and redelivered after it therefore hashes differently and inserts a
+		// duplicate row. The window is one redelivery interval, it was taken knowingly
+		// pre-GA, and it is recorded here so the next value change is recognised for
+		// what it is.
 		entry, cerr := canonicalPayloadEntry(struct {
 			Lat, Lon, Elev           *float64
 			Accuracy, Speed, Heading *float64
 			Occurred                 time.Time
 		}{request.Latitude, request.Longitude, request.Elevation,
-			request.Accuracy, request.Speed, request.Heading, request.OccurredTime})
+			request.Accuracy, request.Speed, request.Heading, request.EntryOccurredTime})
 		if cerr != nil {
 			return nil, fmt.Errorf("canonicalizing a LocationEvent for its payload identity: %w", cerr)
 		}
@@ -240,7 +278,7 @@ func (api *Api) CreateLocationEvents(ctx context.Context, db *gorm.DB, requests 
 			PayloadId:    DerivePayloadId(request.EventId, entry),
 			DeviceToken:  request.DeviceToken,
 			EventType:    request.EventType,
-			OccurredTime: request.OccurredTime,
+			OccurredTime: request.EntryOccurredTime,
 			Latitude:     rdb.NullFloat64Of(request.Latitude),
 			Longitude:    rdb.NullFloat64Of(request.Longitude),
 			Elevation:    rdb.NullFloat64Of(request.Elevation),
@@ -280,6 +318,9 @@ func (api *Api) CreateMeasurementEvents(ctx context.Context, db *gorm.DB, reques
 	parents := make([]*Event, 0, len(requests))
 	created := make([]*MeasurementEvent, 0, len(requests))
 	for _, request := range requests {
+		if request.EntryOccurredTime.IsZero() {
+			return nil, errZeroEntryTime("measurement")
+		}
 		parents = append(parents, &request.Event)
 		entry, cerr := canonicalPayloadEntry(struct {
 			Name           string
@@ -287,7 +328,7 @@ func (api *Api) CreateMeasurementEvents(ctx context.Context, db *gorm.DB, reques
 			Classifier     *uint
 			Unit, DataType *string
 			Occurred       time.Time
-		}{request.Name, request.Value, request.Classifier, request.Unit, request.DataType, request.OccurredTime})
+		}{request.Name, request.Value, request.Classifier, request.Unit, request.DataType, request.EntryOccurredTime})
 		if cerr != nil {
 			return nil, fmt.Errorf("canonicalizing a MeasurementEvent for its payload identity: %w", cerr)
 		}
@@ -296,7 +337,7 @@ func (api *Api) CreateMeasurementEvents(ctx context.Context, db *gorm.DB, reques
 			PayloadId:    DerivePayloadId(request.EventId, entry),
 			DeviceToken:  request.DeviceToken,
 			EventType:    request.EventType,
-			OccurredTime: request.OccurredTime,
+			OccurredTime: request.EntryOccurredTime,
 			Name:         request.Name,
 			Value:        rdb.NullFloat64Of(request.Value),
 			Classifier:   request.Classifier,
@@ -335,6 +376,9 @@ func (api *Api) CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*
 	parents := make([]*Event, 0, len(requests))
 	created := make([]*AlertEvent, 0, len(requests))
 	for _, request := range requests {
+		if request.EntryOccurredTime.IsZero() {
+			return nil, errZeroEntryTime("alert")
+		}
 		parents = append(parents, &request.Event)
 		entry, cerr := canonicalPayloadEntry(struct {
 			Type     string
@@ -342,7 +386,7 @@ func (api *Api) CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*
 			Message  string
 			Source   string
 			Occurred time.Time
-		}{request.Type, request.Level, request.Message, request.Source, request.OccurredTime})
+		}{request.Type, request.Level, request.Message, request.Source, request.EntryOccurredTime})
 		if cerr != nil {
 			return nil, fmt.Errorf("canonicalizing a AlertEvent for its payload identity: %w", cerr)
 		}
@@ -351,7 +395,7 @@ func (api *Api) CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*
 			PayloadId:    DerivePayloadId(request.EventId, entry),
 			DeviceToken:  request.DeviceToken,
 			EventType:    request.EventType,
-			OccurredTime: request.OccurredTime,
+			OccurredTime: request.EntryOccurredTime,
 			Type:         request.Type,
 			Level:        request.Level,
 			Message:      request.Message,

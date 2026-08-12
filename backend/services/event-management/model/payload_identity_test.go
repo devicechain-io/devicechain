@@ -78,7 +78,8 @@ func TestRedeliveryOfANoAltIdEventDoesNotDuplicatePayloadRows(t *testing.T) {
 	// Three deliveries of the same message, as at-least-once permits.
 	for i := 0; i < 3; i++ {
 		_, err := api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx),
-			[]*MeasurementEventCreateRequest{{Event: ev, Name: "temperature", Value: f64(21.5)}})
+			[]*MeasurementEventCreateRequest{{Event: ev,
+				EntryOccurredTime: ev.OccurredTime, Name: "temperature", Value: f64(21.5)}})
 		require.NoErrorf(t, err, "delivery %d must not error", i+1)
 	}
 
@@ -108,8 +109,8 @@ func TestOneEventKeepsItsDistinctPayloadRows(t *testing.T) {
 
 	ev := noAltIdEvent("acme", "device-1", occurred, "batch")
 	_, err := api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx), []*MeasurementEventCreateRequest{
-		{Event: ev, Name: "temperature", Value: f64(21.5)},
-		{Event: ev, Name: "humidity", Value: f64(55)},
+		{Event: ev, EntryOccurredTime: ev.OccurredTime, Name: "temperature", Value: f64(21.5)},
+		{Event: ev, EntryOccurredTime: ev.OccurredTime, Name: "humidity", Value: f64(55)},
 	})
 	require.NoError(t, err)
 
@@ -122,8 +123,10 @@ func TestOneEventKeepsItsDistinctPayloadRows(t *testing.T) {
 	alertEv.EventType = esmodel.Alert
 	alertEv.EventId = DeriveEventId("acme", &alertEv, []byte("alerts"))
 	_, err = api.CreateAlertEvents(ctx, api.RDB.DB(ctx), []*AlertEventCreateRequest{
-		{Event: alertEv, Type: "SENSOR_FAULT", Level: 3, Message: "probe A open circuit"},
-		{Event: alertEv, Type: "SENSOR_FAULT", Level: 3, Message: "probe B open circuit"},
+		{Event: alertEv, EntryOccurredTime: alertEv.OccurredTime,
+			Type: "SENSOR_FAULT", Level: 3, Message: "probe A open circuit"},
+		{Event: alertEv, EntryOccurredTime: alertEv.OccurredTime,
+			Type: "SENSOR_FAULT", Level: 3, Message: "probe B open circuit"},
 	})
 	require.NoError(t, err)
 

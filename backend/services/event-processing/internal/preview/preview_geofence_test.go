@@ -68,7 +68,7 @@ func locMsg(t *testing.T, seq uint64, tenant, device, profileVersion string, fen
 		EventType:           esmodel.Location,
 		FenceSetVersion:     fenceSetVersion,
 		Payload: &dmmodel.ResolvedLocationsPayload{Entries: []dmmodel.ResolvedLocationEntry{
-			{Latitude: &latS, Longitude: &lonS},
+			{Latitude: &latS, Longitude: &lonS, OccurredTime: occurred},
 		}},
 	}
 	b, err := dmproto.MarshalResolvedEvent(ev)

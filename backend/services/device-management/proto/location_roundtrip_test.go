@@ -5,11 +5,13 @@ package proto
 
 import (
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 // The existing resolved-event round trip carries a location payload whose Entries
@@ -25,11 +27,20 @@ func s(v string) *string {
 	return &v
 }
 
+// at parses a fixture instant. A resolved entry always carries one — see
+// model.ResolvedMeasurementsEntry.OccurredTime — so these are values, not pointers.
+func at(t *testing.T, v string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339Nano, v)
+	require.NoError(t, err, "fixture time %q", v)
+	return parsed
+}
+
 // Every field of a fix must survive the protobuf round trip. A dropped field is
 // silent: the payload still decodes, the entry count is still right, and the fix
 // simply arrives at event-management and device-state without its speed or heading.
 func TestLocationPayloadRoundTripCarriesEveryField(t *testing.T) {
-	occurred := "2026-08-09T14:32:07.125Z"
+	occurred := at(t, "2026-08-09T14:32:07.125Z")
 	payload := &model.ResolvedLocationsPayload{
 		Entries: []model.ResolvedLocationEntry{{
 			Latitude:     s("33.749"),
@@ -38,14 +49,14 @@ func TestLocationPayloadRoundTripCarriesEveryField(t *testing.T) {
 			Accuracy:     s("4.2"),
 			Speed:        s("1.75"),
 			Heading:      s("271.5"),
-			OccurredTime: &occurred,
+			OccurredTime: occurred,
 		}},
 	}
 
 	encoded, err := MarshalPayloadForLocationsEvent(payload)
 	require.NoError(t, err)
 
-	decoded, err := UnmarshalPayloadForLocationsEvent(encoded)
+	decoded, err := UnmarshalPayloadForLocationsEvent(encoded, time.Time{})
 	require.NoError(t, err)
 	require.Len(t, decoded.Entries, 1)
 
@@ -62,8 +73,8 @@ func TestLocationPayloadRoundTripCarriesEveryField(t *testing.T) {
 	assert.Equal(t, "1.75", *got.Speed)
 	require.NotNil(t, got.Heading, "heading did not survive the round trip")
 	assert.Equal(t, "271.5", *got.Heading)
-	require.NotNil(t, got.OccurredTime, "occurred time did not survive the round trip")
-	assert.Equal(t, occurred, *got.OccurredTime)
+	assert.True(t, got.OccurredTime.Equal(occurred),
+		"the sample's own instant did not survive the round trip: got %v want %v", got.OccurredTime, occurred)
 }
 
 // The proto fields are `optional string`, so they carry explicit presence: absent and
@@ -74,16 +85,17 @@ func TestLocationPayloadRoundTripPreservesNilAndEmpty(t *testing.T) {
 		Entries: []model.ResolvedLocationEntry{{
 			Latitude:  s("41.8781"),
 			Longitude: s("-87.6298"),
-			// Elevation, Accuracy, OccurredTime deliberately absent.
-			Speed:   s(""), // present, empty — must NOT collapse to absent.
-			Heading: s("0"),
+			// Elevation and Accuracy deliberately absent.
+			Speed:        s(""), // present, empty — must NOT collapse to absent.
+			Heading:      s("0"),
+			OccurredTime: at(t, "2026-08-09T14:32:07.125Z"),
 		}},
 	}
 
 	encoded, err := MarshalPayloadForLocationsEvent(payload)
 	require.NoError(t, err)
 
-	decoded, err := UnmarshalPayloadForLocationsEvent(encoded)
+	decoded, err := UnmarshalPayloadForLocationsEvent(encoded, time.Time{})
 	require.NoError(t, err)
 	require.Len(t, decoded.Entries, 1)
 
@@ -94,7 +106,6 @@ func TestLocationPayloadRoundTripPreservesNilAndEmpty(t *testing.T) {
 	assert.Equal(t, "-87.6298", *got.Longitude)
 	assert.Nil(t, got.Elevation, "an absent elevation must come back absent, not as an empty string")
 	assert.Nil(t, got.Accuracy, "an absent accuracy must come back absent, not as an empty string")
-	assert.Nil(t, got.OccurredTime, "an absent occurred time must come back absent, not as an empty string")
 	require.NotNil(t, got.Speed, "a present empty speed must come back present, not absent")
 	assert.Equal(t, "", *got.Speed)
 	require.NotNil(t, got.Heading, "heading \"0\" is a real bearing (due north) and must not be dropped")
@@ -105,19 +116,19 @@ func TestLocationPayloadRoundTripPreservesNilAndEmpty(t *testing.T) {
 // values — the guard against a marshal loop that reuses one entry pointer, which
 // keeps the count right while collapsing a track into one repeated point.
 func TestLocationPayloadRoundTripKeepsPerEntryValuesAndOrder(t *testing.T) {
-	firstTime := "2026-08-09T14:32:07.125Z"
-	secondTime := "2026-08-09T14:32:09.500Z"
+	firstTime := at(t, "2026-08-09T14:32:07.125Z")
+	secondTime := at(t, "2026-08-09T14:32:09.500Z")
 	payload := &model.ResolvedLocationsPayload{
 		Entries: []model.ResolvedLocationEntry{
 			{
 				Latitude: s("33.749"), Longitude: s("-84.388"), Elevation: s("320.5"),
 				Accuracy: s("4.2"), Speed: s("1.75"), Heading: s("271.5"),
-				OccurredTime: &firstTime,
+				OccurredTime: firstTime,
 			},
 			{
 				Latitude: s("47.6062"), Longitude: s("-122.3321"), Elevation: s("54.25"),
 				Accuracy: s("9.8"), Speed: s("12.5"), Heading: s("18.75"),
-				OccurredTime: &secondTime,
+				OccurredTime: secondTime,
 			},
 		},
 	}
@@ -125,7 +136,7 @@ func TestLocationPayloadRoundTripKeepsPerEntryValuesAndOrder(t *testing.T) {
 	encoded, err := MarshalPayloadForLocationsEvent(payload)
 	require.NoError(t, err)
 
-	decoded, err := UnmarshalPayloadForLocationsEvent(encoded)
+	decoded, err := UnmarshalPayloadForLocationsEvent(encoded, time.Time{})
 	require.NoError(t, err)
 	require.Len(t, decoded.Entries, 2)
 
@@ -137,7 +148,7 @@ func TestLocationPayloadRoundTripKeepsPerEntryValuesAndOrder(t *testing.T) {
 // pick the concrete (un)marshaller by event type, and this is the path every resolved
 // event actually travels. Values must survive it too, not just the direct call.
 func TestLocationRoundTripsThroughGenericDispatchers(t *testing.T) {
-	occurred := "2026-08-09T14:32:07.125Z"
+	occurred := at(t, "2026-08-09T14:32:07.125Z")
 	payload := &model.ResolvedLocationsPayload{
 		Entries: []model.ResolvedLocationEntry{{
 			Latitude:     s("33.749"),
@@ -146,14 +157,14 @@ func TestLocationRoundTripsThroughGenericDispatchers(t *testing.T) {
 			Accuracy:     s("4.2"),
 			Speed:        s("1.75"),
 			Heading:      s("271.5"),
-			OccurredTime: &occurred,
+			OccurredTime: occurred,
 		}},
 	}
 
 	encoded, err := MarshalResolvedPayload(esmodel.Location, payload)
 	require.NoError(t, err)
 
-	generic, err := UnmarshalResolvedPayload(esmodel.Location, encoded)
+	generic, err := UnmarshalResolvedPayload(esmodel.Location, encoded, time.Time{})
 	require.NoError(t, err)
 
 	decoded, ok := generic.(*model.ResolvedLocationsPayload)
@@ -166,7 +177,7 @@ func TestLocationRoundTripsThroughGenericDispatchers(t *testing.T) {
 // values intact — the end-to-end shape the existing empty-Entries round trip could
 // never have caught.
 func TestResolvedEventCarriesLocationValues(t *testing.T) {
-	occurred := "2026-08-09T14:32:07.125Z"
+	occurred := at(t, "2026-08-09T14:32:07.125Z")
 	event := &model.ResolvedEvent{
 		Source:            "http1",
 		SourceDeviceToken: "device-001",
@@ -179,7 +190,7 @@ func TestResolvedEventCarriesLocationValues(t *testing.T) {
 				Accuracy:     s("4.2"),
 				Speed:        s("1.75"),
 				Heading:      s("271.5"),
-				OccurredTime: &occurred,
+				OccurredTime: occurred,
 			}},
 		},
 	}
@@ -198,7 +209,7 @@ func TestResolvedEventCarriesLocationValues(t *testing.T) {
 
 // Assert every field of a resolved location entry against its own expected value.
 func assertLocationEntry(t *testing.T, got model.ResolvedLocationEntry,
-	lat, lon, elev, acc, speed, heading, occurred string) {
+	lat, lon, elev, acc, speed, heading string, occurred time.Time) {
 	t.Helper()
 	require.NotNil(t, got.Latitude, "latitude missing")
 	assert.Equal(t, lat, *got.Latitude, "latitude")
@@ -212,8 +223,7 @@ func assertLocationEntry(t *testing.T, got model.ResolvedLocationEntry,
 	assert.Equal(t, speed, *got.Speed, "speed")
 	require.NotNil(t, got.Heading, "heading missing")
 	assert.Equal(t, heading, *got.Heading, "heading")
-	require.NotNil(t, got.OccurredTime, "occurred time missing")
-	assert.Equal(t, occurred, *got.OccurredTime, "occurred time")
+	assert.True(t, got.OccurredTime.Equal(occurred), "occurred time: got %v want %v", got.OccurredTime, occurred)
 }
 
 // The geofence stamp (ADR-078) must survive the wire, or event-processing has no way to
@@ -225,14 +235,14 @@ func assertLocationEntry(t *testing.T, got model.ResolvedLocationEntry,
 // would pass, and stamping every event is the specific mistake this field's LOCATION-only
 // rule exists to prevent.
 func TestResolvedEventRoundTripCarriesFenceSetVersion(t *testing.T) {
-	occurred := "2026-08-09T14:32:07.125Z"
+	occurred := at(t, "2026-08-09T14:32:07.125Z")
 	location := &model.ResolvedEvent{
 		Source:            "test-source",
 		SourceDeviceToken: "TEST-123",
 		EventType:         esmodel.Location,
 		FenceSetVersion:   19,
 		Payload: &model.ResolvedLocationsPayload{
-			Entries: []model.ResolvedLocationEntry{{Latitude: s("33.749"), Longitude: s("-84.388"), OccurredTime: &occurred}},
+			Entries: []model.ResolvedLocationEntry{{Latitude: s("33.749"), Longitude: s("-84.388"), OccurredTime: occurred}},
 		},
 	}
 	encoded, err := MarshalResolvedEvent(location)
@@ -256,4 +266,55 @@ func TestResolvedEventRoundTripCarriesFenceSetVersion(t *testing.T) {
 	mdecoded, err := UnmarshalResolvedEvent(mencoded)
 	require.NoError(t, err)
 	assert.Equal(t, int32(0), mdecoded.FenceSetVersion, "a measurement event arrived carrying a fence set version")
+}
+
+// An entry published BEFORE per-sample times were honoured carries no time on the wire,
+// and must decode at the message's own time — which is what it meant when it was written.
+//
+// 🔴 This is not a compatibility nicety, it is the replay preview's correctness. The
+// preview reads historical bytes straight off the retained resolved-events stream, so
+// without the fallback every event older than this change would either fail to decode
+// (and be skipped as corrupt, silently shortening history) or decode at the zero instant
+// and sort before everything. The payload is built as PROTO here rather than through the
+// marshaller precisely because the marshaller can no longer produce this shape.
+func TestAnEntryWithNoWireTimeDecodesAtTheEnvelopeTime(t *testing.T) {
+	envelope := at(t, "2026-08-09T14:32:07.125Z")
+
+	legacy := &PResolvedLocationsPayload{
+		Entries: []*PResolvedLocationEntry{
+			{Latitude: s("33.749"), Longitude: s("-84.388")}, // no OccurredTime on the wire
+			{Latitude: s("47.6062"), Longitude: s("-122.3321"), OccurredTime: s("2026-08-09T14:32:09.500Z")},
+		},
+	}
+	encoded, err := proto.Marshal(legacy)
+	require.NoError(t, err)
+
+	decoded, err := UnmarshalPayloadForLocationsEvent(encoded, envelope)
+	require.NoError(t, err)
+	require.Len(t, decoded.Entries, 2)
+
+	assert.True(t, decoded.Entries[0].OccurredTime.Equal(envelope),
+		"an entry with no wire time reads at the envelope's: got %v want %v",
+		decoded.Entries[0].OccurredTime, envelope)
+	// The sibling is the counterweight: a fallback that overwrote every entry with the
+	// envelope would satisfy the assertion above and destroy the feature.
+	assert.True(t, decoded.Entries[1].OccurredTime.Equal(at(t, "2026-08-09T14:32:09.500Z")),
+		"an entry that DOES carry its own time must keep it: got %v", decoded.Entries[1].OccurredTime)
+}
+
+// A present-but-unparseable entry time FAILS, rather than quietly falling back. Absence
+// is history; a malformed value is a defect in this repository, and swallowing it would
+// collapse a batch onto one instant — the exact failure per-sample times remove.
+func TestAMalformedWireTimeIsRefused(t *testing.T) {
+	bad := &PResolvedLocationsPayload{
+		Entries: []*PResolvedLocationEntry{
+			{Latitude: s("33.749"), Longitude: s("-84.388"), OccurredTime: s("yesterday")},
+		},
+	}
+	encoded, err := proto.Marshal(bad)
+	require.NoError(t, err)
+
+	_, err = UnmarshalPayloadForLocationsEvent(encoded, at(t, "2026-08-09T14:32:07.125Z"))
+	require.Error(t, err, "a malformed entry time must not decode")
+	assert.Contains(t, err.Error(), "yesterday", "the error must name the offending value")
 }

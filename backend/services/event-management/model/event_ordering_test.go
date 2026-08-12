@@ -50,9 +50,10 @@ func seedLocationFixes(t *testing.T, api *Api, ctx context.Context, offsets []in
 		occurred := orderingBase.Add(time.Duration(offset) * time.Minute)
 		ev := eventOfType("acme", "device-1", esmodel.Location, occurred, fmt.Sprintf("fix-%d", offset))
 		_, err := api.CreateLocationEvents(ctx, api.RDB.DB(ctx), []*LocationEventCreateRequest{{
-			Event:     ev,
-			Latitude:  f64(latitudeAt(offset)),
-			Longitude: f64(-84.388),
+			Event:             ev,
+			EntryOccurredTime: ev.OccurredTime,
+			Latitude:          f64(latitudeAt(offset)),
+			Longitude:         f64(-84.388),
 		}})
 		require.NoErrorf(t, err, "seed fix at +%dm", offset)
 	}
@@ -115,9 +116,10 @@ func TestLocationEventsPagingIsTotalOverTiedOccurredTimes(t *testing.T) {
 	for i := 0; i < tied; i++ {
 		ev := eventOfType("acme", "device-1", esmodel.Location, orderingBase, fmt.Sprintf("tied-%d", i))
 		_, err := api.CreateLocationEvents(ctx, api.RDB.DB(ctx), []*LocationEventCreateRequest{{
-			Event:     ev,
-			Latitude:  f64(latitudeAt(i)),
-			Longitude: f64(-84.388),
+			Event:             ev,
+			EntryOccurredTime: ev.OccurredTime,
+			Latitude:          f64(latitudeAt(i)),
+			Longitude:         f64(-84.388),
 		}})
 		require.NoErrorf(t, err, "seed tied row %d", i)
 	}
@@ -197,9 +199,10 @@ func TestMeasurementEventsReadNewestFirst(t *testing.T) {
 		occurred := orderingBase.Add(time.Duration(offset) * time.Minute)
 		ev := eventOfType("acme", "device-1", esmodel.Measurement, occurred, fmt.Sprintf("m-%d", offset))
 		_, err := api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx), []*MeasurementEventCreateRequest{{
-			Event: ev,
-			Name:  "temperature",
-			Value: f64(20.5 + float64(offset)),
+			Event:             ev,
+			EntryOccurredTime: ev.OccurredTime,
+			Name:              "temperature",
+			Value:             f64(20.5 + float64(offset)),
 		}})
 		require.NoErrorf(t, err, "seed measurement at +%dm", offset)
 	}

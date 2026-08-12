@@ -62,7 +62,8 @@ func (suite *InboundEventsProcessorTestSuite) SetupTest() {
 		suite.Failed,
 		core.NewNoOpLifecycleCallbacks(),
 		suite.API,
-		config.AuthModeOptional)
+		config.AuthModeOptional,
+		time.Duration(config.DefaultMaxEventFutureSkewSeconds)*time.Second)
 	ctx := context.Background()
 	suite.IP.Initialize(ctx)
 }

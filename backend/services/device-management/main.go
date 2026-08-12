@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-device-management/graphql"
@@ -175,7 +176,8 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 
 	// Add and initialize inbound events processor.
 	InboundEventsProcessor = processor.NewInboundEventsProcessor(Microservice, InboundEventsReader,
-		ResolvedEventsWriter, FailedEventsWriter, core.NewNoOpLifecycleCallbacks(), CachedApi, Configuration.DeviceAuthMode)
+		ResolvedEventsWriter, FailedEventsWriter, core.NewNoOpLifecycleCallbacks(), CachedApi, Configuration.DeviceAuthMode,
+		time.Duration(Configuration.MaxEventFutureSkewSeconds)*time.Second)
 	err = InboundEventsProcessor.Initialize(context.Background())
 	if err != nil {
 		return err

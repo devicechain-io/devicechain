@@ -101,6 +101,7 @@ functionalAreas:
   device-management:
     config:
       deviceAuthMode: required   # disabled | optional | required
+      maxEventFutureSkewSeconds: 300   # ceiling on device clock skew
   event-sources:
     replicas: 2
 ```

@@ -37,15 +37,30 @@ func hasAnchor(criteria EventSearchCriteria) bool {
 	return criteria.AnchorType != nil && criteria.AnchorToken != nil
 }
 
-// anchorKeySubquery returns the tenant-scoped set of event keys
-// (device_token, event_type, occurred_time) that carry the requested anchor, read
-// from the event_anchors set table (ADR-013 addendum 2026-07-01). The anchor target
-// is addressed by its stable per-tenant token (ADR-044). An event is found by any of
-// its assignment dimensions because each is its own anchor row. Runs through DB(ctx)
+// anchorKeySubquery returns the tenant-scoped set of EVENT IDS that carry the requested
+// anchor, read from the event_anchors set table (ADR-013 addendum 2026-07-01). The anchor
+// target is addressed by its stable per-tenant token (ADR-044). An event is found by any
+// of its assignment dimensions because each is its own anchor row. Runs through DB(ctx)
 // so the tenant predicate applies to the subquery too.
+//
+// 🔴 IT KEYS ON event_id, NOT ON (device_token, event_type, occurred_time), and the
+// difference is not cosmetic on either side of it:
+//
+//   - The payload tables no longer share the base event's occurred_time. A reading is
+//     stored at ITS OWN instant while an anchor row records the message's, so a natural-key
+//     join returns NOTHING for any batched reading — an anchor-filtered search over a
+//     store-and-forward fleet would come back empty and look like an absence of data.
+//   - The natural key was never an identity anyway. AnchorsForEvent carries the same note
+//     for the same reason: two distinct events sharing that tuple made the join return the
+//     UNION of both, with nothing in the result saying which was which.
+//
+// occurred_time is deliberately NOT in the subquery. It is the hypertable partition
+// column, so dropping it costs chunk pruning on this join — but the caller's own
+// occurred-time range (commonEventFilters) still prunes, and a fast wrong answer is not
+// the trade to make here.
 func (api *Api) anchorKeySubquery(ctx context.Context, anchorType string, anchorToken string) *gorm.DB {
 	return api.RDB.DB(ctx).Model(&EventAnchor{}).
-		Select("device_token, event_type, occurred_time").
+		Select("event_id").
 		Where("anchor_type = ? AND anchor_token = ?", anchorType, anchorToken)
 }
 
@@ -53,7 +68,7 @@ func (api *Api) anchorKeySubquery(ctx context.Context, anchorType string, anchor
 // joining through the event_anchors set table. A no-op when no anchor is set.
 func (api *Api) anchorFilter(ctx context.Context, criteria EventSearchCriteria, result *gorm.DB) *gorm.DB {
 	if hasAnchor(criteria) {
-		result = result.Where("(device_token, event_type, occurred_time) IN (?)",
+		result = result.Where("event_id IN (?)",
 			api.anchorKeySubquery(ctx, *criteria.AnchorType, *criteria.AnchorToken))
 	}
 	return result
@@ -201,8 +216,7 @@ func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAg
 // measurement_events hypertable per time_bucket. It runs through DB(ctx) with the
 // MeasurementEvent model, so the fail-closed tenant-scope callback injects the
 // tenant predicate (ADR-015) just as it does for the paginated reads. The optional
-// anchor filter reuses the same tenant-scoped (device_token, event_type,
-// occurred_time) subquery as the typed reads.
+// anchor filter reuses the same tenant-scoped event_id subquery as the typed reads.
 func (api *Api) bucketedMeasurementsFromRaw(ctx context.Context, criteria MeasurementAggregationCriteria) ([]MeasurementBucket, error) {
 	results := make([]MeasurementBucket, 0)
 	db := api.RDB.DB(ctx).Model(&MeasurementEvent{}).
@@ -226,7 +240,7 @@ func (api *Api) bucketedMeasurementsFromRaw(ctx context.Context, criteria Measur
 		db = db.Where("occurred_time <= ?", *criteria.EndTime)
 	}
 	if criteria.AnchorType != nil && criteria.AnchorToken != nil {
-		db = db.Where("(device_token, event_type, occurred_time) IN (?)",
+		db = db.Where("event_id IN (?)",
 			api.anchorKeySubquery(ctx, *criteria.AnchorType, *criteria.AnchorToken))
 	}
 	db = db.Group("bucket_start, name").Order("bucket_start ASC, name ASC")

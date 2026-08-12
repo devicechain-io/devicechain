@@ -37,6 +37,7 @@ import (
 	"sort"
 	"time"
 
+	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
@@ -182,7 +183,13 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 		if event.ProfileVersionToken != profileVersion {
 			continue
 		}
-		occurred := runtime.EffectiveEventTime(event.OccurredTime, event.ProcessedTime, 0)
+		// Already bounded at resolution and stored that way, so replay reads the SAME instant
+		// live detection read. It used to call the clamp with a tolerance of 0, which disables
+		// it — so the preview did not bound a device's clock skew at all while the live loop
+		// bounded it with the configured tolerance. Two consumers of one stream disagreeing
+		// about when an event happened, under the exact feature (replay preview) whose whole
+		// value is answering what the rule WOULD have done.
+		occurred := event.OccurredTime
 		// The reader started at the window's lower edge by PUBLISH time; filter to the OCCURRED-time
 		// window (a late-published-but-early-occurred event, or one occurring past the window, is out).
 		if occurred.Before(tr.Start) || occurred.After(tr.End) {
@@ -244,6 +251,37 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 	})
 	res.Stats.FiringCount = len(res.Firings)
 	return res, nil
+}
+
+// occurredSpan returns the earliest and latest instant an event carries: the span of its
+// samples' own times, or the envelope's time twice for an event that batches nothing.
+// Both bounds come from times the resolver already decided and bounded — nothing here
+// re-derives one.
+func occurredSpan(event *dmmodel.ResolvedEvent) (time.Time, time.Time) {
+	first, last := event.OccurredTime, event.OccurredTime
+	observe := func(at time.Time) {
+		if at.Before(first) {
+			first = at
+		}
+		if at.After(last) {
+			last = at
+		}
+	}
+	switch payload := event.Payload.(type) {
+	case *dmmodel.ResolvedMeasurementsPayload:
+		for _, entry := range payload.Entries {
+			observe(entry.OccurredTime)
+		}
+	case *dmmodel.ResolvedLocationsPayload:
+		for _, entry := range payload.Entries {
+			observe(entry.OccurredTime)
+		}
+	case *dmmodel.ResolvedAlertsPayload:
+		for _, entry := range payload.Entries {
+			observe(entry.OccurredTime)
+		}
+	}
+	return first, last
 }
 
 // addDegraded appends a reason to the degraded string, joining multiple reasons with "; " so a

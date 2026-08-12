@@ -673,6 +673,16 @@ functionalAreas:
       # rejects any inbound event that does not present a valid device credential;
       # relax to optional/disabled only for a trusted/bootstrapping transport.
       deviceAuthMode: required
+      # How far a device-reported timestamp may lead the platform's own clock before
+      # resolution replaces it with that ceiling. Resolution is the ONE place the
+      # event time is decided, so this single value governs the stored history, both
+      # live projections, detection and replay alike — no other area configures it.
+      #
+      # Do not disable it (a negative value). Several shared projections advance under
+      # a strictly-newer guard driven by this value and none has a repair path: one
+      # event dated years out pins a device's last-activity forever, so its inactivity
+      # sweep never fires again and it can never be seen to go offline.
+      maxEventFutureSkewSeconds: 300
   event-sources:
     config: {}
     # ADR-063 preferential shedding. Set an operator floor to shed the lowest tiers

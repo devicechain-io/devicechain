@@ -23,6 +23,10 @@ type ResolvedNewRelationshipPayload struct {
 // mean sea level), speed in metres per second, heading in degrees clockwise from
 // true north in [0, 360). Values arrive as strings and have already been
 // range-checked at decode, so nothing downstream re-validates them.
+//
+// OccurredTime is THIS fix's instant and is ALWAYS SET — see the note on
+// ResolvedMeasurementsEntry.OccurredTime, which is the same field for the same
+// reason.
 type ResolvedLocationEntry struct {
 	Latitude     *string
 	Longitude    *string
@@ -30,7 +34,7 @@ type ResolvedLocationEntry struct {
 	Accuracy     *string
 	Speed        *string
 	Heading      *string
-	OccurredTime *string
+	OccurredTime time.Time
 }
 
 // Payload with resolved location entries.
@@ -51,10 +55,23 @@ type ResolvedMeasurementEntry struct {
 	DataType   *string
 }
 
-// Information for a measurements entry.
+// Information for a measurements entry — ONE sample, a coherent set of named
+// readings taken at one instant.
+//
+// 🔴 OccurredTime IS ALWAYS SET, AND IT IS ALREADY BOUNDED. It is not a pointer and
+// there is no fallback to interpret: the resolver resolved the entry-versus-envelope
+// rule and applied the future-skew bound ONCE, in eventtime.ForEntry, so this is the
+// instant every surface must report for this sample. A consumer READS it; nothing
+// downstream re-derives it, re-clamps it, or falls back to the envelope.
+//
+// That absoluteness is the fix. When each consumer decided for itself, five of them
+// gave three different answers — a dashboard's "latest" card could disagree with its
+// own history chart about the same reading, and a replay preview clamped differently
+// from live detection, which is the replay-correctness property the authoring canvas
+// rests on.
 type ResolvedMeasurementsEntry struct {
 	Entries      []ResolvedMeasurementEntry
-	OccurredTime *string
+	OccurredTime time.Time
 }
 
 // Payload with resolved measurement entries.
@@ -62,13 +79,14 @@ type ResolvedMeasurementsPayload struct {
 	Entries []ResolvedMeasurementsEntry
 }
 
-// Information for an alert entry.
+// Information for an alert entry. OccurredTime is this alert's instant and is
+// ALWAYS SET — see the note on ResolvedMeasurementsEntry.OccurredTime.
 type ResolvedAlertEntry struct {
 	Type         string
 	Level        uint32
 	Message      string
 	Source       string
-	OccurredTime *string
+	OccurredTime time.Time
 }
 
 // Payload with resolved alert entries.

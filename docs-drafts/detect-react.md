@@ -150,11 +150,28 @@ moves the frontier to `max(now, t - lateness)` and never backward. The comment a
 that a single frontier across every key and every tenant is deliberate: an idle key's absence timer
 has to fire off *other* keys' progress, since by definition nothing is arriving for it.
 
-Event time is clamped on the way in: `EffectiveEventTime`
-(`backend/services/event-processing/internal/runtime/input.go:96-104`) caps a device-reported time at
-`processed + maxSkew`. Both times are immutable in the payload, so the clamp is deterministic under
-replay. **Only future skew is bounded** (`:87-95`) — a device reporting a time far in the past is
-handled as lateness, not as skew.
+**Event time arrives already clamped, and this service no longer does the clamping.** The rule lives
+in `backend/core/eventtime/eventtime.go` and is applied at exactly one call site —
+`device-management/processor/event_resolver.go:81`, at event resolution — capping a device-reported
+time at `processed + maxSkew`. A resolved event carries times that are already bounded; `input.go`
+reads `entry.OccurredTime` and computes nothing. Both times are immutable in the payload, so the
+clamp is deterministic under replay.
+
+The tolerance is one knob on the **resolver** (`MaxEventFutureSkewSeconds`, default 300s);
+event-processing no longer carries one of its own. It used to, and the preview called the same bound
+with a tolerance of zero — which disables it — so live detection and replay could disagree about when
+an event happened, under the one feature whose value is answering what a rule *would* have done.
+
+**Only future skew is bounded** — a device reporting a time far in the past is handled as lateness,
+not as skew, and there is no honest ceiling on how old a legitimately buffered reading may be.
+
+🔴 **A batch's older samples can be dropped as late.** Each sample now carries its own instant
+(§9), while the watermark advances once per *message*, so a store-and-forward device uploading half
+an hour of buffered readings presents events well behind the frontier and a closed pane refuses
+them. Reordering to apply-before-advance would not change it: the frontier is engine-wide, so any
+live device has already carried it past a quiet device's buffered samples. Windowed rules see what
+arrived inside their lateness budget; the stored history keeps everything either way. The reasoning
+is recorded on `ProcessResolved` (`engine.go`).
 
 `advance` (`engine.go:720-728`) does three things in an order that matters: move the watermark, fire
 due timers, close due panes. Timers fire against the **pre-event** state.
@@ -443,7 +460,9 @@ gate → fan a correlation rule per anchor → build the event.
 
 One input per sample, not one per message, is a correctness decision recorded at
 `internal/runtime/input.go:22-30`: a batched store-and-forward upload carrying `[120, 80]` would
-otherwise last-value-wins into a single map and a `temp > 100` rule would never see the 120.
+otherwise last-value-wins into a single map and a `temp > 100` rule would never see the 120. Each
+input is stamped at **its own sample's instant**, not the message's — which is what makes a batch's
+older samples subject to the lateness contract in §8.
 
 **A runtime CEL eval error skips the event; it does not evaluate to false.** `fanout.go:31-33` argues
 why: a false leaf would *cancel a Duration hold*, whereas a skip preserves it. The consequence for an

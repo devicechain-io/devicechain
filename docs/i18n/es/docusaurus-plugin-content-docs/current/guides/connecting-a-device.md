@@ -33,11 +33,22 @@ Todo evento entrante — sobre cualquier transporte — es un objeto JSON:
 ### Formas del payload
 
 **Todo payload envuelve su contenido en un arreglo `entries`**, y todo valor numérico es una **cadena
-de texto JSON**. Una entrada también puede llevar su propio `occurredTime`; se acepta, pero la lectura
-almacenada toma la marca de tiempo del sobre, así que envíe una entrada por evento en lugar de
-agruparlas. Ambas reglas se aplican: un payload sin entradas, una entrada vacía, o un número
+de texto JSON**. Ambas reglas se aplican: un payload sin entradas, una entrada vacía, o un número
 suelto donde se espera una cadena es **rechazado** — HTTP responde `400` y una publicación MQTT va a
-la cola de mensajes fallidos en lugar de aceptarse en silencio. Envíe una entrada por evento.
+la cola de mensajes fallidos en lugar de aceptarse en silencio.
+
+**Una entrada es una lectura, tomada en un instante.** Una entrada puede llevar su propio
+`occurredTime`, y ese es el instante con el que la lectura se almacena, se grafica, se evalúa y se
+devuelve —de modo que un dispositivo que acumula lecturas mientras está sin conexión puede subir
+toda la serie en un solo mensaje y conservar el historial que realmente registró. Una entrada sin
+`occurredTime` toma la del sobre. `occurredTime` es RFC 3339 (`2026-08-09T12:00:00.125Z`) donde
+aparezca; un valor que no lo sea es **rechazado** indicando la entrada culpable, nunca sustituido en
+silencio.
+
+Una marca de tiempo informada no puede adelantarse demasiado al propio reloj de la plataforma. La que
+lo haga se almacena en ese tope —la tolerancia es amplia para la deriva normal de reloj, así que esto
+solo afecta a un dispositivo cuyo reloj está realmente mal. Ajuste el reloj en lugar de confiar en el
+tope: una lectura almacenada en el tope es una lectura almacenada a la hora equivocada.
 
 **`Measurement`** — una o más lecturas con nombre:
 

@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -96,6 +97,11 @@ var (
 	// tenant, whose values here are exactly the unverified strings off the wire
 	// (ADR-023 G.3).
 	TenantGoneCounter *prometheus.CounterVec
+	// InvalidEventTimeCounter counts inbound messages refused because a timestamp on
+	// them — the envelope's or any entry's — is not an RFC3339 instant. A subset of
+	// FailedDecodeCounter, kept separate because a fleet with wrong clocks is a
+	// different operational fact from a broken payload shape.
+	InvalidEventTimeCounter *prometheus.CounterVec
 )
 
 func main() {
@@ -155,6 +161,10 @@ func initializeMetrics() {
 		// operator see WHICH tier is being shed under a contention floor without leaking
 		// per-tenant cardinality into the metric.
 		[]string{"source", "shed_class"})
+	InvalidEventTimeCounter = Microservice.NewCounterVec(
+		"total_msg_invalid_event_time",
+		"Count of inbound messages refused because a timestamp on them is not an RFC3339 instant",
+		[]string{"source"})
 	TenantGoneCounter = Microservice.NewCounterVec(
 		"total_msg_tenant_deleted",
 		"Count of inbound messages refused because their tenant has been deleted and its data is being reclaimed",
@@ -485,6 +495,15 @@ func onEventDecoded(source string, tenant string, event *model.UnresolvedEvent, 
 func onEventDecodeFailed(source string, tenant string, raw []byte, err error) error {
 	// Increment counter for metrics.
 	FailedDecodeCounter.WithLabelValues(source).Inc()
+	// A timestamp that is not an instant is counted APART from a malformed payload,
+	// because the two ask for different work: bad JSON is a broken integration, a bad
+	// clock is a fleet whose devices need their time source fixed. Neither is visible
+	// today — the platform used to accept an unparseable per-entry time silently and
+	// store the reading at the wrong instant, so a fleet with wrong clocks looked
+	// perfectly healthy. Labelled by SOURCE only, never by tenant (ADR-023 G.3).
+	if errors.Is(err, processor.ErrInvalidEventTime) {
+		InvalidEventTimeCounter.WithLabelValues(source).Inc()
+	}
 
 	// A message that could not be decoded is still routed to the failed-decode
 	// subject for the originating tenant; without a tenant it cannot be scoped, so

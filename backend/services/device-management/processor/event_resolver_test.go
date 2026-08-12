@@ -30,9 +30,11 @@ func (suite *EventResolverTestSuite) SetupTest() {
 	suite.API = new(dmtest.MockApi)
 }
 
-// Build a resolver bound to the suite mock under the given auth mode.
+// Build a resolver bound to the suite mock under the given auth mode, with the
+// event-time bound DISABLED (a zero policy) so these tests read reported times back
+// unchanged. The bound itself is exercised by event_time_test.go.
 func (suite *EventResolverTestSuite) resolver(authMode string) *EventResolver {
-	return NewEventResolver(1, suite.API, authMode, nil, nil, nil, nil, nil, nil)
+	return NewEventResolver(1, suite.API, authMode, EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
 }
 
 // A device whose stable token is the given value.
