@@ -94,6 +94,13 @@ type UnresolvedNewRelationshipPayload struct {
 // stationary device with a noisy compass still reports a heading, and a device
 // that batches or drops fixes reports a speed no pair of stored positions would
 // reproduce. A consumer needing a value it can defend derives it itself.
+// OccurredTime is THIS fix's own instant, nil when the device timed only the
+// message. It is a parsed time rather than the raw string because this struct is
+// only ever built past the untrusted edge: the JSON decoder rejects a malformed
+// value outright (a device gets a 400 / dead-letter naming the offending entry),
+// and the proto seam fails loudly rather than re-validating. Everything downstream
+// therefore has a time or a documented absence, never a string that might not be
+// one.
 type UnresolvedLocationEntry struct {
 	Latitude     *string
 	Longitude    *string
@@ -101,7 +108,7 @@ type UnresolvedLocationEntry struct {
 	Accuracy     *string
 	Speed        *string
 	Heading      *string
-	OccurredTime *string
+	OccurredTime *time.Time
 }
 
 // Payload creating new locations.
@@ -109,10 +116,17 @@ type UnresolvedLocationsPayload struct {
 	Entries []UnresolvedLocationEntry
 }
 
-// Information for a measurements entry.
+// Information for a measurements entry — ONE sample, a coherent set of named
+// readings taken at one instant. OccurredTime is that instant, nil when the device
+// timed only the message; see UnresolvedLocationEntry for why it is already parsed.
+//
+// A batch of these is how a store-and-forward device (and every Sparkplug/LwM2M
+// upload) reports buffered history, so the per-entry time is the difference between
+// a minute of readings stored as a minute of readings and all of them stored at one
+// instant.
 type UnresolvedMeasurementsEntry struct {
 	Measurements map[string]string
-	OccurredTime *string
+	OccurredTime *time.Time
 }
 
 // Payload creating new measurements.
@@ -120,13 +134,15 @@ type UnresolvedMeasurementsPayload struct {
 	Entries []UnresolvedMeasurementsEntry
 }
 
-// Information for an alert entry.
+// Information for an alert entry. OccurredTime is this alert's own instant, nil
+// when the device timed only the message; see UnresolvedLocationEntry for why it is
+// already parsed.
 type UnresolvedAlertEntry struct {
 	Type         string
 	Level        uint32
 	Message      string
 	Source       string
-	OccurredTime *string
+	OccurredTime *time.Time
 }
 
 // Payload creating new alerts.

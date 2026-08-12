@@ -74,13 +74,14 @@ type fix struct {
 // request renders the fix as a create request under the given parent event.
 func (f fix) request(ev Event) *LocationEventCreateRequest {
 	return &LocationEventCreateRequest{
-		Event:     ev,
-		Latitude:  f64(f.lat),
-		Longitude: f64(f.lon),
-		Elevation: f64(f.elev),
-		Accuracy:  f64(f.accuracy),
-		Speed:     f64(f.speed),
-		Heading:   f64(f.heading),
+		Event:             ev,
+		EntryOccurredTime: ev.OccurredTime,
+		Latitude:          f64(f.lat),
+		Longitude:         f64(f.lon),
+		Elevation:         f64(f.elev),
+		Accuracy:          f64(f.accuracy),
+		Speed:             f64(f.speed),
+		Heading:           f64(f.heading),
 	}
 }
 
@@ -140,9 +141,10 @@ func TestLocationEventOmittedFixFieldsReadBackAsNullNotZero(t *testing.T) {
 
 	ev := eventOfType("acme", "device-1", esmodel.Location, occurred, "bare-fix")
 	_, err := api.CreateLocationEvents(ctx, api.RDB.DB(ctx), []*LocationEventCreateRequest{{
-		Event:     ev,
-		Latitude:  f64(atlanta.lat),
-		Longitude: f64(atlanta.lon),
+		Event:             ev,
+		EntryOccurredTime: ev.OccurredTime,
+		Latitude:          f64(atlanta.lat),
+		Longitude:         f64(atlanta.lon),
 	}})
 	require.NoError(t, err)
 

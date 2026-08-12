@@ -114,12 +114,35 @@ type LocationEvent struct {
 // Information required to create a location event.
 type LocationEventCreateRequest struct {
 	Event
-	Latitude  *float64
-	Longitude *float64
-	Elevation *float64
-	Accuracy  *float64
-	Speed     *float64
-	Heading   *float64
+	// EntryOccurredTime is THIS row's own instant — the sample's time, which the
+	// resolver already decided (its own when the device reported one, else the
+	// envelope's) and already bounded against the server clock.
+	//
+	// 🔴 IT IS A SEPARATE FIELD BECAUSE THE EMBEDDED Event MUST KEEP THE ENVELOPE'S
+	// TIME. The embedded Event is the PARENT row, and every request in a batch carries
+	// the same one: CreateXEvents upserts the parents deduplicated by event_id, so
+	// moving a per-sample time onto the embedded Event would make N samples describe N
+	// different parents that all share one identity — one of them would win, silently,
+	// and it would carry a time its own derived event_id was not computed from.
+	//
+	// Zero is rejected at create rather than defaulted. A caller that forgets this
+	// field would otherwise write a row at the zero instant, which reads as a real
+	// (very old) reading and sorts before every genuine one.
+	//
+	// Two knock-on effects, both intended. A payload row can now land in an OLDER
+	// hypertable chunk than its parent event, so retention (which drops chunks per
+	// table) can reclaim a deeply-buffered reading before the envelope that delivered
+	// it — correct, since retention is a statement about how much history to keep and
+	// the reading IS the history. And an anchor row records the message's instant, not
+	// the reading's, which is why the anchor join is keyed on event_id rather than on
+	// (device_token, event_type, occurred_time) — see anchorKeySubquery.
+	EntryOccurredTime time.Time
+	Latitude          *float64
+	Longitude         *float64
+	Elevation         *float64
+	Accuracy          *float64
+	Speed             *float64
+	Heading           *float64
 }
 
 // Measurement event fields. Unit and DataType are denormalized from the bound
@@ -158,11 +181,14 @@ type MeasurementEvent struct {
 // Information required to create a measurement event.
 type MeasurementEventCreateRequest struct {
 	Event
-	Name       string
-	Value      *float64
-	Classifier *uint
-	Unit       *string
-	DataType   *string
+	// EntryOccurredTime is THIS row's own instant, kept apart from the embedded
+	// (parent) Event's for the reason set out on LocationEventCreateRequest.
+	EntryOccurredTime time.Time
+	Name              string
+	Value             *float64
+	Classifier        *uint
+	Unit              *string
+	DataType          *string
 }
 
 // MeasurementRollup is one row of the measurement_rollups continuous aggregate
@@ -212,10 +238,13 @@ type AlertEvent struct {
 // Information required to create an alert event.
 type AlertEventCreateRequest struct {
 	Event
-	Type    string
-	Level   uint32
-	Message string
-	Source  string
+	// EntryOccurredTime is THIS row's own instant, kept apart from the embedded
+	// (parent) Event's for the reason set out on LocationEventCreateRequest.
+	EntryOccurredTime time.Time
+	Type              string
+	Level             uint32
+	Message           string
+	Source            string
 }
 
 // StateChangeEvent is the append-only history of an authoritative presence

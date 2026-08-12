@@ -66,7 +66,7 @@ func (r *SchemaResolver) MeasurementStream(ctx context.Context, args struct {
 					if args.Name != nil && mx.Name != *args.Name {
 						continue
 					}
-					me := measurementFromResolved(resolved, mx)
+					me := measurementFromResolved(resolved, entry, mx)
 					select {
 					case out <- &MeasurementEventResolver{M: me, S: r, C: ctx}:
 					case <-ctx.Done():
@@ -79,14 +79,23 @@ func (r *SchemaResolver) MeasurementStream(ctx context.Context, args struct {
 	return out, nil
 }
 
-// measurementFromResolved maps a single resolved measurement entry onto the
-// MeasurementEvent read model (mirrors the persistence worker's mapping, minus
-// the DB round trip), so a streamed event resolves identically to a queried one.
-func measurementFromResolved(e *dmmodel.ResolvedEvent, mx dmmodel.ResolvedMeasurementEntry) model.MeasurementEvent {
+// measurementFromResolved maps a single resolved measurement reading onto the
+// MeasurementEvent read model (mirrors the persistence worker's mapping, minus the DB
+// round trip), so a streamed event resolves identically to a queried one.
+//
+// 🔴 IT TAKES THE SAMPLE (entry) AS WELL AS THE READING (mx), and that is what makes
+// the sentence above true rather than aspirational. The reading itself carries no time —
+// a batch's instants live on the enclosing sample — so a version of this function that
+// saw only mx could not do anything but stamp the envelope's time, which is precisely
+// what it used to do while its comment claimed identical resolution. It was the one
+// consumer that could not be fixed without a signature change, which is how it stayed
+// wrong while the others were being argued about.
+func measurementFromResolved(e *dmmodel.ResolvedEvent, entry dmmodel.ResolvedMeasurementsEntry,
+	mx dmmodel.ResolvedMeasurementEntry) model.MeasurementEvent {
 	me := model.MeasurementEvent{
 		DeviceToken:  e.SourceDeviceToken,
 		EventType:    e.EventType,
-		OccurredTime: e.OccurredTime,
+		OccurredTime: entry.OccurredTime,
 		Name:         mx.Name,
 	}
 	if f, err := strconv.ParseFloat(mx.Value, 64); err == nil {

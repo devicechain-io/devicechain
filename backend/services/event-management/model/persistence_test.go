@@ -76,7 +76,8 @@ func TestMeasurementsQueryableByEachAnchor(t *testing.T) {
 
 	parent := Event{DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: occurred, Source: "http1"}
 	if _, err := api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx),
-		[]*MeasurementEventCreateRequest{{Event: parent, Name: "temperature", Value: f64(21.5)}}); err != nil {
+		[]*MeasurementEventCreateRequest{{Event: parent,
+			EntryOccurredTime: parent.OccurredTime, Name: "temperature", Value: f64(21.5)}}); err != nil {
 		t.Fatalf("CreateMeasurementEvents: %v", err)
 	}
 	// The device is assigned to a customer AND an area: one anchor row per target.
@@ -117,9 +118,13 @@ func TestCreateMeasurementEventsWritesParentAndChildren(t *testing.T) {
 		Source:        "http1",
 		ProcessedTime: occurred,
 	}
+	// The two children carry DIFFERENT instants under one parent — the store-and-forward
+	// shape. A test where both matched the parent's time would pass even if the child rows
+	// silently inherited the envelope, which is the defect per-sample times remove.
 	requests := []*MeasurementEventCreateRequest{
-		{Event: parent, Name: "temperature", Value: f64(21.5), Unit: sptr("Cel"), DataType: sptr("DOUBLE")},
-		{Event: parent, Name: "humidity", Value: f64(48)},
+		{Event: parent, EntryOccurredTime: occurred.Add(-2 * time.Minute),
+			Name: "temperature", Value: f64(21.5), Unit: sptr("Cel"), DataType: sptr("DOUBLE")},
+		{Event: parent, EntryOccurredTime: occurred, Name: "humidity", Value: f64(48)},
 	}
 
 	created, err := api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx), requests)
@@ -148,12 +153,21 @@ func TestCreateMeasurementEventsWritesParentAndChildren(t *testing.T) {
 		t.Fatalf("expected 2 measurement rows, got %d", len(children))
 	}
 	for _, c := range children {
-		if c.DeviceToken != "device-4" || c.EventType != esmodel.Measurement || !c.OccurredTime.Equal(occurred) {
+		if c.DeviceToken != "device-4" || c.EventType != esmodel.Measurement {
 			t.Fatalf("child fk columns do not match parent: %+v", c)
 		}
 	}
 	if children[0].Name != "humidity" || children[1].Name != "temperature" {
 		t.Fatalf("unexpected child names: %s, %s", children[0].Name, children[1].Name)
+	}
+	// Each child is stored at ITS OWN instant, not the parent's — the whole point of
+	// carrying the sample time separately. humidity was the reading taken AT the message
+	// time; temperature was buffered two minutes earlier.
+	if !children[0].OccurredTime.Equal(occurred) {
+		t.Fatalf("humidity stored at %v, want the sample time %v", children[0].OccurredTime, occurred)
+	}
+	if want := occurred.Add(-2 * time.Minute); !children[1].OccurredTime.Equal(want) {
+		t.Fatalf("temperature stored at %v, want its own sample time %v", children[1].OccurredTime, want)
 	}
 	// The bound metric's denormalized unit + data type persist on the row and are
 	// null for an unbound measurement (ADR-016).

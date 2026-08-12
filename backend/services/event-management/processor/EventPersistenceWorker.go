@@ -96,6 +96,13 @@ func classifyPersistFailure(err error) error {
 	if err == nil || errors.Is(err, ErrDeterministic) {
 		return err
 	}
+	// A payload row with no instant of its own can never acquire one on redelivery: the
+	// same bytes resolve to the same zero. Retrying it burns the whole MaxDeliver budget
+	// and then files it as an API failure, which is the wrong story about a message whose
+	// content is the problem.
+	if errors.Is(err, model.ErrZeroEntryTime) {
+		return fmt.Errorf("%w: %w", ErrDeterministic, err)
+	}
 	var pgerr *pgconn.PgError
 	if errors.As(err, &pgerr) && strings.HasPrefix(pgerr.Code, "22") {
 		return fmt.Errorf("%w: database rejected the value (SQLSTATE %s): %w",
@@ -150,13 +157,14 @@ func (ep *EventPersistenceWorker) PersistLocationEvents(ctx context.Context, db 
 			return nil, err
 		}
 		requests = append(requests, &model.LocationEventCreateRequest{
-			Event:     event,
-			Latitude:  lat,
-			Longitude: lon,
-			Elevation: ele,
-			Accuracy:  acc,
-			Speed:     spd,
-			Heading:   hdg,
+			Event:             event,
+			EntryOccurredTime: location.OccurredTime,
+			Latitude:          lat,
+			Longitude:         lon,
+			Elevation:         ele,
+			Accuracy:          acc,
+			Speed:             spd,
+			Heading:           hdg,
 		})
 	}
 	created, err := ep.Api.CreateLocationEvents(ctx, db, requests)
@@ -192,12 +200,13 @@ func (ep *EventPersistenceWorker) PersistMeasurementEvents(ctx context.Context, 
 				classifier = &c
 			}
 			requests = append(requests, &model.MeasurementEventCreateRequest{
-				Event:      event,
-				Name:       mx.Name,
-				Value:      fval,
-				Classifier: classifier,
-				Unit:       mx.Unit,
-				DataType:   mx.DataType,
+				Event:             event,
+				EntryOccurredTime: mxentry.OccurredTime,
+				Name:              mx.Name,
+				Value:             fval,
+				Classifier:        classifier,
+				Unit:              mx.Unit,
+				DataType:          mx.DataType,
 			})
 		}
 	}
@@ -223,11 +232,12 @@ func (ep *EventPersistenceWorker) PersistAlertEvents(ctx context.Context, db *go
 	requests := make([]*model.AlertEventCreateRequest, 0, len(payload.Entries))
 	for _, alert := range payload.Entries {
 		requests = append(requests, &model.AlertEventCreateRequest{
-			Event:   event,
-			Type:    alert.Type,
-			Level:   alert.Level,
-			Message: alert.Message,
-			Source:  alert.Source,
+			Event:             event,
+			EntryOccurredTime: alert.OccurredTime,
+			Type:              alert.Type,
+			Level:             alert.Level,
+			Message:           alert.Message,
+			Source:            alert.Source,
 		})
 	}
 	created, err := ep.Api.CreateAlertEvents(ctx, db, requests)

@@ -24,6 +24,39 @@ func optionalString(s string) *string {
 	return &s
 }
 
+// marshalEntryTime renders one sample's own instant onto the wire. A resolved entry
+// always carries one, so this never encodes absence — the field stays proto3 `optional`
+// only so bytes published before per-sample times existed still decode (see
+// unmarshalEntryTime).
+func marshalEntryTime(occurred time.Time) *string {
+	formatted := occurred.UTC().Format(time.RFC3339Nano)
+	return &formatted
+}
+
+// unmarshalEntryTime reads one sample's own instant back off the wire, falling back to
+// the message envelope's time when the field is absent.
+//
+// 🔴 THE FALLBACK IS FOR HISTORY, NOT FOR PRODUCERS. Every resolved event published from
+// this version on carries a per-entry time, because resolution always sets one. What is
+// absent is the field on events published BEFORE per-sample times were honoured — and
+// the replay preview reads exactly those bytes back off the retained stream. Decoding
+// them at the envelope time is what they meant when they were written, so history
+// replays as it happened rather than being skipped as corrupt.
+//
+// A value that is PRESENT but unparseable is a different thing entirely and fails: this
+// seam is internal, so a malformed instant here is a defect in this repository, and
+// swallowing it would silently collapse a batch onto one time.
+func unmarshalEntryTime(raw *string, envelope time.Time) (time.Time, error) {
+	if raw == nil {
+		return envelope, nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, *raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("entry occurredTime %q is not an RFC3339 timestamp: %w", *raw, err)
+	}
+	return parsed, nil
+}
+
 // Marshal a failed event to protobuf bytes.
 func MarshalFailedEvent(event *model.FailedEvent) ([]byte, error) {
 	// Encode protobuf event.
@@ -90,7 +123,7 @@ func MarshalPayloadForLocationsEvent(payload *model.ResolvedLocationsPayload) ([
 			Accuracy:     entry.Accuracy,
 			Speed:        entry.Speed,
 			Heading:      entry.Heading,
-			OccurredTime: entry.OccurredTime,
+			OccurredTime: marshalEntryTime(entry.OccurredTime),
 		}
 		pbpayload.Entries = append(pbpayload.Entries, pbentry)
 	}
@@ -118,7 +151,7 @@ func MarshalPayloadForMeasurementsEvent(payload *model.ResolvedMeasurementsPaylo
 		}
 		pbentry := &PResolvedMeasurementsEntry{
 			Measurements: pmxentries,
-			OccurredTime: mxsentry.OccurredTime,
+			OccurredTime: marshalEntryTime(mxsentry.OccurredTime),
 		}
 		pbpayload.Entries = append(pbpayload.Entries, pbentry)
 	}
@@ -138,7 +171,7 @@ func MarshalPayloadForAlertsEvent(payload *model.ResolvedAlertsPayload) ([]byte,
 			Level:        entry.Level,
 			Message:      entry.Message,
 			Source:       entry.Source,
-			OccurredTime: entry.OccurredTime,
+			OccurredTime: marshalEntryTime(entry.OccurredTime),
 		}
 		pbpayload.Entries = append(pbpayload.Entries, pbentry)
 	}
@@ -165,8 +198,9 @@ func UnmarshalPayloadForNewRelationshipEvent(encoded []byte) (*model.ResolvedNew
 	return payload, nil
 }
 
-// Unmarshal a payload into a locations event.
-func UnmarshalPayloadForLocationsEvent(encoded []byte) (*model.ResolvedLocationsPayload, error) {
+// Unmarshal a payload into a locations event. envelope is the message's own occurred
+// time, used for an entry published before per-sample times were honoured.
+func UnmarshalPayloadForLocationsEvent(encoded []byte, envelope time.Time) (*model.ResolvedLocationsPayload, error) {
 	pbpayload := &PResolvedLocationsPayload{}
 	err := proto.Unmarshal(encoded, pbpayload)
 	if err != nil {
@@ -175,6 +209,10 @@ func UnmarshalPayloadForLocationsEvent(encoded []byte) (*model.ResolvedLocations
 	payload := &model.ResolvedLocationsPayload{}
 	entries := make([]model.ResolvedLocationEntry, 0)
 	for _, pbentry := range pbpayload.Entries {
+		occurred, terr := unmarshalEntryTime(pbentry.OccurredTime, envelope)
+		if terr != nil {
+			return nil, terr
+		}
 		entry := model.ResolvedLocationEntry{
 			Latitude:     pbentry.Latitude,
 			Longitude:    pbentry.Longitude,
@@ -182,7 +220,7 @@ func UnmarshalPayloadForLocationsEvent(encoded []byte) (*model.ResolvedLocations
 			Accuracy:     pbentry.Accuracy,
 			Speed:        pbentry.Speed,
 			Heading:      pbentry.Heading,
-			OccurredTime: pbentry.OccurredTime,
+			OccurredTime: occurred,
 		}
 		entries = append(entries, entry)
 	}
@@ -190,8 +228,9 @@ func UnmarshalPayloadForLocationsEvent(encoded []byte) (*model.ResolvedLocations
 	return payload, nil
 }
 
-// Unmarshal a payload into a measurements event.
-func UnmarshalPayloadForMeasurementsEvent(encoded []byte) (*model.ResolvedMeasurementsPayload, error) {
+// Unmarshal a payload into a measurements event. envelope is the message's own occurred
+// time, used for an entry published before per-sample times were honoured.
+func UnmarshalPayloadForMeasurementsEvent(encoded []byte, envelope time.Time) (*model.ResolvedMeasurementsPayload, error) {
 	pbpayload := &PResolvedMeasurementsPayload{}
 	err := proto.Unmarshal(encoded, pbpayload)
 	if err != nil {
@@ -211,9 +250,13 @@ func UnmarshalPayloadForMeasurementsEvent(encoded []byte) (*model.ResolvedMeasur
 			}
 			mxs = append(mxs, mx)
 		}
+		occurred, terr := unmarshalEntryTime(pbentry.OccurredTime, envelope)
+		if terr != nil {
+			return nil, terr
+		}
 		entry := model.ResolvedMeasurementsEntry{
 			Entries:      mxs,
-			OccurredTime: pbentry.OccurredTime,
+			OccurredTime: occurred,
 		}
 		entries = append(entries, entry)
 	}
@@ -221,8 +264,9 @@ func UnmarshalPayloadForMeasurementsEvent(encoded []byte) (*model.ResolvedMeasur
 	return payload, nil
 }
 
-// Unmarshal a payload into an alerts event.
-func UnmarshalPayloadForAlertsEvent(encoded []byte) (*model.ResolvedAlertsPayload, error) {
+// Unmarshal a payload into an alerts event. envelope is the message's own occurred
+// time, used for an entry published before per-sample times were honoured.
+func UnmarshalPayloadForAlertsEvent(encoded []byte, envelope time.Time) (*model.ResolvedAlertsPayload, error) {
 	pbpayload := &PResolvedAlertsPayload{}
 	err := proto.Unmarshal(encoded, pbpayload)
 	if err != nil {
@@ -231,12 +275,16 @@ func UnmarshalPayloadForAlertsEvent(encoded []byte) (*model.ResolvedAlertsPayloa
 	payload := &model.ResolvedAlertsPayload{}
 	entries := make([]model.ResolvedAlertEntry, 0)
 	for _, pbentry := range pbpayload.Entries {
+		occurred, terr := unmarshalEntryTime(pbentry.OccurredTime, envelope)
+		if terr != nil {
+			return nil, terr
+		}
 		entry := model.ResolvedAlertEntry{
 			Type:         pbentry.Type,
 			Level:        pbentry.Level,
 			Message:      pbentry.Message,
 			Source:       pbentry.Source,
-			OccurredTime: pbentry.OccurredTime,
+			OccurredTime: occurred,
 		}
 		entries = append(entries, entry)
 	}
@@ -307,17 +355,18 @@ func MarshalResolvedPayload(etype esmodel.EventType, payload interface{}) ([]byt
 	}
 }
 
-// Unmarshal unresolved payload based on event type.
-func UnmarshalResolvedPayload(etype esmodel.EventType, payload []byte) (interface{}, error) {
+// Unmarshal unresolved payload based on event type. envelope is the message's own
+// occurred time, used for an entry published before per-sample times were honoured.
+func UnmarshalResolvedPayload(etype esmodel.EventType, payload []byte, envelope time.Time) (interface{}, error) {
 	switch etype {
 	case esmodel.NewRelationship:
 		return UnmarshalPayloadForNewRelationshipEvent(payload)
 	case esmodel.Location:
-		return UnmarshalPayloadForLocationsEvent(payload)
+		return UnmarshalPayloadForLocationsEvent(payload, envelope)
 	case esmodel.Measurement:
-		return UnmarshalPayloadForMeasurementsEvent(payload)
+		return UnmarshalPayloadForMeasurementsEvent(payload, envelope)
 	case esmodel.Alert:
-		return UnmarshalPayloadForAlertsEvent(payload)
+		return UnmarshalPayloadForAlertsEvent(payload, envelope)
 	case esmodel.StateChange:
 		return UnmarshalPayloadForStateChangeEvent(payload)
 	default:
@@ -610,17 +659,20 @@ func UnmarshalResolvedEvent(encoded []byte) (*model.ResolvedEvent, error) {
 		return nil, err
 	}
 
-	// Unmarshal payload based on event type.
-	payload, err := UnmarshalResolvedPayload(esmodel.EventType(pbevent.EventType), pbevent.Payload)
-	if err != nil {
-		return nil, err
-	}
-
+	// The envelope's time is parsed BEFORE the payload because the payload needs it: an
+	// entry published before per-sample times were honoured carries no time of its own
+	// and decodes at the envelope's, which is what it meant when it was written.
 	occurred, err := time.Parse(time.RFC3339Nano, pbevent.OccurredTime)
 	if err != nil {
 		return nil, err
 	}
 	processed, err := time.Parse(time.RFC3339Nano, pbevent.ProcessedTime)
+	if err != nil {
+		return nil, err
+	}
+
+	// Unmarshal payload based on event type.
+	payload, err := UnmarshalResolvedPayload(esmodel.EventType(pbevent.EventType), pbevent.Payload, occurred)
 	if err != nil {
 		return nil, err
 	}

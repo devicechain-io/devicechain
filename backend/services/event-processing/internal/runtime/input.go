@@ -26,13 +26,26 @@ import (
 // of named readings — so it becomes one Input, and a rule evaluates against every sample rather
 // than only the last. Folding a batch to a single map (last-value-wins) would silently drop the
 // intermediate readings: a `temp > 100` threshold would miss a `[120, 80]` batch, and aggregates
-// would undercount. Every sample is stamped at `occurred` (the message's clamped event time),
-// matching event-management, which persists every reading but flattens the per-entry sub-times to
-// the message time — so DETECT and the persisted history (and ADR-053 replay authoring) agree.
+// would undercount.
 //
-// A non-measurement event (location/relationship/alert) or an empty batch yields a single
-// heartbeat Input with nil M: it carries no metric (matching no metric-gated rule) but is still a
-// heartbeat for an absence rule. The common one-sample event yields exactly one Input.
+// Every sample is stamped at ITS OWN instant, which the resolver decided and bounded — the same
+// value event-management persists for that reading, so DETECT, the stored history and ADR-053
+// replay authoring agree BY CONSTRUCTION rather than by two services being kept in step. (They
+// once agreed the other way: both flattened a batch onto the message's time, so a minute of
+// buffered readings evaluated as if it had arrived in one instant, and a duration rule could
+// neither open nor close inside a batch.) The `occurred` argument remains the message's own
+// bounded time and is what a batchless event — a heartbeat, a relationship, an alert — is
+// stamped with.
+//
+// A non-measurement event (relationship/alert) or an empty batch yields a single heartbeat Input
+// with nil M: it carries no metric (matching no metric-gated rule) but is still a heartbeat for an
+// absence rule. The common one-sample event yields exactly one Input.
+//
+// Alerts are deliberately NOT fanned out per entry, even though an alert entry now carries its own
+// instant and the historian stores it there. DETECT reads nothing off an alert — no value, no
+// metric — so a batch of them can only ever be a heartbeat, and turning one message into N
+// identical heartbeats would change what a count aggregate over alerts counts while telling a rule
+// nothing it did not already know.
 //
 // A presence StateChange (ADR-067) is the exception: it is authoritative connectivity, not a data
 // heartbeat, so it yields NO input HERE. Feeding it as a heartbeat would let a DISCONNECTED silently
@@ -61,11 +74,13 @@ func BuildInputs(ev *dmmodel.ResolvedEvent, occurred time.Time) []predicate.Inpu
 	// message, and folding them to one Input would evaluate only whichever fix survived, so a
 	// device that entered and left a fence between two uploads would never trip it. Each entry
 	// keeps nil M (a location carries no measurement), so it is still a heartbeat for an absence
-	// rule, and the batch's entries share the message's clamped time like every other batch.
+	// rule, and each fix is stamped at the instant IT was taken — which is what lets a rule tell
+	// a slow drift through a fence from a single upload of the whole run.
 	if loc, ok := ev.Payload.(*dmmodel.ResolvedLocationsPayload); ok && len(loc.Entries) > 0 {
 		out := make([]predicate.Input, 0, len(loc.Entries))
 		for _, entry := range loc.Entries {
 			in := base
+			in.Occurred = entry.OccurredTime
 			in.Position = entryPosition(entry)
 			out = append(out, in)
 		}
@@ -79,6 +94,7 @@ func BuildInputs(ev *dmmodel.ResolvedEvent, occurred time.Time) []predicate.Inpu
 	out := make([]predicate.Input, 0, len(p.Entries))
 	for _, entry := range p.Entries {
 		in := base
+		in.Occurred = entry.OccurredTime
 		in.M = sampleMetrics(entry)
 		out = append(out, in)
 	}
@@ -140,23 +156,4 @@ func sampleMetrics(entry dmmodel.ResolvedMeasurementsEntry) map[string]float64 {
 		m[mx.Name] = v
 	}
 	return m
-}
-
-// EffectiveEventTime bounds a device-reported occurred time against the server-stamped
-// processed time plus a tolerance, so a single device with a wildly-future clock (or a
-// spoofed timestamp) cannot advance the engine's shared watermark far into the future and
-// fire EVERY tenant's absence/duration/session timers at once (the shared frontier is
-// monotonic and snapshotted, so the poisoning would persist). The processed time is stamped
-// by the server at ingest and travels immutably in the payload, so the clamp is deterministic
-// under replay. Only future skew is bounded — a past (late/out-of-order) reading is left to
-// the watermark's normal bounded-lateness handling. Disabled (returns occurred unchanged) when
-// the processed time is unset or maxSkew is non-positive.
-func EffectiveEventTime(occurred, processed time.Time, maxSkew time.Duration) time.Time {
-	if processed.IsZero() || maxSkew <= 0 {
-		return occurred
-	}
-	if limit := processed.Add(maxSkew); occurred.After(limit) {
-		return limit
-	}
-	return occurred
 }

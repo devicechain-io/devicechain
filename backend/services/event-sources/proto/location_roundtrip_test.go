@@ -5,6 +5,7 @@ package proto
 
 import (
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
 )
@@ -18,6 +19,13 @@ import (
 // empty-collection round trip proves the envelope, never the contents.
 func TestLocationPayloadRoundTripsWithItsValues(t *testing.T) {
 	s := func(v string) *string { return &v }
+	ts := func(v string) *time.Time {
+		parsed, err := time.Parse(time.RFC3339Nano, v)
+		if err != nil {
+			t.Fatalf("fixture time %q: %v", v, err)
+		}
+		return &parsed
+	}
 
 	// Distinct, non-round values throughout: six fields all set to "1" would let a
 	// marshaller that wrote accuracy into speed pass unnoticed, and three fields
@@ -31,7 +39,7 @@ func TestLocationPayloadRoundTripsWithItsValues(t *testing.T) {
 				Accuracy:     s("4.2"),
 				Speed:        s("1.75"),
 				Heading:      s("271.5"),
-				OccurredTime: s("2026-08-09T12:00:00.1234567Z"),
+				OccurredTime: ts("2026-08-09T12:00:00.1234567Z"),
 			},
 			// A second entry with its own values: a loop that reuses one entry
 			// variable satisfies a single-entry assertion and fails this one.
@@ -75,6 +83,17 @@ func TestLocationPayloadRoundTripsWithItsValues(t *testing.T) {
 		same("accuracy", got.Accuracy, want.Accuracy)
 		same("speed", got.Speed, want.Speed)
 		same("heading", got.Heading, want.Heading)
-		same("occurredTime", got.OccurredTime, want.OccurredTime)
+		switch {
+		case want.OccurredTime == nil && got.OccurredTime != nil:
+			t.Fatalf("occurredTime: got %v, want nil — an unreported sample time must not be invented",
+				*got.OccurredTime)
+		case want.OccurredTime == nil:
+		case got.OccurredTime == nil:
+			t.Fatalf("occurredTime: got nil, want %v", *want.OccurredTime)
+		case !got.OccurredTime.Equal(*want.OccurredTime):
+			// Nanosecond equality, not a string compare: the sub-second digits are the
+			// whole reason a sample's time is carried separately from the message's.
+			t.Fatalf("occurredTime: got %v, want %v", *got.OccurredTime, *want.OccurredTime)
+		}
 	}
 }

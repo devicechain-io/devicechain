@@ -43,11 +43,12 @@ func seedAlerts(t *testing.T, api *Api, ctx context.Context, offsets []int) {
 		occurred := orderingBase.Add(time.Duration(offset) * time.Minute)
 		ev := eventOfType("acme", "device-1", esmodel.Alert, occurred, fmt.Sprintf("alert-%d", offset))
 		_, err := api.CreateAlertEvents(ctx, api.RDB.DB(ctx), []*AlertEventCreateRequest{{
-			Event:   ev,
-			Type:    "overheat",
-			Level:   uint32(offset),
-			Message: fmt.Sprintf("alert at +%dm", offset),
-			Source:  "test",
+			Event:             ev,
+			EntryOccurredTime: ev.OccurredTime,
+			Type:              "overheat",
+			Level:             uint32(offset),
+			Message:           fmt.Sprintf("alert at +%dm", offset),
+			Source:            "test",
 		}})
 		require.NoErrorf(t, err, "seed alert at +%dm", offset)
 	}

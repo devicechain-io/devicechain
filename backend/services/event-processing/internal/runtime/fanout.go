@@ -79,9 +79,11 @@ func scopeMembershipSet(ev *dmmodel.ResolvedEvent) map[scopeMemberKey]struct{} {
 //     feed every in-scope sample. Absence is deliberately device-scoped (every event a
 //     heartbeat); a raw-CEL author whose leaf touches m opaquely owns totality.
 //
-// occurred is the message's clamped event time; every built event is stamped with it (all of a
-// message's samples share the message time, matching event-management's persistence). A
-// correlation rule (KeyedByAnchor) fans to one event per matching anchor, keyed by the anchor
+// occurred is the message's own bounded event time — already decided at resolution, never
+// re-derived here. It stamps the descope and connectivity paths below and the batchless
+// heartbeat; a message's SAMPLES do not share it, because each carries the instant it was taken
+// and BuildInputs stamps each Input with its own (matching what event-management persists for
+// that reading). A correlation rule (KeyedByAnchor) fans to one event per matching anchor, keyed by the anchor
 // token with the source device as the distinct member, and the per-fan Input's anchor map is
 // pinned to THAT anchor's token so an anchor-referencing member gate evaluates against the
 // correct anchor.

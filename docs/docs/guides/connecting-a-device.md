@@ -33,11 +33,21 @@ Every inbound event — over any transport — is a JSON object:
 ### Payload shapes
 
 **Every payload wraps its content in an `entries` array**, and every numeric value is a **JSON
-string**. An entry may also carry its own `occurredTime`; it is accepted, but the stored reading
-takes the envelope's timestamp, so send one entry per event rather than batching. Both rules are
-enforced: a payload with no entries, an entry with nothing in it, or a bare
+string**. Both rules are enforced: a payload with no entries, an entry with nothing in it, or a bare
 number where a string is expected is **rejected** — HTTP answers `400` and an MQTT publish is
-dead-lettered rather than silently accepted. Send one entry per event.
+dead-lettered rather than silently accepted.
+
+**One entry is one reading, taken at one instant.** An entry may carry its own `occurredTime`, and
+that is the instant the reading is stored, charted, evaluated and returned at — so a device that
+buffers readings while offline can upload the whole run as one message and keep the history it
+actually recorded. An entry that carries no `occurredTime` takes the envelope's. `occurredTime` is
+RFC 3339 (`2026-08-09T12:00:00.125Z`) wherever it appears; a value that is not is **rejected** with
+the offending entry named, never quietly replaced.
+
+A reported timestamp may not run far ahead of the platform's own clock. One that does is stored at
+the ceiling instead — the tolerance is generous enough for ordinary clock drift, so this only bites
+a device whose clock is genuinely wrong. Set the clock, rather than relying on the ceiling: a
+reading stored at the ceiling is a reading stored at the wrong time.
 
 **`Measurement`** — one or more named readings:
 

@@ -128,7 +128,7 @@ func locationTestCtx() context.Context {
 func TestUndeclaredLocationEventIsStoredNotRejected(t *testing.T) {
 	api := locationTestApi("tracker-profile@1")
 	api.LocationDeclarationResult = nil // undeclared
-	resolver := NewEventResolver(1, api, config.AuthModeOptional, nil, nil, nil, nil, nil, newUndeclaredLocationMemo())
+	resolver := NewEventResolver(1, api, config.AuthModeOptional, EventTimePolicy{}, nil, nil, nil, nil, nil, newUndeclaredLocationMemo())
 
 	results, reason, err := resolver.HandleStandardEvent(locationTestCtx(), locationTestDevice(), locationFixEvent("TRACKER-1"))
 
@@ -152,7 +152,7 @@ func TestUndeclaredLocationWarnsOncePerDeviceAndVersion(t *testing.T) {
 	logs := captureWarnings(t)
 	api := locationTestApi("tracker-profile@1")
 	api.LocationDeclarationResult = nil
-	resolver := NewEventResolver(1, api, config.AuthModeOptional, nil, nil, nil, nil, nil, newUndeclaredLocationMemo())
+	resolver := NewEventResolver(1, api, config.AuthModeOptional, EventTimePolicy{}, nil, nil, nil, nil, nil, newUndeclaredLocationMemo())
 	ctx := locationTestCtx()
 
 	for i := 0; i < 50; i++ {
@@ -175,7 +175,7 @@ func TestUndeclaredLocationWarnsAgainAfterRepublish(t *testing.T) {
 	logs := captureWarnings(t)
 	api := locationTestApi("tracker-profile@1")
 	api.LocationDeclarationResult = nil
-	resolver := NewEventResolver(1, api, config.AuthModeOptional, nil, nil, nil, nil, nil, newUndeclaredLocationMemo())
+	resolver := NewEventResolver(1, api, config.AuthModeOptional, EventTimePolicy{}, nil, nil, nil, nil, nil, newUndeclaredLocationMemo())
 	ctx := locationTestCtx()
 
 	for i := 0; i < 5; i++ {
@@ -203,7 +203,7 @@ func TestDeclaredLocationNeverWarns(t *testing.T) {
 	api := locationTestApi("tracker-profile@1")
 	accuracy := 2.5
 	api.LocationDeclarationResult = &dmodel.LocationDeclaration{ExpectedAccuracyMeters: &accuracy}
-	resolver := NewEventResolver(1, api, config.AuthModeOptional, nil, nil, nil, nil, nil, newUndeclaredLocationMemo())
+	resolver := NewEventResolver(1, api, config.AuthModeOptional, EventTimePolicy{}, nil, nil, nil, nil, nil, newUndeclaredLocationMemo())
 	ctx := locationTestCtx()
 
 	for i := 0; i < 20; i++ {
@@ -221,7 +221,7 @@ func TestDeclaredButEmptyLocationNeverWarns(t *testing.T) {
 	logs := captureWarnings(t)
 	api := locationTestApi("tracker-profile@1")
 	api.LocationDeclarationResult = &dmodel.LocationDeclaration{}
-	resolver := NewEventResolver(1, api, config.AuthModeOptional, nil, nil, nil, nil, nil, newUndeclaredLocationMemo())
+	resolver := NewEventResolver(1, api, config.AuthModeOptional, EventTimePolicy{}, nil, nil, nil, nil, nil, newUndeclaredLocationMemo())
 	ctx := locationTestCtx()
 
 	for i := 0; i < 10; i++ {
@@ -240,7 +240,7 @@ func TestUndeclaredLocationWarnsPerDevice(t *testing.T) {
 	logs := captureWarnings(t)
 	api := locationTestApi("tracker-profile@1")
 	api.LocationDeclarationResult = nil
-	resolver := NewEventResolver(1, api, config.AuthModeOptional, nil, nil, nil, nil, nil, newUndeclaredLocationMemo())
+	resolver := NewEventResolver(1, api, config.AuthModeOptional, EventTimePolicy{}, nil, nil, nil, nil, nil, newUndeclaredLocationMemo())
 	ctx := locationTestCtx()
 
 	for _, token := range []string{"TRACKER-1", "TRACKER-2", "TRACKER-3"} {
@@ -263,7 +263,7 @@ func TestNonLocationEventDoesNotConsultTheDeclaration(t *testing.T) {
 	api := locationTestApi("tracker-profile@1")
 	api.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
 	api.LocationDeclarationResult = nil
-	resolver := NewEventResolver(1, api, config.AuthModeOptional, nil, nil, nil, nil, nil, newUndeclaredLocationMemo())
+	resolver := NewEventResolver(1, api, config.AuthModeOptional, EventTimePolicy{}, nil, nil, nil, nil, nil, newUndeclaredLocationMemo())
 
 	measurement := &esmodel.UnresolvedEvent{
 		Source:    "test-source",
@@ -287,7 +287,7 @@ func TestDeclarationLookupFailureLeavesTheEventAlone(t *testing.T) {
 	logs := captureWarnings(t)
 	api := locationTestApi("tracker-profile@1")
 	api.LocationDeclarationErr = errors.New("declaration lookup unavailable")
-	resolver := NewEventResolver(1, api, config.AuthModeOptional, nil, nil, nil, nil, nil, newUndeclaredLocationMemo())
+	resolver := NewEventResolver(1, api, config.AuthModeOptional, EventTimePolicy{}, nil, nil, nil, nil, nil, newUndeclaredLocationMemo())
 
 	results, reason, err := resolver.HandleStandardEvent(locationTestCtx(), locationTestDevice(), locationFixEvent("TRACKER-1"))
 

@@ -211,10 +211,15 @@ rule does not fire.
 
 All of these are optional; the shipped defaults are appropriate for most deployments.
 
+The detection engine has no clock-skew setting of its own. How far a device-reported
+timestamp may lead the platform's own clock is decided once, when the event is resolved, and
+every consumer — the stored history, the live projections, detection and replay alike —
+reads the same already-bounded value. It is configured on the device-management area as
+`maxEventFutureSkewSeconds`.
+
 | Setting | Default | What it does |
 |---|---|---|
 | `watermarkLatenessSeconds` | 5 | How long to wait for out-of-order events before treating a moment as settled. **Raise this** if events arrive in batches or an upstream hop can stall; it is the main defence against a false absence alarm. |
-| `maxEventFutureSkewSeconds` | 300 | How far ahead of the platform's own clock a device-reported timestamp may be before it is clamped. |
 | `idleAdvanceGuardSeconds` | 5 | How long the engine must be quiet before it will fire a rule on wall-clock time. A negative value turns that path off: absence rules then fire only when a *later event* moves event time past their deadline, so a device that goes silent and stays silent never raises one. |
 | `checkpointEvents` | 1000 | Maximum events processed between checkpoints. |
 | `checkpointIntervalSeconds` | 10 | Maximum time between checkpoints, so a quiet stream still commits. |

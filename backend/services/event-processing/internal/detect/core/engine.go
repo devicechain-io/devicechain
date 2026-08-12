@@ -777,12 +777,22 @@ func (e *Engine) ProcessEvent(ev Event) {
 }
 
 // ProcessResolved applies one resolved MESSAGE that fans out to zero or more per-rule
-// events. The runtime evaluates each applicable rule's leaf predicate for the message and
-// builds one core Event per rule (all sharing the message's stream sequence and event
-// time); it hands the batch here. The engine advances the watermark exactly ONCE — every
-// event shares the message's occurred time, and the timers/pane-closes the advance fires
-// must be evaluated against the pre-message frontier a single time, not once per rule —
-// then applies each per-rule event, then records the message sequence.
+// events. The runtime evaluates each applicable rule's leaf predicate for every SAMPLE the
+// message carries and builds one core Event per (sample, rule) — all sharing the message's
+// stream sequence, each stamped at its own sample's instant; it hands the batch here. The
+// engine advances the watermark exactly ONCE, using the MESSAGE's time (t), because the
+// timers and pane-closes an advance fires must be evaluated against the pre-message
+// frontier a single time rather than once per rule or per sample — then applies each event,
+// then records the message sequence.
+//
+// 🔴 A BATCH'S OLDER SAMPLES CAN BE DROPPED AS LATE, AND THAT IS THE BOUNDED-LATENESS
+// CONTRACT RATHER THAN AN OVERSIGHT. Since samples carry their own instants, a
+// store-and-forward device uploading half an hour of buffered readings presents events well
+// behind the frontier, and a window whose pane has already closed refuses them
+// (applyAggregate). Reordering this to apply-before-advance would not change that: the
+// watermark is engine-wide, so any live device has already carried it past a quiet device's
+// buffered samples. The honest statement is that windowed rules see what arrived inside
+// their lateness budget; the stored history keeps everything either way.
 //
 // The single per-MESSAGE sequence, not the per-rule event, is the idempotency and
 // checkpoint unit: a redelivered or replayed message at or below the recorded sequence is

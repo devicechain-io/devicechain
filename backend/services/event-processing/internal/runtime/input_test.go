@@ -9,6 +9,7 @@ import (
 	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	esmodel "github.com/devicechain-io/dc-event-sources/model"
 )
 
 // BuildInput extracts the device, anchors (first token per type), occurred time, and numeric
@@ -24,6 +25,7 @@ func TestBuildInputMeasurements(t *testing.T) {
 			{AnchorType: "gateway", AnchorToken: "gw-1"},
 		},
 		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
+			OccurredTime: base,
 			Entries: []dmmodel.ResolvedMeasurementEntry{
 				{Name: "temperature", Value: "90.5"},
 				{Name: "label", Value: "hot"}, // non-numeric: skipped
@@ -79,12 +81,17 @@ func TestBuildInputsNonMeasurement(t *testing.T) {
 // (not collapsed last-value-wins), so a rule evaluates against each sample.
 func TestBuildInputsBatchedSamples(t *testing.T) {
 	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	// A store-and-forward upload: the two readings were taken a minute apart and the
+	// message carries the later one's time. The instants are DISTINCT and neither equals
+	// the envelope's alone, so an implementation that flattened the batch onto the message
+	// time — which is what this did before — fails rather than passing by coincidence.
+	first := base.Add(-time.Minute)
 	ev := &dmmodel.ResolvedEvent{
 		SourceDeviceToken: "d1",
 		OccurredTime:      base,
 		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{
-			{Entries: []dmmodel.ResolvedMeasurementEntry{{Name: "temp", Value: "120"}}},
-			{Entries: []dmmodel.ResolvedMeasurementEntry{{Name: "temp", Value: "80"}}},
+			{OccurredTime: first, Entries: []dmmodel.ResolvedMeasurementEntry{{Name: "temp", Value: "120"}}},
+			{OccurredTime: base, Entries: []dmmodel.ResolvedMeasurementEntry{{Name: "temp", Value: "80"}}},
 		}},
 	}
 	inputs := BuildInputs(ev, base)
@@ -94,38 +101,57 @@ func TestBuildInputsBatchedSamples(t *testing.T) {
 	if inputs[0].M["temp"] != 120 || inputs[1].M["temp"] != 80 {
 		t.Fatalf("both readings must be preserved; got %v and %v", inputs[0].M, inputs[1].M)
 	}
-	for _, in := range inputs {
-		if !in.Occurred.Equal(base) {
-			t.Fatalf("every sample stamped at the message time; got %v", in.Occurred)
-		}
+	if !inputs[0].Occurred.Equal(first) {
+		t.Fatalf("the buffered sample must keep its own instant; got %v want %v", inputs[0].Occurred, first)
+	}
+	if !inputs[1].Occurred.Equal(base) {
+		t.Fatalf("the live sample must keep its own instant; got %v want %v", inputs[1].Occurred, base)
 	}
 }
 
-// EffectiveEventTime clamps a far-future device time against processed+skew, leaves a normal
-// (past/near) time alone, and disables when processed is unset or skew is non-positive.
-func TestEffectiveEventTimeClamp(t *testing.T) {
-	proc := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
-	skew := 5 * time.Minute
-	// Far-future device time is clamped to processed+skew.
-	future := proc.Add(48 * time.Hour)
-	if got := EffectiveEventTime(future, proc, skew); !got.Equal(proc.Add(skew)) {
-		t.Fatalf("future time should clamp to processed+skew; got %v", got)
+// A batched LOCATION event stamps each fix at the instant it was taken.
+//
+// 🔴 THIS IS NOT A COPY OF THE MEASUREMENT TEST ABOVE — it is the case that had no test at
+// all. Every location fixture in this module (fanout_geofence_test.go, the preview suite)
+// gives every fix the message's own time, so removing the per-fix stamp left the entire
+// module green. And a comment in fanout_geofence_test.go claimed this file already covered
+// it, which was how the gap stayed invisible.
+//
+// It is also the case with the most behaviour riding on it. A tracker that buffers a run
+// of fixes and uploads them as one message is the normal shape, and a geofence rule reads
+// each fix's time: on the message's time the whole run is simultaneous, so a device that
+// entered a fence and left it during the run can neither open nor close a duration hold.
+func TestBuildInputsBatchedLocationFixes(t *testing.T) {
+	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	first := base.Add(-2 * time.Minute)
+	lat, lon := "33.749", "-84.388"
+	ev := &dmmodel.ResolvedEvent{
+		SourceDeviceToken: "d1",
+		OccurredTime:      base,
+		EventType:         esmodel.Location,
+		Payload: &dmmodel.ResolvedLocationsPayload{Entries: []dmmodel.ResolvedLocationEntry{
+			{Latitude: &lat, Longitude: &lon, OccurredTime: first},
+			{Latitude: &lat, Longitude: &lon, OccurredTime: base},
+		}},
 	}
-	// A normal (slightly-ahead, within skew) time is untouched.
-	near := proc.Add(time.Minute)
-	if got := EffectiveEventTime(near, proc, skew); !got.Equal(near) {
-		t.Fatalf("within-skew time must not clamp; got %v", got)
+	inputs := BuildInputs(ev, base)
+	if len(inputs) != 2 {
+		t.Fatalf("a two-fix batch should yield two inputs; got %d", len(inputs))
 	}
-	// A past time is untouched (handled by watermark lateness, not this clamp).
-	past := proc.Add(-time.Hour)
-	if got := EffectiveEventTime(past, proc, skew); !got.Equal(past) {
-		t.Fatalf("past time must not clamp; got %v", got)
+	if !inputs[0].Occurred.Equal(first) {
+		t.Fatalf("the buffered fix must keep its own instant; got %v want %v", inputs[0].Occurred, first)
 	}
-	// Disabled when processed is unset or skew non-positive.
-	if got := EffectiveEventTime(future, time.Time{}, skew); !got.Equal(future) {
-		t.Fatalf("unset processed disables clamp; got %v", got)
+	if !inputs[1].Occurred.Equal(base) {
+		t.Fatalf("the live fix must keep its own instant; got %v want %v", inputs[1].Occurred, base)
 	}
-	if got := EffectiveEventTime(future, proc, 0); !got.Equal(future) {
-		t.Fatalf("non-positive skew disables clamp; got %v", got)
+	// Both still carry a position and no measurements — the per-fix stamp must not have
+	// disturbed what the fan-out was already doing.
+	for i, in := range inputs {
+		if in.Position == nil {
+			t.Fatalf("fix %d lost its position", i)
+		}
+		if in.M != nil {
+			t.Fatalf("fix %d gained measurements: %v", i, in.M)
+		}
 	}
 }

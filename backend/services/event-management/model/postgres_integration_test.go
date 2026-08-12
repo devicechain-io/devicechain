@@ -134,10 +134,12 @@ func TestIntegrationDistinctEventsAtOneNaturalKeyBothPersist(t *testing.T) {
 	require.NotEqual(t, first.EventId, second.EventId)
 
 	_, err := api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx),
-		[]*MeasurementEventCreateRequest{{Event: first, Name: "temperature", Value: f64(21.5)}})
+		[]*MeasurementEventCreateRequest{{Event: first,
+			EntryOccurredTime: first.OccurredTime, Name: "temperature", Value: f64(21.5)}})
 	require.NoError(t, err, "first event must persist")
 	_, err = api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx),
-		[]*MeasurementEventCreateRequest{{Event: second, Name: "humidity", Value: f64(55)}})
+		[]*MeasurementEventCreateRequest{{Event: second,
+			EntryOccurredTime: second.OccurredTime, Name: "humidity", Value: f64(55)}})
 	require.NoError(t, err, "the colliding event must persist too")
 
 	var events []Event
@@ -173,7 +175,8 @@ func TestIntegrationRedeliveryConvergesOnOneRow(t *testing.T) {
 	ev := pgEvent("acme", "device-1", "msg-A", occurred, "temperature=21.5")
 	for i := 0; i < 3; i++ {
 		_, err := api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx),
-			[]*MeasurementEventCreateRequest{{Event: ev, Name: "temperature", Value: f64(21.5)}})
+			[]*MeasurementEventCreateRequest{{Event: ev,
+				EntryOccurredTime: ev.OccurredTime, Name: "temperature", Value: f64(21.5)}})
 		require.NoErrorf(t, err, "delivery %d must not error", i+1)
 	}
 
@@ -208,7 +211,8 @@ func TestIntegrationNoAltIdRedeliveryDuplicatesNothing(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		_, err := api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx),
-			[]*MeasurementEventCreateRequest{{Event: ev, Name: "temperature", Value: f64(21.5)}})
+			[]*MeasurementEventCreateRequest{{Event: ev,
+				EntryOccurredTime: ev.OccurredTime, Name: "temperature", Value: f64(21.5)}})
 		require.NoErrorf(t, err, "delivery %d", i+1)
 		require.NoErrorf(t, api.CreateEventAnchors(ctx, api.RDB.DB(ctx), []*EventAnchor{{
 			EventId: ev.EventId, DeviceToken: "device-1", EventType: esmodel.Measurement,
@@ -250,7 +254,8 @@ func TestIntegrationCompressionEnablesWithTheIdentityKey(t *testing.T) {
 
 	ev := pgEvent("acme", "device-1", "msg-A", occurred, "temperature=21.5")
 	_, err := api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx),
-		[]*MeasurementEventCreateRequest{{Event: ev, Name: "temperature", Value: f64(21.5)}})
+		[]*MeasurementEventCreateRequest{{Event: ev,
+			EntryOccurredTime: ev.OccurredTime, Name: "temperature", Value: f64(21.5)}})
 	require.NoError(t, err)
 
 	sys := api.RDB.DB(core.WithSystemContext(ctx))

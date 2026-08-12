@@ -247,10 +247,12 @@ func (sp *StateProcessor) mergeOne(ctx context.Context, msg messaging.Message) {
 
 // mergeLatestMeasurements extracts the numeric measurements from a resolved
 // measurement event and upserts each into the per-key latest-value projection.
-// Non-numeric values are skipped (v1 is numeric-only); a per-entry occurred time
-// overrides the event's when present. A measurement event whose payload is not
-// the expected shape is skipped (connectivity was already updated) rather than
-// treated as a retryable error.
+// Non-numeric values are skipped (v1 is numeric-only). Each sample is stamped at ITS
+// OWN time, which the resolver already decided and bounded — this reads the entry's
+// time and never falls back to the envelope or re-clamps, so the projection cannot
+// disagree with the history table about the same reading. A measurement event whose
+// payload is not the expected shape is skipped (connectivity was already updated)
+// rather than treated as a retryable error.
 func (sp *StateProcessor) mergeLatestMeasurements(ctx context.Context, event *dmmodel.ResolvedEvent) error {
 	payload, ok := event.Payload.(*dmmodel.ResolvedMeasurementsPayload)
 	if !ok {
@@ -258,12 +260,7 @@ func (sp *StateProcessor) mergeLatestMeasurements(ctx context.Context, event *dm
 	}
 	inputs := make([]model.LatestMeasurementInput, 0)
 	for _, entry := range payload.Entries {
-		occurredAt := event.OccurredTime
-		if entry.OccurredTime != nil {
-			if t, err := time.Parse(time.RFC3339, *entry.OccurredTime); err == nil {
-				occurredAt = t
-			}
-		}
+		occurredAt := entry.OccurredTime
 		for _, mx := range entry.Entries {
 			f, err := strconv.ParseFloat(mx.Value, 64)
 			if err != nil {
@@ -305,9 +302,11 @@ func nullableFloat(val *string) sql.NullFloat64 {
 }
 
 // mergeLatestLocation extracts the fixes from a resolved location event and upserts
-// them into the last-known-position projection. A per-entry occurred time overrides the
-// event's when present, mirroring the measurement path — it is also the ordering key
-// the merge's newer-wins guard compares on.
+// them into the last-known-position projection. Each fix is stamped at ITS OWN time,
+// already decided and bounded at resolution, mirroring the measurement path — and that
+// time is also the ordering key the merge's newer-wins guard compares on, which is why
+// it must arrive bounded: an unbounded future value would win forever and no real fix
+// could ever supersede it.
 //
 // An entry carrying neither a parseable latitude nor a parseable longitude is skipped:
 // it locates the device nowhere, so storing it would replace a real position with an
@@ -321,12 +320,6 @@ func (sp *StateProcessor) mergeLatestLocation(ctx context.Context, event *dmmode
 	}
 	inputs := make([]model.LatestLocationInput, 0, len(payload.Entries))
 	for _, entry := range payload.Entries {
-		occurredAt := event.OccurredTime
-		if entry.OccurredTime != nil {
-			if t, err := time.Parse(time.RFC3339, *entry.OccurredTime); err == nil {
-				occurredAt = t
-			}
-		}
 		in := model.LatestLocationInput{
 			Latitude:     nullableFloat(entry.Latitude),
 			Longitude:    nullableFloat(entry.Longitude),
@@ -334,7 +327,7 @@ func (sp *StateProcessor) mergeLatestLocation(ctx context.Context, event *dmmode
 			Accuracy:     nullableFloat(entry.Accuracy),
 			Speed:        nullableFloat(entry.Speed),
 			Heading:      nullableFloat(entry.Heading),
-			OccurredTime: occurredAt,
+			OccurredTime: entry.OccurredTime,
 		}
 		if !in.Latitude.Valid && !in.Longitude.Valid {
 			continue

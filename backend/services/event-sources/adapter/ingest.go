@@ -336,7 +336,10 @@ func (e *Emitter) Emit(ctx context.Context, tenant, source, deviceToken string, 
 		if s.Time > latest {
 			latest = s.Time
 		}
-		occurred := time.UnixMilli(s.Time).UTC().Format(time.RFC3339Nano)
+		// This sample's OWN instant, which is the whole reason a batch is emitted as a
+		// batch: a store-and-forward upload spanning a minute of history must be stored
+		// as a minute of history, not flattened onto the envelope's single time.
+		occurred := time.UnixMilli(s.Time).UTC()
 		entries = append(entries, esmodel.UnresolvedMeasurementsEntry{
 			// Format 'f', not 'g': 'g' switches to exponent notation for large
 			// magnitudes (1e6 → "1e+06"), which the resolver's Int-declared metric

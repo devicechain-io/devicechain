@@ -10,6 +10,7 @@ import (
 	"io"
 	"strconv"
 	"sync"
+	"time"
 
 	dmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-device-management/proto"
@@ -67,6 +68,11 @@ type InboundEventsProcessor struct {
 	FailedEventsWriter   messaging.MessageWriter
 	Api                  dmodel.DeviceManagementApi
 	AuthMode             string
+	// MaxFutureSkew bounds how far a device-reported instant may lead the server's
+	// own clock before resolution replaces it with the ceiling. It is the platform's
+	// ONE event-time knob and it lives here because resolution is the one place the
+	// event time is decided (see EventTimePolicy).
+	MaxFutureSkew time.Duration
 
 	messages  chan messaging.Message
 	failed    chan failedItem
@@ -90,9 +96,11 @@ type InboundEventsProcessor struct {
 }
 
 // Create a new inbound events processor. authMode is the device authentication
-// policy applied while resolving inbound events (transport security, ADR-014).
+// policy applied while resolving inbound events (transport security, ADR-014);
+// maxFutureSkew bounds a device-reported event time against the server's own clock.
 func NewInboundEventsProcessor(ms *core.Microservice, inbound messaging.MessageReader, resolved messaging.MessageWriter,
-	failed messaging.MessageWriter, callbacks core.LifecycleCallbacks, api dmodel.DeviceManagementApi, authMode string) *InboundEventsProcessor {
+	failed messaging.MessageWriter, callbacks core.LifecycleCallbacks, api dmodel.DeviceManagementApi, authMode string,
+	maxFutureSkew time.Duration) *InboundEventsProcessor {
 	iproc := &InboundEventsProcessor{
 		Microservice:         ms,
 		InboundEventsReader:  inbound,
@@ -100,6 +108,7 @@ func NewInboundEventsProcessor(ms *core.Microservice, inbound messaging.MessageR
 		FailedEventsWriter:   failed,
 		Api:                  api,
 		AuthMode:             authMode,
+		MaxFutureSkew:        maxFutureSkew,
 	}
 
 	// Create lifecycle manager.
@@ -265,8 +274,18 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 	// would bound the undeclared-position warning per worker and report the same
 	// misconfiguration once per worker instead of once.
 	locationMemo := newUndeclaredLocationMemo()
+	// ONE counter for the whole pool, for the same reason as the memo above: the
+	// workers share the inbound channel, so a per-worker counter would report a
+	// fleet's clock skew as N unrelated series.
+	eventTime := EventTimePolicy{
+		MaxFutureSkew: iproc.MaxFutureSkew,
+		Bounded: iproc.Microservice.NewCounter(
+			"resolve_event_time_bounded_total",
+			"Reported event times refused for leading the server clock by more than the configured tolerance, and replaced with the ceiling",
+			nil),
+	}
 	for w := 1; w <= EVENT_RESOLVER_COUNT; w++ {
-		resolver := NewEventResolver(w, iproc.Api, iproc.AuthMode, iproc.messages,
+		resolver := NewEventResolver(w, iproc.Api, iproc.AuthMode, eventTime, iproc.messages,
 			iproc.OnInvalidEvent, iproc.OnResolvedEvent, iproc.OnUnresolvedEvent, iproc.metrics,
 			locationMemo)
 		iproc.resolvers = append(iproc.resolvers, resolver)

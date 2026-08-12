@@ -5,6 +5,7 @@ package processor
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -175,6 +176,68 @@ func validateLocationEntry(index int, entry *model.UnresolvedLocationEntry) erro
 	return nil
 }
 
+// ErrInvalidEventTime marks a decode that failed because a timestamp on the wire is
+// not an RFC3339 instant — the envelope's or any entry's.
+//
+// It exists so the caller can count clock-shaped rejections apart from malformed JSON.
+// Both are terminal decode failures and both already route to the failed-decode path;
+// what the operator cannot see without this is WHICH, and "a fleet whose clocks are
+// wrong" is a different call-out from "a fleet whose payloads are wrong".
+var ErrInvalidEventTime = errors.New("invalid event timestamp")
+
+// entryTimeProbe mirrors only the per-entry occurredTime of the three entry-carrying
+// payloads, which all share the same entries[] wrapper.
+type entryTimeProbe struct {
+	Entries []struct {
+		OccurredTime *string `json:"occurredTime"`
+	} `json:"entries"`
+}
+
+// validateEntryTimes rejects a per-entry occurredTime that is not an RFC3339 instant,
+// naming the entry and the value.
+//
+// 🔴 IT MUST RUN BEFORE THE PAYLOAD IS UNMARSHALLED, and the ordering is asserted by a
+// test. The entry structs carry a *time.Time, so encoding/json would refuse a malformed
+// value on its own — safely, but with a message about parsing "2006" out of a quoted
+// string, naming neither the entry nor the field. This is therefore an error-quality
+// pass, not the safety net: the decode fails closed either way, and running it second
+// would simply mean nobody ever sees the better message.
+//
+// A device gets this text back (400 on HTTP, dead-letter with the reason on a broker
+// transport), so it is written for whoever has to fix the firmware.
+//
+// 🔴 THE ZERO INSTANT IS REFUSED THOUGH IT IS PERFECTLY VALID RFC 3339.
+// "0001-01-01T00:00:00Z" is exactly Go's zero time.Time, which this platform uses as the
+// sentinel for "no time was reported" — the historian keys its fail-closed guard on it. A
+// device that sends the sentinel therefore passes every parse, resolves, is projected,
+// evaluated and streamed, and is then refused ONLY at the history write, which retries to
+// its delivery ceiling and dead-letters as an API failure. The result is a reading every
+// surface has except the one that stores it. Refusing it here is what keeps the sentinel a
+// sentinel; a device that means "the epoch" can say 1970.
+func validateEntryTimes(kind string, payload []byte) error {
+	probe := &entryTimeProbe{}
+	if err := json.Unmarshal(payload, probe); err != nil {
+		// A non-string occurredTime lands here (e.g. an epoch number). Say so in the
+		// same vocabulary rather than leaking the probe's field path.
+		return fmt.Errorf("%w: %s entry occurredTime must be an RFC3339 string: %v", ErrInvalidEventTime, kind, err)
+	}
+	for i, entry := range probe.Entries {
+		if entry.OccurredTime == nil {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339, *entry.OccurredTime)
+		if err != nil {
+			return fmt.Errorf("%w: %s entry %d field \"occurredTime\" is not an RFC3339 timestamp: %q",
+				ErrInvalidEventTime, kind, i, *entry.OccurredTime)
+		}
+		if parsed.IsZero() {
+			return fmt.Errorf("%w: %s entry %d field \"occurredTime\" is the zero instant (%q), which the "+
+				"platform reserves to mean NO time was reported", ErrInvalidEventTime, kind, i, *entry.OccurredTime)
+		}
+	}
+	return nil
+}
+
 // errNoEntries is the fail-closed rejection shared by all three entry-carrying
 // payloads.
 //
@@ -224,6 +287,9 @@ func (jd *JsonDecoder) BuildLocationsPayload(source *JsonEvent) (*model.Unresolv
 	if err != nil {
 		return nil, err
 	}
+	if err := validateEntryTimes("location", locbytes); err != nil {
+		return nil, err
+	}
 	payload := &model.UnresolvedLocationsPayload{}
 	if err := json.Unmarshal(locbytes, payload); err != nil {
 		return nil, err
@@ -243,6 +309,9 @@ func (jd *JsonDecoder) BuildLocationsPayload(source *JsonEvent) (*model.Unresolv
 func (jd *JsonDecoder) BuildMeasurementsPayload(source *JsonEvent) (*model.UnresolvedMeasurementsPayload, error) {
 	locbytes, err := json.Marshal(source.Payload)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateEntryTimes("measurement", locbytes); err != nil {
 		return nil, err
 	}
 	payload := &model.UnresolvedMeasurementsPayload{}
@@ -268,6 +337,9 @@ func (jd *JsonDecoder) BuildMeasurementsPayload(source *JsonEvent) (*model.Unres
 func (jd *JsonDecoder) BuildAlertsPayload(source *JsonEvent) (*model.UnresolvedAlertsPayload, error) {
 	locbytes, err := json.Marshal(source.Payload)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateEntryTimes("alert", locbytes); err != nil {
 		return nil, err
 	}
 	payload := &model.UnresolvedAlertsPayload{}
@@ -319,7 +391,12 @@ func (jd *JsonDecoder) AssembleEvent(jevent *JsonEvent) (*model.UnresolvedEvent,
 	if jevent.OccurredTime != nil {
 		otime, err := time.Parse(time.RFC3339, *jevent.OccurredTime)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: envelope occurredTime is not an RFC3339 timestamp: %q",
+				ErrInvalidEventTime, *jevent.OccurredTime)
+		}
+		if otime.IsZero() {
+			return nil, fmt.Errorf("%w: envelope occurredTime is the zero instant (%q), which the platform "+
+				"reserves to mean NO time was reported", ErrInvalidEventTime, *jevent.OccurredTime)
 		}
 		event.OccurredTime = otime
 	} else {

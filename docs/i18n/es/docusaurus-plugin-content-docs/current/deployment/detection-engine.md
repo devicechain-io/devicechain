@@ -238,10 +238,15 @@ ese aviso antes de concluir que una regla no se dispara.
 Todos estos ajustes son opcionales; los valores predeterminados de fábrica son adecuados para la
 mayoría de los despliegues.
 
+El motor de detección no tiene un ajuste propio de desfase de reloj. Cuánto puede adelantarse una
+marca de tiempo informada por el dispositivo respecto al propio reloj de la plataforma se decide una
+sola vez, al resolver el evento, y todos los consumidores —el historial almacenado, las proyecciones
+en vivo, la detección y la reproducción— leen ese mismo valor ya acotado. Se configura en el área
+device-management como `maxEventFutureSkewSeconds`.
+
 | Ajuste | Predeterminado | Qué hace |
 |---|---|---|
 | `watermarkLatenessSeconds` | 5 | Cuánto esperar a los eventos fuera de orden antes de dar un instante por asentado. **Súbalo** si los eventos llegan por lotes o si un salto aguas arriba puede atascarse; es la principal defensa frente a una falsa alarma de ausencia. |
-| `maxEventFutureSkewSeconds` | 300 | Cuánto puede adelantarse una marca de tiempo informada por el dispositivo respecto al propio reloj de la plataforma antes de que se recorte. |
 | `idleAdvanceGuardSeconds` | 5 | Cuánto tiempo debe estar el motor sin actividad antes de disparar una regla según el reloj de pared. Un valor negativo desactiva esa vía: las reglas de ausencia solo se disparan entonces cuando un *evento posterior* mueve el tiempo del evento más allá de su plazo, de modo que un dispositivo que se queda en silencio y sigue en silencio nunca levanta ninguna. |
 | `checkpointEvents` | 1000 | Máximo de eventos procesados entre puntos de control. |
 | `checkpointIntervalSeconds` | 10 | Tiempo máximo entre puntos de control, para que un flujo tranquilo también confirme. |

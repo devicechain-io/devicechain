@@ -11,6 +11,38 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// marshalEntryTime renders one sample's own instant onto the wire, or nil when the
+// device timed only the message. Absence is meaningful BEFORE resolution — it is what
+// tells the resolver to fall back to the envelope — so it survives the round trip
+// rather than being defaulted here.
+func marshalEntryTime(occurred *time.Time) *string {
+	if occurred == nil {
+		return nil
+	}
+	formatted := occurred.UTC().Format(time.RFC3339Nano)
+	return &formatted
+}
+
+// unmarshalEntryTime reads one sample's own instant back off the wire.
+//
+// 🔴 It FAILS rather than re-validating. This seam is internal: every producer on it
+// went through the device-facing decoder, which already refused a malformed value, or
+// is a platform adapter formatting a time it holds. So a value that will not parse here
+// is a defect in this repository, not bad device input, and swallowing it would convert
+// that defect into a batch silently collapsed onto one instant — the exact failure this
+// whole change removes. The envelope's own time has always been handled this way
+// (UnmarshalUnresolvedEvent below); this makes the entries match.
+func unmarshalEntryTime(raw *string) (*time.Time, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, *raw)
+	if err != nil {
+		return nil, fmt.Errorf("entry occurredTime %q is not an RFC3339 timestamp: %w", *raw, err)
+	}
+	return &parsed, nil
+}
+
 // Marshal payload for a new relationship event.
 func MarshalPayloadForNewRelationshipEvent(payload *model.UnresolvedNewRelationshipPayload) ([]byte, error) {
 	pbna := &PUnresolvedNewRelationshipPayload{
@@ -36,7 +68,7 @@ func MarshalPayloadForLocationsEvent(payload *model.UnresolvedLocationsPayload) 
 			Accuracy:     entry.Accuracy,
 			Speed:        entry.Speed,
 			Heading:      entry.Heading,
-			OccurredTime: entry.OccurredTime,
+			OccurredTime: marshalEntryTime(entry.OccurredTime),
 		}
 		pbpayload.Entries = append(pbpayload.Entries, pbentry)
 	}
@@ -53,7 +85,7 @@ func MarshalPayloadForMeasurementsEvent(payload *model.UnresolvedMeasurementsPay
 	for _, entry := range payload.Entries {
 		pbentry := &PUnresolvedMeasurementsEntry{
 			Measurements: entry.Measurements,
-			OccurredTime: entry.OccurredTime,
+			OccurredTime: marshalEntryTime(entry.OccurredTime),
 		}
 		pbpayload.Entries = append(pbpayload.Entries, pbentry)
 	}
@@ -73,7 +105,7 @@ func MarshalPayloadForAlertsEvent(payload *model.UnresolvedAlertsPayload) ([]byt
 			Level:        entry.Level,
 			Message:      entry.Message,
 			Source:       entry.Source,
-			OccurredTime: entry.OccurredTime,
+			OccurredTime: marshalEntryTime(entry.OccurredTime),
 		}
 		pbpayload.Entries = append(pbpayload.Entries, pbentry)
 	}
@@ -123,6 +155,10 @@ func UnmarshalPayloadForLocationsEvent(encoded []byte) (*model.UnresolvedLocatio
 	payload := &model.UnresolvedLocationsPayload{}
 	entries := make([]model.UnresolvedLocationEntry, 0)
 	for _, pbentry := range pbpayload.Entries {
+		occurred, terr := unmarshalEntryTime(pbentry.OccurredTime)
+		if terr != nil {
+			return nil, terr
+		}
 		entry := model.UnresolvedLocationEntry{
 			Latitude:     pbentry.Latitude,
 			Longitude:    pbentry.Longitude,
@@ -130,7 +166,7 @@ func UnmarshalPayloadForLocationsEvent(encoded []byte) (*model.UnresolvedLocatio
 			Accuracy:     pbentry.Accuracy,
 			Speed:        pbentry.Speed,
 			Heading:      pbentry.Heading,
-			OccurredTime: pbentry.OccurredTime,
+			OccurredTime: occurred,
 		}
 		entries = append(entries, entry)
 	}
@@ -148,9 +184,13 @@ func UnmarshalPayloadForMeasurementsEvent(encoded []byte) (*model.UnresolvedMeas
 	payload := &model.UnresolvedMeasurementsPayload{}
 	entries := make([]model.UnresolvedMeasurementsEntry, 0)
 	for _, pbentry := range pbpayload.Entries {
+		occurred, terr := unmarshalEntryTime(pbentry.OccurredTime)
+		if terr != nil {
+			return nil, terr
+		}
 		entry := model.UnresolvedMeasurementsEntry{
 			Measurements: pbentry.Measurements,
-			OccurredTime: pbentry.OccurredTime,
+			OccurredTime: occurred,
 		}
 		entries = append(entries, entry)
 	}
@@ -168,12 +208,16 @@ func UnmarshalPayloadForAlertsEvent(encoded []byte) (*model.UnresolvedAlertsPayl
 	payload := &model.UnresolvedAlertsPayload{}
 	entries := make([]model.UnresolvedAlertEntry, 0)
 	for _, pbentry := range pbpayload.Entries {
+		occurred, terr := unmarshalEntryTime(pbentry.OccurredTime)
+		if terr != nil {
+			return nil, terr
+		}
 		entry := model.UnresolvedAlertEntry{
 			Type:         pbentry.Type,
 			Level:        pbentry.Level,
 			Message:      pbentry.Message,
 			Source:       pbentry.Source,
-			OccurredTime: pbentry.OccurredTime,
+			OccurredTime: occurred,
 		}
 		entries = append(entries, entry)
 	}

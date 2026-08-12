@@ -88,10 +88,12 @@ func TestDistinctEventsAtOneNaturalKeyBothSurvive(t *testing.T) {
 		"distinct content must derive distinct identities")
 
 	_, err := api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx),
-		[]*MeasurementEventCreateRequest{{Event: first, Name: "temperature", Value: f64(21.5)}})
+		[]*MeasurementEventCreateRequest{{Event: first,
+			EntryOccurredTime: first.OccurredTime, Name: "temperature", Value: f64(21.5)}})
 	require.NoError(t, err)
 	_, err = api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx),
-		[]*MeasurementEventCreateRequest{{Event: second, Name: "humidity", Value: f64(55)}})
+		[]*MeasurementEventCreateRequest{{Event: second,
+			EntryOccurredTime: second.OccurredTime, Name: "humidity", Value: f64(55)}})
 	require.NoError(t, err)
 
 	// Both envelopes survive, each with its own alternateId intact — the alt_id being
@@ -130,7 +132,8 @@ func TestRedeliveryOfACollidingEventIsStillDeduplicated(t *testing.T) {
 			name = "humidity"
 		}
 		_, err := api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx),
-			[]*MeasurementEventCreateRequest{{Event: e, Name: name, Value: f64(1)}})
+			[]*MeasurementEventCreateRequest{{Event: e,
+				EntryOccurredTime: e.OccurredTime, Name: name, Value: f64(1)}})
 		require.NoError(t, err)
 	}
 

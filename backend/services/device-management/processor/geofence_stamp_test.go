@@ -53,7 +53,7 @@ func locationEvent() *esmodel.UnresolvedEvent {
 // resolveOne runs one event through the standard-event path and returns the resolved event.
 func resolveOne(t *testing.T, api *dmtest.MockApi, event *esmodel.UnresolvedEvent) *dmodel.ResolvedEvent {
 	t.Helper()
-	rez := NewEventResolver(1, api, config.AuthModeOptional, nil, nil, nil, nil, nil, nil)
+	rez := NewEventResolver(1, api, config.AuthModeOptional, EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
 	device := deviceWithToken("TEST-123")
 	device.DeviceTypeId = 77
 	results, reason, err := rez.HandleStandardEvent(context.Background(), device, event)

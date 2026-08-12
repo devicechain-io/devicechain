@@ -224,11 +224,13 @@ type FixFunc func(i int, d DeviceInstance) (Fix, bool)
 
 // EmitLocation posts ONE Location event for device d carrying exactly one entry.
 //
-// One entry per event is deliberate, and batching is a trap rather than an
-// optimization: the per-entry occurredTime is discarded at persistence, so entries in
-// one batch all land at the envelope's time, and two identical positions in one batch
-// then collide on their payload id and one of them is dropped. A batch is therefore
-// lossy in a way a single entry cannot be.
+// One entry per event is simply what a simulated tick IS — one device, one position, one
+// instant — not a workaround. It used to be a workaround: a batch's per-entry occurredTime
+// was discarded at persistence, so every entry landed at the envelope's time and two
+// identical positions in one batch collided on their payload id, one being dropped. That
+// is fixed — a batch now keeps each fix's own instant, and distinct instants give distinct
+// payload ids — so a scenario that wants to exercise store-and-forward batching may send
+// one, and should say why.
 func EmitLocation(ctx context.Context, rt *Runtime, d DeviceInstance, fix Fix) error {
 	now := eventTimestamp()
 

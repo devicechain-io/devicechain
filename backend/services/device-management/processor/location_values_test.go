@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
@@ -26,7 +27,7 @@ import (
 // deliberately nil: a resolver that started needing one would fail here loudly
 // rather than being quietly satisfied by a mock.
 func locationResolver() *EventResolver {
-	return NewEventResolver(1, nil, "", nil, nil, nil, nil, nil, nil)
+	return NewEventResolver(1, nil, "", EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
 }
 
 // strptr is a local helper so each literal below reads as its own distinct value.
@@ -34,14 +35,29 @@ func strptr(s string) *string {
 	return &s
 }
 
+// envelopeTime is the message-level instant every fixture below is assembled under. It
+// is a real value, not the zero time, so "the entry fell back to the envelope" is
+// DISTINGUISHABLE from "the entry time was dropped" — with a zero envelope the two
+// outcomes are byte-identical and the fallback assertion proves nothing.
+var envelopeTime = time.Date(2026, 8, 9, 14, 30, 0, 0, time.UTC)
+
+// atTime parses a fixture instant for an entry's own reported time.
+func atTime(t *testing.T, v string) *time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339Nano, v)
+	require.NoError(t, err, "fixture time %q", v)
+	return &parsed
+}
+
 // Resolve the given entries and return the resolved payload.
 func resolveLocations(t *testing.T, entries ...esmodel.UnresolvedLocationEntry) *model.ResolvedLocationsPayload {
 	t.Helper()
 	event := &esmodel.UnresolvedEvent{
-		Source:    "test-source",
-		Device:    "TEST-123",
-		EventType: esmodel.Location,
-		Payload:   &esmodel.UnresolvedLocationsPayload{Entries: entries},
+		Source:       "test-source",
+		Device:       "TEST-123",
+		EventType:    esmodel.Location,
+		OccurredTime: envelopeTime,
+		Payload:      &esmodel.UnresolvedLocationsPayload{Entries: entries},
 	}
 	resolved, err := locationResolver().ResolveLocationsEventPayload(context.Background(), nil, nil, event)
 	require.NoError(t, err)
@@ -55,7 +71,7 @@ func resolveLocations(t *testing.T, entries ...esmodel.UnresolvedLocationEntry) 
 // decimal strings of the same shape, so a mapping that crossed two of them would be
 // invisible under uniform literals.
 func TestResolveLocationsCarriesEveryField(t *testing.T) {
-	occurred := "2026-08-09T14:32:07.125Z"
+	occurred := atTime(t, "2026-08-09T14:32:07.125Z")
 	entry := esmodel.UnresolvedLocationEntry{
 		Latitude:     strptr("33.749"),
 		Longitude:    strptr("-84.388"),
@@ -63,7 +79,7 @@ func TestResolveLocationsCarriesEveryField(t *testing.T) {
 		Accuracy:     strptr("4.2"),
 		Speed:        strptr("1.75"),
 		Heading:      strptr("271.5"),
-		OccurredTime: &occurred,
+		OccurredTime: occurred,
 	}
 
 	payload := resolveLocations(t, entry)
@@ -82,8 +98,8 @@ func TestResolveLocationsCarriesEveryField(t *testing.T) {
 	assert.Equal(t, "1.75", *got.Speed)
 	require.NotNil(t, got.Heading, "heading was dropped in resolution")
 	assert.Equal(t, "271.5", *got.Heading)
-	require.NotNil(t, got.OccurredTime, "occurred time was dropped in resolution")
-	assert.Equal(t, occurred, *got.OccurredTime)
+	assert.True(t, got.OccurredTime.Equal(*occurred),
+		"the fix's own instant was dropped in resolution: got %v want %v", got.OccurredTime, *occurred)
 }
 
 // A device that reports only a position must resolve with the rest genuinely ABSENT.
@@ -107,7 +123,11 @@ func TestResolveLocationsLeavesUnsetFieldsNil(t *testing.T) {
 	assert.Nil(t, got.Accuracy, "unset accuracy must stay nil, not become an empty string")
 	assert.Nil(t, got.Speed, "unset speed must stay nil, not become an empty string")
 	assert.Nil(t, got.Heading, "unset heading must stay nil, not become an empty string")
-	assert.Nil(t, got.OccurredTime, "unset occurred time must stay nil, not become an empty string")
+	// A fix that reported no time of its own is stamped with the MESSAGE's time — the
+	// one place that fallback is decided, so no consumer downstream has a nil to guess at.
+	assert.True(t, got.OccurredTime.Equal(envelopeTime),
+		"a fix with no reported time must fall back to the envelope's: got %v want %v",
+		got.OccurredTime, envelopeTime)
 }
 
 // A batched fix set must resolve entry-for-entry, in order, each keeping its OWN
@@ -115,8 +135,8 @@ func TestResolveLocationsLeavesUnsetFieldsNil(t *testing.T) {
 // the same entry twice — a shape that keeps the COUNT right while collapsing a track
 // into a single repeated point.
 func TestResolveLocationsKeepsPerEntryValuesAndOrder(t *testing.T) {
-	firstTime := "2026-08-09T14:32:07.125Z"
-	secondTime := "2026-08-09T14:32:09.500Z"
+	firstTime := atTime(t, "2026-08-09T14:32:07.125Z")
+	secondTime := atTime(t, "2026-08-09T14:32:09.500Z")
 	first := esmodel.UnresolvedLocationEntry{
 		Latitude:     strptr("33.749"),
 		Longitude:    strptr("-84.388"),
@@ -124,7 +144,7 @@ func TestResolveLocationsKeepsPerEntryValuesAndOrder(t *testing.T) {
 		Accuracy:     strptr("4.2"),
 		Speed:        strptr("1.75"),
 		Heading:      strptr("271.5"),
-		OccurredTime: &firstTime,
+		OccurredTime: firstTime,
 	}
 	second := esmodel.UnresolvedLocationEntry{
 		Latitude:     strptr("47.6062"),
@@ -133,7 +153,7 @@ func TestResolveLocationsKeepsPerEntryValuesAndOrder(t *testing.T) {
 		Accuracy:     strptr("9.8"),
 		Speed:        strptr("12.5"),
 		Heading:      strptr("18.75"),
-		OccurredTime: &secondTime,
+		OccurredTime: secondTime,
 	}
 
 	payload := resolveLocations(t, first, second)
@@ -153,8 +173,7 @@ func TestResolveLocationsKeepsPerEntryValuesAndOrder(t *testing.T) {
 	assert.Equal(t, "1.75", *got.Speed)
 	require.NotNil(t, got.Heading)
 	assert.Equal(t, "271.5", *got.Heading)
-	require.NotNil(t, got.OccurredTime)
-	assert.Equal(t, firstTime, *got.OccurredTime)
+	assert.True(t, got.OccurredTime.Equal(*firstTime), "first entry time: got %v want %v", got.OccurredTime, *firstTime)
 
 	got = payload.Entries[1]
 	require.NotNil(t, got.Latitude)
@@ -169,8 +188,7 @@ func TestResolveLocationsKeepsPerEntryValuesAndOrder(t *testing.T) {
 	assert.Equal(t, "12.5", *got.Speed)
 	require.NotNil(t, got.Heading)
 	assert.Equal(t, "18.75", *got.Heading)
-	require.NotNil(t, got.OccurredTime)
-	assert.Equal(t, secondTime, *got.OccurredTime)
+	assert.True(t, got.OccurredTime.Equal(*secondTime), "second entry time: got %v want %v", got.OccurredTime, *secondTime)
 }
 
 // A payload of the wrong type must be refused rather than resolving to an empty fix
