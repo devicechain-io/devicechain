@@ -993,26 +993,68 @@ jobs:
           # restore from.
           cache-dependency-path: ${{ matrix.module }}/go.sum
 
-      # Pin ko rather than letting the action resolve its default "latest-release".
-      # That resolution is, inside the action:
-      #   tag=$(curl -L -s -u "username:${GH_TOKEN}" \
-      #           https://api.github.com/repos/ko-build/ko/releases/latest | jq -r '.tag_name')
-      # which makes every image-smoke job depend on GitHub's AUTHENTICATED API being
-      # healthy at that moment — and when it is not, the action pipes an HTML error
-      # page straight into jq, which dies with "Invalid numeric literal at line 1,
-      # column 10" and an empty tag, failing the job in ~10s before anything is built.
-      # That is exactly what took out all 12 image-smoke jobs on 2026-07-16: GitHub was
-      # 503-ing authenticated api.github.com requests while unauthenticated ones still
-      # returned 200, so the failure looked like a code problem and was not.
+      # Install ko ourselves rather than via ko-build/setup-ko. The action has now
+      # failed this job in two different ways, and both come from it fetching over the
+      # network with no retry and no verification:
       #
-      # A pinned version takes the action's `*)` branch (tag="${KO_VERSION}"), skipping
-      # the lookup entirely; the binary then comes from the release-asset host, not the
-      # API. It also makes the image build reproducible — the same ko for every run
-      # rather than whatever shipped that morning, which is what pinning a build tool
-      # is for. Bump this deliberately.
-      - uses: ko-build/setup-ko@61b4d1d396f5b2e7d6bb6fefdce3dc38d1a13445 # v0.10
-        with:
-          version: v0.19.1
+      #   1. Its default "latest-release" resolution is, inside the action:
+      #        tag=$(curl -L -s -u "username:${GH_TOKEN}" \
+      #                https://api.github.com/repos/ko-build/ko/releases/latest | jq -r '.tag_name')
+      #      which makes every image-smoke job depend on GitHub's AUTHENTICATED API being
+      #      healthy at that moment — and when it is not, the action pipes an HTML error
+      #      page straight into jq, which dies with "Invalid numeric literal at line 1,
+      #      column 10" and an empty tag, failing the job in ~10s before anything is
+      #      built. That took out all 12 image-smoke jobs on 2026-07-16: GitHub was
+      #      503-ing authenticated api.github.com requests while unauthenticated ones
+      #      still returned 200, so the failure looked like a code problem and was not.
+      #      Pinning a version dodged this by taking the action's `*)` branch.
+      #
+      #   2. Its download is `curl -fsL <url> | tar xzf -`, and 🔴 A PIPE CANNOT BE
+      #      RETRIED. A truncated body is not visible to curl at all — it surfaces only
+      #      downstream as `gzip: stdin: unexpected end of file`, after tar has already
+      #      consumed the stream, so neither `--retry` nor a wrapper around the action
+      #      can recover it. On 2026-08-12 this failed 2-3 of the ~15 matrix jobs on
+      #      EVERY run, a different random subset each time, and one job failed three
+      #      consecutive attempts. ~15 jobs pulling the same 12MB asset simultaneously
+      #      is enough to get some of them throttled mid-stream.
+      #
+      # Downloading to a FILE is what makes the retry meaningful: curl can then restart
+      # a failed transfer, and the checksum is checked before anything is unpacked or
+      # executed. That turns a corrupt download into a named error instead of a
+      # confusing tar failure — or, worse, a silently truncated binary.
+      #
+      # 🔴 KO_VERSION and KO_SHA256 must be bumped TOGETHER. The digest is the one for
+      # ko_<version>_Linux_x86_64.tar.gz in that release's own checksums.txt — read it
+      # from there, never from a local download, which would just be attesting to
+      # whatever you happened to receive. Pinning both keeps the image build
+      # reproducible (the same ko every run, not whatever shipped that morning) and is
+      # what a pinned build tool is for.
+      - name: Install ko (pinned, verified, retried)
+        env:
+          KO_VERSION: v0.19.1
+          KO_SHA256: 635ac6ea3fd376c935fee597fbb29ab2c2449f49ef1655085fe3aa9c25fed7a5
+        run: |
+          set -euo pipefail
+          url="https://github.com/ko-build/ko/releases/download/${KO_VERSION}/ko_${KO_VERSION#v}_Linux_x86_64.tar.gz"
+          dest="${RUNNER_TEMP}/ko-bin"
+          mkdir -p "$dest"
+          for attempt in 1 2 3; do
+            if curl -fsSL --retry 3 --connect-timeout 15 \
+                 -o "${RUNNER_TEMP}/ko.tar.gz" "$url"; then
+              if echo "${KO_SHA256}  ${RUNNER_TEMP}/ko.tar.gz" | sha256sum -c -; then
+                tar xzf "${RUNNER_TEMP}/ko.tar.gz" -C "$dest" ko
+                echo "$dest" >> "$GITHUB_PATH"
+                "$dest/ko" version
+                exit 0
+              fi
+              echo "::warning::ko checksum mismatch on attempt ${attempt} (truncated or corrupt download)"
+            fi
+            echo "ko install attempt ${attempt} failed; retrying"
+            rm -f "${RUNNER_TEMP}/ko.tar.gz"
+            sleep $((attempt * 5))
+          done
+          echo "::error::could not install ko ${KO_VERSION} after 3 attempts"
+          exit 1
 
       - name: ko build (local, no push)
         working-directory: ${{ matrix.module }}
