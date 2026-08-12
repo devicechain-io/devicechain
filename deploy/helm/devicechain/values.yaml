@@ -177,6 +177,14 @@ instance:
           user: ""
           password: ""
           calloutIssuerSeed: ""
+          # The SEPARATE system-account login, read only by event-sources' broker
+          # presence tap: the system account is where the broker publishes its own
+          # connection advisories, and a connection there sees every account's traffic —
+          # too wide a grant to fold into the shared service credential above.
+          # Empty (the default) leaves the tap OFF and MQTT device presence inferred,
+          # which is how every instance before it existed behaves.
+          sysUser: ""
+          sysPassword: ""
       metrics:
         enabled: true
         httpPort: 9090
@@ -690,6 +698,25 @@ functionalAreas:
     #   config:
     #     contention:
     #       manualFloor: 0   # 0..3 — 1 sheds best-effort, 2 adds bronze, 3 adds silver
+    #
+    # Broker-asserted MQTT presence. The broker knows exactly when a device connects
+    # and disconnects; without this, an MQTT device's presence is inferred from "it
+    # published recently", and every alarm, dashboard and command-delivery decision
+    # inherits that guess. It also needs a system-account credential
+    # (infrastructure.nats.auth.sysUser) and a source pointed at this instance's own
+    # broker; any of those missing leaves it off, with a log line saying which.
+    #
+    # reconcileSeconds is not a backstop knob. A graceful broker restart emits NO
+    # disconnect notices for the connections it was holding, so this pass is the only
+    # thing that ever corrects those devices — and an asserted device is skipped by the
+    # inactivity sweep, so nothing else would.
+    #   config:
+    #     brokerPresence:
+    #       enabled: true              # unset = on
+    #       reconcileSeconds: 300
+    #       canarySeconds: 60          # the liveness probe; see canaryDeadlineSeconds
+    #       canaryDeadlineSeconds: 15
+    #       inventoryGatherSeconds: 5  # how long to collect replies from the cluster
     # HTTP device-ingest listener (PR #38): event-sources serves
     # POST /{instanceId}/{tenant}/events on 8081, in addition to the 8080 GraphQL/management
     # port. Exposed as an extra Service/container port so devices can reach it.

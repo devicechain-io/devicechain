@@ -24,6 +24,7 @@ module "nats" {
   enable_auth              = var.nats_enable_auth
   callout_issuer_public    = var.nats_callout_issuer_public
   service_password_bcrypt  = var.nats_service_password_bcrypt
+  sys_password_bcrypt      = var.nats_sys_password_bcrypt
   mqtt_node_port           = var.nats_mqtt_node_port
 
   depends_on = [module.namespace]

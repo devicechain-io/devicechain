@@ -436,6 +436,13 @@ func infraVars(st *State) []string {
 			"nats_callout_issuer_public="+pub,
 			"nats_service_password_bcrypt="+st.Values["natsServicePasswordBcrypt"],
 		)
+		// The system-account login's hash. Passed separately from the service one
+		// because the broker places them in different accounts, and omitted entirely
+		// when no system password was minted — the module then renders SYS with no
+		// users, which is what every instance before this change ran.
+		if h := st.Values["natsSysPasswordBcrypt"]; h != "" {
+			vars = append(vars, "nats_sys_password_bcrypt="+h)
+		}
 	}
 	// Grafana SSO (ADR-047): configure Grafana's generic_oauth + the /grafana ingress
 	// against the minted client secret and the computed URLs. The browser-facing

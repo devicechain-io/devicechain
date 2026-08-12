@@ -192,6 +192,12 @@ type Query {
     # The ingest governance overrides for the caller's tenant (requires
     # tenant:read); read by the enforcing service over a service token.
     tenantGovernance: TenantGovernance!
+    # Every tenant token on the instance (requires the system-tier tenant:read).
+    # Read by services that must act across tenants over a service token — broker
+    # presence reconciliation compares the broker's live connections against what
+    # each tenant's projection believes, and a tenant whose whole fleet dropped is
+    # nameable only from a list. Tokens only: an iteration key, not tenant records.
+    tenantTokens: [String!]!
     # The identity the caller is signed in as (self-scoped).
     me: CurrentIdentity!
     # Re-read the caller's live memberships from a valid identity token, so the

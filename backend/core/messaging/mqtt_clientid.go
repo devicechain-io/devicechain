@@ -153,6 +153,69 @@ func DeviceClientIDMatches(presented, required string) bool {
 		strings.HasPrefix(presented, required+deviceClientIDSeparator)
 }
 
+// DeviceClientIDParts is a client id read back into the fields DeviceClientID
+// composed it from. Discriminator is "" for the plain form and carries whatever the
+// device appended for a second concurrent session.
+type DeviceClientIDParts struct {
+	InstanceId    string
+	Tenant        string
+	DeviceToken   string
+	Discriminator string
+}
+
+// ParseDeviceClientIDFor reads a presented MQTT client id back into its parts,
+// refusing anything that is not one of THIS instance's device ids. It is the inverse
+// of DeviceClientID, and the broker-presence tap's admission test: the tap sees every
+// client id the APP account admits — services, tools and devices alike — and has to
+// decide which of them name a device it may speak for.
+//
+// 🔑 THE INSTANCE ID IS A PARAMETER, NOT AN OUTPUT, AND THAT IS THE WHOLE SAFETY
+// PROPERTY. On a shared broker (ADR-048) two instances' devices sit in the same APP
+// account, so their advisories arrive on the same subject. A parse that merely
+// RETURNED the instance id would leave "and check it matches mine" as a step every
+// caller has to remember, and forgetting it makes one instance publish presence — and
+// under the delivery gate, decide command reachability — for another instance's
+// devices. Requiring it up front means the check cannot be omitted, only passed
+// wrongly.
+//
+// It re-validates all three fields against the token grammar rather than trusting the
+// split, for the reason DeviceClientID refuses to compose an invalid one: these
+// values become a tenant scope and a device token on an event we publish. The auth
+// callout already enforces the id (device-management/processor/callout.go:230-237),
+// so a malformed one should be unreachable — but "should be unreachable" is how the
+// value gets used unchecked, and this is the boundary where an unverified string off
+// the broker becomes a platform identity.
+func ParseDeviceClientIDFor(instanceId, presented string) (DeviceClientIDParts, error) {
+	if err := core.ValidateToken(instanceId); err != nil {
+		return DeviceClientIDParts{}, fmt.Errorf("refusing to parse a client id against an invalid instance id: %w", err)
+	}
+	// Four-way split: the discriminator is the device's own and may itself contain
+	// separators, so everything past the third field is one opaque tail rather than
+	// more fields to interpret.
+	fields := strings.SplitN(presented, deviceClientIDSeparator, 4)
+	if len(fields) < 3 {
+		return DeviceClientIDParts{}, fmt.Errorf("client id %q is not a device client id: want %s",
+			presented, "instance"+deviceClientIDSeparator+"tenant"+deviceClientIDSeparator+"device")
+	}
+	parts := DeviceClientIDParts{InstanceId: fields[0], Tenant: fields[1], DeviceToken: fields[2]}
+	if len(fields) == 4 {
+		parts.Discriminator = fields[3]
+	}
+	if parts.InstanceId != instanceId {
+		return DeviceClientIDParts{}, fmt.Errorf("client id %q belongs to instance %q, not %q",
+			presented, parts.InstanceId, instanceId)
+	}
+	for _, f := range []struct{ name, value string }{
+		{"tenant", parts.Tenant},
+		{"device token", parts.DeviceToken},
+	} {
+		if err := core.ValidateToken(f.value); err != nil {
+			return DeviceClientIDParts{}, fmt.Errorf("client id %q carries an invalid %s: %w", presented, f.name, err)
+		}
+	}
+	return parts, nil
+}
+
 // deviceClientIDTenantPrefix is the string every one of this tenant's device client
 // ids begins with. It is what an ADR-077 purge attributes a recovered client id
 // with, and the only reason the erasure can name an owner for gateway state whose

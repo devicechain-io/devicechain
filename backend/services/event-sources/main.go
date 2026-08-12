@@ -84,6 +84,20 @@ var (
 	// (where sources are built) so that START (where readers are created) can hand
 	// it CaptureReader. nil when no source is pointed at the platform broker.
 	GatewaySource *processor.GatewayJetStreamSource
+	// GatewaySourceId is that source's configured id, recorded WHERE THE SOURCE IS
+	// BUILT rather than re-derived. The broker-presence tap emits under it, and the one
+	// thing that must not happen is a second expression for "which source is the
+	// platform broker": the dispatch below is exact string equality against the NATS
+	// hostname, and a copy of that test would drift from it silently, leaving presence
+	// attributed to a source no device's events carry.
+	GatewaySourceId string
+
+	// ingestGate is the ONE admission gate every transport passes: the ADR-077 refusal
+	// for a deleted tenant over the ADR-023 per-tenant ceiling. Package-scoped because
+	// the broker-presence tap needs it too, and it must be the SAME gate — a presence
+	// event is a durable write into a tenant, so a path around it would be a path
+	// around both the erasure refusal and the ceiling.
+	ingestGate processor.RateGate
 
 	// Metrics
 	MessagesCounter     *prometheus.CounterVec
@@ -169,6 +183,7 @@ func initializeMetrics() {
 		"total_msg_tenant_deleted",
 		"Count of inbound messages refused because their tenant has been deleted and its data is being reclaimed",
 		[]string{"source"})
+	initializePresenceMetrics()
 }
 
 // contentionLevel is the effective ADR-063 shed level. At GA it is just the operator
@@ -288,7 +303,7 @@ func buildEventSources() error {
 	// CONNECTS are stopped at the broker callout (but an established session keeps its
 	// minted JWT for its full TTL), and HTTP ingest has no transport auth at all.
 	infra := Microservice.InstanceConfiguration.Infrastructure
-	ingestGate := processor.RefuseDeletedTenants(
+	ingestGate = processor.RefuseDeletedTenants(
 		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources"),
 		processor.NewRateGate(RateLimiter, BacklogRateLimiter, onRateShed),
 		onTenantGone)
@@ -343,6 +358,7 @@ func buildEventSources() error {
 						source.Id, natscfg.Hostname)
 				}
 				gatewaySourceBuilt = true
+				GatewaySourceId = source.Id
 				gateway := processor.NewGatewayJetStreamSource(source.Id, decoder,
 					onMessageReceived, onEventDecoded, onEventDecodeFailed,
 					ingestGate)
@@ -658,11 +674,20 @@ func afterMicroserviceStarted(ctx context.Context) error {
 				"streams, so QoS>=1 traffic can consume the disk budget's headroom. Ingest continues.")
 	}
 
+	// Broker-asserted MQTT presence (ADR-067). Started LAST and never fatal: it is an
+	// enrichment of ingest, not a precondition for it.
+	startBrokerPresence(ctx)
+
 	return nil
 }
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
+	// Stop the presence tap before the sources: it holds its own broker connection and
+	// its own goroutines, and a reconciliation pass mid-shutdown would emit into a
+	// writer that is about to close.
+	stopBrokerPresence()
+
 	// Stop each event source.
 	for _, source := range EventSources {
 		err := source.Stop(ctx)

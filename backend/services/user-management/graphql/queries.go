@@ -213,6 +213,22 @@ func (r *SchemaResolver) TenantGovernance(ctx context.Context) (*TenantGovernanc
 	return &TenantGovernanceResolver{t: t}, nil
 }
 
+// TenantTokens lists every tenant token on the instance (requires the SYSTEM-tier
+// tenant:read). Read by services that must act across tenants over a service token.
+//
+// 🔴 IT DELIBERATELY DOES NOT TAKE A TENANT FROM CONTEXT, unlike every other query on
+// this plane. That is the point — the caller is asking which tenants exist, so being
+// scoped to one would make the question unanswerable. What keeps it safe is the TIER
+// of the authority: tenant:read is system-tier (auth.authorityTiers), so a tenant
+// subject holding "*" — which means every TENANT-tier authority — does not pass it,
+// and an ordinary console user cannot enumerate the instance's tenants.
+func (r *SchemaResolver) TenantTokens(ctx context.Context) ([]string, error) {
+	if err := auth.Authorize(ctx, auth.TenantRead); err != nil {
+		return nil, err
+	}
+	return r.getIdentityManager(ctx).ListTenantTokens(ctx)
+}
+
 // CurrentIdentityResolver resolves the CurrentIdentity GraphQL type: the global
 // identity the caller is signed in as, for display in the console (name, falling
 // back to email).

@@ -201,7 +201,8 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	case deployed != nil:
 		creds, err = natsauth.CredentialsFromDeployed(
 			deployed.Infrastructure.Nats.Auth.CalloutIssuerSeed,
-			deployed.Infrastructure.Nats.Auth.Password)
+			deployed.Infrastructure.Nats.Auth.Password,
+			deployed.Infrastructure.Nats.Auth.SysPassword)
 		if err != nil {
 			return fail("reusing the running instance's NATS auth credentials", err)
 		}
@@ -216,6 +217,8 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	st.Values["natsCalloutIssuerSeed"] = creds.IssuerSeed
 	st.Values["natsServicePassword"] = creds.ServicePassword
 	st.Values["natsServicePasswordBcrypt"] = creds.ServicePasswordBcrypt
+	st.Values["natsSysPassword"] = creds.SysPassword
+	st.Values["natsSysPasswordBcrypt"] = creds.SysPasswordBcrypt
 
 	// The shared service secret (ADR-044 amendment) backing the synchronous
 	// cross-service call primitive: a caller presents it to user-management's mint
