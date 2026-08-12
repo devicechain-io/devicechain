@@ -1029,7 +1029,26 @@ jobs:
       # whatever you happened to receive. Pinning both keeps the image build
       # reproducible (the same ko every run, not whatever shipped that morning) and is
       # what a pinned build tool is for.
-      - name: Install ko (pinned, verified, retried)
+      # 🔴 TWO INDEPENDENT SOURCES, BECAUSE RETRYING ONE HOST IS NOT RESILIENCE. Within
+      # twenty minutes on 2026-08-12 the release-asset host went from truncating bodies
+      # to returning a hard 503 for every request, and no retry policy reaches a host
+      # that is down. The fallback is deliberately on DIFFERENT infrastructure — the Go
+      # module proxy — so a single provider outage cannot stop every image build.
+      #
+      # The release tarball stays FIRST because it is a 12MB download versus compiling
+      # ko from source. Its deps are not in any matrix module's go.sum, so setup-go's
+      # per-module cache cannot hold them and the fallback recompiles on every job that
+      # takes it. Fast path first, working path second.
+      #
+      # Both paths are pinned to KO_VERSION and both are integrity-checked: the tarball
+      # against KO_SHA256, and `go install` against the Go checksum database, which is a
+      # transparency log rather than a digest written down here. GOWORK=off matches how
+      # this workflow already installs actionlint — without it the tool resolves against
+      # this repo's workspace instead of its own module graph. GOWORK=off also discards
+      # go.work's `toolchain` line, but setup-go has already installed the version named
+      # in go.work, which satisfies ko's own floor; a box whose default toolchain is
+      # older just downloads one via GOTOOLCHAIN rather than failing.
+      - name: Install ko (pinned, verified, two sources)
         env:
           KO_VERSION: v0.19.1
           KO_SHA256: 635ac6ea3fd376c935fee597fbb29ab2c2449f49ef1655085fe3aa9c25fed7a5
@@ -1053,8 +1072,11 @@ jobs:
             rm -f "${RUNNER_TEMP}/ko.tar.gz"
             sleep $((attempt * 5))
           done
-          echo "::error::could not install ko ${KO_VERSION} after 3 attempts"
-          exit 1
+
+          echo "::warning::release asset unavailable after 3 attempts; building ${KO_VERSION} from the Go module proxy"
+          GOWORK=off GOBIN="$dest" go install "github.com/google/ko@${KO_VERSION}"
+          echo "$dest" >> "$GITHUB_PATH"
+          "$dest/ko" version
 
       - name: ko build (local, no push)
         working-directory: ${{ matrix.module }}
