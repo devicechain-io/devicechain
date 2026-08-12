@@ -450,6 +450,31 @@ func (m *Manager) TenantByToken(ctx context.Context, token string) (*iam.Tenant,
 	return m.iam.TenantByToken(ctx, token)
 }
 
+// ListTenantTokens returns every tenant token on the instance, ordered.
+//
+// It exists for services that must act ACROSS tenants and cannot discover which
+// tenants exist any other way — broker-asserted presence reconciliation is the first:
+// it compares the broker's live connection inventory against what each tenant's
+// projection believes, and a tenant whose entire fleet dropped appears in neither the
+// inventory nor any recent traffic, so it is nameable only from a list.
+//
+// 🔑 IT RETURNS TOKENS AND NOTHING ELSE. The caller needs an iteration key, not tenant
+// records, and every field not returned is one that cannot leak through a query whose
+// whole purpose is to be cross-tenant. The resolver gates it on the SYSTEM-tier
+// tenant:read authority, so an ordinary tenant subject — including one holding "*",
+// which means "every TENANT-tier authority" — cannot enumerate the instance's tenants.
+func (m *Manager) ListTenantTokens(ctx context.Context) ([]string, error) {
+	tenants, err := m.iam.ListTenants(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tokens := make([]string, 0, len(tenants))
+	for _, t := range tenants {
+		tokens = append(tokens, t.Token)
+	}
+	return tokens, nil
+}
+
 // SetTenantLogo writes ONLY the caller's own branding_logo column and returns its
 // PREVIOUS value, so the caller can garbage-collect an orphaned object-store blob
 // when the reference changes (ADR-058). Unlike SetTenantBranding it does not touch

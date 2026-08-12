@@ -124,6 +124,20 @@ type NatsAuthConfiguration struct {
 	// anonymously.
 	User     string
 	Password string
+	// SysUser / SysPassword are the SEPARATE login for the NATS system account,
+	// consumed only by the event-sources broker-presence tap: the system account is
+	// where the broker publishes its connection advisories and answers its monitoring
+	// requests, and a connection there observes every account's traffic. It is carried
+	// in every service's instance config for the same provisioning-simplicity reason
+	// as the callout seed above, and read by one of them.
+	//
+	// Empty means the tap is OFF, and that is the intended reading rather than a
+	// degraded one: an instance whose broker predates the system-account login has no
+	// such user, so a service that connected anyway would fail authorization on every
+	// attempt and log a reconnect storm. Absent credential ⇒ no tap ⇒ MQTT presence
+	// stays inferred, which is exactly the behaviour of the release before this one.
+	SysUser     string
+	SysPassword string
 	// CalloutIssuerSeed is the account nkey seed the device-management auth-callout
 	// responder signs device user JWTs with. Only device-management consumes it; it
 	// is carried in every service's instance config for provisioning simplicity

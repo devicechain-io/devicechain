@@ -215,6 +215,13 @@ variable "service_password_bcrypt" {
   sensitive   = true
 }
 
+variable "sys_password_bcrypt" {
+  description = "BCRYPT HASH ($2a$...) of the `dc_sys` system-account password, read by the event-sources broker-presence tap. A SEPARATE credential from service_password_bcrypt because the system account sees every account's connection lifecycle. EMPTY (the default) renders SYS with no users, which turns the tap off — the behaviour of every instance before it existed. Sensitive."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "mqtt_node_port" {
   description = <<-EOT
     Local-kind only: expose the MQTT gateway as a NodePort on this node port so a
@@ -246,6 +253,13 @@ locals {
   # Service name the internal services present (see natsauth.ServiceUser). Kept in
   # sync with the Go constant; a mismatch would lock every service out.
   service_user = "dc_service"
+
+  # System-account login (see natsauth.SysUser), kept in sync with the Go constant
+  # the same way. Rendered only when a hash was supplied: an account block with an
+  # empty user list is what SYS looked like before the presence tap, and is what an
+  # instance that has not minted the credential must keep looking like.
+  sys_user  = "dc_sys"
+  sys_users = var.sys_password_bcrypt == "" ? [] : [{ user = local.sys_user, password = var.sys_password_bcrypt }]
 
   # js_max_file_store resolves the server-level max_file_store (see the
   # jetstream_max_file_store variable and the fileStore.maxSize wiring below). When
@@ -399,7 +413,11 @@ locals {
         jetstream = "enabled"
         users     = [{ user = local.service_user, password = var.service_password_bcrypt }]
       }
-      SYS = {}
+      # SYS carries a user only once the presence tap's credential has been minted.
+      # The system account needs no `jetstream` and no exports: the advisories the
+      # tap reads and the CONNZ request it makes are both served INSIDE SYS, and a
+      # subscriber there is a plain core-NATS client.
+      SYS = { users = local.sys_users }
     }
     system_account = "SYS"
     authorization = {
@@ -408,9 +426,20 @@ locals {
       # leaving the 1s default — too tight for the TLS handshake + callout
       # round-trip (DB + secret check) and a source of flaky connects under load.
       timeout = 5
+      # 🔴 EVERY STATIC LOGIN MUST BE LISTED HERE, INCLUDING THE ONE IN ANOTHER
+      # ACCOUNT. auth_callout carries no `allowed_accounts`, and nats-server reads an
+      # empty list as "every account is in scope" (server/auth.go: `delegated :=
+      # len(opts.AuthCallout.AllowedAccounts) == 0`) — the system account included. So a
+      # user absent from auth_users is handed to the DEVICE callout responder, which
+      # expects a `tenant:credentialId` username and denies anything else.
+      #
+      # The failure is silent in the worst way: the broker is healthy, every device
+      # works, and only the one service presenting the unlisted login is refused. It
+      # then logs once and disables its feature, so the symptom is a capability quietly
+      # missing rather than anything failing.
       auth_callout = {
         issuer     = var.callout_issuer_public
-        auth_users = [local.service_user]
+        auth_users = [local.service_user, local.sys_user]
         account    = "APP"
       }
     }

@@ -37,6 +37,47 @@ const AppAccount = "APP"
 // bypass the device callout and get the account's full permissions.
 const ServiceUser = "dc_service"
 
+// SystemAccount is the NATS system account — where the broker publishes its own
+// connection advisories ($SYS.ACCOUNT.<acct>.CONNECT / .DISCONNECT) and serves its
+// monitoring requests ($SYS.REQ.SERVER.PING.CONNZ). It is set as `system_account`
+// in the broker config, which is also the only thing needed to turn the advisories
+// on.
+const SystemAccount = "SYS"
+
+// SysUser is the username the broker-presence tap presents to read the system
+// account. It is a SEPARATE credential from ServiceUser, and the separation is the
+// point rather than tidiness: a connection in SYS observes every account's
+// connection lifecycle and can drive the server's monitoring endpoints, which is a
+// strictly wider grant than the data-plane one every service holds. Handing that
+// to the shared service login would widen twenty services' blast radius to buy one
+// consumer a subscription.
+const SysUser = "dc_sys"
+
+// MqttGatewayPort is the port nats-server's MQTT gateway listens on, and the port the
+// broker-presence canary opens its probe connection to. It is fixed by the chart's
+// broker configuration rather than negotiated, so a constant is the honest shape.
+const MqttGatewayPort = 1883
+
+// SysConnectSubject and SysDisconnectSubject are the broker advisories the presence
+// tap reads, for connections landing in AppAccount — which is where both services
+// and devices live (see AppAccount).
+//
+// 🔴 THE ADVISORY AND THE MONITORING REPLY SPELL THE MQTT CLIENT ID DIFFERENTLY.
+// An advisory carries it as `client.client_id`; a CONNZ reply carries it as
+// `connections[].mqtt_client`. Both are filled from the same server-side call so
+// the VALUES always agree, but a decoder written for one key reads "" from the
+// other — and "" is not an error, it is a client id that matches no device. The
+// path with the wrong key therefore reports an empty fleet, which is
+// indistinguishable from a genuinely idle one. Measured against nats-server
+// v2.14.4, not read off a struct.
+const (
+	SysConnectSubject    = "$SYS.ACCOUNT." + AppAccount + ".CONNECT"
+	SysDisconnectSubject = "$SYS.ACCOUNT." + AppAccount + ".DISCONNECT"
+	// SysConnzSubject is the fan-out monitoring request every server in the cluster
+	// answers — one reply each, describing only its OWN connections.
+	SysConnzSubject = "$SYS.REQ.SERVER.PING.CONNZ"
+)
+
 // DefaultUserJWTTTL bounds how long a callout-minted device user JWT is valid.
 // The NATS server arms a timer at the JWT's expiry that force-closes the device's
 // connection, after which the reconnect re-runs the callout (an enabled-only
@@ -75,6 +116,12 @@ type Credentials struct {
 	// prefix and bcrypt-compares the presented plaintext, so the broker config
 	// carries no recoverable secret.
 	ServicePasswordBcrypt string
+	// SysPassword / SysPasswordBcrypt are the same pair for the SysUser login in the
+	// system account, minted and stored the same way and for the same reasons. They
+	// are a second credential rather than a second use of the first because SYS is a
+	// wider grant — see SysUser.
+	SysPassword       string
+	SysPasswordBcrypt string
 }
 
 // GenerateCredentials mints a fresh set of broker-auth credentials: an account
@@ -102,12 +149,33 @@ func GenerateCredentials() (Credentials, error) {
 	if err != nil {
 		return Credentials{}, fmt.Errorf("hashing service password: %w", err)
 	}
+	sysPw, sysHash, err := generateSysPassword()
+	if err != nil {
+		return Credentials{}, err
+	}
 	return Credentials{
 		IssuerPublic:          pub,
 		IssuerSeed:            string(seed),
 		ServicePassword:       pw,
 		ServicePasswordBcrypt: string(hash),
+		SysPassword:           sysPw,
+		SysPasswordBcrypt:     sysHash,
 	}, nil
+}
+
+// generateSysPassword mints the system-account login and its hash together, the
+// same way and at the same strength as the service one. Split out so the mint path
+// and the reuse path below cannot drift into producing different-shaped secrets.
+func generateSysPassword() (string, string, error) {
+	pw, err := randomHex(24)
+	if err != nil {
+		return "", "", fmt.Errorf("generating system-account password: %w", err)
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(pw), servicePasswordBcryptCost)
+	if err != nil {
+		return "", "", fmt.Errorf("hashing system-account password: %w", err)
+	}
+	return pw, string(hash), nil
 }
 
 // CredentialsFromDeployed rebuilds the full credential set from the two secrets an
@@ -132,7 +200,15 @@ func GenerateCredentials() (Credentials, error) {
 //
 // It FAILS CLOSED on either input being absent or unusable rather than falling back
 // to a mint, because a fallback would be the exact rotation this exists to prevent.
-func CredentialsFromDeployed(issuerSeed, servicePassword string) (Credentials, error) {
+//
+// sysPassword is the one input treated differently, and deliberately: an instance
+// deployed before the system-account login existed carries none, so an absent one is
+// MINTED rather than refused. That is not the rotation the rule above guards
+// against — there is no running credential to rotate, and the same apply writes the
+// matching hash into the broker config, so the two halves are still minted together.
+// A PRESENT one is reused, so an ordinary re-run of an instance that already has the
+// tap does not rotate it.
+func CredentialsFromDeployed(issuerSeed, servicePassword, sysPassword string) (Credentials, error) {
 	if issuerSeed == "" {
 		return Credentials{}, fmt.Errorf("the running instance carries no callout issuer seed")
 	}
@@ -151,11 +227,26 @@ func CredentialsFromDeployed(issuerSeed, servicePassword string) (Credentials, e
 	if err != nil {
 		return Credentials{}, fmt.Errorf("hashing the running instance's service password: %w", err)
 	}
+	sysPw, sysHash := sysPassword, ""
+	if sysPw == "" {
+		sysPw, sysHash, err = generateSysPassword()
+		if err != nil {
+			return Credentials{}, err
+		}
+	} else {
+		h, err := bcrypt.GenerateFromPassword([]byte(sysPw), servicePasswordBcryptCost)
+		if err != nil {
+			return Credentials{}, fmt.Errorf("hashing the running instance's system-account password: %w", err)
+		}
+		sysHash = string(h)
+	}
 	return Credentials{
 		IssuerPublic:          pub,
 		IssuerSeed:            issuerSeed,
 		ServicePassword:       servicePassword,
 		ServicePasswordBcrypt: string(hash),
+		SysPassword:           sysPw,
+		SysPasswordBcrypt:     sysHash,
 	}, nil
 }
 

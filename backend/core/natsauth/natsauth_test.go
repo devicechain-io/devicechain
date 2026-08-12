@@ -278,7 +278,7 @@ func TestCredentialsFromDeployedRebuildsTheSamePair(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := CredentialsFromDeployed(deployed.IssuerSeed, deployed.ServicePassword)
+	got, err := CredentialsFromDeployed(deployed.IssuerSeed, deployed.ServicePassword, deployed.SysPassword)
 	if err != nil {
 		t.Fatalf("CredentialsFromDeployed: %v", err)
 	}
@@ -303,6 +303,50 @@ func TestCredentialsFromDeployedRebuildsTheSamePair(t *testing.T) {
 	if err := bcrypt.CompareHashAndPassword([]byte(got.ServicePasswordBcrypt), []byte(deployed.ServicePassword)); err != nil {
 		t.Errorf("the rebuilt hash does not verify the deployed password: %v", err)
 	}
+
+	// The system-account login is reused on exactly the same terms. A re-run that
+	// rotated it would leave the running presence tap authenticating with a password
+	// the broker no longer accepts, and the tap fails by going quiet.
+	if got.SysPassword != deployed.SysPassword {
+		t.Errorf("system-account password = %q, want it passed through unchanged", got.SysPassword)
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(got.SysPasswordBcrypt), []byte(deployed.SysPassword)); err != nil {
+		t.Errorf("the rebuilt system-account hash does not verify the deployed password: %v", err)
+	}
+}
+
+// An instance deployed BEFORE the system account had a login carries no system
+// password, and that one input is minted rather than refused — there is nothing
+// running to rotate. This is the single documented exception to the fail-closed rule
+// above, so it gets its own test rather than riding along in the table.
+func TestADeployedInstanceWithNoSystemPasswordGetsOneMinted(t *testing.T) {
+	deployed, err := GenerateCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := CredentialsFromDeployed(deployed.IssuerSeed, deployed.ServicePassword, "")
+	if err != nil {
+		t.Fatalf("an instance predating the system-account login must still re-run: %v", err)
+	}
+	if got.SysPassword == "" {
+		t.Fatal("no system-account password was minted, so the tap can never turn on")
+	}
+	// Minted, not left half-written: the hash the broker will be given must verify
+	// the plaintext the services will be given. A mint that produced only one half
+	// would deploy a broker the tap cannot authenticate against.
+	if err := bcrypt.CompareHashAndPassword([]byte(got.SysPasswordBcrypt), []byte(got.SysPassword)); err != nil {
+		t.Errorf("the minted system-account hash does not verify its own password: %v", err)
+	}
+	// The counterweight: minting the missing one must not disturb the two that ARE
+	// running. This is the assertion that separates "mint what is absent" from
+	// "re-mint everything", which is the rotation bug this whole path exists to avoid.
+	if got.ServicePassword != deployed.ServicePassword {
+		t.Errorf("service password was rotated to %q while minting the system one", got.ServicePassword)
+	}
+	if got.IssuerSeed != deployed.IssuerSeed {
+		t.Errorf("issuer seed was rotated while minting the system one")
+	}
 }
 
 // It must FAIL rather than fall back to minting, because falling back is exactly the
@@ -323,7 +367,7 @@ func TestCredentialsFromDeployedFailsClosed(t *testing.T) {
 		{"a public key where the seed should be", good.IssuerPublic, good.ServicePassword},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := CredentialsFromDeployed(tc.seed, tc.password)
+			got, err := CredentialsFromDeployed(tc.seed, tc.password, good.SysPassword)
 			if err == nil {
 				t.Fatalf("accepted unusable deployed credentials, returning %+v", got)
 			}

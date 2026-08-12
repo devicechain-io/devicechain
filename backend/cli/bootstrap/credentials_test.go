@@ -121,6 +121,7 @@ func TestAFreshInstallStillMintsBrokerCredentials(t *testing.T) {
 
 	for _, key := range []string{
 		"natsServicePassword", "natsServicePasswordBcrypt",
+		"natsSysPassword", "natsSysPasswordBcrypt",
 		"natsCalloutIssuerSeed", "natsCalloutIssuerPublic", "serviceAuthSecret",
 	} {
 		if first.Values[key] == "" {
@@ -133,7 +134,8 @@ func TestAFreshInstallStillMintsBrokerCredentials(t *testing.T) {
 	// The seed and the public key must belong to each other, or the broker trusts an
 	// issuer that nothing signs with.
 	derived, err := natsauth.CredentialsFromDeployed(
-		first.Values["natsCalloutIssuerSeed"], first.Values["natsServicePassword"])
+		first.Values["natsCalloutIssuerSeed"], first.Values["natsServicePassword"],
+		first.Values["natsSysPassword"])
 	if err != nil {
 		t.Fatalf("the minted seed is not usable: %v", err)
 	}

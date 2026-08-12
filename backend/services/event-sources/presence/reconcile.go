@@ -1,0 +1,273 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package presence
+
+import (
+	"context"
+	"time"
+
+	"github.com/devicechain-io/dc-event-sources/adapter"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/rs/zerolog/log"
+)
+
+// TenantLister names every tenant on the instance. Reconciliation cannot discover
+// tenants any other way: a tenant whose whole fleet dropped appears in neither the
+// broker's inventory nor any recent traffic, and it is exactly that tenant whose
+// devices are stuck asserted-online.
+type TenantLister interface {
+	TenantTokens(ctx context.Context) ([]string, error)
+}
+
+// ProjectionReader reads what the device-state projection currently believes about
+// this source's devices, keyed by DeviceKey.
+//
+// 🔑 KEYED BY DEVICE TOKEN, NOT EXTERNAL ID. The existing adapter.Reconciler is
+// external-id keyed and SKIPS every row without one (adapter/ingest.go:279-281), which
+// is right for Sparkplug and LwM2M — their devices are addressed by a transport-native
+// identity — and wrong for plain MQTT, where external id is optional and usually
+// absent. Reused here it would report almost every connected device as "not asserted
+// online", and the connect direction would re-emit a StateChange for the whole fleet on
+// every pass: a durable event row per device per pass, through the resolver, the
+// projection, DETECT and the historian.
+type ProjectionReader interface {
+	AssertedOnline(ctx context.Context, tenant, source string) (map[string]LiveDevice, error)
+}
+
+// ReconcileMetrics are the repair pass's operator signals.
+type ReconcileMetrics struct {
+	// Runs counts completed passes, labelled by outcome ("complete", "partial",
+	// "failed"). A pass that could not prove the inventory complete does only half
+	// its job, and that must be visible as a shape rather than inferred from silence.
+	Runs *prometheus.CounterVec
+	// Repaired counts synthetic transitions emitted, labelled by direction
+	// ("connect", "disconnect"). In a healthy instance this is near zero; a standing
+	// rate means advisories are being lost.
+	Repaired *prometheus.CounterVec
+	// SkippedDisconnects counts devices that WOULD have been marked offline had the
+	// inventory been provably complete. It is the cost of the safety rule, and
+	// without it an instance that never proves completeness looks identical to one
+	// with nothing to repair.
+	SkippedDisconnects prometheus.Counter
+}
+
+func (m ReconcileMetrics) run(outcome string) {
+	if m.Runs != nil {
+		m.Runs.WithLabelValues(outcome).Inc()
+	}
+}
+
+func (m ReconcileMetrics) repaired(direction string, n int) {
+	if m.Repaired != nil && n > 0 {
+		m.Repaired.WithLabelValues(direction).Add(float64(n))
+	}
+}
+
+// Reconciler repairs the difference between what the broker holds and what the
+// projection believes.
+//
+// 🔴 IT IS NOT A BACKSTOP, IT IS THE ONLY ACCOUNT OF SOME DEATHS. A graceful broker
+// shutdown emits NO disconnect advisories for the connections it was holding —
+// measured against nats-server v2.14.4 — so every rolling broker upgrade leaves every
+// connected device asserted-online. Nothing else corrects that: an asserted row is
+// skipped by the inactivity sweep (device-state/model/api.go:425), and data events
+// cannot flip an asserted device's Active (api.go:196). Both existing asserted sources
+// repair their own missed deaths for the same reason (sparkplug host.go:567,
+// lwm2m main.go:566); this one would have been the first that could not.
+type Reconciler struct {
+	tap      *Tap
+	requests Requester
+	tenants  TenantLister
+	reads    ProjectionReader
+	metrics  ReconcileMetrics
+	gather   time.Duration
+	now      func() time.Time
+	// clusterHighWater is the largest cluster this process has ever been told about.
+	//
+	// 🔴 WITHOUT IT, A FULL PARTITION DECLARES ITSELF COMPLETE. Completeness compares
+	// the servers that answered against the size they CLAIM, and a server that has lost
+	// its routes reports itself alone — so in a partition every reachable server claims
+	// a cluster of one, the subset we can reach satisfies its own claim, and the pass
+	// happily marks the unreachable side's devices offline. That is the mass false death
+	// the completeness rule exists to prevent, arriving through the rule itself.
+	//
+	// A high-water mark closes it because a cluster does not shrink in normal operation:
+	// once three servers have been seen, two answering is a partition, not a fact about
+	// the cluster. A DELIBERATE scale-down does leave this too high, and the consequence
+	// is that deaths are withheld — counted and logged, never silent — until the process
+	// restarts. Withholding is the safe direction, and paying for it with a pod restart
+	// on a rare operator action is the right trade.
+	clusterHighWater int
+}
+
+// 🔑 A REPAIR AND THE TRANSITION IT REPLACES SHARE A DEDUP ID, WHICH IS WANTED AND
+// SURPRISING. presenceDedupID keys on (tenant, device, session, state), so two repair
+// passes emitting the same synthetic transition inside the JetStream dedup window
+// collapse to one write — idempotent, which is the point. The consequence to know before
+// reading a test result: a repair issued moments after the transition it is replacing can
+// be SUPPRESSED rather than applied, so an integration test that reconciles twice inside
+// one dedup window sees a single event and can read as "reconciliation is broken".
+//
+// NewReconciler binds a repair pass. now may be nil (⇒ time.Now).
+func NewReconciler(tap *Tap, requests Requester, tenants TenantLister, reads ProjectionReader,
+	metrics ReconcileMetrics, gather time.Duration, now func() time.Time) *Reconciler {
+	if now == nil {
+		now = time.Now
+	}
+	return &Reconciler{tap: tap, requests: requests, tenants: tenants, reads: reads,
+		metrics: metrics, gather: gather, now: now}
+}
+
+// Run performs one repair pass.
+func (r *Reconciler) Run(ctx context.Context) error {
+	inv, err := FetchInventory(ctx, r.requests, r.tap.instanceId, r.gather)
+	if err != nil {
+		r.metrics.run("failed")
+		return err
+	}
+	inv = r.applyClusterHighWater(inv)
+	tenants, err := r.tenants.TenantTokens(ctx)
+	if err != nil {
+		r.metrics.run("failed")
+		return err
+	}
+
+	connects, disconnects, withheld := 0, 0, 0
+	for _, tenant := range tenants {
+		if ctx.Err() != nil {
+			break
+		}
+		online, err := r.reads.AssertedOnline(ctx, tenant, r.tap.source)
+		if err != nil {
+			// One tenant's read failing must not abort the others: the remaining
+			// tenants' devices are equally stuck. It does cost this tenant a pass.
+			log.Warn().Err(err).Str("tenant", tenant).
+				Msg("Could not read presence state while reconciling; this tenant is skipped for this pass.")
+			continue
+		}
+		c, d, w := r.reconcileTenant(ctx, tenant, inv, online)
+		connects, disconnects, withheld = connects+c, disconnects+d, withheld+w
+	}
+
+	r.metrics.repaired("connect", connects)
+	r.metrics.repaired("disconnect", disconnects)
+	if withheld > 0 && r.metrics.SkippedDisconnects != nil {
+		r.metrics.SkippedDisconnects.Add(float64(withheld))
+	}
+	outcome := "complete"
+	if !inv.Complete {
+		outcome = "partial"
+		log.Warn().Int("serversAnswered", inv.Servers).Int("serversExpected", inv.Expected).
+			Int("withheldDisconnects", withheld).
+			Msg("Broker connection inventory was incomplete; devices were only ever marked ONLINE this pass.")
+	}
+	r.metrics.run(outcome)
+	if connects > 0 || disconnects > 0 {
+		log.Info().Int("connects", connects).Int("disconnects", disconnects).
+			Msg("Reconciled broker-asserted presence against the broker's live connections.")
+	}
+	return nil
+}
+
+// applyClusterHighWater raises the pass's expectation to the largest cluster ever seen,
+// downgrading Complete when fewer servers answered than that. See clusterHighWater.
+func (r *Reconciler) applyClusterHighWater(inv Inventory) Inventory {
+	if inv.Expected > r.clusterHighWater {
+		r.clusterHighWater = inv.Expected
+	}
+	// The count that ANSWERED is itself evidence of cluster size: three replies prove
+	// three servers exist regardless of what any of them claims.
+	if inv.Servers > r.clusterHighWater {
+		r.clusterHighWater = inv.Servers
+	}
+	inv.Expected = r.clusterHighWater
+	inv.Complete = inv.Servers > 0 && inv.Servers >= r.clusterHighWater && inv.Complete
+	return inv
+}
+
+// reconcileTenant diffs one tenant both ways, returning (connects, disconnects,
+// withheld-disconnects).
+func (r *Reconciler) reconcileTenant(ctx context.Context, tenant string, inv Inventory,
+	online map[string]LiveDevice) (int, int, int) {
+	connects, disconnects, withheld := 0, 0, 0
+
+	// Direction 1 — the broker holds a connection the projection does not know is
+	// live. Positive evidence, so it is emitted whether or not the inventory is
+	// complete: a missing server's reply costs a delayed repair, never a false claim.
+	for key, live := range inv.Devices {
+		if live.Tenant != tenant {
+			continue
+		}
+		if _, known := online[key]; known {
+			continue
+		}
+		// 🔴 STAMPED AT NOW, NOT AT THE CONNECTION'S START, AND THE OBVIOUS CHOICE IS
+		// THE BROKEN ONE. The start is the more truthful instant and it is what the lost
+		// advisory would have carried — but presence.Decide takes a SAME-session
+		// transition only when its time is newer than the stored one, and the projection
+		// may hold this very session at a LATER time: after a synthetic death (which
+		// reuses the stored session and stamps NOW), the row reads offline at a moment
+		// well after the connection began. A repair carrying the start is then older
+		// than the death, rejected, and rejected identically on every subsequent pass —
+		// forever, silently, while the repair counter says it worked. That is the
+		// failure that looks exactly like success, and it wedges a live device offline,
+		// holding its commands.
+		//
+		// The session id is still the CONNECTION's, so this remains the same session the
+		// advisory would have named and the dedup id is unchanged. What is given up is
+		// accuracy of LastConnectTime on the repair path alone: it records when the
+		// platform re-established the truth rather than when the device connected. On a
+		// path that exists because the accurate signal was already lost, that is the
+		// right thing to trade.
+		if r.tap.Apply(ctx, Transition{
+			Tenant:      live.Tenant,
+			DeviceToken: live.DeviceToken,
+			Event: adapter.PresenceEvent{
+				Connected:  true,
+				Reason:     "reconcile-connected",
+				SessionId:  live.SessionId,
+				OccurredAt: r.now().UTC(),
+			},
+		}) {
+			connects++
+		}
+	}
+
+	// Direction 2 — the projection believes a device is online that the broker is not
+	// holding. This is the direction that can LIE, so it is gated on completeness.
+	for key, stored := range online {
+		if _, live := inv.Devices[key]; live {
+			continue
+		}
+		if !inv.Complete {
+			// A device on a server that did not answer is absent from Devices and
+			// indistinguishable from one that is genuinely gone. Marking it offline
+			// would hold a live device's commands, so the pass withholds instead.
+			withheld++
+			continue
+		}
+		if r.tap.Apply(ctx, Transition{
+			Tenant:      tenant,
+			DeviceToken: stored.DeviceToken,
+			Event: adapter.PresenceEvent{
+				Connected: false,
+				Reason:    "reconcile-not-connected",
+				// 🔑 THE SESSION IS THE ONE THE PROJECTION ALREADY HOLDS, and this is
+				// the difference between a repair that works and one that is silently
+				// rejected forever. presence.Decide takes a DIFFERENT session only when
+				// it is HIGHER; a synthetic death carrying some other id — the last
+				// known connection's, or one minted here — would be lower than the
+				// stored one and rejected on every pass, with nothing to say why.
+				// Reusing the stored id makes this same-session-newer-time, which
+				// Decide accepts and which is exactly what this event means: the
+				// session the projection is tracking has ended.
+				SessionId:  stored.SessionId,
+				OccurredAt: r.now().UTC(),
+			},
+		}) {
+			disconnects++
+		}
+	}
+	return connects, disconnects, withheld
+}

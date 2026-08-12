@@ -182,6 +182,13 @@ variable "nats_service_password_bcrypt" {
   sensitive   = true
 }
 
+variable "nats_sys_password_bcrypt" {
+  description = "BCRYPT HASH ($2a$...) of the `dc_sys` system-account password, read by the event-sources broker-presence tap. Minted by the bring-up alongside the service password; a separate credential because the system account observes every account's connections. Empty leaves SYS without users and the tap off. Sensitive."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "nats_mqtt_node_port" {
   description = <<-EOT
     Local-kind only: expose the MQTT gateway as a NodePort on this node port so a

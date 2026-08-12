@@ -104,11 +104,20 @@ func helmValues(st *State) map[string]interface{} {
 		}
 	}
 	if seed := st.Values["natsCalloutIssuerSeed"]; seed != "" {
-		natsVals["auth"] = map[string]interface{}{
+		auth := map[string]interface{}{
 			"user":              natsauth.ServiceUser,
 			"password":          st.Values["natsServicePassword"],
 			"calloutIssuerSeed": seed,
 		}
+		// The system-account login, written only when one was minted. Its ABSENCE is
+		// the off switch for the broker-presence tap (see NatsAuthConfiguration), so
+		// writing an empty user here would be writing a credential that cannot
+		// authenticate rather than leaving the feature off.
+		if sysPw := st.Values["natsSysPassword"]; sysPw != "" {
+			auth["sysUser"] = natsauth.SysUser
+			auth["sysPassword"] = sysPw
+		}
+		natsVals["auth"] = auth
 	}
 	// The compact preset's JetStream/KV ceilings (compactSizing). Merged into the
 	// SAME nats map as the broker-auth material above rather than assigned over it:

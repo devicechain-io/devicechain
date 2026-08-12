@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/governance"
 )
@@ -18,6 +19,27 @@ const (
 	// (a later slice); the platform default is deliberately never unlimited.
 	DefaultIngestMessagesPerSecond = 1000
 	DefaultIngestBurst             = 2000
+
+	// Broker-presence defaults.
+	//
+	// The reconcile interval is the one with a real trade in it. It is how long a
+	// device can read as connected after a broker restart that announced no deaths —
+	// so shorter is more accurate — against the cost of a full cluster inventory plus
+	// one projection read per tenant. Five minutes keeps the repair well inside the
+	// window that matters for command delivery while leaving the steady-state cost
+	// negligible; the advisories, not this pass, carry the normal case.
+	DefaultPresenceReconcileSeconds = 300
+	// The canary runs far more often than the reconciler: it is the only signal that
+	// distinguishes a healthy quiet fleet from a dead subscription, and being an hour
+	// late to notice a dead tap is being an hour late to every alarm behind it.
+	DefaultPresenceCanarySeconds = 60
+	// One probe's budget: a broker round trip plus an advisory, with generous room for
+	// a loaded cluster. Too tight and the canary reports failures the tap does not have.
+	DefaultPresenceCanaryDeadlineSeconds = 15
+	// The fan-out collection window. Long enough that a busy server is not mistaken for
+	// an absent one — which would withhold every disconnect that pass — and short
+	// enough not to stretch the pass itself.
+	DefaultPresenceInventoryGatherSeconds = 5
 )
 
 // Decodes event payloads into standardized format.
@@ -74,11 +96,80 @@ type Contention struct {
 	ManualFloor int
 }
 
+// BrokerPresence configures broker-asserted MQTT presence (ADR-067): the tap that
+// turns the NATS broker's own connection advisories into authoritative device presence,
+// replacing the "published within 600s" guess that alarms, dashboards and command
+// delivery all inherit.
+//
+// 🔑 ENABLED IS NOT THE ONLY SWITCH, AND IT IS THE LEAST INTERESTING ONE. The tap also
+// requires a system-account credential, a source pointed at the platform broker, and
+// reachable service-to-service calls; any of those missing leaves it off with a log
+// line saying which. This flag exists so an operator can turn it off deliberately —
+// on an instance where the broker is shared with something that objects to a system
+// account subscriber, say — rather than by removing a credential.
+type BrokerPresence struct {
+	// Enabled turns the tap on, defaulting to TRUE when unset: presence that is merely
+	// inferred is a guess every downstream feature inherits, so the accurate answer is
+	// the one to have by default.
+	//
+	// 🔑 IT IS A POINTER BECAUSE A bool CANNOT EXPRESS THIS. The zero value of a bool is
+	// false, which is indistinguishable from an operator writing `enabled: false` — so a
+	// plain bool defaulting to true could only be done by rewriting false to true in
+	// ApplyDefaults, which would make the setting impossible to turn off. Same trap the
+	// contention floor documents from the other direction, where 0 is a legal explicit
+	// value. nil ⇒ unset ⇒ the default; a written value is honoured either way.
+	Enabled *bool
+	// ReconcileSeconds is how often the broker's live connection inventory is compared
+	// against the projection. This is NOT a backstop — a graceful broker shutdown emits
+	// no disconnect advisories at all, so this pass is the only account of those deaths.
+	ReconcileSeconds int
+	// CanarySeconds is how often the tap proves itself alive by opening its own MQTT
+	// connection and observing the broker announce it. See presence.Canary for why the
+	// obvious instrument cannot fail.
+	CanarySeconds int
+	// CanaryDeadlineSeconds bounds one canary probe.
+	CanaryDeadlineSeconds int
+	// InventoryGatherSeconds is how long to collect monitoring replies from the
+	// cluster. It bounds a fan-out, so it trades pass latency against the risk of
+	// judging the inventory incomplete because a server was merely slow — and an
+	// inventory judged incomplete withholds every disconnect that pass.
+	InventoryGatherSeconds int
+}
+
+// ReconcileInterval, CanaryInterval, CanaryDeadline and InventoryGatherWindow render
+// the configured seconds as durations, applying the same fail-safe defaulting the rest
+// of this file uses: a non-positive value falls back to the platform default rather
+// than to zero, which would make a ticker panic or a gather window collect nothing.
+func (b BrokerPresence) ReconcileInterval() time.Duration {
+	return secondsOr(b.ReconcileSeconds, DefaultPresenceReconcileSeconds)
+}
+func (b BrokerPresence) CanaryInterval() time.Duration {
+	return secondsOr(b.CanarySeconds, DefaultPresenceCanarySeconds)
+}
+func (b BrokerPresence) CanaryDeadline() time.Duration {
+	return secondsOr(b.CanaryDeadlineSeconds, DefaultPresenceCanaryDeadlineSeconds)
+}
+func (b BrokerPresence) InventoryGatherWindow() time.Duration {
+	return secondsOr(b.InventoryGatherSeconds, DefaultPresenceInventoryGatherSeconds)
+}
+
+// IsEnabled reports whether the tap should run, applying the default for an unset
+// value. It is the only thing that reads Enabled, so the nil case is handled once.
+func (b BrokerPresence) IsEnabled() bool { return b.Enabled == nil || *b.Enabled }
+
+func secondsOr(v, fallback int) time.Duration {
+	if v <= 0 {
+		v = fallback
+	}
+	return time.Duration(v) * time.Second
+}
+
 type EventSourcesConfiguration struct {
 	EventSources         []EventSource
 	InboundEventBatching KafkaEventBatching
 	IngestRateLimit      IngestRateLimit
 	Contention           Contention
+	BrokerPresence       BrokerPresence
 }
 
 // Creates the default event sources configuration
