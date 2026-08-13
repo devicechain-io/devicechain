@@ -498,9 +498,11 @@ func TestArchivePathFailsOnAnUnreadableArchiverSpec(t *testing.T) {
 // developer's context happened to point at.
 //
 // So withDeployedInstance stubs both, and this is the check that it still does.
-func TestDeployedInstanceStubCoversBothClusterLookups(t *testing.T) {
+func TestDeployedInstanceStubCoversEveryOutsideRead(t *testing.T) {
 	archiveBefore := reflect.ValueOf(readLiveArchiveState).Pointer()
 	hashesBefore := reflect.ValueOf(lookupDeployedBrokerHashes).Pointer()
+	recordReadBefore := reflect.ValueOf(readDeployedBrokerRecord).Pointer()
+	recordStoreBefore := reflect.ValueOf(storeBrokerRecord).Pointer()
 	withDeployedInstance(t, nil, nil)
 	if reflect.ValueOf(readLiveArchiveState).Pointer() == archiveBefore {
 		t.Fatal("withDeployedInstance no longer stubs readLiveArchiveState, so every test that " +
@@ -518,6 +520,24 @@ func TestDeployedInstanceStubCoversBothClusterLookups(t *testing.T) {
 		t.Fatal("withDeployedInstance no longer stubs lookupDeployedBrokerHashes, so every test " +
 			"driving stepRenderConfig now reads the broker's ConfigMap from a REAL cluster. " +
 			"Restore the withDeployedBrokerHashes call in withDeployedInstance.")
+	}
+	// 🔴 THE FOURTH AND FIFTH ARE A FILE, WHICH IS WHY THE TEST'S NAME NO LONGER SAYS
+	// "CLUSTER". Every test here runs with Instance "prod", so unstubbed these resolve
+	// ~/.devicechain/prod on whoever runs the suite. The write is the dangerous half:
+	// measured before the stub existed, one `go test ./...` created that directory and
+	// left a real credential record in it, which a later test in the same run then
+	// reused. On a machine that has a prod instance, the suite would have overwritten
+	// the bridge copy that instance depends on.
+	if reflect.ValueOf(readDeployedBrokerRecord).Pointer() == recordReadBefore {
+		t.Fatal("withDeployedInstance no longer stubs readDeployedBrokerRecord, so every test " +
+			"driving stepRenderConfig now reads ~/.devicechain/<instance> on the machine running " +
+			"the suite. Restore the withBrokerRecord call in withDeployedInstance.")
+	}
+	if reflect.ValueOf(storeBrokerRecord).Pointer() == recordStoreBefore {
+		t.Fatal("withDeployedInstance no longer stubs storeBrokerRecord, so every test driving " +
+			"stepRenderConfig now WRITES a credential record into ~/.devicechain/<instance> on " +
+			"the machine running the suite. Restore the withBrokerRecord call in " +
+			"withDeployedInstance.")
 	}
 }
 

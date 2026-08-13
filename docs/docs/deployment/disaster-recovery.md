@@ -292,6 +292,16 @@ issuer key and the cross-service auth secret. If it cannot determine whether the
 instance exists, it stops rather than guessing — minting would be the destructive
 answer.
 
+The broker is a special case, because it is configured several steps before the
+instance itself is. A bootstrap that fails in between leaves a running broker that no
+later run could recognise from the cluster alone: it holds only a public key and two
+password hashes, and none of those can be turned back into the credentials the
+services need. So the broker's credentials are also recorded on the machine you run
+`dcctl` from, under `~/.devicechain/<instance>/`, before the broker is configured with
+them — and a re-run reuses them from there when there is no instance yet to ask. The
+file is readable only by you, and `dcctl destroy` removes it with the rest of the
+instance's local state.
+
 Why it matters differs by credential. Rewriting the root key makes every stored secret
 permanently unreadable. Rewriting the broker credentials is recoverable but disruptive:
 the broker and the services are updated by different mechanisms on different schedules,

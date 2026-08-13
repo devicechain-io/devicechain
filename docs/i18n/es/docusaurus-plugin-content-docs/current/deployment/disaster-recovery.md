@@ -304,6 +304,17 @@ servicio de NATS, la clave del emisor del callout y el secreto de autenticación
 servicios. Si no puede determinar si la instancia existe, se detiene en vez de suponer:
 acuñar sería la respuesta destructiva.
 
+El bróker es un caso especial, porque se configura varios pasos antes que la instancia
+en sí. Un bootstrap que falle en ese intervalo deja un bróker en funcionamiento que
+ninguna ejecución posterior podría reconocer solo a partir del clúster: allí únicamente
+quedan una clave pública y dos hashes de contraseña, y ninguno de ellos puede
+convertirse de vuelta en las credenciales que necesitan los servicios. Por eso las
+credenciales del bróker también se registran en la máquina desde la que ejecutas
+`dcctl`, en `~/.devicechain/<instancia>/`, antes de configurar el bróker con ellas; y
+una nueva ejecución las reutiliza desde ahí cuando todavía no hay una instancia a la
+que preguntar. El archivo solo es legible por ti, y `dcctl destroy` lo elimina junto
+con el resto del estado local de la instancia.
+
 Por qué importa difiere según la credencial. Reescribir la clave raíz vuelve
 permanentemente ilegible todo secreto almacenado. Reescribir las credenciales del
 bróker es recuperable pero disruptivo: el bróker y los servicios se actualizan por
