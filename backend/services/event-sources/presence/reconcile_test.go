@@ -79,6 +79,25 @@ func (f *fakeRequester) RequestWithContext(ctx context.Context, subject string, 
 // inventoryOf builds an Inventory directly, which is what the diff consumes. The
 // fetch path has its own coverage against a real broker; posing an inventory here
 // keeps these tests about the diff.
+// believedOnline / believedOffline turn a broker-shaped LiveDevice into what the
+// PROJECTION holds for it. The split is the point: an asserted row that reads offline is
+// the repairable case, and it carries the stored session id a repair has to defer to.
+func believedOnline(d LiveDevice) StoredDevice {
+	return StoredDevice{Tenant: d.Tenant, DeviceToken: d.DeviceToken, SessionId: d.SessionId, Active: true}
+}
+
+func believedOffline(tenant, token string, session uint64) StoredDevice {
+	return StoredDevice{Tenant: tenant, DeviceToken: token, SessionId: session, Active: false}
+}
+
+func projection(devices ...StoredDevice) map[string]StoredDevice {
+	m := map[string]StoredDevice{}
+	for _, d := range devices {
+		m[DeviceKey(d.Tenant, d.DeviceToken)] = d
+	}
+	return m
+}
+
 func inventoryOf(complete bool, devices ...LiveDevice) Inventory {
 	inv := Inventory{Devices: map[string]LiveDevice{}, Complete: complete, Servers: 1, Expected: 1}
 	if !complete {
@@ -104,7 +123,7 @@ func TestAConnectedDeviceTheProjectionMissedIsRepaired(t *testing.T) {
 	r := reconcilerFor(t, emitter, time.Now())
 	live := LiveDevice{Tenant: "acme", DeviceToken: "sensor-001", SessionId: 1786552664076882575}
 
-	c, d, w := r.reconcileTenant(t.Context(), "acme", inventoryOf(true, live), map[string]LiveDevice{})
+	c, d, w := r.reconcileTenant(t.Context(), "acme", inventoryOf(true, live), projection())
 
 	require.Equal(t, [3]int{1, 0, 0}, [3]int{c, d, w})
 	got := emitter.await(t, "a repair connect", isDevice("acme", "sensor-001", true))
@@ -136,7 +155,7 @@ func TestARepairConnectIsNotRejectedAfterAFalseDeath(t *testing.T) {
 	prior := presence.Prior{SessionId: session, Time: falseDeathAt, HasTime: true, Connected: false}
 
 	live := LiveDevice{Tenant: "acme", DeviceToken: "sensor-001", SessionId: session}
-	c, _, _ := r.reconcileTenant(t.Context(), "acme", inventoryOf(true, live), map[string]LiveDevice{})
+	c, _, _ := r.reconcileTenant(t.Context(), "acme", inventoryOf(true, live), projection())
 	require.Equal(t, 1, c)
 	got := emitter.await(t, "a repair connect", isDevice("acme", "sensor-001", true))
 
@@ -163,7 +182,7 @@ func TestAnAlreadyOnlineDeviceIsNotReEmitted(t *testing.T) {
 	emitter := newRecordingEmitter()
 	r := reconcilerFor(t, emitter, time.Now())
 	live := LiveDevice{Tenant: "acme", DeviceToken: "sensor-001", SessionId: 42}
-	online := map[string]LiveDevice{DeviceKey("acme", "sensor-001"): live}
+	online := projection(believedOnline(live))
 
 	c, d, w := r.reconcileTenant(t.Context(), "acme", inventoryOf(true, live), online)
 
@@ -181,7 +200,7 @@ func TestASyntheticDeathReusesTheStoredSession(t *testing.T) {
 	now := time.Date(2026, 8, 12, 18, 0, 0, 0, time.UTC)
 	r := reconcilerFor(t, emitter, now)
 	stored := LiveDevice{Tenant: "acme", DeviceToken: "sensor-001", SessionId: 1786552664076882575}
-	online := map[string]LiveDevice{DeviceKey("acme", "sensor-001"): stored}
+	online := projection(believedOnline(stored))
 
 	c, d, w := r.reconcileTenant(t.Context(), "acme", inventoryOf(true), online)
 
@@ -209,7 +228,7 @@ func TestAnIncompleteInventoryWithholdsDeathsButStillRepairsConnects(t *testing.
 	r := reconcilerFor(t, emitter, time.Now())
 	seen := LiveDevice{Tenant: "acme", DeviceToken: "sensor-001", SessionId: 100}
 	missing := LiveDevice{Tenant: "acme", DeviceToken: "sensor-002", SessionId: 200}
-	online := map[string]LiveDevice{DeviceKey("acme", "sensor-002"): missing}
+	online := projection(believedOnline(missing))
 
 	c, d, w := r.reconcileTenant(t.Context(), "acme", inventoryOf(false, seen), online)
 
@@ -235,7 +254,7 @@ func TestTheDiffDoesNotCrossTenants(t *testing.T) {
 	r := reconcilerFor(t, emitter, time.Now())
 	other := LiveDevice{Tenant: "globex", DeviceToken: "sensor-009", SessionId: 7}
 
-	c, d, w := r.reconcileTenant(t.Context(), "acme", inventoryOf(true, other), map[string]LiveDevice{})
+	c, d, w := r.reconcileTenant(t.Context(), "acme", inventoryOf(true, other), projection())
 
 	require.Equal(t, [3]int{0, 0, 0}, [3]int{c, d, w},
 		"reconciling acme acted on a globex device")
@@ -281,14 +300,14 @@ type fakeTenants struct{ tokens []string }
 func (f fakeTenants) TenantTokens(context.Context) ([]string, error) { return f.tokens, nil }
 
 type fakeProjection struct {
-	online map[string]map[string]LiveDevice
+	states map[string]map[string]StoredDevice
 }
 
-func (f fakeProjection) AssertedOnline(_ context.Context, tenant, _ string) (map[string]LiveDevice, error) {
-	if m, ok := f.online[tenant]; ok {
+func (f fakeProjection) AssertedStates(_ context.Context, tenant, _ string) (map[string]StoredDevice, error) {
+	if m, ok := f.states[tenant]; ok {
 		return m, nil
 	}
-	return map[string]LiveDevice{}, nil
+	return map[string]StoredDevice{}, nil
 }
 
 // 🔴 THIS TESTS Run, NOT reconcileTenant — and that distinction is the whole reason it
@@ -300,8 +319,8 @@ func TestRunWillNotKillDevicesAfterTheClusterShrinks(t *testing.T) {
 	emitter := newRecordingEmitter()
 	tap := NewTap(testInstance, "mqtt1", emitter, func(string, string, time.Time, bool) bool { return true }, Metrics{})
 	stored := LiveDevice{Tenant: "acme", DeviceToken: "sensor-001", SessionId: 1786552664076882575}
-	reads := fakeProjection{online: map[string]map[string]LiveDevice{
-		"acme": {DeviceKey("acme", "sensor-001"): stored},
+	reads := fakeProjection{states: map[string]map[string]StoredDevice{
+		"acme": projection(believedOnline(stored)),
 	}}
 
 	// Pass 1: a healthy three-node cluster holding nothing. The device is gone, the
@@ -321,4 +340,81 @@ func TestRunWillNotKillDevicesAfterTheClusterShrinks(t *testing.T) {
 	r.requests = &fakeRequester{servers: []string{"A", "B"}, claimed: 1, conns: map[string][]connzConn{}}
 	require.NoError(t, r.Run(t.Context()))
 	emitter2.refute(t, "a death emitted during a cluster partition", isDevice("acme", "sensor-001", false))
+}
+
+// 🔴🔴 THE PERMANENT WEDGE: A BROKER SESSION THAT WENT BACKWARDS. Session ids are minted
+// from the wall clock of whichever broker node the device landed on, so a reconnect onto
+// a node with a trailing clock carries a LOWER id than the projection holds. Decide takes
+// a DIFFERENT session only when it is higher, so the real CONNECT is rejected while the
+// old session's DISCONNECT — same session, newer time — is not. The row reads offline
+// while the device publishes, and a repair carrying the connection's own low id is
+// rejected the same way on every pass, forever, while the repair counter reports success.
+//
+// The repair therefore defers to the STORED session, which makes it
+// same-session-newer-time. That is the trick direction 2 already relies on, mirrored.
+func TestARepairDefersToTheStoredSessionWhenTheBrokersHasRegressed(t *testing.T) {
+	emitter := newRecordingEmitter()
+	now := time.Date(2026, 8, 12, 18, 0, 0, 0, time.UTC)
+	r := reconcilerFor(t, emitter, now)
+
+	storedSession := uint64(1786552664076882575)
+	regressed := storedSession - uint64(90*time.Second) // a node ~90s behind its peers
+	diedAt := now.Add(-time.Minute)
+	prior := presence.Prior{SessionId: storedSession, Time: diedAt, HasTime: true, Connected: false}
+
+	live := LiveDevice{Tenant: "acme", DeviceToken: "sensor-001", SessionId: regressed}
+	c, d, w := r.reconcileTenant(t.Context(), "acme", inventoryOf(true, live),
+		projection(believedOffline("acme", "sensor-001", storedSession)))
+
+	require.Equal(t, [3]int{1, 0, 0}, [3]int{c, d, w})
+	got := emitter.await(t, "a repair connect", isDevice("acme", "sensor-001", true))
+	require.Equal(t, storedSession, got.Event.SessionId,
+		"the repair carried the broker's regressed session, which presence ordering refuses")
+
+	dec := presence.Decide(prior, got.Event.SessionId, got.Event.OccurredAt, got.Event.Connected)
+	require.True(t, dec.Ordered, "the repair is not ordered against the stored row, so it is discarded")
+	require.True(t, dec.Flipped, "the repair was ordered but did not bring the device back online")
+
+	// 🔑 THE COUNTERWEIGHT. Without it this test passes against the old implementation on
+	// any fixture whose broker session happens to be the higher one — which is every
+	// other fixture in this file.
+	stale := presence.Decide(prior, regressed, got.Event.OccurredAt, true)
+	require.False(t, stale.Ordered,
+		"a repair carrying the broker's regressed session was ACCEPTED, so this test cannot tell the "+
+			"two implementations apart")
+}
+
+// The deference is narrow on purpose. When the broker's session is genuinely newer, the
+// repair must carry the CONNECTION's id — that is the session a late advisory would name,
+// and claiming the stored one instead would file this connection under a dead session's
+// identity and leave its real death unmatchable.
+func TestARepairKeepsTheConnectionsSessionWhenItIsNewerThanTheStoredOne(t *testing.T) {
+	emitter := newRecordingEmitter()
+	r := reconcilerFor(t, emitter, time.Now())
+
+	stored := uint64(1786552664076882575)
+	live := LiveDevice{Tenant: "acme", DeviceToken: "sensor-001", SessionId: stored + uint64(time.Minute)}
+
+	c, _, _ := r.reconcileTenant(t.Context(), "acme", inventoryOf(true, live),
+		projection(believedOffline("acme", "sensor-001", stored)))
+
+	require.Equal(t, 1, c)
+	got := emitter.await(t, "a repair connect", isDevice("acme", "sensor-001", true))
+	require.Equal(t, live.SessionId, got.Event.SessionId,
+		"a newer broker session was overridden by the stored one")
+}
+
+// An asserted row the projection ALREADY believes is offline must not produce a death.
+// Direction 2 walks the same map direction 1 does now, so without the Active filter every
+// dead device would be re-killed on every pass — a durable event row per dead device per
+// pass, forever, for a state that has not changed.
+func TestAnAlreadyOfflineDeviceIsNotKilledAgain(t *testing.T) {
+	emitter := newRecordingEmitter()
+	r := reconcilerFor(t, emitter, time.Now())
+
+	c, d, w := r.reconcileTenant(t.Context(), "acme", inventoryOf(true),
+		projection(believedOffline("acme", "sensor-001", 1786552664076882575)))
+
+	require.Equal(t, [3]int{0, 0, 0}, [3]int{c, d, w})
+	emitter.refute(t, "a death for a device already believed offline", isDevice("acme", "sensor-001", false))
 }

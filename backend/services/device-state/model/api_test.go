@@ -419,3 +419,82 @@ func TestMergeLatestMeasurementsBinding(t *testing.T) {
 		t.Fatalf("older reading wrongly overwrote the newer value/unit: %+v", temp)
 	}
 }
+
+// 🔴 activeOnly SPLITS TWO QUESTIONS AND THE FALSE ANSWER IS THE ONE NOTHING ELSE COVERS.
+// Every caller of the true half predates this argument; the false half exists because a
+// repair for a device the projection believes is OFFLINE has to carry the session id the
+// row is holding, and only an inactive row carries it. A filter that ignores the flag —
+// in either direction — is invisible to the callers' own tests, which fake this read.
+//
+// The source scope is asserted in the same test on purpose: it is the guard that stops
+// one transport's reconciliation from enumerating (and so from killing) another's
+// devices, and it has to survive any rework of the active predicate beside it.
+func TestAssertedDeviceStatesSplitsActiveFromAssertedAndScopesBySource(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+	t0 := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+
+	connect := func(token string, session uint64) {
+		t.Helper()
+		if _, err := api.MergeDeviceState(ctx, token, t0,
+			&PresenceTransition{Connected: true, SessionId: session, OccurredAt: t0},
+			DeviceIdentity{Source: "mqtt1"}); err != nil {
+			t.Fatalf("connect %s: %v", token, err)
+		}
+	}
+	// live-1 stays up; dead-1 connects and then dies, which is the row a repair needs.
+	connect("live-1", 100)
+	connect("dead-1", 200)
+	if _, err := api.MergeDeviceState(ctx, "dead-1", t0.Add(time.Minute),
+		&PresenceTransition{Connected: false, SessionId: 200, OccurredAt: t0.Add(time.Minute)},
+		DeviceIdentity{Source: "mqtt1"}); err != nil {
+		t.Fatalf("disconnect dead-1: %v", err)
+	}
+	// A device on a different source must never appear for mqtt1.
+	if _, err := api.MergeDeviceState(ctx, "other-1", t0,
+		&PresenceTransition{Connected: true, SessionId: 300, OccurredAt: t0},
+		DeviceIdentity{Source: "sparkplug:h1"}); err != nil {
+		t.Fatalf("connect other-1: %v", err)
+	}
+	// An INFERRED device is not asserted and must not appear at all.
+	if _, err := api.MergeDeviceState(ctx, "inferred-1", t0, nil, DeviceIdentity{}); err != nil {
+		t.Fatalf("inferred merge: %v", err)
+	}
+
+	tokensOf := func(activeOnly bool) map[string]uint64 {
+		t.Helper()
+		found, err := api.AssertedDeviceStates(ctx, "mqtt1", activeOnly)
+		if err != nil {
+			t.Fatalf("AssertedDeviceStates(activeOnly=%v): %v", activeOnly, err)
+		}
+		out := map[string]uint64{}
+		for _, s := range found {
+			out[s.DeviceToken] = s.SessionId
+		}
+		return out
+	}
+
+	active := tokensOf(true)
+	if len(active) != 1 {
+		t.Fatalf("activeOnly=true returned %d rows, want just the live device: %v", len(active), active)
+	}
+	if _, ok := active["live-1"]; !ok {
+		t.Fatalf("activeOnly=true did not return the live device: %v", active)
+	}
+
+	all := tokensOf(false)
+	if len(all) != 2 {
+		t.Fatalf("activeOnly=false returned %d rows, want the live AND the dead one: %v", len(all), all)
+	}
+	if session, ok := all["dead-1"]; !ok {
+		t.Fatalf("activeOnly=false omitted the asserted-offline device, whose stored session a repair "+
+			"has to defer to: %v", all)
+	} else if session != 200 {
+		t.Fatalf("the asserted-offline device carried session %d, want the stored 200", session)
+	}
+	for _, absent := range []string{"other-1", "inferred-1"} {
+		if _, present := all[absent]; present {
+			t.Fatalf("%s must not be visible to the mqtt1 source: %v", absent, all)
+		}
+	}
+}

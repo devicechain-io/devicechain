@@ -245,7 +245,7 @@ func New(resolver deviceResolver, emitter presenceEmitter, epoch *adapter.EpochS
 // SourceLwM2M is the event Source stamped on every LwM2M-origin event (ADR-067). It is a
 // single fixed value for the whole adapter — one shared socket is one source, unlike
 // Sparkplug which derives a source per broker/hostId. It is STABLE by contract: the L3
-// failover reconciliation reads it back (assertedActiveDeviceStates(source:)), so
+// failover reconciliation reads it back (assertedDeviceStates(source:)), so
 // renaming it would strand every previously-asserted LwM2M row.
 const SourceLwM2M = "lwm2m"
 

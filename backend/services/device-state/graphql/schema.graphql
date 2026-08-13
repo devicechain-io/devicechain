@@ -113,13 +113,18 @@ type Query {
     deviceStatesByDeviceToken(deviceTokens: [String!]!): [DeviceState!]!
     # Get device states for one or more devices by their (denormalized) external id.
     deviceStatesByExternalId(externalIds: [String!]!): [DeviceState!]!
-    # All ASSERTED + active device states for the calling tenant AND the given event
-    # source — the set the Sparkplug adapter reconciles against on failover (ADR-067
-    # SP4b): it enumerates the devices the platform believes that source has online,
-    # floors its epoch generator from the max sessionId here, and probes each for
-    # liveness. The source scope stops two Sparkplug sources on one tenant from
-    # cross-disconnecting each other's devices.
-    assertedActiveDeviceStates(source: String!): [DeviceState!]!
+    # ASSERTED device states for the calling tenant AND the given event source — the
+    # set an adapter reconciles against on failover (ADR-067 SP4b): it enumerates the
+    # devices the platform believes that source has online, floors its epoch generator
+    # from the max sessionId here, and probes each for liveness. The source scope stops
+    # two sources on one tenant from cross-disconnecting each other's devices.
+    #
+    # activeOnly:true answers "who does the projection believe is online". false adds
+    # the asserted devices it believes are OFFLINE, whose stored sessionId a repair
+    # needs in order to be one presence ordering will accept — a broker node with a
+    # trailing clock mints a LOWER session on reconnect, and a lower session is
+    # rejected forever. There is no default: the two are different questions.
+    assertedDeviceStates(source: String!, activeOnly: Boolean!): [DeviceState!]!
     # Search for device states that match the given criteria.
     deviceStates(criteria: DeviceStateSearchCriteria!): DeviceStateSearchResults!
     # Current value of every measurement name for a device (live readings).

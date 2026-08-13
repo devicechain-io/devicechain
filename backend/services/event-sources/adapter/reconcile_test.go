@@ -22,9 +22,10 @@ import (
 // unparseable sessionId — is dropped rather than corrupting the result.
 func TestAssertedActiveParsesFloorsSkipsAndScopesBySource(t *testing.T) {
 	var gotSource any
-	gql := &fakeGraphQL{responder: func(_ string, vars map[string]any) (any, error) {
-		gotSource = vars["source"]
-		return map[string]any{"assertedActiveDeviceStates": []map[string]any{
+	var gotQuery string
+	gql := &fakeGraphQL{responder: func(query string, vars map[string]any) (any, error) {
+		gotSource, gotQuery = vars["source"], query
+		return map[string]any{"assertedDeviceStates": []map[string]any{
 			{"externalId": "plant-a/n1", "sessionId": "100"},
 			{"externalId": "plant-a/n1/d1", "sessionId": "250"},
 			{"externalId": nil, "sessionId": "999"},             // null external id → skipped
@@ -36,6 +37,13 @@ func TestAssertedActiveParsesFloorsSkipsAndScopesBySource(t *testing.T) {
 	devices, max, err := r.AssertedActive(context.Background(), "acme", "sparkplug:h1")
 	require.NoError(t, err)
 	assert.Equal(t, "sparkplug:h1", gotSource, "the read must be scoped to the caller's source (cross-disconnect guard)")
+	// 🔴 activeOnly:true IS THIS RECONCILER'S QUESTION and the field answers two. It
+	// diffs the believed-ONLINE set against live probes, so the offline rows the MQTT tap
+	// asks for would be probed here as if they were live — a probe, and on no answer a
+	// death, for every device already known to be dead. The stub answers whatever is
+	// asked, so nothing else in this package can see the difference.
+	assert.Contains(t, gotQuery, "activeOnly: true",
+		"the failover reconciler must ask only for the devices believed ONLINE")
 	assert.Equal(t, uint64(250), max, "the floor is the max sessionId among the kept rows")
 	require.Len(t, devices, 2, "the null-externalId and bad-session rows are dropped")
 	assert.Equal(t, "plant-a/n1", devices[0].ExternalId)

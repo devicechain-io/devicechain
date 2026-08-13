@@ -17,13 +17,17 @@ import (
 // SYSTEM-tier tenant:read authority so only a service or the superuser can call it.
 const tenantTokensQuery = `query { tenantTokens }`
 
-// assertedOnlineQuery asks device-state which of this source's devices it currently
-// believes are asserted-online, keyed by device token.
+// assertedStatesQuery asks device-state what it currently believes about this source's
+// asserted devices, keyed by device token.
 //
-// It reads deviceToken where adapter.Reconciler reads externalId, and that is the
-// whole reason it is a separate query rather than a reuse — see ProjectionReader.
-const assertedOnlineQuery = `query($source: String!) {
-  assertedActiveDeviceStates(source: $source) { deviceToken sessionId }
+// It reads deviceToken where adapter.Reconciler reads externalId, and that is the whole
+// reason it is a separate query rather than a reuse — see ProjectionReader.
+//
+// activeOnly:false because the offline rows are the ones that need repairing and their
+// stored sessionId is what makes a repair applicable; `active` is what splits the two
+// directions of the diff back apart on this side.
+const assertedStatesQuery = `query($source: String!) {
+  assertedDeviceStates(source: $source, activeOnly: false) { deviceToken sessionId active }
 }`
 
 // GraphQLTenantLister reads the tenant list from user-management.
@@ -63,8 +67,8 @@ func NewGraphQLProjectionReader(client adapter.GraphQLClient, url string) *Graph
 	return &GraphQLProjectionReader{client: client, url: url}
 }
 
-// AssertedOnline returns the tenant's asserted-online devices for source, keyed by
-// DeviceKey.
+// AssertedStates returns the tenant's asserted devices for source, keyed by DeviceKey,
+// each carrying whether the projection believes it is currently online.
 //
 // 🔑 THE SOURCE FILTER IS WHAT KEEPS THIS PASS FROM KILLING OTHER TRANSPORTS' DEVICES.
 // The diff marks anything it finds here and not in the BROKER's inventory as offline,
@@ -77,19 +81,20 @@ func NewGraphQLProjectionReader(client adapter.GraphQLClient, url string) *Graph
 // an MQTT-connected device that also posts over HTTP has its row attributed to the HTTP
 // source and is invisible here. It is then never repaired — but also never wrongly
 // killed, which is the direction to fail in.
-func (r *GraphQLProjectionReader) AssertedOnline(ctx context.Context, tenant, source string) (map[string]LiveDevice, error) {
+func (r *GraphQLProjectionReader) AssertedStates(ctx context.Context, tenant, source string) (map[string]StoredDevice, error) {
 	var out struct {
-		AssertedActiveDeviceStates []struct {
+		AssertedDeviceStates []struct {
 			DeviceToken string `json:"deviceToken"`
 			SessionId   string `json:"sessionId"`
-		} `json:"assertedActiveDeviceStates"`
+			Active      bool   `json:"active"`
+		} `json:"assertedDeviceStates"`
 	}
 	vars := map[string]any{"source": source}
-	if err := r.client.Query(ctx, r.url, tenant, assertedOnlineQuery, vars, &out); err != nil {
+	if err := r.client.Query(ctx, r.url, tenant, assertedStatesQuery, vars, &out); err != nil {
 		return nil, err
 	}
-	devices := make(map[string]LiveDevice, len(out.AssertedActiveDeviceStates))
-	for _, d := range out.AssertedActiveDeviceStates {
+	devices := make(map[string]StoredDevice, len(out.AssertedDeviceStates))
+	for _, d := range out.AssertedDeviceStates {
 		if d.DeviceToken == "" {
 			continue
 		}
@@ -97,18 +102,21 @@ func (r *GraphQLProjectionReader) AssertedOnline(ctx context.Context, tenant, so
 		// overflows a 32-bit GraphQL Int.
 		session, err := strconv.ParseUint(d.SessionId, 10, 64)
 		if err != nil {
-			// Skip rather than default to 0. A zero session on a synthetic disconnect
-			// would be REJECTED by presence.Decide against any real stored session, so
-			// the repair would silently do nothing — worse than not attempting it,
-			// because it would be counted as a repair.
+			// Skip rather than default to 0. A zero session tells both directions of the
+			// diff a lie: a synthetic disconnect carrying it would be REJECTED by
+			// presence.Decide against any real stored session, and a connect repair would
+			// read the row as having no session to defer to. Dropping the row means the
+			// device is not repaired this pass; keeping it means it is "repaired" without
+			// anything changing, and counted.
 			log.Warn().Str("tenant", tenant).Str("device", d.DeviceToken).Str("sessionId", d.SessionId).
 				Msg("Skipping a device with an unreadable presence session during reconciliation.")
 			continue
 		}
-		devices[DeviceKey(tenant, d.DeviceToken)] = LiveDevice{
+		devices[DeviceKey(tenant, d.DeviceToken)] = StoredDevice{
 			Tenant:      tenant,
 			DeviceToken: d.DeviceToken,
 			SessionId:   session,
+			Active:      d.Active,
 		}
 	}
 	return devices, nil

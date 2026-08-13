@@ -57,19 +57,21 @@ func (r *SchemaResolver) DeviceStatesByExternalId(ctx context.Context, args stru
 	return result, nil
 }
 
-// AssertedActiveDeviceStates returns every ASSERTED + active device state for the
-// calling tenant — the failover-reconciliation source (ADR-067 SP4b). Tenant scope
-// is enforced by the RDB callback from the caller's token, so a Sparkplug adapter
-// only ever sees its own tenant's asserted devices.
-func (r *SchemaResolver) AssertedActiveDeviceStates(ctx context.Context, args struct {
-	Source string
+// AssertedDeviceStates returns the calling tenant's ASSERTED device states for one
+// event source — the failover-reconciliation source (ADR-067 SP4b). Tenant scope is
+// enforced by the RDB callback from the caller's token, so an adapter only ever sees
+// its own tenant's asserted devices. activeOnly is required rather than defaulted; see
+// the model method for why the two questions are not interchangeable.
+func (r *SchemaResolver) AssertedDeviceStates(ctx context.Context, args struct {
+	Source     string
+	ActiveOnly bool
 }) ([]*DeviceStateResolver, error) {
 	if err := auth.Authorize(ctx, auth.StateRead); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	found, err := api.AssertedActiveDeviceStates(ctx, args.Source)
+	found, err := api.AssertedDeviceStates(ctx, args.Source, args.ActiveOnly)
 	if err != nil {
 		return nil, err
 	}
