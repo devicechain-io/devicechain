@@ -79,23 +79,50 @@ formulario de texto libre, coincidiendo con lo que la plataforma aceptará. Los 
 pero no publicado se muestran junto al selector como no disponibles, de modo que un comando faltante se
 lee como "aún no publicado" en lugar de como una funcionalidad ausente.
 
-## Ciclo de vida del comando
+## Ciclo de vida del comando {#command-lifecycle}
 
 Un comando emitido se persiste y se rastrea, no es de tipo "disparar y olvidar" (fire-and-forget). Pasa por:
 
-- **`QUEUED`** — aceptado y validado, esperando ser despachado.
-- **`SENT`** — publicado en el topic de comandos propio del dispositivo.
+Estos estados significan que el comando aún no ha terminado:
+
+- **`QUEUED`** — aceptado y validado, esperando su primera decisión de despacho. Es
+  genuinamente transitorio: un comando no se queda aquí.
+- **`HELD`** — un comando retenido en lugar de despachado. Forma parte del vocabulario del
+  ciclo de vida que la API acepta y la consola representa, y cuenta como en tránsito: un
+  comando retenido todavía se puede cancelar, y un TTL que vence sobre él registra
+  `EXPIRED` y no `TIMEOUT`, porque el comando nunca llegó a salir. Hoy nada coloca un
+  comando en este estado.
+- **`SENT`** — publicado en el topic de comandos propio del dispositivo, esperando su
+  respuesta.
+
+Estos son terminales, y nada sale de un estado terminal:
+
 - **`SUCCESSFUL`** / **`FAILED`** — el dispositivo informó el resultado.
-- **`TIMEOUT`** / **`EXPIRED`** — transcurrió un TTL. `EXPIRED` significa que nunca se envió;
-  `TIMEOUT` significa que sí se envió y nunca se respondió. Cancelar un comando también registra
-  `EXPIRED`.
+- **`TIMEOUT`** — se despachó y el dispositivo nunca respondió.
+- **`EXPIRED`** — su TTL transcurrió antes de que llegara a salir.
+- **`CANCELLED`** — un operador o un inquilino lo canceló.
+
+`EXPIRED` y `TIMEOUT` responden preguntas distintas, y confundir uno con el otro te hace
+buscar en el lugar equivocado: `EXPIRED` significa que el comando nunca salió de la
+plataforma, así que una racha de ellos indica que las entregas no se están intentando;
+`TIMEOUT` significa que sí salió y no volvió nada, lo que apunta al dispositivo. Lee con
+cuidado una racha de `TIMEOUT` antes de culpar al firmware: un comando para un dispositivo
+apagado se despacha igualmente, así que también termina ahí salvo que el dispositivo vuelva
+y responda antes de que venza su TTL.
+
+Cancelar un comando registra `CANCELLED`. La cancelación y la expiración del TTL compartían
+hasta hace poco el único valor `EXPIRED`, así que los comandos cancelados antes de ese
+cambio siguen apareciendo como `EXPIRED`; ambos conviven en los datos históricos, y como
+nada registró qué filas `EXPIRED` provenían de una cancelación, no es posible distinguirlas
+a posteriori.
 
 **Un comando solo alcanza un resultado terminal si el dispositivo responde.** Informar el resultado
 es la mitad del contrato que le corresponde al dispositivo — ver
 [Responder a un comando](../guides/connecting-a-device.md#responding-to-a-command). Un
-dispositivo que nunca responde deja sus comandos en `SENT` hasta que expiran, y un comando
-emitido sin `expiresAt` permanece allí indefinidamente, así que define uno si tus dispositivos no
-informan resultados.
+dispositivo que nunca responde deja sus comandos en `SENT` hasta que su TTL los convierte
+en `TIMEOUT`. Todo comando lleva un TTL — el que definas con `expiresAt`, o el
+predeterminado de la plataforma de siete días —, así que define el tuyo si tus dispositivos
+no informan resultados y una semana es más de lo que el comando sigue siendo útil.
 
 Cada dispositivo recibe comandos en un topic acotado exclusivamente a ese dispositivo, y está autorizado
 solo para ese topic — un dispositivo no puede observar comandos dirigidos a ningún otro dispositivo de

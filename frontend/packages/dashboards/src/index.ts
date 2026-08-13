@@ -44,6 +44,16 @@ export type {
   CommandParamDataType,
 } from './types';
 
+// The command-delivery lifecycle vocabulary — the ONE terminal set every surface
+// (console panel, command-button widget, preview) reads, so a new status can't be
+// learned by some of them and not the others.
+export {
+  COMMAND_STATUSES,
+  TERMINAL_COMMAND_STATUSES,
+  isTerminalCommandStatus,
+  type CommandStatus,
+} from './command-status';
+
 export {
   effectiveBindings,
   parseBindingManifest,

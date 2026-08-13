@@ -378,6 +378,15 @@ func buildMetrics() {
 			"Wake-drain triggers dropped because the device's shard worker was busy (the next wake re-triggers).", nil),
 		DrainDedup: Microservice.NewCounter("command_drain_dedup_total",
 			"Commands skipped because they were already dispatched (drain/live overlap) — a re-actuation avoided.", nil),
+		// The two claim outcomes are SPLIT because they mean opposite things: a lost claim is the
+		// exclusion mechanism working (someone else owns that command, so we correctly did not
+		// actuate it twice), while a claim error is command-delivery being unreachable and a
+		// deliverable command going undelivered. Summed into one series, an outage would look like
+		// ordinary contention.
+		DrainClaimLost: Microservice.NewCounter("command_drain_claims_lost_total",
+			"Held commands another dispatcher or the delivery sweep claimed first, so this wake did not dispatch them — a duplicate actuation avoided, not a fault.", nil),
+		DrainClaimErrors: Microservice.NewCounter("command_drain_claim_errors_total",
+			"Held commands NOT dispatched because ownership could not be established with command-delivery (fail-closed; retried on the device's next Register/Update).", nil),
 		TenantGoneRefused: Microservice.NewCounter("commands_tenant_deleted_total",
 			"Commands ack-dropped because their tenant has been deleted and its data is being reclaimed — the platform declining to actuate an offboarded customer's hardware.", nil),
 	}
@@ -414,12 +423,20 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 	// reads tenantGovernance (tenant:read). Without the scope the override fetch fails and every
 	// tenant meters at the platform default — fail-open-to-default, but overrides go dead.
 	// CommandRead is added for the L4b wake-drain (ADR-075): the same client reads a waking device's
-	// still-SENT commands from command-delivery (command:read) so the dispatcher can deliver commands
+	// backlogged commands from command-delivery (command:read) so the dispatcher can deliver commands
 	// held while the device was offline. Without the scope the drain query is forbidden and offline
-	// commands ride their TTL to TIMEOUT (the L4a behavior) — degraded, not broken.
+	// commands ride their TTL to their terminal state (the L4a behavior) — degraded, not broken.
+	//
+	// CommandWrite is added because the wake drain is a DISPATCHER, not just a reader: before it
+	// issues a command's CoAP op it CLAIMS the command (command-delivery's markCommandSent, which
+	// requires command:write). The claim is what stops the delivery sweep from publishing the same
+	// still-dispatchable command a second time — and a command is a physical actuation, so the
+	// second publish moves real hardware again. The scope is used for that ONE mutation, on a
+	// command this service is about to dispatch itself; nothing here creates, cancels or otherwise
+	// authors commands.
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "lwm2m-ingest",
 		[]string{string(auth.DeviceRead), string(auth.DeviceWrite), string(auth.StateRead),
-			string(auth.TenantRead), string(auth.CommandRead)})
+			string(auth.TenantRead), string(auth.CommandRead), string(auth.CommandWrite)})
 
 	// The ADR-077 gate. It matters more here than on any other ingest front: an LwM2M
 	// device authenticates at the DTLS-PSK handshake against this server directly, so it
@@ -479,14 +496,21 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 	})
 	handlers := registry.NewHandlers(reg, bindings, registryMetrics, obsManager, connTable, decode.DefaultObjectAllowlist, limiter, leaderCtx)
 
-	// The L4b wake-drain fetcher reads a waking device's still-SENT commands from command-delivery so
-	// the dispatcher can deliver commands held while the device was offline. It needs the
+	// The L4b wake-drain fetcher reads a waking device's backlogged commands from command-delivery so
+	// the dispatcher can deliver commands held while the device was offline, and the CLAIMER is its
+	// write half — it takes a still-dispatchable command out of the sweep's reach immediately before
+	// the drain actuates it, so the same command is never published a second time. They are built
+	// together, from the same client and URL, because a fetcher without a claimer can read a
+	// claimable command but not dispatch it (the dispatcher fails closed). Both need the
 	// command-delivery GraphQL coordinate; without it draining is DISABLED (offline commands ride
-	// their TTL to TIMEOUT — the L4a behavior) rather than failing the service. Kept as the concrete
-	// type so a nil is passed to NewDispatcher as a true nil interface (below), not a typed nil.
+	// their TTL to their terminal state — the L4a behavior) rather than failing the service. Kept as
+	// the concrete types so a nil is passed to NewDispatcher as a true nil interface (below), not a
+	// typed nil.
 	var fetcher *downlink.CommandFetcher
+	var claimer *downlink.CommandClaimer
 	if cdURL, ok := commandDeliveryEndpoint(infra); ok {
 		fetcher = downlink.NewCommandFetcher(client, cdURL)
+		claimer = downlink.NewCommandClaimer(client, cdURL)
 	} else {
 		log.Warn().Msg("command-delivery endpoint not configured (infrastructure.commandDelivery) — LwM2M queue-mode drain disabled; a command to an offline device rides its TTL to TIMEOUT instead of draining on the device's next wake.")
 	}
@@ -505,15 +529,15 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 			// reason the registrar's does not cover: this is the second path by which a
 			// command actuates hardware. command-delivery refuses to publish new commands
 			// into a deleted tenant, but a command already durable on the stream still
-			// arrives, and the L4b wake-drain re-fetches commands left in SENT and fires
-			// them when a sleeping device next registers — which can be long after the
-			// delete, off a (tenant, token) remembered from before it.
+			// arrives, and the L4b wake-drain re-fetches commands left HELD or SENT and
+			// fires them when a sleeping device next registers — which can be long after
+			// the delete, off a (tenant, token) remembered from before it.
 			TenantDeleted: tenantGate,
 		}
 		if fetcher != nil {
-			dispatcher = downlink.NewDispatcher(CommandReader, ResponseWriter, connTable, downlink.NewOps(), fetcher, downlinkMetrics, opts)
+			dispatcher = downlink.NewDispatcher(CommandReader, ResponseWriter, connTable, downlink.NewOps(), fetcher, claimer, downlinkMetrics, opts)
 		} else {
-			dispatcher = downlink.NewDispatcher(CommandReader, ResponseWriter, connTable, downlink.NewOps(), nil, downlinkMetrics, opts)
+			dispatcher = downlink.NewDispatcher(CommandReader, ResponseWriter, connTable, downlink.NewOps(), nil, nil, downlinkMetrics, opts)
 		}
 		// Wire the wake-drain: a device becoming reachable on a fresh conn (Register / re-handshake
 		// Update) triggers a drain of its held commands. A no-op when draining is disabled or on a

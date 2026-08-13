@@ -22,10 +22,11 @@ type fakeApi struct {
 	lockAvailable bool
 	pending       []*model.Command
 
-	lockAttempts int
-	pendingReads int
-	expireCalls  int
-	markedSent   []uint
+	lockAttempts    int
+	pendingReads    int
+	expireCalls     int
+	markedSent      []uint
+	markSentByToken []string
 }
 
 func (f *fakeApi) TrySweepLock(_ context.Context, fn func() error) (bool, error) {
@@ -46,11 +47,18 @@ func (f *fakeApi) PendingCommands(context.Context) ([]*model.Command, error) {
 	return f.pending, nil
 }
 
-func (f *fakeApi) ExpireStale(context.Context, time.Time) (int64, error) {
+func (f *fakeApi) ExpireStale(context.Context, time.Time) (int64, map[string]int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.expireCalls++
-	return 0, nil
+	return 0, nil, nil
+}
+
+func (f *fakeApi) MarkSentByToken(_ context.Context, token string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.markSentByToken = append(f.markSentByToken, token)
+	return true, nil
 }
 
 func (f *fakeApi) MarkSent(_ context.Context, id uint) (*model.Command, error) {

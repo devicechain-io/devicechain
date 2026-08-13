@@ -82,19 +82,43 @@ yet" rather than as a missing feature.
 
 An issued command is persisted and tracked, not fire-and-forget. It moves through:
 
-- **`QUEUED`** — accepted and validated, waiting to be dispatched.
-- **`SENT`** — published to the device's own command topic.
+These states mean the command is not finished yet:
+
+- **`QUEUED`** — accepted and validated, awaiting its first dispatch decision. Genuinely
+  transient: a command does not linger here.
+- **`HELD`** — a command withheld rather than dispatched. It is part of the lifecycle
+  vocabulary the API accepts and the console renders, and it counts as in flight: a held
+  command can still be cancelled, and a TTL that lapses on one records `EXPIRED` rather
+  than `TIMEOUT`, because the command never went out. Nothing places a command in it
+  today.
+- **`SENT`** — published to the device's own command topic, awaiting its response.
+
+These are terminal, and nothing moves out of a terminal state:
+
 - **`SUCCESSFUL`** / **`FAILED`** — the device reported the outcome.
-- **`TIMEOUT`** / **`EXPIRED`** — a TTL elapsed. `EXPIRED` means it never went out;
-  `TIMEOUT` means it did and was never answered. Cancelling a command also records
-  `EXPIRED`.
+- **`TIMEOUT`** — it was dispatched and the device never answered.
+- **`EXPIRED`** — its TTL elapsed before it ever went out.
+- **`CANCELLED`** — an operator or a tenant called it off.
+
+`EXPIRED` and `TIMEOUT` answer different questions, and mistaking one for the other sends
+you looking in the wrong place: `EXPIRED` means the command never left the platform, so a
+run of them says deliveries are not being attempted; `TIMEOUT` means it did go out and
+nothing came back, which points at the device. Read a run of `TIMEOUT` carefully before you
+blame firmware: a command for a device that is switched off is dispatched all the same, so
+it ends there too unless the device comes back and answers before its TTL elapses.
+
+Cancelling a command records `CANCELLED`. Cancellation and TTL expiry shared the single
+value `EXPIRED` until recently, so commands cancelled before that change still read as
+`EXPIRED`; both appear in historical data, and nothing recorded which `EXPIRED` rows came
+from a cancel, so they cannot be told apart after the fact.
 
 **A command only reaches a terminal outcome if the device answers.** Reporting the result
 is the device's half of the contract — see
 [Responding to a command](../guides/connecting-a-device.md#responding-to-a-command). A
-device that never responds leaves its commands in `SENT` until they expire, and a command
-issued with no `expiresAt` stays there indefinitely, so set one if your devices do not
-report outcomes.
+device that never responds leaves its commands in `SENT` until their TTL turns them into
+`TIMEOUT`. Every command carries a TTL — one you set with `expiresAt`, or the platform
+default of seven days — so set your own if your devices do not report outcomes and a week
+is longer than the command stays useful.
 
 Each device receives commands on a topic scoped to that device alone, and is authorized
 for that topic only — a device cannot observe commands addressed to any other device in

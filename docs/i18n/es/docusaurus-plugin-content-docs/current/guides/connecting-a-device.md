@@ -237,10 +237,11 @@ en el mismo subject, y una respuesta identifica su comando mediante el token. El
 del topic en lugar del cuerpo, de modo que un dispositivo no puede responder por otro inquilino.
 
 :::info Responder es lo que completa el ciclo de vida
-Un comando que nunca se responde permanece en `SENT` hasta que expira. Sin una respuesta, la
-plataforma solo sabe que el comando fue despachado — no que el dispositivo actuó sobre él. Si
-sus dispositivos no responden, configure un `expiresAt` al emitir comandos para que alcancen un
-estado terminal en lugar de quedar en tránsito indefinidamente.
+Un comando que nunca se responde permanece en `SENT` hasta que su TTL lo convierte en
+`TIMEOUT`. Sin una respuesta, la plataforma solo sabe que el comando fue despachado — no que
+el dispositivo actuó sobre él. Si sus dispositivos no responden, configure un `expiresAt` al
+emitir comandos para que alcancen un estado terminal en su propio plazo y no en el
+predeterminado de siete días de la plataforma.
 :::
 
 ## Qué sucede a continuación

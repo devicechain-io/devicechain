@@ -13,14 +13,18 @@ import (
 
 // fakeQuerier is a stand-in for svcclient.Client: it captures the query arguments and
 // returns a canned set of rows.
+//
+// It keeps the WHOLE criteria map, not just the fields a particular assertion wants. A fake
+// that copies out only the fields it knows about cannot see a field the caller stopped
+// sending (or started sending under a new name) — the omission looks like a passing test.
 type fakeQuerier struct {
 	rows []drainRow
 	err  error
 
 	gotTenant   string
 	gotBaseURL  string
+	gotCriteria map[string]any
 	gotDevice   string
-	gotStatus   string
 	gotPageSize int
 	gotPageNum  int
 }
@@ -32,8 +36,8 @@ func (f *fakeQuerier) Query(ctx context.Context, baseURL, tenant, query string, 
 	f.gotTenant = tenant
 	f.gotBaseURL = baseURL
 	if crit, ok := vars["criteria"].(map[string]any); ok {
+		f.gotCriteria = crit
 		f.gotDevice, _ = crit["deviceToken"].(string)
-		f.gotStatus, _ = crit["status"].(string)
 		f.gotPageSize, _ = crit["pageSize"].(int)
 		f.gotPageNum, _ = crit["pageNumber"].(int)
 	}
@@ -73,9 +77,10 @@ func TestPendingOrdersOldestFirst(t *testing.T) {
 	if string(got[1].Payload) != `{"path":"/5/0/1","value":"coaps://fw"}` {
 		t.Fatalf("payload not preserved: %q", string(got[1].Payload))
 	}
-	// The wire contract: per-tenant scope, the device token, SENT-only, bounded page.
-	if q.gotTenant != "tenantA" || q.gotDevice != "dev-1" || q.gotStatus != statusSent {
-		t.Fatalf("query args = tenant %q device %q status %q", q.gotTenant, q.gotDevice, q.gotStatus)
+	// The wire contract: per-tenant scope and the device token. The status SET has its own
+	// test (TestPendingRequestsHeldAndSentOnTheWire) since it is the part that must not drift.
+	if q.gotTenant != "tenantA" || q.gotDevice != "dev-1" {
+		t.Fatalf("query args = tenant %q device %q", q.gotTenant, q.gotDevice)
 	}
 	if q.gotPageNum != 1 || q.gotPageSize != maxDrainFetch {
 		t.Fatalf("pagination = page %d size %d, want 1/%d (a large fetch so the sort sees the oldest)", q.gotPageNum, q.gotPageSize, maxDrainFetch)
@@ -142,13 +147,75 @@ func TestPendingDropsExpired(t *testing.T) {
 	}
 }
 
-// TestPendingDropsNonSent is the defensive guard: even if the server ever returned a
-// non-SENT row (contract drift), the fetcher must never hand a terminal command to
-// dispatch (re-actuation).
-func TestPendingDropsNonSent(t *testing.T) {
+// TestPendingRequestsHeldAndSentOnTheWire is the WIRE test for the drain's status set. It
+// asserts on the criteria map actually handed to the GraphQL client, against LITERAL strings
+// — never against this package's own constants, because a test that compares a constant to
+// itself passes no matter what either side is renamed to and proves only that Go assignment
+// works.
+//
+// What it is defending: command-delivery's status vocabulary and this package's copy of it
+// are two independent lists (downlink does not import the command-delivery module), and the
+// forked graphql-go rejects an input-object field the schema does not define when it arrives
+// through a VARIABLE — which is how criteria is sent. So the field NAME must be `statuses`
+// and the VALUES must be exactly the two strings command-delivery persists. A rename on
+// either side has to fail here, loudly, rather than drift into a drain that quietly returns
+// nothing and leaves a sleeping fleet's backlog undelivered forever.
+func TestPendingRequestsHeldAndSentOnTheWire(t *testing.T) {
+	q := &fakeQuerier{}
+	f := NewCommandFetcher(q, "http://cd/graphql")
+
+	if _, err := f.Pending(context.Background(), "tenantA", "dev-1", time.Now()); err != nil {
+		t.Fatalf("Pending: %v", err)
+	}
+	if q.gotCriteria == nil {
+		t.Fatal("no criteria were sent")
+	}
+	// The OLD single-value field must be gone: sending both would AND the two filters in
+	// command-delivery, and `status = 'SENT' AND status IN ('HELD','SENT')` silently drops
+	// every HELD row — the exact bug this slice exists to prevent, dressed as a leftover.
+	if _, ok := q.gotCriteria["status"]; ok {
+		t.Fatalf("criteria still carries the single-value `status` field: %#v", q.gotCriteria)
+	}
+	raw, ok := q.gotCriteria["statuses"]
+	if !ok {
+		t.Fatalf("criteria carries no `statuses` field: %#v", q.gotCriteria)
+	}
+	got, ok := raw.([]string)
+	if !ok {
+		t.Fatalf("`statuses` is %T, want []string (the schema declares [String!])", raw)
+	}
+	// Literal wire values, deliberately spelled out here and NOT read from statusHeld /
+	// statusSent / drainStatuses.
+	want := map[string]bool{"HELD": false, "SENT": false}
+	if len(got) != len(want) {
+		t.Fatalf("statuses = %v, want exactly [HELD SENT]", got)
+	}
+	for _, s := range got {
+		seen, known := want[s]
+		if !known {
+			t.Fatalf("statuses carries %q, which is not one of HELD/SENT: %v", s, got)
+		}
+		if seen {
+			t.Fatalf("statuses repeats %q: %v", s, got)
+		}
+		want[s] = true
+	}
+	for s, seen := range want {
+		if !seen {
+			t.Fatalf("statuses is missing %q: %v — a device's %s backlog would never drain", s, got, s)
+		}
+	}
+}
+
+// TestPendingDrainsHeldAndSentCarryingStatus proves both halves of the backlog come through
+// AND that each row's status rides on the DrainCommand. The status is what the dispatcher
+// uses to decide whether a claim is required before it actuates, so a fetcher that dropped
+// the field would leave every command looking un-claimable — a whole-fleet silent stall that
+// no test of the dispatcher alone can see.
+func TestPendingDrainsHeldAndSentCarryingStatus(t *testing.T) {
 	q := &fakeQuerier{rows: []drainRow{
-		{Id: "1", Token: "done", Name: "lwm2m.write", Payload: strp(`{"path":"/3/0/0"}`), Status: "SUCCESSFUL"},
-		{Id: "2", Token: "live", Name: "lwm2m.write", Payload: strp(`{"path":"/3/0/0"}`), Status: "SENT"},
+		{Id: "1", Token: "held", Name: "lwm2m.write", Payload: strp(`{"path":"/3/0/0"}`), Status: "HELD"},
+		{Id: "2", Token: "sent", Name: "lwm2m.write", Payload: strp(`{"path":"/3/0/0"}`), Status: "SENT"},
 	}}
 	f := NewCommandFetcher(q, "http://cd/graphql")
 
@@ -156,8 +223,37 @@ func TestPendingDropsNonSent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Pending: %v", err)
 	}
+	if len(got) != 2 {
+		t.Fatalf("got %d commands, want both the HELD and the SENT row: %+v", len(got), got)
+	}
+	if got[0].Token != "held" || got[0].Status != "HELD" {
+		t.Fatalf("row 0 = %+v, want the HELD command carrying its status", got[0])
+	}
+	if got[1].Token != "sent" || got[1].Status != "SENT" {
+		t.Fatalf("row 1 = %+v, want the SENT command carrying its status", got[1])
+	}
+}
+
+// TestPendingDropsNonDrainableStatus is the defensive guard: even if the server ever returned
+// a row outside the drain's status set (contract drift), the fetcher must never hand a
+// terminal command to dispatch (re-actuation). SUCCESSFUL is the case that matters — a
+// command the device already answered.
+func TestPendingDropsNonDrainableStatus(t *testing.T) {
+	q := &fakeQuerier{rows: []drainRow{
+		{Id: "1", Token: "done", Name: "lwm2m.write", Payload: strp(`{"path":"/3/0/0"}`), Status: "SUCCESSFUL"},
+		{Id: "2", Token: "live", Name: "lwm2m.write", Payload: strp(`{"path":"/3/0/0"}`), Status: "SENT"},
+		{Id: "3", Token: "queued", Name: "lwm2m.write", Payload: strp(`{"path":"/3/0/0"}`), Status: "QUEUED"},
+	}}
+	f := NewCommandFetcher(q, "http://cd/graphql")
+
+	got, err := f.Pending(context.Background(), "t", "d", time.Now())
+	if err != nil {
+		t.Fatalf("Pending: %v", err)
+	}
+	// QUEUED is excluded on purpose as well: command-delivery's own sweep will publish it to
+	// the LIVE path within a tick, so draining it here too would double-dispatch.
 	if len(got) != 1 || got[0].Token != "live" {
-		t.Fatalf("got %+v, want only the SENT command", got)
+		t.Fatalf("got %+v, want only the drainable (SENT) command", got)
 	}
 }
 

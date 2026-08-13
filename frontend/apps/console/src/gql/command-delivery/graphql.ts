@@ -18,6 +18,7 @@ export type CommandSearchCriteria = {
   pageNumber: number;
   pageSize: number;
   status?: string | null | undefined;
+  statuses?: Array<string> | null | undefined;
 };
 
 export type CommandsQueryVariables = Exact<{

@@ -72,9 +72,11 @@ type Api struct {
 	EnqueueValidator CommandEnqueueValidator
 	// DefaultCommandTTL, when positive, is stamped as expires_at on a command whose
 	// creator supplies no explicit ExpiresAt (a caller value always wins). It gives
-	// every command a terminal horizon: a command a device never receives reaches
-	// TIMEOUT via ExpireStale instead of sitting in SENT forever, and it bounds the
-	// LwM2M queue-mode hold (ADR-075 L4b). Zero disables stamping — the pre-config
+	// every command a terminal horizon instead of leaving it in flight forever, and
+	// it bounds the LwM2M queue-mode hold (ADR-075 L4b). Which terminal it reaches
+	// depends on how far the command got: one that was never dispatched (QUEUED or
+	// HELD) becomes EXPIRED, one that went out unanswered becomes TIMEOUT — see
+	// expiredTerminalFor. Zero disables stamping — the pre-config
 	// behavior, used by tests that construct the Api directly; production always sets
 	// it from CommandDeliveryConfiguration (floored positive in ApplyDefaults).
 	DefaultCommandTTL time.Duration
@@ -93,9 +95,10 @@ type CommandDeliveryApi interface {
 	CreateCommand(ctx context.Context, request *CommandCreateRequest) (*Command, error)
 
 	MarkSent(ctx context.Context, id uint) (*Command, error)
+	MarkSentByToken(ctx context.Context, token string) (bool, error)
 	MarkResponse(ctx context.Context, commandToken string, success bool, payload *string, errMsg *string) (*Command, error)
 	CancelCommand(ctx context.Context, token string) (*Command, error)
-	ExpireStale(ctx context.Context, now time.Time) (int64, error)
+	ExpireStale(ctx context.Context, now time.Time) (int64, map[string]int64, error)
 
 	CommandsById(ctx context.Context, ids []uint) ([]*Command, error)
 	CommandsByToken(ctx context.Context, tokens []string) ([]*Command, error)
@@ -219,21 +222,48 @@ func (api *Api) loadCommand(ctx context.Context, id uint) (*Command, error) {
 	return found, nil
 }
 
-// terminalStatusStrings is the wire form of the four terminal states, for a
+// terminalStatusStrings is the wire form of the terminal states, for a
 // "status NOT IN (…)" guard. One definition shared by every from-state-predicated
 // update below and by ExpireStale, so the set the sweep skips and the set a
 // transition guards against can never drift.
+//
+// 🔴 It is DERIVED from model.go's terminalStatuses, not typed out again.
+// It used to be a second hand-written list beside CommandStatus.Terminal(), and
+// two lists of the same set drift on the day a state is added: MarkResponse's
+// fast path would treat a row as finished while this guard still let a sweep
+// overwrite it, or the reverse. Deriving makes "add a terminal state" a
+// one-place edit.
 func terminalStatusStrings() []string {
-	return []string{
-		CommandSuccessful.String(), CommandTimeout.String(),
-		CommandExpired.String(), CommandFailed.String(),
+	out := make([]string, 0, len(terminalStatuses))
+	for _, s := range terminalStatuses {
+		out = append(out, s.String())
 	}
+	return out
 }
 
-// MarkSent transitions a command QUEUED -> SENT.
+// dispatchableStatusStrings is the wire form of the states from which a command
+// may still be dispatched: QUEUED (never yet considered) and HELD (considered,
+// and deliberately withheld because the device was absent).
+//
+// It is the from-state guard for MarkSent and the selection predicate for
+// PendingCommands, and those two MUST agree: a state the sweep hands out but
+// cannot then mark sent is republished on every tick forever, and a state
+// MarkSent accepts but the sweep never selects is a hold nothing drains.
+func dispatchableStatusStrings() []string {
+	return []string{CommandQueued.String(), CommandHeld.String()}
+}
+
+// MarkSent transitions a command QUEUED/HELD -> SENT.
+//
+// HELD is accepted alongside QUEUED because a hold is released by DISPATCHING it,
+// not by first returning it to QUEUED: the release is the same publish the sweep
+// performs for a fresh command, and routing it through an extra state would open
+// a window in which the row is indistinguishable from one that had never been
+// considered. This is also what stops a released hold from being published twice
+// — the row leaves the dispatchable set at the moment it is sent.
 //
 // It is a from-state-predicated conditional UPDATE, not a load-modify-Save: only a
-// still-QUEUED row advances, and only the status/sent_time columns are touched. A
+// still-dispatchable row advances, and only the status/sent_time columns are touched. A
 // full-row Save would LOSE-UPDATE a response that raced in between the load and the
 // write — the sweep publishes BEFORE marking SENT, so a device answering in
 // milliseconds can drive the row to SUCCESSFUL (MarkResponse) while this write is
@@ -244,11 +274,12 @@ func terminalStatusStrings() []string {
 // already succeeded. (It used to be genuinely permanent; the platform default TTL now
 // stamps every command that does not carry its own, which bounds the lie without making
 // it less of one.) RowsAffected==0 means the row already left
-// QUEUED (a fast response, a concurrent sweep) — a benign race, not an error; the
-// current row is returned. (A deleted row surfaces as loadCommand's not-found.)
+// the dispatchable set (a fast response, a concurrent sweep, a cancel) — a benign
+// race, not an error; the current row is returned. (A deleted row surfaces as
+// loadCommand's not-found.)
 func (api *Api) MarkSent(ctx context.Context, id uint) (*Command, error) {
 	res := api.RDB.DB(ctx).Model(&Command{}).
-		Where("id = ? AND status = ?", id, CommandQueued.String()).
+		Where("id = ? AND status IN ?", id, dispatchableStatusStrings()).
 		Updates(map[string]any{
 			"status":    CommandSent.String(),
 			"sent_time": sql.NullTime{Time: time.Now(), Valid: true},
@@ -257,6 +288,57 @@ func (api *Api) MarkSent(ctx context.Context, id uint) (*Command, error) {
 		return nil, res.Error
 	}
 	return api.loadCommand(ctx, id)
+}
+
+// MarkSentByToken is MarkSent addressed by the command's token rather than its
+// primary key, for a dispatcher that holds the token and not the row.
+//
+// It exists for the LwM2M wake drain, which is a DISPATCHER the sweep does not
+// perform: when a sleeping device registers, the drain reads its withheld
+// commands and issues them over the live CoAP session directly. Without this the
+// drain would leave those rows HELD, and the next sweep tick — by then seeing the
+// device as present — would publish them a second time. A command is a physical
+// actuation, so that second publish is a second movement of real hardware.
+//
+// Claim-THEN-dispatch is the ordering: the caller marks the row sent first and
+// issues the op only if it won the claim, so a losing racer declines instead of
+// re-actuating. The dispatcher also carries an in-memory recently-dispatched
+// cache, but that is defence in depth — it is per-pod and TTL-bounded, so it
+// cannot be the thing standing between a leadership change and a duplicate
+// actuation.
+//
+// 🔴 BE PRECISE ABOUT WHAT THE CLAIM DOES AND DOES NOT CLOSE. It is structural
+// against a LATER sweep tick: once the row leaves the dispatchable set, no
+// subsequent PendingCommands read can return it. It is NOT structural against the
+// tick already in flight. The sweep SELECTs its batch and then publishes each row
+// in a loop, re-checking nothing in between, so a claim that lands after that
+// SELECT does not stop the publish that follows it — and the sweep's own MarkSent
+// then matches zero rows and is treated as a benign race. In that window the only
+// thing left between the two dispatches is the per-pod dedupe cache, which is
+// exactly the guarantee this comment must not overstate.
+//
+// It is harmless today because nothing writes HELD and the drain never fetches a
+// QUEUED row, so the two paths select disjoint sets. It stops being harmless the
+// moment the presence gate produces held rows. Closing it means the sweep claims
+// before publishing too — which needs a way to release a claim whose publish then
+// failed, since a marked-but-unpublished row is invisible to redelivery until its
+// TTL. That decision belongs with the gate, and is recorded rather than left to be
+// rediscovered as a bug.
+//
+// It reports whether THIS call performed the transition. RowsAffected==0 means
+// the row was not dispatchable — already sent by the sweep, already answered, or
+// cancelled — which is a benign race and not an error.
+func (api *Api) MarkSentByToken(ctx context.Context, token string) (bool, error) {
+	res := api.RDB.DB(ctx).Model(&Command{}).
+		Where("token = ? AND status IN ?", token, dispatchableStatusStrings()).
+		Updates(map[string]any{
+			"status":    CommandSent.String(),
+			"sent_time": sql.NullTime{Time: time.Now(), Valid: true},
+		})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }
 
 // MarkResponse records a device response against a command, looked up by its
@@ -311,10 +393,21 @@ func (api *Api) MarkResponse(ctx context.Context, commandToken string, success b
 	return api.loadCommand(ctx, found.ID)
 }
 
-// CancelCommand cancels a non-terminal command by token, moving it to EXPIRED
-// (QUEUED/SENT -> EXPIRED). A terminal command is returned unchanged. Like the other
-// transitions it is a from-state-predicated conditional UPDATE so a cancel racing a
+// CancelCommand cancels a non-terminal command by token, moving it to CANCELLED
+// (QUEUED/HELD/SENT -> CANCELLED). A terminal command is returned unchanged. Like the
+// other transitions it is a from-state-predicated conditional UPDATE so a cancel racing a
 // device response does not clobber the response.
+//
+// It writes CANCELLED, not EXPIRED. The two were one value, which forced the docs
+// to carry the line "cancelling a command also records EXPIRED" — an apology for a
+// model that could not distinguish "the platform ran out of time" from "someone
+// called it off". They are different ACTORS and an operator auditing a fleet needs
+// to tell them apart: a run of EXPIRED means the platform is failing to deliver,
+// while a run of CANCELLED means people keep changing their minds.
+//
+// 🔴 Rows cancelled before this change stay EXPIRED. There is no backfill and one
+// would be a guess — nothing recorded which EXPIRED rows came from a cancel, which
+// is precisely the information that was being lost.
 func (api *Api) CancelCommand(ctx context.Context, token string) (*Command, error) {
 	matches, err := api.CommandsByToken(ctx, []string{token})
 	if err != nil {
@@ -329,48 +422,111 @@ func (api *Api) CancelCommand(ctx context.Context, token string) (*Command, erro
 	}
 	if res := api.RDB.DB(ctx).Model(&Command{}).
 		Where("id = ? AND status NOT IN ?", found.ID, terminalStatusStrings()).
-		Updates(map[string]any{"status": CommandExpired.String()}); res.Error != nil {
+		Updates(map[string]any{"status": CommandCancelled.String()}); res.Error != nil {
 		return nil, res.Error
 	}
 	return api.loadCommand(ctx, found.ID)
 }
 
+// expiredTerminalFor maps the state a lapsed command was IN to the terminal it
+// deserves. The distinction is the whole reason the platform tracks a hold
+// separately from a dispatch:
+//
+//   - QUEUED / HELD -> EXPIRED. The command never went out. Its TTL elapsed while
+//     the platform still had it — because the device was absent the entire time,
+//     or because it was enqueued too close to its own horizon.
+//   - SENT -> TIMEOUT. The command DID go out and the device never answered.
+//
+// Reporting the first case as TIMEOUT — which is what a single "not finished"
+// state forces — blames the device for a delivery that was never attempted. For a
+// fleet that is switched off overnight or over a weekend that is not an edge case,
+// it is the common case, and it sends an operator looking for a fault in hardware
+// that was behaving correctly by being off.
+//
+// An unrecognised status maps to TIMEOUT, preserving the pre-existing default. It
+// should be unreachable: the only non-terminal states are the three above.
+func expiredTerminalFor(status string) string {
+	switch CommandStatus(status) {
+	case CommandQueued, CommandHeld:
+		return CommandExpired.String()
+	default:
+		return CommandTimeout.String()
+	}
+}
+
 // ExpireStale times out every non-terminal command whose TTL has elapsed. A
-// QUEUED command that never went out becomes EXPIRED; a SENT command
-// that was never answered becomes TIMEOUT. The caller MUST pass a system
-// context (core.WithSystemContext) so the sweep spans all tenants. Returns the
-// number of commands expired.
-func (api *Api) ExpireStale(ctx context.Context, now time.Time) (int64, error) {
+// QUEUED or HELD command that never went out becomes EXPIRED; a SENT command
+// that was never answered becomes TIMEOUT (see expiredTerminalFor). The caller
+// MUST pass a system context (core.WithSystemContext) so the sweep spans all
+// tenants.
+//
+// It returns the number of commands expired AND a breakdown keyed by the state
+// each command lapsed FROM, because those counts mean opposite things
+// operationally: rows dying out of HELD say the fleet is absent and the platform
+// never got to try, while rows dying out of SENT say devices are being reached
+// and are not answering. One total reports both as "expiry is happening", which
+// points an operator at the wrong half of the system.
+func (api *Api) ExpireStale(ctx context.Context, now time.Time) (int64, map[string]int64, error) {
 	stale := make([]*Command, 0)
 	terminal := terminalStatusStrings()
+	byFromStatus := make(map[string]int64)
 	result := api.RDB.DB(ctx).
 		Where("status NOT IN ?", terminal).
 		Where("expires_at IS NOT NULL AND expires_at < ?", now).
 		Find(&stale)
 	if result.Error != nil {
-		return 0, result.Error
+		return 0, byFromStatus, result.Error
 	}
 
 	var count int64
 	for _, cmd := range stale {
-		next := CommandTimeout.String()
-		if cmd.Status == CommandQueued.String() {
-			next = CommandExpired.String()
+		next := expiredTerminalFor(cmd.Status)
+		affected, err := api.expireOne(ctx, cmd.ID, cmd.Status, next)
+		if err != nil {
+			return count, byFromStatus, err
 		}
-		// Conditional update: only expire a command that is STILL non-terminal, and
-		// touch only the status column — never a full-row Save of the pre-response
-		// snapshot. A device response (MarkResponse) that landed since the scan made
-		// the command terminal, so this WHERE misses and the response is preserved
-		// instead of being overwritten back to TIMEOUT/EXPIRED.
-		res := api.RDB.DB(ctx).Model(&Command{}).
-			Where("id = ? AND status NOT IN ?", cmd.ID, terminal).
-			Update("status", next)
-		if res.Error != nil {
-			return count, res.Error
+		// Count against the state it lapsed FROM, and only when the conditional update
+		// actually landed — a row that moved on between the scan and the write was
+		// not expired by us and must not be reported as though it were.
+		if affected > 0 {
+			byFromStatus[cmd.Status] += affected
 		}
-		count += res.RowsAffected
+		count += affected
 	}
-	return count, nil
+	return count, byFromStatus, nil
+}
+
+// expireOne applies one expiry, from the exact state the scan observed.
+//
+// Split out so the from-state predicate is directly testable: the race it guards
+// against — the row moving on between ExpireStale's SELECT and its UPDATE — cannot
+// be staged through the public API, but it can be staged here by writing a
+// different status to the row and then asking this to expire the stale one.
+//
+// Returns the number of rows it actually transitioned, which is 0 when it lost.
+func (api *Api) expireOne(ctx context.Context, id uint, fromStatus, next string) (int64, error) {
+	// Conditional update: only expire a command that is still in the EXACT state
+	// the scan saw, and touch only the status column — never a full-row Save of
+	// the pre-response snapshot. A device response (MarkResponse) that landed
+	// since the scan made the command terminal, so this WHERE misses and the
+	// response is preserved instead of being overwritten back to TIMEOUT/EXPIRED.
+	//
+	// 🔴 It pins the SCANNED status, not merely "still non-terminal", and the
+	// difference is load-bearing now that the terminal depends on how far the
+	// command got. A row that moved HELD→SENT between the scan and this write — a
+	// wake drain claiming it, or the delivery sweep publishing it — would otherwise
+	// be stamped EXPIRED ("never dispatched") microseconds after it was physically
+	// dispatched, and the device's imminent answer would then be dropped by
+	// MarkResponse's terminal guard: a lost response AND a mis-attributed count.
+	// Pinning the from-state makes this write lose the race instead, leaving the row
+	// live to expire on a later pass with the terminal its new state deserves.
+	res := api.RDB.DB(ctx).Model(&Command{}).
+		Where("id = ? AND status = ?", id, fromStatus).
+		Update("status", next)
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	return res.RowsAffected, nil
 }
 
 // CommandsById gets commands by id.
@@ -402,6 +558,13 @@ func (api *Api) Commands(ctx context.Context, criteria CommandSearchCriteria) (*
 		}
 		if criteria.Status != nil {
 			db = db.Where("status = ?", *criteria.Status)
+		}
+		// ANDed with Status above, per CommandSearchCriteria's contract. An empty
+		// slice is "no filter", not "match nothing" — gorm renders an empty IN as a
+		// NULL comparison, so honouring it literally would make the result depend on
+		// the driver rather than on the query.
+		if criteria.Statuses != nil && len(*criteria.Statuses) > 0 {
+			db = db.Where("status IN ?", *criteria.Statuses)
 		}
 		return db
 	}, criteria.Pagination)
@@ -442,9 +605,18 @@ func (api *Api) TrySweepLock(ctx context.Context, fn func() error) (bool, error)
 	return api.RDB.TryAdvisoryLock(ctx, rdb.AdvisoryLockKey(sweepLockName), fn)
 }
 
-// PendingCommands returns every still-QUEUED command, oldest first. It is the
-// redelivery worker's source; the caller passes a system context for the
-// cross-tenant sweep.
+// PendingCommands returns every still-dispatchable command — QUEUED or HELD —
+// oldest first. It is the redelivery worker's source; the caller passes a system
+// context for the cross-tenant sweep.
+//
+// HELD rows are included because the sweep is what NOTICES that a held command can
+// now go out: it is the recurring pass that re-reads presence, so a hold placed
+// while a device was absent is reconsidered on the next tick after it returns. A
+// hold the sweep could not see would be a hold nothing drains — it would sit until
+// its TTL regardless of the device coming back. The decision to publish or keep
+// holding belongs to the caller; this read only says which rows are still in play.
+// (dispatchableStatusStrings is shared with MarkSent so the set handed out and the
+// set that can be marked sent cannot drift apart.)
 //
 // The ORDER BY is a strict improvement over the previous unordered read: delivery
 // now follows enqueue order instead of whatever the planner returned.
@@ -468,7 +640,7 @@ func (api *Api) TrySweepLock(ctx context.Context, fn func() error) (bool, error)
 // that always makes progress beats a bounded one that can wedge.
 func (api *Api) PendingCommands(ctx context.Context) ([]*Command, error) {
 	found := make([]*Command, 0)
-	result := api.RDB.DB(ctx).Where("status = ?", CommandQueued.String()).
+	result := api.RDB.DB(ctx).Where("status IN ?", dispatchableStatusStrings()).
 		Order("id ASC").Find(&found)
 	if result.Error != nil {
 		return nil, result.Error

@@ -80,12 +80,24 @@ const SYNTHETIC_ALARMS: ReadonlyArray<
 
 // A canonical spread of synthetic commands (one per lifecycle stage) so an author
 // previewing a command-button sees a populated, representative history — an in-flight
-// command, a completed one, a failure — before any real command has been issued.
-const SYNTHETIC_COMMANDS: ReadonlyArray<Pick<CommandRow, 'name' | 'status' | 'payload' | 'responsePayload' | 'error'>> = [
-  { name: 'reboot', status: 'SENT', payload: '{"delaySeconds":5}', responsePayload: null, error: null },
-  { name: 'set-interval', status: 'SUCCESSFUL', payload: '{"seconds":30}', responsePayload: '{"ok":true}', error: null },
-  { name: 'calibrate', status: 'QUEUED', payload: null, responsePayload: null, error: null },
-  { name: 'firmware-update', status: 'FAILED', payload: '{"version":"2.1.0"}', responsePayload: null, error: 'device offline' },
+// command, one withheld for an absent device, a completed one, a failure, a cancellation
+// — before any real command has been issued.
+//
+// `dispatched` says whether this command was ever actually put on the wire, which is
+// what decides sentTime below. It is a per-fixture fact, not something derivable from
+// the status: a CANCELLED command may have been called off while still held (never
+// sent) or after dispatch, and the preview picks the former.
+const SYNTHETIC_COMMANDS: ReadonlyArray<
+  Pick<CommandRow, 'name' | 'status' | 'payload' | 'responsePayload' | 'error'> & { dispatched: boolean }
+> = [
+  { name: 'reboot', status: 'SENT', payload: '{"delaySeconds":5}', responsePayload: null, error: null, dispatched: true },
+  // Early in the list on purpose: an author can cap the widget's row count, and a
+  // withheld command is the state a preview most needs to show.
+  { name: 'self-test', status: 'HELD', payload: null, responsePayload: null, error: null, dispatched: false },
+  { name: 'set-interval', status: 'SUCCESSFUL', payload: '{"seconds":30}', responsePayload: '{"ok":true}', error: null, dispatched: true },
+  { name: 'calibrate', status: 'QUEUED', payload: null, responsePayload: null, error: null, dispatched: false },
+  { name: 'firmware-update', status: 'FAILED', payload: '{"version":"2.1.0"}', responsePayload: null, error: 'device offline', dispatched: true },
+  { name: 'open-valve', status: 'CANCELLED', payload: '{"percent":100}', responsePayload: null, error: null, dispatched: false },
 ];
 
 // The device a synthetic command-button reports as its target, so the Send control
@@ -240,7 +252,11 @@ export class SyntheticDataSource implements WidgetDataSource, WidgetActions {
       const now = Date.now();
       const commands: CommandRow[] = SYNTHETIC_COMMANDS.map((c, i) => {
         const queued = new Date(now - i * 20_000).toISOString();
-        const terminal = c.status === 'SUCCESSFUL' || c.status === 'FAILED';
+        // respondedTime is NOT "terminal" — it is "the DEVICE answered", which is a
+        // narrower thing. TIMEOUT, EXPIRED and CANCELLED are all terminal with nothing
+        // ever coming back from the device, so stamping them with a response time would
+        // teach an author's layout to expect a value the live hub never supplies.
+        const answered = c.status === 'SUCCESSFUL' || c.status === 'FAILED';
         return {
           token: `syn-command-${i}`,
           name: c.name,
@@ -249,8 +265,10 @@ export class SyntheticDataSource implements WidgetDataSource, WidgetActions {
           responsePayload: c.responsePayload,
           error: c.error,
           queuedTime: queued,
-          sentTime: c.status === 'QUEUED' ? null : queued,
-          respondedTime: terminal ? queued : null,
+          // Likewise: only a command that actually went out has a sentTime. QUEUED and
+          // HELD never did, and neither did the cancelled one (called off while held).
+          sentTime: c.dispatched ? queued : null,
+          respondedTime: answered ? queued : null,
         };
       });
       sink.next({

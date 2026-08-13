@@ -17,16 +17,58 @@ type commandQuerier interface {
 	Query(ctx context.Context, baseURL, tenant, query string, variables map[string]any, out any) error
 }
 
-// statusSent is command-delivery's SENT lifecycle state, duplicated here as a wire
-// contract (like deliveryEnvelope's JSON tags) rather than imported — downlink does not
-// depend on the command-delivery module. It MUST stay equal to
-// command-delivery/model.CommandSent. The drain reads only SENT commands: a QUEUED row
-// is ≤ one sweep old and command-delivery's own 30s redelivery will publish it to the
-// LIVE path (draining it here too would double-dispatch), and a terminal row is done.
-const statusSent = "SENT"
+// statusHeld and statusSent are command-delivery lifecycle states, duplicated here as a
+// wire contract (like deliveryEnvelope's JSON tags) rather than imported — downlink does
+// not depend on the command-delivery module. BOTH MUST stay equal to their
+// command-delivery/model counterparts (CommandHeld, CommandSent); drainStatuses below is
+// the single definition everything in this package derives from.
+const (
+	statusHeld = "HELD"
+	statusSent = "SENT"
+)
+
+// drainStatuses is the SET of states a waking device's backlog lives in. It is BOTH the
+// server-side predicate (the criteria this package sends) and the client-side re-check, so
+// the two cannot drift into disagreeing about what is drainable.
+//
+// Both states are here because they are the same backlog recorded by two different
+// mechanisms:
+//
+//   - HELD is what the device's ABSENCE produced: command-delivery knew the device was not
+//     reachable and deliberately withheld dispatch rather than publishing into the void.
+//     This is where a sleeping device's queue accumulates.
+//   - SENT is the PRE-EXISTING hold plus genuinely in-flight commands. Before HELD existed,
+//     a command for a sleeping device was published, ack-dropped by this dispatcher because
+//     the device had no live conn, and left in SENT — so a SENT row is either such a hold
+//     awaiting this drain, or a command dispatched moments ago and still unanswered. The
+//     dedup and the claim below tell those apart at dispatch time; the query cannot.
+//
+// Dropping SENT would strand every command already holding in it. Reading only SENT is what
+// this package did before HELD existed, and would silently drain nothing once
+// command-delivery starts withholding.
+//
+// QUEUED stays excluded, and the original reason still holds: a QUEUED row is ≤ one sweep
+// old and command-delivery's own redelivery will publish it to the LIVE path, so draining it
+// here too would double-dispatch. A terminal row is done.
+var drainStatuses = []string{statusHeld, statusSent}
+
+// drainable reports whether a fetched row's status is one this package may dispatch. It
+// reads drainStatuses so the client-side defensive re-check and the server-side predicate
+// are literally the same list — a status renamed on one side and not the other cannot leave
+// a row that the query returns but the loop silently discards (a device whose whole backlog
+// vanishes, with no error anywhere).
+func drainable(status string) bool {
+	for _, s := range drainStatuses {
+		if status == s {
+			return true
+		}
+	}
+	return false
+}
 
 // maxDrainPerWake bounds the per-wake DISPATCH: a waking device drains at most this many
-// of its OLDEST still-SENT commands, the remainder on its next Register/Update. It is the
+// of its OLDEST backlogged commands (drainStatuses), the remainder on its next
+// Register/Update. It is the
 // device-edge flood governor (ADR-075 L4b) — a REACT send-command storm (the programmatic
 // flood origin, not operators) cannot slam a constrained radio with an unbounded burst the
 // instant it wakes.
@@ -39,11 +81,11 @@ const maxDrainPerWake = 32
 // out of order across wakes). So we fetch a large page (this equals core rdb.MaxPageSize, the
 // server's own clamp — a larger request is clamped to it anyway), sort by id, THEN truncate
 // to maxDrainPerWake, making the selection genuinely oldest-first. A device with more than
-// this many still-SENT commands is pathological (bounded by the 7-day TTL horizon); its
+// this many backlogged commands is pathological (bounded by the 7-day TTL horizon); its
 // overflow drains across subsequent wakes.
 const maxDrainFetch = 1000
 
-// drainQuery pulls a device's commands in a given lifecycle state. Field names are
+// drainQuery pulls a device's commands in a given SET of lifecycle states. Field names are
 // pinned to command-delivery's schema; the graphql-go fork rejects an unknown field
 // sent through a variable, so a typo here fails the call loudly rather than silently
 // returning a half-populated row (CLAUDE.md, the forked-dependency note). The query
@@ -55,15 +97,24 @@ const drainQuery = `query($criteria: CommandSearchCriteria!) {
   }
 }`
 
-// DrainCommand is one still-SENT command fetched for a waking device, mapped to exactly
+// DrainCommand is one backlogged command fetched for a waking device, mapped to exactly
 // what the dispatcher's executor consumes: the command token (to correlate the response
 // back to the persisted command) plus the command name and the raw JSON payload bytes
 // the CoAP op mapping reads. It is byte-for-byte the same (name, payload) the live
 // deliveryEnvelope yields, so the drain reuses the identical dispatch path.
+//
+// Status is carried — rather than reduced to a Held bool here — because it is the honest
+// datum: the row's own lifecycle state, not this package's interpretation of it. The
+// dispatcher needs it to decide whether a CLAIM is required before actuating: a HELD row is
+// still in command-delivery's dispatchable set, so dispatching it without claiming leaves it
+// for the next sweep tick to publish again — a SECOND physical actuation. A SENT row has
+// already left that set and needs no claim. A boolean would have to be recomputed (and could
+// be recomputed differently) the day a third non-terminal state appears.
 type DrainCommand struct {
 	Token   string
 	Name    string
 	Payload []byte
+	Status  string
 }
 
 // drainRow decodes one row of the commands query. Payload/ExpiresAt are nullable
@@ -83,12 +134,13 @@ type drainResponse struct {
 	} `json:"commands"`
 }
 
-// CommandFetcher reads a waking device's still-SENT commands from command-delivery so
-// the leader can drain them to the now-live CoAP device (ADR-075 L4b, Architecture D).
-// The durable hold is command-delivery's Postgres row — the command that was
-// published-and-ack-dropped while the device was offline sits in SENT until it is
-// delivered (this) or reaches its TTL horizon (TIMEOUT). This is the read side of that
-// hold; it builds no second source of truth.
+// CommandFetcher reads a waking device's backlogged commands — HELD or SENT, see
+// drainStatuses — from command-delivery so the leader can drain them to the now-live CoAP
+// device (ADR-075 L4b, Architecture D). The durable hold is command-delivery's Postgres row:
+// a command withheld for an absent device sits in HELD, and one that was
+// published-and-ack-dropped while the device was offline sits in SENT, until it is delivered
+// (this) or reaches its TTL horizon. This is the read side of that hold; it builds no second
+// source of truth.
 type CommandFetcher struct {
 	client    commandQuerier
 	baseURL   string
@@ -101,22 +153,28 @@ func NewCommandFetcher(client commandQuerier, baseURL string) *CommandFetcher {
 	return &CommandFetcher{client: client, baseURL: baseURL, fetchSize: maxDrainFetch, max: maxDrainPerWake}
 }
 
-// Pending returns a waking device's still-SENT commands, OLDEST FIRST (by numeric id —
-// the commands query has no server-side ordering, and a firmware Write /5/0/1 must not
-// dispatch after its Execute /5/0/2). Already-expired rows are dropped: a command past
-// its horizon will TIMEOUT within a sweep and must never actuate a device late. The
-// result is capped at the fetch page (maxDrainPerWake); a device with a deeper backlog
-// drains the rest on subsequent wakes as each drained command leaves SENT. `now` is
-// injected for testability.
+// Pending returns a waking device's backlogged commands — those in drainStatuses (HELD or
+// SENT) — OLDEST FIRST (by numeric id — the commands query has no server-side ordering, and
+// a firmware Write /5/0/1 must not dispatch after its Execute /5/0/2). Already-expired rows
+// are dropped: a command past its horizon will expire within a sweep and must never actuate
+// a device late. The result is capped at the fetch page (maxDrainPerWake); a device with a
+// deeper backlog drains the rest on subsequent wakes as each drained command leaves the
+// drainable set. `now` is injected for testability.
 //
 // A device with no pending commands is the overwhelmingly common case (one mostly-empty
 // query per Register/Update) and returns an empty slice, not an error.
 func (f *CommandFetcher) Pending(ctx context.Context, tenant, deviceToken string, now time.Time) ([]DrainCommand, error) {
+	// `statuses`, not `status`: the drain wants a SET. 🔴 This and command-delivery's schema
+	// MUST land together — the forked graphql-go rejects an input-object field the schema does
+	// not define when it arrives through a VARIABLE (CLAUDE.md, the forked-dependency note),
+	// which is exactly how this is sent. Against an older command-delivery this call therefore
+	// fails loudly (a counted drain error, retried on the next wake) rather than silently
+	// dropping the filter and draining every device's commands.
 	criteria := map[string]any{
 		"pageNumber":  1,
 		"pageSize":    f.fetchSize,
 		"deviceToken": deviceToken,
-		"status":      statusSent,
+		"statuses":    drainStatuses,
 	}
 	var resp drainResponse
 	if err := f.client.Query(ctx, f.baseURL, tenant, drainQuery,
@@ -137,9 +195,11 @@ func (f *CommandFetcher) Pending(ctx context.Context, tenant, deviceToken string
 		if len(out) >= f.max {
 			break // per-wake dispatch cap: the oldest f.max; the rest drain on the next wake
 		}
-		// Defensive: the server filtered status=SENT, but never dispatch a row that is
-		// not SENT even if that contract ever drifts (a terminal command must not re-fire).
-		if r.Status != statusSent {
+		// Defensive: the server already filtered on drainStatuses, but never hand a row
+		// outside that set to dispatch even if the contract ever drifts (a terminal command
+		// must not re-fire). This re-check reads the SAME list the criteria above sent, so
+		// the predicate and the guard cannot disagree about what "drainable" means.
+		if !drainable(r.Status) {
 			continue
 		}
 		// Drop an already-expired command: it is about to be TIMEOUT'd by the sweep and
@@ -153,7 +213,10 @@ func (f *CommandFetcher) Pending(ctx context.Context, tenant, deviceToken string
 		if r.Payload != nil {
 			payload = []byte(*r.Payload)
 		}
-		out = append(out, DrainCommand{Token: r.Token, Name: r.Name, Payload: payload})
+		// Status rides along: the dispatcher claims a HELD row before actuating and leaves a
+		// SENT one alone. Dropping it here would make every drained command look unclaimable,
+		// which is the shape a fake that omits a field produces — the caller's omission hides.
+		out = append(out, DrainCommand{Token: r.Token, Name: r.Name, Payload: payload, Status: r.Status})
 	}
 	return out, nil
 }

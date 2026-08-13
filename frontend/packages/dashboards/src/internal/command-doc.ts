@@ -20,7 +20,12 @@ export interface CommandSearchCriteriaInput {
   pageNumber: number;
   pageSize: number;
   deviceToken?: string | null;
+  // Match a single lifecycle state exactly.
   status?: string | null;
+  // Match ANY of several lifecycle states. ANDed with `status` when both are given; an
+  // empty list is ignored rather than matching nothing. The states a caller cares about
+  // are usually a set — "still outstanding" is HELD ∪ SENT ∪ QUEUED, not one value.
+  statuses?: string[] | null;
 }
 
 export interface CommandsQueryResult {

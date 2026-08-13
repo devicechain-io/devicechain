@@ -84,13 +84,27 @@ type connLookup interface {
 	Lookup(tenant, deviceToken string) (mux.Conn, Reach)
 }
 
-// drainFetcher reads a waking device's still-SENT commands from command-delivery
-// (*CommandFetcher satisfies it). It is the read side of the durable hold (ADR-075 L4b,
-// Architecture D): the command a live-path offline ack-drop left in command-delivery's
-// Postgres SENT row is pulled here at the device's next wake. nil disables draining (an
-// inert or pre-L4b-wiring build, and the disposition unit tests).
+// drainFetcher reads a waking device's backlogged commands (HELD or SENT — drainStatuses)
+// from command-delivery (*CommandFetcher satisfies it). It is the read side of the durable
+// hold (ADR-075 L4b, Architecture D): a command withheld for an absent device, or one a
+// live-path offline ack-drop left in SENT, is pulled here at the device's next wake. nil
+// disables draining (an inert or pre-L4b-wiring build, and the disposition unit tests).
 type drainFetcher interface {
 	Pending(ctx context.Context, tenant, deviceToken string, now time.Time) ([]DrainCommand, error)
+}
+
+// commandClaimer is the WRITE half of the drain (*CommandClaimer satisfies it): it moves a
+// still-dispatchable command to SENT and reports whether THIS caller won it. It is a
+// separate, one-method seam beside drainFetcher for the same reason drainFetcher is one —
+// so the claim-then-dispatch ordering below is unit-testable without a live command-delivery
+// or a minted service token, including its LOST and ERRORED branches, which are the two that
+// must not actuate and are therefore the two most easily faked past.
+//
+// nil disables claiming, which means a HELD command is NOT dispatched (see claim below) —
+// fail-closed, because an unclaimed dispatch is a duplicate actuation waiting for the next
+// sweep tick.
+type commandClaimer interface {
+	Claim(ctx context.Context, tenant, commandToken string) (bool, error)
 }
 
 // Metrics are the optional Prometheus instruments the dispatcher updates; any nil field is
@@ -110,6 +124,13 @@ type Metrics struct {
 	DrainErrors  prometheus.Counter // a wake-drain fetch that failed (retried on the device's next wake)
 	DrainDropped prometheus.Counter // a wake-drain trigger dropped because the device's shard was busy (next wake re-triggers)
 	DrainDedup   prometheus.Counter // a command skipped because it was already dispatched (drain/live overlap) — a re-actuation avoided
+	// Claim outcomes, split because they mean opposite things operationally. LOST is BENIGN —
+	// someone else owns that command and we correctly declined to actuate it twice. ERRORS is a
+	// FAULT: command-delivery could not be reached, so a claimable command went undispatched
+	// (fail-closed) and the device waits for its next wake. One counter would let a rising
+	// outage hide inside a normal-looking race count.
+	DrainClaimLost   prometheus.Counter // a held command another dispatcher/the sweep claimed first — no actuation, correct
+	DrainClaimErrors prometheus.Counter // a claim that could not be established; the command is NOT dispatched, retried next wake
 	// TenantGoneRefused counts live commands ack-dropped because their tenant has been
 	// deleted (ADR-077). Distinct from Poison: the command is well formed, the platform is
 	// declining to actuate an offboarded customer's hardware. Wake-drains refused for the
@@ -167,6 +188,7 @@ type Dispatcher struct {
 	conns     connLookup
 	exec      executor
 	fetcher   drainFetcher
+	claimer   commandClaimer
 	metrics   Metrics
 	// tenantDeleted reports whether a tenant has been through the ADR-077 delete door.
 	// Never nil; see NewDispatcher.
@@ -198,10 +220,16 @@ type Options struct {
 }
 
 // NewDispatcher builds a Dispatcher over the durable command reader, the command-responses writer,
-// the conn table, the CoAP op executor, and the wake-drain fetcher (nil disables draining).
+// the conn table, the CoAP op executor, the wake-drain fetcher (nil disables draining) and the
+// wake-drain claimer (nil means a HELD command is not dispatched — fail-closed).
 // tenantDeleted gates ACTUATION on the ADR-077 tenant lifecycle (Options.TenantDeleted).
 // Nil disables the gate, matching the resolver's own fail-open.
-func NewDispatcher(rdr reader, responses responsePublisher, conns connLookup, exec executor, fetcher drainFetcher, metrics Metrics, opts Options) *Dispatcher {
+//
+// 🔴 fetcher and claimer are separate PARAMETERS rather than an Options field because both are
+// unexported interfaces — an exported Options field of an unexported type could not be set from
+// outside this package, and a caller that silently could not supply a claimer would get the
+// fail-closed branch with no compile error to say so.
+func NewDispatcher(rdr reader, responses responsePublisher, conns connLookup, exec executor, fetcher drainFetcher, claimer commandClaimer, metrics Metrics, opts Options) *Dispatcher {
 	if opts.TenantDeleted == nil {
 		opts.TenantDeleted = func(string) bool { return false }
 	}
@@ -217,6 +245,7 @@ func NewDispatcher(rdr reader, responses responsePublisher, conns connLookup, ex
 		conns:         conns,
 		exec:          exec,
 		fetcher:       fetcher,
+		claimer:       claimer,
 		metrics:       metrics,
 		tenantDeleted: opts.TenantDeleted,
 		workers:       opts.Workers,
@@ -338,7 +367,8 @@ func (d *Dispatcher) Run(ctx context.Context) {
 }
 
 // Drain enqueues a wake-drain for a device onto its shard worker, so the leader pulls that device's
-// still-SENT commands from command-delivery and dispatches them to the now-live conn (ADR-075 L4b).
+// backlogged commands (HELD or SENT) from command-delivery and dispatches them to the now-live conn
+// (ADR-075 L4b).
 // The /rd handler calls it after a device becomes live (Register/Update) — the LwM2M queue-mode wake
 // signal. It is NON-BLOCKING: a wake must never stall the CoAP read loop, so a full shard drops the
 // trigger (counted) and the device's next Update re-triggers. A call on a standby (no active term)
@@ -369,7 +399,7 @@ func (d *Dispatcher) Drain(tenant, deviceToken string) {
 //   - the LIVE path reads the device-commands stream, and a command published in the
 //     moments before the delete is already durable in that stream — command-delivery
 //     refusing to publish more does not unpublish those;
-//   - the WAKE-DRAIN re-fetches commands still in SENT and fires them when a sleeping
+//   - the WAKE-DRAIN re-fetches commands still HELD or SENT and fires them when a sleeping
 //     device next registers, which can be long after the tenant was deleted. Nothing on
 //     that path had a lifecycle check: the (tenant, token) is remembered from a
 //     registration that predates the delete, and PSK bindings are static config.
@@ -474,12 +504,15 @@ func (d *Dispatcher) dispatch(ctx context.Context, w work) {
 	ackDrop(w.msg)
 }
 
-// drain pulls a waking device's still-SENT commands from command-delivery and dispatches them to its
-// now-live conn, oldest-first (ADR-075 L4b). It runs on the device's shard worker (so it never races
-// or reorders the device's live commands), leader-only (Drain no-ops on a standby). A fetch failure
-// is counted and retried on the device's next wake; the device dropping or the term being evicted
-// mid-drain stops cleanly, leaving the remaining rows SENT for the next wake (never a partial ack of
-// something not dispatched).
+// drain pulls a waking device's backlogged commands (HELD or SENT) from command-delivery and
+// dispatches them to its now-live conn, oldest-first (ADR-075 L4b). It runs on the device's shard
+// worker (so it never races or reorders the device's live commands), leader-only (Drain no-ops on a
+// standby). A fetch failure is counted and retried on the device's next wake; the device dropping or
+// the term being evicted mid-drain stops cleanly, leaving the remaining rows untouched for the next
+// wake (never a partial ack of something not dispatched).
+//
+// 🔴 The ordering inside the loop is CLAIM, THEN DISPATCH, and it is that way round because
+// dispatching is IRREVERSIBLE. See claim below for why.
 func (d *Dispatcher) drain(ctx context.Context, job drainJob) {
 	if ctx.Err() != nil || d.fetcher == nil {
 		return
@@ -495,19 +528,83 @@ func (d *Dispatcher) drain(ctx context.Context, job drainJob) {
 	}
 	for _, c := range cmds {
 		if ctx.Err() != nil {
-			return // evicted mid-drain: the remaining rows stay SENT for the next leader's wake
+			return // evicted mid-drain: the remaining rows are untouched, for the next leader's wake
 		}
 		conn, reach := d.conns.Lookup(job.tenant, job.deviceToken)
 		if reach != ReachLive {
-			return // the device dropped mid-drain: the remaining rows stay SENT for the next wake
+			return // the device dropped mid-drain: the remaining rows are untouched, for the next wake
 		}
 		if d.dedupe.recentlyDispatched(job.tenant, job.deviceToken, c.Token) {
 			continue // already fired by the live path or a prior drain — do not re-actuate
+		}
+		// Take the command out of command-delivery's dispatchable set BEFORE actuating. A
+		// command we could not claim is one we must not fire.
+		if !d.claim(ctx, job.tenant, c) {
+			continue
 		}
 		d.executeAndReport(ctx, conn, job.tenant, c.Name, c.Token, c.Payload)
 		d.dedupe.mark(job.tenant, job.deviceToken, c.Token)
 		incr(d.metrics.Drained, 1)
 	}
+}
+
+// claim takes ownership of one backlogged command and reports whether the drain may dispatch
+// it. It is the CLAIM half of claim-then-dispatch.
+//
+// 🔴 Why claiming exists at all: the delivery sweep publishes anything still DISPATCHABLE. A
+// HELD row is in that set, so a drain that ran the CoAP op without first claiming would leave
+// the row HELD for the next sweep tick to publish down the live path — the same command
+// delivered twice, which for a command is a second PHYSICAL ACTUATION (a valve opened again,
+// a firmware update re-applied), not a duplicate log line. Claiming first makes the exclusion
+// structural: whoever wins the conditional UPDATE actuates, everyone else declines.
+//
+// 🔴 The in-memory dedupe is NOT this guarantee and must never be mistaken for it. It is
+// per-pod and TTL-bounded, so it says nothing about another replica or about this pod after a
+// restart — exactly the two situations a leadership change produces. It is defence in depth
+// against the drain/live overlap within one pod, no more.
+//
+// A SENT row needs NO claim: it has already left the dispatchable set, so the sweep will not
+// republish it. That is deliberate and load-bearing for THIS slice — nothing writes HELD yet,
+// so every drained row today is SENT and takes this branch. Issuing a mutation per drained
+// command "for symmetry" would add a round trip to every wake of every device on the instance
+// and change behaviour that is supposed to be unchanged.
+//
+// Both non-dispatch outcomes are counted, and they are counted apart (see Metrics):
+//   - LOST (false, nil): another dispatcher or the sweep won it. Benign, no actuation.
+//   - ERROR: command-delivery unreachable/forbidden/failing. FAIL CLOSED — declining to
+//     actuate is recoverable (the row is still dispatchable and the device's next wake
+//     retries), whereas actuating on an unconfirmed claim is not. Logged at debug like the
+//     fetch-failure path: on a real outage this fires once per backlogged command per wake,
+//     and a warn per row would bury the outage in its own noise.
+func (d *Dispatcher) claim(ctx context.Context, tenant string, c DrainCommand) bool {
+	if c.Status == statusSent {
+		return true
+	}
+	if d.claimer == nil {
+		// Claiming disabled but a claimable row arrived: refuse rather than fire. Counted as
+		// an error, not a loss — nobody else took this command, the platform simply cannot
+		// prove it owns it, and that is a wiring fault worth seeing on a graph.
+		incr(d.metrics.DrainClaimErrors, 1)
+		log.Debug().Str("tenant", tenant).Str("command", c.Token).Str("status", c.Status).
+			Msg("Not dispatching a held LwM2M command: no command claimer is wired, so ownership cannot be established.")
+		return false
+	}
+	won, err := d.claimer.Claim(ctx, tenant, c.Token)
+	if err != nil {
+		if ctx.Err() == nil { // a claim aborted by eviction is not a claim failure
+			incr(d.metrics.DrainClaimErrors, 1)
+			log.Debug().Err(err).Str("tenant", tenant).Str("command", c.Token).
+				Msg("Could not claim a held LwM2M command at wake; not dispatching it (it stays dispatchable and retries on the device's next Register/Update).")
+		}
+		return false
+	}
+	if !won {
+		// Someone else moved it out of the dispatchable set first. Nothing is wrong; this is
+		// the mechanism working.
+		incr(d.metrics.DrainClaimLost, 1)
+		return false
+	}
+	return true
 }
 
 // executeAndReport runs one command's CoAP op on a live conn and, unless the term was evicted mid-op,
@@ -625,8 +722,9 @@ func labelInc(v *prometheus.CounterVec, op string, n int) {
 // dedupe is a small time-bounded set of recently-dispatched (deviceToken, commandToken) keys that
 // suppresses a re-dispatch of the same command by the OTHER path (a wake drain fetching a SENT row
 // the live stream just delivered, or vice versa) — a re-actuation avoided. It is an optimization,
-// NOT a correctness guarantee: seal-fate and the fact that the drain only ever reads still-SENT rows
-// already bound re-fire, so under a pathological burst the set may be cleared, degrading to the
+// NOT a correctness guarantee: seal-fate, the fact that the drain only reads rows still in
+// drainStatuses, and — for a HELD row — the claim taken before dispatch already bound re-fire, so
+// under a pathological burst the set may be cleared, degrading to the
 // platform's documented at-least-once actuation posture rather than growing without bound. Safe for
 // concurrent use (different devices dispatch on different shard workers).
 type dedupe struct {

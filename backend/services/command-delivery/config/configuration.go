@@ -23,7 +23,9 @@ const (
 	// — a TTL-less command (every REACT send-command, ADR-051) previously never reached
 	// a terminal state because ExpireStale only touches rows with a non-null expires_at.
 	// It is also what makes the LwM2M queue-mode hold (ADR-075 L4b) bounded: a held
-	// command a device never wakes to receive resolves to TIMEOUT at this horizon.
+	// command a device never wakes to receive resolves to EXPIRED at this horizon —
+	// EXPIRED rather than TIMEOUT because it was never dispatched, which is the
+	// distinction HELD exists to preserve (see model.CommandStatus).
 	DefaultCommandTTLSeconds = 168 * 60 * 60
 
 	// MinCommandTTLSeconds floors the configured default so a fat-fingered tiny value

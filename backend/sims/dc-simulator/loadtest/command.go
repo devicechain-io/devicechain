@@ -97,6 +97,12 @@ const (
 	// Mirrored here as literals — the sim speaks only the wire. SUCCESSFUL is the
 	// settled terminal a completed round-trip reaches; QUEUED/SENT are the in-flight
 	// states a dropped or unanswered command is stranded in.
+	//
+	// HELD is deliberately absent, and that is an assertion rather than an omission:
+	// the harness drives LIVE devices through a full round trip, so a command held
+	// for an absent device is a state its probes must never reach. The snapshot tallies
+	// every status it sees (see commandSnapshot.Statuses), so a HELD row would show up
+	// in the report and fail roundTripComplete rather than pass unnoticed.
 	cmdStatusQueued     = "QUEUED"
 	cmdStatusSent       = "SENT"
 	cmdStatusSuccessful = "SUCCESSFUL"
