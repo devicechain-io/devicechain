@@ -86,11 +86,11 @@ These states mean the command is not finished yet:
 
 - **`QUEUED`** — accepted and validated, awaiting its first dispatch decision. Genuinely
   transient: a command does not linger here.
-- **`HELD`** — a command withheld rather than dispatched. It is part of the lifecycle
-  vocabulary the API accepts and the console renders, and it counts as in flight: a held
-  command can still be cancelled, and a TTL that lapses on one records `EXPIRED` rather
-  than `TIMEOUT`, because the command never went out. Nothing places a command in it
-  today.
+- **`HELD`** — the platform is deliberately withholding the command because the device is
+  known to be away. This is where an offline fleet's backlog collects, and it can sit for
+  days. A held command counts as in flight: it can still be cancelled, and a TTL that
+  lapses on one records `EXPIRED` rather than `TIMEOUT`, because the command never went
+  out. It returns to `QUEUED` when the device comes back.
 - **`SENT`** — published to the device's own command topic, awaiting its response.
 
 These are terminal, and nothing moves out of a terminal state:
@@ -103,13 +103,37 @@ These are terminal, and nothing moves out of a terminal state:
 `EXPIRED` and `TIMEOUT` answer different questions, and mistaking one for the other sends
 you looking in the wrong place: `EXPIRED` means the command never left the platform, so a
 run of them says deliveries are not being attempted; `TIMEOUT` means it did go out and
-nothing came back, which points at the device. Read a run of `TIMEOUT` carefully before you
-blame firmware: a command for a device that is switched off is dispatched all the same, and
-over MQTT it is delivered only to a device that is connected and subscribed at that instant.
-A device that is away does not receive it later — the broker does not hold it — so the
-command is recorded as sent, nothing answers, and it ends in `TIMEOUT`. A run of `TIMEOUT`
-against devices you know are intermittent is therefore a statement about when they were
-connected, not about their firmware.
+nothing came back, which points at the device.
+
+### Commands to a device that is away
+
+Over MQTT a command reaches only a device that is connected and subscribed at that
+instant — the broker does not hold it for a device to collect later. So a command
+published toward an absent device is simply lost, and the platform would have no way to
+know: it recorded the command as sent, nothing answered, and a week later it read
+`TIMEOUT` — a permanent record blaming a device that was never given the command.
+
+The platform therefore checks before it publishes. When a transport reports that a device
+is not connected, its commands move to `HELD` instead of being published, and return to
+`QUEUED` when the device comes back.
+
+Three limits are worth knowing:
+
+- **The check needs a transport that reports connections.** For a device whose transport
+  only carries data, "no events recently" is not evidence the device cannot receive — a
+  device reporting hourly is quiet for 59 minutes of every hour and reachable throughout.
+  Those commands are dispatched as before.
+- **It is a check, not a queue.** A device that disconnects between the check and the
+  publish still loses the command. What is removed is the case the platform could see
+  coming.
+- **Commands to Sparkplug devices are not delivered at all.** The path is not built —
+  Sparkplug nodes live on your own MQTT infrastructure rather than the platform's, and
+  nothing bridges the two. A command issued to one is recorded `FAILED` immediately, with
+  that as its reason, rather than being held for a return that would not help.
+
+A run of `TIMEOUT` against devices you know are intermittent is therefore still worth
+reading as a statement about when they were connected rather than about their firmware —
+but it should now be a much shorter run.
 
 Cancelling a command records `CANCELLED`. Cancellation and TTL expiry shared the single
 value `EXPIRED` until recently, so commands cancelled before that change still read as

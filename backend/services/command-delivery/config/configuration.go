@@ -15,6 +15,21 @@ const (
 	// sweep that times out stale commands and re-publishes still-queued ones.
 	RedeliveryInterval = 30
 
+	// HoldReconcileInterval is the cadence (in seconds) of the pass that releases
+	// WITHHELD commands whose devices have come back.
+	//
+	// 🔑 IT IS SLOW ON PURPOSE, AND IT IS NOT A LATENCY KNOB. The two passes ask
+	// different questions: the sweep asks "is there new work?", where latency IS the
+	// product, while this asks "has the world changed under a decision made earlier?",
+	// where the answer is almost always no and asking cheaply beats asking quickly.
+	// Turning this down to chase release latency would put the whole accumulated
+	// withheld set — which is what the gate exists to let accumulate — back under a
+	// near-continuous scan, which is the cost the gate was built to remove.
+	//
+	// The right fix for release latency is not a shorter interval but a wake: the
+	// transports know the instant a device returns, and this is the net under it.
+	HoldReconcileInterval = 120
+
 	// DefaultCommandTTLSeconds is the fallback command time-to-live (168h = 7 days)
 	// stamped onto a command whose creator supplies no explicit expiresAt. It is
 	// deliberately aligned with the device-commands stream MaxAge (core/messaging

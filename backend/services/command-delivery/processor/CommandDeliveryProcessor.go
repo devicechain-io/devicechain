@@ -13,6 +13,7 @@ import (
 
 	"github.com/devicechain-io/dc-command-delivery/config"
 	"github.com/devicechain-io/dc-command-delivery/model"
+	"github.com/devicechain-io/dc-command-delivery/presence"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/prometheus/client_golang/prometheus"
@@ -69,6 +70,43 @@ type CommandDeliveryProcessor struct {
 	ClaimsLost     prometheus.Counter
 	ClaimsStranded prometheus.Counter
 
+	// Presence answers, for a batch of one tenant's devices, whether dispatching to
+	// each is worth doing right now. MAY BE NIL — read it through presenceStates, never
+	// directly.
+	//
+	// 🔴 NIL MEANS THE GATE IS OFF, AND OFF MEANS DELIVER. That is the same fail-open
+	// every other authority on this path takes, and here it is the only safe direction:
+	// a gate that withheld when it could not reach the projection would convert an
+	// unreachable device-state into a platform-wide command stall. It is nil whenever
+	// device-state is not deployed in this instance's profile, which is a supported
+	// configuration, not a misconfiguration.
+	Presence presence.Reader
+
+	// HoldsPlaced counts commands withheld for an absent device, UndeliverableFailed
+	// counts commands failed because their transport carries no command path at all,
+	// and PresenceReadErrors counts sweep passes that could not reach the projection.
+	//
+	// 🔑 PresenceReadErrors IS THE ONE THAT MATTERS OPERATIONALLY. A read failure
+	// fails open, so a permanently broken projection read looks exactly like a fleet
+	// that is entirely present: every command dispatches, nothing is held, and the only
+	// difference from a working gate is that the silent losses it exists to prevent are
+	// happening again. Without this counter, the gate can be dead for months and the
+	// only symptom is the absence of a symptom.
+	HoldsPlaced         prometheus.Counter
+	UndeliverableFailed prometheus.Counter
+	PresenceReadErrors  prometheus.Counter
+
+	// HoldsReleased counts withheld commands returned to QUEUED because their device
+	// came back. Read it against HoldsPlaced: the two should track each other over a
+	// fleet's duty cycle, and holds placed with nothing released is the signature of a
+	// gate that has become a one-way door.
+	HoldsReleased prometheus.Counter
+
+	// reconcileCursor is where the next reconcile pass resumes its walk of the withheld
+	// set. Per-pod and reset on restart, which merely restarts the walk — it is a
+	// position in a scan, not state anything depends on.
+	reconcileCursor uint
+
 	lifecycle core.LifecycleManager
 	quit      chan struct{}
 }
@@ -78,9 +116,12 @@ type CommandDeliveryProcessor struct {
 // tenantDeleted gates delivery on the ADR-077 tenant lifecycle. Nil disables the gate
 // (every tenant reads live), matching the resolver's own fail-open, so an unwired gate
 // behaves like an unreachable authority rather than stalling every tenant's commands.
+//
+// presenceReader is the presence gate, and nil disables it the same way — see the field.
 func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.MessageReader,
 	commands messaging.MessageWriter, callbacks core.LifecycleCallbacks,
-	api model.CommandDeliveryApi, tenantDeleted func(string) bool) *CommandDeliveryProcessor {
+	api model.CommandDeliveryApi, tenantDeleted func(string) bool,
+	presenceReader presence.Reader) *CommandDeliveryProcessor {
 	cproc := &CommandDeliveryProcessor{
 		Microservice:           ms,
 		CommandResponsesReader: responses,
@@ -88,11 +129,21 @@ func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.Mess
 		Api:                    api,
 		metrics:                ms.NewProcessorMetrics("response"),
 		TenantDeleted:          tenantDeleted,
+		Presence:               presenceReader,
 		ClaimsLost: ms.NewCounter("command_delivery_claims_lost_total",
 			"Dispatches abandoned because another dispatcher claimed the command first", nil),
 		ClaimsStranded: ms.NewCounter("command_delivery_claims_stranded_total",
 			"Commands left reading SENT because their publish failed and the release failed too; "+
 				"each will expire as TIMEOUT, wrongly blaming the device", nil),
+		HoldsPlaced: ms.NewCounter("command_delivery_holds_placed_total",
+			"Commands withheld from dispatch because the device is authoritatively absent", nil),
+		UndeliverableFailed: ms.NewCounter("command_delivery_undeliverable_total",
+			"Commands failed because the device's transport carries no command path at all", nil),
+		PresenceReadErrors: ms.NewCounter("command_delivery_presence_read_errors_total",
+			"Sweep passes that could not read the presence projection; the gate fails OPEN, so a "+
+				"standing rate here means commands are being dispatched ungated", nil),
+		HoldsReleased: ms.NewCounter("command_delivery_holds_released_total",
+			"Withheld commands returned to the dispatch queue because their device came back", nil),
 	}
 
 	// Create lifecycle manager.
@@ -101,10 +152,9 @@ func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.Mess
 	return cproc
 }
 
-// deliverPendingCommands fetches the still-QUEUED commands across tenants and
-// delivers each one, marking it SENT on a successful publish.
-// Per-command errors are logged and skipped so one bad command does not abort the
-// batch.
+// deliverPendingCommands fetches the still-QUEUED commands across tenants and puts each
+// through the presence gate, which either dispatches it, withholds it, or fails it.
+// Per-command errors are logged and skipped so one bad command does not abort the batch.
 //
 // Callers MUST hold the sweep lock (see sweepLocked). Publishing a command is a
 // physical actuation, so running this concurrently on two pods sends the device the
@@ -115,31 +165,169 @@ func (cproc *CommandDeliveryProcessor) deliverPendingCommands(ctx context.Contex
 		log.Error().Err(err).Msg("unable to load pending commands for delivery")
 		return
 	}
+	for _, batch := range groupByTenant(pending, cproc.tenantDeleted) {
+		cproc.deliverTenantBatch(ctx, batch)
+	}
+}
+
+// tenantBatch is one tenant's slice of a sweep tick.
+type tenantBatch struct {
+	tenant   string
+	commands []*model.Command
+}
+
+// groupByTenant splits a cross-tenant read into per-tenant batches, dropping tenants that
+// have been through the ADR-077 delete door. Both passes over commands share it — the
+// delivery sweep and the hold reconciler — which is the point: the lifecycle gate belongs
+// to every path that can put a command in front of a dispatcher, not only to the one that
+// publishes.
+//
+// 🔴 THE ADR-077 REFUSAL HAPPENS HERE, BEFORE ANY BATCH IS BUILT, and that placement is
+// deliberate: publishing is a PHYSICAL ACTUATION that happens BEFORE MarkSent, so a
+// command queued before an operator deleted the tenant would otherwise fire a valve or a
+// relay on an offboarded customer's hardware — and once the tenant's rows are swept, the
+// actuation has already happened by the time MarkSent fails to find its row. The device
+// acts, and the platform's only record is an error log about a command it can no longer
+// describe. Dropping the tenant here also means no presence read is issued for it, so the
+// gate never asks a deleted tenant's projection anything.
+//
+// 🔑 THE RECONCILER NEEDS IT JUST AS MUCH, AND THAT IS THE EASY ONE TO MISS. Releasing a
+// hold is not an actuation, so it looks harmless — but it returns the row to QUEUED, and
+// the sweep dispatches QUEUED. A release is an actuation one tick later.
+//
+// The refused rows are LEFT WHERE THEY ARE, not failed. They are about to be deleted with
+// the rest of the tenant, so transitioning them would be writing into data being erased in
+// order to describe the erasure; and if the purge is ever abandoned, an untouched command
+// is the state an operator can reason about. It is a refusal, not a failure, so it is not
+// logged either — one line per command per pass forever is how a correct refusal gets
+// mistaken for an outage.
+//
+// Batches come back in first-seen order, which preserves PendingCommands' oldest-first
+// ordering across tenants rather than handing the sweep whatever order a map iterates in.
+func groupByTenant(pending []*model.Command, deleted func(string) bool) []tenantBatch {
+	batches := make([]tenantBatch, 0)
+	index := make(map[string]int, len(pending))
 	for _, cmd := range pending {
-		// 🔴 The ADR-077 lifecycle gate, and the reason it is HERE rather than inside
-		// deliverCommand: publishing is a PHYSICAL ACTUATION and it happens BEFORE
-		// MarkSent. A command queued before an operator deleted the tenant would
-		// otherwise fire a valve or a relay on an offboarded customer's hardware — and
-		// once the tenant's rows are swept, the actuation has already happened by the time
-		// MarkSent fails to find its row, so the device acts and the platform's only
-		// record of it is an error log on a command it can no longer describe.
-		//
-		// The row is LEFT QUEUED, not failed. It is about to be deleted with the rest of
-		// the tenant, so transitioning it would be writing into data being erased in
-		// order to describe the erasure; and if the purge is ever abandoned, a queued
-		// command is the state an operator can reason about. `continue` also skips the
-		// error log the delivery path would emit — this is a refusal, not a failure, and
-		// logging one line per command per sweep tick forever is how a correct refusal
-		// gets mistaken for an outage.
-		if cproc.tenantDeleted(cmd.TenantId) {
+		if deleted(cmd.TenantId) {
 			continue
 		}
-		if err := cproc.deliverCommand(ctx, cmd); err != nil {
-			log.Error().Err(err).Uint("command", cmd.ID).Str("device", cmd.DeviceToken).
-				Msg("unable to deliver command")
+		at, seen := index[cmd.TenantId]
+		if !seen {
+			at = len(batches)
+			index[cmd.TenantId] = at
+			batches = append(batches, tenantBatch{tenant: cmd.TenantId})
+		}
+		batches[at].commands = append(batches[at].commands, cmd)
+	}
+	return batches
+}
+
+// deliverTenantBatch reads presence once for the tenant, then applies the gate's verdict
+// to each of its commands.
+func (cproc *CommandDeliveryProcessor) deliverTenantBatch(ctx context.Context, batch tenantBatch) {
+	tenantCtx := core.WithTenant(ctx, batch.tenant)
+	states := cproc.presenceStates(tenantCtx, distinctDevices(batch.commands))
+	for _, cmd := range batch.commands {
+		// 🔴 A MISSING KEY READS AS State{Known:false}, WHICH Decide ANSWERS Dispatch.
+		// That is the fail-open, and it carries three separate cases on one line: a
+		// device the projection has never seen, a tenant whose presence read failed, and
+		// an instance with no gate wired at all (nil states). All three must deliver.
+		switch presence.Decide(states[cmd.DeviceToken]) {
+		case presence.Hold:
+			cproc.holdCommand(tenantCtx, cmd)
+		case presence.Undeliverable:
+			cproc.failUndeliverable(tenantCtx, cmd)
+		default:
+			if err := cproc.deliverCommand(ctx, cmd); err != nil {
+				log.Error().Err(err).Uint("command", cmd.ID).Str("device", cmd.DeviceToken).
+					Msg("unable to deliver command")
+			}
 		}
 	}
 }
+
+// distinctDevices reduces a batch to the devices it targets. A tenant with a hundred
+// queued commands to three devices asks about three.
+func distinctDevices(commands []*model.Command) []string {
+	seen := make(map[string]bool, len(commands))
+	tokens := make([]string, 0, len(commands))
+	for _, cmd := range commands {
+		if !seen[cmd.DeviceToken] {
+			seen[cmd.DeviceToken] = true
+			tokens = append(tokens, cmd.DeviceToken)
+		}
+	}
+	return tokens
+}
+
+// presenceStates reads the projection for one tenant's devices, answering nil — which
+// every lookup then reads as "unknown", hence Dispatch — when the gate is unwired or the
+// read fails.
+//
+// 🔴 A FAILED READ MUST NOT WITHHOLD. The gate exists to stop commands being thrown at
+// devices that cannot receive them; it is not an authority on whether the platform is
+// allowed to dispatch. Treating an unreachable device-state as "everything is absent"
+// would convert one service's outage into a platform-wide command stall, which is a
+// strictly worse failure than the silent loss the gate prevents. The counter is what
+// stops that fail-open being invisible.
+func (cproc *CommandDeliveryProcessor) presenceStates(ctx context.Context, devices []string) map[string]presence.State {
+	if cproc.Presence == nil {
+		return nil
+	}
+	states, err := cproc.Presence.StatesFor(ctx, devices)
+	if err != nil {
+		incr(cproc.PresenceReadErrors, 1)
+		log.Warn().Err(err).Int("devices", len(devices)).
+			Msg("Could not read device presence; dispatching this tenant's commands ungated.")
+		return nil
+	}
+	return states
+}
+
+// holdCommand withholds one command whose device is authoritatively absent.
+//
+// A lost race is DEBUG, not an error: it means another dispatcher claimed the row between
+// the sweep's read and this write, which is the conditional update doing its job.
+func (cproc *CommandDeliveryProcessor) holdCommand(ctx context.Context, cmd *model.Command) {
+	held, err := cproc.Api.HoldCommand(ctx, cmd.ID)
+	if err != nil {
+		log.Error().Err(err).Uint("command", cmd.ID).Str("device", cmd.DeviceToken).
+			Msg("unable to withhold a command for an absent device")
+		return
+	}
+	if !held {
+		log.Debug().Str("command", cmd.Token).
+			Msg("A command left QUEUED between the sweep's read and its hold; another dispatcher has it.")
+		return
+	}
+	incr(cproc.HoldsPlaced, 1)
+}
+
+// failUndeliverable ends one command whose transport cannot carry a command at all.
+func (cproc *CommandDeliveryProcessor) failUndeliverable(ctx context.Context, cmd *model.Command) {
+	failed, err := cproc.Api.MarkUndeliverable(ctx, cmd.ID, undeliverableReason)
+	if err != nil {
+		log.Error().Err(err).Uint("command", cmd.ID).Str("device", cmd.DeviceToken).
+			Msg("unable to fail an undeliverable command")
+		return
+	}
+	if !failed {
+		return
+	}
+	incr(cproc.UndeliverableFailed, 1)
+	log.Warn().Str("command", cmd.Token).Str("device", cmd.DeviceToken).
+		Msg("Failed a command to a device whose transport has no command path; it was never dispatched.")
+}
+
+// undeliverableReason is what the tenant reads on the failed command.
+//
+// It names the PLATFORM as the cause, twice over. The device did nothing wrong, and a
+// message that reads like a delivery failure sends an operator to check hardware that is
+// working perfectly. Nor is it the protocol's fault — Sparkplug does define a command
+// message; what is missing is our path for carrying one. "Does not support commands"
+// would be a claim about the transport, and it would be false.
+const undeliverableReason = "This platform has no command delivery path for the device's " +
+	"transport, so the command was never dispatched."
 
 // incr adds to an optional counter, skipping a nil one so a literal-built processor
 // needs no metrics registry.
@@ -405,6 +593,23 @@ func (cproc *CommandDeliveryProcessor) ExecuteStart(ctx context.Context) error {
 				return
 			case <-ticker.C:
 				cproc.sweepLocked(ctx)
+			}
+		}
+	}()
+
+	// The hold-reconcile net, on its own slower ticker. It is deliberately NOT folded
+	// into the sweep above: the sweep's cadence is chosen for delivery latency, and a
+	// walk of the accumulated withheld set has no business running at that rate. Its own
+	// ticker also means a slow reconcile pass cannot delay a delivery pass.
+	go func() {
+		ticker := time.NewTicker(config.HoldReconcileInterval * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-cproc.quit:
+				return
+			case <-ticker.C:
+				cproc.reconcileHolds(ctx)
 			}
 		}
 	}()

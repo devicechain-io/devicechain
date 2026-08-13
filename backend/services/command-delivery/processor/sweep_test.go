@@ -23,18 +23,90 @@ type fakeApi struct {
 	lockAvailable bool
 	pending       []*model.Command
 
+	// The reconcile pass's half: its own lock, the withheld set it walks, and what it
+	// released. The lock defaults to UNAVAILABLE so the delivery tests above are
+	// unaffected by a reconciler they are not about.
+	reconcileLockAvailable bool
+	reconcileLockAttempts  int
+	heldPage               []*model.Command
+	heldReads              []uint
+	heldReadErr            error
+	releasedHolds          []uint
+
 	lockAttempts    int
 	pendingReads    int
 	expireCalls     int
 	markedSent      []uint
 	released        []uint
 	markSentByToken []string
+	held            []uint
+	undeliverable   []uint
+	failReasons     []string
 
 	// claimFails makes MarkSent report that this caller LOST the claim, and
 	// releaseFails makes ReleaseClaim error. Both default to the happy path so
 	// existing tests are unaffected.
 	claimFails   bool
 	releaseFails bool
+	// holdLoses and releaseLoses make HoldCommand / ReleaseHold report a zero-row
+	// update — the conditional write losing to another writer that moved the row after
+	// the scan that selected it.
+	holdLoses    bool
+	releaseLoses bool
+}
+
+func (f *fakeApi) TryReconcileLock(_ context.Context, fn func() error) (bool, error) {
+	f.mu.Lock()
+	f.reconcileLockAttempts++
+	available := f.reconcileLockAvailable
+	f.mu.Unlock()
+	if !available {
+		return false, nil
+	}
+	return true, fn()
+}
+
+// HeldCommands answers from f.heldPage, honouring the cursor so a test can drive the
+// walk the way the reconciler does.
+func (f *fakeApi) HeldCommands(_ context.Context, afterId uint, limit int) ([]*model.Command, uint, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.heldReads = append(f.heldReads, afterId)
+	if f.heldReadErr != nil {
+		return nil, 0, f.heldReadErr
+	}
+	page := make([]*model.Command, 0, limit)
+	for _, cmd := range f.heldPage {
+		if cmd.ID > afterId && len(page) < limit {
+			page = append(page, cmd)
+		}
+	}
+	if len(page) < limit {
+		return page, 0, nil
+	}
+	return page, page[len(page)-1].ID, nil
+}
+
+func (f *fakeApi) ReleaseHold(_ context.Context, id uint) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.releasedHolds = append(f.releasedHolds, id)
+	return !f.releaseLoses, nil
+}
+
+func (f *fakeApi) HoldCommand(_ context.Context, id uint) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.held = append(f.held, id)
+	return !f.holdLoses, nil
+}
+
+func (f *fakeApi) MarkUndeliverable(_ context.Context, id uint, reason string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.undeliverable = append(f.undeliverable, id)
+	f.failReasons = append(f.failReasons, reason)
+	return true, nil
 }
 
 func (f *fakeApi) TrySweepLock(_ context.Context, fn func() error) (bool, error) {
@@ -331,31 +403,48 @@ func TestSweepDeliversWithNoLifecycleGateWired(t *testing.T) {
 
 // 🔴 THE PLUMBING, which every test above skips.
 //
-// procWith builds the processor by struct literal and assigns TenantDeleted directly, so
-// all three tests above measure the FIELD. The shipped binary reaches it only through
+// procWith builds the processor by struct literal and assigns the gates directly, so all
+// three tests above measure the FIELD. The shipped binary reaches them only through
 // NewCommandDeliveryProcessor — and with nothing covering that, deleting the constructor's
 // `TenantDeleted: tenantDeleted` line disabled the gate in production while leaving this
 // entire suite green. A gate is not wired because its logic is right; it is wired because
-// the constructor carries it.
+// the constructor carries it. (The same defect shipped an entirely inert tier carriage
+// elsewhere in the platform, one missing assignment, every test passing.)
 //
-// It calls the real constructor once. Once is the limit: NewProcessorMetrics registers
-// into prometheus' default registry via promauto, so a second construction in this
-// package would panic on duplicate registration — which is also why the other tests use
-// the fixture, and why this one is the single place the constructor is exercised.
-func TestConstructorWiresTheLifecycleGate(t *testing.T) {
+// It calls the real constructor ONCE, and that is a hard limit rather than a preference:
+// NewProcessorMetrics registers into prometheus' default registry via promauto, so a
+// second construction in this package panics on duplicate registration. Both gates are
+// therefore proven in this one pass, which is why it carries two tenants:
+//
+//   - acme is DELETED, so its command must not publish — the ADR-077 gate arrived.
+//   - other is live but its device is authoritatively ABSENT, so its command must be
+//     HELD rather than published — the presence gate arrived.
+//
+// The second assertion is the one that cannot be faked by a broken sweep. "Published
+// nothing" is also what a completely wedged sweep looks like; "held exactly command 2"
+// requires the constructor's presence reader to have been consulted and to have answered.
+func TestConstructorWiresBothDeliveryGates(t *testing.T) {
 	ms := &core.Microservice{FunctionalArea: "commanddelivery"}
-	api := &fakeApi{lockAvailable: true, pending: []*model.Command{queued(1, "c1")}}
+	api := &fakeApi{lockAvailable: true, pending: []*model.Command{
+		queuedFor(1, "c1", "acme"),
+		queuedFor(2, "c2", "other"),
+	}}
 	writer := &recordingWriter{}
 
 	proc := NewCommandDeliveryProcessor(ms, nil, writer, core.NewNoOpLifecycleCallbacks(), api,
-		func(tenant string) bool { return tenant == "acme" })
+		func(tenant string) bool { return tenant == "acme" },
+		absentReader{"dev-c2"})
 
-	// Drive the real sweep rather than reading proc.TenantDeleted back: the field being
-	// set proves assignment, not that the delivery path consults what was assigned.
+	// Drive the real sweep rather than reading the fields back: a field being set proves
+	// assignment, not that the delivery path consults what was assigned.
 	proc.sweepLocked(context.Background())
 
 	if writer.count() != 0 {
-		t.Fatalf("the gate passed to the constructor must reach the sweep; published %d", writer.count())
+		t.Fatalf("both gates passed to the constructor must reach the sweep; published %d", writer.count())
+	}
+	if len(api.held) != 1 || api.held[0] != 2 {
+		t.Fatalf("the presence reader passed to the constructor must reach the sweep — the live "+
+			"tenant's absent device should have its command HELD; held=%v", api.held)
 	}
 }
 

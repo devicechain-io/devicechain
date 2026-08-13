@@ -184,6 +184,16 @@ type CommandDeliveryApi interface {
 	// ReleaseClaim undoes a claim whose dispatch then failed, returning the row to
 	// QUEUED and clearing sent_time.
 	ReleaseClaim(ctx context.Context, id uint) (bool, error)
+	// HoldCommand withholds a queued command whose device is authoritatively absent.
+	HoldCommand(ctx context.Context, id uint) (bool, error)
+	// MarkUndeliverable fails a queued command whose transport carries no command path.
+	MarkUndeliverable(ctx context.Context, id uint, reason string) (bool, error)
+	// ReleaseHold returns a withheld command to QUEUED for the sweep to reconsider.
+	ReleaseHold(ctx context.Context, id uint) (bool, error)
+	// HeldCommands walks the withheld set a bounded page at a time.
+	HeldCommands(ctx context.Context, afterId uint, limit int) ([]*Command, uint, error)
+	// TryReconcileLock serializes the hold-reconcile pass across replicas.
+	TryReconcileLock(ctx context.Context, fn func() error) (bool, error)
 	MarkSentByToken(ctx context.Context, token string) (bool, error)
 	MarkResponse(ctx context.Context, commandToken string, success bool, payload *string, errMsg *string) (*Command, error)
 	CancelCommand(ctx context.Context, token string) (*Command, error)
@@ -562,8 +572,9 @@ func sweepableStatusStrings() []string {
 // write — the sweep publishes BEFORE marking SENT, so a device answering in
 // milliseconds can drive the row to SUCCESSFUL (MarkResponse) while this write is
 // delayed under load; a Save of the stale QUEUED snapshot would then clobber it back
-// to SENT, wiping RespondedTime/ResponsePayload. Nothing recovers it: PendingCommands
-// redelivers only DISPATCHABLE rows — QUEUED and HELD, never SENT — and the response was
+// to SENT, wiping RespondedTime/ResponsePayload. Nothing recovers it: the sweep selects
+// QUEUED rows and nothing returns a SENT row to QUEUED except ReleaseClaim, which the
+// dispatcher calls only on its own failed publish — and the response was
 // already consumed, so the row sits in SENT until its TTL drags it to TIMEOUT — a week, by
 // default, reporting a failure that already succeeded. (It used to be genuinely permanent;
 // the platform default TTL now stamps every command that does not carry its own, which
@@ -618,6 +629,126 @@ func (api *Api) ReleaseClaim(ctx context.Context, id uint) (bool, error) {
 	return res.RowsAffected == 1, nil
 }
 
+// HoldCommand withholds a queued command because its device is authoritatively absent,
+// reporting whether THIS caller performed the transition.
+//
+// 🔴 THE FROM-STATE PREDICATE IS NOT DEFENSIVE POLISH — WITHOUT IT THIS RE-OPENS THE
+// DOUBLE-ACTUATION HOLE claim-before-publish was built to close. The sweep SELECTs its
+// batch and then walks it, so a row it observed as QUEUED can be claimed by another
+// dispatcher — the LwM2M wake drain — while the walk is still in progress. An
+// unconditional write would then stamp HELD over a row that was claimed SENT
+// microseconds earlier and physically dispatched: the command becomes claimable again,
+// the next tick or drain sends it a second time, and a device dispenses, unlocks or
+// reboots twice. Pinning QUEUED makes this write LOSE that race instead.
+//
+// It pins QUEUED specifically rather than "still non-terminal" for the same reason
+// expireOne pins its scanned status: HELD is already held (a no-op worth distinguishing
+// from a win), and SENT is a command in flight, which must never be dragged back into
+// the withheld set.
+//
+// A false return is a benign race, not an error — the row left QUEUED between the scan
+// and this write, and whoever moved it is welcome to it.
+func (api *Api) HoldCommand(ctx context.Context, id uint) (bool, error) {
+	res := api.RDB.DB(ctx).Model(&Command{}).
+		Where("id = ? AND status = ?", id, CommandQueued.String()).
+		Update("status", CommandHeld.String())
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
+}
+
+// MarkUndeliverable drives a queued command to FAILED because its transport cannot carry
+// a command at all, recording the reason. It reports whether THIS caller performed the
+// transition.
+//
+// 🔑 THE ALTERNATIVE — HOLDING — WOULD BE A DIFFERENT LIE, NOT A SAFER ONE. HELD means
+// "waiting for the device to come back", and for a transport with no command path that is
+// false in a way that never resolves: the device does come back, and delivery still cannot
+// happen. The row would then sit until its TTL dragged it to EXPIRED ("the platform ran
+// out of time"), occupying the tenant's undelivered ceiling the whole time and letting one
+// such fleet crowd out commands to devices that CAN receive them. FAILED with a reason is
+// the honest terminal, and it is reached in seconds rather than days.
+//
+// The reason is written to the same Error column a device's own failure response uses.
+// That is deliberate: from the caller's side both mean "this command will not happen, and
+// here is why", and a second column for platform-side failures would need every reader to
+// know which one to look at.
+//
+// From-state predicated on QUEUED, for exactly the reason HoldCommand is.
+func (api *Api) MarkUndeliverable(ctx context.Context, id uint, reason string) (bool, error) {
+	res := api.RDB.DB(ctx).Model(&Command{}).
+		Where("id = ? AND status = ?", id, CommandQueued.String()).
+		Updates(map[string]any{
+			"status": CommandFailed.String(),
+			"error":  sql.NullString{String: reason, Valid: true},
+		})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
+}
+
+// ReleaseHold returns a withheld command to QUEUED so the next delivery sweep
+// reconsiders it, reporting whether THIS caller performed the transition.
+//
+// It is the inverse of HoldCommand and predicated on HELD for the mirror-image reason:
+// a row that has since been claimed, answered or cancelled must not be dragged back into
+// the dispatchable set.
+//
+// 🔑 IT RELEASES TO QUEUED RATHER THAN DISPATCHING DIRECTLY, so there stays exactly ONE
+// place that decides whether a command goes out. The releaser's question is only "is this
+// device still absent?"; everything else — the device turning out to be on a transport
+// that cannot carry commands, the tenant having been deleted, the ceiling, the claim — is
+// the sweep's, and it re-asks all of it with a fresh presence read on the next tick. A
+// release path that published would be a second dispatcher with its own copy of those
+// rules, which is how the two answers drift apart.
+func (api *Api) ReleaseHold(ctx context.Context, id uint) (bool, error) {
+	res := api.RDB.DB(ctx).Model(&Command{}).
+		Where("id = ? AND status = ?", id, CommandHeld.String()).
+		Update("status", CommandQueued.String())
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
+}
+
+// HeldCommands returns a bounded page of withheld commands with an id above afterId,
+// oldest first, together with the id to resume from. A returned cursor of 0 means the
+// walk reached the end and the next pass should start over.
+//
+// 🔴 THIS ONE MUST BE PAGED WHERE PendingCommands MUST NOT BE, and the difference is the
+// size of the set rather than a difference of opinion about caps. QUEUED is transient —
+// every row leaves it at the next tick — so an uncapped read is one tick of churn. HELD
+// is where an absent fleet's backlog ACCUMULATES, bounded only by each tenant's ceiling
+// times the number of tenants, and it can sit for days.
+//
+// 🔑 A PLAIN `LIMIT n` WOULD WEDGE, which is the trap PendingCommands' own comment
+// describes and the reason this takes a cursor instead. With oldest-first ordering, the
+// commands of a device that is never coming back hold the smallest ids and would
+// therefore fill EVERY page forever — so the devices that DID return, holding higher ids,
+// would never be looked at, and the net would silently stop being a net. Walking from a
+// cursor visits every row within a few passes regardless of what is stuck at the front.
+//
+// The cursor is the caller's to hold, deliberately: it is a position in a walk, not a
+// fact about the data, and a per-pod one that resets on restart merely restarts the walk.
+func (api *Api) HeldCommands(ctx context.Context, afterId uint, limit int) ([]*Command, uint, error) {
+	found := make([]*Command, 0)
+	result := api.RDB.DB(ctx).
+		Where("status = ? AND id > ?", CommandHeld.String(), afterId).
+		Order("id ASC").Limit(limit).Find(&found)
+	if result.Error != nil {
+		return nil, 0, result.Error
+	}
+	// A short page means the walk is done; answering 0 restarts it. Answering the last
+	// id instead would leave the cursor parked past the end, and every subsequent pass
+	// would read nothing at all — a reconciler that quietly stops reconciling.
+	if len(found) < limit {
+		return found, 0, nil
+	}
+	return found, found[len(found)-1].ID, nil
+}
+
 // MarkSentByToken is MarkSent addressed by the command's token rather than its
 // primary key, for a dispatcher that holds the token and not the row.
 //
@@ -645,13 +776,12 @@ func (api *Api) ReleaseClaim(ctx context.Context, id uint) (bool, error) {
 // thing left between the two dispatches is the per-pod dedupe cache, which is
 // exactly the guarantee this comment must not overstate.
 //
-// It is harmless today because nothing writes HELD and the drain never fetches a
-// QUEUED row, so the two paths select disjoint sets. It stops being harmless the
-// moment the presence gate produces held rows. Closing it means the sweep claims
-// before publishing too — which needs a way to release a claim whose publish then
-// failed, since a marked-but-unpublished row is invisible to redelivery until its
-// TTL. That decision belongs with the gate, and is recorded rather than left to be
-// rediscovered as a bug.
+// 🔑 THE SWEEP NOW CLAIMS BEFORE IT PUBLISHES, which is what closes the LATER-tick
+// half of this properly rather than by the two paths happening to select disjoint
+// sets — they no longer do, since the presence gate produces held rows and the
+// reconciler returns them to QUEUED. What remains open is only the in-flight tick
+// described above, and it is narrow: both dispatchers claim first, so the loser
+// declines; the residue is a publish already in progress when the claim lands.
 //
 // It reports whether THIS call performed the transition. RowsAffected==0 means
 // the row was not dispatchable — already sent by the sweep, already answered, or
@@ -945,16 +1075,35 @@ func (api *Api) TrySweepLock(ctx context.Context, fn func() error) (bool, error)
 	return api.RDB.TryAdvisoryLock(ctx, rdb.AdvisoryLockKey(sweepLockName), fn)
 }
 
-// PendingCommands returns every still-dispatchable command — QUEUED or HELD —
-// oldest first. It is the redelivery worker's source; the caller passes a system
-// context for the cross-tenant sweep.
+// reconcileLockName namespaces the hold-reconcile pass's own advisory lock.
 //
-// HELD rows are included because the sweep is what NOTICES that a held command can
-// now go out: it is the recurring pass that re-reads presence, so a hold placed
-// while a device was absent is reconsidered on the next tick after it returns. A
-// hold the sweep could not see would be a hold nothing drains — it would sit until
-// its TTL regardless of the device coming back. The decision to publish or keep
-// holding belongs to the caller; this read only says which rows are still in play.
+// 🔑 ITS OWN LOCK, NOT THE SWEEP'S, and the two are safe to run at once. Sharing would
+// serialize a slow minutes-cadence walk of the withheld set against the 30-second
+// delivery sweep, so a long reconcile pass would starve delivery — the fast path losing
+// to the slow one, which is the wrong way round. They can overlap because every write
+// on both paths is predicated on the exact state its scan observed: a release that
+// races a claim, or a hold that races a release, matches zero rows and does nothing.
+// The lock is here only to stop N replicas doing the SAME walk, which would be wasted
+// reads rather than duplicate actuations — the reconcile publishes nothing.
+const reconcileLockName = "command-delivery-hold-reconcile"
+
+// TryReconcileLock runs fn while holding the cross-replica reconcile lock, reporting
+// whether it ran. Like TrySweepLock it does not wait.
+func (api *Api) TryReconcileLock(ctx context.Context, fn func() error) (bool, error) {
+	return api.RDB.TryAdvisoryLock(ctx, rdb.AdvisoryLockKey(reconcileLockName), fn)
+}
+
+// PendingCommands returns every QUEUED command, oldest first. It is the delivery
+// sweep's source; the caller passes a system context for the cross-tenant read.
+//
+// 🔑 HELD ROWS ARE DELIBERATELY EXCLUDED, and it is the presence gate that makes that
+// safe. A held command is one the platform has decided not to send yet, so re-reading
+// the whole withheld set every 30 seconds would be asking "has this device come back?"
+// on a schedule, when the transports already answer that by telling us. For a fleet
+// offline over a weekend it means an entire multi-day backlog re-read on every tick.
+// Held rows leave HELD by a different door: the reconcile net's slower pass, and — once
+// it exists — a wake on the device's return.
+//
 // (The set selected here is a SUBSET of what MarkSent will claim from — the sweep hands
 // out QUEUED, while a claim also accepts HELD for the release paths. Subset, not
 // equality: a state the sweep hands out but cannot then mark sent would be republished
@@ -963,11 +1112,10 @@ func (api *Api) TrySweepLock(ctx context.Context, fn func() error) (bool, error)
 // The ORDER BY is a strict improvement over the previous unordered read: delivery
 // now follows enqueue order instead of whatever the planner returned.
 //
-// It is deliberately NOT capped. 🔑 THAT ARGUMENT SURVIVES ONLY BECAUSE THIS NOW
-// SELECTS QUEUED ALONE. While it also selected HELD, the selection was an absent
-// fleet's whole multi-day backlog re-read every 30 seconds; with the gate, held rows
-// are released by the device's return and never appear here. What is left is one tick
-// of churn, which is the thing the reasoning below was written about.
+// It is deliberately NOT capped. 🔑 THAT ARGUMENT SURVIVES ONLY BECAUSE THIS SELECTS
+// QUEUED ALONE — see above. What is left is one tick of enqueue churn, which is the
+// thing the reasoning below was written about. (HeldCommands reads the set that DOES
+// accumulate, which is why that one is paged.)
 //
 // A naive `LIMIT n` makes that worse, not
 // better, and the failure is not obvious: combined with oldest-first ordering, any

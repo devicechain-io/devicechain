@@ -13,7 +13,7 @@ CREATE INDEX "idx_command-delivery_commands_device_token" ON "command-delivery".
 CREATE INDEX "idx_command-delivery_commands_status" ON "command-delivery".commands USING btree (status);
 CREATE INDEX "idx_command-delivery_commands_token" ON "command-delivery".commands USING btree (token);
 CREATE INDEX idx_audit_tenant_time ON "command-delivery".audit_events USING btree (tenant_id, occurred_time DESC);
-CREATE INDEX idx_commands_dispatchable ON "command-delivery".commands USING btree (id) WHERE ((deleted_at IS NULL) AND ((status)::text = ANY ((ARRAY['QUEUED'::character varying, 'HELD'::character varying])::text[])));
+CREATE INDEX idx_commands_dispatchable_status ON "command-delivery".commands USING btree (status, id) WHERE ((deleted_at IS NULL) AND ((status)::text = ANY ((ARRAY['QUEUED'::character varying, 'HELD'::character varying])::text[])));
 CREATE INDEX idx_commands_tenant_status ON "command-delivery".commands USING btree (tenant_id, status) WHERE (deleted_at IS NULL);
 CREATE SCHEMA "command-delivery";
 CREATE SEQUENCE "command-delivery".audit_events_id_seq

@@ -557,23 +557,29 @@ func (d *Dispatcher) drain(ctx context.Context, job drainJob) {
 // claim takes ownership of one backlogged command and reports whether the drain may dispatch
 // it. It is the CLAIM half of claim-then-dispatch.
 //
-// 🔴 Why claiming exists at all: the delivery sweep publishes anything still DISPATCHABLE. A
-// HELD row is in that set, so a drain that ran the CoAP op without first claiming would leave
-// the row HELD for the next sweep tick to publish down the live path — the same command
-// delivered twice, which for a command is a second PHYSICAL ACTUATION (a valve opened again,
-// a firmware update re-applied), not a duplicate log line. Claiming first makes the exclusion
-// structural: whoever wins the conditional UPDATE actuates, everyone else declines.
+// 🔴 Why claiming exists at all: a drain that ran the CoAP op without first claiming would
+// leave the row HELD, and HELD is not a resting place — command-delivery's reconciler
+// releases a hold back to QUEUED the moment the device reads as present, which this very
+// registration makes true. The next delivery sweep then publishes it down the live path: the
+// same command delivered twice, which for a command is a second PHYSICAL ACTUATION (a valve
+// opened again, a firmware update re-applied), not a duplicate log line. Claiming first makes
+// the exclusion structural: whoever wins the conditional UPDATE actuates, everyone else
+// declines.
 //
 // 🔴 The in-memory dedupe is NOT this guarantee and must never be mistaken for it. It is
 // per-pod and TTL-bounded, so it says nothing about another replica or about this pod after a
 // restart — exactly the two situations a leadership change produces. It is defence in depth
 // against the drain/live overlap within one pod, no more.
 //
-// A SENT row needs NO claim: it has already left the dispatchable set, so the sweep will not
-// republish it. That is deliberate and load-bearing for THIS slice — nothing writes HELD yet,
-// so every drained row today is SENT and takes this branch. Issuing a mutation per drained
-// command "for symmetry" would add a round trip to every wake of every device on the instance
-// and change behaviour that is supposed to be unchanged.
+// A SENT row needs NO claim: it has already left the dispatchable set, and nothing returns
+// it there — a release targets HELD, so a SENT row cannot be pulled back in front of the
+// sweep. Issuing a mutation per drained command "for symmetry" would add a round trip to
+// every wake of every device on the instance for a guarantee the status already carries.
+//
+// 🔑 The HELD branch below is LIVE now, which it was not when this was written: the presence
+// gate withholds commands to an absent device, and a sleeping LwM2M device is exactly that.
+// So the claim is no longer a precaution against a state nothing produced — it is the
+// ordinary path for a queue-mode device, and every drained backlog goes through it.
 //
 // Both non-dispatch outcomes are counted, and they are counted apart (see Metrics):
 //   - LOST (false, nil): another dispatcher or the sweep won it. Benign, no actuation.

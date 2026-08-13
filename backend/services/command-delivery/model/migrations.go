@@ -27,5 +27,6 @@ var (
 	Migrations = []*gormigrate.Migration{
 		NewBaselineSchema(),
 		NewTenantStatusIndexSchema(),
+		NewDispatchableStatusIndexSchema(),
 	}
 )
