@@ -19,6 +19,9 @@ func (api *Api) CreateNotificationPolicy(ctx context.Context,
 	if err := validateJSONObject(request.Metadata, "metadata"); err != nil {
 		return nil, err
 	}
+	if err := validateDeviceTypeScoping(request.DeviceTypeToken); err != nil {
+		return nil, err
+	}
 
 	var created *NotificationPolicy
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
@@ -65,6 +68,9 @@ func (api *Api) CreateNotificationPolicy(ctx context.Context,
 func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 	request *NotificationPolicyCreateRequest) (*NotificationPolicy, error) {
 	if err := validateJSONObject(request.Metadata, "metadata"); err != nil {
+		return nil, err
+	}
+	if err := validateDeviceTypeScoping(request.DeviceTypeToken); err != nil {
 		return nil, err
 	}
 	matches, err := api.NotificationPoliciesByToken(ctx, []string{token})
