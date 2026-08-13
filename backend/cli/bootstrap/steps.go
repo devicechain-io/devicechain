@@ -199,10 +199,17 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	var creds natsauth.Credentials
 	switch {
 	case deployed != nil:
+		// The hashes the broker is ALREADY configured with, so reuse means reuse:
+		// bcrypt salts, so re-hashing an unchanged password writes a different string
+		// and — now that the broker adopts its config by rolling on a checksum change
+		// — that would restart the broker on every idempotent re-run. Best-effort by
+		// design: an empty result costs a fresh hash, and a supplied one is used only
+		// if it verifies against the plaintext below.
 		creds, err = natsauth.CredentialsFromDeployed(
 			deployed.Infrastructure.Nats.Auth.CalloutIssuerSeed,
 			deployed.Infrastructure.Nats.Auth.Password,
-			deployed.Infrastructure.Nats.Auth.SysPassword)
+			deployed.Infrastructure.Nats.Auth.SysPassword,
+			lookupDeployedBrokerHashes(ctx, st.KubeContext, natsStatefulSetName))
 		if err != nil {
 			return fail("reusing the running instance's NATS auth credentials", err)
 		}

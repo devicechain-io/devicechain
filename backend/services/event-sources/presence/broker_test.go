@@ -359,7 +359,7 @@ server_name: "callout-test"
 jetstream { store_dir: %q }
 accounts {
   APP: { jetstream: enabled, users: [ {user: dc_service, password: svc} ] }
-  SYS: { users: [ {user: dc_sys, password: sys} ] }
+  SYS: { users: [ {user: dc_sys, password: sys}, {user: dc_unlisted, password: unlisted} ] }
 }
 system_account: SYS
 authorization {
@@ -397,11 +397,25 @@ authorization {
 	// NOT in auth_users must be refused on this same broker. If it connected, then
 	// auth_users is not what admits dc_sys and the assertion above would hold even
 	// against the broken configuration.
-	other, err := nats.Connect(srv.ClientURL(), nats.UserInfo("dc_other", "nope"),
+	//
+	// 🔴 THE CONTROL'S FIXTURE HAS TO BE A USER THIS BROKER WOULD OTHERWISE ADMIT, and
+	// getting that wrong is how this test spent its first life proving nothing. It used
+	// `dc_other`, defined in no account at all — which ordinary authentication refuses
+	// whether a callout is configured or not. Deleting the entire auth_callout block
+	// then left the test GREEN: dc_sys connected on its own static password, dc_other
+	// was refused as an unknown user, and both assertions read exactly as they do here.
+	// Measured, not reasoned about — the mutation survived.
+	//
+	// dc_unlisted is defined in SYS with a valid password, so this broker admits it on
+	// the static credential alone. The ONLY thing that can refuse it is the callout
+	// taking it over — which is the delegation this test exists to pin, and which the
+	// account block above deliberately places in SYS, since "delegation reaches the
+	// system account too" is the specific surprise that shipped the feature dead.
+	other, err := nats.Connect(srv.ClientURL(), nats.UserInfo("dc_unlisted", "unlisted"),
 		nats.Timeout(3*time.Second))
 	if err == nil {
 		other.Close()
-		t.Fatal("an unlisted login connected, so this broker is not enforcing the callout and the " +
-			"assertion above is vacuous")
+		t.Fatal("a login absent from auth_users connected on its own static password, so this broker " +
+			"is not delegating to the callout at all and the assertion above is vacuous")
 	}
 }

@@ -347,6 +347,21 @@ evaluates 3 module.nats.cluster_replicas -var ha=false -var nats_cluster_replica
 evaluates '"DoNotSchedule"' 'module.nats.ha_topology.spread_constraints["kubernetes.io/hostname"].whenUnsatisfiable' -var ha=true
 evaluates 1 'module.nats.ha_topology.spread_constraints["kubernetes.io/hostname"].maxSkew' -var ha=true
 evaluates '{}' 'module.nats.ha_topology.spread_constraints' -var ha=false
+# Whether a NATS config change is ADOPTED by the running broker at all. nats-server
+# refuses to hot-reload the auth_callout block — and the refusal is wholesale, so
+# every other change in the same apply goes with it — which means without the pod
+# template's config checksum a change is applied, reported successful by tofu, by
+# the reloader and by the ConfigMap, and never reaches the server. Asserted in BOTH
+# topologies because it is not an HA property: a single-server instance has exactly
+# the same silent-divergence bug.
+#
+# Read-back, not a grep: hack/check-nats-config-adoption.sh pins that the line
+# exists, but only this can see that it is still nested under podTemplate. The
+# chart has no values.schema.json, so a key at the wrong depth is ignored in
+# silence — and `tofu console` fails on the missing attribute before it ever gets
+# to compare values.
+evaluates true module.nats.ha_topology.config_checksum_annotation -var ha=true
+evaluates true module.nats.ha_topology.config_checksum_annotation -var ha=false
 # The MQTT gateway's own streams hold persistent sessions and inflight QoS 1
 # messages; at 1 on a clustered broker, losing their node drops every session.
 evaluates 3 module.nats.ha_topology.mqtt_stream_replicas -var ha=true
