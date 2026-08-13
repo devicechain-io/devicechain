@@ -104,8 +104,12 @@ These are terminal, and nothing moves out of a terminal state:
 you looking in the wrong place: `EXPIRED` means the command never left the platform, so a
 run of them says deliveries are not being attempted; `TIMEOUT` means it did go out and
 nothing came back, which points at the device. Read a run of `TIMEOUT` carefully before you
-blame firmware: a command for a device that is switched off is dispatched all the same, so
-it ends there too unless the device comes back and answers before its TTL elapses.
+blame firmware: a command for a device that is switched off is dispatched all the same, and
+over MQTT it is delivered only to a device that is connected and subscribed at that instant.
+A device that is away does not receive it later — the broker does not hold it — so the
+command is recorded as sent, nothing answers, and it ends in `TIMEOUT`. A run of `TIMEOUT`
+against devices you know are intermittent is therefore a statement about when they were
+connected, not about their firmware.
 
 Cancelling a command records `CANCELLED`. Cancellation and TTL expiry shared the single
 value `EXPIRED` until recently, so commands cancelled before that change still read as

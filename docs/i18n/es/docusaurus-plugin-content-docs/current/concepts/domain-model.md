@@ -107,8 +107,11 @@ buscar en el lugar equivocado: `EXPIRED` significa que el comando nunca salió d
 plataforma, así que una racha de ellos indica que las entregas no se están intentando;
 `TIMEOUT` significa que sí salió y no volvió nada, lo que apunta al dispositivo. Lee con
 cuidado una racha de `TIMEOUT` antes de culpar al firmware: un comando para un dispositivo
-apagado se despacha igualmente, así que también termina ahí salvo que el dispositivo vuelva
-y responda antes de que venza su TTL.
+apagado se despacha igualmente, y sobre MQTT solo se entrega a un dispositivo que esté
+conectado y suscrito en ese preciso instante. Un dispositivo ausente no lo recibe más tarde
+—el broker no lo retiene—, así que el comando queda registrado como enviado, nada responde y
+termina en `TIMEOUT`. Por eso una racha de `TIMEOUT` contra dispositivos que usted sabe que
+son intermitentes habla de cuándo estuvieron conectados, no de su firmware.
 
 Cancelar un comando registra `CANCELLED`. La cancelación y la expiración del TTL compartían
 hasta hace poco el único valor `EXPIRED`, así que los comandos cancelados antes de ese

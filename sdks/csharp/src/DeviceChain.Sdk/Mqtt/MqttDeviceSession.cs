@@ -216,9 +216,17 @@ public sealed class MqttDeviceSession : IAsyncDisposable
             Username = DevicePlane.ConnectUsername(_options.Tenant, _options.CredentialId),
             // Empty, not absent: it is what selects access-token credential mode at the callout.
             Password = string.Empty,
-            // False so the broker holds this device's subscription and any undelivered QoS-1
-            // commands across a reconnect — which is what stops a command being lost while the
-            // device is briefly away.
+            // False so the broker restores this device's SUBSCRIPTION across a reconnect. It
+            // re-arms it during CONNECT processing, before this client could send SUBSCRIBE, so
+            // there is no window where the device is connected but not subscribed.
+            //
+            // 🔴 IT DOES NOT HOLD UNDELIVERED COMMANDS, AND AN EARLIER COMMENT HERE SAID IT DID.
+            // The broker queues a QoS-1 message only if it reached it as an MQTT PUBLISH from
+            // another MQTT client; a command published by the platform arrives over NATS and is
+            // delivered to this subscription live, as QoS 0, with no packet id and no store. A
+            // command issued while the device is away is dropped by the broker and is not
+            // redelivered on reconnect. Persisting the subscription is what narrows the loss
+            // window to nothing on THIS client; it does not close the away case.
             CleanSession = false,
             KeepAlive = _options.KeepAlive,
             Trust = _options.Trust,

@@ -180,9 +180,16 @@ func (r *Receiver) Subscribe(ctx context.Context, deviceToken, credentialId stri
 
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(r.broker)
-	// CleanSession false + auto-reconnect keeps the session so a brief blip does not
-	// lose a QoS-1 command (the broker queues it) — the receiver is load-bearing, so
-	// it favors delivery.
+	// CleanSession false + auto-reconnect keeps the SUBSCRIPTION across a blip: the broker
+	// re-arms it during CONNECT, before this client could resubscribe, so there is no
+	// connected-but-unsubscribed window. The receiver is load-bearing, so it favors delivery.
+	//
+	// 🔴 IT DOES NOT MAKE THE BROKER QUEUE A COMMAND, AND AN EARLIER COMMENT HERE SAID IT DID.
+	// A platform-published command reaches an MQTT device only through the live QoS-0 path — it
+	// is published over NATS, so it never enters the broker's QoS-1 message store and the durable
+	// consumer behind a persistent subscription never sees it. A command issued while this
+	// receiver is disconnected is dropped by the broker, and command-delivery has already marked
+	// it SENT. Keeping the session narrows the window; it does not remove it.
 	opts.SetClientID(clientID)
 	opts.SetUsername(fmt.Sprintf("%s:%s", r.tenant, credentialId))
 	opts.SetPassword("")

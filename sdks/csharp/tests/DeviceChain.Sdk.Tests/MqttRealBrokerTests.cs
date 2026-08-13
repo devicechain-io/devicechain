@@ -148,11 +148,24 @@ public class MqttRealBrokerTests
         Assert.Contains("\"payload\":\"moving\"", body);
     }
 
-    // cleanSession=false means the broker holds the subscription and any undelivered QoS-1
-    // commands while the device is away — which is what stops a command being lost across a
-    // reconnect. Proving it needs a real broker: no fake models session persistence.
+    // cleanSession=false means the broker holds the subscription and, for a message that reached
+    // it as an MQTT PUBLISH from another MQTT client, the undelivered QoS-1 message too. Proving
+    // it needs a real broker: no fake models session persistence.
+    //
+    // 🔴🔴 READ THE PUBLISHER BEFORE READING THE NAME. This test publishes from `peer`, a second
+    // MQTT client, at QoS 1 — and that is the ONE path that puts a message in the broker's QoS-1
+    // store. A DeviceChain command does NOT take that path: command-delivery publishes it over
+    // NATS, so it never enters that store, the durable consumer behind this persistent
+    // subscription never sees it, and it is delivered only live, as QoS 0. A command issued while
+    // the device is away is therefore dropped by the broker — the opposite of what this test's
+    // former name ("ThePersistentSessionHoldsACommandSentWhileTheDeviceWasAway") asserted.
+    //
+    // So this proves the broker's session persistence works. It does NOT prove anything about
+    // command delivery, and it must not be cited as if it did. Covering the real path needs a
+    // publisher on the NATS side, which is out of reach from an SDK test — the gap is real and is
+    // named here rather than papered over.
     [SkippableFact]
-    public async Task ThePersistentSessionHoldsACommandSentWhileTheDeviceWasAway()
+    public async Task TheBrokerHoldsAQoS1MessagePublishedByAnotherMqttClientWhileTheDeviceWasAway()
     {
         Skip.IfNot(Available, "DC_MQTT_BROKER is not set");
 
