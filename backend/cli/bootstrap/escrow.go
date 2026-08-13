@@ -10,10 +10,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/devicechain-io/dc-microservice/secrets/escrow"
 	"github.com/fatih/color"
 	"golang.org/x/term"
@@ -164,6 +166,15 @@ var (
 	// that decides between "upgrade this instance" and "rotate every credential out
 	// from under it", and that decision must be testable without standing up a cluster.
 	lookupDeployedInstance = DeployedInstanceConfig
+
+	// lookupDeployedBrokerHashes is the matching seam for the broker's existing
+	// password hashes. Separate from the one above because it is deliberately the
+	// weaker of the two: that one refuses to guess and fails the run, this one
+	// answers "nothing" for every problem it meets. Indirected so a test can prove
+	// that difference — that a re-run still produces a working credential set when
+	// this returns empty, and that a hash which does not verify is discarded rather
+	// than shipped to the broker.
+	lookupDeployedBrokerHashes = DeployedBrokerHashes
 
 	// encodeArtifact is the seam that makes the post-write verification testable.
 	//
@@ -595,6 +606,62 @@ func syncDir(dir string) {
 // minting on a "could not tell" is exactly the destructive branch. EnsureCluster has
 // already run by this point, so the API being unreachable here is an anomaly worth
 // stopping for rather than guessing past.
+// brokerHashPair matches one `"password": "<bcrypt>", "user": "<name>"` pair in the
+// broker's rendered config. The chart writes the account users as JSON objects with
+// the keys in this order, which is what makes a targeted match viable — but see
+// DeployedBrokerHashes for why being wrong about that is survivable.
+var brokerHashPair = regexp.MustCompile(`"password":\s*"(\$2[aby]\$[^"]+)",\s*"user":\s*"([^"]+)"`)
+
+// DeployedBrokerHashes reads the bcrypt password hashes the RUNNING broker is
+// configured with, so a bootstrap re-run can keep them rather than minting
+// salt-different ones for the same passwords.
+//
+// 🔑 EVERY FAILURE HERE RETURNS AN EMPTY PAIR AND NO ERROR, ON PURPOSE. The hashes
+// are an optimisation, not a credential: natsauth.CredentialsFromDeployed uses one
+// only if it verifies against the plaintext it already holds, so a missing, stale or
+// mis-parsed value costs a fresh hash and nothing else. That is what makes it safe to
+// read a value out of a live cluster's config here — the read cannot introduce a new
+// way for an ordinary re-run to fail, which was the standing objection to doing this
+// at all.
+//
+// Why it matters enough to do: the module stamps a checksum of this ConfigMap onto
+// the broker's pod template so config changes are actually adopted, so a re-hashed
+// line is no longer a cosmetic diff — it rolls the broker. Re-running bootstrap
+// against a healthy instance would otherwise drop every MQTT device for a credential
+// that did not change.
+//
+// It reads the ConfigMap rather than the Helm release because that is the artifact
+// the server actually loads, and it matches a password/user PAIR rather than hunting
+// for a bare `$2a$` so the two accounts cannot be transposed — handing the system
+// account's hash to the service login would simply fail to verify and re-hash, but
+// silently doing the right thing for the wrong reason is not worth the ambiguity.
+func DeployedBrokerHashes(ctx context.Context, kubeContext, releaseName string) natsauth.DeployedHashes {
+	restCfg, err := RestConfig(kubeContext)
+	if err != nil {
+		return natsauth.DeployedHashes{}
+	}
+	typed, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		return natsauth.DeployedHashes{}
+	}
+	cm, err := typed.CoreV1().ConfigMaps(infraNamespace).Get(ctx, releaseName+"-config", metav1.GetOptions{})
+	if err != nil {
+		return natsauth.DeployedHashes{}
+	}
+	var out natsauth.DeployedHashes
+	for _, conf := range cm.Data {
+		for _, m := range brokerHashPair.FindAllStringSubmatch(conf, -1) {
+			switch m[2] {
+			case natsauth.ServiceUser:
+				out.Service = m[1]
+			case natsauth.SysUser:
+				out.Sys = m[1]
+			}
+		}
+	}
+	return out
+}
+
 func DeployedInstanceConfig(ctx context.Context, kubeContext, instanceId string) (*config.InstanceConfiguration, error) {
 	restCfg, err := RestConfig(kubeContext)
 	if err != nil {

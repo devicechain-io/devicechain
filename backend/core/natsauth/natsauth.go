@@ -190,13 +190,29 @@ func generateSysPassword() (string, string, error) {
 //   - the issuer public key is derived from the seed, so it is byte-identical to
 //     what the broker config already holds. The broker's ConfigMap does not change
 //     and nothing reloads.
-//   - the password hash is RE-hashed, because bcrypt salts and so a hash of the same
-//     password is a different string every time. That does churn the broker config
-//     by one line per re-run, and it is safe precisely because the password did not
-//     change: the old hash and the new one verify the same plaintext, so there is no
-//     instant at which the two sides disagree. (Reading the deployed hash back
-//     instead would avoid the churn at the cost of parsing nats.conf and giving an
-//     ordinary re-run a new way to fail — a worse trade.)
+//
+//   - the password hash is REUSED when the caller can supply the one the broker is
+//     already configured with, and re-hashed otherwise. bcrypt salts, so hashing the
+//     same password twice yields different strings — and this function used to always
+//     re-hash, on the reasoning that the churn was one harmless line per re-run
+//     because the two hashes verify the same plaintext.
+//
+//     🔴 THAT REASONING WAS CORRECT UNTIL THE BROKER STARTED ADOPTING ITS CONFIG. The
+//     module now stamps a checksum of the rendered ConfigMap onto the pod template
+//     (podTemplate.configChecksumAnnotation) so that a config change actually reaches
+//     the running server instead of being refused by a reload nats-server does not
+//     support. One churned line is no longer inert: it rolls the broker. An idempotent
+//     re-run would cost a full restart — MQTT devices dropped, ingest down — for a
+//     credential that did not change. Measured on a live cluster: two identical
+//     applies in a row, differing only in the salt, produced two different checksums.
+//
+//     The old objection to reading the hash back was that it gives an ordinary re-run
+//     a new way to fail. That is answered by construction rather than argued with: a
+//     supplied hash is used ONLY if it verifies against the plaintext being reused, so
+//     a hash that is absent, unparseable, stale or simply wrong falls through to a
+//     fresh one. The worst case is exactly the old behaviour, and the invariant the
+//     mint path exists to hold — that the hash shipped to the broker verifies the
+//     plaintext shipped to the services — is checked here rather than assumed.
 //
 // It FAILS CLOSED on either input being absent or unusable rather than falling back
 // to a mint, because a fallback would be the exact rotation this exists to prevent.
@@ -208,7 +224,34 @@ func generateSysPassword() (string, string, error) {
 // matching hash into the broker config, so the two halves are still minted together.
 // A PRESENT one is reused, so an ordinary re-run of an instance that already has the
 // tap does not rotate it.
-func CredentialsFromDeployed(issuerSeed, servicePassword, sysPassword string) (Credentials, error) {
+// DeployedHashes carries the bcrypt hashes the RUNNING broker is configured with,
+// so a re-run can keep them instead of minting salt-different ones. Both fields are
+// best-effort: an empty or wrong value costs a re-hash, never a failure.
+type DeployedHashes struct {
+	Service string
+	Sys     string
+}
+
+// reuseOrRehash returns existing when it is a bcrypt hash of plaintext, and a fresh
+// hash otherwise.
+//
+// 🔑 THE VERIFY IS THE WHOLE SAFETY ARGUMENT, not a sanity check. It is what lets the
+// caller hand over a value scraped out of a live cluster without that scrape becoming
+// a way to break an instance: a hash that does not verify is indistinguishable, here,
+// from one that was never supplied, and both take the mint path. So the function can
+// only ever ship a hash that provably matches the plaintext going to the services.
+func reuseOrRehash(plaintext, existing string) (string, error) {
+	if existing != "" && bcrypt.CompareHashAndPassword([]byte(existing), []byte(plaintext)) == nil {
+		return existing, nil
+	}
+	h, err := bcrypt.GenerateFromPassword([]byte(plaintext), servicePasswordBcryptCost)
+	if err != nil {
+		return "", err
+	}
+	return string(h), nil
+}
+
+func CredentialsFromDeployed(issuerSeed, servicePassword, sysPassword string, deployed DeployedHashes) (Credentials, error) {
 	if issuerSeed == "" {
 		return Credentials{}, fmt.Errorf("the running instance carries no callout issuer seed")
 	}
@@ -223,7 +266,7 @@ func CredentialsFromDeployed(issuerSeed, servicePassword, sysPassword string) (C
 	if err != nil {
 		return Credentials{}, fmt.Errorf("deriving the issuer public key from the running instance's seed: %w", err)
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(servicePassword), servicePasswordBcryptCost)
+	hash, err := reuseOrRehash(servicePassword, deployed.Service)
 	if err != nil {
 		return Credentials{}, fmt.Errorf("hashing the running instance's service password: %w", err)
 	}
@@ -234,17 +277,16 @@ func CredentialsFromDeployed(issuerSeed, servicePassword, sysPassword string) (C
 			return Credentials{}, err
 		}
 	} else {
-		h, err := bcrypt.GenerateFromPassword([]byte(sysPw), servicePasswordBcryptCost)
+		sysHash, err = reuseOrRehash(sysPw, deployed.Sys)
 		if err != nil {
 			return Credentials{}, fmt.Errorf("hashing the running instance's system-account password: %w", err)
 		}
-		sysHash = string(h)
 	}
 	return Credentials{
 		IssuerPublic:          pub,
 		IssuerSeed:            issuerSeed,
 		ServicePassword:       servicePassword,
-		ServicePasswordBcrypt: string(hash),
+		ServicePasswordBcrypt: hash,
 		SysPassword:           sysPw,
 		SysPasswordBcrypt:     sysHash,
 	}, nil

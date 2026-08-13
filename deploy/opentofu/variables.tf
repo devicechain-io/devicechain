@@ -76,9 +76,16 @@ variable "nats_prom_exporter" {
 # --- NATS (messaging + MQTT + JetStream KV, ADR-003/006/007) --------------------
 
 variable "nats_chart_version" {
-  description = "Version of the nats Helm chart to install. Empty installs the latest; PIN to a tested version for reproducible deploys."
+  description = <<-EOT
+    Version of the nats Helm chart to install. Empty installs the latest, which is
+    NOT the default: see the chart_version variable in modules/nats for why this is
+    pinned rather than tracked. In short, the module's config-adoption mechanism and
+    its helm timeout are both sized against chart internals verified at this
+    version, and the pod-template checksum includes the chart's own version label —
+    so "latest" would roll the broker whenever upstream cuts a release.
+  EOT
   type        = string
-  default     = ""
+  default     = "2.14.4"
 }
 
 variable "nats_jetstream_storage" {

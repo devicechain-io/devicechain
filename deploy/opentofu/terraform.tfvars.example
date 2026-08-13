@@ -11,8 +11,12 @@
 # namespace        = "dc-system"
 # create_namespace = true
 
-# Pin to a tested chart/image version for reproducible deploys.
-# nats_chart_version = "1.2.2"
+# Pin to a tested chart/image version for reproducible deploys. nats_chart_version is
+# ALREADY pinned in variables.tf and this is only how you would move it — read that
+# variable's description first, because the module's behaviour depends on the chart
+# and a bump is a deliberate act. Do NOT set it to "" (installs latest) or to a 1.x
+# chart, whose values schema is entirely different from the one this module renders.
+# nats_chart_version = "2.14.4"
 # The event store needs a CloudNativePG operand image carrying TimescaleDB; the default
 # is the one we build and publish. A stock `timescale/timescaledb:` image will not work.
 # timescale_image    = "ghcr.io/devicechain-io/postgresql-timescaledb:17.10-ts2.28.3-r1"

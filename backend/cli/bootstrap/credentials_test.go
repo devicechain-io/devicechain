@@ -45,9 +45,18 @@ func deployedInstance(t *testing.T) (*config.InstanceConfiguration, natsauth.Cre
 	return cfg, creds, serviceAuth
 }
 
-func rerun(t *testing.T, cfg *config.InstanceConfiguration) *State {
+// rerun drives stepRenderConfig against an instance that is already deployed.
+//
+// 🔑 The optional hashes are applied AFTER withDeployedInstance, and the order is
+// load-bearing: withDeployedInstance installs its own "no hashes deployed" stub, so a
+// caller that set one first would have it silently overwritten and would be testing
+// the fallback while believing it tested reuse.
+func rerun(t *testing.T, cfg *config.InstanceConfiguration, hashes ...natsauth.DeployedHashes) *State {
 	t.Helper()
 	withDeployedInstance(t, cfg, nil)
+	for _, h := range hashes {
+		withDeployedBrokerHashes(t, h)
+	}
 	st := &State{Instance: "prod", BuildImages: true, Values: map[string]string{}}
 	if err := stepRenderConfig(t.Context(), st); err != nil {
 		t.Fatalf("stepRenderConfig: %v", err)
@@ -93,11 +102,10 @@ func TestARerunLeavesTheBrokerIssuerUntouched(t *testing.T) {
 	}
 }
 
-// The bcrypt hash is the one value a re-run DOES change, because bcrypt salts. That
-// is safe only while the new hash verifies the SAME password — which is precisely
-// what makes the change inert, and therefore what has to be asserted rather than
-// assumed.
-func TestTheRehashedServicePasswordStillVerifies(t *testing.T) {
+// Whatever hash a re-run ships, it must verify the password the services present.
+// This is the invariant that outranks every optimisation below it: get it wrong and
+// the broker rejects every service connection the moment it loads the config.
+func TestTheServicePasswordHashAlwaysVerifies(t *testing.T) {
 	cfg, creds, _ := deployedInstance(t)
 	st := rerun(t, cfg)
 
@@ -106,10 +114,58 @@ func TestTheRehashedServicePasswordStillVerifies(t *testing.T) {
 		t.Fatalf("the re-run's hash does not verify the password the services present: %v.\n"+
 			"The broker would reject every service connection once it loaded this config.", err)
 	}
-	// Not a requirement, but if this ever stops holding the comment above is wrong
-	// and the "churns by one line" note in CredentialsFromDeployed needs revisiting.
-	if hash == creds.ServicePasswordBcrypt {
-		t.Log("the re-hash happened to reproduce the deployed hash; bcrypt salting has changed")
+}
+
+// 🔴 THE HASH MUST NOT MOVE WHEN NOTHING MOVED, and this is not tidiness. The nats
+// module stamps a checksum of the rendered ConfigMap onto the broker's pod template
+// so that config changes are actually adopted (nats-server cannot hot-reload the
+// auth_callout block, and refuses the whole reload when it changes). A hash that is
+// re-salted on every re-run therefore rolls the broker every time — dropping every
+// MQTT device and stalling ingest for ~a minute — for a credential nobody changed.
+//
+// Measured on a live cluster before this was fixed: two identical applies in a row,
+// differing only in bcrypt's salt, produced two different pod-template checksums.
+func TestARerunKeepsTheBrokersExistingHashes(t *testing.T) {
+	cfg, creds, _ := deployedInstance(t)
+	cfg.Infrastructure.Nats.Auth.SysPassword = creds.SysPassword
+	st := rerun(t, cfg, natsauth.DeployedHashes{
+		Service: creds.ServicePasswordBcrypt,
+		Sys:     creds.SysPasswordBcrypt,
+	})
+
+	for _, c := range []struct{ key, want string }{
+		{"natsServicePasswordBcrypt", creds.ServicePasswordBcrypt},
+		{"natsSysPasswordBcrypt", creds.SysPasswordBcrypt},
+	} {
+		if got := st.Values[c.key]; got != c.want {
+			t.Errorf("a re-run rewrote %s even though the password did not change.\n"+
+				"  got  %q\n  want %q\n"+
+				"That is a changed ConfigMap, which is a changed pod-template checksum, "+
+				"which is a broker restart on an idempotent re-run.", c.key, got, c.want)
+		}
+	}
+}
+
+// The counterweight, and the thing that makes reading a hash out of a live cluster
+// safe at all: a supplied hash that does NOT verify is discarded, not shipped. Drives
+// the real step with a well-formed bcrypt hash of the wrong password — the shape a
+// stale ConfigMap or a mis-parse would produce.
+func TestARerunDiscardsABrokerHashThatDoesNotVerify(t *testing.T) {
+	cfg, creds, _ := deployedInstance(t)
+	wrong, err := bcrypt.GenerateFromPassword([]byte("not-the-deployed-password"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := rerun(t, cfg, natsauth.DeployedHashes{Service: string(wrong)})
+
+	hash := st.Values["natsServicePasswordBcrypt"]
+	if hash == string(wrong) {
+		t.Fatal("a re-run shipped a hash that does not verify the deployed password. " +
+			"The broker would load it and then reject every service connection — the exact " +
+			"failure the reuse path exists to prevent, now caused by the reuse path.")
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(creds.ServicePassword)); err != nil {
+		t.Fatalf("after discarding the bad hash the re-run did not produce a working one: %v", err)
 	}
 }
 
@@ -135,7 +191,7 @@ func TestAFreshInstallStillMintsBrokerCredentials(t *testing.T) {
 	// issuer that nothing signs with.
 	derived, err := natsauth.CredentialsFromDeployed(
 		first.Values["natsCalloutIssuerSeed"], first.Values["natsServicePassword"],
-		first.Values["natsSysPassword"])
+		first.Values["natsSysPassword"], natsauth.DeployedHashes{})
 	if err != nil {
 		t.Fatalf("the minted seed is not usable: %v", err)
 	}

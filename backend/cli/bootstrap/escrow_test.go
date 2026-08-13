@@ -947,6 +947,21 @@ func withDeployedInstance(t *testing.T, cfg *config.InstanceConfiguration, err e
 	// TestDeployedInstanceStubCoversBothClusterLookups is the standing check that
 	// this line is still here.
 	withArchiveState(t, liveArchiveState{}, nil)
+	// And the THIRD cluster read: the broker's existing password hashes. Defaults to
+	// "none deployed", which is the honest answer for a fake instance that has no
+	// broker — and which exercises the fallback, so the tests below assert against a
+	// re-run that had to hash for itself unless they say otherwise.
+	withDeployedBrokerHashes(t, natsauth.DeployedHashes{})
+}
+
+// withDeployedBrokerHashes stubs what the running broker's config already holds.
+func withDeployedBrokerHashes(t *testing.T, h natsauth.DeployedHashes) {
+	t.Helper()
+	orig := lookupDeployedBrokerHashes
+	t.Cleanup(func() { lookupDeployedBrokerHashes = orig })
+	lookupDeployedBrokerHashes = func(context.Context, string, string) natsauth.DeployedHashes {
+		return h
+	}
 }
 
 // withArchiveState stubs what the two database Clusters are currently archiving

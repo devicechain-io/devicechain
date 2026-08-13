@@ -39,9 +39,31 @@ variable "release_name" {
 }
 
 variable "chart_version" {
-  description = "nats chart version; empty installs latest."
+  description = <<-EOT
+    nats chart version. Empty installs latest, which this module does NOT do by
+    default and should not be asked to.
+
+    🔴 PINNED BECAUSE THIS MODULE'S BEHAVIOUR IS A PROPERTY OF THE CHART, not just
+    of the values passed to it. podTemplate.configChecksumAnnotation below relies on
+    the chart hashing the rendered ConfigMap into the pod template; the reloader
+    sidecar's cert watch-list is derived by the chart's own helpers; the lame-duck
+    and terminationGracePeriod floors the timeout on helm_release.nats is sized
+    against are chart defaults. All of those were read and verified at 2.14.4. On
+    "latest" they are whatever upstream last shipped, and nothing here would notice
+    them moving.
+
+    There is a second, sharper reason. The hashed manifest includes the chart's
+    standard labels — `helm.sh/chart` and `app.kubernetes.io/version` — so under
+    "latest" a new upstream chart release changes the checksum and ROLLS THE BROKER
+    on the next otherwise-unrelated apply. An unpinned chart turns a config-adoption
+    mechanism into an unscheduled outage trigger.
+
+    Bumping this is a deliberate act: re-check the checksum template
+    (files/stateful-set/pod-template.yaml), the reloader's watched paths, and the
+    lame-duck defaults before raising it.
+  EOT
   type        = string
-  default     = ""
+  default     = "2.14.4"
 }
 
 variable "jetstream_storage" {
@@ -584,6 +606,56 @@ locals {
     podTemplate = {
       topologySpreadConstraints = local.spread_constraints
 
+      # 🔴 WITHOUT THIS, A CONFIG CHANGE CAN BE APPLIED AND NEVER ADOPTED, AND
+      # EVERY LAYER REPORTS SUCCESS. Measured on a live cluster, not reasoned about.
+      #
+      # The chart mounts this config and a reloader sidecar SIGHUPs the server when
+      # the projected file changes. But nats-server refuses to hot-reload a whole
+      # class of options: `diffOptions` (server/reload.go) switches on each changed
+      # field and its `default:` arm returns "config reload not supported for %s".
+      # `authcallout` has NO case, so ANY change to the auth_callout block lands
+      # there — verified live with the issuer byte-identical on both sides and only
+      # `auth_users` differing. JetStream's max memory / max store are refused the
+      # same way, outside the switch. So this is not an auth quirk: it is a class.
+      #
+      # And the refusal is WHOLESALE. diffOptions returns an error and the caller
+      # abandons the entire reload, so every other change in the same apply — the
+      # account passwords, MQTT settings, JetStream ceilings — is discarded with it.
+      # What the operator sees: tofu reports applied, the reloader reports it sent
+      # the hangup, the ConfigMap shows the new values, and the running server is on
+      # the config it booted with. The ONLY evidence is one [ERR] line in the
+      # broker's own log. Every service then fails `nats: Authorization Violation`
+      # against a ConfigMap that proves the credentials are right.
+      #
+      # Two things that breaks in the field, both observed:
+      #   - a released fix to the auth block never reaches an EXISTING instance; the
+      #     upgrade applies green and the broker keeps the old behaviour.
+      #   - a bootstrap that dies between the infra step and the chart step leaves a
+      #     live broker holding credentials no re-run will reuse (the reuse guard
+      #     reads the instance chart's config, which does not exist yet) AND cannot
+      #     adopt the new ones. Permanently wedged short of a manual restart.
+      #
+      # Setting this makes the chart stamp `checksum/config: sha256(<the rendered
+      # ConfigMap>)` onto the pod template, so a config change rolls the StatefulSet
+      # and the server always comes up on the file. Correctness by construction
+      # rather than by remembering which fields this nats-server version can reload
+      # — a set defined by someone else's `default:` arm, which moves between
+      # releases and whose drift is invisible until it bites in production.
+      #
+      # THE RELOADER STAYS ENABLED, deliberately: the checksum covers only the
+      # ConfigMap, and TLS material arrives in a separate Secret with only its PATHS
+      # in the config. Certificates therefore still hot-reload without a broker
+      # outage. (That path is broken today on any instance already carrying a
+      # refused change, because each HUP re-diffs the whole config and bails again,
+      # discarding the cert change with it — this repairs that too.)
+      #
+      # THE COST, stated plainly: config changes now roll the broker. Shutdown alone
+      # is lameDuckGracePeriod + lameDuckDuration = 40s, and terminationGracePeriod
+      # is 60s — the chart's own floor for it. Budget ~50-70s per pod: a full outage
+      # at one server, a rolling restart at three. The change is not the duration but
+      # the FREQUENCY: previously only a chart or image bump rolled these pods.
+      configChecksumAnnotation = true
+
       # NO `tolerations` HERE, DELIBERATELY — which is not the same as having
       # forgotten them, and the difference is worth the paragraphs.
       #
@@ -709,6 +781,16 @@ locals {
     clustered            = local.chart_values.config.cluster.enabled
     mqtt_stream_replicas = local.chart_values.config.mqtt.merge.stream_replicas
     spread_constraints   = local.chart_values.podTemplate.topologySpreadConstraints
+    # Read back for the same reason as the rest, and with a sharper edge: this one
+    # is the difference between a config change reaching the running broker and
+    # being silently discarded (see podTemplate above). A grep over this file can
+    # confirm the line EXISTS but not that it is still nested under podTemplate,
+    # and the chart ships no values.schema.json — so a key that drifts to the wrong
+    # parent during a refactor is accepted in silence and simply does nothing.
+    # Reading the nested path here turns that into a `tofu validate` failure
+    # ("This object does not have an attribute named ..."), with no cluster, no
+    # network and no plan.
+    config_checksum_annotation = local.chart_values.podTemplate.configChecksumAnnotation
     route_tls_verified = (local.chart_values.config.cluster.enabled
       && local.chart_values.config.cluster.tls.enabled
     && local.chart_values.config.cluster.tls.merge.verify)
@@ -831,6 +913,34 @@ resource "helm_release" "nats" {
   repository = "https://nats-io.github.io/k8s/helm/charts/"
   chart      = "nats"
   version    = var.chart_version != "" ? var.chart_version : null
+
+  # 🔴 SIZED FOR A ROLLING RESTART, because podTemplate.configChecksumAnnotation
+  # makes one a routine outcome of a config change rather than a rare event.
+  #
+  # The provider's default wait is 300s. One server costs ~50-70s to cycle
+  # (lameDuckGracePeriod 10s + lameDuckDuration 30s on shutdown, then startup and a
+  # readiness probe that waits 10s before its first check), and a StatefulSet rolls
+  # them ONE AT A TIME, each new pod also waiting to rejoin the JetStream RAFT group
+  # before it reports ready. Three servers therefore land close enough to 300s that a
+  # slow meta-leader election decides it — and the failure mode is the nastiest kind:
+  # the apply reports a timeout WHILE THE ROLL COMPLETES ANYWAY, so the operator is
+  # told it failed and finds a healthy cluster. That is the exact mirror of the
+  # false-green this annotation exists to remove, and it would be introduced BY the
+  # fix. 900s is not a derivation — five servers at the worst declared per-pod cost
+  # is ~350s — it is roughly 2.5x headroom over that, because the cost being
+  # bounded is a RAFT rejoin, not a sleep.
+  #
+  # 🔴 THE COST, because it is not free and it is not confined to rolls: this
+  # timeout governs EVERY waited operation on this release, so a genuinely wedged
+  # install now takes 15 minutes to report instead of 5. That includes the failure
+  # documented a few lines below — TLS material missing, pods stuck
+  # ContainerCreating, helm waiting on a readiness that will never come. Slower
+  # feedback on real breakage is the price of not fabricating failures on healthy
+  # rolls; it is the right trade only because the false timeout would be
+  # indistinguishable from the silent-divergence bug this file exists to close.
+  #
+  # This is a ceiling, not a delay: helm returns as soon as the release is ready.
+  timeout = 900
 
   # The server pods mount the TLS material at startup; create it first so the STS
   # is not stuck ContainerCreating on a missing secret (helm wait would time out).
@@ -957,6 +1067,10 @@ output "ha_topology" {
     mqtt_stream_replicas = local.reported.mqtt_stream_replicas
     route_tls_verified   = local.reported.route_tls_verified
     spread_constraints   = local.reported.spread_constraints
+    # Whether a config change will actually be ADOPTED by the running broker
+    # rather than applied, reported successful, and silently ignored. Asserted in
+    # CI alongside the rest.
+    config_checksum_annotation = local.reported.config_checksum_annotation
     # The ONE field here that is not a read-back, because it has no chart value
     # to read: it reports a contradiction in what was ASKED for, which the
     # precondition below refuses. Shared with that precondition through

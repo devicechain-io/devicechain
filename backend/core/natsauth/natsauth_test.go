@@ -278,7 +278,7 @@ func TestCredentialsFromDeployedRebuildsTheSamePair(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := CredentialsFromDeployed(deployed.IssuerSeed, deployed.ServicePassword, deployed.SysPassword)
+	got, err := CredentialsFromDeployed(deployed.IssuerSeed, deployed.ServicePassword, deployed.SysPassword, DeployedHashes{})
 	if err != nil {
 		t.Fatalf("CredentialsFromDeployed: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestADeployedInstanceWithNoSystemPasswordGetsOneMinted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := CredentialsFromDeployed(deployed.IssuerSeed, deployed.ServicePassword, "")
+	got, err := CredentialsFromDeployed(deployed.IssuerSeed, deployed.ServicePassword, "", DeployedHashes{})
 	if err != nil {
 		t.Fatalf("an instance predating the system-account login must still re-run: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestCredentialsFromDeployedFailsClosed(t *testing.T) {
 		{"a public key where the seed should be", good.IssuerPublic, good.ServicePassword},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := CredentialsFromDeployed(tc.seed, tc.password, good.SysPassword)
+			got, err := CredentialsFromDeployed(tc.seed, tc.password, good.SysPassword, DeployedHashes{})
 			if err == nil {
 				t.Fatalf("accepted unusable deployed credentials, returning %+v", got)
 			}

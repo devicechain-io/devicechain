@@ -962,6 +962,16 @@ jobs:
         run: hack/check-tofu-validations.sh
         working-directory: .
 
+      # nats-server refuses to hot-reload the auth_callout block (and JetStream's
+      # memory/store ceilings), and the refusal is wholesale — so without the pod
+      # template's config checksum, a change is applied, reported successful by every
+      # layer, and never adopted by the running broker. The only trace is one [ERR]
+      # line in the broker's own log. Guard the flag and the chart pin it was
+      # verified against.
+      - name: NATS config adoption
+        run: hack/check-nats-config-adoption.sh
+        working-directory: .
+
   # ---------------------------------------------------------------------------
   # Image smoke build: ko builds each service image locally (no push). This
   # catches image-build breakage. The matrix covers the discovered services
