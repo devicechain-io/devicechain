@@ -298,3 +298,27 @@ func TestARunThatDiesAtTheInfraApplyStillLeavesTheRecord(t *testing.T) {
 		t.Fatalf("the record was stamped for instance %q", rec.Instance)
 	}
 }
+
+// The twin of "no service password", and it was missing while its sibling was present —
+// which is how the asymmetry survived. An empty sysPassword is not a field to shrug at:
+// CredentialsFromDeployed reads it as "this instance predates the SYS login" and mints a
+// fresh one, silently rotating a credential the live broker is enforcing. That back-compat
+// branch is right for an instance config written before SYS existed; this record format
+// never had such a generation.
+func TestARecordWithNoSysPasswordReadsAsNoRecord(t *testing.T) {
+	dir := withRecordDir(t)
+	path := filepath.Join(dir, "prod-"+brokerRecordFile)
+
+	rec := sampleRecord("prod")
+	rec.SysPassword = ""
+	writeAt(t, path, rec)
+	if got := readBrokerRecord("prod"); got != nil {
+		t.Fatalf("a record with no sys password was accepted: %+v", got)
+	}
+
+	// The counterweight: the same record WITH one is accepted.
+	writeAt(t, path, sampleRecord("prod"))
+	if readBrokerRecord("prod") == nil {
+		t.Fatal("the complete record was rejected, so the assertion above proves nothing")
+	}
+}

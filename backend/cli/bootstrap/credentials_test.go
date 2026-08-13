@@ -458,3 +458,78 @@ func TestADryRunNeverWritesTheRecord(t *testing.T) {
 		t.Fatalf("a real run stored %d records, so the dry-run assertion proves nothing", len(*stored2))
 	}
 }
+
+// 🔴 "THE RECORD CANNOT FAIL A RUN" HAS TO BE TRUE, NOT NEARLY TRUE. readBrokerRecord
+// screens SHAPE — valid json, right instance, no empty fields — and cannot screen
+// cryptography, so a hand-edited file can carry a non-empty seed that is not a valid nkey.
+// Surfacing that error would be a bootstrap failing at step 1 where it previously
+// succeeded, which is the standing objection to adding this read at all. It mints instead,
+// and says why.
+func TestAnUnusableRecordMintsRatherThanFailingTheRun(t *testing.T) {
+	rec := &brokerRecord{
+		Instance:        "prod",
+		IssuerSeed:      "SAAHTHISISNOTAVALIDNKEYSEEDATALL",
+		ServicePassword: "service-plaintext",
+		SysPassword:     "sys-plaintext",
+	}
+	withDeployedInstance(t, nil, nil)
+	withBrokerRecord(t, rec)
+
+	st := &State{Instance: "prod", BuildImages: true, Values: map[string]string{}}
+	if err := stepRenderConfig(t.Context(), st); err != nil {
+		t.Fatalf("an unusable record failed the run instead of falling through to mint: %v", err)
+	}
+	if st.Values["natsCalloutIssuerSeed"] == rec.IssuerSeed {
+		t.Fatal("the unusable seed was carried into the instance config")
+	}
+	if st.Values["natsCalloutIssuerSeed"] == "" || st.Values["natsCalloutIssuerPublic"] == "" {
+		t.Fatal("the run neither reused nor minted a usable issuer key")
+	}
+
+	// 🔑 THE COUNTERWEIGHT: a USABLE record with the same shape is still reused, so this
+	// test is about the seed being bad rather than about the record branch being dead.
+	good, err := natsauth.GenerateCredentials()
+	if err != nil {
+		t.Fatalf("generating credentials: %v", err)
+	}
+	withBrokerRecord(t, &brokerRecord{
+		Instance: "prod", IssuerSeed: good.IssuerSeed,
+		ServicePassword: good.ServicePassword, SysPassword: good.SysPassword,
+	})
+	st2 := &State{Instance: "prod", BuildImages: true, Values: map[string]string{}}
+	if err := stepRenderConfig(t.Context(), st2); err != nil {
+		t.Fatalf("stepRenderConfig: %v", err)
+	}
+	if st2.Values["natsCalloutIssuerSeed"] != good.IssuerSeed {
+		t.Fatal("a usable record was not reused, so the fall-through above proves nothing")
+	}
+}
+
+// 🔴 A DRY RUN MUST NOT CLAIM A SOURCE IT CANNOT KNOW. It skips the deployed-instance
+// lookup, so it cannot tell which of the two sources a real run would take — and over a
+// healthy instance, "reused from the record" names the wrong one. It reports the record's
+// existence and mints throwaway values, exactly as it does for the instance config.
+func TestADryRunReportsTheRecordWithoutClaimingItWasUsed(t *testing.T) {
+	creds, err := natsauth.GenerateCredentials()
+	if err != nil {
+		t.Fatalf("generating credentials: %v", err)
+	}
+	rec := &brokerRecord{
+		Instance: "prod", IssuerSeed: creds.IssuerSeed,
+		ServicePassword: creds.ServicePassword, SysPassword: creds.SysPassword,
+	}
+	withDeployedInstance(t, nil, nil)
+	withBrokerRecord(t, rec)
+
+	st := &State{Instance: "prod", DryRun: true, BuildImages: true, Values: map[string]string{}}
+	if err := stepRenderConfig(t.Context(), st); err != nil {
+		t.Fatalf("stepRenderConfig: %v", err)
+	}
+	if st.Values["natsCalloutIssuerSeed"] == creds.IssuerSeed {
+		t.Fatal("a dry run reused the recorded credentials; it cannot know that a real run would, " +
+			"because it never asked the cluster whether the instance exists")
+	}
+	if st.Values["natsCalloutIssuerSeed"] == "" {
+		t.Fatal("a dry run rendered no issuer seed at all")
+	}
+}

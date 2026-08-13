@@ -196,6 +196,10 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// the Helm step of the very run that caused it, and enough to leave device
 	// connects rejected while the callout responder signs with a seed the broker no
 	// longer trusts. It is silent, delayed, and detached from its cause.
+	// Read once. The dry-run branch below reports on the same value the switch consulted,
+	// rather than asking again — two reads of one file is two chances to disagree.
+	localRecord := readDeployedBrokerRecord(st.Instance)
+
 	var creds natsauth.Credentials
 	switch {
 	case deployed != nil:
@@ -228,15 +232,25 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		//
 		// The record cannot make this branch fail. A missing, torn or foreign record
 		// reads as absent and mints, which is what this branch did before it existed.
-		if rec := readDeployedBrokerRecord(st.Instance); rec != nil {
-			creds, err = natsauth.CredentialsFromDeployed(
-				rec.IssuerSeed, rec.ServicePassword, rec.SysPassword,
+		if localRecord != nil && !st.DryRun {
+			// 🔴 A RECORD THAT DOES NOT WORK IS A RECORD THAT IS NOT THERE. readBrokerRecord
+			// screens shape, not cryptography: a hand-edited file can carry a non-empty seed
+			// that is not a valid nkey, and CredentialsFromDeployed rejects it on the CRC.
+			// Returning that error would be a bootstrap that fails at step 1 where it used to
+			// succeed — the standing objection to adding this read at all — so it falls
+			// through to the mint below, loudly. Post-adoption a wrong mint converges on the
+			// broker's next roll; a refused run does not converge on anything.
+			reused, rerr := natsauth.CredentialsFromDeployed(
+				localRecord.IssuerSeed, localRecord.ServicePassword, localRecord.SysPassword,
 				lookupDeployedBrokerHashes(ctx, st.KubeContext, natsStatefulSetName))
-			if err != nil {
-				return fail("reusing the recorded NATS auth credentials", err)
+			if rerr == nil {
+				creds = reused
+				notes = append(notes, "NATS broker credentials reused from this machine's bootstrap record")
+				break
 			}
-			notes = append(notes, "NATS broker credentials reused from this machine's bootstrap record")
-			break
+			notes = append(notes, fmt.Sprintf(
+				"the bootstrap record for this instance is unusable (%v); minting fresh broker "+
+					"credentials, which a running broker would be reconfigured with", rerr))
 		}
 		creds, err = natsauth.GenerateCredentials()
 		if err != nil {
@@ -269,8 +283,14 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// the one OpenTofu is about to write its state into, so a run that cannot write here
 	// was going to die at step 3 anyway, later and with a worse message.
 	if st.DryRun {
-		if rec := readDeployedBrokerRecord(st.Instance); rec != nil {
-			notes = append(notes, "would reuse the NATS broker credentials recorded on this machine")
+		// 🔑 REPORTED, NOT USED, AND WORDED FOR WHAT A REHEARSAL CAN ACTUALLY KNOW. A dry run
+		// skips the deployed-instance lookup, so it cannot tell which of the two sources a
+		// real run would take — and saying "reused from the record" over a healthy instance
+		// would name the wrong one. The values it renders are throwaway either way, so the
+		// record is not consulted for them at all; its existence is the useful fact.
+		if localRecord != nil {
+			notes = append(notes, "a bootstrap record for this instance exists on this machine; "+
+				"a real run would reuse it if the instance itself is not yet deployed")
 		}
 	} else if err := storeBrokerRecord(st.Instance, brokerRecord{
 		Instance:        st.Instance,

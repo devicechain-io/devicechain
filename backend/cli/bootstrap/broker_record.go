@@ -54,7 +54,14 @@ import (
 // so a record named to sit "next to the escrow" would survive a teardown, and a same-name
 // rebuild would then find no instance config, a present record, and silently resurrect the
 // destroyed instance's broker credentials. That is credential inheritance across
-// generations, and the reuse log line would report it as a truthful reuse.
+// generations, and the reuse note would report it as a truthful reuse.
+//
+// 🔴 The naming rule closes that for a destroy that COMPLETES, and only for one that does.
+// destroyEverything deletes the cluster first and removes local state second, so a run
+// killed between the two leaves the record behind for a dead instance. The residual is
+// known and accepted: closing it properly means arbitrating the record against the live
+// broker's hashes before reuse, which re-opens the objection this read is built under — a
+// transient hash-read failure would then mint against a perfectly healthy broker.
 const brokerRecordFile = "broker-credentials.json"
 
 // brokerRecord is the material the cluster cannot yield after step 3.
@@ -89,10 +96,18 @@ var brokerRecordPathFor = func(instance string) (string, error) {
 // the same thing: no record, mint as before. This is the standing objection that
 // DeployedBrokerHashes was written to answer — a read added for a rare recovery must not
 // give an ORDINARY re-run a new way to fail — and it applies here unchanged. The worst case
-// is exactly today's behaviour.
+// is exactly today's behaviour. The caller extends the same rule to a record that is
+// well-formed but cryptographically unusable, which only shape-screening here cannot catch.
 //
-// The instance mismatch is deliberately in that list rather than being an error. It should
-// be unreachable, and minting is the safe answer; refusing to run is not.
+// 🔑 WHY THIS MINTS WHERE THE ROOT-KEY ESCROW NEXT DOOR REFUSES. The two guard the same
+// window and answer it oppositely, which looks like an inconsistency and is not. A root key
+// protects secrets and backups written by EARLIER generations of the instance, so minting a
+// divergent one is unrecoverable data loss across generations — refusing, with a recovery
+// command, is the only safe move. Broker credentials have no cross-generation value: they
+// are whatever the running broker was last told, and since the broker adopts a config change
+// by rolling, a wrong mint converges on the next apply. Refusing would trade a self-healing
+// outcome for a dead run. Same reasoning puts the instance mismatch in the list above rather
+// than making it an error — it should be unreachable, and minting is the safe answer.
 func readBrokerRecord(instance string) *brokerRecord {
 	path, err := brokerRecordPathFor(instance)
 	if err != nil {
@@ -106,7 +121,15 @@ func readBrokerRecord(instance string) *brokerRecord {
 	if err := json.Unmarshal(raw, &rec); err != nil {
 		return nil
 	}
-	if rec.Instance != instance || rec.IssuerSeed == "" || rec.ServicePassword == "" {
+	// 🔑 ALL THREE, NOT TWO. An empty sysPassword is not a missing field to shrug at:
+	// CredentialsFromDeployed treats it as "this instance predates the SYS login" and
+	// mints a fresh one — which is exactly the silent-rotation outcome the decode-error
+	// check above exists to prevent, arriving through the value instead of the type.
+	// The back-compat branch it would take is right for an INSTANCE CONFIG written before
+	// SYS existed; this record format never had such a generation, so here it is only ever
+	// a corrupted or hand-edited file.
+	if rec.Instance != instance || rec.IssuerSeed == "" ||
+		rec.ServicePassword == "" || rec.SysPassword == "" {
 		return nil
 	}
 	return &rec
