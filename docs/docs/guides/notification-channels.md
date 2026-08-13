@@ -43,7 +43,13 @@ A webhook channel POSTs the rendered notification to a URL. Create it the same w
 
 ## Policies
 
-A **policy** decides which raised alarms get delivered, to whom, through which channels. It carries a set of **rules** — each maps a `severity` (`CRITICAL`, `MAJOR`, `MINOR`, `WARNING`, `INDETERMINATE`, or `"*"` for any) to a channel (named by token) and a JSON array of `recipients` the adapter interprets (email addresses for SMTP; may be empty for a webhook). A policy can be tenant-wide or scoped to one device profile via `deviceTypeToken`.
+A **policy** decides which raised alarms get delivered, to whom, through which channels. It carries a set of **rules** — each maps a `severity` (`CRITICAL`, `MAJOR`, `MINOR`, `WARNING`, `INDETERMINATE`, or `"*"` for any) to a channel (named by token) and a JSON array of `recipients` the adapter interprets (email addresses for SMTP; may be empty for a webhook).
+
+Note the severity here is **uppercase**, because it is the *alarm's* severity. A detection rule's own authoring severity is lowercase (`major`), and it is uppercased when the alarm is raised — so a notification rule always matches the uppercase form.
+
+:::caution Policies are tenant-wide
+`deviceTypeToken` is **not honoured yet**, and a policy that sets it is **refused at write**. Scoping needs a cross-service lookup from the alarm's originator to its device type, which has not landed; until it does the dispatcher skips a scoped policy rather than applying it tenant-wide and over-notifying. Refusing the write is deliberate — a policy that accepted the field would return success and then deliver nothing at all. Leave `deviceTypeToken` unset.
+:::
 
 Two more knobs shape delivery:
 

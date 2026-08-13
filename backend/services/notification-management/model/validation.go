@@ -40,6 +40,25 @@ func channelTypeIds() []string {
 	return ids
 }
 
+// validateDeviceTypeScoping rejects a policy scoped to a device type, because the
+// dispatcher does not honour that scoping yet — policy_notifier skips any policy
+// with a non-empty DeviceTypeToken rather than applying it tenant-wide, which
+// would over-notify. Accepting the field therefore produced the worst possible
+// outcome: the mutation returned success and the policy delivered NOTHING, with
+// no error and no log an operator would think to look for.
+//
+// Failing the write instead is the fail-closed reading — a policy that cannot
+// route is refused at the point the operator can still do something about it.
+// When the cross-service originator→device-type resolution lands, delete this and
+// the skip in policy_notifier together; a scoped policy that writes but does not
+// deliver is exactly the state this exists to prevent.
+func validateDeviceTypeScoping(deviceTypeToken *string) error {
+	if deviceTypeToken == nil || strings.TrimSpace(*deviceTypeToken) == "" {
+		return nil
+	}
+	return fmt.Errorf("deviceTypeToken is not honoured yet: a device-type-scoped policy is skipped by the dispatcher and would deliver nothing, so it is refused rather than silently accepted; leave deviceTypeToken unset for a tenant-wide policy")
+}
+
 // validateJSONObject checks that a nil-or-JSON string is a well-formed JSON
 // object (not an array or scalar). Channel config and rule recipients are opaque
 // to this slice; the model only guarantees they are structurally valid so a later
