@@ -53,6 +53,15 @@ func TestGovernanceOverrides_Validate(t *testing.T) {
 			IngestMessagesPerSecond: fptr(500), IngestBurst: iptr(1000),
 			OutboundMessagesPerSecond: fptr(50), OutboundBurst: iptr(100),
 			AiInferenceRequestsPerMinute: fptr(30), AiInferenceBurst: iptr(15)}, false},
+
+		// The HELD-command ceiling is a scalar, but the same positive-or-omit rule: a
+		// zero would mean "this tenant may hold nothing" and refuse every command to an
+		// absent device. Unlike shedPriority beside it, a large value is ordinary — a
+		// ceiling is a count, not a point on the 1-100 band scale.
+		{"positive held-command ceiling", GovernanceOverrides{HeldCommandCeiling: iptr(2500)}, false},
+		{"a large held-command ceiling is ordinary", GovernanceOverrides{HeldCommandCeiling: iptr(1000000)}, false},
+		{"zero held-command ceiling rejected", GovernanceOverrides{HeldCommandCeiling: iptr(0)}, true},
+		{"negative held-command ceiling rejected", GovernanceOverrides{HeldCommandCeiling: iptr(-1)}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -82,6 +91,8 @@ func TestGovernanceOverrides_ApplyTo(t *testing.T) {
 		IngestMessagesPerSecond: fptr(500), IngestBurst: iptr(1000),
 		OutboundMessagesPerSecond: fptr(50), OutboundBurst: iptr(100),
 		AiInferenceRequestsPerMinute: fptr(30), AiInferenceBurst: iptr(15),
+		ShedPriority:       iptr(90),
+		HeldCommandCeiling: iptr(2500),
 	}
 	var tenant iam.Tenant
 	full.applyTo(&tenant)
@@ -91,6 +102,9 @@ func TestGovernanceOverrides_ApplyTo(t *testing.T) {
 	assert.Equal(t, iptr(100), tenant.OutboundBurst)
 	assert.Equal(t, fptr(30), tenant.AiInferenceRequestsPerMinute)
 	assert.Equal(t, iptr(15), tenant.AiInferenceBurst)
+	assert.Equal(t, iptr(90), tenant.ShedPriority)
+	assert.Equal(t, iptr(2500), tenant.HeldCommandCeiling,
+		"a field missing from applyTo is silently unwritable through the admin API")
 
 	// A full replace: clearing every override reverts the tenant to the defaults.
 	GovernanceOverrides{}.applyTo(&tenant)
@@ -100,4 +114,6 @@ func TestGovernanceOverrides_ApplyTo(t *testing.T) {
 	assert.Nil(t, tenant.OutboundBurst)
 	assert.Nil(t, tenant.AiInferenceRequestsPerMinute)
 	assert.Nil(t, tenant.AiInferenceBurst)
+	assert.Nil(t, tenant.ShedPriority)
+	assert.Nil(t, tenant.HeldCommandCeiling)
 }

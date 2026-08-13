@@ -16,7 +16,7 @@
 // are opaque snapshots — and a since-removed command fails visibly at the delivery
 // boundary (the server validates device existence and JSON); it isn't silently wrong.
 
-import type { CommandParameter } from '@devicechain/dashboards';
+import type { CommandDispatch, CommandParameter } from '@devicechain/dashboards';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 
 import type { CommandStreamState } from '../hooks';
@@ -96,20 +96,31 @@ export function CommandButton({ widget, data, actions }: WidgetProps<CommandStre
     setSendError(null);
     // Call synchronously so a dispatch is observable, but guard a synchronous throw so a
     // misbehaving seam can't leave the button stuck-disabled.
-    let promise: Promise<{ token: string }>;
+    let promise: Promise<CommandDispatch>;
     try {
       promise = actions.sendCommand(deviceToken, commandName, payload);
-    } catch (err) {
-      setSendError(errText(err));
+    } catch {
+      setSendError(SEND_FAILED);
       setPending(false);
       return;
     }
     promise
       .then((dispatch) => {
-        if (gen === sendGen.current) setSentToken(dispatch.token);
+        if (gen !== sendGen.current) return;
+        // 🔴 A REFUSAL IS SHOWN, A FAILURE IS NOT. The server decided this command was
+        // wrong and said why in client-safe terms (an unknown command for this device, a
+        // parameter that violates the schema, the tenant's held-command ceiling) — that
+        // reason is the whole point of the answer, and an operator can act on it. A
+        // thrown error, below, is an availability failure: it says nothing about the
+        // command, and its text is internal, so it gets one fixed message instead.
+        if (dispatch.status === 'rejected') {
+          setSendError(dispatch.reason);
+          return;
+        }
+        setSentToken(dispatch.token);
       })
-      .catch((err) => {
-        if (gen === sendGen.current) setSendError(errText(err));
+      .catch(() => {
+        if (gen === sendGen.current) setSendError(SEND_FAILED);
       })
       .finally(() => {
         if (gen === sendGen.current) setPending(false);
@@ -354,6 +365,11 @@ function StatusBadge({ status }: { status: string }) {
 
 const hint: CSSProperties = { fontSize: 11, color: css('muted-foreground') };
 
+// What a viewer is told when the platform could not decide the enqueue. It is fixed
+// prose on purpose: the thrown error's text describes in-cluster machinery, and a
+// dashboard is the surface most likely to be embedded outside the tenant's own console.
+const SEND_FAILED = 'Couldn’t issue the command. Try again.';
+
 const inputStyle: CSSProperties = {
   width: '100%',
   boxSizing: 'border-box',
@@ -375,7 +391,3 @@ const sendButton: CSSProperties = {
   color: css('background'),
   marginTop: 2,
 };
-
-function errText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}

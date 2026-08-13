@@ -265,7 +265,8 @@ CREATE TABLE "user-management".iam_tenants (
  basemap_attribution text,
  basemap_center_lat numeric,
  basemap_center_lon numeric,
- basemap_zoom numeric
+ basemap_zoom numeric,
+ held_command_ceiling bigint
 );
 CREATE TABLE "user-management".signing_keys (
  id bigint NOT NULL,

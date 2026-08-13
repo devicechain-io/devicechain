@@ -313,7 +313,8 @@ func (s *Store) UpdateTenant(ctx context.Context, t *Tenant) error {
 	return s.sys(ctx).Model(t).
 		Select("Name", "Config", "TierID", "IngestMessagesPerSecond", "IngestBurst",
 			"OutboundMessagesPerSecond", "OutboundBurst", "AiExternalEnabled",
-			"AiInferenceRequestsPerMinute", "AiInferenceBurst", "ShedPriority").
+			"AiInferenceRequestsPerMinute", "AiInferenceBurst", "ShedPriority",
+			"HeldCommandCeiling").
 		Updates(t).Error
 }
 

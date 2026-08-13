@@ -43,6 +43,7 @@ export type AdminTenantCreateRequest = {
   aiInferenceBurst?: number | null | undefined;
   aiInferenceRequestsPerMinute?: number | null | undefined;
   config?: string | null | undefined;
+  heldCommandCeiling?: number | null | undefined;
   ingestBurst?: number | null | undefined;
   ingestMessagesPerSecond?: number | null | undefined;
   name?: string | null | undefined;
@@ -73,6 +74,7 @@ export type AdminTenantUpdateRequest = {
   aiInferenceBurst?: number | null | undefined;
   aiInferenceRequestsPerMinute?: number | null | undefined;
   config?: string | null | undefined;
+  heldCommandCeiling?: number | null | undefined;
   ingestBurst?: number | null | undefined;
   ingestMessagesPerSecond?: number | null | undefined;
   name?: string | null | undefined;

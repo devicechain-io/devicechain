@@ -152,6 +152,24 @@ func (r *TenantGovernanceResolver) ShedPriority() *int32 {
 	return &i
 }
 
+// HeldCommandCeiling resolves how many commands this tenant may park in the HELD state
+// down the same cascade — override, else tier, else null. Null means "no bound resolved
+// from the tenant or its tier"; the reader (command-delivery) substitutes its own
+// configured default, which is itself a real bound. Null is inherit, never unlimited —
+// and unlike a rate ceiling, an unbounded reading here would not merely admit traffic,
+// it would let a tenant's offline backlog grow in durable storage indefinitely.
+//
+// The provenance is dropped here like the rates: a service enforcing the bound has no
+// business knowing which level won. That belongs to the admin plane.
+func (r *TenantGovernanceResolver) HeldCommandCeiling() *int32 {
+	v, _ := r.t.EffectiveHeldCommandCeiling()
+	if v == nil {
+		return nil
+	}
+	i := int32(*v)
+	return &i
+}
+
 // PurgeState resolves where the tenant sits in the ADR-077 deletion lifecycle, as the
 // raw state string ("active" | "purging").
 //

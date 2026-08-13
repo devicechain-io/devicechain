@@ -116,6 +116,53 @@ func TestAdminShedPriorityIsReadable(t *testing.T) {
 	require.Nil(t, (&AdminTenantResolver{M: iam.Tenant{}}).ShedPriority())
 }
 
+// goldTierWithHeldCommandCeiling is a gold tier that packages extra headroom for an
+// offline fleet's HELD-command backlog.
+func goldTierWithHeldCommandCeiling() *iam.TenantTier {
+	return &iam.TenantTier{Token: iam.TierGoldToken, Config: map[string]any{"heldCommandCeiling": float64(50000)}}
+}
+
+// TestHeldCommandCeilingCascadeOnTheWire pins that the data-plane tenantGovernance
+// surface resolves heldCommandCeiling down the same cascade — override → tier → null —
+// that command-delivery will read it through. Null means the reader substitutes its own
+// configured default, which is a real bound; no level can express "unlimited".
+func TestHeldCommandCeilingCascadeOnTheWire(t *testing.T) {
+	t.Run("override wins over the tier", func(t *testing.T) {
+		r := &TenantGovernanceResolver{t: &iam.Tenant{Tier: goldTierWithHeldCommandCeiling(), HeldCommandCeiling: ip(200)}}
+		require.EqualValues(t, 200, *r.HeldCommandCeiling())
+	})
+	t.Run("tier supplies it when the tenant declares none", func(t *testing.T) {
+		r := &TenantGovernanceResolver{t: &iam.Tenant{Tier: goldTierWithHeldCommandCeiling()}}
+		require.EqualValues(t, 50000, *r.HeldCommandCeiling())
+	})
+	t.Run("null when neither declares — the reader applies its own default", func(t *testing.T) {
+		r := &TenantGovernanceResolver{t: &iam.Tenant{Tier: &iam.TenantTier{Token: iam.TierSilverToken}}}
+		require.Nil(t, r.HeldCommandCeiling())
+	})
+	t.Run("a junk override falls through to the tier, not past it", func(t *testing.T) {
+		// Same asymmetry as the rate ceilings: the consumer floors an unusable value to
+		// its OWN default, so passing one through here would skip the tier entirely and
+		// hand a gold tenant the service default instead of its packaged headroom.
+		r := &TenantGovernanceResolver{t: &iam.Tenant{Tier: goldTierWithHeldCommandCeiling(), HeldCommandCeiling: ip(0)}}
+		require.EqualValues(t, 50000, *r.HeldCommandCeiling())
+	})
+}
+
+// TestAdminHeldCommandCeilingIsReadable is the same regression TestAdminShedPriorityIsReadable
+// pins, for the new override. updateTenant is a full REPLACE of the mutable fields, so an
+// override the admin plane cannot read back is one that any unrelated edit silently nulls —
+// here, quietly unbounding a tenant's HELD backlog down to whatever its tier or the service
+// default happens to allow, with nothing in the API to show it ever had a bound.
+func TestAdminHeldCommandCeilingIsReadable(t *testing.T) {
+	r := &AdminTenantResolver{M: iam.Tenant{HeldCommandCeiling: ip(2500)}}
+	got := r.HeldCommandCeiling()
+	require.NotNil(t, got, "the heldCommandCeiling override must be readable on AdminTenant (else an edit silently nulls it)")
+	require.EqualValues(t, 2500, *got)
+
+	// An unset override reads back as null (inherit), like every other override.
+	require.Nil(t, (&AdminTenantResolver{M: iam.Tenant{}}).HeldCommandCeiling())
+}
+
 // TestUnusableOverrideFallsThroughToTheTierNotPastIt pins the one case where "the
 // consumer already folds onto the platform default, so the composition is
 // equivalent" is NOT equivalent to ADR-065 D5's cascade.

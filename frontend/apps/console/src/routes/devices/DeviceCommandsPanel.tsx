@@ -167,20 +167,43 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
 
     setSubmitting(true);
     try {
-      await createCommand({
+      const result = await createCommand({
         token: crypto.randomUUID(),
         deviceToken,
         name: trimmed,
         payload: body,
       });
+      // 🔴 A REJECTION IS NOT A FAILURE, and the operator must be able to tell them
+      // apart. The server refused THIS command and said why in terms that name only
+      // the device, the command and the offending parameter — so the reason is shown
+      // verbatim, and the form keeps what was typed so it can be corrected and
+      // resent. A thrown error (the catch below) means the platform could not answer
+      // at all: it says nothing about the command, so it gets the generic transport
+      // message instead. Collapsing the two is what made "your payload is missing a
+      // required parameter" read like an outage.
+      if (result.rejection) {
+        toast(t('commandRejected', { name: trimmed, reason: result.rejection.reason }), 'error');
+        return;
+      }
+      // Neither arm populated is a server contract violation, not a success: fall into
+      // the generic failure path rather than reporting a command that may not exist.
+      if (!result.command) throw new Error('createCommand returned neither a command nor a rejection');
       toast(t('commandIssued', { name: trimmed }));
       setName('');
       setPayload('');
       setSelectedKey('');
       setParamValues({});
       reload();
-    } catch (err) {
-      toast(errMessage(err), 'error');
+    } catch {
+      // 🔴 ONE FIXED MESSAGE, not errMessage(err) — and this is the ONE mutation in the
+      // console where that is right. Everywhere else (including cancel, below) the
+      // server's GraphQL error text IS the answer, because a refusal has nowhere else to
+      // travel. createCommand now has a rejection channel, so anything still arriving as
+      // a thrown error is a failure to DECIDE — a database error, the enqueue gate
+      // unreachable — whose text describes in-cluster machinery and asserts nothing about
+      // the command. Showing it here can only mislead: it reads as a verdict on what the
+      // operator typed.
+      toast(t('commandIssueFailed'), 'error');
     } finally {
       setSubmitting(false);
     }

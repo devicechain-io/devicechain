@@ -14,10 +14,10 @@
 // and clicking it produced a server error toast. Nothing in the frontend asserted the
 // SET of statuses, so it broke in total silence.
 import '@/i18n/config';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { gqlMock } = vi.hoisted(() => ({ gqlMock: vi.fn() }));
+const { gqlMock, toastMock } = vi.hoisted(() => ({ gqlMock: vi.fn(), toastMock: vi.fn() }));
 
 // Spread the real module so everything except the wire stays genuine.
 vi.mock('@devicechain/client', async (importOriginal) => {
@@ -25,10 +25,20 @@ vi.mock('@devicechain/client', async (importOriginal) => {
   return { ...actual, gql: (...args: unknown[]) => gqlMock(...args) };
 });
 
+// The toast is the panel's only report channel for an issue attempt, so it is the seam
+// the outcome assertions read. Everything else (the real i18n catalogs, the real API
+// module, the real form) stays genuine.
+vi.mock('@/components/ui/toast', () => ({ useToast: () => ({ toast: toastMock }) }));
+
+import { GraphQLRequestError } from '@devicechain/client';
+
 import { DeviceCommandsPanel } from './DeviceCommandsPanel';
 
 afterEach(cleanup);
-beforeEach(() => gqlMock.mockReset());
+beforeEach(() => {
+  gqlMock.mockReset();
+  toastMock.mockReset();
+});
 
 const CANCEL = 'Cancel';
 
@@ -68,6 +78,54 @@ function respondWith(statuses: string[]) {
     // Irrelevant to the history table, but the panel waits on it before rendering.
     return Promise.resolve({ deviceCommandVocabulary: { constrained: false, commands: [] } });
   });
+}
+
+// ── Issue-outcome fixtures ─────────────────────────────────────────────────
+//
+// The panel talks to two services and, within command-delivery, to two operations. The
+// answers dispatch on the DOCUMENT rather than the service so the history query and the
+// createCommand mutation can be answered differently in one render.
+
+type IssueOutcome =
+  | { kind: 'created' }
+  | { kind: 'rejected'; code: string; reason: string }
+  | { kind: 'failed'; error: Error };
+
+function respondToIssue(outcome: IssueOutcome) {
+  gqlMock.mockImplementation((service: string, document: unknown) => {
+    if (String(document).includes('mutation CreateCommand')) {
+      if (outcome.kind === 'failed') return Promise.reject(outcome.error);
+      if (outcome.kind === 'rejected') {
+        return Promise.resolve({
+          createCommand: {
+            command: null,
+            rejection: { code: outcome.code, reason: outcome.reason },
+          },
+        });
+      }
+      return Promise.resolve({
+        createCommand: {
+          command: { id: 'id-new', token: 'tok-new', status: 'QUEUED' },
+          rejection: null,
+        },
+      });
+    }
+    if (service === 'command-delivery') {
+      return Promise.resolve({
+        commands: { results: [], pagination: { pageStart: 0, pageEnd: 0, totalRecords: 0 } },
+      });
+    }
+    return Promise.resolve({ deviceCommandVocabulary: { constrained: false, commands: [] } });
+  });
+}
+
+// Fill the free-text command name and press Issue command — the unconstrained path, so
+// the assertions are about the OUTCOME rather than about vocabulary handling.
+async function issueCommand(name = 'reboot') {
+  const input = await screen.findByPlaceholderText('e.g. reboot');
+  fireEvent.change(input, { target: { value: name } });
+  fireEvent.click(screen.getByRole('button', { name: 'Issue command' }));
+  return input as HTMLInputElement;
 }
 
 // The Cancel control inside the row for a given status, or null when none is offered.
@@ -117,5 +175,72 @@ describe('DeviceCommandsPanel cancel control', () => {
     expect(await screen.findByText('HELD')).toBeTruthy();
     expect(cancelControlFor('HELD')).toBeTruthy();
     expect(cancelControlFor('EXPIRED')).toBeNull();
+  });
+});
+
+// 🔴🔴 THE THREE ANSWERS AN ENQUEUE CAN GIVE, and the point of the change is that they
+// are now distinguishable. createCommand used to return the command or throw, so every
+// refusal — an unknown device, a command the profile never published, a payload that
+// violates its schema, a tenant at its held-command ceiling — reached the operator as
+// whatever error string happened to be in flight, styled exactly like the service being
+// down. A rejection is a DECIDED verdict about this command and its reason is the useful
+// part; a thrown error is the platform failing to answer and says nothing about the
+// command at all.
+describe('DeviceCommandsPanel issue outcomes', () => {
+  it('reports a successful enqueue and clears the form', async () => {
+    respondToIssue({ kind: 'created' });
+
+    render(<DeviceCommandsPanel deviceToken="therm-1" />);
+    const input = await issueCommand();
+
+    await waitFor(() => expect(toastMock).toHaveBeenCalled());
+    expect(toastMock).toHaveBeenCalledWith('Command “reboot” issued');
+    // The success toast carries no variant — the error arms below assert 'error'.
+    expect(toastMock.mock.calls[0]).toHaveLength(1);
+    await waitFor(() => expect(input.value).toBe(''));
+  });
+
+  it('shows the server’s reason when the enqueue is refused', async () => {
+    respondToIssue({
+      kind: 'rejected',
+      code: 'COMMAND_NOT_IN_VOCABULARY',
+      reason: 'cannot enqueue command: command "reboot" is not in the published vocabulary for device "therm-1"',
+    });
+
+    render(<DeviceCommandsPanel deviceToken="therm-1" />);
+    const input = await issueCommand();
+
+    await waitFor(() => expect(toastMock).toHaveBeenCalled());
+    const [message, variant] = toastMock.mock.calls[0];
+    expect(variant).toBe('error');
+    // The reason is shown VERBATIM — that is the whole value of the new arm.
+    expect(message).toContain('is not in the published vocabulary for device "therm-1"');
+    // ...and it is not dressed up as the platform failing.
+    expect(message).not.toContain('Couldn’t issue the command');
+    // The typed command survives, because the operator's next move is to correct it.
+    expect(input.value).toBe('reboot');
+  });
+
+  it('shows a generic failure — never the platform’s error text — when the enqueue can’t be decided', async () => {
+    respondToIssue({
+      kind: 'failed',
+      error: new GraphQLRequestError(
+        'ERROR: relation "commands" does not exist (SQLSTATE 42P01)',
+        500,
+      ),
+    });
+
+    render(<DeviceCommandsPanel deviceToken="therm-1" />);
+    await issueCommand();
+
+    await waitFor(() => expect(toastMock).toHaveBeenCalled());
+    const [message, variant] = toastMock.mock.calls[0];
+    expect(variant).toBe('error');
+    expect(message).toBe('Couldn’t issue the command. Try again.');
+    // 🔴 The server's text names in-cluster machinery and asserts nothing about the
+    // command. It must not reach the operator, and it must not read as a verdict.
+    expect(message).not.toContain('SQLSTATE');
+    expect(message).not.toContain('relation "commands"');
+    expect(message).not.toContain('refused');
   });
 });

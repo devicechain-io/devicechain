@@ -37,6 +37,7 @@ func NewEnqueueValidator(client *svcclient.Client, graphqlURL string) *EnqueueVa
 const validateCommandEnqueue = `query($deviceToken: String!, $commandKey: String!, $payload: String) {
   validateCommandEnqueue(deviceToken: $deviceToken, commandKey: $commandKey, payload: $payload) {
     allowed
+    code
     reason
   }
 }`
@@ -65,6 +66,7 @@ func (v *EnqueueValidator) ValidateEnqueue(ctx context.Context, deviceToken stri
 	var out struct {
 		ValidateCommandEnqueue struct {
 			Allowed *bool   `json:"allowed"`
+			Code    *string `json:"code"`
 			Reason  *string `json:"reason"`
 		} `json:"validateCommandEnqueue"`
 	}
@@ -91,7 +93,17 @@ func (v *EnqueueValidator) ValidateEnqueue(ctx context.Context, deviceToken stri
 		if out.ValidateCommandEnqueue.Reason != nil && *out.ValidateCommandEnqueue.Reason != "" {
 			reason = *out.ValidateCommandEnqueue.Reason
 		}
-		return &model.EnqueueRejected{Reason: reason}
+		// The code is relayed EXACTLY as the owner sent it, including a value this
+		// build has never heard of: device-management owns the vocabulary and
+		// therefore owns the reasons a command can be refused, and a translation table
+		// here would silently drop any case it was added after. An absent or empty
+		// code stays empty and is marked unclassified upstream — a rejection is still
+		// a rejection even when we cannot say which kind.
+		code := model.RejectionCode("")
+		if out.ValidateCommandEnqueue.Code != nil {
+			code = model.RejectionCode(*out.ValidateCommandEnqueue.Code)
+		}
+		return &model.EnqueueRejected{Code: code, Reason: reason}
 	}
 	return nil
 }

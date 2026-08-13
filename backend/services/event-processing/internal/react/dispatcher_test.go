@@ -60,16 +60,20 @@ type fakeMetrics struct {
 	orphan        int
 	notEnabled    map[string]int
 	connectorShed map[string]int
+	permanent     map[string]int
 }
 
 func newFakeMetrics() *fakeMetrics {
-	return &fakeMetrics{dispatched: map[string]int{}, notEnabled: map[string]int{}, connectorShed: map[string]int{}}
+	return &fakeMetrics{dispatched: map[string]int{}, notEnabled: map[string]int{},
+		connectorShed: map[string]int{}, permanent: map[string]int{}}
 }
 
 func (m *fakeMetrics) RecordDispatched(a string)    { m.dispatched[a]++ }
 func (m *fakeMetrics) RecordOrphan()                { m.orphan++ }
 func (m *fakeMetrics) RecordNotEnabled(a string)    { m.notEnabled[a]++ }
 func (m *fakeMetrics) RecordConnectorShed(a string) { m.connectorShed[a]++ }
+
+func (m *fakeMetrics) RecordPermanentlyRejected(a string) { m.permanent[a]++ }
 
 func evt() runtime.DerivedEvent {
 	return runtime.DerivedEvent{

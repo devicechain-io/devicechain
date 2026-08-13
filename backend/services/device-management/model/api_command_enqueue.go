@@ -8,12 +8,42 @@ import (
 	"fmt"
 )
 
+// EnqueueRejectionCode is the STABLE, machine-readable classification of an enqueue
+// rejection, carried alongside the human Reason.
+//
+// It exists because Reason is prose: it names the device token and the offending
+// parameter so a person can fix the command, which is exactly what makes it unusable
+// as a branch condition. A caller that must DECIDE something — command-delivery
+// relaying the rejection, REACT's dispatcher deciding whether a retry could ever
+// succeed — needs a value that does not change when the wording does.
+//
+// 🔴 The set is derived from the rejections ValidateCommandEnqueue can actually
+// produce, one code per rejectedVerdict site, and nothing else. A code for a case the
+// code cannot reach is a contract promising an answer that will never be given, and
+// the first caller to branch on it writes dead code that reads as coverage.
+type EnqueueRejectionCode string
+
+const (
+	// RejectDeviceNotFound: the device token resolved to no live device (it never
+	// existed, or it was deleted). Permanent — no retry of the same enqueue can
+	// succeed while the token names nothing.
+	RejectDeviceNotFound EnqueueRejectionCode = "DEVICE_NOT_FOUND"
+	// RejectCommandNotInVocabulary: the device's profile declares a command
+	// vocabulary and the requested key is not in its PUBLISHED version. Permanent
+	// for this (device, key) pair until the profile is republished.
+	RejectCommandNotInVocabulary EnqueueRejectionCode = "COMMAND_NOT_IN_VOCABULARY"
+	// RejectPayloadSchemaViolation: the command key resolved, but the payload
+	// violates that definition's parameter schema (a missing required parameter, a
+	// wrong type, an out-of-range value). Permanent for this payload.
+	RejectPayloadSchemaViolation EnqueueRejectionCode = "PAYLOAD_SCHEMA_VIOLATION"
+)
+
 // CommandEnqueueVerdict is the answer to "may this command be enqueued to this
 // device?" — the ADR-043 decision 3 enqueue gate, evaluated at the owner of the
 // command vocabulary.
 //
-// A rejection is carried as a verdict (Allowed=false + Reason), NOT as an error:
-// the caller must be able to tell "the command is invalid" (the API client's
+// A rejection is carried as a verdict (Allowed=false + Code + Reason), NOT as an
+// error: the caller must be able to tell "the command is invalid" (the API client's
 // fault, and safe to relay verbatim) apart from "the check could not be
 // performed" (a transport/availability failure, which the caller must fail closed
 // on and must NOT relay — it would leak in-cluster topology). Errors from this
@@ -21,6 +51,9 @@ import (
 type CommandEnqueueVerdict struct {
 	// Allowed reports whether the command may be enqueued.
 	Allowed bool
+	// Code classifies a rejection for a machine; empty when Allowed. It is the field
+	// a caller branches on — Reason is for a human and its wording is free to change.
+	Code EnqueueRejectionCode
 	// Reason explains a rejection in terms the API client can act on; empty when
 	// Allowed. It names only tenant-visible things (the device token, the command
 	// key, the offending parameter) — never a service, host, or internal id.
@@ -84,9 +117,13 @@ func (api *Api) DeviceCommandVocabulary(ctx context.Context, deviceToken string)
 // allowedVerdict is the accept answer.
 func allowedVerdict() *CommandEnqueueVerdict { return &CommandEnqueueVerdict{Allowed: true} }
 
-// rejectedVerdict is the reject answer, with a client-safe reason.
-func rejectedVerdict(format string, args ...any) *CommandEnqueueVerdict {
-	return &CommandEnqueueVerdict{Allowed: false, Reason: fmt.Sprintf(format, args...)}
+// rejectedVerdict is the reject answer: a machine-readable code plus a client-safe
+// reason. The code is a REQUIRED positional argument rather than an optional extra so
+// that adding a rejection forces a decision about how a caller is meant to classify
+// it — an uncoded rejection would silently reach a branching caller as "unclassified"
+// and be handled by whatever its default is.
+func rejectedVerdict(code EnqueueRejectionCode, format string, args ...any) *CommandEnqueueVerdict {
+	return &CommandEnqueueVerdict{Allowed: false, Code: code, Reason: fmt.Sprintf(format, args...)}
 }
 
 // ValidateCommandEnqueue is the single enqueue gate of ADR-043 decision 3: it
@@ -124,7 +161,7 @@ func (api *Api) ValidateCommandEnqueue(ctx context.Context, deviceToken string, 
 		return nil, err
 	}
 	if !vocab.DeviceExists {
-		return rejectedVerdict("device %q does not exist", deviceToken), nil
+		return rejectedVerdict(RejectDeviceNotFound, "device %q does not exist", deviceToken), nil
 	}
 	// Decision 4 backward path: no declared vocabulary ⇒ free-form, as today.
 	if !vocab.Constrained {
@@ -139,13 +176,14 @@ func (api *Api) ValidateCommandEnqueue(ctx context.Context, deviceToken string, 
 		}
 	}
 	if matched == nil {
-		return rejectedVerdict("device %q accepts no command %q", deviceToken, commandKey), nil
+		return rejectedVerdict(RejectCommandNotInVocabulary,
+			"device %q accepts no command %q", deviceToken, commandKey), nil
 	}
 
 	if err := ValidateCommandPayload(matched, payload); err != nil {
 		// ValidateCommandPayload's message already names the command key and the
 		// offending parameter, and nothing else — safe to relay to the client.
-		return rejectedVerdict("%s", err.Error()), nil
+		return rejectedVerdict(RejectPayloadSchemaViolation, "%s", err.Error()), nil
 	}
 	return allowedVerdict(), nil
 }

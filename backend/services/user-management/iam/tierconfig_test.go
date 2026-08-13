@@ -25,10 +25,11 @@ func TestTierConfigKeysCoverEveryDimension(t *testing.T) {
 		require.NoError(t, ValidateTierConfig(map[string]any{d.BurstField: float64(10)}),
 			"burst key for dimension %q must be registered", d.Name)
 	}
-	// Two keys per dimension (rate + burst), plus the one standalone non-dimension key
-	// (ADR-063 shedPriority). This +1 is the guard that the standalone key is neither
-	// dropped nor accidentally duplicated per dimension.
-	require.Len(t, TierConfigKeys(), len(dims)*2+1)
+	// Two keys per dimension (rate + burst), plus the standalone non-dimension keys
+	// (ADR-063 shedPriority and the HELD-command ceiling). This +2 is the guard that a
+	// standalone key is neither dropped nor accidentally duplicated per dimension, and
+	// bumping it is meant to be a conscious act: a key that lands without it fails here.
+	require.Len(t, TierConfigKeys(), len(dims)*2+2)
 }
 
 // TestTierConfigKeysMatchTheKnownDimensions is the half the test above cannot do.
@@ -49,6 +50,11 @@ func TestTierConfigKeysMatchTheKnownDimensions(t *testing.T) {
 		// The ADR-063 shed priority — a standalone key, NOT a dimension (it has no
 		// burst and no rate unit), registered outside the dimension loop.
 		"shedPriority",
+		// The HELD-command ceiling — likewise standalone, and likewise not a dimension:
+		// a backlog bound has no burst and no per-second unit. Listed here as well as
+		// counted above on purpose; the redundancy is what makes adding a key deliberate
+		// rather than something a +1 quietly absorbs.
+		"heldCommandCeiling",
 	}, TierConfigKeys())
 }
 

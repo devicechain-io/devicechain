@@ -14,6 +14,7 @@ CREATE INDEX "idx_command-delivery_commands_status" ON "command-delivery".comman
 CREATE INDEX "idx_command-delivery_commands_tenant_id" ON "command-delivery".commands USING btree (tenant_id);
 CREATE INDEX "idx_command-delivery_commands_token" ON "command-delivery".commands USING btree (token);
 CREATE INDEX idx_audit_tenant_time ON "command-delivery".audit_events USING btree (tenant_id, occurred_time DESC);
+CREATE INDEX idx_commands_tenant_status ON "command-delivery".commands USING btree (tenant_id, status);
 CREATE SCHEMA "command-delivery";
 CREATE SEQUENCE "command-delivery".audit_events_id_seq
  START WITH 1

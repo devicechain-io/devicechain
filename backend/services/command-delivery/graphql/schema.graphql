@@ -60,6 +60,42 @@ input CommandCreateRequest {
     metadata: String
 }
 
+# Why an enqueue was REFUSED — a decided verdict, not a failure.
+#
+# It is a payload rather than a GraphQL error because the two mean opposite things to
+# a caller: a rejection says the request is wrong and describes exactly how, while a
+# GraphQL error says the platform could not answer. A machine caller that cannot tell
+# them apart retries a permanently-invalid command until its redelivery cap gives up,
+# which is indistinguishable from an outage.
+type CommandEnqueueRejection {
+    # The stable, machine-readable classification. Branch on this, never on `reason`
+    # — the reason is prose for a person and its wording may change.
+    #
+    # Produced here: PAYLOAD_NOT_JSON, METADATA_NOT_JSON, EXPIRES_AT_INVALID,
+    # HELD_CEILING_EXCEEDED. Relayed from the enqueue gate that owns the device and
+    # its command vocabulary: DEVICE_NOT_FOUND, COMMAND_NOT_IN_VOCABULARY,
+    # PAYLOAD_SCHEMA_VIOLATION. COMMAND_REJECTED means a rejection arrived carrying no
+    # classification. The list is open — treat an unrecognized code as a rejection you
+    # cannot classify, never as a success.
+    #
+    # HELD_CEILING_EXCEEDED is the only TEMPORARY one: the tenant is holding its limit
+    # of commands for absent devices, and the limit frees as those devices return. The
+    # rest describe a request that will be just as wrong on the next attempt.
+    code: String!
+    # Why it was refused, in client-safe terms: it names only the device token, the
+    # command key and the offending parameter — never a service, host or internal id.
+    reason: String!
+}
+
+# The outcome of an enqueue attempt. EXACTLY ONE of the two fields is non-null:
+# `command` for a command that was created (or the ORIGINAL one returned by an
+# idempotent replay of a token already in use), `rejection` for a request that was
+# refused. A GraphQL error instead of either means the enqueue could not be decided.
+type CreateCommandResult {
+    command: Command
+    rejection: CommandEnqueueRejection
+}
+
 # Criteria used when searching for commands.
 input CommandSearchCriteria {
     pageNumber: Int!
@@ -90,8 +126,10 @@ type Query {
 }
 
 type Mutation {
-    # Issue (persist) a new command to a device.
-    createCommand(request: CommandCreateRequest!): Command!
+    # Issue (persist) a new command to a device. Returns either the command or a
+    # typed rejection (see CreateCommandResult); a GraphQL error means the enqueue
+    # could not be decided at all.
+    createCommand(request: CommandCreateRequest!): CreateCommandResult!
     # Cancel a non-terminal command by token.
     cancelCommand(token: String!): Command!
     # Claim a still-dispatchable command (QUEUED or HELD) for immediate delivery,

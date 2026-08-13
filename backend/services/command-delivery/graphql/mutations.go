@@ -5,15 +5,59 @@ package graphql
 
 import (
 	"context"
+	"errors"
+
 	"github.com/devicechain-io/dc-microservice/auth"
 
 	"github.com/devicechain-io/dc-command-delivery/model"
 )
 
+// CommandEnqueueRejectionResolver exposes a refused enqueue: a stable code plus a
+// client-safe reason.
+type CommandEnqueueRejectionResolver struct {
+	M model.EnqueueRejected
+}
+
+func (r *CommandEnqueueRejectionResolver) Code() string { return string(r.M.Code) }
+
+func (r *CommandEnqueueRejectionResolver) Reason() string { return r.M.Reason }
+
+// CreateCommandResultResolver carries EITHER the created command OR the rejection
+// that refused it — never both, never neither.
+type CreateCommandResultResolver struct {
+	command   *CommandResolver
+	rejection *CommandEnqueueRejectionResolver
+}
+
+func (r *CreateCommandResultResolver) Command() *CommandResolver { return r.command }
+
+func (r *CreateCommandResultResolver) Rejection() *CommandEnqueueRejectionResolver {
+	return r.rejection
+}
+
 // CreateCommand issues (persists) a new command to a device.
+//
+// 🔴 THE RETURN SHAPE SPLITS "NO" FROM "I COULD NOT ANSWER", and the split is the
+// point of this mutation's payload:
+//
+//   - A REJECTION — the device does not exist, the command is not in the profile's
+//     published vocabulary, the payload is malformed or violates its schema, the
+//     tenant is at its held-command ceiling — is a DECIDED verdict about the request.
+//     It comes back as `rejection` with a machine-readable code, so a caller can tell
+//     a permanently-invalid command from a temporary refusal without parsing prose.
+//   - A FAILURE TO ANSWER — the enqueue gate unreachable, a database error — stays a
+//     GraphQL error, sanitized. It must NOT become a rejection: a rejection asserts
+//     something about the caller's command that nobody actually checked, and the
+//     detail behind an availability failure names in-cluster topology this tenant
+//     client has no business learning.
+//
+// Collapsing them is what the previous shape did, and it is live-visible today: every
+// rejection arrived as an error string, so REACT's dispatcher retried a
+// device-deleted command until its poison cap gave up — indistinguishable, from the
+// outside, from command-delivery being down.
 func (r *SchemaResolver) CreateCommand(ctx context.Context, args struct {
 	Request model.CommandCreateRequest
-}) (*CommandResolver, error) {
+}) (*CreateCommandResultResolver, error) {
 	if err := auth.Authorize(ctx, auth.CommandWrite); err != nil {
 		return nil, err
 	}
@@ -21,13 +65,21 @@ func (r *SchemaResolver) CreateCommand(ctx context.Context, args struct {
 	api := r.GetApi(ctx)
 	created, err := api.CreateCommand(ctx, &args.Request)
 	if err != nil {
+		var rejection *model.EnqueueRejected
+		if errors.As(err, &rejection) {
+			return &CreateCommandResultResolver{
+				rejection: &CommandEnqueueRejectionResolver{M: *rejection},
+			}, nil
+		}
 		return nil, err
 	}
 
-	return &CommandResolver{
-		M: *created,
-		S: r,
-		C: ctx,
+	return &CreateCommandResultResolver{
+		command: &CommandResolver{
+			M: *created,
+			S: r,
+			C: ctx,
+		},
 	}, nil
 }
 

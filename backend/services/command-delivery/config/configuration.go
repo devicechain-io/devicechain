@@ -31,6 +31,25 @@ const (
 	// MinCommandTTLSeconds floors the configured default so a fat-fingered tiny value
 	// cannot expire commands out from under a device before it can answer.
 	MinCommandTTLSeconds = 60
+
+	// DefaultHeldCommandCeiling is the platform default bound on how many WITHHELD
+	// (HELD) commands one tenant may accumulate. HELD is where an offline fleet's
+	// backlog collects and it can sit for days, so it is the one lifecycle state that
+	// grows without a natural brake: the delivery sweep reads every dispatchable row
+	// into the pod on each tick, so an unbounded hold is both a per-tenant storage
+	// problem and an instance-wide memory one.
+	//
+	// 🔴 A MISSING OR ZERO VALUE MEANS THIS DEFAULT, NEVER UNLIMITED — in the service
+	// config (ApplyDefaults floors it), in a per-tenant override, and in a tier. A
+	// governance bound whose absent value reads as "no bound" stops governing exactly
+	// when the thing that carries it is unreachable.
+	DefaultHeldCommandCeiling = 10000
+
+	// MinHeldCommandCeiling floors the configured ceiling. A handful of held commands
+	// per tenant is not a bound, it is an outage for any fleet that sleeps: a device
+	// waking to find its backlog was refused at enqueue never receives the commands
+	// at all, and the refusal is invisible from the device's side.
+	MinHeldCommandCeiling = 100
 )
 
 // CommandDeliveryConfiguration is the microservice configuration. Commands are
@@ -43,6 +62,12 @@ type CommandDeliveryConfiguration struct {
 	// negative value is replaced by the platform default in ApplyDefaults, so the field
 	// can never disable expiry (which would resurrect the stuck-in-SENT-forever gap).
 	DefaultCommandTTLSeconds int
+
+	// HeldCommandCeiling is this instance's fallback bound on withheld (HELD) commands
+	// per tenant, used when no per-tenant or tier ceiling has been resolved. Fail-safe
+	// in the same shape as the TTL above: a zero or negative value is replaced by the
+	// platform default in ApplyDefaults, so the field can never mean "unlimited".
+	HeldCommandCeiling int
 }
 
 // NewCommandDeliveryConfiguration creates the default command delivery configuration.
@@ -59,6 +84,12 @@ func (c *CommandDeliveryConfiguration) ApplyDefaults() {
 	if c.DefaultCommandTTLSeconds <= 0 {
 		c.DefaultCommandTTLSeconds = DefaultCommandTTLSeconds
 	}
+	// A missing or zero ceiling is the platform default, NEVER unlimited — the same
+	// fail-safe direction as the TTL: the harmless-looking value (absent, zero) must
+	// land on the bound, not remove it.
+	if c.HeldCommandCeiling <= 0 {
+		c.HeldCommandCeiling = DefaultHeldCommandCeiling
+	}
 }
 
 // Validate is the ADR-022 decision-1 validation hook for this service. It rejects a
@@ -69,6 +100,14 @@ func (c *CommandDeliveryConfiguration) Validate() error {
 	if c.DefaultCommandTTLSeconds < MinCommandTTLSeconds {
 		return fmt.Errorf("defaultCommandTtlSeconds must be at least %d (got %d)",
 			MinCommandTTLSeconds, c.DefaultCommandTTLSeconds)
+	}
+	// Same shape for the held-command ceiling: a value below the floor is refused
+	// rather than quietly accepted, because a tiny ceiling is not a conservative
+	// setting — it refuses a sleeping fleet's backlog at enqueue, and the device
+	// never learns the commands existed.
+	if c.HeldCommandCeiling < MinHeldCommandCeiling {
+		return fmt.Errorf("heldCommandCeiling must be at least %d (got %d)",
+			MinHeldCommandCeiling, c.HeldCommandCeiling)
 	}
 	return nil
 }

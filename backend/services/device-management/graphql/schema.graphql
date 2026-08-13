@@ -225,6 +225,11 @@ type MetricDefinitionSearchResults {
 type CommandEnqueueVerdict {
     # Whether the command may be enqueued.
     allowed: Boolean!
+    # The stable, machine-readable classification of a rejection; null when allowed.
+    # One of DEVICE_NOT_FOUND, COMMAND_NOT_IN_VOCABULARY, PAYLOAD_SCHEMA_VIOLATION.
+    # Branch on this, never on `reason` — the reason is prose for a person and its
+    # wording may change without the meaning changing.
+    code: String
     # Why it was rejected, in client-safe terms; null when allowed.
     reason: String
 }

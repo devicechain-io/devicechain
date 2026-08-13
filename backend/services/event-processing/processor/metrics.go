@@ -177,11 +177,12 @@ func (m *detectMetrics) recordSupersededFrontierDropped() {
 // Every recorder is nil-safe so a dispatcher built
 // without a Microservice (unit tests) runs unmeasured.
 type reactMetrics struct {
-	dispatched    *prometheus.CounterVec
-	notEnabled    *prometheus.CounterVec
-	connectorShed *prometheus.CounterVec
-	orphan        prometheus.Counter
-	poisonDropped prometheus.Counter
+	dispatched          *prometheus.CounterVec
+	notEnabled          *prometheus.CounterVec
+	connectorShed       *prometheus.CounterVec
+	permanentlyRejected *prometheus.CounterVec
+	orphan              prometheus.Counter
+	poisonDropped       prometheus.Counter
 }
 
 // newReactMetrics registers the REACT counters under the service's Prometheus namespace. A nil
@@ -192,11 +193,12 @@ func newReactMetrics(ms *core.Microservice) *reactMetrics {
 		return nil
 	}
 	return &reactMetrics{
-		dispatched:    ms.NewCounterVec("react_actions_dispatched_total", "REACT actions handed to their sink, by action type (includes idempotent replays).", []string{"action"}),
-		notEnabled:    ms.NewCounterVec("react_actions_not_enabled_total", "REACT actions recognized but dropped because this deployment has no sink for them, by action type: sendCommand without command-delivery configured, or httpCall/publish without outbound connectors enabled. The alarm sink is always wired, so raiseAlarm/clearAlarm should never appear here.", []string{"action"}),
-		connectorShed: ms.NewCounterVec("react_connector_egress_shed_total", "Connector dispatch ATTEMPTS (httpCall/publish) shed at the source for being over the tenant's outbound egress quota (ADR-060 SD-3). Per-attempt: a sibling-failure redelivery may shed then later admit the same action, so this is not a count of permanently-dropped actions.", []string{"action"}),
-		orphan:        ms.NewCounter("react_events_orphaned_total", "Derived events whose rule was gone from the projection (nothing dispatched).", nil),
-		poisonDropped: ms.NewCounter("react_events_poison_dropped_total", "Derived events dropped after the redelivery cap (a persistently-failing dispatch).", nil),
+		dispatched:          ms.NewCounterVec("react_actions_dispatched_total", "REACT actions handed to their sink, by action type (includes idempotent replays).", []string{"action"}),
+		notEnabled:          ms.NewCounterVec("react_actions_not_enabled_total", "REACT actions recognized but dropped because this deployment has no sink for them, by action type: sendCommand without command-delivery configured, or httpCall/publish without outbound connectors enabled. The alarm sink is always wired, so raiseAlarm/clearAlarm should never appear here.", []string{"action"}),
+		connectorShed:       ms.NewCounterVec("react_connector_egress_shed_total", "Connector dispatch ATTEMPTS (httpCall/publish) shed at the source for being over the tenant's outbound egress quota (ADR-060 SD-3). Per-attempt: a sibling-failure redelivery may shed then later admit the same action, so this is not a count of permanently-dropped actions.", []string{"action"}),
+		permanentlyRejected: ms.NewCounterVec("react_actions_permanently_rejected_total", "REACT actions DROPPED because the downstream service returned a typed rejection a retry cannot change, by action type: a sendCommand for a device that no longer exists, or a command outside the device's published vocabulary. These were previously retried to the redelivery cap and counted as poison, so a non-zero rate here is an authoring defect (a rule aimed at commands its devices cannot accept), not an infrastructure one.", []string{"action"}),
+		orphan:              ms.NewCounter("react_events_orphaned_total", "Derived events whose rule was gone from the projection (nothing dispatched).", nil),
+		poisonDropped:       ms.NewCounter("react_events_poison_dropped_total", "Derived events dropped after the redelivery cap (a persistently-failing dispatch).", nil),
 	}
 }
 
@@ -214,6 +216,15 @@ func (m *reactMetrics) RecordNotEnabled(action string) {
 		return
 	}
 	m.notEnabled.WithLabelValues(action).Inc()
+}
+
+// RecordPermanentlyRejected records one action dropped on a typed downstream rejection that a
+// retry cannot change (react.Metrics).
+func (m *reactMetrics) RecordPermanentlyRejected(action string) {
+	if m == nil {
+		return
+	}
+	m.permanentlyRejected.WithLabelValues(action).Inc()
 }
 
 // RecordConnectorShed records one connector action dropped at the source for being over the tenant's

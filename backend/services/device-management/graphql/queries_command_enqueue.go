@@ -22,6 +22,21 @@ func (r *CommandEnqueueVerdictResolver) Allowed() bool {
 	return r.M.Allowed
 }
 
+// The machine-readable classification of a rejection; null when allowed.
+//
+// It is what a caller BRANCHES on. Reason is prose written for a person and its
+// wording is free to change; a caller that decides anything from the prose (whether
+// to relay the rejection, whether a retry could ever succeed) breaks silently the
+// day the sentence is reworded, and the break looks like a behaviour change with no
+// code change behind it.
+func (r *CommandEnqueueVerdictResolver) Code() *string {
+	if r.M.Code == "" {
+		return nil
+	}
+	code := string(r.M.Code)
+	return &code
+}
+
 // Why the command was rejected; null when allowed.
 func (r *CommandEnqueueVerdictResolver) Reason() *string {
 	if r.M.Reason == "" {

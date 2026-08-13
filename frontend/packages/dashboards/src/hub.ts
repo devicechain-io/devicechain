@@ -172,11 +172,31 @@ export interface CommandStreamSink {
   error?: (err: unknown) => void;
 }
 
-// The result of issuing a command: its freshly-minted dispatch token, so the widget can
-// highlight the command it just sent as it moves through the lifecycle.
-export interface CommandDispatch {
-  token: string;
-}
+// The result of issuing a command. It is a DISCRIMINATED UNION rather than a token,
+// because the enqueue has two possible answers and a widget must not show them the same
+// way:
+//
+//   - 'sent'     — the command was created; `token` is its freshly-minted dispatch
+//                  token, so the widget can highlight the command it just issued as it
+//                  moves through the lifecycle.
+//   - 'rejected' — the server REFUSED the request and said why: `code` is the stable
+//                  classification to branch on (DEVICE_NOT_FOUND,
+//                  COMMAND_NOT_IN_VOCABULARY, PAYLOAD_SCHEMA_VIOLATION,
+//                  PAYLOAD_NOT_JSON, METADATA_NOT_JSON, EXPIRES_AT_INVALID,
+//                  HELD_CEILING_EXCEEDED, … — an OPEN set), `reason` is client-safe
+//                  prose to show a person.
+//
+// A THROWN error is neither: it means the platform could not decide the enqueue at all
+// (the service unreachable, a database error), which says nothing about the command and
+// so deserves a generic failure message rather than a reason.
+//
+// The union is deliberately not "token, plus an optional rejection". A caller reading
+// `.token` off a refusal would compile, highlight nothing, and report no failure — the
+// send would look successful. The discriminant makes the refusal impossible to ignore
+// at the type level.
+export type CommandDispatch =
+  | { status: 'sent'; token: string }
+  | { status: 'rejected'; code: string; reason: string };
 
 // ── Location channel ─────────────────────────────────────────────────────
 //
@@ -240,10 +260,12 @@ export interface WidgetActions {
   clearAlarm(alarmToken: string): Promise<void>;
   // Issue a command to a device (requires command:write). The runtime mints the dispatch
   // token and returns it; it also reconciles the command widgets so the new command
-  // appears at once. OPTIONAL: added after this interface shipped, so a host predating it
-  // (or a strictly read-only one) may omit it — a command widget then renders its Send
-  // control disabled. `payload` is the request body sent to the device verbatim (the
-  // widget serializes its typed parameter form to JSON).
+  // appears at once. It RESOLVES on a refusal too — with a 'rejected' dispatch carrying
+  // the server's code + reason (see CommandDispatch) — and rejects only when the enqueue
+  // could not be decided at all. OPTIONAL: added after this interface shipped, so a host
+  // predating it (or a strictly read-only one) may omit it — a command widget then
+  // renders its Send control disabled. `payload` is the request body sent to the device
+  // verbatim (the widget serializes its typed parameter form to JSON).
   sendCommand?(deviceToken: string, name: string, payload?: string): Promise<CommandDispatch>;
   // Whether the current viewer holds an authority (e.g. 'alarm:write'). Drives whether
   // an action control renders at all.
@@ -715,13 +737,23 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
   // idempotency key + cancel handle), then nudges every open command widget to reconcile
   // so the new command shows at once. The mutation reaches command-delivery (requires
   // command:write, enforced server-side regardless of can()).
+  //
+  // A REFUSAL COMES BACK AS A VALUE, not an exception (see CommandDispatch): the server
+  // decided the request and named the reason, so the widget can show it. Nothing was
+  // created in that case, so the open command widgets are NOT reconciled — a re-poll
+  // would only re-render the same history and make a refused send look like it did
+  // something.
   async sendCommand(deviceToken: string, name: string, payload?: string): Promise<CommandDispatch> {
     const token = randomToken();
-    await gql(COMMAND_AREA, CREATE_COMMAND, {
+    const result = await gql(COMMAND_AREA, CREATE_COMMAND, {
       request: { token, deviceToken, name, payload: payload ?? null },
     });
+    const rejection = result.createCommand?.rejection;
+    if (rejection) {
+      return { status: 'rejected', code: rejection.code, reason: rejection.reason };
+    }
     this.reconcileCommands();
-    return { token };
+    return { status: 'sent', token };
   }
 
   // reconcileAlarms re-queries every open alarm subscription hub-wide (after a mutation).

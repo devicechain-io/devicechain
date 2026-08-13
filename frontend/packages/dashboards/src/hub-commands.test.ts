@@ -37,6 +37,18 @@ function page(rows: CommandRow[], total = rows.length) {
   return { commands: { results: rows, pagination: { totalRecords: total } } };
 }
 
+// The createCommand mutation's two arms, exactly as the service returns them: one field
+// populated, the other null. Written as helpers so a fixture can never accidentally
+// carry both (which the server never does) or the pre-split shape (which it no longer
+// does).
+function enqueued(status = 'QUEUED') {
+  return { createCommand: { command: { token: 'server-token', status }, rejection: null } };
+}
+
+function refused(code: string, reason: string) {
+  return { createCommand: { command: null, rejection: { code, reason } } };
+}
+
 function newResolver(devices: string[] = []): DeviceResolver {
   return { devicesForAnchor: vi.fn(async () => devices), deviceExists: vi.fn(async () => true) };
 }
@@ -169,22 +181,68 @@ describe('DashboardHub control channel', () => {
 
   describe('sendCommand', () => {
     it('mints a dispatch token, issues createCommand, and returns the token', async () => {
-      h.gql.mockResolvedValue({ createCommand: { token: 'ignored', status: 'QUEUED' } });
+      h.gql.mockResolvedValue(enqueued());
       const hub = new DashboardHub({ resolver: newResolver(), authorities: ['*'] });
 
       const result = await hub.sendCommand('therm-1', 'reboot', '{"delaySeconds":5}');
 
-      expect(typeof result.token).toBe('string');
-      expect(result.token.length).toBeGreaterThan(0);
+      expect(result.status).toBe('sent');
+      const token = result.status === 'sent' ? result.token : '';
+      expect(token.length).toBeGreaterThan(0);
       const req = (h.gql.mock.calls[0][2] as { request: Record<string, unknown> }).request;
       expect(req.deviceToken).toBe('therm-1');
       expect(req.name).toBe('reboot');
       expect(req.payload).toBe('{"delaySeconds":5}');
-      expect(req.token).toBe(result.token); // the returned token is the one issued
+      expect(req.token).toBe(token); // the returned token is the one issued
+    });
+
+    // 🔴 THE ARM THAT USED NOT TO EXIST. A refused enqueue arrives as a RESULT — the
+    // server decided the request and named the reason — so it must resolve, carrying the
+    // machine-readable code and the operator-readable reason, and must NOT be thrown:
+    // every rejection used to arrive as an error string, indistinguishable from the
+    // service being down.
+    it('resolves a refused enqueue as a rejection carrying its code and reason', async () => {
+      h.gql.mockResolvedValue(
+        refused('COMMAND_NOT_IN_VOCABULARY', 'command "reboot" is not published for device "therm-1"'),
+      );
+      const hub = new DashboardHub({ resolver: newResolver(), authorities: ['*'] });
+
+      const result = await hub.sendCommand('therm-1', 'reboot');
+
+      expect(result).toEqual({
+        status: 'rejected',
+        code: 'COMMAND_NOT_IN_VOCABULARY',
+        reason: 'command "reboot" is not published for device "therm-1"',
+      });
+    });
+
+    // Nothing was created, so nothing changed: re-polling would redraw the same history
+    // and make a refusal look like it did something.
+    it('does not reconcile open command widgets when the enqueue was refused', async () => {
+      h.gql.mockResolvedValue(page([]));
+      const hub = new DashboardHub({ resolver: newResolver(), authorities: ['*'] });
+      hub.subscribeCommands({ datasource: deviceSel('therm-1'), pageSize: 20 }, { next: () => {} });
+      await settle();
+      expect(h.gql).toHaveBeenCalledTimes(1); // initial poll
+
+      h.gql.mockResolvedValue(refused('HELD_CEILING_EXCEEDED', 'the tenant is holding its limit of commands'));
+      await hub.sendCommand('therm-1', 'reboot');
+      await settle();
+
+      // initial poll (1) + createCommand (2) — and NO reconcile re-poll.
+      expect(h.gql).toHaveBeenCalledTimes(2);
+    });
+
+    // An availability failure is still thrown: it says nothing about the command.
+    it('throws when the enqueue could not be decided at all', async () => {
+      h.gql.mockRejectedValue(new Error('command-delivery unreachable'));
+      const hub = new DashboardHub({ resolver: newResolver(), authorities: ['*'] });
+
+      await expect(hub.sendCommand('therm-1', 'reboot')).rejects.toThrow('command-delivery unreachable');
     });
 
     it('passes a null payload when none is given', async () => {
-      h.gql.mockResolvedValue({ createCommand: { token: 't', status: 'QUEUED' } });
+      h.gql.mockResolvedValue(enqueued());
       const hub = new DashboardHub({ resolver: newResolver(), authorities: ['*'] });
 
       await hub.sendCommand('therm-1', 'ping');
@@ -200,7 +258,7 @@ describe('DashboardHub control channel', () => {
       await settle();
       expect(h.gql).toHaveBeenCalledTimes(1); // initial poll
 
-      h.gql.mockResolvedValue({ createCommand: { token: 't', status: 'QUEUED' } });
+      h.gql.mockResolvedValue(enqueued());
       await hub.sendCommand('therm-1', 'reboot');
       await settle();
 
@@ -215,6 +273,7 @@ describe('DashboardHub control channel', () => {
       await settle();
       dispose();
 
+      h.gql.mockResolvedValue(enqueued());
       await hub.sendCommand('therm-1', 'reboot');
       await settle();
 

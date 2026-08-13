@@ -48,5 +48,10 @@ var (
 		// a fallback view. Moves the basemap off every browser's localStorage and onto
 		// the tenant that owns the provider credential.
 		NewTenantBasemapMigration(),
+		// The per-tenant HELD-command ceiling: how many commands a tenant may have parked
+		// because the platform is deliberately withholding dispatch from an absent device.
+		// An offline fleet's backlog sits there for days and nothing drains it, so it is
+		// bounded per tenant above the tier's default.
+		NewTenantHeldCommandCeilingMigration(),
 	}
 )

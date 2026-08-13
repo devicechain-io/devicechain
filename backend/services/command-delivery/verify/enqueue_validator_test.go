@@ -185,3 +185,90 @@ func TestValidateEnqueue_GraphQLErrorFailsClosed(t *testing.T) {
 		t.Logf("note: error text was %q", err.Error())
 	}
 }
+
+// codedValidator wires a validator against a stub device-management that answers with
+// a REJECTION carrying the given code, and records the query document it was sent.
+//
+// It is separate from newValidator rather than a parameter on it: the query document
+// is part of what this test asserts (the `code` field must be REQUESTED, not merely
+// decodable), and threading that through the shared helper would leave every other
+// test carrying a knob it does not use.
+func codedValidator(t *testing.T, code any) (*EnqueueValidator, *string) {
+	t.Helper()
+	mint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(auth.ServiceTokenResponse{Token: "svc-token", ExpiresAt: 1 << 40})
+	}))
+	t.Cleanup(mint.Close)
+
+	sentQuery := new(string)
+	dm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Query string `json:"query"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		*sentQuery = body.Query
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"validateCommandEnqueue": map[string]any{
+				"allowed": false,
+				"code":    code,
+				"reason":  `device "dev-1" does not exist`,
+			}},
+		})
+	}))
+	t.Cleanup(dm.Close)
+
+	host, portStr, _ := net.SplitHostPort(mint.Listener.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+	client := svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port)},
+		"shh", "command-delivery", []string{string(auth.DeviceRead)})
+	return NewEnqueueValidator(client, dm.URL), sentQuery
+}
+
+// TestValidateEnqueue_RelaysTheVerdictCode pins the machine-readable half of the
+// relay: the code the OWNER assigned must arrive intact.
+//
+// 🔴 It asserts the query ASKS for the code as well as that the answer decodes. Those
+// are two different failures with one symptom: a document that omits the field gets a
+// response with no code at all, and the decode then yields an empty string that looks
+// exactly like a peer which chose not to classify. Downstream, REACT reads that as
+// "unrecognized" and retries a permanently-invalid command to the poison cap — the
+// precise behaviour this whole seam exists to end, restored silently.
+func TestValidateEnqueue_RelaysTheVerdictCode(t *testing.T) {
+	v, sentQuery := codedValidator(t, "DEVICE_NOT_FOUND")
+	ctx := core.WithTenant(context.Background(), "tenant-a")
+
+	err := v.ValidateEnqueue(ctx, "dev-1", "reboot", nil)
+	var rejection *model.EnqueueRejected
+	if !errors.As(err, &rejection) {
+		t.Fatalf("expected a typed rejection, got %T (%v)", err, err)
+	}
+	if rejection.Code != "DEVICE_NOT_FOUND" {
+		t.Fatalf("the owner's code must be relayed verbatim, got %q", rejection.Code)
+	}
+	if !strings.Contains(*sentQuery, "code") {
+		t.Fatalf("the query must REQUEST the code; a document that omits it decodes an empty code "+
+			"that is indistinguishable from a peer declining to classify: %s", *sentQuery)
+	}
+}
+
+// TestValidateEnqueue_UncodedRejectionStaysARejection covers the peer that answers
+// without a classification. It is still a REJECTION — the verdict said no — and must
+// not be upgraded into an availability error (which would fail closed on a decided
+// answer) nor be given a guessed code (which would let a caller act on a claim nobody
+// made). It arrives uncoded and is marked unclassified upstream.
+func TestValidateEnqueue_UncodedRejectionStaysARejection(t *testing.T) {
+	v, _ := codedValidator(t, nil)
+	ctx := core.WithTenant(context.Background(), "tenant-a")
+
+	err := v.ValidateEnqueue(ctx, "dev-1", "reboot", nil)
+	var rejection *model.EnqueueRejected
+	if !errors.As(err, &rejection) {
+		t.Fatalf("an uncoded rejection is still a rejection, got %T (%v)", err, err)
+	}
+	if rejection.Code != "" {
+		t.Fatalf("an absent code must not be invented here, got %q", rejection.Code)
+	}
+	if rejection.Reason == "" {
+		t.Fatal("the reason must still be relayed")
+	}
+}

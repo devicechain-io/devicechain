@@ -45,12 +45,32 @@ type tierConfigKey struct {
 // display_order warning both reserve as "a separate field with its own meaning".
 const ShedPriorityConfigKey = "shedPriority"
 
+// HeldCommandCeilingConfigKey is the tier config key carrying the tier's default bound
+// on how many commands a tenant may have parked in the HELD state — the state
+// command-delivery puts a command in when the platform is DELIBERATELY withholding
+// dispatch because the device is known absent (ADR-023 governance, packaged per
+// ADR-065). An offline fleet's backlog accumulates there and can sit for days, so how
+// much of it a tenant's packaging entitles it to is exactly a tier question.
+//
+// Registered OUTSIDE the dimension loop below, like ShedPriorityConfigKey and for the
+// same reason: it is a standalone scalar, not a rate+burst governance dimension. A held
+// backlog has no burst and no per-second unit, and forcing it into a Dimension would
+// fabricate both.
+//
+// It differs from shedPriority in what KIND of scalar it is, which is why it does not
+// share that key's validator: this is a CEILING (how much), so any positive whole
+// number is meaningful and larger is simply more; shedPriority is a POINT on a fixed
+// 1–100 band scale, where 101 names no band at all.
+const HeldCommandCeilingConfigKey = "heldCommandCeiling"
+
 // tierConfigKeys is the registry, keyed by config-blob key name.
 var tierConfigKeys = buildTierConfigKeys()
 
 // buildTierConfigKeys registers, for every governance dimension, its rate key (a
 // positive number) and its burst key (a positive integer) — both the dimension's own
-// field names — plus the standalone ADR-063 shedPriority key.
+// field names — plus the standalone non-dimension keys (ADR-063 shedPriority and the
+// HELD-command ceiling), which are registered explicitly because they are scalars with
+// no rate/burst pair to derive.
 func buildTierConfigKeys() map[string]tierConfigKey {
 	keys := make(map[string]tierConfigKey)
 	for _, d := range governance.AllDimensions() {
@@ -58,6 +78,7 @@ func buildTierConfigKeys() map[string]tierConfigKey {
 		keys[d.BurstField] = tierConfigKey{validate: validatePositiveBurst}
 	}
 	keys[ShedPriorityConfigKey] = tierConfigKey{validate: validateShedPriority}
+	keys[HeldCommandCeilingConfigKey] = tierConfigKey{validate: validateHeldCommandCeiling}
 	return keys
 }
 
@@ -206,6 +227,40 @@ func validateShedPriority(v any) error {
 		return fmt.Errorf("must be between 1 and 100 (got %v); omit it to inherit the platform default", f)
 	}
 	return nil
+}
+
+// validateHeldCommandCeiling accepts a positive whole number: a bound on how many
+// commands a tenant may hold, so it is a COUNT and a fractional one is not a count.
+//
+// It is deliberately the validatePositiveBurst rule and not the validateShedPriority
+// one, and it delegates rather than restating so the two cannot drift. Shaping it on
+// the band validator would be the tempting mistake — both are "an integer on a tier" —
+// but a ceiling has no upper bound in its meaning, only in its representation, and
+// capping one at 100 would silently make every realistic fleet backlog unconfigurable.
+// The MaxInt32 bound validatePositiveBurst applies is the representational one: the
+// value round-trips through a GraphQL Int, so a larger number would be truncated at the
+// wire rather than rejected at the door.
+//
+// Zero is not "inherit" here — an omitted key is. A zero ceiling would mean the tenant
+// may hold NOTHING, refusing every command to an absent device across the whole tier,
+// so it is rejected at write like every other ceiling (ADR-065 decision 8) rather than
+// quietly reinterpreted.
+func validateHeldCommandCeiling(v any) error { return validatePositiveBurst(v) }
+
+// HeldCommandCeiling returns the tier's default bound on a tenant's HELD-command
+// backlog, or nil if the tier declares none (inherit the enforcing service's platform
+// default — which is a real ceiling, never unlimited). Nil for a nil tier, like
+// RateFor/BurstFor/ShedPriority, so a caller need not special-case an unloaded
+// association. Read defensively through the same validator the write path uses: an
+// out-of-band DB write parking a junk value here inherits rather than turning into a
+// ceiling of zero, which would refuse every command to an absent device.
+func (t *TenantTier) HeldCommandCeiling() *int {
+	f := t.positiveNumber(HeldCommandCeilingConfigKey, validateHeldCommandCeiling)
+	if f == nil {
+		return nil
+	}
+	i := int(*f)
+	return &i
 }
 
 // ShedPriority returns the tier's ADR-063 shed-priority default (1–100), or nil if
