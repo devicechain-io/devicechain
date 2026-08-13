@@ -100,10 +100,14 @@ type ResolvedAlertsPayload struct {
 // device-state projection applies the transition under a monotonic
 // (SessionId, OccurredTime) guard (ADR-067 decision 4).
 type ResolvedStateChangePayload struct {
-	State        string
-	Reason       string
-	SessionId    uint64
-	OccurredTime *string
+	State  string
+	Reason string
+	// ExpectedSessionId is the parsed compare-and-set precondition, zero when the
+	// producer made no claim. Both presence consumers hand it to presence.Decide, which
+	// admits a LOWER SessionId only when this matches the session they currently hold.
+	ExpectedSessionId uint64
+	SessionId         uint64
+	OccurredTime      *string
 }
 
 // Event with token references resolved and the originating device's tracked

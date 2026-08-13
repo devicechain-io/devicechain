@@ -192,6 +192,10 @@ message PResolvedStateChangePayload {
     string reason = 2;
     uint64 session_id = 3;
     optional string occurred_time = 4;
+    // Parsed compare-and-set precondition on the projection's stored session; zero when
+    // the producer made no claim. Appended as a NEW field number so an event already on
+    // the resolved-events stream, written before this field existed, still decodes.
+    uint64 expected_session_id = 5;
 }
 
 /**

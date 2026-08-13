@@ -123,9 +123,9 @@ func TestAConnectedDeviceTheProjectionMissedIsRepaired(t *testing.T) {
 	r := reconcilerFor(t, emitter, time.Now())
 	live := LiveDevice{Tenant: "acme", DeviceToken: "sensor-001", SessionId: 1786552664076882575}
 
-	c, d, w := r.reconcileTenant(t.Context(), "acme", inventoryOf(true, live), projection())
+	counts := r.reconcileTenant(t.Context(), "acme", inventoryOf(true, live), projection())
 
-	require.Equal(t, [3]int{1, 0, 0}, [3]int{c, d, w})
+	require.Equal(t, passCounts{Connects: 1}, counts)
 	got := emitter.await(t, "a repair connect", isDevice("acme", "sensor-001", true))
 	if got.Event.SessionId != live.SessionId {
 		t.Errorf("repair session = %d, want the connection's own %d", got.Event.SessionId, live.SessionId)
@@ -155,11 +155,16 @@ func TestARepairConnectIsNotRejectedAfterAFalseDeath(t *testing.T) {
 	prior := presence.Prior{SessionId: session, Time: falseDeathAt, HasTime: true, Connected: false}
 
 	live := LiveDevice{Tenant: "acme", DeviceToken: "sensor-001", SessionId: session}
-	c, _, _ := r.reconcileTenant(t.Context(), "acme", inventoryOf(true, live), projection())
-	require.Equal(t, 1, c)
+	counts := r.reconcileTenant(t.Context(), "acme", inventoryOf(true, live), projection())
+	require.Equal(t, 1, counts.Connects)
 	got := emitter.await(t, "a repair connect", isDevice("acme", "sensor-001", true))
 
-	d := presence.Decide(prior, got.Event.SessionId, got.Event.OccurredAt, got.Event.Connected)
+	d := presence.Decide(prior, presence.Incoming{
+		SessionId:         got.Event.SessionId,
+		ExpectedSessionId: got.Event.ExpectedSessionId,
+		OccurredAt:        got.Event.OccurredAt,
+		Connected:         got.Event.Connected,
+	})
 	require.True(t, d.Ordered,
 		"the repair at %v is not ordered against a row last written at %v, so it is silently discarded "+
 			"on this pass and on every pass after it", got.Event.OccurredAt, falseDeathAt)
@@ -168,7 +173,9 @@ func TestARepairConnectIsNotRejectedAfterAFalseDeath(t *testing.T) {
 	// 🔑 THE COUNTERWEIGHT that makes this test mean something: the START — the stamp
 	// this test exists to reject — really would be discarded. Without it, the assertion
 	// above passes against any implementation whose clock happens to run forward.
-	stale := presence.Decide(prior, session, start, true)
+	stale := presence.Decide(prior, presence.Incoming{
+		SessionId: session, ExpectedSessionId: got.Event.ExpectedSessionId, OccurredAt: start, Connected: true,
+	})
 	require.False(t, stale.Ordered,
 		"a repair stamped at the connection's start was ACCEPTED, so this test cannot tell the two "+
 			"implementations apart")
@@ -184,9 +191,9 @@ func TestAnAlreadyOnlineDeviceIsNotReEmitted(t *testing.T) {
 	live := LiveDevice{Tenant: "acme", DeviceToken: "sensor-001", SessionId: 42}
 	online := projection(believedOnline(live))
 
-	c, d, w := r.reconcileTenant(t.Context(), "acme", inventoryOf(true, live), online)
+	counts := r.reconcileTenant(t.Context(), "acme", inventoryOf(true, live), online)
 
-	require.Equal(t, [3]int{0, 0, 0}, [3]int{c, d, w})
+	require.Equal(t, passCounts{}, counts)
 	require.Empty(t, emitter.all(), "a steady-state pass emitted events")
 }
 
@@ -202,9 +209,9 @@ func TestASyntheticDeathReusesTheStoredSession(t *testing.T) {
 	stored := LiveDevice{Tenant: "acme", DeviceToken: "sensor-001", SessionId: 1786552664076882575}
 	online := projection(believedOnline(stored))
 
-	c, d, w := r.reconcileTenant(t.Context(), "acme", inventoryOf(true), online)
+	counts := r.reconcileTenant(t.Context(), "acme", inventoryOf(true), online)
 
-	require.Equal(t, [3]int{0, 1, 0}, [3]int{c, d, w})
+	require.Equal(t, passCounts{Disconnects: 1}, counts)
 	got := emitter.await(t, "a repair disconnect", isDevice("acme", "sensor-001", false))
 	if got.Event.SessionId != stored.SessionId {
 		t.Errorf("death session = %d, want the STORED %d — anything else is silently rejected",
@@ -230,10 +237,11 @@ func TestAnIncompleteInventoryWithholdsDeathsButStillRepairsConnects(t *testing.
 	missing := LiveDevice{Tenant: "acme", DeviceToken: "sensor-002", SessionId: 200}
 	online := projection(believedOnline(missing))
 
-	c, d, w := r.reconcileTenant(t.Context(), "acme", inventoryOf(false, seen), online)
+	counts := r.reconcileTenant(t.Context(), "acme", inventoryOf(false, seen), online)
 
-	if d != 0 || w != 1 {
-		t.Errorf("disconnects=%d withheld=%d, want 0 and 1 — an unproven inventory must not kill anyone", d, w)
+	if counts.Disconnects != 0 || counts.Withheld != 1 {
+		t.Errorf("disconnects=%d withheld=%d, want 0 and 1 — an unproven inventory must not kill anyone",
+			counts.Disconnects, counts.Withheld)
 	}
 	emitter.refute(t, "a death from an incomplete inventory", isDevice("acme", "sensor-002", false))
 
@@ -241,8 +249,8 @@ func TestAnIncompleteInventoryWithholdsDeathsButStillRepairsConnects(t *testing.
 	// and must still run. Without it, "incomplete ⇒ do nothing" would pass this test
 	// while leaving reconnecting devices unrepaired during exactly the partial-cluster
 	// conditions that lose the most advisories.
-	if c != 1 {
-		t.Errorf("connects=%d, want 1 — positive evidence does not need a complete inventory", c)
+	if counts.Connects != 1 {
+		t.Errorf("connects=%d, want 1 — positive evidence does not need a complete inventory", counts.Connects)
 	}
 	emitter.await(t, "a repair connect during an incomplete pass", isDevice("acme", "sensor-001", true))
 }
@@ -254,9 +262,9 @@ func TestTheDiffDoesNotCrossTenants(t *testing.T) {
 	r := reconcilerFor(t, emitter, time.Now())
 	other := LiveDevice{Tenant: "globex", DeviceToken: "sensor-009", SessionId: 7}
 
-	c, d, w := r.reconcileTenant(t.Context(), "acme", inventoryOf(true, other), projection())
+	counts := r.reconcileTenant(t.Context(), "acme", inventoryOf(true, other), projection())
 
-	require.Equal(t, [3]int{0, 0, 0}, [3]int{c, d, w},
+	require.Equal(t, passCounts{}, counts,
 		"reconciling acme acted on a globex device")
 	require.Empty(t, emitter.all())
 }
@@ -350,9 +358,13 @@ func TestRunWillNotKillDevicesAfterTheClusterShrinks(t *testing.T) {
 // while the device publishes, and a repair carrying the connection's own low id is
 // rejected the same way on every pass, forever, while the repair counter reports success.
 //
-// The repair therefore defers to the STORED session, which makes it
-// same-session-newer-time. That is the trick direction 2 already relies on, mirrored.
-func TestARepairDefersToTheStoredSessionWhenTheBrokerSessionHasRegressed(t *testing.T) {
+// 🔑 THE REPAIR NOW REPORTS THE CONNECTION'S OWN SESSION and proves its entitlement with
+// a compare-and-set on the session it observed. An earlier fix deferred to the STORED
+// session instead: that applied, but it filed the row under a DEAD session, so the live
+// connection's eventual death was rejected for the same ordering reason and the device
+// read online after it was gone. Re-filing onto the live session restores the ordinary
+// advisory path — the connection's own DISCONNECT is then same-session-newer-time.
+func TestARepairReFilesADeviceOntoARegressedBrokerSession(t *testing.T) {
 	emitter := newRecordingEmitter()
 	now := time.Date(2026, 8, 12, 18, 0, 0, 0, time.UTC)
 	r := reconcilerFor(t, emitter, now)
@@ -363,25 +375,82 @@ func TestARepairDefersToTheStoredSessionWhenTheBrokerSessionHasRegressed(t *test
 	prior := presence.Prior{SessionId: storedSession, Time: diedAt, HasTime: true, Connected: false}
 
 	live := LiveDevice{Tenant: "acme", DeviceToken: "sensor-001", SessionId: regressed}
-	c, d, w := r.reconcileTenant(t.Context(), "acme", inventoryOf(true, live),
+	counts := r.reconcileTenant(t.Context(), "acme", inventoryOf(true, live),
 		projection(believedOffline("acme", "sensor-001", storedSession)))
 
-	require.Equal(t, [3]int{1, 0, 0}, [3]int{c, d, w})
+	require.Equal(t, passCounts{Connects: 1, Regressed: 1}, counts)
 	got := emitter.await(t, "a repair connect", isDevice("acme", "sensor-001", true))
-	require.Equal(t, storedSession, got.Event.SessionId,
-		"the repair carried the broker's regressed session, which presence ordering refuses")
+	require.Equal(t, regressed, got.Event.SessionId,
+		"the repair must report the session the device is actually LIVE on, not the stored one")
+	require.Equal(t, storedSession, got.Event.ExpectedSessionId,
+		"without the compare-and-set the lower session is refused by presence ordering")
 
-	dec := presence.Decide(prior, got.Event.SessionId, got.Event.OccurredAt, got.Event.Connected)
+	dec := presence.Decide(prior, presence.Incoming{
+		SessionId:         got.Event.SessionId,
+		ExpectedSessionId: got.Event.ExpectedSessionId,
+		OccurredAt:        got.Event.OccurredAt,
+		Connected:         got.Event.Connected,
+	})
 	require.True(t, dec.Ordered, "the repair is not ordered against the stored row, so it is discarded")
 	require.True(t, dec.Flipped, "the repair was ordered but did not bring the device back online")
 
-	// 🔑 THE COUNTERWEIGHT. Without it this test passes against the old implementation on
-	// any fixture whose broker session happens to be the higher one — which is every
-	// other fixture in this file.
-	stale := presence.Decide(prior, regressed, got.Event.OccurredAt, true)
-	require.False(t, stale.Ordered,
-		"a repair carrying the broker's regressed session was ACCEPTED, so this test cannot tell the "+
-			"two implementations apart")
+	// 🔑 TWO COUNTERWEIGHTS, because this test has two ways to pass vacuously.
+	// (1) Drop the compare-and-set and the same repair must be REFUSED — otherwise the
+	// test cannot tell the fix from an implementation that simply emits the low id.
+	naked := presence.Decide(prior, presence.Incoming{
+		SessionId: regressed, OccurredAt: got.Event.OccurredAt, Connected: true,
+	})
+	require.False(t, naked.Ordered,
+		"the regressed session was accepted WITHOUT a compare-and-set, so this test proves nothing")
+	// (2) The re-file must actually restore the advisory path: the live connection's own
+	// death, which the pin left permanently unmatchable, is now ordered against the row the
+	// repair produced. This is the property the earlier fix did not have.
+	afterRepair := presence.Prior{SessionId: regressed, Time: got.Event.OccurredAt, HasTime: true, Connected: true}
+	death := presence.Decide(afterRepair, presence.Incoming{
+		SessionId: regressed, OccurredAt: got.Event.OccurredAt.Add(time.Minute), Connected: false,
+	})
+	require.True(t, death.Ordered && death.Flipped,
+		"after the re-file the connection's own DISCONNECT is still rejected, so the device would "+
+			"read online forever — the exact defect the pin had")
+}
+
+// 🔴 TRIGGER A: AN ACTIVE ROW FILED UNDER A SESSION THE DEVICE IS NO LONGER ON. The
+// earlier repair skipped every active row, which is why this state was unreachable for
+// it — and it is precisely the state that repair LEFT BEHIND, so on upgrade it describes
+// the entire pinned population. It is also where a crossing death and a
+// reconnect-after-a-rejected-death land.
+func TestAnActiveRowOnARegressedSessionIsReFiled(t *testing.T) {
+	emitter := newRecordingEmitter()
+	now := time.Date(2026, 8, 12, 18, 0, 0, 0, time.UTC)
+	r := reconcilerFor(t, emitter, now)
+
+	storedSession := uint64(1786552664076882575)
+	regressed := storedSession - uint64(90*time.Second)
+	live := LiveDevice{Tenant: "acme", DeviceToken: "sensor-001", SessionId: regressed}
+
+	// The row reads ONLINE, under the stale higher session.
+	pinned := projection(believedOnline(LiveDevice{
+		Tenant: "acme", DeviceToken: "sensor-001", SessionId: storedSession}))
+	counts := r.reconcileTenant(t.Context(), "acme", inventoryOf(true, live), pinned)
+
+	require.Equal(t, passCounts{Connects: 1, Regressed: 1}, counts)
+	got := emitter.await(t, "a re-file connect", isDevice("acme", "sensor-001", true))
+	require.Equal(t, regressed, got.Event.SessionId)
+	require.Equal(t, storedSession, got.Event.ExpectedSessionId)
+
+	// It re-files without claiming the device changed state: it was believed online and
+	// still is. NewSession is what refreshes LastConnectTime; Flipped would wrongly move
+	// LastDisconnectTime's counterpart and re-fire the DETECT edge.
+	prior := presence.Prior{SessionId: storedSession, Time: now.Add(-time.Minute), HasTime: true, Connected: true}
+	dec := presence.Decide(prior, presence.Incoming{
+		SessionId:         got.Event.SessionId,
+		ExpectedSessionId: got.Event.ExpectedSessionId,
+		OccurredAt:        got.Event.OccurredAt,
+		Connected:         got.Event.Connected,
+	})
+	require.True(t, dec.Ordered, "the re-file was refused, so the row stays on a dead session")
+	require.True(t, dec.NewSession, "the re-file must read as a new session or LastConnectTime never moves")
+	require.False(t, dec.Flipped, "the device was already believed online; this is not a state change")
 }
 
 // The deference is narrow on purpose. When the broker's session is genuinely newer, the
@@ -395,10 +464,11 @@ func TestARepairKeepsTheConnectionsSessionWhenItIsNewerThanTheStoredOne(t *testi
 	stored := uint64(1786552664076882575)
 	live := LiveDevice{Tenant: "acme", DeviceToken: "sensor-001", SessionId: stored + uint64(time.Minute)}
 
-	c, _, _ := r.reconcileTenant(t.Context(), "acme", inventoryOf(true, live),
+	counts := r.reconcileTenant(t.Context(), "acme", inventoryOf(true, live),
 		projection(believedOffline("acme", "sensor-001", stored)))
 
-	require.Equal(t, 1, c)
+	require.Equal(t, 1, counts.Connects)
+	require.Zero(t, counts.Regressed, "a NEWER broker session is not a regression")
 	got := emitter.await(t, "a repair connect", isDevice("acme", "sensor-001", true))
 	require.Equal(t, live.SessionId, got.Event.SessionId,
 		"a newer broker session was overridden by the stored one")
@@ -412,10 +482,10 @@ func TestAnAlreadyOfflineDeviceIsNotKilledAgain(t *testing.T) {
 	emitter := newRecordingEmitter()
 	r := reconcilerFor(t, emitter, time.Now())
 
-	c, d, w := r.reconcileTenant(t.Context(), "acme", inventoryOf(true),
+	counts := r.reconcileTenant(t.Context(), "acme", inventoryOf(true),
 		projection(believedOffline("acme", "sensor-001", 1786552664076882575)))
 
-	require.Equal(t, [3]int{0, 0, 0}, [3]int{c, d, w})
+	require.Equal(t, passCounts{}, counts)
 	emitter.refute(t, "a death for a device already believed offline", isDevice("acme", "sensor-001", false))
 }
 
@@ -460,9 +530,9 @@ func TestASyntheticDeathCarriesAPassNonce(t *testing.T) {
 	r := reconcilerFor(t, emitter, time.Now())
 
 	stored := LiveDevice{Tenant: "acme", DeviceToken: "sensor-001", SessionId: 1786552664076882575}
-	_, d, _ := r.reconcileTenant(t.Context(), "acme", inventoryOf(true), projection(believedOnline(stored)))
+	counts := r.reconcileTenant(t.Context(), "acme", inventoryOf(true), projection(believedOnline(stored)))
 
-	require.Equal(t, 1, d)
+	require.Equal(t, 1, counts.Disconnects)
 	got := emitter.await(t, "a synthetic death", isDevice("acme", "sensor-001", false))
 	require.Equal(t, stored.SessionId, got.Event.SessionId, "the death must reuse the stored session")
 	require.NotEmpty(t, got.Event.DedupNonce, "a death carried no dedup nonce, so a retry is swallowed")

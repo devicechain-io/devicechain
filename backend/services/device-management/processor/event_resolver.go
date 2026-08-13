@@ -499,27 +499,49 @@ func (rez *EventResolver) ResolveStateChangeEventPayload(ctx context.Context, de
 	default:
 		return nil, fmt.Errorf("invalid presence state %q in state-change event", payload.State)
 	}
-	var sessionId uint64
-	if payload.SessionId != "" {
-		parsed, err := strconv.ParseUint(payload.SessionId, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid session id %q in state-change event: %w", payload.SessionId, err)
-		}
-		// Both sinks (device-state, event-management) store SessionId in a signed bigint, so
-		// a value above MaxInt64 is unstorable. Reject it HERE as a deterministic failure —
-		// otherwise the pgx "greater than maximum int8" error is not classified deterministic
-		// and the message burns MaxDeliver redeliveries before dead-lettering (a poison loop).
-		if parsed > math.MaxInt64 {
-			return nil, fmt.Errorf("session id %q in state-change event exceeds the storable range (max %d)", payload.SessionId, int64(math.MaxInt64))
-		}
-		sessionId = parsed
+	sessionId, err := parseSessionId(payload.SessionId, "session id")
+	if err != nil {
+		return nil, err
+	}
+	// The SAME guarded parse, deliberately not a second hand-written one. A compare-and-set
+	// precondition is matched against a stored session id, so a rule that accepted a range
+	// the session field rejects could never match anything — and would fail as a silent
+	// no-repair rather than as an error.
+	expectedSessionId, err := parseSessionId(payload.ExpectedSessionId, "expected session id")
+	if err != nil {
+		return nil, err
 	}
 	return &model.ResolvedStateChangePayload{
-		State:        string(payload.State),
-		Reason:       payload.Reason,
-		SessionId:    sessionId,
-		OccurredTime: payload.OccurredTime,
+		State:             string(payload.State),
+		Reason:            payload.Reason,
+		ExpectedSessionId: expectedSessionId,
+		SessionId:         sessionId,
+		OccurredTime:      payload.OccurredTime,
 	}, nil
+}
+
+// parseSessionId parses a wire-format session id. Empty is absent (zero), which for
+// SessionId means "the producer sent none" and for ExpectedSessionId means "no
+// compare-and-set claim".
+//
+// 🔴 THE UPPER BOUND IS NOT COSMETIC. Both sinks (device-state, event-management) store a
+// session id in a signed bigint, so a value above MaxInt64 is unstorable. Rejecting it
+// HERE makes it a deterministic failure the caller dead-letters; left to the database, the
+// pgx "greater than maximum int8" error is not classified deterministic and the message
+// burns every MaxDeliver redelivery first — a poison loop.
+func parseSessionId(raw, field string) (uint64, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s %q in state-change event: %w", field, raw, err)
+	}
+	if parsed > math.MaxInt64 {
+		return 0, fmt.Errorf("%s %q in state-change event exceeds the storable range (max %d)",
+			field, raw, int64(math.MaxInt64))
+	}
+	return parsed, nil
 }
 
 // Convert an unresolved event payload into a resolved payload.

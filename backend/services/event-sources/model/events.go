@@ -166,10 +166,16 @@ const (
 // resolver parses it to a uint64. Reason is descriptive metadata only, never an
 // ordering or authorization input.
 type UnresolvedStateChangePayload struct {
-	State        PresenceState
-	Reason       string
-	SessionId    string
-	OccurredTime *string
+	State  PresenceState
+	Reason string
+	// ExpectedSessionId is a compare-and-set precondition on the projection's stored
+	// session, empty when the producer makes no claim (every transport advisory). It is
+	// the only way a transition carrying a session id LOWER than the stored one is
+	// applied — see presence.Incoming for why a lower id can be the current truth. It
+	// rides as a string for the same precision reason as SessionId.
+	ExpectedSessionId string
+	SessionId         string
+	OccurredTime      *string
 }
 
 // Initializer.

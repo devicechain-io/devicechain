@@ -99,12 +99,18 @@ ahora llega por MQTT simple conserva su fuente afirmada, y sigue exento del barr
 
 **El orden lo fija una identidad de sesión acuñada por la plataforma, nunca nada que envíe el
 dispositivo.** Cada par de conexión/desconexión se sella con un marcador de sesión que genera la
-plataforma, estrictamente creciente incluso ante un salto del reloj. El número de secuencia de
-nacimiento/muerte de Sparkplug se lee solo para emparejar una muerte con el nacimiento al que
-pertenece —nunca se compara por magnitud, porque desborda y vuelve a empezar— y el identificador de
-registro de LwM2M nunca se usa como identidad de sesión. La consecuencia para usted es que un mensaje
-retrasado o repetido de una sesión anterior no puede derribar una sesión viva, en ninguno de los dos
-transportes.
+plataforma. El número de secuencia de nacimiento/muerte de Sparkplug se lee solo para emparejar una
+muerte con el nacimiento al que pertenece —nunca se compara por magnitud, porque desborda y vuelve a
+empezar— y el identificador de registro de LwM2M nunca se usa como identidad de sesión. La
+consecuencia para usted es que un mensaje retrasado o repetido de una sesión anterior no puede
+derribar una sesión viva, en ninguno de los dos transportes.
+
+Los marcadores se acuñan con el reloj del nodo del broker que aceptó la conexión, así que en un
+clúster de varios nodos **no** está garantizado que el marcador de una sesión nueva quede por encima
+del anterior: un nodo cuyo reloj va por detrás de sus pares acuña uno menor. La plataforma concilia
+ese caso en lugar de darlo por imposible: un dispositivo que se encuentra activo en una sesión que
+queda por debajo de la almacenada se vuelve a archivar en la sesión en la que realmente está, de modo
+que su desconexión posterior se sigue reconociendo.
 
 **Un dispositivo no puede afirmar su propia presencia.** Un evento de conexión/desconexión enviado por
 la vía habitual de carga útil orientada al dispositivo se rechaza de plano, no simplemente se ignora.

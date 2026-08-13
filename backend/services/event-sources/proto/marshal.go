@@ -119,10 +119,11 @@ func MarshalPayloadForAlertsEvent(payload *model.UnresolvedAlertsPayload) ([]byt
 // Marshal payload for a state-change (presence) event.
 func MarshalPayloadForStateChangeEvent(payload *model.UnresolvedStateChangePayload) ([]byte, error) {
 	pbpayload := &PUnresolvedStateChangePayload{
-		State:        string(payload.State),
-		Reason:       payload.Reason,
-		SessionId:    payload.SessionId,
-		OccurredTime: payload.OccurredTime,
+		State:             string(payload.State),
+		Reason:            payload.Reason,
+		ExpectedSessionId: payload.ExpectedSessionId,
+		SessionId:         payload.SessionId,
+		OccurredTime:      payload.OccurredTime,
 	}
 	bytes, err := proto.Marshal(pbpayload)
 	if err != nil {
@@ -233,10 +234,11 @@ func UnmarshalPayloadForStateChangeEvent(encoded []byte) (*model.UnresolvedState
 		return nil, err
 	}
 	return &model.UnresolvedStateChangePayload{
-		State:        model.PresenceState(pbpayload.State),
-		Reason:       pbpayload.Reason,
-		SessionId:    pbpayload.SessionId,
-		OccurredTime: pbpayload.OccurredTime,
+		State:             model.PresenceState(pbpayload.State),
+		Reason:            pbpayload.Reason,
+		ExpectedSessionId: pbpayload.ExpectedSessionId,
+		SessionId:         pbpayload.SessionId,
+		OccurredTime:      pbpayload.OccurredTime,
 	}, nil
 }
 

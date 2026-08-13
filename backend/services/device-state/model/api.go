@@ -47,9 +47,16 @@ type DeviceStateApi interface {
 // producer's monotone per-session id (a host-observed connect epoch, not e.g. a raw
 // Sparkplug bdSeq). OccurredAt is the transition's event time.
 type PresenceTransition struct {
-	Connected  bool
-	SessionId  uint64
-	OccurredAt time.Time
+	Connected bool
+	SessionId uint64
+	// ExpectedSessionId is a compare-and-set precondition, zero for every ordinary
+	// transport advisory. It is the only way a transition whose SessionId is LOWER than
+	// the stored one is applied: a producer that read this projection can name the
+	// session it saw, and the transition applies only if the row still holds it. See
+	// presence.Incoming — a session id can legitimately go backwards, because it is
+	// minted from the clock of whichever broker node the device landed on.
+	ExpectedSessionId uint64
+	OccurredAt        time.Time
 }
 
 // DeviceIdentity carries the denormalized identity fields the projection stores from
@@ -157,7 +164,12 @@ func (api *Api) MergeDeviceState(ctx context.Context, deviceToken string, occurr
 					HasTime:   found.PresenceTime.Valid,
 					Connected: found.Active,
 				},
-				pt.SessionId, pt.OccurredAt, pt.Connected,
+				presence.Incoming{
+					SessionId:         pt.SessionId,
+					ExpectedSessionId: pt.ExpectedSessionId,
+					OccurredAt:        pt.OccurredAt,
+					Connected:         pt.Connected,
+				},
 			)
 			if d.Ordered {
 				found.SessionId = pt.SessionId
