@@ -129,24 +129,26 @@ func TestHeldCeilingRefusesANewEnqueueAndPersistsNothing(t *testing.T) {
 	}
 }
 
-// TestOnlyHeldRowsCountTowardTheCeiling is why HELD is a state of its own.
+// TestOnlyUndeliveredRowsCountTowardTheCeiling pins BOTH halves of the counted set,
+// because each half is a different mistake.
 //
-// The ceiling bounds the backlog withheld for ABSENT devices. QUEUED is transient
-// (every row leaves it at the next sweep tick), SENT is in flight, and the terminals
-// are history. Counting any of them would throttle a BUSY, HEALTHY tenant — one whose
-// commands are being delivered as fast as they are issued — for a backlog it does not
-// have, and the throttle would arrive precisely when the fleet is working.
-func TestOnlyHeldRowsCountTowardTheCeiling(t *testing.T) {
+// SENT and the terminals must NOT count: SENT is in flight (the platform has done its
+// part, and a device that never answers is bounded by the command's own TTL), and
+// terminal rows are history. Counting them would throttle a BUSY, HEALTHY tenant for a
+// backlog it does not have, precisely when its fleet is working.
+//
+// QUEUED and HELD must BOTH count, and that is the fix this slice carries. Counting
+// HELD alone bounded the wrong set: a row does not enter HELD at enqueue, so the count
+// did not grow as a tenant enqueued, and one sweep tick could promote an unbounded
+// backlog in a single step. Counting both makes the set invariant under promotion.
+func TestOnlyUndeliveredRowsCountTowardTheCeiling(t *testing.T) {
+	// --- SENT and the terminals do not count ---
 	api := newTestApi(t)
 	ctx := core.WithTenant(context.Background(), "A")
-
-	// Well over any ceiling used below, and not one of them is a hold.
 	for _, seed := range []struct {
 		token  string
 		status CommandStatus
 	}{
-		{"c-queued-1", CommandQueued},
-		{"c-queued-2", CommandQueued},
 		{"c-sent-1", CommandSent},
 		{"c-sent-2", CommandSent},
 		{"c-successful", CommandSuccessful},
@@ -157,12 +159,31 @@ func TestOnlyHeldRowsCountTowardTheCeiling(t *testing.T) {
 	} {
 		seedWithStatus(t, api, ctx, seed.token, seed.status)
 	}
-
 	api.DefaultHeldCommandCeiling = 2
 	if _, err := api.CreateCommand(ctx, &CommandCreateRequest{
 		Token: "healthy-tenant", DeviceToken: "d", Name: "reboot",
 	}); err != nil {
-		t.Fatalf("nine non-held rows must not count toward a held-command ceiling of 2: %v", err)
+		t.Fatalf("seven in-flight/terminal rows must not count toward a ceiling of 2: %v", err)
+	}
+
+	// --- QUEUED counts, exactly as HELD does ---
+	// 🔑 THE COUNTERWEIGHT THAT MAKES THIS SLICE'S FIX VISIBLE. Under the old rule these
+	// two enqueues were admitted no matter how many QUEUED rows were already waiting,
+	// and the whole pile could then convert to HELD on one tick.
+	for _, status := range []CommandStatus{CommandQueued, CommandHeld} {
+		t.Run(string(status)+" counts", func(t *testing.T) {
+			api := newTestApi(t)
+			ctx := core.WithTenant(context.Background(), "B")
+			seedWithStatus(t, api, ctx, "u-1", status)
+			seedWithStatus(t, api, ctx, "u-2", status)
+			api.DefaultHeldCommandCeiling = 2
+			if _, err := api.CreateCommand(ctx, &CommandCreateRequest{
+				Token: "over-the-line", DeviceToken: "d", Name: "reboot",
+			}); err == nil {
+				t.Fatalf("two %s rows did not reach a ceiling of 2, so the bound is on the wrong set",
+					status)
+			}
+		})
 	}
 }
 

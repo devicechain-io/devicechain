@@ -119,12 +119,25 @@ func TestCreateSentResponseLifecycle(t *testing.T) {
 		t.Fatalf("expected QUEUED, got %s", created.Status)
 	}
 
-	sent, err := api.MarkSent(ctx, created.ID)
+	claimed, err := api.MarkSent(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("MarkSent failed: %v", err)
 	}
+	if !claimed {
+		t.Fatal("MarkSent did not claim a QUEUED command")
+	}
+	sent := loadOrFail(t, api, ctx, created.ID)
 	if sent.Status != CommandSent.String() || !sent.SentTime.Valid {
 		t.Fatalf("expected SENT with SentTime set, got %s valid=%v", sent.Status, sent.SentTime.Valid)
+	}
+
+	// 🔑 The claim is EXCLUSIVE, which is what makes claim-before-publish safe: a second
+	// caller must be told it lost rather than told the row's status, because a status read
+	// back cannot distinguish "I claimed it" from "someone else just did".
+	if again, err := api.MarkSent(ctx, created.ID); err != nil {
+		t.Fatalf("second MarkSent errored: %v", err)
+	} else if again {
+		t.Fatal("MarkSent claimed the same command twice; two dispatchers would both actuate the device")
 	}
 
 	payload := `{"result":"ok"}`
@@ -260,11 +273,16 @@ func TestMarkSentNoOpOnTerminal(t *testing.T) {
 		t.Fatalf("CancelCommand failed: %v", err)
 	}
 
-	// MarkSent must NOT error and must NOT drag the terminal command to SENT.
-	got, err := api.MarkSent(ctx, created.ID)
+	// MarkSent must NOT error, must report that it did not claim, and must NOT drag the
+	// terminal command to SENT.
+	claimed, err := api.MarkSent(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("MarkSent on a terminal command should be a no-op, got error: %v", err)
 	}
+	if claimed {
+		t.Fatal("MarkSent claimed a CANCELLED command")
+	}
+	got := loadOrFail(t, api, ctx, created.ID)
 	if got.Status != CommandCancelled.String() {
 		t.Fatalf("MarkSent clobbered a terminal command: status=%s, want %s", got.Status, CommandCancelled)
 	}
@@ -297,10 +315,14 @@ func TestMarkSentDoesNotClobberResponse(t *testing.T) {
 	}
 
 	// The now-late MarkSent must be a no-op — not a revert to SENT.
-	got, err := api.MarkSent(ctx, created.ID)
+	claimed, err := api.MarkSent(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("MarkSent failed: %v", err)
 	}
+	if claimed {
+		t.Fatal("MarkSent claimed a command the device had already answered")
+	}
+	got := loadOrFail(t, api, ctx, created.ID)
 	if got.Status != CommandSuccessful.String() {
 		t.Fatalf("MarkSent clobbered a completed response: status=%s, want SUCCESSFUL", got.Status)
 	}
@@ -439,3 +461,17 @@ func assertStatus(t *testing.T, api *Api, ctx context.Context, token string, wan
 }
 
 func strPtr(s string) *string { return &s }
+
+// loadOrFail reads a command back by id, failing the test if it cannot.
+//
+// MarkSent used to return the row, which made it read like an accessor; it now returns
+// whether THIS caller won the claim, because a status read back cannot distinguish "I
+// claimed it" from "someone else just did". Tests that want the row read it explicitly.
+func loadOrFail(t *testing.T, api *Api, ctx context.Context, id uint) *Command {
+	t.Helper()
+	got, err := api.loadCommand(ctx, id)
+	if err != nil {
+		t.Fatalf("could not load command %d: %v", id, err)
+	}
+	return got
+}

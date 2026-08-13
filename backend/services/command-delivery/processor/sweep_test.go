@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -26,7 +27,14 @@ type fakeApi struct {
 	pendingReads    int
 	expireCalls     int
 	markedSent      []uint
+	released        []uint
 	markSentByToken []string
+
+	// claimFails makes MarkSent report that this caller LOST the claim, and
+	// releaseFails makes ReleaseClaim error. Both default to the happy path so
+	// existing tests are unaffected.
+	claimFails   bool
+	releaseFails bool
 }
 
 func (f *fakeApi) TrySweepLock(_ context.Context, fn func() error) (bool, error) {
@@ -61,11 +69,21 @@ func (f *fakeApi) MarkSentByToken(_ context.Context, token string) (bool, error)
 	return true, nil
 }
 
-func (f *fakeApi) MarkSent(_ context.Context, id uint) (*model.Command, error) {
+func (f *fakeApi) MarkSent(_ context.Context, id uint) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.markedSent = append(f.markedSent, id)
-	return nil, nil
+	return !f.claimFails, nil
+}
+
+func (f *fakeApi) ReleaseClaim(_ context.Context, id uint) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.released = append(f.released, id)
+	if f.releaseFails {
+		return false, errors.New("release failed")
+	}
+	return true, nil
 }
 
 func (f *fakeApi) CreateCommand(context.Context, *model.CommandCreateRequest) (*model.Command, error) {
@@ -90,6 +108,9 @@ type recordingWriter struct {
 	mu       sync.Mutex
 	messages []messaging.Message
 	devices  []string
+	// err, when set, makes WriteToDevice fail — the publish-failure path, which is
+	// where a claim leaks if it is not released.
+	err error
 }
 
 func (w *recordingWriter) WriteMessages(_ context.Context, msgs ...messaging.Message) error {
@@ -105,6 +126,9 @@ func (w *recordingWriter) WriteMessages(_ context.Context, msgs ...messaging.Mes
 func (w *recordingWriter) WriteToDevice(_ context.Context, deviceToken string, msgs ...messaging.Message) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.err != nil {
+		return w.err
+	}
 	w.devices = append(w.devices, deviceToken)
 	w.messages = append(w.messages, msgs...)
 	return nil
@@ -332,5 +356,52 @@ func TestConstructorWiresTheLifecycleGate(t *testing.T) {
 
 	if writer.count() != 0 {
 		t.Fatalf("the gate passed to the constructor must reach the sweep; published %d", writer.count())
+	}
+}
+
+// TestALostClaimDoesNotPublish is the point of claiming BEFORE publishing.
+//
+// 🔴 THE ORDER IS THE DEFECT THIS CLOSES. Publishing first left a window between the
+// publish and the mark in which another dispatcher — the LwM2M wake drain, or a release
+// path — could claim the same row and actuate the device a SECOND time. A command is a
+// physical movement of real hardware, so a duplicate is not a bookkeeping wrinkle.
+func TestALostClaimDoesNotPublish(t *testing.T) {
+	api := &fakeApi{lockAvailable: true, pending: []*model.Command{queued(1, "cmd-1")}}
+	api.claimFails = true
+	writer := &recordingWriter{}
+
+	procWith(api, writer).sweepLocked(context.Background())
+
+	if len(api.markedSent) != 1 {
+		t.Fatalf("the sweep must attempt the claim, got %d attempts", len(api.markedSent))
+	}
+	if writer.count() != 0 {
+		t.Fatalf("a command whose claim was LOST must not be published; another dispatcher already "+
+			"has it and the device would actuate twice (published %d)", writer.count())
+	}
+	if len(api.released) != 0 {
+		t.Fatalf("a lost claim must not be released — the release would steal the row back from "+
+			"the dispatcher that won it (released %v)", api.released)
+	}
+}
+
+// TestAFailedPublishReleasesTheClaim is the other half: the claim must not leak.
+//
+// A row claimed and then not published reads SENT with a sent_time, is invisible to every
+// dispatcher (SENT is neither claimable nor swept), and dies TIMEOUT — "delivered, and the
+// device never answered" — for a command that never went out. That is exactly the lie the
+// command-state vocabulary exists to stop telling.
+func TestAFailedPublishReleasesTheClaim(t *testing.T) {
+	api := &fakeApi{lockAvailable: true, pending: []*model.Command{queued(1, "cmd-1")}}
+	writer := &recordingWriter{err: errors.New("broker unavailable")}
+
+	procWith(api, writer).sweepLocked(context.Background())
+
+	if len(api.markedSent) != 1 {
+		t.Fatalf("the sweep must claim before publishing, got %d claims", len(api.markedSent))
+	}
+	if len(api.released) != 1 || api.released[0] != 1 {
+		t.Fatalf("a command whose publish failed must have its claim released back to QUEUED, "+
+			"else it reads SENT forever and expires as TIMEOUT; released=%v", api.released)
 	}
 }

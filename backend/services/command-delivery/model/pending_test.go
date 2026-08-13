@@ -72,13 +72,19 @@ func TestPendingCommands(t *testing.T) {
 	// belongs in it — the sweep is the recurring pass that re-reads presence, so a
 	// command withheld while its device was absent is reconsidered once the device
 	// returns; a hold the sweep could not see would only ever be drained by its TTL.
-	// A row that has already gone out (SENT) or finished must not come back.
+	// A row that has already gone out (SENT) or finished must not come back — and
+	// neither must a HELD one.
 	//
-	// This subtest used to assert "returns only QUEUED commands", which is now the
-	// opposite of the contract. It passed only because its fixture happened to seed
-	// no held row — so the first person to add one would have been told, by a
-	// failure message, that correct behaviour was a bug.
-	t.Run("returns the dispatchable set, not just the queued ones", func(t *testing.T) {
+	// 🔑 THIS ASSERTION HAS NOW FLIPPED TWICE, WHICH IS WORTH KNOWING BEFORE FLIPPING IT
+	// A THIRD TIME. It began as "returns only QUEUED commands"; the HELD slice changed it
+	// to "returns the dispatchable set", because a hold the sweep could not see would
+	// never be drained; the presence gate changes it back, because a hold is now released
+	// by the device's RETURN rather than by re-reading the whole backlog every 30 seconds.
+	//
+	// The invariant underneath all three is the one to reason from, not the row list: the
+	// sweep selects exactly what it can dispatch WITHOUT new information. QUEUED qualifies.
+	// HELD does not — by construction it is waiting for information the sweep does not have.
+	t.Run("returns the queued set only; held rows are released by the device returning", func(t *testing.T) {
 		api := newTestApi(t)
 		seedQueued(t, api, ctx, 3)
 
@@ -97,20 +103,17 @@ func TestPendingCommands(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(pending) != 4 {
-			t.Fatalf("expected the 3 queued commands plus the held one, got %d", len(pending))
+		if len(pending) != 3 {
+			t.Fatalf("expected only the 3 queued commands, got %d", len(pending))
 		}
-		var heldSeen bool
 		for _, cmd := range pending {
 			if cmd.Status == CommandSent.String() {
 				t.Fatalf("a %s command must not be redelivered", cmd.Status)
 			}
 			if cmd.Token == "held-for-absent-device" {
-				heldSeen = true
+				t.Fatal("the sweep returned a HELD command; the gate is undone and an absent fleet's " +
+					"entire backlog is re-read on every tick")
 			}
-		}
-		if !heldSeen {
-			t.Fatal("the held command must be returned; a hold the sweep cannot see is never drained by the device returning")
 		}
 	})
 }
