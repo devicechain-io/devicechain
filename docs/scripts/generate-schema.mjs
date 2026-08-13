@@ -26,6 +26,12 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 export const REPO = join(HERE, '..', '..');
 export const OUT = join(HERE, '..', 'static', 'schema');
 
+// Where these artifacts will be reachable. Netlify sets DEPLOY_PRIME_URL to the
+// branch or preview URL and leaves it equal to the site URL on production, so a
+// deploy preview describes ITSELF rather than handing the reader production links
+// that do not yet carry the change they are reviewing.
+export const SITE = process.env.DEPLOY_PRIME_URL || 'https://docs.devicechain.io';
+
 /** Thrown rather than exited, so the floors below can be exercised by a test. */
 export class GenerateError extends Error {
   constructor(headline, detail) {
@@ -116,6 +122,33 @@ export function resolve(entry) {
   };
 }
 
+/**
+ * The banner every published schema opens with.
+ *
+ * 🔴 Arriving at a single file is the common case, not the exception — a link, a
+ * search hit, a URL guessed from a sibling. Without this the reader has the type
+ * definitions and nothing else: not which endpoint serves them, not which token
+ * gets in, and no route to the other twelve schemas. The index knows all of that
+ * and is invisible from here.
+ */
+function banner(s) {
+  const plane = PLANES[s.plane];
+  return [
+    '# ---------------------------------------------------------------------------',
+    `# DeviceChain GraphQL schema: ${s.area} — ${s.plane} plane.`,
+    '#',
+    `#   Endpoint   https://<your-host>${s.endpoint}`,
+    `#   Authorize  ${plane.token}`,
+    `#   All areas  ${SITE}/schema/index.json`,
+    '#',
+    `# Generated from ${s.source}.`,
+    '# Introspection is disabled by default on a DeviceChain instance, so this file',
+    '# is how to read the API without deploying one.',
+    '# ---------------------------------------------------------------------------',
+    '',
+  ].join('\n');
+}
+
 /** Everything the run would publish, gated. Throws rather than writing anything. */
 export function buildArtifacts(repo = REPO, schemas = SCHEMAS) {
   reconcile(discover(repo), schemas);
@@ -125,7 +158,28 @@ export function buildArtifacts(repo = REPO, schemas = SCHEMAS) {
   for (const s of resolved) {
     if (s.publish === false) continue;
     const { text, touched } = sanitizeSdl(readFileSync(join(repo, s.source), 'utf8'));
-    artifacts.push({ name: s.published, text, touched });
+
+    // Slot the banner in under the licence header, which stays first. Falls back to
+    // the top of the file for a schema that carries no header — which is not
+    // hypothetical: the three .gql files had none, because addlicense has no handler
+    // for that extension and skipped them in silence for as long as they existed.
+    //
+    // The offset matters: `touched` holds the line numbers the gate uses to scope
+    // its checks, and inserting above them without shifting it aims every one at the
+    // wrong line.
+    const lines = text.split('\n');
+    const spdx = lines.findIndex((l) => l.startsWith('# SPDX-License-Identifier'));
+    const at = spdx === -1 ? 0 : spdx + 1;
+    const inserted = banner(s).split('\n').slice(0, -1);
+    if (spdx !== -1) inserted.unshift('');
+    lines.splice(at, 0, ...inserted);
+    const shift = inserted.length;
+
+    artifacts.push({
+      name: s.published,
+      text: lines.join('\n'),
+      touched: new Set([...touched].map((n) => (n > at ? n + shift : n))),
+    });
   }
 
   const index = {
@@ -138,6 +192,10 @@ export function buildArtifacts(repo = REPO, schemas = SCHEMAS) {
     endpointPattern:
       'https://<your-host>{endpoint} — the ingress routes /api/<area> to that area\'s '
       + 'service and strips the prefix, so the request arrives at the service\'s own mount.',
+    // Absolute, because this document gets fetched, piped and handed to something
+    // else. By then a host-relative "/schema/foo.graphql" resolves against whatever
+    // the consumer happens to be looking at, which is not where it came from.
+    baseUrl: SITE,
     planes: PLANES,
     areas: resolved.map((s) => {
       if (s.publish === false) return { area: s.area, api: false, note: s.note };
@@ -146,7 +204,7 @@ export function buildArtifacts(repo = REPO, schemas = SCHEMAS) {
         plane: s.plane,
         token: PLANES[s.plane].token,
         endpoint: s.endpoint,
-        schema: `/schema/${s.published}`,
+        schema: `${SITE}/schema/${s.published}`,
       };
       if (s.note) row.note = s.note;
       return row;

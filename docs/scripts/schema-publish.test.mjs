@@ -10,13 +10,13 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { sanitizeSdl, sanitizeText, hasCitation } from './sanitize.mjs';
 import { scan } from './gate.mjs';
 import {
-  REPO, GenerateError, discover, reconcile, resolve, buildArtifacts,
+  REPO, SITE, GenerateError, discover, reconcile, resolve, buildArtifacts,
 } from './generate-schema.mjs';
 import { SCHEMAS, REQUIRED_OUTPUTS } from './schemas.manifest.mjs';
 
@@ -315,33 +315,80 @@ test('the index gives every published schema a plane, a token and an endpoint', 
     assert.ok(index.planes[area.plane], `${area.area}: unknown plane ${area.plane}`);
     assert.ok(area.token, `${area.area}: no token named`);
     assert.match(area.endpoint, /^\/api\/[a-z-]+\/(graphql|admin\/graphql|settings\/graphql)$/);
-    assert.ok(artifacts.some((a) => `/schema/${a.name}` === area.schema), `${area.area}: ${area.schema} not published`);
+    assert.ok(artifacts.some((a) => `${SITE}/schema/${a.name}` === area.schema), `${area.area}: ${area.schema} not published`);
   }
   // Every published artifact is reachable from the index — no orphan files.
   const listed = new Set(index.areas.filter((a) => a.schema).map((a) => a.schema));
   for (const a of artifacts) {
     if (a.name === 'index.json') continue;
-    assert.ok(listed.has(`/schema/${a.name}`), `${a.name} is served but absent from the index`);
+    assert.ok(listed.has(`${SITE}/schema/${a.name}`), `${a.name} is served but absent from the index`);
   }
 });
 
 test('the two admin planes and the settings plane keep their mounts', () => {
   const index = JSON.parse(buildArtifacts().find((a) => a.name === 'index.json').text);
-  const at = (schema) => index.areas.find((a) => a.schema === schema);
+  const at = (name) => index.areas.find((a) => a.schema === `${SITE}/schema/${name}`);
 
-  assert.equal(at('/schema/user-management-admin.graphql').endpoint, '/api/user-management/admin/graphql');
-  assert.equal(at('/schema/user-management-settings.graphql').endpoint, '/api/user-management/settings/graphql');
-  assert.equal(at('/schema/ai-inference-admin.graphql').endpoint, '/api/ai-inference/admin/graphql');
-  assert.equal(at('/schema/user-management-admin.graphql').plane, 'identity');
-  assert.equal(at('/schema/device-management.graphql').plane, 'tenant');
-  assert.equal(at('/schema/ai-inference.graphql').plane, 'service');
+  assert.equal(at('user-management-admin.graphql').endpoint, '/api/user-management/admin/graphql');
+  assert.equal(at('user-management-settings.graphql').endpoint, '/api/user-management/settings/graphql');
+  assert.equal(at('ai-inference-admin.graphql').endpoint, '/api/ai-inference/admin/graphql');
+  assert.equal(at('user-management-admin.graphql').plane, 'identity');
+  assert.equal(at('device-management.graphql').plane, 'tenant');
+  assert.equal(at('ai-inference.graphql').plane, 'service');
+});
+
+test('every internal link in llms.txt resolves', () => {
+  // llms.txt is a static asset, so Docusaurus's onBrokenLinks never sees it: it can
+  // rot silently into a file whose whole job is telling a machine where to look.
+  // The first draft of it linked /reference/domain-model, which is /concepts/.
+  const text = readFileSync(join(REPO, 'docs', 'static', 'llms.txt'), 'utf8');
+  const links = [...text.matchAll(/\]\((\/[^)]*)\)/g)].map((m) => m[1]);
+  assert.ok(links.length >= 5, `only found ${links.length} internal links to check`);
+
+  const published = new Set(buildArtifacts().map((a) => `/schema/${a.name}`));
+  for (const link of links) {
+    if (link.startsWith('/schema/')) {
+      assert.ok(published.has(link), `llms.txt links ${link}, which is not published`);
+    } else if (link === '/sitemap.xml') {
+      // Emitted by the sitemap plugin at build time; nothing to check in the tree.
+    } else {
+      const page = join(REPO, 'docs', 'docs', `${link.replace(/^\//, '')}.md`);
+      assert.ok(existsSync(page), `llms.txt links ${link}, but ${page} does not exist`);
+    }
+  }
+});
+
+test('every published schema opens with a banner routing back to the index', () => {
+  // Arriving at one file is the common case. Without this the reader has the types
+  // and no way to learn the endpoint, the token, or that twelve siblings exist.
+  for (const a of buildArtifacts()) {
+    if (a.name === 'index.json') continue;
+    const head = a.text.split('\n').slice(0, 16).join('\n');
+    assert.match(head, /DeviceChain GraphQL schema: /, a.name);
+    assert.match(head, /^#\s+Endpoint\s+https:\/\/<your-host>\/api\//m, a.name);
+    assert.match(head, /^#\s+Authorize\s+\S/m, a.name);
+    assert.match(head, /^#\s+All areas\s+https?:\/\/\S+\/schema\/index\.json$/m, a.name);
+    // The licence header stays first.
+    assert.match(a.text, /^# Copyright The DeviceChain Authors\n# SPDX-License-Identifier/, a.name);
+  }
+});
+
+test('the index carries absolute URLs, because it gets fetched and passed on', () => {
+  const index = JSON.parse(buildArtifacts().find((a) => a.name === 'index.json').text);
+  assert.match(index.baseUrl, /^https?:\/\//);
+  for (const area of index.areas) {
+    if (area.api === false) continue;
+    assert.match(area.schema, /^https?:\/\/\S+\/schema\/\S+\.graphql$/, area.area);
+  }
 });
 
 test('the published SDL still parses as the schema it came from', () => {
-  // The sanitizer only edits comments, so every type, field and directive must
-  // survive byte-for-byte. Comparing the non-comment lines is a cheap way to say so
-  // without pulling a GraphQL parser into the docs build.
-  const strip = (t) => t.split('\n').filter((l) => !/^[ \t]*#/.test(l)).join('\n');
+  // The pipeline only writes comments — the sanitizer edits them, the banner adds
+  // some — so every type, field and directive must survive byte-for-byte. Comparing
+  // the lines that are neither comment nor blank says exactly that, without pulling
+  // a GraphQL parser into the docs build. Blank lines are excluded deliberately:
+  // they are not schema, and the banner adds one.
+  const strip = (t) => t.split('\n').filter((l) => l.trim() !== '' && !/^[ \t]*#/.test(l)).join('\n');
   for (const artifact of buildArtifacts()) {
     if (artifact.name === 'index.json') continue;
     const entry = SCHEMAS.find((s) => s.source.endsWith(`/${artifact.name.replace(/\.graphql$/, '')}`)

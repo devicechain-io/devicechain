@@ -333,6 +333,17 @@ The [`docs/`](docs/) directory is a Docusaurus site covering concepts
 [`docs/docs/intro.md`](docs/docs/intro.md) to start, or read it published at
 [docs.devicechain.io](https://docs.devicechain.io).
 
+**Reading the API without deploying anything.** Every external API is GraphQL, and
+introspection is off by default, so a running instance will not describe itself. The
+schemas are published as plain text instead, generated on every docs build from the
+files the services parse at startup:
+
+- [**Schema index**](https://docs.devicechain.io/schema/index.json) — every
+  functional area, which auth plane it sits on, the token that authorizes it, its
+  endpoint, and a link to its schema.
+- [`llms.txt`](https://docs.devicechain.io/llms.txt) — the same starting points,
+  laid out for an agent or an LLM-backed tool.
+
 ## Getting help
 
 - **A question, or something that confused you** —
