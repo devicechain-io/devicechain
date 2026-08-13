@@ -190,6 +190,8 @@ type CommandDeliveryApi interface {
 	MarkUndeliverable(ctx context.Context, id uint, reason string) (bool, error)
 	// ReleaseHold returns a withheld command to QUEUED for the sweep to reconsider.
 	ReleaseHold(ctx context.Context, id uint) (bool, error)
+	// ReleaseHeldForDevice returns one device's withheld commands to QUEUED — the wake.
+	ReleaseHeldForDevice(ctx context.Context, deviceToken string) (int64, error)
 	// HeldCommands walks the withheld set a bounded page at a time.
 	HeldCommands(ctx context.Context, afterId uint, limit int) ([]*Command, uint, error)
 	// TryReconcileLock serializes the hold-reconcile pass across replicas.
@@ -711,6 +713,34 @@ func (api *Api) ReleaseHold(ctx context.Context, id uint) (bool, error) {
 		return false, res.Error
 	}
 	return res.RowsAffected == 1, nil
+}
+
+// ReleaseHeldForDevice returns every command withheld for one device to QUEUED, reporting
+// how many it released. It is the wake: the transport that owns the device's connection
+// telling us the wait is over.
+//
+// 🔑 ONE STATEMENT, NOT A WALK. The reconciler pages because it scans a whole instance's
+// withheld set on a timer; this one already knows the device, so the set is small, bounded
+// by that device's share of its tenant's ceiling, and addressable by an indexed predicate.
+// A read-then-release loop here would add a round trip and a race for nothing.
+//
+// Predicated on HELD for the same reason every other gate write is predicated: a row that
+// has since been claimed, answered or cancelled must not be dragged back into the
+// dispatchable set. Rows the caller does not own are excluded by the tenant scope the
+// callbacks add, so a wake for one tenant's device cannot release another's.
+//
+// It releases to QUEUED rather than dispatching, which keeps ONE place deciding whether a
+// command goes out — the sweep, which re-reads presence and re-applies the ADR-077
+// lifecycle gate and the transport verdict. So the wake is an optimisation of WHEN the
+// question is asked, never of what the answer is.
+func (api *Api) ReleaseHeldForDevice(ctx context.Context, deviceToken string) (int64, error) {
+	res := api.RDB.DB(ctx).Model(&Command{}).
+		Where("device_token = ? AND status = ?", deviceToken, CommandHeld.String()).
+		Update("status", CommandQueued.String())
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	return res.RowsAffected, nil
 }
 
 // HeldCommands returns a bounded page of withheld commands with an id above afterId,

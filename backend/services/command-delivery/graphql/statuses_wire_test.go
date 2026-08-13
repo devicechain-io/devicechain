@@ -342,3 +342,117 @@ func decodeTokens(t *testing.T, data json.RawMessage) map[string]bool {
 	}
 	return got
 }
+
+// TestReleaseHeldCommandsRequiresTheWakeAuthority.
+//
+// 🔑 THE POINT OF A SEPARATE AUTHORITY IS PRECISION, AND ONLY A DENIAL TEST CAN SHOW IT.
+// Waking is not dangerous the way claiming is — the worst a spurious wake does is cost one
+// extra sweep evaluation, since the sweep re-reads presence and withholds the command
+// again. What the split buys is that event-sources gets the wake WITHOUT getting
+// command:claim's delivery-suppression primitive, and that event-processing's REACT sink,
+// which mints command:write, cannot wake anything.
+//
+// The tier cases matter more here than the authority case: command:wake is system-tier, so
+// no tenant token may reach it however it is granted — including one holding "*".
+func TestReleaseHeldCommandsRequiresTheWakeAuthority(t *testing.T) {
+	const mutation = `mutation($deviceToken: String!) { releaseHeldCommands(deviceToken: $deviceToken) }`
+
+	cases := []struct {
+		name         string
+		claims       *auth.Claims
+		mustBeDenied string
+	}{
+		{
+			name:         "a read-only caller",
+			claims:       &auth.Claims{Authorities: []string{string(auth.CommandRead)}, TokenType: auth.TokenTypeAccess},
+			mustBeDenied: "releaseHeldCommands must require an authority a reader does not hold",
+		},
+		{
+			name: "a service token holding command:write but not command:wake",
+			claims: &auth.Claims{
+				Authorities: []string{string(auth.CommandRead), string(auth.CommandWrite)},
+				TokenType:   auth.TokenTypeService,
+			},
+			mustBeDenied: "command:write must NOT confer the wake; REACT's send-command sink mints exactly " +
+				"command:write, and a mutation for one caller would answer to two",
+		},
+		{
+			name: "a service token holding command:claim but not command:wake",
+			claims: &auth.Claims{
+				Authorities: []string{string(auth.CommandClaim)},
+				TokenType:   auth.TokenTypeService,
+			},
+			mustBeDenied: "the two authorities are mirror images, not synonyms: claiming takes a command " +
+				"OUT of the dispatchable set and waking puts one back in, and neither implies the other",
+		},
+		{
+			name: "a tenant access token holding command:wake",
+			claims: &auth.Claims{
+				Authorities: []string{string(auth.CommandWake)},
+				TokenType:   auth.TokenTypeAccess,
+			},
+			mustBeDenied: "command:wake is system-tier, so a tenant access token must never satisfy it",
+		},
+		{
+			name: "a tenant access token holding the super-authority",
+			claims: &auth.Claims{
+				Authorities: []string{string(auth.AuthorityAll)},
+				TokenType:   auth.TokenTypeAccess,
+			},
+			mustBeDenied: `"*" means every authority at the BEARER'S tier; it must not reach a system-tier one`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, api := newWireTestCtx(t)
+			seedCommand(t, ctx, api, "authz-wake", model.CommandHeld)
+
+			denied := auth.WithClaims(ctx, tc.claims)
+			schema := gql.MustParseSchema(SchemaContent, &SchemaResolver{})
+			res := schema.Exec(denied, mutation, "", map[string]any{"deviceToken": "device-1"})
+			if len(res.Errors) == 0 {
+				t.Fatalf("%s (the wake was allowed)", tc.mustBeDenied)
+			}
+
+			// And the command must still be HELD. A refused wake that released anyway
+			// would put it in front of the dispatcher while telling the caller it did
+			// nothing.
+			matches, err := api.CommandsByToken(ctx, []string{"authz-wake"})
+			if err != nil {
+				t.Fatalf("lookup failed: %v", err)
+			}
+			if len(matches) != 1 || matches[0].Status != model.CommandHeld.String() {
+				t.Fatalf("a refused wake must leave the command HELD, got %v", matches)
+			}
+		})
+	}
+
+	// The counterweight, without which every assertion above is satisfied by a mutation
+	// that is simply broken for everyone.
+	t.Run("a service token holding command:wake is allowed", func(t *testing.T) {
+		ctx, api := newWireTestCtx(t)
+		seedCommand(t, ctx, api, "svc-wake", model.CommandHeld)
+
+		svc := auth.WithClaims(ctx, &auth.Claims{
+			Authorities: []string{string(auth.CommandWake)},
+			TokenType:   auth.TokenTypeService,
+		})
+		var out struct {
+			ReleaseHeldCommands int `json:"releaseHeldCommands"`
+		}
+		if err := json.Unmarshal(exec(t, svc, mutation, map[string]any{"deviceToken": "device-1"}), &out); err != nil {
+			t.Fatalf("decoding the service wake failed: %v", err)
+		}
+		if out.ReleaseHeldCommands != 1 {
+			t.Fatalf("released %d, want the 1 held command; event-sources is the only caller and "+
+				"the wake would be dead", out.ReleaseHeldCommands)
+		}
+		matches, err := api.CommandsByToken(ctx, []string{"svc-wake"})
+		if err != nil {
+			t.Fatalf("lookup failed: %v", err)
+		}
+		if matches[0].Status != model.CommandQueued.String() {
+			t.Fatalf("a wake must return the command to QUEUED, got %s", matches[0].Status)
+		}
+	})
+}

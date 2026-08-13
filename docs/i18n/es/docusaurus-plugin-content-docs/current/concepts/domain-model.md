@@ -118,7 +118,11 @@ entregó el comando.
 
 Por eso la plataforma comprueba antes de publicar. Cuando un transporte informa de que un
 dispositivo no está conectado, sus comandos pasan a `HELD` en lugar de publicarse, y vuelven
-a `QUEUED` cuando el dispositivo regresa.
+a `QUEUED` cuando el dispositivo regresa — normalmente uno o dos segundos después de que se
+reconecte, porque lo comunica directamente el transporte que posee la conexión. Una pasada
+periódica recoge lo que ese aviso no alcance, de modo que el pendiente de un dispositivo que
+regresa siempre acaba liberándose aunque la plataforma nunca llegue a enterarse de la
+reconexión.
 
 Conviene conocer tres límites:
 

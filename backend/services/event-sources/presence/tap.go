@@ -106,6 +106,25 @@ type Tap struct {
 	// Metrics.RegressedSessions. Bounded by definition to the devices this replica has
 	// seen, and deliberately never consulted for a decision — only for the counter.
 	lastSession *sessionWatermarks
+	// waker releases a returning device's withheld commands. MAY BE NIL, which simply
+	// means no wake — held commands then wait for command-delivery's reconcile pass.
+	//
+	// 🔴 IT HANGS HERE, ON THE BROKER TAP, RATHER THAN INSIDE EmitPresence, AND THAT IS
+	// NOT AN ARBITRARY PLACEMENT. EmitPresence is shared: lwm2m-ingest calls it too, and
+	// LwM2M already dispatches a returning device's backlog ITSELF over the CoAP session
+	// it opens on Register. A wake there would race that drain — both would put the same
+	// commands in front of a dispatcher, and a command is a physical actuation. The tap
+	// is the broker-asserted MQTT path specifically, which is exactly the transport that
+	// delivers by publishing and therefore has no drain of its own.
+	waker Waker
+}
+
+// WithWaker attaches the command wake to a tap. Separate from NewTap because the waker
+// needs command-delivery's coordinates, which are resolved later than the tap itself and
+// may legitimately be absent.
+func (t *Tap) WithWaker(w Waker) *Tap {
+	t.waker = w
+	return t
 }
 
 // NewTap binds a tap for one instance, emitting under source. gate may be nil only in
@@ -230,5 +249,21 @@ func (t *Tap) Apply(ctx context.Context, transition Transition) bool {
 		return false
 	}
 	t.metrics.emitted(transition.Event.Connected)
+
+	// 🔑 THE WAKE FIRES ONLY AFTER A SUCCESSFUL CONNECT EMIT, AND BOTH HALVES OF THAT
+	// MATTER. Only on a CONNECT because a disconnect has nothing to release. Only after
+	// the emit lands because the wake races it: command-delivery re-reads presence when
+	// it dispatches, so a wake that arrived before the projection had the connect would
+	// release the commands into a sweep that reads the device as still absent and simply
+	// withholds them again — a wasted round trip that also looks, on the counters, like
+	// the wake working.
+	//
+	// The ordering is not a guarantee, only the best this side can do: the emit is
+	// asynchronous downstream, so the projection may still be behind. What makes that
+	// acceptable is that the failure is benign and self-correcting — the commands stay
+	// held and the reconcile pass releases them once presence has caught up.
+	if transition.Event.Connected && t.waker != nil {
+		t.waker.Wake(transition.Tenant, transition.DeviceToken)
+	}
 	return true
 }
