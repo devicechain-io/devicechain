@@ -26,6 +26,20 @@ const tenantTokensQuery = `query { tenantTokens }`
 // activeOnly:false because the offline rows are the ones that need repairing and their
 // stored sessionId is what makes a repair applicable; `active` is what splits the two
 // directions of the diff back apart on this side.
+//
+// 🔴 THE RESULT SET IS UNBOUNDED, AND THE OFFLINE HALF IS THE ONE THAT GROWS FOREVER.
+// Nothing ever removes an ASSERTED row — the inactivity sweep skips them and a dead
+// device's row persists until the device is deleted — so this returns every device ever
+// asserted for the source, not the current fleet. The field is unpaged and the projection
+// carries no index on (presence_source, source), so a churny tenant pays a full scan and a
+// full JSON round trip every reconcile interval. The active-only read this replaced had
+// the same plan and the same absence of paging, so this is a widening rather than a new
+// shape — but it is a widening in the direction that accumulates.
+//
+// The bounded design, when it is worth building: direction 1 only needs stored sessions
+// for devices the BROKER is currently holding, so a token-scoped read over the inventory
+// (which the projection does index, by tenant and device token) replaces the offline half
+// entirely, leaving activeOnly:true for direction 2.
 const assertedStatesQuery = `query($source: String!) {
   assertedDeviceStates(source: $source, activeOnly: false) { deviceToken sessionId active }
 }`
@@ -105,9 +119,16 @@ func (r *GraphQLProjectionReader) AssertedStates(ctx context.Context, tenant, so
 			// Skip rather than default to 0. A zero session tells both directions of the
 			// diff a lie: a synthetic disconnect carrying it would be REJECTED by
 			// presence.Decide against any real stored session, and a connect repair would
-			// read the row as having no session to defer to. Dropping the row means the
-			// device is not repaired this pass; keeping it means it is "repaired" without
-			// anything changing, and counted.
+			// read the row as having no session to defer to — so it would be "repaired"
+			// without anything changing, and counted.
+			//
+			// 🔴 Dropping is not free either, and the halves differ. For a device the
+			// broker is NOT holding, the row simply goes unrepaired this pass. For one it
+			// IS holding, the connect direction now sees no stored row at all and emits
+			// with the broker's own id — which, if that id has regressed, is exactly the
+			// rejected-forever wedge this reader exists to avoid. Both are worse than
+			// dropping is bad, and neither is reachable unless the projection returns a
+			// sessionId we did not write.
 			log.Warn().Str("tenant", tenant).Str("device", d.DeviceToken).Str("sessionId", d.SessionId).
 				Msg("Skipping a device with an unreadable presence session during reconciliation.")
 			continue

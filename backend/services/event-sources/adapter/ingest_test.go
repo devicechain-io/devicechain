@@ -294,6 +294,21 @@ func TestDedupIDStableAndDistinct(t *testing.T) {
 	assert.Equal(t, pid(ev), pid(PresenceEvent{Connected: true, SessionId: 5, OccurredAt: time.Unix(9, 0)}), "same (device,session,state) dedups regardless of receipt time")
 	assert.NotEqual(t, pid(ev), pid(PresenceEvent{Connected: false, SessionId: 5}), "CONNECTED and DISCONNECTED stay distinct")
 	assert.NotEqual(t, pid(ev), pid(PresenceEvent{Connected: true, SessionId: 6}), "a new session stays distinct")
+
+	// 🔴 THE NONCE IS THE ESCAPE HATCH FOR EMISSIONS THAT ARE OBSERVATIONS RATHER THAN
+	// RE-DERIVATIONS. Reconciliation can legitimately need the SAME (session, state) twice
+	// inside the duplicate window — once the connect direction can re-activate a row under
+	// its stored session, the pair alternates — and without a distinguishing key the second
+	// one is swallowed at the stream while the publish reports success, because the PubAck
+	// is discarded. Two properties, and the second is what keeps every advisory's id stable.
+	assert.NotEqual(t, pid(ev), pid(PresenceEvent{Connected: true, SessionId: 5, DedupNonce: "pass-2"}),
+		"a nonce must make an otherwise identical emission distinct")
+	assert.NotEqual(t, pid(PresenceEvent{Connected: true, SessionId: 5, DedupNonce: "pass-1"}),
+		pid(PresenceEvent{Connected: true, SessionId: 5, DedupNonce: "pass-2"}),
+		"two passes must not collapse into one write")
+	assert.Equal(t, pid(ev), pid(PresenceEvent{Connected: true, SessionId: 5, DedupNonce: ""}),
+		"an empty nonce must leave the id byte-identical to what an advisory produced before the "+
+			"field existed; the golden ids in golden_test.go depend on it")
 }
 
 // --- Ingester ---------------------------------------------------------------

@@ -352,7 +352,7 @@ func TestRunWillNotKillDevicesAfterTheClusterShrinks(t *testing.T) {
 //
 // The repair therefore defers to the STORED session, which makes it
 // same-session-newer-time. That is the trick direction 2 already relies on, mirrored.
-func TestARepairDefersToTheStoredSessionWhenTheBrokersHasRegressed(t *testing.T) {
+func TestARepairDefersToTheStoredSessionWhenTheBrokerSessionHasRegressed(t *testing.T) {
 	emitter := newRecordingEmitter()
 	now := time.Date(2026, 8, 12, 18, 0, 0, 0, time.UTC)
 	r := reconcilerFor(t, emitter, now)
@@ -417,4 +417,53 @@ func TestAnAlreadyOfflineDeviceIsNotKilledAgain(t *testing.T) {
 
 	require.Equal(t, [3]int{0, 0, 0}, [3]int{c, d, w})
 	emitter.refute(t, "a death for a device already believed offline", isDevice("acme", "sensor-001", false))
+}
+
+// 🔴 TWO PASSES MUST NOT COLLAPSE INTO ONE WRITE. The presence dedup key is
+// (tenant, device, session, state) with no time in it, and once the connect direction can
+// re-activate a row under its STORED session, that pair alternates: repair-connect,
+// real-drop-rejected, direction-2 death, real-reconnect-rejected, repair-connect again —
+// the same key, minutes apart, inside a 30-minute duplicate window. The second one would be
+// discarded at the stream while the publish reported success (the ack is dropped) and the
+// repair counter recorded a repair that did not happen. Each pass therefore stamps a nonce.
+func TestTwoReconcilePassesDoNotCollapseIntoOneWrite(t *testing.T) {
+	emitter := newRecordingEmitter()
+	first := time.Date(2026, 8, 12, 18, 0, 0, 0, time.UTC)
+	r := reconcilerFor(t, emitter, first)
+
+	stored := uint64(1786552664076882575)
+	live := LiveDevice{Tenant: "acme", DeviceToken: "sensor-001", SessionId: stored - 1}
+	view := projection(believedOffline("acme", "sensor-001", stored))
+
+	r.reconcileTenant(t.Context(), "acme", inventoryOf(true, live), view)
+	a := emitter.await(t, "the first pass's repair", isDevice("acme", "sensor-001", true))
+
+	// A later pass over the same divergence: identical tenant, device, session and state.
+	r.now = func() time.Time { return first.Add(5 * time.Minute) }
+	emitter2 := newRecordingEmitter()
+	r.tap = NewTap(testInstance, "mqtt1", emitter2, func(string, string, time.Time, bool) bool { return true }, Metrics{})
+	r.reconcileTenant(t.Context(), "acme", inventoryOf(true, live), view)
+	b := emitter2.await(t, "the second pass's repair", isDevice("acme", "sensor-001", true))
+
+	require.Equal(t, a.Event.SessionId, b.Event.SessionId, "the fixture must pose the SAME session both passes")
+	require.Equal(t, a.Event.Connected, b.Event.Connected, "the fixture must pose the SAME state both passes")
+	require.NotEmpty(t, b.Event.DedupNonce, "a repair carried no dedup nonce, so a later pass is swallowed")
+	require.NotEqual(t, a.Event.DedupNonce, b.Event.DedupNonce,
+		"two passes stamped the same nonce, so the stream collapses them and the second repair is "+
+			"counted without being written")
+}
+
+// The death direction needs it for the same reason and by the same route: it is the other
+// half of the alternating pair.
+func TestASyntheticDeathCarriesAPassNonce(t *testing.T) {
+	emitter := newRecordingEmitter()
+	r := reconcilerFor(t, emitter, time.Now())
+
+	stored := LiveDevice{Tenant: "acme", DeviceToken: "sensor-001", SessionId: 1786552664076882575}
+	_, d, _ := r.reconcileTenant(t.Context(), "acme", inventoryOf(true), projection(believedOnline(stored)))
+
+	require.Equal(t, 1, d)
+	got := emitter.await(t, "a synthetic death", isDevice("acme", "sensor-001", false))
+	require.Equal(t, stored.SessionId, got.Event.SessionId, "the death must reuse the stored session")
+	require.NotEmpty(t, got.Event.DedupNonce, "a death carried no dedup nonce, so a retry is swallowed")
 }

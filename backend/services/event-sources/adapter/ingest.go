@@ -437,12 +437,21 @@ func dedupID(prefix string, parts ...string) string {
 // session's CONNECTED and DISCONNECTED are each emitted once, so a retry or a failover
 // re-derivation dedups, while a genuinely new session (new epoch) or the opposite
 // transition is distinct.
+//
+// A non-empty DedupNonce is appended, which makes an emission distinct from an otherwise
+// identical one — see PresenceEvent.DedupNonce for why reconciliation needs that and
+// advisories must not have it. It is appended only when set, so every id an advisory
+// produces is byte-identical to what it produced before the field existed.
 func presenceDedupID(prefix, tenant, deviceToken string, ev PresenceEvent) string {
 	state := "0"
 	if ev.Connected {
 		state = "1"
 	}
-	return dedupID(prefix, "sc", tenant, deviceToken, strconv.FormatUint(ev.SessionId, 10), state)
+	parts := []string{"sc", tenant, deviceToken, strconv.FormatUint(ev.SessionId, 10), state}
+	if ev.DedupNonce != "" {
+		parts = append(parts, ev.DedupNonce)
+	}
+	return dedupID(prefix, parts...)
 }
 
 // measurementDedupID keys a measurement batch on (tenant, device, occurred-time, and the

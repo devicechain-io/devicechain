@@ -215,6 +215,12 @@ func (r *Reconciler) reconcileTenant(ctx context.Context, tenant string, inv Inv
 	stored map[string]StoredDevice) (int, int, int) {
 	connects, disconnects, withheld := 0, 0, 0
 
+	// One stamp for the pass, used both as the transitions' OccurredAt and as their dedup
+	// nonce, so every emission below is attributable to this pass and no two passes
+	// collapse into one write. See PresenceEvent.DedupNonce.
+	at := r.now().UTC()
+	nonce := at.Format(time.RFC3339Nano)
+
 	// Direction 1 — the broker holds a connection the projection does not know is
 	// live. Positive evidence, so it is emitted whether or not the inventory is
 	// complete: a missing server's reply costs a delayed repair, never a false claim.
@@ -262,13 +268,28 @@ func (r *Reconciler) reconcileTenant(ctx context.Context, tenant string, inv Inv
 		// session it was already tracking. The real session's eventual DISCONNECT will
 		// be rejected for the same ordering reason — and repaired by direction 2, which
 		// reuses the stored id and therefore converges.
+		//
+		// 🔑 THE TRADE, STATED SO NOBODY REDISCOVERS IT AS A BUG. Once a device is pinned
+		// this way, its death is invisible to the advisory path and reaches the
+		// projection ONLY through direction 2, which is gated on a provably complete
+		// inventory. So a permanent false-OFFLINE (commands held forever) becomes a
+		// false-ONLINE that lasts as long as the inventory cannot be proved complete —
+		// counted by SkippedDisconnects and logged by the partial-pass warning. That is
+		// the direction this codebase fails in everywhere else, and it is observable,
+		// which the state it replaces was not.
 		session := live.SessionId
 		if seen && live.SessionId <= known.SessionId {
 			session = known.SessionId
-			log.Warn().Str("tenant", live.Tenant).Str("device", live.DeviceToken).
-				Uint64("brokerSession", live.SessionId).Uint64("storedSession", known.SessionId).
-				Msg("Repairing a device whose broker session id is not newer than the stored one; " +
-					"a broker node's clock is trailing its peers.")
+			// Only the STRICTLY lower case implicates a clock. Equality is the ordinary
+			// recovery from a synthetic death: same connection, same session, the row
+			// simply reads offline at a later instant than the connect. Saying "trailing
+			// clock" there sends an operator auditing broker clocks for a missed advisory.
+			if live.SessionId < known.SessionId {
+				log.Warn().Str("tenant", live.Tenant).Str("device", live.DeviceToken).
+					Uint64("brokerSession", live.SessionId).Uint64("storedSession", known.SessionId).
+					Msg("Repairing a device whose broker session id is OLDER than the stored one; " +
+						"a broker node's clock is trailing its peers.")
+			}
 		}
 		if r.tap.Apply(ctx, Transition{
 			Tenant:      live.Tenant,
@@ -277,7 +298,8 @@ func (r *Reconciler) reconcileTenant(ctx context.Context, tenant string, inv Inv
 				Connected:  true,
 				Reason:     "reconcile-connected",
 				SessionId:  session,
-				OccurredAt: r.now().UTC(),
+				OccurredAt: at,
+				DedupNonce: nonce,
 			},
 		}) {
 			connects++
@@ -316,7 +338,8 @@ func (r *Reconciler) reconcileTenant(ctx context.Context, tenant string, inv Inv
 				// Decide accepts and which is exactly what this event means: the
 				// session the projection is tracking has ended.
 				SessionId:  believed.SessionId,
-				OccurredAt: r.now().UTC(),
+				OccurredAt: at,
+				DedupNonce: nonce,
 			},
 		}) {
 			disconnects++

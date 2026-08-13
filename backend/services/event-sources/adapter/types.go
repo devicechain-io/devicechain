@@ -39,4 +39,24 @@ type PresenceEvent struct {
 	Reason     string
 	SessionId  uint64
 	OccurredAt time.Time
+	// DedupNonce, when set, joins the stream dedup key so this emission is distinct
+	// from an otherwise identical one. Empty for anything a transport announced — those
+	// SHOULD collapse, because a redelivery or a failover re-derivation of one advisory
+	// is one event.
+	//
+	// 🔴 IT EXISTS FOR RECONCILIATION, WHOSE EMISSIONS ARE OBSERVATIONS RATHER THAN
+	// RE-DERIVATIONS. The presence dedup key is (tenant, device, session, state) with no
+	// time in it, which is right for advisories: a given session's connect and its
+	// disconnect each happen once. A repair pass is different — it says "as of this pass,
+	// the broker and the projection disagree", and after an intervening transition the
+	// same (session, state) can be a genuinely NEW edge. Without a nonce the second one
+	// is suppressed at the stream, the publish reports success because the PubAck is
+	// discarded, and the repair counter records a repair that did not happen — for as
+	// long as the duplicate window lasts.
+	//
+	// The cost is that N replicas reconciling the same divergence in one pass now write N
+	// events instead of one. They are same-session same-state, so ordering marks every one
+	// after the first as not-a-state-change and the projection does not move; the price is
+	// rows, paid only for devices that are actually diverged.
+	DedupNonce string
 }
