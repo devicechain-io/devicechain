@@ -52,10 +52,14 @@ import (
 // false-FAIL (its device would not answer, so SUCCESSFUL is not reached), never a
 // false-PASS — the no-spurious and round-trip authorities are both durable.
 //
-// Commands enqueued by REACT carry no TTL (createCommand omits expiresAt ⇒ NULL), so
-// they never auto-EXPIRE/TIMEOUT: a command waits indefinitely for its response, and
-// a stuck SENT is therefore a genuine round-trip failure, never a 30s-sweep-vs-TTL
-// timing artifact.
+// A stuck SENT is a genuine round-trip failure, never a 30s-sweep-vs-TTL timing
+// artifact — but NOT because commands are TTL-less. createCommand omits expiresAt and
+// command-delivery then stamps its platform default (a week), so every command here does
+// carry one. The reason the harness can ignore it is arithmetic: a run measured in
+// minutes cannot reach a deadline measured in days, so no command in it can EXPIRE or
+// TIMEOUT on the clock. 🔴 That holds only while the default stays orders of magnitude
+// above a run — if defaultCommandTtlSeconds is ever tuned down toward a run's length,
+// this oracle starts reading a TTL sweep as a delivery failure.
 
 // Harness topology — a DEDICATED command profile, distinct from the detection
 // harness's, carrying the temp metric, a published command definition (so the
@@ -483,8 +487,9 @@ func (o *commandOracle) snapshotAll(ctx context.Context, tokens []string) (map[s
 // at least K commands in the terminal SUCCESSFUL state, or the timeout backstops.
 // Callers stop ALL emission before calling, so no new commands are created after
 // quiesce and the count is fixed at K per probe; a command's status only advances
-// monotonically toward the terminal SUCCESSFUL (commands carry no TTL, so a delivered
-// + answered command stays SUCCESSFUL), so unlike the alarm oracle this needs no
+// monotonically toward the terminal SUCCESSFUL (a delivered + answered command stays
+// SUCCESSFUL — its TTL is days away, see the note at the top of this file), so unlike
+// the alarm oracle this needs no
 // stability-across-polls — reaching K successful IS the settled state.
 //
 // It tolerates a transient snapshot error (a GraphQL blip at peak contention) by

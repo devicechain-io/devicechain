@@ -238,9 +238,12 @@ func terminalStatusStrings() []string {
 // write — the sweep publishes BEFORE marking SENT, so a device answering in
 // milliseconds can drive the row to SUCCESSFUL (MarkResponse) while this write is
 // delayed under load; a Save of the stale QUEUED snapshot would then clobber it back
-// to SENT, wiping RespondedTime/ResponsePayload. That is permanent: PendingCommands
-// redelivers only QUEUED rows, the response was already consumed, and a REACT command
-// carries no TTL so it never times out. RowsAffected==0 means the row already left
+// to SENT, wiping RespondedTime/ResponsePayload. Nothing recovers it: PendingCommands
+// redelivers only QUEUED rows and the response was already consumed, so the row sits in
+// SENT until its TTL drags it to TIMEOUT — a week, by default, reporting a failure that
+// already succeeded. (It used to be genuinely permanent; the platform default TTL now
+// stamps every command that does not carry its own, which bounds the lie without making
+// it less of one.) RowsAffected==0 means the row already left
 // QUEUED (a fast response, a concurrent sweep) — a benign race, not an error; the
 // current row is returned. (A deleted row surfaces as loadCommand's not-found.)
 func (api *Api) MarkSent(ctx context.Context, id uint) (*Command, error) {
