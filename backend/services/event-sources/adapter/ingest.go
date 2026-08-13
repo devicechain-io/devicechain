@@ -230,8 +230,13 @@ func (r *Registrar) create(ctx context.Context, tenant, token, externalId, devic
 // tenant owns FOR THIS SOURCE (ADR-067). The response is tenant-scoped by the caller's
 // token and source-scoped by the argument, so a source only ever sees — and so can only
 // reconcile — its own asserted-online devices, never a sibling source's.
+//
+// activeOnly:true is this reconciler's question and not the only one the field answers:
+// it diffs the believed-online set against live probes, so an asserted device the
+// projection already thinks is offline is not its business. The MQTT tap asks the other
+// way; see device-state's schema.
 const assertedActiveQuery = `query($source: String!) {
-  assertedActiveDeviceStates(source: $source) { externalId sessionId }
+  assertedDeviceStates(source: $source, activeOnly: true) { externalId sessionId }
 }`
 
 // AssertedDevice is one asserted-active device the failover reconciliation must account
@@ -265,18 +270,18 @@ func NewReconciler(client GraphQLClient, deviceStateURL string) *Reconciler {
 // row with no external id is not one this adapter emitted).
 func (r *Reconciler) AssertedActive(ctx context.Context, tenant, source string) ([]AssertedDevice, uint64, error) {
 	var out struct {
-		AssertedActiveDeviceStates []struct {
+		AssertedDeviceStates []struct {
 			ExternalId *string `json:"externalId"`
 			SessionId  string  `json:"sessionId"`
-		} `json:"assertedActiveDeviceStates"`
+		} `json:"assertedDeviceStates"`
 	}
 	vars := map[string]any{"source": source}
 	if err := r.client.Query(ctx, r.url, tenant, assertedActiveQuery, vars, &out); err != nil {
 		return nil, 0, err
 	}
-	devices := make([]AssertedDevice, 0, len(out.AssertedActiveDeviceStates))
+	devices := make([]AssertedDevice, 0, len(out.AssertedDeviceStates))
 	var max uint64
-	for _, d := range out.AssertedActiveDeviceStates {
+	for _, d := range out.AssertedDeviceStates {
 		if d.ExternalId == nil || *d.ExternalId == "" {
 			continue
 		}
@@ -432,12 +437,21 @@ func dedupID(prefix string, parts ...string) string {
 // session's CONNECTED and DISCONNECTED are each emitted once, so a retry or a failover
 // re-derivation dedups, while a genuinely new session (new epoch) or the opposite
 // transition is distinct.
+//
+// A non-empty DedupNonce is appended, which makes an emission distinct from an otherwise
+// identical one — see PresenceEvent.DedupNonce for why reconciliation needs that and
+// advisories must not have it. It is appended only when set, so every id an advisory
+// produces is byte-identical to what it produced before the field existed.
 func presenceDedupID(prefix, tenant, deviceToken string, ev PresenceEvent) string {
 	state := "0"
 	if ev.Connected {
 		state = "1"
 	}
-	return dedupID(prefix, "sc", tenant, deviceToken, strconv.FormatUint(ev.SessionId, 10), state)
+	parts := []string{"sc", tenant, deviceToken, strconv.FormatUint(ev.SessionId, 10), state}
+	if ev.DedupNonce != "" {
+		parts = append(parts, ev.DedupNonce)
+	}
+	return dedupID(prefix, parts...)
 }
 
 // measurementDedupID keys a measurement batch on (tenant, device, occurred-time, and the

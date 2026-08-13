@@ -56,7 +56,7 @@ func TestReconciliationAlsoPassesTheGate(t *testing.T) {
 	r := NewReconciler(tap, nil, nil, nil, ReconcileMetrics{}, time.Second, time.Now)
 
 	live := LiveDevice{Tenant: "purged", DeviceToken: "sensor-001", SessionId: 1786552664076882575}
-	r.reconcileTenant(context.Background(), "purged", inventoryOf(true, live), map[string]LiveDevice{})
+	r.reconcileTenant(context.Background(), "purged", inventoryOf(true, live), projection())
 
 	require.Empty(t, emitter.all(), "reconciliation emitted into a tenant the gate refuses")
 }

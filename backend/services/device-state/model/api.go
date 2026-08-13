@@ -32,7 +32,7 @@ type DeviceStateApi interface {
 	MergeDeviceState(ctx context.Context, deviceToken string, occurredAt time.Time, pt *PresenceTransition, id DeviceIdentity) (*DeviceState, error)
 	DeviceStatesByDeviceToken(ctx context.Context, deviceTokens []string) ([]*DeviceState, error)
 	DeviceStatesByExternalId(ctx context.Context, externalIds []string) ([]*DeviceState, error)
-	AssertedActiveDeviceStates(ctx context.Context, source string) ([]*DeviceState, error)
+	AssertedDeviceStates(ctx context.Context, source string, activeOnly bool) ([]*DeviceState, error)
 	DeviceStates(ctx context.Context, criteria DeviceStateSearchCriteria) (*DeviceStateSearchResults, error)
 	SweepInactive(ctx context.Context, now time.Time) (int64, error)
 	MergeLatestMeasurements(ctx context.Context, deviceToken string, inputs []LatestMeasurementInput) error
@@ -375,17 +375,34 @@ func (api *Api) DeviceStatesByExternalId(ctx context.Context, externalIds []stri
 	return found, nil
 }
 
-// AssertedActiveDeviceStates returns every ASSERTED + active device state for the given
-// event source (ADR-067 SP4b failover reconciliation). It is tenant-scoped by the RDB
-// callback from the caller's context, and additionally source-scoped so a Sparkplug
-// adapter reconciling one broker never sees — and so can never cross-disconnect — a
-// sibling source's devices on the same tenant.
-func (api *Api) AssertedActiveDeviceStates(ctx context.Context, source string) ([]*DeviceState, error) {
+// AssertedDeviceStates returns every ASSERTED device state for the given event source
+// (ADR-067 SP4b failover reconciliation). It is tenant-scoped by the RDB callback from
+// the caller's context, and additionally source-scoped so an adapter reconciling one
+// broker never sees — and so can never cross-disconnect — a sibling source's devices on
+// the same tenant.
+//
+// 🔑 activeOnly SEPARATES TWO DIFFERENT QUESTIONS, and the answer to the second is what
+// makes a repair applicable at all.
+//
+//   - true  — "who does the projection believe is online?" This is what a reconciler
+//     diffs against a live inventory to find deaths it missed.
+//   - false — that, PLUS the asserted devices it believes are OFFLINE. A repair for one
+//     of those has to carry a session id that presence.Decide will accept, and Decide
+//     takes a different session only when it is HIGHER. A broker node with a trailing
+//     clock mints a LOWER session on reconnect, so a repair carrying the connection's
+//     own id is rejected — on that pass and on every pass after it. The caller can only
+//     avoid that by knowing the session the projection is already holding, which is
+//     exactly what the inactive rows carry.
+//
+// There is deliberately no default: a caller that has not thought about which question
+// it is asking is a caller about to emit repairs that cannot apply.
+func (api *Api) AssertedDeviceStates(ctx context.Context, source string, activeOnly bool) ([]*DeviceState, error) {
 	found := make([]*DeviceState, 0)
-	result := api.RDB.DB(ctx).
-		Where("active = ? AND presence_source = ? AND source = ?", true, PresenceSourceAsserted, source).
-		Find(&found)
-	if result.Error != nil {
+	db := api.RDB.DB(ctx).Where("presence_source = ? AND source = ?", PresenceSourceAsserted, source)
+	if activeOnly {
+		db = db.Where("active = ?", true)
+	}
+	if result := db.Find(&found); result.Error != nil {
 		return nil, result.Error
 	}
 	return found, nil

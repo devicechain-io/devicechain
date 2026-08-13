@@ -20,19 +20,35 @@ type TenantLister interface {
 	TenantTokens(ctx context.Context) ([]string, error)
 }
 
+// StoredDevice is what the projection currently holds for one asserted device of this
+// source. Active distinguishes the two halves of the diff, and SessionId is what makes a
+// repair for an INACTIVE row applicable at all — see reconcileTenant.
+type StoredDevice struct {
+	Tenant      string
+	DeviceToken string
+	SessionId   uint64
+	Active      bool
+}
+
 // ProjectionReader reads what the device-state projection currently believes about
 // this source's devices, keyed by DeviceKey.
 //
 // 🔑 KEYED BY DEVICE TOKEN, NOT EXTERNAL ID. The existing adapter.Reconciler is
-// external-id keyed and SKIPS every row without one (adapter/ingest.go:279-281), which
-// is right for Sparkplug and LwM2M — their devices are addressed by a transport-native
-// identity — and wrong for plain MQTT, where external id is optional and usually
-// absent. Reused here it would report almost every connected device as "not asserted
-// online", and the connect direction would re-emit a StateChange for the whole fleet on
-// every pass: a durable event row per device per pass, through the resolver, the
-// projection, DETECT and the historian.
+// external-id keyed and SKIPS every row without one (adapter/ingest.go), which is right
+// for Sparkplug and LwM2M — their devices are addressed by a transport-native identity —
+// and wrong for plain MQTT, where external id is optional and usually absent. Reused
+// here it would report almost every connected device as "not asserted online", and the
+// connect direction would re-emit a StateChange for the whole fleet on every pass: a
+// durable event row per device per pass, through the resolver, the projection, DETECT
+// and the historian.
+//
+// 🔴 IT READS THE INACTIVE ROWS TOO, and that is not for symmetry. The repair a device
+// needs is the one for a row that reads OFFLINE, and such a repair has to carry a
+// session id presence.Decide will accept. Without the stored id there is nothing to
+// compare the broker's against, and a regressed session produces a repair that is
+// rejected on this pass and on every pass after it.
 type ProjectionReader interface {
-	AssertedOnline(ctx context.Context, tenant, source string) (map[string]LiveDevice, error)
+	AssertedStates(ctx context.Context, tenant, source string) (map[string]StoredDevice, error)
 }
 
 // ReconcileMetrics are the repair pass's operator signals.
@@ -44,6 +60,13 @@ type ReconcileMetrics struct {
 	// Repaired counts synthetic transitions emitted, labelled by direction
 	// ("connect", "disconnect"). In a healthy instance this is near zero; a standing
 	// rate means advisories are being lost.
+	//
+	// 🔴 EMITTED, NOT APPLIED, AND NOTHING HERE CAN NARROW THAT. Whether the projection
+	// accepts a transition is decided asynchronously and downstream, so this counter
+	// cannot distinguish a repair that landed from one presence ordering threw away.
+	// That gap used to be reachable in a way that mattered — a repair rejected on every
+	// pass forever, counted as a success every time — which is why reconcileTenant now
+	// constructs repairs Decide will accept rather than leaving the counter to imply it.
 	Repaired *prometheus.CounterVec
 	// SkippedDisconnects counts devices that WOULD have been marked offline had the
 	// inventory been provably complete. It is the cost of the safety rule, and
@@ -138,7 +161,7 @@ func (r *Reconciler) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			break
 		}
-		online, err := r.reads.AssertedOnline(ctx, tenant, r.tap.source)
+		stored, err := r.reads.AssertedStates(ctx, tenant, r.tap.source)
 		if err != nil {
 			// One tenant's read failing must not abort the others: the remaining
 			// tenants' devices are equally stuck. It does cost this tenant a pass.
@@ -146,7 +169,7 @@ func (r *Reconciler) Run(ctx context.Context) error {
 				Msg("Could not read presence state while reconciling; this tenant is skipped for this pass.")
 			continue
 		}
-		c, d, w := r.reconcileTenant(ctx, tenant, inv, online)
+		c, d, w := r.reconcileTenant(ctx, tenant, inv, stored)
 		connects, disconnects, withheld = connects+c, disconnects+d, withheld+w
 	}
 
@@ -189,8 +212,14 @@ func (r *Reconciler) applyClusterHighWater(inv Inventory) Inventory {
 // reconcileTenant diffs one tenant both ways, returning (connects, disconnects,
 // withheld-disconnects).
 func (r *Reconciler) reconcileTenant(ctx context.Context, tenant string, inv Inventory,
-	online map[string]LiveDevice) (int, int, int) {
+	stored map[string]StoredDevice) (int, int, int) {
 	connects, disconnects, withheld := 0, 0, 0
+
+	// One stamp for the pass, used both as the transitions' OccurredAt and as their dedup
+	// nonce, so every emission below is attributable to this pass and no two passes
+	// collapse into one write. See PresenceEvent.DedupNonce.
+	at := r.now().UTC()
+	nonce := at.Format(time.RFC3339Nano)
 
 	// Direction 1 — the broker holds a connection the projection does not know is
 	// live. Positive evidence, so it is emitted whether or not the inventory is
@@ -199,7 +228,8 @@ func (r *Reconciler) reconcileTenant(ctx context.Context, tenant string, inv Inv
 		if live.Tenant != tenant {
 			continue
 		}
-		if _, known := online[key]; known {
+		known, seen := stored[key]
+		if seen && known.Active {
 			continue
 		}
 		// 🔴 STAMPED AT NOW, NOT AT THE CONNECTION'S START, AND THE OBVIOUS CHOICE IS
@@ -214,20 +244,62 @@ func (r *Reconciler) reconcileTenant(ctx context.Context, tenant string, inv Inv
 		// failure that looks exactly like success, and it wedges a live device offline,
 		// holding its commands.
 		//
-		// The session id is still the CONNECTION's, so this remains the same session the
-		// advisory would have named and the dedup id is unchanged. What is given up is
-		// accuracy of LastConnectTime on the repair path alone: it records when the
+		// The session id is normally the CONNECTION's, so this remains the same session
+		// the advisory would have named and the dedup id is unchanged. What is given up
+		// is accuracy of LastConnectTime on the repair path alone: it records when the
 		// platform re-established the truth rather than when the device connected. On a
 		// path that exists because the accurate signal was already lost, that is the
 		// right thing to trade.
+		//
+		// 🔴 EXCEPT WHEN THE CONNECTION'S OWN SESSION HAS GONE BACKWARDS, WHICH IS A
+		// PERMANENT WEDGE AND NOT A RARE ONE ON A CLUSTER. Session ids are minted from
+		// the wall clock of whichever broker node the device landed on. A reconnect onto
+		// a node with a trailing clock carries a LOWER id than the projection is holding,
+		// Decide takes a different session only when it is HIGHER, so the real CONNECT is
+		// rejected — and the old session's DISCONNECT, being same-session-newer-time, is
+		// not. The row reads offline while the device publishes. A repair carrying the
+		// connection's own low id is rejected the same way, on this pass and on every
+		// pass after it, forever, while the repair counter reports success.
+		//
+		// Reusing the STORED id makes the repair same-session-newer-time, which Decide
+		// accepts. This is exactly the trick direction 2 below already relies on, applied
+		// in the other direction, and it is the only claim here that is not the
+		// connection's own: the projection then records this connection under the
+		// session it was already tracking. The real session's eventual DISCONNECT will
+		// be rejected for the same ordering reason — and repaired by direction 2, which
+		// reuses the stored id and therefore converges.
+		//
+		// 🔑 THE TRADE, STATED SO NOBODY REDISCOVERS IT AS A BUG. Once a device is pinned
+		// this way, its death is invisible to the advisory path and reaches the
+		// projection ONLY through direction 2, which is gated on a provably complete
+		// inventory. So a permanent false-OFFLINE (commands held forever) becomes a
+		// false-ONLINE that lasts as long as the inventory cannot be proved complete —
+		// counted by SkippedDisconnects and logged by the partial-pass warning. That is
+		// the direction this codebase fails in everywhere else, and it is observable,
+		// which the state it replaces was not.
+		session := live.SessionId
+		if seen && live.SessionId <= known.SessionId {
+			session = known.SessionId
+			// Only the STRICTLY lower case implicates a clock. Equality is the ordinary
+			// recovery from a synthetic death: same connection, same session, the row
+			// simply reads offline at a later instant than the connect. Saying "trailing
+			// clock" there sends an operator auditing broker clocks for a missed advisory.
+			if live.SessionId < known.SessionId {
+				log.Warn().Str("tenant", live.Tenant).Str("device", live.DeviceToken).
+					Uint64("brokerSession", live.SessionId).Uint64("storedSession", known.SessionId).
+					Msg("Repairing a device whose broker session id is OLDER than the stored one; " +
+						"a broker node's clock is trailing its peers.")
+			}
+		}
 		if r.tap.Apply(ctx, Transition{
 			Tenant:      live.Tenant,
 			DeviceToken: live.DeviceToken,
 			Event: adapter.PresenceEvent{
 				Connected:  true,
 				Reason:     "reconcile-connected",
-				SessionId:  live.SessionId,
-				OccurredAt: r.now().UTC(),
+				SessionId:  session,
+				OccurredAt: at,
+				DedupNonce: nonce,
 			},
 		}) {
 			connects++
@@ -236,7 +308,10 @@ func (r *Reconciler) reconcileTenant(ctx context.Context, tenant string, inv Inv
 
 	// Direction 2 — the projection believes a device is online that the broker is not
 	// holding. This is the direction that can LIE, so it is gated on completeness.
-	for key, stored := range online {
+	for key, believed := range stored {
+		if !believed.Active {
+			continue
+		}
 		if _, live := inv.Devices[key]; live {
 			continue
 		}
@@ -249,7 +324,7 @@ func (r *Reconciler) reconcileTenant(ctx context.Context, tenant string, inv Inv
 		}
 		if r.tap.Apply(ctx, Transition{
 			Tenant:      tenant,
-			DeviceToken: stored.DeviceToken,
+			DeviceToken: believed.DeviceToken,
 			Event: adapter.PresenceEvent{
 				Connected: false,
 				Reason:    "reconcile-not-connected",
@@ -262,8 +337,9 @@ func (r *Reconciler) reconcileTenant(ctx context.Context, tenant string, inv Inv
 				// Reusing the stored id makes this same-session-newer-time, which
 				// Decide accepts and which is exactly what this event means: the
 				// session the projection is tracking has ended.
-				SessionId:  stored.SessionId,
-				OccurredAt: r.now().UTC(),
+				SessionId:  believed.SessionId,
+				OccurredAt: at,
+				DedupNonce: nonce,
 			},
 		}) {
 			disconnects++
