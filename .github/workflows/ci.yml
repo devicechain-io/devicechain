@@ -582,6 +582,24 @@ jobs:
       - name: Feature drafts still match the tree
         run: hack/check-docs-drafts-rot.sh
 
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 26
+
+      # The schema publisher's gates, including its own negative controls. The two
+      # guards above cannot see the published schemas at all: they scan committed
+      # sources, and these files are generated at build time into a gitignored
+      # directory, so they exist only on Netlify. This is what covers that.
+      - name: Schema publishing self-tests
+        run: node --test docs/scripts/schema-publish.test.mjs
+
+      # Netlify builds the docs site, not Actions — so a backend rename would break
+      # the docs deploy AFTER merge, in a Go pull request that triggers no docs
+      # build at all. Running the generator in check mode here puts the failure on
+      # the pull request that caused it.
+      - name: GraphQL schemas reconcile with the publish manifest
+        run: node docs/scripts/generate-schema.mjs --check
+
   # ---------------------------------------------------------------------------
   # Frontend: codegen drift check, typecheck, unit tests, build.
   # ---------------------------------------------------------------------------

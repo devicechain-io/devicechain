@@ -4,7 +4,12 @@
   "private": true,
   "description": "DeviceChain documentation site (Docusaurus)",
   "scripts": {
+    "schema": "node scripts/generate-schema.mjs",
+    "schema:check": "node scripts/generate-schema.mjs --check",
+    "test:schema": "node --test scripts/schema-publish.test.mjs",
+    "prestart": "npm run schema",
     "start": "docusaurus start",
+    "prebuild": "npm run schema",
     "build": "docusaurus build",
     "serve": "docusaurus serve",
     "clear": "docusaurus clear",

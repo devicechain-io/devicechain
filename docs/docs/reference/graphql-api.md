@@ -8,10 +8,30 @@ title: GraphQL API
 Every DeviceChain service that exposes an external API does so through **GraphQL**.
 
 :::note Status
-Schemas evolve while DeviceChain is pre-release. The schema files in the repository are the
+Schemas evolve while DeviceChain is pre-release. The published schema files are the
 authoritative reference — **introspection is disabled by default** (see [Exploring the
 schema](#exploring-the-schema)).
 :::
+
+## Download the schemas
+
+Every schema is published here, generated from the files the services parse at startup:
+
+| | |
+|---|---|
+| **Index** | [`/schema/index.json`](pathname:///schema/index.json) — every area, its auth plane, its endpoint and its schema file |
+| **Schemas** | `/schema/<area>.graphql`, plus `-admin` and `-settings` for the two areas that serve those planes |
+
+Start with the index. It names the auth plane each schema sits on, which the schema
+files themselves do not say — and an admin mutation offered to a tenant developer is a
+call they can never authorize.
+
+These are served as plain text with permissive CORS, so they can be fetched directly:
+
+```bash
+curl -s https://docs.devicechain.io/schema/index.json | jq '.areas[] | {area, endpoint}'
+curl -s https://docs.devicechain.io/schema/device-management.graphql
+```
 
 ## Endpoints
 
@@ -103,11 +123,13 @@ self-document will not work — the introspection query is rejected.
 
 That leaves two ways to read the schema.
 
-**The schema files in the repository.** Each area's schema is committed under
-`backend/services/<area>/graphql/`, and this is the reliable route because it needs no running
-instance and no token — which matters most when you are still evaluating DeviceChain. Note the
-filenames are not uniform: most areas use `schema.graphql`, but `user-management` uses
-`schema.gql`, `admin_schema.gql` and `settings_schema.gql`.
+**The published schema files**, listed under [Download the schemas](#download-the-schemas)
+above. This is the reliable route because it needs no running instance and no token — which
+matters most when you are still evaluating DeviceChain. They are generated from
+`backend/services/<area>/graphql/` on every docs build, so they cannot drift from the schemas
+the services parse. (The committed sources are there too, if you would rather read them in
+place; note the filenames are not uniform — most areas use `schema.graphql`, but
+`user-management` uses `schema.gql`, `admin_schema.gql` and `settings_schema.gql`.)
 
 **Introspection on a development instance.** Set `DC_GRAPHQL_DEV_TOOLS=true` on the service to
 enable it. Do this on a dev instance only; it is off by default deliberately. Any value that does

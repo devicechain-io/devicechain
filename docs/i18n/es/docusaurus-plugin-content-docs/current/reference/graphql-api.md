@@ -8,10 +8,31 @@ title: API de GraphQL
 Todo servicio de DeviceChain que expone una API externa lo hace a través de **GraphQL**.
 
 :::note Estado
-Los esquemas evolucionan mientras DeviceChain está en pre-release. Los archivos de esquema en el
-repositorio son la referencia autoritativa — **la introspección está deshabilitada por defecto**
+Los esquemas evolucionan mientras DeviceChain está en pre-release. Los archivos de esquema
+publicados son la referencia autoritativa — **la introspección está deshabilitada por defecto**
 (ver [Explorar el esquema](#explorar-el-esquema)).
 :::
+
+## Descargar los esquemas
+
+Todos los esquemas se publican aquí, generados a partir de los archivos que los servicios
+analizan al arrancar:
+
+| | |
+|---|---|
+| **Índice** | [`/schema/index.json`](pathname:///schema/index.json) — cada área, su plano de autenticación, su endpoint y su archivo de esquema |
+| **Esquemas** | `/schema/<area>.graphql`, más `-admin` y `-settings` para las dos áreas que sirven esos planos |
+
+Empieza por el índice. Nombra el plano de autenticación en el que reside cada esquema, algo que
+los propios archivos de esquema no dicen — y una mutación de administración ofrecida a quien
+desarrolla sobre un inquilino es una llamada que nunca podrá autorizar.
+
+Se sirven como texto plano con CORS permisivo, así que pueden obtenerse directamente:
+
+```bash
+curl -s https://docs.devicechain.io/schema/index.json | jq '.areas[] | {area, endpoint}'
+curl -s https://docs.devicechain.io/schema/device-management.graphql
+```
 
 ## Endpoints
 
@@ -104,11 +125,14 @@ endpoint esperando que se autodocumente no funcionará — la consulta de intros
 
 Eso deja dos formas de leer el esquema.
 
-**Los archivos de esquema en el repositorio.** El esquema de cada área está versionado bajo
-`backend/services/<area>/graphql/`, y esta es la vía confiable porque no necesita una instancia en
-ejecución ni un token — lo que más importa cuando todavía estás evaluando DeviceChain. Ten en
-cuenta que los nombres de archivo no son uniformes: la mayoría de las áreas usan `schema.graphql`,
-pero `user-management` usa `schema.gql`, `admin_schema.gql` y `settings_schema.gql`.
+**Los archivos de esquema publicados**, listados en [Descargar los
+esquemas](#descargar-los-esquemas) más arriba. Esta es la vía confiable porque no necesita una
+instancia en ejecución ni un token — lo que más importa cuando todavía estás evaluando
+DeviceChain. Se generan desde `backend/services/<area>/graphql/` en cada build de la
+documentación, así que no pueden divergir de los esquemas que los servicios analizan. (Las
+fuentes versionadas también están ahí, si prefieres leerlas en su sitio; ten en cuenta que los
+nombres de archivo no son uniformes: la mayoría de las áreas usan `schema.graphql`, pero
+`user-management` usa `schema.gql`, `admin_schema.gql` y `settings_schema.gql`.)
 
 **Introspección en una instancia de desarrollo.** Configura `DC_GRAPHQL_DEV_TOOLS=true` en el
 servicio para habilitarla. Hazlo solo en una instancia de desarrollo; está deshabilitada por
