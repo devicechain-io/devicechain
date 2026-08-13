@@ -164,6 +164,14 @@ type GovernanceOverrides struct {
 	// per-tenant override an admin declares once and it embeds in both tenant inputs.
 	// nil means "inherit" — the tier's shedPriority, then the platform fail-safe.
 	ShedPriority *int
+	// HeldCommandCeiling is the per-tenant ceiling on how many commands may sit in the
+	// HELD state — dispatch deliberately withheld because the device is known absent.
+	// A genuine ceiling like the rate fields above (how much), not a preference like
+	// ShedPriority (who degrades last) — but a standalone SCALAR, with no burst and no
+	// rate unit, which is why it is not a governance dimension. nil means "inherit" —
+	// the tier's heldCommandCeiling, then the enforcing service's own default. It never
+	// means unlimited, and nothing downstream can read it that way.
+	HeldCommandCeiling *int
 }
 
 // validate rejects a non-positive override on any governance dimension. A nil field
@@ -200,6 +208,13 @@ func (g GovernanceOverrides) validate() error {
 	if err := validateShedPriorityOverride("shedPriority", g.ShedPriority); err != nil {
 		return err
 	}
+	// A ceiling, so it goes through the same positive-or-inherit rule as a burst rather
+	// than the shed priority's band check beside it: any positive whole number is a
+	// meaningful backlog bound, and capping it at 100 would make every realistic fleet
+	// unconfigurable.
+	if err := validateBurstOverride("heldCommandCeiling", g.HeldCommandCeiling); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -215,6 +230,7 @@ func (g GovernanceOverrides) applyTo(t *iam.Tenant) {
 	t.AiInferenceRequestsPerMinute = g.AiInferenceRequestsPerMinute
 	t.AiInferenceBurst = g.AiInferenceBurst
 	t.ShedPriority = g.ShedPriority
+	t.HeldCommandCeiling = g.HeldCommandCeiling
 }
 
 // TenantInput is the data to create a tenant.

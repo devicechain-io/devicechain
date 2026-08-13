@@ -132,6 +132,41 @@ func wireEnqueueValidator() {
 	log.Info().Str("deviceManagement", url).Msg("Command enqueue will be validated against device-management (device existence + published command vocabulary + payload schema, ADR-043).")
 }
 
+// wireHeldCeilingResolver wires the PER-TENANT held-command ceiling: an operator's
+// override, resolving to the tenant's tier, resolving to this instance's configured
+// default. Consumed the way event-sources consumes governance.ShedPriorityResolver,
+// and it needs no adapter — that resolver's Resolve(tenant) int already satisfies
+// model.HeldCommandCeilingResolver, and it folds the configured default in itself.
+//
+// 🔑 A NIL RESOLVER IS SAFE, NOT DISABLED. The instance-wide ceiling
+// (Api.DefaultHeldCommandCeiling, floored positive in ApplyDefaults) still bounds
+// every tenant, so an unconfigured collaborator degrades to one bound for everyone
+// rather than to no bound at all — the direction a governance limit must fail.
+//
+// Guarded on the same two coordinates as wireEnqueueValidator, and for the same
+// reason: a config document predating this feature carries no usable
+// user-management block, and building http://:0/graphql would make every enqueue
+// pay a doomed round trip. Degrade loudly rather than trap.
+func wireHeldCeilingResolver() {
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.ServiceAuth.Secret == "" {
+		log.Warn().Int("ceiling", Configuration.HeldCommandCeiling).
+			Msg("Service secret not configured — per-tenant held-command ceilings are disabled; metering every tenant at the instance default.")
+		return
+	}
+	if infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+		log.Warn().Int("ceiling", Configuration.HeldCommandCeiling).
+			Msg("user-management endpoint not configured (infrastructure.userManagement) — per-tenant held-command ceilings are disabled; metering every tenant at the instance default.")
+		return
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery",
+		[]string{string(auth.TenantRead)})
+	url := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+	Api.HeldCeilingResolver = governance.NewHeldCommandCeilingResolver(client, url, Configuration.HeldCommandCeiling)
+	log.Info().Str("userManagement", url).Int("default", Configuration.HeldCommandCeiling).
+		Msg("Per-tenant held-command ceilings enabled (override, else tier, else the instance default).")
+}
+
 // Called after microservice has been initialized.
 func afterMicroserviceInitialized(ctx context.Context) error {
 	// Parse configuration.
@@ -157,6 +192,15 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// supplies no explicit expiresAt (ADR-075 L4b).
 	Api = model.NewApi(RdbManager)
 	Api.DefaultCommandTTL = time.Duration(Configuration.DefaultCommandTTLSeconds) * time.Second
+
+	// The held-command ceiling this instance falls back to. It is floored positive in
+	// ApplyDefaults, so this is always a real bound: a missing or zero configured value
+	// means the platform default and NEVER unlimited.
+	//
+	// It is the fallback, not the whole answer: wireHeldCeilingResolver below adds the
+	// per-tenant cascade on top of it.
+	Api.DefaultHeldCommandCeiling = Configuration.HeldCommandCeiling
+	wireHeldCeilingResolver()
 
 	// Wire the enqueue gate (ADR-043 decision 3): a synchronous check against
 	// device-management before a command is enqueued (ADR-044 amendment) covering

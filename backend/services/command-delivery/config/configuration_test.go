@@ -44,3 +44,35 @@ func TestDefaultCommandTTLValidation(t *testing.T) {
 	tooSmall := &CommandDeliveryConfiguration{DefaultCommandTTLSeconds: MinCommandTTLSeconds - 1}
 	assert.Error(t, tooSmall.Validate())
 }
+
+// The held-command ceiling gets the same fail-safe treatment as the TTL, and for the
+// same reason in the opposite direction: an absent or zero value is the PLATFORM
+// DEFAULT, never "unlimited". A governance bound whose missing value reads as no bound
+// stops governing exactly when whatever carries it is unset or unreachable.
+func TestHeldCommandCeilingFlooredWhenNonPositive(t *testing.T) {
+	empty := &CommandDeliveryConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(``), empty))
+	assert.Equal(t, DefaultHeldCommandCeiling, empty.HeldCommandCeiling)
+
+	for _, v := range []int{0, -1} {
+		cfg := &CommandDeliveryConfiguration{HeldCommandCeiling: v}
+		cfg.ApplyDefaults()
+		assert.Equal(t, DefaultHeldCommandCeiling, cfg.HeldCommandCeiling,
+			"a missing or zero ceiling must mean the platform default, NEVER unlimited")
+	}
+}
+
+// A configured ceiling survives defaulting untouched; one below the floor is refused.
+// A handful of held commands per tenant is not a conservative setting — it refuses a
+// sleeping fleet's backlog at enqueue, and the device never learns the commands existed.
+func TestHeldCommandCeilingValidation(t *testing.T) {
+	kept := &CommandDeliveryConfiguration{DefaultCommandTTLSeconds: 3600, HeldCommandCeiling: 250}
+	kept.ApplyDefaults()
+	assert.Equal(t, 250, kept.HeldCommandCeiling)
+	assert.NoError(t, kept.Validate())
+
+	tooSmall := &CommandDeliveryConfiguration{
+		DefaultCommandTTLSeconds: 3600, HeldCommandCeiling: MinHeldCommandCeiling - 1,
+	}
+	assert.Error(t, tooSmall.Validate())
+}

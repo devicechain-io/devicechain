@@ -66,6 +66,18 @@ export const COMMANDS_QUERY = `
 // idempotency key + cancel handle); `payload` is the request body the device receives
 // verbatim (the widget serializes its typed form to JSON). Only the token + status are
 // selected back — the hub re-reads the lifecycle via the poll query afterward.
+//
+// 🔴 THE RESULT HAS TWO ARMS, and they mean opposite things. `command` is the command
+// that was created; `rejection` is a decided REFUSAL of the request (unknown device,
+// command not in the device's published vocabulary, payload violating its parameter
+// schema, malformed JSON/timestamp, the tenant's held-command ceiling full), carrying a
+// stable `code` to branch on and a client-safe `reason` for a person. Exactly one is
+// non-null. A GraphQL error instead of either means the enqueue could not be DECIDED —
+// an availability failure that says nothing about the command — which is why a
+// rejection is a value here rather than something thrown.
+//
+// The code set is OPEN (the enqueue gate that owns the vocabulary relays its own codes
+// through), so an unrecognized code is still a rejection, never a success.
 
 export interface CreateCommandRequestInput {
   token: string;
@@ -75,7 +87,10 @@ export interface CreateCommandRequestInput {
 }
 
 export interface CreateCommandResult {
-  createCommand: { token: string; status: string };
+  createCommand: {
+    command: { token: string; status: string } | null;
+    rejection: { code: string; reason: string } | null;
+  };
 }
 
 export interface CreateCommandVariables {
@@ -85,8 +100,14 @@ export interface CreateCommandVariables {
 export const CREATE_COMMAND = `
   mutation DashboardCreateCommand($request: CommandCreateRequest!) {
     createCommand(request: $request) {
-      token
-      status
+      command {
+        token
+        status
+      }
+      rejection {
+        code
+        reason
+      }
     }
   }
 ` as unknown as TypedDocument<CreateCommandResult, CreateCommandVariables>;

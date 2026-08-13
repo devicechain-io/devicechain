@@ -31,15 +31,30 @@ type capturedQuery struct {
 	payloadSent bool
 }
 
-// newValidator wires an EnqueueValidator against a stub mint endpoint and a stub
-// device-management that returns the supplied verdict.
-func newValidator(t *testing.T, allowed bool, reason *string) (*EnqueueValidator, *capturedQuery) {
+// newSvcClient builds the ADR-044 service-token client every test here needs, against a
+// stub mint endpoint that hands out one long-lived token.
+//
+// The mint is uninteresting to every test in this file — none of them assert anything
+// about token acquisition — which is exactly why it is shared: three hand-rolled copies
+// of the same server plus the same host/port parse is three places for the uninteresting
+// half to drift, in a file whose subject is the verdict relay.
+func newSvcClient(t *testing.T) *svcclient.Client {
 	t.Helper()
 	mint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(auth.ServiceTokenResponse{Token: "svc-token", ExpiresAt: 1 << 40})
 	}))
 	t.Cleanup(mint.Close)
 
+	host, portStr, _ := net.SplitHostPort(mint.Listener.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+	return svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port)},
+		"shh", "command-delivery", []string{string(auth.DeviceRead)})
+}
+
+// newValidator wires an EnqueueValidator against a stub mint endpoint and a stub
+// device-management that returns the supplied verdict.
+func newValidator(t *testing.T, allowed bool, reason *string) (*EnqueueValidator, *capturedQuery) {
+	t.Helper()
 	captured := &capturedQuery{}
 	dm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		captured.tenant = r.Header.Get(auth.ServiceTenantHeader)
@@ -61,10 +76,7 @@ func newValidator(t *testing.T, allowed bool, reason *string) (*EnqueueValidator
 	}))
 	t.Cleanup(dm.Close)
 
-	host, portStr, _ := net.SplitHostPort(mint.Listener.Addr().String())
-	port, _ := strconv.Atoi(portStr)
-	client := svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port)}, "shh", "command-delivery", []string{string(auth.DeviceRead)})
-	return NewEnqueueValidator(client, dm.URL), captured
+	return NewEnqueueValidator(newSvcClient(t), dm.URL), captured
 }
 
 func TestValidateEnqueue_Allowed(t *testing.T) {
@@ -157,10 +169,6 @@ func TestValidateEnqueue_OutageErrorsNotRejection(t *testing.T) {
 // A GraphQL-level error (e.g. the caller lacks device:read) must also fail closed
 // as a transport error rather than being read as a permissive verdict.
 func TestValidateEnqueue_GraphQLErrorFailsClosed(t *testing.T) {
-	mint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(auth.ServiceTokenResponse{Token: "svc-token", ExpiresAt: 1 << 40})
-	}))
-	t.Cleanup(mint.Close)
 	dm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"errors": []map[string]any{{"message": "not authorized"}},
@@ -168,10 +176,7 @@ func TestValidateEnqueue_GraphQLErrorFailsClosed(t *testing.T) {
 	}))
 	t.Cleanup(dm.Close)
 
-	host, portStr, _ := net.SplitHostPort(mint.Listener.Addr().String())
-	port, _ := strconv.Atoi(portStr)
-	client := svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port)}, "shh", "command-delivery", []string{string(auth.DeviceRead)})
-	v := NewEnqueueValidator(client, dm.URL)
+	v := NewEnqueueValidator(newSvcClient(t), dm.URL)
 
 	err := v.ValidateEnqueue(core.WithTenant(context.Background(), "tenant-a"), "dev-1", "drive", nil)
 	if err == nil {
@@ -183,5 +188,83 @@ func TestValidateEnqueue_GraphQLErrorFailsClosed(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not authorized") {
 		t.Logf("note: error text was %q", err.Error())
+	}
+}
+
+// codedValidator wires a validator against a stub device-management that answers with
+// a REJECTION carrying the given code, and records the query document it was sent.
+//
+// It is separate from newValidator rather than a parameter on it: the query document
+// is part of what this test asserts (the `code` field must be REQUESTED, not merely
+// decodable), and threading that through the shared helper would leave every other
+// test carrying a knob it does not use.
+func codedValidator(t *testing.T, code any) (*EnqueueValidator, *string) {
+	t.Helper()
+	sentQuery := new(string)
+	dm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Query string `json:"query"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		*sentQuery = body.Query
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"validateCommandEnqueue": map[string]any{
+				"allowed": false,
+				"code":    code,
+				"reason":  `device "dev-1" does not exist`,
+			}},
+		})
+	}))
+	t.Cleanup(dm.Close)
+
+	return NewEnqueueValidator(newSvcClient(t), dm.URL), sentQuery
+}
+
+// TestValidateEnqueue_RelaysTheVerdictCode pins the machine-readable half of the
+// relay: the code the OWNER assigned must arrive intact.
+//
+// 🔴 It asserts the query ASKS for the code as well as that the answer decodes. Those
+// are two different failures with one symptom: a document that omits the field gets a
+// response with no code at all, and the decode then yields an empty string that looks
+// exactly like a peer which chose not to classify. Downstream, REACT reads that as
+// "unrecognized" and retries a permanently-invalid command to the poison cap — the
+// precise behaviour this whole seam exists to end, restored silently.
+func TestValidateEnqueue_RelaysTheVerdictCode(t *testing.T) {
+	v, sentQuery := codedValidator(t, "DEVICE_NOT_FOUND")
+	ctx := core.WithTenant(context.Background(), "tenant-a")
+
+	err := v.ValidateEnqueue(ctx, "dev-1", "reboot", nil)
+	var rejection *model.EnqueueRejected
+	if !errors.As(err, &rejection) {
+		t.Fatalf("expected a typed rejection, got %T (%v)", err, err)
+	}
+	if rejection.Code != "DEVICE_NOT_FOUND" {
+		t.Fatalf("the owner's code must be relayed verbatim, got %q", rejection.Code)
+	}
+	if !strings.Contains(*sentQuery, "code") {
+		t.Fatalf("the query must REQUEST the code; a document that omits it decodes an empty code "+
+			"that is indistinguishable from a peer declining to classify: %s", *sentQuery)
+	}
+}
+
+// TestValidateEnqueue_UncodedRejectionStaysARejection covers the peer that answers
+// without a classification. It is still a REJECTION — the verdict said no — and must
+// not be upgraded into an availability error (which would fail closed on a decided
+// answer) nor be given a guessed code (which would let a caller act on a claim nobody
+// made). It arrives uncoded and is marked unclassified upstream.
+func TestValidateEnqueue_UncodedRejectionStaysARejection(t *testing.T) {
+	v, _ := codedValidator(t, nil)
+	ctx := core.WithTenant(context.Background(), "tenant-a")
+
+	err := v.ValidateEnqueue(ctx, "dev-1", "reboot", nil)
+	var rejection *model.EnqueueRejected
+	if !errors.As(err, &rejection) {
+		t.Fatalf("an uncoded rejection is still a rejection, got %T (%v)", err, err)
+	}
+	if rejection.Code != "" {
+		t.Fatalf("an absent code must not be invented here, got %q", rejection.Code)
+	}
+	if rejection.Reason == "" {
+		t.Fatal("the reason must still be relayed")
 	}
 }

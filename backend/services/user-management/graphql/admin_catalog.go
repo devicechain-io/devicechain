@@ -103,6 +103,21 @@ func (r *AdminTenantResolver) ShedPriority() *int32 {
 	return &v
 }
 
+// HeldCommandCeiling resolves the per-tenant HELD-command ceiling override for the
+// operator's visibility/edit — the RAW nullable column, null when the tenant inherits
+// its tier's heldCommandCeiling. Load-bearing for the same reason as ShedPriority
+// above: updateTenant is a full REPLACE of the mutable fields (applyTo writes every
+// override, nil clearing it), so a console that could not read the current value back
+// would null it on any unrelated edit — quietly returning a tenant that was deliberately
+// bounded to whatever the tier or the service default happens to be.
+func (r *AdminTenantResolver) HeldCommandCeiling() *int32 {
+	if r.M.HeldCommandCeiling == nil {
+		return nil
+	}
+	v := int32(*r.M.HeldCommandCeiling)
+	return &v
+}
+
 // Config resolves the AdminTenant.config field: the freeform config map as a
 // JSON object string, or null when unset.
 func (r *AdminTenantResolver) Config() (*string, error) { return marshalConfig(r.M.Config) }
@@ -249,6 +264,7 @@ type adminTenantCreateInput struct {
 	AiInferenceRequestsPerMinute *float64
 	AiInferenceBurst             *int32
 	ShedPriority                 *int32
+	HeldCommandCeiling           *int32
 }
 
 // adminTenantUpdateInput mirrors AdminTenantUpdateRequest.
@@ -264,6 +280,7 @@ type adminTenantUpdateInput struct {
 	AiInferenceRequestsPerMinute *float64
 	AiInferenceBurst             *int32
 	ShedPriority                 *int32
+	HeldCommandCeiling           *int32
 }
 
 // intPtr adapts an optional GraphQL Int (*int32) to the model's *int, preserving
@@ -298,6 +315,7 @@ func (r *AdminResolver) CreateTenant(ctx context.Context, args struct {
 			AiInferenceRequestsPerMinute: args.Request.AiInferenceRequestsPerMinute,
 			AiInferenceBurst:             intPtr(args.Request.AiInferenceBurst),
 			ShedPriority:                 intPtr(args.Request.ShedPriority),
+			HeldCommandCeiling:           intPtr(args.Request.HeldCommandCeiling),
 		},
 		AiExternalEnabled: args.Request.AiExternalEnabled,
 	})
@@ -326,6 +344,7 @@ func (r *AdminResolver) UpdateTenant(ctx context.Context, args struct {
 			AiInferenceRequestsPerMinute: args.Request.AiInferenceRequestsPerMinute,
 			AiInferenceBurst:             intPtr(args.Request.AiInferenceBurst),
 			ShedPriority:                 intPtr(args.Request.ShedPriority),
+			HeldCommandCeiling:           intPtr(args.Request.HeldCommandCeiling),
 		},
 		AiExternalEnabled: args.Request.AiExternalEnabled,
 	})

@@ -17,14 +17,18 @@
 // plus the action's CONTENT, deliberately NOT its index in the action list: the rule is resolved
 // fresh per attempt, so an author reordering the chain between attempts would, under an index-keyed
 // token, re-send whichever action now sits at the old index under the old action's token. See
-// idempotencyToken for the full argument. There is no permanent-vs-
-// transient error classification here: any dispatch failure is retried (the event is not acked),
-// and a genuinely un-dispatchable event is bounded by the consumer's redelivery cap (poison), not
-// by fragile per-error interpretation.
+// idempotencyToken for the full argument. Dispatch failures are retried by DEFAULT — the event is
+// not acked, and a genuinely un-dispatchable event is bounded by the consumer's redelivery cap
+// (poison) — with ONE narrow exception: a sink that returns a *PermanentRejection is stating that
+// the downstream service DECIDED the request is invalid, and that decision cannot change under
+// redelivery. Those are dropped instead of retried. The asymmetry is deliberate and is not an
+// invitation to interpret errors generally: a sink may only raise a permanent rejection from a
+// typed verdict the downstream service actually returned, never from a string it recognized.
 package react
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -68,11 +72,39 @@ type CommandRequest struct {
 	Payload     string
 }
 
+// PermanentRejection is a sink's report that the downstream service DECIDED the request is
+// invalid, in a form that cannot become valid by being sent again: the device does not exist, the
+// command is not in the device's published vocabulary, the payload violates its schema.
+//
+// It exists because the dispatcher's retry-everything default has one genuinely wrong case. A
+// permanently-invalid command was retried until the consumer's redelivery cap gave up, which spent
+// the whole poison budget on a request that was answered correctly the first time and made a
+// deleted device look exactly like a command-delivery outage.
+//
+// 🔴 IT MAY ONLY BE RAISED FROM A TYPED VERDICT THE DOWNSTREAM SERVICE RETURNED — command-delivery's
+// createCommand rejection payload carries a stable code for exactly this purpose. Never from an
+// error string, an HTTP status, or a substring match: a wrongly-permanent classification DROPS a
+// real actuation with no retry and no record beyond a log line, while a wrongly-transient one costs
+// a bounded number of retries. That asymmetry is why the default stays "retry" and why anything a
+// sink cannot positively classify must NOT be wrapped in this.
+type PermanentRejection struct {
+	// Code is the downstream service's machine-readable classification (it is logged and
+	// metered, never parsed).
+	Code string
+	// Reason is the human-readable explanation, relayed verbatim for the log.
+	Reason string
+}
+
+func (e *PermanentRejection) Error() string {
+	return fmt.Sprintf("permanently rejected (%s): %s", e.Code, e.Reason)
+}
+
 // CommandSink enqueues a command for a device (ADR-043), implemented over command-delivery. Send
 // returns nil on success (a fresh enqueue OR an idempotent replay of an already-enqueued token,
-// which command-delivery collapses) and a non-nil error on any failure — the dispatcher retries
-// every error, so the sink need not classify. A repeat with the same Token never enqueues a second
-// command (slice 5b-1), which is what makes at-least-once retry safe.
+// which command-delivery collapses) and a non-nil error on failure. The dispatcher retries every
+// error EXCEPT a *PermanentRejection, which it drops (see PermanentRejection for why the default
+// is retry and what a sink must have in hand before it may say otherwise). A repeat with the same
+// Token never enqueues a second command (slice 5b-1), which is what makes at-least-once retry safe.
 type CommandSink interface {
 	Send(ctx context.Context, req CommandRequest) error
 }
@@ -208,6 +240,16 @@ type Metrics interface {
 	// a later one. action is the same "httpCall"/"publish" enum — no per-tenant label (the ADR-023 G.3
 	// cardinality lesson).
 	RecordConnectorShed(action string)
+	// RecordPermanentlyRejected: one action DROPPED because the downstream service returned a
+	// typed rejection that a retry cannot change (a *PermanentRejection) — today, a
+	// send-command for a device that no longer exists or a command outside the device's
+	// published vocabulary. It counts a permanently-dropped action, unlike RecordConnectorShed
+	// which counts an attempt that a later redelivery may still admit. A non-zero rate here is
+	// an AUTHORING defect (a rule pointed at commands its devices cannot accept), not an
+	// infrastructure one — which is exactly why it must be countable separately from the
+	// retries it replaces. The label is the same fixed action enum, never a tenant or rule
+	// value, and never the rejection code (that is logged, not labelled).
+	RecordPermanentlyRejected(action string)
 }
 
 // Dispatcher turns a derived event into its authored actions. It holds no per-detection state —
@@ -329,6 +371,22 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 			Payload:     a.SendCommand.Payload,
 		}
 		if err := d.commands.Send(ctx, req); err != nil {
+			var permanent *PermanentRejection
+			if errors.As(err, &permanent) {
+				// command-delivery DECIDED this command is invalid, and redelivering the same
+				// event produces the same deterministic request and the same verdict. Drop it
+				// (ack-progress) rather than spending the consumer's whole redelivery budget
+				// re-asking a question that has been answered — which is what made a deleted
+				// device indistinguishable from command-delivery being down. Logged at warn
+				// because a rule firing at a device that cannot accept its command is an
+				// AUTHORING defect the operator has to see; the metric makes it countable.
+				log.Warn().Str("tenant", ev.Tenant).Str("device", ev.Series).
+					Str("command", a.SendCommand.Command).Str("code", permanent.Code).
+					Str("reason", permanent.Reason).
+					Msg("REACT send-command permanently rejected; dropping (a retry cannot change the verdict).")
+				d.metrics.RecordPermanentlyRejected("sendCommand")
+				return Done
+			}
 			return Retry
 		}
 		d.metrics.RecordDispatched("sendCommand")

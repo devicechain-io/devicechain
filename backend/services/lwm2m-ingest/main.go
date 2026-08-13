@@ -427,16 +427,21 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 	// held while the device was offline. Without the scope the drain query is forbidden and offline
 	// commands ride their TTL to their terminal state (the L4a behavior) — degraded, not broken.
 	//
-	// CommandWrite is added because the wake drain is a DISPATCHER, not just a reader: before it
-	// issues a command's CoAP op it CLAIMS the command (command-delivery's markCommandSent, which
-	// requires command:write). The claim is what stops the delivery sweep from publishing the same
-	// still-dispatchable command a second time — and a command is a physical actuation, so the
-	// second publish moves real hardware again. The scope is used for that ONE mutation, on a
-	// command this service is about to dispatch itself; nothing here creates, cancels or otherwise
-	// authors commands.
+	// CommandClaim is added because the wake drain is a DISPATCHER, not just a reader: before it
+	// issues a command's CoAP op it CLAIMS the command (command-delivery's markCommandSent). The
+	// claim is what stops the delivery sweep from publishing the same still-dispatchable command a
+	// second time — and a command is a physical actuation, so the second publish moves real
+	// hardware again.
+	//
+	// 🔑 command:claim, NOT command:write, and the narrowness is the point: this service must be
+	// able to take a command it is about to dispatch out of the sweep's reach, and nothing more.
+	// command:write would additionally let it CREATE and CANCEL commands for any tenant, neither of
+	// which it has any business doing. It is also the only holder — event-processing's REACT sink
+	// mints command:write, so gating the claim on that would have made a mutation written for one
+	// caller answer to two.
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "lwm2m-ingest",
 		[]string{string(auth.DeviceRead), string(auth.DeviceWrite), string(auth.StateRead),
-			string(auth.TenantRead), string(auth.CommandRead), string(auth.CommandWrite)})
+			string(auth.TenantRead), string(auth.CommandRead), string(auth.CommandClaim)})
 
 	// The ADR-077 gate. It matters more here than on any other ingest front: an LwM2M
 	// device authenticates at the DTLS-PSK handshake against this server directly, so it

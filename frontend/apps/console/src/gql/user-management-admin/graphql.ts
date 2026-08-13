@@ -43,6 +43,7 @@ export type AdminTenantCreateRequest = {
   aiInferenceBurst?: number | null | undefined;
   aiInferenceRequestsPerMinute?: number | null | undefined;
   config?: string | null | undefined;
+  heldCommandCeiling?: number | null | undefined;
   ingestBurst?: number | null | undefined;
   ingestMessagesPerSecond?: number | null | undefined;
   name?: string | null | undefined;
@@ -73,6 +74,7 @@ export type AdminTenantUpdateRequest = {
   aiInferenceBurst?: number | null | undefined;
   aiInferenceRequestsPerMinute?: number | null | undefined;
   config?: string | null | undefined;
+  heldCommandCeiling?: number | null | undefined;
   ingestBurst?: number | null | undefined;
   ingestMessagesPerSecond?: number | null | undefined;
   name?: string | null | undefined;
@@ -96,7 +98,7 @@ export type IdentitiesQuery = { identities: Array<{ id: string, email: string, f
 export type TenantsQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type TenantsQuery = { tenants: Array<{ id: string, token: string, name: string | null, enabled: boolean, purgeState: string, purgeEpoch: string | null, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, outboundMessagesPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null, color: string }, effectiveSettings: Array<{ dimension: { name: string, label: string, rateUnit: string }, rate: { source: string, value: number | null, tier: number | null, override: number | null }, burst: { source: string, value: number | null, tier: number | null, override: number | null } }> }> };
+export type TenantsQuery = { tenants: Array<{ id: string, token: string, name: string | null, enabled: boolean, purgeState: string, purgeEpoch: string | null, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, outboundMessagesPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, heldCommandCeiling: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null, color: string }, effectiveSettings: Array<{ dimension: { name: string, label: string, rateUnit: string }, rate: { source: string, value: number | null, tier: number | null, override: number | null }, burst: { source: string, value: number | null, tier: number | null, override: number | null } }> }> };
 
 export type GovernanceDimensionsQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -270,7 +272,7 @@ export type CreateTenantMutationVariables = Exact<{
 }>;
 
 
-export type CreateTenantMutation = { createTenant: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, outboundMessagesPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null, color: string } } };
+export type CreateTenantMutation = { createTenant: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, outboundMessagesPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, heldCommandCeiling: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null, color: string } } };
 
 export type UpdateTenantMutationVariables = Exact<{
   token: string;
@@ -278,7 +280,7 @@ export type UpdateTenantMutationVariables = Exact<{
 }>;
 
 
-export type UpdateTenantMutation = { updateTenant: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, outboundMessagesPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null, color: string } } };
+export type UpdateTenantMutation = { updateTenant: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, outboundMessagesPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, heldCommandCeiling: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null, color: string } } };
 
 export type SetTenantEnabledMutationVariables = Exact<{
   token: string;
@@ -286,7 +288,7 @@ export type SetTenantEnabledMutationVariables = Exact<{
 }>;
 
 
-export type SetTenantEnabledMutation = { setTenantEnabled: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, outboundMessagesPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null, color: string } } };
+export type SetTenantEnabledMutation = { setTenantEnabled: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, outboundMessagesPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, heldCommandCeiling: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null, color: string } } };
 
 export type DeleteTenantMutationVariables = Exact<{
   token: string;
@@ -377,6 +379,7 @@ export const TenantsDocument = new TypedDocumentString(`
     aiExternalEnabled
     aiInferenceRequestsPerMinute
     aiInferenceBurst
+    heldCommandCeiling
     effectiveSettings {
       dimension {
         name
@@ -711,6 +714,7 @@ export const CreateTenantDocument = new TypedDocumentString(`
     aiExternalEnabled
     aiInferenceRequestsPerMinute
     aiInferenceBurst
+    heldCommandCeiling
     createdAt
     updatedAt
   }
@@ -736,6 +740,7 @@ export const UpdateTenantDocument = new TypedDocumentString(`
     aiExternalEnabled
     aiInferenceRequestsPerMinute
     aiInferenceBurst
+    heldCommandCeiling
     createdAt
     updatedAt
   }
@@ -761,6 +766,7 @@ export const SetTenantEnabledDocument = new TypedDocumentString(`
     aiExternalEnabled
     aiInferenceRequestsPerMinute
     aiInferenceBurst
+    heldCommandCeiling
     createdAt
     updatedAt
   }

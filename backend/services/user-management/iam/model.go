@@ -366,6 +366,25 @@ type Tenant struct {
 	// query; nothing durable is keyed on it (ADR-063 invariant), so a change converges
 	// on core/governance's 60s TTL like every other cascade value.
 	ShedPriority *int
+
+	// Per-tenant ceiling on how many commands may sit in the HELD state — the
+	// command-delivery lifecycle state meaning "the platform is deliberately
+	// withholding dispatch because the device is known absent". An offline fleet's
+	// backlog accumulates there and can sit for days, so it needs a bound, and how
+	// large a bound a tenant gets is a packaging question (ADR-023 governance,
+	// ADR-065 tier).
+	//
+	// A SCALAR, like ShedPriority and unlike the rate+burst dimensions above: a
+	// backlog has no burst and no per-second unit. But it is a CEILING (how much),
+	// not a preference (who degrades first) — so any positive whole number means
+	// something and larger is simply more, where a shed priority outside 1–100 names
+	// no band at all.
+	//
+	// nil means "inherit" — the tenant's tier decides, and failing that the enforcing
+	// service's own configured default. It NEVER means unlimited, and there is no
+	// value that does: nothing drains a HELD backlog on its own, so an unbounded one
+	// is tenant-triggered, operator-invisible growth in durable storage.
+	HeldCommandCeiling *int
 }
 
 func (Tenant) TableName() string { return "iam_tenants" }

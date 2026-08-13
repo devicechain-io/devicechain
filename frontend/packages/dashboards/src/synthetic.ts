@@ -353,8 +353,10 @@ export class SyntheticDataSource implements WidgetDataSource, WidgetActions {
   }
 
   async sendCommand(): Promise<CommandDispatch> {
-    // no-op in preview — return a stub dispatch token so the widget's optimistic UI works
-    return { token: 'syn-dispatch' };
+    // no-op in preview — return a stub dispatch token so the widget's optimistic UI works.
+    // Preview never refuses: there is no enqueue gate behind it to decide a rejection,
+    // and inventing one would be a verdict nothing actually reached.
+    return { status: 'sent', token: 'syn-dispatch' };
   }
 
   // disposeAll stops every live stream (e.g. when preview is turned off). Individual

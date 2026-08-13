@@ -154,6 +154,14 @@ type TenantGovernance {
     # contention floor, lowers the affected classes' effective ingest ceiling. Null ⇒
     # the reader substitutes the platform fail-safe (a bronze-band value), never gold.
     shedPriority: Int
+    # How many commands this tenant may have parked in the HELD state — the
+    # command-delivery lifecycle state meaning "the platform is deliberately
+    # withholding dispatch because the device is known absent". Resolved down the same
+    # cascade (override, else tier, else null). An offline fleet's backlog accumulates
+    # there and can sit for days, which is why it is bounded per tenant. Null ⇒ the
+    # reader substitutes its own configured default — a real bound. There is no value
+    # meaning unlimited, at any level.
+    heldCommandCeiling: Int
     # Where this tenant sits in the ADR-077 deletion lifecycle: "active" or "purging".
     # Read by the data-plane services that must stop acting on behalf of a tenant an
     # operator has deleted — device connect-auth, ingest auto-registration, command

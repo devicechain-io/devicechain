@@ -227,7 +227,7 @@ describe('SyntheticDataSource action stubs', () => {
 
   it('sendCommand resolves with a stub dispatch token', async () => {
     const src = new SyntheticDataSource();
-    await expect(src.sendCommand()).resolves.toEqual({ token: expect.any(String) });
+    await expect(src.sendCommand()).resolves.toEqual({ status: 'sent', token: expect.any(String) });
   });
 
   it('every datasource is available in preview (never the deleted-device state)', async () => {

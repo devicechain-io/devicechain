@@ -33,7 +33,7 @@ export type CreateCommandMutationVariables = Exact<{
 }>;
 
 
-export type CreateCommandMutation = { createCommand: { id: string, token: string, status: string } };
+export type CreateCommandMutation = { createCommand: { command: { id: string, token: string, status: string } | null, rejection: { code: string, reason: string } | null } };
 
 export type CancelCommandMutationVariables = Exact<{
   token: string;
@@ -89,9 +89,15 @@ export const CommandsDocument = new TypedDocumentString(`
 export const CreateCommandDocument = new TypedDocumentString(`
     mutation CreateCommand($request: CommandCreateRequest!) {
   createCommand(request: $request) {
-    id
-    token
-    status
+    command {
+      id
+      token
+      status
+    }
+    rejection {
+      code
+      reason
+    }
   }
 }
     `) as unknown as TypedDocumentString<CreateCommandMutation, CreateCommandMutationVariables>;

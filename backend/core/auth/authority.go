@@ -138,6 +138,27 @@ const (
 	// Command delivery (command-delivery).
 	CommandRead  Authority = "command:read"
 	CommandWrite Authority = "command:write"
+	// CommandClaim permits taking a still-dispatchable command OUT of the delivery
+	// sweep's reach in order to dispatch it directly — the LwM2M wake drain, which
+	// issues a sleeping device's withheld commands over the CoAP session it opens on
+	// Register. It is deliberately NOT part of command:write.
+	//
+	// 🔴 It is SYSTEM-tier, and that tier is what enforces "service tokens only".
+	// Claiming is not an operation any human performs: it removes a command from the
+	// dispatchable set WITHOUT publishing it, so a caller that claims and then fails
+	// to dispatch leaves the command sitting in SENT until it dies as TIMEOUT — a
+	// terminal that blames the DEVICE for a delivery the platform suppressed. Cancel
+	// records the truth; this manufactures a lie with nothing in the audit trail to
+	// contradict it.
+	//
+	// Splitting it from command:write is what makes the grant PRECISE rather than
+	// merely restricted. Gating on command:write plus a token-type check would still
+	// admit every service holding command:write — event-processing's REACT sink mints
+	// exactly that — so a mutation for one caller would answer to two. A separate
+	// authority is granted to the one service that needs it and to nothing else, and
+	// being system-tier means an operator cannot put it on a tenant-scoped role
+	// either, which a resolver-level token-type check cannot police at all.
+	CommandClaim Authority = "command:claim"
 
 	// Dashboards (dashboard-management, ADR-039). Gate the dashboard-definition
 	// CRUD API; the live telemetry a dashboard renders is still gated by EventRead
@@ -259,6 +280,12 @@ var vocabulary = map[Authority]Tiers{
 	RoleWrite:   system,
 	TenantRead:  system,
 	TenantWrite: system,
+	// Claiming a command for direct dispatch is a machine operation, never a
+	// human one — system-tier on a data-plane resolver is what makes it
+	// reachable only by a service token (satisfies() bounds a tenant access
+	// token, including one holding "*", to tenant-tier authorities, and the
+	// data-plane handler already refuses identity tokens).
+	CommandClaim: system,
 	// The AI provider list is instance config an operator owns — the ADR-065
 	// correction. A tenant only CONSENTS to external routing (a separate flag).
 	AIAdmin:       system,

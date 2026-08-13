@@ -8,6 +8,7 @@ import { graphql } from '@/gql/command-delivery';
 import type {
   CommandsQuery,
   CommandCreateRequest,
+  CreateCommandMutation,
 } from '@/gql/command-delivery/graphql';
 
 // Public types are derived from the generated operation results so they always
@@ -15,6 +16,11 @@ import type {
 export type Command = CommandsQuery['commands']['results'][number];
 export type CommandSearchResults = CommandsQuery['commands'];
 export type { CommandCreateRequest };
+
+// The outcome of an enqueue attempt: exactly one of `command` / `rejection` is
+// populated (see createCommand below).
+export type CreateCommandResult = CreateCommandMutation['createCommand'];
+export type CommandEnqueueRejection = NonNullable<CreateCommandResult['rejection']>;
 
 const COMMANDS = graphql(`
   query Commands($criteria: CommandSearchCriteria!) {
@@ -45,9 +51,15 @@ const COMMANDS = graphql(`
 const CREATE_COMMAND = graphql(`
   mutation CreateCommand($request: CommandCreateRequest!) {
     createCommand(request: $request) {
-      id
-      token
-      status
+      command {
+        id
+        token
+        status
+      }
+      rejection {
+        code
+        reason
+      }
     }
   }
 `);
@@ -82,7 +94,23 @@ export async function listCommands(opts: {
 
 // Issue a command to a device. The caller supplies a fresh unique token (an
 // idempotency key for the dispatch); requires the command:write authority.
-export async function createCommand(request: CommandCreateRequest) {
+//
+// 🔴 IT RESOLVES ON A REFUSAL. The result carries EITHER the created `command` OR
+// the `rejection` that refused it — the device is unknown, the command is not in the
+// device's published vocabulary, the payload violates its parameter schema, the
+// timestamp/JSON is malformed, or the tenant is at its held-command ceiling. A
+// rejection is a decided verdict about the request, so it is a value here and the
+// caller must branch on it; only a failure to DECIDE (the service unreachable, a
+// database error) throws. The two are not interchangeable: a rejection carries a
+// reason the operator can act on, while a thrown error means the platform could not
+// answer and says nothing about the command.
+//
+// The rejection's `code` is the stable classification (PAYLOAD_NOT_JSON,
+// COMMAND_NOT_IN_VOCABULARY, HELD_CEILING_EXCEEDED, …) and its `reason` is
+// client-safe prose. The code set is OPEN — the enqueue gate that owns the device
+// vocabulary relays its own codes through — so a caller must never treat an
+// unrecognized code as anything but a rejection.
+export async function createCommand(request: CommandCreateRequest): Promise<CreateCommandResult> {
   return (await gql('command-delivery', CREATE_COMMAND, { request })).createCommand;
 }
 

@@ -401,6 +401,29 @@ func forceStatus(api *Api, ctx context.Context, id uint, status CommandStatus) e
 		Where("id = ?", id).Update("status", status.String()).Error
 }
 
+// seedWithStatus creates a command and drives it into the requested state, returning
+// its id. It is THE way this package's tests place a row in a given status.
+//
+// A fresh command is already QUEUED, so that case is a plain create; every other state
+// goes through forceStatus for the reason above — nothing in this service produces a
+// HELD row yet, and reaching one "properly" through the public API would be measuring a
+// transition that does not exist.
+func seedWithStatus(t *testing.T, api *Api, ctx context.Context, token string, status CommandStatus) uint {
+	t.Helper()
+	created, err := api.CreateCommand(ctx, &CommandCreateRequest{
+		Token: token, DeviceToken: "d", Name: "reboot",
+	})
+	if err != nil {
+		t.Fatalf("seeding %s failed: %v", token, err)
+	}
+	if status != CommandQueued {
+		if err := forceStatus(api, ctx, created.ID, status); err != nil {
+			t.Fatalf("forcing %s to %s failed: %v", token, status, err)
+		}
+	}
+	return created.ID
+}
+
 func assertStatus(t *testing.T, api *Api, ctx context.Context, token string, want CommandStatus) {
 	t.Helper()
 	matches, err := api.CommandsByToken(ctx, []string{token})

@@ -155,15 +155,7 @@ func TestExpireLosesToARowThatMovedOnAfterTheScan(t *testing.T) {
 	api := newTestApi(t)
 	ctx := core.WithTenant(context.Background(), "A")
 
-	created, err := api.CreateCommand(ctx, &CommandCreateRequest{
-		Token: "raced-expiry", DeviceToken: "d", Name: "reboot",
-	})
-	if err != nil {
-		t.Fatalf("CreateCommand failed: %v", err)
-	}
-	if err := forceStatus(api, ctx, created.ID, CommandHeld); err != nil {
-		t.Fatalf("hold failed: %v", err)
-	}
+	id := seedWithStatus(t, api, ctx, "raced-expiry", CommandHeld)
 
 	// The sweep scanned it as HELD. Before its write lands, a drain claims it.
 	won, err := api.MarkSentByToken(ctx, "raced-expiry")
@@ -172,11 +164,11 @@ func TestExpireLosesToARowThatMovedOnAfterTheScan(t *testing.T) {
 	}
 
 	// The sweep's write, carrying the now-stale from-state.
-	affected, err := api.expireOne(ctx, created.ID, CommandHeld.String(), CommandExpired.String())
+	expired, err := api.expireOne(ctx, id, CommandHeld.String(), CommandExpired.String())
 	if err != nil {
 		t.Fatalf("expireOne failed: %v", err)
 	}
-	if affected != 0 {
+	if expired {
 		t.Fatal("expiry must LOSE to a row that moved on after the scan; " +
 			"winning stamps EXPIRED on a command that was just dispatched and drops the response that follows")
 	}
@@ -200,17 +192,9 @@ func TestMarkSentReleasesAHeldCommand(t *testing.T) {
 	api := newTestApi(t)
 	ctx := core.WithTenant(context.Background(), "A")
 
-	created, err := api.CreateCommand(ctx, &CommandCreateRequest{
-		Token: "held-release", DeviceToken: "d", Name: "reboot",
-	})
-	if err != nil {
-		t.Fatalf("CreateCommand failed: %v", err)
-	}
-	if err := forceStatus(api, ctx, created.ID, CommandHeld); err != nil {
-		t.Fatalf("hold failed: %v", err)
-	}
+	id := seedWithStatus(t, api, ctx, "held-release", CommandHeld)
 
-	got, err := api.MarkSent(ctx, created.ID)
+	got, err := api.MarkSent(ctx, id)
 	if err != nil {
 		t.Fatalf("MarkSent failed: %v", err)
 	}
@@ -235,15 +219,7 @@ func TestMarkSentByTokenClaimsExactlyOnce(t *testing.T) {
 	api := newTestApi(t)
 	ctx := core.WithTenant(context.Background(), "A")
 
-	created, err := api.CreateCommand(ctx, &CommandCreateRequest{
-		Token: "claim-me", DeviceToken: "d", Name: "reboot",
-	})
-	if err != nil {
-		t.Fatalf("CreateCommand failed: %v", err)
-	}
-	if err := forceStatus(api, ctx, created.ID, CommandHeld); err != nil {
-		t.Fatalf("hold failed: %v", err)
-	}
+	seedWithStatus(t, api, ctx, "claim-me", CommandHeld)
 
 	won, err := api.MarkSentByToken(ctx, "claim-me")
 	if err != nil {
@@ -303,17 +279,7 @@ func TestCancelRecordsCancelledFromEveryLiveState(t *testing.T) {
 			api := newTestApi(t)
 			ctx := core.WithTenant(context.Background(), "A")
 
-			created, err := api.CreateCommand(ctx, &CommandCreateRequest{
-				Token: "cancel-" + from.String(), DeviceToken: "d", Name: "reboot",
-			})
-			if err != nil {
-				t.Fatalf("CreateCommand failed: %v", err)
-			}
-			if from != CommandQueued {
-				if err := forceStatus(api, ctx, created.ID, from); err != nil {
-					t.Fatalf("force %s failed: %v", from, err)
-				}
-			}
+			seedWithStatus(t, api, ctx, "cancel-"+from.String(), from)
 
 			got, err := api.CancelCommand(ctx, "cancel-"+from.String())
 			if err != nil {
@@ -337,24 +303,11 @@ func TestPendingCommandsCoversTheDispatchableSet(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "A")
 	sysctx := core.WithSystemContext(ctx)
 
-	seed := func(token string, status CommandStatus) {
-		created, err := api.CreateCommand(ctx, &CommandCreateRequest{
-			Token: token, DeviceToken: "d", Name: "reboot",
-		})
-		if err != nil {
-			t.Fatalf("CreateCommand %s failed: %v", token, err)
-		}
-		if status != CommandQueued {
-			if err := forceStatus(api, ctx, created.ID, status); err != nil {
-				t.Fatalf("force %s failed: %v", status, err)
-			}
-		}
-	}
-	seed("p-queued", CommandQueued)
-	seed("p-held", CommandHeld)
-	seed("p-sent", CommandSent)
-	seed("p-cancelled", CommandCancelled)
-	seed("p-successful", CommandSuccessful)
+	seedWithStatus(t, api, ctx, "p-queued", CommandQueued)
+	seedWithStatus(t, api, ctx, "p-held", CommandHeld)
+	seedWithStatus(t, api, ctx, "p-sent", CommandSent)
+	seedWithStatus(t, api, ctx, "p-cancelled", CommandCancelled)
+	seedWithStatus(t, api, ctx, "p-successful", CommandSuccessful)
 
 	pending, err := api.PendingCommands(sysctx)
 	if err != nil {
@@ -384,23 +337,10 @@ func TestCommandsFilterByStatuses(t *testing.T) {
 	api := newTestApi(t)
 	ctx := core.WithTenant(context.Background(), "A")
 
-	seed := func(token string, status CommandStatus) {
-		created, err := api.CreateCommand(ctx, &CommandCreateRequest{
-			Token: token, DeviceToken: "d", Name: "reboot",
-		})
-		if err != nil {
-			t.Fatalf("CreateCommand %s failed: %v", token, err)
-		}
-		if status != CommandQueued {
-			if err := forceStatus(api, ctx, created.ID, status); err != nil {
-				t.Fatalf("force %s failed: %v", status, err)
-			}
-		}
-	}
-	seed("f-queued", CommandQueued)
-	seed("f-held", CommandHeld)
-	seed("f-sent", CommandSent)
-	seed("f-successful", CommandSuccessful)
+	seedWithStatus(t, api, ctx, "f-queued", CommandQueued)
+	seedWithStatus(t, api, ctx, "f-held", CommandHeld)
+	seedWithStatus(t, api, ctx, "f-sent", CommandSent)
+	seedWithStatus(t, api, ctx, "f-successful", CommandSuccessful)
 
 	search := func(criteria CommandSearchCriteria) map[string]bool {
 		t.Helper()

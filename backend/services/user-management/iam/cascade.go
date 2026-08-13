@@ -158,3 +158,43 @@ func (t *Tenant) EffectiveShedPriority() (*int, SettingSource) {
 	}
 	return nil, SourcePlatformDefault
 }
+
+// UsableHeldCommandCeiling reports whether a per-tenant HELD-command ceiling override
+// is a live bound, by the same rule a tier's heldCommandCeiling is held to. Like
+// UsableRate it lets the cascade tell an override that MEANS something from one that
+// does not, so an unusable override falls through to the tier rather than past it.
+func UsableHeldCommandCeiling(v int) bool { return validateHeldCommandCeiling(v) == nil }
+
+// OverrideHeldCommandCeiling returns the tenant's own HELD-command ceiling override, or
+// nil when it declares none (or declares an unusable one — see
+// EffectiveHeldCommandCeiling). A scalar, so it takes no dimension, unlike
+// OverrideRate/OverrideBurst.
+func (t *Tenant) OverrideHeldCommandCeiling() *int {
+	if t.HeldCommandCeiling == nil || !UsableHeldCommandCeiling(*t.HeldCommandCeiling) {
+		return nil
+	}
+	return t.HeldCommandCeiling
+}
+
+// EffectiveHeldCommandCeiling resolves how many commands this tenant may park in the
+// HELD state, down the same cascade the ceilings use — tenant override → tier → nil
+// (SourcePlatformDefault). A nil value means the enforcing service (command-delivery)
+// substitutes its own configured default, which is itself a real bound: null is
+// "inherit", NEVER "unlimited", and nothing in this path can produce an unlimited
+// reading. That matters more here than for a rate, because nothing drains a HELD
+// backlog on its own — an unbounded one grows in durable storage until an operator
+// notices.
+//
+// Like the shed priority it is a scalar end to end: it never passes through
+// overridesFor / PerSecond, having neither a burst nor a rate unit. Unlike it, it is a
+// ceiling rather than a band, so its usability rule is "a positive whole number", not
+// "a point on the 1–100 scale".
+func (t *Tenant) EffectiveHeldCommandCeiling() (*int, SettingSource) {
+	if v := t.OverrideHeldCommandCeiling(); v != nil {
+		return v, SourceOverride
+	}
+	if v := t.Tier.HeldCommandCeiling(); v != nil {
+		return v, SourceTier
+	}
+	return nil, SourcePlatformDefault
+}

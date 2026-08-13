@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import type { CommandRow, WidgetActions, WidgetInstance } from '@devicechain/dashboards';
+import type { CommandDispatch, CommandRow, WidgetActions, WidgetInstance } from '@devicechain/dashboards';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -40,11 +40,14 @@ const state = (over: Partial<CommandStreamState> = {}): CommandStreamState => ({
   ...over,
 });
 
-// A typed sendCommand spy — explicit arg types so the tuple reads in assertions.
+// A typed sendCommand spy — explicit arg types so the tuple reads in assertions. Its
+// default outcome is a successful dispatch; the rejection/failure arms below override it.
 type SendSpy = ReturnType<typeof makeSend>;
-function makeSend() {
-  return vi.fn<(deviceToken: string, name: string, payload?: string) => Promise<{ token: string }>>(
-    async () => ({ token: 'dispatch-1' }),
+function makeSend(
+  outcome: () => Promise<CommandDispatch> = async () => ({ status: 'sent', token: 'dispatch-1' }),
+) {
+  return vi.fn<(deviceToken: string, name: string, payload?: string) => Promise<CommandDispatch>>(
+    outcome,
   );
 }
 
@@ -135,7 +138,7 @@ describe('CommandButton', () => {
       can: () => false,
       acknowledgeAlarm: vi.fn(async () => {}),
       clearAlarm: vi.fn(async () => {}),
-      sendCommand: vi.fn(async () => ({ token: 't' })),
+      sendCommand: vi.fn(async () => ({ status: 'sent' as const, token: 't' })),
     };
     render(
       <CommandButton widget={widget({ commandName: 'reboot' })} data={state()} actions={readOnly} />,
@@ -212,6 +215,71 @@ describe('CommandButton', () => {
     expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: /send/i }));
     expect(JSON.parse(send.mock.calls[0][2]!)).toEqual({ enabled: true });
+  });
+
+  // ── The two ways a send can not happen ─────────────────────────────────
+  //
+  // 🔴 THEY ARE DIFFERENT ANSWERS AND MUST NOT LOOK THE SAME. A rejection is the server
+  // deciding this command is wrong and saying how, in terms naming only the device, the
+  // command and the offending parameter — an operator can fix that. A thrown error is
+  // the platform failing to answer at all: its text describes machinery, and it says
+  // nothing about the command. Every refusal used to arrive as the second kind.
+
+  it('shows the server’s reason when the enqueue is refused', async () => {
+    const send = makeSend(async () => ({
+      status: 'rejected',
+      code: 'PAYLOAD_SCHEMA_VIOLATION',
+      reason: 'parameter "delaySeconds" must be at most 60',
+    }));
+    render(
+      <CommandButton
+        widget={widget({ commandName: 'reboot' })}
+        data={state()}
+        actions={writableActions(send)}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    expect(await screen.findByText('parameter "delaySeconds" must be at most 60')).toBeTruthy();
+    // A refusal is not a platform failure, so the generic message must not also appear.
+    expect(screen.queryByText(/Couldn’t issue the command/i)).toBeNull();
+    // And the Send control comes back — the operator's next move is to correct and retry.
+    expect((screen.getByRole('button', { name: /send/i }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('shows one generic message — never the raw error — when the platform can’t answer', async () => {
+    const send = makeSend(async () => {
+      throw new Error('dial tcp 10.42.0.9:8080: connect: connection refused');
+    });
+    render(
+      <CommandButton
+        widget={widget({ commandName: 'reboot' })}
+        data={state()}
+        actions={writableActions(send)}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    expect(await screen.findByText(/Couldn’t issue the command/i)).toBeTruthy();
+    // The internal detail is not on screen anywhere.
+    expect(screen.queryByText(/connection refused/i)).toBeNull();
+    expect(screen.queryByText(/10\.42\.0\.9/)).toBeNull();
+  });
+
+  it('shows no failure text when the command is accepted', async () => {
+    const send = makeSend();
+    render(
+      <CommandButton
+        widget={widget({ commandName: 'reboot' })}
+        data={state()}
+        actions={writableActions(send)}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+    await screen.findByText('No commands issued yet.'); // the render settles
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText(/Couldn’t issue the command/i)).toBeNull();
   });
 
   it('shows an inline history error instead of replacing the send form', () => {
