@@ -178,7 +178,12 @@ func NewApi(rdb *rdb.RdbManager) *Api {
 type CommandDeliveryApi interface {
 	CreateCommand(ctx context.Context, request *CommandCreateRequest) (*Command, error)
 
-	MarkSent(ctx context.Context, id uint) (*Command, error)
+	// MarkSent claims a command for dispatch, reporting whether THIS caller won it.
+	// Claim before dispatching: a command is a physical actuation.
+	MarkSent(ctx context.Context, id uint) (bool, error)
+	// ReleaseClaim undoes a claim whose dispatch then failed, returning the row to
+	// QUEUED and clearing sent_time.
+	ReleaseClaim(ctx context.Context, id uint) (bool, error)
 	MarkSentByToken(ctx context.Context, token string) (bool, error)
 	MarkResponse(ctx context.Context, commandToken string, success bool, payload *string, errMsg *string) (*Command, error)
 	CancelCommand(ctx context.Context, token string) (*Command, error)
@@ -327,7 +332,7 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 	// with the same token without ever enqueuing a second physical command.
 	var conflicted bool
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := api.checkHeldCeiling(ctx, tx); err != nil {
+		if err := api.checkUndeliveredCeiling(ctx, tx); err != nil {
 			return err
 		}
 		result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(created)
@@ -351,16 +356,13 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 	return created, nil
 }
 
-// checkHeldCeiling refuses an enqueue for a tenant already holding its ceiling of
-// WITHHELD commands. It runs inside CreateCommand's insert transaction so the count
-// reads the state the insert lands in.
+// checkUndeliveredCeiling refuses an enqueue for a tenant that already has its ceiling
+// of commands waiting to go out. It runs inside CreateCommand's insert transaction so
+// the count reads the state the insert lands in.
 //
-// 🔴 IT COUNTS ONLY HELD, and that is the whole point of the state existing
-// separately. HELD is where an absent fleet's backlog accumulates and where it can
-// sit for days; QUEUED is transient (every row leaves it at the next sweep tick) and
-// SENT is in flight. Counting those too would throttle a BUSY HEALTHY tenant — one
-// whose commands are being delivered as fast as they are issued — for a backlog it
-// does not have. Terminal rows are history and count for nothing.
+// SENT is excluded: it is in flight, the platform has done its part, and a device that
+// never answers is bounded by the command's own TTL rather than by this. Terminal rows
+// are history and count for nothing.
 //
 // It is a count-then-insert, deliberately NOT serialized with a lock, following the
 // same reasoning as device-management's MaxGeoFencesPerTenant: two simultaneous
@@ -372,37 +374,55 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 // send-command, every console issue) against a per-tenant row to buy a precision the
 // bound does not need.
 //
-// 🔴 KNOW WHAT THIS DOES NOT BOUND, BECAUSE IT IS BIGGER THAN THE ONE-OVER RACE
-// ABOVE AND MUST NOT BE CONFUSED WITH IT. The ceiling is enforced HERE, at enqueue,
-// but a row does not enter HELD here — it is inserted QUEUED, and the presence gate
-// moves it to HELD on a later sweep tick. So the counted set does not grow as a
-// tenant enqueues. A tenant whose fleet is absent can enqueue any number of commands
-// while its HELD count is still below the ceiling, every check passing, and then a
-// SINGLE sweep tick converts that whole QUEUED backlog to HELD at once. The
-// overshoot is one sweep interval's enqueue volume, and per-tenant command-rate
-// governance is not enforced today, so nothing else bounds it either.
+// 🔑 IT COUNTS EVERY UNDELIVERED COMMAND, NOT ONLY THE HELD ONES, AND THAT IS WHAT
+// MAKES ONE ENFORCEMENT POINT SUFFICIENT. Counting HELD alone was a bound on the
+// wrong set: a row does not enter HELD at enqueue — it is inserted QUEUED and the
+// presence gate promotes it on a later sweep tick — so the counted set did not grow
+// as a tenant enqueued. A tenant whose fleet was absent could enqueue without limit,
+// every check passing, and a SINGLE sweep tick could convert the whole backlog at
+// once. That was a hole in the bound, not a rounding error.
 //
-// That is a hole in the bound, not a rounding error, and it is not reachable yet
-// only because nothing writes HELD. The gate slice must close it — the natural
-// place is to re-check the ceiling at the QUEUED→HELD transition, where the counted
-// set actually grows — or the tolerance has to be restated honestly. Recorded in
-// scratchpad/gate-slice-decisions.md so the gate does not inherit it silently.
-func (api *Api) checkHeldCeiling(ctx context.Context, tx *gorm.DB) error {
+// Counting QUEUED + HELD closes it by making the counted set INVARIANT UNDER
+// PROMOTION: QUEUED→HELD moves a row between two counted states, so it cannot change
+// the count, so no sweep tick can overshoot for any backlog size. The residual is
+// back to the tolerated one-over race described above — which this may now cite
+// honestly, because the two are finally the same kind of thing.
+//
+// The consequence to know rather than discover: a tenant whose fleet is PRESENT now
+// counts its in-flight QUEUED rows too. Those drain within a tick, so the
+// steady-state contribution is one tick of enqueue volume — small, but not zero, and
+// a tenant enqueueing near its ceiling at a high rate will feel it. That is the
+// correct behaviour: the bound is on undelivered work, and undelivered is undelivered.
+func (api *Api) checkUndeliveredCeiling(ctx context.Context, tx *gorm.DB) error {
 	ceiling := api.heldCommandCeiling(ctx)
-	var held int64
-	if err := tx.Model(&Command{}).Where("status = ?", CommandHeld.String()).Count(&held).Error; err != nil {
+	var undelivered int64
+	if err := tx.Model(&Command{}).
+		Where("status IN ?", undeliveredStatusStrings()).Count(&undelivered).Error; err != nil {
 		// A failure to COUNT is a failure to decide, not a rejection: it stays a plain
 		// error so the caller fails closed without telling the client its command is
 		// invalid.
 		return err
 	}
-	if held >= int64(ceiling) {
+	if undelivered >= int64(ceiling) {
 		return rejected(RejectHeldCeilingExceeded,
-			"the tenant is already holding %d commands for absent devices; the limit is %d "+
-				"(commands withheld for offline devices are released as the devices return)",
-			held, ceiling)
+			"the tenant already has %d commands waiting to be delivered; the limit is %d "+
+				"(commands are released as their devices become reachable, and expire if they do not)",
+			undelivered, ceiling)
 	}
 	return nil
+}
+
+// undeliveredStatusStrings is the set the tenant ceiling bounds: commands accepted by
+// the platform that have not gone out yet. QUEUED is "not yet gated"; HELD is "gated,
+// waiting for the device". Both are the tenant holding work open, which is the thing
+// being limited.
+//
+// 🔴 THIS IS DELIBERATELY A SEPARATE LIST FROM claimableStatusStrings(), even though
+// the two hold the same values today. They answer different questions — "what does the
+// tenant have outstanding" versus "what may a dispatcher claim" — and the day a state
+// belongs to one and not the other, a shared helper would silently change both.
+func undeliveredStatusStrings() []string {
+	return []string{CommandQueued.String(), CommandHeld.String()}
 }
 
 // heldCommandCeiling resolves the ceiling in force for the calling tenant: the
@@ -493,16 +513,38 @@ func terminalStatusStrings() []string {
 	return out
 }
 
-// dispatchableStatusStrings is the wire form of the states from which a command
-// may still be dispatched: QUEUED (never yet considered) and HELD (considered,
-// and deliberately withheld because the device was absent).
+// claimableStatusStrings is the wire form of the states a DISPATCHER may claim a
+// command from: QUEUED (never yet considered) and HELD (considered, and deliberately
+// withheld because the device was absent). It is the from-state guard for MarkSent.
 //
-// It is the from-state guard for MarkSent and the selection predicate for
-// PendingCommands, and those two MUST agree: a state the sweep hands out but
-// cannot then mark sent is republished on every tick forever, and a state
-// MarkSent accepts but the sweep never selects is a hold nothing drains.
-func dispatchableStatusStrings() []string {
+// 🔴 IT IS NO LONGER THE SWEEP'S SELECTION PREDICATE, AND THE SPLIT IS THE POINT.
+// These were one helper while the two sets genuinely coincided, and collapsing them
+// then was correct. They have now come apart: the sweep stops scanning HELD (see
+// sweepableStatusStrings), while a claim must still accept HELD because the paths that
+// release a hold — the LwM2M wake drain, and the wake handler — claim held rows
+// directly.
+//
+// Do NOT re-merge these because they happen to list the same values today. They answer
+// different questions — "what may a dispatcher claim" versus "what does the sweep hand
+// out" — and a shared helper would silently move both the day one of them changes.
+func claimableStatusStrings() []string {
 	return []string{CommandQueued.String(), CommandHeld.String()}
+}
+
+// sweepableStatusStrings is the wire form of what the periodic delivery sweep selects:
+// QUEUED only.
+//
+// 🔑 HELD IS DELIBERATELY ABSENT, AND THAT IS THE WHOLE POINT OF THE GATE. Polling for
+// "has this device come back yet" asks a question the transports already answer by
+// telling us; the sweep only ever scanned held rows because nothing was listening. A
+// held backlog is released by the device's return, not by re-reading it every 30
+// seconds — which, for a multi-day offline fleet, is the entire backlog loaded and
+// iterated by the leader forever.
+//
+// This is also what keeps the sweep's unbounded read defensible: its selection is once
+// again one tick of QUEUED churn, which is what that argument was written for.
+func sweepableStatusStrings() []string {
+	return []string{CommandQueued.String()}
 }
 
 // MarkSent transitions a command QUEUED/HELD -> SENT.
@@ -529,17 +571,51 @@ func dispatchableStatusStrings() []string {
 // the dispatchable set (a fast response, a concurrent sweep, a cancel) — a benign
 // race, not an error; the current row is returned. (A deleted row surfaces as
 // loadCommand's not-found.)
-func (api *Api) MarkSent(ctx context.Context, id uint) (*Command, error) {
+func (api *Api) MarkSent(ctx context.Context, id uint) (bool, error) {
 	res := api.RDB.DB(ctx).Model(&Command{}).
-		Where("id = ? AND status IN ?", id, dispatchableStatusStrings()).
+		Where("id = ? AND status IN ?", id, claimableStatusStrings()).
 		Updates(map[string]any{
 			"status":    CommandSent.String(),
 			"sent_time": sql.NullTime{Time: time.Now(), Valid: true},
 		})
 	if res.Error != nil {
-		return nil, res.Error
+		return false, res.Error
 	}
-	return api.loadCommand(ctx, id)
+	return res.RowsAffected == 1, nil
+}
+
+// ReleaseClaim returns a claimed-but-undispatched command to QUEUED, clearing the
+// sent_time the claim stamped. It reports whether this caller's release landed.
+//
+// 🔴 IT IS THE OTHER HALF OF CLAIM-BEFORE-PUBLISH, AND WITHOUT IT THE CLAIM IS A LEAK.
+// A dispatcher that claims a row and then fails to publish has produced a row that is
+// SENT with a sent_time, invisible to every dispatcher (SENT is not claimable and the
+// sweep does not select it), which dies TIMEOUT — "delivered, and the device never
+// answered" — for a command that was never sent. That is precisely the lie the whole
+// command-state vocabulary exists to stop telling.
+//
+// 🔑 THE TARGET IS QUEUED, NOT HELD, and the distinction matters. A failed publish says
+// nothing about presence: the device was present enough a moment ago for this row to be
+// dispatched at all. QUEUED sends it back through the presence gate on the next tick,
+// which re-evaluates and either dispatches or holds it. HELD would skip that evaluation
+// and park a deliverable command behind a wake that may never come, because the device
+// never left.
+//
+// The from-state predicate is what makes this safe to run after a failure whose outcome
+// is uncertain. If the publish actually landed and only its acknowledgement was lost,
+// the device may already have answered and moved the row to a terminal state — the
+// release then matches nothing and correctly does nothing.
+func (api *Api) ReleaseClaim(ctx context.Context, id uint) (bool, error) {
+	res := api.RDB.DB(ctx).Model(&Command{}).
+		Where("id = ? AND status = ?", id, CommandSent.String()).
+		Updates(map[string]any{
+			"status":    CommandQueued.String(),
+			"sent_time": sql.NullTime{},
+		})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
 }
 
 // MarkSentByToken is MarkSent addressed by the command's token rather than its
@@ -582,7 +658,7 @@ func (api *Api) MarkSent(ctx context.Context, id uint) (*Command, error) {
 // cancelled — which is a benign race and not an error.
 func (api *Api) MarkSentByToken(ctx context.Context, token string) (bool, error) {
 	res := api.RDB.DB(ctx).Model(&Command{}).
-		Where("token = ? AND status IN ?", token, dispatchableStatusStrings()).
+		Where("token = ? AND status IN ?", token, claimableStatusStrings()).
 		Updates(map[string]any{
 			"status":    CommandSent.String(),
 			"sent_time": sql.NullTime{Time: time.Now(), Valid: true},
@@ -879,15 +955,21 @@ func (api *Api) TrySweepLock(ctx context.Context, fn func() error) (bool, error)
 // hold the sweep could not see would be a hold nothing drains — it would sit until
 // its TTL regardless of the device coming back. The decision to publish or keep
 // holding belongs to the caller; this read only says which rows are still in play.
-// (dispatchableStatusStrings is shared with MarkSent so the set handed out and the
-// set that can be marked sent cannot drift apart.)
+// (The set selected here is a SUBSET of what MarkSent will claim from — the sweep hands
+// out QUEUED, while a claim also accepts HELD for the release paths. Subset, not
+// equality: a state the sweep hands out but cannot then mark sent would be republished
+// on every tick forever, which is what must never happen.)
 //
 // The ORDER BY is a strict improvement over the previous unordered read: delivery
 // now follows enqueue order instead of whatever the planner returned.
 //
-// It is deliberately NOT capped, though the unbounded read is a real memory hazard
-// — a fleet that goes offline queues commands without bound, and this loads the
-// whole backlog into the pod at once. A naive `LIMIT n` makes that worse, not
+// It is deliberately NOT capped. 🔑 THAT ARGUMENT SURVIVES ONLY BECAUSE THIS NOW
+// SELECTS QUEUED ALONE. While it also selected HELD, the selection was an absent
+// fleet's whole multi-day backlog re-read every 30 seconds; with the gate, held rows
+// are released by the device's return and never appear here. What is left is one tick
+// of churn, which is the thing the reasoning below was written about.
+//
+// A naive `LIMIT n` makes that worse, not
 // better, and the failure is not obvious: combined with oldest-first ordering, any
 // command that can never be delivered (an oversized payload, a tenant whose stream
 // is gone) keeps the smallest id and therefore occupies a slot in EVERY subsequent
@@ -904,7 +986,7 @@ func (api *Api) TrySweepLock(ctx context.Context, fn func() error) (bool, error)
 // that always makes progress beats a bounded one that can wedge.
 func (api *Api) PendingCommands(ctx context.Context) ([]*Command, error) {
 	found := make([]*Command, 0)
-	result := api.RDB.DB(ctx).Where("status IN ?", dispatchableStatusStrings()).
+	result := api.RDB.DB(ctx).Where("status IN ?", sweepableStatusStrings()).
 		Order("id ASC").Find(&found)
 	if result.Error != nil {
 		return nil, result.Error

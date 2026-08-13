@@ -90,32 +90,61 @@ func TestTerminalStatusStringsMatchesTerminal(t *testing.T) {
 	}
 }
 
-// TestDispatchableStatusesAreNonTerminal guards the other shared set.
+// TestDispatchableStatusesAreNonTerminal guards the two dispatch sets and, crucially,
+// the RELATIONSHIP between them now that they have come apart.
 //
-// dispatchableStatusStrings() is both the from-state guard for MarkSent and the
-// selection predicate for PendingCommands. If it ever admitted a terminal state,
-// the sweep would hand out finished commands and re-actuate hardware; if it and
-// PendingCommands drifted apart, the sweep would either publish rows it cannot
-// then mark sent (republishing them every tick forever) or hold rows nothing
-// drains.
+// claimableStatusStrings() is the from-state guard for MarkSent; sweepableStatusStrings()
+// is what the periodic sweep selects. If either ever admitted a terminal state, a
+// finished command would be handed out and hardware re-actuated. And the sweep's set must
+// stay a SUBSET of the claimable one: a row the sweep publishes but cannot then mark sent
+// is republished on every tick forever.
+//
+// 🔑 Subset, NOT equality — that is what changed. HELD is claimable (the release paths
+// claim held rows directly) but deliberately not sweepable (the gate exists so held rows
+// are released by a device's return, not by polling).
 func TestDispatchableStatusesAreNonTerminal(t *testing.T) {
-	dispatchable := dispatchableStatusStrings()
-	if len(dispatchable) == 0 {
-		t.Fatal("no dispatchable statuses; the delivery sweep would never publish anything")
+	claimable := claimableStatusStrings()
+	sweepable := sweepableStatusStrings()
+	if len(claimable) == 0 {
+		t.Fatal("no claimable statuses; no dispatcher could ever claim a command")
 	}
-	for _, s := range dispatchable {
+	if len(sweepable) == 0 {
+		t.Fatal("no sweepable statuses; the delivery sweep would never publish anything")
+	}
+	for _, s := range append(append([]string{}, claimable...), sweepable...) {
 		if CommandStatus(s).Terminal() {
-			t.Fatalf("%s is dispatchable AND terminal; the sweep would re-actuate a finished command", s)
+			t.Fatalf("%s is dispatchable AND terminal; a finished command would be re-actuated", s)
 		}
 		if !CommandStatus(s).Valid() {
 			t.Fatalf("%s is dispatchable but not a known status", s)
 		}
 	}
-	// SENT must NOT be dispatchable: it has already gone out. Including it would
-	// make the sweep republish every unanswered command on every tick.
-	for _, s := range dispatchable {
+	// The subset relation, which is the invariant the split has to preserve.
+	claimSet := map[string]bool{}
+	for _, s := range claimable {
+		claimSet[s] = true
+	}
+	for _, s := range sweepable {
+		if !claimSet[s] {
+			t.Fatalf("the sweep selects %s but MarkSent will not claim it; every such row would be "+
+				"published and republished on every tick forever", s)
+		}
+	}
+	// HELD must be claimable but NOT sweepable. Both halves are load-bearing: drop it from
+	// claimable and nothing can ever release a hold; add it to sweepable and the gate is
+	// undone — the sweep goes back to re-reading an absent fleet's whole backlog every tick.
+	if !claimSet[CommandHeld.String()] {
+		t.Fatal("HELD is not claimable, so no release path could ever dispatch a held command")
+	}
+	for _, s := range sweepable {
+		if CommandStatus(s) == CommandHeld {
+			t.Fatal("HELD is sweepable; the gate is undone and the sweep re-reads the whole held backlog")
+		}
+	}
+	// SENT must be in neither set: it has already gone out.
+	for _, s := range append(append([]string{}, claimable...), sweepable...) {
 		if CommandStatus(s) == CommandSent {
-			t.Fatal("SENT must not be dispatchable; the sweep would republish every in-flight command each tick")
+			t.Fatal("SENT must not be dispatchable; every in-flight command would be republished each tick")
 		}
 	}
 }
@@ -194,15 +223,79 @@ func TestMarkSentReleasesAHeldCommand(t *testing.T) {
 
 	id := seedWithStatus(t, api, ctx, "held-release", CommandHeld)
 
-	got, err := api.MarkSent(ctx, id)
+	claimed, err := api.MarkSent(ctx, id)
 	if err != nil {
 		t.Fatalf("MarkSent failed: %v", err)
 	}
+	if !claimed {
+		t.Fatal("a held command must be claimable; otherwise nothing can ever release a hold")
+	}
+	got := loadOrFail(t, api, ctx, id)
 	if got.Status != CommandSent.String() {
 		t.Fatalf("a held command must be releasable to SENT, got %s", got.Status)
 	}
 	if !got.SentTime.Valid {
 		t.Fatalf("releasing a hold must stamp SentTime")
+	}
+
+	// 🔑 And the release must be undoable, or a failed publish strands the row: SENT with
+	// a sent_time, claimable by nobody, dying TIMEOUT for a command never delivered.
+	released, err := api.ReleaseClaim(ctx, id)
+	if err != nil {
+		t.Fatalf("ReleaseClaim failed: %v", err)
+	}
+	if !released {
+		t.Fatal("ReleaseClaim did not release a row it had just claimed")
+	}
+	back := loadOrFail(t, api, ctx, id)
+	if back.Status != CommandQueued.String() {
+		t.Fatalf("a released claim must return to QUEUED so the gate re-evaluates presence, got %s",
+			back.Status)
+	}
+	if back.SentTime.Valid {
+		t.Fatal("a released claim must clear SentTime; a sent_time on an undelivered command is the " +
+			"record that makes TIMEOUT look justified")
+	}
+}
+
+// TestReleaseClaimCannotResurrectAnAnsweredCommand pins the from-state guard.
+//
+// 🔴 THE RACE IS REAL AND THE COMMENT ON ReleaseClaim ALREADY DESCRIBED IT — it just had
+// nothing checking it, which a mutation found by deleting the guard and watching every
+// test stay green. A publish can land while its acknowledgement is lost: the dispatcher
+// sees a failure and releases, but the device has already acted and answered, driving the
+// row terminal. Without the guard the release drags that finished command back to QUEUED,
+// where the next sweep tick dispatches it AGAIN — a second physical actuation caused by
+// the very code written to prevent one.
+func TestReleaseClaimCannotResurrectAnAnsweredCommand(t *testing.T) {
+	for _, terminal := range []CommandStatus{
+		CommandSuccessful, CommandFailed, CommandCancelled, CommandExpired, CommandTimeout,
+	} {
+		t.Run(string(terminal), func(t *testing.T) {
+			api := newTestApi(t)
+			ctx := core.WithTenant(context.Background(), "A")
+			id := seedWithStatus(t, api, ctx, "answered-"+string(terminal), terminal)
+
+			released, err := api.ReleaseClaim(ctx, id)
+			if err != nil {
+				t.Fatalf("ReleaseClaim errored on a terminal command: %v", err)
+			}
+			if released {
+				t.Fatalf("ReleaseClaim reported it released a %s command", terminal)
+			}
+			if got := loadOrFail(t, api, ctx, id); got.Status != terminal.String() {
+				t.Fatalf("ReleaseClaim resurrected a %s command as %s; the next sweep tick would "+
+					"dispatch it again and the device would actuate twice", terminal, got.Status)
+			}
+		})
+	}
+
+	// The counterweight: the guard must not be so tight that a genuine release fails.
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+	id := seedWithStatus(t, api, ctx, "genuinely-claimed", CommandSent)
+	if released, err := api.ReleaseClaim(ctx, id); err != nil || !released {
+		t.Fatalf("a genuinely claimed SENT row must be releasable (released=%v err=%v)", released, err)
 	}
 }
 
@@ -318,14 +411,15 @@ func TestPendingCommandsCoversTheDispatchableSet(t *testing.T) {
 		got[c.Token] = true
 	}
 
-	for _, want := range []string{"p-queued", "p-held"} {
-		if !got[want] {
-			t.Fatalf("%s must be delivered by the sweep but PendingCommands omitted it (got %v)", want, got)
-		}
+	if !got["p-queued"] {
+		t.Fatalf("p-queued must be delivered by the sweep but PendingCommands omitted it (got %v)", got)
 	}
-	for _, unwanted := range []string{"p-sent", "p-cancelled", "p-successful"} {
+	// p-held is in the UNWANTED list on purpose: the gate's whole value is that the sweep
+	// stops polling held rows. If this ever passes with p-held present, the sweep is back
+	// to loading an absent fleet's multi-day backlog on every tick.
+	for _, unwanted := range []string{"p-held", "p-sent", "p-cancelled", "p-successful"} {
 		if got[unwanted] {
-			t.Fatalf("%s must NOT be redelivered but PendingCommands returned it (got %v)", unwanted, got)
+			t.Fatalf("%s must NOT be selected by the sweep but PendingCommands returned it (got %v)", unwanted, got)
 		}
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-command-delivery/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
 
@@ -57,6 +58,17 @@ type CommandDeliveryProcessor struct {
 	// the constructor never runs.
 	TenantDeleted func(tenant string) bool
 
+	// ClaimsLost counts dispatches abandoned because another dispatcher claimed the
+	// command first, and ClaimsStranded counts commands left reading SENT because the
+	// publish failed AND the release failed too.
+	//
+	// 🔑 BOTH EXIST BECAUSE THEY USED TO BE SILENT. A lost claim was previously a
+	// zero-row update nobody looked at; a stranded row has no representation at all
+	// except a TIMEOUT that blames the device. Nil is tolerated (skipped) for the same
+	// reason TenantDeleted is: this struct is assembled by literal in tests.
+	ClaimsLost     prometheus.Counter
+	ClaimsStranded prometheus.Counter
+
 	lifecycle core.LifecycleManager
 	quit      chan struct{}
 }
@@ -76,6 +88,11 @@ func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.Mess
 		Api:                    api,
 		metrics:                ms.NewProcessorMetrics("response"),
 		TenantDeleted:          tenantDeleted,
+		ClaimsLost: ms.NewCounter("command_delivery_claims_lost_total",
+			"Dispatches abandoned because another dispatcher claimed the command first", nil),
+		ClaimsStranded: ms.NewCounter("command_delivery_claims_stranded_total",
+			"Commands left reading SENT because their publish failed and the release failed too; "+
+				"each will expire as TIMEOUT, wrongly blaming the device", nil),
 	}
 
 	// Create lifecycle manager.
@@ -124,6 +141,14 @@ func (cproc *CommandDeliveryProcessor) deliverPendingCommands(ctx context.Contex
 	}
 }
 
+// incr adds to an optional counter, skipping a nil one so a literal-built processor
+// needs no metrics registry.
+func incr(c prometheus.Counter, n float64) {
+	if c != nil {
+		c.Add(n)
+	}
+}
+
 // tenantDeleted answers the ADR-077 gate, tolerating an unwired closure.
 //
 // A method rather than a normalization in the constructor because this struct's fields
@@ -142,8 +167,17 @@ func (cproc *CommandDeliveryProcessor) tenantDeleted(tenant string) bool {
 	return cproc.TenantDeleted != nil && cproc.TenantDeleted(tenant)
 }
 
-// deliverCommand publishes a single command to its device's tenant subject and
-// transitions it QUEUED -> SENT.
+// deliverCommand claims a single command, then publishes it to its device's subject.
+//
+// 🔴 CLAIM BEFORE PUBLISH, NOT AFTER, AND THE ORDER IS THE WHOLE POINT. Publishing first
+// left a window between the publish and the mark in which another dispatcher — the LwM2M
+// wake drain, or the release path — could claim the same row and actuate the device a
+// second time. A command is a physical movement of real hardware, so a duplicate is not a
+// bookkeeping wrinkle.
+//
+// Claiming first inverts the risk: the failure mode becomes a row claimed but not
+// published, which ReleaseClaim returns to QUEUED for the next tick. A command delivered
+// late is recoverable; a command delivered twice is not.
 func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *model.Command) error {
 	envelope := deliveryEnvelope{
 		Token:       cmd.Token,
@@ -173,15 +207,36 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 	// did not filter — or a compromised one — read every command in the tenant,
 	// payloads included. The subject now carries the device, and the broker grant is
 	// narrowed to match, so the isolation is enforced rather than requested.
+	// Claim first. A lost claim means another dispatcher got there — benign, and now
+	// COUNTED rather than silent: while nothing wrote HELD this could not happen at all,
+	// so a standing rate here is the signal that two dispatch paths are overlapping.
+	claimed, err := cproc.Api.MarkSent(tenantCtx, cmd.ID)
+	if err != nil {
+		return err
+	}
+	if !claimed {
+		incr(cproc.ClaimsLost, 1)
+		log.Debug().Str("command", cmd.Token).Str("device", cmd.DeviceToken).
+			Msg("Another dispatcher claimed this command first; not publishing it again.")
+		return nil
+	}
+
 	if err := cproc.DeviceCommandsWriter.WriteToDevice(tenantCtx, cmd.DeviceToken, msg); err != nil {
 		cproc.DeviceCommandsWriter.HandleResponse(err)
+		// The claim is now a lie unless it is undone: the row reads SENT with a
+		// sent_time for a command that never went out, and nothing would ever pick it
+		// up again. Release failures are logged rather than returned — the publish error
+		// is the one worth propagating, and a swallowed release is exactly the kind of
+		// silence that produced this whole class of defect, so it gets a counter too.
+		if _, rerr := cproc.Api.ReleaseClaim(tenantCtx, cmd.ID); rerr != nil {
+			incr(cproc.ClaimsStranded, 1)
+			log.Error().Err(rerr).Str("command", cmd.Token).
+				Msg("Could not release a command whose publish failed; it will read SENT until its TTL " +
+					"expires it as TIMEOUT, which wrongly blames the device.")
+		}
 		return err
 	}
 	cproc.DeviceCommandsWriter.HandleResponse(nil)
-
-	if _, err := cproc.Api.MarkSent(tenantCtx, cmd.ID); err != nil {
-		return err
-	}
 	return nil
 }
 
