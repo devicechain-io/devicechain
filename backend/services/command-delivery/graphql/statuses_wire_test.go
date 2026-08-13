@@ -82,9 +82,12 @@ func newWireTestCtx(t *testing.T) (context.Context, *model.Api) {
 	return ctx, api
 }
 
-// seedCommand creates a command and drives it to the requested state. HELD has no
-// public transition yet (the presence gate is a later slice), so it is written
-// directly rather than through an API call that does not exist.
+// seedCommand creates a command and drives it to the requested state. Every state past
+// QUEUED is written directly rather than reached through its real transition: this suite
+// is about the GraphQL wire's treatment of a status, so staging one through the delivery
+// sweep, a presence read and a device response would put most of the platform between the
+// test and what it measures. (HELD does have a real writer now — the presence gate — and
+// its transitions are pinned where they belong, on the API and the sweep.)
 func seedCommand(t *testing.T, ctx context.Context, api *model.Api, token string, status model.CommandStatus) {
 	t.Helper()
 	created, err := api.CreateCommand(ctx, &model.CommandCreateRequest{

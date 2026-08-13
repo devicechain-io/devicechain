@@ -11,9 +11,11 @@ import (
 	"github.com/devicechain-io/dc-command-delivery/config"
 	"github.com/devicechain-io/dc-command-delivery/graphql"
 	"github.com/devicechain-io/dc-command-delivery/model"
+	"github.com/devicechain-io/dc-command-delivery/presence"
 	"github.com/devicechain-io/dc-command-delivery/processor"
 	"github.com/devicechain-io/dc-command-delivery/verify"
 	"github.com/devicechain-io/dc-microservice/auth"
+	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
@@ -97,12 +99,45 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	CommandDeliveryProcessor = processor.NewCommandDeliveryProcessor(Microservice, CommandResponsesReader,
 		DeviceCommandsWriter, core.NewNoOpLifecycleCallbacks(), Api,
-		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery"))
+		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery"),
+		presenceReader(infra))
 	err = CommandDeliveryProcessor.Initialize(context.Background())
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+// presenceReader builds the presence gate's read side, or nil to run the sweep ungated.
+//
+// 🔴 FAIL-OPEN, AND LOUDLY, which is the opposite of wireEnqueueValidator's neighbours in
+// this file and is a deliberate difference. The enqueue validator refuses work it cannot
+// validate; this gate only ever WITHHOLDS work, so an unavailable authority must not stop
+// commands. Nil here means every command dispatches exactly as it did before the gate
+// existed — the behaviour the platform has always had, not a new failure. Withholding
+// instead would turn a device-state outage, or an instance that simply does not deploy
+// device-state, into a platform-wide command stall.
+//
+// Both guards are configurations, not mistakes: an instance can legitimately run a profile
+// without device-state, and a config document predating this feature carries no
+// deviceState block. Each logs at WARN with what is lost, because a gate that is off is
+// invisible in every other way — commands flow, nothing is held, and the silent losses it
+// exists to prevent resume without a single error.
+func presenceReader(infra mscfg.InfrastructureConfiguration) presence.Reader {
+	if infra.ServiceAuth.Secret == "" {
+		log.Warn().Msg("Service secret not configured — the presence gate is OFF; commands to devices known to be offline will be published and silently dropped by the broker.")
+		return nil
+	}
+	if infra.DeviceState.Hostname == "" || infra.DeviceState.Port == 0 {
+		log.Warn().Msg("device-state endpoint not configured (infrastructure.deviceState) — the presence gate is OFF; commands to devices known to be offline will be published and silently dropped by the broker.")
+		return nil
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery",
+		[]string{string(auth.StateRead)})
+	url := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceState.Hostname, infra.DeviceState.Port)
+	log.Info().Str("deviceState", url).
+		Msg("Presence gate enabled; commands to devices a transport reports as absent will be withheld rather than published.")
+	return presence.NewGraphQLReader(client, url)
 }
 
 // wireEnqueueValidator installs the ADR-043 decision 3 enqueue gate on the Api when

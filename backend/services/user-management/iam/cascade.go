@@ -181,9 +181,9 @@ func (t *Tenant) OverrideHeldCommandCeiling() *int {
 // (SourcePlatformDefault). A nil value means the enforcing service (command-delivery)
 // substitutes its own configured default, which is itself a real bound: null is
 // "inherit", NEVER "unlimited", and nothing in this path can produce an unlimited
-// reading. That matters more here than for a rate, because nothing drains a HELD
-// backlog on its own — an unbounded one grows in durable storage until an operator
-// notices.
+// reading. That matters more here than for a rate, because a HELD backlog drains only
+// when the devices come back: a fleet that stays offline accumulates in durable storage
+// until an operator notices, which is precisely the case the ceiling is for.
 //
 // Like the shed priority it is a scalar end to end: it never passes through
 // overridesFor / PerSecond, having neither a burst nor a rate unit. Unlike it, it is a

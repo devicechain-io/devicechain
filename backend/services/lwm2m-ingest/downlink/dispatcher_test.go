@@ -216,12 +216,13 @@ func (l *flakyLookup) Lookup(_, _ string) (mux.Conn, Reach) {
 // TestDrainDispatchesHeldCommands proves the core wake-drain: held commands are dispatched to the
 // now-live device, in fetch order (the fetcher already sorts oldest-first), each publishing a response.
 //
-// The fixtures carry Status: statusSent — as does every pre-existing drain test below — because
-// that is what a real row looks like TODAY: nothing writes HELD yet, so the whole backlog is the
-// pre-existing SENT hold (published, ack-dropped by an offline dispatcher, left in SENT). Stating
-// the status explicitly rather than leaving it zero keeps these fixtures honest about which row
-// they model, and it is what makes the claim-then-dispatch tests above a genuine contrast rather
-// than a distinction the fixtures cannot express.
+// The fixtures carry Status: statusSent — as does every pre-existing drain test below — and that
+// models the OTHER kind of backlogged row: one published toward a device that had already gone
+// quiet, ack-dropped, and left sitting in SENT. It is not the only kind any more. The presence
+// gate now withholds commands to an absent device, and a sleeping queue-mode device is exactly
+// that, so a real backlog today is a mixture of both — which is why the claim-then-dispatch
+// tests above stage HELD explicitly. Stating the status on every fixture rather than leaving it
+// zero is what makes that contrast expressible at all.
 func TestDrainDispatchesHeldCommands(t *testing.T) {
 	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
 	pub := &fakePublisher{}

@@ -382,8 +382,9 @@ type Tenant struct {
 	//
 	// nil means "inherit" — the tenant's tier decides, and failing that the enforcing
 	// service's own configured default. It NEVER means unlimited, and there is no
-	// value that does: nothing drains a HELD backlog on its own, so an unbounded one
-	// is tenant-triggered, operator-invisible growth in durable storage.
+	// value that does: a HELD backlog drains only when the devices come back, so for a
+	// fleet that stays offline an unbounded one is tenant-triggered, operator-invisible
+	// growth in durable storage.
 	HeldCommandCeiling *int
 }
 

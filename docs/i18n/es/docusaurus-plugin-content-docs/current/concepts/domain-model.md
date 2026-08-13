@@ -87,11 +87,11 @@ Estos estados significan que el comando aún no ha terminado:
 
 - **`QUEUED`** — aceptado y validado, esperando su primera decisión de despacho. Es
   genuinamente transitorio: un comando no se queda aquí.
-- **`HELD`** — un comando retenido en lugar de despachado. Forma parte del vocabulario del
-  ciclo de vida que la API acepta y la consola representa, y cuenta como en tránsito: un
-  comando retenido todavía se puede cancelar, y un TTL que vence sobre él registra
-  `EXPIRED` y no `TIMEOUT`, porque el comando nunca llegó a salir. Hoy nada coloca un
-  comando en este estado.
+- **`HELD`** — la plataforma está reteniendo el comando deliberadamente porque sabe que el
+  dispositivo está ausente. Aquí es donde se acumula el pendiente de una flota desconectada,
+  y puede permanecer durante días. Un comando retenido cuenta como en tránsito: todavía se
+  puede cancelar, y un TTL que vence sobre él registra `EXPIRED` y no `TIMEOUT`, porque el
+  comando nunca llegó a salir. Vuelve a `QUEUED` cuando el dispositivo regresa.
 - **`SENT`** — publicado en el topic de comandos propio del dispositivo, esperando su
   respuesta.
 
@@ -105,13 +105,40 @@ Estos son terminales, y nada sale de un estado terminal:
 `EXPIRED` y `TIMEOUT` responden preguntas distintas, y confundir uno con el otro te hace
 buscar en el lugar equivocado: `EXPIRED` significa que el comando nunca salió de la
 plataforma, así que una racha de ellos indica que las entregas no se están intentando;
-`TIMEOUT` significa que sí salió y no volvió nada, lo que apunta al dispositivo. Lee con
-cuidado una racha de `TIMEOUT` antes de culpar al firmware: un comando para un dispositivo
-apagado se despacha igualmente, y sobre MQTT solo se entrega a un dispositivo que esté
-conectado y suscrito en ese preciso instante. Un dispositivo ausente no lo recibe más tarde
-—el broker no lo retiene—, así que el comando queda registrado como enviado, nada responde y
-termina en `TIMEOUT`. Por eso una racha de `TIMEOUT` contra dispositivos que usted sabe que
-son intermitentes habla de cuándo estuvieron conectados, no de su firmware.
+`TIMEOUT` significa que sí salió y no volvió nada, lo que apunta al dispositivo.
+
+### Comandos para un dispositivo ausente {#commands-to-a-device-that-is-away}
+
+Sobre MQTT un comando solo llega a un dispositivo que esté conectado y suscrito en ese
+preciso instante: el broker no lo retiene para que lo recoja más tarde. Por eso un comando
+publicado hacia un dispositivo ausente simplemente se pierde, y la plataforma no tenía forma
+de saberlo: registraba el comando como enviado, nada respondía y una semana después figuraba
+como `TIMEOUT` — un registro permanente que culpaba a un dispositivo al que nunca se le
+entregó el comando.
+
+Por eso la plataforma comprueba antes de publicar. Cuando un transporte informa de que un
+dispositivo no está conectado, sus comandos pasan a `HELD` en lugar de publicarse, y vuelven
+a `QUEUED` cuando el dispositivo regresa.
+
+Conviene conocer tres límites:
+
+- **La comprobación necesita un transporte que informe de las conexiones.** Para un
+  dispositivo cuyo transporte solo transporta datos, "sin eventos recientes" no es prueba de
+  que el dispositivo no pueda recibir: un dispositivo que informa cada hora está en silencio
+  59 de cada 60 minutos y es alcanzable durante todo ese tiempo. Esos comandos se despachan
+  como antes.
+- **Es una comprobación, no una cola.** Un dispositivo que se desconecta entre la
+  comprobación y la publicación pierde el comando igualmente. Lo que se elimina es el caso
+  que la plataforma sí podía prever.
+- **Los comandos a dispositivos Sparkplug no se entregan en absoluto.** La ruta no está
+  construida: los nodos Sparkplug viven en tu propia infraestructura MQTT y no en la de la
+  plataforma, y nada une ambas. Un comando emitido a uno de ellos se registra como `FAILED`
+  de inmediato, con ese motivo, en lugar de retenerse a la espera de un regreso que no
+  serviría de nada.
+
+Por eso una racha de `TIMEOUT` contra dispositivos que usted sabe que son intermitentes
+sigue mereciendo leerse como algo que habla de cuándo estuvieron conectados y no de su
+firmware — pero ahora debería ser una racha mucho más corta.
 
 Cancelar un comando registra `CANCELLED`. La cancelación y la expiración del TTL compartían
 hasta hace poco el único valor `EXPIRED`, así que los comandos cancelados antes de ese
