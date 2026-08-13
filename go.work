@@ -2,10 +2,26 @@
 // (warpstreamlabs/bento v1.19, landed in outbound-connectors in slice C4b) declares
 // `go 1.26.5`, which propagates the language version to that module and therefore to
 // the workspace. The workspace `go` directive must be >= every module's, so it sits at
-// 1.26.5; the toolchain directive keeps CI/local on a matching toolchain.
+// 1.26.5.
 go 1.26.5
 
-toolchain go1.26.5
+// 🔑 THE TOOLCHAIN IS PINNED SEPARATELY FROM THE LANGUAGE FLOOR, AND THEY MOVE FOR
+// DIFFERENT REASONS. The `go` line above is a floor set by what our modules declare and
+// it changes when a dependency raises it. This line is which compiler actually builds —
+// it changes when a Go patch release fixes something we ship, which is a security
+// cadence, not a dependency one. Conflating them is how a stdlib CVE fix gets blocked on
+// an unrelated language-version argument.
+//
+// At 1.26.6 for seven reachable standard-library advisories — GO-2026-5026, -5972,
+// -6088, -6089, -6090, -6091 and -6218, across net/http, crypto/tls, encoding/asn1,
+// encoding/xml, html/template and net/url — all fixed in this patch release.
+//
+// 🔴 THIS IS THE CHECK THAT GOES RED WITHOUT ANYONE TOUCHING THE CODE. govulncheck reads
+// a LIVE advisory database, so the same commit that passed this morning fails this
+// afternoon when an advisory lands. A red govulncheck on a PR therefore says nothing
+// about that PR until you have checked whether main is red too — here every failing
+// module was failing on code the PR never touched, including one byte-identical to main.
+toolchain go1.26.6
 
 use (
 	./backend/cli
