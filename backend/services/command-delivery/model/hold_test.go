@@ -193,13 +193,26 @@ func TestAHoldDoesNotChangeWhatTheCeilingCounts(t *testing.T) {
 	created := enqueued(t, api, ctx, "cmd-counted")
 
 	before := undeliveredCount(t, api, ctx)
-	if _, err := api.HoldCommand(ctx, created.ID); err != nil {
+	held, err := api.HoldCommand(ctx, created.ID)
+	if err != nil {
 		t.Fatalf("HoldCommand failed: %v", err)
+	}
+	// 🔴 WITHOUT THIS THE TEST CANNOT FAIL. "The count did not change" is also exactly
+	// what a HoldCommand that did nothing at all produces, so the transition has to be
+	// confirmed before its invariance means anything.
+	if !held || loadOrFail(t, api, ctx, created.ID).Status != CommandHeld.String() {
+		t.Fatal("the promotion under test did not happen, so its invariance proves nothing")
 	}
 	if after := undeliveredCount(t, api, ctx); after != before {
 		t.Fatalf("holding a command changed the ceiling's count from %d to %d; the counted set "+
 			"must be invariant under QUEUED -> HELD or a tenant can enqueue past its ceiling and "+
 			"one sweep tick converts the backlog", before, after)
+	}
+	// And the count must be the one that MOVES for a genuine enqueue — otherwise a
+	// helper that counted nothing at all would satisfy every assertion above.
+	enqueued(t, api, ctx, "cmd-counted-2")
+	if after := undeliveredCount(t, api, ctx); after != before+1 {
+		t.Fatalf("a new enqueue must raise the ceiling's count from %d, got %d", before, after)
 	}
 }
 

@@ -71,6 +71,12 @@ import (
 // accumulate. Indexing (id) under a partial predicate gives an ordered index scan
 // with no Sort, and the index stays small because it only ever covers rows that
 // are still dispatchable.
+//
+// 🔴 THAT SECOND PARAGRAPH IS A SNAPSHOT OF A QUERY THAT NO LONGER EXISTS, kept
+// because a migration records what it did and why it did it THEN. The sweep has
+// since narrowed to QUEUED alone and the presence gate now writes HELD, which
+// together make (id) the wrong key — see NewDispatchableStatusIndexSchema, which
+// replaces this index and explains the shift. Read that one for current behaviour.
 func NewTenantStatusIndexSchema() *gormigrate.Migration {
 	return &gormigrate.Migration{
 		ID: "20260813000000",
