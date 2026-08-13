@@ -124,7 +124,7 @@ func (e *fakeExecutor) callCount() int {
 }
 
 func newDispatcher(rdr reader, pub responsePublisher, look connLookup, exec executor) *Dispatcher {
-	return NewDispatcher(rdr, pub, look, exec, nil, Metrics{}, Options{})
+	return NewDispatcher(rdr, pub, look, exec, nil, nil, Metrics{}, Options{})
 }
 
 // fakeFetcher is a stand-in wake-drain source: it returns a canned command list (or an error).
@@ -149,6 +149,38 @@ func (f *fakeFetcher) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.calls
+}
+
+// fakeClaimer is a stand-in for command-delivery's markCommandSent. It records the command
+// tokens it was asked to claim — not merely a count — because the properties under test are
+// "WHICH commands were claimed" and "was the claim issued BEFORE the op", and a bare counter
+// cannot tell a claim of the right command from a claim of the wrong one.
+type fakeClaimer struct {
+	mu       sync.Mutex
+	won      bool  // what a successful claim reports: true = we own it, false = someone else won
+	err      error // if set, the claim could not be established at all
+	claimed  []string
+	observer func() // called inside Claim, to observe the world AT claim time (e.g. ops run so far)
+}
+
+func (c *fakeClaimer) Claim(_ context.Context, _, commandToken string) (bool, error) {
+	c.mu.Lock()
+	c.claimed = append(c.claimed, commandToken)
+	obs := c.observer
+	c.mu.Unlock()
+	if obs != nil {
+		obs()
+	}
+	if c.err != nil {
+		return false, c.err
+	}
+	return c.won, nil
+}
+
+func (c *fakeClaimer) claims() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.claimed...)
 }
 
 // liveWorkTok builds a live work item with an explicit command token (production commands are
@@ -183,15 +215,22 @@ func (l *flakyLookup) Lookup(_, _ string) (mux.Conn, Reach) {
 
 // TestDrainDispatchesHeldCommands proves the core wake-drain: held commands are dispatched to the
 // now-live device, in fetch order (the fetcher already sorts oldest-first), each publishing a response.
+//
+// The fixtures carry Status: statusSent — as does every pre-existing drain test below — because
+// that is what a real row looks like TODAY: nothing writes HELD yet, so the whole backlog is the
+// pre-existing SENT hold (published, ack-dropped by an offline dispatcher, left in SENT). Stating
+// the status explicitly rather than leaving it zero keeps these fixtures honest about which row
+// they model, and it is what makes the claim-then-dispatch tests above a genuine contrast rather
+// than a distinction the fixtures cannot express.
 func TestDrainDispatchesHeldCommands(t *testing.T) {
 	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
 	pub := &fakePublisher{}
 	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
 	ff := &fakeFetcher{cmds: []DrainCommand{
-		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`)},
-		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`)},
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusSent},
+		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`), Status: statusSent},
 	}}
-	d := NewDispatcher(nil, pub, look, exec, ff, Metrics{}, Options{})
+	d := NewDispatcher(nil, pub, look, exec, ff, nil, Metrics{}, Options{})
 
 	d.drain(context.Background(), drainJob{tenant: "acme", deviceToken: "pump-1"})
 
@@ -209,10 +248,10 @@ func TestDrainSkipsCommandAlreadyDispatchedLive(t *testing.T) {
 	pub := &fakePublisher{}
 	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
 	ff := &fakeFetcher{cmds: []DrainCommand{
-		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`)}, // already fired live
-		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`)},           // fresh
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusSent}, // already fired live
+		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`), Status: statusSent},           // fresh
 	}}
-	d := NewDispatcher(nil, pub, look, exec, ff, Metrics{}, Options{})
+	d := NewDispatcher(nil, pub, look, exec, ff, nil, Metrics{}, Options{})
 
 	// The live path dispatches c1 first (marks it dispatched).
 	d.dispatch(context.Background(), liveWorkTok("acme", "pump-1", "c1", CommandWrite, `{"path":"/5/0/1","value":"u"}`, newAck()))
@@ -247,11 +286,11 @@ func TestDrainStopsWhenDeviceDropsMidDrain(t *testing.T) {
 	pub := &fakePublisher{}
 	look := &flakyLookup{conn: &fakeConn{}, liveFor: 1} // live for c1 only, offline thereafter
 	ff := &fakeFetcher{cmds: []DrainCommand{
-		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`)},
-		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`)},
-		{Token: "c3", Name: CommandRead, Payload: []byte(`{"path":"/3/0/0"}`)},
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusSent},
+		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`), Status: statusSent},
+		{Token: "c3", Name: CommandRead, Payload: []byte(`{"path":"/3/0/0"}`), Status: statusSent},
 	}}
-	d := NewDispatcher(nil, pub, look, exec, ff, Metrics{}, Options{})
+	d := NewDispatcher(nil, pub, look, exec, ff, nil, Metrics{}, Options{})
 
 	d.drain(context.Background(), drainJob{tenant: "acme", deviceToken: "pump-1"})
 
@@ -266,10 +305,10 @@ func TestDrainStopsOnEviction(t *testing.T) {
 	pub := &fakePublisher{}
 	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
 	ff := &fakeFetcher{cmds: []DrainCommand{
-		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`)},
-		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`)},
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusSent},
+		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`), Status: statusSent},
 	}}
-	d := NewDispatcher(nil, pub, look, exec, ff, Metrics{}, Options{})
+	d := NewDispatcher(nil, pub, look, exec, ff, nil, Metrics{}, Options{})
 
 	d.drain(ctx, drainJob{tenant: "acme", deviceToken: "pump-1"})
 
@@ -282,7 +321,7 @@ func TestDrainFetchErrorNoDispatch(t *testing.T) {
 	exec := &fakeExecutor{}
 	ff := &fakeFetcher{err: errors.New("command-delivery unreachable")}
 	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
-	d := NewDispatcher(nil, &fakePublisher{}, look, exec, ff, Metrics{}, Options{})
+	d := NewDispatcher(nil, &fakePublisher{}, look, exec, ff, nil, Metrics{}, Options{})
 
 	d.drain(context.Background(), drainJob{tenant: "acme", deviceToken: "pump-1"})
 
@@ -304,12 +343,138 @@ func TestDrainDisabledWhenFetcherNil(t *testing.T) {
 // TestDrainTriggerNoOpOnStandby: Drain called when this replica is not the serving leader (Run not
 // active, so no published queues) is a no-op and never panics.
 func TestDrainTriggerNoOpOnStandby(t *testing.T) {
-	ff := &fakeFetcher{cmds: []DrainCommand{{Token: "c1", Name: CommandRead, Payload: []byte(`{"path":"/3/0/0"}`)}}}
-	d := NewDispatcher(nil, &fakePublisher{}, &fakeLookup{}, &fakeExecutor{}, ff, Metrics{}, Options{})
+	ff := &fakeFetcher{cmds: []DrainCommand{{Token: "c1", Name: CommandRead, Payload: []byte(`{"path":"/3/0/0"}`), Status: statusSent}}}
+	d := NewDispatcher(nil, &fakePublisher{}, &fakeLookup{}, &fakeExecutor{}, ff, nil, Metrics{}, Options{})
 
 	d.Drain("acme", "pump-1") // no active term → no-op
 
 	assert.Equal(t, 0, ff.callCount(), "a standby (no serving term) does not fetch")
+}
+
+// --- claim-then-dispatch (ADR-075 L4b) --------------------------------------
+//
+// 🔴 A command is a PHYSICAL ACTUATION, and the delivery sweep publishes anything still
+// DISPATCHABLE. So a drain that fired a HELD command's CoAP op without first taking the row
+// out of that set would leave it for the next sweep tick to publish down the live path — the
+// valve opened a second time. The in-memory dedupe does NOT cover this: it is per-pod and
+// TTL-bounded, so it says nothing about another replica or about this pod after a restart,
+// which are exactly the situations a leadership change produces.
+//
+// These four tests pin the ordering and all three of its outcomes. The two "must not
+// actuate" branches (claim lost, claim errored) are the ones a fake that just returned
+// success would silently skip past, so each asserts on the EXECUTOR — zero CoAP ops — rather
+// than on a return value or a counter.
+
+// TestDrainClaimsAHeldCommandBeforeDispatch proves the ORDERING, not merely that a claim
+// happened: the claimer observes the executor's call count at claim time and it must be zero.
+// A test that only checked "claim called && op called" would pass just as happily on
+// dispatch-then-claim, which is the bug — the op is irreversible, so a claim taken afterwards
+// protects nothing.
+func TestDrainClaimsAHeldCommandBeforeDispatch(t *testing.T) {
+	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
+	pub := &fakePublisher{}
+	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
+	ff := &fakeFetcher{cmds: []DrainCommand{
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusHeld},
+	}}
+	opsAtClaimTime := -1
+	claimer := &fakeClaimer{won: true}
+	claimer.observer = func() { opsAtClaimTime = exec.callCount() }
+	d := NewDispatcher(nil, pub, look, exec, ff, claimer, Metrics{}, Options{})
+
+	d.drain(context.Background(), drainJob{tenant: "acme", deviceToken: "pump-1"})
+
+	assert.Equal(t, []string{"c1"}, claimer.claims(), "the held command is claimed by token")
+	assert.Equal(t, 0, opsAtClaimTime, "the claim must be taken BEFORE the CoAP op runs, not after")
+	assert.Equal(t, 1, exec.callCount(), "having won the claim, the drain dispatches")
+	require.Len(t, pub.responses(), 1)
+	assert.Equal(t, "c1", pub.responses()[0].CommandToken)
+}
+
+// TestDrainDoesNotDispatchWhenTheClaimIsLost: another dispatcher (or the sweep) moved the
+// command out of the dispatchable set first. That is the exclusion mechanism WORKING — this
+// replica must decline, so no CoAP op may run.
+func TestDrainDoesNotDispatchWhenTheClaimIsLost(t *testing.T) {
+	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
+	pub := &fakePublisher{}
+	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
+	ff := &fakeFetcher{cmds: []DrainCommand{
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusHeld},
+	}}
+	claimer := &fakeClaimer{won: false} // someone else got there first
+	d := NewDispatcher(nil, pub, look, exec, ff, claimer, Metrics{}, Options{})
+
+	d.drain(context.Background(), drainJob{tenant: "acme", deviceToken: "pump-1"})
+
+	assert.Equal(t, []string{"c1"}, claimer.claims(), "the claim was attempted")
+	assert.Equal(t, 0, exec.callCount(), "a LOST claim must not actuate — the winner dispatches it")
+	assert.Empty(t, pub.responses(), "no outcome to report for a command we never sent")
+}
+
+// TestDrainDoesNotDispatchWhenTheClaimErrors is the FAIL-CLOSED direction. command-delivery
+// being unreachable means we cannot prove we own the command; dispatching anyway would be
+// irreversible, while declining costs one wake (the row is still dispatchable and the device
+// re-triggers on its next Register/Update). So: no op.
+func TestDrainDoesNotDispatchWhenTheClaimErrors(t *testing.T) {
+	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
+	pub := &fakePublisher{}
+	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
+	ff := &fakeFetcher{cmds: []DrainCommand{
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusHeld},
+		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`), Status: statusHeld},
+	}}
+	claimer := &fakeClaimer{err: errors.New("command-delivery unreachable")}
+	d := NewDispatcher(nil, pub, look, exec, ff, claimer, Metrics{}, Options{})
+
+	d.drain(context.Background(), drainJob{tenant: "acme", deviceToken: "pump-1"})
+
+	assert.Equal(t, 0, exec.callCount(), "a claim that ERRORS must not actuate — an unconfirmed claim is not a claim")
+	assert.Empty(t, pub.responses())
+	assert.Len(t, claimer.claims(), 2,
+		"a failed claim skips only ITS command; the rest of the backlog is still attempted (one bad row must not strand the queue)")
+}
+
+// TestDrainDispatchesASentCommandWithoutClaiming pins the NO-NEW-TRAFFIC-TODAY property. A
+// SENT row has already left command-delivery's dispatchable set, so the sweep will not
+// republish it and there is nothing to claim. Nothing writes HELD yet, which means EVERY
+// drained row today is SENT — so a claim issued "for symmetry" here would add a round trip to
+// every wake of every device on the instance and change behaviour this slice is required to
+// leave alone.
+func TestDrainDispatchesASentCommandWithoutClaiming(t *testing.T) {
+	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
+	pub := &fakePublisher{}
+	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
+	ff := &fakeFetcher{cmds: []DrainCommand{
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusSent},
+		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`), Status: statusSent},
+	}}
+	// 🔴 won:false — if the drain DID call the claimer for a SENT row, this claimer would
+	// report the claim lost and both commands would go undispatched. So the assertion below
+	// fails loudly on an unnecessary claim instead of merely not-noticing it.
+	claimer := &fakeClaimer{won: false}
+	d := NewDispatcher(nil, pub, look, exec, ff, claimer, Metrics{}, Options{})
+
+	d.drain(context.Background(), drainJob{tenant: "acme", deviceToken: "pump-1"})
+
+	assert.Empty(t, claimer.claims(), "a SENT row is already out of the dispatchable set — no claim may be issued")
+	assert.Equal(t, 2, exec.callCount(), "both SENT commands still dispatch, exactly as before this change")
+	assert.Len(t, pub.responses(), 2)
+}
+
+// TestDrainWithoutAClaimerRefusesAHeldCommand: claiming wired off (no command-delivery
+// coordinate) must NOT degrade into dispatching held commands unclaimed. Fail closed — a
+// command nobody can prove ownership of is one the sweep may still publish.
+func TestDrainWithoutAClaimerRefusesAHeldCommand(t *testing.T) {
+	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
+	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
+	ff := &fakeFetcher{cmds: []DrainCommand{
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusHeld},
+	}}
+	d := NewDispatcher(nil, &fakePublisher{}, look, exec, ff, nil, Metrics{}, Options{})
+
+	d.drain(context.Background(), drainJob{tenant: "acme", deviceToken: "pump-1"})
+
+	assert.Equal(t, 0, exec.callCount(), "with no claimer, a held command must not be actuated")
 }
 
 // --- dispatch() disposition (deterministic, no Run loop) --------------------
@@ -533,11 +698,11 @@ func TestWakeDrainEndToEnd(t *testing.T) {
 	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
 	pub := &fakePublisher{}
 	ff := &fakeFetcher{cmds: []DrainCommand{
-		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"coaps://fw"}`)},
-		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`)},
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"coaps://fw"}`), Status: statusSent},
+		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`), Status: statusSent},
 	}}
 	// An empty reader so Run's consume loop just parks on ctx — the drain is driven purely by the wake.
-	d := NewDispatcher(&scriptReader{}, pub, connTable, exec, ff, Metrics{}, Options{})
+	d := NewDispatcher(&scriptReader{}, pub, connTable, exec, ff, nil, Metrics{}, Options{})
 	connTable.SetOnLive(d.Drain)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -625,7 +790,7 @@ func TestProcessRefusesALiveCommandForADeletedTenant(t *testing.T) {
 	pub := &fakePublisher{}
 	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
 	ack := &fakeAck{}
-	d := NewDispatcher(nil, pub, look, exec, nil, Metrics{},
+	d := NewDispatcher(nil, pub, look, exec, nil, nil, Metrics{},
 		Options{TenantDeleted: func(tenant string) bool { return tenant == "acme" }})
 
 	w := liveWorkTok("acme", "pump-1", "c1", CommandWrite, `{"path":"/5/0/1","value":"u"}`, ack)
@@ -641,9 +806,9 @@ func TestProcessRefusesAWakeDrainForADeletedTenant(t *testing.T) {
 	pub := &fakePublisher{}
 	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
 	ff := &fakeFetcher{cmds: []DrainCommand{
-		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`)},
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusSent},
 	}}
-	d := NewDispatcher(nil, pub, look, exec, ff, Metrics{},
+	d := NewDispatcher(nil, pub, look, exec, ff, nil, Metrics{},
 		Options{TenantDeleted: func(tenant string) bool { return tenant == "acme" }})
 
 	d.process(context.Background(), task{deviceToken: "pump-1", drain: &drainJob{tenant: "acme", deviceToken: "pump-1"}})
@@ -660,14 +825,14 @@ func TestProcessStillActuatesWhenTheGateSaysLive(t *testing.T) {
 
 	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
 	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
-	d := NewDispatcher(nil, &fakePublisher{}, look, exec, nil, Metrics{}, live())
+	d := NewDispatcher(nil, &fakePublisher{}, look, exec, nil, nil, Metrics{}, live())
 	w := liveWorkTok("acme", "pump-1", "c1", CommandWrite, `{"path":"/5/0/1","value":"u"}`, &fakeAck{})
 	d.process(context.Background(), task{deviceToken: "pump-1", live: &w})
 	assert.Equal(t, 1, exec.callCount(), "a live tenant's command must still actuate")
 
 	exec2 := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
-	ff := &fakeFetcher{cmds: []DrainCommand{{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`)}}}
-	d2 := NewDispatcher(nil, &fakePublisher{}, look, exec2, ff, Metrics{}, live())
+	ff := &fakeFetcher{cmds: []DrainCommand{{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusSent}}}
+	d2 := NewDispatcher(nil, &fakePublisher{}, look, exec2, ff, nil, Metrics{}, live())
 	d2.process(context.Background(), task{deviceToken: "pump-1", drain: &drainJob{tenant: "acme", deviceToken: "pump-1"}})
 	assert.Equal(t, 1, exec2.callCount(), "a live tenant's held command must still drain")
 }

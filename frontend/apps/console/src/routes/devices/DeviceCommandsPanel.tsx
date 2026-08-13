@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Send } from 'lucide-react';
-import type { CommandParameter } from '@devicechain/dashboards';
+import { isTerminalCommandStatus, type CommandParameter } from '@devicechain/dashboards';
 import {
   parseParameterSchema,
   defaultValues,
@@ -45,9 +45,13 @@ import { getDeviceCommandVocabulary, type PublishedCommand } from '@/lib/api/dev
 
 const pageSize = 25;
 
-// Commands that have reached a terminal state can no longer be cancelled; the
-// rest (QUEUED / SENT) are still in flight.
-const TERMINAL = new Set(['SUCCESSFUL', 'TIMEOUT', 'EXPIRED', 'FAILED']);
+// Commands that have reached a terminal state can no longer be cancelled; the rest
+// (QUEUED / HELD / SENT) are still in flight.
+//
+// 🔴 The terminal set is NOT redeclared here. It used to be, and it went stale: when
+// cancellation started writing CANCELLED instead of EXPIRED, this copy still called a
+// cancelled command in-flight, so the panel kept offering Cancel on it and the click
+// came back as a server error. One definition, in @devicechain/dashboards.
 
 function statusVariant(status: string): 'success' | 'destructive' | 'outline' | 'secondary' {
   switch (status) {
@@ -56,10 +60,20 @@ function statusVariant(status: string): 'success' | 'destructive' | 'outline' | 
     case 'FAILED':
     case 'TIMEOUT':
       return 'destructive';
+    // Terminal but not a failure: nobody broke, the command simply stopped. EXPIRED ran
+    // out of time, CANCELLED was called off on purpose. The muted outline says "over"
+    // without the red that would report a fault to an operator scanning the column.
     case 'EXPIRED':
+    case 'CANCELLED':
       return 'outline';
+    // HELD is waiting on the DEVICE, not lost — it carries the same in-flight styling as
+    // QUEUED / SENT on purpose, because the command still stands and can still be
+    // cancelled. It is spelled out rather than left to the default so this stays a
+    // decision rather than an accident of fall-through.
+    case 'HELD':
+      return 'secondary';
     default:
-      // QUEUED / SENT — still in flight.
+      // QUEUED / SENT — still in flight, as is any status this console does not yet know.
       return 'secondary';
   }
 }
@@ -307,7 +321,7 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
                   {command.error || command.responsePayload || '—'}
                 </DataTableCell>
                 <DataTableCell className="text-right">
-                  {!TERMINAL.has(command.status) && (
+                  {!isTerminalCommandStatus(command.status) && (
                     <Button variant="outline" size="sm" onClick={() => cancel(command)}>
                       {t('cancel')}
                     </Button>

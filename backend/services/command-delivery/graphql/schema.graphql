@@ -65,7 +65,13 @@ input CommandSearchCriteria {
     pageNumber: Int!
     pageSize: Int!
     deviceToken: String
+    # Match a single lifecycle state exactly.
     status: String
+    # Match any of several lifecycle states. ANDed with `status` if both are given;
+    # an empty list is ignored rather than matching nothing. Use this when the states
+    # you care about are a set — a device waking from sleep drains both the commands
+    # withheld for it (HELD) and those already dispatched and still unanswered (SENT).
+    statuses: [String!]
 }
 
 # Search results returned from command query.
@@ -88,6 +94,14 @@ type Mutation {
     createCommand(request: CommandCreateRequest!): Command!
     # Cancel a non-terminal command by token.
     cancelCommand(token: String!): Command!
+    # Claim a still-dispatchable command (QUEUED or HELD) for immediate delivery,
+    # moving it to SENT. For a transport that dispatches a device's backlog itself
+    # rather than waiting for the delivery sweep — an LwM2M device draining its held
+    # commands over the CoAP session it just opened. Claim BEFORE dispatching: the
+    # claim is what stops the sweep from publishing the same command a second time,
+    # and a command is a physical actuation. Returns false if the command was not
+    # claimable (already sent, answered or cancelled), which is a benign race.
+    markCommandSent(token: String!): Boolean!
 }
 
 schema {

@@ -235,10 +235,11 @@ to the same subject, and a response identifies its command by token. The tenant 
 from the topic rather than the body, so a device cannot answer for another tenant.
 
 :::info Responding is what completes the lifecycle
-A command that is never answered stays `SENT` until it expires. Without a response the
-platform knows only that the command was dispatched — not that the device acted on it. If
-your devices do not respond, set an `expiresAt` when issuing commands so they reach a
-terminal state rather than sitting in flight indefinitely.
+A command that is never answered stays `SENT` until its TTL turns it into `TIMEOUT`.
+Without a response the platform knows only that the command was dispatched — not that the
+device acted on it. If your devices do not respond, set an `expiresAt` when issuing
+commands so they reach a terminal state on your schedule rather than on the platform's
+seven-day default.
 :::
 
 ## What happens next

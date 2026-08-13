@@ -247,9 +247,17 @@ func (t *Tools) GetAlarm(ctx context.Context, req *mcp.CallToolRequest, in GetAl
 
 type ListCommandsInput struct {
 	DeviceToken string `json:"deviceToken,omitempty" jsonschema:"optional device token to filter commands to one device"`
-	Status      string `json:"status,omitempty" jsonschema:"optional command status filter: one of QUEUED, SENT, SUCCESSFUL, TIMEOUT, EXPIRED, FAILED"`
-	PageNumber  int    `json:"pageNumber,omitempty" jsonschema:"1-based page number (default 1)"`
-	PageSize    int    `json:"pageSize,omitempty" jsonschema:"commands per page (default 25, max 100)"`
+	// 🔴 This enumeration is the ONLY thing an MCP client reads to decide what it may
+	// filter on. A status missing from the string is one an agent can never ask for —
+	// not an error it can recover from, an invisible capability. It must therefore
+	// carry every value in command-delivery's CommandStatus, non-terminal (QUEUED,
+	// HELD, SENT) then terminal (SUCCESSFUL, FAILED, TIMEOUT, EXPIRED, CANCELLED).
+	// HELD and CANCELLED are the two an agent most needs the names of: HELD is why a
+	// command has not moved, and CANCELLED is what a cancel now records instead of
+	// the EXPIRED it used to share with TTL death.
+	Status     string `json:"status,omitempty" jsonschema:"optional command status filter: one of QUEUED, HELD, SENT, SUCCESSFUL, FAILED, TIMEOUT, EXPIRED, CANCELLED"`
+	PageNumber int    `json:"pageNumber,omitempty" jsonschema:"1-based page number (default 1)"`
+	PageSize   int    `json:"pageSize,omitempty" jsonschema:"commands per page (default 25, max 100)"`
 }
 
 type CommandSummary struct {

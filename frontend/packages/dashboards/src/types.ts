@@ -377,14 +377,30 @@ export interface LocationSample {
 
 // A device command as the command-button widget sees it (command-delivery). Mirrors
 // the stored Command row: `token` is the client-minted dispatch id (also the cancel
-// handle); `status` carries the lifecycle enum (QUEUED → SENT →
-// SUCCESSFUL | FAILED, plus TIMEOUT/EXPIRED) as a plain string — the service declares
-// no GraphQL enum. Kept decoupled from command-delivery's GraphQL types so the widget
+// handle); `status` carries the lifecycle state as a plain string — the service
+// declares no GraphQL enum, which is also why an unrecognized value has to stay
+// survivable here. Kept decoupled from command-delivery's GraphQL types so the widget
 // layer carries no service coupling.
+//
+// The lifecycle, in full (see ./command-status for the machine-readable copy):
+//
+//   non-terminal  QUEUED  accepted, awaiting its first dispatch decision
+//                 HELD    dispatch deliberately withheld — the device is known absent,
+//                         so the command waits rather than going into the void; this is
+//                         where an offline fleet's backlog sits, possibly for days
+//                 SENT    dispatched toward a reachable device, awaiting its response
+//   terminal      SUCCESSFUL / FAILED   the device answered
+//                 TIMEOUT               dispatched, never answered
+//                 EXPIRED               TTL elapsed before it ever went out
+//                 CANCELLED             an operator or tenant called it off
+//
+// EXPIRED and CANCELLED are separate ACTORS reaching the same dead end, not two names
+// for one thing. Cancellation used to write EXPIRED and old rows were never backfilled,
+// so both values legitimately appear in live data.
 export interface CommandRow {
   token: string;
   name: string;
-  status: string; // QUEUED | SENT | SUCCESSFUL | FAILED | TIMEOUT | EXPIRED
+  status: string; // QUEUED | HELD | SENT | SUCCESSFUL | FAILED | TIMEOUT | EXPIRED | CANCELLED
   payload: string | null; // request JSON (as issued)
   responsePayload: string | null; // device response JSON
   error: string | null;

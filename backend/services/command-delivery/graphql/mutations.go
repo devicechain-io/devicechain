@@ -31,7 +31,7 @@ func (r *SchemaResolver) CreateCommand(ctx context.Context, args struct {
 	}, nil
 }
 
-// CancelCommand cancels a non-terminal command by token (moves it to EXPIRED).
+// CancelCommand cancels a non-terminal command by token (moves it to CANCELLED).
 func (r *SchemaResolver) CancelCommand(ctx context.Context, args struct {
 	Token string
 }) (*CommandResolver, error) {
@@ -50,4 +50,51 @@ func (r *SchemaResolver) CancelCommand(ctx context.Context, args struct {
 		S: r,
 		C: ctx,
 	}, nil
+}
+
+// MarkCommandSent claims a still-dispatchable command (QUEUED or HELD) for
+// immediate delivery, moving it to SENT. It reports whether THIS call won the
+// claim.
+//
+// It exists for a transport that dispatches a device's backlog itself instead of
+// waiting for the delivery sweep — the LwM2M wake drain, which issues a sleeping
+// device's held commands over the CoAP session it opens on Register. Claiming is
+// what keeps that from double-actuating hardware: the sweep publishes anything
+// still dispatchable, so a drain that dispatched without claiming would leave the
+// row HELD for the next tick to publish again.
+//
+// 🔴 It returns a BOOLEAN, not the command. A caller uses this to decide whether
+// it may actuate a physical device, and that decision must rest on whether the
+// conditional UPDATE matched — not on a status field read back afterwards, which
+// cannot distinguish "I claimed it" from "someone else did a millisecond ago".
+// Returning the row would invite exactly that misread.
+//
+// 🔴 SERVICE TOKENS ONLY, and command:write is NOT sufficient on its own.
+// command:write is a TENANT-tier authority (see auth.tiersByAuthority), so every
+// tenant user who can issue or cancel a command would otherwise be able to claim
+// one — and a claim is not a harmless status edit. It removes a command from the
+// dispatchable set WITHOUT publishing it, so the command is never delivered, sits
+// in SENT, and dies as TIMEOUT: a terminal state that blames the DEVICE for a
+// delivery the platform silently suppressed. Cancelling records the truth
+// (CANCELLED, a named actor); this would manufacture a lie with nothing in the
+// audit trail to contradict it.
+//
+// No human surface offers this mutation and none should: it exists for one
+// machine caller, the LwM2M wake drain, which claims a command it is about to put
+// on a live CoAP session. The tier vocabulary alone cannot express "service
+// tokens only" — that takes an explicit TokenType check here, which is exactly
+// what the authority table's own note says is required when it must be true.
+func (r *SchemaResolver) MarkCommandSent(ctx context.Context, args struct {
+	Token string
+}) (bool, error) {
+	if err := auth.Authorize(ctx, auth.CommandWrite); err != nil {
+		return false, err
+	}
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok || claims.TokenType != auth.TokenTypeService {
+		return false, auth.ErrForbidden
+	}
+
+	api := r.GetApi(ctx)
+	return api.MarkSentByToken(ctx, args.Token)
 }

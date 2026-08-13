@@ -17,8 +17,8 @@ import (
 // TestCommandStatusValid verifies the known-state predicate.
 func TestCommandStatusValid(t *testing.T) {
 	valid := []CommandStatus{
-		CommandQueued, CommandSent,
-		CommandSuccessful, CommandTimeout, CommandExpired, CommandFailed,
+		CommandQueued, CommandHeld, CommandSent,
+		CommandSuccessful, CommandTimeout, CommandExpired, CommandCancelled, CommandFailed,
 	}
 	for _, s := range valid {
 		if !s.Valid() {
@@ -43,12 +43,20 @@ func TestCommandStatusValid(t *testing.T) {
 // TestCommandStatusTerminal verifies the terminal-state predicate.
 func TestCommandStatusTerminal(t *testing.T) {
 	terminal := map[CommandStatus]bool{
-		CommandQueued:     false,
+		CommandQueued: false,
+		// HELD is NOT terminal. A held command is one the platform is deliberately
+		// withholding because the device is absent; it is still going to be
+		// delivered when the device returns. Marking it terminal would freeze an
+		// entire offline fleet's backlog permanently.
+		CommandHeld:       false,
 		CommandSent:       false,
 		CommandSuccessful: true,
 		CommandTimeout:    true,
 		CommandExpired:    true,
-		CommandFailed:     true,
+		// CANCELLED IS terminal. A cancelled command must never be resurrected by
+		// the sweep, marked sent, or driven by a late device response.
+		CommandCancelled: true,
+		CommandFailed:    true,
 	}
 	for s, want := range terminal {
 		if s.Terminal() != want {
@@ -231,8 +239,9 @@ func TestCreateCommandIdempotentOnToken(t *testing.T) {
 }
 
 // TestMarkSentNoOpOnTerminal verifies MarkSent is a no-op on a command that has
-// already left QUEUED, leaving it unchanged rather than forcing it to SENT. This is
-// the from-state-predicated guard: MarkSent only advances a still-QUEUED row.
+// already left the dispatchable set, leaving it unchanged rather than forcing it to
+// SENT. This is the from-state-predicated guard: MarkSent only advances a row that is
+// still QUEUED or HELD.
 func TestMarkSentNoOpOnTerminal(t *testing.T) {
 	api := newTestApi(t)
 	ctx := core.WithTenant(context.Background(), "A")
@@ -246,7 +255,7 @@ func TestMarkSentNoOpOnTerminal(t *testing.T) {
 		t.Fatalf("CreateCommand failed: %v", err)
 	}
 
-	// Cancel moves the command to EXPIRED (terminal).
+	// Cancel moves the command to CANCELLED (terminal).
 	if _, err := api.CancelCommand(ctx, "cmd-2"); err != nil {
 		t.Fatalf("CancelCommand failed: %v", err)
 	}
@@ -256,8 +265,8 @@ func TestMarkSentNoOpOnTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarkSent on a terminal command should be a no-op, got error: %v", err)
 	}
-	if got.Status != CommandExpired.String() {
-		t.Fatalf("MarkSent clobbered a terminal command: status=%s, want %s", got.Status, CommandExpired)
+	if got.Status != CommandCancelled.String() {
+		t.Fatalf("MarkSent clobbered a terminal command: status=%s, want %s", got.Status, CommandCancelled)
 	}
 }
 
@@ -326,6 +335,21 @@ func TestExpireStale(t *testing.T) {
 	if _, err := api.MarkSent(sysctx, sentOld.ID); err != nil {
 		t.Fatalf("mark s-old sent failed: %v", err)
 	}
+	// HELD + expired -> EXPIRED, NOT TIMEOUT. This is the case the vocabulary
+	// exists for: the device was absent for the command's whole life, so the
+	// platform never attempted delivery. Reporting it as TIMEOUT — which is what
+	// a single "in flight" state forces — blames the device for a delivery that
+	// was never made, and for a fleet switched off overnight that is the common
+	// case rather than an edge one.
+	heldOld, err := api.CreateCommand(sysctx, &CommandCreateRequest{
+		Token: "h-old", DeviceToken: "d", Name: "x", ExpiresAt: &past,
+	})
+	if err != nil {
+		t.Fatalf("create h-old failed: %v", err)
+	}
+	if err := forceStatus(api, sysctx, heldOld.ID, CommandHeld); err != nil {
+		t.Fatalf("hold h-old failed: %v", err)
+	}
 	// QUEUED but not yet expired -> untouched.
 	if _, err := api.CreateCommand(sysctx, &CommandCreateRequest{
 		Token: "q-fresh", DeviceToken: "d", Name: "x", ExpiresAt: &future,
@@ -333,17 +357,48 @@ func TestExpireStale(t *testing.T) {
 		t.Fatalf("create q-fresh failed: %v", err)
 	}
 
-	count, err := api.ExpireStale(sysctx, time.Now())
+	count, byFromStatus, err := api.ExpireStale(sysctx, time.Now())
 	if err != nil {
 		t.Fatalf("ExpireStale failed: %v", err)
 	}
-	if count != 2 {
-		t.Fatalf("expected 2 commands expired, got %d", count)
+	if count != 3 {
+		t.Fatalf("expected 3 commands expired, got %d", count)
 	}
 
 	assertStatus(t, api, sysctx, "q-old", CommandExpired)
 	assertStatus(t, api, sysctx, "s-old", CommandTimeout)
+	assertStatus(t, api, sysctx, "h-old", CommandExpired)
 	assertStatus(t, api, sysctx, "q-fresh", CommandQueued)
+
+	// The breakdown is keyed by the state each command lapsed FROM, and it is the
+	// only thing that separates "the fleet was absent" (HELD) from "devices were
+	// reached and stayed silent" (SENT). Asserting only the total would pass even
+	// if every row were attributed to the wrong state.
+	want := map[string]int64{
+		CommandQueued.String(): 1,
+		CommandHeld.String():   1,
+		CommandSent.String():   1,
+	}
+	if len(byFromStatus) != len(want) {
+		t.Fatalf("expiry breakdown = %v, want %v", byFromStatus, want)
+	}
+	for status, n := range want {
+		if byFromStatus[status] != n {
+			t.Fatalf("expiry breakdown[%s] = %d, want %d (full: %v)", status, byFromStatus[status], n, byFromStatus)
+		}
+	}
+}
+
+// forceStatus drives a command into a state no public transition reaches yet.
+//
+// HELD is written by the presence gate, which is a later slice; until it lands
+// nothing in this service produces a held row, so a test that needs one has to
+// place it directly. Writing it through the API instead would be measuring a
+// transition that does not exist and would silently start measuring the wrong
+// thing on the day it does.
+func forceStatus(api *Api, ctx context.Context, id uint, status CommandStatus) error {
+	return api.RDB.DB(ctx).Model(&Command{}).
+		Where("id = ?", id).Update("status", status.String()).Error
 }
 
 func assertStatus(t *testing.T, api *Api, ctx context.Context, token string, want CommandStatus) {

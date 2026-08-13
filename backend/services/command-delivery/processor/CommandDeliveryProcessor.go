@@ -280,8 +280,18 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 // which needs an intermediate lifecycle state — see the note on TrySweepLock.
 func (cproc *CommandDeliveryProcessor) sweepLocked(ctx context.Context) {
 	ran, err := cproc.Api.TrySweepLock(ctx, func() error {
-		if _, err := cproc.Api.ExpireStale(core.WithSystemContext(ctx), time.Now()); err != nil {
+		count, byFromStatus, err := cproc.Api.ExpireStale(core.WithSystemContext(ctx), time.Now())
+		if err != nil {
 			log.Error().Err(err).Msg("command expiry sweep failed")
+		}
+		// Report the breakdown, not just the total. A command that lapsed out of
+		// HELD was never dispatched — the device was absent for its whole TTL — while
+		// one that lapsed out of SENT was delivered to and ignored. Those point at
+		// opposite halves of the system (the fleet vs the devices' firmware), and a
+		// single "expired N commands" line cannot tell an operator which they have.
+		if count > 0 {
+			log.Info().Int64("expired", count).Interface("fromStatus", byFromStatus).
+				Msg("Command expiry sweep reached a terminal state for stale commands.")
 		}
 		cproc.deliverPendingCommands(ctx)
 		return nil

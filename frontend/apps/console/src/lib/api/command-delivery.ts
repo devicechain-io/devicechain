@@ -86,8 +86,13 @@ export async function createCommand(request: CommandCreateRequest) {
   return (await gql('command-delivery', CREATE_COMMAND, { request })).createCommand;
 }
 
-// Cancel a non-terminal command by token (moves it to EXPIRED). Requires
-// command:write.
+// Cancel a non-terminal command by token (QUEUED / HELD / SENT -> CANCELLED).
+// Requires command:write.
+//
+// CANCELLED, not EXPIRED: the two were one value until recently, and cancellation
+// wrote EXPIRED. Historical rows keep it — there is no backfill — so both values
+// appear in real data, meaning different things (EXPIRED = the platform ran out of
+// time to send it; CANCELLED = somebody called it off).
 export async function cancelCommand(token: string) {
   return (await gql('command-delivery', CANCEL_COMMAND, { token })).cancelCommand;
 }
