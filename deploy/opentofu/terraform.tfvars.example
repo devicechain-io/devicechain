@@ -14,8 +14,9 @@
 # Pin to a tested chart/image version for reproducible deploys. nats_chart_version is
 # ALREADY pinned in variables.tf and this is only how you would move it — read that
 # variable's description first, because the module's behaviour depends on the chart
-# and a bump is a deliberate act. Do NOT set it to "" (installs latest) or to a 1.x
-# chart, whose values schema is entirely different from the one this module renders.
+# and a bump is a deliberate act. An empty value is REFUSED (it used to install
+# latest); so is a 1.x chart's worth of drift, whose values schema is entirely
+# different from the one this module renders — that one is on you to notice.
 # nats_chart_version = "2.14.4"
 # The event store needs a CloudNativePG operand image carrying TimescaleDB; the default
 # is the one we build and publish. A stock `timescale/timescaledb:` image will not work.
@@ -37,12 +38,19 @@
 # Single-node by default; flip on for the ADR-020 HA topology (when implemented).
 # ha = false
 
-# Ingress + TLS. Disable either if the cluster already has it; pin chart versions.
-# enable_ingress_nginx       = true
-# enable_cert_manager        = true
-# ingress_class              = "nginx"
-# ingress_nginx_chart_version = "4.11.3"
-# cert_manager_chart_version  = "v1.16.2"
+# Ingress + TLS. Disable either if the cluster already has it.
+#
+# Both chart versions are ALREADY pinned in variables.tf and these lines are only how
+# you would move them. Read each variable's description first — both modules depend on
+# chart internals (ingress-nginx's snippet/risk-level gating, cert-manager's CRD-install
+# value), so a bump is a deliberate act with something to re-verify. An empty value is
+# REFUSED: it used to install latest, which made the version resolve at apply time and
+# two bootstraps of this commit install different software.
+# enable_ingress_nginx        = true
+# enable_cert_manager         = true
+# ingress_class               = "nginx"
+# ingress_nginx_chart_version = "4.15.1"
+# cert_manager_chart_version  = "v1.21.1"
 
 # CloudNativePG — the operator that will own both database stores (ADR-020 A2), plus
 # the Barman Cloud plugin that provides WAL archiving and point-in-time recovery.

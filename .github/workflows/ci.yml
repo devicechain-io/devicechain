@@ -966,10 +966,18 @@ jobs:
       # memory/store ceilings), and the refusal is wholesale — so without the pod
       # template's config checksum, a change is applied, reported successful by every
       # layer, and never adopted by the running broker. The only trace is one [ERR]
-      # line in the broker's own log. Guard the flag and the chart pin it was
-      # verified against.
+      # line in the broker's own log.
       - name: NATS config adoption
         run: hack/check-nats-config-adoption.sh
+        working-directory: .
+
+      # An unpinned chart version has to be resolved at APPLY time, so a chart-repo
+      # hiccup surfaces as the helm provider's "inconsistent final plan ... .version:
+      # was known, but now unknown" — which names neither the chart nor the network.
+      # It also means two bootstraps of this commit install different software, under
+      # modules that are sized against chart internals.
+      - name: chart version pins
+        run: hack/check-chart-pins.sh
         working-directory: .
 
   # ---------------------------------------------------------------------------

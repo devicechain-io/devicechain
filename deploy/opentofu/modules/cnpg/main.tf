@@ -22,9 +22,9 @@
 # controller, not a proxy, and with no replica `synchronous_standby_names` is
 # empty, so commits are the same local fsync the StatefulSet does today.
 #
-# VERSIONS ARE PINNED BY DEFAULT, unlike the nats/cert-manager/monitoring modules
-# which default to "latest". Two reasons, and both are specific rather than
-# stylistic:
+# VERSIONS ARE PINNED BY DEFAULT — as they now are in every module here, enforced
+# by hack/check-chart-pins.sh. These two had specific reasons before it was a rule,
+# and the reasons still say what a bump has to re-establish:
 #
 #   - The plugin is 0.x. It is the component that stands between us and our
 #     backups, and a 0.x minor is entitled to break its API.
@@ -47,12 +47,23 @@ variable "namespace" {
 variable "operator_chart_version" {
   description = <<-EOT
     cloudnative-pg chart version. 0.29.0 ships operator appVersion 1.30.0, which
-    is the version the A2 spike validated. Empty installs latest, which is
-    supported but unpinned — see the module header for why that trades away
-    evidence rather than just reproducibility.
+    is the version the A2 spike validated — see the module header for why an
+    unpinned chart here would trade away evidence rather than just
+    reproducibility.
   EOT
   type        = string
   default     = "0.29.0"
+
+  # Fail closed. An empty string used to mean "install latest", which made the chart
+  # version resolve at APPLY time — the chart repository became a dependency of
+  # planning, and a repo hiccup surfaced as the helm provider's "inconsistent final
+  # plan ... .version: was known, but now unknown", naming neither the chart nor the
+  # network. The regex also refuses a helm version RANGE ("4.15.1 - 5.0.0"), which is
+  # a constraint resolved at apply time wearing a pin's clothes.
+  validation {
+    condition     = can(regex("^v?[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$", var.operator_chart_version))
+    error_message = "operator_chart_version must be an exact chart version (e.g. \"1.2.3\" or \"v1.2.3\"); an empty value or a version range is resolved at apply time, which is not a pin."
+  }
 }
 
 variable "enable_backup_plugin" {
@@ -79,6 +90,17 @@ variable "plugin_chart_version" {
   description = "plugin-barman-cloud chart version. 0.7.0 ships plugin appVersion v0.13.0. The chart supports only the latest point release of the plugin, so this and the plugin move together."
   type        = string
   default     = "0.7.0"
+
+  # Fail closed. An empty string used to mean "install latest", which made the chart
+  # version resolve at APPLY time — the chart repository became a dependency of
+  # planning, and a repo hiccup surfaced as the helm provider's "inconsistent final
+  # plan ... .version: was known, but now unknown", naming neither the chart nor the
+  # network. The regex also refuses a helm version RANGE ("4.15.1 - 5.0.0"), which is
+  # a constraint resolved at apply time wearing a pin's clothes.
+  validation {
+    condition     = can(regex("^v?[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$", var.plugin_chart_version))
+    error_message = "plugin_chart_version must be an exact chart version (e.g. \"1.2.3\" or \"v1.2.3\"); an empty value or a version range is resolved at apply time, which is not a pin."
+  }
 }
 
 variable "enable_pod_monitor" {
@@ -284,7 +306,7 @@ resource "helm_release" "cnpg" {
   create_namespace = true
   repository       = "https://cloudnative-pg.github.io/charts"
   chart            = "cloudnative-pg"
-  version          = var.operator_chart_version != "" ? var.operator_chart_version : null
+  version          = var.operator_chart_version
 
   # Control-plane availability. A `values` document rather than `set` blocks
   # because tolerations and topologySpreadConstraints are lists of objects, and
@@ -354,7 +376,7 @@ resource "helm_release" "barman_plugin" {
   namespace  = var.namespace
   repository = "https://cloudnative-pg.github.io/charts"
   chart      = "plugin-barman-cloud"
-  version    = var.plugin_chart_version != "" ? var.plugin_chart_version : null
+  version    = var.plugin_chart_version
 
   # 🔴 THE PLUGIN IS IN THE FAILOVER PATH, BUT IT MUST NOT BE REPLICATED, AND THE
   # SECOND HALF IS THE SURPRISING ONE.

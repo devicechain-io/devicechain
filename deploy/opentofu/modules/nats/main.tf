@@ -40,8 +40,8 @@ variable "release_name" {
 
 variable "chart_version" {
   description = <<-EOT
-    nats chart version. Empty installs latest, which this module does NOT do by
-    default and should not be asked to.
+    nats chart version. An exact version is required; the validation block below
+    refuses an empty value or a range, both of which resolve at apply time.
 
     🔴 PINNED BECAUSE THIS MODULE'S BEHAVIOUR IS A PROPERTY OF THE CHART, not just
     of the values passed to it. podTemplate.configChecksumAnnotation below relies on
@@ -64,6 +64,17 @@ variable "chart_version" {
   EOT
   type        = string
   default     = "2.14.4"
+
+  # Fail closed. An empty string used to mean "install latest", which made the chart
+  # version resolve at APPLY time — the chart repository became a dependency of
+  # planning, and a repo hiccup surfaced as the helm provider's "inconsistent final
+  # plan ... .version: was known, but now unknown", naming neither the chart nor the
+  # network. The regex also refuses a helm version RANGE ("4.15.1 - 5.0.0"), which is
+  # a constraint resolved at apply time wearing a pin's clothes.
+  validation {
+    condition     = can(regex("^v?[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$", var.chart_version))
+    error_message = "chart_version must be an exact chart version (e.g. \"1.2.3\" or \"v1.2.3\"); an empty value or a version range is resolved at apply time, which is not a pin."
+  }
 }
 
 variable "jetstream_storage" {
@@ -912,7 +923,7 @@ resource "helm_release" "nats" {
   namespace  = var.namespace
   repository = "https://nats-io.github.io/k8s/helm/charts/"
   chart      = "nats"
-  version    = var.chart_version != "" ? var.chart_version : null
+  version    = var.chart_version
 
   # 🔴 SIZED FOR A ROLLING RESTART, because podTemplate.configChecksumAnnotation
   # makes one a routine outcome of a config change rather than a rare event.

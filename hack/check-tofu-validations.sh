@@ -668,6 +668,36 @@ rejects restore_tsdb_target_time "2026-07-28 03:00:00+00"
 accepts restore_rdb_target_time "2026-07-28 03:00:00+00" -var restore_rdb_from=dc-rdb
 accepts restore_tsdb_target_time "2026-07-26 01:02:03+00" -var restore_tsdb_from=dc-tsdb
 
+# --- chart version pins, the RUNTIME half -------------------------------------
+#
+# hack/check-chart-pins.sh keeps the source pinned; these blocks keep a tfvars
+# override from undoing it. Both halves are needed and neither subsumes the other:
+# the script cannot see a value a user supplies, and a validation block cannot see a
+# default that was quietly emptied in the tree.
+#
+# Two shapes are refused, and the second is the one that motivated a regex rather
+# than a `!= ""`:
+#   ""              — used to mean "install latest"
+#   "4.15.1 - 5.0.0" — a helm version RANGE, resolved at apply time wearing a pin's
+#                      clothes. It reads as pinned in a diff and behaves as unpinned.
+# Both make the chart repository a dependency of PLANNING, which is how a repo 503
+# reaches an operator as "Provider produced inconsistent final plan ... .version:
+# was known, but now unknown" — a message naming neither the chart nor the network.
+#
+# 🔴 THE ACCEPTS ARE NOT DECORATION HERE. The condition is a `can(regex(...))`, and a
+# regex that is subtly too strict refuses the very versions we ship — `v1.21.1` has a
+# leading v and `1.2.3-rc.1` has a pre-release suffix, and a naive `^[0-9.]+$` eats
+# both while passing every rejection above.
+for _cv in nats_chart_version cnpg_chart_version cnpg_plugin_chart_version \
+	ingress_nginx_chart_version cert_manager_chart_version monitoring_chart_version; do
+	rejects "$_cv" ""
+	rejects "$_cv" "4.15.1 - 5.0.0"
+	accepts "$_cv" "1.2.3"
+	accepts "$_cv" "v1.2.3"
+	accepts "$_cv" "1.2.3-rc.1"
+done
+unset _cv
+
 # The per-store objects the modules actually receive. Null on a normal install —
 # and this is the assertion that fails if a future edit makes "restore" a flag
 # rather than an absent object, which would hand the chart a half-populated

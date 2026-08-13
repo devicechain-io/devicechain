@@ -77,15 +77,26 @@ variable "nats_prom_exporter" {
 
 variable "nats_chart_version" {
   description = <<-EOT
-    Version of the nats Helm chart to install. Empty installs the latest, which is
-    NOT the default: see the chart_version variable in modules/nats for why this is
-    pinned rather than tracked. In short, the module's config-adoption mechanism and
+    Version of the nats Helm chart to install. See the chart_version variable in
+    modules/nats for why this is pinned rather than tracked. In short, the module's
+    config-adoption mechanism and
     its helm timeout are both sized against chart internals verified at this
     version, and the pod-template checksum includes the chart's own version label —
     so "latest" would roll the broker whenever upstream cuts a release.
   EOT
   type        = string
   default     = "2.14.4"
+
+  # Fail closed. An empty string used to mean "install latest", which made the chart
+  # version resolve at APPLY time — the chart repository became a dependency of
+  # planning, and a repo hiccup surfaced as the helm provider's "inconsistent final
+  # plan ... .version: was known, but now unknown", naming neither the chart nor the
+  # network. The regex also refuses a helm version RANGE ("4.15.1 - 5.0.0"), which is
+  # a constraint resolved at apply time wearing a pin's clothes.
+  validation {
+    condition     = can(regex("^v?[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$", var.nats_chart_version))
+    error_message = "nats_chart_version must be an exact chart version (e.g. \"1.2.3\" or \"v1.2.3\"); an empty value or a version range is resolved at apply time, which is not a pin."
+  }
 }
 
 variable "nats_jetstream_storage" {
@@ -329,9 +340,26 @@ variable "ingress_nginx_namespace" {
 }
 
 variable "ingress_nginx_chart_version" {
-  description = "ingress-nginx chart version; empty installs latest. Pin for reproducibility."
+  description = <<-EOT
+    ingress-nginx chart version. Pinned by default — 4.15.1 ships controller 1.15.1,
+    which is what the module's snippet/risk-level values were verified against.
+    Upstream keeps tightening that surface, and when it moves again the symptom is
+    not a version diff: the instance chart's Ingress is REJECTED BY THE ADMISSION
+    WEBHOOK partway through bootstrap.
+  EOT
   type        = string
-  default     = ""
+  default     = "4.15.1"
+
+  # Fail closed. An empty string used to mean "install latest", which made the chart
+  # version resolve at APPLY time — the chart repository became a dependency of
+  # planning, and a repo hiccup surfaced as the helm provider's "inconsistent final
+  # plan ... .version: was known, but now unknown", naming neither the chart nor the
+  # network. The regex also refuses a helm version RANGE ("4.15.1 - 5.0.0"), which is
+  # a constraint resolved at apply time wearing a pin's clothes.
+  validation {
+    condition     = can(regex("^v?[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$", var.ingress_nginx_chart_version))
+    error_message = "ingress_nginx_chart_version must be an exact chart version (e.g. \"1.2.3\" or \"v1.2.3\"); an empty value or a version range is resolved at apply time, which is not a pin."
+  }
 }
 
 variable "ingress_use_host_port" {
@@ -363,9 +391,25 @@ variable "cert_manager_namespace" {
 }
 
 variable "cert_manager_chart_version" {
-  description = "cert-manager chart version; empty installs latest. Pin for reproducibility."
+  description = <<-EOT
+    cert-manager chart version. Pinned by default — v1.21.1 is the version the CRD
+    install path was verified against, and that path is the whole reason this module
+    runs: with no cert-manager CRDs the instance chart's Issuer/Certificate cannot
+    apply, and enable_database_backups fails outright.
+  EOT
   type        = string
-  default     = ""
+  default     = "v1.21.1"
+
+  # Fail closed. An empty string used to mean "install latest", which made the chart
+  # version resolve at APPLY time — the chart repository became a dependency of
+  # planning, and a repo hiccup surfaced as the helm provider's "inconsistent final
+  # plan ... .version: was known, but now unknown", naming neither the chart nor the
+  # network. The regex also refuses a helm version RANGE ("4.15.1 - 5.0.0"), which is
+  # a constraint resolved at apply time wearing a pin's clothes.
+  validation {
+    condition     = can(regex("^v?[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$", var.cert_manager_chart_version))
+    error_message = "cert_manager_chart_version must be an exact chart version (e.g. \"1.2.3\" or \"v1.2.3\"); an empty value or a version range is resolved at apply time, which is not a pin."
+  }
 }
 
 # --- CloudNativePG (database HA + backup, ADR-020 A2 / ADR-028) -----------------
@@ -383,15 +427,37 @@ variable "cnpg_namespace" {
 }
 
 variable "cnpg_chart_version" {
-  description = "cloudnative-pg chart version. Pinned by default — 0.29.0 ships operator 1.30.0, the version the A2 spike validated the DNS contract, failover timing and synchronous semantics against. Empty installs latest and gives that evidence up."
+  description = "cloudnative-pg chart version. Pinned by default — 0.29.0 ships operator 1.30.0, the version the A2 spike validated the DNS contract, failover timing and synchronous semantics against."
   type        = string
   default     = "0.29.0"
+
+  # Fail closed. An empty string used to mean "install latest", which made the chart
+  # version resolve at APPLY time — the chart repository became a dependency of
+  # planning, and a repo hiccup surfaced as the helm provider's "inconsistent final
+  # plan ... .version: was known, but now unknown", naming neither the chart nor the
+  # network. The regex also refuses a helm version RANGE ("4.15.1 - 5.0.0"), which is
+  # a constraint resolved at apply time wearing a pin's clothes.
+  validation {
+    condition     = can(regex("^v?[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$", var.cnpg_chart_version))
+    error_message = "cnpg_chart_version must be an exact chart version (e.g. \"1.2.3\" or \"v1.2.3\"); an empty value or a version range is resolved at apply time, which is not a pin."
+  }
 }
 
 variable "cnpg_plugin_chart_version" {
   description = "plugin-barman-cloud chart version. Pinned by default — 0.7.0 ships plugin v0.13.0. The plugin is 0.x and stands between the platform and its backups, so an unpinned minor is entitled to break the thing we least want broken."
   type        = string
   default     = "0.7.0"
+
+  # Fail closed. An empty string used to mean "install latest", which made the chart
+  # version resolve at APPLY time — the chart repository became a dependency of
+  # planning, and a repo hiccup surfaced as the helm provider's "inconsistent final
+  # plan ... .version: was known, but now unknown", naming neither the chart nor the
+  # network. The regex also refuses a helm version RANGE ("4.15.1 - 5.0.0"), which is
+  # a constraint resolved at apply time wearing a pin's clothes.
+  validation {
+    condition     = can(regex("^v?[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$", var.cnpg_plugin_chart_version))
+    error_message = "cnpg_plugin_chart_version must be an exact chart version (e.g. \"1.2.3\" or \"v1.2.3\"); an empty value or a version range is resolved at apply time, which is not a pin."
+  }
 }
 
 variable "enable_database_backups" {
@@ -824,6 +890,17 @@ variable "monitoring_chart_version" {
   description = "kube-prometheus-stack chart version. Pinned by default — this chart's Operator CRDs are installed once and never upgraded by Helm, so an unpinned 'latest' drifting across bootstraps skews the operator against install-day CRDs. Bump deliberately."
   type        = string
   default     = "65.1.1"
+
+  # Fail closed. An empty string used to mean "install latest", which made the chart
+  # version resolve at APPLY time — the chart repository became a dependency of
+  # planning, and a repo hiccup surfaced as the helm provider's "inconsistent final
+  # plan ... .version: was known, but now unknown", naming neither the chart nor the
+  # network. The regex also refuses a helm version RANGE ("4.15.1 - 5.0.0"), which is
+  # a constraint resolved at apply time wearing a pin's clothes.
+  validation {
+    condition     = can(regex("^v?[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$", var.monitoring_chart_version))
+    error_message = "monitoring_chart_version must be an exact chart version (e.g. \"1.2.3\" or \"v1.2.3\"); an empty value or a version range is resolved at apply time, which is not a pin."
+  }
 }
 
 variable "monitoring_slim" {
