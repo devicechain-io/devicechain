@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/governance"
 )
 
 const (
@@ -43,7 +44,12 @@ const (
 	// config (ApplyDefaults floors it), in a per-tenant override, and in a tier. A
 	// governance bound whose absent value reads as "no bound" stops governing exactly
 	// when the thing that carries it is unreachable.
-	DefaultHeldCommandCeiling = 10000
+	//
+	// It is DERIVED from core's last-resort floor rather than restated, because the
+	// two are the same number by intent: the resolver falls back to core's value when
+	// this service supplies a non-positive default, so a lone edit here would leave a
+	// tenant's ceiling depending on which of the two paths answered.
+	DefaultHeldCommandCeiling = governance.DefaultHeldCommandCeiling
 
 	// MinHeldCommandCeiling floors the configured ceiling. A handful of held commands
 	// per tenant is not a bound, it is an outage for any fleet that sleeps: a device

@@ -255,12 +255,7 @@ func validateHeldCommandCeiling(v any) error { return validatePositiveBurst(v) }
 // out-of-band DB write parking a junk value here inherits rather than turning into a
 // ceiling of zero, which would refuse every command to an absent device.
 func (t *TenantTier) HeldCommandCeiling() *int {
-	f := t.positiveNumber(HeldCommandCeilingConfigKey, validateHeldCommandCeiling)
-	if f == nil {
-		return nil
-	}
-	i := int(*f)
-	return &i
+	return t.positiveInt(HeldCommandCeilingConfigKey, validateHeldCommandCeiling)
 }
 
 // ShedPriority returns the tier's ADR-063 shed-priority default (1–100), or nil if
@@ -269,12 +264,7 @@ func (t *TenantTier) HeldCommandCeiling() *int {
 // defensively through the same validator the write path uses — an out-of-band DB
 // write parking a junk value here inherits rather than banding to a wrong class.
 func (t *TenantTier) ShedPriority() *int {
-	f := t.positiveNumber(ShedPriorityConfigKey, validateShedPriority)
-	if f == nil {
-		return nil
-	}
-	i := int(*f)
-	return &i
+	return t.positiveInt(ShedPriorityConfigKey, validateShedPriority)
 }
 
 // RateFor returns the tier's rate ceiling for a dimension, or nil if the tier
@@ -291,12 +281,7 @@ func (t *TenantTier) RateFor(dim governance.Dimension) *float64 {
 
 // BurstFor returns the tier's burst ceiling for a dimension, or nil to inherit.
 func (t *TenantTier) BurstFor(dim governance.Dimension) *int {
-	f := t.positiveNumber(dim.BurstField, validatePositiveBurst)
-	if f == nil {
-		return nil
-	}
-	i := int(*f)
-	return &i
+	return t.positiveInt(dim.BurstField, validatePositiveBurst)
 }
 
 // positiveNumber reads a numeric config key, returning nil unless it is present and
@@ -322,4 +307,20 @@ func (t *TenantTier) positiveNumber(key string, validate func(any) error) *float
 		return nil
 	}
 	return &f
+}
+
+// positiveInt is positiveNumber for the whole-number settings — every tier accessor
+// except RateFor, which legitimately returns a float.
+//
+// The truncation to int is safe because each of these keys is validated as a whole
+// number on both the write path and (via validate) here, so there is no fraction to
+// lose. It exists because the same four-line tail was written out at each call site,
+// and a tail repeated per setting is one that can be got subtly wrong on the next one.
+func (t *TenantTier) positiveInt(key string, validate func(any) error) *int {
+	f := t.positiveNumber(key, validate)
+	if f == nil {
+		return nil
+	}
+	i := int(*f)
+	return &i
 }

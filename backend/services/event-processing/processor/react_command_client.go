@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-processing/internal/react"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 )
@@ -40,11 +41,18 @@ const createCommandMutation = `mutation($request: CommandCreateRequest!) {
 // the tenant is at its limit of commands withheld for absent devices RIGHT NOW, and that limit
 // frees as the fleet comes back. Retrying it is the correct behaviour, and treating it as permanent
 // would drop exactly the commands an offline fleet is waiting for.
+// Only half of this map is compiler-checked, and the split is not a style choice. The
+// device-management codes are typed constants in a module this service already depends on, so a
+// RENAME there breaks the build here — which matters, because the opt-in default above protects
+// against a code being MISSING, not against one silently changing value. The command-delivery codes
+// have no such anchor: event-processing does not depend on dc-command-delivery (and must not, to
+// enqueue over its API rather than its package), so they stay string literals and a rename there
+// would quietly demote those rejections back to retry-to-poison-cap.
 var permanentRejectionCodes = map[string]bool{
 	// Answered by device-management's enqueue gate, the owner of the device and its vocabulary.
-	"DEVICE_NOT_FOUND":          true,
-	"COMMAND_NOT_IN_VOCABULARY": true,
-	"PAYLOAD_SCHEMA_VIOLATION":  true,
+	string(dmmodel.RejectDeviceNotFound):         true,
+	string(dmmodel.RejectCommandNotInVocabulary): true,
+	string(dmmodel.RejectPayloadSchemaViolation): true,
 	// Answered by command-delivery itself, on the request as written.
 	"PAYLOAD_NOT_JSON":   true,
 	"METADATA_NOT_JSON":  true,

@@ -371,6 +371,22 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 // threaten that, while a lock would serialize the hot enqueue path (every REACT
 // send-command, every console issue) against a per-tenant row to buy a precision the
 // bound does not need.
+//
+// 🔴 KNOW WHAT THIS DOES NOT BOUND, BECAUSE IT IS BIGGER THAN THE ONE-OVER RACE
+// ABOVE AND MUST NOT BE CONFUSED WITH IT. The ceiling is enforced HERE, at enqueue,
+// but a row does not enter HELD here — it is inserted QUEUED, and the presence gate
+// moves it to HELD on a later sweep tick. So the counted set does not grow as a
+// tenant enqueues. A tenant whose fleet is absent can enqueue any number of commands
+// while its HELD count is still below the ceiling, every check passing, and then a
+// SINGLE sweep tick converts that whole QUEUED backlog to HELD at once. The
+// overshoot is one sweep interval's enqueue volume, and per-tenant command-rate
+// governance is not enforced today, so nothing else bounds it either.
+//
+// That is a hole in the bound, not a rounding error, and it is not reachable yet
+// only because nothing writes HELD. The gate slice must close it — the natural
+// place is to re-check the ceiling at the QUEUED→HELD transition, where the counted
+// set actually grows — or the tolerance has to be restated honestly. Recorded in
+// scratchpad/gate-slice-decisions.md so the gate does not inherit it silently.
 func (api *Api) checkHeldCeiling(ctx context.Context, tx *gorm.DB) error {
 	ceiling := api.heldCommandCeiling(ctx)
 	var held int64
@@ -505,11 +521,11 @@ func dispatchableStatusStrings() []string {
 // milliseconds can drive the row to SUCCESSFUL (MarkResponse) while this write is
 // delayed under load; a Save of the stale QUEUED snapshot would then clobber it back
 // to SENT, wiping RespondedTime/ResponsePayload. Nothing recovers it: PendingCommands
-// redelivers only QUEUED rows and the response was already consumed, so the row sits in
-// SENT until its TTL drags it to TIMEOUT — a week, by default, reporting a failure that
-// already succeeded. (It used to be genuinely permanent; the platform default TTL now
-// stamps every command that does not carry its own, which bounds the lie without making
-// it less of one.) RowsAffected==0 means the row already left
+// redelivers only DISPATCHABLE rows — QUEUED and HELD, never SENT — and the response was
+// already consumed, so the row sits in SENT until its TTL drags it to TIMEOUT — a week, by
+// default, reporting a failure that already succeeded. (It used to be genuinely permanent;
+// the platform default TTL now stamps every command that does not carry its own, which
+// bounds the lie without making it less of one.) RowsAffected==0 means the row already left
 // the dispatchable set (a fast response, a concurrent sweep, a cancel) — a benign
 // race, not an error; the current row is returned. (A deleted row surfaces as
 // loadCommand's not-found.)
@@ -714,22 +730,33 @@ func (api *Api) ExpireStale(ctx context.Context, now time.Time) (int64, map[stri
 		return 0, byFromStatus, result.Error
 	}
 
-	var count int64
 	for _, cmd := range stale {
-		next := expiredTerminalFor(cmd.Status)
-		affected, err := api.expireOne(ctx, cmd.ID, cmd.Status, next)
+		expired, err := api.expireOne(ctx, cmd.ID, cmd.Status, expiredTerminalFor(cmd.Status))
 		if err != nil {
-			return count, byFromStatus, err
+			return sumCounts(byFromStatus), byFromStatus, err
 		}
 		// Count against the state it lapsed FROM, and only when the conditional update
 		// actually landed — a row that moved on between the scan and the write was
-		// not expired by us and must not be reported as though it were.
-		if affected > 0 {
-			byFromStatus[cmd.Status] += affected
+		// not expired by us and must not be reported as though it were. The total is
+		// DERIVED from this breakdown rather than accumulated beside it: two counters
+		// with separately-written rules can disagree, and one that has drifted from
+		// the other is indistinguishable from a correct one at a glance.
+		if expired {
+			byFromStatus[cmd.Status]++
 		}
-		count += affected
 	}
-	return count, byFromStatus, nil
+	return sumCounts(byFromStatus), byFromStatus, nil
+}
+
+// sumCounts totals an expiry breakdown. ExpireStale reports both because they answer
+// different operational questions, but only the breakdown is measured — the total is
+// whatever it adds up to, by construction.
+func sumCounts(byFromStatus map[string]int64) int64 {
+	var total int64
+	for _, n := range byFromStatus {
+		total += n
+	}
+	return total
 }
 
 // expireOne applies one expiry, from the exact state the scan observed.
@@ -739,8 +766,9 @@ func (api *Api) ExpireStale(ctx context.Context, now time.Time) (int64, map[stri
 // be staged through the public API, but it can be staged here by writing a
 // different status to the row and then asking this to expire the stale one.
 //
-// Returns the number of rows it actually transitioned, which is 0 when it lost.
-func (api *Api) expireOne(ctx context.Context, id uint, fromStatus, next string) (int64, error) {
+// It reports whether THIS call performed the transition — false when it lost the race
+// to a row that moved on after the scan, which is benign and not an error.
+func (api *Api) expireOne(ctx context.Context, id uint, fromStatus, next string) (bool, error) {
 	// Conditional update: only expire a command that is still in the EXACT state
 	// the scan saw, and touch only the status column — never a full-row Save of
 	// the pre-response snapshot. A device response (MarkResponse) that landed
@@ -760,9 +788,9 @@ func (api *Api) expireOne(ctx context.Context, id uint, fromStatus, next string)
 		Where("id = ? AND status = ?", id, fromStatus).
 		Update("status", next)
 	if res.Error != nil {
-		return 0, res.Error
+		return false, res.Error
 	}
-	return res.RowsAffected, nil
+	return res.RowsAffected > 0, nil
 }
 
 // CommandsById gets commands by id.

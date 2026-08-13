@@ -233,6 +233,43 @@ describe('DashboardHub control channel', () => {
       expect(h.gql).toHaveBeenCalledTimes(2);
     });
 
+    // 🔴 The dispatch token is minted client-side, so nothing forces sendCommand to
+    // read the server's answer at all. Without an explicit guard, a response carrying
+    // NEITHER arm falls straight through to "sent" with a token that names no command,
+    // and every open command widget is reconciled as though something were created —
+    // the operator is told their command went out and handed a handle that cancels
+    // nothing. The REACT sink and the console both refuse this shape; the hub is the
+    // surface most likely to be embedded outside the console, so it is the last one
+    // that should be lenient.
+    it('refuses a response carrying neither arm rather than reporting it as sent', async () => {
+      h.gql.mockResolvedValue({ createCommand: { command: null, rejection: null } });
+      const hub = new DashboardHub({ resolver: newResolver(), authorities: ['*'] });
+
+      await expect(hub.sendCommand('therm-1', 'reboot')).rejects.toThrow(/no answer/i);
+    });
+
+    it('refuses an absent createCommand rather than reporting it as sent', async () => {
+      h.gql.mockResolvedValue({});
+      const hub = new DashboardHub({ resolver: newResolver(), authorities: ['*'] });
+
+      await expect(hub.sendCommand('therm-1', 'reboot')).rejects.toThrow(/no answer/i);
+    });
+
+    it('does not reconcile open command widgets when neither arm came back', async () => {
+      h.gql.mockResolvedValue(page([]));
+      const hub = new DashboardHub({ resolver: newResolver(), authorities: ['*'] });
+      hub.subscribeCommands({ datasource: deviceSel('therm-1'), pageSize: 20 }, { next: () => {} });
+      await settle();
+      expect(h.gql).toHaveBeenCalledTimes(1); // initial poll
+
+      h.gql.mockResolvedValue({ createCommand: { command: null, rejection: null } });
+      await expect(hub.sendCommand('therm-1', 'reboot')).rejects.toThrow(/no answer/i);
+      await settle();
+
+      // initial poll (1) + createCommand (2) — and NO reconcile re-poll.
+      expect(h.gql).toHaveBeenCalledTimes(2);
+    });
+
     // An availability failure is still thrown: it says nothing about the command.
     it('throws when the enqueue could not be decided at all', async () => {
       h.gql.mockRejectedValue(new Error('command-delivery unreachable'));

@@ -225,10 +225,16 @@ type Options struct {
 // tenantDeleted gates ACTUATION on the ADR-077 tenant lifecycle (Options.TenantDeleted).
 // Nil disables the gate, matching the resolver's own fail-open.
 //
-// 🔴 fetcher and claimer are separate PARAMETERS rather than an Options field because both are
-// unexported interfaces — an exported Options field of an unexported type could not be set from
-// outside this package, and a caller that silently could not supply a claimer would get the
-// fail-closed branch with no compile error to say so.
+// 🔴 fetcher and claimer are separate PARAMETERS rather than Options fields, and that is a
+// TRADEOFF, not a constraint. Nothing prevents exporting them: an unexported interface type is
+// unnameable outside this package but still assignable to, and both seams declare only exported
+// methods, so an external type can satisfy them and an exported Options field of that type would
+// compile at every call site. What is bought by keeping them positional is that omitting the
+// claimer is a COMPILE error rather than a zero value — and the zero value takes the fail-closed
+// branch, where a HELD command is never dispatched. That failure is silent and looks exactly like
+// a device having nothing queued. What is paid is a long signature and a change at every call
+// site; if a third seam arrives, move all of them into Options together and make the
+// nil-claimer case loud some other way.
 func NewDispatcher(rdr reader, responses responsePublisher, conns connLookup, exec executor, fetcher drainFetcher, claimer commandClaimer, metrics Metrics, opts Options) *Dispatcher {
 	if opts.TenantDeleted == nil {
 		opts.TenantDeleted = func(string) bool { return false }

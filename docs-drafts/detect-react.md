@@ -495,25 +495,35 @@ The action chain is re-read **from the projection on every attempt**, not taken 
 takes effect without republishing events, and the severity a `raiseAlarm` raises at is always the
 current one.
 
-Actions dispatch in list order, and **there is no retryable/permanent classification here at all** —
-the package says so at `internal/react/dispatcher.go:20-23`, and calls per-error interpretation
-fragile. Exactly two things produce a `Retry`: a rule-store read error (`:281-284`) and a **sink**
-error — the command client, the alarm sink, the connector writer (`:331-333`, `:383-385`,
-`:449-451`). Everything else returns `Done` and **moves on to the next action**: a false guard, a nil
-sink, a failed payload render, an egress rate shed, a `sendCommand` on a falling edge, a missing
-payload variant, an unknown action type.
+Actions dispatch in list order, and the default is **retry everything** — with exactly one narrow
+classified exception, stated at `internal/react/dispatcher.go:20-26`. Two kinds of thing produce a
+`Retry`: a rule-store read error (`:322-326`) and a **sink** error — the command client (`:373-391`),
+the alarm sink (`:441-443`), the connector writer (`:507-509`). Everything else returns `Done` and
+**moves on to the next action**: a false guard, a nil sink, a failed payload render, an egress rate
+shed, a `sendCommand` on a falling edge, a missing payload variant, an unknown action type.
+
+The exception is the one place a sink error does *not* become a `Retry`. A `*PermanentRejection`
+(`:75-100`) is a sink's report that the downstream service **decided** the request is invalid, in a
+form redelivery cannot change; the dispatcher logs it at warn, counts it
+(`RecordPermanentlyRejected`, `:243-252`) and returns `Done`, dropping that one action and
+continuing down the chain (`:373-391`). Read the constraint on it as tightly as the package states
+it: a sink may raise it **only** from a typed verdict the downstream service actually returned, never
+from an error string, an HTTP status or a substring match — because a wrongly-permanent
+classification drops a real actuation with no retry and no record beyond a log line, while a
+wrongly-transient one costs a bounded number of retries. Today exactly one sink raises it (send
+command, §10b); alarms and connectors classify nothing.
 
 That is worth restating in the operator's terms, because "fails closed" reads like "held for later"
 and is not. For a guard or a template, failing closed means *skip this action and ack the event*
-(`:416-423`): the side effect is permanently dropped, never retried, and the only trace is a log
+(`:474-481`): the side effect is permanently dropped, never retried, and the only trace is a log
 line. A rule whose template has a defect does not wedge — it silently does nothing, forever.
 
-The `Retry` path aborts at the **failing action** and returns (`:292-297`). Since the chain is
+The `Retry` path aborts at the **failing action** and returns (`:334-339`). Since the chain is
 re-resolved per attempt, a redelivery re-runs the already-dispatched prefix — which is why the
-idempotency token is **content-addressed rather than index-addressed** (`:613-630`): after an author
+idempotency token is **content-addressed rather than index-addressed** (`:671-688`): after an author
 reorders actions, an index key would re-send the action now at the old index under the old action's
 token, swallowing one dispatch and duplicating another. The guard string is appended to the token
-**only when non-empty** (`:648-651`) so adding guard support did not re-key every in-flight command
+**only when non-empty** (`:706-709`) so adding guard support did not re-key every in-flight command
 at the deploy boundary.
 
 The consequence on the *other* side of the failing action is the one to carry away, and it is worse
@@ -521,7 +531,7 @@ than duplication: siblings ordered **after** the failure never dispatch on any a
 event is finally acked at the delivery cap they are lost outright. See §14.
 
 Guards are consulted on the rising edge only, and **never on a `raiseAlarm`'s falling edge**
-(`:350-357`) — gating the clear would strand an alarm active forever. Guards and payload templates
+(`:408-415`) — gating the clear would strand an alarm active forever. Guards and payload templates
 both fail **closed**, in the sense just given.
 
 ### 10a. Raise alarm — the alarm object as a level-state integrator
@@ -533,7 +543,7 @@ The contributor identity is **version-free**:
 `runtime.StableRuleKey` = `{profileToken}/{ruleToken}` (`internal/runtime/ruleid.go:63-79`), dropping
 the profile version. The composed runtime id rotates on *every* profile publish, and keying the
 contributor on it forked a fresh contributor per version and stranded the old one ACTIVE forever
-(argued at `internal/react/dispatcher.go:359-370`).
+(argued at `internal/react/dispatcher.go:417-428`).
 
 The reduction is pure and order-independent
 (`backend/services/device-management/model/alarm_contributor.go:78-134`): an edge older than the
@@ -558,29 +568,50 @@ One deliberate product behaviour to know: an operator's **Clear does not touch t
 ### 10b. Send command
 
 REACT calls `createCommand` over a service token minted with `command:write` alone. Validation lands
-at enqueue in command-delivery (`backend/services/command-delivery/model/api.go:109-162`), which
-delegates to device-management (`backend/services/device-management/model/api_command_enqueue.go:121-149`):
+at enqueue in command-delivery (`backend/services/command-delivery/model/api.go:204-300`), which
+delegates the vocabulary question to device-management
+(`backend/services/device-management/model/api_command_enqueue.go:158-189`):
 
-| Case | Verdict |
-|---|---|
-| device missing or soft-deleted | rejected |
-| profile declares **no** command vocabulary | **allowed, free-form and unvalidated** |
-| vocabulary declared, command key absent | rejected |
-| key matches, payload violates the parameter schema | rejected |
+| Case | Verdict | Code |
+|---|---|---|
+| device missing or soft-deleted | rejected | `DEVICE_NOT_FOUND` |
+| profile declares **no** command vocabulary | **allowed, free-form and unvalidated** | — |
+| vocabulary declared, command key absent | rejected | `COMMAND_NOT_IN_VOCABULARY` |
+| key matches, payload violates the parameter schema | rejected | `PAYLOAD_SCHEMA_VIOLATION` |
 
-The vocabulary comes from the **active published** profile version. Idempotency is a partial unique
-index on `(tenant, token)` plus an insert that does nothing on conflict and **reads back the original
-row** rather than erroring (`command-delivery/model/api.go:186-196`).
+The vocabulary comes from the **active published** profile version. command-delivery adds rejections
+of its own on the request as written (`PAYLOAD_NOT_JSON`, `METADATA_NOT_JSON`, `EXPIRES_AT_INVALID`)
+and one on the tenant's *state* rather than the request: `HELD_CEILING_EXCEEDED`, the per-tenant bound
+on commands withheld for absent devices. Every rejection is now a **typed verdict carrying a stable
+code** (`api.go:195-203`), separated from a failure to *answer* — a DB fault or an unreachable
+enqueue gate stays a plain, deliberately opaque GraphQL error, because collapsing the two tells a
+tenant "your command is invalid" during an outage.
 
-The sink **does not classify** its errors (`backend/services/event-processing/processor/react_command_client.go:37-43`),
-so a permanent rejection and an outage look identical to REACT. A typo'd command name on a
-constrained profile therefore costs five full redeliveries — and the sibling actions fare worse than
-"re-fired each time", which was the intuition and is only half of it. `Dispatch` returns at the
-failing action (`internal/react/dispatcher.go:292-297`), so a redelivery re-fires only the siblings
-ordered **before** it. Anything ordered **after** the bad `sendCommand` never dispatches on any
-attempt, and at the cap the event is dropped and acked with those actions never having run. Put the
-`raiseAlarm` first and it costs five duplicate raises, which the contributor upsert collapses; put it
-second and a typo in the command name means the alarm is never raised at all.
+Idempotency is a partial unique index on `(tenant, token)` plus an insert that does nothing on
+conflict and **reads back the original row** rather than erroring (`api.go:321-349`). The replay
+lookup runs **first in the whole method** — ahead of the payload checks, the enqueue gate and the
+held-command ceiling (`:204-232`) — precisely because REACT's deterministic token makes replays a
+normal path: a count-then-insert in front of it would refuse a redelivery, at a tenant already at its
+ceiling, for a reason untrue of a call that would have created no row at all.
+
+The sink classifies **exactly one thing**: whether command-delivery *rejected* the request or *failed
+to answer* it (`backend/services/event-processing/processor/react_command_client.go:69-131`). A
+rejection whose code is in an **opt-in** permanent set (`:43-52` — the three vocabulary verdicts above
+plus the three request-shape ones) is returned as a `*react.PermanentRejection`, which the dispatcher
+drops rather than retries. Everything else keeps the old retry-everything behaviour: a transport blip,
+a non-200, a GraphQL error, a response carrying neither arm, a code this build does not recognise —
+and, deliberately, `HELD_CEILING_EXCEEDED`, which is the one rejection that is *temporary*, clearing
+as an offline fleet returns. The default direction is the point: an unrecognised code costs bounded
+retries, whereas a wrongly-permanent classification drops an actuation outright.
+
+So a typo'd command name on a constrained profile now costs **one** attempt, not five, and its
+siblings are unaffected — a permanent rejection returns `Done`, so the chain continues past it on the
+same attempt. What follows applies to a sink failure REACT must **retry**. `Dispatch` returns at the
+failing action (`internal/react/dispatcher.go:334-339`), so a redelivery re-fires only the siblings
+ordered **before** it. Anything ordered **after** never dispatches on any attempt, and at the cap the
+event is dropped and acked with those actions never having run. Put the `raiseAlarm` first and a
+command-delivery outage costs five duplicate raises, which the contributor upsert collapses; put it
+second and the same outage means the alarm is never raised at all.
 
 ### 10c. Connector dispatch
 
@@ -654,7 +685,8 @@ it over-reaches are worth naming, because each is a real failure mode:
 | Stage | On failure | Terminal fate |
 |---|---|---|
 | DETECT applying an event | nothing acked, nothing committed | redelivered |
-| REACT, any sink | the event is left **unacked** — never negatively acknowledged, because that would burn the whole delivery cap in about a millisecond (`react_dispatcher.go:162-165`) | after the cap: **dropped, acked, counted — no dead letter** (`:155-160`) |
+| REACT, any sink failure it must **retry** | the event is left **unacked** — never negatively acknowledged, because that would burn the whole delivery cap in about a millisecond (`react_dispatcher.go:162-165`) | after the cap: **dropped, acked, counted — no dead letter** (`:155-160`) |
+| REACT, a send-command the downstream **permanently rejected** | never enters the retry path at all: the action is dropped, logged at warn and counted on the first attempt (`internal/react/dispatcher.go:373-391`) | that one action is lost; its siblings dispatch and the event is acked |
 | device-management raise-alarm consumer | left unacked | dropped past the cap with a loud error. A dropped **raise** will not re-emit until the condition falls and re-breaches; a dropped **resolve** strands the alarm |
 | outbound-connectors | left unacked | **dead-lettered** — the only one of these three that is |
 
@@ -772,11 +804,14 @@ Ordered by what they cost.
    thing that would close this, not something that exists. `device-roster` (`:376-380`) has the same
    shape, with absence-arming for never-reported devices as the casualty.
 3. **Dynamic thresholds are not replay-deterministic** — §5.
-4. **REACT's abort silently loses every action ordered after the failing one.** `Dispatch` returns at
-   the failing action (`internal/react/dispatcher.go:292-297`), so a redelivery re-runs the prefix
-   and never reaches the suffix; at the delivery cap the event is dropped and acked with those
-   actions never dispatched. This is partial **loss**, not the bounded duplication the prefix re-run
-   suggests, and it is silent: the drop is counted as one poison event, not as N undelivered actions.
+4. **A retryable REACT failure silently loses every action ordered after the failing one.**
+   `Dispatch` returns at the failing action (`internal/react/dispatcher.go:334-339`), so a
+   redelivery re-runs the prefix and never reaches the suffix; at the delivery cap the event is
+   dropped and acked with those actions never dispatched. This is partial **loss**, not the bounded
+   duplication the prefix re-run suggests, and it is silent: the drop is counted as one poison event,
+   not as N undelivered actions. A *permanently rejected* send-command no longer triggers this — it
+   returns `Done` and the chain continues (§10b) — which narrows the gap to failures REACT must
+   retry, and does nothing about them.
 5. **Duration's late non-matching event tears down a hold with no event-time guard.**
    `engine.go:776-783` deletes the active run and cancels the timer unconditionally, with no
    comparison against the run's own start, so a bounded-late non-matching event can tear down a hold

@@ -752,6 +752,23 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
     if (rejection) {
       return { status: 'rejected', code: rejection.code, reason: rejection.reason };
     }
+    // 🔴 A response carrying NEITHER arm is a contract violation, and it must not read
+    // as success. Exactly one of command/rejection is populated; neither means the
+    // answer never arrived intact — a resolver returning nothing, a host GraphQL layer
+    // dropping a field, a mangled response.
+    //
+    // The trap is that the dispatch token is minted HERE, so nothing forces this code
+    // to look at the server's answer at all: without this guard the fall-through
+    // returns { status: 'sent' } with a token that names no command, and reconciles
+    // every open command widget as though something had been created. The operator is
+    // told their command went out and has a handle that cancels nothing.
+    //
+    // The two siblings written alongside this both guard it — the REACT sink returns an
+    // explicit error, the console throws — and this is the surface most likely to be
+    // embedded outside the console, so it is the last one that should be lenient.
+    if (!result.createCommand?.command) {
+      throw new Error('The command could not be issued: the platform returned no answer for it.');
+    }
     this.reconcileCommands();
     return { status: 'sent', token };
   }

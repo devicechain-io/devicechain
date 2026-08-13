@@ -76,7 +76,7 @@ func newWireTestCtx(t *testing.T) (context.Context, *model.Api) {
 	api := model.NewApi(mgr)
 
 	ctx := core.WithTenant(context.Background(), "A")
-	ctx = withServiceAuthorities(ctx, auth.CommandRead, auth.CommandWrite)
+	ctx = withServiceAuthorities(ctx, auth.CommandRead, auth.CommandWrite, auth.CommandClaim)
 	ctx = context.WithValue(ctx, gqlcore.ContextRdbKey, mgr)
 	ctx = context.WithValue(ctx, gqlcore.ContextApiKey, api)
 	return ctx, api
@@ -212,18 +212,20 @@ func TestMarkCommandSentClaimsThroughTheSchema(t *testing.T) {
 	}
 }
 
-// TestMarkCommandSentIsServicePlaneOnly pins BOTH halves of the claim's gate.
+// TestMarkCommandSentRequiresTheClaimAuthority pins the gate on the claim.
 //
-// 🔴 The second half is the one that matters and it is not expressible in the
-// authority vocabulary: command:write is a TENANT-tier authority, so every tenant
-// user who can issue or cancel a command holds it. A claim is not a harmless
-// status edit — it removes a command from the dispatchable set WITHOUT publishing
-// it, so the command is never delivered, sits in SENT, and dies as TIMEOUT, a
-// terminal that blames the device for a delivery the platform suppressed. Cancel
-// records the truth; this would manufacture a lie with nothing in the audit trail
-// to contradict it. Only the machine caller that is about to put the command on a
-// live session may claim.
-func TestMarkCommandSentIsServicePlaneOnly(t *testing.T) {
+// 🔴 The sharpest case is the SECOND one: a service token holding command:write
+// but NOT command:claim must be refused. That is the whole reason the claim has
+// its own authority rather than riding command:write plus a token-type check —
+// event-processing's REACT sink mints exactly command:write, so a gate on
+// command:write would make a mutation written for one machine caller answer to
+// two. A token-type check cannot express that distinction at all.
+//
+// A claim is not a harmless status edit: it takes a command out of the
+// dispatchable set WITHOUT publishing it, so the command is never delivered and
+// dies as TIMEOUT — a terminal that blames the device for a delivery the platform
+// suppressed.
+func TestMarkCommandSentRequiresTheClaimAuthority(t *testing.T) {
 	const mutation = `mutation($token: String!) { markCommandSent(token: $token) }`
 
 	cases := []struct {
@@ -234,16 +236,32 @@ func TestMarkCommandSentIsServicePlaneOnly(t *testing.T) {
 		{
 			name:         "a read-only caller",
 			claims:       &auth.Claims{Authorities: []string{string(auth.CommandRead)}, TokenType: auth.TokenTypeAccess},
-			mustBeDenied: "markCommandSent must require command:write",
+			mustBeDenied: "markCommandSent must require an authority a reader does not hold",
 		},
 		{
-			name: "a tenant user holding command:write",
+			name: "a service token holding command:write but not command:claim",
 			claims: &auth.Claims{
 				Authorities: []string{string(auth.CommandRead), string(auth.CommandWrite)},
+				TokenType:   auth.TokenTypeService,
+			},
+			mustBeDenied: "command:write must NOT confer the claim; REACT's send-command sink mints exactly " +
+				"command:write, so allowing it would let a second service suppress deliveries",
+		},
+		{
+			name: "a tenant access token holding command:claim",
+			claims: &auth.Claims{
+				Authorities: []string{string(auth.CommandClaim)},
 				TokenType:   auth.TokenTypeAccess,
 			},
-			mustBeDenied: "command:write is a TENANT-tier authority, so an ordinary user holds it; " +
-				"letting them claim gives every tenant user a way to suppress a delivery and have the device blamed for it",
+			mustBeDenied: "command:claim is system-tier, so a tenant access token must never satisfy it",
+		},
+		{
+			name: "a tenant access token holding the super-authority",
+			claims: &auth.Claims{
+				Authorities: []string{string(auth.AuthorityAll)},
+				TokenType:   auth.TokenTypeAccess,
+			},
+			mustBeDenied: `"*" means every authority at the BEARER'S tier; it must not reach a system-tier one`,
 		},
 	}
 	for _, tc := range cases {
@@ -272,14 +290,14 @@ func TestMarkCommandSentIsServicePlaneOnly(t *testing.T) {
 	}
 
 	// The counterweight: the gate is only worth having while the ONE legitimate
-	// caller still gets through. A denial test alone would pass if the mutation
+	// caller still gets through. A denial-only suite would pass if the mutation
 	// were broken for everybody.
-	t.Run("a service token is allowed", func(t *testing.T) {
+	t.Run("a service token holding command:claim is allowed", func(t *testing.T) {
 		ctx, api := newWireTestCtx(t)
 		seedCommand(t, ctx, api, "svc-claim", model.CommandHeld)
 
 		svc := auth.WithClaims(ctx, &auth.Claims{
-			Authorities: []string{string(auth.CommandRead), string(auth.CommandWrite)},
+			Authorities: []string{string(auth.CommandClaim)},
 			TokenType:   auth.TokenTypeService,
 		})
 		var out struct {
@@ -289,7 +307,8 @@ func TestMarkCommandSentIsServicePlaneOnly(t *testing.T) {
 			t.Fatalf("decoding the service claim failed: %v", err)
 		}
 		if !out.MarkCommandSent {
-			t.Fatal("a service token must be able to claim; the LwM2M wake drain is the only caller and it would be dead")
+			t.Fatal("a service token holding command:claim must be able to claim; " +
+				"the LwM2M wake drain is the only caller and it would be dead")
 		}
 		matches, err := api.CommandsByToken(ctx, []string{"svc-claim"})
 		if err != nil {

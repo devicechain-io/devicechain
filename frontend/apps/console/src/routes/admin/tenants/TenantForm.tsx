@@ -72,6 +72,12 @@ export function TenantForm({
   // this gates how often — and declared per minute, since drafting is human-paced.
   const [aiRate, setAiRate] = useState(tenant?.aiInferenceRequestsPerMinute?.toString() ?? '');
   const [aiBurst, setAiBurst] = useState(tenant?.aiInferenceBurst?.toString() ?? '');
+  // How many commands this tenant may hold for absent devices before an enqueue is
+  // refused. Blank inherits the tier's ceiling, then the platform default — never
+  // unlimited. It is seeded from the tenant and resubmitted on every save for the same
+  // reason every override above is: the update is a full REPLACE of the governance
+  // fields, so a value this form does not carry is a value the next save clears.
+  const [heldCeiling, setHeldCeiling] = useState(tenant?.heldCommandCeiling?.toString() ?? '');
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const { data: tiers, error: tiersError } = useQuery(() => listTenantTiers(), []);
@@ -98,6 +104,7 @@ export function TenantForm({
         aiExternalEnabled,
         aiInferenceRequestsPerMinute: optNum(aiRate),
         aiInferenceBurst: optNum(aiBurst),
+        heldCommandCeiling: optNum(heldCeiling),
       };
       if (editing) {
         await updateTenant(tenant.token, { name: name.trim() || undefined, tierToken, config: cfg, ...gov });
@@ -260,6 +267,21 @@ export function TenantForm({
           />
         </FormField>
       </div>
+      <FormField
+        label={t('heldCeilingLabel')}
+        htmlFor="t-held-ceiling"
+        description={t('heldCeilingDescription')}
+      >
+        <Input
+          id="t-held-ceiling"
+          type="number"
+          min="0"
+          step="1"
+          value={heldCeiling}
+          placeholder={t('defaultPlaceholder')}
+          onChange={(e) => setHeldCeiling(e.target.value)}
+        />
+      </FormField>
     </>
   );
 

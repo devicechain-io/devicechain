@@ -137,7 +137,7 @@ func TestEveryAuthorityDeclaresATier(t *testing.T) {
 	expected := []Authority{
 		UserRead, UserWrite, RoleRead, RoleWrite, TenantRead, TenantWrite,
 		DeviceRead, DeviceWrite, EventRead, StateRead, LocationRead, AlarmRead, AlarmWrite,
-		CommandRead, CommandWrite, DashboardRead, DashboardWrite,
+		CommandRead, CommandWrite, CommandClaim, DashboardRead, DashboardWrite,
 		NotificationRead, NotificationWrite, AuditRead, SettingsRead, SettingsWrite,
 		ClientRead, ClientWrite, ConnectorRead, ConnectorWrite, BrandingWrite,
 		BasemapWrite, AIAdmin, AIInfer,

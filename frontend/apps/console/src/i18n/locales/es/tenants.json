@@ -31,6 +31,8 @@
   "effectiveTierDefault": "No hay ningún modelo asignado — recurre al valor predeterminado del nivel, {{model}}.",
   "empty": "Aún no hay inquilinos. Crea el primero para empezar.",
   "enable": "Habilitar",
+  "heldCeilingDescription": "Máximo de comandos que este inquilino puede tener a la espera de dispositivos que están sin conexión. Déjalo en blanco para heredar el límite del nivel y, después, el valor predeterminado de la plataforma — que es un límite real, nunca ilimitado.",
+  "heldCeilingLabel": "Límite de comandos retenidos",
   "ingestBurstLabel": "Ráfaga de ingesta",
   "ingestRateLabel": "Tasa de ingesta (eventos/s)",
   "inheritDefaultHint": "Déjalo en blanco para heredar el valor predeterminado de la plataforma.",

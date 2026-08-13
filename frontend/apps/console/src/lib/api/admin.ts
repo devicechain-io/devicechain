@@ -124,6 +124,11 @@ const TENANTS = graphql(`
       aiExternalEnabled
       aiInferenceRequestsPerMinute
       aiInferenceBurst
+      # Selected so the edit form can ROUND-TRIP it. updateTenant is a full replace of
+      # the governance fields — an omitted override is written as NULL, not left alone —
+      # so a field this query does not read back is a field the next save silently
+      # clears, however unrelated the edit that triggered it.
+      heldCommandCeiling
       # What the tenant is ACTUALLY metered at, with the provenance that makes it
       # readable as tier + delta (ADR-065 decision 7). Resolved server-side by the
       # same cascade the data plane reads its ceilings through — deliberately not
@@ -679,6 +684,7 @@ const CREATE_TENANT = graphql(`
       aiExternalEnabled
       aiInferenceRequestsPerMinute
       aiInferenceBurst
+      heldCommandCeiling
       createdAt
       updatedAt
     }
@@ -710,6 +716,7 @@ const UPDATE_TENANT = graphql(`
       aiExternalEnabled
       aiInferenceRequestsPerMinute
       aiInferenceBurst
+      heldCommandCeiling
       createdAt
       updatedAt
     }

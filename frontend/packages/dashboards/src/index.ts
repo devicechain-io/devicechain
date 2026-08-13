@@ -47,9 +47,14 @@ export type {
 // The command-delivery lifecycle vocabulary — the ONE terminal set every surface
 // (console panel, command-button widget, preview) reads, so a new status can't be
 // learned by some of them and not the others.
+//
+// The terminal SET itself is deliberately not re-exported: isTerminalCommandStatus is
+// the only question a consumer of this package has, and handing out the set invites a
+// hand-rolled membership check per call site — the three-copies problem this module was
+// created to end. It stays exported from ./command-status for the sibling test, which
+// asserts the set's contents against a hand-written list.
 export {
   COMMAND_STATUSES,
-  TERMINAL_COMMAND_STATUSES,
   isTerminalCommandStatus,
   type CommandStatus,
 } from './command-status';

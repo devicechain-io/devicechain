@@ -14,7 +14,7 @@ import (
 // It is a SNAPSHOT, not the live model, per the house rule in migrations.go. Pointing
 // this at iam.Tenant would make this migration mean whatever that struct means on the
 // day it runs — which breaks FRESH installs the moment the model gains another field
-// (the baseline creates the table without it, this migration adds two columns, and the
+// (the baseline creates the table without it, this migration adds its one column, and the
 // next fresh install replays into "column already exists") while every existing database
 // applies cleanly and looks healthy.
 //

@@ -12,27 +12,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 )
 
-// seedHeld creates a command and drives it straight to HELD.
-//
-// 🔴 The hold is written DIRECTLY, via forceStatus, because nothing in this service
-// produces a held row yet — the presence gate that withholds a command for an absent
-// device is a later slice. A test that tried to reach the ceiling "properly", through
-// the public API, would be counting rows that never become HELD and would therefore
-// pass no matter what the ceiling did.
-func seedHeld(t *testing.T, api *Api, ctx context.Context, token string) uint {
-	t.Helper()
-	created, err := api.CreateCommand(ctx, &CommandCreateRequest{
-		Token: token, DeviceToken: "d", Name: "reboot",
-	})
-	if err != nil {
-		t.Fatalf("seeding %s failed: %v", token, err)
-	}
-	if err := forceStatus(api, ctx, created.ID, CommandHeld); err != nil {
-		t.Fatalf("holding %s failed: %v", token, err)
-	}
-	return created.ID
-}
-
 // asRejection asserts the error is a typed enqueue rejection and returns it. A plain
 // error here would mean the ceiling reported "we could not decide", which is the
 // channel reserved for a failure to ANSWER — a client told that would go looking for
@@ -68,8 +47,8 @@ func TestReplayAtTheCeilingReturnsTheOriginalCommand(t *testing.T) {
 	api := newTestApi(t)
 	ctx := core.WithTenant(context.Background(), "A")
 
-	originalID := seedHeld(t, api, ctx, "replay-me")
-	seedHeld(t, api, ctx, "filler")
+	originalID := seedWithStatus(t, api, ctx, "replay-me", CommandHeld)
+	seedWithStatus(t, api, ctx, "filler", CommandHeld)
 
 	// The tenant is now AT its ceiling, and the gate is one that refuses everything.
 	// Both must be bypassed by a replay: it decides nothing, so it may consult nothing.
@@ -126,8 +105,8 @@ func TestHeldCeilingRefusesANewEnqueueAndPersistsNothing(t *testing.T) {
 	api := newTestApi(t)
 	ctx := core.WithTenant(context.Background(), "A")
 
-	seedHeld(t, api, ctx, "held-1")
-	seedHeld(t, api, ctx, "held-2")
+	seedWithStatus(t, api, ctx, "held-1", CommandHeld)
+	seedWithStatus(t, api, ctx, "held-2", CommandHeld)
 	api.DefaultHeldCommandCeiling = 2
 
 	_, err := api.CreateCommand(ctx, &CommandCreateRequest{
@@ -176,17 +155,7 @@ func TestOnlyHeldRowsCountTowardTheCeiling(t *testing.T) {
 		{"c-cancelled", CommandCancelled},
 		{"c-timeout", CommandTimeout},
 	} {
-		created, err := api.CreateCommand(ctx, &CommandCreateRequest{
-			Token: seed.token, DeviceToken: "d", Name: "reboot",
-		})
-		if err != nil {
-			t.Fatalf("seeding %s failed: %v", seed.token, err)
-		}
-		if seed.status != CommandQueued {
-			if err := forceStatus(api, ctx, created.ID, seed.status); err != nil {
-				t.Fatalf("forcing %s failed: %v", seed.token, err)
-			}
-		}
+		seedWithStatus(t, api, ctx, seed.token, seed.status)
 	}
 
 	api.DefaultHeldCommandCeiling = 2
@@ -206,8 +175,8 @@ func TestHeldCeilingIsPerTenant(t *testing.T) {
 	tenantA := core.WithTenant(context.Background(), "A")
 	tenantB := core.WithTenant(context.Background(), "B")
 
-	seedHeld(t, api, tenantA, "a-held-1")
-	seedHeld(t, api, tenantA, "a-held-2")
+	seedWithStatus(t, api, tenantA, "a-held-1", CommandHeld)
+	seedWithStatus(t, api, tenantA, "a-held-2", CommandHeld)
 	api.DefaultHeldCommandCeiling = 2
 
 	if _, err := api.CreateCommand(tenantB, &CommandCreateRequest{

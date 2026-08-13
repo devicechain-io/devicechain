@@ -121,30 +121,29 @@ func (r *SchemaResolver) CancelCommand(ctx context.Context, args struct {
 // cannot distinguish "I claimed it" from "someone else did a millisecond ago".
 // Returning the row would invite exactly that misread.
 //
-// 🔴 SERVICE TOKENS ONLY, and command:write is NOT sufficient on its own.
-// command:write is a TENANT-tier authority (see auth.tiersByAuthority), so every
-// tenant user who can issue or cancel a command would otherwise be able to claim
-// one — and a claim is not a harmless status edit. It removes a command from the
-// dispatchable set WITHOUT publishing it, so the command is never delivered, sits
-// in SENT, and dies as TIMEOUT: a terminal state that blames the DEVICE for a
-// delivery the platform silently suppressed. Cancelling records the truth
+// 🔴 IT IS GATED ON command:claim, NOT command:write, AND THAT IS THE WHOLE
+// SECURITY ARGUMENT. A claim is not a harmless status edit: it removes a command
+// from the dispatchable set WITHOUT publishing it, so the command is never
+// delivered, sits in SENT, and dies as TIMEOUT — a terminal that blames the
+// DEVICE for a delivery the platform suppressed. Cancelling records the truth
 // (CANCELLED, a named actor); this would manufacture a lie with nothing in the
 // audit trail to contradict it.
 //
-// No human surface offers this mutation and none should: it exists for one
-// machine caller, the LwM2M wake drain, which claims a command it is about to put
-// on a live CoAP session. The tier vocabulary alone cannot express "service
-// tokens only" — that takes an explicit TokenType check here, which is exactly
-// what the authority table's own note says is required when it must be true.
+// command:claim is SYSTEM-tier, and the existing vocabulary is what turns that
+// into "service tokens only": auth.satisfies bounds a tenant access token —
+// including one holding "*" — to tenant-tier authorities, and the data-plane
+// handler already refuses identity tokens. So no explicit token-type check is
+// needed here, and one would be strictly weaker than this: command:write plus a
+// token-type check still admits EVERY service holding command:write, and
+// event-processing's REACT sink mints exactly that, so a mutation for one caller
+// would answer to two. A separate authority is granted to the one service that
+// needs it, and being system-tier also stops an operator granting it on a
+// tenant-scoped role — which a resolver-level check cannot police at all.
 func (r *SchemaResolver) MarkCommandSent(ctx context.Context, args struct {
 	Token string
 }) (bool, error) {
-	if err := auth.Authorize(ctx, auth.CommandWrite); err != nil {
+	if err := auth.Authorize(ctx, auth.CommandClaim); err != nil {
 		return false, err
-	}
-	claims, ok := auth.ClaimsFromContext(ctx)
-	if !ok || claims.TokenType != auth.TokenTypeService {
-		return false, auth.ErrForbidden
 	}
 
 	api := r.GetApi(ctx)
