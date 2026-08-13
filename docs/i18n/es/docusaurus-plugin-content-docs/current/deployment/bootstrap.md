@@ -48,8 +48,11 @@ instancia que parece perfectamente sana y no tiene ningún dato.
    secretos**. Todas se acuñan en la primera instalación y **se reutilizan tal cual
    cuando la instancia ya existe**: el pipeline le pregunta al clúster qué está
    ejecutando la instancia antes de generar nada, y se detiene en vez de suponer si
-   no puede determinarlo. Además, la clave raíz se deposita en un archivo cifrado que
-   tú conservas; consulta [Recuperación ante desastres](./disaster-recovery.md).
+   no puede determinarlo. También registra las credenciales del bróker en la máquina
+   desde la que lo ejecutas, antes de configurar el bróker con ellas, de modo que una
+   ejecución interrumpida a mitad de camino se retome con solo volver a ejecutarla.
+   Además, la clave raíz se deposita en un archivo cifrado que tú conservas; consulta
+   [Recuperación ante desastres](./disaster-recovery.md).
 2. **Aplicar la infraestructura** — ejecuta `tofu apply` sobre la configuración de
    OpenTofu incrustada (NATS, PostgreSQL, TimescaleDB, ingress de NGINX,
    cert-manager, el operador CloudNativePG y su plugin de respaldo Barman Cloud,

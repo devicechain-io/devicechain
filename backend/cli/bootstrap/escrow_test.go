@@ -952,6 +952,33 @@ func withDeployedInstance(t *testing.T, cfg *config.InstanceConfiguration, err e
 	// broker — and which exercises the fallback, so the tests below assert against a
 	// re-run that had to hash for itself unless they say otherwise.
 	withDeployedBrokerHashes(t, natsauth.DeployedHashes{})
+	// And the FOURTH read, which is a FILE rather than a cluster call and is the more
+	// dangerous of the two for exactly that reason.
+	//
+	// 🔴 EVERY TEST HERE RUNS WITH Instance "prod", so an unstubbed record resolves
+	// ~/.devicechain/prod on whoever is running the suite — read AND written. Measured
+	// before this line existed: one `go test ./...` created that directory and left a
+	// real credential record in it, and a later test in the same run then reported
+	// "reused from this machine's bootstrap record". On a machine that has a prod
+	// instance, the suite would have overwritten its bridge copy. Defaults to "no
+	// record", which is the fresh-install answer.
+	withBrokerRecord(t, nil)
+}
+
+// withBrokerRecord stubs the local bootstrap record. A nil rec means there is none;
+// the write is captured rather than performed, so the suite never touches a real
+// instance's directory. The returned pointer sees what a run stored.
+func withBrokerRecord(t *testing.T, rec *brokerRecord) *[]brokerRecord {
+	t.Helper()
+	origRead, origStore := readDeployedBrokerRecord, storeBrokerRecord
+	t.Cleanup(func() { readDeployedBrokerRecord, storeBrokerRecord = origRead, origStore })
+	stored := &[]brokerRecord{}
+	readDeployedBrokerRecord = func(string) *brokerRecord { return rec }
+	storeBrokerRecord = func(_ string, r brokerRecord) error {
+		*stored = append(*stored, r)
+		return nil
+	}
+	return stored
 }
 
 // withDeployedBrokerHashes stubs what the running broker's config already holds.

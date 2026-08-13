@@ -215,6 +215,29 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		}
 		notes = append(notes, "NATS broker credentials reused from the running instance")
 	default:
+		// NO DEPLOYED INSTANCE — WHICH IS NOT THE SAME AS NO DEPLOYED BROKER. The
+		// lookup above reads the instance chart's config, written in step 5, while the
+		// BROKER is configured in step 3. A run that died between them left a live
+		// broker whose credentials this branch would happily rotate out from under it,
+		// permanently, because nothing the cluster still holds can be turned back into
+		// the seed and plaintexts. broker_record.go is the bridge, and this is the only
+		// place it is consulted: the deployed instance config stays authoritative
+		// whenever it exists, because it is what the running SERVICES are actually
+		// holding, and a disagreement between the two means services are already failing
+		// to connect — exactly when preferring the config is what lets a re-run repair.
+		//
+		// The record cannot make this branch fail. A missing, torn or foreign record
+		// reads as absent and mints, which is what this branch did before it existed.
+		if rec := readDeployedBrokerRecord(st.Instance); rec != nil {
+			creds, err = natsauth.CredentialsFromDeployed(
+				rec.IssuerSeed, rec.ServicePassword, rec.SysPassword,
+				lookupDeployedBrokerHashes(ctx, st.KubeContext, natsStatefulSetName))
+			if err != nil {
+				return fail("reusing the recorded NATS auth credentials", err)
+			}
+			notes = append(notes, "NATS broker credentials reused from this machine's bootstrap record")
+			break
+		}
 		creds, err = natsauth.GenerateCredentials()
 		if err != nil {
 			return fail("minting NATS auth credentials", err)
@@ -226,6 +249,38 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	st.Values["natsServicePasswordBcrypt"] = creds.ServicePasswordBcrypt
 	st.Values["natsSysPassword"] = creds.SysPassword
 	st.Values["natsSysPasswordBcrypt"] = creds.SysPasswordBcrypt
+
+	// RECORD THEM BEFORE ANYTHING CONSUMES THEM — the same placement, and the same
+	// reasoning, as the root-key escrow write further down: the value of the artifact is
+	// that it exists for every broker that exists, so a run that cannot write one must not
+	// go on to configure a broker whose credentials have no second copy.
+	//
+	// Rewritten on every real run, including a reuse, so the record can never drift from
+	// the instance config. That makes it a no-op write in the healthy case and a repair
+	// when a stale record survived a rebuild.
+	//
+	// 🔴 NEVER UNDER --dry-run. A dry run skips the cluster lookup and mints throwaway
+	// values; writing them here would overwrite the only bridge copy of a live
+	// half-bootstrapped broker's credentials with garbage — worse than the defect this
+	// record exists to fix. It reads the record (above) and reports, which is what a
+	// rehearsal owes the operator.
+	//
+	// Failing the run on a write error is deliberate and costs nothing: the directory is
+	// the one OpenTofu is about to write its state into, so a run that cannot write here
+	// was going to die at step 3 anyway, later and with a worse message.
+	if st.DryRun {
+		if rec := readDeployedBrokerRecord(st.Instance); rec != nil {
+			notes = append(notes, "would reuse the NATS broker credentials recorded on this machine")
+		}
+	} else if err := storeBrokerRecord(st.Instance, brokerRecord{
+		Instance:        st.Instance,
+		Written:         time.Now().UTC(),
+		IssuerSeed:      creds.IssuerSeed,
+		ServicePassword: creds.ServicePassword,
+		SysPassword:     creds.SysPassword,
+	}); err != nil {
+		return fail("recording the broker credentials before the broker is configured", err)
+	}
 
 	// The shared service secret (ADR-044 amendment) backing the synchronous
 	// cross-service call primitive: a caller presents it to user-management's mint

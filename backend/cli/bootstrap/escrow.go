@@ -176,6 +176,14 @@ var (
 	// than shipped to the broker.
 	lookupDeployedBrokerHashes = DeployedBrokerHashes
 
+	// readDeployedBrokerRecord / storeBrokerRecord are the local bridge across the
+	// step-3/step-5 gap — see broker_record.go for why it exists and why it is a file.
+	// Indirected for the same reason as the two above and one more: every credential test
+	// runs with Instance "prod", so an unstubbed read would resolve ~/.devicechain/prod on
+	// a maintainer's machine and silently consult a REAL instance's credentials.
+	readDeployedBrokerRecord = readBrokerRecord
+	storeBrokerRecord        = writeBrokerRecord
+
 	// encodeArtifact is the seam that makes the post-write verification testable.
 	//
 	// That check exists for a case nothing here can produce on purpose: an artifact

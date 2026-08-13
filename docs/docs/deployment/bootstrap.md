@@ -43,7 +43,10 @@ the same hostname, leaving an instance that looks perfectly healthy and has no d
    root key**. All of them are minted on a first install and **reused as-is when the
    instance already exists** — the pipeline asks the cluster what the instance is
    running before it generates anything, and stops rather than guessing if it cannot
-   tell. The root key is additionally escrowed to an encrypted file you keep; see
+   tell. It also records the broker's credentials on the machine you run it from,
+   before the broker is configured with them, so that a run interrupted partway
+   through can be resumed by simply running it again. The root key is additionally
+   escrowed to an encrypted file you keep; see
    [Disaster Recovery](./disaster-recovery.md).
 2. **Apply infrastructure** — `tofu apply` the embedded OpenTofu config (NATS,
    PostgreSQL, TimescaleDB, NGINX ingress, cert-manager, the CloudNativePG

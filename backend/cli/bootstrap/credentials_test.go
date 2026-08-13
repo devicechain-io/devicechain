@@ -312,3 +312,149 @@ func TestParseDeployedConfigReadsAWellFormedInstance(t *testing.T) {
 		t.Errorf("the round trip lost credentials: %+v", got.Infrastructure)
 	}
 }
+
+// --- the local bootstrap record: the bridge across the step-3/step-5 gap ---------
+
+// 🔴 THE DEPLOYED INSTANCE CONFIG WINS, AND GETTING THIS BACKWARDS IS THE EXPENSIVE
+// MISTAKE. The record says what dcctl intended; the instance config says what the running
+// SERVICES are actually holding. Preferring the record would rotate a healthy instance onto
+// credentials nobody is using — the broker rolls, the fleet drops — for no reason at all.
+// Preferring the config is a no-op plus a record repair.
+func TestADeployedInstanceBeatsTheLocalRecord(t *testing.T) {
+	cfg, creds, _ := deployedInstance(t)
+	other, err := natsauth.GenerateCredentials()
+	if err != nil {
+		t.Fatalf("generating the record's credentials: %v", err)
+	}
+	rec := &brokerRecord{
+		Instance: "prod", IssuerSeed: other.IssuerSeed,
+		ServicePassword: other.ServicePassword, SysPassword: other.SysPassword,
+	}
+
+	withDeployedInstance(t, cfg, nil)
+	stored := withBrokerRecord(t, rec)
+	st := &State{Instance: "prod", BuildImages: true, Values: map[string]string{}}
+	if err := stepRenderConfig(t.Context(), st); err != nil {
+		t.Fatalf("stepRenderConfig: %v", err)
+	}
+
+	if st.Values["natsCalloutIssuerSeed"] != creds.IssuerSeed {
+		t.Fatal("the local record overrode the deployed instance's credentials")
+	}
+	// And contract 7: the record is repaired to match, so it can never drift.
+	if len(*stored) != 1 || (*stored)[0].IssuerSeed != creds.IssuerSeed {
+		t.Fatalf("a reuse from the instance config did not rewrite the record: %+v", *stored)
+	}
+}
+
+// The case the whole file exists for: no instance config (the run died before step 5) but a
+// live broker configured in step 3, whose credentials only this record still holds.
+func TestNoInstanceConfigButARecordReusesTheBrokersCredentials(t *testing.T) {
+	creds, err := natsauth.GenerateCredentials()
+	if err != nil {
+		t.Fatalf("generating credentials: %v", err)
+	}
+	rec := &brokerRecord{
+		Instance: "prod", IssuerSeed: creds.IssuerSeed,
+		ServicePassword: creds.ServicePassword, SysPassword: creds.SysPassword,
+	}
+
+	withDeployedInstance(t, nil, nil)
+	withBrokerRecord(t, rec)
+	st := &State{Instance: "prod", BuildImages: true, Values: map[string]string{}}
+	if err := stepRenderConfig(t.Context(), st); err != nil {
+		t.Fatalf("stepRenderConfig: %v", err)
+	}
+
+	if st.Values["natsCalloutIssuerSeed"] != creds.IssuerSeed {
+		t.Fatal("a re-run minted a fresh issuer seed while a recorded one existed, so the live " +
+			"broker's callout would be signed by a key it does not trust")
+	}
+	if st.Values["natsServicePassword"] != creds.ServicePassword {
+		t.Fatal("a re-run minted a fresh service password, which the live broker will refuse")
+	}
+	if st.Values["natsSysPassword"] != creds.SysPassword {
+		t.Fatal("a re-run minted a fresh system-account password")
+	}
+	// The public issuer must be DERIVED from the reused seed, not carried in the record —
+	// a record holding both is a record that can disagree with itself.
+	if st.Values["natsCalloutIssuerPublic"] != creds.IssuerPublic {
+		t.Fatal("the reused seed did not produce the issuer public key the broker is configured with")
+	}
+}
+
+// With neither source, minting is correct and unchanged. This is the counterweight to the
+// two above: without it they pass against an implementation that always reuses.
+func TestNoInstanceConfigAndNoRecordStillMints(t *testing.T) {
+	withDeployedInstance(t, nil, nil)
+	withBrokerRecord(t, nil)
+	st := &State{Instance: "prod", BuildImages: true, Values: map[string]string{}}
+	if err := stepRenderConfig(t.Context(), st); err != nil {
+		t.Fatalf("stepRenderConfig: %v", err)
+	}
+	if st.Values["natsCalloutIssuerSeed"] == "" || st.Values["natsServicePassword"] == "" {
+		t.Fatal("a fresh install did not mint broker credentials")
+	}
+}
+
+// 🔴 A PRESENT-BUT-BROKEN INSTANCE CONFIG MUST STILL FAIL CLOSED, and the record must not
+// rescue it. The chain is "config, else record, else mint" only when there is NO config: an
+// instance that exists but has lost its broker credentials is a state dcctl cannot reason
+// about, and the record may hold something the services are not using.
+func TestARecordDoesNotRescueAnInstanceMissingItsBrokerCredentials(t *testing.T) {
+	cfg := &config.InstanceConfiguration{}
+	cfg.Infrastructure.Secrets.RootKey = testRootKey
+	creds, err := natsauth.GenerateCredentials()
+	if err != nil {
+		t.Fatalf("generating credentials: %v", err)
+	}
+	rec := &brokerRecord{
+		Instance: "prod", IssuerSeed: creds.IssuerSeed,
+		ServicePassword: creds.ServicePassword, SysPassword: creds.SysPassword,
+	}
+
+	withDeployedInstance(t, cfg, nil)
+	withBrokerRecord(t, rec)
+	st := &State{Instance: "prod", BuildImages: true, Values: map[string]string{}}
+	if err := stepRenderConfig(t.Context(), st); err == nil {
+		t.Fatal("a live instance with no broker credentials was allowed to proceed because a local " +
+			"record existed; that record is not evidence about what the services hold")
+	}
+}
+
+// 🔴 A REHEARSAL MUST NOT DAMAGE THE THING IT IS REHEARSING. A dry run skips the cluster
+// lookup and mints throwaway values; writing those over the record would destroy the only
+// bridge copy of a live half-bootstrapped broker's credentials — strictly worse than the
+// defect the record fixes. It reads and reports instead.
+func TestADryRunNeverWritesTheRecord(t *testing.T) {
+	creds, err := natsauth.GenerateCredentials()
+	if err != nil {
+		t.Fatalf("generating credentials: %v", err)
+	}
+	rec := &brokerRecord{
+		Instance: "prod", IssuerSeed: creds.IssuerSeed,
+		ServicePassword: creds.ServicePassword, SysPassword: creds.SysPassword,
+	}
+	withDeployedInstance(t, nil, nil)
+	stored := withBrokerRecord(t, rec)
+
+	st := &State{Instance: "prod", DryRun: true, BuildImages: true, Values: map[string]string{}}
+	if err := stepRenderConfig(t.Context(), st); err != nil {
+		t.Fatalf("stepRenderConfig: %v", err)
+	}
+	if len(*stored) != 0 {
+		t.Fatalf("a dry run wrote %d record(s); it mints throwaway values, so that would replace a "+
+			"live broker's only recoverable credentials with ones nothing is using", len(*stored))
+	}
+
+	// The counterweight: the same run WITHOUT --dry-run does write, so the assertion above
+	// is about the flag rather than about a store that never fires.
+	stored2 := withBrokerRecord(t, rec)
+	real := &State{Instance: "prod", BuildImages: true, Values: map[string]string{}}
+	if err := stepRenderConfig(t.Context(), real); err != nil {
+		t.Fatalf("stepRenderConfig (real): %v", err)
+	}
+	if len(*stored2) != 1 {
+		t.Fatalf("a real run stored %d records, so the dry-run assertion proves nothing", len(*stored2))
+	}
+}
