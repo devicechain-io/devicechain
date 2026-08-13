@@ -17,6 +17,26 @@ import (
 
 const (
 	GRAPHQL_PORT = 8080
+
+	// graphiqlEndpoint is the GraphQL URL the /graphiql explorer page posts to. It
+	// is templated into the page's fetch() call, which resolves it against the
+	// document URL — so a RELATIVE value is what makes one string correct in every
+	// topology the explorer is reached through:
+	//
+	//	/graphiql             -> /graphql             (port-forward, straight at the pod)
+	//	/api/<area>/graphiql  -> /api/<area>/graphql  (through the ingress, which
+	//	                                               strips the /api/<area> prefix)
+	//	/api/<area>/graphiql  -> /api/<area>/graphql  (the console's vite dev proxy,
+	//	                                               which strips the same prefix)
+	//
+	// No absolute path can do all three: "/graphql" drops the prefix the ingress and
+	// the dev proxy both expect, and "/api/<area>/graphql" is not a route this mux
+	// registers. This previously read "/<instance>/<tenant>/<area>/graphql", which is
+	// served by NONE of them — the page loaded and every query it sent 404'd.
+	//
+	// The only GraphQL route ExecuteStart registers is "/graphql" (it also registers
+	// "/graphiql", "/metrics", "/healthz" and "/readyz"). Keep this resolving onto it.
+	graphiqlEndpoint = "graphql"
 )
 
 // Manages lifecycle of microservice GraphQL server.
@@ -78,9 +98,7 @@ func (gql *GraphQLManager) ExecuteStart(context.Context) error {
 	// are enabled (secure by default, ADR-029). It pairs with schema introspection,
 	// which MustParseSchema gates on the same flag; a prod deploy exposes neither.
 	if DevToolsEnabled() {
-		graphiqlHandler, err := graphiql.NewGraphiqlHandler(fmt.Sprintf("/%s/%s/%s/%s",
-			gql.Microservice.InstanceId, gql.Microservice.TenantId, gql.Microservice.FunctionalArea,
-			"graphql"))
+		graphiqlHandler, err := graphiql.NewGraphiqlHandler(graphiqlEndpoint)
 		if err != nil {
 			panic(err)
 		}
