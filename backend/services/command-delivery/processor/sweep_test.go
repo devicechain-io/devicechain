@@ -32,6 +32,7 @@ type fakeApi struct {
 	heldReads              []uint
 	heldReadErr            error
 	releasedHolds          []uint
+	wokenDevices           []string
 
 	lockAttempts    int
 	pendingReads    int
@@ -85,6 +86,15 @@ func (f *fakeApi) HeldCommands(_ context.Context, afterId uint, limit int) ([]*m
 		return page, 0, nil
 	}
 	return page, page[len(page)-1].ID, nil
+}
+
+// ReleaseHeldForDevice is the wake, which the sweep and reconciler never call — it is
+// driven by a transport over GraphQL. Recorded so a test can prove that stays true.
+func (f *fakeApi) ReleaseHeldForDevice(_ context.Context, deviceToken string) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.wokenDevices = append(f.wokenDevices, deviceToken)
+	return 0, nil
 }
 
 func (f *fakeApi) ReleaseHold(_ context.Context, id uint) (bool, error) {

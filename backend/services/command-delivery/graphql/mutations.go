@@ -149,3 +149,40 @@ func (r *SchemaResolver) MarkCommandSent(ctx context.Context, args struct {
 	api := r.GetApi(ctx)
 	return api.MarkSentByToken(ctx, args.Token)
 }
+
+// ReleaseHeldCommands returns a device's withheld commands to the delivery queue,
+// answering how many it released.
+//
+// 🔴 THE ADR-077 LIFECYCLE GATE IS DELIBERATELY NOT CALLED HERE, WHICH IS A DEPARTURE
+// FROM THE OTHER TWO RELEASE PATHS AND IS WORTH THE PARAGRAPH. The rule this codebase
+// follows is that the gate belongs on every path that can put a command in front of a
+// dispatcher — and the delivery sweep, which is the only thing that dispatches, applies
+// it. Waking moves rows HELD -> QUEUED; for a deleted tenant those rows are then refused
+// by the sweep exactly as they were while held, so nothing actuates either way.
+//
+// What differs from the reconciler, which DOES gate, is cost rather than principle: the
+// reconciler's check is an in-process closure over a batch it already grouped by tenant,
+// while this one sits on the device-connect path and would add a user-management round
+// trip per connecting device — paid on every reconnect storm, to prevent a status change
+// on rows that are being erased. The load-bearing gate is the sweep's. If waking ever
+// grows a direct dispatch, this decision has to be revisited with it.
+//
+// command:wake rather than command:claim, and the two are mirror images: claiming takes a
+// command out of the dispatchable set without delivering it, while waking puts one back
+// in. The worst a spurious wake does is cost one extra evaluation, since the sweep
+// re-reads presence and withholds it again — so the split is least privilege, not danger.
+// Being system-tier is what keeps it to service tokens.
+func (r *SchemaResolver) ReleaseHeldCommands(ctx context.Context, args struct {
+	DeviceToken string
+}) (int32, error) {
+	if err := auth.Authorize(ctx, auth.CommandWake); err != nil {
+		return 0, err
+	}
+
+	api := r.GetApi(ctx)
+	released, err := api.ReleaseHeldForDevice(ctx, args.DeviceToken)
+	if err != nil {
+		return 0, err
+	}
+	return int32(released), nil
+}

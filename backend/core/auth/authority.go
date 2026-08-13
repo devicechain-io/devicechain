@@ -159,6 +159,30 @@ const (
 	// being system-tier means an operator cannot put it on a tenant-scoped role
 	// either, which a resolver-level token-type check cannot police at all.
 	CommandClaim Authority = "command:claim"
+	// CommandWake permits returning a device's WITHHELD commands to the delivery
+	// queue because that device has just come back — the transport that owns the
+	// connection telling command-delivery the wait is over.
+	//
+	// 🔑 IT IS COMMAND:CLAIM'S MIRROR IMAGE, AND THE ASYMMETRY IS THE POINT. Claiming
+	// takes a command OUT of the dispatchable set without delivering it, which is why
+	// that one is dangerous. Waking puts one BACK IN, and the worst a spurious wake can
+	// do is cost one extra evaluation: the delivery sweep re-reads presence and simply
+	// withholds the command again. That is stated plainly rather than dressed up —
+	// pretending both carry the same risk would make the real argument for splitting
+	// them harder to find.
+	//
+	// The real argument is LEAST PRIVILEGE, not danger. Gating the wake on
+	// command:claim would hand event-sources a delivery-suppression primitive it has
+	// no use for; gating it on command:write would let event-processing's REACT sink
+	// wake commands, so a mutation for one caller would answer to two. A separate
+	// authority is granted to the transports that own device connections and to
+	// nothing else.
+	//
+	// System-tier for the same reason command:claim is: waking is a machine operation,
+	// and the tier is what makes it reachable only by a service token — satisfies()
+	// bounds a tenant access token, including one holding "*", to tenant-tier
+	// authorities, which a resolver-level check could not police.
+	CommandWake Authority = "command:wake"
 
 	// Dashboards (dashboard-management, ADR-039). Gate the dashboard-definition
 	// CRUD API; the live telemetry a dashboard renders is still gated by EventRead
@@ -286,6 +310,10 @@ var vocabulary = map[Authority]Tiers{
 	// token, including one holding "*", to tenant-tier authorities, and the
 	// data-plane handler already refuses identity tokens).
 	CommandClaim: system,
+	// Waking a device's withheld commands is likewise a machine operation: the
+	// transport that owns the connection is the only thing that knows the device
+	// came back.
+	CommandWake: system,
 	// The AI provider list is instance config an operator owns — the ADR-065
 	// correction. A tenant only CONSENTS to external routing (a separate flag).
 	AIAdmin:       system,

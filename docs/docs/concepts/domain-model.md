@@ -115,7 +115,10 @@ know: it recorded the command as sent, nothing answered, and a week later it rea
 
 The platform therefore checks before it publishes. When a transport reports that a device
 is not connected, its commands move to `HELD` instead of being published, and return to
-`QUEUED` when the device comes back.
+`QUEUED` when the device comes back — normally within a second or two of it reconnecting,
+because the transport that owns the connection says so directly. A periodic pass catches
+anything that announcement misses, so a returning device's backlog is always released
+eventually even if the platform never hears about the reconnection itself.
 
 Three limits are worth knowing:
 

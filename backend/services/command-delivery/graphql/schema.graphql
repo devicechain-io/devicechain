@@ -140,6 +140,16 @@ type Mutation {
     # and a command is a physical actuation. Returns false if the command was not
     # claimable (already sent, answered or cancelled), which is a benign race.
     markCommandSent(token: String!): Boolean!
+    # Return a device's WITHHELD commands to the delivery queue because the device has
+    # come back. For a transport that owns the device's connection and therefore learns
+    # of its return the instant it happens, rather than waiting for the periodic pass
+    # that reconciles holds. Returns how many commands were released; zero is the
+    # ordinary answer for a device with nothing waiting.
+    #
+    # It queues rather than delivers: the delivery sweep still decides whether each
+    # command goes out, re-reading presence and re-applying every other gate. So a wake
+    # changes WHEN that question is asked, never what the answer is.
+    releaseHeldCommands(deviceToken: String!): Int!
 }
 
 schema {
