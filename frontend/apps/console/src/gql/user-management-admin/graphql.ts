@@ -288,7 +288,7 @@ export type SetTenantEnabledMutationVariables = Exact<{
 }>;
 
 
-export type SetTenantEnabledMutation = { setTenantEnabled: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, outboundMessagesPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null, color: string } } };
+export type SetTenantEnabledMutation = { setTenantEnabled: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, outboundMessagesPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, heldCommandCeiling: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null, color: string } } };
 
 export type DeleteTenantMutationVariables = Exact<{
   token: string;
@@ -766,6 +766,7 @@ export const SetTenantEnabledDocument = new TypedDocumentString(`
     aiExternalEnabled
     aiInferenceRequestsPerMinute
     aiInferenceBurst
+    heldCommandCeiling
     createdAt
     updatedAt
   }

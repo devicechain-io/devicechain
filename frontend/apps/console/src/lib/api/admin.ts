@@ -748,6 +748,7 @@ const SET_TENANT_ENABLED = graphql(`
       aiExternalEnabled
       aiInferenceRequestsPerMinute
       aiInferenceBurst
+      heldCommandCeiling
       createdAt
       updatedAt
     }
