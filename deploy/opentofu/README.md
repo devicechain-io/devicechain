@@ -17,12 +17,12 @@ these modules, passing its cluster credentials to the providers.
 | Provisioned | How | Endpoint (defaults) |
 |---|---|---|
 | Namespace | `kubernetes_namespace_v1` | `dc-system` |
-| NATS (JetStream + MQTT) | `nats` Helm chart | `dc-nats.dc-system:4222` / `:1883` |
+| NATS (JetStream + MQTT) | `nats` Helm chart, pinned | `dc-nats.dc-system:4222` / `:1883` |
 | Relational Postgres | `cnpg-cluster` module — a CloudNativePG `Cluster` (`dc-rdb`) | `dc-postgresql.dc-system:5432` |
 | TimescaleDB (event store) | `cnpg-cluster` module — a CloudNativePG `Cluster` (`dc-tsdb`) | `dc-timescaledb-single.dc-system:5432` |
-| NGINX ingress controller | `ingress-nginx` Helm chart | IngressClass `nginx` |
-| cert-manager (+ CRDs) | `cert-manager` Helm chart | namespace `cert-manager` |
-| Observability (Prometheus/Grafana/Alertmanager) | `kube-prometheus-stack` Helm chart | namespace `monitoring` |
+| NGINX ingress controller | `ingress-nginx` Helm chart, pinned | IngressClass `nginx` |
+| cert-manager (+ CRDs) | `cert-manager` Helm chart, pinned | namespace `cert-manager` |
+| Observability (Prometheus/Grafana/Alertmanager) | `kube-prometheus-stack` Helm chart, pinned | namespace `monitoring` |
 | CloudNativePG operator (+ CRDs) | `cloudnative-pg` Helm chart, pinned | namespace `cnpg-system` |
 | Barman Cloud backup plugin | `plugin-barman-cloud` Helm chart, pinned | namespace `cnpg-system` |
 
@@ -229,8 +229,16 @@ fast-follow.
   library; the application creates the extension and hypertables on migrate.
 - **Credentials.** Passwords default to `devicechain` for local dev. Override via
   `terraform.tfvars` (gitignored) or a pre-created Secret for any real deploy.
-- **Pin versions.** Set `nats_chart_version` and `timescale_image` to tested
-  versions for reproducible deploys (the defaults float to latest).
+- **Pin versions.** Every third-party Helm chart is **already pinned by default**, and
+  `hack/check-chart-pins.sh` keeps it that way — in the module *and* in the root, at the
+  same version. An unpinned version has to be resolved at apply time, so the chart
+  repository becomes a dependency of *planning*: a repo hiccup surfaces as the helm
+  provider's `inconsistent final plan … .version: was known, but now unknown`, which names
+  neither the chart nor the network. Several modules are also sized against chart
+  internals, so upstream moving underneath them shows up as an admission rejection or an
+  unadopted config rather than as a version diff. Bump deliberately; each variable's
+  description says what to re-verify. `timescale_image` is pinned for the same reason and
+  is not a chart, so it is not covered by that check.
 - **JetStream disk ceiling.** `nats_jetstream_max_file_store` is the hard aggregate
   JetStream file-store bound (ADR-023); it defaults to 90% of `nats_jetstream_storage`
   for filesystem headroom, **floored to a whole unit of that size's own magnitude** —

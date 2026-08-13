@@ -25,14 +25,25 @@ variable "release_name" {
 
 variable "chart_version" {
   description = <<-EOT
-    kube-prometheus-stack chart version. PINNED by default (unlike the other infra
-    modules): this chart ships the Prometheus Operator CRDs in its crds/ directory,
+    kube-prometheus-stack chart version. PINNED, and this one has a reason beyond
+    reproducibility: the chart ships the Prometheus Operator CRDs in its crds/ directory,
     which Helm installs once and never upgrades — so an unpinned "latest" that drifts
     across bootstraps silently skews the operator against install-day CRDs. Bump
     deliberately, and apply the new CRDs by hand per the chart's upgrade notes.
   EOT
   type        = string
   default     = "65.1.1"
+
+  # Fail closed. An empty string used to mean "install latest", which made the chart
+  # version resolve at APPLY time — the chart repository became a dependency of
+  # planning, and a repo hiccup surfaced as the helm provider's "inconsistent final
+  # plan ... .version: was known, but now unknown", naming neither the chart nor the
+  # network. The regex also refuses a helm version RANGE ("4.15.1 - 5.0.0"), which is
+  # a constraint resolved at apply time wearing a pin's clothes.
+  validation {
+    condition     = can(regex("^v?[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$", var.chart_version))
+    error_message = "chart_version must be an exact chart version (e.g. \"1.2.3\" or \"v1.2.3\"); an empty value or a version range is resolved at apply time, which is not a pin."
+  }
 }
 
 variable "cnpg_cluster_metrics" {
@@ -421,7 +432,7 @@ resource "helm_release" "kube_prometheus_stack" {
   create_namespace = true
   repository       = "https://prometheus-community.github.io/helm-charts"
   chart            = "kube-prometheus-stack"
-  version          = var.chart_version != "" ? var.chart_version : null
+  version          = var.chart_version
 
   # The stack installs many CRDs + several workloads; the default 300s is tight on
   # a cold cluster pulling images.

@@ -29,13 +29,17 @@
 # WHAT IT DOES AND DOES NOT DISTINGUISH
 #
 # This is a SOURCE-level check and it is honest about being one. It catches the
-# realistic regression — someone tidying away a flag or a pin whose purpose is not
-# obvious from the line itself — and it cannot catch upstream changing or removing
-# the chart feature. That risk is held by the version pin plus the bump instructions
-# in the module's chart_version description, which is why the pin is checked HERE
-# rather than treated as unrelated hygiene: an unpinned chart also means the
-# pod-template hash covers a `helm.sh/chart` label that moves on its own, turning a
-# config-adoption mechanism into an unscheduled outage trigger.
+# realistic regression — someone tidying away a flag whose purpose is not obvious from
+# the line itself — and it cannot catch upstream changing or removing the chart
+# feature. That risk is held by the version pin plus the bump instructions in the
+# module's chart_version description.
+#
+# 🔴 The pin is a PRECONDITION of this mechanism, not unrelated hygiene: the
+# pod-template hash covers the chart's own `helm.sh/chart` label, so an unpinned chart
+# turns config adoption into an unscheduled outage trigger — the broker rolls whenever
+# upstream cuts a release. It is enforced by hack/check-chart-pins.sh, which holds the
+# same requirement for every chart this deployment installs, in module and root, and
+# asserts they agree. Both scripts run in the same CI job.
 #
 # Deliberately NOT a `helm template` render. That would prove more, but it needs the
 # chart fetched from the network at check time — and the release-asset host this repo
@@ -48,7 +52,6 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 module=deploy/opentofu/modules/nats/main.tf
-root=deploy/opentofu/variables.tf
 rc=0
 
 fail() {
@@ -64,58 +67,8 @@ if ! grep -Eq '^[[:space:]]*configChecksumAnnotation[[:space:]]*=[[:space:]]*tru
       never adopted by the running server."
 fi
 
-# The pinned default of one variable block.
-#
-# 🔴 THE `^  default` ANCHOR IS LOAD-BEARING, and a looser match false-passes.
-# Both of these descriptions are heredocs that DISCUSS versions and the bump
-# procedure, so a sentence containing `default = "2.14.4"` as prose is entirely
-# plausible — and a version-shaped string anywhere in the block would satisfy an
-# unanchored grep while the real default stayed empty. Measured: it does. Attribute
-# indentation is exactly two spaces and is guaranteed by `tofu fmt -check`, which
-# runs earlier in this same CI job; heredoc bodies are indented further and fmt
-# never reformats them, so the anchor separates the two reliably.
-pinned_default() {
-	sed -n "/^variable \"$2\"/,/^}/p" "$1" \
-		| sed -n 's/^  default[[:space:]]*=[[:space:]]*"\([0-9]\+\.[0-9]\+\.[0-9]\+\)".*/\1/p' \
-		| head -1
-}
-
-# 2. The chart the above was verified against, in the module...
-module_pin="$(pinned_default "$module" chart_version)"
-if [ -z "$module_pin" ]; then
-	fail "$module: variable chart_version has no pinned default.
-      An empty default installs whatever upstream last shipped, so the checksum
-      template, the reloader's watched paths and the lame-duck floors this module is
-      sized against are all unverified — and the pod-template hash includes the
-      chart's own version label, so a new upstream release rolls the broker on the
-      next otherwise-unrelated apply."
-fi
-
-# 3. ...and in the root that actually passes it.
-root_pin="$(pinned_default "$root" nats_chart_version)"
-if [ -z "$root_pin" ]; then
-	fail "$root: variable nats_chart_version has no pinned default.
-      The module's own pin is not enough — it is in fact the WEAKER of the two. The
-      root passes chart_version through unconditionally, and an argument that is
-      passed explicitly always beats the module's default, so on the shipped path
-      this value is the only one that decides anything. The module's pin protects a
-      direct consumer of the module; this one protects us."
-fi
-
-# 4. And they must agree, or the module's carefully verified pin documents a chart
-#    the instance does not run. Both being semver-shaped is not enough: the root
-#    wins, so a drift here means every "verified at 2.14.4" claim in the module is
-#    describing something else. Measured: root=9.9.9 with module=2.14.4 satisfied
-#    both checks above and said OK.
-if [ -n "$module_pin" ] && [ -n "$root_pin" ] && [ "$module_pin" != "$root_pin" ]; then
-	fail "the two chart pins disagree: $module pins $module_pin but $root pins $root_pin.
-      The root's value is the one that installs, so the module's comments — the
-      checksum template, the reloader paths, the lame-duck floors it says were
-      verified — would be describing a chart nobody deploys."
-fi
-
 if [ "$rc" -eq 0 ]; then
-	echo "OK: NATS config adoption is enforced (checksum annotation set, chart pinned to $root_pin in module + root)."
+	echo "OK: NATS config adoption is enforced (podTemplate.configChecksumAnnotation is set)."
 fi
 
 exit "$rc"
