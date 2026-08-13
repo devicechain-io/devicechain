@@ -36,6 +36,13 @@ type DeviceState implements Model {
     # externalId is the device's transport-native identity, denormalized from the
     # resolved event (ADR-049); null when the device has no external id.
     externalId: String
+    # source is the event source that last drove this device (e.g. "mqtt", "lwm2m",
+    # "sparkplug:{hostId}"), denormalized from the resolved event. Null before the
+    # device has produced an event carrying one. It answers "which transport is this
+    # device on", which callers need to know whether a command can reach it at all —
+    # the transports differ in whether they have a command path, not only in whether
+    # the device is currently connected.
+    source: String
     # presenceSource discriminates authoritative presence from inferred (ADR-067):
     # INFERRED (activity + inactivity sweep) or ASSERTED (Active driven only by a
     # StateChange). sessionId is the last-applied transition's ordering epoch, returned

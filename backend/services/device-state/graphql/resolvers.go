@@ -89,6 +89,16 @@ func (r *DeviceStateResolver) ExternalId() *string {
 	return &r.M.ExternalId
 }
 
+// Source is the event source that last drove this device. Null rather than empty when
+// unset, matching ExternalId: both are denormalized from events, so a device that has not
+// yet produced one has no answer rather than a blank one.
+func (r *DeviceStateResolver) Source() *string {
+	if r.M.Source == "" {
+		return nil
+	}
+	return &r.M.Source
+}
+
 // PresenceSource is INFERRED or ASSERTED (ADR-067).
 func (r *DeviceStateResolver) PresenceSource() string {
 	return r.M.PresenceSource
