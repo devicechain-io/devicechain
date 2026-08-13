@@ -16,7 +16,12 @@
 # directory and rolls both the tag and the digest forward weekly — without that,
 # a digest pin would freeze the base at whatever was current when it was written,
 # which is worse for security than a floating tag.
-FROM golang:1.26@sha256:2005724102f45917a63e9d092fc0e4ea56ea575048ce147caad5f5f61502c365 AS builder
+# 🔴 THIS PIN IS WHAT BUILDS THE SHIPPED BINARY, AND go.work's toolchain IS NOT.
+# The two move together or the fix is only half applied: govulncheck in CI reads the
+# toolchain the WORKFLOW installed, so bumping go.work alone turns the check green while
+# this image keeps compiling the operator against the standard library the advisories are
+# about. A green scan would then be reporting on a binary nobody ships.
+FROM golang:1.26@sha256:26326682769ca980f8f1d3b1f52be2dd1c1d25270e3de3fe0c97d6bb65df3556 AS builder
 
 WORKDIR /workspace
 # Copy the Go Modules manifests
