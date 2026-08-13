@@ -108,4 +108,9 @@ message PUnresolvedStateChangePayload {
     string reason = 2;
     string session_id = 3;
     optional string occurred_time = 4;
+    // Compare-and-set precondition on the projection's stored session; empty when the
+    // producer makes no claim, which is every transport advisory. Carried as a string
+    // for the same precision reason as session_id. Appended as a NEW field number so
+    // an in-flight event written by an older producer still decodes.
+    string expected_session_id = 5;
 }

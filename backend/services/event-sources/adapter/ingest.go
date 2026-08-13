@@ -380,6 +380,16 @@ func (e *Emitter) Emit(ctx context.Context, tenant, source, deviceToken string, 
 	})
 }
 
+// formatOptionalSessionId renders a session id that may be absent. Zero is the "no
+// claim" sentinel for ExpectedSessionId and is rendered as the empty string, so a
+// producer that never sets it puts nothing new on the wire.
+func formatOptionalSessionId(id uint64) string {
+	if id == 0 {
+		return ""
+	}
+	return strconv.FormatUint(id, 10)
+}
+
 // EmitPresence writes one presence transition as a StateChange UnresolvedEvent (ADR-067)
 // under the connection's tenant. OccurredTime is the receipt-clock time the source's
 // session/lifetime logic stamped (never a device payload ts). SessionId rides the wire
@@ -401,10 +411,14 @@ func (e *Emitter) EmitPresence(ctx context.Context, tenant, source, deviceToken 
 		ProcessedTime:          e.now().UTC(),
 		AuthenticatedTransport: e.authenticatedTransport,
 		Payload: &esmodel.UnresolvedStateChangePayload{
-			State:        state,
-			Reason:       ev.Reason,
-			SessionId:    strconv.FormatUint(ev.SessionId, 10),
-			OccurredTime: &occStr,
+			State:  state,
+			Reason: ev.Reason,
+			// Left EMPTY rather than "0" when there is no compare-and-set claim, which is
+			// every transport advisory. The resolver reads empty as "no claim", so the wire
+			// shape of an ordinary presence event is unchanged by this field existing.
+			ExpectedSessionId: formatOptionalSessionId(ev.ExpectedSessionId),
+			SessionId:         strconv.FormatUint(ev.SessionId, 10),
+			OccurredTime:      &occStr,
 		},
 	}
 	encoded, err := esproto.MarshalUnresolvedEvent(uev)

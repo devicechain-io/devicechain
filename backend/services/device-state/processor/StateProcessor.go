@@ -200,19 +200,7 @@ func (sp *StateProcessor) mergeOne(ctx context.Context, msg messaging.Message) {
 		}
 	}
 
-	// A StateChange (ADR-067) carries an authoritative presence transition; every
-	// other event type is a plain activity heartbeat (nil transition). The transition
-	// time is the event's occurred time — one canonical clock, set by the producer.
-	var pt *model.PresenceTransition
-	if event.EventType == esmodel.StateChange {
-		if p, ok := event.Payload.(*dmmodel.ResolvedStateChangePayload); ok {
-			pt = &model.PresenceTransition{
-				Connected:  p.State == string(esmodel.PresenceConnected),
-				SessionId:  p.SessionId,
-				OccurredAt: event.OccurredTime,
-			}
-		}
-	}
+	pt := presenceTransitionFor(event)
 
 	// Update the originating device's live connectivity projection for every event.
 	if _, err := sp.Api.MergeDeviceState(msgctx, event.SourceDeviceToken, event.OccurredTime, pt,
@@ -404,4 +392,30 @@ func (sp *StateProcessor) Terminate(ctx context.Context) error {
 // Lifecycle callback that runs termination logic.
 func (sp *StateProcessor) ExecuteTerminate(context.Context) error {
 	return nil
+}
+
+// presenceTransitionFor maps a resolved event onto an authoritative presence transition
+// (ADR-067), or nil when the event is a plain data heartbeat. The transition time is the
+// event's occurred time — one canonical clock, set by the producer.
+//
+// 🔑 EXTRACTED SO THE SEAM CAN BE TESTED AS THE CALLER, NOT RE-IMPLEMENTED BY A TEST.
+// This is a hand-written field-by-field mapping at the end of a chain of four other
+// hand-written mappings, which makes it exactly the kind of place a newly added field is
+// silently dropped: every layer still compiles, every existing test still passes, and the
+// field simply never arrives. A test that rebuilt this mapping itself would agree with
+// whatever the mapping forgot. See TestARegressedSessionSurvivesTheWholeChain.
+func presenceTransitionFor(event *dmmodel.ResolvedEvent) *model.PresenceTransition {
+	if event.EventType != esmodel.StateChange {
+		return nil
+	}
+	p, ok := event.Payload.(*dmmodel.ResolvedStateChangePayload)
+	if !ok {
+		return nil
+	}
+	return &model.PresenceTransition{
+		Connected:         p.State == string(esmodel.PresenceConnected),
+		SessionId:         p.SessionId,
+		ExpectedSessionId: p.ExpectedSessionId,
+		OccurredAt:        event.OccurredTime,
+	}
 }

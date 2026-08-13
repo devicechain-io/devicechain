@@ -317,6 +317,7 @@ func reconcileMetrics() presence.ReconcileMetrics {
 		Runs:               PresenceReconcileCounter,
 		Repaired:           PresenceRepairedCounter,
 		SkippedDisconnects: PresenceWithheldCounter,
+		RegressedSessions:  PresenceRegressedGauge,
 	}
 }
 
@@ -337,6 +338,7 @@ var (
 	PresenceReconcileCounter  *prometheus.CounterVec
 	PresenceRepairedCounter   *prometheus.CounterVec
 	PresenceWithheldCounter   prometheus.Counter
+	PresenceRegressedGauge    prometheus.Gauge
 	PresenceCanaryOkCounter   prometheus.Counter
 	PresenceCanaryMissCounter prometheus.Counter
 )
@@ -366,10 +368,16 @@ func initializePresenceMetrics() {
 		"presence_events_failed_total",
 		"Presence transitions that could not be written to the inbound stream",
 		nil)
+	// 🔴 THE OLD HELP TEXT SAID "which the projection rejects as stale", AND THAT STOPPED
+	// BEING TRUE when reconciliation gained a compare-and-set: a regressed session that
+	// names the session the projection is holding is now ACCEPTED and re-files the device.
+	// A metric description is read by whoever is deciding whether an alert matters, so one
+	// that describes the old behaviour is worse than none.
 	PresenceRegressedCounter = Microservice.NewCounter(
 		"presence_sessions_regressed_total",
-		"Presence transitions whose session id went backwards, which the projection rejects as stale "+
-			"(a broker node's clock may be trailing its peers)",
+		"Presence transitions observed with a session id lower than this replica's high-water mark "+
+			"(a broker node's clock may be trailing its peers). Diagnostic only: whether such a "+
+			"transition is applied is decided downstream by the projection",
 		nil)
 	PresenceReconcileCounter = Microservice.NewCounterVec(
 		"presence_reconcile_runs_total",
@@ -382,6 +390,11 @@ func initializePresenceMetrics() {
 	PresenceWithheldCounter = Microservice.NewCounter(
 		"presence_reconcile_withheld_disconnects_total",
 		"Devices that would have been marked offline had the broker inventory been provably complete",
+		nil)
+	PresenceRegressedGauge = Microservice.NewGauge(
+		"presence_reconcile_regressed_sessions",
+		"Devices found LIVE on a session id lower than the one the projection holds, as of the last "+
+			"reconciliation pass. A standing non-zero value means the repairs are not converging",
 		nil)
 	PresenceCanaryOkCounter = Microservice.NewCounter(
 		"presence_canary_observed_total",

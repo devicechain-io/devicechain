@@ -68,6 +68,20 @@ type ReconcileMetrics struct {
 	// pass forever, counted as a success every time — which is why reconcileTenant now
 	// constructs repairs Decide will accept rather than leaving the counter to imply it.
 	Repaired *prometheus.CounterVec
+	// RegressedSessions is the number of devices this pass found LIVE on a session id
+	// lower than the one the projection is holding — the trailing-clock population.
+	//
+	// 🔑 IT IS THE CONVERGENCE SIGNAL, AND IT IS WHY Repaired's "emitted, not applied"
+	// gap stops mattering here. A repair that is emitted and then rejected leaves the
+	// device regressed, so it is counted again on the next pass; a repair that lands
+	// re-files the row onto the live session and the device drops out of this gauge. A
+	// standing non-zero value therefore means repairs are NOT converging, which is the
+	// thing an operator wants alerted on — strictly more useful than a per-repair
+	// applied counter, which would have to be inferred from a later read anyway.
+	//
+	// It is a GAUGE, not a counter: it measures a population at a moment, and a device
+	// that is still regressed on the next pass is the same device, not a new event.
+	RegressedSessions prometheus.Gauge
 	// SkippedDisconnects counts devices that WOULD have been marked offline had the
 	// inventory been provably complete. It is the cost of the safety rule, and
 	// without it an instance that never proves completeness looks identical to one
@@ -156,7 +170,7 @@ func (r *Reconciler) Run(ctx context.Context) error {
 		return err
 	}
 
-	connects, disconnects, withheld := 0, 0, 0
+	var total passCounts
 	for _, tenant := range tenants {
 		if ctx.Err() != nil {
 			break
@@ -169,28 +183,52 @@ func (r *Reconciler) Run(ctx context.Context) error {
 				Msg("Could not read presence state while reconciling; this tenant is skipped for this pass.")
 			continue
 		}
-		c, d, w := r.reconcileTenant(ctx, tenant, inv, stored)
-		connects, disconnects, withheld = connects+c, disconnects+d, withheld+w
+		total.add(r.reconcileTenant(ctx, tenant, inv, stored))
 	}
 
-	r.metrics.repaired("connect", connects)
-	r.metrics.repaired("disconnect", disconnects)
-	if withheld > 0 && r.metrics.SkippedDisconnects != nil {
-		r.metrics.SkippedDisconnects.Add(float64(withheld))
+	r.metrics.repaired("connect", total.Connects)
+	r.metrics.repaired("disconnect", total.Disconnects)
+	if total.Withheld > 0 && r.metrics.SkippedDisconnects != nil {
+		r.metrics.SkippedDisconnects.Add(float64(total.Withheld))
+	}
+	// Set unconditionally, including to zero. A gauge only means anything if the healthy
+	// value is written as often as the unhealthy one; skipping the zero would leave the
+	// last bad reading standing after the problem cleared.
+	if r.metrics.RegressedSessions != nil {
+		r.metrics.RegressedSessions.Set(float64(total.Regressed))
 	}
 	outcome := "complete"
 	if !inv.Complete {
 		outcome = "partial"
 		log.Warn().Int("serversAnswered", inv.Servers).Int("serversExpected", inv.Expected).
-			Int("withheldDisconnects", withheld).
+			Int("withheldDisconnects", total.Withheld).
 			Msg("Broker connection inventory was incomplete; devices were only ever marked ONLINE this pass.")
 	}
 	r.metrics.run(outcome)
-	if connects > 0 || disconnects > 0 {
-		log.Info().Int("connects", connects).Int("disconnects", disconnects).
+	if total.Connects > 0 || total.Disconnects > 0 {
+		log.Info().Int("connects", total.Connects).Int("disconnects", total.Disconnects).
+			Int("regressedSessions", total.Regressed).
 			Msg("Reconciled broker-asserted presence against the broker's live connections.")
 	}
 	return nil
+}
+
+// passCounts is one pass's tally, per tenant and summed. It is a struct rather than a
+// widening tuple of ints because every field has the same type and none of them is
+// distinguishable at a call site — a transposed pair would compile and quietly mislabel
+// an operator's metrics.
+type passCounts struct {
+	Connects    int
+	Disconnects int
+	Withheld    int
+	Regressed   int
+}
+
+func (c *passCounts) add(o passCounts) {
+	c.Connects += o.Connects
+	c.Disconnects += o.Disconnects
+	c.Withheld += o.Withheld
+	c.Regressed += o.Regressed
 }
 
 // applyClusterHighWater raises the pass's expectation to the largest cluster ever seen,
@@ -209,11 +247,10 @@ func (r *Reconciler) applyClusterHighWater(inv Inventory) Inventory {
 	return inv
 }
 
-// reconcileTenant diffs one tenant both ways, returning (connects, disconnects,
-// withheld-disconnects).
+// reconcileTenant diffs one tenant both ways.
 func (r *Reconciler) reconcileTenant(ctx context.Context, tenant string, inv Inventory,
-	stored map[string]StoredDevice) (int, int, int) {
-	connects, disconnects, withheld := 0, 0, 0
+	stored map[string]StoredDevice) passCounts {
+	var counts passCounts
 
 	// One stamp for the pass, used both as the transitions' OccurredAt and as their dedup
 	// nonce, so every emission below is attributable to this pass and no two passes
@@ -229,8 +266,26 @@ func (r *Reconciler) reconcileTenant(ctx context.Context, tenant string, inv Inv
 			continue
 		}
 		known, seen := stored[key]
-		if seen && known.Active {
+
+		// 🔴 A SESSION ID THAT WENT BACKWARDS IS THE ONE CASE AN ACTIVE ROW STILL NEEDS
+		// REPAIRING, WHICH IS WHY THIS IS NOT JUST `known.Active`. Session ids are minted
+		// from the wall clock of whichever broker node the device landed on, so a reconnect
+		// onto a trailing node carries a genuinely-current id LOWER than the stored one.
+		// Such a device can sit ACTIVE while filed under a session it is no longer on —
+		// left alone, every event about the live connection is rejected as stale, including
+		// its eventual death, so the row reads online forever and its commands are
+		// dispatched to a subscriber that is gone.
+		//
+		// Three reachable states land here, and all three were previously skipped: a row
+		// pinned online under a dead session (the whole population upgrading from the
+		// earlier pin-based repair), a real death that crossed a repair in flight, and a
+		// rejected death followed by a reconnect onto another trailing node.
+		regressed := seen && live.SessionId < known.SessionId
+		if seen && known.Active && !regressed {
 			continue
+		}
+		if regressed {
+			counts.Regressed++
 		}
 		// 🔴 STAMPED AT NOW, NOT AT THE CONNECTION'S START, AND THE OBVIOUS CHOICE IS
 		// THE BROKEN ONE. The start is the more truthful instant and it is what the lost
@@ -251,58 +306,53 @@ func (r *Reconciler) reconcileTenant(ctx context.Context, tenant string, inv Inv
 		// path that exists because the accurate signal was already lost, that is the
 		// right thing to trade.
 		//
-		// 🔴 EXCEPT WHEN THE CONNECTION'S OWN SESSION HAS GONE BACKWARDS, WHICH IS A
-		// PERMANENT WEDGE AND NOT A RARE ONE ON A CLUSTER. Session ids are minted from
-		// the wall clock of whichever broker node the device landed on. A reconnect onto
-		// a node with a trailing clock carries a LOWER id than the projection is holding,
-		// Decide takes a different session only when it is HIGHER, so the real CONNECT is
-		// rejected — and the old session's DISCONNECT, being same-session-newer-time, is
-		// not. The row reads offline while the device publishes. A repair carrying the
-		// connection's own low id is rejected the same way, on this pass and on every
-		// pass after it, forever, while the repair counter reports success.
+		// 🔴 WHEN THE CONNECTION'S OWN SESSION HAS GONE BACKWARDS, THE REPAIR CARRIES A
+		// COMPARE-AND-SET INSTEAD OF LYING ABOUT WHICH SESSION IT IS. Decide takes a
+		// different session only when it is HIGHER, so a repair carrying this connection's
+		// genuinely-lower id is rejected on its own — on this pass and on every pass after
+		// it, forever, while the repair counter reports success.
 		//
-		// Reusing the STORED id makes the repair same-session-newer-time, which Decide
-		// accepts. This is exactly the trick direction 2 below already relies on, applied
-		// in the other direction, and it is the only claim here that is not the
-		// connection's own: the projection then records this connection under the
-		// session it was already tracking. The real session's eventual DISCONNECT will
-		// be rejected for the same ordering reason — and repaired by direction 2, which
-		// reuses the stored id and therefore converges.
+		// The earlier fix reused the STORED id, which Decide accepts as
+		// same-session-newer-time. It worked, and it left the projection filed under a DEAD
+		// session: the live connection's eventual death was then rejected for the same
+		// ordering reason, so the row read online while the device was gone and its commands
+		// went to a subscriber that no longer existed. It converted a permanent false-OFFLINE
+		// into a false-ONLINE — the safer direction, but still a fiction, and one that could
+		// only be cleared by a provably-complete inventory.
 		//
-		// 🔑 THE TRADE, STATED SO NOBODY REDISCOVERS IT AS A BUG. Once a device is pinned
-		// this way, its death is invisible to the advisory path and reaches the
-		// projection ONLY through direction 2, which is gated on a provably complete
-		// inventory. So a permanent false-OFFLINE (commands held forever) becomes a
-		// false-ONLINE that lasts as long as the inventory cannot be proved complete —
-		// counted by SkippedDisconnects and logged by the partial-pass warning. That is
-		// the direction this codebase fails in everywhere else, and it is observable,
-		// which the state it replaces was not.
-		session := live.SessionId
-		if seen && live.SessionId <= known.SessionId {
-			session = known.SessionId
-			// Only the STRICTLY lower case implicates a clock. Equality is the ordinary
-			// recovery from a synthetic death: same connection, same session, the row
-			// simply reads offline at a later instant than the connect. Saying "trailing
-			// clock" there sends an operator auditing broker clocks for a missed advisory.
-			if live.SessionId < known.SessionId {
-				log.Warn().Str("tenant", live.Tenant).Str("device", live.DeviceToken).
-					Uint64("brokerSession", live.SessionId).Uint64("storedSession", known.SessionId).
-					Msg("Repairing a device whose broker session id is OLDER than the stored one; " +
-						"a broker node's clock is trailing its peers.")
-			}
+		// 🔑 THE REPAIR NOW REPORTS THE SESSION THE DEVICE IS ACTUALLY ON, and proves it is
+		// entitled to by naming the session it observed. This pass READ the projection, so
+		// it can say "I am reporting session S, and I saw you holding E": if the row still
+		// holds E the report applies and the device is re-filed onto its live session; if
+		// anything has moved it since — a higher session, a death, another replica's repair
+		// — the precondition fails and nothing happens. That is strictly better than the
+		// pin, because afterwards the ordinary advisory path works again: the connection's
+		// own DISCONNECT is same-session-newer-time against the session now stored.
+		var expected uint64
+		if regressed {
+			expected = known.SessionId
+			log.Warn().Str("tenant", live.Tenant).Str("device", live.DeviceToken).
+				Uint64("brokerSession", live.SessionId).Uint64("storedSession", known.SessionId).
+				Msg("Re-filing a device whose broker session id is OLDER than the stored one; " +
+					"a broker node's clock is trailing its peers.")
 		}
 		if r.tap.Apply(ctx, Transition{
 			Tenant:      live.Tenant,
 			DeviceToken: live.DeviceToken,
 			Event: adapter.PresenceEvent{
-				Connected:  true,
-				Reason:     "reconcile-connected",
-				SessionId:  session,
-				OccurredAt: at,
-				DedupNonce: nonce,
+				Connected: true,
+				Reason:    "reconcile-connected",
+				// The connection's OWN session, always. Equality with the stored id needs
+				// no compare-and-set: that is the ordinary recovery from a synthetic death
+				// — same connection, same session, the row simply reads offline at a later
+				// instant than the connect — and Decide takes it as same-session-newer-time.
+				SessionId:         live.SessionId,
+				ExpectedSessionId: expected,
+				OccurredAt:        at,
+				DedupNonce:        nonce,
 			},
 		}) {
-			connects++
+			counts.Connects++
 		}
 	}
 
@@ -319,7 +369,7 @@ func (r *Reconciler) reconcileTenant(ctx context.Context, tenant string, inv Inv
 			// A device on a server that did not answer is absent from Devices and
 			// indistinguishable from one that is genuinely gone. Marking it offline
 			// would hold a live device's commands, so the pass withholds instead.
-			withheld++
+			counts.Withheld++
 			continue
 		}
 		if r.tap.Apply(ctx, Transition{
@@ -342,8 +392,8 @@ func (r *Reconciler) reconcileTenant(ctx context.Context, tenant string, inv Inv
 				DedupNonce: nonce,
 			},
 		}) {
-			disconnects++
+			counts.Disconnects++
 		}
 	}
-	return connects, disconnects, withheld
+	return counts
 }

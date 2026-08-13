@@ -105,7 +105,17 @@ type Event struct {
 // (Connected true = CONNECTED, false = DISCONNECTED).
 type PresenceEdge struct {
 	SessionId uint64
-	Connected bool
+	// ExpectedSessionId is the compare-and-set precondition carried by the resolved
+	// event, zero for every ordinary transport advisory. DETECT must honour it for the
+	// same reason it shares presence.Decide at all: if the projection re-files a device
+	// onto a lower session and the engine does not, the two disagree about whether the
+	// device is online, and a raised offline alarm sticks while the device publishes.
+	//
+	// 🔑 It is event INPUT, not cursor state, so it is deliberately absent from the
+	// per-series presence.Prior the engine snapshots — the snapshot round-trip
+	// (loadPresenceState/snapshotPresenceState) is unchanged by this field existing.
+	ExpectedSessionId uint64
+	Connected         bool
 }
 
 // EdgeKind discriminates the two edges of an alarm-bearing detection (ADR-057). A rule is
@@ -928,7 +938,12 @@ func (e *Engine) applyConnectivity(ev Event, r Rule) {
 		_, raised := e.raised[ev.Key]
 		prior.Connected = !raised
 	}
-	d := presence.Decide(prior, ev.Presence.SessionId, ev.Time, ev.Presence.Connected)
+	d := presence.Decide(prior, presence.Incoming{
+		SessionId:         ev.Presence.SessionId,
+		ExpectedSessionId: ev.Presence.ExpectedSessionId,
+		OccurredAt:        ev.Time,
+		Connected:         ev.Presence.Connected,
+	})
 	if !d.Ordered {
 		return // stale / out-of-order edge: neither the cursor nor the alarm moves
 	}

@@ -91,11 +91,17 @@ timeout that demotes a device. A device that used to arrive over Sparkplug or Lw
 over plain MQTT keeps its asserted source, and keeps being exempt from the inactivity sweep.
 
 **Ordering is by a platform-minted session identity, never by anything the device sends.** Each
-connect/disconnect pair is stamped with a session marker the platform generates, strictly increasing
-even across a clock step. A Sparkplug birth/death sequence number is read only to match a death to the
-birth it belongs to — it is never compared by magnitude, because it wraps — and an LwM2M registration
-id is never used as the session identity. The consequence for you is that a delayed or replayed
-message from an older session cannot tear down a live one, on either transport.
+connect/disconnect pair is stamped with a session marker the platform generates. A Sparkplug
+birth/death sequence number is read only to match a death to the birth it belongs to — it is never
+compared by magnitude, because it wraps — and an LwM2M registration id is never used as the session
+identity. The consequence for you is that a delayed or replayed message from an older session cannot
+tear down a live one, on either transport.
+
+Markers are minted from the clock of the broker node that accepted the connection, so across a
+multi-node cluster a new session's marker is **not** guaranteed to sort above the one before it — a
+node whose clock trails its peers mints a lower one. The platform reconciles that case rather than
+assuming it away: a device found live on a session that sorts below its stored one is re-filed onto
+the session it is actually on, so its later disconnect is still recognised.
 
 **A device cannot assert its own presence.** A connect/disconnect event submitted through the ordinary
 device-facing payload path is rejected outright, not merely ignored. Only the transports themselves

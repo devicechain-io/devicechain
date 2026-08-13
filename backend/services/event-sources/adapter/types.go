@@ -59,4 +59,18 @@ type PresenceEvent struct {
 	// after the first as not-a-state-change and the projection does not move; the price is
 	// rows, paid only for devices that are actually diverged.
 	DedupNonce string
+
+	// ExpectedSessionId is a compare-and-set precondition on the projection's stored
+	// session, and it is the ONLY way a transition carrying a LOWER session id than the
+	// projection holds is ever applied. Zero means "no claim", which is every transport
+	// advisory: a transport reports what it observed and has not read the projection, so
+	// it has nothing to compare against.
+	//
+	// 🔴 IT EXISTS BECAUSE SESSION IDS CAN GO BACKWARDS ACROSS BROKER NODES. The id is
+	// minted from the wall clock of whichever node the device landed on, so a reconnect
+	// onto a node whose clock trails its peers carries a genuinely-current id LOWER than
+	// the stored one — and the ordinary "higher session wins" rule then rejects every
+	// event about the live connection, permanently. Only a producer that has READ the
+	// projection can break that tie, by naming what it read. See presence.Incoming.
+	ExpectedSessionId uint64
 }
