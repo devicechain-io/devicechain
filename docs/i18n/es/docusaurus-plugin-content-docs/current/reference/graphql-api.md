@@ -5,40 +5,92 @@ title: API de GraphQL
 
 # API de GraphQL
 
-Todo servicio de DeviceChain que expone una API externa lo hace a través de **GraphQL**. El esquema es introspectable, por lo que la API se autodocumenta — apunta cualquier cliente de GraphQL (GraphiQL, Apollo, Insomnia) al endpoint de un servicio para explorarlo.
+Todo servicio de DeviceChain que expone una API externa lo hace a través de **GraphQL**.
 
 :::note Estado
-Los esquemas de device-management y event-management son los más desarrollados; user-management está en expansión. Los esquemas evolucionan mientras DeviceChain está en pre-release — trata el resultado de la introspección en vivo como autoritativo.
+Los esquemas evolucionan mientras DeviceChain está en pre-release. Los archivos de esquema en el
+repositorio son la referencia autoritativa — **la introspección está deshabilitada por defecto**
+(ver [Explorar el esquema](#explorar-el-esquema)).
 :::
 
 ## Endpoints
 
-Cada servicio expone su propio endpoint de GraphQL (las rutas exactas dependen del entorno y se exponen a través del ingress configurado por tu despliegue):
+El ingress enruta `/api/<area>/graphql` a cada servicio de área funcional, quitando el prefijo para
+que llegue al `/graphql` propio de ese servicio. Así que todos los endpoints siguientes son
+`https://<tu-host>/api/<area>/graphql`:
 
-| Servicio | Cubre |
+| Área | Cubre |
 |---|---|
-| device-management | dispositivos, perfiles, activos, áreas, clientes, grupos, relaciones |
-| event-management | consultas de eventos de series temporales — `events`, `locationEvents`, `measurementEvents`, `alertEvents` |
-| user-management | autenticación — `login`, `selectTenant`, `refresh` |
+| `user-management` | autenticación — `login`, `selectTenant`, `refresh` — y la vista de gobernanza del propio inquilino |
+| `device-management` | dispositivos, tipos de dispositivo, perfiles, activos, áreas, clientes, grupos, relaciones, alarmas, credenciales, autoría de reglas de detección |
+| `event-management` | consultas de eventos de series temporales — `events`, `locationEvents`, `measurementEvents`, `alertEvents`, `bucketedMeasurements` |
+| `device-state` | último estado conocido en vivo — `latestMeasurements`, `latestLocation`, `deviceStates` |
+| `command-delivery` | envío de comandos — `createCommand`, `cancelCommand`, historial de comandos |
+| `event-processing` | validación de reglas de detección, vista previa de reproducción, salud de reglas |
+| `dashboard-management` | CRUD y versionado de paneles |
+| `outbound-connectors` | CRUD de conectores de salida por inquilino |
+| `notification-management` | canales y políticas de notificación |
+| `ai-inference` | una única llamada, `inferRuleCandidate`, que respalda la puerta de autoría de reglas en lenguaje natural — presente solo cuando el servicio opcional de inferencia está habilitado |
 
-`user-management` también expone una **API de administración de instancia** separada (un endpoint distinto, autenticado con un token de identidad y autorizado para el superusuario) que gestiona el directorio global de identidades, las membresías por inquilino, el catálogo de roles y el registro de inquilinos. La autorización en los servicios del plano de datos está **basada en capacidades**: cada resolver verifica una autoridad específica (por ejemplo, `device:write`) que lleva el token de inquilino del llamador.
+Otros tres endpoints residen en un **plano de token de identidad** separado, no en el plano de
+inquilino, y están autorizados para el superusuario o el operador:
+
+| Endpoint | Cubre |
+|---|---|
+| `/api/user-management/admin/graphql` | la API de administración de instancia — directorio de identidades, membresías, catálogo de roles, registro de inquilinos y niveles |
+| `/api/user-management/settings/graphql` | ajustes de instancia |
+| `/api/ai-inference/admin/graphql` | proveedores de inferencia registrados por el operador |
+
+La autorización en los servicios del plano de datos está **basada en capacidades**: cada resolver
+verifica una autoridad específica (por ejemplo, `device:write`) que lleva el token de inquilino del
+llamador. Ten en cuenta que algunas autoridades no coinciden con la intuición — leer credenciales
+de dispositivo requiere `device:write`, no `device:read`, y `latestLocation` requiere
+`location:read` mientras que sus hermanas en `device-state` requieren `state:read`.
+
+`sparkplug-ingest` y `lwm2m-ingest` no sirven GraphQL en absoluto y se mantienen deliberadamente
+fuera del router `/api`. `event-sources` sí está enrutado, pero responde con un esquema marcador
+de posición — la ingesta llega a él por los transportes del plano de dispositivo, no por esta API.
 
 ## Consultar eventos
 
-event-management expone consultas de lectura sobre el historial de eventos persistido. Cada una toma un criterio de búsqueda — dispositivo, tipos de evento, un rango de tiempo de ocurrencia, un anclaje de relación (`{type, id}`) y paginación — y devuelve resultados paginados:
+event-management expone consultas de lectura sobre el historial de eventos persistido. Cada una
+toma un criterio de búsqueda — dispositivo, tipos de evento, un rango de tiempo de ocurrencia, un
+anclaje de relación (`{type, token}`) y paginación — y devuelve resultados paginados:
 
 ```graphql
 query {
   measurementEvents(criteria: {
     pageNumber: 1, pageSize: 50,
-    deviceId: "42",
+    deviceToken: "sensor-001",
     startTime: "2026-06-01T00:00:00Z",
     endTime: "2026-06-24T00:00:00Z",
-    anchor: { type: "customer", id: "7" }
+    anchor: { type: "customer", token: "acme-corp" }
   }) {
-    results { deviceId occurredTime name value }
+    results { deviceToken occurredTime name value }
     pagination { totalRecords }
   }
+}
+```
+
+Las entidades se nombran mediante **token** en todo momento, incluido dentro del anclaje. Ambos
+límites de tiempo son inclusivos, filtran por `occurredTime` (el instante en que el dispositivo
+reportó, no el instante en que la plataforma lo almacenó), y los resultados vuelven del más
+reciente al más antiguo. La paginación empieza en 1.
+
+**`measurementEvents` no filtra por nombre de medición.** El criterio no tiene un campo `name`, así
+que "solo las lecturas de temperatura de este dispositivo" no es directamente expresable — filtra
+del lado del cliente sobre `results[].name`, o usa `bucketedMeasurements`, que sí toma un `name` y
+devuelve intervalos temporales:
+
+```graphql
+query {
+  bucketedMeasurements(criteria: {
+    deviceToken: "sensor-001",
+    name: "temperature",
+    startTime: "2026-06-01T00:00:00Z",
+    endTime: "2026-06-24T00:00:00Z",
+    intervalSeconds: 300
+  }) { bucketStart name avg min max sum count }
 }
 ```
 
@@ -46,7 +98,22 @@ Todas las consultas de eventos están **acotadas por inquilino automáticamente*
 
 ## Explorar el esquema
 
-Dado que la API es introspectable, la referencia más confiable es el propio esquema:
+**La introspección está deshabilitada por defecto.** Un despliegue de producción que no configura
+nada no expone ninguna superficie de introspección, así que apuntar un cliente de GraphQL a un
+endpoint esperando que se autodocumente no funcionará — la consulta de introspección se rechaza.
+
+Eso deja dos formas de leer el esquema.
+
+**Los archivos de esquema en el repositorio.** El esquema de cada área está versionado bajo
+`backend/services/<area>/graphql/`, y esta es la vía confiable porque no necesita una instancia en
+ejecución ni un token — lo que más importa cuando todavía estás evaluando DeviceChain. Ten en
+cuenta que los nombres de archivo no son uniformes: la mayoría de las áreas usan `schema.graphql`,
+pero `user-management` usa `schema.gql`, `admin_schema.gql` y `settings_schema.gql`.
+
+**Introspección en una instancia de desarrollo.** Configura `DC_GRAPHQL_DEV_TOOLS=true` en el
+servicio para habilitarla. Hazlo solo en una instancia de desarrollo; está deshabilitada por
+defecto de forma deliberada. Cualquier valor que no se interprete como booleano se trata como
+deshabilitado en lugar de adivinarse. Con ella habilitada, la consulta habitual funciona:
 
 ```graphql
 query {
