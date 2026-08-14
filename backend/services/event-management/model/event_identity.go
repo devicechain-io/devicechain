@@ -43,6 +43,25 @@ const EventIdSize = sha256.Size
 // occurred_time is keyed at NANOSECOND resolution deliberately. Hashing a truncated time
 // would reintroduce the exact collision this change removes, one layer further in and much
 // harder to see.
+//
+// 🔴 UNSTATED PRECONDITION, MADE STATED: canonicalPayload MUST ALREADY BE CANONICAL.
+// This function hashes those bytes opaquely, and json.Marshal of a SLICE preserves slice
+// order, so two orderings of the same readings are two different events here. It cannot be
+// otherwise: a digest over opaque bytes has no way to know which slices carry meaning in
+// their order (a location track does) and which are sets (a sample's measurements are). So
+// the obligation lands on the PRODUCER — whatever builds a payload whose order is arbitrary
+// has to choose a canonical one before publishing, because nothing downstream can recover
+// it.
+//
+// The site that owes this today is device-management's ResolveMeasurementsEventPayload,
+// which sorts a sample's measurements by name because it fills that slice by ranging a map.
+// It did not always, and the cost was exactly the failure this identity exists to prevent: a
+// reading hashed to a different id on each resolution, so a redelivery missed ON CONFLICT
+// and double-persisted the event, its measurement rows and its rollup contribution.
+//
+// 🔑 The trap to watch for is NOT "a map in the payload" — encoding/json sorts a Go map's
+// keys, so a map that survives to this point is stable. It is a map EXPANDED INTO A SLICE
+// upstream, which looks like a plain slice by the time it arrives here.
 func DeriveEventId(tenantId string, event *Event, canonicalPayload []byte) []byte {
 	h := sha256.New()
 	writeField(h, []byte(tenantId))

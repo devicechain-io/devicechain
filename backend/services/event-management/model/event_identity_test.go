@@ -6,9 +6,11 @@ package model
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"testing"
 	"time"
 
+	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -180,6 +182,62 @@ func TestDeriveEventIdIsStableAndContentSensitive(t *testing.T) {
 	assert.NotEqual(t, want, DeriveEventId("acme", &otherAlt, []byte("p")), "alternateId is keyed")
 
 	assert.NotEqual(t, want, DeriveEventId("acme", &base, []byte("q")), "payload is keyed")
+}
+
+// TestDeriveEventIdIsOrderSensitiveOverAPayload pins the coupling that makes the producer's
+// canonical ordering LOAD-BEARING, and it is here so that anyone who deletes the sort in
+// device-management's ResolveMeasurementsEventPayload can find out why it was there.
+//
+// The digest takes the payload as opaque bytes, and json.Marshal of a SLICE preserves slice
+// order. So two orderings of the SAME readings are two different events as far as this
+// function is concerned. That is the correct behaviour for a digest over opaque bytes — it
+// cannot know which slices carry meaning in their order (a location track does) and which do
+// not. The consequence is a requirement on the PRODUCER: whatever emits a payload whose order
+// is arbitrary has to pick a canonical one before publishing, because nothing downstream can
+// recover it.
+//
+// The resolver's measurements were the case where that requirement went unmet: the entries
+// came from ranging a map, so one reading produced a different id on each resolution and a
+// redelivery double-persisted the event. Fixed at the producer; this test is the reason the
+// fix cannot be quietly dropped.
+func TestDeriveEventIdIsOrderSensitiveOverAPayload(t *testing.T) {
+	occurred := time.Date(2026, 7, 31, 20, 0, 0, 0, time.UTC)
+	base := Event{DeviceToken: "d", EventType: esmodel.Measurement, OccurredTime: occurred}
+
+	ascending := &dmmodel.ResolvedMeasurementsPayload{
+		Entries: []dmmodel.ResolvedMeasurementsEntry{{
+			Entries: []dmmodel.ResolvedMeasurementEntry{
+				{Name: "humidity", Value: "48"},
+				{Name: "temperature", Value: "21.5"},
+			},
+			OccurredTime: occurred,
+		}},
+	}
+	swapped := &dmmodel.ResolvedMeasurementsPayload{
+		Entries: []dmmodel.ResolvedMeasurementsEntry{{
+			Entries: []dmmodel.ResolvedMeasurementEntry{
+				{Name: "temperature", Value: "21.5"},
+				{Name: "humidity", Value: "48"},
+			},
+			OccurredTime: occurred,
+		}},
+	}
+
+	ascendingBytes, err := json.Marshal(ascending)
+	require.NoError(t, err)
+	swappedBytes, err := json.Marshal(swapped)
+	require.NoError(t, err)
+
+	// The instrument check: if these encoded identically the assertion below would pass
+	// while proving nothing about order.
+	require.NotEqual(t, string(ascendingBytes), string(swappedBytes),
+		"the two fixtures encoded identically, so this test cannot observe order at all")
+
+	assert.NotEqual(t,
+		DeriveEventId("acme", &base, ascendingBytes),
+		DeriveEventId("acme", &base, swappedBytes),
+		"the same readings in two orders derive two identities — which is exactly why the "+
+			"producer must emit a canonical order rather than a map's iteration order")
 }
 
 // TestDeriveEventIdSeparatesFieldBoundaries guards against the classic concatenation flaw:

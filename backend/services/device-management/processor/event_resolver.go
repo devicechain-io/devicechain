@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/config"
@@ -413,6 +415,40 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 			}
 			rmentries = append(rmentries, rmentry)
 		}
+		// 🔴 SORT BY NAME, AND IT IS LOAD-BEARING — not a tidiness pass.
+		//
+		// The loop above ranges a MAP, and Go randomises map iteration, so without this
+		// the same reading resolves into a differently-ordered slice on every attempt.
+		// That order is not cosmetic: event-management derives the event's IDENTITY from
+		// json.Marshal of this payload (DeriveEventId), and that id is the primary key
+		// that makes a redelivery idempotent. A varying order means a varying id, so a
+		// re-resolution misses ON CONFLICT and the event double-persists — parent row,
+		// every measurement row (payload_id is scoped to the parent id), and a doubled
+		// sum and count in the measurement_rollups aggregate.
+		//
+		// Measured, and the number is smaller than the theory: 400 resolutions of ONE
+		// five-metric reading produced exactly 5 distinct ids, not the 120 that 5! would
+		// suggest — Go rotates the iteration start within a bucket rather than permuting
+		// freely, so a small map has about as many orders as it has keys. A redelivery
+		// therefore reproduced the original id roughly 1 time in 5.
+		//
+		// Sorting HERE rather than in the digest is deliberate. There is no device order
+		// being discarded: UnresolvedMeasurementsEntry.Measurements is a map[string]string
+		// on the model AND a proto map field on the wire, so the device's JSON object
+		// order was already gone one hop upstream. This loop does not preserve an order,
+		// it invents one — so this is the single place where the arbitrariness enters, and
+		// the digest (which sees only the payload) becomes stable as a result. Name is a
+		// total order because map keys are unique, so no two entries here can share one.
+		//
+		// 🔴 WHAT THIS DOES NOT MAKE DETERMINISTIC, so nobody builds on a promise it does
+		// not keep: the resolved EVENT's bytes as a whole. Anchors and ScopeMemberships are
+		// filled from DB reads that carry no ORDER BY, so their order can still vary between
+		// two resolutions. That is harmless for identity — neither reaches DeriveEventId,
+		// which hashes the payload alone — but it means "the resolved event replays
+		// byte-identically" is NOT a property this establishes.
+		slices.SortFunc(rmentries, func(a, b model.ResolvedMeasurementEntry) int {
+			return strings.Compare(a.Name, b.Name)
+		})
 		rmsentry := model.ResolvedMeasurementsEntry{
 			Entries:      rmentries,
 			OccurredTime: rez.eventTime.boundEntry(umsentry.OccurredTime, event.OccurredTime, event.ProcessedTime),

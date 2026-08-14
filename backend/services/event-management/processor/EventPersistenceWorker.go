@@ -41,9 +41,13 @@ type EventPersistenceResults struct {
 	Events []interface{}
 	// Deduped reports that the persist was a no-op because the row already existed —
 	// only the StateChange path sets it (its idempotency unique index absorbs a
-	// JetStream redelivery). When true the caller MUST skip anchor persistence: a
-	// StateChange carries no AltId, so without this a redelivery would re-insert its
-	// anchor set (event_anchors has no unique index), duplicating it.
+	// JetStream redelivery). When true the caller skips anchor persistence, which is
+	// now an optimization rather than the correctness guard it originally was:
+	// uq_event_anchors_idem (tenant_id, event_id, occurred_time, anchor_type,
+	// anchor_token) has since made the anchor set idempotent on its own, and
+	// CreateEventAnchors upserts against exactly those columns. The older comment here
+	// claimed event_anchors carried no unique index; that stopped being true when the
+	// index was added, and the claim survived the change.
 	Deduped bool
 }
 
@@ -382,8 +386,11 @@ func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmode
 			return perr
 		}
 		// A deduped persist (a StateChange redelivery absorbed by its idempotency index)
-		// must NOT re-run anchor persistence — event_anchors has no unique index, so a
-		// plain re-insert would duplicate the anchor set.
+		// skips anchor persistence. This is an optimization, NOT the correctness guard the
+		// comment here used to claim: event_anchors does carry a unique index
+		// (uq_event_anchors_idem) and CreateEventAnchors upserts on exactly its columns, so
+		// re-running this would be a no-op rather than a duplicated anchor set. Removing
+		// the skip would cost a round trip, not correctness.
 		if results != nil && results.Deduped {
 			return nil
 		}
