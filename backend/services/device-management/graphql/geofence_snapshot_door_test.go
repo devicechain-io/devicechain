@@ -128,8 +128,11 @@ func TestGeoFenceSetSnapshotDoorRefusesAVersionTheTenantDoesNotHave(t *testing.T
 	acme, globex := twoTenantFenceCtx(t)
 	r := &SchemaResolver{}
 
-	// Advance acme to version 2; globex stays at 1.
-	if _, err := r.UpdateGeoFence(withAuthorities(acme, auth.DeviceRead, auth.DeviceWrite), struct {
+	// Advance acme to version 2; globex stays at 1. The authoring authorities here are a
+	// FIXTURE, not the subject — this test is about the snapshot door's tenant scoping — so it
+	// carries whatever authoring currently takes (location:read included, since minting or
+	// moving a fence shapes a question about where a device is).
+	if _, err := r.UpdateGeoFence(withAuthorities(acme, auth.DeviceRead, auth.DeviceWrite, auth.LocationRead), struct {
 		Token   string
 		Request model.GeoFenceCreateRequest
 	}{Token: "acme-yard", Request: model.GeoFenceCreateRequest{Token: "acme-yard", Geometry: authTestGeometry}}); err != nil {

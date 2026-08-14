@@ -155,6 +155,13 @@ func (r *SchemaResolver) DeleteDetectionRule(ctx context.Context, args struct{ T
 // Delete a single geofence. The delete mints a new fence-set version like any other
 // fence change — a removed fence changes what containment answers, so events resolved
 // after it must not keep naming a snapshot that still contains it.
+//
+// 🔑 DELIBERATELY device:write ALONE, unlike create and update (see requireFenceAuthoring),
+// and the asymmetry is reasoned rather than an omission. That pair carries location:read
+// because MINTING or MOVING a fence SHAPES A QUESTION about where a device is, which is the
+// primitive that lets a caller binary-search a position out of repeated containment answers.
+// Deleting removes a question; it constructs nothing and answers nothing. Delete-then-recreate
+// is not a way around the gate either, because the recreate is the gated half.
 func (r *SchemaResolver) DeleteGeoFence(ctx context.Context, args struct{ Token string }) (bool, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return false, err

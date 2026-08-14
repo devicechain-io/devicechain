@@ -1582,11 +1582,17 @@ type Mutation {
     updateDetectionRule(token: String!, request: DetectionRuleCreateRequest!): DetectionRule!
     # Delete a single detection rule.
     deleteDetectionRule(token: String!): Boolean!
-    # Create a new geofence.
+    # Create a new geofence. Takes device:write AND location:read: a fence is a question about
+    # where a device is, and whoever can shape the question can extract the answer — a caller able
+    # to mint fences can narrow one until a containment rule's raise/resolve edge reveals a
+    # device's actual coordinates. Reading fences stays on device:read, since a fence's geometry
+    # is a region someone drew, not a device's position.
     createGeoFence(request: GeoFenceCreateRequest!): GeoFence!
-    # Update an existing geofence.
+    # Update an existing geofence. Same authorities as creation, for the same reason: reshaping a
+    # fence is the same question-shaping primitive as minting one.
     updateGeoFence(token: String!, request: GeoFenceCreateRequest!): GeoFence!
-    # Delete a single geofence.
+    # Delete a single geofence. device:write alone — removing a fence constructs no question and
+    # answers none, and delete-then-recreate is no way around the gate on creation.
     deleteGeoFence(token: String!): Boolean!
     # Acknowledge a raised alarm (operator action). The acknowledging identity is the
     # authenticated subject, recorded server-side — not a client-supplied value.

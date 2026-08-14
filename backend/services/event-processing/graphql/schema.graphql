@@ -52,7 +52,10 @@ type Query {
     # COLLECTS edges instead of publishing, so it never perturbs the live singleton (no snapshot
     # write, no production-durable ack, no live-state mutation). A compile failure returns ok=false
     # with node-anchored diagnostics; an unpublished profile, an aged-out window, or the scan cap
-    # returns a degraded but non-error result. Tenant-scoped; read-only; gated on device:read.
+    # returns a degraded but non-error result. Tenant-scoped; read-only; gated on device:read —
+    # AND on location:read when the draft tests geofence containment, because the timeline such a
+    # preview returns names, per device, when it entered and left a region, which is a read of
+    # position however it was asked for. A draft that tests no containment needs only device:read.
     previewRule(input: PreviewRuleInput!): PreviewResult!
 }
 

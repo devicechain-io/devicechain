@@ -70,8 +70,10 @@ type previewRuleInput struct {
 // a THROWAWAY in-memory DETECT core over an ephemeral replay consumer and collects edges instead of
 // publishing, so it never perturbs the live singleton (see internal/preview for the isolation contract).
 //
-// It gates on device:read (a read-only replay over the profile's own history) and is tenant-scoped to
-// the caller. A compile failure returns ok=false with node-anchored diagnostics (reusing the canvas
+// It gates on device:read (a read-only replay over the profile's own history) — plus location:read
+// when the compiled draft tests geofence containment, because that preview's timeline IS a read of
+// position; see the gate below. Tenant-scoped to the caller either way.
+// A compile failure returns ok=false with node-anchored diagnostics (reusing the canvas
 // diagnostic shape); an unpublished profile, an aged-out window, or the scan cap returns a degraded but
 // non-error result — the console shows partial history rather than an error.
 func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input previewRuleInput }) (*PreviewResultResolver, error) {
@@ -93,6 +95,34 @@ func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input pre
 	compiled, definition, tracePlan, cerr := r.compileDraft(in)
 	if cerr != nil {
 		return failedPreview(cerr...), nil
+	}
+
+	// 🔴🔴 A PREVIEW THAT TESTS CONTAINMENT IS A READ OF POSITION, AND NEEDS THE POSITION
+	// AUTHORITY. device:read alone was proportionate while a preview could only replay
+	// measurements — event:read sits in the same read-only viewer baseline, so the preview
+	// answered nothing its caller could not already ask. Geofence containment changed that and
+	// the gate did not move with it: the returned timeline carries the device token, the instant
+	// and the raise/resolve edge, so `geo.inFence("depot")` over a 24h window reconstructs which
+	// devices were inside a named region and when — the exact question location:read exists to
+	// gate, delivered to a caller latestLocation had just refused a single coordinate to.
+	//
+	// 🔑 GATED ON THE DRAFT, NOT ON THE CALLER'S ROLE, and that is what makes it more than a
+	// patch. RequiresPosition is set by the same compile-time analysis that drives the
+	// position-scoped feed, so the authority follows the QUESTION BEING ASKED rather than who is
+	// asking it. A threshold preview keeps working on device:read and nothing about authoring
+	// ordinary rules gets harder. It also closes a privilege inversion a role-based gate would
+	// have left open: fence authoring is device:write, so a caller holding device:write but not
+	// location:read could otherwise mint arbitrarily small fences and binary-search a device's
+	// actual coordinates through repeated previews — recovering position itself, not merely
+	// containment.
+	//
+	// Ordering: this runs AFTER compileDraft because RequiresPosition is what the compiler
+	// decides, and BEFORE the archive check and the replay so an unauthorized caller is refused
+	// rather than told about the instance's configuration or given a window's worth of work.
+	if compiled.RequiresPosition {
+		if err := auth.Authorize(ctx, auth.LocationRead); err != nil {
+			return nil, err
+		}
 	}
 
 	// A draft whose leaf calls inFence cannot be previewed without the frozen fence-set archive
