@@ -19,10 +19,10 @@ func (api *Api) CommandBatchesById(ctx context.Context, ids []uint) ([]*CommandB
 // CommandBatchesByToken gets command batches by token.
 //
 // The empty case is guarded here too, though `token in ?` with an empty slice already
-// renders a predicate that matches nothing. The guard is for the READER: the by-id and
-// by-token lookups sit side by side throughout this codebase and behave oppositely on the
-// same input, and the one that is safe is safe by accident of how gorm renders IN rather
-// than by anything visible here.
+// renders a predicate that matches nothing. The guard is for the READER: in raw gorm the
+// by-id and by-token forms behave OPPOSITELY on an empty slice, and the by-token one is
+// safe only by accident of how gorm renders IN rather than by anything visible here. Both
+// lookups answer empty with empty now — this keeps that true if the body is ever rewritten.
 func (api *Api) CommandBatchesByToken(ctx context.Context, tokens []string) ([]*CommandBatch, error) {
 	found := make([]*CommandBatch, 0)
 	if len(tokens) == 0 {

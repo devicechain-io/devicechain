@@ -2,8 +2,9 @@
 # Copyright The DeviceChain Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Fails if any Go source calls gorm's Find with an INLINE non-string condition —
-# `db.Find(&out, ids)` — instead of going through rdb.FindByIds.
+# Fails if any Go source hands gorm a condition as a bare Go VALUE rather than as
+# a spelled-out predicate — `db.Find(&out, ids)`, `db.Where(ids)` — instead of
+# going through rdb.FindByIds.
 #
 # 🔴 What this is protecting against, and why a "defensive" guard it is not.
 #
@@ -19,11 +20,28 @@
 # the wrong rule about the other. Nothing at a call site makes the difference
 # visible — which is exactly what a source guard is for.
 #
+# `Where` is here for the same reason, measured the same way: `db.Where([]uint{})
+# .Find(&out)` also returns the whole table. A zero-valued struct condition,
+# `Where(Thing{})`, matches everything too — so a bare identifier passed to Where
+# is worth a second look whatever its type.
+#
+# 🔴 WHAT THIS DOES NOT SEE. Stated in full, because "the guard is green" is only
+# worth what its coverage is, and every shape below was MEASURED against gorm
+# v1.31.2 rather than recalled:
+#
+#   - A call split across lines. None exist today and gofmt does not create them.
+#   - `First(&x, ids)` / `Take(&x, ids)` with an empty slice: gorm returns THE
+#     TABLE'S FIRST ROW with a nil error — a wrong entity reported as found, which
+#     is worse than a wrong count. Deliberately NOT matched: the legitimate scalar
+#     form `First(&x, id)` is textually identical, and a guard with false
+#     positives is a guard people learn to suppress. The one such call in the tree
+#     (command-delivery loadCommand) takes a scalar id, which cannot be empty.
+#   - `Delete(&T{}, ids)` is NOT a hazard: gorm refuses a delete with no WHERE
+#     clause outright (ErrMissingWhereClause, 0 rows affected). Measured — the
+#     assumption that it would silently delete the table was wrong.
+#
 # A grep is the right instrument here, unlike hack/check-subscribe-confirmed.sh,
-# which needs a type checker. The discriminator is purely syntactic: a second
-# argument that is not a double-quoted format string. The one thing a grep cannot
-# see is a call split across lines; none exist today, and gofmt does not create
-# them, but that is the known gap rather than a claim of completeness.
+# which needs a type checker: the discriminator is syntactic, not type-dependent.
 #
 #   hack/check-inline-id-conditions.sh
 #   hack/check-inline-id-conditions.sh --self-test   # prove the check can fail
@@ -37,8 +55,12 @@ usage() {
   exit 2
 }
 
-# .Find(&x, y  — where y does not begin with a double quote.
-PATTERN='\.Find\(&?[A-Za-z_][A-Za-z0-9_]*, [^"]'
+# Two shapes:
+#   .Find(&x, y     where y does not begin with a double quote
+#   .Where(x)       a lone bare value, no predicate string
+# The destination allows dots so a field target — `Find(&s.cache, ids)` — cannot
+# slip past; that was a real hole in the first version of this pattern.
+PATTERN='\.Find\(&?[A-Za-z_][A-Za-z0-9_.]*, [^"]|\.Where\([A-Za-z_][A-Za-z0-9_.]*\)'
 
 # Paths (relative to the scanned root) that are allowed to carry the raw form.
 # Deliberately short, and every entry is a place where the unsafe call IS the
@@ -48,6 +70,9 @@ PATTERN='\.Find\(&?[A-Za-z_][A-Za-z0-9_]*, [^"]'
 #   rdb/find_by_ids_test.go  makes the unsafe call on purpose, to pin the gorm
 #                            behaviour the helper exists for
 #   _legacy/                 archived pre-migration tree, not in the workspace
+#
+# If a legitimate new case appears — a subquery passed to Where, say — spell the
+# condition out or add an entry here WITH ITS REASON. Do not widen the pattern.
 is_exempt() {
   case "$1" in
     _legacy/*) return 0 ;;
@@ -68,8 +93,10 @@ scan() {
   local -a hits=()
 
   # `|| true` because grep exits 1 for "no matches", which is the PASSING case
-  # here and must not trip set -e. The find/read pairing keeps paths with spaces
-  # intact and, unlike a bare `grep -r`, does not depend on grep's --include.
+  # here and must not trip set -e. 🔴 That swallows a BROKEN PATTERN too — grep
+  # exits 2 — which would report a clean tree it never really read. The self-test
+  # is the fence: CI runs it in the same job, immediately before the real scan,
+  # and it requires a planted call to be reported.
   while IFS= read -r hit; do
     path="${hit%%:*}"
     path="${path#./}"
@@ -94,15 +121,19 @@ scan() {
 check() {
   if ! scan "$ROOT"; then
     echo >&2
-    echo "FAILED: the calls above pass an inline condition to gorm's Find. With an EMPTY" >&2
-    echo "        slice gorm drops the condition entirely and returns every row in scope." >&2
-    echo "        Use rdb.FindByIds instead:" >&2
+    echo "FAILED: the calls above hand gorm a condition as a bare Go value. With an EMPTY" >&2
+    echo "        slice gorm drops the condition entirely and returns every row in scope;" >&2
+    echo "        a zero-valued struct condition matches everything for the same reason." >&2
+    echo >&2
+    echo "        For a by-id lookup, use rdb.FindByIds:" >&2
     echo >&2
     echo "            return rdb.FindByIds[Device](api.RDB.DB(ctx).Preload(\"DeviceType\"), ids)" >&2
     echo >&2
+    echo "        Otherwise spell the predicate out: .Where(\"id in ?\", ids)" >&2
+    echo >&2
     return 1
   fi
-  echo "==> No inline id conditions outside rdb.FindByIds."
+  echo "==> No bare-value gorm conditions outside rdb.FindByIds."
 }
 
 # ---------------------------------------------------------------------------
@@ -120,20 +151,32 @@ self_test() {
 
   mkdir -p "$tmp/backend/services/x/model" "$tmp/backend/core/rdb" "$tmp/_legacy/old"
 
-  echo "==> Self-test: an inline id condition must be reported"
-  cat > "$tmp/backend/services/x/model/api_things.go" <<'EOF'
+  # Each planted shape is checked on its own, so a pattern that lost one branch
+  # cannot hide behind another branch still firing.
+  echo "==> Self-test: every unsafe shape must be reported, one at a time"
+  local shape
+  for shape in \
+      'result := api.RDB.DB(ctx).Find(&found, ids)' \
+      'result := api.RDB.DB(ctx).Find(&api.cache.rows, ids)' \
+      'result := api.RDB.DB(ctx).Where(ids).Find(&found)' \
+      ; do
+    cat > "$tmp/backend/services/x/model/api_things.go" <<EOF
 package model
 
 func (api *Api) ThingsById(ctx context.Context, ids []uint) ([]*Thing, error) {
 	found := make([]*Thing, 0)
-	result := api.RDB.DB(ctx).Find(&found, ids)
+	$shape
 	return found, result.Error
 }
 EOF
-  status=0
-  scan "$tmp" 2>/dev/null || status=$?
-  [ "$status" -eq 1 ] || { echo "SELF-TEST FAILED: a planted inline condition was not reported." >&2; return 1; }
-  echo "    reported"
+    status=0
+    scan "$tmp" 2>/dev/null || status=$?
+    [ "$status" -eq 1 ] || {
+      echo "SELF-TEST FAILED: not reported: $shape" >&2
+      return 1
+    }
+    echo "    reported: $shape"
+  done
 
   echo "==> Self-test: the safe forms and the exempt paths must be reported by nothing"
   cat > "$tmp/backend/services/x/model/api_things.go" <<'EOF'
@@ -153,6 +196,10 @@ func (api *Api) ThingsByToken(ctx context.Context, tokens []string) ([]*Thing, e
 func (api *Api) AllThings(ctx context.Context) ([]*Thing, error) {
 	found := make([]*Thing, 0)
 	return found, api.RDB.DB(ctx).Where("live = ?", true).Find(&found).Error
+}
+
+func (api *Api) SeedThing(ctx context.Context) error {
+	return api.RDB.DB(ctx).Where(Thing{Token: "seed"}).FirstOrCreate(&Thing{}).Error
 }
 EOF
   # The exempt paths, carrying the very shape the check rejects everywhere else.

@@ -10,10 +10,11 @@ import "testing"
 // Both, not one: they are two doors onto the same defect, and each was written
 // separately — a fix applied to whichever the test happened to name is the shape
 // this is guarding against. gorm's inline-condition form drops an empty slice
-// instead of rendering a predicate that matches nothing, which turned
-// `notificationChannelsById(ids: [])` — a legal document — into an unfiltered,
-// unpaginated read of every channel and policy the tenant has. Policies preload
-// their rules and each rule's channel, so that read was the more expensive one.
+// instead of rendering a predicate that matches nothing, so each lookup answered
+// a legal `xById(ids: [])` document with an unfiltered, unpaginated read of its
+// own table: every channel the tenant has, or every policy. The policy read was
+// the more expensive of the two, since it preloads each policy's rules and each
+// rule's channel.
 //
 // rdb.FindByIds carries the guard now; this asserts the lookups still go through
 // it, which the helper's own test cannot see.

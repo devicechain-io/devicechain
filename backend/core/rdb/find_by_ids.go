@@ -11,7 +11,7 @@ import "gorm.io/gorm"
 // `db.Find(&out, ids)` — DROPS an empty id slice rather than rendering a predicate that
 // matches nothing, so it degrades into an unfiltered, unpaginated SELECT: a request for
 // no rows is answered with every row in scope. Measured against real gorm, not inferred
-// from the docs, and pinned by TestGormDropsAnEmptyInlineIdSlice below.
+// from the docs, and pinned by TestGormDropsAnEmptyInlineIdSlice in find_by_ids_test.go.
 //
 // The trap is invisible at the call site because the SIBLING lookup is safe: the same
 // packages' `Find(&out, "token in ?", tokens)` renders a match-nothing predicate on an
