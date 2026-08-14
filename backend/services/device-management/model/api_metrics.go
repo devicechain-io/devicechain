@@ -117,14 +117,7 @@ func (api *Api) UpdateMetricDefinition(ctx context.Context, token string,
 
 // Get metric definitions by id.
 func (api *Api) MetricDefinitionsById(ctx context.Context, ids []uint) ([]*MetricDefinition, error) {
-	found := make([]*MetricDefinition, 0)
-	result := api.RDB.DB(ctx)
-	result = result.Preload("DeviceProfile")
-	result = result.Find(&found, ids)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return found, nil
+	return rdb.FindByIds[MetricDefinition](api.RDB.DB(ctx).Preload("DeviceProfile"), ids)
 }
 
 // Get metric definitions by token.

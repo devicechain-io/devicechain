@@ -69,12 +69,7 @@ func (api *Api) UpdateAssetType(ctx context.Context, token string,
 
 // Get asset types by id.
 func (api *Api) AssetTypesById(ctx context.Context, ids []uint) ([]*AssetType, error) {
-	found := make([]*AssetType, 0)
-	result := api.RDB.DB(ctx).Find(&found, ids)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return found, nil
+	return rdb.FindByIds[AssetType](api.RDB.DB(ctx), ids)
 }
 
 // Get asset types by token.
@@ -171,14 +166,7 @@ func (api *Api) UpdateAsset(ctx context.Context, token string, request *AssetCre
 
 // Get assets by id.
 func (api *Api) AssetsById(ctx context.Context, ids []uint) ([]*Asset, error) {
-	found := make([]*Asset, 0)
-	result := api.RDB.DB(ctx)
-	result = result.Preload("AssetType")
-	result = result.Find(&found, ids)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return found, nil
+	return rdb.FindByIds[Asset](api.RDB.DB(ctx).Preload("AssetType"), ids)
 }
 
 // Get assets by token.

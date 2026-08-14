@@ -194,12 +194,7 @@ func (api *Api) UpdateDetectionRule(ctx context.Context, token string,
 
 // Get detection rules by id.
 func (api *Api) DetectionRulesById(ctx context.Context, ids []uint) ([]*DetectionRule, error) {
-	found := make([]*DetectionRule, 0)
-	result := api.RDB.DB(ctx).Preload("DeviceProfile").Find(&found, ids)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return found, nil
+	return rdb.FindByIds[DetectionRule](api.RDB.DB(ctx).Preload("DeviceProfile"), ids)
 }
 
 // Get detection rules by token.

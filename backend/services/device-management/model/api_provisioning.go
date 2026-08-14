@@ -166,12 +166,7 @@ func (api *Api) UpdateProvisioningProfile(ctx context.Context, token string,
 
 // Get provisioning profiles by id.
 func (api *Api) ProvisioningProfilesById(ctx context.Context, ids []uint) ([]*ProvisioningProfile, error) {
-	found := make([]*ProvisioningProfile, 0)
-	result := api.RDB.DB(ctx).Preload("DeviceType").Find(&found, ids)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return found, nil
+	return rdb.FindByIds[ProvisioningProfile](api.RDB.DB(ctx).Preload("DeviceType"), ids)
 }
 
 // Get provisioning profiles by token.

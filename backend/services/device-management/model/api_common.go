@@ -57,11 +57,7 @@ func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
 
 // EntityRelationshipTypesById looks up relationship types by id.
 func (api *Api) EntityRelationshipTypesById(ctx context.Context, ids []uint) ([]*EntityRelationshipType, error) {
-	found := make([]*EntityRelationshipType, 0)
-	if err := api.RDB.DB(ctx).Find(&found, ids).Error; err != nil {
-		return nil, err
-	}
-	return found, nil
+	return rdb.FindByIds[EntityRelationshipType](api.RDB.DB(ctx), ids)
 }
 
 // EntityRelationshipTypesByToken looks up relationship types by token.
@@ -128,11 +124,7 @@ func (api *Api) CreateEntityRelationship(ctx context.Context,
 
 // EntityRelationshipsById looks up relationships by id.
 func (api *Api) EntityRelationshipsById(ctx context.Context, ids []uint) ([]*EntityRelationship, error) {
-	found := make([]*EntityRelationship, 0)
-	if err := api.RDB.DB(ctx).Preload("RelationshipType").Find(&found, ids).Error; err != nil {
-		return nil, err
-	}
-	return found, nil
+	return rdb.FindByIds[EntityRelationship](api.RDB.DB(ctx).Preload("RelationshipType"), ids)
 }
 
 // EntityRelationshipsByToken looks up relationships by token.

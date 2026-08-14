@@ -156,9 +156,7 @@ func (api *Api) buildRules(tx *gorm.DB, policyId uint,
 
 // NotificationPoliciesById loads policies (with rules) by numeric id.
 func (api *Api) NotificationPoliciesById(ctx context.Context, ids []uint) ([]*NotificationPolicy, error) {
-	found := make([]*NotificationPolicy, 0)
-	result := api.RDB.DB(ctx).Preload("Rules").Preload("Rules.Channel").Find(&found, ids)
-	return found, result.Error
+	return rdb.FindByIds[NotificationPolicy](api.RDB.DB(ctx).Preload("Rules").Preload("Rules.Channel"), ids)
 }
 
 // NotificationPoliciesByToken loads policies (with rules) by token.

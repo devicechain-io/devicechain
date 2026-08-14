@@ -153,14 +153,7 @@ func (api *Api) UpdateCommandDefinition(ctx context.Context, token string,
 
 // Get command definitions by id.
 func (api *Api) CommandDefinitionsById(ctx context.Context, ids []uint) ([]*CommandDefinition, error) {
-	found := make([]*CommandDefinition, 0)
-	result := api.RDB.DB(ctx)
-	result = result.Preload("DeviceProfile")
-	result = result.Find(&found, ids)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return found, nil
+	return rdb.FindByIds[CommandDefinition](api.RDB.DB(ctx).Preload("DeviceProfile"), ids)
 }
 
 // Get command definitions by token.

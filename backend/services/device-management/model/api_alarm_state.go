@@ -21,12 +21,7 @@ import (
 
 // Get alarms by id.
 func (api *Api) AlarmsById(ctx context.Context, ids []uint) ([]*Alarm, error) {
-	found := make([]*Alarm, 0)
-	result := api.RDB.DB(ctx).Find(&found, ids)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return found, nil
+	return rdb.FindByIds[Alarm](api.RDB.DB(ctx), ids)
 }
 
 // Get alarms by token.

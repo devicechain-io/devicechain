@@ -168,12 +168,7 @@ func (api *Api) UpdateEntityGroup(ctx context.Context, token string,
 
 // EntityGroupsById gets entity groups by id.
 func (api *Api) EntityGroupsById(ctx context.Context, ids []uint) ([]*EntityGroup, error) {
-	found := make([]*EntityGroup, 0)
-	result := api.RDB.DB(ctx).Find(&found, ids)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return found, nil
+	return rdb.FindByIds[EntityGroup](api.RDB.DB(ctx), ids)
 }
 
 // EntityGroupsByToken gets entity groups by token.
