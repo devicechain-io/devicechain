@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // batchInsertChunk is how many command rows go into one INSERT.
@@ -63,8 +64,13 @@ type BatchEnqueueValidator interface {
 // is therefore inserted inside the transaction, where its id is available to the same
 // transaction.
 //
-// Rejections are returned as *EnqueueRejected, exactly as CreateCommand does; a plain error
-// means the batch could not be DECIDED and is sanitized upstream.
+// 🔴 IT RETURNS TWO REJECTION TYPES, and whatever wires this up must handle BOTH.
+// *EnqueueRejected covers the request-shaped refusals (ambiguous target, too large, bad
+// JSON, unusable group); *BatchRejected covers the two that need to name devices
+// (partial-refused, ceiling) and is the more operationally common of the pair. A GraphQL
+// layer that only errors.As the first would sanitize the most frequent refusals into opaque
+// server errors — telling a tenant the platform is broken when it has just declined their
+// request for a stated, fixable reason. A plain error means the batch could not be DECIDED.
 func (api *Api) CreateCommandBatch(ctx context.Context, request *CommandBatchCreateRequest) (*CommandBatch, error) {
 	existing, replay, err := api.liveBatchByToken(ctx, request.Token)
 	if err != nil {
@@ -125,6 +131,7 @@ func (api *Api) CreateCommandBatch(ctx context.Context, request *CommandBatchCre
 	// next person to add a rejection inside the transaction would get a confusing type error
 	// instead of a helper.
 	var verdict error
+	var conflicted bool
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		// 🔴 THE LOCK IS WHY A BATCH CANNOT OVERSHOOT THE CEILING BY ITS OWN SIZE. The
 		// single-enqueue path deliberately runs lock-free and tolerates being one row over
@@ -170,8 +177,20 @@ func (api *Api) CreateCommandBatch(ctx context.Context, request *CommandBatchCre
 
 		created.Accepted = len(admitted)
 		created.Refusals, created.RefusalCounts = summarizeRefusals(refusals)
-		if err := tx.Create(created).Error; err != nil {
-			return err
+		// ON CONFLICT DO NOTHING for the same reason CreateCommand uses it: the replay
+		// probe runs OUTSIDE this transaction, so two concurrent issues of the same batch
+		// token can both pass it and race here. Without this the loser hits the
+		// (tenant_id, token) unique index, which aborts its transaction and surfaces as a
+		// sanitized server error — an outage-shaped answer to what is really an ordinary
+		// idempotent retry. RowsAffected==0 means the other one won, and the answer is its
+		// batch, resolved after the transaction closes.
+		result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(created)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			conflicted = true
+			return nil
 		}
 		return insertBatchCommands(tx, created, admitted, payload, expiresAt)
 	})
@@ -180,6 +199,20 @@ func (api *Api) CreateCommandBatch(ctx context.Context, request *CommandBatchCre
 	}
 	if err != nil {
 		return nil, err
+	}
+	if conflicted {
+		// A concurrent issue of the same batch token won the race. That batch is the
+		// answer — same rule as the replay path above, just discovered a moment later.
+		existing, found, err := api.liveBatchByToken(ctx, request.Token)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			// The winner was soft-deleted between its commit and this read. Rare enough to
+			// be worth reporting honestly rather than papering over with a retry loop.
+			return nil, fmt.Errorf("command batch %q was removed while being created", request.Token)
+		}
+		return existing, nil
 	}
 	return created, nil
 }
@@ -384,7 +417,7 @@ func insertBatchCommands(tx *gorm.DB, batch *CommandBatch, deviceTokens []string
 			BatchId:     sql.NullInt64{Int64: int64(batch.ID), Valid: true},
 			BatchToken:  sql.NullString{String: batch.Token, Valid: true},
 		}
-		cmd.Token = batchCommandToken(batch.Token, i)
+		cmd.Token = batchCommandToken(batch.ID, i)
 		if len(payload) > 0 {
 			raw := datatypes.JSON(payload)
 			cmd.Payload = &raw
@@ -394,21 +427,43 @@ func insertBatchCommands(tx *gorm.DB, batch *CommandBatch, deviceTokens []string
 	return tx.CreateInBatches(rows, batchInsertChunk).Error
 }
 
-// batchCommandToken mints a command's token from the batch token and the device's position.
+// batchCommandToken mints a command's token from the batch's ROW ID and the device's
+// position in the admitted order.
 //
-// The index rather than the device token keeps the result inside the 128-character bound
-// and inside the token grammar whatever the device is called, and it is deterministic for a
-// given batch — which matters only for readability, since the batch's own token is what
-// makes the operation idempotent. It is truncated so a maximum-length batch token still
-// leaves room for the suffix.
-func batchCommandToken(batchToken string, index int) string {
-	const room = 112
-	prefix := batchToken
-	if len(prefix) > room {
-		prefix = prefix[:room]
-	}
-	return fmt.Sprintf("%s-b%06d", prefix, index)
+// 🔴 IT USED THE BATCH TOKEN, TRUNCATED TO 112 CHARACTERS, AND THAT WAS INJECTIVE ONLY BY
+// LUCK. Two legal batch tokens sharing a 112-character prefix minted byte-identical command
+// tokens, so the second batch died on the (tenant_id, token) unique index — a sanitized
+// server error, and every retry failed identically forever, because the input that caused
+// it is the input. The comment above it claimed the derivation had been chosen to avoid
+// exactly that class of collision.
+//
+// The row id is injective per tenant by construction and needs no truncation, so the
+// property is now structural rather than probabilistic. It is available because the batch
+// row is inserted inside the same transaction as its commands.
+//
+// The `dcb` prefix is a PROVENANCE MARK, not decoration: it is what liveCommandByToken
+// keys on to keep a client's own token namespace and this generated one from being
+// confused for each other (see batchMintedTokenPrefix).
+func batchCommandToken(batchId uint, index int) string {
+	return fmt.Sprintf("%s%d-%06d", batchMintedTokenPrefix, batchId, index)
 }
+
+// batchMintedTokenPrefix marks a command token as PLATFORM-MINTED for a batch rather than
+// chosen by a client.
+//
+// 🔴 IT EXISTS BECAUSE THE TWO NAMESPACES OVERLAP AND THE COLLISION IS SILENT. A command
+// token is a client-chosen idempotency key, and CreateCommand answers a token that already
+// names a live command by returning THAT command as a replay. A client issuing a
+// single command under a token the batch minter happened to produce therefore got back
+// somebody else's command — a different device, a different command name — reported as a
+// successful idempotent replay, with nothing created and no error. Since the minter's
+// output is predictable, that was reachable by accident, not only by an attacker.
+//
+// It is a grammar-legal prefix (the token grammar requires an alphanumeric first
+// character, so a sigil like "_" is not available) and is deliberately not documented as
+// reserved-for-clients-to-avoid — the fix is that the replay probe distinguishes
+// provenance, not that clients are asked to stay out of the way.
+const batchMintedTokenPrefix = "dcb"
 
 // summarizeRefusals renders refusals for storage: a bounded per-code sample and the
 // COMPLETE per-code totals, so `resolved = accepted + sum(counts)` holds however large the

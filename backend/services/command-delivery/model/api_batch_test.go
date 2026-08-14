@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -15,8 +16,15 @@ import (
 	"gorm.io/gorm"
 )
 
-// newBatchTestApi builds an Api carrying both command tables and the indexes the real
-// migration creates.
+// newBatchTestApi builds an Api carrying both command tables and their per-tenant token
+// indexes.
+//
+// ⚠️ IT DOES NOT CREATE `uix_commands_batch_device`. That index is literal DDL in the
+// migration and AutoMigrate does not reproduce it, so the intra-batch duplicate guard is
+// NOT exercised by any test in this package — dedup is enforced here only by
+// dedupeBatchTokens, which is exactly why that code has its own test rather than leaning on
+// the schema. The index is verified where it can be: hack/migration-diff.sh against real
+// Postgres.
 func newBatchTestApi(t *testing.T) *Api {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -81,6 +89,19 @@ func deviceTokens(n int) []string {
 
 func batchRequest(token string, tokens []string) *CommandBatchCreateRequest {
 	return &CommandBatchCreateRequest{Token: token, Name: "reboot", DeviceTokens: tokens}
+}
+
+// decodeRefusalCounts reads a batch's stored per-code totals back.
+func decodeRefusalCounts(t *testing.T, batch *CommandBatch) []RefusalCount {
+	t.Helper()
+	if batch.RefusalCounts == nil {
+		return nil
+	}
+	counts := make([]RefusalCount, 0)
+	if err := json.Unmarshal(*batch.RefusalCounts, &counts); err != nil {
+		t.Fatalf("decode refusal counts: %v", err)
+	}
+	return counts
 }
 
 // commandsOf loads the commands a batch created, in id order.

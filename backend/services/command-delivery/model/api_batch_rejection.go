@@ -3,7 +3,10 @@
 
 package model
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
 // MaxBatchDeviceTokens bounds how many devices one request may name explicitly.
 //
@@ -34,6 +37,14 @@ const (
 	// a profile change, while one refused for headroom will succeed once the backlog
 	// drains. A single code cannot say both, so it says neither and defers to the list.
 	RejectBatchPartialRefused RejectionCode = "BATCH_PARTIAL_REFUSED"
+	// RejectTokenInUse: the command token names a row this caller does not own — in
+	// practice, one the platform minted for a batch. Permanent for this token; pick
+	// another.
+	//
+	// It exists because the alternative outcomes are both worse: returning the occupying
+	// command would hand the caller a different device's actuation as an idempotent replay,
+	// and succeeding silently would report a command that was never created.
+	RejectTokenInUse RejectionCode = "TOKEN_IN_USE"
 	// RejectGroupUnusable: the named group cannot serve as a command target — it does not
 	// exist, collects something other than devices, was never published, or the named
 	// version does not exist. The owner's own code travels in the reason.
@@ -80,10 +91,26 @@ func batchRejection(code RejectionCode, refusals []BatchDeviceRefusal, resolved 
 }
 
 // boundRefusals truncates the per-code sample while keeping the per-code totals complete.
+//
+// It de-duplicates by DEVICE first, defensively. `resolved = accepted + sum(counts)` is the
+// invariant that makes a batch record self-auditing, and it is only true if each device is
+// counted once — but half the refusals here come from ANOTHER SERVICE's fleet gate, and
+// nothing in this process guarantees that service names a device once. A remote answer that
+// repeated a token would quietly push the totals past `resolved`, which reads as a corrupt
+// record rather than as the upstream slip it is.
+//
+// The output is sorted by code so the stored JSON is deterministic: unsorted, it came out in
+// Go map-iteration order, so two identical batches produced different bytes and any diff of
+// the record was noise.
 func boundRefusals(refusals []BatchDeviceRefusal) ([]BatchDeviceRefusal, []RefusalCount) {
 	counts := make(map[RejectionCode]int)
+	seen := make(map[string]struct{}, len(refusals))
 	kept := make([]BatchDeviceRefusal, 0, len(refusals))
 	for _, r := range refusals {
+		if _, already := seen[r.DeviceToken]; already {
+			continue
+		}
+		seen[r.DeviceToken] = struct{}{}
 		counts[r.Code]++
 		if counts[r.Code] <= maxStoredRefusalsPerCode {
 			kept = append(kept, r)
@@ -93,5 +120,6 @@ func boundRefusals(refusals []BatchDeviceRefusal) ([]BatchDeviceRefusal, []Refus
 	for code, count := range counts {
 		ordered = append(ordered, RefusalCount{Code: code, Count: count})
 	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Code < ordered[j].Code })
 	return kept, ordered
 }

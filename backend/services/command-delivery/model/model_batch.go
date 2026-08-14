@@ -112,21 +112,3 @@ type CommandBatchCreateRequest struct {
 	GroupVersion *int32
 	AllowPartial bool
 }
-
-// BatchCancellation reports what a batch cancel could and could not stop.
-//
-// 🔴 IT IS A BREAKDOWN RATHER THAN A COUNT, and that is the whole point. Cancelling a batch
-// is a panic operation — the operator has just realised they fired the wrong thing at a
-// fleet — and the only question that matters is how much of it already went out. A single
-// number cannot distinguish "stopped all 5,000" from "stopped 3,800, and 1,200 machines are
-// already acting on it", which are opposite answers to the question actually being asked.
-type BatchCancellation struct {
-	// Cancelled is how many commands were stopped before dispatch (QUEUED or HELD).
-	Cancelled int64
-	// AlreadyInFlight is how many had already been published toward a device (SENT) and
-	// were therefore NOT cancelled. These stay governed by their TTL and by whatever the
-	// device answers.
-	AlreadyInFlight int64
-	// AlreadyTerminal is how many had already finished, one way or another.
-	AlreadyTerminal int64
-}

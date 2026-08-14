@@ -137,10 +137,18 @@ type Command struct {
 	Error           sql.NullString
 
 	// BatchId links a command to the CommandBatch that created it; null for a command
-	// issued one at a time. BatchToken is the same link denormalized, and it is not
-	// redundant: the command search criteria filter on the token and the criteria builder
-	// is single-table, so without it every "show me that batch" query would need a join
-	// the rest of the search path does not do.
+	// issued one at a time.
+	//
+	// It is also what keeps the two TOKEN NAMESPACES apart. A command token is a
+	// client-chosen idempotency key, but a batch's commands carry tokens the platform
+	// minted, in the same column — so the replay probe keys on `batch_id IS NULL` to avoid
+	// answering a client's request with somebody else's actuation.
+	//
+	// BatchToken is the same link denormalized. It will let the command search filter by
+	// batch without a join, since the criteria builder is single-table. ⚠️ That filter is
+	// NOT built yet — CommandSearchCriteria has no batch field — so today this column is
+	// carried for a reader that is still to come, and the claim it is load-bearing would
+	// be false if made now.
 	BatchId    sql.NullInt64
 	BatchToken sql.NullString
 }

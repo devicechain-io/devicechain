@@ -368,12 +368,26 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 		return nil, err
 	}
 	if conflicted {
-		// The token was claimed between this call's replay lookup and its insert — a
-		// concurrent create with the same token. Return the existing row (idempotent
-		// replay), not a fresh one. The request's other fields are intentionally ignored on replay —
-		// the token IS the identity, so the first write wins and a differing re-request does not
-		// mutate or duplicate it.
-		return api.commandByToken(ctx, request.Token)
+		// The token was claimed between this call's replay lookup and its insert. Re-probe
+		// through the SAME provenance-aware lookup rather than reading the row back
+		// blindly: if a client's concurrent create claimed it, this is an ordinary
+		// idempotent replay and the existing row is the answer. The request's other fields
+		// are intentionally ignored — the token IS the identity, so the first write wins
+		// and a differing re-request does not mutate or duplicate it.
+		claimed, found, err := api.liveCommandByToken(ctx, request.Token)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			return claimed, nil
+		}
+		// Nothing a client owns holds the token, yet the insert conflicted — so the row
+		// occupying it is one the platform minted for a batch. Refusing is the only honest
+		// answer: returning that command would hand this caller a different device's
+		// actuation as though it were their own, and silently succeeding would report a
+		// command that was never created.
+		return nil, rejected(RejectTokenInUse,
+			"command token %q is already in use", request.Token)
 	}
 	return created, nil
 }
@@ -482,9 +496,21 @@ func (api *Api) heldCommandCeiling(ctx context.Context) int {
 // the common case (every first-time enqueue), so First would emit an error log line per command
 // issued, teaching an operator to ignore the one that matters. Find reports the miss as
 // RowsAffected==0, which is what it is: an answer, not a fault.
+//
+// 🔴 IT DELIBERATELY IGNORES BATCH-CREATED COMMANDS, and that is a correctness requirement
+// rather than a filter. A command token is a CLIENT-CHOSEN idempotency key, but a batch's
+// commands carry tokens the PLATFORM minted — two namespaces in one column. Without this
+// predicate, a client issuing a command under a token the batch minter happened to produce
+// got back somebody else's command, for a different device and a different command name,
+// reported as a successful idempotent replay with nothing created and no error. The minter's
+// output is predictable, so that was reachable by accident and not only by an attacker.
+//
+// Excluding them here means such a token instead falls through to the insert, where the
+// (tenant_id, token) unique index refuses it — a refusal the caller can see and act on,
+// which is the honest answer to "that name is taken".
 func (api *Api) liveCommandByToken(ctx context.Context, token string) (*Command, bool, error) {
 	found := &Command{}
-	result := api.RDB.DB(ctx).Where("token = ?", token).Limit(1).Find(found)
+	result := api.RDB.DB(ctx).Where("token = ? AND batch_id IS NULL", token).Limit(1).Find(found)
 	if result.Error != nil {
 		return nil, false, result.Error
 	}

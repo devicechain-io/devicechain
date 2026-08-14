@@ -13,16 +13,24 @@ import (
 // bound the owner enforces on its own page size.
 const groupTargetPageSize = 1000
 
-// maxGroupResolutionPages bounds the walk itself.
+// maxBarrenGroupPages bounds how many CONSECUTIVE pages may add no new device before the
+// walk gives up.
 //
-// 🔴 IT IS A LOOP FUSE, NOT A FEATURE LIMIT. The walk terminates when the owner stops
-// returning a cursor, so a bug on either side of that contract — a cursor that never
-// advances, a page that always reports itself full — would otherwise spin forever inside a
-// request. The bound is set well above what MaxBatchDeviceTokens can consume, so reaching
-// it means the contract is broken rather than the fleet being large, which is why it is an
-// error rather than a truncation: silently returning a short target set would report a
-// fleet write as complete when it had commanded a fraction of the fleet.
-const maxGroupResolutionPages = (MaxBatchDeviceTokens / groupTargetPageSize) + 10
+// 🔴 IT COUNTS BARREN PAGES, NOT TOTAL PAGES, AND THE DIFFERENCE IS A FALSE FAILURE ON
+// LEGAL INPUT. The first version fused on total pages at (MaxBatchDeviceTokens /
+// groupTargetPageSize) + 10, reasoning that a legal group could not need more. That holds
+// only if every page comes back FULL — and short pages are legal and expected: the owner
+// post-filters, and membership churns mid-walk, which this very file documents as normal.
+// A group legally returning ~half-full pages needs twice the page count, so a perfectly
+// good ten-thousand-device fan-out would have died with "resolution did not terminate".
+//
+// Progress is the property actually being defended. A walk that keeps finding devices is
+// working however many pages it takes; one that keeps being handed a cursor while adding
+// nothing is a broken pagination contract — a cursor that does not advance, or a page that
+// always claims a successor. Reaching this bound is therefore an ERROR rather than a
+// truncation: silently returning a short target set would report a fleet write as complete
+// when it commanded a fraction of the fleet.
+const maxBarrenGroupPages = 5
 
 // GroupTargetPage is one keyset page of a group's device members, as the owner answers it.
 type GroupTargetPage struct {
@@ -74,22 +82,26 @@ func (api *Api) resolveGroupTargets(ctx context.Context, request *CommandBatchCr
 	seen := make(map[string]struct{})
 	cursor := ""
 
-	for page := 0; page < maxGroupResolutionPages; page++ {
+	barren := 0
+	for barren < maxBarrenGroupPages {
 		resolved, err := api.GroupTargetResolver.ResolveGroupTargets(ctx, *request.GroupToken,
 			request.GroupVersion, cursor, groupTargetPageSize)
 		if err != nil {
 			return nil, fmt.Errorf("cannot resolve the group target: group resolution is unavailable")
 		}
 		if resolved.Rejected {
-			// The owner's own classification travels in the reason rather than being
-			// re-derived here: this service does not know why a group is unusable, and a
-			// second classification built from the prose would be a parse of prose.
-			return nil, rejected(RejectGroupUnusable, "cannot command group %q: %s",
-				*request.GroupToken, resolved.Reason)
+			// The owner OWNS why a group is unusable, so its code is relayed alongside the
+			// reason rather than re-derived here — a second classification built from the
+			// prose would be a parse of prose, and a caller that can only read the sentence
+			// cannot tell "not a device group" from "never published" without doing exactly
+			// that. The reason stays the human half.
+			return nil, rejected(RejectGroupUnusable, "cannot command group %q [%s]: %s",
+				*request.GroupToken, resolved.Code, resolved.Reason)
 		}
 		if resolved.ResolvedVersion != nil {
 			targets.groupVersion = sql.NullInt32{Int32: *resolved.ResolvedVersion, Valid: true}
 		}
+		before := len(targets.deviceTokens)
 		for _, token := range resolved.DeviceTokens {
 			// A keyset walk cannot legitimately return a device twice, but a group whose
 			// members change mid-walk is exactly when a contract slip would show up — and
@@ -110,9 +122,15 @@ func (api *Api) resolveGroupTargets(ctx context.Context, request *CommandBatchCr
 		if resolved.NextCursor == "" {
 			return targets, nil
 		}
+		if len(targets.deviceTokens) == before {
+			barren++
+		} else {
+			barren = 0
+		}
 		cursor = resolved.NextCursor
 	}
-	// Reaching the fuse means the owner kept issuing cursors past the point the bound
-	// above should have caught, i.e. the pagination contract is broken on one side.
+	// Consecutive pages that each promised a successor and added nobody. That is a broken
+	// pagination contract — a cursor that does not advance, or a page that always claims
+	// another — not a large fleet, so it is an error rather than a short target set.
 	return nil, fmt.Errorf("cannot resolve the group target: resolution did not terminate")
 }
