@@ -526,12 +526,19 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 // stating because it is easy to over-read. A pg advisory lock is bound to the session
 // holding it, so if this pod's connection dies mid-sweep — a failover, a network blip —
 // Postgres releases the lock immediately and a peer may pick up the same still-QUEUED
-// rows and publish them again. deliverCommand also publishes BEFORE it marks SENT, so a
-// publish that succeeds and a MarkSent that fails leaves the command queued for the next
-// pass. Command delivery is therefore at-least-once, as it was before; what this removes
-// is the guaranteed, every-single-tick duplication of running N sweepers by design.
-// Closing the remaining window needs a from-state-predicated claim before the publish,
-// which needs an intermediate lifecycle state — see the note on TrySweepLock.
+// rows and publish them again.
+//
+// ⚠️ THIS COMMENT USED TO SAY deliverCommand PUBLISHES BEFORE IT MARKS SENT, AND ALSO
+// THAT CLOSING THE WINDOW WOULD NEED A CLAIM AND AN INTERMEDIATE STATE. Both were true
+// when written and neither is now: the claim exists, SENT is the state, and
+// deliverCommand marks before it publishes (see its own comment, which explains why that
+// order is not negotiable). Left as a correction rather than deleted because the residual
+// below is easy to misread as the window that was closed.
+//
+// What remains is the OTHER direction: a claim that lands and a publish that then fails
+// leaves the row SENT until ReleaseClaim returns it. Command delivery is therefore
+// at-least-once, as it was before; what the sweep lock removes is the guaranteed,
+// every-single-tick duplication of running N sweepers by design.
 func (cproc *CommandDeliveryProcessor) sweepLocked(ctx context.Context) {
 	ran, err := cproc.Api.TrySweepLock(ctx, func() error {
 		count, byFromStatus, err := cproc.Api.ExpireStale(core.WithSystemContext(ctx), time.Now())

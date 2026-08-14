@@ -182,6 +182,11 @@ type Api struct {
 	// behavior, used by tests that construct the Api directly; production always sets
 	// it from CommandDeliveryConfiguration (floored positive in ApplyDefaults).
 	DefaultCommandTTL time.Duration
+	// BatchMetrics, when set, counts fleet-write outcomes. Nil is a fully supported
+	// state and is what every test gets: promauto registers globally and panics on a
+	// duplicate, so an Api built by literal must not register anything. Every recorder
+	// tolerates a nil receiver — see NewBatchMetrics.
+	BatchMetrics *BatchMetrics
 }
 
 // NewApi creates a new API instance.
@@ -634,6 +639,42 @@ func claimableStatusStrings() []string {
 	return []string{CommandQueued.String(), CommandHeld.String()}
 }
 
+// batchCancellableStatusStrings is the wire form of the states a BATCH CANCEL takes to
+// CANCELLED: QUEUED and HELD, the two that mean "the platform still has it".
+//
+// 🔴 SENT IS ABSENT, AND ITS ABSENCE IS THE DESIGN — FOR A DEVICE THAT WAS THERE. A sent
+// command has been published to a live device. Driving it to CANCELLED stops no actuation
+// — the hardware acts either way — and MarkResponse's terminal fast path then DROPS the
+// device's real answer when it arrives. So a fleet-wide "cancel" over sent rows would
+// reboot the fleet, discard what each device reported, and leave a record saying the
+// operation was called off. The cancel reports those rows as alreadySent, which is true.
+//
+// ⚠️ THAT ARGUMENT DOES NOT COVER EVERY SENT ROW, AND AN EARLIER VERSION OF THIS COMMENT
+// CLAIMED IT DID. SENT carries two meanings: "the device has it", and — on the LwM2M
+// queue-mode path — "we published while the device was asleep and the ack was dropped".
+// The second kind has NOT reached anything, and the LwM2M wake drain dispatches it
+// directly out of SENT without claiming (downlink/fetcher.go's drainStatuses, and
+// dispatcher.go's claim, which returns true for SENT). So a cancelled batch's SENT rows
+// can still actuate a queue-mode device on its next Register.
+//
+// This is not closed here, deliberately: closing it means deciding what SENT means before
+// deciding who may act on it, which is the same question as narrowing CancelCommand. Both
+// are tracked together rather than half-answered in a fleet-write slice.
+//
+// ⚠️ THIS DISAGREES WITH CancelCommand, WHICH STILL CANCELS FROM SENT. A loop of
+// CancelCommand over a batch's commands therefore does something different from
+// cancelling the batch. That asymmetry is known and is being closed in the other
+// direction — by narrowing CancelCommand — rather than by widening this.
+//
+// It is a fourth QUEUED+HELD list rather than a reuse of undeliveredStatusStrings or
+// claimableStatusStrings for the reason those two already state about each other: they
+// answer different questions, and the day one set moves a shared helper would move all
+// of them silently. The pending CancelCommand change is the live example — it moves
+// this set's question and neither of theirs.
+func batchCancellableStatusStrings() []string {
+	return []string{CommandQueued.String(), CommandHeld.String()}
+}
+
 // sweepableStatusStrings is the wire form of what the periodic delivery sweep selects:
 // QUEUED only.
 //
@@ -709,7 +750,46 @@ func (api *Api) MarkSent(ctx context.Context, id uint) (bool, error) {
 // is uncertain. If the publish actually landed and only its acknowledgement was lost,
 // the device may already have answered and moved the row to a terminal state — the
 // release then matches nothing and correctly does nothing.
+// 🔴 A COMMAND WHOSE BATCH HAS BEEN CANCELLED IS RELEASED TO CANCELLED, NOT TO QUEUED,
+// AND WITHOUT THAT THE BATCH CANCEL IS NOT A BRAKE. The sequence is entirely ordinary:
+// the sweep claims a batch's command QUEUED->SENT; the cancel arrives, correctly skips
+// the row (it is SENT — the platform has handed it over) and reports it as alreadySent;
+// the publish then FAILS, and this release returns the row to QUEUED. The next tick
+// dispatches it. The device actuates minutes after an operator was told the fleet write
+// was stopped — and that row, unlike the ones this design legitimately cannot recall, had
+// never gone anywhere.
+//
+// It is the only path with that property. Every other route back to a dispatchable state
+// predicates on HELD or on QUEUED/HELD, and a cancelled row is terminal, so the hold
+// reconciler and the wake drain already no-op correctly.
+//
+// The two updates are ORDERED, cancelled-batch first, and both are predicated on SENT so
+// exactly one of them can move the row. That is what makes it safe without a transaction.
+//
+// ⚠️ IT IS NOT AIRTIGHT, AND AN EARLIER VERSION OF THIS COMMENT CLAIMED IT WAS. One
+// interleaving survives: the first statement evaluates its subquery and sees no committed
+// stamp, the cancel commits, and the second statement then requeues a command whose batch
+// is now called off. Neither the sweep nor MarkSent carries a cancelled-batch predicate,
+// so the next tick delivers it. Closing that would mean testing the batch at CLAIM time,
+// on the hot path, to buy a window that needs a publish failure and a cancel to land in
+// the same microsecond. Documented and accepted rather than silently assumed away — if it
+// ever needs closing, close it at the claim, not here.
 func (api *Api) ReleaseClaim(ctx context.Context, id uint) (bool, error) {
+	cancelledBatches := api.RDB.DB(ctx).Model(&CommandBatch{}).
+		Select("id").Where("cancelled_at IS NOT NULL")
+	stopped := api.RDB.DB(ctx).Model(&Command{}).
+		Where("id = ? AND status = ? AND batch_id IN (?)", id, CommandSent.String(), cancelledBatches).
+		Updates(map[string]any{
+			"status":    CommandCancelled.String(),
+			"sent_time": sql.NullTime{},
+		})
+	if stopped.Error != nil {
+		return false, stopped.Error
+	}
+	if stopped.RowsAffected == 1 {
+		return true, nil
+	}
+
 	res := api.RDB.DB(ctx).Model(&Command{}).
 		Where("id = ? AND status = ?", id, CommandSent.String()).
 		Updates(map[string]any{

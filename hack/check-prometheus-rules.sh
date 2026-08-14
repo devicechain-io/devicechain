@@ -14,10 +14,18 @@
 # alerts simply never fire.
 #
 # That is the same failure mode as an alert with no series, reached by a
-# different route, and this repo now ships four rule files: the DETECT/REACT
+# different route, and this repo now ships five rule files: the DETECT/REACT
 # rules, the JetStream replication rules (ADR-020 A0), the database backup rules
-# (ADR-028, ADR-020 A2.5) and the database control-plane rules (ADR-020 A1.5).
-# A break in any one takes its neighbours with it.
+# (ADR-028, ADR-020 A2.5), the database control-plane rules (ADR-020 A1.5) and
+# the command-delivery rules. A break in any one takes its neighbours with it.
+#
+# 🔴 THIS SCRIPT CANNOT SEE A MISSPELLED SERIES NAME. promtool parses PromQL; it
+# has no idea whether `devicechain_commanddelivery_batch_refusals_total` is a
+# metric this platform exports or a plausible-looking string nobody registers. A
+# rule over a series that does not exist evaluates an empty vector, never fires,
+# and passes every check in this file. hack/check-dashboards.sh is what closes
+# that, by resolving every devicechain_* series named here back to the Go
+# registration that creates it.
 #
 # Nothing else catches this. `helm lint` checks YAML, not PromQL. The values
 # schema does not see rendered output. The Prometheus Operator's own admission
@@ -124,7 +132,8 @@ for doc in yaml.safe_load_all(open(os.path.join(work, "rendered.yaml"))):
 # renamed value, a template that stopped being included -- would produce zero
 # files, zero failures, and a green run. Requiring the rules we know we ship is
 # what stops this passing by rendering nothing.
-required = {"database-backup", "jetstream-replication", "database-control-plane"}
+required = {"database-backup", "jetstream-replication", "database-control-plane",
+            "command-delivery"}
 missing = required - set(names)
 if missing:
     sys.exit(
@@ -172,6 +181,7 @@ note "every rendered rule group parses"
 declare -A rule_tests=(
   [database-backup]="$repo_root/hack/testdata/prometheus-rules-tests.yaml"
   [database-control-plane]="$repo_root/hack/testdata/prometheus-rules-control-plane-tests.yaml"
+  [command-delivery]="$repo_root/hack/testdata/prometheus-rules-command-delivery-tests.yaml"
 )
 
 # 🔴 AND THE GROUPS THAT ARE KNOWINGLY UNTESTED, NAMED. Without this list the loop

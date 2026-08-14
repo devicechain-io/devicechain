@@ -21,7 +21,7 @@ La única excepción es el primer paso de abajo. Averiguar qué acepta un dispos
 consulta de `device-management` — otro endpoint,
 `https://<tu-host>/api/device-management/graphql`, y otra autoridad, **`device:read`**.
 
-## Averigua qué acepta el dispositivo
+## Averigua qué acepta el dispositivo {#find-out-what-the-device-accepts}
 
 El vocabulario de comandos de un dispositivo proviene de su perfil, así que pregúntale a
 `device-management` en lugar de adivinar:
@@ -185,6 +185,15 @@ Siete días es mucho tiempo para enterarte de que un comando falló. Si tus disp
 informan desenlaces, un comando permanece en `SENT` toda la semana antes de que `TIMEOUT`
 registre lo que ya sospechabas. Fija tu propio `expiresAt` con lo que signifique «todavía
 útil» para esa actuación — un reinicio que no ha ocurrido en diez minutos ya no va a ocurrir.
+
+## Comandar muchos dispositivos a la vez
+
+Todo lo anterior emite un comando para un dispositivo. Para enviar un solo comando a una
+flota entera —nombrada explícitamente o resuelta a partir de un grupo de entidades— como una
+única operación que puedes auditar y anular, consulta [Comandar una
+flota](./commanding-a-fleet.md). No es un bucle de esta mutación: fija la membresía del grupo
+tal como estaba en el momento de dispararse, registra qué dispositivos fueron rechazados y
+por qué, y se cancela como una sola operación.
 
 ## Dos mutaciones que no son para ti
 

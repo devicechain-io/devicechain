@@ -350,14 +350,17 @@ frontend:
 # all ServiceMonitors).
 metrics:
   enabled: true
-  # grafanaDashboards renders the event-processing operations dashboard as a ConfigMap
-  # labeled grafana_dashboard: "1" for the Grafana sidecar (kube-prometheus-stack) to
+  # grafanaDashboards renders one ConfigMap per operations dashboard the chart carries
+  # (dashboards/*.json — event-processing and command-delivery today), each labeled
+  # grafana_dashboard: "1" for the Grafana sidecar (kube-prometheus-stack) to
   # auto-import. Set false on clusters that have the Prometheus Operator but no Grafana
   # sidecar. Ignored when metrics.enabled is false.
   grafanaDashboards: true
-  # alerts renders a PrometheusRule with the event-processing (DETECT + REACT) alerting
-  # rules. Requires the Prometheus Operator CRDs (same as enabled). Ignored when
-  # metrics.enabled is false.
+  # alerts renders the PrometheusRules for the platform's own services: the
+  # event-processing (DETECT + REACT) rules and the command-delivery rules. Requires
+  # the Prometheus Operator CRDs (same as enabled). Ignored when metrics.enabled is
+  # false. The database and replication rules below are gated separately, because they
+  # describe infrastructure this chart does not install.
   alerts: true
   # natsPodMonitor renders a PodMonitor scraping the NATS broker's own
   # prometheus-nats-exporter sidecar (ADR-020 A0) — BROKER-side cluster health

@@ -21,7 +21,7 @@ The one exception is the first step below. Finding out what a device accepts is 
 `https://<your-host>/api/device-management/graphql`, and a different authority,
 **`device:read`**.
 
-## Find out what the device accepts
+## Find out what the device accepts {#find-out-what-the-device-accepts}
 
 A device's command vocabulary comes from its profile, so ask `device-management` rather
 than guessing:
@@ -180,6 +180,14 @@ Seven days is a long time to wait to learn a command failed. If your devices do 
 outcomes, a command sits in `SENT` for the whole week before `TIMEOUT` records what you
 already suspected. Set your own `expiresAt` to whatever "still useful" means for that
 actuation — a reboot that has not landed in ten minutes is not going to.
+
+## Commanding many devices at once
+
+Everything above issues one command to one device. To send one command to a whole fleet —
+named explicitly, or resolved from an entity group — as a single operation you can audit and
+call off, see [Commanding a fleet](./commanding-a-fleet.md). It is not a loop of this
+mutation: it pins the group's membership as of the moment it fires, records which devices
+were refused and why, and cancels as one operation.
 
 ## Two mutations that are not for you
 

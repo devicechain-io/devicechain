@@ -364,6 +364,21 @@ jobs:
       - name: no inline id conditions outside rdb.FindByIds
         run: hack/check-inline-id-conditions.sh
 
+      - name: rejection-code label guard self-test
+        run: hack/check-rejection-code-labels.sh --self-test
+
+      - name: every declared rejection code is allowed in a metric label
+        # `batch_refusals_total` carries a `code` label, so the codes that may
+        # reach it are an allowlist rather than whatever a caller sends — a label
+        # fed from an open vocabulary is the unbounded-cardinality vector the
+        # no-tenant-label rule exists to prevent.
+        #
+        # The failure this catches is silent in the direction that matters: a new
+        # rejection code that nobody allowlists still WORKS, it just folds into
+        # "other", so the panel that answers WHY fleet writes are being refused
+        # quietly stops naming it. Nothing goes red at runtime.
+        run: hack/check-rejection-code-labels.sh
+
   # ---------------------------------------------------------------------------
   # Migrations: prove every area's chain still reproduces its golden schema.
   #
@@ -905,12 +920,41 @@ jobs:
         #
         # Nothing else catches this. `helm lint` checks YAML, not PromQL, and the
         # Prometheus Operator's admission webhook is optional and speaks only once
-        # the release is already being applied. The chart ships three rule files
-        # now (DETECT/REACT, JetStream replication, database backups), and a break
-        # in one takes its neighbours down with it.
+        # the release is already being applied. The chart ships five rule files now
+        # (DETECT/REACT, JetStream replication, database backups, database control
+        # plane, command delivery), and a break in one takes its neighbours down
+        # with it.
+        #
+        # 🔴 IT CANNOT SEE A MISSPELLED SERIES. promtool parses PromQL and has no
+        # idea which metrics this platform registers, so a rule naming a series
+        # that does not exist parses perfectly and evaluates an empty vector —
+        # which is not false, so the alert simply never fires. That gap is the
+        # dashboard guard's, below.
         run: |
           python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
           hack/check-prometheus-rules.sh
+
+      # Self-test first, and it plants each defect ALONE: a self-test that plants
+      # all of them at once is satisfied by a checker that finds any one.
+      - name: dashboard guard self-test
+        run: hack/check-dashboards.sh --self-test
+
+      - name: dashboards parse and name real series
+        # Two gaps nothing else covers, both silent.
+        #
+        # templates/grafana-dashboard.yaml embeds each dashboard with
+        # `.Files.Get | indent`, which turns ANY bytes into a valid YAML block
+        # scalar — so helm lint, helm template, the profile render and kubectl
+        # apply all pass on malformed JSON, and it fails in the Grafana sidecar's
+        # log at runtime, on somebody else's cluster.
+        #
+        # And nothing checked that a series name exists. A misspelled metric in a
+        # panel draws an empty graph; in an alert it never fires and never
+        # complains.
+        #
+        # It also pins the dashboard ConfigMap names, which became a real risk
+        # when that template stopped hardcoding one filename and became a glob.
+        run: hack/check-dashboards.sh
 
       - name: cnpg-cluster chart vs the real CRD schemas
         # The one failure the chart cannot protect itself from.

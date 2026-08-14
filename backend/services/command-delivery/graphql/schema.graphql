@@ -188,6 +188,20 @@ type CommandBatch implements Model & TokenReference & MetadataEntity {
     refusals: [CommandBatchDeviceRefusal!]!
     # The complete per-code totals for every device refused.
     refusalCounts: [CommandBatchRefusalCount!]!
+    # When someone called this batch off, and how many commands that call caught.
+    # Both null until a batch is cancelled.
+    #
+    # 🔑 `cancelledCount` IS WHAT THAT CALL CAUGHT, NOT A LIVE COUNT OF CANCELLED
+    # COMMANDS, and the two drift apart legitimately. A command already handed to its
+    # device when the cancel ran is reported as `alreadySent` and left alone — but if its
+    # delivery then fails, it is retired as cancelled rather than retried, because the
+    # batch it belongs to has been called off. That happens after this number is written.
+    #
+    # The stamp is FIRST-WINS: cancelling an already-cancelled batch reports what it
+    # finds and leaves these two alone, so they keep describing the intervention that
+    # actually stopped something.
+    cancelledAt: String
+    cancelledCount: Int
 }
 
 # Data required to issue a command to many devices at once.
@@ -285,6 +299,41 @@ type CreateCommandBatchResult {
     rejection: CommandBatchRejection
 }
 
+# What cancelling a fleet write was able to do.
+#
+# 🔴 `cancelled` IS MEASURED; THE OTHER THREE ARE OBSERVED A MOMENT LATER. `cancelled` is
+# how many commands the platform actually moved. The rest come from counting the batch's
+# commands immediately afterwards, in a table other writers are still using.
+#
+# 🔴 THE FOUR NEED NOT SUM, AND THE GAP MEANS SOMETHING. A command can return to the
+# delivery queue between the cancel and the count — its dispatcher tried to send it and
+# failed — and such a command is in none of the three buckets, because it is neither
+# stopped, nor sent, nor finished. It is left out rather than folded into
+# `alreadyFinished`, which would report a live command as a finished one.
+#
+# So if `matched` exceeds the sum, some commands are back in the delivery queue and this
+# cancel did not stop them. **Cancel again** — that is the fix, and it is the only one;
+# nothing retries on your behalf. It cannot keep happening: once a cancel is recorded, a
+# failed delivery retires its command rather than requeueing it, so the second call finds
+# a settled batch.
+type CancelCommandBatchResult {
+    # Commands the platform still held and has now stopped. They will not be delivered.
+    cancelled: Int!
+    # Commands already handed to their devices. 🔴 THOSE DEVICES WILL STILL ACT ON THEM.
+    # A command in flight cannot be recalled, and reporting it as cancelled would say the
+    # fleet was stopped when part of it was not.
+    alreadySent: Int!
+    # Commands that had already succeeded, failed, timed out, expired or been cancelled
+    # before this call. Nothing to do.
+    alreadyFinished: Int!
+    # How many of the batch's commands exist right now.
+    #
+    # It is NOT the batch's `accepted`, which is a stored fact about the moment the batch
+    # fired. Commands can be deleted, so `matched` below `accepted` is ordinary and says
+    # nothing about the cancel.
+    matched: Int!
+}
+
 # Criteria used when searching for command batches.
 input CommandBatchSearchCriteria {
     pageNumber: Int!
@@ -343,6 +392,25 @@ type Mutation {
     createCommandBatch(request: CommandBatchCreateRequest!): CreateCommandBatchResult!
     # Cancel a non-terminal command by token.
     cancelCommand(token: String!): Command!
+    # Call off a fleet write: every command the platform still holds for the batch is
+    # stopped. Reports what it was able to do, and never refuses — a brake that declined
+    # to engage because part of the fleet had already moved would leave the rest of the
+    # fleet commanded.
+    #
+    # ⚠️ It stops QUEUED and HELD commands only, and this differs from `cancelCommand`,
+    # which also cancels one that has been SENT. The difference is deliberate: a sent
+    # command is already at the device and cancelling it stops no actuation — it only
+    # makes the platform stop listening for the device's answer, so the fleet acts while
+    # the record says the operation was called off. Sent commands are reported as
+    # `alreadySent` instead. `cancelCommand` will be brought into line; until then, a loop
+    # of `cancelCommand` over a batch's commands does NOT do the same thing as this.
+    #
+    # Requires `command:write`. A batch that targeted a GROUP additionally requires
+    # `device:read`, for the same reason reading one does: the answer describes a set the
+    # device registry owns. The check happens BEFORE anything is cancelled.
+    #
+    # An unknown batch token is an error, not a result.
+    cancelCommandBatch(token: String!): CancelCommandBatchResult!
     # Claim a still-dispatchable command (QUEUED or HELD) for immediate delivery,
     # moving it to SENT. For a transport that dispatches a device's backlog itself
     # rather than waiting for the delivery sweep — an LwM2M device draining its held

@@ -93,6 +93,23 @@ type CommandBatch struct {
 	// A bounded sample of refusals, and the complete per-code totals.
 	Refusals      *datatypes.JSON
 	RefusalCounts *datatypes.JSON
+
+	// When someone called this batch off, and how many commands that call caught.
+	//
+	// 🔑 BOTH ARE STORED FACTS ABOUT THE MOMENT OF THE CANCEL, on the same doctrine as
+	// Resolved and Accepted above, and CancelledCount is NOT a live count of the batch's
+	// CANCELLED rows. The two drift apart legitimately: a command that was already SENT
+	// when the cancel ran is driven to CANCELLED later, if its publish fails and the
+	// release finds the batch stamped. Deriving this number instead would make it move
+	// after the fact, and an audit could no longer answer "what did pulling the brake
+	// actually stop?"
+	//
+	// CancelledAt is also the flag ReleaseClaim reads to decide whether a failed publish
+	// retires its command or returns it to the queue. It does that from a LATER
+	// transaction, once this one has committed — the two writes land together, and no
+	// other session can see either until they do.
+	CancelledAt    sql.NullTime
+	CancelledCount sql.NullInt32
 }
 
 // CommandBatchCreateRequest carries the data required to issue a batch.

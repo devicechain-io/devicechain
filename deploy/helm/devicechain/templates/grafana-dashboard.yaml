@@ -1,21 +1,37 @@
 {{/*
-Grafana dashboard for the event-processing (DETECT + REACT) operations board (Slice 8).
-Delivered as a ConfigMap labeled grafana_dashboard: "1" so the Grafana sidecar
-(kube-prometheus-stack) auto-imports it — the same operator-based assumption the
-ServiceMonitor already makes. Skipped when metrics are off or dashboards are opted out
-(clusters with the Prometheus Operator but no Grafana sidecar). The JSON lives at
-dashboards/event-processing.json and is scoped per-instance by the $namespace template var.
+Grafana operations dashboards, one ConfigMap per file in dashboards/*.json.
+Each is labeled grafana_dashboard: "1" so the Grafana sidecar (kube-prometheus-stack)
+auto-imports it — the same operator-based assumption the ServiceMonitor already makes.
+Skipped when metrics are off or dashboards are opted out (clusters with the Prometheus
+Operator but no Grafana sidecar). Every dashboard is scoped per-instance by its own
+$namespace template var.
+
+🔴 THE CONFIGMAP NAME IS A PUBLISHED INTERFACE, not an implementation detail. It was
+`{instance}-event-processing-dashboard` when this template hardcoded one filename, and
+`{{ $.Values.instance.id }}-{{ base $path | trimSuffix ".json" }}-dashboard` reproduces
+that byte-for-byte for dashboards/event-processing.json. Renaming it would orphan the
+old ConfigMap on every existing install — Helm deletes what it no longer renders, but a
+sidecar that has already loaded the dashboard, and anyone who pinned the name in their
+own tooling, would not follow. hack/check-dashboards.sh pins the rendered names.
+
+🔑 The JSON is embedded, never validated, by anything Helm does: `.Files.Get | indent`
+turns ANY bytes into a valid YAML block scalar, so `helm lint`, `helm template` and the
+profile render all pass on malformed JSON and the failure surfaces only in the Grafana
+sidecar at runtime. hack/check-dashboards.sh is what parses them.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.grafanaDashboards }}
+{{- range $path, $_ := .Files.Glob "dashboards/*.json" }}
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ .Values.instance.id }}-event-processing-dashboard
-  namespace: {{ .Values.instance.id }}
+  name: {{ $.Values.instance.id }}-{{ base $path | trimSuffix ".json" }}-dashboard
+  namespace: {{ $.Values.instance.id }}
   labels:
     grafana_dashboard: "1"
-    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+    {{- include "devicechain.instanceLabels" $ | nindent 4 }}
 data:
-  event-processing.json: |-
-{{ .Files.Get "dashboards/event-processing.json" | indent 4 }}
+  {{ base $path }}: |-
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
 {{- end }}

@@ -590,3 +590,101 @@ func TestUnknownBatchInputFieldIsRejected(t *testing.T) {
 			"it is the upstream fail-open this repo forks the library to fix")
 	}
 }
+
+const cancelBatchMutation = `mutation ($token: String!) {
+    cancelCommandBatch(token: $token) {
+        cancelled
+        alreadySent
+        alreadyFinished
+        matched
+    }
+}`
+
+// TestCancellingAGroupBatchRequiresDeviceReadBeforeAnythingIsCancelled.
+//
+// 🔴 THE ROW ASSERTION IS THE TEST; THE ERROR IS NOT. createCommandBatch is allowed to
+// authorize AFTER the fact, because creating a batch is idempotent by token and the gate
+// there withholds a LOOK. A cancel is a state change, so a gate applied afterwards would
+// let an unauthorized caller stop a group's fleet write and only then be refused the
+// answer — the damage done, the refusal cosmetic. Asserting only that an error came back
+// cannot tell those two designs apart.
+func TestCancellingAGroupBatchRequiresDeviceReadBeforeAnythingIsCancelled(t *testing.T) {
+	ctx, api := newWireTestCtx(t)
+	api.GroupTargetResolver = stubGroupResolver{members: []string{"secret-pump-a", "secret-pump-b"}}
+
+	authorized := withServiceAuthorities(ctx, auth.CommandRead, auth.CommandWrite, auth.DeviceRead)
+	created := createBatch(t, authorized, map[string]any{
+		"token": "region-3-reboot", "name": "reboot", "allowPartial": false,
+		"groupToken": "pumps-region-3",
+	})
+	if created.CreateCommandBatch.Batch == nil {
+		t.Fatalf("fixture: %+v", created.CreateCommandBatch.Rejection)
+	}
+
+	// A caller with command:write but NOT device:read.
+	writerOnly := withServiceAuthorities(ctx, auth.CommandWrite)
+	schema := gql.MustParseSchema(SchemaContent, &SchemaResolver{})
+	res := schema.Exec(writerOnly, cancelBatchMutation, "", map[string]any{"token": "region-3-reboot"})
+	if len(res.Errors) == 0 {
+		t.Fatal("cancelling a GROUP batch must require device:read")
+	}
+	if !strings.Contains(strings.ToLower(res.Errors[0].Message), "forbidden") {
+		t.Fatalf("expected a forbidden error, got %q", res.Errors[0].Message)
+	}
+
+	// 🔴 AND NOTHING WAS CANCELLED. If the gate ran after the model call, every assertion
+	// above would still hold while the fleet write had already been stopped.
+	var stillLive int64
+	if err := api.RDB.DB(authorized).Model(&model.Command{}).
+		Where("batch_token = ? AND status = ?", "region-3-reboot", model.CommandQueued.String()).
+		Count(&stillLive).Error; err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if stillLive != 2 {
+		t.Fatalf("%d of the batch's commands are still queued, want 2 — the refused cancel "+
+			"took effect before the caller was refused", stillLive)
+	}
+
+	// Negative control: the same cancel by a caller holding device:read must work, or
+	// this passes against a mutation that refuses everyone.
+	ok := schema.Exec(authorized, cancelBatchMutation, "", map[string]any{"token": "region-3-reboot"})
+	if len(ok.Errors) > 0 {
+		t.Fatalf("an authorized cancel must succeed: %v", ok.Errors)
+	}
+	if err := api.RDB.DB(authorized).Model(&model.Command{}).
+		Where("batch_token = ? AND status = ?", "region-3-reboot", model.CommandQueued.String()).
+		Count(&stillLive).Error; err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if stillLive != 0 {
+		t.Fatalf("%d commands still queued after an authorized cancel", stillLive)
+	}
+}
+
+// TestCancellingADeviceListBatchNeedsOnlyCommandWrite is the counterweight: the gate must
+// key on the batch being a GROUP one, not on cancelling as such.
+func TestCancellingADeviceListBatchNeedsOnlyCommandWrite(t *testing.T) {
+	ctx, _ := newWireTestCtx(t)
+	if out := createBatch(t, ctx, listRequest("my-own-push", "pump-a")); out.CreateCommandBatch.Batch == nil {
+		t.Fatalf("fixture: %+v", out.CreateCommandBatch.Rejection)
+	}
+
+	writerOnly := withServiceAuthorities(ctx, auth.CommandWrite)
+	schema := gql.MustParseSchema(SchemaContent, &SchemaResolver{})
+	res := schema.Exec(writerOnly, cancelBatchMutation, "", map[string]any{"token": "my-own-push"})
+	if len(res.Errors) > 0 {
+		t.Fatalf("cancelling a device-list batch must need only command:write, got %v", res.Errors)
+	}
+}
+
+// TestCancellingAnUnknownBatchIsAnError. It is not a rejection: a cancel has no
+// decided-refusal outcome, and a caller naming a token that does not exist has made a
+// mistake the platform cannot describe as a verdict.
+func TestCancellingAnUnknownBatchIsAnError(t *testing.T) {
+	ctx, _ := newWireTestCtx(t)
+	schema := gql.MustParseSchema(SchemaContent, &SchemaResolver{})
+	res := schema.Exec(ctx, cancelBatchMutation, "", map[string]any{"token": "never-existed"})
+	if len(res.Errors) == 0 {
+		t.Fatal("cancelling a token that names no batch must be an error")
+	}
+}

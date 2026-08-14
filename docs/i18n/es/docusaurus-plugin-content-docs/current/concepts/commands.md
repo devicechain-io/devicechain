@@ -142,7 +142,8 @@ en marcha tu automatización basada en alarmas mientras una escritura de flota e
 
 Se aplica igual tanto si envías un comando como diez mil: un lote se admite hasta el mismo
 límite que alcanzaría un bucle de comandos individuales, así que no hay forma de eludirla ni
-ventaja en ninguna de las dos formas.
+ventaja en ninguna de las dos formas. Consulta [Un comando, muchos
+dispositivos](#command-batches).
 
 Un rechazo nombra el límite que realmente se aplicó y, cuando es la reserva la que te ha
 acotado, indica cuánto se apartó — de modo que quien reciba un rechazo en 8000 frente a un
@@ -184,3 +185,69 @@ no informan resultados y una semana es más de lo que el comando sigue siendo ú
 Cada dispositivo recibe comandos en un topic acotado exclusivamente a ese dispositivo, y está autorizado
 solo para ese topic — un dispositivo no puede observar comandos dirigidos a ningún otro dispositivo de
 su inquilino.
+
+## Un comando, muchos dispositivos {#command-batches}
+
+Un **lote de comandos** difunde un solo comando a muchos dispositivos como una única
+operación registrada. Los dispositivos se nombran explícitamente o se resuelven a partir de
+un **grupo de entidades**, y todos reciben la misma clave de comando y la misma carga útil.
+Para emitir uno, consulta [Comandar una flota](../guides/commanding-a-fleet.md).
+
+Todo lo anterior sigue aplicándose por dispositivo: cada comando se valida contra el contrato
+de capacidades de ese dispositivo, se retiene si el dispositivo está ausente, se sigue por el
+mismo ciclo de vida y queda acotado por el mismo TTL. Un lote no cambia nada de lo que le
+ocurre a un comando — cambia lo que la plataforma *recuerda* sobre la operación en conjunto.
+
+Ese registro es justamente el punto. Un dispositivo rechazado no recibe fila de comando
+alguna — no existe un estado que signifique «se quiso pero no se creó» — así que sin el
+registro del lote un rechazo no dejaría rastro, y quien dispara una escritura de flota y
+vuelve por la mañana no tendría nada que leer. El registro conserva a cuántos dispositivos
+resolvió el objetivo, cuántos se admitieron realmente, y cuáles fueron rechazados y por qué.
+
+Tres cosas lo distinguen de un bucle de comandos individuales, y ninguna es comodidad:
+
+- **Un objetivo de grupo queda congelado en el momento del disparo.** El lote resuelve la
+  membresía **publicada** del grupo — nunca un selector en borrador — y registra la versión
+  del grupo contra la que resolvió. Editar el grupo después no puede cambiar lo que ya salió,
+  y una auditoría todavía puede responder qué *significaba* el grupo cuando el lote se
+  disparó.
+- **Una difusión parcial es una decisión, no un valor por defecto.** En una flota real
+  algunos dispositivos no podrán recibir el comando. Quien llama debe declarar si eso es
+  aceptable: si no lo es, el lote entero se rechaza y **no se crea nada**, ni siquiera el
+  registro, porque no ocurrió nada. Si lo es, los dispositivos que pueden recibir el comando
+  lo reciben y el resto quedan registrados como rechazos.
+- **Se puede anular como una sola operación.** Deshacer un bucle implica cancelar cada comando
+  por separado, y conservar todos los tokens con los que se emitieron.
+
+Las cifras del registro —cuántos dispositivos resolvieron, cuántos se admitieron— describen
+**el momento en que el lote se disparó**, no el presente. Las filas de comando no son
+inmortales, así que una cuenta en vivo podría derivar por debajo de la verdad del momento de
+creación sin ningún rechazo que explique la diferencia. Las preguntas en presente («de los
+5000 en cola, ¿cuántos han salido?») se responden buscando los comandos que creó el lote, no
+releyendo el lote.
+
+Los rechazos se almacenan de dos formas, y por la misma razón por la que una difusión grande
+necesita ambas: una lista individual, acotada para que una escritura de flota no pueda
+almacenar un blob sin límite, y totales completos por código que nunca se truncan. Los
+totales son lo que hace que el registro se audite solo — los dispositivos resueltos siempre
+equivalen a los admitidos más la suma de los recuentos de rechazo, incluso cuando la muestra
+nombrada se queda corta.
+
+### Cancelar un lote detiene lo que aún no ha salido {#cancelling-a-batch}
+
+Cancelar un lote mueve sus comandos de `QUEUED` o `HELD` a `CANCELLED`. Los comandos que ya
+están `SENT` se dejan en paz, y los dispositivos que los tienen actuarán igualmente sobre
+ellos.
+
+Eso es más estrecho que cancelar un comando individual, y es deliberado. `SENT` significa que
+el comando ya está en el dispositivo, así que cancelarlo no revoca nada — lo único que hace
+es que la plataforma deje de esperar la respuesta del dispositivo, sustituyendo un desenlace
+real por un registro que dice que un operador lo anuló. Hacer eso con miles de comandos a la
+vez destruiría la evidencia de lo que la flota realmente hizo. Cancelar un comando individual
+todavía se permite desde `SENT` hoy; eso se estrechará para que coincida.
+
+Cancelar un lote nunca se rechaza. Un freno que se negara a actuar porque parte de la flota
+ya se movió dejaría comandada al resto de la flota, que es el peor desenlace disponible — así
+que siempre actúa e informa de lo que alcanzó. El registro del lote queda sellado con cuándo
+se canceló y cuántos comandos alcanzó esa llamada, y el sello es de **primero que llega**:
+una segunda cancelación no sobrescribe lo que registró la primera.

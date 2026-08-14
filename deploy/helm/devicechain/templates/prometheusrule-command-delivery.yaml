@@ -1,0 +1,161 @@
+{{/*
+Alerting rules for command delivery — the dispatch sweep, the presence gate, and the
+fleet-write (batch) path. A Prometheus-Operator PrometheusRule CRD, gated on
+metrics.enabled + metrics.alerts (same operator assumption as the ServiceMonitor).
+Every expression is scoped to THIS instance's namespace, so one rule object alerts
+only on its own instance.
+
+WHY ONLY THREE ALERTS, when the service exports ten counters.
+
+The dashboard (dashboards/command-delivery.json) covers all ten. A counter earns an
+ALERT only when a human has to act on it and nothing else would tell them. Holds
+placed/released, claim losses, batch refusals by code and cancel dispositions all fail
+that test — they are either expected operation, or they are already visible to the
+person who made the request, because the API told them. What is left is the set of
+states where the platform reports something FALSE and nobody is looking:
+
+  - a stranded claim makes the platform blame an innocent device;
+  - a failing presence read makes the gate silently stop gating;
+  - a reserve-bound refusal makes a fleet write fail against a limit the tenant
+    was never told about.
+
+🔴 THRESHOLDS HERE ARE ARGUED, NOT MEASURED. There is no production baseline for this
+service. Each `for:` window below is chosen against a specific benign shape that must
+NOT page, and each is exercised in BOTH directions by the promtool unit tests in
+hack/testdata/prometheus-rules-command-delivery-tests.yaml — which is the only thing
+that makes a guessed number trustworthy, because it pins what the number excludes as
+well as what it catches. Shorten a window and its "must stay quiet" case fails.
+
+Note the two naming eras in the series below and do not tidy them: the six original
+counters carry a historical `command_delivery_` stutter inside an already
+`commanddelivery`-subsystemed name, and the batch counters do not. Renaming an exported
+series breaks every dashboard and recording rule pointed at it.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts }}
+{{- $ns := .Values.instance.id }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: command-delivery
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.command-delivery
+      rules:
+        # 🔴 THE LOUDEST RULE IN THIS FILE, and the only one whose subject is the
+        # platform lying rather than the platform failing.
+        #
+        # A stranded claim is a command that was moved to SENT, whose publish then
+        # failed, AND whose release back to QUEUED also failed. Nothing retries it.
+        # It sits in SENT until its own deadline and is then recorded as TIMEOUT —
+        # the status that means "the device did not answer". The device never
+        # received anything. So the permanent record of this incident is an
+        # accusation against a device that did nothing wrong, and the operator's
+        # next move is to go and inspect hardware that is fine.
+        #
+        # 🔑 `increase(...[30m])`, NOT `rate(...[5m])`, and the difference is
+        # whether a SINGLE stranded command can ever fire this. With a 5m rate and
+        # any `for` above 5m it cannot: one increment makes the rate non-zero for
+        # exactly one window and the `for` never completes. That would leave the
+        # rule firing only on repeated stranding — precisely the case an operator
+        # would have noticed anyway — and silent on the isolated one, which is the
+        # case that gets misdiagnosed. A 30m window holds one increment true long
+        # enough to be alerted on and then clears itself.
+        - alert: CommandClaimsStranded
+          expr: |
+            sum(increase(devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace="{{ $ns }}"}[30m])) > 0
+          # 5m, and it is deliberately short. There is nothing benign to ride out
+          # here — a counter that only ever moves on a double failure has no
+          # transient state to settle. The window exists to collapse a burst of
+          # stranded commands into one alert rather than a storm, and it costs
+          # nothing: the damage is already done and its visible consequence (the
+          # TIMEOUT) is minutes to hours away.
+          for: 5m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "Commands are stranded in SENT and will time out against innocent devices"
+            description: >-
+              At least one command was left reading SENT after both its publish and its release
+              failed. It was never delivered, nothing will retry it, and it will expire as TIMEOUT —
+              which records the failure against the DEVICE. Treat every TIMEOUT reported in this
+              window as unattributed until this is resolved, and do not send engineers to inspect
+              the devices named. Look for a broker outage overlapping a database outage: it takes
+              BOTH to strand a claim, which is why this counter is normally flat at zero.
+        # The gate that fails OPEN, so its failure looks like nothing at all.
+        #
+        # The presence gate withholds commands for devices that are authoritatively
+        # absent. When the presence projection cannot be read, the sweep dispatches
+        # ANYWAY — deliberately, because refusing to dispatch on a monitoring
+        # failure would be a worse outage than dispatching unchecked. The cost is
+        # that the failure mode is invisible from every other angle: dispatch rate
+        # is normal, error rates are normal, and the hold counters simply go quiet,
+        # which reads as "no devices are absent right now".
+        #
+        # 🔑 THIS IS WHY A QUIET HOLDS PANEL IS NOT REASSURING while this fires, and
+        # the description says so rather than leaving it to be inferred.
+        - alert: CommandPresenceReadErrors
+          expr: |
+            sum(rate(devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace="{{ $ns }}"}[10m])) > 0
+          # 15m against a 10m window, so this needs the errors to STILL be arriving
+          # after the first window has rolled — an isolated read failure (a broker
+          # reconnect, a leader election, a rolling restart of the presence
+          # projection) keeps the rate non-zero for 10 minutes and then stops, which
+          # is 5 minutes short of firing. That is the intended exclusion: one failed
+          # read means a handful of commands went out ungated, which is not worth
+          # waking anyone. A gate that has stopped gating IS.
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "The command presence gate is failing open"
+            description: >-
+              The dispatch sweep cannot read the presence projection, and the gate fails OPEN by
+              design — so commands are being dispatched WITHOUT the absence check, to devices
+              nobody confirmed were there. Nothing else reports this: dispatch looks healthy and
+              the holds-placed counter goes to zero, which reads as "no devices are absent" rather
+              than "nothing is being checked". Check the device-state area and the presence
+              projection's own health.
+        # The reserve, reported as a COUNTERFACTUAL rather than as a state.
+        #
+        # 🔴 bound="reserve" means "this refusal would NOT have happened without the
+        # reserve" — the write fitted against the tenant's raw ceiling and was
+        # refused only by the headroom the delivery machinery holds back. It does
+        # NOT mean "a reserve was in force", which would be true of nearly every
+        # refusal and would make this rule fire on ordinary oversized fleet writes.
+        # That distinction is computed at the refusal site, and it is the entire
+        # reason this alert can be trusted to mean the reserve wants tuning.
+        #
+        # Warning, never critical, and it is worth being explicit about why: every
+        # alert here is the reserve WORKING. Nothing is broken, no data is lost, and
+        # the caller was told their write was refused. What it says is that the
+        # tenant's configured ceiling and the reserve now disagree about what a
+        # reasonable fleet write is, and somebody should pick one.
+        - alert: CommandBatchReserveRefusals
+          expr: |
+            sum(rate(devicechain_commanddelivery_batch_refusals_total{namespace="{{ $ns }}", bound="reserve"}[15m])) > 0
+          # 30m against a 15m window: the refusals must still be arriving half an
+          # hour after they started. A single operator discovering the limit by
+          # walking into it — the overwhelmingly common case, and one that needs no
+          # alert because the API already told them — cannot reach this. A standing
+          # rate over 45 minutes is a tenant whose normal fleet size no longer fits,
+          # which is a configuration decision waiting to be made.
+          for: 30m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "The delivery-machinery reserve is refusing fleet writes the tenant's ceiling would have admitted"
+            description: >-
+              Fleet writes are being refused that WOULD have fitted against the tenant's own
+              undelivered-command ceiling, and were refused only by the headroom the delivery
+              machinery reserves for itself. This is the reserve doing its job — nothing is broken
+              and every caller was told — but a rate sustained for this long means the ceiling and
+              the reserve disagree about what a normal fleet write is for this tenant. Raise the
+              tenant's ceiling, or lower the reserve, deliberately. Split the refusals by code on
+              the Command Delivery dashboard to see which tenants and which writes.
+{{- end }}

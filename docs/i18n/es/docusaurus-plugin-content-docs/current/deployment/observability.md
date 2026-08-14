@@ -13,10 +13,10 @@ sin necesidad de armar un proyecto de monitoreo aparte.
 
 :::note Estado
 La pila de monitoreo (kube-prometheus-stack a través de `dcctl bootstrap`), el inicio de sesión único (SSO) de Grafana
-a través del propio servidor de autorización OAuth 2.1 de la plataforma, y el
-panel de operaciones de event-processing están implementados y validados de extremo a extremo.
-La amplitud de paneles por servicio (un panel de Grafana curado para cada área funcional)
-y el trazado distribuido OTLP son mejoras planeadas a futuro.
+a través del propio servidor de autorización OAuth 2.1 de la plataforma, y el panel de operaciones
+de event-processing están implementados y validados de extremo a extremo. Un panel de command-delivery
+y sus reglas de alerta se incluyen junto a ellos. Los paneles para las demás áreas funcionales y el
+trazado distribuido OTLP son mejoras planeadas a futuro.
 :::
 
 ## Lo que expone cada servicio

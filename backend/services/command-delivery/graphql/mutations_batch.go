@@ -8,6 +8,7 @@ import (
 	"errors"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"gorm.io/gorm"
 
 	"github.com/devicechain-io/dc-command-delivery/model"
 )
@@ -214,4 +215,70 @@ func (r *SchemaResolver) CreateCommandBatch(ctx context.Context, args struct {
 			C: ctx,
 		},
 	}, nil
+}
+
+// CancelCommandBatchResultResolver reports what a batch cancel was able to do.
+type CancelCommandBatchResultResolver struct {
+	M model.BatchCancellation
+}
+
+func (r *CancelCommandBatchResultResolver) Cancelled() int32 { return int32(r.M.Cancelled) }
+
+func (r *CancelCommandBatchResultResolver) AlreadySent() int32 { return int32(r.M.AlreadySent) }
+
+func (r *CancelCommandBatchResultResolver) AlreadyFinished() int32 {
+	return int32(r.M.AlreadyFinished)
+}
+
+func (r *CancelCommandBatchResultResolver) Matched() int32 { return int32(r.M.Matched) }
+
+// CancelCommandBatch calls off a fleet write.
+//
+// 🔴 THE GROUP GATE RUNS BEFORE ANYTHING IS CANCELLED, AND THAT ORDERING IS THE WHOLE
+// DIFFERENCE FROM CreateCommandBatch'S RECORD GATE. That one is allowed to authorize
+// after the fact because creating a batch is idempotent by token and a command:write
+// holder could have created it anyway — the gate withholds a LOOK, not an action. A
+// cancel is not idempotent in that sense: authorizing afterwards would let a caller
+// without device:read stop a group's fleet write and only then be refused the answer.
+// The state change would already have happened, which is the one thing an authorization
+// check exists to prevent.
+//
+// So the batch is loaded first, the gate applied to what it says, and only then is
+// anything written. TargetKind is set once at creation and never updated, so there is
+// nothing for a race to change between the two.
+//
+// 🔑 THE AUTHORITY THIS WITHHOLDS IS NARROWER THAN IT LOOKS, and saying so keeps anyone
+// from mistaking it for the only thing standing between a caller and a fleet. Batch
+// command tokens are platform-minted and predictable, so a command:write holder who knows
+// a batch's row id can already cancel its commands one at a time through cancelCommand.
+// What this gate stops is doing it in one call, under OUR service identity's reading of
+// the group, and learning the group's size from the counts that come back.
+//
+// The residual is the same one createCommandBatch documents: refusing tells the caller
+// that this token names a group batch. One bit, against the group's size and the ability
+// to stop its fleet write in a single call.
+func (r *SchemaResolver) CancelCommandBatch(ctx context.Context, args struct {
+	Token string
+}) (*CancelCommandBatchResultResolver, error) {
+	if err := auth.Authorize(ctx, auth.CommandWrite); err != nil {
+		return nil, err
+	}
+
+	api := r.GetApi(ctx)
+	found, err := api.CommandBatchesByToken(ctx, []string{args.Token})
+	if err != nil {
+		return nil, err
+	}
+	if len(found) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	if err := authorizeGroupBatchReads(ctx, found); err != nil {
+		return nil, err
+	}
+
+	cancelled, err := api.CancelCommandBatch(ctx, found[0])
+	if err != nil {
+		return nil, err
+	}
+	return &CancelCommandBatchResultResolver{M: *cancelled}, nil
 }

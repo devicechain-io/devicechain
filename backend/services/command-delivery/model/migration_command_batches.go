@@ -132,11 +132,14 @@ func NewCommandBatchSchema() *gormigrate.Migration {
 				// Serves "show me that batch's commands". Partial for the same reason the
 				// dispatchable index is: a deleted row is never the subject of it.
 				//
-				// ⚠️ An earlier version of this comment also credited it with serving "the
-				// batch cancel, a bounded UPDATE over exactly this predicate". No batch
-				// cancel exists yet. The index is right either way, but an index justified
-				// by a caller that does not exist is how a later reader concludes the
-				// caller was removed and the index is now dead.
+				// ⚠️ AND NOT THE BATCH CANCEL, WHICH NOW EXISTS AND DOES NOT USE THIS
+				// INDEX. An earlier version of this comment credited it in advance with
+				// serving "the batch cancel, a bounded UPDATE over exactly this
+				// predicate", and was then corrected to say no such cancel existed. It
+				// does now — and it filters on batch_id, so it is served by
+				// uix_commands_batch_device above, not by this. The claim was wrong in
+				// both directions, which is why the correction is kept rather than
+				// quietly dropped.
 				`CREATE INDEX IF NOT EXISTS idx_commands_batch_token ` +
 					`ON "command-delivery".commands (tenant_id, batch_token) ` +
 					`WHERE batch_token IS NOT NULL AND deleted_at IS NULL;`,
