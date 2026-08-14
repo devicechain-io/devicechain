@@ -227,12 +227,7 @@ func (api *Api) emitMintedGeoFenceSet(ctx context.Context, minted *GeoFenceSetVe
 
 // Get geofences by id.
 func (api *Api) GeoFencesById(ctx context.Context, ids []uint) ([]*GeoFence, error) {
-	found := make([]*GeoFence, 0)
-	result := api.RDB.DB(ctx).Find(&found, ids)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return found, nil
+	return rdb.FindByIds[GeoFence](api.RDB.DB(ctx), ids)
 }
 
 // Get geofences by token.

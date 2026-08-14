@@ -1065,23 +1065,10 @@ func (api *Api) expireOne(ctx context.Context, id uint, fromStatus, next string)
 	return res.RowsAffected > 0, nil
 }
 
-// CommandsById gets commands by id.
-//
-// 🔴 THE EMPTY-SLICE GUARD IS LOAD-BEARING: gorm's inline-condition form DROPS an empty id
-// slice rather than rendering an impossible predicate, so `Find(&found, []uint{})` is an
-// unfiltered, unpaginated SELECT — asking for no commands answered with every command the
-// tenant has. Reachable straight from the API, since `commandsById(ids: [])` is a legal
-// document. Measured on the live code path, not inferred.
+// CommandsById gets commands by id. The empty-id case is a live hazard rather than an
+// edge case — rdb.FindByIds carries the guard and the reason it has to exist.
 func (api *Api) CommandsById(ctx context.Context, ids []uint) ([]*Command, error) {
-	found := make([]*Command, 0)
-	if len(ids) == 0 {
-		return found, nil
-	}
-	result := api.RDB.DB(ctx).Find(&found, ids)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return found, nil
+	return rdb.FindByIds[Command](api.RDB.DB(ctx), ids)
 }
 
 // CommandsByToken gets commands by token.

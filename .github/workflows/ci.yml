@@ -337,6 +337,34 @@ jobs:
         run: hack/check-subscribe-confirmed.sh
 
   # ---------------------------------------------------------------------------
+  # Data access: the query shapes that are unsafe in a way no call site shows.
+  #
+  # gorm's inline-condition form, `db.Find(&out, ids)`, DROPS an empty slice
+  # instead of rendering a predicate that matches nothing — so it silently
+  # degrades into an unfiltered, unpaginated SELECT. `xById(ids: [])` is a legal
+  # GraphQL document, so that is reachable from the public API, and twenty-one
+  # lookups across two services carried it at once.
+  #
+  # This is a job rather than a step inside `go` because it is a property of the
+  # TREE, not of a module: the `go` matrix would run it once per module and still
+  # only ever look at the whole repo. It needs no toolchain, so it is cheap.
+  # ---------------------------------------------------------------------------
+  data-access:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # Self-test first, as with every guard here — this one is a grep, and a grep
+      # whose pattern or path has drifted reports a clean tree it never read. It
+      # also exercises the EXEMPTION list in both directions, which is the part
+      # most likely to quietly swallow the repo.
+      - name: inline-id-condition guard self-test
+        run: hack/check-inline-id-conditions.sh --self-test
+
+      - name: no inline id conditions outside rdb.FindByIds
+        run: hack/check-inline-id-conditions.sh
+
+  # ---------------------------------------------------------------------------
   # Migrations: prove every area's chain still reproduces its golden schema.
   #
   # THIS IS THE ONLY THING THAT CHECKS THE MIGRATIONS AT ALL. The unit tests build

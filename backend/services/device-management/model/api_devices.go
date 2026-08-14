@@ -186,12 +186,7 @@ func uintPtrEqual(a, b *uint) bool {
 
 // Get device types by id.
 func (api *Api) DeviceTypesById(ctx context.Context, ids []uint) ([]*DeviceType, error) {
-	found := make([]*DeviceType, 0)
-	result := api.RDB.DB(ctx).Find(&found, ids)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return found, nil
+	return rdb.FindByIds[DeviceType](api.RDB.DB(ctx), ids)
 }
 
 // Get device types by token.
@@ -626,14 +621,7 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceC
 
 // Get devices by id.
 func (api *Api) DevicesById(ctx context.Context, ids []uint) ([]*Device, error) {
-	found := make([]*Device, 0)
-	result := api.RDB.DB(ctx)
-	result = result.Preload("DeviceType")
-	result = result.Find(&found, ids)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return found, nil
+	return rdb.FindByIds[Device](api.RDB.DB(ctx).Preload("DeviceType"), ids)
 }
 
 // Get devices by token.

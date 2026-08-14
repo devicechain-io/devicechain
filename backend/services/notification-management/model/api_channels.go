@@ -128,9 +128,7 @@ func (api *Api) applyChannelSecret(ctx context.Context, id uint, secret *string)
 
 // NotificationChannelsById loads channels by numeric id.
 func (api *Api) NotificationChannelsById(ctx context.Context, ids []uint) ([]*NotificationChannel, error) {
-	found := make([]*NotificationChannel, 0)
-	result := api.RDB.DB(ctx).Find(&found, ids)
-	return found, result.Error
+	return rdb.FindByIds[NotificationChannel](api.RDB.DB(ctx), ids)
 }
 
 // NotificationChannelsByToken loads channels by token.

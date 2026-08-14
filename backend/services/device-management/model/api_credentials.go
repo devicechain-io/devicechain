@@ -116,14 +116,7 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 
 // Get device credentials by id.
 func (api *Api) DeviceCredentialsById(ctx context.Context, ids []uint) ([]*DeviceCredential, error) {
-	found := make([]*DeviceCredential, 0)
-	result := api.RDB.DB(ctx)
-	result = result.Preload("Device")
-	result = result.Find(&found, ids)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return found, nil
+	return rdb.FindByIds[DeviceCredential](api.RDB.DB(ctx).Preload("Device"), ids)
 }
 
 // Get device credentials by token.

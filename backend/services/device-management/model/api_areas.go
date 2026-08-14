@@ -69,12 +69,7 @@ func (api *Api) UpdateAreaType(ctx context.Context, token string,
 
 // Get area types by id.
 func (api *Api) AreaTypesById(ctx context.Context, ids []uint) ([]*AreaType, error) {
-	found := make([]*AreaType, 0)
-	result := api.RDB.DB(ctx).Find(&found, ids)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return found, nil
+	return rdb.FindByIds[AreaType](api.RDB.DB(ctx), ids)
 }
 
 // Get area types by token.
@@ -171,14 +166,7 @@ func (api *Api) UpdateArea(ctx context.Context, token string, request *AreaCreat
 
 // Get areas by id.
 func (api *Api) AreasById(ctx context.Context, ids []uint) ([]*Area, error) {
-	found := make([]*Area, 0)
-	result := api.RDB.DB(ctx)
-	result = result.Preload("AreaType")
-	result = result.Find(&found, ids)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return found, nil
+	return rdb.FindByIds[Area](api.RDB.DB(ctx).Preload("AreaType"), ids)
 }
 
 // Get areas by token.

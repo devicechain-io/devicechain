@@ -119,12 +119,7 @@ func (api *Api) UpdateDeviceProfile(ctx context.Context, token string,
 
 // Get device profiles by id.
 func (api *Api) DeviceProfilesById(ctx context.Context, ids []uint) ([]*DeviceProfile, error) {
-	found := make([]*DeviceProfile, 0)
-	result := api.RDB.DB(ctx).Find(&found, ids)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return found, nil
+	return rdb.FindByIds[DeviceProfile](api.RDB.DB(ctx), ids)
 }
 
 // Get device profiles by token.

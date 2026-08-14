@@ -69,12 +69,7 @@ func (api *Api) UpdateCustomerType(ctx context.Context, token string,
 
 // Get customer types by id.
 func (api *Api) CustomerTypesById(ctx context.Context, ids []uint) ([]*CustomerType, error) {
-	found := make([]*CustomerType, 0)
-	result := api.RDB.DB(ctx).Find(&found, ids)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return found, nil
+	return rdb.FindByIds[CustomerType](api.RDB.DB(ctx), ids)
 }
 
 // Get customer types by token.
@@ -171,14 +166,7 @@ func (api *Api) UpdateCustomer(ctx context.Context, token string, request *Custo
 
 // Get customers by id.
 func (api *Api) CustomersById(ctx context.Context, ids []uint) ([]*Customer, error) {
-	found := make([]*Customer, 0)
-	result := api.RDB.DB(ctx)
-	result = result.Preload("CustomerType")
-	result = result.Find(&found, ids)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return found, nil
+	return rdb.FindByIds[Customer](api.RDB.DB(ctx).Preload("CustomerType"), ids)
 }
 
 // Get customers by token.
