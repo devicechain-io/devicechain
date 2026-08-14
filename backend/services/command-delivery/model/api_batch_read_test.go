@@ -136,6 +136,70 @@ func TestBatchSearchFiltersDoNotLeakAcrossBatches(t *testing.T) {
 	}
 }
 
+// TestEmptyLookupReturnsNothingNotEverything pins a defect that was live and reachable
+// straight from the API.
+//
+// 🔴 gorm's INLINE-CONDITION form DROPS an empty id slice instead of rendering an
+// impossible predicate, so `Find(&found, []uint{})` is an unfiltered, unpaginated SELECT.
+// `commandsById(ids: [])` is a legal GraphQL document, and it answered with every command
+// in the tenant. The `token in ?` form does NOT share the bug — it renders a predicate
+// that matches nothing — which is exactly what made the id form's behaviour easy to miss:
+// the two lookups sit side by side and behaved oppositely on the same input.
+//
+// Both forms are asserted here, and both entity types, so the test says which of the four
+// regressed rather than just that something did.
+func TestEmptyLookupReturnsNothingNotEverything(t *testing.T) {
+	api := newBatchTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+	if _, err := api.CreateCommandBatch(ctx, batchRequest("empty-probe", []string{"pump-a", "pump-b"})); err != nil {
+		t.Fatalf("seed batch: %v", err)
+	}
+
+	batchesById, err := api.CommandBatchesById(ctx, []uint{})
+	if err != nil {
+		t.Fatalf("CommandBatchesById: %v", err)
+	}
+	if len(batchesById) != 0 {
+		t.Fatalf("asking for NO batch ids must return no batches; got %d — the id filter "+
+			"was dropped and this is an unbounded read of the tenant's table", len(batchesById))
+	}
+
+	batchesByToken, err := api.CommandBatchesByToken(ctx, []string{})
+	if err != nil {
+		t.Fatalf("CommandBatchesByToken: %v", err)
+	}
+	if len(batchesByToken) != 0 {
+		t.Fatalf("asking for NO batch tokens must return no batches; got %d", len(batchesByToken))
+	}
+
+	commandsById, err := api.CommandsById(ctx, []uint{})
+	if err != nil {
+		t.Fatalf("CommandsById: %v", err)
+	}
+	if len(commandsById) != 0 {
+		t.Fatalf("asking for NO command ids must return no commands; got %d", len(commandsById))
+	}
+
+	commandsByToken, err := api.CommandsByToken(ctx, []string{})
+	if err != nil {
+		t.Fatalf("CommandsByToken: %v", err)
+	}
+	if len(commandsByToken) != 0 {
+		t.Fatalf("asking for NO command tokens must return no commands; got %d", len(commandsByToken))
+	}
+
+	// The negative control. If the seed produced nothing, every assertion above would
+	// pass against a lookup that always returns nothing.
+	populated, err := api.CommandBatchesByToken(ctx, []string{"empty-probe"})
+	if err != nil {
+		t.Fatalf("CommandBatchesByToken(populated): %v", err)
+	}
+	if len(populated) != 1 {
+		t.Fatalf("the fixture must be readable, got %d batches — without this the empty "+
+			"cases above prove nothing", len(populated))
+	}
+}
+
 // TestBatchesByTokenIsTenantScoped guards the property every read in this service
 // depends on and no filter of its own can provide.
 func TestBatchesByTokenIsTenantScoped(t *testing.T) {

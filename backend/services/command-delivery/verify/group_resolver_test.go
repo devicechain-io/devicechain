@@ -104,9 +104,13 @@ func TestAbsentGroupVerdictIsAnError(t *testing.T) {
 	}
 }
 
-// TestFirstPageSendsNullCursor pins the boundary between "start at the beginning" and a
-// malformed cursor. The owner rejects a present-but-empty cursor, so sending "" for the
-// first page would fail every group walk on its first call.
+// TestFirstPageSendsNullCursor pins how "start at the beginning" is expressed.
+//
+// The owner treats "" as equivalent to null today, so this is a contract test rather than
+// a bug guard — null is what "no cursor" means, and pinning it here means a change to the
+// owner's leniency cannot silently become our problem. The load-bearing half is the
+// second assertion: a real cursor must travel unchanged, because a walk that keeps
+// sending null re-commands the devices it already reached, every page, forever.
 func TestFirstPageSendsNullCursor(t *testing.T) {
 	resolver, captured := newGroupResolverAgainst(t, `{"data":{"resolveDeviceGroupTargets":{
 	  "rejected":false,"deviceTokens":[],"nextCursor":null,"resolvedVersion":null

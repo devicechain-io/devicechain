@@ -17,11 +17,15 @@ import (
 //
 // 🔑 IT IS ONE TYPE OVER TWO INTERNAL ONES. CreateCommandBatch refuses with
 // *model.EnqueueRejected for request-shaped problems (ambiguous target, too large,
-// malformed JSON, unusable group) and *model.BatchRejected for the two that must name
-// devices (partial-refused, ceiling). A caller has no way to know which internal type
-// produced its refusal and no reason to care: both answer "why was my batch refused?",
-// and forcing the distinction onto the wire would make every client branch on an
-// implementation detail of this service.
+// malformed JSON, unusable group) and *model.BatchRejected for the two that carry a
+// resolved count (partial-refused, ceiling). A caller has no way to know which internal
+// type produced its refusal and no reason to care: both answer "why was my batch
+// refused?", and forcing the distinction onto the wire would make every client branch on
+// an implementation detail of this service.
+//
+// Note that carrying a count is not the same as naming devices: only BATCH_PARTIAL_REFUSED
+// populates Refusals. The ceiling refusal is raised with a nil refusal list because no
+// device in the request caused it — the tenant's existing backlog did.
 type CommandBatchRejectionResolver struct {
 	code          string
 	reason        string
@@ -148,9 +152,10 @@ func (r *SchemaResolver) CreateCommandBatch(ctx context.Context, args struct {
 	if err := auth.Authorize(ctx, auth.CommandWrite); err != nil {
 		return nil, err
 	}
-	// Gated on the request naming a group, not on resolution succeeding, so the check
-	// runs BEFORE anything is resolved and an unauthorized caller learns nothing at all
-	// — not even whether the group exists.
+	// The REQUEST gate, on the request naming a group. It runs before anything is
+	// resolved, so an unauthorized caller never causes a group walk — and, more to the
+	// point, never gets a batch created and devices commanded that we then refuse to
+	// show them.
 	if args.Request.GroupToken != nil && *args.Request.GroupToken != "" {
 		if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
 			return nil, err
@@ -164,6 +169,30 @@ func (r *SchemaResolver) CreateCommandBatch(ctx context.Context, args struct {
 			return &CreateCommandBatchResultResolver{rejection: rejection}, nil
 		}
 		return nil, err
+	}
+
+	// 🔴 THE RECORD GATE, AND IT IS NOT BELT-AND-BRACES — THE REQUEST GATE ABOVE IS
+	// BYPASSABLE BY REPLAY ON ITS OWN. CreateCommandBatch probes the token FIRST and
+	// ignores every other field, so a caller who names NO group hits neither the request
+	// gate nor group resolution, and is handed back whatever batch that token already
+	// names. Point it at an existing group batch's token — and those are client-chosen
+	// idempotency keys like "nightly-reboot", so guessing one is realistic — and the
+	// reply carries the group token, the group's size in resolved/accepted, and a
+	// refusal sample naming up to a hundred devices. That is the exact disclosure the
+	// request gate exists to prevent, reached by omitting the field it keys on.
+	//
+	// Gating on the RESULT's target kind closes it for both paths at once, because a
+	// replay and a fresh create are indistinguishable here by construction.
+	//
+	// Residual, stated plainly rather than papered over: refusing tells the caller that
+	// this token names a group batch. That is one bit, against the group's identity,
+	// size and members — and the alternative, refusing every replay a caller cannot
+	// prove ownership of, would break device-list idempotency for exactly the machine
+	// callers that depend on it.
+	if created.TargetKind == string(model.BatchTargetGroup) {
+		if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+			return nil, err
+		}
 	}
 
 	return &CreateCommandBatchResultResolver{

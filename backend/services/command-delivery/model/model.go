@@ -177,9 +177,16 @@ type CommandCreateRequest struct {
 // a round trip per state and cannot be paged coherently.
 //
 // An EMPTY Statuses slice is treated as "no status filter", not as "match
-// nothing". Both readings are defensible; this one is chosen because gorm
-// renders an empty IN as a NULL-comparison whose result is neither, and a filter
-// whose meaning depends on the driver is worse than either answer.
+// nothing". Both readings are defensible; this one is chosen because a caller
+// that builds a status list programmatically and ends up with none of them
+// almost always means "I have no preference", and the other reading turns that
+// into a silently empty page.
+//
+// ⚠️ An earlier version of this note justified the choice by claiming gorm
+// renders an empty IN as a NULL comparison "whose result is neither", i.e. that
+// the behaviour was driver-dependent. Measured, it is not: `status IN ?` with an
+// empty slice returns zero rows, deterministically and without error. The choice
+// is ours to defend on its own terms, which is what the paragraph above now does.
 type CommandSearchCriteria struct {
 	rdb.Pagination
 	DeviceToken *string

@@ -217,9 +217,14 @@ input CommandBatchCreateRequest {
     # Pin a specific frozen version of a dynamic group. Omit for the active published
     # version. Naming one for a static group is refused rather than ignored.
     groupVersion: Int
-    # Accept a partial fan-out. When false (the default), a batch in which ANY device
-    # cannot receive the command is refused whole and NOTHING is created — including the
-    # batch record, since nothing happened to record.
+    # Accept a partial fan-out. When false, a batch in which ANY device cannot receive the
+    # command is refused whole and NOTHING is created — including the batch record, since
+    # nothing happened to record.
+    #
+    # It is REQUIRED rather than defaulting to false, which is deliberate for a field that
+    # decides whether a physical actuation may reach some of a fleet but not all of it: a
+    # caller states its intent, instead of inheriting one from a schema it may not have
+    # read.
     allowPartial: Boolean!
 }
 
@@ -230,8 +235,12 @@ type CommandBatchRejection {
     # BATCH_TARGET_AMBIGUOUS (both or neither target given, or a version with no group),
     # BATCH_TOO_LARGE, BATCH_GROUP_UNUSABLE (the group does not exist, collects something
     # other than devices, or was never published — the owner's own code travels in the
-    # reason), PAYLOAD_NOT_JSON, METADATA_NOT_JSON, EXPIRES_AT_INVALID, TOKEN_IN_USE,
+    # reason), PAYLOAD_NOT_JSON, METADATA_NOT_JSON, EXPIRES_AT_INVALID,
     # BATCH_PARTIAL_REFUSED, and HELD_CEILING_EXCEEDED.
+    #
+    # Note there is no TOKEN_IN_USE here, unlike createCommand. A batch token that is
+    # already in use is not a conflict — it is an idempotent replay, and it returns the
+    # ORIGINAL batch as `batch`.
     #
     # The last two are the ones to expect in practice: BATCH_PARTIAL_REFUSED is the
     # ordinary answer for a heterogeneous fleet when `allowPartial` is off, and
@@ -247,11 +256,20 @@ type CommandBatchRejection {
     # happened first. Zero would mean a target that genuinely resolved to no devices,
     # which is a real (and successful) batch, not a refusal.
     resolved: Int
-    # A bounded sample of the devices responsible, populated for the refusals that are
-    # ABOUT specific devices (BATCH_PARTIAL_REFUSED, HELD_CEILING_EXCEEDED) and empty for
-    # the ones that refuse the request as a whole. It is what makes the default,
-    # whole-batch refusal actionable: without it an operator would have to bisect a fleet
-    # by hand to learn which devices to fix.
+    # A bounded sample of the devices responsible. It is populated for exactly ONE code —
+    # BATCH_PARTIAL_REFUSED — and empty for every other, including HELD_CEILING_EXCEEDED.
+    #
+    # That asymmetry is not an oversight. A partial refusal is caused BY specific devices
+    # (this one is not in the vocabulary, that one does not exist), so naming them is what
+    # makes the default whole-batch refusal actionable — otherwise an operator would bisect
+    # a fleet by hand to find the offender. A ceiling refusal is caused by the tenant's
+    # backlog, not by any device in the request: no device is at fault, nothing about the
+    # batch would change if you swapped its members, and a list here would invite fixing
+    # devices that are fine. What to do about it is in `reason`.
+    #
+    # (Per-device HELD_CEILING_EXCEEDED entries DO exist — on the RECORD of a batch that
+    # was allowed to fan out partially, where they say which devices did not fit. That is
+    # a different object answering a different question.)
     refusals: [CommandBatchDeviceRefusal!]!
     # The complete per-code totals behind that sample.
     refusalCounts: [CommandBatchRefusalCount!]!

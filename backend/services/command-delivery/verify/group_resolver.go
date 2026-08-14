@@ -79,8 +79,14 @@ func (r *GroupResolver) ResolveGroupTargets(ctx context.Context, groupToken stri
 	} else {
 		vars["version"] = nil
 	}
-	// The first page carries no cursor. Sent as null rather than "" because the owner
-	// reads a present-but-empty cursor as a malformed one.
+	// The first page carries no cursor, sent as an explicit null.
+	//
+	// The owner happens to accept "" as equivalent to null, so this is not load-bearing
+	// against it — an earlier version of this comment claimed the opposite, that ""
+	// would be refused as malformed, and that was simply untrue. Null is still the right
+	// thing to send: it is what "no cursor" MEANS, it matches how the payload argument is
+	// handled two files over, and it does not depend on a leniency the owner is free to
+	// drop.
 	if afterCursor != "" {
 		vars["afterId"] = afterCursor
 	} else {

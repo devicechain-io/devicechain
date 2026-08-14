@@ -11,8 +11,19 @@ import (
 )
 
 // CommandBatchesById gets command batches by id.
+//
+// 🔴 THE EMPTY-SLICE GUARD IS NOT DEFENSIVE PADDING — WITHOUT IT THIS RETURNS THE WHOLE
+// TABLE. gorm's inline-condition form drops an empty id slice entirely rather than
+// rendering an impossible predicate, so `Find(&found, []uint{})` is an unfiltered SELECT
+// with no pagination: asking for NO batches answers with every batch the tenant has.
+// Measured, not assumed — the same is true of CommandsById, which this mirrors.
+//
+// Zero ids means zero rows. That is both the honest answer and the safe one.
 func (api *Api) CommandBatchesById(ctx context.Context, ids []uint) ([]*CommandBatch, error) {
 	found := make([]*CommandBatch, 0)
+	if len(ids) == 0 {
+		return found, nil
+	}
 	result := api.RDB.DB(ctx).Find(&found, ids)
 	if result.Error != nil {
 		return nil, result.Error
@@ -21,8 +32,16 @@ func (api *Api) CommandBatchesById(ctx context.Context, ids []uint) ([]*CommandB
 }
 
 // CommandBatchesByToken gets command batches by token.
+//
+// The empty case is guarded here too, though `token in ?` with an empty slice already
+// renders a predicate that matches nothing. The guard is for the READER: the two lookups
+// sit side by side and behave oppositely on the same input, and the one that is safe is
+// safe by accident of how gorm renders IN rather than by anything visible here.
 func (api *Api) CommandBatchesByToken(ctx context.Context, tokens []string) ([]*CommandBatch, error) {
 	found := make([]*CommandBatch, 0)
+	if len(tokens) == 0 {
+		return found, nil
+	}
 	result := api.RDB.DB(ctx).Find(&found, "token in ?", tokens)
 	if result.Error != nil {
 		return nil, result.Error

@@ -360,6 +360,82 @@ func TestGroupTargetRequiresDeviceRead(t *testing.T) {
 	}
 }
 
+// TestReplayOfAGroupBatchAlsoRequiresDeviceRead pins the hole the request gate leaves
+// open by itself, which was REPRODUCED before it was fixed.
+//
+// 🔴 THE ATTACK NAMES NO GROUP, WHICH IS THE WHOLE POINT. CreateCommandBatch probes the
+// token first and ignores every other field, so a request carrying only a token that
+// already names a group batch skips the request gate (no groupToken to key on) and skips
+// group resolution — and is handed the stored record: the group token, the group's size
+// in resolved/accepted, and a refusal sample naming devices. Batch tokens are
+// client-chosen idempotency keys, so pointing at "nightly-reboot" is a guess anyone can
+// make.
+//
+// Before the fix this test observed targetKind=GROUP, the group token, and resolved=2
+// returned to a caller holding command:write alone.
+func TestReplayOfAGroupBatchAlsoRequiresDeviceRead(t *testing.T) {
+	ctx, api := newWireTestCtx(t)
+	api.GroupTargetResolver = stubGroupResolver{members: []string{"secret-pump-a", "secret-pump-b"}}
+
+	authorized := withServiceAuthorities(ctx, auth.CommandRead, auth.CommandWrite, auth.DeviceRead)
+	created := createBatch(t, authorized, map[string]any{
+		"token": "nightly-reboot", "name": "reboot", "allowPartial": false,
+		"groupToken": "pumps-region-3",
+	})
+	if created.CreateCommandBatch.Batch == nil {
+		t.Fatalf("fixture: the group batch must be creatable, got %+v",
+			created.CreateCommandBatch.Rejection)
+	}
+
+	// The unauthorized replay: same token, NO group named.
+	schema := gql.MustParseSchema(SchemaContent, &SchemaResolver{})
+	res := schema.Exec(ctx, createBatchMutation, "", map[string]any{
+		"request": map[string]any{
+			"token": "nightly-reboot", "name": "anything", "allowPartial": false,
+			"deviceTokens": []any{"pump-i-own"},
+		},
+	})
+	if len(res.Errors) == 0 {
+		t.Fatal("replaying a GROUP batch's token must require device:read; without the " +
+			"record gate the caller is handed the group's token, size and member sample " +
+			"while never naming a group")
+	}
+	if !strings.Contains(strings.ToLower(res.Errors[0].Message), "forbidden") {
+		t.Fatalf("expected a forbidden error, got %q", res.Errors[0].Message)
+	}
+
+	// Negative control: the SAME replay by a caller holding device:read must succeed,
+	// or this test would pass against a mutation that refuses every replay.
+	replayed := createBatch(t, authorized, map[string]any{
+		"token": "nightly-reboot", "name": "anything", "allowPartial": false,
+		"deviceTokens": []any{"pump-i-own"},
+	})
+	if replayed.CreateCommandBatch.Batch == nil {
+		t.Fatalf("an authorized replay must return the original batch, got %+v",
+			replayed.CreateCommandBatch.Rejection)
+	}
+	if replayed.CreateCommandBatch.Batch.TargetKind != string(model.BatchTargetGroup) {
+		t.Fatalf("the replay must return the ORIGINAL group batch, got %q",
+			replayed.CreateCommandBatch.Batch.TargetKind)
+	}
+}
+
+// TestDeviceListReplayDoesNotRequireDeviceRead is the counterweight to the record gate:
+// it must key on the stored batch being a GROUP one, not on replay as such, or ordinary
+// device-list idempotency starts demanding an authority it never needed.
+func TestDeviceListReplayDoesNotRequireDeviceRead(t *testing.T) {
+	ctx, _ := newWireTestCtx(t)
+	if out := createBatch(t, ctx, listRequest("replay-me", "pump-a")); out.CreateCommandBatch.Batch == nil {
+		t.Fatalf("fixture: %+v", out.CreateCommandBatch.Rejection)
+	}
+
+	out := createBatch(t, ctx, listRequest("replay-me", "pump-a"))
+	if out.CreateCommandBatch.Batch == nil {
+		t.Fatalf("replaying a DEVICE_LIST batch needs only command:write, got %+v",
+			out.CreateCommandBatch.Rejection)
+	}
+}
+
 // TestDeviceListBatchDoesNotRequireDeviceRead is the counterweight: the gate above must
 // be scoped to group targets, or it silently raises the bar on the common path.
 func TestDeviceListBatchDoesNotRequireDeviceRead(t *testing.T) {
@@ -428,11 +504,20 @@ func TestBatchQueriesReadBackTheRecord(t *testing.T) {
 // TestUnknownBatchInputFieldIsRejected pins the forked-library behaviour on THIS input.
 //
 // The fork exists because upstream silently DISCARDS input-object entries the schema does
-// not define when they arrive through a variable. On this mutation that fail-open is
-// especially bad: `allowPartial` misspelled would be dropped, the batch would take the
-// safe default, and a caller who explicitly opted into a partial fan-out would get a
-// whole-batch refusal it never asked for — or worse, a misspelled `groupToken` would leave
-// a request that looks group-targeted refused as ambiguous.
+// not define when they arrive through a variable.
+//
+// 🔴 THE EXAMPLE HAS TO BE A NULLABLE FIELD, AND MY FIRST ONE WAS NOT. I originally
+// justified this test with a misspelled `allowPartial` — but that field is `Boolean!`, so
+// dropping it leaves a required variable unsatisfied and even UNPATCHED graphql-go returns
+// a request error. The test would have passed against the unforked library and proved
+// nothing about the fork.
+//
+// `groupToken` is the real case: nullable, so upstream drops a misspelling silently and
+// the request becomes one that names NO target — refused as BATCH_TARGET_AMBIGUOUS, which
+// tells the operator their request was malformed in a way that has nothing to do with the
+// typo they actually made. `deviceTokens` is the same shape and worse, because a dropped
+// device list on a request that also names a group turns a rejected-as-ambiguous call
+// into a silently group-wide actuation.
 func TestUnknownBatchInputFieldIsRejected(t *testing.T) {
 	ctx, _ := newWireTestCtx(t)
 
@@ -440,8 +525,10 @@ func TestUnknownBatchInputFieldIsRejected(t *testing.T) {
 	res := schema.Exec(ctx, createBatchMutation, "", map[string]any{
 		"request": map[string]any{
 			"token": "wire-unknown-field", "name": "reboot", "allowPartial": false,
-			"deviceTokens":  []any{"pump-a"},
-			"allow_partial": true, // not a field in the schema
+			"deviceTokens": []any{"pump-a"},
+			// Nullable in the schema, so upstream drops it without complaint and the
+			// request silently becomes a different one.
+			"group_token": "pumps-region-3",
 		},
 	})
 	if len(res.Errors) == 0 {
