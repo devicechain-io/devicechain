@@ -59,6 +59,10 @@ const sidebars: SidebarsConfig = {
             'concepts/sparkplug',
             'concepts/lwm2m',
             'concepts/device-presence',
+            // Directly after presence on purpose: whether a command is dispatched
+            // or held is decided by whether the device is present, so the two read
+            // as one story.
+            'concepts/commands',
           ],
         },
         {
