@@ -128,6 +128,21 @@ func (api *Api) EventExistsByAltId(ctx context.Context, db *gorm.DB, altId strin
 // (UnresolvedMeasurementsEntry.Measurements) has already been expanded into one request per
 // entry by the time these rows are built, so its ordering can no longer reach the digest.
 //
+// 🔴 THAT REASONING IS TRUE HERE AND WAS FALSE ONE LAYER UP, WHICH IS WORTH KNOWING BEFORE
+// TRUSTING IT AGAIN. The expansion argument holds for a payload ROW, which is one
+// measurement. It did not hold for DeriveEventId, which marshals the WHOLE multi-entry
+// payload: there the map's order survived, as slice order, straight into the event id, so
+// one reading hashed to a different id on every resolution and a redelivery double-
+// persisted the event. The hazard was identified at this layer, solved at this layer, and
+// its sibling was left standing — for thirteen days, since both digests landed 2026-08-01
+// and the sort landed 2026-08-14. Short, but the map-ranging loop it depended on was much
+// older: what was new was a digest that consumed its output.
+//
+// It is closed now, at the producer; DeriveEventId's own comment holds that contract and is
+// the one place to keep current. The rule to carry forward HERE is the local one: "no maps
+// in this struct" is only ever a statement about ONE marshal call, and every other call that
+// marshals the same data has to be checked on its own.
+//
 // occurred_time is included because a single message's entries may each carry their own,
 // so it discriminates within one event rather than merely repeating the parent's key.
 func canonicalPayloadEntry(v any) ([]byte, error) {
@@ -478,8 +493,13 @@ func (api *Api) CreateStateChangeEvents(ctx context.Context, db *gorm.DB, reques
 // CreateEventAnchors persists an event's anchor rows on the given db handle (a
 // transaction). Anchors follow the same dedup policy as the events they index:
 // an alternateId-bearing event is skipped before it reaches here on redelivery,
-// and an event without one is re-persisted along with its anchors — so a plain
-// insert keeps anchors in lockstep with the base event.
+// and an event without one is re-persisted along with its anchors.
+//
+// The insert is an UPSERT, not the plain insert this comment used to describe: the
+// body below conflicts on uq_event_anchors_idem, which was added precisely because a
+// re-persisted event re-presented its whole anchor set. The "plain insert" claim
+// outlived the change that falsified it — the same way the sibling claim in
+// EventPersistenceResults.Deduped did.
 func (api *Api) CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors []*EventAnchor) error {
 	if len(anchors) == 0 {
 		return nil
