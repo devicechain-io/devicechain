@@ -184,11 +184,23 @@ func (r *SchemaResolver) CreateCommandBatch(ctx context.Context, args struct {
 	// Gating on the RESULT's target kind closes it for both paths at once, because a
 	// replay and a fresh create are indistinguishable here by construction.
 	//
-	// Residual, stated plainly rather than papered over: refusing tells the caller that
-	// this token names a group batch. That is one bit, against the group's identity,
-	// size and members — and the alternative, refusing every replay a caller cannot
-	// prove ownership of, would break device-list idempotency for exactly the machine
-	// callers that depend on it.
+	// Two residuals, stated plainly rather than papered over.
+	//
+	// First: refusing tells the caller that this token names a group batch. One bit,
+	// against the group's identity, size and members — and the alternative, refusing
+	// every replay a caller cannot prove ownership of, would break device-list
+	// idempotency for exactly the machine callers that depend on it.
+	//
+	// Second, and broader than this gate: a replay hands the record to WHOEVER PRESENTS
+	// THE TOKEN. So a command:write holder who guesses a device-list batch's token gets
+	// its payload, its counts, and a refusal sample naming devices it never supplied.
+	// That is not a hole this gate should close — it is the idempotency contract, and
+	// createCommand has had exactly the same property since it shipped (replaying a
+	// command token returns the original command, device token and all). Group targets
+	// are carved out not because replay is unsafe in general, but because group
+	// MEMBERSHIP is another authority's data and this service reads it under its own
+	// identity. If token guessing ever needs to be addressed, it needs addressing for
+	// both mutations at once, and the fix is unguessable tokens, not a gate here.
 	if created.TargetKind == string(model.BatchTargetGroup) {
 		if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
 			return nil, err

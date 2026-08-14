@@ -446,6 +446,60 @@ func TestDeviceListBatchDoesNotRequireDeviceRead(t *testing.T) {
 	}
 }
 
+// TestReadingAGroupBatchRecordRequiresDeviceRead pins the read-side counterpart of the
+// mutation's record gate.
+//
+// Reading a group batch back discloses exactly what provoking one does — the group token,
+// its size, and a device sample — so it answers to the same authority. The gate cannot
+// fire for any token the platform mints today (tenant tokens get device:read and
+// command:read together), which is precisely why it needs a test: nothing in production
+// traffic would ever reveal that it had been removed.
+func TestReadingAGroupBatchRecordRequiresDeviceRead(t *testing.T) {
+	ctx, api := newWireTestCtx(t)
+	api.GroupTargetResolver = stubGroupResolver{members: []string{"secret-pump-a"}}
+
+	authorized := withServiceAuthorities(ctx, auth.CommandRead, auth.CommandWrite, auth.DeviceRead)
+	if out := createBatch(t, authorized, map[string]any{
+		"token": "group-record", "name": "reboot", "allowPartial": false,
+		"groupToken": "pumps-region-3",
+	}); out.CreateCommandBatch.Batch == nil {
+		t.Fatalf("fixture: %+v", out.CreateCommandBatch.Rejection)
+	}
+	// A device-list batch, to prove the gate keys on the RECORD and not on the query.
+	if out := createBatch(t, ctx, listRequest("list-record", "pump-a")); out.CreateCommandBatch.Batch == nil {
+		t.Fatalf("fixture: %+v", out.CreateCommandBatch.Rejection)
+	}
+
+	const byToken = `query($tokens: [String!]!) {
+	  commandBatchesByToken(tokens: $tokens) { token targetKind groupToken }
+	}`
+	// command:read WITHOUT device:read — not a token the platform mints, which is the
+	// point: this asserts our surface fails closed on its own rather than depending on
+	// another service's baseline coupling the two authorities.
+	readerOnly := withServiceAuthorities(ctx, auth.CommandRead)
+	schema := gql.MustParseSchema(SchemaContent, &SchemaResolver{})
+
+	res := schema.Exec(readerOnly, byToken, "", map[string]any{"tokens": []any{"group-record"}})
+	if len(res.Errors) == 0 {
+		t.Fatal("reading a GROUP batch record must require device:read; it carries the " +
+			"group token, the group's size and a device sample")
+	}
+
+	// Control 1: the same reader may read a DEVICE_LIST batch. Without this, a gate that
+	// refused every batch read would pass the assertion above.
+	res = schema.Exec(readerOnly, byToken, "", map[string]any{"tokens": []any{"list-record"}})
+	if len(res.Errors) != 0 {
+		t.Fatalf("a device-list batch needs only command:read, got %v", res.Errors)
+	}
+
+	// Control 2: with device:read the group batch reads fine. Without this, a gate that
+	// refused group batches to EVERYONE would also pass.
+	res = schema.Exec(authorized, byToken, "", map[string]any{"tokens": []any{"group-record"}})
+	if len(res.Errors) != 0 {
+		t.Fatalf("device:read must be sufficient to read a group batch, got %v", res.Errors)
+	}
+}
+
 // TestBatchQueriesReadBackTheRecord covers the read side, including the batchToken
 // filter that is the ONLY way to ask what a fleet write is doing now.
 func TestBatchQueriesReadBackTheRecord(t *testing.T) {
