@@ -102,13 +102,28 @@ type CommandBatch struct {
 // know what it asked for, and silently preferring one would fan a physical actuation out
 // across whichever set the implementation happened to favour.
 type CommandBatchCreateRequest struct {
-	Token        string
-	Name         string
-	Payload      *string
-	ExpiresAt    *string
-	Metadata     *string
-	DeviceTokens []string
+	Token     string
+	Name      string
+	Payload   *string
+	ExpiresAt *string
+	Metadata  *string
+	// DeviceTokens is a POINTER to a slice because this struct is bound directly as a
+	// GraphQL input, and the library requires a pointer for a nullable input field —
+	// the same reason CommandSearchCriteria.Statuses is shaped this way. Read it
+	// through NamedDevices, which is nil-safe.
+	DeviceTokens *[]string
 	GroupToken   *string
 	GroupVersion *int32
 	AllowPartial bool
+}
+
+// NamedDevices is the explicitly-named device list, or empty when the request targets a
+// group. Absent and empty are deliberately the same thing here: "exactly one target"
+// is decided on whether a list has ENTRIES, so a caller sending `deviceTokens: []`
+// alongside a group is naming a group, not naming both.
+func (r *CommandBatchCreateRequest) NamedDevices() []string {
+	if r.DeviceTokens == nil {
+		return nil
+	}
+	return *r.DeviceTokens
 }

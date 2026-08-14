@@ -144,11 +144,14 @@ type Command struct {
 	// minted, in the same column — so the replay probe keys on `batch_id IS NULL` to avoid
 	// answering a client's request with somebody else's actuation.
 	//
-	// BatchToken is the same link denormalized. It will let the command search filter by
-	// batch without a join, since the criteria builder is single-table. ⚠️ That filter is
-	// NOT built yet — CommandSearchCriteria has no batch field — so today this column is
-	// carried for a reader that is still to come, and the claim it is load-bearing would
-	// be false if made now.
+	// BatchToken is the same link denormalized, and it is what lets the command search
+	// filter by batch without a join, since the criteria builder is single-table
+	// (CommandSearchCriteria.BatchToken).
+	//
+	// 🔑 THAT SEARCH IS THE ONLY WAY TO ASK WHAT A BATCH IS DOING NOW. The batch record's
+	// Resolved and Accepted are stored facts about the moment it fired, deliberately not
+	// live counts — so "how many of those 5,000 have actually been delivered?" is a
+	// question only the command rows can answer.
 	BatchId    sql.NullInt64
 	BatchToken sql.NullString
 }
@@ -174,14 +177,26 @@ type CommandCreateRequest struct {
 // a round trip per state and cannot be paged coherently.
 //
 // An EMPTY Statuses slice is treated as "no status filter", not as "match
-// nothing". Both readings are defensible; this one is chosen because gorm
-// renders an empty IN as a NULL-comparison whose result is neither, and a filter
-// whose meaning depends on the driver is worse than either answer.
+// nothing". Both readings are defensible; this one is chosen because a caller
+// that builds a status list programmatically and ends up with none of them
+// almost always means "I have no preference", and the other reading turns that
+// into a silently empty page.
+//
+// ⚠️ An earlier version of this note justified the choice by claiming gorm
+// renders an empty IN as a NULL comparison "whose result is neither", i.e. that
+// the behaviour was driver-dependent. Measured, it is not: `status IN ?` with an
+// empty slice returns zero rows, deterministically and without error. The choice
+// is ours to defend on its own terms, which is what the paragraph above now does.
 type CommandSearchCriteria struct {
 	rdb.Pagination
 	DeviceToken *string
 	Status      *string
 	Statuses    *[]string
+	// BatchToken narrows to the commands one batch created. It is the live view of a
+	// fleet write — the batch record itself carries only creation-time counts — so it
+	// is what answers "of the 5,000 this batch queued, how many have gone out?" when
+	// combined with Status or Statuses.
+	BatchToken *string
 }
 
 // CommandSearchResults wraps a page of commands.

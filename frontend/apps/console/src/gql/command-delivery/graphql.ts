@@ -14,6 +14,7 @@ export type CommandCreateRequest = {
 };
 
 export type CommandSearchCriteria = {
+  batchToken?: string | null | undefined;
   deviceToken?: string | null | undefined;
   pageNumber: number;
   pageSize: number;

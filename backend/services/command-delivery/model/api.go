@@ -1066,8 +1066,17 @@ func (api *Api) expireOne(ctx context.Context, id uint, fromStatus, next string)
 }
 
 // CommandsById gets commands by id.
+//
+// 🔴 THE EMPTY-SLICE GUARD IS LOAD-BEARING: gorm's inline-condition form DROPS an empty id
+// slice rather than rendering an impossible predicate, so `Find(&found, []uint{})` is an
+// unfiltered, unpaginated SELECT — asking for no commands answered with every command the
+// tenant has. Reachable straight from the API, since `commandsById(ids: [])` is a legal
+// document. Measured on the live code path, not inferred.
 func (api *Api) CommandsById(ctx context.Context, ids []uint) ([]*Command, error) {
 	found := make([]*Command, 0)
+	if len(ids) == 0 {
+		return found, nil
+	}
 	result := api.RDB.DB(ctx).Find(&found, ids)
 	if result.Error != nil {
 		return nil, result.Error
@@ -1101,6 +1110,14 @@ func (api *Api) Commands(ctx context.Context, criteria CommandSearchCriteria) (*
 		// the driver rather than on the query.
 		if criteria.Statuses != nil && len(*criteria.Statuses) > 0 {
 			db = db.Where("status IN ?", *criteria.Statuses)
+		}
+		// Filtered on the denormalized token rather than joining the batch, matching
+		// DeviceToken above: an empty string is a filter that matches nothing (no
+		// command carries an empty batch token), not a filter that is skipped. Only
+		// Statuses gets the empty-means-unfiltered treatment, and that is a deliberate
+		// API choice about a LIST argument, not something gorm forces.
+		if criteria.BatchToken != nil {
+			db = db.Where("batch_token = ?", *criteria.BatchToken)
 		}
 		return db
 	}, criteria.Pagination)

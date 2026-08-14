@@ -66,11 +66,13 @@ func newWireTestCtx(t *testing.T) (context.Context, *model.Api) {
 	if err := rdb.RegisterTokenGrammar(db); err != nil {
 		t.Fatalf("failed to register token grammar: %v", err)
 	}
-	if err := db.AutoMigrate(&model.Command{}); err != nil {
+	if err := db.AutoMigrate(&model.Command{}, &model.CommandBatch{}); err != nil {
 		t.Fatalf("failed to migrate: %v", err)
 	}
-	if err := rdb.CreateTenantTokenIndex(db, &model.Command{}); err != nil {
-		t.Fatalf("failed to create tenant token index: %v", err)
+	for _, table := range []any{&model.Command{}, &model.CommandBatch{}} {
+		if err := rdb.CreateTenantTokenIndex(db, table); err != nil {
+			t.Fatalf("failed to create tenant token index: %v", err)
+		}
 	}
 	mgr := &rdb.RdbManager{Database: db}
 	api := model.NewApi(mgr)

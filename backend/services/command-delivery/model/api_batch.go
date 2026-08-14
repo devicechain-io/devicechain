@@ -227,7 +227,8 @@ type batchTargets struct {
 
 // validateBatchRequest checks what can be decided without touching another service.
 func validateBatchRequest(request *CommandBatchCreateRequest) error {
-	hasList := len(request.DeviceTokens) > 0
+	named := request.NamedDevices()
+	hasList := len(named) > 0
 	hasGroup := request.GroupToken != nil && *request.GroupToken != ""
 	if hasList == hasGroup {
 		// Both or neither. Not a precedence rule: a caller that sent both does not know
@@ -236,10 +237,10 @@ func validateBatchRequest(request *CommandBatchCreateRequest) error {
 		return rejected(RejectBatchTargetAmbiguous,
 			"a batch must name exactly one of deviceTokens or groupToken")
 	}
-	if hasList && len(request.DeviceTokens) > MaxBatchDeviceTokens {
+	if hasList && len(named) > MaxBatchDeviceTokens {
 		return rejected(RejectBatchTooLarge,
 			"a batch may name at most %d devices in one request; this one names %d",
-			MaxBatchDeviceTokens, len(request.DeviceTokens))
+			MaxBatchDeviceTokens, len(named))
 	}
 	if request.GroupVersion != nil && !hasGroup {
 		return rejected(RejectBatchTargetAmbiguous,
@@ -273,10 +274,10 @@ func (api *Api) batchPayloadAndTTL(request *CommandBatchCreateRequest) ([]byte, 
 
 // resolveBatchTargets turns the request's target into an ordered, deduplicated device list.
 func (api *Api) resolveBatchTargets(ctx context.Context, request *CommandBatchCreateRequest) (*batchTargets, error) {
-	if len(request.DeviceTokens) > 0 {
+	if named := request.NamedDevices(); len(named) > 0 {
 		return &batchTargets{
 			kind:         BatchTargetDeviceList,
-			deviceTokens: dedupeBatchTokens(request.DeviceTokens),
+			deviceTokens: dedupeBatchTokens(named),
 		}, nil
 	}
 	if api.GroupTargetResolver == nil {

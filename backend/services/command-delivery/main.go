@@ -140,31 +140,45 @@ func presenceReader(infra mscfg.InfrastructureConfiguration) presence.Reader {
 	return presence.NewGraphQLReader(client, url)
 }
 
-// wireEnqueueValidator installs the ADR-043 decision 3 enqueue gate on the Api when
-// the shared service secret is configured, logging the enabled/disabled mode at
-// startup so a misconfigured deploy (empty secret) is visible rather than silently
-// skipping validation at enqueue time.
+// wireDeviceManagementGates installs the three collaborators command-delivery reaches
+// device-management for, when the shared service secret is configured: the ADR-043
+// decision 3 enqueue gate, its fleet counterpart, and group-target resolution. The
+// enabled/disabled mode is logged at startup so a misconfigured deploy (empty secret) is
+// visible rather than silently skipping validation at enqueue time.
 //
-// The gate covers device existence (W1.1b) AND command-vocabulary/payload validation
-// in one call, so there is a single switch: either command-delivery can reach
-// device-management and both are enforced, or it cannot and neither is.
-func wireEnqueueValidator() {
+// They share one switch because they share one identity and one endpoint — either
+// command-delivery can reach device-management under its device:read service token, or it
+// cannot. The enqueue gate covers device existence (W1.1b) AND command-vocabulary/payload
+// validation in one call, and the batch gate answers the same question for many devices.
+//
+// 🔴 THE BATCH GATE IS PART OF THIS SET, NOT A LATER ADDITION, BECAUSE THE DEGRADED MODE
+// IS NOT THE SAME SIZE ON BOTH PATHS. An unwired single validator means one unvalidated
+// command; an unwired batch validator means a fan-out of up to ten thousand of them, none
+// of which was checked against any device's vocabulary. The warnings below therefore say
+// what is lost for FLEET writes too — an operator who reads "commands unvalidated" and
+// infers a per-command nuisance has been told the smaller half of the truth.
+//
+// Group resolution has no degraded mode at all: with no resolver, a group-targeted batch
+// is refused outright rather than quietly becoming an empty one.
+func wireDeviceManagementGates() {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	if infra.ServiceAuth.Secret == "" {
-		log.Warn().Msg("Service secret not configured — command-delivery will NOT validate commands before enqueue (device existence and payload schema unchecked).")
+		log.Warn().Msg("Service secret not configured — command-delivery will NOT validate commands before enqueue (device existence and payload schema unchecked), including fleet-wide batches; group-targeted batches will be refused.")
 		return
 	}
 	// Guard the device-management coordinate too: a config document predating this
 	// feature carries no deviceManagement block, and building http://:0/graphql
 	// would fail every enqueue. Degrade to no-validation (loudly) rather than trap.
 	if infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 {
-		log.Warn().Msg("device-management endpoint not configured (infrastructure.deviceManagement) — command-delivery will NOT validate commands before enqueue (device existence and payload schema unchecked).")
+		log.Warn().Msg("device-management endpoint not configured (infrastructure.deviceManagement) — command-delivery will NOT validate commands before enqueue (device existence and payload schema unchecked), including fleet-wide batches; group-targeted batches will be refused.")
 		return
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery", []string{string(auth.DeviceRead)})
 	url := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
 	Api.EnqueueValidator = verify.NewEnqueueValidator(client, url)
-	log.Info().Str("deviceManagement", url).Msg("Command enqueue will be validated against device-management (device existence + published command vocabulary + payload schema, ADR-043).")
+	Api.BatchValidator = verify.NewBatchValidator(client, url)
+	Api.GroupTargetResolver = verify.NewGroupResolver(client, url)
+	log.Info().Str("deviceManagement", url).Msg("Command enqueue will be validated against device-management (device existence + published command vocabulary + payload schema, ADR-043), for single commands and for fleet batches; entity groups will be resolved there as batch targets.")
 }
 
 // wireHeldCeilingResolver wires the PER-TENANT held-command ceiling: an operator's
@@ -240,12 +254,15 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// Wire the enqueue gate (ADR-043 decision 3): a synchronous check against
 	// device-management before a command is enqueued (ADR-044 amendment) covering
 	// device existence, the profile's published command vocabulary, and the payload's
-	// conformance to the command's parameter schema. Enabled only when the shared
-	// service secret is configured; otherwise the enqueue path runs unvalidated and we
-	// say so loudly rather than fail closed (an unvalidated command is an integrity
-	// nuisance, not a security breach, and refusing to start would take the whole
-	// service down over an optional collaborator).
-	wireEnqueueValidator()
+	// conformance to the command's parameter schema — for single commands and for
+	// fleet batches — plus resolution of entity groups named as batch targets.
+	// Enabled only when the shared service secret is configured; otherwise the enqueue
+	// path runs unvalidated and we say so loudly rather than fail closed (an
+	// unvalidated command is an integrity nuisance, not a security breach, and
+	// refusing to start would take the whole service down over an optional
+	// collaborator). Group targeting is the exception and fails closed: a group that
+	// cannot be resolved must not silently become an empty fleet write.
+	wireDeviceManagementGates()
 
 	// Create and initialize nats manager.
 	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)

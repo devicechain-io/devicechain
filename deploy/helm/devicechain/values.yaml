@@ -198,8 +198,11 @@ instance:
         port: 8080
       deviceManagement:
         # device-management is reached in-cluster by its instance-namespace Service
-        # name for synchronous cross-service calls (ADR-044 amendment): command-
-        # delivery verifies a target device exists before enqueue (W1.1b).
+        # name for synchronous cross-service calls (ADR-044 amendment). command-
+        # delivery makes three: it verifies a target device exists before enqueue
+        # (W1.1b), asks the same question for every device in a fleet batch, and
+        # resolves an entity group named as a batch target to its members. All three
+        # ride one service token, so they share this coordinate.
         hostname: device-management
         port: 8080
       eventProcessing:
