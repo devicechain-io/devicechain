@@ -101,6 +101,85 @@ func (rp *ResolvedEventsProcessor) seedFencesForPublishedRules(rules []runtime.S
 	return rp.signalFenceSet(tenant, set)
 }
 
+// startFenceReconcile launches one periodic re-seed of the geofence projection. It runs ON the
+// single-writer loop (the ticker branch) and does no I/O itself — see fenceReconcileInterval for
+// why the sweep exists at all.
+//
+// 🔴 THE SPLIT BETWEEN THIS AND runFenceReconcile IS NOT STYLE — IT IS THE ONLY ARRANGEMENT THAT
+// IS RACE-FREE. The sweep needs three things, and they belong to two different goroutines:
+//
+//   - the tenant list comes from rp.registry, which carries NO LOCK because all of its mutation
+//     (applyRuleUpdate) and all of its hot-path reads (RulesFor, Lookup) share the loop goroutine.
+//     Reading it from a sweep goroutine would be a data race on a map, so it is snapshotted HERE.
+//   - the archive reads are cross-service round trips. Taking them on the loop would stall every
+//     tenant's event processing behind device-management, which is the exact thing fenceView's
+//     design note forbids — so they happen THERE.
+//   - the install is fenceView.Put, and fenceView is loop-owned too. So the sweep does not write
+//     it; it hands each set back over fenceUpdates (signalFenceSet), the same door the fact
+//     consumer already uses.
+//
+// Skipping while a sweep is in flight is deliberate and is why lastFenceReconcile can stamp the
+// START of a sweep without risk: if one somehow outlives the interval, the next tick drops its
+// sweep rather than stacking a second one onto a service that is evidently not answering quickly.
+// A dropped sweep costs one interval of repair latency for a fault measured in restarts.
+func (rp *ResolvedEventsProcessor) startFenceReconcile() {
+	if rp.fenceView == nil || rp.FenceSets == nil {
+		return
+	}
+	if !rp.fenceReconciling.CompareAndSwap(false, true) {
+		return // a previous sweep is still running; let it finish rather than pile on
+	}
+	tenants := rp.registry.TenantsWithFenceRules()
+	if len(tenants) == 0 {
+		rp.fenceReconciling.Store(false)
+		return
+	}
+	// Add from the loop goroutine, which itself holds a readerWG count until run() returns — so
+	// this can never be the Add that races ExecuteStop's Wait up from zero.
+	rp.readerWG.Add(1)
+	go rp.runFenceReconcile(tenants)
+}
+
+// runFenceReconcile reads each tenant's CURRENT frozen fence set from device-management's archive
+// and hands it to the single-writer loop. It is the off-loop half of startFenceReconcile.
+//
+// It re-seeds unconditionally rather than asking whether a tenant is already current, for the same
+// reason seedFencesForPublishedRules does: the answer lives in fenceView, which this goroutine must
+// not touch. Put is idempotent on a version already held (a repeat replaces in place and consumes
+// no retention slot), so a sweep that finds nothing wrong changes nothing.
+//
+// Reading the CURRENT version is the right repair for this fault specifically. A lost publish means
+// events resolved from now on are stamped with a version the view never received; seeding current
+// makes the live path whole immediately. It does not retroactively make a replay whole, and that
+// residual stays deliberate — reported as a loud counted eval error, resolved off-loop through
+// FenceSetSource by the callers that can afford to block.
+//
+// A per-tenant read failure is logged and skipped rather than abandoning the sweep: one tenant's
+// blip must not deny the repair to every other tenant, and the next interval retries anyway.
+func (rp *ResolvedEventsProcessor) runFenceReconcile(tenants []string) {
+	defer rp.readerWG.Done()
+	defer rp.fenceReconciling.Store(false)
+
+	reseeded := 0
+	for _, tenant := range tenants {
+		set, err := rp.FenceSets.CurrentFenceSet(rp.procCtx, tenant)
+		if err != nil {
+			log.Error().Err(err).Str("tenant", tenant).
+				Msg("Unable to re-seed the DETECT geofence projection for a tenant; its containment calls report unresolvable until the next sweep.")
+			continue
+		}
+		if set == nil {
+			continue
+		}
+		if !rp.signalFenceSet(tenant, set) {
+			return // shutdown mid-send: the next start reconciles from the archive anyway
+		}
+		reseeded++
+	}
+	log.Debug().Int("tenants", len(tenants)).Int("reseeded", reseeded).
+		Msg("Swept the DETECT geofence projection against device-management's frozen fence sets.")
+}
+
 // runFenceSetConsumer drains device-management's geofence-set fact stream (ADR-078): the FROZEN
 // fence set of each newly-minted fence-set version. For each fact it hands the compiled set to the
 // single-writer loop and then acks.

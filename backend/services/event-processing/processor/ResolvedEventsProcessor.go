@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
@@ -24,6 +25,27 @@ import (
 // readErrorBackoff caps the retry rate after a non-EOF read error the reader's own
 // self-heal does not resolve, so a persistent instant error cannot hot-spin.
 const readErrorBackoff = 200 * time.Millisecond
+
+// fenceReconcileInterval is how often the live loop re-seeds the geofence projection from
+// device-management's frozen fence-set archive, on top of the two reconciles startup already runs.
+//
+// 🔴 IT REPAIRS THE ONE FEED NEITHER OTHER PATH CAN: A LOST FENCE-SET PUBLISH. The projection is
+// fed by a fact stream (a fence edit announces its frozen set) and seeded at startup and on a
+// tenant's first published fence rule. Every one of those is driven by an EVENT. But
+// emitMintedGeoFenceSet is deliberately best-effort — the authoring action has already committed
+// and must not be failed by a wire problem — so a dropped publish leaves device-management
+// stamping version N while DETECT holds ≤N−1, and there is no later event to notice: no fact was
+// written, so no fact redelivers, and no rule changed. Containment then reports a counted eval
+// error on every location event of that tenant, indefinitely, and the only repair a human could
+// perform is to re-save a fence they did not want to change. The trigger here is the ABSENCE of an
+// event, which is why it must be a timer and cannot be a hook.
+//
+// Five minutes is chosen against the cost, not the urgency: each sweep is one archive read per
+// tenant that actually holds a fence rule (TenantsWithFenceRules), and those are human-authored,
+// so the steady-state load is a handful of reads per interval. A tighter cadence would buy a
+// shorter dead window for a fault that is already rare; a much looser one would leave a tenant's
+// geofencing dead for an operator-visible stretch.
+const fenceReconcileInterval = 5 * time.Minute
 
 // maxRulePersistBackoff caps the backoff of the in-process retry that persists a published
 // rule to the durable projection. The retry runs until the write succeeds (or shutdown), so a
@@ -313,6 +335,22 @@ type ResolvedEventsProcessor struct {
 	// so the operations board's #1 "falling behind" signal keeps updating even while the stream is
 	// quiet and nothing checkpoints (the exact moment a backlog is most worth seeing).
 	lastLagSample time.Time
+	// lastFenceReconcile is when the periodic geofence reconcile last STARTED (not finished) —
+	// loop-owned, read and written only in the ticker branch. Stamping the start is what keeps a
+	// slow sweep from being immediately re-scheduled the moment it finishes; the in-flight guard
+	// below is what makes that safe rather than merely unlikely.
+	//
+	// It is initialized in ExecuteStart rather than left zero (as lastBudgetSample and lastLagSample
+	// deliberately are, so their gauges publish on the first tick). A zero here would fire a third
+	// archive sweep seconds after the two startup reconciles have already run, which is the one
+	// moment the projection is certainly fresh.
+	lastFenceReconcile time.Time
+	// fenceReconciling is set while an off-loop periodic fence sweep is in flight. It is the ONE
+	// field here touched by two goroutines — the loop sets it, the sweep clears it — hence the
+	// atomic. It bounds concurrency to one sweep: if device-management is slow or wedged, ticks
+	// keep arriving and would otherwise pile sweeps up against it, turning a cross-service blip
+	// into a self-inflicted read storm on the service that is already struggling.
+	fenceReconciling atomic.Bool
 	// lastLiveRead is the wall-clock time of the most recent live read-pump delivery (a
 	// message or a read error). It drains the reader's local fetch buffer before idle-advance
 	// (the authoritative caught-up signal is the broker backlog, not this timer): idle-advance
@@ -616,6 +654,9 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 	if err := rp.reconcileFenceView(ctx); err != nil {
 		return err
 	}
+	// The projection is fresh as of here, so start the periodic sweep's clock now rather than
+	// letting a zero value fire one immediately on the first tick.
+	rp.lastFenceReconcile = rp.clock.Now()
 	rp.readerWG.Add(1)
 	go rp.run()
 	// Launch the live rule-update consumer after the loop is running (so the ruleUpdates
@@ -1268,6 +1309,16 @@ func (rp *ResolvedEventsProcessor) run() {
 			recheckDeadline := now.Add(loopRecheckBudget)
 			rp.retryAttrRechecks(recheckDeadline)
 			rp.retryArmRechecks(recheckDeadline)
+			// Periodically re-seed the geofence projection from device-management's archive, so a
+			// LOST fence-set publish heals on its own rather than leaving the tenant's containment
+			// unresolvable until the next restart (see fenceReconcileInterval). Unlike the rechecks
+			// above this takes no share of the loop's read budget, because it does no reading here:
+			// it only snapshots the tenant list off the loop-owned registry and hands it to a
+			// goroutine.
+			if now.Sub(rp.lastFenceReconcile) >= fenceReconcileInterval {
+				rp.startFenceReconcile()
+				rp.lastFenceReconcile = now
+			}
 		}
 	}
 }

@@ -112,8 +112,12 @@ El motor en vivo mantiene las **cuatro versiones más recientes** del conjunto d
 
 No se pierde nada del historial cuando ocurre: la instantánea de cada versión se almacena de forma duradera, y las rutas de previsualización y reproducción leen de ahí en lugar de la caché en vivo. Solo la evaluación en vivo está acotada, y se recupera sola — los eventos siguientes llevan la versión actual.
 
+El motor también vuelve a leer el conjunto de geocercas actual de cada inquilino desde el historial almacenado cada pocos minutos. Normalmente eso no cambia nada, porque una edición de geocerca se le anuncia al motor en el momento. Importa en un caso poco común: guardar una geocerca nunca falla porque no se haya podido enviar el anuncio, así que si ese anuncio se pierde el motor seguiría evaluando contra la versión anterior hasta su siguiente reinicio. La relectura periódica cierra eso por sí sola, lo que significa que **una edición de geocerca surte efecto en unos pocos minutos como mucho, incluso si su anuncio nunca llega** — sin reinicio y sin necesidad de volver a guardar la geocerca.
+
 Para saber cómo se autoran y evalúan las reglas de detección, vea [procesamiento de eventos](./event-processing.md). Para los datos de ubicación en sí, vea [conectar un dispositivo](../guides/connecting-a-device.md).
 
 ## Permisos {#permissions}
 
-Leer las geocercas y su historial requiere `device:read`; crearlas, cambiarlas y eliminarlas requiere `device:write` — las mismas autoridades que gobiernan el resto del registro de dispositivos.
+Leer las geocercas y su historial requiere `device:read`, y eliminar una requiere `device:write` — las mismas autoridades que gobiernan el resto del registro de dispositivos.
+
+**Crear o cambiar una geocerca requiere además `location:read`.** Dibujar una geocerca no es solo una escritura: es una pregunta sobre dónde están los dispositivos. Quien pudiera crear geocercas solo con `device:write` podría colocar una pequeña, observar si alguna regla reacciona, moverla y deducir las posiciones de una flota a partir de las respuestas — sin haber tenido nunca la autoridad para ver una coordenada. Eliminar sigue requiriendo solo `device:write`, porque quitar una geocerca no pregunta nada.
