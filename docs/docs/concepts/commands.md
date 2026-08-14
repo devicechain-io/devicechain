@@ -133,7 +133,7 @@ while a fleet write is in flight.
 
 It applies the same way whether you send one command or ten thousand: a batch is admitted
 up to the same limit a loop of single commands would reach, so there is no way around it
-and no advantage to either shape.
+and no advantage to either shape. See [One command, many devices](#command-batches).
 
 A refusal names the limit that actually applied, and when the reserve is what bound you it
 says how much was set aside — so a caller refused at 8,000 against a visible ceiling of
@@ -174,3 +174,65 @@ is longer than the command stays useful.
 Each device receives commands on a topic scoped to that device alone, and is authorized
 for that topic only — a device cannot observe commands addressed to any other device in
 its tenant.
+
+## One command, many devices {#command-batches}
+
+A **command batch** fans one command out to many devices as a single, recorded operation.
+The devices are either named explicitly or resolved from an **entity group**, and every one
+of them receives the same command key and the same payload. To issue one, see [Commanding a
+fleet](../guides/commanding-a-fleet.md).
+
+Everything above still applies per device: each command is validated against that device's
+capability contract, withheld if the device is away, tracked through the same lifecycle, and
+bound by the same TTL. A batch changes nothing about what happens to one command — it
+changes what the platform *remembers* about the operation as a whole.
+
+That record is the point. A device the platform refuses is given no command row at all —
+there is no state meaning "wanted but not created" — so without a batch record a refusal
+would leave no trace, and an operator who fires a fleet push and comes back in the morning
+would have nothing to read. The record keeps how many devices the target resolved to, how
+many were actually enqueued, and which ones were refused and why.
+
+Three things distinguish it from a loop of single commands, and none of them is convenience:
+
+- **A group target is frozen at fire time.** The batch resolves the group's **published**
+  membership — never a draft selector — and records the group version it resolved against.
+  Editing the group afterwards cannot change what already went out, and an audit can still
+  answer what the group *meant* when the batch fired.
+- **A partial fan-out is a decision, not a default.** On a real fleet some devices cannot
+  receive the command. The caller must state whether that is acceptable: if it is not, the
+  whole batch is refused and **nothing is created**, including the record, because nothing
+  happened. If it is, the devices that can receive the command get it and the rest are
+  recorded as refusals.
+- **It can be called off as one operation.** Undoing a loop means cancelling each command
+  separately, and still knowing every token it was issued under.
+
+The counts on the record — how many devices resolved, how many were accepted — describe
+**the moment the batch fired**, not the present. Command rows are not immortal, so a live
+count could drift below the creation-time truth with no refusal explaining the gap. Present-
+tense questions ("of the 5,000 queued, how many have gone out?") are answered by searching
+the commands the batch created, not by re-reading the batch.
+
+The refusals are stored two ways for the same reason a large fan-out needs both: an
+individual list, capped so one fleet write cannot store an unbounded blob, and complete
+per-code totals that are never truncated. The totals are what make the record self-auditing
+— the devices resolved always equal those accepted plus the sum of the refusal counts, even
+when the named sample is short.
+
+### Cancelling a batch stops what has not gone out {#cancelling-a-batch}
+
+Cancelling a batch moves its commands from `QUEUED` or `HELD` to `CANCELLED`. Commands
+already `SENT` are left alone, and the devices holding them will still act on them.
+
+That is narrower than cancelling a single command, deliberately. `SENT` means the command is
+already at the device, so cancelling it recalls nothing — all it does is make the platform
+stop listening for the device's answer, replacing a real outcome with a record saying an
+operator called it off. Doing that to thousands of commands at once would destroy the
+evidence of what the fleet actually did. Cancelling a single command is still permitted from
+`SENT` today; that will be narrowed to match.
+
+A batch cancel never refuses. A brake that declined to engage because part of the fleet had
+already moved would leave the rest of the fleet commanded, which is the worst available
+outcome — so it always engages and reports what it caught. The batch record is stamped with
+when it was cancelled and how many commands that call caught, and the stamp is first-wins: a
+second cancel does not overwrite what the first recorded.

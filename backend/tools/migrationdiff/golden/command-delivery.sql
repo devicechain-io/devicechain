@@ -71,7 +71,9 @@ CREATE TABLE "command-delivery".command_batches (
  resolved bigint NOT NULL,
  accepted bigint NOT NULL,
  refusals jsonb,
- refusal_counts jsonb
+ refusal_counts jsonb,
+ cancelled_at timestamp with time zone,
+ cancelled_count integer
 );
 CREATE TABLE "command-delivery".command_delivery_migrations (
  id character varying(255) NOT NULL

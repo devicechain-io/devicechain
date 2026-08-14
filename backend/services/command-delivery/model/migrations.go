@@ -29,5 +29,6 @@ var (
 		NewTenantStatusIndexSchema(),
 		NewDispatchableStatusIndexSchema(),
 		NewCommandBatchSchema(),
+		NewCommandBatchCancelSchema(),
 	}
 )

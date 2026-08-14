@@ -1,0 +1,358 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for the command-delivery alerting rules.
+#
+# WHAT THESE ARE FOR, over and above the parse check
+#
+# The three rules in this group have no production baseline behind them. Every
+# threshold and every `for:` window was ARGUED rather than measured, which makes
+# these tests the only thing standing between a reasoned guess and a number
+# nobody ever checked. They therefore assert both directions for every rule:
+#
+#   - the state it exists to catch, and
+#   - the benign state it was deliberately shaped to EXCLUDE.
+#
+# 🔴 THE EXCLUSIONS ARE THE HALF THAT CAN ROT. "It fires when something is
+# wrong" survives almost any edit to a threshold; "it stays quiet on a single
+# failed presence read" does not. Shorten CommandPresenceReadErrors' `for` to
+# 10m and every firing case below still passes — the isolated-blip case is what
+# goes red. The same holds for CommandBatchReserveRefusals' bound selector: drop
+# it and the reserve cases still pass, and only "ceiling refusals alone must not
+# page" catches it.
+#
+# THE SERIES, and what is known about each:
+#
+#   - devicechain_commanddelivery_command_delivery_claims_stranded_total — a
+#     plain unlabelled Counter, registered at process start, so it EXISTS and
+#     reads 0 on a healthy instance rather than being absent. Every scenario
+#     below carries it for that reason: a rule that is silent because its series
+#     is missing and a rule that is silent because the platform is healthy look
+#     identical, and only one of them is a working alert.
+#   - devicechain_commanddelivery_command_delivery_presence_read_errors_total —
+#     same shape, same reason.
+#   - devicechain_commanddelivery_batch_refusals_total{code,bound} — a
+#     CounterVec, so unlike the two above it exports NOTHING until the first
+#     refusal. Its `bound` label is a counterfactual: "reserve" means the write
+#     would have fitted against the tenant's raw ceiling and was refused only by
+#     the delivery-machinery reserve, NOT merely that a reserve was in force.
+#
+#   🔑 The historical `command_delivery_` stutter inside an already
+#   `commanddelivery`-subsystemed name is REAL and is not a typo in this file.
+#   The batch counters, added later, do not carry it. hack/check-dashboards.sh
+#   is what proves both spellings name series the Go tree actually registers.
+#
+# Run via hack/check-prometheus-rules.sh, which renders the chart first: these
+# assert against the SHIPPED rules, not against a checked-in copy of them.
+
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # -------------------------------------------------------------------------
+  # 🔴 ONE stranded command, and it must not be swallowed.
+  #
+  # This is the case that chose `increase(...[30m])` over `rate(...[5m])`. A
+  # single increment makes a 5m rate non-zero for exactly one window, so ANY
+  # `for` longer than 5m would leave this scenario silent — and this is the
+  # scenario that matters most, because an isolated stranded command is the one
+  # nobody notices until a device is wrongly blamed for a TIMEOUT.
+  #
+  # Sample layout (interval 1m):
+  #   minutes  0- 9   healthy, counter flat at 0
+  #   minute  10      one command is stranded: publish failed AND release failed
+  #   minutes 11+     flat again — the incident is over, the damage is not
+  # -------------------------------------------------------------------------
+  - name: a single stranded claim still pages
+    interval: 1m
+    input_series:
+      - series: 'devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+        values: "0+0x9 1+0x120"
+      # The other two counters stay flat, so their rules must stay silent. A
+      # group where everything fires together carries no more information than
+      # a group where nothing does.
+      - series: 'devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+        values: "0+0x130"
+      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="reserve"}'
+        values: "0+0x130"
+    alert_rule_test:
+      # The 5m `for` from the side that can be wrong: the strand lands at minute
+      # 10, so nothing may fire at minute 12.
+      - eval_time: 12m
+        alertname: CommandClaimsStranded
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: CommandClaimsStranded
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Commands are stranded in SENT and will time out against innocent devices"
+              description: >-
+                At least one command was left reading SENT after both its publish and its release
+                failed. It was never delivered, nothing will retry it, and it will expire as TIMEOUT —
+                which records the failure against the DEVICE. Treat every TIMEOUT reported in this
+                window as unattributed until this is resolved, and do not send engineers to inspect
+                the devices named. Look for a broker outage overlapping a database outage: it takes
+                BOTH to strand a claim, which is why this counter is normally flat at zero.
+      - eval_time: 35m
+        alertname: CommandClaimsStranded
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Commands are stranded in SENT and will time out against innocent devices"
+              description: >-
+                At least one command was left reading SENT after both its publish and its release
+                failed. It was never delivered, nothing will retry it, and it will expire as TIMEOUT —
+                which records the failure against the DEVICE. Treat every TIMEOUT reported in this
+                window as unattributed until this is resolved, and do not send engineers to inspect
+                the devices named. Look for a broker outage overlapping a database outage: it takes
+                BOTH to strand a claim, which is why this counter is normally flat at zero.
+      # 🔑 AND IT CLEARS ITSELF once the 30m window rolls past the increment.
+      # That is a property of the window, not of anyone acknowledging anything,
+      # and it is asserted so that widening the window (which would make this
+      # alert stick around for hours after a one-off) fails here.
+      - eval_time: 60m
+        alertname: CommandClaimsStranded
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: CommandPresenceReadErrors
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: CommandBatchReserveRefusals
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # THE EXCLUSION THAT SHAPES CommandPresenceReadErrors. One failed read of the
+  # presence projection — a broker reconnect, a leader election, a rolling
+  # restart of device-state — means a handful of commands went out ungated. It
+  # is not worth waking anyone, and a rule that pages for it will be muted, at
+  # which point it stops covering the case it exists for.
+  #
+  # The 10m rate window keeps this true for ten minutes; the 15m `for` is five
+  # minutes longer, so it never fires. Shorten the `for` to 10m and this case
+  # goes red while every firing case below stays green.
+  # -------------------------------------------------------------------------
+  - name: one failed presence read is not a gate that has stopped gating
+    interval: 1m
+    input_series:
+      - series: 'devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+        values: "0+0x9 1+0x120"
+      - series: 'devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+        values: "0+0x130"
+      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="reserve"}'
+        values: "0+0x130"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: CommandPresenceReadErrors
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: CommandPresenceReadErrors
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: CommandPresenceReadErrors
+        exp_alerts: []
+      # And the blip must not drag its neighbours in either.
+      - eval_time: 60m
+        alertname: CommandClaimsStranded
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: CommandBatchReserveRefusals
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # THE STATE CommandPresenceReadErrors EXISTS FOR. The presence projection is
+  # unreachable and stays unreachable, so every sweep pass fails its read — and
+  # the gate FAILS OPEN, dispatching anyway. Nothing else reports this: dispatch
+  # is healthy, errors are normal, and the holds counters go to zero, which
+  # reads as "no devices are absent" rather than "nothing is being checked".
+  # -------------------------------------------------------------------------
+  - name: a presence gate that has stopped gating pages
+    interval: 1m
+    input_series:
+      - series: 'devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+        values: "0+0x9 1+1x120"
+      - series: 'devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+        values: "0+0x130"
+      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="reserve"}'
+        values: "0+0x130"
+    alert_rule_test:
+      # Errors start at minute 10; the 15m `for` cannot be satisfied by minute
+      # 20. Placing the negative assertion here is what catches a `for` that
+      # someone shortens "because it seemed slow".
+      - eval_time: 20m
+        alertname: CommandPresenceReadErrors
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: CommandPresenceReadErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "The command presence gate is failing open"
+              description: >-
+                The dispatch sweep cannot read the presence projection, and the gate fails OPEN by
+                design — so commands are being dispatched WITHOUT the absence check, to devices
+                nobody confirmed were there. Nothing else reports this: dispatch looks healthy and
+                the holds-placed counter goes to zero, which reads as "no devices are absent" rather
+                than "nothing is being checked". Check the device-state area and the presence
+                projection's own health.
+      # 🔴 A PRESENCE OUTAGE IS NOT A STRANDING INCIDENT. Asserting this keeps
+      # the critical rule from degenerating into "something is wrong with
+      # command delivery" — if it fired here it would carry no information the
+      # warning does not already carry, at a severity that wakes someone.
+      - eval_time: 40m
+        alertname: CommandClaimsStranded
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: CommandBatchReserveRefusals
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # THE RESERVE, TUNED TOO TIGHT. A tenant's ordinary fleet write now fits
+  # against their configured ceiling and is refused by the delivery-machinery
+  # reserve alone, over and over. Nothing is broken and every caller was told —
+  # which is exactly why it needs an alert: there is no failure anywhere for an
+  # operator to trip over, just a tenant who cannot do the thing they used to.
+  #
+  # The scenario carries a LARGER stream of ceiling-bound refusals alongside, so
+  # that a rule which fired on refusal volume rather than on attribution would
+  # look identical here. What separates them is the case below.
+  # -------------------------------------------------------------------------
+  - name: a standing reserve-bound refusal rate pages
+    interval: 1m
+    input_series:
+      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="reserve"}'
+        values: "0+0x9 1+1x120"
+      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="ceiling"}'
+        values: "0+0x9 5+5x120"
+      - series: 'devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+        values: "0+0x130"
+      - series: 'devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+        values: "0+0x130"
+    alert_rule_test:
+      # Refusals start at minute 10 and the 30m `for` runs against a 15m window,
+      # so three quarters of an hour of sustained refusal is the bar. One
+      # operator discovering the limit by walking into it cannot reach it.
+      - eval_time: 35m
+        alertname: CommandBatchReserveRefusals
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: CommandBatchReserveRefusals
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "The delivery-machinery reserve is refusing fleet writes the tenant's ceiling would have admitted"
+              description: >-
+                Fleet writes are being refused that WOULD have fitted against the tenant's own
+                undelivered-command ceiling, and were refused only by the headroom the delivery
+                machinery reserves for itself. This is the reserve doing its job — nothing is broken
+                and every caller was told — but a rate sustained for this long means the ceiling and
+                the reserve disagree about what a normal fleet write is for this tenant. Raise the
+                tenant's ceiling, or lower the reserve, deliberately. Split the refusals by code on
+                the Command Delivery dashboard to see which tenants and which writes.
+      - eval_time: 60m
+        alertname: CommandClaimsStranded
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: CommandPresenceReadErrors
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # 🔴 THE SELECTOR CONTROL, and the only case that can catch a lost
+  # bound="reserve".
+  #
+  # A tenant is hammering a ceiling their fleet writes genuinely do not fit
+  # under. Every refusal is attributed to the ceiling or to nothing; the reserve
+  # caused none of them. Alerting here would blame the reserve for refusals it
+  # did not cause, and would hand an operator deciding whether to tune the
+  # reserve exactly the wrong evidence.
+  #
+  # Delete `bound="reserve"` from the rule and every OTHER reserve case still
+  # passes. This one goes red.
+  # -------------------------------------------------------------------------
+  - name: ceiling-bound refusals alone must not blame the reserve
+    interval: 1m
+    input_series:
+      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="ceiling"}'
+        values: "0+0x9 10+10x120"
+      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="DEVICE_NOT_FOUND", bound="none"}'
+        values: "0+0x9 3+3x120"
+      # Present and flat: the reserve is attributed nothing at all, which is
+      # different from the series being absent.
+      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="reserve"}'
+        values: "0+0x130"
+      - series: 'devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+        values: "0+0x130"
+      - series: 'devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+        values: "0+0x130"
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: CommandBatchReserveRefusals
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: CommandBatchReserveRefusals
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: CommandClaimsStranded
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: CommandPresenceReadErrors
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # THE IDLE CASE, named for every rule in the group.
+  #
+  # 🔴 This is the assertion that a NEW alert added to this group must be added
+  # to, and hack/check-prometheus-rules.sh will refuse the group until it is: a
+  # rule nobody names here can fire on a perfectly healthy instance forever
+  # without a single test going red.
+  #
+  # It also carries a SECOND instance's series, running hot, to pin the
+  # namespace selector. Every rule object in this chart is rendered per-instance
+  # and every expression is namespace-scoped; without that, one incident would
+  # page N times with N-1 alerts naming the wrong instance.
+  # -------------------------------------------------------------------------
+  - name: an idle instance raises nothing, and a neighbour's incident is not ours
+    interval: 1m
+    input_series:
+      - series: 'devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+        values: "0+0x130"
+      - series: 'devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+        values: "0+0x130"
+      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="reserve"}'
+        values: "0+0x130"
+      # A different DeviceChain instance in the same Prometheus, on fire.
+      - series: 'devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace="other-instance", pod="other-command-delivery-1", job="other-instance/command-delivery"}'
+        values: "0+7x130"
+      - series: 'devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace="other-instance", pod="other-command-delivery-1", job="other-instance/command-delivery"}'
+        values: "0+11x130"
+      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="other-instance", pod="other-command-delivery-1", job="other-instance/command-delivery", code="HELD_CEILING_EXCEEDED", bound="reserve"}'
+        values: "0+13x130"
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: CommandClaimsStranded
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: CommandPresenceReadErrors
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: CommandBatchReserveRefusals
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: CommandClaimsStranded
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: CommandPresenceReadErrors
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: CommandBatchReserveRefusals
+        exp_alerts: []

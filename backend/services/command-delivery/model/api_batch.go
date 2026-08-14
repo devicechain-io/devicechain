@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"time"
@@ -72,11 +73,128 @@ type BatchEnqueueValidator interface {
 // server errors — telling a tenant the platform is broken when it has just declined their
 // request for a stated, fixable reason. A plain error means the batch could not be DECIDED.
 func (api *Api) CreateCommandBatch(ctx context.Context, request *CommandBatchCreateRequest) (*CommandBatch, error) {
+	acct := batchAccounting{targetKind: requestTargetKindLabel(request)}
+	created, err := api.decideCommandBatch(ctx, request, &acct)
+	api.recordBatchOutcome(&acct, err)
+	return created, err
+}
+
+// batchAccounting is what the metrics need at the point the answer is known.
+//
+// Two of its fields — replay and refusals — cannot be read off the returned batch at all:
+// a replay and a fresh create are indistinguishable by construction, and a refusal's
+// attribution is computed inside the transaction and kept nowhere else. The other two,
+// targetKind and accepted, DO duplicate fields on the batch, deliberately: the paths that
+// return someone else's batch (a replay, and the loser of a create race) must not report
+// that batch's numbers as this call's work.
+type batchAccounting struct {
+	targetKind string
+	replay     bool
+	accepted   int
+	// refusals is a TALLY, not a list, and that is a size decision rather than a style
+	// one. A ten-thousand-device batch refused at the ceiling produces ten thousand
+	// refusals whose entire metric output is one label pair — so a slice would carry
+	// 320 KB to describe a single counter increment, and the emit loop would take the
+	// CounterVec's lock ten thousand times to add ten thousand ones. The label space is
+	// closed (see metricSafeCodes), so the tally can never be larger than a few dozen
+	// entries however large the fleet is.
+	refusals     map[refusalRecord]int
+	refusalTotal int
+}
+
+// refusalRecord is one refusal already attributed to the bound responsible for it.
+type refusalRecord struct {
+	code  RejectionCode
+	bound string
+}
+
+func (a *batchAccounting) refuse(code RejectionCode, bound string) {
+	if a.refusals == nil {
+		a.refusals = make(map[refusalRecord]int, 4)
+	}
+	a.refusals[refusalRecord{code: code, bound: bound}]++
+	a.refusalTotal++
+}
+
+// recordBatchOutcome emits the counters for one decided batch.
+//
+// 🔴 IT RUNS AFTER THE TRANSACTION, NOT INSIDE IT, AND THAT IS WHY THE ACCOUNTING
+// STRUCT EXISTS AT ALL. The per-device ceiling refusals are decided inside the
+// transaction that also writes the rows; incrementing a counter there would count
+// refusals from a batch that then rolled back — and a Prometheus counter has no
+// rollback, so the miscount is permanent and invisible. Decide inside, emit outside.
+//
+// 🔑 THE TWO COUNTERS HAVE DIFFERENT UNITS, DELIBERATELY, AND CONFLATING THEM IS THE
+// EASY MISTAKE HERE.
+//
+//   - batch_refusals_total counts refusal EVENTS: one per refused device where devices
+//     were what got refused, and exactly ONE for a batch refused as a unit. That is what
+//     lets it answer "what is refusing fleet writes" for request-shaped refusals — a
+//     malformed target or an oversized request refuses no device in particular, and a
+//     per-device counter would report nothing at all for them.
+//   - batch_devices_total counts DEVICES, and only for a batch that was created. A batch
+//     refused whole enqueued to nobody, so counting its target set as "refused devices"
+//     would report a fleet-sized device event for a request that never reached the fleet.
+//
+// So the two do not sum to each other and are not meant to.
+func (api *Api) recordBatchOutcome(acct *batchAccounting, err error) {
+	switch rejection, isRejection := rejectionCodeOf(err); {
+	case acct.replay:
+		api.BatchMetrics.recordEnqueue(acct.targetKind, outcomeReplayed)
+		return
+	case err != nil && !isRejection:
+		// 🔴 UNDECIDED IS NOT REFUSED, AND FOLDING THE TWO WOULD HIDE AN OUTAGE INSIDE A
+		// GOVERNANCE SIGNAL. A refusal is a verdict the platform reached; this is the
+		// platform failing to reach one — device-management unreachable, the database
+		// down. They call for opposite responses, and a spike in one reading as a spike
+		// in the other is how "the tenant is misusing batches" gets diagnosed during an
+		// outage. Nothing else is emitted: no target was decided, no device was refused.
+		api.BatchMetrics.recordEnqueue(acct.targetKind, outcomeUndecided)
+		return
+	case err != nil:
+		api.BatchMetrics.recordEnqueue(acct.targetKind, outcomeRefused)
+		// A refusal raised before any target was resolved carries no attribution of its
+		// own, so it is classified from the error — but only when nothing else has been
+		// recorded, because the site that CAN attribute a refusal (the ceiling, which
+		// knows which bound caused it) already has.
+		if len(acct.refusals) == 0 {
+			acct.refuse(rejection, boundNone)
+		}
+	default:
+		api.BatchMetrics.recordEnqueue(acct.targetKind, outcomeCreated)
+		api.BatchMetrics.recordDevices(dispositionAccepted, acct.accepted)
+		api.BatchMetrics.recordDevices(dispositionRefused, acct.refusalTotal)
+	}
+	for refusal, count := range acct.refusals {
+		api.BatchMetrics.recordRefusal(refusal.code, refusal.bound, count)
+	}
+}
+
+// rejectionCodeOf reports the classification a refusal carries, if it is a refusal at
+// all. A plain error means the batch could not be DECIDED, which is not a refusal and
+// must not be counted as one — that distinction is the whole reason these two rejection
+// types exist rather than a bare error.
+func rejectionCodeOf(err error) (RejectionCode, bool) {
+	var batchRejected *BatchRejected
+	if errors.As(err, &batchRejected) {
+		return batchRejected.Code, true
+	}
+	var enqueueRejected *EnqueueRejected
+	if errors.As(err, &enqueueRejected) {
+		return enqueueRejected.Code, true
+	}
+	return "", false
+}
+
+func (api *Api) decideCommandBatch(ctx context.Context, request *CommandBatchCreateRequest,
+	acct *batchAccounting) (*CommandBatch, error) {
 	existing, replay, err := api.liveBatchByToken(ctx, request.Token)
 	if err != nil {
 		return nil, err
 	}
 	if replay {
+		acct.replay = true
+		acct.targetKind = targetKindLabel(BatchTargetKind(existing.TargetKind))
 		// The token IS the identity: the first write wins and a differing re-request does
 		// not mutate it. A partially-admitted batch is NOT topped up on replay — it is the
 		// same batch, and admitting more devices under the same token would make `accepted`
@@ -96,6 +214,10 @@ func (api *Api) CreateCommandBatch(ctx context.Context, request *CommandBatchCre
 	if err != nil {
 		return nil, err
 	}
+	// From here the kind is a RESOLVED fact rather than what the request appeared to ask
+	// for. They agree today; taking it from the target keeps that from being an
+	// assumption the metric quietly depends on.
+	acct.targetKind = targetKindLabel(targets.kind)
 
 	refusals, err := api.validateBatchTargets(ctx, targets.deviceTokens, request.Name, payload)
 	if err != nil {
@@ -112,6 +234,13 @@ func (api *Api) CreateCommandBatch(ctx context.Context, request *CommandBatchCre
 		return nil, batchRejection(RejectBatchPartialRefused, refusals, len(targets.deviceTokens),
 			"%d of %d devices cannot receive this command; re-issue with allowPartial to "+
 				"command the rest", len(refusals), len(targets.deviceTokens))
+	}
+	// Past the whole-batch check, every refusal here belongs to a batch that is going
+	// ahead without those devices, so each one is a device that will not get the command
+	// and is counted as such. Deliberately after the return above: a batch refused whole
+	// enqueued to nobody, and its single refusal event is classified from the error.
+	for _, refusal := range refusals {
+		acct.refuse(refusal.Code, boundNone)
 	}
 
 	created := &CommandBatch{
@@ -152,30 +281,48 @@ func (api *Api) CreateCommandBatch(ctx context.Context, request *CommandBatchCre
 			return err
 		}
 		admitted := admissible
-		if len(admitted) > headroom {
+		if len(admitted) > headroom.underLimit {
 			if !request.AllowPartial {
+				// One refusal event for the batch, attributed by asking whether the WHOLE
+				// batch would have fitted against the raw ceiling — which is what probing
+				// its LAST device answers.
+				//
+				// 🔴 PROBING THE FIRST DEVICE OVER THE LIMIT IS THE WRONG QUESTION, AND IT
+				// READS AS THE RIGHT ONE. `refusedByReserve(underLimit)` is true whenever
+				// a reserve gap exists at all, whatever the batch's size — so a 12,000
+				// device batch against a limit of 8,000 inside a ceiling of 10,000 was
+				// blamed on the reserve, when removing the reserve entirely would still
+				// have refused it. Nothing about this refusal is the reserve's doing.
+				// The alert built on this label exists to tell an operator the ceiling
+				// would have admitted a write, so that mistake makes it lie.
+				acct.refuse(RejectHeldCeilingExceeded, headroom.boundAt(len(admitted)-1))
 				verdict = batchRejection(RejectHeldCeilingExceeded, nil, len(targets.deviceTokens),
 					"this batch needs room for %d commands but the tenant has room for %d%s "+
 						"(commands are released as their devices become reachable, and expire "+
 						"if they do not); re-issue with allowPartial to send what fits",
-					len(admitted), headroom, api.reserveNote(ctx))
+					len(admitted), headroom.underLimit, api.reserveNote(ctx))
 				return verdict
 			}
 			// Best effort against the remaining headroom, in the order the target
 			// resolved: the caller's own order for a list (so it can express priority),
 			// id order for a group. Never map order — an operator must be able to predict
 			// and explain which subset went out.
-			for _, over := range admitted[headroom:] {
+			for position, over := range admitted[headroom.underLimit:] {
 				refusals = append(refusals, BatchDeviceRefusal{
 					DeviceToken: over,
 					Code:        RejectHeldCeilingExceeded,
 					Reason:      "the tenant had no remaining room for undelivered commands",
 				})
+				// Attributed one device at a time, because a batch can straddle the two
+				// bounds — see batchHeadroom.refusedByReserve.
+				acct.refuse(RejectHeldCeilingExceeded,
+					headroom.boundAt(headroom.underLimit+position))
 			}
-			admitted = admitted[:headroom]
+			admitted = admitted[:headroom.underLimit]
 		}
 
 		created.Accepted = len(admitted)
+		acct.accepted = len(admitted)
 		created.Refusals, created.RefusalCounts = summarizeRefusals(refusals)
 		// ON CONFLICT DO NOTHING for the same reason CreateCommand uses it: the replay
 		// probe runs OUTSIDE this transaction, so two concurrent issues of the same batch
@@ -189,6 +336,11 @@ func (api *Api) CreateCommandBatch(ctx context.Context, request *CommandBatchCre
 			return result.Error
 		}
 		if result.RowsAffected == 0 {
+			// Counted as a replay, because that is what it is — the same rule as the
+			// probe at the top, reached a moment later. Without this the loser records
+			// `created` for a batch the winner already recorded, and reports its own
+			// would-be admission as accepted devices, none of which were written.
+			acct.replay = true
 			conflicted = true
 			return nil
 		}
@@ -376,18 +528,56 @@ func (api *Api) reserveNote(ctx context.Context) string {
 		"is reserved for command delivery)", limit, ceiling, ceiling-limit)
 }
 
-func (api *Api) undeliveredHeadroom(ctx context.Context, tx *gorm.DB) (int, error) {
-	limit, _ := api.effectiveUndeliveredLimit(ctx)
+// batchHeadroom is how much room a batch has, measured against BOTH bounds.
+//
+// 🔴 underCeiling IS NOT A PERMISSION AND MUST NEVER BE ADMITTED AGAINST. Only underLimit
+// decides how many devices go out. The second number exists so a refusal can answer a
+// question the first cannot: was this batch refused because the TENANT is full, or only
+// because part of the tenant's ceiling is reserved for command delivery? Those call for
+// opposite responses — raise the ceiling, versus leave it alone, the reserve is working —
+// and an operator handed one number cannot tell them apart.
+type batchHeadroom struct {
+	underLimit   int
+	underCeiling int
+}
+
+// boundAt names which limit refused the device at the given position in the admitted
+// order: the RESERVE, or the tenant's own ceiling.
+//
+// It is answered per DEVICE rather than per batch because a batch can straddle the two.
+// With a limit of 8,000 inside a ceiling of 10,000, a 12,000-device batch overruns both:
+// the devices at positions 8,000 through 9,999 would have fitted without the reserve and
+// are its doing, while everything from 10,000 on would have been refused regardless.
+// Attributing the whole batch to one bound would blame the reserve for 2,000 refusals it
+// did not cause, or hide the 2,000 it did.
+//
+// 🔴 IT IS A COUNTERFACTUAL — "would this device have got through without the reserve?" —
+// AND NOT "was a reserve in force". Those differ for every batch that overruns the raw
+// ceiling as well, which is the common shape of a genuinely oversized fleet write. The
+// alert built on this label exists to tell an operator the ceiling WOULD have admitted
+// the write, so answering the easier question makes it lie.
+func (h batchHeadroom) boundAt(position int) string {
+	if position >= h.underLimit && position < h.underCeiling {
+		return boundReserve
+	}
+	return boundCeiling
+}
+
+func (api *Api) undeliveredHeadroom(ctx context.Context, tx *gorm.DB) (batchHeadroom, error) {
+	limit, ceiling := api.effectiveUndeliveredLimit(ctx)
 	var undelivered int64
 	if err := tx.Model(&Command{}).
 		Where("status IN ?", undeliveredStatusStrings()).Count(&undelivered).Error; err != nil {
-		return 0, err
+		return batchHeadroom{}, err
 	}
-	headroom := limit - int(undelivered)
-	if headroom < 0 {
-		return 0, nil
-	}
-	return headroom, nil
+	// Both floored at zero. A tenant can legitimately sit ABOVE its limit — the
+	// single-enqueue path tolerates being one row over, and an operator can lower a
+	// ceiling under an existing backlog — and a negative headroom would then admit
+	// devices by subtracting a negative from a slice bound.
+	return batchHeadroom{
+		underLimit:   max(0, limit-int(undelivered)),
+		underCeiling: max(0, ceiling-int(undelivered)),
+	}, nil
 }
 
 // lockTenantForBatch serializes batch admission per tenant for the life of the transaction.

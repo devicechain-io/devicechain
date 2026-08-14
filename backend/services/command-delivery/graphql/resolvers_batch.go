@@ -148,6 +148,24 @@ func (r *CommandBatchResolver) Accepted() int32 {
 	return int32(r.M.Accepted)
 }
 
+// When this batch was called off, if it was.
+func (r *CommandBatchResolver) CancelledAt() *string {
+	if !r.M.CancelledAt.Valid {
+		return nil
+	}
+	return util.FormatTime(r.M.CancelledAt.Time)
+}
+
+// How many commands the cancelling call caught. Deliberately NOT a live count of the
+// batch's cancelled commands — see the field's own documentation in the schema.
+func (r *CommandBatchResolver) CancelledCount() *int32 {
+	if !r.M.CancelledCount.Valid {
+		return nil
+	}
+	count := r.M.CancelledCount.Int32
+	return &count
+}
+
 func (r *CommandBatchResolver) Refusals() ([]*BatchDeviceRefusalResolver, error) {
 	refusals, err := decodeStoredJSON[model.BatchDeviceRefusal](r.M.Refusals, "refusals")
 	if err != nil {

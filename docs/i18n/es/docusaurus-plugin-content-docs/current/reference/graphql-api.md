@@ -46,7 +46,7 @@ que llegue al `/graphql` propio de ese servicio. Así que todos los endpoints si
 | `device-management` | dispositivos, tipos de dispositivo, perfiles, activos, áreas, clientes, grupos, relaciones, alarmas, credenciales, autoría de reglas de detección |
 | `event-management` | consultas de eventos de series temporales — `events`, `locationEvents`, `measurementEvents`, `alertEvents`, `bucketedMeasurements` |
 | `device-state` | último estado conocido en vivo — `latestMeasurements`, `latestLocation`, `deviceStates` |
-| `command-delivery` | envío de comandos — `createCommand`, `cancelCommand`, historial de comandos |
+| `command-delivery` | envío de comandos — `createCommand`, `cancelCommand`, lotes para toda la flota (`createCommandBatch`, `cancelCommandBatch`), historial de comandos |
 | `event-processing` | validación de reglas de detección, vista previa de reproducción, salud de reglas |
 | `dashboard-management` | CRUD y versionado de paneles |
 | `outbound-connectors` | CRUD de conectores de salida por inquilino |

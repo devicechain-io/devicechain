@@ -90,7 +90,12 @@ func newTestApi(t *testing.T) *Api {
 	if err := rdb.RegisterTokenGrammar(db); err != nil {
 		t.Fatalf("failed to register token grammar: %v", err)
 	}
-	if err := db.AutoMigrate(&Command{}); err != nil {
+	// CommandBatch is migrated here even though most tests in this file never touch a
+	// batch: ReleaseClaim reads it, to decide whether a failed publish returns its
+	// command to the queue or retires it because the batch was called off. Production
+	// always has both tables, so a fixture with only one measures a schema that does not
+	// exist — and the symptom is an unrelated release test failing on "no such table".
+	if err := db.AutoMigrate(&Command{}, &CommandBatch{}); err != nil {
 		t.Fatalf("failed to migrate: %v", err)
 	}
 	// Create the per-tenant partial unique index on token exactly as the real migration does

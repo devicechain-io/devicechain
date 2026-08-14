@@ -45,7 +45,7 @@ it reaches that service's own `/graphql`. So every endpoint below is
 | `device-management` | devices, device types, profiles, assets, areas, customers, groups, relationships, alarms, credentials, detection-rule authoring |
 | `event-management` | time-series event queries — `events`, `locationEvents`, `measurementEvents`, `alertEvents`, `bucketedMeasurements` |
 | `device-state` | live last-known state — `latestMeasurements`, `latestLocation`, `deviceStates` |
-| `command-delivery` | command dispatch — `createCommand`, `cancelCommand`, command history |
+| `command-delivery` | command dispatch — `createCommand`, `cancelCommand`, fleet-wide batches (`createCommandBatch`, `cancelCommandBatch`), command history |
 | `event-processing` | detection-rule validation, replay preview, rule health |
 | `dashboard-management` | dashboard CRUD and versioning |
 | `outbound-connectors` | per-tenant outbound connector CRUD |

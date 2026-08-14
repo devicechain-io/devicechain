@@ -14,9 +14,9 @@ with no separate monitoring project to assemble.
 :::note Status
 The monitoring stack (kube-prometheus-stack via `dcctl bootstrap`), Grafana SSO
 through the platform's own OAuth 2.1 authorization server, and the
-event-processing operations dashboard are implemented and validated end-to-end.
-Per-service dashboard breadth (a curated Grafana board for every functional area)
-and OTLP distributed tracing are planned follow-ups.
+event-processing operations dashboard are implemented and validated end-to-end. A
+command-delivery dashboard and its alert rules ship alongside them. Dashboards for
+the remaining functional areas and OTLP distributed tracing are planned follow-ups.
 :::
 
 ## What every service exposes

@@ -15,7 +15,7 @@ DeviceChain es un conjunto de microservicios Go sin estado sobre una biblioteca 
 | **event-processing** | El pipeline DETECT + REACT: un núcleo de streaming replay-correct evalúa reglas de detección sobre eventos resueltos (umbral, duración, repetición, tasa de cambio, ausencia, conectividad, agregado por ventana, correlación por área) y despacha acciones automatizadas (levantar alarma, enviar comando, y conectores salientes). La detección vive aquí; el objeto de alarma que levanta permanece en device-management, y la entrega del conector se delega a outbound-connectors. |
 | **event-management** | Persiste los eventos resueltos en TimescaleDB, aplica las políticas de ciclo de vida de datos (compresión / retención / rollups), y sirve consultas de series temporales sobre GraphQL. |
 | **device-state** | La proyección en vivo del último estado conocido por dispositivo — presencia y lectura actual por medición. |
-| **command-delivery** | Despacho de comandos persistente y bidireccional hacia los dispositivos, seguido a través de un ciclo de vida por comando. |
+| **command-delivery** | Despacho de comandos persistente y bidireccional hacia los dispositivos, seguido a través de un ciclo de vida por comando — de a un dispositivo, o de una flota entera como un único lote registrado. |
 | **dashboard-management** | Definiciones de panel versionadas (borrador, publicar / revertir), almacenadas de forma opaca y renderizadas por los paquetes de runtime en React del workspace de frontend de este repositorio. Exportar una definición es una función del lado de la consola, no una operación del servicio. |
 | **notification-management** | Enruta las alarmas disparadas hacia los humanos — política por inquilino sobre correo electrónico (SMTP) y webhook, con escalamiento por severidad. |
 | **user-management** | Identidades globales, membresías por inquilino, el catálogo de roles, y la emisión/validación de JWT. |
@@ -26,7 +26,7 @@ DeviceChain es un conjunto de microservicios Go sin estado sobre una biblioteca 
 | **mcp** _(opcional)_ | Un servidor de solo lectura del Model Context Protocol que permite a los asistentes de IA operar un inquilino en nombre de un usuario. Un servidor de recursos OAuth 2.1 ligero sobre la API de GraphQL que porta el propio token con alcance de inquilino del llamador — sin token de servicio, solo herramientas de lectura curadas. Vea [Acceso de IA (MCP)](./mcp.md). |
 | **operator** | Un operador basado en controller-runtime que gestiona el ciclo de vida de `DeviceChainInstance` (agregación de estado, recarga en caliente de configuración). Las cargas de trabajo en sí son renderizadas por el chart de Helm; los inquilinos son registros de base de datos del plano de control, no recursos reconciliados. |
 
-Están planificados servicios adicionales — operaciones por lotes y programación. Consulte el repositorio para el estado actual.
+Difundir un solo comando a muchos dispositivos forma parte de `command-delivery` y no de un servicio aparte — vea [Un comando, muchos dispositivos](./commands.md#command-batches). La programación sigue planificada. Consulte el repositorio para el estado actual.
 
 ## La columna vertebral de datos y mensajería
 

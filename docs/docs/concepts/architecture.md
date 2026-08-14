@@ -15,7 +15,7 @@ DeviceChain is a set of stateless Go microservices over a shared core library, c
 | **event-processing** | The DETECT + REACT pipeline: a replay-correct streaming core evaluates detection rules over resolved events (threshold, duration, repeating, rate-of-change, absence, connectivity, windowed aggregate, area correlation) and dispatches automated actions (raise alarm, send command, and outbound connectors). Detection lives here; the alarm object it raises stays in device-management, and connector delivery is handed off to outbound-connectors. |
 | **event-management** | Persists resolved events to TimescaleDB, applies the data-lifecycle policies (compression / retention / rollups), and serves time-series queries over GraphQL. |
 | **device-state** | The live last-known-state projection per device — presence and current reading per measurement. |
-| **command-delivery** | Persistent, two-way command dispatch to devices, tracked through a per-command lifecycle. |
+| **command-delivery** | Persistent, two-way command dispatch to devices, tracked through a per-command lifecycle — one device at a time, or a whole fleet as a single recorded batch. |
 | **dashboard-management** | Versioned dashboard definitions (draft, publish / rollback), stored opaquely and rendered by the React runtime packages in this repository's frontend workspace. Exporting a definition is a console-side feature, not a service operation. |
 | **notification-management** | Routes triggered alarms to humans — per-tenant policy over email (SMTP) and webhook, with per-severity escalation. |
 | **user-management** | Global identities, per-tenant memberships, the role catalog, and JWT issuance/validation. |
@@ -26,7 +26,7 @@ DeviceChain is a set of stateless Go microservices over a shared core library, c
 | **mcp** _(opt-in)_ | A read-only Model Context Protocol server that lets AI assistants operate a tenant on a user's behalf. A thin OAuth 2.1 resource server over the GraphQL API carrying the caller's own tenant-scoped token — no service token, curated read tools only. See [AI Access (MCP)](./mcp.md). |
 | **operator** | A controller-runtime operator that manages the `DeviceChainInstance` lifecycle (status aggregation, config hot-reload). Workloads themselves are rendered by the Helm chart; tenants are control-plane database records, not reconciled resources. |
 
-Additional services — batch operations and scheduling — are planned. See the repository for current status.
+Fanning one command out to many devices is part of `command-delivery` rather than a separate service — see [One command, many devices](./commands.md#command-batches). Scheduling is still planned. See the repository for current status.
 
 ## The data and messaging backbone
 
