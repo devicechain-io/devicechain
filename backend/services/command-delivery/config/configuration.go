@@ -71,6 +71,21 @@ const (
 	// waking to find its backlog was refused at enqueue never receives the commands
 	// at all, and the refusal is invisible from the device's side.
 	MinHeldCommandCeiling = 100
+
+	// DefaultDeliveryMachineryReserve is the share of the ceiling kept for the platform's
+	// own command delivery, so one fleet write cannot consume the whole ceiling and leave
+	// every automated send-command for that tenant refused until the backlog drains.
+	//
+	// Derived from core's value for the same reason the ceiling above is: the two are one
+	// number by intent, and a lone edit here would make a tenant's effective limit depend
+	// on which path answered.
+	DefaultDeliveryMachineryReserve = governance.DefaultDeliveryMachineryReserve
+
+	// MaxDeliveryMachineryReserve caps the configured reserve. Past half the ceiling the
+	// reserve stops being a reserve: it becomes the main allocation, and fleet writes —
+	// the capability this whole subsystem exists to provide — are bounded by the leftovers
+	// of a guard meant to protect delivery, not to prevent it.
+	MaxDeliveryMachineryReserve = 0.5
 )
 
 // CommandDeliveryConfiguration is the microservice configuration. Commands are
@@ -89,6 +104,16 @@ type CommandDeliveryConfiguration struct {
 	// in the same shape as the TTL above: a zero or negative value is replaced by the
 	// platform default in ApplyDefaults, so the field can never mean "unlimited".
 	HeldCommandCeiling int
+
+	// DeliveryMachineryReserve is the fraction of the ceiling in force that only the
+	// platform's own service-token callers may draw on. It is OPERATOR-SIDE ONLY — there
+	// is deliberately no per-tenant override and no tier key, because a tenant able to
+	// lower the reserve could defeat the protection that exists against its own fleet
+	// writes.
+	//
+	// Fail-safe in the same direction as the two above: absent, zero, negative or NaN
+	// means the platform reserve, never "no reserve".
+	DeliveryMachineryReserve float64
 }
 
 // NewCommandDeliveryConfiguration creates the default command delivery configuration.
@@ -111,6 +136,15 @@ func (c *CommandDeliveryConfiguration) ApplyDefaults() {
 	if c.HeldCommandCeiling <= 0 {
 		c.HeldCommandCeiling = DefaultHeldCommandCeiling
 	}
+	// Same direction again for the reserve. Written as a negated positive test rather than
+	// `<= 0` on purpose: NaN compares false to everything, so the obvious spelling would
+	// let a NaN through here AND through the upper-bound check in Validate. It would not
+	// actually remove the reserve — governance.RestrictedCommandLimit makes the same test
+	// and lands on the platform reserve — but a config value that survives validation while
+	// meaning nothing is worth refusing where it enters rather than where it is used.
+	if !(c.DeliveryMachineryReserve > 0) {
+		c.DeliveryMachineryReserve = DefaultDeliveryMachineryReserve
+	}
 }
 
 // Validate is the ADR-022 decision-1 validation hook for this service. It rejects a
@@ -129,6 +163,14 @@ func (c *CommandDeliveryConfiguration) Validate() error {
 	if c.HeldCommandCeiling < MinHeldCommandCeiling {
 		return fmt.Errorf("heldCommandCeiling must be at least %d (got %d)",
 			MinHeldCommandCeiling, c.HeldCommandCeiling)
+	}
+	// An over-large reserve is refused rather than clamped. Unlike an absent value —
+	// which has an obviously right answer — a reserve of 0.8 or 3 is an operator saying
+	// something they did not mean, and silently substituting 0.2 would leave them
+	// believing a split that is not in force.
+	if c.DeliveryMachineryReserve > MaxDeliveryMachineryReserve {
+		return fmt.Errorf("deliveryMachineryReserve must be at most %v (got %v)",
+			MaxDeliveryMachineryReserve, c.DeliveryMachineryReserve)
 	}
 	return nil
 }

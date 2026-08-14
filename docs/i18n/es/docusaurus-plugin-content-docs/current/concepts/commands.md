@@ -126,6 +126,29 @@ la de su nivel, si no el valor predeterminado de la plataforma: **10 000**. A un
 que ya está en su límite se le rechaza el siguiente comando con el código
 `HELD_CEILING_EXCEEDED`.
 
+#### Una parte del techo está reservada para la entrega {#delivery-machinery-reserve}
+
+No todo ese techo está a tu disposición. Una parte — el **20 % de forma predeterminada**, es
+decir 2000 de los 10 000 de la plataforma — se guarda para la entrega de comandos de la
+propia plataforma, y solo la plataforma dispone de ella. Todo lo que emite comandos en tu
+nombre queda acotado por el resto: la consola, los SDK, `dcctl` y tus propias integraciones
+por igual.
+
+Esto existe por lo que puede provocar una escritura de flota. «Reinicia todas las bombas» es
+una sola petición legítima capaz de llenar el techo entero de golpe, y a partir de ese momento
+se rechaza cada comando que tus reglas de automatización intentan enviar — hasta que la
+acumulación se drene, lo que para una flota apagada puede significar días. La reserva mantiene
+en marcha tu automatización basada en alarmas mientras una escritura de flota está en vuelo.
+
+Se aplica igual tanto si envías un comando como diez mil: un lote se admite hasta el mismo
+límite que alcanzaría un bucle de comandos individuales, así que no hay forma de eludirla ni
+ventaja en ninguna de las dos formas.
+
+Un rechazo nombra el límite que realmente se aplicó y, cuando es la reserva la que te ha
+acotado, indica cuánto se apartó — de modo que quien reciba un rechazo en 8000 frente a un
+techo visible de 10 000 pueda distinguir ambas cifras. La reserva es un ajuste del operador,
+no del inquilino: no se puede subir ni bajar por inquilino.
+
 :::info Acota el trabajo no entregado, no solo el retenido
 La cuenta abarca todo comando en **`QUEUED` o `HELD`** — no solo los retenidos para
 dispositivos ausentes. Un inquilino cuya flota está entera y presente igualmente puede ser

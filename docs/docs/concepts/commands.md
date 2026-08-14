@@ -118,6 +118,28 @@ The limit resolves down a cascade: the tenant's own override if it has one, othe
 tier's, otherwise the platform default of **10,000**. A tenant already at its limit has the
 next command refused with the code `HELD_CEILING_EXCEEDED`.
 
+#### Part of the ceiling is reserved for delivery {#delivery-machinery-reserve}
+
+Not all of that ceiling is available to you. A share of it — **20% by default**, so 2,000 of
+the platform's 10,000 — is kept for the platform's own command delivery, and only the
+platform draws on it. Everything that issues commands on your behalf is bounded by the
+remainder: the console, the SDKs, `dcctl`, and your own integrations alike.
+
+This exists because of what a fleet write can otherwise do. "Reboot every pump" is a single
+legitimate request that can fill the whole ceiling at once, and from that moment every
+command your automation rules try to send is refused — until the backlog drains, which for
+an offline fleet can mean days. The reserve keeps your alarm-driven automation working
+while a fleet write is in flight.
+
+It applies the same way whether you send one command or ten thousand: a batch is admitted
+up to the same limit a loop of single commands would reach, so there is no way around it
+and no advantage to either shape.
+
+A refusal names the limit that actually applied, and when the reserve is what bound you it
+says how much was set aside — so a caller refused at 8,000 against a visible ceiling of
+10,000 can tell the two numbers apart. The reserve is an operator setting, not a tenant
+one; it cannot be raised or lowered per tenant.
+
 :::info It bounds undelivered work, not just held work
 The count is every command **`QUEUED` or `HELD`** — not only the ones withheld for absent
 devices. A tenant whose fleet is entirely present can still be refused, purely on in-flight

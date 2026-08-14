@@ -262,7 +262,8 @@ func TestAllowPartialAdmitsTheRestAndRecordsTheRefusals(t *testing.T) {
 func TestTheCeilingBoundsTheWholeBatchNotEachCommand(t *testing.T) {
 	api := newBatchTestApi(t)
 	api.DefaultHeldCommandCeiling = 5
-	ctx := core.WithTenant(context.Background(), "acme")
+	// Service-token class, so the bound under test is the ceiling — see machineryCtx.
+	ctx := machineryCtx(core.WithTenant(context.Background(), "acme"))
 	api.BatchValidator = &countingValidator{}
 
 	_, err := api.CreateCommandBatch(ctx, batchRequest("toobig", deviceTokens(6)))
@@ -287,7 +288,9 @@ func TestTheCeilingBoundsTheWholeBatchNotEachCommand(t *testing.T) {
 func TestAllowPartialFillsExactlyTheHeadroomInResolvedOrder(t *testing.T) {
 	api := newBatchTestApi(t)
 	api.DefaultHeldCommandCeiling = 4
-	ctx := core.WithTenant(context.Background(), "acme")
+	// Service-token class, so the headroom under test is the ceiling itself rather than
+	// the ceiling less the delivery machinery reserve — see machineryCtx.
+	ctx := machineryCtx(core.WithTenant(context.Background(), "acme"))
 	api.BatchValidator = &countingValidator{}
 
 	// One command already outstanding, so the headroom is 3 rather than the whole ceiling.
