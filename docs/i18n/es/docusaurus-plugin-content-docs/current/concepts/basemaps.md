@@ -42,7 +42,7 @@ Esa segunda parte es la que conviene conocer. Si tu inquilino define su propia U
 
 Los niveles **por superficie** se definen en el navegador y nunca pasan por esa validación, así que aplican la misma regla en el punto de uso: una opción de widget o un campo del editor de geocercas que indique una URL de mosaicos sin línea de crédito se **ignora por completo**, y el mapa recurre al mapa base del inquilino, que sí está acreditado. El editor de geocercas lo indica cuando ocurre. Una anulación a medias se descarta en lugar de aplicarse a medias, porque la alternativa es dibujar los mosaicos de un proveedor sin ningún crédito.
 
-La vista inicial (`centerLat` / `centerLon` / `zoom`) no tiene esa restricción y se hereda campo a campo, de modo que un inquilino puede cambiar el zoom sin volver a declarar un proveedor para conservarlo.
+La vista inicial es más flexible, pero no carece del todo de restricciones. El `zoom` se hereda por sí solo, de modo que un inquilino puede cambiarlo sin volver a declarar un proveedor para conservarlo. El centro no: `centerLat` y `centerLon` forman un **par**, porque media coordenada no nombra ningún punto. Fijar uno sin el otro se rechaza, y anular solo uno en un nivel inferior no toma el otro del nivel superior — borra el centro heredado y deja esa superficie sin vista inicial alguna.
 
 ### La vista inicial es un recurso alternativo, nunca una anulación {#the-starting-view-is-a-fallback}
 
