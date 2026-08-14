@@ -88,7 +88,14 @@ func deviceTokens(n int) []string {
 }
 
 func batchRequest(token string, tokens []string) *CommandBatchCreateRequest {
-	return &CommandBatchCreateRequest{Token: token, Name: "reboot", DeviceTokens: tokens}
+	return &CommandBatchCreateRequest{Token: token, Name: "reboot", DeviceTokens: &tokens}
+}
+
+// namedDevices builds the pointer-to-slice shape the request carries for its nullable
+// GraphQL list.
+func namedDevices(n int) *[]string {
+	tokens := deviceTokens(n)
+	return &tokens
 }
 
 // decodeRefusalCounts reads a batch's stored per-code totals back.
@@ -361,10 +368,10 @@ func TestABatchMustNameExactlyOneTarget(t *testing.T) {
 
 	cases := map[string]*CommandBatchCreateRequest{
 		"neither": {Token: "t1", Name: "reboot"},
-		"both": {Token: "t2", Name: "reboot", DeviceTokens: deviceTokens(2),
+		"both": {Token: "t2", Name: "reboot", DeviceTokens: namedDevices(2),
 			GroupToken: &group},
 		"version without a group": {Token: "t3", Name: "reboot",
-			DeviceTokens: deviceTokens(2), GroupVersion: func() *int32 { v := int32(1); return &v }()},
+			DeviceTokens: namedDevices(2), GroupVersion: func() *int32 { v := int32(1); return &v }()},
 	}
 	for name, request := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -1102,6 +1102,14 @@ func (api *Api) Commands(ctx context.Context, criteria CommandSearchCriteria) (*
 		if criteria.Statuses != nil && len(*criteria.Statuses) > 0 {
 			db = db.Where("status IN ?", *criteria.Statuses)
 		}
+		// Filtered on the denormalized token rather than joining the batch, matching
+		// DeviceToken above: an empty string is a filter that matches nothing (no
+		// command carries an empty batch token), not a filter that is skipped. Only
+		// Statuses gets the empty-means-unfiltered treatment, and that is a gorm
+		// rendering problem rather than a choice.
+		if criteria.BatchToken != nil {
+			db = db.Where("batch_token = ?", *criteria.BatchToken)
+		}
 		return db
 	}, criteria.Pagination)
 	db.Find(&results)

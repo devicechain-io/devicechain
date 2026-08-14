@@ -101,6 +101,14 @@ input CommandSearchCriteria {
     pageNumber: Int!
     pageSize: Int!
     deviceToken: String
+    # Narrow to the commands one batch created.
+    #
+    # This is how you ask what a fleet write is DOING. A CommandBatch record carries
+    # `resolved` and `accepted` as they were at the moment it fired — deliberately, so
+    # the record stays self-auditing — so questions about the present ("of the 5,000
+    # queued, how many have gone out?") are answerable only from the command rows.
+    # Combine it with `status` or `statuses`.
+    batchToken: String
     # Match a single lifecycle state exactly.
     status: String
     # Match any of several lifecycle states. ANDed with `status` if both are given;
@@ -116,6 +124,167 @@ type CommandSearchResults {
     pagination: SearchResultsPagination!
 }
 
+# One device a batch did NOT enqueue to, and why.
+type CommandBatchDeviceRefusal {
+    # The device this refusal is about, exactly as it was resolved or named.
+    deviceToken: String!
+    # The machine-readable classification. It is the SAME open vocabulary a single
+    # enqueue rejection uses — DEVICE_NOT_FOUND, COMMAND_NOT_IN_VOCABULARY,
+    # PAYLOAD_SCHEMA_VIOLATION relayed from the device's owner, HELD_CEILING_EXCEEDED
+    # produced here. Branch on this, never on `reason`.
+    code: String!
+    # Why this device was refused, in client-safe terms.
+    reason: String!
+}
+
+# The COMPLETE number of devices refused for one code — never truncated.
+#
+# It is the counterweight to the bounded `refusals` sample: a batch fired at a large
+# group can refuse more devices than anyone can read, so the individual names are
+# capped while these totals stay exact. `resolved` = `accepted` + the sum of these.
+type CommandBatchRefusalCount {
+    code: String!
+    count: Int!
+}
+
+# One command fanned out to many devices, as a persisted record.
+#
+# It exists because the mutation response is consumed once. A refused device is given no
+# command row — there is no state meaning "wanted but not created" — so without this
+# record a refusal would leave no trace, and an operator who fires a fleet push and comes
+# back in the morning would have nothing to read.
+type CommandBatch implements Model & TokenReference & MetadataEntity {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    deletedAt: String
+    token: String!
+    metadata: String
+    # The command key every member of the batch received, and its payload. One key and
+    # one payload for the whole batch is what makes validating a fleet affordable.
+    name: String!
+    payload: String
+    # How the target was named: DEVICE_LIST or GROUP.
+    targetKind: String!
+    # The entity group this was fired at; null for a device-list batch.
+    groupToken: String
+    # The FROZEN group version the target set was resolved against; null for a
+    # device-list batch or a static group, which is never versioned. It is what lets an
+    # audit answer what the group MEANT when this fired, after someone edits the selector.
+    groupVersion: Int
+    # Whether the caller accepted a partial fan-out.
+    allowPartial: Boolean!
+    # How many devices the target resolved to, and how many were actually enqueued to.
+    #
+    # 🔴 BOTH ARE STORED FACTS ABOUT THE MOMENT THE BATCH FIRED, NOT LIVE COUNTS. Command
+    # rows are not immortal (they can be soft-deleted, or erased with a tenant), so
+    # deriving `accepted` from a live query would let it drift below the creation-time
+    # truth with no refusal explaining the gap. For present-tense delivery state, search
+    # commands with `batchToken`.
+    resolved: Int!
+    accepted: Int!
+    # A BOUNDED sample of the devices that were refused — enough to act on, capped so one
+    # fleet write cannot store an unbounded blob. Use `refusalCounts` for exact totals.
+    refusals: [CommandBatchDeviceRefusal!]!
+    # The complete per-code totals for every device refused.
+    refusalCounts: [CommandBatchRefusalCount!]!
+}
+
+# Data required to issue a command to many devices at once.
+#
+# `deviceTokens` and `groupToken` are ALTERNATIVES: supply exactly one. Both or neither is
+# refused rather than resolved by a precedence rule — a caller that sent both does not know
+# what it asked for, and silently preferring one would fan a physical actuation across
+# whichever set this service happened to favour.
+input CommandBatchCreateRequest {
+    # The idempotency key for the whole operation. Re-issuing a token that already names a
+    # batch returns THAT batch unchanged; it is never topped up, because admitting more
+    # devices under the same token would make `accepted` a moving number.
+    token: String!
+    # The command key every targeted device receives, and the payload it carries.
+    name: String!
+    payload: String
+    expiresAt: String
+    metadata: String
+    # Name the devices explicitly. Order is meaningful: a partially-admitted batch admits
+    # in this order, so it can express priority.
+    deviceTokens: [String!]
+    # Or name an entity group, resolved to its devices when the batch fires. The group
+    # must collect DEVICES, and a dynamic group must have been published — its draft
+    # selector is mutable, and a fleet actuation must not follow whatever someone last
+    # typed.
+    groupToken: String
+    # Pin a specific frozen version of a dynamic group. Omit for the active published
+    # version. Naming one for a static group is refused rather than ignored.
+    groupVersion: Int
+    # Accept a partial fan-out. When false (the default), a batch in which ANY device
+    # cannot receive the command is refused whole and NOTHING is created — including the
+    # batch record, since nothing happened to record.
+    allowPartial: Boolean!
+}
+
+# Why a batch was REFUSED — a decided verdict, not a failure.
+type CommandBatchRejection {
+    # The stable, machine-readable classification. Branch on this, never on `reason`.
+    #
+    # BATCH_TARGET_AMBIGUOUS (both or neither target given, or a version with no group),
+    # BATCH_TOO_LARGE, BATCH_GROUP_UNUSABLE (the group does not exist, collects something
+    # other than devices, or was never published — the owner's own code travels in the
+    # reason), PAYLOAD_NOT_JSON, METADATA_NOT_JSON, EXPIRES_AT_INVALID, TOKEN_IN_USE,
+    # BATCH_PARTIAL_REFUSED, and HELD_CEILING_EXCEEDED.
+    #
+    # The last two are the ones to expect in practice: BATCH_PARTIAL_REFUSED is the
+    # ordinary answer for a heterogeneous fleet when `allowPartial` is off, and
+    # HELD_CEILING_EXCEEDED is temporary — the tenant is full now and drains as its
+    # devices come back. The rest describe a request that will be just as wrong next time.
+    # The list is open; treat an unrecognized code as a refusal you cannot classify.
+    code: String!
+    # Why the batch was refused, in client-safe terms.
+    reason: String!
+    # How many devices the target resolved to before the refusal.
+    #
+    # NULL IS NOT ZERO. Null means no target set was ever established — the refusal
+    # happened first. Zero would mean a target that genuinely resolved to no devices,
+    # which is a real (and successful) batch, not a refusal.
+    resolved: Int
+    # A bounded sample of the devices responsible, populated for the refusals that are
+    # ABOUT specific devices (BATCH_PARTIAL_REFUSED, HELD_CEILING_EXCEEDED) and empty for
+    # the ones that refuse the request as a whole. It is what makes the default,
+    # whole-batch refusal actionable: without it an operator would have to bisect a fleet
+    # by hand to learn which devices to fix.
+    refusals: [CommandBatchDeviceRefusal!]!
+    # The complete per-code totals behind that sample.
+    refusalCounts: [CommandBatchRefusalCount!]!
+}
+
+# The outcome of a batch attempt. EXACTLY ONE of the two fields is non-null: `batch` for
+# one that was created (or the ORIGINAL returned by an idempotent replay), `rejection` for
+# one that was refused. A GraphQL error instead of either means the batch could not be
+# decided at all — device-management unreachable, group resolution unavailable — and
+# NOTHING was created, so the token is unspent and the request can simply be retried.
+type CreateCommandBatchResult {
+    batch: CommandBatch
+    rejection: CommandBatchRejection
+}
+
+# Criteria used when searching for command batches.
+input CommandBatchSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    # The command key the batch fanned out.
+    name: String
+    # The entity group it was fired at. Matches nothing for device-list batches.
+    groupToken: String
+    # DEVICE_LIST or GROUP. An unrecognized value matches nothing rather than erroring.
+    targetKind: String
+}
+
+# Search results returned from command batch query.
+type CommandBatchSearchResults {
+    results: [CommandBatch!]!
+    pagination: SearchResultsPagination!
+}
+
 type Query {
     # Find commands by unique id.
     commandsById(ids: [String!]!): [Command!]!
@@ -123,6 +292,12 @@ type Query {
     commandsByToken(tokens: [String!]!): [Command!]!
     # List all commands that match the given criteria.
     commands(criteria: CommandSearchCriteria!): CommandSearchResults!
+    # Find command batches by unique id.
+    commandBatchesById(ids: [String!]!): [CommandBatch!]!
+    # Find command batches by unique token.
+    commandBatchesByToken(tokens: [String!]!): [CommandBatch!]!
+    # List all command batches that match the given criteria.
+    commandBatches(criteria: CommandBatchSearchCriteria!): CommandBatchSearchResults!
 }
 
 type Mutation {
@@ -130,6 +305,24 @@ type Mutation {
     # typed rejection (see CreateCommandResult); a GraphQL error means the enqueue
     # could not be decided at all.
     createCommand(request: CommandCreateRequest!): CreateCommandResult!
+    # Issue one command to MANY devices as a single, recorded operation — named
+    # explicitly or resolved from an entity group.
+    #
+    # It replaces looping createCommand, and the difference is not convenience: the loop
+    # leaves no record of what was attempted, is not serialized against other fleet
+    # writes competing for the same tenant ceiling, pins no group version (so a selector
+    # edit mid-loop silently changes the target), and cannot be cancelled or audited as
+    # one operation. (Both paths ARE bounded by the same tenant ceiling — that is not
+    # what the batch adds.)
+    #
+    # Requires `command:write`. A batch targeting a GROUP additionally requires
+    # `device:read`, because resolving a group to its members is a read of the device
+    # registry, and the answer — which devices were refused, how many there were — comes
+    # back to the caller. Naming devices explicitly needs only `command:write`, since a
+    # caller doing that already knows them.
+    #
+    # Returns either the batch or a typed rejection (see CreateCommandBatchResult).
+    createCommandBatch(request: CommandBatchCreateRequest!): CreateCommandBatchResult!
     # Cancel a non-terminal command by token.
     cancelCommand(token: String!): Command!
     # Claim a still-dispatchable command (QUEUED or HELD) for immediate delivery,
