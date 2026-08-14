@@ -36,9 +36,16 @@ type DeviceState implements Model {
     # externalId is the device's transport-native identity, denormalized from the
     # resolved event (ADR-049); null when the device has no external id.
     externalId: String
-    # source is the event source that last drove this device (e.g. "mqtt", "lwm2m",
-    # "sparkplug:{hostId}"), denormalized from the resolved event. Null before the
-    # device has produced an event carrying one. It answers "which transport is this
+    # source is the event source that last drove this device, denormalized from the
+    # resolved event. Its form is `transport` or `transport:qualifier`:
+    #   - MQTT and HTTP project the EVENT SOURCE'S OWN ID, which you choose in
+    #     configuration (the shipped defaults are "mqtt1" and "http1"). The literal
+    #     "mqtt" is not a value this field takes.
+    #   - LwM2M projects the fixed string "lwm2m".
+    #   - Sparkplug projects "sparkplug:{hostId}", carrying the host application id.
+    # To classify a device BY TRANSPORT, cut at the first ":" and compare that; do not
+    # compare the whole value, which for two of the three cases is operator-chosen.
+    # Null before the device has produced an event carrying one. It answers "which transport is this
     # device on", which callers need to know whether a command can reach it at all —
     # the transports differ in whether they have a command path, not only in whether
     # the device is currently connected.
