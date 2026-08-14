@@ -52,7 +52,7 @@ func leaveTheSelector(t *testing.T, api *Api, ctx context.Context, token string)
 func walkAll(t *testing.T, api *Api, ctx context.Context, token string, limit int) []string {
 	t.Helper()
 	seen := make([]string, 0)
-	cursor := uint(0)
+	cursor := uint64(0)
 	for i := 0; i < 100; i++ { // a loop bound, so a cursor bug fails instead of hanging
 		page, err := api.ResolveDeviceGroupTargets(ctx, token, nil, cursor, limit)
 		if err != nil {

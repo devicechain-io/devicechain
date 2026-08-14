@@ -6,7 +6,6 @@ package graphql
 import (
 	"context"
 	"fmt"
-	"math"
 	"strconv"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -160,7 +159,7 @@ func (r *SchemaResolver) ResolveDeviceGroupTargets(ctx context.Context, args str
 			maxGroupTargetPageSize, args.Limit)
 	}
 
-	var afterId uint
+	var afterId uint64
 	if args.AfterId != nil && *args.AfterId != "" {
 		parsed, err := parseCursor(*args.AfterId)
 		if err != nil {
@@ -193,17 +192,22 @@ func (r *SchemaResolver) ResolveDeviceGroupTargets(ctx context.Context, args str
 // "0" as a cursor (a zero NextCursor marshals as null), so a caller presenting one is
 // confused, and the safe reading of a cursor that cannot have come from us is refusal.
 //
-// 🔴 THE UPPER BOUND IS NOT DECORATION, and the first version of this fix omitted it.
-// ParseUint returns a uint64; `uint` is 64 bits on the platforms we ship but 32 on a
-// 32-bit build, where the conversion would TRUNCATE — and a truncated cursor is not a
-// refused one, it is a valid-looking id pointing somewhere else in the table, which
-// silently resumes the fleet walk at the wrong place. That is the same class of failure
-// as the Sscanf bug above (a bad cursor becoming a plausible one), reached by a different
-// route, which is why the bound is checked rather than assumed from the build target.
-func parseCursor(cursor string) (uint, error) {
+// 🔴 IT RETURNS uint64 AND NARROWS NOTHING, which is the second correction this function
+// has needed. The first attempt parsed 64 bits and converted to `uint`, guarded by
+// `id > math.MaxUint` — and that guard is a TAUTOLOGY on a 64-bit build, where math.MaxUint
+// IS MaxUint64, so it narrowed nothing and constrained nothing. CodeQL was right to keep
+// flagging it. Had it ever run on a 32-bit build the conversion would have truncated, and a
+// truncated cursor is not a refused one: it is a valid-looking id pointing somewhere else in
+// the table, silently resuming the fleet walk at the wrong place.
+//
+// The cursor is only ever the right-hand side of a SQL `id >` comparison, so there is no
+// reason to narrow it at all. Carrying it as uint64 end to end deletes the failure mode
+// rather than guarding it — which is the fix that should have been made the first time,
+// instead of adding a bound to a conversion that did not need to exist.
+func parseCursor(cursor string) (uint64, error) {
 	id, err := strconv.ParseUint(cursor, 10, 64)
-	if err != nil || id == 0 || id > uint64(math.MaxUint) {
+	if err != nil || id == 0 {
 		return 0, fmt.Errorf("malformed page cursor %q", cursor)
 	}
-	return uint(id), nil
+	return id, nil
 }

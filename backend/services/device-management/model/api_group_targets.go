@@ -60,10 +60,19 @@ type DeviceGroupTargetPage struct {
 	// NextCursor is the id to pass as afterId for the following page; zero means the
 	// group is exhausted.
 	//
+	// 🔑 IT IS uint64 RATHER THAN THE uint THE ROW ID IS, so nothing on the cursor's round
+	// trip ever narrows. A cursor arrives as text, is parsed as a 64-bit value, and is only
+	// ever used as the right-hand side of a SQL `id >` comparison, so widening the row id
+	// on the way out is lossless and the way back in needs no conversion at all. The
+	// alternative — parse 64 and narrow to uint — has to be bounds-checked to be correct on
+	// a 32-bit build, and a truncated cursor is not a refused one: it is a valid-looking id
+	// pointing somewhere else in the table, silently resuming a fleet walk at the wrong
+	// place. Removing the conversion removes the whole question.
+	//
 	// 🔑 It is derived from the LAST ROW RETURNED, not from a count, so it stays correct
 	// when rows appear or vanish between pages — which is the whole reason this is a
 	// keyset walk (see ResolveDeviceGroupTargets).
-	NextCursor uint
+	NextCursor uint64
 	// ResolvedVersion is the frozen group version this page was resolved against, or nil
 	// for a static group. The caller stamps it on the batch record so the record can
 	// still answer "what did this group MEAN when the batch fired?" after the group is
@@ -109,7 +118,7 @@ func rejectedTargets(code GroupTargetRejectionCode, format string, args ...any) 
 // could not be PERFORMED and the caller must fail closed without relaying it. Same split,
 // and for the same reason, as the enqueue gate.
 func (api *Api) ResolveDeviceGroupTargets(ctx context.Context, groupToken string,
-	version *int32, afterId uint, limit int) (*DeviceGroupTargetPage, error) {
+	version *int32, afterId uint64, limit int) (*DeviceGroupTargetPage, error) {
 	if limit <= 0 {
 		return nil, fmt.Errorf("group target page limit must be positive, got %d", limit)
 	}
@@ -145,7 +154,7 @@ func (api *Api) ResolveDeviceGroupTargets(ctx context.Context, groupToken string
 // dynamicDeviceTargets resolves a page against a FROZEN published version's selector,
 // never the group's live draft.
 func (api *Api) dynamicDeviceTargets(ctx context.Context, group *EntityGroup, version *int32,
-	afterId uint, limit int) (*DeviceGroupTargetPage, error) {
+	afterId uint64, limit int) (*DeviceGroupTargetPage, error) {
 	wanted := version
 	if wanted == nil {
 		if !group.ActiveVersion.Valid {
@@ -191,7 +200,7 @@ func (api *Api) dynamicDeviceTargets(ctx context.Context, group *EntityGroup, ve
 // staticDeviceTargets pages a static group's explicit "member" edges by keyset on the
 // member's own row id, so the cursor means the same thing on both paths.
 func (api *Api) staticDeviceTargets(ctx context.Context, group *EntityGroup,
-	afterId uint, limit int) (*DeviceGroupTargetPage, error) {
+	afterId uint64, limit int) (*DeviceGroupTargetPage, error) {
 	edges := make([]EntityRelationship, 0, limit)
 	q := api.RDB.DB(ctx).Model(&EntityRelationship{}).
 		Joins("JOIN entity_relationship_types rt ON rt.id = entity_relationships.relationship_type_id").
@@ -233,7 +242,7 @@ func targetPage(members []EntityMember, limit int, resolvedVersion *int32) *Devi
 		page.DeviceTokens = append(page.DeviceTokens, m.Token)
 	}
 	if len(members) == limit && limit > 0 {
-		page.NextCursor = members[len(members)-1].Id
+		page.NextCursor = uint64(members[len(members)-1].Id)
 	}
 	return page
 }
