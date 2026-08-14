@@ -7,10 +7,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/adapter"
-	esconfig "github.com/devicechain-io/dc-event-sources/config"
 	"github.com/devicechain-io/dc-event-sources/presence"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/config"
@@ -109,7 +109,8 @@ func startBrokerPresence(ctx context.Context) {
 	reconciler := presence.NewReconciler(tap, presence.NewRequester(conn),
 		presence.NewGraphQLTenantLister(client, umURL, Microservice.InstanceId),
 		presence.NewGraphQLProjectionReader(client, dsURL),
-		reconcileMetrics(), cfg.InventoryGatherWindow(), time.Now)
+		reconcileMetrics(), cfg.InventoryGatherWindow(), time.Now,
+		presence.PassTimeoutFor(cfg.ReconcileInterval()))
 
 	// The canary dials the MQTT gateway, which terminates TLS against the SAME private
 	// per-instance CA the system-account connection above verifies. Handing it the same
@@ -143,7 +144,16 @@ func startBrokerPresence(ctx context.Context) {
 		rt.stops = append(rt.stops, stopWaker)
 	}
 
-	go runPresenceLoops(runCtx, rt, reconciler, canary, cfg)
+	// 🔴 A TYPED NIL IS NOT A NIL INTERFACE. canary is a *presence.Canary that is
+	// deliberately left nil when there is no observer to see a probe; assigning it
+	// straight into a prober would produce a NON-nil interface holding a nil pointer, so
+	// the loop's nil check would pass and every probe would panic on a fleet that had
+	// merely declined to run a canary.
+	var probe prober
+	if canary != nil {
+		probe = canary
+	}
+	go runPresenceLoops(runCtx, rt, reconciler, probe, cfg.ReconcileInterval(), cfg.CanaryInterval())
 	brokerPresence = rt
 }
 
@@ -177,19 +187,70 @@ func attachCommandWake(tap *presence.Tap, infra config.InfrastructureConfigurati
 	return stop
 }
 
-// runPresenceLoops drives the repair pass and the canary on their own schedules.
+// runPresenceLoops drives the repair pass and the canary.
+//
+// 🔴🔴 THEY ARE TWO GOROUTINES, AND THAT SEPARATION IS THE POINT. They used to be two
+// arms of one select, which made the canary DOWNSTREAM of the thing it exists to watch: a
+// reconcile pass that blocked meant Probe was never called again, so
+// presence_canary_missed_total could not increment, and an instance whose presence had
+// stopped working read exactly like a healthy idle one. The instrument and its subject
+// died together.
+//
+// A deadline on the pass (presence.Run) turns "forever" into "late", but it does not make
+// the canary independent — a canary that only reports while its subject is healthy is not
+// an instrument. Both changes are needed and neither replaces the other.
 //
 // The first reconciliation runs IMMEDIATELY rather than after one interval. Startup is
 // the moment the gap is most likely: this replica has just missed every advisory
 // published while it was not running, and a broker restarted during that window
 // announced no deaths at all.
-func runPresenceLoops(ctx context.Context, rt *presenceRuntime, r *presence.Reconciler,
-	c *presence.Canary, cfg esconfig.BrokerPresence) {
-	defer close(rt.stopped)
-	reconcile := time.NewTicker(cfg.ReconcileInterval())
-	defer reconcile.Stop()
-	canary := time.NewTicker(cfg.CanaryInterval())
-	defer canary.Stop()
+// It takes the two intervals rather than the configuration they come from, because the
+// property worth testing here is that the loops do not block each other — and a test of
+// that has to drive THIS function, not the two it calls. Testing the callees would pass
+// just as happily against a version that put both back on one select.
+func runPresenceLoops(ctx context.Context, rt *presenceRuntime, r reconcileRunner,
+	c prober, reconcileInterval, canaryInterval time.Duration) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runReconcileLoop(ctx, r, reconcileInterval)
+	}()
+	if c != nil {
+		// A nil canary means no observer is subscribed, so a probe could only ever report
+		// a false miss. No goroutine rather than a goroutine that skips every tick.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			runCanaryLoop(ctx, c, canaryInterval)
+		}()
+	}
+	// 🔑 A CHANNEL CLOSED BEHIND THE WAIT, NOT THE WaitGroup ITSELF. stopBrokerPresence
+	// waits on rt.stopped with a five-second cap, and a WaitGroup has no timed wait — so
+	// a loop that refused to end would hang shutdown instead of being abandoned.
+	go func() {
+		wg.Wait()
+		close(rt.stopped)
+	}()
+}
+
+// reconcileRunner and prober are the two loops' seams onto their subjects.
+//
+// They exist so the INDEPENDENCE of the two loops is testable, which is the property the
+// split was made for: the only way to show it is to block one loop and watch the other
+// keep going, and against the concrete types that needs a broker and an MQTT dial.
+type reconcileRunner interface {
+	Run(ctx context.Context) error
+}
+
+type prober interface {
+	Probe(ctx context.Context) error
+}
+
+// runReconcileLoop repairs the projection against the broker on its own schedule.
+func runReconcileLoop(ctx context.Context, r reconcileRunner, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 
 	runOnce := func() {
 		if err := r.Run(ctx); err != nil && ctx.Err() == nil {
@@ -203,12 +264,22 @@ func runPresenceLoops(ctx context.Context, rt *presenceRuntime, r *presence.Reco
 		select {
 		case <-ctx.Done():
 			return
-		case <-reconcile.C:
+		case <-ticker.C:
 			runOnce()
-		case <-canary.C:
-			if c == nil {
-				continue // no observer, so a probe could only ever report a false miss
-			}
+		}
+	}
+}
+
+// runCanaryLoop proves the advisory subscription is still being read.
+func runCanaryLoop(ctx context.Context, c prober, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 			if err := c.Probe(ctx); err != nil && ctx.Err() == nil {
 				log.Error().Err(err).Msg("Broker presence canary probe failed.")
 			}

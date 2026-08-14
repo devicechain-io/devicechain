@@ -463,7 +463,7 @@ func TestAssertedDeviceStatesSplitsActiveFromAssertedAndScopesBySource(t *testin
 
 	tokensOf := func(activeOnly bool) map[string]uint64 {
 		t.Helper()
-		found, err := api.AssertedDeviceStates(ctx, "mqtt1", activeOnly)
+		found, err := api.AssertedDeviceStates(ctx, "mqtt1", activeOnly, 0, MaxAssertedPageSize)
 		if err != nil {
 			t.Fatalf("AssertedDeviceStates(activeOnly=%v): %v", activeOnly, err)
 		}

@@ -20,6 +20,19 @@ const (
 	PresenceSourceAsserted = "ASSERTED"
 )
 
+// MaxAssertedPageSize is the largest page AssertedDeviceStates will serve.
+//
+// It is a REFUSAL threshold, not a clamp: a caller asking for more is answered with an
+// error rather than a quietly smaller page. Callers walk this query until a page comes
+// back shorter than the one they asked for, so a silently reduced page would be read as
+// the end of the set — and the walk would stop with most of the fleet unread, which for
+// a presence reconciler means treating connected devices as absent.
+//
+// 1000 sits an order of magnitude below where a page could threaten the caller's read
+// limit even with the longest legal device tokens, which leaves the bound about memory
+// and round trips rather than about being just barely safe.
+const MaxAssertedPageSize = 1000
+
 // DeviceState is the live current-state projection for one device (ADR-012):
 // connectivity + activity timestamps, distinct from the
 // append-only event history. One row per device.

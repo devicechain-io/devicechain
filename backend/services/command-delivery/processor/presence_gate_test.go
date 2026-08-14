@@ -33,6 +33,9 @@ func (r *scriptedReader) StatesFor(ctx context.Context, devices []string) (map[s
 		r.tenants = append(r.tenants, tenant)
 	}
 	if r.err != nil {
+		// A reader that fails outright answers for nothing — the shape the real chunked
+		// reader produces when every chunk fails, which is what a whole-service outage
+		// looks like from here.
 		return nil, r.err
 	}
 	return r.states, nil

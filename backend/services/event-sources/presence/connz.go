@@ -28,6 +28,23 @@ const connzPageSize = 512
 // spin forever.
 const connzPageLimit = 500
 
+// connzRequestTimeout bounds ONE page request.
+//
+// 🔴🔴 WITHOUT IT THERE IS NO WAY OUT AT ALL, AND THE INSTRUMENT DIES WITH THE SUBJECT.
+// nats.go's request path selects on exactly two things: the reply channel, and the
+// context. A context with no deadline therefore has no third exit, and the library's
+// own protections do not cover this failure: no-responders is decided at PUBLISH time,
+// so a peer that dies AFTER accepting the request is not caught by it, and the pending
+// request is cleared only on a permanent close or an explicit forced reconnect — an
+// ordinary drop-and-reconnect leaves it hanging.
+//
+// A wedged pass used to be permanent in a way that hid itself: the reconciler and the
+// canary shared one select loop, so a stuck CONNZ page meant the canary never probed
+// again and the metric that exists to notice presence being broken could not move. Both
+// halves read healthy. The canary now runs on its own goroutine (presence_wiring.go),
+// and this deadline means the pass fails and retries rather than stopping forever.
+const connzRequestTimeout = 10 * time.Second
+
 // statszReply is the subset of a $SYS.REQ.SERVER.PING reply this package reads: which
 // server answered, and how many servers IT believes are in the cluster.
 type statszReply struct {
@@ -229,6 +246,18 @@ func pingServers(ctx context.Context, r Requester, gather time.Duration) ([]stri
 	return ids, expected, nil
 }
 
+// requestPage issues one CONNZ page request under its own deadline.
+//
+// The deadline is per REQUEST rather than per pass because that is the granularity at
+// which the failure happens: one server going away mid-walk should cost one page's
+// timeout, not the whole pass's remaining budget. The pass deadline (Reconciler.Run)
+// still bounds the total.
+func requestPage(ctx context.Context, r Requester, subject string, body []byte) (*nats.Msg, error) {
+	ctx, cancel := context.WithTimeout(ctx, connzRequestTimeout)
+	defer cancel()
+	return r.RequestWithContext(ctx, subject, body)
+}
+
 // collectServer pages one server's connections into devices.
 func collectServer(ctx context.Context, r Requester, instanceId, serverID string, devices map[string]LiveDevice) error {
 	subject := fmt.Sprintf(sysServerDirect, serverID, "CONNZ")
@@ -238,7 +267,7 @@ func collectServer(ctx context.Context, r Requester, instanceId, serverID string
 		if err != nil {
 			return err
 		}
-		msg, err := r.RequestWithContext(ctx, subject, body)
+		msg, err := requestPage(ctx, r, subject, body)
 		if err != nil {
 			return fmt.Errorf("requesting connections from server %s: %w", serverID, err)
 		}

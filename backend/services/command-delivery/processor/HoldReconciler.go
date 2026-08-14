@@ -95,15 +95,32 @@ func (cproc *CommandDeliveryProcessor) reconcileTenantBatch(ctx context.Context,
 	tenantCtx := core.WithTenant(ctx, batch.tenant)
 	states, err := cproc.Presence.StatesFor(tenantCtx, distinctDevices(batch.commands))
 	if err != nil {
-		// Fail closed, per reconcileOnePage: keep holding. Counted on the same meter as
-		// the sweep's read failures, because it is the same outage and an operator
-		// looking at it wants one number for "the gate cannot see presence".
+		// Fail closed, per reconcileOnePage: keep holding the devices this read could
+		// not cover. Counted on the same meter as the sweep's read failures, because it
+		// is the same outage and an operator looking at it wants one number for "the
+		// gate cannot see presence".
 		incr(cproc.PresenceReadErrors, 1)
 		log.Warn().Err(err).Str("tenant", batch.tenant).
-			Msg("Could not read device presence; leaving this tenant's commands withheld.")
-		return
+			Int("asked", len(distinctDevices(batch.commands))).Int("answered", len(states)).
+			Msg("Could not read presence for some withheld commands' devices; those stay withheld.")
 	}
 	for _, cmd := range batch.commands {
+		// 🔴🔴 THE UNANSWERED QUESTION IS SKIPPED BEFORE ANY VERDICT IS ASKED FOR, AND
+		// THIS LINE IS LOAD-BEARING IN A WAY THE NEXT ONE HIDES. A device the read could
+		// not cover is absent from States, which Decide answers Dispatch — i.e. NOT Hold
+		// — so without this check the loop below would RELEASE it. One device-state blip
+		// would return a whole page of withheld commands to QUEUED, the sweep would
+		// publish them at brokers where those devices are absent, and every one would
+		// land in SENT and then TIMEOUT: the record that blames the device for the
+		// platform's outage, which is the outcome this reconciler exists to avoid
+		// writing.
+		//
+		// It is NOT the same check as "the projection has no row for this device". That
+		// case genuinely releases, deliberately — see below. Resolved is what tells the
+		// two apart, and the read's error is the only thing that can.
+		if !presence.Resolved(states, cmd.DeviceToken, err) {
+			continue
+		}
 		// 🔑 THE ONLY QUESTION ASKED HERE IS "IS THIS DEVICE STILL ABSENT?". Anything
 		// that is not a Hold releases — including Undeliverable, which is not a mistake:
 		// a row held before its device's transport was known to carry no commands gets

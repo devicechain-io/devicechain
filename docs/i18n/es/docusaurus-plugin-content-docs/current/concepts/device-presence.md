@@ -81,6 +81,40 @@ para que una toma que funciona tenga algo que observar: `presence_canary_observe
 una toma sana, y `presence_canary_missed_total` sube cuando la cadena está rota. Ese par es lo
 único que distingue una toma muerta de una flota en silencio.
 
+La sonda funciona con su propio calendario, independiente de la pasada de reparación descrita más
+abajo. Esa separación es lo que hace fiable al contador: un instrumento que solo pudiera informar
+mientras aquello que vigila estuviera sano se quedaría callado justo en el momento que importa.
+
+### Una pasada de reparación que se queda sin tiempo lo dice {#reconcile-pass-timeout}
+
+Cada pasada de reparación recorre todos los inquilinos de la instancia y lee los dispositivos
+declarados de cada uno, así que en una instancia grande la pasada es larga. Está acotada: una
+pasada que no pueda terminar dentro de su presupuesto se detiene, informa
+`presence_reconcile_runs_total{outcome="timeout"}` y registra cuántos inquilinos cubrió.
+
+**La siguiente pasada continúa en el inquilino al que no llegó**, en lugar de empezar otra vez desde
+el principio. Sin eso, una flota cuya pasada nunca cupiera en el presupuesto repararía los mismos
+primeros inquilinos en cada intento y nunca alcanzaría al resto — no tarde, nunca. Resultados
+`timeout` ocasionales significan que las reparaciones van con retraso y que cada inquilino sigue
+teniendo su turno; una racha *sostenida* significa que la instancia necesita más margen, y los
+dispositivos al final de la rotación son aquellos cuyas desconexiones perdidas quedan sin corregir
+durante más tiempo.
+
+`presence_reconcile_runs_total` lleva un resultado por pasada, y conviene distinguirlos:
+
+| Resultado | Qué significa |
+| --- | --- |
+| `complete` | se recorrieron todos los inquilinos contra un clúster de brokers íntegramente contabilizado |
+| `partial` | la pasada se ejecutó, pero no respondieron todos los nodos del broker — solo se marcaron dispositivos **en línea**, nunca fuera de línea |
+| `timeout` | la pasada agotó su presupuesto; los inquilinos a los que no llegó van primero la próxima vez |
+| `failed` | la pasada no pudo leer nada — ni el inventario del broker, ni la lista de inquilinos, ni **el estado de presencia de ningún inquilino**. No reparó absolutamente nada |
+| `cancelled` | el servicio se estaba deteniendo a mitad de pasada. No es un fallo |
+
+`failed` es el resultado sobre el que alarmar junto con la sonda. Que falle la lectura de un solo
+inquilino se tolera — los demás siguen teniendo su pasada — pero que fallen *todas* significa que
+las reparaciones se han detenido por completo, que es como se ve desde aquí una caída de
+device-state.
+
 ### Las transiciones de presencia se contabilizan contra el techo de ingesta del inquilino {#presence-and-the-ingest-ceiling}
 
 Las transiciones de conexión y desconexión pasan por el mismo [límite de ingesta](./governance.md)

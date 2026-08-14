@@ -1033,6 +1033,11 @@ func expiredTerminalFor(status string) string {
 	}
 }
 
+// expirePageSize bounds how many stale commands one page of the expiry walk loads.
+// It is not a limit on how many expire — the walk continues to the end of the set —
+// only on how many are held in memory at once.
+const expirePageSize = 500
+
 // ExpireStale times out every non-terminal command whose TTL has elapsed. A
 // QUEUED or HELD command that never went out becomes EXPIRED; a SENT command
 // that was never answered becomes TIMEOUT (see expiredTerminalFor). The caller
@@ -1045,34 +1050,53 @@ func expiredTerminalFor(status string) string {
 // never got to try, while rows dying out of SENT say devices are being reached
 // and are not answering. One total reports both as "expiry is happening", which
 // points an operator at the wrong half of the system.
+// 🔑 IT WALKS THE STALE SET IN PAGES, from a cursor. The set is every expired
+// non-terminal row across every tenant, so its size is a property of the fleet and
+// of how long an outage lasted — an instance coming back after a weekend with a
+// held backlog per tenant can have a very large one, and loading it whole puts all
+// of it in the pod at once. The cursor is the row id, which is stable and ascending
+// (the same walk HeldCommands uses); expiry is a conditional update per row, so a
+// row that moves on between pages is simply not expired by us, exactly as before.
 func (api *Api) ExpireStale(ctx context.Context, now time.Time) (int64, map[string]int64, error) {
-	stale := make([]*Command, 0)
 	terminal := terminalStatusStrings()
 	byFromStatus := make(map[string]int64)
-	result := api.RDB.DB(ctx).
-		Where("status NOT IN ?", terminal).
-		Where("expires_at IS NOT NULL AND expires_at < ?", now).
-		Find(&stale)
-	if result.Error != nil {
-		return 0, byFromStatus, result.Error
-	}
-
-	for _, cmd := range stale {
-		expired, err := api.expireOne(ctx, cmd.ID, cmd.Status, expiredTerminalFor(cmd.Status))
-		if err != nil {
-			return sumCounts(byFromStatus), byFromStatus, err
+	var after uint
+	for {
+		stale := make([]*Command, 0, expirePageSize)
+		result := api.RDB.DB(ctx).
+			Where("status NOT IN ?", terminal).
+			Where("expires_at IS NOT NULL AND expires_at < ?", now).
+			Where("id > ?", after).
+			Order("id ASC").
+			Limit(expirePageSize).
+			Find(&stale)
+		if result.Error != nil {
+			return sumCounts(byFromStatus), byFromStatus, result.Error
 		}
-		// Count against the state it lapsed FROM, and only when the conditional update
-		// actually landed — a row that moved on between the scan and the write was
-		// not expired by us and must not be reported as though it were. The total is
-		// DERIVED from this breakdown rather than accumulated beside it: two counters
-		// with separately-written rules can disagree, and one that has drifted from
-		// the other is indistinguishable from a correct one at a glance.
-		if expired {
-			byFromStatus[cmd.Status]++
+		if len(stale) == 0 {
+			return sumCounts(byFromStatus), byFromStatus, nil
 		}
+		for _, cmd := range stale {
+			expired, err := api.expireOne(ctx, cmd.ID, cmd.Status, expiredTerminalFor(cmd.Status))
+			if err != nil {
+				return sumCounts(byFromStatus), byFromStatus, err
+			}
+			// Count against the state it lapsed FROM, and only when the conditional update
+			// actually landed — a row that moved on between the scan and the write was
+			// not expired by us and must not be reported as though it were. The total is
+			// DERIVED from this breakdown rather than accumulated beside it: two counters
+			// with separately-written rules can disagree, and one that has drifted from
+			// the other is indistinguishable from a correct one at a glance.
+			if expired {
+				byFromStatus[cmd.Status]++
+			}
+		}
+		// 🔴 THE CURSOR ADVANCES PAST THE LAST ROW SEEN, NOT PAST THE LAST ROW EXPIRED.
+		// A row whose conditional update lost its race is still behind us; re-reading
+		// from its id would hand the next page the same row forever, and the walk would
+		// never end. The predicate is not what bounds this loop — the cursor is.
+		after = stale[len(stale)-1].ID
 	}
-	return sumCounts(byFromStatus), byFromStatus, nil
 }
 
 // sumCounts totals an expiry breakdown. ExpireStale reports both because they answer

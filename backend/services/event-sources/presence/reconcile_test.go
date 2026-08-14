@@ -112,7 +112,7 @@ func inventoryOf(complete bool, devices ...LiveDevice) Inventory {
 func reconcilerFor(t *testing.T, e *recordingEmitter, at time.Time) *Reconciler {
 	t.Helper()
 	tap := NewTap(testInstance, "mqtt1", e, func(string, string, time.Time, bool) bool { return true }, Metrics{})
-	return NewReconciler(tap, nil, nil, nil, ReconcileMetrics{}, time.Second, func() time.Time { return at })
+	return NewReconciler(tap, nil, nil, nil, ReconcileMetrics{}, time.Second, func() time.Time { return at }, DefaultPassTimeout)
 }
 
 // A device the broker holds that the projection does not know about is repaired with a
@@ -335,7 +335,7 @@ func TestRunWillNotKillDevicesAfterTheClusterShrinks(t *testing.T) {
 	// inventory is complete, so the death is emitted — and that is what establishes both
 	// the high-water mark and that this fixture CAN produce a death.
 	full := &fakeRequester{servers: []string{"A", "B", "C"}, claimed: 3, conns: map[string][]connzConn{}}
-	r := NewReconciler(tap, full, fakeTenants{[]string{"acme"}}, reads, ReconcileMetrics{}, time.Second, time.Now)
+	r := NewReconciler(tap, full, fakeTenants{[]string{"acme"}}, reads, ReconcileMetrics{}, time.Second, time.Now, DefaultPassTimeout)
 	require.NoError(t, r.Run(t.Context()))
 	emitter.await(t, "a death from a complete pass", isDevice("acme", "sensor-001", false))
 

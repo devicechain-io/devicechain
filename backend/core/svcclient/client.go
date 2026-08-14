@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -33,6 +34,8 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -46,6 +49,51 @@ const (
 	// memory.
 	maxResponseBytes = 1 << 20
 )
+
+// ErrResponseTooLarge reports that a peer's response exceeded maxResponseBytes.
+//
+// 🔴 IT EXISTS BECAUSE THE ALTERNATIVE IS A LIE ABOUT WHOSE FAULT IT IS. io.LimitReader
+// returns no error at the cap — it simply stops — so a response that outgrew the cap
+// used to arrive here as half a JSON document and fail to parse. The caller then saw
+// "decode response: unexpected end of JSON input", which reads as "the peer is broken"
+// when the truth is "this query asks for more than the transport carries". Those need
+// opposite responses: one is somebody else's bug, the other is a caller that must page.
+//
+// The read is capped at maxResponseBytes+1 so that overflow is DETECTED rather than
+// inferred; the extra byte is never used for anything else.
+var ErrResponseTooLarge = errors.New("svcclient: response exceeded the read cap")
+
+// responsesTruncated counts reads that hit the cap, labelled by the peer that produced
+// them.
+//
+// 🔴 LABELLED BY PEER, NEVER BY TENANT. The tenant is the interesting dimension and it
+// is exactly the one that cannot be used: a per-tenant label on a platform-wide client
+// is unbounded cardinality, i.e. a self-inflicted denial of service on the metrics
+// stack. The peer set is fixed by the deployment.
+//
+// It is worth a metric of its own rather than leaving this to each caller's error
+// counter, because the cap is a limit nobody thinks about until a fleet crosses it, and
+// an error counter that also counts timeouts cannot say which happened.
+var responsesTruncated = promauto.NewCounterVec(prometheus.CounterOpts{
+	Namespace: "devicechain", Subsystem: "svcclient",
+	Name: "responses_truncated_total",
+	Help: "Cross-service responses that exceeded the client's read cap, by peer.",
+}, []string{"peer"})
+
+// readCapped reads a response body up to the cap, reporting separately whether the
+// peer had MORE to say. It reads one byte past the cap: at exactly the cap a response
+// is complete and must be treated as ordinary, and the only way to tell "exactly full"
+// from "overflowing" is to ask for one more byte than can legitimately arrive.
+func readCapped(body io.Reader) ([]byte, bool, error) {
+	raw, err := io.ReadAll(io.LimitReader(body, maxResponseBytes+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if len(raw) > maxResponseBytes {
+		return raw[:maxResponseBytes], true, nil
+	}
+	return raw, false, nil
+}
 
 // Client makes authenticated GraphQL calls to other services on behalf of one
 // calling service identity (subject + authorities). It is safe for concurrent use
@@ -118,12 +166,21 @@ func (c *Client) Query(ctx context.Context, baseURL, tenant, query string, varia
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	raw, truncated, err := readCapped(resp.Body)
 	if err != nil {
 		return fmt.Errorf("svcclient: read response: %w", err)
 	}
+	// 🔑 STATUS IS DECIDED FIRST, SIZE SECOND. The same capped read feeds this error
+	// message, so answering ErrResponseTooLarge ahead of the status check would hide a
+	// peer's 500 behind a complaint about how long its error page was. A large error
+	// page is a peer that is failing, not a caller that is asking for too much.
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("svcclient: %s returned %d: %s", baseURL, resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	if truncated {
+		responsesTruncated.WithLabelValues(baseURL).Inc()
+		return fmt.Errorf("%w: %s returned more than %d bytes; the caller must page this query",
+			ErrResponseTooLarge, baseURL, maxResponseBytes)
 	}
 
 	var envelope struct {
@@ -208,12 +265,20 @@ func (c *Client) mint(ctx context.Context) (string, time.Time, error) {
 		return "", time.Time{}, fmt.Errorf("svcclient: mint token: %w", err)
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	// A token response is a few hundred bytes, so the cap is not a paging question here
+	// — but it is read through the same helper so the two paths cannot diverge, and so
+	// a mint endpoint that starts answering with something enormous says what happened.
+	raw, truncated, err := readCapped(resp.Body)
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("svcclient: read mint response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", time.Time{}, fmt.Errorf("svcclient: mint returned %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	if truncated {
+		responsesTruncated.WithLabelValues(c.mintURL).Inc()
+		return "", time.Time{}, fmt.Errorf("%w: the mint endpoint returned more than %d bytes",
+			ErrResponseTooLarge, maxResponseBytes)
 	}
 	var minted auth.ServiceTokenResponse
 	if err := json.Unmarshal(raw, &minted); err != nil {

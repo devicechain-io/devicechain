@@ -53,7 +53,7 @@ func TestReconciliationAlsoPassesTheGate(t *testing.T) {
 	emitter := newRecordingEmitter()
 	tap := NewTap(testInstance, "mqtt1", emitter,
 		func(string, string, time.Time, bool) bool { return false }, Metrics{})
-	r := NewReconciler(tap, nil, nil, nil, ReconcileMetrics{}, time.Second, time.Now)
+	r := NewReconciler(tap, nil, nil, nil, ReconcileMetrics{}, time.Second, time.Now, DefaultPassTimeout)
 
 	live := LiveDevice{Tenant: "purged", DeviceToken: "sensor-001", SessionId: 1786552664076882575}
 	r.reconcileTenant(context.Background(), "purged", inventoryOf(true, live), projection())
@@ -149,7 +149,7 @@ func TestTheInventoryPagesPastATruncatedReply(t *testing.T) {
 // This test found that hole. The fix is a high-water mark — a cluster does not shrink in
 // normal operation, so once three servers have been seen, two answering is a partition.
 func TestAShrunkenClusterIsNotComplete(t *testing.T) {
-	r := NewReconciler(nil, nil, nil, nil, ReconcileMetrics{}, time.Second, time.Now)
+	r := NewReconciler(nil, nil, nil, nil, ReconcileMetrics{}, time.Second, time.Now, DefaultPassTimeout)
 
 	// A healthy three-node pass establishes the mark and is complete.
 	full := r.applyClusterHighWater(Inventory{Servers: 3, Expected: 3, Complete: true})
@@ -172,7 +172,7 @@ func TestAShrunkenClusterIsNotComplete(t *testing.T) {
 // whatever any of them claims. Without this, a cluster whose members all under-report
 // from the very first pass would never establish a mark at all.
 func TestAnswersCountAsEvidenceOfClusterSize(t *testing.T) {
-	r := NewReconciler(nil, nil, nil, nil, ReconcileMetrics{}, time.Second, time.Now)
+	r := NewReconciler(nil, nil, nil, nil, ReconcileMetrics{}, time.Second, time.Now, DefaultPassTimeout)
 
 	first := r.applyClusterHighWater(Inventory{Servers: 3, Expected: 1, Complete: true})
 	require.Equal(t, 3, first.Expected, "three servers answered but the pass expected one")
@@ -184,7 +184,7 @@ func TestAnswersCountAsEvidenceOfClusterSize(t *testing.T) {
 // A pass already judged incomplete by the fetch (an unreachable server) stays incomplete
 // however the counts land — the high-water mark can only ever take completeness AWAY.
 func TestTheHighWaterMarkNeverGrantsCompleteness(t *testing.T) {
-	r := NewReconciler(nil, nil, nil, nil, ReconcileMetrics{}, time.Second, time.Now)
+	r := NewReconciler(nil, nil, nil, nil, ReconcileMetrics{}, time.Second, time.Now, DefaultPassTimeout)
 
 	got := r.applyClusterHighWater(Inventory{Servers: 3, Expected: 3, Complete: false})
 	require.False(t, got.Complete, "an inventory that failed to collect a server was promoted to complete")

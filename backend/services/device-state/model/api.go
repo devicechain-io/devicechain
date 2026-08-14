@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/devicechain-io/dc-device-state/config"
@@ -32,7 +33,7 @@ type DeviceStateApi interface {
 	MergeDeviceState(ctx context.Context, deviceToken string, occurredAt time.Time, pt *PresenceTransition, id DeviceIdentity) (*DeviceState, error)
 	DeviceStatesByDeviceToken(ctx context.Context, deviceTokens []string) ([]*DeviceState, error)
 	DeviceStatesByExternalId(ctx context.Context, externalIds []string) ([]*DeviceState, error)
-	AssertedDeviceStates(ctx context.Context, source string, activeOnly bool) ([]*DeviceState, error)
+	AssertedDeviceStates(ctx context.Context, source string, activeOnly bool, afterId uint64, pageSize int) ([]*DeviceState, error)
 	DeviceStates(ctx context.Context, criteria DeviceStateSearchCriteria) (*DeviceStateSearchResults, error)
 	SweepInactive(ctx context.Context, now time.Time) (int64, error)
 	MergeLatestMeasurements(ctx context.Context, deviceToken string, inputs []LatestMeasurementInput) error
@@ -408,9 +409,29 @@ func (api *Api) DeviceStatesByExternalId(ctx context.Context, externalIds []stri
 //
 // There is deliberately no default: a caller that has not thought about which question
 // it is asking is a caller about to emit repairs that cannot apply.
-func (api *Api) AssertedDeviceStates(ctx context.Context, source string, activeOnly bool) ([]*DeviceState, error) {
-	found := make([]*DeviceState, 0)
-	db := api.RDB.DB(ctx).Where("presence_source = ? AND source = ?", PresenceSourceAsserted, source)
+//
+// 🔴 IT RETURNS ONE PAGE, walked from a row-id cursor, because this set is exactly as
+// large as the tenant's asserted fleet. Read whole, it crosses the cross-service read
+// cap somewhere in the thousands of devices and the response is CUT OFF rather than
+// shortened — and a truncated presence set is not a smaller answer to the same question,
+// it is a wrong answer to a different one: the missing devices read as "not asserted",
+// which in the reconciler that consumes this means marking connected devices offline.
+//
+// Keyset, not offset. The id is stable and ascending, so a page picks up exactly where
+// the last one ended even though rows are being written underneath the walk; OFFSET
+// would skip a row every time one was inserted before the cursor, and a skipped row here
+// is a device that silently does not get reconciled.
+func (api *Api) AssertedDeviceStates(ctx context.Context, source string, activeOnly bool,
+	afterId uint64, pageSize int) ([]*DeviceState, error) {
+	if pageSize < 1 || pageSize > MaxAssertedPageSize {
+		return nil, fmt.Errorf("pageSize must be between 1 and %d, got %d", MaxAssertedPageSize, pageSize)
+	}
+	found := make([]*DeviceState, 0, pageSize)
+	db := api.RDB.DB(ctx).
+		Where("presence_source = ? AND source = ?", PresenceSourceAsserted, source).
+		Where("id > ?", afterId).
+		Order("id ASC").
+		Limit(pageSize)
 	if activeOnly {
 		db = db.Where("active = ?", true)
 	}
