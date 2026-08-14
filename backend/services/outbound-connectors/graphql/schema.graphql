@@ -5,7 +5,7 @@
 # Outbound Connectors GraphQL Schema (ADR-060)
 #
 # This service is a durable NATS consumer that executes outbound connector actions
-# (httpCall, and — from slice C4b — publish). This surface is the per-tenant, versioned
+# (httpCall and publish). This surface is the per-tenant, versioned
 # Connector CRUD (ADR-039 draft/publish/rollback): the registered {type, config,
 # write-only credential} targets a `publish` action delivers through. Credentials are
 # write-only — a `secret` goes IN on create/update and is sealed in the ADR-059 secret

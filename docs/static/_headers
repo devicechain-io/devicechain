@@ -1,0 +1,35 @@
+# Netlify response headers. Copied verbatim into the published site by Docusaurus,
+# which treats everything under static/ as a site asset.
+
+# .graphql is not a registered MIME type, so the default is
+# application/octet-stream — which makes a browser download the file instead of
+# showing it, and makes a naive HTTP client treat SDL as binary. These are meant to
+# be read, by a person following a link and by an agent fetching a URL, so they are
+# served as text.
+/schema/*
+  Content-Type: text/plain; charset=utf-8
+  Access-Control-Allow-Origin: *
+
+# 🔴 And again for every localized copy. Docusaurus builds each locale as its own
+# site and copies static/ into all of them, so /es/schema/… exists and is served —
+# but a Netlify path rule matches by prefix, so "/schema/*" does not reach it. The
+# English copy came back as text and the Spanish one as octet-stream, which is the
+# kind of half-right that a check on one path alone reports as done.
+#
+# The placeholder covers any locale, so a new one needs no line here. (robots.txt
+# has the same shape of problem and does need one per locale — there the sitemaps
+# are enumerated because each locale emits its own.)
+/:locale/schema/*
+  Content-Type: text/plain; charset=utf-8
+  Access-Control-Allow-Origin: *
+
+# The index is the entry point: it names every area, its auth plane and its
+# endpoint, and points at the schema file for each. Listed after the wildcards so
+# the more specific rule wins for Content-Type.
+/schema/index.json
+  Content-Type: application/json; charset=utf-8
+  Access-Control-Allow-Origin: *
+
+/:locale/schema/index.json
+  Content-Type: application/json; charset=utf-8
+  Access-Control-Allow-Origin: *

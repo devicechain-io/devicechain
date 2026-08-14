@@ -5,3 +5,9 @@
 
 # Generated
 .cache-loader
+
+# The published GraphQL schemas, written by scripts/generate-schema.mjs on every
+# start and build. Never committed: a copy in the tree is a copy that can drift
+# from the schemas the services actually parse, and the whole point of generating
+# them is that it cannot.
+/static/schema/

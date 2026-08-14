@@ -1,3 +1,6 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # System settings (instance-scoped) GraphQL API — ADR-042 P2.
 #
 # Served at /settings/graphql and authenticated with an *identity*-tier token (the

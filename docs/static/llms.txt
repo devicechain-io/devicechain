@@ -1,0 +1,49 @@
+# DeviceChain
+
+> An open-source IoT platform: device management, a typed relationship graph,
+> time-series telemetry, two-way command dispatch, and a streaming detection and
+> reaction engine. Apache 2.0, self-hosted, multi-tenant. Pre-release — models and
+> APIs still change.
+
+Every external API is GraphQL, and **introspection is disabled by default**, so a
+running instance will not describe itself. The schemas below are the way to read the
+API without deploying one. They are generated on every build from the files the
+services parse at startup, so they cannot drift from the running API.
+
+Start with the schema index. It is the only document that says which **auth plane**
+each API sits on — an admin mutation offered to a tenant developer is a call they can
+never authorize, and the schema files themselves do not carry that distinction.
+
+## Machine-readable contracts
+
+- [GraphQL schema index](/schema/index.json): every functional area, its auth plane,
+  the token that authorizes it, its endpoint, and a link to its schema. JSON.
+- [Device management schema](/schema/device-management.graphql): devices, device
+  types, profiles, the relationship graph, alarms, credentials, detection-rule
+  authoring. The largest area; a good place to see the conventions.
+- [User management schema](/schema/user-management.graphql): `login`, `selectTenant`
+  and `refresh` — where a tenant access token comes from, and the first call any
+  integration makes.
+
+## Reference
+
+- [GraphQL API](/reference/graphql-api): endpoints, the `/api/<area>/graphql`
+  convention, auth planes, pagination and search-criteria conventions, and why an
+  undeclared input field fails the whole request.
+- [Domain model](/concepts/domain-model): the entities, their identifiers and their
+  lifecycle states.
+- [Architecture](/concepts/architecture): the services, what each owns, and how a
+  reading travels from a device to a dashboard.
+
+## Guides
+
+- [Connecting a device](/guides/connecting-a-device): registration through first
+  telemetry, over MQTT.
+- [Notification channels](/guides/notification-channels): routing an alarm to a human.
+
+## Optional
+
+- [Full sitemap](/sitemap.xml): every page, both locales. Spanish translations live
+  under `/es/`.
+- [Source repository](https://github.com/devicechain-io/devicechain): a Go monorepo.
+  The schemas above are generated from `backend/services/*/graphql/`.
