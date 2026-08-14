@@ -26,11 +26,27 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 export const REPO = join(HERE, '..', '..');
 export const OUT = join(HERE, '..', 'static', 'schema');
 
-// Where these artifacts will be reachable. Netlify sets DEPLOY_PRIME_URL to the
-// branch or preview URL and leaves it equal to the site URL on production, so a
-// deploy preview describes ITSELF rather than handing the reader production links
-// that do not yet carry the change they are reviewing.
-export const SITE = process.env.DEPLOY_PRIME_URL || 'https://docs.devicechain.io';
+// The canonical host these artifacts advertise. Kept in step with the site's own
+// `url` by a test rather than imported, because docusaurus.config.ts is TypeScript
+// and this runs before any build step that could transpile it.
+export const CANONICAL = 'https://docs.devicechain.io';
+
+// Where these artifacts say they live.
+//
+// 🔴 This deliberately does NOT trust DEPLOY_PRIME_URL to be the site URL on a
+// production build. An earlier version did, on the strength of a confident comment
+// I wrote from memory, and it was wrong: on the production deploy Netlify set it to
+// https://main--devicechain-docs.netlify.app, so every published schema advertised
+// the branch subdomain instead of the canonical domain. Every file was a 200 and
+// every content-type correct — only reading the BODY on the real site showed it.
+//
+// So production takes the canonical URL from configuration, which cannot drift with
+// a hosting provider's variable semantics, and only a non-production context is
+// allowed to override it — where pointing at itself is exactly what is wanted, so a
+// review reads the artifacts belonging to the change under review.
+export const SITE = process.env.CONTEXT && process.env.CONTEXT !== 'production'
+  ? (process.env.DEPLOY_PRIME_URL || CANONICAL)
+  : CANONICAL;
 
 /** Thrown rather than exited, so the floors below can be exercised by a test. */
 export class GenerateError extends Error {

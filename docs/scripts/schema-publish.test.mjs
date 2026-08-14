@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { sanitizeSdl, sanitizeText, hasCitation } from './sanitize.mjs';
 import { scan } from './gate.mjs';
 import {
-  REPO, SITE, GenerateError, discover, reconcile, resolve, buildArtifacts,
+  REPO, SITE, CANONICAL, GenerateError, discover, reconcile, resolve, buildArtifacts,
 } from './generate-schema.mjs';
 import { SCHEMAS, REQUIRED_OUTPUTS } from './schemas.manifest.mjs';
 
@@ -371,6 +371,53 @@ test('every published schema opens with a banner routing back to the index', () 
     // The licence header stays first.
     assert.match(a.text, /^# Copyright The DeviceChain Authors\n# SPDX-License-Identifier/, a.name);
   }
+});
+
+test('the canonical host matches the one the site is configured to serve from', () => {
+  // CANONICAL is a copy of docusaurus.config.ts's `url`, because that file is
+  // TypeScript and this script runs before anything could transpile it. A copy that
+  // nothing compares is a copy that drifts.
+  const config = readFileSync(join(REPO, 'docs', 'docusaurus.config.ts'), 'utf8');
+  const url = /^\s*url:\s*'([^']+)'/m.exec(config);
+  assert.ok(url, 'could not find `url:` in docusaurus.config.ts');
+  assert.equal(CANONICAL, url[1]);
+});
+
+// SITE is resolved once at module load, so each case re-imports with a distinct
+// query string to get a fresh instance. The await has to be INSIDE the try: a
+// `finally` restoring process.env around a returned promise runs before the module
+// body ever reads it, and the assertion then measures the default. That mistake
+// passes the production case for the wrong reason, since the default IS canonical.
+async function siteUnder(env, tag) {
+  const saved = { ...process.env };
+  try {
+    Object.assign(process.env, env);
+    const mod = await import(`./generate-schema.mjs?${tag}`);
+    return mod.SITE;
+  } finally {
+    process.env = saved;
+  }
+}
+
+test('a production build advertises the canonical host, not a hosting subdomain', async () => {
+  // The regression this exists for: DEPLOY_PRIME_URL is NOT the site URL on a
+  // production deploy. Netlify set it to https://main--devicechain-docs.netlify.app,
+  // and every published schema went out advertising that instead of the domain
+  // people actually link to. Everything returned 200, so only the body showed it.
+  const site = await siteUnder({
+    CONTEXT: 'production',
+    DEPLOY_PRIME_URL: 'https://main--devicechain-docs.netlify.app',
+  }, 'production');
+  assert.equal(site, CANONICAL);
+  assert.ok(!site.includes('netlify.app'));
+});
+
+test('a deploy preview advertises itself, so a review reads its own artifacts', async () => {
+  const site = await siteUnder({
+    CONTEXT: 'deploy-preview',
+    DEPLOY_PRIME_URL: 'https://deploy-preview-999--devicechain-docs.netlify.app',
+  }, 'preview');
+  assert.equal(site, 'https://deploy-preview-999--devicechain-docs.netlify.app');
 });
 
 test('the index carries absolute URLs, because it gets fetched and passed on', () => {
