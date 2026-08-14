@@ -303,6 +303,12 @@ func Compile(r Rule, limits Limits) (*CompiledRule, error) {
 	// leaf cannot answer at all without a position", which is true for every kind.
 	cr.RequiresPosition = pred.ReferencesFences()
 
+	// ...and now that BOTH scopes are known, refuse the one combination that scopes the rule down
+	// to nothing at all.
+	if err := errFenceAndMetricLeaf(r, cr, pred); err != nil {
+		return nil, err
+	}
+
 	// Validate the REACT layer (severity + action chain) and carry the severity through. This is
 	// the same publish-time gate the detection fields pass: a malformed action or an alarm without
 	// a tier is rejected here (fail-closed) so it can never reach the dispatcher.
@@ -311,6 +317,58 @@ func Compile(r Rule, limits Limits) (*CompiledRule, error) {
 	}
 	cr.Severity = r.Severity
 	return cr, nil
+}
+
+// errFenceAndMetricLeaf refuses a rule whose leaf tests a GEOFENCE and a MEASUREMENT together,
+// because the runtime can never feed it a single event.
+//
+// 🔴 THE TWO SCOPES INTERSECT AT THE EMPTY SET, AND NOTHING BELOW THIS POINT CAN NOTICE. The
+// position scope feeds the leaf only samples reporting a position; the metric scope feeds it only
+// samples carrying a measurement. Both are individually sound. But BuildInputs constructs the two
+// kinds from disjoint payloads — a location entry sets Position and leaves M nil, a measurement
+// entry sets M and leaves Position nil, and a heartbeat has neither — so no Input has ever
+// satisfied both gates and none can. The rule then publishes clean, reports healthy, evaluates
+// zero samples and raises nothing, which is indistinguishable from "the condition never happened".
+// That is the worst failure this package has: a silent one that looks like a correct negative.
+//
+// Refusing at compile is the only place the distinction survives. At runtime the two skips are
+// ordinary scope decisions on separate lines of the fan-out loop, taken against different events;
+// nothing there holds both facts at once, so no counter and no log could be attributed to this.
+//
+// The test is ONE question — does the compiled leaf read `m` at all — and not an enumeration of
+// the three metric-scope fields, because every one of them implies that read. FeedMetrics is
+// derived from the leaf's own `m` references; a structured GateMetric lowers to a comparison on
+// `m[metric]`; a ValueMetric lowers to the `metric in m` presence guard valueGuardedLeaf prepends.
+// Asking the leaf covers all three plus the case none of them catch: a raw reference that earned
+// no scope at all (`size(m) > 3`, a dynamic key). That last one is not fed nothing — it is fed
+// location samples and errors on each, which the runtime counts as an eval error and skips. It is
+// louder, but it is the same dead rule, and knowing at publish beats discovering from a counter.
+//
+// The gate fields are then read only to PHRASE the refusal, so an author is told which half of
+// their rule is the measurement. Note there is no GateMetric case among them: a structured `when`
+// and raw CEL are mutually exclusive (leafSource refuses both), and a fence call can only arrive
+// as raw CEL, so a structured gate can never be the conflicting half. A branch for it would read
+// like a guard and could never fire.
+//
+// What this deliberately does NOT refuse: a fence rule with no measurement (the ordinary case), or
+// a measurement rule with no fence. A rule that wants both conditions is two rules, or one rule
+// whose measurement condition is expressed as an attribute the location event also carries.
+func errFenceAndMetricLeaf(r Rule, cr *CompiledRule, pred *predicate.Predicate) error {
+	if !cr.RequiresPosition || !pred.ReferencesMetrics() {
+		return nil
+	}
+	because := "the condition reads `m`"
+	switch {
+	case cr.ValueMetric != "":
+		because = fmt.Sprintf("the rule reads its value from measurement %q", cr.ValueMetric)
+	case len(cr.FeedMetrics) > 0:
+		because = fmt.Sprintf("the condition reads measurement(s) %s", strings.Join(cr.FeedMetrics, ", "))
+	}
+	return invalid(r.ID, "when",
+		"a condition cannot test a geofence and a measurement together: %s, and it also calls "+
+			"geo.inFence(). A location event carries no measurements and a measurement event "+
+			"carries no position, so no event could satisfy both and the rule would never fire. "+
+			"Split it into a fence rule and a measurement rule", because)
 }
 
 // validateReact enforces the REACT contract on an authored rule (ADR-051 REACT stage): a bounded

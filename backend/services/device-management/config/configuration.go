@@ -152,5 +152,23 @@ func (c *DeviceManagementConfiguration) Validate() error {
 	if c.MembershipCacheTtlSeconds <= 0 {
 		return fmt.Errorf("membershipCacheTtlSeconds must be positive (got %d)", c.MembershipCacheTtlSeconds)
 	}
+	// 🔴 A NEGATIVE VALUE HERE USED TO START THE INSTANCE WITH THE SKEW BOUND OFF. eventtime
+	// treats maxSkew <= 0 as "no ceiling" — a defensive read, since ApplyDefaults turns the
+	// unset 0 into 300 — so a negative reached that branch and disabled the one place the
+	// platform decides what instant a reading happened at. The cost is not a wrong chart: one
+	// event dated years out pins a device's last-activity under the strictly-newer guard, its
+	// inactivity sweep never fires again, and the device can never be seen to go offline. The
+	// chart already tells operators not to do it; this is the half that refuses.
+	//
+	// Every sibling above rejects a non-positive value. This one is bounded BELOW at zero
+	// rather than at one because 0 is the legitimate "unset" ApplyDefaults has already
+	// replaced by the time Validate runs — so reaching Validate with 0 means a caller
+	// constructed the config without defaulting it, which the sibling checks would catch
+	// anyway. Only a value the operator wrote can be negative.
+	if c.MaxEventFutureSkewSeconds < 0 {
+		return fmt.Errorf("maxEventFutureSkewSeconds must not be negative (got %d): a negative "+
+			"value disables the clock-skew bound, which lets one far-future timestamp freeze a "+
+			"device's presence permanently", c.MaxEventFutureSkewSeconds)
+	}
 	return nil
 }

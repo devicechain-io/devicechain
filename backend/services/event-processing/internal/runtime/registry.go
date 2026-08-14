@@ -288,12 +288,13 @@ func (reg *RuleRegistry) IDs() []string {
 // A tenant with no fence-referencing rule cannot produce a containment miss, so seeding it would
 // buy nothing and cost a round trip per restart.
 //
-// The consequence to be honest about: a tenant that gains its FIRST fence rule after startup is
-// not seeded by this reconcile. It does not need to be — the rule arrives as a published-rule
-// fact, and any fence edit from then on arrives as a fence-set fact; and if neither has happened
-// yet, an event stamped with a version the view does not hold reports a loud counted error rather
-// than a silent "outside". The reconcile narrows a real window; it does not pretend to close one
-// that only a synchronous read on the hot path could.
+// The consequence this reconcile cannot cover: a tenant that gains its FIRST fence rule after
+// startup is not in the list, because its rule did not exist when the list was taken. That window
+// used to be left open on the argument that the miss is loud (an event stamped with a version the
+// view does not hold reports a counted eval error rather than a silent "outside"). Loud is not the
+// same as working — the rule was dead until someone re-saved a fence, which is not a repair any
+// author would guess at — so the published-rule fact handler now seeds that tenant itself; see
+// processor.seedFencesForPublishedRules. This reconcile still owns the restart case.
 func (reg *RuleRegistry) TenantsWithFenceRules() []string {
 	seen := make(map[string]struct{})
 	for _, sr := range reg.byID {

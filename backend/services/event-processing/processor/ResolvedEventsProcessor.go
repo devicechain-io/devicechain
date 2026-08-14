@@ -1865,6 +1865,13 @@ func (rp *ResolvedEventsProcessor) handleRuleFact(msg messaging.Message, signal 
 	// version-transition disarm. Skipped during catch-up (signal=false): the reconciles rebuild it.
 	if signal {
 		rules, _ := runtime.CompilePublishedRules(tenant, ev.ProfileVersionToken, ev.Rules)
+		// Fences BEFORE rules: a rule that tests containment must not go live against a view that
+		// has nothing in it for its tenant. The startup reconcile cannot cover this case — the rule
+		// did not exist when it ran — so this is the only thing standing between a tenant's FIRST
+		// fence rule and an eval error on every event until someone edits a fence.
+		if !rp.seedFencesForPublishedRules(rules) {
+			return false // shutdown mid-send: leave unacked; the persisted rows rebuild it
+		}
 		if len(rules) > 0 || activeEntry != nil {
 			select {
 			case rp.ruleUpdates <- ruleUpdate{upserts: rules, active: activeEntry}:
