@@ -192,7 +192,39 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 		occurred := event.OccurredTime
 		// The reader started at the window's lower edge by PUBLISH time; filter to the OCCURRED-time
 		// window (a late-published-but-early-occurred event, or one occurring past the window, is out).
-		if occurred.Before(tr.Start) || occurred.After(tr.End) {
+		//
+		// 🔑 THE FILTER WIDENS; THE INSTANT HANDED TO THE ENGINE DOES NOT. `occurred` above stays
+		// the envelope and is what reg.Plan and ProcessResolved receive below, exactly as before —
+		// the plan fans a batch out per entry on its own, so changing the parent instant here would
+		// alter what the engine computes rather than merely which events reach it. This change is
+		// about ADMISSION only.
+		//
+		// 🔴🔴 THE ADMISSION TEST IS ON THE EVENT'S WHOLE SPAN, NOT ON ITS ENVELOPE, AND A BATCH IS WHY.
+		// An event's envelope carries ONE instant, but a batched event carries a sample's own time
+		// per entry — so a store-and-forward tracker that buffers 10:00–10:30 readings and uploads
+		// them at 11:05 has an envelope of 11:05 and samples entirely inside a 10:00–11:00 window.
+		// Filtering on the envelope dropped that event WHOLE: EventsScanned stayed 0, the preview
+		// reported the rule as never firing, and no degraded flag was raised. A preview whose entire
+		// job is "what would this rule have done" answered "nothing" about samples it never looked
+		// at, with no indication it had skipped them — the confident wrong answer this package's
+		// doc comment lists as the one failure mode worse than a truncation notice.
+		//
+		// 🔑 THIS IS AN ADMISSION FIX ONLY, AND DELIBERATELY NOT A CLAIM ABOUT THE LIVE ENGINE.
+		// Whether the samples then produce edges is the engine's business: it advances a watermark
+		// from the instant it is handed, so a batch's entries can still be dropped as LATE, and
+		// that behaviour is engine-wide and identical here and in production. Fixing it needs
+		// per-series watermarks and is not attempted here. What this change guarantees is narrower
+		// and worth having on its own: an event that overlaps the window REACHES the engine and is
+		// counted, so a preview's silence is the engine's answer rather than an artefact of the
+		// filter in front of it.
+		//
+		// occurredSpan returns the earliest and latest instant the event carries (the envelope
+		// twice, for an event that batches nothing), so this stays exactly the old comparison for
+		// an unbatched event and widens it to an overlap test for a batched one. Widening a filter
+		// is only safe while it still EXCLUDES: an event whose whole span sits outside the window
+		// is still dropped, which is what the second test below holds.
+		first, last := occurredSpan(event)
+		if last.Before(tr.Start) || first.After(tr.End) {
 			continue
 		}
 		// Check the in-scope cap BEFORE counting/processing, so EventsScanned reports events actually
