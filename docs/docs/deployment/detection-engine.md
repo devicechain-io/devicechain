@@ -109,6 +109,26 @@ upstream hop can stall; the cost is that every time-based decision is delayed by
 platform received it, so one device with a wrong clock cannot drag the whole engine's sense of time
 forward. Timestamps in the past are treated as lateness, not clamped.
 
+**What happens past the tolerance** depends on the rule kind, and it is worth knowing before you
+size the setting:
+
+- **Tumbling-window aggregates and session/gap rules discard the reading**, silently. Their window
+  has closed, and re-opening it would mean re-emitting a result already published. Nothing is
+  counted or logged.
+- **Every other kind still evaluates it** — threshold, duration, repeating, count-window,
+  rate and sliding aggregates. The reading is applied against a frontier that has already moved on,
+  which can skew a duration or a window boundary, but it is not dropped.
+
+Either way the reading is **stored and charted normally**; this is a detection-only effect.
+
+One property makes the tolerance less of a lever than it looks: **the frontier is shared across the
+whole instance**, not tracked per device. So a fleet's busy devices carry it to roughly "now"
+regardless of how long one quiet device was away, and raising the tolerance to cover a
+half-hour store-and-forward upload would mean delaying every time-based decision, for every tenant,
+by half an hour. Where that trade does not work, the answer is to shorten the upload batches or to
+keep window-shaped rules off those metrics — see [connecting a
+device](../guides/connecting-a-device.md).
+
 ### How quickly can an absence rule fire?
 
 An "absence" or "silence" rule cannot fire the instant a device goes quiet — nothing arrives to
@@ -215,7 +235,18 @@ The detection engine has no clock-skew setting of its own. How far a device-repo
 timestamp may lead the platform's own clock is decided once, when the event is resolved, and
 every consumer — the stored history, the live projections, detection and replay alike —
 reads the same already-bounded value. It is configured on the device-management area as
-`maxEventFutureSkewSeconds`.
+`maxEventFutureSkewSeconds`, in seconds, **default 300**. A reading whose reported time leads the
+server's clock by more than that is stored at the ceiling rather than refused.
+
+A **negative value is rejected at startup**, and it is worth knowing what it would have meant:
+disabling the bound entirely. One event dated years into the future then pins the device's
+last-activity time — every projection here keeps only the strictly newer value — so its inactivity
+sweep never fires again and the device can never be seen to go offline. There is no supported way
+to turn the bound off; raise the number if a fleet's clocks genuinely drift.
+
+`watermarkLatenessSeconds` below is a different setting for a different direction: skew bounds how
+far a timestamp may run *ahead*, lateness bounds how long the engine waits for one that arrives
+*behind*.
 
 | Setting | Default | What it does |
 |---|---|---|

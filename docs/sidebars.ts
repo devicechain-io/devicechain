@@ -93,6 +93,7 @@ const sidebars: SidebarsConfig = {
           items: [
             'concepts/governance',
             'concepts/tenant-tiers',
+            'concepts/system-settings',
             'concepts/object-storage',
             'concepts/mcp',
           ],

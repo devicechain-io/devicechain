@@ -113,6 +113,23 @@ query {
 }
 ```
 
+:::caution Deeply backfilled readings are missing from `bucketedMeasurements`
+A bucketed read whose `intervalSeconds` is a whole multiple of 60 and which carries no anchor
+filter is served from a pre-aggregated rollup rather than from the raw readings. The rollup keeps
+itself current over a **trailing 30-day window**, and everything older than that was materialized
+once, when the database was created.
+
+So a reading **written now but stamped more than 30 days in the past** — by its own `occurredTime`,
+which a device controls — falls between the two: too old for the refresh window, too late for the
+one-time pass. `measurementEvents` returns it and the raw history is complete; `bucketedMeasurements`
+does not show it, and no error says so.
+
+The boundary is how far **back** the reading is stamped, not how old the data is. A reading
+backfilled by an hour, or a day, or three weeks is picked up within a minute and is fine. This
+only reaches a device that buffered for over a month, or one whose clock is wrong by that much.
+Sub-minute intervals and anchor-scoped reads are served from the raw readings and are unaffected.
+:::
+
 All event queries are **tenant-scoped automatically** — results are limited to the caller's tenant, and a query without a resolved tenant is rejected.
 
 ## Exploring the schema
@@ -150,6 +167,50 @@ query {
 - List queries take a search-criteria input with pagination.
 - Mutations follow a `create* / update* / delete*` naming pattern.
 
+### An update replaces the whole record {#an-update-replaces-the-whole-record}
+
+`update*` mutations take the **same input as their `create*` sibling**, and they mean what that
+implies: every field you send is written, and **every field you leave out is erased**. There is no
+patch semantic. The mutation returns the entity and succeeds, so a field you did not mean to clear
+is gone with nothing to indicate it.
+
+```graphql
+# Renaming a device this way ALSO clears its externalId and its metadata.
+mutation {
+  updateDevice(token: "sensor-001", request: { token: "sensor-001", name: "Cold store probe" }) {
+    token
+  }
+}
+```
+
+Read the entity first, change what you mean to change, and send the whole thing back:
+
+```graphql
+query { devicesByToken(tokens: ["sensor-001"]) { token name externalId metadata } }
+```
+
+Two consequences worth planning around. Because the write covers every field, **two people editing
+one entity overwrite each other across all of it**, not only where they overlap. And because the
+update input is the create input, it carries the **token** — for most entities the resolver locates
+the row by the request's token, so it is not a rename channel, but where an entity's token is
+genuinely fixed the server says so rather than moving it (a geofence is the worked example).
+
+Three deliberate exceptions, which are exceptions because omission means something specific rather
+than nothing:
+
+| Where | An omitted field means |
+| --- | --- |
+| A notification channel's `secret` | **Unchanged.** You never need to re-send it; a non-null value replaces it, an empty string clears it |
+| A tenant's [governance overrides](../concepts/governance.md) | **Inherit the platform default** — never "unlimited" |
+| A device profile's `activeVersion` | Not writable here at all; it moves only by publish and rollback |
+
+:::note
+This is the current contract, not the intended one. Partial updates — where an omitted field is
+left alone — are planned before 1.0, and will apply uniformly across every area rather than
+per-service. Until then, treat every `update*` as a full replace unless the table above says
+otherwise.
+:::
+
 ## Input validation
 
 **An input field the schema does not define is rejected.** Sending an undeclared field
@@ -171,5 +232,32 @@ It matters more than a typo check. A silently discarded field is indistinguishab
 that was applied: the mutation returns success, and you get a partially-configured entity
 with nothing to indicate a value went missing. Rejecting is what makes a success response
 mean the whole input was understood.
+
+### What a token may contain {#what-a-token-may-contain}
+
+Every entity token — and every tenant id — must match:
+
+```
+^[A-Za-z0-9][A-Za-z0-9_-]*$
+```
+
+Letters (either case), digits, hyphens and underscores, starting with a letter or a digit, and at
+most **128 characters**. Anything else is refused at write, on create *and* on update, before
+anything is stored.
+
+This is a security rule rather than a house style, which is why it is this narrow. A token is
+spliced into infrastructure namespaces: a tenant id becomes a segment of a NATS subject recovered
+by splitting on `.`, and a device token becomes a segment of an MQTT topic. So a `.` shifts subject
+segments, and `*`, `>`, `+` and `#` inject wildcards that match **across tenants**. Uppercase is
+allowed deliberately, because machine-supplied identifiers like device serials and VINs are usually
+uppercase.
+
+The identifiers integrators reach for first are the ones this rejects — `sensor.001`, a MAC address
+`AA:BB:CC:DD:EE:FF`, `plant/line-2`, anything with a space. **Put those in `externalId` instead**,
+which is opaque, has no format constraints, and is unique within a tenant when present. Give the
+entity a token you choose and keep the device's own identifier alongside it.
+
+The console mints tokens for you from a per-entity-type template, so this rarely comes up there;
+it is the API and scripted-provisioning path where it bites first.
 
 Detailed, per-type reference pages will be generated from the schemas as they stabilize.

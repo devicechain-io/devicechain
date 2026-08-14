@@ -50,14 +50,41 @@ The centre and zoom apply only when a map has **nothing of its own to fit to**. 
 
 ## What a tile URL must look like {#what-a-tile-url-must-look-like}
 
-Saving is fail-closed, and each rule refuses a value that would otherwise fail silently later:
+Saving is fail-closed, and each rule refuses a value that would otherwise fail silently later.
+
+**These rules apply at the tenant and instance tiers only.** A per-surface override — a map
+widget's tile URL, or the geofence editor's personal field — is held in your browser and never
+reaches the server, so nothing checks it beyond the credit-line rule above. A URL that is `http://`,
+that carries a Leaflet-style `{s}`, or that points at a style JSON is accepted there and handed
+straight to the renderer, which draws blank tiles with no message and no fallback. If a personal
+override shows an empty map, the rules below are the checklist to walk.
 
 - **`https` only.** A console served over HTTPS blocks tiles fetched over HTTP as mixed content, so an `http://` source is stored-but-unrenderable. If you run an internal tile server on plain HTTP, put it behind TLS.
 - **It must be a template.** The URL needs `{z}`, `{x}` and `{y}` — or `{bbox-epsg-3857}`, or `{quadkey}`. Without a placeholder, every tile on the map requests the same image, which is the shape of the two common paste errors: a single tile's URL, and a style JSON URL.
 - **Only placeholders the renderer knows are allowed** — `{prefix}`, `{z}`, `{x}`, `{y}`, `{ratio}`, `{bbox-epsg-3857}` and `{quadkey}`. Anything else in braces is sent to the provider as literal text. This catches the most common copy of all: a URL written for Leaflet, which carries an `{s}` subdomain placeholder DeviceChain's renderer does not substitute. Replace it with a single subdomain — `a.tile.example.com` rather than `{s}.tile.example.com` — which is what current practice recommends anyway.
 - **Attribution is required, and its markup is limited** to plain text plus links written exactly as `<a href="https://…">text</a>`. Links are allowed because several providers' licences require the credit to link to their copyright page; everything else is refused.
 
-Only **raster** tiles are supported today. A vector style URL is not accepted.
+Only **raster** tiles are supported today. A vector style URL is not accepted, and tiles are
+requested under the standard 256-pixel `{z}/{x}/{y}` addressing. A retina endpoint serving
+512-pixel images at those same coordinates works and simply renders sharper — that is what
+`{ratio}` is for. A tile server using a genuine 512-tile *scheme*, where the coordinates
+themselves mean something different, is not supported.
+
+### The numeric and length bounds {#the-numeric-and-length-bounds}
+
+Also refused, on save at the tenant and instance tiers:
+
+| Field | Bound |
+| --- | --- |
+| `tileUrl` | 2048 characters |
+| `attribution` | 512 characters, and no control characters |
+| `zoom` | 0 to 24 |
+| `centerLat` | −90 to 90 |
+| `centerLon` | −180 to 180 |
+
+The server names the bound it refused, so you learn it at Save — but the console only checks that
+the camera fields *are numbers*, not that they are in range, so a zoom of 30 passes the form and
+comes back as a server error rather than being caught as you type.
 
 ## Choosing a provider {#choosing-a-provider}
 

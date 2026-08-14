@@ -40,6 +40,8 @@ Los niveles llevan un **orden de visualización** y un **color** para que un ope
 - **Empaquetado de IA** — la matriz entre niveles que asigna qué modelos de IA puede usar cada nivel.
 - **Por inquilino** — el nivel de un inquilino se establece en su página de detalle de administración; su modelo de IA por función también se establece allí, a partir del menú derivado del nivel.
 
+Las dos superficies de IA anteriores necesitan el servicio opcional [`ai-inference`](./ai-authoring.md), que se entrega en el perfil de despliegue `full`. Sin él el nivel funciona con normalidad — los techos de gobernanza no se ven afectados — pero la matriz de empaquetado de IA y el menú de modelo por inquilino informan de que esta instancia no ejecuta el área.
+
 ## Un concepto de empaquetado en exactamente un lugar
 
 Los niveles de inquilino son una capacidad familiar y esperada para cualquiera que empaquete una plataforma IoT multiinquilino: algo dado por sentado, hecho de forma limpia. El punto de modelar un nivel como su propia entidad de primera clase es que el concepto de "a qué tiene derecho un inquilino" vive en **exactamente un lugar** en lugar de estar disperso entre los servicios que lo consumen: la gobernanza lo lee, el derecho de uso de IA lo lee, y ninguno mantiene su propia copia.

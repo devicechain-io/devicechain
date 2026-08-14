@@ -125,6 +125,26 @@ respecto al momento en que la plataforma la recibió, para que un dispositivo co
 no pueda arrastrar hacia adelante el sentido del tiempo de todo el motor. Las marcas de tiempo en el
 pasado se tratan como retraso, no se recortan.
 
+**Qué ocurre pasada la tolerancia** depende del tipo de regla, y conviene saberlo antes de
+dimensionar el ajuste:
+
+- **Los agregados de ventana fija y las reglas de sesión/hueco descartan la lectura**, en silencio.
+  Su ventana se cerró, y reabrirla significaría volver a emitir un resultado ya publicado. No se
+  cuenta ni se registra nada.
+- **Todos los demás tipos la siguen evaluando** — umbral, duración, repetición, ventana de conteo,
+  tasa y agregados deslizantes. La lectura se aplica contra una frontera que ya avanzó, lo que puede
+  desvirtuar una duración o el borde de una ventana, pero no se descarta.
+
+En ambos casos la lectura se **almacena y grafica con normalidad**; esto afecta solo a la detección.
+
+Una propiedad hace que la tolerancia sea menos palanca de lo que parece: **la frontera es compartida
+por toda la instancia**, no se lleva por dispositivo. Así que los dispositivos activos de una flota
+la arrastran hasta aproximadamente «ahora» por mucho tiempo que uno silencioso haya estado fuera, y
+subir la tolerancia para cubrir una subida acumulada de media hora significaría retrasar media hora
+toda decisión basada en el tiempo, para todos los inquilinos. Donde ese intercambio no funcione, la
+respuesta es acortar los lotes de subida o mantener las reglas con ventana fuera de esas métricas —
+vea [conectar un dispositivo](../guides/connecting-a-device.md).
+
 ### ¿Con qué rapidez puede dispararse una regla de ausencia?
 
 Una regla de «ausencia» o «silencio» no puede dispararse en el instante en que un dispositivo se
@@ -242,7 +262,20 @@ El motor de detección no tiene un ajuste propio de desfase de reloj. Cuánto pu
 marca de tiempo informada por el dispositivo respecto al propio reloj de la plataforma se decide una
 sola vez, al resolver el evento, y todos los consumidores —el historial almacenado, las proyecciones
 en vivo, la detección y la reproducción— leen ese mismo valor ya acotado. Se configura en el área
-device-management como `maxEventFutureSkewSeconds`.
+device-management como `maxEventFutureSkewSeconds`, en segundos, **con 300 por defecto**. Una lectura
+cuya hora informada adelanta al reloj del servidor más que eso se almacena en el techo, no se
+rechaza.
+
+Un **valor negativo se rechaza al arrancar**, y conviene saber qué habría significado: desactivar el
+límite por completo. Un evento fechado años en el futuro fija entonces la hora de última actividad
+del dispositivo — todas las proyecciones de aquí conservan solo el valor estrictamente más nuevo —,
+así que su barrido de inactividad no vuelve a dispararse y el dispositivo nunca puede darse por
+fuera de línea. No hay forma admitida de desactivar el límite; suba el número si los relojes de una
+flota se desvían de verdad.
+
+`watermarkLatenessSeconds`, más abajo, es otro ajuste para otra dirección: el desfase acota cuánto
+puede adelantarse una marca de tiempo, y el retraso acota cuánto espera el motor a una que llega
+*por detrás*.
 
 | Ajuste | Predeterminado | Qué hace |
 |---|---|---|

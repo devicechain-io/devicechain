@@ -50,14 +50,30 @@ El centro y el zoom se aplican solo cuando un mapa **no tiene nada propio a lo q
 
 ## Qué aspecto debe tener una URL de mosaicos {#what-a-tile-url-must-look-like}
 
-El guardado falla de forma cerrada, y cada regla rechaza un valor que si no fallaría en silencio más adelante:
+El guardado falla de forma cerrada, y cada regla rechaza un valor que si no fallaría en silencio más adelante.
+
+**Estas reglas se aplican solo en los niveles de inquilino e instancia.** Una anulación por superficie —la URL de mosaicos de un widget de mapa, o el campo personal del editor de geocercas— se guarda en tu navegador y nunca llega al servidor, así que nada la comprueba más allá de la regla del crédito anterior. Una URL que sea `http://`, que lleve un `{s}` al estilo de Leaflet, o que apunte a un JSON de estilo se acepta ahí y se entrega directamente al renderizador, que dibuja mosaicos en blanco sin mensaje y sin recurso alternativo. Si una anulación personal muestra un mapa vacío, las reglas siguientes son la lista que hay que repasar:
 
 - **Solo `https`.** Una consola servida por HTTPS bloquea los mosaicos obtenidos por HTTP como contenido mixto, así que un origen `http://` queda almacenado pero no puede representarse. Si tienes un servidor de mosaicos interno en HTTP simple, ponlo detrás de TLS.
 - **Debe ser una plantilla.** La URL necesita `{z}`, `{x}` e `{y}` —o `{bbox-epsg-3857}`, o `{quadkey}`—. Sin un marcador, todos los mosaicos del mapa solicitan la misma imagen, que es la forma de los dos errores de copiado más habituales: la URL de un único mosaico y la URL de un JSON de estilo.
 - **Solo se admiten los marcadores que el renderizador conoce** —`{prefix}`, `{z}`, `{x}`, `{y}`, `{ratio}`, `{bbox-epsg-3857}` y `{quadkey}`—. Cualquier otra cosa entre llaves se envía al proveedor como texto literal. Esto detecta la copia más habitual de todas: una URL escrita para Leaflet, que lleva un marcador de subdominio `{s}` que el renderizador de DeviceChain no sustituye. Sustitúyelo por un único subdominio —`a.tile.example.com` en lugar de `{s}.tile.example.com`—, que además es lo que recomienda la práctica actual.
 - **La atribución es obligatoria, y su marcado es limitado**: texto plano más enlaces escritos exactamente como `<a href="https://…">texto</a>`. Se permiten enlaces porque varias licencias de proveedores exigen que el crédito enlace a su página de derechos de autor; todo lo demás se rechaza.
 
-Hoy solo se admiten mosaicos **ráster**. No se acepta una URL de estilo vectorial.
+Hoy solo se admiten mosaicos **ráster**. No se acepta una URL de estilo vectorial, y los mosaicos se solicitan con el direccionamiento estándar `{z}/{x}/{y}` de 256 píxeles. Un endpoint retina que sirva imágenes de 512 píxeles en esas mismas coordenadas funciona y simplemente se ve más nítido — para eso está `{ratio}`. Un servidor de mosaicos con un *esquema* genuino de 512, donde las coordenadas significan otra cosa, no está admitido.
+
+### Los límites numéricos y de longitud {#the-numeric-and-length-bounds}
+
+También se rechazan, al guardar en los niveles de inquilino e instancia:
+
+| Campo | Límite |
+| --- | --- |
+| `tileUrl` | 2048 caracteres |
+| `attribution` | 512 caracteres, y ningún carácter de control |
+| `zoom` | de 0 a 24 |
+| `centerLat` | de −90 a 90 |
+| `centerLon` | de −180 a 180 |
+
+El servidor nombra el límite que rechazó, así que lo aprendes al guardar — pero la consola solo comprueba que los campos de cámara *sean números*, no que estén en rango, así que un zoom de 30 pasa el formulario y vuelve como un error del servidor en lugar de detectarse mientras escribes.
 
 ## Elegir un proveedor {#choosing-a-provider}
 

@@ -45,6 +45,34 @@ toda la serie en un solo mensaje y conservar el historial que realmente registr�
 aparezca; un valor que no lo sea es **rechazado** indicando la entrada culpable, nunca sustituido en
 silencio.
 
+Hay un valor RFC 3339 válido que se rechaza igualmente: **`0001-01-01T00:00:00Z`**, que la
+plataforma reserva para significar «no se informó ninguna hora». Un dispositivo que quiera decir la
+época debe enviar `1970-01-01T00:00:00Z`. Como todo rechazo de marca de tiempo, es terminal y se
+lleva por delante **el mensaje entero** — todas las lecturas hermanas del mismo lote —, así que
+conviene descartarlo en el firmware antes que descubrirlo en una cola de mensajes fallidos.
+
+:::caution Un lote muy acumulado se almacena entero, pero la detección puede no verlo todo
+La frase anterior habla de *almacenamiento*, y ahí se cumple sin matices: cada lectura aterriza y se
+grafica en su propio instante. La detección es otra cosa. El motor mantiene una única frontera para
+toda la instancia y la avanza con la hora de cada mensaje, así que **un dispositivo que estuvo un
+rato sin conexión y luego sube toda su serie de golpe puede hacer que sus lecturas más antiguas
+lleguen por detrás de esa frontera** — y los dos tipos de regla con ventana, los agregados de
+ventana fija y las reglas de sesión/hueco, descartan una lectura cuya ventana ya se cerró. Sin
+contador, sin registro, sin alarma.
+
+Las reglas de umbral, duración, repetición, ventana de conteo y tasa sí evalúan esas lecturas.
+
+La tolerancia es [`watermarkLatenessSeconds`](../deployment/detection-engine.md) (5 segundos por
+defecto), y subirla ayuda solo hasta cierto punto: la frontera es compartida, así que los
+dispositivos activos la siguen empujando hacia adelante por mucho tiempo que el silencioso haya
+estado fuera.
+
+Si usa reglas con ventana sobre una flota que acumula, la forma fiable es **subir en lotes que
+abarquen menos que la tolerancia de retraso**, o mantener las reglas con ventana fuera de las
+métricas que reportan esos dispositivos. El almacenamiento, las gráficas y las [consultas de
+eventos](../reference/graphql-api.md) no se ven afectados en ningún caso — las lecturas están todas.
+:::
+
 Una marca de tiempo informada no puede adelantarse demasiado al propio reloj de la plataforma. La que
 lo haga se almacena en ese tope —la tolerancia es amplia para la deriva normal de reloj, así que esto
 solo afecta a un dispositivo cuyo reloj está realmente mal. Ajuste el reloj en lugar de confiar en el

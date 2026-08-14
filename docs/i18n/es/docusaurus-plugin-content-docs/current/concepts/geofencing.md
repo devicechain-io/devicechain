@@ -14,7 +14,9 @@ Disponible: la autoría de geocercas en la consola (dibujar, editar, eliminar) o
 
 En la consola, las geocercas viven en **Áreas → Geocercas**. Haga clic en el mapa para colocar un vértice, haga clic en el primer vértice para cerrar la forma, y guarde. Sobre una geocerca existente puede arrastrar un vértice para moverlo, hacer Alt-clic en un vértice para eliminarlo, o hacer clic en el pequeño tirador de una arista para añadir un vértice ahí.
 
-Una geocerca lleva un **token** — el identificador con el que las reglas la nombran — más un nombre y una descripción opcionales. El token queda fijo una vez creada.
+Una geocerca lleva un **token** — el identificador con el que las reglas la nombran — más un nombre y una descripción opcionales. El token queda fijo una vez creada: la consola lo muestra como solo lectura al editar, y la API rechaza una actualización que lo cambiaría. El nombre se puede cambiar cuando quiera, y cambiarlo no rompe nada.
+
+La razón es que una regla nombra una geocerca por su **token**, dentro de un texto de regla que la plataforma no puede reescribir por usted. Un renombrado dejaría cada `geo.inFence("token-viejo")` sin nombrar nada. Si de verdad necesita otro token, cree la geocerca nueva, reapunte las reglas que nombran la vieja y luego borre la vieja — que es el orden que le obliga a ocuparse de las reglas en lugar de descubrirlas más tarde.
 
 ### El mapa que hay detrás de su geocerca {#no-default-basemap}
 
@@ -43,6 +45,14 @@ La contención se calcula sobre una esfera, no sobre un mapa plano, y eso no es 
 - **A través del antimeridiano.** Una geocerca que va de 179°E a 179°O tiene 2° de ancho. Leída como coordenadas planas se convierte en una banda de 358° de ancho que cubre casi todo el mundo — respondiendo «dentro» para un dispositivo en el Atlántico y «fuera» para uno que está parado dentro de la geocerca.
 - **En latitudes altas.** El camino más corto entre dos puntos a la misma latitud se arquea hacia el polo, así que un «rectángulo» dibujado con cuatro vértices no está delimitado por líneas de latitud constante. En una caja que cubre 10°O–10°E y 80°–81°N, un punto a 80,05°N queda *fuera* de la geocerca real en el centro y *dentro* en los bordes. La matemática plana dice que ambos están dentro.
 
+### Dónde cuenta el borde {#where-the-edge-counts}
+
+Tres respuestas que puede necesitar predecir, todas decididas de una manera y aplicadas de forma uniforme:
+
+- **El borde está dentro.** Una posición que cae exactamente sobre la arista de una geocerca está contenida. Si se dejara a la biblioteca de geometría subyacente, el borde se repartiría entre regiones adyacentes — así que dos geocercas que comparten una arista reclamarían cada una una parte y ninguna reclamaría el resto. Una prueba explícita de «sobre la arista» lo evita, con una tolerancia de unos 6 mm sobre el terreno.
+- **El borde de un agujero también está dentro**, por la misma regla. Posición estrictamente dentro de un agujero → fuera de la geocerca. Posición sobre el anillo del agujero → dentro de la geocerca. Así, dos geocercas adyacentes, o una geocerca y su propio agujero, nunca discrepan sobre un punto que comparten.
+- **El sentido del anillo da igual.** Las versiones en sentido horario y antihorario del mismo anillo dan la misma respuesta; el sentido se normaliza en lugar de darse por bueno, así que una integración que autora GeoJSON sobre la API no tiene que acertarlo. (La única forma que esto no puede rescatar es una «geocerca» tan grande que envuelve casi todo el globo, donde «la región más pequeña» es ambigua — pero el límite de 512 posiciones y la exigencia de delimitar un área dejan eso muy lejos de lo que parece una geocerca real.)
+
 ## Las geocercas cambian, y el historial debe sobrevivirlo {#fences-change}
 
 Todo cambio en una geocerca — crear, editar, eliminar, incluso renombrar una — **congela el conjunto entero de geocercas en una nueva versión**. Cada versión almacena la geometría de cada geocerca tal como estaba en ese momento, de modo que las formas se conservan incluso después de que las geocercas mismas se editen o eliminen.
@@ -68,6 +78,39 @@ geo.inFence("yard-perimeter")
 ```
 
 El predicado responde para la posición del evento que se está evaluando, contra el conjunto de geocercas con el que ese evento fue sellado. Una regla que nombra una geocerca que no se puede compilar — porque su anillo no delimita un área — falla al compilar en lugar de responder de forma arbitraria.
+
+### Una prueba de geocerca y una de medición no pueden compartir condición {#fences-and-measurements}
+
+Una condición que llama a `geo.inFence(...)` **y** lee una medición se rechaza al publicarla:
+
+```text
+geo.inFence("yard") && m["temp"] > 80    ← rechazada
+```
+
+No es una regla de estilo — ningún evento podría satisfacerla nunca. Un evento de ubicación reporta una posición y no lleva mediciones; un evento de medición lleva lecturas y no reporta posición. Una condición que necesita ambas no recibe nada, para siempre, y se quedaría en su lista de reglas informando que está sana sin dispararse jamás. Rechazarla al publicar es el único punto donde las dos mitades se ven juntas; en la evaluación cada una es solo una muestra que no cualificó.
+
+Exprésela como dos reglas — una sobre la geocerca, otra sobre la medición — o, si el valor que prueba cambia poco, póngalo en el dispositivo como un **atributo**, que un evento de ubicación sí lleva.
+
+### Cuando una geocerca que una regla nombra no está {#unknown-fence}
+
+`geo.inFence("typo")` compila y publica: nada comprueba al publicar que el token nombre una geocerca real. En la evaluación la llamada no puede responder, y la plataforma no se inventa una — la muestra se **omite y se cuenta como error de evaluación**, nunca se responde «fuera». Responder «fuera» sería peor que inútil: para una regla que sostiene una condición en el tiempo, parecería que el dispositivo sale de la geocerca.
+
+Cuatro situaciones lo producen, y solo la primera es un error:
+
+| Situación | Lo que ve |
+| --- | --- |
+| El token está mal escrito, o la geocerca se borró | Errores de evaluación en cada evento de ubicación, desde que la regla entra en vigor |
+| Previsualizar una regla sobre eventos **anteriores a que se dibujara la geocerca** | Errores durante todo el tramo previo a su existencia — la geocerca realmente no estaba en el conjunto entonces |
+| Una regla autorada contra una geocerca que existe en una versión *posterior* a los eventos que se reproducen | Lo mismo, y por lo mismo |
+| La primerísima regla de geocerca de un inquilino, en los segundos posteriores a publicarla | Transitorio; el motor carga el conjunto de geocercas al llegar la regla |
+
+Los errores de evaluación se exponen por regla en la previsualización de autoría y en la salud de reglas del motor de detección, así que esto es visible — pero nada señala la geocerca como causa. Si una regla de geocerca produce errores y nada más, revise el token primero.
+
+### Qué mantiene el motor en memoria {#fence-set-retention}
+
+El motor en vivo mantiene las **cuatro versiones más recientes** del conjunto de geocercas por inquilino — la actual más tres sustituidas. Está dimensionado para eventos aún en vuelo, que tienen segundos o minutos, así que alcanzar el límite exige **cuatro ediciones de geocerca mientras un evento va desde la ingesta hasta el motor**. Un evento sellado con una versión ya desalojada reporta el mismo error de evaluación contado que una geocerca desconocida.
+
+No se pierde nada del historial cuando ocurre: la instantánea de cada versión se almacena de forma duradera, y las rutas de previsualización y reproducción leen de ahí en lugar de la caché en vivo. Solo la evaluación en vivo está acotada, y se recupera sola — los eventos siguientes llevan la versión actual.
 
 Para saber cómo se autoran y evalúan las reglas de detección, vea [procesamiento de eventos](./event-processing.md). Para los datos de ubicación en sí, vea [conectar un dispositivo](../guides/connecting-a-device.md).
 

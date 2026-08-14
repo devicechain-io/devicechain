@@ -115,6 +115,24 @@ query {
 }
 ```
 
+:::caution A `bucketedMeasurements` le faltan las lecturas rellenadas con mucho retraso
+Una lectura por intervalos cuyo `intervalSeconds` es un múltiplo entero de 60 y que no lleva filtro
+de ancla se sirve desde una preagregación, no desde las lecturas en bruto. Esa preagregación se
+mantiene al día sobre una **ventana móvil de 30 días**, y todo lo anterior se materializó una sola
+vez, cuando se creó la base de datos.
+
+Así que una lectura **escrita ahora pero fechada más de 30 días en el pasado** — por su propio
+`occurredTime`, que controla el dispositivo — cae entre ambas: demasiado antigua para la ventana de
+refresco, demasiado tardía para la pasada única. `measurementEvents` la devuelve y el historial en
+bruto está completo; `bucketedMeasurements` no la muestra, y ningún error lo advierte.
+
+El límite es cuánto **hacia atrás** está fechada la lectura, no la antigüedad de los datos. Una
+lectura rellenada con una hora, un día o tres semanas de retraso se recoge en un minuto y no tiene
+problema. Esto solo alcanza a un dispositivo que estuvo almacenando más de un mes, o a uno cuyo
+reloj se desvía otro tanto. Los intervalos de menos de un minuto y las lecturas acotadas por ancla
+se sirven desde las lecturas en bruto y no se ven afectados.
+:::
+
 Todas las consultas de eventos están **acotadas por inquilino automáticamente** — los resultados se limitan al inquilino del llamador, y una consulta sin un inquilino resuelto se rechaza.
 
 ## Explorar el esquema
@@ -153,6 +171,50 @@ query {
 - Las consultas de listado toman una entrada de criterio de búsqueda con paginación.
 - Las mutaciones siguen un patrón de nomenclatura `create* / update* / delete*`.
 
+### Una actualización reemplaza el registro completo {#an-update-replaces-the-whole-record}
+
+Las mutaciones `update*` toman **la misma entrada que su hermana `create*`**, y significan lo que
+eso implica: cada campo que envías se escribe, y **cada campo que omites se borra**. No hay
+semántica de parcheo. La mutación devuelve la entidad y tiene éxito, así que un campo que no querías
+limpiar desaparece sin nada que lo indique.
+
+```graphql
+# Renombrar un dispositivo así TAMBIÉN borra su externalId y sus metadatos.
+mutation {
+  updateDevice(token: "sensor-001", request: { token: "sensor-001", name: "Sonda de cámara fría" }) {
+    token
+  }
+}
+```
+
+Lee la entidad primero, cambia lo que quieras cambiar y envíala entera de vuelta:
+
+```graphql
+query { devicesByToken(tokens: ["sensor-001"]) { token name externalId metadata } }
+```
+
+Dos consecuencias que conviene prever. Como la escritura cubre todos los campos, **dos personas que
+editan una misma entidad se sobrescriben mutuamente en todo el registro**, no solo donde coinciden.
+Y como la entrada de actualización es la de creación, lleva el **token** — en la mayoría de las
+entidades el resolutor localiza la fila por el token de la solicitud, así que no es un canal de
+renombrado, pero donde el token de una entidad es realmente fijo el servidor lo dice en lugar de
+moverlo (una geocerca es el ejemplo trabajado).
+
+Tres excepciones deliberadas, que lo son porque omitir significa algo concreto en lugar de nada:
+
+| Dónde | Un campo omitido significa |
+| --- | --- |
+| El `secret` de un canal de notificación | **Sin cambios.** Nunca necesitas reenviarlo; un valor no nulo lo reemplaza, una cadena vacía lo borra |
+| Las [anulaciones de gobernanza](../concepts/governance.md) de un inquilino | **Heredar el valor por defecto de la plataforma** — nunca «ilimitado» |
+| El `activeVersion` de un perfil de dispositivo | Aquí no es escribible en absoluto; solo se mueve al publicar y al revertir |
+
+:::note
+Este es el contrato actual, no el previsto. Las actualizaciones parciales — donde un campo omitido
+se deja intacto — están planificadas para antes de la 1.0, y se aplicarán de forma uniforme en todas
+las áreas en lugar de servicio por servicio. Hasta entonces, trata cada `update*` como un reemplazo
+completo salvo que la tabla anterior diga otra cosa.
+:::
+
 ## Validación de entrada
 
 **Un campo de entrada que el esquema no define se rechaza.** Enviar un campo no declarado
@@ -174,5 +236,33 @@ Importa más que una simple verificación de errores tipográficos. Un campo des
 que sí se aplicó: la mutación devuelve éxito, y obtienes una entidad parcialmente configurada
 sin nada que indique que faltó un valor. Rechazar es lo que hace que una respuesta de éxito
 signifique que se entendió toda la entrada.
+
+### Qué puede contener un token {#what-a-token-may-contain}
+
+Todo token de entidad — y todo id de inquilino — debe coincidir con:
+
+```
+^[A-Za-z0-9][A-Za-z0-9_-]*$
+```
+
+Letras (de cualquier caja), dígitos, guiones y guiones bajos, empezando por una letra o un dígito, y
+un máximo de **128 caracteres**. Cualquier otra cosa se rechaza al escribir, tanto al crear como al
+actualizar, antes de almacenar nada.
+
+Es una regla de seguridad más que un estilo de la casa, y por eso es así de estrecha. Un token se
+inserta en espacios de nombres de infraestructura: un id de inquilino pasa a ser un segmento de un
+asunto de NATS que se recupera partiendo por `.`, y un token de dispositivo pasa a ser un segmento
+de un tópico MQTT. Así que un `.` desplaza los segmentos del asunto, y `*`, `>`, `+` y `#` inyectan
+comodines que coinciden **entre inquilinos**. Las mayúsculas se permiten deliberadamente, porque los
+identificadores que emiten las máquinas — números de serie, VIN — suelen ir en mayúsculas.
+
+Los identificadores a los que un integrador recurre primero son precisamente los que esto rechaza:
+`sensor.001`, una dirección MAC `AA:BB:CC:DD:EE:FF`, `plant/line-2`, cualquier cosa con un espacio.
+**Ponlos en `externalId`**, que es opaco, no tiene restricciones de formato y es único dentro de un
+inquilino cuando está presente. Dale a la entidad un token que elijas tú y conserva junto a él el
+identificador propio del dispositivo.
+
+La consola acuña los tokens por ti a partir de una plantilla por tipo de entidad, así que allí esto
+rara vez aparece; es en la API y en el aprovisionamiento por script donde muerde primero.
 
 Se generarán páginas de referencia detalladas por tipo a partir de los esquemas a medida que se estabilicen.
