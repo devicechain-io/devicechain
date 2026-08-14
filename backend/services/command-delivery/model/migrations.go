@@ -28,5 +28,6 @@ var (
 		NewBaselineSchema(),
 		NewTenantStatusIndexSchema(),
 		NewDispatchableStatusIndexSchema(),
+		NewCommandBatchSchema(),
 	}
 )

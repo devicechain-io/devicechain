@@ -145,6 +145,16 @@ type Api struct {
 	// EnqueueValidator, when set, gates CreateCommand on the target device existing
 	// and on the command matching the device profile's published vocabulary.
 	EnqueueValidator CommandEnqueueValidator
+	// BatchValidator is EnqueueValidator's fleet counterpart, gating CreateCommandBatch.
+	// It is a separate interface rather than a method on the same one because the two
+	// answer differently shaped questions — one verdict versus a refusal list — and
+	// because a batch that fell back to looping the single validator would issue one
+	// network round trip per device, which is the cost the batch gate exists to remove.
+	BatchValidator BatchEnqueueValidator
+	// GroupTargetResolver, when set, resolves a group-targeted batch to its devices.
+	// Nil makes a group target FAIL rather than resolve to nothing: an empty batch would
+	// report success for a fleet write that reached nobody.
+	GroupTargetResolver GroupTargetResolver
 	// HeldCeilingResolver, when set, supplies the per-tenant held-command ceiling.
 	// Nil (the wiring not yet configured, or a unit test) falls back to
 	// DefaultHeldCommandCeiling below — never to "unbounded".

@@ -1,22 +1,36 @@
 ALTER SEQUENCE "command-delivery".audit_events_id_seq OWNED BY "command-delivery".audit_events.id;
+ALTER SEQUENCE "command-delivery".command_batches_id_seq OWNED BY "command-delivery".command_batches.id;
 ALTER SEQUENCE "command-delivery".commands_id_seq OWNED BY "command-delivery".commands.id;
 ALTER TABLE ONLY "command-delivery".audit_events
  ADD CONSTRAINT audit_events_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "command-delivery".audit_events ALTER COLUMN id SET DEFAULT nextval('"command-delivery".audit_events_id_seq'::regclass);
+ALTER TABLE ONLY "command-delivery".command_batches
+ ADD CONSTRAINT command_batches_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "command-delivery".command_batches ALTER COLUMN id SET DEFAULT nextval('"command-delivery".command_batches_id_seq'::regclass);
 ALTER TABLE ONLY "command-delivery".command_delivery_migrations
  ADD CONSTRAINT command_delivery_migrations_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "command-delivery".commands
  ADD CONSTRAINT commands_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "command-delivery".commands ALTER COLUMN id SET DEFAULT nextval('"command-delivery".commands_id_seq'::regclass);
+CREATE INDEX "idx_command-delivery_command_batches_deleted_at" ON "command-delivery".command_batches USING btree (deleted_at);
+CREATE INDEX "idx_command-delivery_command_batches_tenant_id" ON "command-delivery".command_batches USING btree (tenant_id);
+CREATE INDEX "idx_command-delivery_command_batches_token" ON "command-delivery".command_batches USING btree (token);
 CREATE INDEX "idx_command-delivery_commands_deleted_at" ON "command-delivery".commands USING btree (deleted_at);
 CREATE INDEX "idx_command-delivery_commands_device_token" ON "command-delivery".commands USING btree (device_token);
 CREATE INDEX "idx_command-delivery_commands_status" ON "command-delivery".commands USING btree (status);
 CREATE INDEX "idx_command-delivery_commands_token" ON "command-delivery".commands USING btree (token);
 CREATE INDEX idx_audit_tenant_time ON "command-delivery".audit_events USING btree (tenant_id, occurred_time DESC);
+CREATE INDEX idx_commands_batch_token ON "command-delivery".commands USING btree (tenant_id, batch_token) WHERE ((batch_token IS NOT NULL) AND (deleted_at IS NULL));
 CREATE INDEX idx_commands_dispatchable_status ON "command-delivery".commands USING btree (status, id) WHERE ((deleted_at IS NULL) AND ((status)::text = ANY ((ARRAY['QUEUED'::character varying, 'HELD'::character varying])::text[])));
 CREATE INDEX idx_commands_tenant_status ON "command-delivery".commands USING btree (tenant_id, status) WHERE (deleted_at IS NULL);
 CREATE SCHEMA "command-delivery";
 CREATE SEQUENCE "command-delivery".audit_events_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "command-delivery".command_batches_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -40,6 +54,25 @@ CREATE TABLE "command-delivery".audit_events (
  entity_label text,
  rows_affected bigint
 );
+CREATE TABLE "command-delivery".command_batches (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ deleted_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ token character varying(128) NOT NULL,
+ metadata jsonb,
+ name character varying(128) NOT NULL,
+ payload jsonb,
+ target_kind character varying(16) NOT NULL,
+ group_token character varying(128),
+ group_version integer,
+ allow_partial boolean NOT NULL,
+ resolved bigint NOT NULL,
+ accepted bigint NOT NULL,
+ refusals jsonb,
+ refusal_counts jsonb
+);
 CREATE TABLE "command-delivery".command_delivery_migrations (
  id character varying(255) NOT NULL
 );
@@ -60,6 +93,10 @@ CREATE TABLE "command-delivery".commands (
  responded_time timestamp with time zone,
  expires_at timestamp with time zone,
  response_payload jsonb,
- error text
+ error text,
+ batch_id bigint,
+ batch_token character varying(128)
 );
+CREATE UNIQUE INDEX uix_command_batches_tenant_token ON "command-delivery".command_batches USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_commands_batch_device ON "command-delivery".commands USING btree (tenant_id, batch_id, device_token) WHERE ((batch_id IS NOT NULL) AND (deleted_at IS NULL));
 CREATE UNIQUE INDEX uix_commands_tenant_token ON "command-delivery".commands USING btree (tenant_id, token) WHERE (deleted_at IS NULL);

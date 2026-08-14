@@ -135,6 +135,14 @@ type Command struct {
 	ExpiresAt       sql.NullTime
 	ResponsePayload *datatypes.JSON
 	Error           sql.NullString
+
+	// BatchId links a command to the CommandBatch that created it; null for a command
+	// issued one at a time. BatchToken is the same link denormalized, and it is not
+	// redundant: the command search criteria filter on the token and the criteria builder
+	// is single-table, so without it every "show me that batch" query would need a join
+	// the rest of the search path does not do.
+	BatchId    sql.NullInt64
+	BatchToken sql.NullString
 }
 
 // CommandCreateRequest carries the data required to issue a command.
