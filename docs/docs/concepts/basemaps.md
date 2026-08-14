@@ -42,7 +42,7 @@ That second part is the one worth knowing. If your tenant sets its own tile URL 
 
 The **per-surface** tiers are set in the browser and never reach that validation, so they apply the same rule at the point of use: a widget option or a geofence-editor field naming a tile URL with no credit line is **ignored entirely**, and the map falls back to the tenant's properly-credited basemap. The geofence editor says so when it happens. A half-filled override is discarded rather than half-applied, because the alternative is drawing a provider's tiles with no credit at all.
 
-The starting view (`centerLat` / `centerLon` / `zoom`) carries no such constraint and inherits field by field, so a tenant can move the zoom without restating a provider to keep it.
+The starting view is looser, but not entirely free of constraint. `zoom` inherits on its own, so a tenant can move the zoom without restating a provider to keep it. The centre does not: `centerLat` and `centerLon` are a **pair**, because half a coordinate names no point. Setting one without the other is refused, and overriding only one at a lower level does not borrow the other from above — it clears the inherited centre, leaving that surface with no starting view at all.
 
 ### The starting view is a fallback, never an override {#the-starting-view-is-a-fallback}
 
