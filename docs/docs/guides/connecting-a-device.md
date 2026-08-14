@@ -203,7 +203,7 @@ Each message is a JSON envelope:
 - **`name`** is the command key. If the device's profile declares a command vocabulary,
   this is one of its published commands and `payload` has already been validated against
   that command's parameter schema — see
-  [Commands and the capability contract](../concepts/domain-model.md#commands-and-the-capability-contract).
+  [Commands and the capability contract](../concepts/commands.md#commands-and-the-capability-contract).
 
 ## Responding to a command {#responding-to-a-command}
 

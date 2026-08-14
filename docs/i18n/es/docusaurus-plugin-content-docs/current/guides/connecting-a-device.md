@@ -205,7 +205,7 @@ Cada mensaje es un sobre (envelope) JSON:
 - **`name`** es la clave del comando. Si el perfil del dispositivo declara un vocabulario de
   comandos, este es uno de sus comandos publicados y `payload` ya se ha validado contra
   el esquema de parámetros de ese comando — consulte
-  [Comandos y el contrato de capacidades](../concepts/domain-model.md#commands-and-the-capability-contract).
+  [Comandos y el contrato de capacidades](../concepts/commands.md#commands-and-the-capability-contract).
 
 ## Respuesta a un comando {#responding-to-a-command}
 
