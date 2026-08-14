@@ -134,14 +134,58 @@ func TestGeoFenceReadAuthorityDoesNotGrantWrite(t *testing.T) {
 	})
 }
 
-// device:write opens the writes, and the whole create → update → delete path really runs
-// (a real Api behind it), so this is not passing merely because a stub returned nil.
+// device:write plus location:read opens the writes, and the whole create → update → delete
+// path really runs (a real Api behind it), so this is not passing merely because a stub
+// returned nil. location:read is in the set because MINTING or MOVING a fence takes it — see
+// the test below for why.
 func TestGeoFenceWriteAuthorityAdmitsMutations(t *testing.T) {
-	ctx := withAuthorities(geoFenceTestCtx(t), auth.DeviceRead, auth.DeviceWrite)
+	ctx := withAuthorities(geoFenceTestCtx(t), auth.DeviceRead, auth.DeviceWrite, auth.LocationRead)
 
 	callGeoFenceWrites(t, ctx, "yard", func(name string, err error) {
 		if err != nil {
-			t.Errorf("%s refused a caller holding device:write: %v", name, err)
+			t.Errorf("%s refused a caller holding device:write and location:read: %v", name, err)
 		}
 	})
+}
+
+// 🔴🔴 AUTHORING A FENCE TAKES location:read, BECAUSE SHAPING THE QUESTION EXTRACTS THE ANSWER.
+// A fence is a question about where a device is. A caller holding device:write but NOT
+// location:read could otherwise mint a fence a few metres across, run a containment rule against
+// it, read the raise/resolve edge, and repeat — binary-searching a device's actual coordinates
+// out of a platform that had just refused to show them one. That recovers POSITION ITSELF, not
+// merely containment against a region someone else drew, and it left device:write strictly
+// out-reading the authority invented to gate position.
+//
+// DELETE is deliberately NOT in that set, and the asymmetry is the point of this test: deleting
+// removes a question rather than constructing one, and delete-then-recreate is no way around the
+// gate because the recreate is the gated half. Asserting both halves from ONE context is what
+// makes this more than a restatement of the code — a gate accidentally applied to all three
+// writes, or to none, fails here.
+func TestFenceAuthoringNeedsThePositionAuthorityButDeletingDoesNot(t *testing.T) {
+	ctx := withAuthorities(geoFenceTestCtx(t), auth.DeviceRead, auth.DeviceWrite)
+	r := &SchemaResolver{}
+	request := model.GeoFenceCreateRequest{Token: "yard", Geometry: authTestGeometry}
+
+	if _, err := r.CreateGeoFence(ctx, struct {
+		Request model.GeoFenceCreateRequest
+	}{Request: request}); err == nil {
+		t.Error("createGeoFence admitted a caller without location:read; a fence author can " +
+			"binary-search a position out of repeated containment answers")
+	}
+
+	if _, err := r.UpdateGeoFence(ctx, struct {
+		Token   string
+		Request model.GeoFenceCreateRequest
+	}{Token: "yard", Request: request}); err == nil {
+		t.Error("updateGeoFence admitted a caller without location:read; reshaping an existing " +
+			"fence is the same question-shaping primitive as minting one")
+	}
+
+	// The counterweight. Without it, a gate bolted onto every write would pass the two
+	// assertions above while quietly making fence cleanup need a position authority it has no
+	// reason to need.
+	if _, err := r.DeleteGeoFence(ctx, struct{ Token string }{Token: "yard"}); err != nil {
+		t.Errorf("deleteGeoFence must stay on device:write alone — removing a fence constructs "+
+			"no question and answers none; got: %v", err)
+	}
 }

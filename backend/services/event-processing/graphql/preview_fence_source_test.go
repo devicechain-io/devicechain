@@ -72,7 +72,7 @@ func previewInput(definition, start, end string) struct{ Input previewRuleInput 
 func TestPreviewOfAFenceRuleWithNoSourceIsHonestlyDegraded(t *testing.T) {
 	r := &SchemaResolver{Profiles: &model.ProfileActiveStore{}}
 
-	res, err := r.PreviewRule(previewCtx(auth.DeviceRead),
+	res, err := r.PreviewRule(previewCtx(auth.DeviceRead, auth.LocationRead),
 		previewInput(fenceDraft, "2026-08-01T00:00:00Z", "2026-08-02T00:00:00Z"))
 	if err != nil {
 		t.Fatalf("previewRule: %v", err)
@@ -96,7 +96,7 @@ func TestPreviewOfAFenceRuleWithASourceGetsPastTheGate(t *testing.T) {
 	r := &SchemaResolver{Profiles: &model.ProfileActiveStore{}, FenceSets: nilFenceSource{}}
 
 	// An inverted window: the next check after the fence gate.
-	res, err := r.PreviewRule(previewCtx(auth.DeviceRead),
+	res, err := r.PreviewRule(previewCtx(auth.DeviceRead, auth.LocationRead),
 		previewInput(fenceDraft, "2026-08-02T00:00:00Z", "2026-08-01T00:00:00Z"))
 	if err != nil {
 		t.Fatalf("previewRule: %v", err)
