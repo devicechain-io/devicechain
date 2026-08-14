@@ -11,9 +11,15 @@ half — receiving a command and reporting what happened — is in
 [Connecting a device](./connecting-a-device.md#responding-to-a-command). The lifecycle
 those two halves move a command through is in [Commands](../concepts/commands.md).
 
-Everything here is on the `command-delivery` GraphQL endpoint,
-`https://<your-host>/api/command-delivery/graphql`, with a tenant access token. Issuing
-needs the **`command:write`** authority; reading command history needs **`command:read`**.
+Issuing, reading and cancelling are on the `command-delivery` endpoint,
+`https://<your-host>/api/command-delivery/graphql`, with a tenant access token. Issuing and
+cancelling need the **`command:write`** authority; reading command history needs
+**`command:read`**.
+
+The one exception is the first step below. Finding out what a device accepts is a
+`device-management` query — a different endpoint,
+`https://<your-host>/api/device-management/graphql`, and a different authority,
+**`device:read`**.
 
 ## Find out what the device accepts
 
@@ -89,7 +95,7 @@ may change.
 
 | `code` | Meaning | Retry? |
 |---|---|---|
-| `HELD_CEILING_EXCEEDED` | The tenant is already holding its limit of commands for absent devices. | **Yes** — it clears as those devices return |
+| `HELD_CEILING_EXCEEDED` | The tenant is at its limit of **undelivered** commands — everything still `QUEUED` or `HELD`, not only what is held for absent devices. | **Yes** — it clears as those commands go out |
 | `DEVICE_NOT_FOUND` | No device with that token in this tenant. | No |
 | `COMMAND_NOT_IN_VOCABULARY` | The profile constrains commands and this key is not one. Check the casing. | No |
 | `PAYLOAD_SCHEMA_VIOLATION` | The payload broke the command's parameter schema — unknown parameter, wrong type, out of range, or a required one missing. | No |
@@ -103,6 +109,10 @@ never as a success.
 Only `HELD_CEILING_EXCEEDED` is temporary. Every other code describes a request that will be
 just as wrong next time, so retrying it wastes attempts and hides a real defect from whoever
 could fix it.
+
+A tenant whose fleet is entirely present can still hit the ceiling: it bounds *undelivered*
+work, and queued commands count while they wait for the next delivery tick. See [How much
+backlog a tenant may hold](../concepts/commands.md#held-command-ceiling).
 
 ## Follow it to an outcome
 

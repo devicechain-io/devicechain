@@ -12,10 +12,14 @@ del dispositivo — recibir un comando e informar qué ocurrió — está en
 vida por el que ambas mitades mueven un comando está en
 [Comandos](../concepts/commands.md).
 
-Todo lo de aquí ocurre en el endpoint GraphQL de `command-delivery`,
+Emitir, leer y cancelar ocurren en el endpoint de `command-delivery`,
 `https://<tu-host>/api/command-delivery/graphql`, con un token de acceso de inquilino.
-Emitir requiere la autoridad **`command:write`**; leer el historial requiere
+Emitir y cancelar requieren la autoridad **`command:write`**; leer el historial requiere
 **`command:read`**.
+
+La única excepción es el primer paso de abajo. Averiguar qué acepta un dispositivo es una
+consulta de `device-management` — otro endpoint,
+`https://<tu-host>/api/device-management/graphql`, y otra autoridad, **`device:read`**.
 
 ## Averigua qué acepta el dispositivo
 
@@ -92,7 +96,7 @@ redacción puede cambiar.
 
 | `code` | Significado | ¿Reintentar? |
 |---|---|---|
-| `HELD_CEILING_EXCEEDED` | El inquilino ya retiene su límite de comandos para dispositivos ausentes. | **Sí** — se libera conforme esos dispositivos regresan |
+| `HELD_CEILING_EXCEEDED` | El inquilino está en su límite de comandos **no entregados** — todo lo que sigue en `QUEUED` o `HELD`, no solo lo retenido para dispositivos ausentes. | **Sí** — se libera conforme esos comandos salen |
 | `DEVICE_NOT_FOUND` | No hay ningún dispositivo con ese token en este inquilino. | No |
 | `COMMAND_NOT_IN_VOCABULARY` | El perfil restringe los comandos y esta clave no es uno. Revisa mayúsculas y minúsculas. | No |
 | `PAYLOAD_SCHEMA_VIOLATION` | La carga útil incumplió el esquema de parámetros del comando — parámetro desconocido, tipo incorrecto, fuera de rango, o falta uno requerido. | No |
@@ -106,6 +110,11 @@ clasificar — nunca como un éxito.
 Solo `HELD_CEILING_EXCEEDED` es temporal. Cualquier otro código describe una petición que
 estará igual de mal la próxima vez, así que reintentarla desperdicia intentos y le oculta un
 defecto real a quien podría corregirlo.
+
+Un inquilino cuya flota está entera y presente igualmente puede alcanzar el techo: acota el
+trabajo *no entregado*, y los comandos en cola cuentan mientras esperan el siguiente ciclo de
+entrega. Consulta [Cuánta acumulación puede retener un
+inquilino](../concepts/commands.md#held-command-ceiling).
 
 ## Síguelo hasta su desenlace
 

@@ -82,9 +82,11 @@ know: it recorded the command as sent, nothing answered, and a week later it rea
 The platform therefore checks before it publishes. When a transport reports that a device
 is not connected, its commands move to `HELD` instead of being published, and return to
 `QUEUED` when the device comes back — normally within a second or two of it reconnecting,
-because the transport that owns the connection says so directly. A periodic pass catches
-anything that announcement misses, so a returning device's backlog is always released
-eventually even if the platform never hears about the reconnection itself.
+because the transport that owns the connection says so directly. A periodic pass re-checks
+the withheld set against what the platform currently believes about each device, so a
+backlog is still released if that announcement is itself lost. Both paths depend on the
+platform learning the device is back: it is the presence record changing that releases the
+hold, and the announcement only makes it happen sooner.
 
 Three limits are worth knowing:
 
@@ -106,20 +108,29 @@ but it should now be a much shorter run.
 
 ### How much backlog a tenant may hold {#held-command-ceiling}
 
-Nothing drains a `HELD` backlog on its own. It grows for as long as devices stay away and
-shrinks only as they come back, so it is bounded per tenant — and the bound is a real
-number at every level. **No setting means "unlimited."** An unbounded backlog is a
+A backlog of withheld commands drains two ways and no others: a device comes back, or a
+command's TTL lapses and it records `EXPIRED`. For a fleet that stays off, that means the
+backlog sits until the TTL horizon. So it is bounded per tenant, and the bound is a real
+number at every level — **no setting means "unlimited."** An unbounded backlog is a
 tenant-triggered, operator-invisible growth in durable storage.
 
 The limit resolves down a cascade: the tenant's own override if it has one, otherwise its
-tier's, otherwise the platform default of **10,000** held commands. Issuing a command that
-would push a tenant past whichever applies is refused with the code
-`HELD_CEILING_EXCEEDED`.
+tier's, otherwise the platform default of **10,000**. A tenant already at its limit has the
+next command refused with the code `HELD_CEILING_EXCEEDED`.
+
+:::info It bounds undelivered work, not just held work
+The count is every command **`QUEUED` or `HELD`** — not only the ones withheld for absent
+devices. A tenant whose fleet is entirely present can still be refused, purely on in-flight
+enqueue volume. Queued commands drain within a tick, so their steady-state contribution is
+about one tick of enqueue rate: small, but not zero, and a tenant issuing near its ceiling
+at a high rate will feel it. The bound is on undelivered work, and undelivered is
+undelivered.
+:::
 
 That refusal is the **only temporary one** the enqueue path produces. Every other rejection
 describes a request that will be exactly as wrong on the next attempt; this one clears on
-its own as absent devices return and their commands drain. It is the one code worth
-retrying, and the rest are worth surfacing to a person. See
+its own as those commands go out. It is the one code worth retrying, and the rest are worth
+surfacing to a person. See
 [Sending a command](../guides/sending-commands.md#when-an-enqueue-is-refused).
 
 Cancelling a command records `CANCELLED`. Cancellation and TTL expiry shared the single
@@ -127,7 +138,10 @@ value `EXPIRED` until recently, so commands cancelled before that change still r
 `EXPIRED`; both appear in historical data, and nothing recorded which `EXPIRED` rows came
 from a cancel, so they cannot be told apart after the fact.
 
-**A command only reaches a terminal outcome if the device answers.** Reporting the result
+**Only the device can report success.** `SUCCESSFUL` and a device-reported `FAILED` are the
+two outcomes it alone can produce; every other terminal is one the platform writes on its
+own — `TIMEOUT`, `EXPIRED`, `CANCELLED`, or a `FAILED` recorded because the transport
+cannot carry the command at all. Reporting the result
 is the device's half of the contract — see
 [Responding to a command](../guides/connecting-a-device.md#responding-to-a-command). A
 device that never responds leaves its commands in `SENT` until their TTL turns them into

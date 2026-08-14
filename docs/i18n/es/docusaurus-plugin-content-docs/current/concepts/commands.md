@@ -87,9 +87,10 @@ Por eso la plataforma comprueba antes de publicar. Cuando un transporte informa 
 dispositivo no está conectado, sus comandos pasan a `HELD` en lugar de publicarse, y vuelven
 a `QUEUED` cuando el dispositivo regresa — normalmente uno o dos segundos después de que se
 reconecte, porque lo comunica directamente el transporte que posee la conexión. Una pasada
-periódica recoge lo que ese aviso no alcance, de modo que el pendiente de un dispositivo que
-regresa siempre acaba liberándose aunque la plataforma nunca llegue a enterarse de la
-reconexión.
+periódica vuelve a contrastar el conjunto retenido con lo que la plataforma cree actualmente
+de cada dispositivo, de modo que el pendiente igual se libera si ese aviso se pierde. Ambas
+vías dependen de que la plataforma se entere de que el dispositivo volvió: es el registro de
+presencia al cambiar lo que libera la retención, y el aviso solo hace que ocurra antes.
 
 Conviene conocer tres límites:
 
@@ -111,13 +112,45 @@ Por eso una racha de `TIMEOUT` contra dispositivos que usted sabe que son interm
 sigue mereciendo leerse como algo que habla de cuándo estuvieron conectados y no de su
 firmware — pero ahora debería ser una racha mucho más corta.
 
+### Cuánta acumulación puede retener un inquilino {#held-command-ceiling}
+
+Una acumulación de comandos retenidos se drena de dos maneras y de ninguna otra: el
+dispositivo vuelve, o vence el TTL del comando y este registra `EXPIRED`. Para una flota que
+permanece apagada, eso significa que la acumulación se queda ahí hasta el horizonte del TTL.
+Por eso está acotada por inquilino, y la cota es un número real en todos los niveles —
+**ningún ajuste significa «ilimitado»**. Una acumulación sin cota es un crecimiento del
+almacenamiento durable provocado por el inquilino e invisible para el operador.
+
+El límite se resuelve por una cascada: la anulación propia del inquilino si la tiene, si no
+la de su nivel, si no el valor predeterminado de la plataforma: **10 000**. A un inquilino
+que ya está en su límite se le rechaza el siguiente comando con el código
+`HELD_CEILING_EXCEEDED`.
+
+:::info Acota el trabajo no entregado, no solo el retenido
+La cuenta abarca todo comando en **`QUEUED` o `HELD`** — no solo los retenidos para
+dispositivos ausentes. Un inquilino cuya flota está entera y presente igualmente puede ser
+rechazado, únicamente por volumen de emisión en vuelo. Los comandos en cola se drenan en un
+ciclo, así que su aporte en régimen estacionario es aproximadamente un ciclo de ritmo de
+emisión: poco, pero no cero, y un inquilino que emite cerca de su techo a alta frecuencia lo
+notará. La cota es sobre trabajo no entregado, y no entregado es no entregado.
+:::
+
+Ese rechazo es el **único temporal** que produce la ruta de admisión. Cualquier otro rechazo
+describe una petición que estará igual de mal en el siguiente intento; este se resuelve solo
+conforme esos comandos salen. Es el único código que vale la pena reintentar, y el resto vale
+la pena mostrarlos a una persona. Consulta
+[Enviar un comando](../guides/sending-commands.md#when-an-enqueue-is-refused).
+
 Cancelar un comando registra `CANCELLED`. La cancelación y la expiración del TTL compartían
 hasta hace poco el único valor `EXPIRED`, así que los comandos cancelados antes de ese
 cambio siguen apareciendo como `EXPIRED`; ambos conviven en los datos históricos, y como
 nada registró qué filas `EXPIRED` provenían de una cancelación, no es posible distinguirlas
 a posteriori.
 
-**Un comando solo alcanza un resultado terminal si el dispositivo responde.** Informar el resultado
+**Solo el dispositivo puede informar éxito.** `SUCCESSFUL` y un `FAILED` informado por el
+dispositivo son los dos desenlaces que solo él puede producir; cualquier otro terminal lo
+escribe la plataforma por su cuenta — `TIMEOUT`, `EXPIRED`, `CANCELLED`, o un `FAILED`
+registrado porque el transporte no puede llevar el comando en absoluto. Informar el resultado
 es la mitad del contrato que le corresponde al dispositivo — ver
 [Responder a un comando](../guides/connecting-a-device.md#responding-to-a-command). Un
 dispositivo que nunca responde deja sus comandos en `SENT` hasta que su TTL los convierte
