@@ -66,12 +66,22 @@ func (c *GraphQLClient) Query(ctx context.Context, area, token, query string, va
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxGraphQLResponseBytes))
+	// Read one byte past the cap so that outgrowing it is DETECTED rather than inferred.
+	// io.LimitReader stops silently at its limit, so without the extra byte an oversized
+	// response arrives as half a JSON document and is reported as a decoding failure —
+	// which sends the model, and whoever is reading its output, after a peer that is
+	// working correctly. Status is still decided first: a large error page is a failing
+	// peer, not a request that asked for too much.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxGraphQLResponseBytes+1))
 	if err != nil {
 		return fmt.Errorf("reading %s graphql response: %w", area, err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("%s graphql returned HTTP %d", area, resp.StatusCode)
+	}
+	if len(raw) > maxGraphQLResponseBytes {
+		return fmt.Errorf("the %s response exceeded %d bytes; narrow the request (fewer tokens, "+
+			"a smaller page, or a shorter time range) and try again", area, maxGraphQLResponseBytes)
 	}
 
 	var envelope struct {

@@ -79,6 +79,38 @@ opens its own MQTT connection once a minute purely so that a working tap has som
 `presence_canary_observed_total` rises on a healthy tap, and `presence_canary_missed_total` rises
 when the chain is broken. That is the only pair that distinguishes a dead tap from a quiet fleet.
 
+The probe runs on its own schedule, independently of the repair pass described below. That
+separation is what makes the counter trustworthy: an instrument that could only report while the
+thing it watches was healthy would go quiet at exactly the moment it mattered.
+
+### A repair pass that runs out of time says so {#reconcile-pass-timeout}
+
+Each repair pass walks every tenant on the instance and reads that tenant's asserted devices, so a
+large instance's pass is a long one. It is bounded: a pass that cannot finish inside its budget
+stops, reports `presence_reconcile_runs_total{outcome="timeout"}`, and logs how many tenants it
+covered.
+
+**The next pass then resumes at the tenant it did not reach**, rather than starting again from the
+beginning. Without that, a fleet whose pass never fit in the budget would repair the same first few
+tenants on every attempt and never reach the rest — not late, never. Occasional `timeout` outcomes
+mean repairs are lagging and every tenant still gets its turn; a *sustained* run of them means the
+instance needs more headroom, and the devices at the back of the rotation are the ones whose
+missed disconnects go uncorrected longest.
+
+`presence_reconcile_runs_total` carries one outcome per pass, and they are worth telling apart:
+
+| Outcome | What it means |
+| --- | --- |
+| `complete` | every tenant was walked against a fully accounted-for broker cluster |
+| `partial` | the pass ran, but not every broker node answered — devices were only ever marked **online**, never offline |
+| `timeout` | the pass ran out of its budget; the tenants it did not reach go first next time |
+| `failed` | the pass could read nothing — no broker inventory, no tenant list, or **no tenant's presence state**. Reconciliation did nothing at all |
+| `cancelled` | the service was shutting down mid-pass. Not a fault |
+
+The `failed` outcome is the one to alarm on alongside the canary. A single tenant's state read
+failing is tolerated — the other tenants still get their pass — but *every* read failing means
+repairs have stopped entirely, which is what a device-state outage looks like from here.
+
 ### Presence transitions are metered against the tenant's ingest ceiling {#presence-and-the-ingest-ceiling}
 
 Connect and disconnect transitions pass the same per-tenant [ingest

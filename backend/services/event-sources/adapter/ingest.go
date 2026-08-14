@@ -5,6 +5,7 @@ package adapter
 
 import (
 	"context"
+	"fmt"
 	"hash/fnv"
 	"sort"
 	"strconv"
@@ -235,9 +236,19 @@ func (r *Registrar) create(ctx context.Context, tenant, token, externalId, devic
 // it diffs the believed-online set against live probes, so an asserted device the
 // projection already thinks is offline is not its business. The MQTT tap asks the other
 // way; see device-state's schema.
-const assertedActiveQuery = `query($source: String!) {
-  assertedDeviceStates(source: $source, activeOnly: true) { externalId sessionId }
+// 🔴 IT IS READ IN PAGES, and `id` is selected as the page cursor rather than for the
+// diff. The set is one tenant's asserted-online fleet, which crosses the cross-service
+// response cap in the thousands of devices — and past the cap the read FAILS rather than
+// shortening, so an unpaged read here takes failover reconciliation offline for exactly
+// the fleets that most need it.
+const assertedActiveQuery = `query($source: String!, $afterId: ID, $pageSize: Int!) {
+  assertedDeviceStates(source: $source, activeOnly: true, afterId: $afterId, pageSize: $pageSize) {
+    id externalId sessionId
+  }
 }`
+
+// assertedActivePageSize is how many rows one page of the walk asks for.
+const assertedActivePageSize = 500
 
 // AssertedDevice is one asserted-active device the failover reconciliation must account
 // for: its external id (the source identity to probe) and the presence SessionId last
@@ -268,38 +279,71 @@ func NewReconciler(client GraphQLClient, deviceStateURL string) *Reconciler {
 // generator so a fresh emission always supersedes any stored session. A device whose
 // external id is null is skipped: it cannot be reconciled against a source identity (a
 // row with no external id is not one this adapter emitted).
+// 🔴🔴 A FAILURE PART-WAY THROUGH THE WALK FAILS THE WHOLE READ, AND HERE THAT IS NOT A
+// STYLE CHOICE — THE PARTIAL ANSWER IS ACTIVELY POISONOUS. The maximum sessionId returned
+// is the FLOOR for the adapter's epoch generator, whose whole job is to mint sessions
+// that supersede whatever the projection already holds. Keep the pages read before a
+// failure and the floor is computed from a subset, so it can be LOWER than a session
+// already stored — and every emission the adapter then makes is rejected by presence
+// ordering, for devices this pass will never revisit. A failed read is retried on the
+// next pass; a floor that is too low wedges until a restart.
 func (r *Reconciler) AssertedActive(ctx context.Context, tenant, source string) ([]AssertedDevice, uint64, error) {
-	var out struct {
-		AssertedDeviceStates []struct {
-			ExternalId *string `json:"externalId"`
-			SessionId  string  `json:"sessionId"`
-		} `json:"assertedDeviceStates"`
-	}
-	vars := map[string]any{"source": source}
-	if err := r.client.Query(ctx, r.url, tenant, assertedActiveQuery, vars, &out); err != nil {
-		return nil, 0, err
-	}
-	devices := make([]AssertedDevice, 0, len(out.AssertedDeviceStates))
+	devices := make([]AssertedDevice, 0, assertedActivePageSize)
 	var max uint64
-	for _, d := range out.AssertedDeviceStates {
-		if d.ExternalId == nil || *d.ExternalId == "" {
-			continue
+	var afterId string
+	for {
+		var out struct {
+			AssertedDeviceStates []struct {
+				Id         string  `json:"id"`
+				ExternalId *string `json:"externalId"`
+				SessionId  string  `json:"sessionId"`
+			} `json:"assertedDeviceStates"`
 		}
-		session, err := strconv.ParseUint(d.SessionId, 10, 64)
-		if err != nil {
-			// A malformed sessionId would poison the floor; skip the row and let the
-			// probe still cover its external id (fail toward reconciling, not toward a
-			// bad epoch floor).
-			log.Warn().Str("tenant", tenant).Str("externalId", *d.ExternalId).Str("sessionId", d.SessionId).
-				Msg("Skipping an asserted device with an unparseable sessionId during reconciliation.")
-			continue
+		vars := map[string]any{"source": source, "pageSize": assertedActivePageSize}
+		if afterId != "" {
+			vars["afterId"] = afterId
 		}
-		if session > max {
-			max = session
+		if err := r.client.Query(ctx, r.url, tenant, assertedActiveQuery, vars, &out); err != nil {
+			return nil, 0, err
 		}
-		devices = append(devices, AssertedDevice{ExternalId: *d.ExternalId, SessionId: session})
+		rows := out.AssertedDeviceStates
+		for _, d := range rows {
+			if d.ExternalId == nil || *d.ExternalId == "" {
+				continue
+			}
+			session, err := strconv.ParseUint(d.SessionId, 10, 64)
+			if err != nil {
+				// A malformed sessionId would poison the floor; skip the row and let the
+				// probe still cover its external id (fail toward reconciling, not toward a
+				// bad epoch floor).
+				log.Warn().Str("tenant", tenant).Str("externalId", *d.ExternalId).Str("sessionId", d.SessionId).
+					Msg("Skipping an asserted device with an unparseable sessionId during reconciliation.")
+				continue
+			}
+			if session > max {
+				max = session
+			}
+			devices = append(devices, AssertedDevice{ExternalId: *d.ExternalId, SessionId: session})
+		}
+		if len(rows) < assertedActivePageSize {
+			return devices, max, nil
+		}
+		// From the last row READ, not the last row kept: rows with no external id and rows
+		// with an unreadable session are dropped above, and resuming from the last kept row
+		// would re-read them on every subsequent page.
+		next := rows[len(rows)-1].Id
+		// 🔴🔴 THE GUARD IS THAT THE CURSOR MOVED, NOT THAT THE PAGE COUNT IS SMALL. Row
+		// ids ascend strictly, so a FULL page always advances the cursor; one that does not
+		// means the server ignored afterId, and no number of further pages will make
+		// progress. It replaces a fixed page ceiling, which put a hard limit on fleet size
+		// above which this read would have failed on every pass forever — the failure this
+		// change exists to remove, reintroduced above the new bound.
+		if next == afterId {
+			return nil, 0, fmt.Errorf("the asserted-active walk for source %s is not advancing past id %q; "+
+				"the server is ignoring the page cursor", source, afterId)
+		}
+		afterId = next
 	}
-	return devices, max, nil
 }
 
 // Emitter builds an UnresolvedEvent from a device's samples and writes it durably to the

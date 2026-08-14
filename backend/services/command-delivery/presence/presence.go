@@ -15,6 +15,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 )
@@ -44,8 +45,47 @@ type State struct {
 }
 
 // Reader reads the live presence projection for a set of devices in one tenant.
+//
+// It returns what it could read TOGETHER WITH an error when any part of the read failed:
+// both values are meaningful, and neither is a consolation prize. A chunked read that
+// loses one chunk still gates every device the other chunks covered.
 type Reader interface {
 	StatesFor(ctx context.Context, deviceTokens []string) (map[string]State, error)
+}
+
+// Resolved reports whether a read actually learned anything about a device — the question
+// a caller must ask before acting on silence.
+//
+// 🔴🔴 THE SAME ABSENCE MEANS TWO INCOMPATIBLE THINGS EITHER SIDE OF AN ERROR, AND THE
+// CALLERS OWE THEM OPPOSITE ACTIONS:
+//
+//   - on a CLEAN read, a device absent from states is a device the projection holds no row
+//     for. That is a real answer, and the hold reconciler RELEASES on it — deliberately,
+//     so the sweep re-decides in one place.
+//   - on a FAILED read the identical absence is not an answer at all, and releasing on it
+//     is how a transient device-state blip returns a whole page of withheld commands to
+//     the dispatch path, to be published at brokers where those devices are absent. Every
+//     one lands SENT and then TIMEOUT: the record that blames the device for the
+//     platform's outage.
+//
+// 🔑 THE ERROR IS THE ONLY CHANNEL THAT CAN CARRY THIS, which is worth stating because the
+// first attempt used a second one. That version had the reader also NAME the devices its
+// failed chunks covered, and a review established the field could never change an answer:
+// every path that named devices also returned an error, so the error alone already decided
+// every case the field was consulted for. Worse, Reader is an interface — an implementation
+// that returned an error while naming nothing would have slipped straight past the field
+// and released the batch. One rule that cannot be forgotten beats two where the weaker one
+// looks like the protection.
+//
+// The cost is small and one-directional: on a partially failed read, a device that a
+// SUCCESSFUL chunk found no row for stays held one extra pass instead of being released
+// immediately. Held slightly too long self-corrects on the next clean read; released
+// wrongly does not.
+func Resolved(states map[string]State, token string, err error) bool {
+	if _, known := states[token]; known {
+		return true
+	}
+	return err == nil
 }
 
 // nonDeliveringTransports names the sources positively known to have NO command path at
@@ -151,7 +191,35 @@ const statesQuery = `query($deviceTokens: [String!]!) {
   }
 }`
 
-// StatesFor reads the projection for a batch of this tenant's devices.
+// readChunkSize bounds how many device tokens one presence query asks about.
+//
+// 🔴 IT IS A RESPONSE BOUND, NOT A REQUEST ONE. The cross-service client reads at most
+// 1 MiB of any response; past that the body is cut off and the read fails. A presence
+// row costs roughly 90 bytes on the wire with an ordinary device token and over 200 with
+// a long one, so an unchunked read stops working somewhere between five and twelve
+// thousand devices — INSIDE the fleet size a tenant is allowed to accumulate commands
+// for. The failure is not a slow query; it is the delivery gate switching itself off for
+// that tenant at exactly the moment a large fleet is reconnecting.
+//
+// 500 matches reconcilePageSize, the bound the hold reconciler already reads its side
+// with. The two page the same set from opposite ends, and two numbers for one set is a
+// pair to keep in step for no benefit.
+const readChunkSize = 500
+
+// readBudget bounds the WHOLE of one tenant's presence read, however many chunks it takes.
+//
+// 🔴 CHUNKING MULTIPLIES A HUNG PEER'S COST, AND WITHOUT THIS THE FIX WOULD HAVE TRADED
+// ONE FAILURE FOR ANOTHER. The cross-service client bounds each call at ten seconds, which
+// was the whole cost of the single read this replaced. Twenty chunks against a device-state
+// that accepts connections and never answers is two hundred seconds — inside a sweep that
+// ticks every thirty, with every other tenant queued behind it. The chunks share one
+// budget so the worst case stays a property of the tenant rather than of its size.
+//
+// Chunks not reached inside the budget are reported unread, exactly like chunks that were
+// attempted and failed: in both cases nothing was learned about those devices.
+const readBudget = 15 * time.Second
+
+// StatesFor reads the projection for a batch of this tenant's devices, in chunks.
 //
 // 🔑 BATCHED ON PURPOSE. The sweep holds a whole tick's worth of queued commands, and one
 // round trip per command would put a network call between the platform and every dispatch
@@ -161,15 +229,56 @@ const statesQuery = `query($deviceTokens: [String!]!) {
 // 🔴 A DEVICE MISSING FROM THE RESPONSE IS "UNKNOWN", NOT "ABSENT". The query returns rows
 // that exist, so a device the projection has never seen simply does not come back. Reading
 // that as absence would hold commands for every device that has not spoken yet.
+//
+// 🔑 A FAILED CHUNK COSTS ONLY ITS OWN DEVICES. Every chunk is attempted even after one
+// fails, and the states already read are kept rather than discarded: a device-state blip
+// mid-way through a large tenant used to un-gate every command that tenant had queued, and
+// now un-gates one page of them. The error is still returned — it is what tells a caller
+// that the devices missing from the map may be missing because nobody could ask (see
+// Resolved), and it is what the meter and the log count.
 func (r *graphqlReader) StatesFor(ctx context.Context, deviceTokens []string) (map[string]State, error) {
-	out := make(map[string]State, len(deviceTokens))
+	states := make(map[string]State, len(deviceTokens))
 	if len(deviceTokens) == 0 {
-		return out, nil
+		return states, nil
 	}
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok {
-		return nil, fmt.Errorf("presence read requires a tenant in context")
+		return states, fmt.Errorf("presence read requires a tenant in context")
 	}
+	ctx, cancel := context.WithTimeout(ctx, readBudget)
+	defer cancel()
+
+	var failed error
+	for start := 0; start < len(deviceTokens); start += readChunkSize {
+		end := min(start+readChunkSize, len(deviceTokens))
+		chunk := deviceTokens[start:end]
+		if ctx.Err() != nil {
+			// The budget is spent. Attempting the rest would add ten seconds each to a
+			// sweep tick that has already overrun, and would learn nothing new about a
+			// peer that has already failed to answer. The devices in the chunks not
+			// reached are simply absent from states, which — with the error — is exactly
+			// what Resolved reads as "nothing is known about this device".
+			if failed == nil {
+				failed = ctx.Err()
+			}
+			break
+		}
+		if err := r.readChunk(ctx, tenant, chunk, states); err != nil {
+			// Recorded, not returned: the chunks after this one are independent reads
+			// and their devices are equally entitled to an answer. Only the FIRST error
+			// is carried, because a tenant whose device-state is down produces one
+			// error per chunk and a joined list of twenty identical failures tells an
+			// operator nothing the first one did not.
+			if failed == nil {
+				failed = err
+			}
+		}
+	}
+	return states, failed
+}
+
+// readChunk performs one query and folds its rows into states.
+func (r *graphqlReader) readChunk(ctx context.Context, tenant string, tokens []string, states map[string]State) error {
 	var resp struct {
 		DeviceStatesByDeviceToken []struct {
 			DeviceToken    string `json:"deviceToken"`
@@ -179,18 +288,18 @@ func (r *graphqlReader) StatesFor(ctx context.Context, deviceTokens []string) (m
 		} `json:"deviceStatesByDeviceToken"`
 	}
 	if err := r.client.Query(ctx, r.url, tenant, statesQuery,
-		map[string]any{"deviceTokens": deviceTokens}, &resp); err != nil {
-		return nil, err
+		map[string]any{"deviceTokens": tokens}, &resp); err != nil {
+		return err
 	}
 	for _, row := range resp.DeviceStatesByDeviceToken {
-		out[row.DeviceToken] = State{
+		states[row.DeviceToken] = State{
 			Active:   row.Active,
 			Asserted: row.PresenceSource == presenceSourceAsserted,
 			Source:   row.Source,
 			Known:    true,
 		}
 	}
-	return out, nil
+	return nil
 }
 
 // presenceSourceAsserted mirrors device-state's constant. It is duplicated rather than

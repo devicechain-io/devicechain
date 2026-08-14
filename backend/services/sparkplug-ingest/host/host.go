@@ -70,7 +70,15 @@ const (
 	// subscribing (to floor the epoch generator). It caps how long a slow/absent
 	// device-state can stall connection setup — on timeout the floor+probe are skipped
 	// this cycle, not the connection.
-	reconcileQueryTimeout = 5 * time.Second
+	//
+	// 🔑 IT COVERS A PAGED WALK, NOT ONE ROUND TRIP. The asserted-active read is bounded
+	// per page, so a tenant's fleet costs ceil(devices/500) sequential calls; the five
+	// seconds this was originally sized at is one call's worth, and a large fleet
+	// reconnecting against a busy device-state — which is exactly the restart storm this
+	// path runs in — would miss the budget on every attempt and never floor its epoch
+	// generator. The walk is bounded elsewhere by its own page ceiling, so a generous
+	// value here cannot become an unbounded stall.
+	reconcileQueryTimeout = 30 * time.Second
 )
 
 // Broker is the resolved MQTT connection for one source: a customer-operated

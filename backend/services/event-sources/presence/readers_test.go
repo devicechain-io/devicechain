@@ -64,10 +64,13 @@ func TestTheProjectionReadAsksForBothHalvesAndDecodesActive(t *testing.T) {
 	assert.Contains(t, gql.query, "activeOnly: false",
 		"the read must ask for the offline rows too; without their stored sessionId a repair for a "+
 			"device with a regressed broker session is rejected on every pass")
-	// 🔴 ANCHORED ON THE SELECTION SET'S CLOSING BRACE. `Contains(query, "active")` is
-	// satisfied by the word `activeOnly` in the argument list, so it passes with the field
-	// deleted — a vacuous assertion for the exact regression this test names.
-	assert.Contains(t, gql.query, "sessionId active }",
+	// 🔴 ANCHORED ON THE FIELD THAT PRECEDES IT IN THE SELECTION SET. `Contains(query,
+	// "active")` is satisfied by the word `activeOnly` in the argument list, so it passes
+	// with the field deleted — a vacuous assertion for the exact regression this test
+	// names. Anchoring on the neighbour rather than on the closing brace keeps it from
+	// breaking every time the query is reformatted, which is what it did when paging
+	// arguments pushed the selection set onto its own line.
+	assert.Contains(t, gql.query, "sessionId active",
 		"the read must select `active` in the selection set, or every row decodes as offline "+
 			"and direction 2 stops emitting deaths entirely")
 	assert.Equal(t, "mqtt1", gql.vars["source"],

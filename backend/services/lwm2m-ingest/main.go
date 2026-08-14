@@ -81,7 +81,19 @@ const (
 // skipped and RETRIED IN-TERM (retryReconstruct) with this same interval between rounds, so a
 // device that would otherwise sit stuck CONNECTED is reconstructed once device-state recovers,
 // without waiting for the next acquisition. It also paces the in-term retry loop.
-const reconcileQueryTimeout = 5 * time.Second
+//
+// 🔑 IT COVERS A PAGED WALK, NOT ONE ROUND TRIP. The asserted-active read is bounded per
+// page, so a tenant's fleet costs ceil(devices/500) sequential calls. Five seconds was one
+// call's worth: against a busy device-state — the correlated state during a failover, which
+// is precisely when this runs — a large tenant would miss the budget on every attempt and
+// never floor its epoch generator, retrying forever without progressing. The walk carries
+// its own page ceiling, so a generous value here cannot become an unbounded stall, and the
+// pass is bound by leaderCtx so an eviction or shutdown still aborts it promptly.
+//
+// Raising it also slows the in-term retry loop below to the same cadence, which is wanted:
+// re-attempting a read that cannot fit its budget every five seconds is load without
+// progress.
+const reconcileQueryTimeout = 30 * time.Second
 
 // reconstructReadRetryInterval paces the in-term retry loop for tenants whose device-state read
 // failed on the first reconstruction pass (ADR-075 L3b / F4). A var (not a const) only so a test

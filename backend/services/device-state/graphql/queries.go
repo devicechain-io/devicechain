@@ -6,10 +6,40 @@ package graphql
 import (
 	"context"
 	_ "embed"
+	"fmt"
+	"strconv"
+
 	"github.com/devicechain-io/dc-microservice/auth"
+	gql "github.com/graph-gophers/graphql-go"
 
 	"github.com/devicechain-io/dc-device-state/model"
 )
+
+// cursorFrom reads a page cursor from an optional GraphQL id. An absent cursor starts
+// the walk at the beginning, which is what a first page means.
+//
+// 🔑 strconv, NOT fmt.Sscanf. Sscanf("%d") is happy to consume a PREFIX, so "12abc"
+// would parse as 12 and a caller passing a malformed cursor would silently get a page
+// from somewhere in the middle of the set instead of an error. ParseUint rejects the
+// whole string or none of it.
+//
+// 🔴 IT RETURNS uint64 AND NARROWS NOTHING, which device-management's equivalent needed
+// two corrections to arrive at (graphql/queries_command_batch.go). Parsing 64 bits and
+// returning a `uint` truncates on a 32-bit build — and a truncated cursor is not a refused
+// one, it is a valid-looking id pointing somewhere else in the table, silently resuming
+// the walk at the wrong place and skipping every device in between. The cursor is only
+// ever the right-hand side of a SQL `id >` comparison, so there is no reason to narrow it:
+// carrying it as uint64 end to end deletes the failure mode instead of guarding it.
+func cursorFrom(afterId *gql.ID) (uint64, error) {
+	if afterId == nil || string(*afterId) == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.ParseUint(string(*afterId), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("afterId must be the id of the last row of the previous page, got %q", string(*afterId))
+	}
+	return parsed, nil
+}
 
 // Find device states by originating device token.
 func (r *SchemaResolver) DeviceStatesByDeviceToken(ctx context.Context, args struct {
@@ -57,21 +87,36 @@ func (r *SchemaResolver) DeviceStatesByExternalId(ctx context.Context, args stru
 	return result, nil
 }
 
-// AssertedDeviceStates returns the calling tenant's ASSERTED device states for one
-// event source — the failover-reconciliation source (ADR-067 SP4b). Tenant scope is
-// enforced by the RDB callback from the caller's token, so an adapter only ever sees
+// AssertedDeviceStates returns ONE PAGE of the calling tenant's ASSERTED device states
+// for one event source — the failover-reconciliation source (ADR-067 SP4b). Tenant scope
+// is enforced by the RDB callback from the caller's token, so an adapter only ever sees
 // its own tenant's asserted devices. activeOnly is required rather than defaulted; see
 // the model method for why the two questions are not interchangeable.
+//
+// pageSize is REFUSED when out of range rather than clamped; the reason is the caller's
+// termination rule, and it is recorded once on model.MaxAssertedPageSize.
 func (r *SchemaResolver) AssertedDeviceStates(ctx context.Context, args struct {
 	Source     string
 	ActiveOnly bool
+	AfterId    *gql.ID
+	PageSize   int32
 }) ([]*DeviceStateResolver, error) {
 	if err := auth.Authorize(ctx, auth.StateRead); err != nil {
 		return nil, err
 	}
+	// pageSize is NOT range-checked here. The model method refuses an unusable one and
+	// says so in the same words, and duplicating the rule at the door would give it two
+	// homes to drift between — while protecting nothing, since the model is the only
+	// thing that can enforce it for callers that are not this resolver. The authority
+	// check does stay ahead of everything: an unauthenticated caller must not learn which
+	// page sizes are legal.
+	after, err := cursorFrom(args.AfterId)
+	if err != nil {
+		return nil, err
+	}
 
 	api := r.GetApi(ctx)
-	found, err := api.AssertedDeviceStates(ctx, args.Source, args.ActiveOnly)
+	found, err := api.AssertedDeviceStates(ctx, args.Source, args.ActiveOnly, after, int(args.PageSize))
 	if err != nil {
 		return nil, err
 	}

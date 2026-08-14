@@ -138,7 +138,20 @@ type Query {
     # needs in order to be one presence ordering will accept — a broker node with a
     # trailing clock mints a LOWER session on reconnect, and a lower session is
     # rejected forever. There is no default: the two are different questions.
-    assertedDeviceStates(source: String!, activeOnly: Boolean!): [DeviceState!]!
+    #
+    # The result is a PAGE, walked from a cursor: pass afterId as the id of the last
+    # row of the previous page (omit it for the first), and keep asking until a page
+    # comes back holding fewer rows than pageSize. Paging is mandatory because this
+    # set is as large as the tenant's fleet, and a response larger than the caller's
+    # read limit is cut off rather than shortened — a truncated presence set would
+    # silently under-report who is online, which in a reconciler means devices marked
+    # offline while connected.
+    #
+    # pageSize is required and must be between 1 and 1000. It is refused rather than
+    # quietly adjusted, because a caller that stops when a page comes back short would
+    # read a silently reduced page as the end of the set and stop with the fleet only
+    # half read.
+    assertedDeviceStates(source: String!, activeOnly: Boolean!, afterId: ID, pageSize: Int!): [DeviceState!]!
     # Search for device states that match the given criteria.
     deviceStates(criteria: DeviceStateSearchCriteria!): DeviceStateSearchResults!
     # Current value of every measurement name for a device (live readings).

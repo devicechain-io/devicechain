@@ -27,22 +27,29 @@ const tenantTokensQuery = `query { tenantTokens }`
 // stored sessionId is what makes a repair applicable; `active` is what splits the two
 // directions of the diff back apart on this side.
 //
-// 🔴 THE RESULT SET IS UNBOUNDED, AND THE OFFLINE HALF IS THE ONE THAT GROWS FOREVER.
-// Nothing ever removes an ASSERTED row — the inactivity sweep skips them and a dead
-// device's row persists until the device is deleted — so this returns every device ever
-// asserted for the source, not the current fleet. The field is unpaged and the projection
-// carries no index on (presence_source, source), so a churny tenant pays a full scan and a
-// full JSON round trip every reconcile interval. The active-only read this replaced had
-// the same plan and the same absence of paging, so this is a widening rather than a new
-// shape — but it is a widening in the direction that accumulates.
+// 🔴 THE RESULT SET IS AS LARGE AS EVERY DEVICE EVER ASSERTED FOR THE SOURCE, AND THE
+// OFFLINE HALF GROWS FOREVER. Nothing removes an ASSERTED row — the inactivity sweep
+// skips them and a dead device's row persists until the device is deleted — so this is
+// not the current fleet, it is the cumulative one. That is why it is read in PAGES: read
+// whole, it crosses the cross-service response cap somewhere in the thousands of devices,
+// and the client's answer past the cap is a failed read, not a shorter one. This whole
+// tenant would then be skipped for the pass, every pass, on the instances that need
+// reconciliation most.
 //
-// The bounded design, when it is worth building: direction 1 only needs stored sessions
-// for devices the BROKER is currently holding, so a token-scoped read over the inventory
-// (which the projection does index, by tenant and device token) replaces the offline half
-// entirely, leaving activeOnly:true for direction 2.
-const assertedStatesQuery = `query($source: String!) {
-  assertedDeviceStates(source: $source, activeOnly: false) { deviceToken sessionId active }
+// The narrower design remains available if the round trips ever matter: direction 1 only
+// needs stored sessions for devices the BROKER is currently holding, so a token-scoped
+// read over the inventory (which the projection indexes by tenant and device token) would
+// replace the offline half entirely, leaving activeOnly:true for direction 2.
+//
+// `id` is selected because it is the page cursor, not because the diff wants it.
+const assertedStatesQuery = `query($source: String!, $afterId: ID, $pageSize: Int!) {
+  assertedDeviceStates(source: $source, activeOnly: false, afterId: $afterId, pageSize: $pageSize) {
+    id deviceToken sessionId active
+  }
 }`
+
+// assertedStatesPageSize is how many rows one page of the walk asks for.
+const assertedStatesPageSize = 500
 
 // GraphQLTenantLister reads the tenant list from user-management.
 type GraphQLTenantLister struct {
@@ -95,20 +102,81 @@ func NewGraphQLProjectionReader(client adapter.GraphQLClient, url string) *Graph
 // an MQTT-connected device that also posts over HTTP has its row attributed to the HTTP
 // source and is invisible here. It is then never repaired — but also never wrongly
 // killed, which is the direction to fail in.
+// 🔴 A FAILURE PART-WAY THROUGH THE WALK FAILS THE WHOLE READ. Keeping the pages already
+// collected would look like a kindness and is the opposite: this map is one side of a
+// DIFF, and a device missing from it because its page was never fetched is
+// indistinguishable from a device the projection does not hold — so the pass would emit
+// connect "repairs" for devices that needed none, stamped with the broker's session. The
+// caller already handles a failed read correctly, by skipping this tenant for the pass.
 func (r *GraphQLProjectionReader) AssertedStates(ctx context.Context, tenant, source string) (map[string]StoredDevice, error) {
+	devices := make(map[string]StoredDevice, assertedStatesPageSize)
+	var afterId string
+	for {
+		rows, next, err := r.assertedPage(ctx, tenant, source, afterId)
+		if err != nil {
+			return nil, err
+		}
+		r.foldAssertedPage(tenant, rows, devices)
+		if len(rows) < assertedStatesPageSize {
+			return devices, nil
+		}
+		// 🔴🔴 THE GUARD IS THAT THE CURSOR MOVED, NOT THAT THE PAGE COUNT IS SMALL. Row
+		// ids ascend strictly, so a FULL page always advances the cursor; one that does
+		// not means the server ignored afterId (or compared with >= instead of >), and no
+		// number of further pages will make progress. Catching it here costs two pages and
+		// is independent of how large the fleet is.
+		//
+		// It replaces a 200-page ceiling, which was the wrong instrument in a way worth
+		// recording: this set is CUMULATIVE — nothing prunes an asserted row, so it grows
+		// for the life of the tenant — and a ceiling of 200 pages is a hard limit of
+		// 100,000 rows, after which the walk would have failed on EVERY pass, forever. That
+		// is exactly the "reconciliation is off for the fleets that need it most" failure
+		// this whole change exists to remove, reintroduced above the new bound. A ceiling
+		// sized against fleet size can only ever move that cliff; asking whether the walk
+		// is making progress removes it.
+		if next == afterId {
+			return nil, fmt.Errorf("the asserted-state walk for source %s is not advancing past id %q; "+
+				"the server is ignoring the page cursor", source, afterId)
+		}
+		afterId = next
+	}
+}
+
+// assertedRow is one row of a page, plus the id that carries the cursor.
+type assertedRow struct {
+	Id          string `json:"id"`
+	DeviceToken string `json:"deviceToken"`
+	SessionId   string `json:"sessionId"`
+	Active      bool   `json:"active"`
+}
+
+// assertedPage reads one page and reports the cursor for the next.
+//
+// 🔑 THE CURSOR COMES FROM THE LAST ROW READ, NOT THE LAST ROW KEPT. foldAssertedPage
+// drops rows it cannot make sense of (below), and resuming from the last KEPT row would
+// re-read every dropped row on the next page — forever, if the last row of a page is one
+// of them.
+func (r *GraphQLProjectionReader) assertedPage(ctx context.Context, tenant, source, afterId string) ([]assertedRow, string, error) {
 	var out struct {
-		AssertedDeviceStates []struct {
-			DeviceToken string `json:"deviceToken"`
-			SessionId   string `json:"sessionId"`
-			Active      bool   `json:"active"`
-		} `json:"assertedDeviceStates"`
+		AssertedDeviceStates []assertedRow `json:"assertedDeviceStates"`
 	}
-	vars := map[string]any{"source": source}
+	vars := map[string]any{"source": source, "pageSize": assertedStatesPageSize}
+	if afterId != "" {
+		vars["afterId"] = afterId
+	}
 	if err := r.client.Query(ctx, r.url, tenant, assertedStatesQuery, vars, &out); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	devices := make(map[string]StoredDevice, len(out.AssertedDeviceStates))
-	for _, d := range out.AssertedDeviceStates {
+	rows := out.AssertedDeviceStates
+	if len(rows) == 0 {
+		return rows, "", nil
+	}
+	return rows, rows[len(rows)-1].Id, nil
+}
+
+// foldAssertedPage folds one page's rows into the accumulating projection snapshot.
+func (r *GraphQLProjectionReader) foldAssertedPage(tenant string, rows []assertedRow, devices map[string]StoredDevice) {
+	for _, d := range rows {
 		if d.DeviceToken == "" {
 			continue
 		}
@@ -140,5 +208,4 @@ func (r *GraphQLProjectionReader) AssertedStates(ctx context.Context, tenant, so
 			Active:      d.Active,
 		}
 	}
-	return devices, nil
 }

@@ -230,8 +230,8 @@ func (cproc *CommandDeliveryProcessor) deliverTenantBatch(ctx context.Context, b
 	for _, cmd := range batch.commands {
 		// 🔴 A MISSING KEY READS AS State{Known:false}, WHICH Decide ANSWERS Dispatch.
 		// That is the fail-open, and it carries three separate cases on one line: a
-		// device the projection has never seen, a tenant whose presence read failed, and
-		// an instance with no gate wired at all (nil states). All three must deliver.
+		// device the projection has never seen, a device whose chunk of the read failed,
+		// and an instance with no gate wired at all. All three must deliver.
 		switch presence.Decide(states[cmd.DeviceToken]) {
 		case presence.Hold:
 			cproc.holdCommand(tenantCtx, cmd)
@@ -260,9 +260,9 @@ func distinctDevices(commands []*model.Command) []string {
 	return tokens
 }
 
-// presenceStates reads the projection for one tenant's devices, answering nil — which
-// every lookup then reads as "unknown", hence Dispatch — when the gate is unwired or the
-// read fails.
+// presenceStates reads the projection for one tenant's devices, answering an empty Read
+// — whose every lookup then reads as "unknown", hence Dispatch — when the gate is
+// unwired.
 //
 // 🔴 A FAILED READ MUST NOT WITHHOLD. The gate exists to stop commands being thrown at
 // devices that cannot receive them; it is not an authority on whether the platform is
@@ -270,6 +270,18 @@ func distinctDevices(commands []*model.Command) []string {
 // would convert one service's outage into a platform-wide command stall, which is a
 // strictly worse failure than the silent loss the gate prevents. The counter is what
 // stops that fail-open being invisible.
+//
+// 🔑 SO THIS SIDE DELIBERATELY DOES NOT CALL presence.Resolved. A device nobody could ask
+// about and a device the projection has never seen get the same answer here — dispatch —
+// and that equivalence is written down as a decision rather than left to be re-derived,
+// because the OTHER caller (the hold reconciler) owes them different answers and asks
+// Resolved for exactly that reason. What the partial read buys is narrower: the chunks
+// that DID succeed still gate their own devices, so an outage midway through a large
+// tenant un-gates one page of commands instead of all of them.
+//
+// The meter counts once per tenant pass, not once per failed chunk: it answers "can the
+// gate see presence", and per-chunk counting would make one outage read as ten times
+// worse on a large tenant than on a small one.
 func (cproc *CommandDeliveryProcessor) presenceStates(ctx context.Context, devices []string) map[string]presence.State {
 	if cproc.Presence == nil {
 		return nil
@@ -277,9 +289,8 @@ func (cproc *CommandDeliveryProcessor) presenceStates(ctx context.Context, devic
 	states, err := cproc.Presence.StatesFor(ctx, devices)
 	if err != nil {
 		incr(cproc.PresenceReadErrors, 1)
-		log.Warn().Err(err).Int("devices", len(devices)).
-			Msg("Could not read device presence; dispatching this tenant's commands ungated.")
-		return nil
+		log.Warn().Err(err).Int("asked", len(devices)).Int("answered", len(states)).
+			Msg("Could not read presence for some of this tenant's devices; those commands dispatch ungated.")
 	}
 	return states
 }
