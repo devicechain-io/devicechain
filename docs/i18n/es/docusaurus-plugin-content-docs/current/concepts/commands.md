@@ -144,10 +144,10 @@ Se aplica igual tanto si envías un comando como diez mil: un lote se admite has
 límite que alcanzaría un bucle de comandos individuales, así que no hay forma de eludirla ni
 ventaja en ninguna de las dos formas.
 
-Un rechazo siempre nombra el límite que realmente se aplicó, e indica cuánto estaba
-reservado — de modo que quien reciba un rechazo en 8000 frente a un techo visible de 10 000
-pueda distinguir ambas cifras. La reserva es un ajuste del operador, no del inquilino: no se
-puede subir ni bajar por inquilino.
+Un rechazo nombra el límite que realmente se aplicó y, cuando es la reserva la que te ha
+acotado, indica cuánto se apartó — de modo que quien reciba un rechazo en 8000 frente a un
+techo visible de 10 000 pueda distinguir ambas cifras. La reserva es un ajuste del operador,
+no del inquilino: no se puede subir ni bajar por inquilino.
 
 :::info Acota el trabajo no entregado, no solo el retenido
 La cuenta abarca todo comando en **`QUEUED` o `HELD`** — no solo los retenidos para

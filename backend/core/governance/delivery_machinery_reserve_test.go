@@ -120,9 +120,37 @@ func TestTheObviousFloatSpellingWouldLoseAnInteger(t *testing.T) {
 	}
 }
 
-// The reserve is never under-provisioned: machinery always keeps at least its fraction,
-// across a sweep of ceilings and fractions. This is the property the ceil() rounding
-// direction exists for, asserted over a range rather than at one point.
+// 🔴 The basis-point quantization, pinned because it is the one place the stated rule and
+// the implemented rule differ. The fraction is rounded to basis points BEFORE the ceil, so
+// a reserve that is not a whole number of basis points can reserve one fewer than
+// ceil(ceiling × reserve) would.
+//
+// 1/3 of 10000 is 3333.33…, so the stated formula says 3334; the implementation quantizes
+// 1/3 to 0.3333 and reserves 3333. Half a basis point, deliberate, and the price of exact
+// integer arithmetic — but "never under-provisioned" is not an absolute, so the exception
+// is written down rather than left for someone to discover.
+func TestTheQuantizationCanReserveOneFewer(t *testing.T) {
+	const ceiling = 10000
+	reserve := 1.0 / 3.0
+
+	limit := RestrictedCommandLimit(ceiling, reserve)
+	if reserved := ceiling - limit; reserved != 3333 {
+		t.Fatalf("reserved %d for 1/3 of %d, want 3333 (basis-point quantized)", reserved, ceiling)
+	}
+	if unquantized := int(math.Ceil(float64(ceiling) * reserve)); unquantized != 3334 {
+		t.Fatalf("the unquantized formula now yields %d; it yielded 3334 when this was written",
+			unquantized)
+	}
+}
+
+// The reserve is never under-provisioned for a reserve expressed in whole basis points:
+// machinery always keeps at least its fraction, across a sweep of ceilings and fractions.
+// This is the property the ceil() rounding direction exists for.
+//
+// The fractions below are all basis-point-exact ON PURPOSE, which is a limit of this test
+// rather than of the code — see TestTheQuantizationCanReserveOneFewer for what happens
+// outside that set. A sweep that quietly included 1/3 would fail, and "fixing" it by
+// loosening the assertion would erase the property.
 func TestTheReserveIsNeverUnderProvisioned(t *testing.T) {
 	for _, ceiling := range []int{100, 128, 333, 1000, 10000, 65536, 100000} {
 		for _, reserve := range []float64{0.05, 0.1, 0.15, 0.2, 0.25, 0.5, 0.8, 0.9} {

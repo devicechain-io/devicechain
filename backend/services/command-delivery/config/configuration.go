@@ -136,10 +136,12 @@ func (c *CommandDeliveryConfiguration) ApplyDefaults() {
 	if c.HeldCommandCeiling <= 0 {
 		c.HeldCommandCeiling = DefaultHeldCommandCeiling
 	}
-	// Same direction again for the reserve. Written as a negated positive test rather
-	// than `<= 0` on purpose: NaN compares false to everything, so the obvious spelling
-	// would let a NaN through here AND through the upper-bound check in Validate, leaving
-	// the service running on a reserve that makes every comparison downstream false.
+	// Same direction again for the reserve. Written as a negated positive test rather than
+	// `<= 0` on purpose: NaN compares false to everything, so the obvious spelling would
+	// let a NaN through here AND through the upper-bound check in Validate. It would not
+	// actually remove the reserve — governance.RestrictedCommandLimit makes the same test
+	// and lands on the platform reserve — but a config value that survives validation while
+	// meaning nothing is worth refusing where it enters rather than where it is used.
 	if !(c.DeliveryMachineryReserve > 0) {
 		c.DeliveryMachineryReserve = DefaultDeliveryMachineryReserve
 	}

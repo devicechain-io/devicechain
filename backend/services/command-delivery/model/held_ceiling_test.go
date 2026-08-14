@@ -45,7 +45,8 @@ func asRejection(t *testing.T, err error) *EnqueueRejected {
 // also "succeed" here, and it would double-actuate real hardware.
 func TestReplayAtTheCeilingReturnsTheOriginalCommand(t *testing.T) {
 	api := newTestApi(t)
-	ctx := core.WithTenant(context.Background(), "A")
+	// Service-token class, so "at the ceiling" means the ceiling — see machineryCtx.
+	ctx := machineryCtx(core.WithTenant(context.Background(), "A"))
 
 	originalID := seedWithStatus(t, api, ctx, "replay-me", CommandHeld)
 	seedWithStatus(t, api, ctx, "filler", CommandHeld)
@@ -147,7 +148,9 @@ func TestHeldCeilingRefusesANewEnqueueAndPersistsNothing(t *testing.T) {
 func TestOnlyUndeliveredRowsCountTowardTheCeiling(t *testing.T) {
 	// --- SENT and the terminals do not count ---
 	api := newTestApi(t)
-	ctx := core.WithTenant(context.Background(), "A")
+	// Service-token class — this test is about WHICH ROWS COUNT, so the number it counts
+	// to must be the ceiling itself. See machineryCtx.
+	ctx := machineryCtx(core.WithTenant(context.Background(), "A"))
 	for _, seed := range []struct {
 		token  string
 		status CommandStatus
@@ -176,7 +179,7 @@ func TestOnlyUndeliveredRowsCountTowardTheCeiling(t *testing.T) {
 	for _, status := range []CommandStatus{CommandQueued, CommandHeld} {
 		t.Run(string(status)+" counts", func(t *testing.T) {
 			api := newTestApi(t)
-			ctx := core.WithTenant(context.Background(), "B")
+			ctx := machineryCtx(core.WithTenant(context.Background(), "B"))
 			seedWithStatus(t, api, ctx, "u-1", status)
 			seedWithStatus(t, api, ctx, "u-2", status)
 			api.DefaultHeldCommandCeiling = 2
@@ -196,6 +199,8 @@ func TestOnlyUndeliveredRowsCountTowardTheCeiling(t *testing.T) {
 // counted instance-wide would make the noisiest tenant everyone else's ceiling.
 func TestHeldCeilingIsPerTenant(t *testing.T) {
 	api := newTestApi(t)
+	// Service-token class: the property is per-TENANT scoping of the count, measured
+	// against the ceiling rather than against the ceiling less the reserve.
 	tenantA := core.WithTenant(context.Background(), "A")
 	tenantB := core.WithTenant(context.Background(), "B")
 

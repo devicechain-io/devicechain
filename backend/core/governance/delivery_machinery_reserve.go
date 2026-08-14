@@ -31,10 +31,16 @@ const reserveBasisPointsScale = 10000
 // but a platform service token) may hold, given the ceiling in force and the reserve
 // fraction. A machinery caller is bounded by the ceiling itself, not by this.
 //
-// The reserve is defined as `reserved = ceil(ceiling × reserve)` — rounding in favour of
-// the reserve, so the protected share is never under-provisioned — and the limit is what
-// is left. Both arguments are treated fail-safe: a non-positive ceiling means the platform
-// ceiling, and a reserve outside (0,1) means the platform reserve.
+// The reserve is `reserved = ceil(ceiling × r)`, rounding in favour of the reserve, and the
+// limit is what is left. Note the exact r: the configured fraction is first QUANTIZED to
+// basis points, so r is `round(reserve × 10000) / 10000` and not the fraction verbatim. A
+// reserve of 1/3 against a ceiling of 10000 therefore reserves 3333, where ceil of the
+// unquantized product would be 3334. The gap is bounded by half a basis point and is the
+// price of exact integer arithmetic; it is called out because "never under-provisioned"
+// would otherwise read as an absolute, and it is not one.
+//
+// Both arguments are treated fail-safe: a non-positive ceiling means the platform ceiling,
+// and a reserve outside (0,1) means the platform reserve.
 //
 // 🔴 ZERO DOES NOT MEAN "NO RESERVE". It means the platform default, exactly as a zero
 // ceiling means the platform ceiling (ADR-023: the harmless-looking value must land on the
@@ -42,18 +48,27 @@ const reserveBasisPointsScale = 10000
 // positive fraction; there is deliberately no value that switches it off, because the
 // thing it protects is the platform's ability to deliver at all.
 //
-// 🔴 THE max(1, …) IS NOT DEFENSIVE PADDING. A reserve at or above 1 would compute a
-// limit of zero, and a zero limit is not a tighter bound — it is an outage in which the
-// tenant may enqueue nothing at all. That is the same zero-inversion the ceiling resolver
-// refuses when a tier answers zero, arriving here through the reserve instead.
+// 🔴 THE max(1, …) IS NOT DEFENSIVE PADDING — a zero limit is not a tighter bound, it is
+// an outage in which the tenant may enqueue nothing at all, the same zero-inversion the
+// ceiling resolver refuses when a tier answers zero, arriving here through the reserve.
+//
+// What actually reaches it is worth naming, because the obvious answer is wrong: a reserve
+// of 1 or more does NOT, since the fail-safe above has already replaced it with the
+// default. The live triggers are a tiny ceiling — restricted(1, 0.2) and restricted(2, 0.8)
+// both clamp to 1, since `reserved` is at least 1 — and a reserve so close to 1 that its
+// basis points round to 10000, e.g. restricted(10000, 0.99996). Neither is reachable
+// through the service's own config (which floors the ceiling at 100 and caps the reserve at
+// half), so this is the guard for a caller that does not go through that config.
 //
 // 🔴 THE ARITHMETIC IS INTEGER ON PURPOSE. The obvious spelling, `floor(ceiling × (1 −
 // reserve))`, LOSES AN INTEGER at ordinary values, because `1 − reserve` is not exact in
-// binary: at reserve 0.8 and ceiling 10000 it yields 1999 where the answer is 2000, and it
-// is wrong for 34 of the 180 (ceiling, reserve) pairs it was measured over. Basis points
-// keep it exact, and int64 keeps the product from overflowing a 32-bit int (a ceiling above
-// ~214k would wrap, which is a plausible-looking limit rather than a refused one — the
-// failure mode a narrowing conversion always has).
+// binary. The pinned example: reserve 0.8, ceiling 10000 yields 1999 where the answer is
+// 2000. No count of "how often" is given here on purpose — it depends entirely on which
+// (ceiling, reserve) pairs you sweep, so any number quoted would be a fact about the
+// author's grid rather than about the arithmetic. What is stable is that the error exists
+// and is silent. Basis points keep it exact, and int64 keeps the product from overflowing
+// a 32-bit int (a ceiling above ~214k would wrap, which is a plausible-looking limit
+// rather than a refused one — the failure mode a narrowing conversion always has).
 //
 // 🔴 That defect only appears with RUNTIME values, which is what a configured reserve
 // always is. Written with Go constants the subtraction is folded in arbitrary precision

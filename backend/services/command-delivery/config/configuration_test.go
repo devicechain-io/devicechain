@@ -96,9 +96,15 @@ func TestDeliveryMachineryReserveFlooredWhenNonPositive(t *testing.T) {
 }
 
 // 🔴 NaN is the case the obvious `<= 0` spelling lets through: it compares false to every
-// bound, so it would survive BOTH the defaulting hook and the upper-bound check in
-// Validate, and the service would run on a reserve that makes every comparison downstream
-// false. YAML has no NaN literal, but a float field is reachable from more than YAML.
+// bound, so it would survive BOTH the defaulting hook and the upper-bound check in Validate.
+//
+// It is defence in depth rather than the only defence — governance.RestrictedCommandLimit
+// applies the same negated-positive test and would land on the platform reserve anyway — and
+// it is not reachable through the deployed config path: the chart serializes each area's
+// config with toJson and LoadConfiguration decodes it with encoding/json, and JSON has no
+// NaN literal at all. (YAML does have one, `.nan`; the config document simply is not YAML by
+// the time it arrives.) A config struct built in Go is reachable from more than that path,
+// which is what this guards.
 func TestDeliveryMachineryReserveRejectsNaN(t *testing.T) {
 	cfg := &CommandDeliveryConfiguration{DeliveryMachineryReserve: math.NaN()}
 	cfg.ApplyDefaults()

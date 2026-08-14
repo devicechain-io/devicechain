@@ -484,15 +484,6 @@ func undeliveredStatusStrings() []string {
 	return []string{CommandQueued.String(), CommandHeld.String()}
 }
 
-// heldCommandCeiling resolves the ceiling in force for the calling tenant: the
-// resolver's answer (per-tenant override → tier → platform default, folded upstream)
-// when one is wired and the tenant is known, else this service's configured default,
-// else the compiled-in platform default.
-//
-// 🔴 EVERY FALLBACK LANDS ON A NUMBER. A missing resolver, an unresolved tenant, a
-// zero from either of them: all mean the PLATFORM DEFAULT, never unlimited. A
-// governance ceiling whose absent value reads as "no ceiling" stops governing exactly
-// when its authority is unreachable — the moment it is most needed.
 // effectiveUndeliveredLimit is how many undelivered commands THIS CALLER may hold, and
 // the ceiling it was derived from. Both paths that bound enqueue — the single-command
 // check and the batch headroom — resolve through here, which is the only reason one
@@ -507,7 +498,16 @@ func undeliveredStatusStrings() []string {
 //
 // 🔴 NO CLAIMS MEANS RESTRICTED. An unauthenticated or claims-less context is not a
 // machine caller; treating "I could not tell" as machinery would make the reserve
-// vanish exactly where identity is least established.
+// vanish exactly where identity is least established. On the data plane the handler
+// admits only access and service tokens and refuses the rest, and CommandWrite is
+// checked before this is ever reached — so the claims-less branch is defence in depth
+// rather than a live path, which is exactly why it needs a test of its own.
+//
+// ⚠️ The single-command path counts without a lock (see checkUndeliveredCeiling), so
+// concurrent restricted enqueues at the boundary can each pass and nibble a few rows
+// into the reserved share — the same one-over race the ceiling has always tolerated,
+// now also present at this boundary. Batches cannot: they take the per-tenant advisory
+// lock first.
 func (api *Api) effectiveUndeliveredLimit(ctx context.Context) (limit int, ceiling int) {
 	ceiling = api.heldCommandCeiling(ctx)
 	if claims, ok := auth.ClaimsFromContext(ctx); ok && claims.TokenType == auth.TokenTypeService {
@@ -516,6 +516,15 @@ func (api *Api) effectiveUndeliveredLimit(ctx context.Context) (limit int, ceili
 	return governance.RestrictedCommandLimit(ceiling, api.DeliveryMachineryReserve), ceiling
 }
 
+// heldCommandCeiling resolves the ceiling in force for the calling tenant: the
+// resolver's answer (per-tenant override → tier → platform default, folded upstream)
+// when one is wired and the tenant is known, else this service's configured default,
+// else the compiled-in platform default.
+//
+// 🔴 EVERY FALLBACK LANDS ON A NUMBER. A missing resolver, an unresolved tenant, a
+// zero from either of them: all mean the PLATFORM DEFAULT, never unlimited. A
+// governance ceiling whose absent value reads as "no ceiling" stops governing exactly
+// when its authority is unreachable — the moment it is most needed.
 func (api *Api) heldCommandCeiling(ctx context.Context) int {
 	if api.HeldCeilingResolver != nil {
 		if tenant, ok := core.TenantFromContext(ctx); ok {

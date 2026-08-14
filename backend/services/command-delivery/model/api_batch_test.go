@@ -262,7 +262,8 @@ func TestAllowPartialAdmitsTheRestAndRecordsTheRefusals(t *testing.T) {
 func TestTheCeilingBoundsTheWholeBatchNotEachCommand(t *testing.T) {
 	api := newBatchTestApi(t)
 	api.DefaultHeldCommandCeiling = 5
-	ctx := core.WithTenant(context.Background(), "acme")
+	// Service-token class, so the bound under test is the ceiling — see machineryCtx.
+	ctx := machineryCtx(core.WithTenant(context.Background(), "acme"))
 	api.BatchValidator = &countingValidator{}
 
 	_, err := api.CreateCommandBatch(ctx, batchRequest("toobig", deviceTokens(6)))

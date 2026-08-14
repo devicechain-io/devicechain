@@ -135,10 +135,10 @@ It applies the same way whether you send one command or ten thousand: a batch is
 up to the same limit a loop of single commands would reach, so there is no way around it
 and no advantage to either shape.
 
-A refusal always names the limit that actually applied, and says how much was reserved —
-so a caller refused at 8,000 against a visible ceiling of 10,000 can tell the two numbers
-apart. The reserve is an operator setting, not a tenant one; it cannot be raised or lowered
-per tenant.
+A refusal names the limit that actually applied, and when the reserve is what bound you it
+says how much was set aside — so a caller refused at 8,000 against a visible ceiling of
+10,000 can tell the two numbers apart. The reserve is an operator setting, not a tenant
+one; it cannot be raised or lowered per tenant.
 
 :::info It bounds undelivered work, not just held work
 The count is every command **`QUEUED` or `HELD`** — not only the ones withheld for absent

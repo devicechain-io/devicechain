@@ -256,7 +256,9 @@ func TestAGroupReturningShortPagesStillResolvesCompletely(t *testing.T) {
 func TestEveryChunkOfALargeFleetIsValidated(t *testing.T) {
 	api := newBatchTestApi(t)
 	api.DefaultHeldCommandCeiling = batchValidationChunk * 3
-	ctx := core.WithTenant(context.Background(), "acme")
+	// Service-token class: the ceiling here only has to be big enough not to interfere,
+	// and the reserve would quietly shrink it. See machineryCtx.
+	ctx := machineryCtx(core.WithTenant(context.Background(), "acme"))
 	validator := &countingValidator{}
 	api.BatchValidator = validator
 
