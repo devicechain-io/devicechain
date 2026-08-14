@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -191,9 +192,17 @@ func (r *SchemaResolver) ResolveDeviceGroupTargets(ctx context.Context, args str
 // Zero is rejected outright rather than treated as "begin": the resolver never emits
 // "0" as a cursor (a zero NextCursor marshals as null), so a caller presenting one is
 // confused, and the safe reading of a cursor that cannot have come from us is refusal.
+//
+// 🔴 THE UPPER BOUND IS NOT DECORATION, and the first version of this fix omitted it.
+// ParseUint returns a uint64; `uint` is 64 bits on the platforms we ship but 32 on a
+// 32-bit build, where the conversion would TRUNCATE — and a truncated cursor is not a
+// refused one, it is a valid-looking id pointing somewhere else in the table, which
+// silently resumes the fleet walk at the wrong place. That is the same class of failure
+// as the Sscanf bug above (a bad cursor becoming a plausible one), reached by a different
+// route, which is why the bound is checked rather than assumed from the build target.
 func parseCursor(cursor string) (uint, error) {
 	id, err := strconv.ParseUint(cursor, 10, 64)
-	if err != nil || id == 0 {
+	if err != nil || id == 0 || id > uint64(math.MaxUint) {
 		return 0, fmt.Errorf("malformed page cursor %q", cursor)
 	}
 	return uint(id), nil

@@ -165,7 +165,16 @@ func TestAHealthyFleetProducesNoRefusalsAtAll(t *testing.T) {
 //
 // The cases below are the ones Sscanf accepted. Each must now be refused.
 func TestAMalformedCursorIsRefusedRatherThanRestartingTheWalk(t *testing.T) {
-	for _, cursor := range []string{"12abc", "12.5", "0x10", " 12", "0", "-5", "", "999999999999999999999999"} {
+	// ⚠️ THE uint TRUNCATION GUARD IS NOT EXERCISED HERE, AND CANNOT BE ON THIS BUILD.
+	// `uint` is 64 bits on every platform we ship, so `id > math.MaxUint` is unreachable
+	// and a case asserting that 2^32 is refused would FAIL here while passing on the
+	// 32-bit build it was written for. The guard exists because the conversion is
+	// unchecked otherwise — CodeQL flagged it after the Sscanf fix had already shipped —
+	// and this note is here so nobody "adds the missing case" and breaks the suite.
+	// What IS covered below: every malformed form, plus 2^64, which ParseUint itself
+	// rejects on every platform.
+	for _, cursor := range []string{"12abc", "12.5", "0x10", " 12", "0", "-5", "",
+		"999999999999999999999999", "18446744073709551616"} {
 		t.Run(cursor, func(t *testing.T) {
 			if _, err := parseCursor(cursor); err == nil {
 				t.Fatalf("cursor %q was accepted; a cursor this walk never issued must be "+
