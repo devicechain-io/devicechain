@@ -229,64 +229,103 @@ func TestPreviewScanCap(t *testing.T) {
 	}
 }
 
-// A store-and-forward batch whose ENVELOPE falls outside the previewed window is still
-// evaluated, because its samples fall inside it.
+// batchMsg builds a STORE-AND-FORWARD message: one envelope carrying a sample taken earlier.
 //
-// 🔴 REPLAY-CORRECTNESS IS THE WHOLE FEATURE, so this is not an edge case. Live detection
-// evaluated those samples, at those instants. A preview that tested only the envelope
-// would skip the message whole and report "this rule would not have fired" about readings
-// live DID fire on — a confident wrong answer, which is worse than a truncation notice.
-func TestPreviewEvaluatesABatchWhoseEnvelopeIsOutsideTheWindow(t *testing.T) {
-	base := time.Date(2026, 7, 9, 11, 0, 0, 0, time.UTC)
-	// The window closes at 11:45; the upload happened at 12:05 carrying a reading from
-	// 11:30. On the envelope alone the message is out; on its samples it is in.
-	window := TimeRange{Start: base.Add(-15 * time.Minute), End: base.Add(45 * time.Minute)}
-	uploadedAt := base.Add(65 * time.Minute)
-	sampledAt := base.Add(30 * time.Minute)
-
+// 🔑 This is the shape msg() cannot make. msg() stamps the envelope and the entry at the SAME
+// instant, so every test built on it is blind to which of the two the code under test reads —
+// which is exactly how the preview came to filter on the envelope while claiming to filter on the
+// span, with a green suite.
+func batchMsg(t *testing.T, seq uint64, tenant, device, profileVersion, metric, value string,
+	uploadedAt, sampledAt time.Time) messaging.Message {
+	t.Helper()
 	ev := &dmmodel.ResolvedEvent{
 		Source:              "http1",
-		SourceDeviceToken:   "d1",
-		ProfileVersionToken: "p@1",
+		SourceDeviceToken:   device,
+		ProfileVersionToken: profileVersion,
 		OccurredTime:        uploadedAt,
 		ProcessedTime:       uploadedAt,
 		EventType:           esmodel.Measurement,
 		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
 			OccurredTime: sampledAt,
-			Entries:      []dmmodel.ResolvedMeasurementEntry{{Name: "temperature", Value: "150"}},
+			Entries:      []dmmodel.ResolvedMeasurementEntry{{Name: metric, Value: value}},
 		}}},
 	}
-	first, last := occurredSpan(ev)
-	if !first.Equal(sampledAt) {
-		t.Fatalf("span start is %v, want the sample's instant %v", first, sampledAt)
+	b, err := dmproto.MarshalResolvedEvent(ev)
+	if err != nil {
+		t.Fatalf("marshal resolved event: %v", err)
 	}
-	if !last.Equal(uploadedAt) {
-		t.Fatalf("span end is %v, want the envelope %v", last, uploadedAt)
+	m := messaging.NewConsumedMessage("dc."+tenant+".resolved-events", b, 0, nil, nil)
+	m.StreamSeq = seq
+	return m
+}
+
+// A store-and-forward batch whose ENVELOPE falls outside the previewed window is still
+// evaluated, because its samples fall inside it.
+//
+// 🔴 REPLAY-CORRECTNESS IS THE WHOLE FEATURE, so this is not an edge case. A preview that
+// tested only the envelope skipped the message WHOLE and reported "this rule would not have
+// fired" about samples it never looked at, with no degraded flag saying so — a confident wrong
+// answer, which is worse than a truncation notice.
+//
+// 🔑 THE ASSERTION IS THAT THE EVENT WAS ADMITTED AND COUNTED, not a claim about what the live
+// engine does with a late batch. The engine advances a watermark from the instant it is handed
+// and can still drop a batch's entries as late — the same in production as here, and a separate
+// concern needing per-series watermarks. This test holds the narrower guarantee: an event
+// overlapping the window reaches the engine, so a preview's silence is the engine's answer and
+// not an artefact of the filter in front of it. The RAISE below is the evidence it got that far.
+//
+// 🔴🔴 THIS TEST GOES THROUGH Run, AND THAT IS THE POINT OF IT. Its predecessor called
+// occurredSpan directly and then hand-wrote the comparison it believed Run made, under a comment
+// saying "which is exactly the test the filter now makes". It was not: Run filtered on the
+// envelope, and occurredSpan had no non-test caller at all. The assertion restated the intent
+// instead of measuring the subject, so it passed whether or not the filter was ever wired in —
+// and the feature shipped inert behind it. Assert on Run's OUTPUT (EventsScanned, Firings), never
+// on a helper the production path might not call.
+func TestPreviewEvaluatesABatchWhoseEnvelopeIsOutsideTheWindow(t *testing.T) {
+	// The window closes at base+45m; the upload happened at base+65m carrying a reading taken at
+	// base+30m. On the envelope alone the message is out; on its span it is in.
+	tr := TimeRange{Start: base.Add(-15 * time.Minute), End: base.Add(45 * time.Minute)}
+	op := &fakeOpener{msgs: []messaging.Message{
+		batchMsg(t, 1, "acme", "d1", "p@1", "temperature", "150",
+			base.Add(65*time.Minute), base.Add(30*time.Minute)),
+	}}
+
+	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", tr, 0, 0, 0, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
 	}
-	// The span overlaps the window even though the envelope sits past its end — which is
-	// exactly the test the filter now makes.
-	if last.Before(window.Start) || first.After(window.End) {
-		t.Fatal("a batch sampled inside the window must not be filtered out by its envelope")
+	if res.Stats.EventsScanned != 1 {
+		t.Fatalf("scanned=%d, want 1: a batch sampled inside the window was dropped whole by its "+
+			"envelope, so the preview never saw readings live detection did fire on", res.Stats.EventsScanned)
+	}
+	if len(res.Firings) != 1 || !res.Firings[0].Raise {
+		t.Fatalf("want one RAISE for the in-window sample, got %+v", res.Firings)
+	}
+	if res.Degraded != "" {
+		t.Fatalf("nothing here is degraded, got %q", res.Degraded)
 	}
 }
 
 // An event genuinely outside the window is still excluded. The counterweight: widening the
-// filter to a span is only safe while it still excludes.
+// filter to a span is only safe while it still excludes — a filter that admitted everything
+// would satisfy the test above and silently preview events the window never asked for.
 func TestPreviewSpanStillExcludesAnEventOutsideTheWindow(t *testing.T) {
-	base := time.Date(2026, 7, 9, 11, 0, 0, 0, time.UTC)
-	window := TimeRange{Start: base, End: base.Add(30 * time.Minute)}
+	tr := TimeRange{Start: base, End: base.Add(30 * time.Minute)}
 	after := base.Add(2 * time.Hour)
+	op := &fakeOpener{msgs: []messaging.Message{
+		// Envelope AND sample both past the window: nothing about this event overlaps it.
+		batchMsg(t, 1, "acme", "d1", "p@1", "temperature", "150", after, after),
+	}}
 
-	ev := &dmmodel.ResolvedEvent{
-		OccurredTime: after,
-		EventType:    esmodel.Measurement,
-		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
-			OccurredTime: after,
-			Entries:      []dmmodel.ResolvedMeasurementEntry{{Name: "temperature", Value: "150"}},
-		}}},
+	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", tr, 0, 0, 0, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
 	}
-	first, last := occurredSpan(ev)
-	if !(last.Before(window.Start) || first.After(window.End)) {
-		t.Fatalf("an event entirely after the window must be excluded; span %v..%v", first, last)
+	if res.Stats.EventsScanned != 0 {
+		t.Fatalf("scanned=%d, want 0: an event entirely outside the window must not be evaluated",
+			res.Stats.EventsScanned)
+	}
+	if len(res.Firings) != 0 {
+		t.Fatalf("an out-of-window event produced firings: %+v", res.Firings)
 	}
 }
