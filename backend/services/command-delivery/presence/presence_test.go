@@ -11,6 +11,22 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 )
 
+// sparkplugSource is the source string a Sparkplug device is ACTUALLY projected with —
+// sparkplug-ingest stamps "sparkplug:"+hostId onto every event it emits, and device-state
+// denormalizes that verbatim.
+//
+// 🔴🔴 USE THIS, NEVER A HAND-WRITTEN "sparkplug". Every case here once passed a bare
+// "sparkplug", which no producer in the platform emits, and the whole Undeliverable branch
+// was unreachable in production for as long as those fixtures looked green. A fixture that
+// carries a PLAUSIBLE BUT UNPRODUCEABLE value tests the fixture, not the gate — it is the
+// same failure as a fake that drops a field, one step further from being visible.
+//
+// It is spelled with a real host id rather than the "{hostId}" placeholder so it is a value
+// the platform could genuinely mint, and it is deliberately NOT the default host id: a
+// qualifier that happened to be empty or defaulted would let a whole-string comparison keep
+// passing for the wrong reason.
+const sparkplugSource = "sparkplug:plant-a"
+
 // TestDecide walks every combination the gate can be handed, because each wrong answer
 // is a different production failure and they are not interchangeable.
 func TestDecide(t *testing.T) {
@@ -57,17 +73,40 @@ func TestDecide(t *testing.T) {
 		},
 		{
 			"sparkplug is undeliverable, not held, even when ACTIVE",
-			State{Known: true, Asserted: true, Active: true, Source: "sparkplug"},
+			State{Known: true, Asserted: true, Active: true, Source: sparkplugSource},
 			Undeliverable,
 			"🔑 the transport has no command path at all, so presence is beside the point",
 		},
 		{
 			"sparkplug is undeliverable, not held, when absent",
-			State{Known: true, Asserted: true, Active: false, Source: "sparkplug"},
+			State{Known: true, Asserted: true, Active: false, Source: sparkplugSource},
 			Undeliverable,
 			"HELD would mean 'waiting for the device to come back' — false here, because it " +
 				"comes back and delivery still cannot happen, while the row occupies the " +
 				"tenant's ceiling for a full TTL",
+		},
+		{
+			"an UNQUALIFIED sparkplug source is still undeliverable",
+			State{Known: true, Asserted: true, Active: false, Source: "sparkplug"},
+			Undeliverable,
+			"the transport cut must not stop matching the bare form; a source is " +
+				"`transport` OR `transport:qualifier` and both name the same transport",
+		},
+		{
+			"a source merely NAMED like sparkplug is deliverable",
+			State{Known: true, Asserted: true, Active: true, Source: "sparkplugin"},
+			Dispatch,
+			"🔴 THE COUNTERWEIGHT TO THE TRANSPORT CUT. A prefix match would condemn this. " +
+				"`source` for a plain gateway is an OPERATOR-CHOSEN id, so a name that merely " +
+				"starts with a denied transport is reachable input, not a hypothetical",
+		},
+		{
+			"an operator source named sparkplug-test is deliverable",
+			State{Known: true, Asserted: true, Active: false, Source: "sparkplug-test"},
+			Hold,
+			"same counterweight, on the path where the alternative verdict is HOLD rather " +
+				"than DISPATCH — it holds on its absence, and is never condemned as " +
+				"undeliverable",
 		},
 		{
 			"lwm2m absent holds",
@@ -115,7 +154,7 @@ func TestDecide(t *testing.T) {
 func TestOnlyPositiveEvidenceWithholds(t *testing.T) {
 	for _, s := range []State{
 		{Known: false},
-		{Known: false, Asserted: true, Active: false, Source: "sparkplug"},
+		{Known: false, Asserted: true, Active: false, Source: sparkplugSource},
 		{Known: true, Asserted: false, Active: false},
 		{Known: true, Asserted: false, Active: false, Source: "mqtt"},
 		{Known: true, Asserted: true, Active: true},

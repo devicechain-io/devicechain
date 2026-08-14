@@ -154,7 +154,7 @@ func TestTheReconcilerFailsCLOSED(t *testing.T) {
 func TestTheReconcilerReleasesAnUndeliverableCommandRatherThanFailingItHere(t *testing.T) {
 	api := &fakeApi{heldPage: []*model.Command{heldFor(1, "c1", "acme")}}
 	proc := reconcilerWith(api, &scriptedReader{
-		states: map[string]presence.State{"dev-c1": asserted(true, "sparkplug")},
+		states: map[string]presence.State{"dev-c1": asserted(true, sparkplugSource)},
 	})
 
 	proc.reconcileHolds(context.Background())

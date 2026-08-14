@@ -55,6 +55,17 @@ func asserted(active bool, source string) presence.State {
 	return presence.State{Known: true, Asserted: true, Active: active, Source: source}
 }
 
+// sparkplugSource is the source string a Sparkplug device is ACTUALLY projected with:
+// sparkplug-ingest stamps "sparkplug:"+hostId, and device-state denormalizes it verbatim.
+//
+// 🔴🔴 NEVER HAND-WRITE A BARE "sparkplug" IN A GATE FIXTURE. These end-to-end tests are the
+// ones that could have caught the whole Undeliverable verdict being unreachable in
+// production, and they did not — because they posed a source value nothing in the platform
+// emits, so they exercised the deny list against an input it would never be given. The
+// presence package holds the same constant with the same warning; they are separate because
+// the two packages share no non-test code, which is exactly the drift this value guards.
+const sparkplugSource = "sparkplug:plant-a"
+
 // TestAnAbsentDeviceHasItsCommandHeldRatherThanPublished is the gate's whole purpose.
 //
 // 🔴 THE BEHAVIOUR THIS REPLACES IS A SILENT LOSS, NOT A VISIBLE FAILURE. An MQTT publish
@@ -234,7 +245,7 @@ func TestAnUndeliverableTransportFailsTheCommandRatherThanHoldingIt(t *testing.T
 	api := &fakeApi{lockAvailable: true, pending: []*model.Command{queued(1, "c1")}}
 	writer := &recordingWriter{}
 	proc := procWith(api, writer)
-	proc.Presence = &scriptedReader{states: map[string]presence.State{"dev-c1": asserted(true, "sparkplug")}}
+	proc.Presence = &scriptedReader{states: map[string]presence.State{"dev-c1": asserted(true, sparkplugSource)}}
 
 	proc.sweepLocked(context.Background())
 
@@ -364,7 +375,7 @@ func TestAMixedTenantBatchTakesThreeDifferentActions(t *testing.T) {
 	proc.Presence = &scriptedReader{states: map[string]presence.State{
 		"dev-present":   asserted(true, "mqtt"),
 		"dev-absent":    asserted(false, "mqtt"),
-		"dev-sparkplug": asserted(true, "sparkplug"),
+		"dev-sparkplug": asserted(true, sparkplugSource),
 	}}
 
 	proc.sweepLocked(context.Background())
