@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 
@@ -179,9 +180,20 @@ func (r *SchemaResolver) ResolveDeviceGroupTargets(ctx context.Context, args str
 // A malformed cursor is an ERROR, never a silent restart from zero. Zero means "begin",
 // so swallowing a parse failure would quietly re-walk the group from the start — a fleet
 // write that re-commands every device it has already commanded, reported as success.
+//
+// 🔴 IT USED fmt.Sscanf AND THAT COMMENT WAS A LIE. Sscanf("%d") stops at the first
+// non-digit and reports SUCCESS for the prefix it managed to read: "12abc" and " 12"
+// both yielded 12, and "0x10" yielded 0 with no error — landing exactly on the
+// re-walk-from-the-beginning this is written to prevent, via a string a caller could
+// plausibly produce. ParseUint rejects the whole class because it consumes the ENTIRE
+// string or fails.
+//
+// Zero is rejected outright rather than treated as "begin": the resolver never emits
+// "0" as a cursor (a zero NextCursor marshals as null), so a caller presenting one is
+// confused, and the safe reading of a cursor that cannot have come from us is refusal.
 func parseCursor(cursor string) (uint, error) {
-	var id uint64
-	if _, err := fmt.Sscanf(cursor, "%d", &id); err != nil {
+	id, err := strconv.ParseUint(cursor, 10, 64)
+	if err != nil || id == 0 {
 		return 0, fmt.Errorf("malformed page cursor %q", cursor)
 	}
 	return uint(id), nil

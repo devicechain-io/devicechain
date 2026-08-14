@@ -44,10 +44,16 @@ const deviceLookupChunk = 1000
 // 🔑 IT IS AFFORDABLE BECAUSE THE VERDICT IS A FUNCTION OF THE DEVICE TYPE, NOT THE
 // DEVICE. Every device in a batch receives the same command key and the same payload, so
 // once a type's published vocabulary is resolved, the decision for every device of that
-// type is already made. A ten-thousand-device batch spanning three device types costs one
-// device lookup per chunk and THREE vocabulary resolutions — not ten thousand of each,
-// which is what a loop over ValidateCommandEnqueue would cost, one network round trip at
-// a time from command-delivery.
+// type is already made. A ten-thousand-device batch spanning three device types resolves
+// the vocabulary THREE times, not ten thousand — which is what a loop over
+// ValidateCommandEnqueue would cost, one network round trip at a time from
+// command-delivery.
+//
+// The device lookup is bulk but not free: DevicesByToken preloads DeviceType, so each
+// chunk is two queries rather than one, and this gate reads only DeviceTypeId. It is a
+// handful of extra queries across a whole batch, kept because a lean private lookup would
+// be a second way to resolve a device token — but it is two per chunk, not one, and the
+// arithmetic above should not be read as claiming otherwise.
 //
 // It agrees with ValidateCommandEnqueue by CONSTRUCTION, not by inspection: both call
 // decideAgainstVocabulary on a vocabulary built by vocabularyOf. That matters more than
@@ -129,18 +135,23 @@ func (api *Api) ValidateCommandEnqueueBatch(ctx context.Context, deviceTokens []
 	return refusals, nil
 }
 
-// dedupeTokens returns the distinct tokens in first-seen order, dropping empties.
+// dedupeTokens returns the distinct tokens in first-seen order.
 //
 // Order is preserved rather than sorted because the caller's order is meaningful — it is
 // the order a partially-admitted batch admits in — so an answer sorted here would have to
 // be re-sorted there, and the two orderings could disagree.
+//
+// 🔴 AN EMPTY TOKEN IS KEPT, NOT DROPPED, AND THE DIFFERENCE IS A CONTRACT HOLE. This
+// gate reports refusals only, so a caller reads "asked about, and not named here" as
+// ALLOWED. Silently discarding "" therefore answered *allowed* for a token that can never
+// be enqueued to — the one reading that is both wrong and unrecoverable, because nothing
+// in the response says the token was ever seen. Keeping it costs nothing: "" is absent
+// from any bulk lookup result, so it falls out as DEVICE_NOT_FOUND through the ordinary
+// path, which is exactly what it is.
 func dedupeTokens(tokens []string) []string {
 	seen := make(map[string]struct{}, len(tokens))
 	ordered := make([]string, 0, len(tokens))
 	for _, token := range tokens {
-		if token == "" {
-			continue
-		}
 		if _, already := seen[token]; already {
 			continue
 		}

@@ -56,12 +56,12 @@ func newBatchWireCtx(t *testing.T) context.Context {
 
 // TestTheBatchGateAnswersRefusalsOnTheWire drives the batch gate through the REAL schema.
 //
-// 🔴 A MODEL TEST CANNOT COVER THIS. The model returns a slice of refusals; the wire
-// contract says the list is NON-NULL, so a resolver returning a nil slice for a healthy
-// fleet would marshal differently than one returning an empty slice — and a caller reading
-// "allowed = asked about and not named here" cannot tell a missing list from an empty one.
-// That is the single most consequential distinction in this query, and it exists only on
-// the wire.
+// 🔴 A MODEL TEST CANNOT COVER THIS: the resolver is a separate layer that can be wired
+// wrong while every model assertion stays green. A method that compiled, satisfied the
+// schema parse and returned an empty list every time would leave the model perfectly
+// correct and unreachable — command-delivery would see a healthy verdict for every device
+// in a fleet, and enqueue commands the gate exists to refuse. This drives the real schema
+// with variables, the path command-delivery's validator uses.
 func TestTheBatchGateAnswersRefusalsOnTheWire(t *testing.T) {
 	ctx := newBatchWireCtx(t)
 	api := batchApiOf(t, ctx)
@@ -120,11 +120,16 @@ func TestTheBatchGateAnswersRefusalsOnTheWire(t *testing.T) {
 	}
 }
 
-// TestAHealthyFleetMarshalsAsAnEmptyListNotNull. The whole response shape rests on
-// "asked about, and not named here" meaning allowed, so the empty answer has to survive
-// the wire as an empty list. A nil slice reaching a non-null list field is the classic
-// way that promise breaks.
-func TestAHealthyFleetMarshalsAsAnEmptyListNotNull(t *testing.T) {
+// TestAHealthyFleetProducesNoRefusalsAtAll pins the whole-document shape for the case
+// that dominates in production: nothing wrong with the fleet.
+//
+// ⚠️ IT DOES NOT TEST nil-VERSUS-EMPTY, AND AN EARLIER VERSION OF THIS COMMENT CLAIMED IT
+// DID. That claim was false and was disproved by mutation: making the resolver return a
+// nil slice leaves this test — and the whole package — passing, because graphql-go renders
+// a nil Go slice as [] on a [X!]! field. Written as a defence against nil this was
+// decoration; what it actually earns is the exact-JSON assertion below, which fails if the
+// field is renamed or if a device that should pass silently acquires a refusal.
+func TestAHealthyFleetProducesNoRefusalsAtAll(t *testing.T) {
 	ctx := newBatchWireCtx(t)
 	api := batchApiOf(t, ctx)
 	if _, err := api.CreateDeviceType(ctx, &model.DeviceTypeCreateRequest{Token: "sensor"}); err != nil {
@@ -146,6 +151,36 @@ func TestAHealthyFleetMarshalsAsAnEmptyListNotNull(t *testing.T) {
 	}
 	if got := string(res.Data); got != `{"validateCommandEnqueueBatch":[]}` {
 		t.Fatalf("a healthy fleet must marshal as an empty list, got %s", got)
+	}
+}
+
+// 🔴 TestAMalformedCursorIsRefusedRatherThanRestartingTheWalk.
+//
+// This is a REGRESSION TEST FOR A LIVE BUG, not a hypothetical. parseCursor used
+// fmt.Sscanf("%d"), which stops at the first non-digit and reports SUCCESS for whatever
+// prefix it read — so " 12" and "12abc" both became 12, and "0x10" became 0 WITH NO ERROR.
+// Zero means "begin", so that last one silently restarted the walk from the top: a fleet
+// write that re-commands every device it has already commanded, and reports success while
+// doing it. The comment above the function asserted this could not happen.
+//
+// The cases below are the ones Sscanf accepted. Each must now be refused.
+func TestAMalformedCursorIsRefusedRatherThanRestartingTheWalk(t *testing.T) {
+	for _, cursor := range []string{"12abc", "12.5", "0x10", " 12", "0", "-5", "", "999999999999999999999999"} {
+		t.Run(cursor, func(t *testing.T) {
+			if _, err := parseCursor(cursor); err == nil {
+				t.Fatalf("cursor %q was accepted; a cursor this walk never issued must be "+
+					"refused, not silently coerced into a page number", cursor)
+			}
+		})
+	}
+	// The counterweight: a cursor the resolver actually emits must still round-trip, or
+	// the fix above would refuse every legitimate page-two request.
+	id, err := parseCursor("4207")
+	if err != nil {
+		t.Fatalf("a well-formed cursor was refused: %v", err)
+	}
+	if id != 4207 {
+		t.Fatalf("parseCursor(\"4207\") = %d", id)
 	}
 }
 

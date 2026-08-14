@@ -277,9 +277,14 @@ func TestABatchNamesOnlyRefusals(t *testing.T) {
 		t.Fatalf("a fleet that accepts the command must produce no refusals, got %d: %+v",
 			len(refusals), refusals)
 	}
+	// The empty answer is an empty slice rather than nil. ⚠️ NOT because nil would
+	// marshal differently — an earlier version of this comment claimed that and it is
+	// FALSE, verified by mutation: graphql-go renders a nil Go slice as [] on a [X!]!
+	// field, so the wire is identical either way. The reason is the Go boundary: this is
+	// an exported API whose result callers range over, append to and length-check, and
+	// "always a slice" is one less thing for each of them to reason about.
 	if refusals == nil {
-		t.Fatal("the empty answer must be an empty slice, not nil — it crosses a GraphQL " +
-			"non-null list boundary, where nil marshals differently")
+		t.Fatal("the empty answer must be an empty slice, not nil")
 	}
 }
 
@@ -304,9 +309,13 @@ func TestABatchCollapsesDuplicatesAndKeepsTheCallersOrder(t *testing.T) {
 	for _, r := range refusals {
 		got = append(got, r.DeviceToken)
 	}
-	want := []string{"zeta", "alpha", "mid"}
+	// 🔴 THE EMPTY TOKEN IS REFUSED, NOT DROPPED. This gate reports refusals only, so a
+	// caller reads "asked about, and not named here" as ALLOWED — and an earlier version
+	// discarded "" silently, which answered *allowed* for a token that can never be
+	// enqueued to, with nothing in the response to say it had even been seen.
+	want := []string{"zeta", "alpha", "", "mid"}
 	if len(got) != len(want) {
-		t.Fatalf("refusals = %v, want %v (duplicates collapsed, empties dropped)", got, want)
+		t.Fatalf("refusals = %v, want %v (duplicates collapsed, the empty token REFUSED)", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
@@ -354,7 +363,13 @@ func TestAnEmptyBatchIsAnEmptyAnswer(t *testing.T) {
 	api := newEnqueueTestApi(t)
 	ctx := core.WithTenant(context.Background(), "A")
 
-	for _, tokens := range [][]string{nil, {}, {"", ""}} {
+	// 🔑 Only nil and [] are EMPTY. [""] is not — it is a batch of one token that cannot
+	// name a device, and it must produce a refusal rather than silence (see
+	// TestABatchCollapsesDuplicatesAndKeepsTheCallersOrder). Folding it in here, as an
+	// earlier version did, made "the caller sent nothing" and "the caller sent something
+	// unusable" the same case, which is precisely the conflation that let an unusable
+	// token read as allowed.
+	for _, tokens := range [][]string{nil, {}} {
 		refusals, err := api.ValidateCommandEnqueueBatch(ctx, tokens, "reboot", nil)
 		if err != nil {
 			t.Fatalf("an empty batch must not error (%v): %v", tokens, err)
@@ -365,5 +380,13 @@ func TestAnEmptyBatchIsAnEmptyAnswer(t *testing.T) {
 		if len(refusals) != 0 {
 			t.Fatalf("an empty batch produced %d refusals", len(refusals))
 		}
+	}
+
+	deduped, err := api.ValidateCommandEnqueueBatch(ctx, []string{"", ""}, "reboot", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(deduped) != 1 || deduped[0].Code != RejectDeviceNotFound {
+		t.Fatalf("[\"\", \"\"] = %+v; want exactly one DEVICE_NOT_FOUND refusal", deduped)
 	}
 }
