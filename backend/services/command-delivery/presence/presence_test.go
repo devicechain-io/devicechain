@@ -70,6 +70,32 @@ func TestDecide(t *testing.T) {
 				"tenant's ceiling for a full TTL",
 		},
 		{
+			// 🔴 THE CASE EVERY EARLIER TEST MISSED, AND THE ONLY ONE PRODUCTION EVER
+			// PRODUCES. sparkplug-ingest stamps "sparkplug:" + hostId; the bare literal
+			// above is a fixture value no deployment writes. Matching the whole source
+			// string meant this fell through to Hold, so the transport with no command
+			// path at all was the one occupying the tenant's ceiling for a full TTL.
+			"a REAL sparkplug source carries its host id and is still undeliverable",
+			State{Known: true, Asserted: true, Active: false, Source: "sparkplug:acme-host-1"},
+			Undeliverable,
+			"the source is qualified by the producing host, so the verdict must key on the " +
+				"transport rather than on the whole string",
+		},
+		{
+			"a qualified sparkplug source is undeliverable when ACTIVE too",
+			State{Known: true, Asserted: true, Active: true, Source: "sparkplug:acme-host-1"},
+			Undeliverable,
+			"presence is beside the point when there is no command path",
+		},
+		{
+			// The guard on the other side: reducing to the transport must not condemn a
+			// source that merely STARTS like a denied one.
+			"a transport that is not denied stays dispatchable however it is qualified",
+			State{Known: true, Asserted: false, Active: true, Source: "sparkplugish:host"},
+			Dispatch,
+			"only an exact transport match denies; a longer name is a different transport",
+		},
+		{
 			"lwm2m absent holds",
 			State{Known: true, Asserted: true, Active: false, Source: "lwm2m"},
 			Hold,

@@ -14,6 +14,7 @@ package presence
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/devicechain-io/dc-microservice/core"
 )
@@ -64,8 +65,25 @@ type Reader interface {
 // delivery still cannot happen. Holding would swap one lie for another — and it would
 // occupy the tenant's undelivered-command ceiling for a full TTL, letting a Sparkplug
 // fleet crowd out commands to devices that CAN receive them.
+// 🔴 KEYED ON THE TRANSPORT, NOT ON THE WHOLE SOURCE STRING, and the difference is what
+// makes this fire at all. A source is either a bare transport name ("lwm2m") or a
+// transport QUALIFIED BY THE INSTANCE that produced it — sparkplug-ingest stamps
+// "sparkplug:" + hostId, and device-state stores and returns that verbatim. Matching the
+// whole string against "sparkplug" therefore matched nothing a real deployment ever
+// produces: every Sparkplug command fell through to Hold or Dispatch, the exact two
+// outcomes the entry above exists to prevent, while the published documentation promised
+// the third. Nothing caught it because every test wrote the bare literal.
 var nonDeliveringTransports = map[string]bool{
 	"sparkplug": true,
+}
+
+// transportOf reduces a presence source to the transport that produced it, discarding any
+// instance qualifier after the first colon.
+func transportOf(source string) string {
+	if i := strings.IndexByte(source, ':'); i >= 0 {
+		return source[:i]
+	}
+	return source
 }
 
 // Decide reduces one device's projected state to a verdict.
@@ -91,7 +109,7 @@ func Decide(s State) Verdict {
 		// Dispatch, exactly as before the gate existed.
 		return Dispatch
 	}
-	if nonDeliveringTransports[s.Source] {
+	if nonDeliveringTransports[transportOf(s.Source)] {
 		return Undeliverable
 	}
 	if s.Asserted && !s.Active {
