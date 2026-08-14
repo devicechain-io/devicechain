@@ -112,8 +112,12 @@ The live engine holds the **four most recent fence-set versions** per tenant —
 
 Nothing is lost from history when that happens: every version's snapshot is stored durably, and the preview and replay paths read from there rather than from the live cache. It is only live evaluation that is bounded, and it recovers on its own — the next events carry the current version.
 
+The engine also re-reads each tenant's current fence set from stored history every few minutes. Normally that changes nothing, because a fence edit is announced to the engine as it happens. It matters in one uncommon case: saving a fence never fails because the announcement could not be sent, so if that announcement is lost the engine would otherwise keep evaluating against the older version until it next restarted. The periodic re-read closes that by itself, which means **a fence edit takes effect within a few minutes at the outside, even if its announcement never arrives** — no restart, and no need to re-save the fence.
+
 For how detection rules are authored and evaluated, see [event processing](./event-processing.md). For the location data itself, see [connecting a device](../guides/connecting-a-device.md).
 
 ## Permissions {#permissions}
 
-Reading geofences and their history requires `device:read`; creating, changing and deleting them requires `device:write` — the same authorities that govern the rest of the device registry.
+Reading geofences and their history requires `device:read`, and deleting one requires `device:write` — the same authorities that govern the rest of the device registry.
+
+**Creating or changing a fence additionally requires `location:read`.** Drawing a fence is not only a write: it asks a question about where devices are. Someone who could create fences with `device:write` alone could place a small one, watch whether any rule reacts, move it, and read a fleet's positions out of the answers — without ever holding the authority to see a coordinate. Deleting stays on `device:write`, because removing a fence asks nothing.
