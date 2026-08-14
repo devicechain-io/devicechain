@@ -251,6 +251,15 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	Api.DefaultHeldCommandCeiling = Configuration.HeldCommandCeiling
 	wireHeldCeilingResolver()
 
+	// The share of whatever ceiling is in force that only a platform service token may
+	// draw on, so one fleet write cannot consume the whole ceiling and leave every
+	// automated send-command for that tenant refused until the backlog drains. Operator
+	// configuration only — deliberately no per-tenant or tier path, since a tenant able
+	// to lower this could defeat the protection that exists against its own batches.
+	// Floored positive in ApplyDefaults and capped in Validate, so this is always a real
+	// share: absent or zero means the platform reserve, never "no reserve".
+	Api.DeliveryMachineryReserve = Configuration.DeliveryMachineryReserve
+
 	// Wire the enqueue gate (ADR-043 decision 3): a synchronous check against
 	// device-management before a command is enqueued (ADR-044 amendment) covering
 	// device existence, the profile's published command vocabulary, and the payload's

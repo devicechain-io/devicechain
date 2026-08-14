@@ -316,7 +316,9 @@ func TestARequestNamingTooManyDevicesIsRefused(t *testing.T) {
 func TestAPartialBatchAccountsForEveryDeviceItDidNotCommand(t *testing.T) {
 	api := newBatchTestApi(t)
 	api.DefaultHeldCommandCeiling = 3
-	ctx := core.WithTenant(context.Background(), "acme")
+	// Service-token class, so the headroom under test is the ceiling itself rather than
+	// the ceiling less the delivery machinery reserve — see machineryCtx.
+	ctx := machineryCtx(core.WithTenant(context.Background(), "acme"))
 	api.BatchValidator = &countingValidator{}
 
 	request := batchRequest("partial", deviceTokens(8))

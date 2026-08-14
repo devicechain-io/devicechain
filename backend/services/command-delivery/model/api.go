@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-command-delivery/config"
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
@@ -164,6 +166,12 @@ type Api struct {
 	// directly by a test) falls back to config.DefaultHeldCommandCeiling, so the
 	// bound holds in every configuration — see heldCommandCeiling.
 	DefaultHeldCommandCeiling int
+	// DeliveryMachineryReserve is the share of the ceiling in force that only a platform
+	// service token may draw on, so a fleet write cannot consume the whole ceiling and
+	// leave every automated send-command for that tenant refused. Zero (an Api built
+	// directly by a test) means the platform reserve, never "no reserve" — see
+	// governance.RestrictedCommandLimit, which owns that rule.
+	DeliveryMachineryReserve float64
 	// DefaultCommandTTL, when positive, is stamped as expires_at on a command whose
 	// creator supplies no explicit ExpiresAt (a caller value always wins). It gives
 	// every command a terminal horizon instead of leaving it in flight forever, and
@@ -430,7 +438,7 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 // a tenant enqueueing near its ceiling at a high rate will feel it. That is the
 // correct behaviour: the bound is on undelivered work, and undelivered is undelivered.
 func (api *Api) checkUndeliveredCeiling(ctx context.Context, tx *gorm.DB) error {
-	ceiling := api.heldCommandCeiling(ctx)
+	limit, ceiling := api.effectiveUndeliveredLimit(ctx)
 	var undelivered int64
 	if err := tx.Model(&Command{}).
 		Where("status IN ?", undeliveredStatusStrings()).Count(&undelivered).Error; err != nil {
@@ -439,13 +447,28 @@ func (api *Api) checkUndeliveredCeiling(ctx context.Context, tx *gorm.DB) error 
 		// invalid.
 		return err
 	}
-	if undelivered >= int64(ceiling) {
-		return rejected(RejectHeldCeilingExceeded,
-			"the tenant already has %d commands waiting to be delivered; the limit is %d "+
-				"(commands are released as their devices become reachable, and expire if they do not)",
-			undelivered, ceiling)
+	if undelivered >= int64(limit) {
+		return rejected(RejectHeldCeilingExceeded, "%s", undeliveredRefusalReason(undelivered, limit, ceiling))
 	}
 	return nil
+}
+
+// undeliveredRefusalReason explains a ceiling refusal in terms of the limit that ACTUALLY
+// applied to this caller.
+//
+// 🔴 QUOTING THE CEILING WHEN THE RESERVE IS WHAT BOUND YOU IS A LIE THE CALLER CANNOT
+// DEBUG: it reports 8,000 outstanding against a limit of 10,000 and refuses anyway. So the
+// reserved share is named whenever it is the thing in force — and only then, because for a
+// service-token caller no reserve applied and mentioning one would be equally misleading.
+func undeliveredRefusalReason(undelivered int64, limit, ceiling int) string {
+	const tail = "(commands are released as their devices become reachable, and expire if they do not)"
+	if limit < ceiling {
+		return fmt.Sprintf("the tenant already has %d commands waiting to be delivered; the limit "+
+			"for this caller is %d, because %d of the tenant's ceiling of %d is reserved for command "+
+			"delivery %s", undelivered, limit, ceiling-limit, ceiling, tail)
+	}
+	return fmt.Sprintf("the tenant already has %d commands waiting to be delivered; the limit is %d %s",
+		undelivered, limit, tail)
 }
 
 // undeliveredStatusStrings is the set the tenant ceiling bounds: commands accepted by
@@ -470,6 +493,29 @@ func undeliveredStatusStrings() []string {
 // zero from either of them: all mean the PLATFORM DEFAULT, never unlimited. A
 // governance ceiling whose absent value reads as "no ceiling" stops governing exactly
 // when its authority is unreachable — the moment it is most needed.
+// effectiveUndeliveredLimit is how many undelivered commands THIS CALLER may hold, and
+// the ceiling it was derived from. Both paths that bound enqueue — the single-command
+// check and the batch headroom — resolve through here, which is the only reason one
+// reserve can hold: a reserve enforced on the batch path alone is walked around by a
+// client looping createCommand, which is precisely the fleet write it exists to bound.
+//
+// The split is by TOKEN CLASS, and the distinction already exists in the token rather
+// than being invented here: a platform service token (ADR-044's machine tier — REACT's
+// send-command sink is the one that matters) may use the whole ceiling. Everything else
+// — console, /dash, the SDKs, dcctl, the simulator, and a tenant's own integration — is
+// bounded by the ceiling less the reserve.
+//
+// 🔴 NO CLAIMS MEANS RESTRICTED. An unauthenticated or claims-less context is not a
+// machine caller; treating "I could not tell" as machinery would make the reserve
+// vanish exactly where identity is least established.
+func (api *Api) effectiveUndeliveredLimit(ctx context.Context) (limit int, ceiling int) {
+	ceiling = api.heldCommandCeiling(ctx)
+	if claims, ok := auth.ClaimsFromContext(ctx); ok && claims.TokenType == auth.TokenTypeService {
+		return ceiling, ceiling
+	}
+	return governance.RestrictedCommandLimit(ceiling, api.DeliveryMachineryReserve), ceiling
+}
+
 func (api *Api) heldCommandCeiling(ctx context.Context) int {
 	if api.HeldCeilingResolver != nil {
 		if tenant, ok := core.TenantFromContext(ctx); ok {

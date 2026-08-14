@@ -103,7 +103,10 @@ func TestReplayAtTheCeilingReturnsTheOriginalCommand(t *testing.T) {
 // further out of reach on every attempt.
 func TestHeldCeilingRefusesANewEnqueueAndPersistsNothing(t *testing.T) {
 	api := newTestApi(t)
-	ctx := core.WithTenant(context.Background(), "A")
+	// A service-token caller, so this measures the CEILING and not the ceiling less the
+	// delivery machinery reserve — see machineryCtx. The restricted class has its own
+	// tests in delivery_reserve_test.go.
+	ctx := machineryCtx(core.WithTenant(context.Background(), "A"))
 
 	seedWithStatus(t, api, ctx, "held-1", CommandHeld)
 	seedWithStatus(t, api, ctx, "held-2", CommandHeld)

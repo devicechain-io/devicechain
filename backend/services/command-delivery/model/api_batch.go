@@ -155,10 +155,10 @@ func (api *Api) CreateCommandBatch(ctx context.Context, request *CommandBatchCre
 		if len(admitted) > headroom {
 			if !request.AllowPartial {
 				verdict = batchRejection(RejectHeldCeilingExceeded, nil, len(targets.deviceTokens),
-					"this batch needs room for %d commands but the tenant has room for %d "+
+					"this batch needs room for %d commands but the tenant has room for %d%s "+
 						"(commands are released as their devices become reachable, and expire "+
 						"if they do not); re-issue with allowPartial to send what fits",
-					len(admitted), headroom)
+					len(admitted), headroom, api.reserveNote(ctx))
 				return verdict
 			}
 			// Best effort against the remaining headroom, in the order the target
@@ -353,16 +353,37 @@ func withoutRefused(tokens []string, refusals []BatchDeviceRefusal) []string {
 	return kept
 }
 
-// undeliveredHeadroom is how many more undelivered commands this tenant may hold: the
-// ceiling in force minus what it already has. Never negative.
+// undeliveredHeadroom is how many more undelivered commands THIS CALLER may add: the
+// limit in force for its token class, minus what the tenant already has. Never negative.
+//
+// 🔴 It is the caller's effective limit, not the raw ceiling. A batch admitted up to the
+// full ceiling would be free to consume the share kept for command delivery, which is the
+// whole scenario the reserve exists for: one legitimate fleet write filling the ceiling
+// and silently disabling the tenant's alarm-driven automation until the backlog drains.
+// reserveNote is the clause a ceiling refusal adds when the RESERVE, rather than the
+// tenant's ceiling, is what left the caller short — empty otherwise.
+//
+// Without it the refusal reads "the tenant has room for 0" while a `heldCommandCeiling` of
+// 10,000 sits in the tenant's own settings against 8,000 outstanding, and the operator has
+// no way to reconcile the two. The note is omitted for a service-token caller because no
+// reserve applied to it, and naming one would mislead in the other direction.
+func (api *Api) reserveNote(ctx context.Context) string {
+	limit, ceiling := api.effectiveUndeliveredLimit(ctx)
+	if limit >= ceiling {
+		return ""
+	}
+	return fmt.Sprintf(" (this caller may hold %d of the tenant's ceiling of %d; the remaining %d "+
+		"is reserved for command delivery)", limit, ceiling, ceiling-limit)
+}
+
 func (api *Api) undeliveredHeadroom(ctx context.Context, tx *gorm.DB) (int, error) {
-	ceiling := api.heldCommandCeiling(ctx)
+	limit, _ := api.effectiveUndeliveredLimit(ctx)
 	var undelivered int64
 	if err := tx.Model(&Command{}).
 		Where("status IN ?", undeliveredStatusStrings()).Count(&undelivered).Error; err != nil {
 		return 0, err
 	}
-	headroom := ceiling - int(undelivered)
+	headroom := limit - int(undelivered)
 	if headroom < 0 {
 		return 0, nil
 	}
