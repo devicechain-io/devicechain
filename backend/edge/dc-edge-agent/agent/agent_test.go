@@ -690,6 +690,25 @@ func TestSpoolBoundedRingBufferDropsOldestVisibly(t *testing.T) {
 	}
 	const totalPublished = nEvents + 1
 
+	// 🔴 WAIT FOR THE APPEND, NOT FOR THE ACK. The publish above returns as soon as the
+	// MQTT QoS-1 handshake completes, which says nothing about the agent having stored the
+	// event — and storing it EVICTS another, because the spool is already at cap. Sampling
+	// straight after the ack can therefore read a drop count one eviction stale, while the
+	// post-restart sample below is recomputed from settled durable state and includes it.
+	// That is a race in this test, not a defect in drop accounting: it made CI report
+	// "dropped_total = 9 after restart, want 8" on a run whose durable count was right on
+	// both sides. Note which way it failed — a genuine loss of drop history, the thing the
+	// assertion is really for, would make the post-restart value LOWER, not higher.
+	//
+	// LastSeq is the deterministic settling point rather than a quiescence window: the
+	// stream is 1:1 with device publishes, and JetStream enforces DiscardOld limits inside
+	// the store operation, so any state snapshot showing the last append also shows the
+	// FirstSeq that append produced.
+	waitUntil(t, 20*time.Second, func() bool {
+		info, err := a1.js.StreamInfo(captureStream)
+		return err == nil && info.State.LastSeq >= totalPublished
+	})
+
 	a1.sampleMetrics()
 	dropped1 := a1.droppedTotal.Load()
 	if dropped1 <= 0 {
