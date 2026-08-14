@@ -8,6 +8,12 @@ La detección es solo la mitad de la automatización — la otra mitad es **actu
 
 La entrega de salida la gestiona un servicio dedicado, **outbound-connectors**, mantenido deliberadamente separado del motor de detección: un endpoint externo lento o con mal comportamiento puede acumular retrasos en su propia entrega sin llegar nunca a ralentizar la evaluación de reglas.
 
+:::info El servicio es opcional
+`outbound-connectors` se entrega en el perfil de despliegue [`full`](../deployment/kubernetes-operator.md), no en `default` — así que una instancia levantada sin nombrar un perfil no lo ejecuta. La consola sigue mostrando la sección **Conectores**, y sus páginas explican que esta instancia no ejecuta el área en lugar de fingir que la función no existe.
+
+Todo lo de esta página se aplica una vez desplegada el área. Para añadirla, levante la instancia con el perfil `full`.
+:::
+
 :::note Estado
 **Disponible hoy:** la acción de webhook `httpCall`, y una acción `publish` que entrega a **MQTT**, **Apache Kafka**, **AWS SNS** y **AWS SQS** a través de un conector versionado con alcance de inquilino, con credenciales almacenadas en el almacén de secretos cifrado. Ambas acciones de salida se pueden configurar como **nodos de acción en el lienzo de automatización**. Un conector `gcp_pubsub` se puede crear a través de la API pero todavía no se puede despachar — un `publish` hacia uno de ellos se envía a la cola de mensajes no entregados (dead letter) como no soportado, y la consola no ofrece ese tipo. Están planeados objetivos `publish` adicionales (RabbitMQ, Azure, NATS, Redis, Slack, Splunk) bajo el mismo modelo — este repositorio es la fuente de verdad de lo que actualmente se construye.
 :::

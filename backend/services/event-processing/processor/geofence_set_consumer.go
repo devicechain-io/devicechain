@@ -10,6 +10,7 @@ import (
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
+	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/rs/zerolog/log"
 )
@@ -41,6 +42,63 @@ func (rp *ResolvedEventsProcessor) signalFenceSet(tenant string, set *geofence.F
 	case <-rp.procCtx.Done():
 		return false
 	}
+}
+
+// seedFencesForPublishedRules seeds a tenant's CURRENT fence set when a published-rule fact
+// brings in a rule that tests containment, so the rule can evaluate from its first event.
+//
+// 🔴 WITHOUT THIS, A TENANT'S FIRST FENCE RULE DOES NOT WORK UNTIL SOMEONE EDITS A FENCE. The
+// startup reconcile seeds only the tenants that ALREADY held a fence rule when the process
+// started — it cannot seed a tenant whose rule does not exist yet — and the only other thing that
+// fills the view is a geofence-set fact, which is minted by a fence WRITE. So a tenant that draws
+// its fences on Monday and publishes the rule on Tuesday has a view with nothing in it: every
+// event's stamped version misses, containment answers ErrNoFenceSet, and each sample is skipped
+// and counted as an eval error. Loud, but the rule is dead, and the fix — go and re-save a fence
+// you did not want to change — is not one an author would ever guess.
+//
+// It seeds unconditionally rather than checking whether the tenant is already held. The check
+// would have to read fenceView, which is owned by the single-writer loop and must not be touched
+// from this consumer goroutine, so "is it already seeded" is not a question that can be answered
+// here without a race. Doing the read anyway is affordable because the trigger is a human
+// authoring action, not event volume, and Put is idempotent on a version it already holds.
+//
+// The fence set is signalled before the rules it is for, but that is a preference, NOT a
+// guarantee: the two travel on separate channels the loop selects over, so with both ready it may
+// apply either first. The residual window is the microseconds between two already-queued sends,
+// during which an event for that tenant would report an eval error. Closing it properly would mean
+// carrying the fence set inside the ruleUpdate, which couples two independent facts to buy
+// nothing — the failure it would prevent is a handful of eval errors, against the unbounded one
+// this function exists to fix.
+//
+// A read failure is logged and skipped, not fatal, and does not hold up the fact: the same trade
+// the startup reconcile makes. Refusing to install a whole profile's rules because one
+// cross-service read blipped would be a far larger outage than the one it prevents, and the
+// unseeded case still reports itself loudly. Returns false only on shutdown mid-send.
+func (rp *ResolvedEventsProcessor) seedFencesForPublishedRules(rules []runtime.ScopedRule) bool {
+	if rp.fenceView == nil || rp.FenceSets == nil {
+		return true
+	}
+	tenant := ""
+	for _, sr := range rules {
+		if sr.Compiled == nil || !sr.Compiled.RequiresPosition {
+			continue
+		}
+		tenant = sr.Tenant
+		break
+	}
+	if tenant == "" {
+		return true
+	}
+	set, err := rp.FenceSets.CurrentFenceSet(rp.procCtx, tenant)
+	if err != nil {
+		log.Error().Err(err).Str("tenant", tenant).
+			Msg("Unable to seed the DETECT geofence projection for a newly published fence rule; its containment calls report unresolvable until a fence edit.")
+		return true
+	}
+	if set == nil {
+		return true
+	}
+	return rp.signalFenceSet(tenant, set)
 }
 
 // runFenceSetConsumer drains device-management's geofence-set fact stream (ADR-078): the FROZEN

@@ -77,3 +77,31 @@ func TestLoadRejectsUnknownKey(t *testing.T) {
 
 	assert.Error(t, err)
 }
+
+// A negative maxEventFutureSkewSeconds fails the load closed. It used to be accepted and
+// silently DISABLE the clock-skew bound — eventtime reads maxSkew <= 0 as "no ceiling" — which
+// costs far more than a wrong chart: one event dated years out pins a device's last-activity
+// under the strictly-newer guard, so its inactivity sweep never fires again and it can never be
+// seen to go offline. Every sibling bound in the same Validate was checked; this one was not.
+func TestLoadRejectsNegativeEventSkew(t *testing.T) {
+	cfg := &DeviceManagementConfiguration{}
+	err := core.LoadConfiguration([]byte(`{"MaxEventFutureSkewSeconds":-1}`), cfg)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "maxEventFutureSkewSeconds")
+}
+
+// NEGATIVE CONTROL for the check above, in both directions. The unset value must still DEFAULT
+// (0 is "the operator said nothing", not "the operator asked for no bound"), and a positive
+// override must still be preserved rather than swept up by a check written as `<= 0`.
+func TestEventSkewUnsetDefaultsAndPositiveIsKept(t *testing.T) {
+	unset := &DeviceManagementConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(`{"RdbConfiguration":{"SqlDebug":true}}`), unset))
+	assert.Equal(t, DefaultMaxEventFutureSkewSeconds, unset.MaxEventFutureSkewSeconds)
+	assert.NoError(t, unset.Validate())
+
+	explicit := &DeviceManagementConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(`{"MaxEventFutureSkewSeconds":30}`), explicit))
+	assert.Equal(t, 30, explicit.MaxEventFutureSkewSeconds)
+	assert.NoError(t, explicit.Validate())
+}

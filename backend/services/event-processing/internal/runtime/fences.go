@@ -62,8 +62,10 @@ type FenceSetSource interface {
 // "what was true at version N", which is the question a preview or a replay asks and the only
 // question that is deterministic. This one answers "what is true now", which is a question the
 // evaluation path must NEVER ask — it is the exact mistake the version stamp exists to prevent.
-// Its one legitimate caller is the STARTUP RECONCILE, which is seeding a live cache rather than
-// evaluating anything, so a type that cannot be reached from the fan-out keeps the distinction
+// Its legitimate callers both SEED a live cache rather than evaluate anything — the startup
+// reconcile, and the published-rule fact handler when a tenant's first fence rule arrives (a
+// tenant that had no fence rule at startup is not in the reconcile's list, and nothing else would
+// ever fill its view). A type that cannot be reached from the fan-out keeps the distinction
 // enforced by the compiler rather than by a comment.
 //
 // 🔴 IT IS A BLOCKING READ AND MUST NEVER BE CALLED FROM THE SINGLE-WRITER LOOP, for the same

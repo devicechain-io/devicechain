@@ -1666,7 +1666,9 @@ type Mutation {
     # is a region someone drew, not a device's position.
     createGeoFence(request: GeoFenceCreateRequest!): GeoFence!
     # Update an existing geofence. Same authorities as creation, for the same reason: reshaping a
-    # fence is the same question-shaping primitive as minting one.
+    # fence is the same question-shaping primitive as minting one. The request's `token` must
+    # equal the `token` argument: a fence's token is immutable, because rules name fences by
+    # token and this service cannot rewrite the rules that would be left naming nothing.
     updateGeoFence(token: String!, request: GeoFenceCreateRequest!): GeoFence!
     # Delete a single geofence. device:write alone — removing a fence constructs no question and
     # answers none, and delete-then-recreate is no way around the gate on creation.

@@ -8,6 +8,12 @@ Detection is only half of automation — the other half is **acting on the outsi
 
 Outbound delivery is handled by a dedicated **outbound-connectors** service, kept separate from the detection engine on purpose: a slow or misbehaving external endpoint can back up its own delivery without ever slowing down rule evaluation.
 
+:::info The service is opt-in
+`outbound-connectors` ships in the `full` [deployment profile](../deployment/kubernetes-operator.md), not in `default` — so an instance brought up without naming a profile does not run it. The console still shows the **Connectors** section, and its pages explain that this instance does not run the area rather than pretending the feature is missing.
+
+Everything on this page applies once the area is deployed. To add it, bring the instance up on the `full` profile.
+:::
+
 :::note Status
 **Available today:** the `httpCall` webhook action, and a `publish` action delivering to **MQTT**, **Apache Kafka**, **AWS SNS**, and **AWS SQS** through a tenant-scoped, versioned connector with credentials held in the encrypted secret store. Both outbound actions are configurable as **action nodes on the automation canvas**. A `gcp_pubsub` connector can be created through the API but cannot be dispatched yet — a `publish` to one is dead-lettered as unsupported, and the console does not offer the type. Additional `publish` targets (RabbitMQ, Azure, NATS, Redis, Slack, Splunk) are planned behind the same model — this repository is the source of truth for what currently builds.
 :::

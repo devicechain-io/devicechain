@@ -44,6 +44,32 @@ actually recorded. An entry that carries no `occurredTime` takes the envelope's.
 RFC 3339 (`2026-08-09T12:00:00.125Z`) wherever it appears; a value that is not is **rejected** with
 the offending entry named, never quietly replaced.
 
+One valid RFC 3339 value is refused anyway: **`0001-01-01T00:00:00Z`**, which the platform reserves
+to mean "no time was reported". A device that means the epoch should send `1970-01-01T00:00:00Z`.
+Like every other timestamp refusal this is terminal and takes the **whole message** with it —
+every sibling reading in the same batch — so it is worth ruling out in firmware rather than
+discovering in a dead-letter queue.
+
+:::caution A deeply buffered batch is stored in full, but detection may not see all of it
+The sentence above is about *storage*, and there it holds without qualification: every reading
+lands and charts at its own instant. Detection is different. The engine tracks a single frontier
+across the whole instance and advances it from each message's own time, so **a device that was
+offline for a while and then uploads its whole run at once can have its older readings arrive
+behind that frontier** — and the two window-shaped rule kinds, tumbling-window aggregates and
+session/gap rules, discard a reading whose window has already closed. No counter, no log, no alarm.
+
+Threshold, duration, repeating, count-window and rate rules still evaluate those readings.
+
+The tolerance is [`watermarkLatenessSeconds`](../deployment/detection-engine.md) (default 5
+seconds), and raising it helps only up to a point: the frontier is shared, so busy devices keep
+carrying it forward regardless of how long your quiet one was away.
+
+If you use windowed rules on a fleet that buffers, the reliable shape is to **upload in batches
+that span less than the lateness tolerance**, or keep windowed rules off the metrics those devices
+report. Storage, charts, and the [event queries](../reference/graphql-api.md) are unaffected either
+way — the readings are all there.
+:::
+
 A reported timestamp may not run far ahead of the platform's own clock. One that does is stored at
 the ceiling instead — the tolerance is generous enough for ordinary clock drift, so this only bites
 a device whose clock is genuinely wrong. Set the clock, rather than relying on the ceiling: a

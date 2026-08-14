@@ -31,7 +31,7 @@ Two details of the MQTT case are worth knowing before you build on it:
 
 The consequence of that skip is deliberate, and worth understanding before you rely on it: **an asserted device has no inactivity backstop.** Its offline signal can only come from the transport, so if that signal never arrives — a Sparkplug death certificate lost along with the connection, or an LwM2M device whose registration lifetime has not yet lapsed (LwM2M's own default is 86400 seconds, a full day) — the device keeps reading online with nothing to correct it. What to watch for, and how to bound the window, is in **[Running the Edge Services](../deployment/edge-services.md)**.
 
-For MQTT devices, DeviceChain closes that gap itself rather than leaving it to you. There is one case where the broker cannot tell you a device has gone: when the broker itself restarts, the connections it was holding simply vanish, and no disconnect is ever announced for them. So DeviceChain periodically compares the broker's live connection list against what it believes, and corrects the difference in both directions — devices it did not know were connected, and devices it thinks are connected that the broker is not holding. Devices that reconnect after a broker restart are corrected by their own reconnect; the rest are corrected by the next comparison.
+For MQTT devices, DeviceChain closes that gap itself rather than leaving it to you. There is one case where the broker cannot tell you a device has gone: when the broker itself restarts, the connections it was holding simply vanish, and no disconnect is ever announced for them. So DeviceChain periodically compares the broker's live connection list against what it believes, and corrects the difference in both directions — devices it did not know were connected, and devices it thinks are connected that the broker is not holding. Devices that reconnect after a broker restart are corrected by their own reconnect; the rest are corrected by a later comparison — one that can account for the whole cluster, per the paragraph below and the [scale-down caveat](#resizing-the-broker-cluster).
 
 That comparison deliberately declines to mark anything offline unless it can account for **every** node of the broker cluster. If one node is slow or unreachable, its devices are missing from the list and are indistinguishable from devices that have genuinely gone — and wrongly marking a live device offline is the more damaging error, because everything keyed on presence acts on it: the device reads offline on its Connectivity tab, and a [Connectivity rule](./event-processing.md#condition-types) raises a disconnect alarm for a device that was reachable the whole time. In that situation DeviceChain still marks newly-seen devices online and simply waits for the next pass to make the offline call.
 
@@ -53,3 +53,63 @@ Presence is only as good as the signal behind it, and the two asserting transpor
 single owning replica — which gives presence a few operational properties worth knowing before you
 alarm on it: what a changeover costs, why an asserted device can be stuck online, and how to bound
 that. Those are covered in **[Running the Edge Services](../deployment/edge-services.md)**.
+
+Three more properties belong to broker-asserted MQTT presence specifically.
+
+### Confirming the broker tap is actually running {#confirming-the-tap}
+
+Reading connections off DeviceChain's own broker needs four things, and if any is missing the tap
+**declines to start**. It logs why and every MQTT device falls back to inferred presence — which
+looks exactly like an instance that never had asserted presence, because functionally it is one.
+The four:
+
+- `brokerPresence.enabled` is not set to `false`
+- a NATS system-account credential is configured (`dcctl bootstrap` mints one; this is the usual
+  reason a hand-assembled instance has no tap)
+- at least one event source points at the platform's own broker — with none, there are no
+  connection advisories to read
+- service-to-service calls are configured. Without them the tap would run with no repair path, so
+  it stays off deliberately rather than half-working: a device whose disconnect the broker never
+  announced would read as connected forever
+
+**The counter to alarm on is `presence_canary_missed_total`, not the presence counters.** A
+long-lived MQTT fleet legitimately emits no connect or disconnect advisories for days, so
+`presence_events_total` reads the same whether the tap is healthy or dead. The service therefore
+opens its own MQTT connection once a minute purely so that a working tap has something to observe:
+`presence_canary_observed_total` rises on a healthy tap, and `presence_canary_missed_total` rises
+when the chain is broken. That is the only pair that distinguishes a dead tap from a quiet fleet.
+
+### Presence transitions are metered against the tenant's ingest ceiling {#presence-and-the-ingest-ceiling}
+
+Connect and disconnect transitions pass the same per-tenant [ingest
+limit](./governance.md) as telemetry, and are **refused when a tenant is at its ceiling** —
+counted in `presence_events_refused_total`.
+
+This is deliberate rather than an oversight. Connection churn is entirely device-controlled and
+otherwise free: a device reconnecting in a loop would be an unmetered write amplifier that the
+ingest limiter never sees. But the consequence is worth planning for — a tenant pressed against its
+ceiling has devices whose online/offline state is wrong, and stays wrong until a later
+reconciliation pass repairs it (by default, up to five minutes). Anything keyed on presence is
+wrong for that window too, including Connectivity rules and the release of commands held for an
+offline device.
+
+It applies to the platform broker's MQTT tap. Sparkplug ingestion applies no per-tenant ceiling and
+sheds nothing, and LwM2M runs its own separately configured limit.
+
+### Resizing the broker cluster requires restarting `event-sources` {#resizing-the-broker-cluster}
+
+The comparison above declines to mark anything offline unless it can account for every node of the
+broker cluster. It decides "every node" from the largest cluster it has ever seen — a mark that
+only ever rises, which is what stops a network partition from causing mass false disconnects (a
+route-isolated broker reports itself as the whole cluster and would otherwise satisfy its own
+check).
+
+The cost of that design is one case it cannot distinguish: **deliberately scaling the broker
+cluster down**. Fewer nodes answer than the remembered maximum, so every subsequent pass is treated
+as incomplete and no offline repair is ever made — not until the next pass, but for the life of the
+process. Devices orphaned by the removed node read online indefinitely, and because an asserted
+device has no inactivity backstop, nothing else corrects them.
+
+**After scaling the NATS cluster down, restart `event-sources`.** The signal that you needed to and
+did not is `presence_reconcile_withheld_disconnects_total` rising without settling. Scaling *up*
+needs nothing.

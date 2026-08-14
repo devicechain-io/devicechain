@@ -687,6 +687,85 @@ func TestGeoFenceTokenValidation(t *testing.T) {
 	}
 }
 
+// A fence's token is immutable. `updateGeoFence(token:, request:)` carries the token
+// twice — once to say which fence, once inside a request input shared with the create
+// path — and the second one used to win, silently moving the fence to a new token while
+// leaving every rule that named the old one resolving to nothing.
+//
+// The refusal has to write NOTHING, which is the half worth asserting: an update that
+// mints a fence-set version and then fails would leave a version on record describing a
+// change that never happened, and the stamp's whole job is that a version names the
+// fences that were live at it.
+func TestGeoFenceTokenIsImmutable(t *testing.T) {
+	api := newGeoFenceTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	if _, err := api.CreateGeoFence(ctx, &GeoFenceCreateRequest{Token: "yard", Geometry: yardGeometry}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	before, err := api.CurrentFenceSetVersion(ctx)
+	if err != nil {
+		t.Fatalf("current version: %v", err)
+	}
+
+	moved := polygonGeometry(-84.40, 33.75, -84.39, 33.76, -84.38, 33.74, -84.40, 33.75)
+	_, err = api.UpdateGeoFence(ctx, "yard", &GeoFenceCreateRequest{
+		Token: "renamed-yard", Geometry: moved,
+	})
+	if err == nil {
+		t.Fatal("a rename was accepted")
+	}
+	// The message has to name both tokens: an operator reading it from a script needs to
+	// know which fence refused and what it was asked to become.
+	if !strings.Contains(err.Error(), "yard") || !strings.Contains(err.Error(), "renamed-yard") {
+		t.Errorf("refusal does not name both tokens: %v", err)
+	}
+
+	// Nothing moved: the fence is still under its own token, the new token names nothing,
+	// and the geometry is the one that was authored rather than the one the refused call
+	// carried.
+	still, err := api.GeoFencesByToken(ctx, []string{"yard"})
+	if err != nil || len(still) != 1 {
+		t.Fatalf("read old token: %v (%d rows)", err, len(still))
+	}
+	if ring := decodePolygonRing(t, string(still[0].Geometry)); len(ring) != 5 {
+		t.Errorf("the refused geometry was written anyway: ring has %d positions, want 5", len(ring))
+	}
+	renamed, err := api.GeoFencesByToken(ctx, []string{"renamed-yard"})
+	if err != nil {
+		t.Fatalf("read new token: %v", err)
+	}
+	if len(renamed) != 0 {
+		t.Errorf("the new token names %d fences, want 0", len(renamed))
+	}
+
+	// And no version was minted for the change that did not happen.
+	after, err := api.CurrentFenceSetVersion(ctx)
+	if err != nil {
+		t.Fatalf("current version after: %v", err)
+	}
+	if after != before {
+		t.Errorf("a refused rename minted a version: %d -> %d", before, after)
+	}
+
+	// NEGATIVE CONTROL. The guard refuses a CHANGED token, not every update — an edit
+	// that restates the fence's own token still goes through and still mints. Without
+	// this the test above passes just as well against a method that rejects everything.
+	renameless := "North Yard"
+	if _, err := api.UpdateGeoFence(ctx, "yard", &GeoFenceCreateRequest{
+		Token: "yard", Name: &renameless, Geometry: moved,
+	}); err != nil {
+		t.Fatalf("an update that keeps the token was refused: %v", err)
+	}
+	edited, err := api.CurrentFenceSetVersion(ctx)
+	if err != nil {
+		t.Fatalf("current version after edit: %v", err)
+	}
+	if edited == before {
+		t.Errorf("the accepted edit minted no version (still %d)", edited)
+	}
+}
+
 // GeoFenceSetSnapshotAt distinguishes "before any fence existed" from "a version that
 // is not on record". Answering an empty snapshot for an unknown version would read as
 // "there were no fences" when the truth is "we cannot know".

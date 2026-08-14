@@ -27,6 +27,37 @@ func validateGeoFenceToken(token string) error {
 	return nil
 }
 
+// errGeoFenceTokenImmutable refuses an update that would move a fence to a different
+// token. It is the request-shape half of `updateGeoFence(token:, request:)`, which
+// carries the token twice: once to say which fence, and once inside a request input
+// shared with the create path.
+//
+// 🔴 A RENAME HAS NO SAFE OUTCOME, WHICH IS WHY IT IS REFUSED RATHER THAN CASCADED. A
+// rule names a fence by its token, inside compiled CEL text that this service cannot
+// see and event-processing cannot be asked to rewrite. So a rename leaves every
+// `geo.inFence("old")` naming nothing: containment answers ErrUnknownFence, which the
+// runtime turns into a SKIPPED sample rather than a `false` — deliberately, so the
+// breakage lands on the eval-error counter instead of silently reading as "outside".
+// That is the loudest a downstream service can be about it, and it is still only
+// visible to someone already looking at the counter. The rename itself, meanwhile,
+// succeeds with a 200 and mints a fence-set version that freezes the NEW token into the
+// snapshot, so nothing downstream can even reconstruct what the rules used to name.
+//
+// The other two surfaces already assume immutability — the console renders the token as
+// a disabled input when editing, and the concept docs say the token is fixed once
+// created — so this closes a gap between the API and everything written about it, and
+// matches how UpdateDeviceProfile refuses the same move. A caller that genuinely wants a
+// different token creates a second fence and deletes the first, which is the operation
+// that also makes them confront the rules naming the old one.
+func errGeoFenceTokenImmutable(token string, requested string) error {
+	if requested == token {
+		return nil
+	}
+	return fmt.Errorf("cannot rename geofence %q to %q: a fence's token is immutable, "+
+		"because rules name fences by token and a rename would leave them naming nothing",
+		token, requested)
+}
+
 // CreateGeoFence creates a geofence and mints a new tenant fence-set version in the
 // SAME transaction (ADR-078). The two are one atomic fact: a fence that exists at a
 // version the stamp never advanced to would be invisible to every event resolved after
@@ -86,9 +117,15 @@ func (api *Api) CreateGeoFence(ctx context.Context, request *GeoFenceCreateReque
 // this layer cannot answer cheaply or safely, and the failure modes are asymmetric — a
 // spare version costs one row, while a missed one silently keeps events pointing at a
 // snapshot that no longer describes the fences.
+//
+// A fence's TOKEN is immutable, and this is where that is enforced — see
+// errGeoFenceTokenImmutable.
 func (api *Api) UpdateGeoFence(ctx context.Context, token string,
 	request *GeoFenceCreateRequest) (*GeoFence, error) {
 	if err := validateGeoFenceToken(request.Token); err != nil {
+		return nil, err
+	}
+	if err := errGeoFenceTokenImmutable(token, request.Token); err != nil {
 		return nil, err
 	}
 	if _, err := validateGeoFenceGeometry(request.Geometry); err != nil {
@@ -104,7 +141,6 @@ func (api *Api) UpdateGeoFence(ctx context.Context, token string,
 	}
 
 	updated := matches[0]
-	updated.Token = request.Token
 	updated.Name = rdb.NullStrOf(request.Name)
 	updated.Description = rdb.NullStrOf(request.Description)
 	updated.Metadata = rdb.MetadataStrOf(request.Metadata)

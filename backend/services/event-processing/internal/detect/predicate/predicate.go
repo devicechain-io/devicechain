@@ -81,6 +81,12 @@ type Predicate struct {
 	metricsComplete bool
 	scopeSafe       bool
 
+	// referencesMetrics records whether the leaf reads `m` AT ALL — including the dynamic reads
+	// `metrics` cannot name. It is deliberately not derivable from the two fields above: an empty
+	// `metrics` means either "reads no measurement" or "reads one this analysis cannot pin", and
+	// telling those apart is the whole question ReferencesMetrics answers.
+	referencesMetrics bool
+
 	// referencesFences records whether the leaf calls inFence at all, computed once at compile
 	// from the type-checked AST. It drives the position-scoped feed (rules.CompiledRule
 	// RequiresPosition): a fence leaf must see only events that report a position, exactly as a
@@ -138,6 +144,7 @@ func Compile(source string, costCeiling uint64) (*Predicate, error) {
 	// set is exhaustive, prove the leaf is FALSE whenever those measurements are absent, so the
 	// runtime can safely skip an off-metric event without dropping a raise (see ScopableMetrics).
 	p.metrics, p.metricsComplete = metricRefs(ast.NativeRep())
+	p.referencesMetrics = referencesMetrics(ast.NativeRep())
 	if p.metricsComplete && len(p.metrics) > 0 {
 		safe, err := falseWhenMetricsAbsent(env, ast)
 		if err != nil {

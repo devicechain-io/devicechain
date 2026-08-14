@@ -26,6 +26,10 @@ func (p *Predicate) MetricRefs() (metrics []string, complete bool) {
 	return p.metrics, p.metricsComplete
 }
 
+// ReferencesMetrics reports whether the leaf reads `m` at all, including the reads MetricRefs
+// cannot name. See referencesMetrics.
+func (p *Predicate) ReferencesMetrics() bool { return p.referencesMetrics }
+
 // ScopableMetrics returns the measurement keys the runtime may safely scope this leaf's feed on,
 // and whether scoping is sound at all (review D4). It is sound ONLY when the reference set is
 // complete AND non-empty AND the leaf is provably FALSE when none of those measurements are
@@ -83,6 +87,24 @@ func falseWhenMetricsAbsent(env *cel.Env, ast *cel.Ast) (bool, error) {
 	// Value(), so the comma-ok check rejects true/unknown/non-bool alike.
 	b, ok := out.Value().(bool)
 	return ok && !b, nil
+}
+
+// referencesMetrics reports whether the leaf reads the `m` variable at all, by any shape —
+// `m.temp`, `m["temp"]`, `size(m)`, a dynamic index, a comprehension over it.
+//
+// It is the measurement counterpart of referencesFences, and it exists because "reads no
+// measurement" and "reads a measurement this analysis cannot name" are DIFFERENT answers that
+// metricRefs collapses onto the same empty slice. Feed scoping only ever needed the nameable
+// ones; the fence/measurement conflict check (rules.errFenceAndMetricLeaf) needs to know the
+// leaf touches `m` even when it cannot say which key.
+func referencesMetrics(a *celast.AST) bool {
+	if a == nil {
+		return false
+	}
+	root := celast.NavigateAST(a)
+	return len(celast.MatchDescendants(root, func(e celast.NavigableExpr) bool {
+		return e.Kind() == celast.IdentKind && e.AsIdent() == VarM
+	})) > 0
 }
 
 // metricRefs walks a type-checked predicate AST for constant-keyed reads of the `m` variable.
