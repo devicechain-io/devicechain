@@ -581,6 +581,20 @@ jobs:
       - name: No Referrer-Policy strips the Referer the default basemap needs
         run: hack/check-osm-tile-policy.sh
 
+      # The ci-complete gate is the single check branch protection requires, and
+      # it is only as complete as a hand-written `needs` list. A job added to this
+      # file is unguarded by default — it runs, it can fail, and the gate goes
+      # green — so this asserts the list still names every job, and that the gate
+      # kept the two properties that make it work (always(), and a body).
+      #
+      # Self-test first, and it plants each defect ALONE: a self-test that plants
+      # all of them at once is satisfied by a checker that finds any one.
+      - name: ci-complete gate guard self-test
+        run: hack/check-ci-gate-complete.sh --self-test
+
+      - name: the required gate depends on every job
+        run: hack/check-ci-gate-complete.sh
+
   # ---------------------------------------------------------------------------
   # Published documentation hygiene.
   # ---------------------------------------------------------------------------
@@ -1164,3 +1178,66 @@ jobs:
           done
           echo "::error::ko build failed after 3 attempts" >&2
           exit 1
+
+  # ---------------------------------------------------------------------------
+  # The single required check.
+  #
+  # This job exists so branch protection has ONE stable name to require. The
+  # alternative — listing the individual jobs — drifts silently in both
+  # directions, and 38 of the ~56 check names are matrix-generated from the
+  # workspace module list: adding a service leaves its `go (…)` check unrequired
+  # (so it may go red and still merge), and removing one leaves a required name
+  # that never reports again (so every PR waits forever).
+  #
+  # 🔴 `if: always()` IS LOAD-BEARING, AND WITHOUT IT THIS JOB IS WORSE THAN
+  # NOTHING. A job whose `needs` failed is SKIPPED, not failed — and GitHub counts
+  # a skipped required check as satisfied. So the obvious spelling of this job
+  # (no `if:`, no body) reports success on exactly the runs it exists to block,
+  # and does so while looking green in the UI. `always()` makes it run regardless,
+  # and the step below is what turns the upstream results into a verdict.
+  #
+  # 🔴 The `needs` list is hand-written because Actions has no "needs: every job".
+  # That is the same drift hazard one level up, so hack/check-ci-gate-complete.sh
+  # asserts the list names every job in this file, and runs in the `actions` job.
+  # ---------------------------------------------------------------------------
+  ci-complete:
+    name: ci-complete
+    if: always()
+    runs-on: ubuntu-latest
+    needs:
+      - discover
+      - go
+      - subscriptions
+      - data-access
+      - migrations
+      - license
+      - actions
+      - docs
+      - frontend
+      - csharp
+      - unity-compile-check
+      - helm
+      - opentofu
+      - image-smoke
+    steps:
+      # ANY result other than success fails the gate, including `skipped` and
+      # `cancelled`. No job in this workflow is conditional, so a skip here means
+      # an upstream failed or the run was cancelled — both of which must block.
+      # The results arrive through the environment rather than interpolated into
+      # the script, so nothing from the workflow context is ever executed as shell.
+      - name: every job succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.value.result)\t\(.key)"' | sort > /tmp/results
+          if [ ! -s /tmp/results ]; then
+            echo "::error::no upstream results were reported; this gate examined nothing"
+            exit 1
+          fi
+          column -t /tmp/results || cat /tmp/results
+          if grep -qv '^success' /tmp/results; then
+            echo "::error::one or more required jobs did not succeed (see the table above)"
+            exit 1
+          fi
+          echo "all $(wc -l < /tmp/results) jobs succeeded"
