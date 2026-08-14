@@ -14,6 +14,7 @@ package presence
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/devicechain-io/dc-microservice/core"
 )
@@ -64,8 +65,33 @@ type Reader interface {
 // delivery still cannot happen. Holding would swap one lie for another — and it would
 // occupy the tenant's undelivered-command ceiling for a full TTL, letting a Sparkplug
 // fleet crowd out commands to devices that CAN receive them.
+//
+// 🔴🔴 KEYED ON THE TRANSPORT, MATCHED THROUGH transportOf — NEVER ON THE WHOLE `source`.
+// A projected source is `transport` or `transport:qualifier`, and the qualifier is chosen at
+// runtime, so the whole value is not a closed vocabulary and cannot be enumerated here. This
+// list held the bare word "sparkplug" and was looked up with the whole value, which no
+// producer ever writes: sparkplug-ingest stamps "sparkplug:"+hostId. The lookup therefore
+// missed for every real device and the Undeliverable verdict — with failUndeliverable,
+// MarkUndeliverable and command_delivery_undeliverable_total behind it — could not fire at
+// all, while every test passed on a hand-written bare "sparkplug" that nothing emits.
 var nonDeliveringTransports = map[string]bool{
 	"sparkplug": true,
+}
+
+// transportOf reduces a projected `source` to the transport it names, dropping any
+// runtime qualifier: "sparkplug:plant-a" -> "sparkplug", "mqtt" -> "mqtt".
+//
+// 🔴 IT IS NOT A PREFIX MATCH, AND THAT IS THE POINT. Matching by prefix would condemn a
+// source merely NAMED like a denied transport — "sparkplugin", or an operator's gateway
+// source called "sparkplug-test" — and `source` for a plain MQTT gateway is an
+// OPERATOR-CHOSEN id, so those collisions are reachable input, not hypotheticals. Cutting
+// at the first ":" matches the one form producers actually mint and nothing adjacent to it.
+//
+// An operator can still collide deliberately by naming a source exactly "sparkplug"; that
+// is unchanged by this function and is the deny list's pre-existing shape, not a new hazard.
+func transportOf(source string) string {
+	transport, _, _ := strings.Cut(source, ":")
+	return transport
 }
 
 // Decide reduces one device's projected state to a verdict.
@@ -91,7 +117,7 @@ func Decide(s State) Verdict {
 		// Dispatch, exactly as before the gate existed.
 		return Dispatch
 	}
-	if nonDeliveringTransports[s.Source] {
+	if nonDeliveringTransports[transportOf(s.Source)] {
 		return Undeliverable
 	}
 	if s.Asserted && !s.Active {

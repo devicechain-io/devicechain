@@ -39,7 +39,7 @@ func reconcilerWith(api *fakeApi, reader presence.Reader) *CommandDeliveryProces
 func TestAReturnedDeviceHasItsCommandsReleased(t *testing.T) {
 	api := &fakeApi{heldPage: []*model.Command{heldFor(1, "c1", "acme")}}
 	proc := reconcilerWith(api, &scriptedReader{
-		states: map[string]presence.State{"dev-c1": asserted(true, "mqtt")},
+		states: map[string]presence.State{"dev-c1": asserted(true, mqttSource)},
 	})
 
 	proc.reconcileHolds(context.Background())
@@ -71,7 +71,7 @@ func TestAReleaseIsCOUNTED(t *testing.T) {
 			api := &fakeApi{heldPage: []*model.Command{heldFor(1, "c1", "acme")}}
 			api.releaseLoses = c.lost
 			proc := reconcilerWith(api, &scriptedReader{
-				states: map[string]presence.State{"dev-c1": asserted(true, "mqtt")},
+				states: map[string]presence.State{"dev-c1": asserted(true, mqttSource)},
 			})
 			proc.HoldsReleased = prometheus.NewCounter(prometheus.CounterOpts{
 				Name: "holds_released_" + strconv.FormatBool(c.lost)})
@@ -91,7 +91,7 @@ func TestAReleaseIsCOUNTED(t *testing.T) {
 func TestAStillAbsentDeviceKeepsItsHold(t *testing.T) {
 	api := &fakeApi{heldPage: []*model.Command{heldFor(1, "c1", "acme")}}
 	proc := reconcilerWith(api, &scriptedReader{
-		states: map[string]presence.State{"dev-c1": asserted(false, "mqtt")},
+		states: map[string]presence.State{"dev-c1": asserted(false, mqttSource)},
 	})
 
 	proc.reconcileHolds(context.Background())
@@ -154,7 +154,7 @@ func TestTheReconcilerFailsCLOSED(t *testing.T) {
 func TestTheReconcilerReleasesAnUndeliverableCommandRatherThanFailingItHere(t *testing.T) {
 	api := &fakeApi{heldPage: []*model.Command{heldFor(1, "c1", "acme")}}
 	proc := reconcilerWith(api, &scriptedReader{
-		states: map[string]presence.State{"dev-c1": asserted(true, "sparkplug")},
+		states: map[string]presence.State{"dev-c1": asserted(true, sparkplugSource)},
 	})
 
 	proc.reconcileHolds(context.Background())
@@ -181,8 +181,8 @@ func TestADeletedTenantsHoldsAreNeverReleased(t *testing.T) {
 		heldFor(2, "c2", "other"),
 	}}
 	proc := reconcilerWith(api, &scriptedReader{states: map[string]presence.State{
-		"dev-c1": asserted(true, "mqtt"),
-		"dev-c2": asserted(true, "mqtt"),
+		"dev-c1": asserted(true, mqttSource),
+		"dev-c2": asserted(true, mqttSource),
 	}})
 	proc.TenantDeleted = func(tenant string) bool { return tenant == "acme" }
 
@@ -234,7 +234,7 @@ func TestTheWalkAdvancesAndThenRestarts(t *testing.T) {
 func TestTheReconcilerDoesNothingWithoutItsLock(t *testing.T) {
 	api := &fakeApi{heldPage: []*model.Command{heldFor(1, "c1", "acme")}}
 	proc := procWith(api, &recordingWriter{})
-	proc.Presence = &scriptedReader{states: map[string]presence.State{"dev-c1": asserted(true, "mqtt")}}
+	proc.Presence = &scriptedReader{states: map[string]presence.State{"dev-c1": asserted(true, mqttSource)}}
 	api.reconcileLockAvailable = false
 
 	proc.reconcileHolds(context.Background())

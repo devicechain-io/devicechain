@@ -45,7 +45,7 @@ type absentReader []string
 func (a absentReader) StatesFor(context.Context, []string) (map[string]presence.State, error) {
 	states := map[string]presence.State{}
 	for _, device := range a {
-		states[device] = presence.State{Known: true, Asserted: true, Active: false, Source: "mqtt"}
+		states[device] = presence.State{Known: true, Asserted: true, Active: false, Source: mqttSource}
 	}
 	return states, nil
 }
@@ -54,6 +54,24 @@ func (a absentReader) StatesFor(context.Context, []string) (map[string]presence.
 func asserted(active bool, source string) presence.State {
 	return presence.State{Known: true, Asserted: true, Active: active, Source: source}
 }
+
+// sparkplugSource is the source string a Sparkplug device is ACTUALLY projected with:
+// sparkplug-ingest stamps "sparkplug:"+hostId, and device-state denormalizes it verbatim.
+//
+// 🔴🔴 NEVER HAND-WRITE A BARE "sparkplug" IN A GATE FIXTURE. These end-to-end tests are the
+// ones that could have caught the whole Undeliverable verdict being unreachable in
+// production, and they did not — because they posed a source value nothing in the platform
+// emits, so they exercised the deny list against an input it would never be given. The
+// presence package holds the same constant with the same warning; they are separate because
+// the two packages share no non-test code, which is exactly the drift this value guards.
+const sparkplugSource = "sparkplug:plant-a"
+
+// mqttSource is what a plain-MQTT device is ACTUALLY projected with, and it is NOT "mqtt":
+// event-sources stamps the configured event source's own id (default "mqtt1"), while
+// processor.TYPE_MQTT = "mqtt" is a config type discriminator that never reaches an event.
+// Behaviour-neutral here — any source off the deny list dispatches — which is precisely why
+// the fiction would never fail a test, and why it is spelled correctly instead.
+const mqttSource = "mqtt1"
 
 // TestAnAbsentDeviceHasItsCommandHeldRatherThanPublished is the gate's whole purpose.
 //
@@ -66,7 +84,7 @@ func TestAnAbsentDeviceHasItsCommandHeldRatherThanPublished(t *testing.T) {
 	api := &fakeApi{lockAvailable: true, pending: []*model.Command{queued(1, "c1")}}
 	writer := &recordingWriter{}
 	proc := procWith(api, writer)
-	proc.Presence = &scriptedReader{states: map[string]presence.State{"dev-c1": asserted(false, "mqtt")}}
+	proc.Presence = &scriptedReader{states: map[string]presence.State{"dev-c1": asserted(false, mqttSource)}}
 
 	proc.sweepLocked(context.Background())
 
@@ -89,7 +107,7 @@ func TestAPresentDeviceStillDispatches(t *testing.T) {
 	api := &fakeApi{lockAvailable: true, pending: []*model.Command{queued(1, "c1")}}
 	writer := &recordingWriter{}
 	proc := procWith(api, writer)
-	proc.Presence = &scriptedReader{states: map[string]presence.State{"dev-c1": asserted(true, "mqtt")}}
+	proc.Presence = &scriptedReader{states: map[string]presence.State{"dev-c1": asserted(true, mqttSource)}}
 
 	proc.sweepLocked(context.Background())
 
@@ -135,7 +153,7 @@ func TestTheGateFailsOpen(t *testing.T) {
 		{
 			"the device has no row in the projection",
 			func(p *CommandDeliveryProcessor) {
-				p.Presence = &scriptedReader{states: map[string]presence.State{"someone-else": asserted(false, "mqtt")}}
+				p.Presence = &scriptedReader{states: map[string]presence.State{"someone-else": asserted(false, mqttSource)}}
 			},
 			"deviceStatesByDeviceToken returns only rows that EXIST — a device that has never " +
 				"produced an event is simply absent from the response, and reading that silence " +
@@ -194,7 +212,7 @@ func TestAFailedPresenceReadIsCOUNTED(t *testing.T) {
 func TestAHoldIsCOUNTED(t *testing.T) {
 	api := &fakeApi{lockAvailable: true, pending: []*model.Command{queued(1, "c1")}}
 	proc := procWith(api, &recordingWriter{})
-	proc.Presence = &scriptedReader{states: map[string]presence.State{"dev-c1": asserted(false, "mqtt")}}
+	proc.Presence = &scriptedReader{states: map[string]presence.State{"dev-c1": asserted(false, mqttSource)}}
 	proc.HoldsPlaced = prometheus.NewCounter(prometheus.CounterOpts{Name: "holds_placed"})
 
 	proc.sweepLocked(context.Background())
@@ -212,7 +230,7 @@ func TestALostHoldIsNotCOUNTED(t *testing.T) {
 	api := &fakeApi{lockAvailable: true, pending: []*model.Command{queued(1, "c1")}}
 	api.holdLoses = true
 	proc := procWith(api, &recordingWriter{})
-	proc.Presence = &scriptedReader{states: map[string]presence.State{"dev-c1": asserted(false, "mqtt")}}
+	proc.Presence = &scriptedReader{states: map[string]presence.State{"dev-c1": asserted(false, mqttSource)}}
 	proc.HoldsPlaced = prometheus.NewCounter(prometheus.CounterOpts{Name: "holds_placed_lost"})
 
 	proc.sweepLocked(context.Background())
@@ -234,7 +252,7 @@ func TestAnUndeliverableTransportFailsTheCommandRatherThanHoldingIt(t *testing.T
 	api := &fakeApi{lockAvailable: true, pending: []*model.Command{queued(1, "c1")}}
 	writer := &recordingWriter{}
 	proc := procWith(api, writer)
-	proc.Presence = &scriptedReader{states: map[string]presence.State{"dev-c1": asserted(true, "sparkplug")}}
+	proc.Presence = &scriptedReader{states: map[string]presence.State{"dev-c1": asserted(true, sparkplugSource)}}
 
 	proc.sweepLocked(context.Background())
 
@@ -336,7 +354,7 @@ func TestAHoldThatLosesItsRaceIsBenign(t *testing.T) {
 	api.holdLoses = true
 	writer := &recordingWriter{}
 	proc := procWith(api, writer)
-	proc.Presence = &scriptedReader{states: map[string]presence.State{"dev-c1": asserted(false, "mqtt")}}
+	proc.Presence = &scriptedReader{states: map[string]presence.State{"dev-c1": asserted(false, mqttSource)}}
 
 	proc.sweepLocked(context.Background())
 
@@ -362,9 +380,9 @@ func TestAMixedTenantBatchTakesThreeDifferentActions(t *testing.T) {
 	writer := &recordingWriter{}
 	proc := procWith(api, writer)
 	proc.Presence = &scriptedReader{states: map[string]presence.State{
-		"dev-present":   asserted(true, "mqtt"),
-		"dev-absent":    asserted(false, "mqtt"),
-		"dev-sparkplug": asserted(true, "sparkplug"),
+		"dev-present":   asserted(true, mqttSource),
+		"dev-absent":    asserted(false, mqttSource),
+		"dev-sparkplug": asserted(true, sparkplugSource),
 	}}
 
 	proc.sweepLocked(context.Background())

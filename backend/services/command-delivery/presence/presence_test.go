@@ -11,6 +11,35 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 )
 
+// sparkplugSource is the source string a Sparkplug device is ACTUALLY projected with —
+// sparkplug-ingest stamps "sparkplug:"+hostId onto every event it emits, and device-state
+// denormalizes that verbatim.
+//
+// 🔴🔴 USE THIS, NEVER A HAND-WRITTEN "sparkplug". Every case here once passed a bare
+// "sparkplug", which no producer in the platform emits, and the whole Undeliverable branch
+// was unreachable in production for as long as those fixtures looked green. A fixture that
+// carries a PLAUSIBLE BUT UNPRODUCEABLE value tests the fixture, not the gate — it is the
+// same failure as a fake that drops a field, one step further from being visible.
+//
+// It is spelled with a real host id rather than the "{hostId}" placeholder so it is a value
+// the platform could genuinely mint, and it is deliberately NOT the default host id: a
+// qualifier that happened to be empty or defaulted would let a whole-string comparison keep
+// passing for the wrong reason.
+const sparkplugSource = "sparkplug:plant-a"
+
+// mqttSource is what a plain-MQTT device is ACTUALLY projected with, and it is NOT "mqtt".
+// event-sources stamps the configured event source's own id (`EventSource.Id`, free text,
+// shipped default "mqtt1"); the constant `processor.TYPE_MQTT = "mqtt"` is a config TYPE
+// discriminator matched in a switch and is never written onto an event.
+//
+// 🔑 THESE CASES ARE BEHAVIOUR-NEUTRAL, AND THAT IS EXACTLY WHY THE VALUE IS FIXED HERE.
+// Any source not on the deny list dispatches, so "mqtt" and "mqtt1" produce identical
+// verdicts and no test would have caught the fiction — which is the same reason the bare
+// "sparkplug" survived. A fixture spelling a value the platform cannot mint teaches the
+// next reader that it can, and the next deny-list entry written against that belief is a
+// repeat of the defect this file now guards.
+const mqttSource = "mqtt1"
+
 // TestDecide walks every combination the gate can be handed, because each wrong answer
 // is a different production failure and they are not interchangeable.
 func TestDecide(t *testing.T) {
@@ -29,20 +58,20 @@ func TestDecide(t *testing.T) {
 		},
 		{
 			"asserted and absent holds",
-			State{Known: true, Asserted: true, Active: false, Source: "mqtt"},
+			State{Known: true, Asserted: true, Active: false, Source: mqttSource},
 			Hold,
 			"this is the case the gate exists for: an authoritative absence makes a publish " +
 				"provably futile, and today it is silently discarded and marked SENT",
 		},
 		{
 			"asserted and present dispatches",
-			State{Known: true, Asserted: true, Active: true, Source: "mqtt"},
+			State{Known: true, Asserted: true, Active: true, Source: mqttSource},
 			Dispatch,
 			"the device is there",
 		},
 		{
 			"INFERRED and inactive dispatches",
-			State{Known: true, Asserted: false, Active: false, Source: "mqtt"},
+			State{Known: true, Asserted: false, Active: false, Source: mqttSource},
 			Dispatch,
 			"🔴 THE CONJUNCT THAT STOPS THIS BEING A DISASTER. An inferred row's inactivity " +
 				"means only 'no events for a while' — a device reporting hourly is inactive for " +
@@ -51,23 +80,46 @@ func TestDecide(t *testing.T) {
 		},
 		{
 			"INFERRED and active dispatches",
-			State{Known: true, Asserted: false, Active: true, Source: "mqtt"},
+			State{Known: true, Asserted: false, Active: true, Source: mqttSource},
 			Dispatch,
 			"nothing to withhold on",
 		},
 		{
 			"sparkplug is undeliverable, not held, even when ACTIVE",
-			State{Known: true, Asserted: true, Active: true, Source: "sparkplug"},
+			State{Known: true, Asserted: true, Active: true, Source: sparkplugSource},
 			Undeliverable,
 			"🔑 the transport has no command path at all, so presence is beside the point",
 		},
 		{
 			"sparkplug is undeliverable, not held, when absent",
-			State{Known: true, Asserted: true, Active: false, Source: "sparkplug"},
+			State{Known: true, Asserted: true, Active: false, Source: sparkplugSource},
 			Undeliverable,
 			"HELD would mean 'waiting for the device to come back' — false here, because it " +
 				"comes back and delivery still cannot happen, while the row occupies the " +
 				"tenant's ceiling for a full TTL",
+		},
+		{
+			"an UNQUALIFIED sparkplug source is still undeliverable",
+			State{Known: true, Asserted: true, Active: false, Source: "sparkplug"},
+			Undeliverable,
+			"the transport cut must not stop matching the bare form; a source is " +
+				"`transport` OR `transport:qualifier` and both name the same transport",
+		},
+		{
+			"a source merely NAMED like sparkplug is deliverable",
+			State{Known: true, Asserted: true, Active: true, Source: "sparkplugin"},
+			Dispatch,
+			"🔴 THE COUNTERWEIGHT TO THE TRANSPORT CUT. A prefix match would condemn this. " +
+				"`source` for a plain gateway is an OPERATOR-CHOSEN id, so a name that merely " +
+				"starts with a denied transport is reachable input, not a hypothetical",
+		},
+		{
+			"an operator source named sparkplug-test is deliverable",
+			State{Known: true, Asserted: true, Active: false, Source: "sparkplug-test"},
+			Hold,
+			"same counterweight, on the path where the alternative verdict is HOLD rather " +
+				"than DISPATCH — it holds on its absence, and is never condemned as " +
+				"undeliverable",
 		},
 		{
 			"lwm2m absent holds",
@@ -115,9 +167,9 @@ func TestDecide(t *testing.T) {
 func TestOnlyPositiveEvidenceWithholds(t *testing.T) {
 	for _, s := range []State{
 		{Known: false},
-		{Known: false, Asserted: true, Active: false, Source: "sparkplug"},
+		{Known: false, Asserted: true, Active: false, Source: sparkplugSource},
 		{Known: true, Asserted: false, Active: false},
-		{Known: true, Asserted: false, Active: false, Source: "mqtt"},
+		{Known: true, Asserted: false, Active: false, Source: mqttSource},
 		{Known: true, Asserted: true, Active: true},
 	} {
 		if got := Decide(s); got != Dispatch {
@@ -176,7 +228,7 @@ func (f *fakeClient) Query(_ context.Context, _, tenant, _ string, vars map[stri
 // produced an event, which on a fresh instance is all of them.
 func TestStatesForMarksMissingDevicesUnknown(t *testing.T) {
 	client := &fakeClient{rows: []map[string]any{
-		{"deviceToken": "known-1", "active": false, "presenceSource": "ASSERTED", "source": "mqtt"},
+		{"deviceToken": "known-1", "active": false, "presenceSource": "ASSERTED", "source": mqttSource},
 	}}
 	reader := NewGraphQLReader(client, "http://device-state/graphql")
 	ctx := core.WithTenant(context.Background(), "acme")
@@ -185,7 +237,7 @@ func TestStatesForMarksMissingDevicesUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StatesFor failed: %v", err)
 	}
-	if got := states["known-1"]; !got.Known || got.Active || !got.Asserted || got.Source != "mqtt" {
+	if got := states["known-1"]; !got.Known || got.Active || !got.Asserted || got.Source != mqttSource {
 		t.Fatalf("known-1 decoded wrong: %+v", got)
 	}
 	if got, present := states["never-seen"]; present {
