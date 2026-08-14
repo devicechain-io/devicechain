@@ -234,6 +234,47 @@ type CommandEnqueueVerdict {
     reason: String
 }
 
+# One device a batch enqueue gate refused, and why — the same (code, reason) pair
+# CommandEnqueueVerdict carries, plus the device it is about, because a batch answers
+# about many devices at once and a verdict with no subject is unattributable.
+type BatchEnqueueRefusal {
+    # The device this refusal is about, exactly as the caller spelled it.
+    deviceToken: String!
+    # The machine-readable classification — the SAME vocabulary validateCommandEnqueue
+    # produces (DEVICE_NOT_FOUND, COMMAND_NOT_IN_VOCABULARY, PAYLOAD_SCHEMA_VIOLATION),
+    # never a batch-specific one. Branch on this, never on `reason`.
+    code: String!
+    # Why it was refused, in client-safe terms: it names only the device token, the
+    # command key and the offending parameter — never a service, host or internal id.
+    reason: String!
+}
+
+# One page of the devices an entity group collects, resolved as a command target.
+type DeviceGroupTargetPage {
+    # Whether the group cannot serve as a command target at all. When true, `code` and
+    # `reason` explain it and every other field is meaningless — in particular
+    # deviceTokens is empty, which must NOT be read as "the group has no members".
+    rejected: Boolean!
+    # The classification of a rejection; null otherwise. One of GROUP_NOT_FOUND,
+    # GROUP_NOT_A_DEVICE_GROUP, GROUP_NOT_PUBLISHED, GROUP_VERSION_NOT_FOUND,
+    # GROUP_NOT_VERSIONED.
+    code: String
+    # Why the group was refused, in client-safe terms; null otherwise.
+    reason: String
+    # This page's device tokens, ascending by the member's row id.
+    deviceTokens: [String!]!
+    # The cursor to pass as afterId for the next page; null when the group is exhausted.
+    #
+    # It is a String rather than an Int because it carries a row id, and GraphQL's Int is
+    # a signed 32-bit value — an id beyond that would fail to marshal on the one field
+    # whose entire job is to not lose members. Treat it as opaque.
+    nextCursor: String
+    # The frozen group version this page resolved against; null for a static group,
+    # which is never versioned. Record it: it is what lets an audit answer "what did this
+    # group MEAN when the command fired?" after someone edits the selector.
+    resolvedVersion: Int
+}
+
 # One command a device currently accepts, read from its profile's active PUBLISHED
 # version (ADR-043 decision 3). This is a snapshot copy frozen at publish — deliberately
 # NOT a CommandDefinition, because it has no id or token to address: the draft row it was
@@ -1389,6 +1430,42 @@ type Query {
     # schema. Answers device existence, unknown command key, and payload validity in
     # one hop. A profile declaring no vocabulary allows free-form payloads (decision 4).
     validateCommandEnqueue(deviceToken: String!, commandKey: String!, payload: String): CommandEnqueueVerdict!
+    # Decide the same question for MANY devices at once — the gate a fleet-wide command
+    # write runs through. One command key and one payload apply to every device, so the
+    # verdict depends only on each device's TYPE: the devices resolve in one lookup and
+    # each distinct type's published vocabulary is resolved once, rather than once per
+    # device.
+    #
+    # It answers with REFUSALS ONLY. A device that may receive the command produces no
+    # entry, so a healthy fleet's answer is the empty list and the response scales with
+    # the problems rather than with the fleet — but it also means silence is consent, so
+    # send only tokens you intend to enqueue to. Duplicate tokens are collapsed and
+    # refusals come back in the order each device was first named.
+    #
+    # The refusal codes are exactly validateCommandEnqueue's, never a batch-specific set,
+    # so a device refused here is refused there for the same stated reason.
+    validateCommandEnqueueBatch(deviceTokens: [String!]!, commandKey: String!, payload: String): [BatchEnqueueRefusal!]!
+    # Resolve one page of the devices an entity group collects, for use as a command
+    # target. Walk it by passing the previous page's nextCursor as afterId; a null
+    # nextCursor means the group is exhausted.
+    #
+    # It is a KEYSET walk rather than page-number paging, and that is a correctness
+    # difference: with offset paging, a device leaving the group between two pages shifts
+    # every later row down a slot, so a device that was a member throughout is never
+    # visited — it would receive no command and appear in no refusal list. A cursor
+    # cannot skip a row that stays in the set. What a walk can still miss is a device
+    # that JOINS below the cursor after it has passed, which is the honest semantic: the
+    # target set is the group's membership as of the moment the walk began.
+    #
+    # A dynamic group resolves its FROZEN published version — the group's draft selector
+    # is mutable, and a fleet actuation must not follow whatever someone last typed.
+    # Name a version to pin one explicitly; omit it for the active published version.
+    #
+    # Three conditions come back as rejected=true with a code rather than as errors,
+    # because each is a decided fact about the request the caller can act on: the group
+    # does not exist, it collects something other than devices, or it is a dynamic group
+    # that has never been published (so it has no frozen rule to fire at).
+    resolveDeviceGroupTargets(groupToken: String!, version: Int, afterId: String, limit: Int!): DeviceGroupTargetPage!
     # List the commands a device currently accepts (ADR-043 decision 3) — the listing
     # counterpart of validateCommandEnqueue, which is ask-don't-list. Both are answered
     # from the same resolution, so what this offers is what the gate accepts.

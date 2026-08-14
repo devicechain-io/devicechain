@@ -35,7 +35,8 @@ func newGroupMemberTestApi(t *testing.T) (*Api, context.Context) {
 	}
 	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{},
 		&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &EntityAttribute{},
-		&EntityGroup{}, &EntityGroupMembership{}, &EntityGroupFacetRef{}, &DetectionRuleScopeRef{},
+		&EntityGroup{}, &EntityGroupVersion{}, &EntityGroupMembership{}, &EntityGroupFacetRef{},
+		&DetectionRuleScopeRef{},
 		&EntityRelationship{}, &EntityRelationshipType{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

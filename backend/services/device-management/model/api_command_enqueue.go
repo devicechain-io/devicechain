@@ -105,13 +105,24 @@ func (api *Api) DeviceCommandVocabulary(ctx context.Context, deviceToken string)
 	if err != nil {
 		return nil, err
 	}
-	// Constrained is derived HERE and only here, from the same list the gate then
-	// matches against, so the two readings are the same reading.
+	return vocabularyOf(definitions), nil
+}
+
+// vocabularyOf builds the vocabulary of a device that EXISTS, from the definition list
+// its type resolved to.
+//
+// Constrained is derived HERE and only here, from the same list the gate then matches
+// against, so the two readings are the same reading. It is a named function rather than
+// a struct literal because the batch gate resolves definitions per device TYPE and would
+// otherwise have to repeat the `len(definitions) > 0` derivation — and a second copy of
+// that one comparison is exactly how "an unconstrained device is not a device with
+// nothing to send" stops being true on one of the two paths.
+func vocabularyOf(definitions []*CommandDefinition) *CommandVocabulary {
 	return &CommandVocabulary{
 		DeviceExists: true,
 		Constrained:  len(definitions) > 0,
 		Commands:     definitions,
-	}, nil
+	}
 }
 
 // allowedVerdict is the accept answer.
@@ -161,11 +172,60 @@ func (api *Api) ValidateCommandEnqueue(ctx context.Context, deviceToken string, 
 		return nil, err
 	}
 	if !vocab.DeviceExists {
-		return rejectedVerdict(RejectDeviceNotFound, "device %q does not exist", deviceToken), nil
+		return rejectedVerdict(RejectDeviceNotFound, "%s", deviceNotFoundReason(deviceToken)), nil
 	}
+	return decideAgainstVocabulary(vocab, commandKey, payload).verdictFor(deviceToken), nil
+}
+
+// deviceNotFoundReason is the one rejection wording both gates must share. The batch gate
+// decides this case by a token's ABSENCE from a bulk result rather than by a vocabulary
+// lookup, so without a shared renderer the two paths would each spell the same refusal
+// their own way — and the reason is the only part of a rejection a person reads.
+func deviceNotFoundReason(deviceToken string) string {
+	return fmt.Sprintf("device %q does not exist", deviceToken)
+}
+
+// vocabularyDecision is the part of an enqueue verdict that depends ONLY on the device
+// TYPE — the published vocabulary it resolves to, the command key, and the payload.
+//
+// 🔑 IT IS SPLIT OUT BECAUSE THE BATCH GATE MUST NOT RE-DERIVE IT. A batch carries one
+// command key and one payload for every device in it (the whole reason it is affordable),
+// so the decision varies only with the device's type — which means the batch gate can
+// resolve each distinct type once and reuse the answer, instead of doing O(devices)
+// vocabulary reads and O(devices) schema validations.
+//
+// The alternative — a second implementation of the same rules inside the batch path — is
+// the failure this shape exists to prevent: the two gates would drift, and the symptom
+// would be a command that the single-device gate accepts and the batch gate refuses (or
+// worse, the reverse). Both paths now reach the same verdict because it is literally the
+// same function, not because two pieces of code agree today.
+//
+// The device TOKEN is deliberately not an input: it appears only in the rendered reason,
+// which is why verdictFor takes it separately. Keeping it out is what makes the decision
+// reusable across every device sharing a type.
+type vocabularyDecision struct {
+	// code is the rejection classification, or "" when the command is allowed.
+	code EnqueueRejectionCode
+	// reason is the fully-rendered reason for a decision whose wording does not name
+	// the device (the payload-schema case, whose message names the command key and the
+	// offending parameter). Empty when the reason must be rendered per device.
+	reason string
+	// commandKey is retained so a per-device reason can name it.
+	commandKey string
+}
+
+// decideAgainstVocabulary applies ADR-043 decision 3 + 4 to an ALREADY-RESOLVED
+// vocabulary. It performs no I/O, so a caller holding one vocabulary may reuse it for
+// every device of that type.
+//
+// The caller is responsible for the device-existence check: a vocabulary with
+// DeviceExists false has no meaningful Constrained or Commands, and the two callers
+// discover a missing device differently (a single lookup returning nothing, versus a
+// token absent from a bulk result).
+func decideAgainstVocabulary(vocab *CommandVocabulary, commandKey string, payload []byte) vocabularyDecision {
 	// Decision 4 backward path: no declared vocabulary ⇒ free-form, as today.
 	if !vocab.Constrained {
-		return allowedVerdict(), nil
+		return vocabularyDecision{}
 	}
 
 	var matched *CommandDefinition
@@ -176,14 +236,29 @@ func (api *Api) ValidateCommandEnqueue(ctx context.Context, deviceToken string, 
 		}
 	}
 	if matched == nil {
-		return rejectedVerdict(RejectCommandNotInVocabulary,
-			"device %q accepts no command %q", deviceToken, commandKey), nil
+		return vocabularyDecision{code: RejectCommandNotInVocabulary, commandKey: commandKey}
 	}
 
 	if err := ValidateCommandPayload(matched, payload); err != nil {
 		// ValidateCommandPayload's message already names the command key and the
-		// offending parameter, and nothing else — safe to relay to the client.
-		return rejectedVerdict(RejectPayloadSchemaViolation, "%s", err.Error()), nil
+		// offending parameter, and nothing else — safe to relay to the client, and
+		// identical for every device of this type.
+		return vocabularyDecision{code: RejectPayloadSchemaViolation, reason: err.Error(), commandKey: commandKey}
 	}
-	return allowedVerdict(), nil
+	return vocabularyDecision{}
+}
+
+// allowed reports whether this decision permits the enqueue.
+func (d vocabularyDecision) allowed() bool { return d.code == "" }
+
+// verdictFor renders the decision as a single-device verdict, naming the device in the
+// one reason whose wording is per-device.
+func (d vocabularyDecision) verdictFor(deviceToken string) *CommandEnqueueVerdict {
+	if d.allowed() {
+		return allowedVerdict()
+	}
+	if d.reason != "" {
+		return rejectedVerdict(d.code, "%s", d.reason)
+	}
+	return rejectedVerdict(d.code, "device %q accepts no command %q", deviceToken, d.commandKey)
 }
