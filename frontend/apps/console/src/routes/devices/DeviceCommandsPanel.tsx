@@ -33,6 +33,7 @@ import {
 import { useToast } from '@/components/ui/toast';
 import { Textarea } from '@/components/ui/textarea';
 import { formatTime } from '@/lib/utils';
+import { commandStatusVariant } from '@/lib/command-status';
 import { useQuery } from '@/lib/hooks/use-query';
 import { errMessage, useReload } from '@/routes/common';
 import {
@@ -59,33 +60,9 @@ const pageSize = 25;
 // @devicechain/dashboards — and see cancel() below, which reads the status that came back
 // rather than trusting that the call resolved.
 
-function statusVariant(status: string): 'success' | 'destructive' | 'outline' | 'secondary' {
-  switch (status) {
-    case 'SUCCESSFUL':
-      return 'success';
-    case 'FAILED':
-    case 'TIMEOUT':
-      return 'destructive';
-    // Terminal but not a failure: nobody broke, the command simply stopped. EXPIRED ran
-    // out of time, CANCELLED was called off on purpose. The muted outline says "over"
-    // without the red that would report a fault to an operator scanning the column.
-    case 'EXPIRED':
-    case 'CANCELLED':
-      return 'outline';
-    // HELD and PARKED are waiting on the DEVICE, not lost — they carry the same in-flight
-    // styling as QUEUED / SENT on purpose, because the command still stands and can still
-    // be cancelled. HELD was never dispatched (the device was known absent); PARKED was
-    // published and found nobody there, and the platform will deliver it when the device
-    // wakes. Both are spelled out rather than left to the default so this stays a decision
-    // rather than an accident of fall-through.
-    case 'HELD':
-    case 'PARKED':
-      return 'secondary';
-    default:
-      // QUEUED / SENT — still in flight, as is any status this console does not yet know.
-      return 'secondary';
-  }
-}
+// The status→Badge mapping is NOT declared here either, for the same reason. A batch's
+// per-device rows show the identical column, and two hand-written switches are how the
+// two tables would come to paint FAILED differently. See lib/command-status.ts.
 
 // DeviceCommandsPanel lets an operator issue a command to a device and shows the
 // per-device command history with live lifecycle status — this is also the
@@ -368,7 +345,7 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
                 </DataTableCell>
                 <DataTableCell className="font-medium text-foreground">{command.name}</DataTableCell>
                 <DataTableCell>
-                  <Badge variant={statusVariant(command.status)}>{command.status}</Badge>
+                  <Badge variant={commandStatusVariant(command.status)}>{command.status}</Badge>
                 </DataTableCell>
                 <DataTableCell className="max-w-xs truncate text-muted-foreground">
                   {command.error || command.responsePayload || '—'}

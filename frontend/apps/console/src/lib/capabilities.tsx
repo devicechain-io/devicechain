@@ -58,6 +58,10 @@ export type AreaStatus = 'available' | 'absent' | 'unknown';
 export const AREA = {
   aiInferenceAdmin: 'ai-inference/admin',
   outboundConnectors: 'outbound-connectors',
+  // command-delivery is in the `default` and `full` profiles but absent from
+  // `telemetry` and `ingest-only`, so an instance that only ingests genuinely has
+  // no command surface to reach — hence a gate rather than an assumption.
+  commandDelivery: 'command-delivery',
 } as const satisfies Record<string, Area>;
 
 interface CapabilityValue {

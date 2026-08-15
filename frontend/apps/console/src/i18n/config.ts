@@ -27,6 +27,7 @@ import enDeviceProfiles from './locales/en/deviceProfiles.json';
 import enTenants from './locales/en/tenants.json';
 import enTiers from './locales/en/tiers.json';
 import enConnectors from './locales/en/connectors.json';
+import enCommandBatches from './locales/en/commandBatches.json';
 import enBranding from './locales/en/branding.json';
 import enBasemap from './locales/en/basemap.json';
 import enBrowse from './locales/en/browse.json';
@@ -52,6 +53,7 @@ import esDeviceProfiles from './locales/es/deviceProfiles.json';
 import esTenants from './locales/es/tenants.json';
 import esTiers from './locales/es/tiers.json';
 import esConnectors from './locales/es/connectors.json';
+import esCommandBatches from './locales/es/commandBatches.json';
 import esBranding from './locales/es/branding.json';
 import esBasemap from './locales/es/basemap.json';
 import esBrowse from './locales/es/browse.json';
@@ -122,6 +124,7 @@ export const NAMESPACES = [
   'tenants',
   'tiers',
   'connectors',
+  'commandBatches',
   'branding',
   'basemap',
   'browse',
@@ -157,6 +160,7 @@ const resources = {
     tenants: enTenants,
     tiers: enTiers,
     connectors: enConnectors,
+    commandBatches: enCommandBatches,
     branding: enBranding,
     basemap: enBasemap,
     browse: enBrowse,
@@ -183,6 +187,7 @@ const resources = {
     tenants: esTenants,
     tiers: esTiers,
     connectors: esConnectors,
+    commandBatches: esCommandBatches,
     branding: esBranding,
     basemap: esBasemap,
     browse: esBrowse,

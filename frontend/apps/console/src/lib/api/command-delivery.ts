@@ -9,6 +9,8 @@ import type {
   CommandsQuery,
   CommandCreateRequest,
   CreateCommandMutation,
+  CommandBatchesQuery,
+  CommandBatchesByTokenQuery,
 } from '@/gql/command-delivery/graphql';
 
 // Public types are derived from the generated operation results so they always
@@ -21,6 +23,15 @@ export type { CommandCreateRequest };
 // populated (see createCommand below).
 export type CreateCommandResult = CreateCommandMutation['createCommand'];
 export type CommandEnqueueRejection = NonNullable<CreateCommandResult['rejection']>;
+
+// A batch as the LIST sees it (no payload, no refusal detail) and as the DETAIL page
+// sees it (everything). They are separate selections on purpose: a list of batches
+// fired at large groups would otherwise carry a refusal sample per row.
+export type CommandBatchSummary = CommandBatchesQuery['commandBatches']['results'][number];
+export type CommandBatchSearchResults = CommandBatchesQuery['commandBatches'];
+export type CommandBatch = CommandBatchesByTokenQuery['commandBatchesByToken'][number];
+export type CommandBatchDeviceRefusal = CommandBatch['refusals'][number];
+export type CommandBatchRefusalCount = CommandBatch['refusalCounts'][number];
 
 const COMMANDS = graphql(`
   query Commands($criteria: CommandSearchCriteria!) {
@@ -64,6 +75,70 @@ const CREATE_COMMAND = graphql(`
   }
 `);
 
+// The batch LIST selection. It carries the stored creation-time facts (`resolved`,
+// `accepted`) and the cancellation stamp, which is everything the list column set
+// needs — and deliberately not `payload`, `refusals` or `refusalCounts`, which are
+// per-batch detail nobody reads from a table of twenty.
+const COMMAND_BATCHES = graphql(`
+  query CommandBatches($criteria: CommandBatchSearchCriteria!) {
+    commandBatches(criteria: $criteria) {
+      results {
+        id
+        token
+        createdAt
+        name
+        targetKind
+        groupToken
+        groupVersion
+        allowPartial
+        resolved
+        accepted
+        cancelledAt
+        cancelledCount
+      }
+      pagination {
+        pageStart
+        pageEnd
+        totalRecords
+      }
+    }
+  }
+`);
+
+// The batch DETAIL selection. It adds the payload and BOTH refusal shapes, which
+// answer different questions and are not interchangeable: `refusalCounts` is the
+// complete per-code total, while `refusals` is a bounded sample (capped per code) of
+// the individual devices. Rendering the sample as though it were the whole set is
+// the misreading this pair exists to prevent — see the Refusals panel.
+const COMMAND_BATCHES_BY_TOKEN = graphql(`
+  query CommandBatchesByToken($tokens: [String!]!) {
+    commandBatchesByToken(tokens: $tokens) {
+      id
+      token
+      createdAt
+      name
+      payload
+      targetKind
+      groupToken
+      groupVersion
+      allowPartial
+      resolved
+      accepted
+      refusals {
+        deviceToken
+        code
+        reason
+      }
+      refusalCounts {
+        code
+        count
+      }
+      cancelledAt
+      cancelledCount
+    }
+  }
+`);
+
 const CANCEL_COMMAND = graphql(`
   mutation CancelCommand($token: String!) {
     cancelCommand(token: $token) {
@@ -90,6 +165,65 @@ export async function listCommands(opts: {
       },
     })
   ).commands;
+}
+
+// List the per-device commands ONE BATCH created, paged. Requires command:read.
+//
+// 🔴 THE ORDER IS THE BATCH'S OWN, not "newest first". Every row of a batch shares one
+// creation instant, so the newest-first sort ties across the whole batch and the
+// tiebreak — a token minted from each device's position — carries the ADMITTED order,
+// which is the order the caller named the devices in. Page 1 is therefore the head of
+// the batch and must not be re-sorted client-side.
+//
+// This is also the only way to ask a present-tense question about a fleet write. The
+// batch record's `resolved`/`accepted` are stored facts about the moment it fired; "how
+// many have actually gone out?" is answerable only from these rows.
+export async function listBatchCommands(opts: {
+  batchToken: string;
+  pageNumber: number;
+  pageSize: number;
+  status?: string;
+}): Promise<CommandSearchResults> {
+  return (
+    await gql('command-delivery', COMMANDS, {
+      criteria: {
+        pageNumber: opts.pageNumber,
+        pageSize: opts.pageSize,
+        batchToken: opts.batchToken,
+        status: opts.status,
+      },
+    })
+  ).commands;
+}
+
+// List command batches, newest first (server default), paged. Requires command:read.
+export async function listCommandBatches(opts: {
+  pageNumber: number;
+  pageSize: number;
+  name?: string;
+  groupToken?: string;
+  targetKind?: string;
+}): Promise<CommandBatchSearchResults> {
+  return (
+    await gql('command-delivery', COMMAND_BATCHES, {
+      criteria: {
+        pageNumber: opts.pageNumber,
+        pageSize: opts.pageSize,
+        name: opts.name,
+        groupToken: opts.groupToken,
+        targetKind: opts.targetKind,
+      },
+    })
+  ).commandBatches;
+}
+
+// Read one batch by token. The query takes a LIST and answers with the batches it
+// found, so an unknown token is an empty array rather than an error — hence the
+// `?? null`, which the detail page renders as "no such batch".
+export async function getCommandBatch(token: string): Promise<CommandBatch | null> {
+  const found = (await gql('command-delivery', COMMAND_BATCHES_BY_TOKEN, { tokens: [token] }))
+    .commandBatchesByToken;
+  return found[0] ?? null;
 }
 
 // Issue a command to a device. The caller supplies a fresh unique token (an
