@@ -528,8 +528,9 @@ func (d *Dispatcher) parse(msg messaging.Message) (work, bool) {
 // dispatch handles one routed command on a worker goroutine. It looks up the device's live conn,
 // and — connected-only (ADR-075 L4a) — dispatches to a live device or ack-drops otherwise:
 //   - NotServed: another protocol's device (or none) — ack-drop, no response.
-//   - Offline: a served device with no live conn — ack-drop, no response; the command rides
-//     command-delivery's TTL to TIMEOUT (L4b adds durable hold-and-drain).
+//   - Offline: a served device with no live conn — PARK the command back in command-delivery so
+//     the drain claims it on the device's next wake. (It used to ack-drop and ride the TTL to
+//     TIMEOUT, which blamed the device for a command that reached nothing.)
 //   - Live: run the CoAP op, publish the outcome, then ACK regardless of the publish result
 //     (seal-fate, S1). If ctx was cancelled mid-op (eviction), do NOT ack — the command redelivers
 //     to the next leader instead of a spurious FAILED from a replica no longer serving.
@@ -556,7 +557,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, w work) {
 		return
 	}
 	// Drain/live dedup (L4b): this command may already have been dispatched by a wake drain that
-	// fetched its still-SENT row moments ago (drain and live share this device's one worker, but a
+	// fetched its PARKED row moments ago (drain and live share this device's one worker, but a
 	// fetch can still overlap a stream delivery). Re-running it would re-actuate the device, so skip
 	// the op and ACK (seal-fate — it was actuated, must not redeliver).
 	if d.dedupe.recentlyDispatched(w.tenant, w.env.DeviceToken, w.env.Token) {
@@ -698,8 +699,15 @@ func (d *Dispatcher) claim(ctx context.Context, tenant string, c DrainCommand) b
 // records metrics and publishes the outcome on command-responses. It is the shared core of the live
 // (dispatch) and wake-drain (drain) paths — the ONLY difference between them is what seals the
 // command's fate afterward (the live path acks its JetStream message; the drain has none — the
-// command's fate rides its command-delivery row: a response terminalizes it, else it stays SENT for
-// the next wake or reaches TIMEOUT). It never acks or redelivers anything itself.
+// command's fate rides its command-delivery row).
+//
+// 🔴 A DRAINED COMMAND THAT NEVER ANSWERS IS NOT RETRIED, and this comment used to claim it was.
+// The drain claims each row into SENT before actuating, and SENT is invisible to the drain, the
+// sweep and the cancel alike — so a response terminalizes the row, and its absence lets the row sit
+// until it reaches TIMEOUT. There is no "stays for the next wake": that was true only while SENT
+// was drainable, which is the arrangement PARKED replaced. For this window the drain path is
+// at-most-once by construction; closing it is the stranded-SENT reconciler's job, not this
+// function's. It never acks or redelivers anything itself.
 func (d *Dispatcher) executeAndReport(ctx context.Context, conn mux.Conn, tenant, name, token string, payload []byte) {
 	opCtx, cancel := context.WithTimeout(ctx, d.opTimeout)
 	res := d.exec.Execute(opCtx, conn, name, payload)
@@ -874,12 +882,12 @@ func labelInc(v *prometheus.CounterVec, op string, n int) {
 }
 
 // dedupe is a small time-bounded set of recently-dispatched (deviceToken, commandToken) keys that
-// suppresses a re-dispatch of the same command by the OTHER path (a wake drain fetching a SENT row
-// the live stream just delivered, or vice versa) — a re-actuation avoided. It is an optimization,
-// NOT a correctness guarantee: seal-fate, the fact that the drain only reads rows still in
-// drainStatuses, and — for a HELD row — the claim taken before dispatch already bound re-fire, so
-// under a pathological burst the set may be cleared, degrading to the
-// platform's documented at-least-once actuation posture rather than growing without bound. Safe for
+// suppresses a re-dispatch of the same command by the OTHER path (a wake drain fetching a PARKED
+// row the live stream just delivered, or vice versa) — a re-actuation avoided. It is an
+// optimization, NOT a correctness guarantee: seal-fate, the fact that the drain only reads rows
+// still in drainStatuses, and the claim now taken before EVERY drained dispatch already bound
+// re-fire, so under a pathological burst the set may be cleared, degrading to the platform's
+// documented at-least-once actuation posture rather than growing without bound. Safe for
 // concurrent use (different devices dispatch on different shard workers).
 type dedupe struct {
 	mu   sync.Mutex
