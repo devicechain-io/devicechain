@@ -20,7 +20,7 @@ Every device carries a **presence source** that says how its online/offline stat
 
 A device stays **inferred** until an asserting transport produces for it, so nothing changes for existing devices unless they start arriving over a transport that asserts presence. Three transports assert presence today:
 
-- **Plain MQTT**, for devices connected to DeviceChain's own broker. No cooperation is needed from the device — it does not have to publish a birth message, set a last will, or announce itself in any way. The broker already knows the moment a connection opens and closes, and DeviceChain reads that directly, so an ordinary MQTT client gets authoritative presence simply by connecting.
+- **Plain MQTT**, for devices connected to DeviceChain's own broker. No cooperation is needed from the device — it does not have to publish a birth message, set a last will, or announce itself in any way. The broker already knows the moment a connection opens and closes, and DeviceChain reads that directly. What has to be equipped for it is the *instance*, not the device: reading those connections needs a NATS system-account credential and an event source pointed at this instance's own broker, and until it has both the tap stays off and MQTT devices stay inferred. `dcctl bootstrap` mints that credential and wires that source, so an instance brought up that way asserts MQTT presence with no further work; a bare `helm install` leaves the credential empty and does not. [Confirming the broker tap is actually running](#confirming-the-tap) below is how you tell which one you have.
 - **[Sparkplug-B](./sparkplug.md)**, whose BIRTH and DEATH messages are exactly these explicit connect/disconnect signals.
 - **[LwM2M](./lwm2m.md)**, whose registration lifecycle — register, periodic update, and deregister (or a lapsed lifetime) — does the same.
 
@@ -44,12 +44,12 @@ Inferred presence is convenient but laggy and ambiguous: "offline" only means "h
 Keeping the two modes as an explicit per-device flag means a device on a connectionless transport keeps its familiar timeout behavior, while a device on a presence-aware transport gets the authoritative signal, and the two never interfere.
 
 :::note Status
-Device presence — both inferred and asserted — is available, with [Sparkplug-B](./sparkplug.md) and [LwM2M](./lwm2m.md) as presence-asserting transports. A **detection rule can fire directly on a connect/disconnect edge**: the [Connectivity condition](./event-processing.md#condition-types) raises an alarm the instant an authoritative disconnect arrives and resolves it on reconnect — no timeout to tune. The engine evaluates it today, but neither console authoring surface offers it yet — the form builder and the automation canvas both omit the condition type, so a connectivity rule is defined by sending the rule directly to the API. **Do not open one in the console's form editor**: it does not recognise the type, so it reads the rule back as a threshold rule and saving replaces the original definition, with no warning. (The canvas refuses it properly, naming the unsupported type.) It complements the timeout-based Absence rule (authoritative death vs. inferred silence), and the two are meant to be paired. An authoritative disconnect also updates the device's live state, so the Connectivity tab shows the device offline the moment the transport reports it.
+Device presence — both inferred and asserted — is available, with three presence-asserting transports: plain MQTT on DeviceChain's own broker (which asserts only once the instance has the system-account credential described above), [Sparkplug-B](./sparkplug.md), and [LwM2M](./lwm2m.md). A **detection rule can fire directly on a connect/disconnect edge**: the [Connectivity condition](./event-processing.md#condition-types) raises an alarm the instant an authoritative disconnect arrives and resolves it on reconnect — no timeout to tune. The engine evaluates it today, but neither console authoring surface offers it yet — the form builder and the automation canvas both omit the condition type, so a connectivity rule is defined by sending the rule directly to the API. **Do not open one in the console's form editor**: it does not recognise the type, so it reads the rule back as a threshold rule and saving replaces the original definition, with no warning. (The canvas refuses it properly, naming the unsupported type.) It complements the timeout-based Absence rule (authoritative death vs. inferred silence), and the two are meant to be paired. An authoritative disconnect also updates the device's live state, so the Connectivity tab shows the device offline the moment the transport reports it.
 :::
 
 ## Running it
 
-Presence is only as good as the signal behind it, and the two asserting transports each run as a
+Presence is only as good as the signal behind it, and the two asserting edge transports each run as a
 single owning replica — which gives presence a few operational properties worth knowing before you
 alarm on it: what a changeover costs, why an asserted device can be stuck online, and how to bound
 that. Those are covered in **[Running the Edge Services](../deployment/edge-services.md)**.
@@ -82,6 +82,21 @@ when the chain is broken. That is the only pair that distinguishes a dead tap fr
 The probe runs on its own schedule, independently of the repair pass described below. That
 separation is what makes the counter trustworthy: an instrument that could only report while the
 thing it watches was healthy would go quiet at exactly the moment it mattered.
+
+### Tuning the tap {#broker-presence-settings}
+
+The tap ships with working defaults and most instances never change them. They live under the
+`event-sources` area's `brokerPresence` configuration.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `enabled` | on when unset | Runs the tap. Set it to `false` to turn broker-asserted MQTT presence off deliberately — on an instance whose broker is shared with something that objects to a system-account subscriber, say. Every MQTT device then falls back to inferred presence. |
+| `reconcileSeconds` | `300` | How often the broker's live connection list is compared against the platform's own, in both directions. **This is not a backstop.** A graceful broker restart announces no disconnects at all, so this pass is the only thing that ever corrects those devices — and an asserted device has no inactivity sweep behind it. Lower it for a faster repair, at the cost of one cluster-wide inventory plus one read per tenant on every pass. |
+| `canarySeconds` | `60` | How often the service opens its own MQTT connection to prove the tap is still live. This is the schedule `presence_canary_missed_total` counts against. |
+| `canaryDeadlineSeconds` | `15` | Bounds one probe. Too tight and it reports failures the tap does not have. |
+| `inventoryGatherSeconds` | `5` | How long a pass collects replies from the broker cluster. Too short and a merely slow node reads as absent, which withholds every disconnect that pass. |
+
+A non-positive value on any of the four intervals falls back to the default above rather than to zero.
 
 ### A repair pass that runs out of time says so {#reconcile-pass-timeout}
 

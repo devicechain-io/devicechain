@@ -129,9 +129,12 @@ despierte a una persona.
 
 **Un dispositivo afirmado que muere sin decirlo puede figurar en línea indefinidamente.** El barrido
 de inactividad omite deliberadamente a los dispositivos afirmados —el sentido mismo de un transporte
-que afirma presencia es que el silencio no es prueba de muerte— y **no hay nada más en ese lado que
-tenga un tiempo de espera, un perro guardián ni un barredor.** Solo una señal nueva del propio
-transporte de ese dispositivo puede limpiarlo.
+que afirma presencia es que el silencio no es prueba de muerte— y en estos dos transportes **no hay
+nada más que tenga un tiempo de espera, un perro guardián ni un barredor.** Solo una señal nueva del
+propio transporte de ese dispositivo puede limpiarlo. Los dispositivos afirmados por el broker propio
+de DeviceChain son la excepción, y la única: allí una pasada de reparación compara periódicamente la
+lista de conexiones vivas del broker con lo que la plataforma cree y corrige la diferencia. Vea
+[Presencia de dispositivo](../concepts/device-presence.md).
 
 Las formas concretas en que ocurre:
 
@@ -151,11 +154,12 @@ Las formas concretas en que ocurre:
   Como la promoción es de un solo sentido, queda varado en su último estado afirmado de forma
   permanente.
 
-**La única palanca que existe es `maxLifetimeSeconds`**, y solo se aplica a LwM2M. El tiempo de vida
+**La única palanca en estos dos transportes es `maxLifetimeSeconds`**, y solo se aplica a LwM2M. El tiempo de vida
 de cada registro se recorta hasta ese valor como máximo, de modo que acota directamente cuánto tiempo
 puede figurar en línea un dispositivo LwM2M muerto. Ponerlo en, digamos, 3600 lo limita a una hora. La
 restricción es la de arriba: debe quedar por encima del mayor tiempo de vida que pida realmente su
-flota.
+flota. La vía MQTT tiene su propia cota: el intervalo de la pasada de reparación,
+`brokerPresence.reconcileSeconds`, cinco minutos de forma predeterminada.
 
 En la vía de Sparkplug no hay palanca equivalente. Si que un dispositivo Sparkplug figure en línea
 tiene peso operativo para usted, empareje la señal de conectividad con una
