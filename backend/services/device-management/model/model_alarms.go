@@ -3,7 +3,10 @@
 
 package model
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // AlarmSeverity is the severity of an alarm (ADR-041). Ordered so the integrator can
 // escalate an active alarm in place when a higher-severity rule fires, rather than
@@ -27,8 +30,8 @@ const (
 // declaration of the vocabulary: Rank is its index and Valid is membership in it, so a
 // tier added to the const block above but not to this slice has no rank and is not valid
 // — it cannot be half-added. Anything needing to range over the severities reads this
-// rather than re-listing them and drifting. (Unexported: nothing outside the package
-// needs it yet. Export a copy-returning accessor when something does — not before.)
+// rather than re-listing them and drifting. (Unexported; AlarmSeverities is the
+// copy-returning accessor for callers outside the package.)
 var alarmSeveritiesByRank = []AlarmSeverity{
 	AlarmSeverityCritical,
 	AlarmSeverityMajor,
@@ -52,6 +55,25 @@ func (s AlarmSeverity) Rank() int {
 		}
 	}
 	return -1
+}
+
+// AlarmSeverities returns the tier vocabulary, most severe first.
+//
+// It exists so that code which must reproduce the vocabulary can be CHECKED against this
+// declaration rather than trusted. notification-management validates a policy rule's
+// severity against these tiers, and deliberately keeps its own copy of them — importing
+// this package at run time would hand a DR tool downstream of it a CEL engine and an MQTT
+// client. Its copy is safe only because a test there asserts equality with what this
+// returns, so a tier added, retired or reordered here fails that test on the same PR.
+//
+// Which means: this accessor's callers are allowed to be tests. That is the point of it.
+//
+// It returns a COPY. alarmSeveritiesByRank is the single declaration Rank and Valid are
+// computed from, so a caller that sorted or truncated the slice it was handed would silently
+// redefine both — and the corruption would show up as a wrong escalation order in an
+// unrelated service. One small allocation on an error path is the right price for that.
+func AlarmSeverities() []AlarmSeverity {
+	return slices.Clone(alarmSeveritiesByRank)
 }
 
 // String returns the underlying string value.

@@ -216,7 +216,7 @@ func TestPolicyRulesLifecycle(t *testing.T) {
 		Token:   "ops-policy",
 		Enabled: true,
 		Rules: []*NotificationRuleCreateRequest{
-			{Severity: "critical", ChannelToken: "smtp-crit", Recipients: strPtr(`["oncall@example.com"]`)},
+			{Severity: "CRITICAL", ChannelToken: "smtp-crit", Recipients: strPtr(`["oncall@example.com"]`)},
 			{Severity: SeverityAny, ChannelToken: "smtp-warn"},
 		},
 	})
@@ -237,7 +237,7 @@ func TestPolicyRulesLifecycle(t *testing.T) {
 	// Unknown channel token fails the whole write (no partial policy).
 	if _, err := api.CreateNotificationPolicy(ctx, &NotificationPolicyCreateRequest{
 		Token: "bad-policy", Enabled: true,
-		Rules: []*NotificationRuleCreateRequest{{Severity: "critical", ChannelToken: "does-not-exist"}},
+		Rules: []*NotificationRuleCreateRequest{{Severity: "CRITICAL", ChannelToken: "does-not-exist"}},
 	}); err == nil {
 		t.Fatal("expected unknown channel token to fail policy create")
 	}
@@ -249,7 +249,7 @@ func TestPolicyRulesLifecycle(t *testing.T) {
 	updated, err := api.UpdateNotificationPolicy(ctx, "ops-policy", &NotificationPolicyCreateRequest{
 		Token:   "ops-policy",
 		Enabled: true,
-		Rules:   []*NotificationRuleCreateRequest{{Severity: "critical", ChannelToken: "smtp-crit"}},
+		Rules:   []*NotificationRuleCreateRequest{{Severity: "CRITICAL", ChannelToken: "smtp-crit"}},
 	})
 	if err != nil {
 		t.Fatalf("update policy: %v", err)
@@ -280,7 +280,7 @@ func TestDeleteChannelInUseGuard(t *testing.T) {
 	}
 	if _, err := api.CreateNotificationPolicy(ctx, &NotificationPolicyCreateRequest{
 		Token: "ops-policy", Enabled: true,
-		Rules: []*NotificationRuleCreateRequest{{Severity: "critical", ChannelToken: "smtp-crit"}},
+		Rules: []*NotificationRuleCreateRequest{{Severity: "CRITICAL", ChannelToken: "smtp-crit"}},
 	}); err != nil {
 		t.Fatalf("create policy: %v", err)
 	}

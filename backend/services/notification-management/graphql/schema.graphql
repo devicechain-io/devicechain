@@ -123,6 +123,10 @@ type NotificationPolicy {
 # A rule inside a policy create/update. The channel is named by token and resolved
 # on write; an unknown channel token fails the whole policy write.
 input NotificationRuleCreateRequest {
+    # One of CRITICAL, MAJOR, MINOR, WARNING, INDETERMINATE, or "*" for any. Checked
+    # on write: this is the ALARM's tier, which is uppercase, and it is matched
+    # exactly — so a lowercase severity (what a detection rule is authored with)
+    # would produce a rule that writes, reads back unchanged, and never delivers.
     severity: String!
     channelToken: String!
     recipients: String

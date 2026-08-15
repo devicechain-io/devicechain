@@ -6,12 +6,14 @@ package main
 import (
 	"context"
 	crand "crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
 	"strings"
 	"time"
 
+	emodel "github.com/devicechain-io/dc-event-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
@@ -107,12 +109,17 @@ func runSeedEvents(ctx context.Context, argv []string) error {
 
 	// Refuse a second seed onto the same device.
 	//
-	// measurement_events carries no unique constraint (a hypertable's payload
-	// tables relate to the parent by natural key, not by a declared one), so a
-	// re-run does not conflict — it INSERTS AGAIN. The receipt would then record
-	// 40 rows where the first 20 came from a run whose disaster never happened,
-	// and every count downstream would still agree with itself. Found by re-running
-	// after a mid-seed failure, which is exactly how an operator meets it.
+	// This guard predates payload_id, when measurement_events carried no unique
+	// constraint at all and a re-run simply INSERTED AGAIN — the receipt would
+	// record 40 rows where the first 20 came from a run whose disaster never
+	// happened, and every count downstream would still agree with itself. Found by
+	// re-running after a mid-seed failure, which is exactly how an operator meets it.
+	//
+	// The idempotency index now makes a re-run converge rather than double, so this
+	// is no longer the only thing standing between the operator and a wrong receipt.
+	// It stays because converging silently is still the wrong ANSWER here: the drill
+	// must not quietly adopt rows it did not write in this run, and an explicit
+	// refusal (or --reset) is what makes the operator say which they meant.
 	var existing int
 	if err := db.WithContext(ctx).Raw(`
 		SELECT count(*) FROM "`+areaEvent+`".measurement_events
@@ -339,9 +346,32 @@ restore. Add it to eventHypertables`, total, areaEvent, len(eventHypertables), s
 	return nil
 }
 
-// insertMeasurement writes one measurement the way the persistence pipeline does
-// — a parent row in `events` and a payload row in `measurement_events`, keyed by
-// the natural key they share.
+// The two statements are named constants rather than literals inline below so that a
+// test can assert their column lists against the live models without parsing this file.
+// Hand-written SQL is exactly the kind the compiler cannot check, so the check has to
+// come from somewhere — see seed_events_test.go.
+const (
+	insertParentEventSQL = `
+		INSERT INTO "` + areaEvent + `".events
+			(tenant_id, event_id, device_token, event_type, occurred_time, source, processed_time)
+		VALUES (?, ?, ?, ?, ?, 'drdrill', now())
+		ON CONFLICT DO NOTHING`
+
+	// DO NOTHING here for the same reason the parent has it, and it is no longer
+	// merely defensive: payload_id backs a unique index
+	// (tenant_id, payload_id, occurred_time), so an interrupted seed that is re-run
+	// would now converge rather than duplicate. The `existing > 0` guard upstream
+	// refuses that case first; this is what makes the statement itself honest about it.
+	insertMeasurementSQL = `
+		INSERT INTO "` + areaEvent + `".measurement_events
+			(tenant_id, event_id, payload_id, device_token, event_type, occurred_time, name, value)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT DO NOTHING`
+)
+
+// insertMeasurement writes one measurement the way the persistence pipeline does — a
+// parent row in `events` and a payload row in `measurement_events`, linked by the
+// derived event_id they share.
 //
 // Written by SQL rather than pushed through HTTP ingest, and that is a deliberate
 // difference from the secret half. The secret half must go through the real API
@@ -356,23 +386,69 @@ restore. Add it to eventHypertables`, total, areaEvent, len(eventHypertables), s
 // device, a credential, a second port-forward and an async broker hop between the
 // write and the assertion — five ways for a RESTORE drill to fail for reasons
 // that have nothing to do with a restore.
+//
+// 🔴 THE IDENTITIES ARE DERIVED, NOT INVENTED. `events.event_id` and
+// `measurement_events.(event_id, payload_id)` are NOT NULL with no default, so omitting
+// them is not a row missing an optional column — both INSERTs fail outright with
+// SQLSTATE 23502, and `ON CONFLICT DO NOTHING` cannot rescue either, because the
+// not-null check precedes conflict arbitration. That is what broke this seeder, and
+// with it the whole drill. They are computed with the platform's own
+// DeriveEventId/DerivePayloadId rather than with anything local: a second
+// implementation of an identity is how two rows that should collapse stop collapsing.
+//
+// It is also why the parent's canonical payload is the measurement entry itself. The
+// seeder writes one measurement per event, so the message's payload and its one entry
+// are the same bytes — the multi-entry case a real message may carry does not arise
+// here, and pretending it does would mean inventing a shape to hash.
 func insertMeasurement(ctx context.Context, db *gorm.DB, tenant, device, name string, at time.Time, value float64) error {
-	if err := db.WithContext(ctx).Exec(`
-		INSERT INTO "`+areaEvent+`".events
-			(tenant_id, device_token, event_type, occurred_time, source, processed_time)
-		VALUES (?, ?, ?, ?, 'drdrill', now())
-		ON CONFLICT DO NOTHING`,
-		tenant, device, int64(esmodel.Measurement), at).Error; err != nil {
+	eventId, payloadId, err := measurementIdentity(tenant, device, name, at, value)
+	if err != nil {
+		return fmt.Errorf("deriving the identity for the measurement at %s: %w", at.Format(time.RFC3339), err)
+	}
+	if err := db.WithContext(ctx).Exec(insertParentEventSQL,
+		tenant, eventId, device, int64(esmodel.Measurement), at).Error; err != nil {
 		return fmt.Errorf("inserting the parent event at %s: %w", at.Format(time.RFC3339), err)
 	}
-	if err := db.WithContext(ctx).Exec(`
-		INSERT INTO "`+areaEvent+`".measurement_events
-			(tenant_id, device_token, event_type, occurred_time, name, value)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		tenant, device, int64(esmodel.Measurement), at, name, value).Error; err != nil {
+	if err := db.WithContext(ctx).Exec(insertMeasurementSQL,
+		tenant, eventId, payloadId, device, int64(esmodel.Measurement), at, name, value).Error; err != nil {
 		return fmt.Errorf("inserting the measurement at %s: %w", at.Format(time.RFC3339), err)
 	}
 	return nil
+}
+
+// measurementIdentity computes the two content-derived keys one seeded measurement
+// needs, using event-management's own derivation functions.
+//
+// 🔴 THE ENTRY BYTES ARE THIS TOOL'S, NOT THE SERVICE'S, and that is deliberate — do
+// not "fix" it by copying the shape event-management marshals. The service hashes an
+// anonymous struct declared inline in CreateMeasurementEvents, which this package
+// cannot name; reproducing its fields here would create a coupling that nothing
+// enforces and that would drift the first time that struct gains a field, while a
+// comment claiming the two agree quietly became false.
+//
+// So these ids are NOT byte-equal to what an ingested reading would produce, and
+// nothing requires them to be: the drill's assertions count rows and sum values, and
+// never compare an id against a pipeline-produced one. What borrowing the real
+// DeriveEventId/DerivePayloadId does buy is the two properties the SCHEMA demands of
+// whatever writes these columns — a value that is STABLE across a re-run of the same
+// seed, and DISTINCT for every row within it — computed by the same length-prefixed
+// construction the platform uses rather than by a second hand-rolled digest.
+func measurementIdentity(tenant, device, name string, at time.Time, value float64) ([]byte, []byte, error) {
+	event := &emodel.Event{
+		DeviceToken:  device,
+		EventType:    esmodel.Measurement,
+		OccurredTime: at,
+	}
+	entry, err := json.Marshal(struct {
+		Name              string    `json:"name"`
+		Value             float64   `json:"value"`
+		EntryOccurredTime time.Time `json:"entryOccurredTime"`
+	}{Name: name, Value: value, EntryOccurredTime: at})
+	if err != nil {
+		return nil, nil, err
+	}
+	eventId := emodel.DeriveEventId(tenant, event, entry)
+	return eventId, emodel.DerivePayloadId(eventId, entry), nil
 }
 
 // compressOldChunks compresses exactly the measurement_events chunks the
