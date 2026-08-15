@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -177,7 +178,7 @@ func TestUpdateDeviceType_ReprofileFansOutRoster(t *testing.T) {
 	}
 	cap.events = nil
 
-	if _, err := api.UpdateDeviceType(ctx, "sensor", &DeviceTypeCreateRequest{Token: "sensor", ProfileToken: strp("profile-b")}); err != nil {
+	if _, err := api.UpdateDeviceType(ctx, "sensor", &DeviceTypeUpdateRequest{ProfileToken: dcgraphql.OptionalStringOf("profile-b")}); err != nil {
 		t.Fatalf("reprofile: %v", err)
 	}
 	assert.Len(t, cap.events, 2, "the re-profile fans out to both devices")
@@ -201,7 +202,7 @@ func TestUpdateDeviceType_NoProfileChangeNoFanout(t *testing.T) {
 	}
 	cap.events = nil
 
-	_, err := api.UpdateDeviceType(ctx, "sensor", &DeviceTypeCreateRequest{Token: "sensor", ProfileToken: strp("profile-a"), Name: strp("renamed")})
+	_, err := api.UpdateDeviceType(ctx, "sensor", &DeviceTypeUpdateRequest{ProfileToken: dcgraphql.OptionalStringOf("profile-a"), Name: dcgraphql.OptionalStringOf("renamed")})
 	assert.NoError(t, err)
 	assert.Empty(t, cap.events, "an unchanged profile must not fan out")
 }

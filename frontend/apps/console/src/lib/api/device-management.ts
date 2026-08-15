@@ -8,6 +8,7 @@ import type {
   DevicesQuery,
   DeviceTypesQuery,
   DeviceTypeCreateRequest,
+  DeviceTypeUpdateRequest,
   DeviceCreateRequest,
   DeviceBulkCreateRequest,
   EntityGroupsQuery,
@@ -69,6 +70,7 @@ export type DetectionRule = DetectionRulesQuery['detectionRules']['results'][num
 // without reaching into the generated module directly.
 export type {
   DeviceTypeCreateRequest,
+  DeviceTypeUpdateRequest,
   DeviceCreateRequest,
   DeviceBulkCreateRequest,
   EntityGroupCreateRequest,
@@ -373,7 +375,7 @@ export async function createDeviceType(request: DeviceTypeCreateRequest): Promis
 }
 
 const UPDATE_DEVICE_TYPE = graphql(`
-  mutation UpdateDeviceType($token: String!, $request: DeviceTypeCreateRequest) {
+  mutation UpdateDeviceType($token: String!, $request: DeviceTypeUpdateRequest!) {
     updateDeviceType(token: $token, request: $request) {
       id
       token
@@ -397,44 +399,17 @@ const UPDATE_DEVICE_TYPE = graphql(`
   }
 `);
 
+// updateDeviceType is a PARTIAL update: pass only the fields being changed. An
+// omitted field is left alone, an explicit null clears it. Callers must NOT carry
+// forward the fields they do not edit — doing so re-creates the lost-update problem
+// the carry-forward existed to work around, because two operators editing different
+// tabs would each write the other's fields back from their own stale snapshot.
 export async function updateDeviceType(
   token: string,
-  request: Required<DeviceTypeCreateRequest>,
+  request: DeviceTypeUpdateRequest,
 ): Promise<DeviceType> {
   const data = await gql('device-management', UPDATE_DEVICE_TYPE, { token, request });
   return data.updateDeviceType;
-}
-
-// updateDeviceType is a full replace, so any field omitted from the request is
-// nulled. A partial editor (the basic form, the appearance form, the profile
-// control) therefore has to carry forward every field it does not itself edit;
-// this returns that carry-forward base so the three editors share one field list
-// instead of each maintaining a copy that can drift (the ADR-045 preservation
-// trap). Callers spread it and override only what they change.
-//
-// The `Required<…>` return type makes a future field added to DeviceTypeCreateRequest a
-// compile error here until it is carried forward too — the whole point of a single
-// source of truth. Every request field must therefore be listed (the DeviceType
-// selection sets carry them all so this can), so `profileToken` maps from the
-// nested `profile` object.
-export function deviceTypePreserved(dt: DeviceType): Required<DeviceTypeCreateRequest> {
-  // Values use `?? null` (not undefined): the generated input fields are
-  // `string | null`, and for a full replace an explicit null and an omitted field
-  // both land as a nil *string server-side.
-  return {
-    token: dt.token,
-    name: dt.name ?? null,
-    description: dt.description ?? null,
-    imageUrl: dt.imageUrl ?? null,
-    icon: dt.icon ?? null,
-    backgroundColor: dt.backgroundColor ?? null,
-    foregroundColor: dt.foregroundColor ?? null,
-    borderColor: dt.borderColor ?? null,
-    profileToken: dt.profile?.token ?? null,
-    manufacturer: dt.manufacturer ?? null,
-    model: dt.model ?? null,
-    metadata: dt.metadata ?? null,
-  };
 }
 
 const DELETE_DEVICE_TYPE = graphql(`
