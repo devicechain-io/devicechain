@@ -19,6 +19,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { gqlMock, toastMock } = vi.hoisted(() => ({ gqlMock: vi.fn(), toastMock: vi.fn() }));
 
+// The page carries a cancel action now, which reads the caller's authorities. These tests
+// are about what the RECORD says, so the claims are a fixture — the gate itself is
+// exercised in CancelBatchAction.test.tsx.
+vi.mock('@/auth/AuthProvider', () => ({
+  useAuth: () => ({ claims: { authorities: ['command:read', 'command:write'] } }),
+}));
+
 vi.mock('@devicechain/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@devicechain/client')>();
   return { ...actual, gql: (...args: unknown[]) => gqlMock(...args) };
@@ -28,6 +35,7 @@ vi.mock('@devicechain/client', async (importOriginal) => {
 // keeps the page free of a provider it does not otherwise need.
 vi.mock('@/components/ui/toast', () => ({ useToast: () => ({ toast: toastMock }) }));
 
+import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 import CommandBatchDetailPage from './CommandBatchDetailPage';
 
 afterEach(cleanup);
@@ -101,19 +109,31 @@ function respondWith(
 
 function renderPage(token = 'batch-1') {
   render(
-    <MemoryRouter initialEntries={[`/command-batches/${token}`]}>
-      <Routes>
-        <Route path="/command-batches/:token" element={<CommandBatchDetailPage />} />
-      </Routes>
-    </MemoryRouter>,
+    // The cancel action confirms before it writes, and useConfirm requires the provider.
+    <ConfirmProvider>
+      <MemoryRouter initialEntries={[`/command-batches/${token}`]}>
+        <Routes>
+          <Route path="/command-batches/:token" element={<CommandBatchDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    </ConfirmProvider>,
   );
 }
 
-/** The variables of the most recent `commands` query. */
+/** The variables of the most recent `commands` query that fetched the ROWS TABLE. */
 function lastCommandsCriteria(): Record<string, unknown> {
+  // 🔴 The `statuses` calls are excluded, and that is not tidiness. The cancel action reads
+  // a still-held COUNT with the same document, narrowed by `statuses` — so "the last
+  // Commands call" is no longer the table's, and a naive tail would assert the criteria of
+  // a query these tests are not about.
+  //
   // Indexed rather than .at(-1): the console's tsconfig lib predates ES2022, so `.at`
   // type-checks nowhere here even though vitest transpiles it happily.
-  const commandsCalls = gqlMock.mock.calls.filter((c) => String(c[1]).includes('query Commands'));
+  const commandsCalls = gqlMock.mock.calls.filter(
+    (c) =>
+      String(c[1]).includes('query Commands') &&
+      (c[2] as { criteria: Record<string, unknown> }).criteria.statuses === undefined,
+  );
   const call = commandsCalls[commandsCalls.length - 1];
   if (!call) throw new Error('the batch’s command rows were never queried');
   return (call[2] as { criteria: Record<string, unknown> }).criteria;
