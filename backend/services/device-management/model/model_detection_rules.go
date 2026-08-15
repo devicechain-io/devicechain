@@ -85,6 +85,14 @@ type DetectionRule struct {
 	EntityGroupVersion *int32
 }
 
+// DefaultOrder implements rdb.Sortable with the registry default: newest first, token
+// as the unique tiebreak. Ordering the authoring list has no runtime meaning — the
+// DETECT engine consumes the frozen publish snapshot, not this query — so recency is
+// the ordering an author wants and nothing downstream depends on it.
+func (DetectionRule) DefaultOrder() string {
+	return "detection_rules.created_at DESC, detection_rules.token ASC"
+}
+
 // GroupScoped reports whether the rule carries a valid group scope (ADR-062 S4): a non-empty
 // token AND a version. It is the SINGLE definition of "is this rule scoped", shared by the
 // publish gate's validation flag, the published-rule fact projection, and the scope-ref sync,

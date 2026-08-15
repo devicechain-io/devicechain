@@ -49,6 +49,19 @@ type NotificationState struct {
 	LastEscalatedAt sql.NullTime
 }
 
+// DefaultOrder implements rdb.Sortable: newest first, tiebroken on the row id.
+//
+// The tiebreak is id rather than a token because this table has none — alarm_token
+// names the ALARM this row is about, not this row, and it is a plain column rather than
+// an rdb.TokenReference. It is unique per tenant in practice (one state row per raised
+// alarm), but the total order rests on id, which is unique by construction. The
+// timestamps that actually matter operationally (LastNotifiedAt, LastEscalatedAt) are
+// nullable and would need explicit NULLS placement; created_at is not, so the registry
+// default applies unchanged.
+func (NotificationState) DefaultOrder() string {
+	return "notification_states.created_at DESC, notification_states.id DESC"
+}
+
 // NotificationStateSearchCriteria locates per-alarm notification state by optional
 // filters.
 type NotificationStateSearchCriteria struct {

@@ -41,6 +41,18 @@ type Connector struct {
 	Config datatypes.JSON `gorm:"not null"`
 }
 
+// DefaultOrder implements rdb.Sortable. Newest-first on the draft row's creation time:
+// the connector list is an administration surface where the thing just registered is the
+// thing being looked for, and created_at belongs to the draft, so publishing a new
+// version does not move a connector in the list.
+//
+// created_at is not unique (bootstrap registers several inside one tick), so token ASC
+// supplies the totality. Both columns are NOT NULL (gorm.Model, rdb.TokenReference), so
+// no NULLS clause is required.
+func (Connector) DefaultOrder() string {
+	return "connectors.created_at DESC, connectors.token ASC"
+}
+
 // ConnectorVersion is an immutable, published SNAPSHOT of a connector's definition
 // (ADR-039 versioning). The mutable working copy is the parent Connector row (the
 // "draft"); publishing freezes {type, config} into a new version (N+1). History is

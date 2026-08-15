@@ -65,6 +65,25 @@ type AIProvider struct {
 	Enabled bool `gorm:"not null"`
 }
 
+// DefaultOrder implements rdb.Sortable. Newest-first on created_at, tie-broken by the
+// unique token, so the operator's provider list is stable across pages and shows a
+// freshly registered provider at the top.
+//
+// 🔑 THIS IS THE ONE MODEL IN THE SET WHOSE TABLE IS NOT SCHEMA-PREFIXED. It declares an
+// explicit TableName() (just below) returning "ai_providers", which the NamingStrategy
+// takes verbatim instead of qualifying it with the service's functional-area schema — so
+// the table resolves through the DSN search_path. It is also INSTANCE-scoped rather than
+// tenant-scoped (no rdb.TenantScoped embed), so no tenant predicate narrows the read.
+// Neither fact changes the clause: the bare table name is the correct qualifier whether
+// the table is schema-qualified or not, because Postgres exposes the unqualified name as
+// the implicit alias of a schema-qualified table.
+//
+// Both columns are NOT NULL (created_at from gorm.Model, token from rdb.TokenReference),
+// so no NULLS placement is needed.
+func (AIProvider) DefaultOrder() string {
+	return "ai_providers.created_at DESC, ai_providers.token ASC"
+}
+
 func (AIProvider) TableName() string { return "ai_providers" }
 
 // AIProviderSecretName is the stable per-provider secret handle, keyed by the

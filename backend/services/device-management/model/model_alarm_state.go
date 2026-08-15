@@ -103,6 +103,22 @@ type Alarm struct {
 	ContributorVersion uint `gorm:"not null;default:0"`
 }
 
+// DefaultOrder implements rdb.Sortable. An alarm does not follow the registry default:
+// created_at records when the ROW was first inserted, but a re-raise flips a CLEARED
+// row back to ACTIVE in place, so the row's age stops tracking the alarm's age the
+// moment it cycles. raised_time is the column an operator means by "newest".
+//
+// The clause used to live in the AlarmSearch filters closure, which is why it reads
+// familiar; it belongs here so one place per model says what the order is. Its reason
+// is unchanged: the heap order shifts under every in-place UPDATE (ack, escalation, a
+// last-value write on each contributing edge), so an unordered read would reshuffle
+// rows and move page boundaries under a console that reconciles by re-querying.
+// raised_time is not unique — a burst of contributors can share an instant — so the
+// monotonic id is the total tiebreak.
+func (Alarm) DefaultOrder() string {
+	return "alarms.raised_time DESC, alarms.id DESC"
+}
+
 // Search criteria for locating alarms. All facets are optional and AND together;
 // Originator restricts to a single entity by its (type, token).
 type AlarmSearchCriteria struct {

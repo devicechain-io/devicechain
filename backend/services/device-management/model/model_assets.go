@@ -33,6 +33,12 @@ type AssetType struct {
 	Assets []Asset
 }
 
+// DefaultOrder implements rdb.Sortable with the registry default: newest first, token
+// as the unique tiebreak (created_at alone is not total under a bulk seed).
+func (AssetType) DefaultOrder() string {
+	return "asset_types.created_at DESC, asset_types.token ASC"
+}
+
 // Search criteria for locating asset types.
 type AssetTypeSearchCriteria struct {
 	rdb.Pagination
@@ -63,6 +69,13 @@ type Asset struct {
 
 	AssetTypeId uint
 	AssetType   *AssetType
+}
+
+// DefaultOrder implements rdb.Sortable with the registry default: newest first, token
+// as the unique tiebreak. Assets are also paged as a group member family, where the
+// closure's own order leads and this one only tiebreaks.
+func (Asset) DefaultOrder() string {
+	return "assets.created_at DESC, assets.token ASC"
 }
 
 // Search criteria for locating assets.

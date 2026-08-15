@@ -39,6 +39,16 @@ type NotificationChannel struct {
 	Enabled     bool
 }
 
+// DefaultOrder implements rdb.Sortable: the registry default — newest first, tiebroken
+// on the entity's per-tenant token. created_at alone is not total (a bootstrap or an
+// import writes several channels inside one clock tick, and rows that tie are free to
+// reshuffle between pages), and token is unique per tenant, so it closes the order.
+// Ascending on the tiebreak keeps a tie group's internal order stable and readable
+// rather than merely deterministic.
+func (NotificationChannel) DefaultOrder() string {
+	return "notification_channels.created_at DESC, notification_channels.token ASC"
+}
+
 // ChannelSecretName is the stable secret-store handle name for a channel's delivery
 // secret: "channel/{id}/secret". It is keyed by the channel's immutable numeric ID,
 // NOT its token: a channel's token is mutable (an update may rename it), and keying

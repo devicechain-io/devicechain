@@ -38,7 +38,10 @@ type EntityMemberSearchResults struct {
 // and its SQL table name (for the ea.entity_id = <table>.id correlation). The table name is
 // an internal constant, never user input — it is the one identifier the lowering
 // concatenates rather than binds.
-func memberModelAndTable(memberType string) (any, string, bool) {
+// The model is returned as an rdb.Sortable, not an any, because ListOf calls
+// DefaultOrder() on it — so the false branch's nil is now a PANIC rather than a gorm
+// error, and every caller must check the ok bool.
+func memberModelAndTable(memberType string) (rdb.Sortable, string, bool) {
 	switch entity.Type(memberType) {
 	case entity.TypeDevice:
 		return &Device{}, "devices", true
@@ -134,14 +137,26 @@ func (api *Api) ResolveGroupMembers(ctx context.Context, group *EntityGroup,
 func (api *Api) queryDynamicMembers(ctx context.Context, memberType, frag string, args []any,
 	pagination rdb.Pagination) (*EntityMemberSearchResults, error) {
 	pagination.Unbounded = false // never an unbounded scan, even if a caller asks
-	memberModel, _, _ := memberModelAndTable(memberType)
+	// Fail closed on an unrecognized family rather than handing ListOf a nil Sortable,
+	// which would panic on the DefaultOrder() call. Every caller reaching here has
+	// already validated the family, so this is unreachable — the point is that it is now
+	// unreachable BY CONSTRUCTION and not merely by caller discipline.
+	memberModel, _, ok := memberModelAndTable(memberType)
+	if !ok {
+		return nil, fmt.Errorf("unresolvable member family %q", memberType)
+	}
 
 	results := make([]EntityMember, 0)
 	db, pag := api.RDB.ListOf(ctx, memberModel, func(q *gorm.DB) *gorm.DB {
-		return q.Where(frag, args...)
+		// Order by id inside the CLOSURE, not chained after ListOf: gorm merges ORDER BY
+		// by appending, so a clause added here leads and the model's DefaultOrder becomes
+		// the trailing tiebreak. Chained after the call it would instead DOMINATE the
+		// injected default, which is backwards — the per-query intent should refine the
+		// model's order, not replace it.
+		return q.Where(frag, args...).Order("id ASC")
 	}, pagination)
-	// Order by id for a stable page across requests; select only the identity columns.
-	db.Select("id", "token").Order("id").Find(&results)
+	// Select only the identity columns; the order is already established above.
+	db.Select("id", "token").Find(&results)
 	if db.Error != nil {
 		return nil, db.Error
 	}
@@ -181,10 +196,20 @@ func (api *Api) staticGroupMembers(ctx context.Context, group *EntityGroup,
 			// member's family matches the group, so a stray group→area edge on a device
 			// group must not surface here (and target ids are per-table, so an unfiltered
 			// target_id would collide across families).
-			Where("entity_relationships.target_type = ?", group.MemberType)
+			Where("entity_relationships.target_type = ?", group.MemberType).
+			// Ordered inside the CLOSURE so it LEADS and EntityRelationship's
+			// DefaultOrder tiebreaks behind it; chained after ListOf it would dominate
+			// the injected default instead. QUALIFIED because of the JOIN above: this
+			// clause and the injected default land in the same ORDER BY, and the
+			// default's token/created_at ARE ambiguous across the two joined tables —
+			// so qualification is not optional in this statement, and writing the
+			// leading key unqualified next to a qualified tiebreak would only invite
+			// someone to "simplify" the one that cannot be. It is also the form every
+			// predicate above already uses.
+			Order("entity_relationships.target_id ASC")
 	}, pagination)
 	edges := make([]EntityRelationship, 0)
-	db.Select("target_id", "target_token").Order("target_id").Find(&edges)
+	db.Select("target_id", "target_token").Find(&edges)
 	if db.Error != nil {
 		return nil, db.Error
 	}
@@ -221,7 +246,14 @@ func (api *Api) IsGroupMember(ctx context.Context, group *EntityGroup, entityId 
 	if err != nil {
 		return false, err
 	}
-	memberModel, _, _ := memberModelAndTable(group.MemberType)
+	// Fail closed on an unrecognized family. lowerParamsFor above already resolved the
+	// same family (it is where the table name came from), so this cannot fire — but a
+	// nil model reaching gorm's Model() is a silent wrong answer, so check it here
+	// rather than rely on that coupling holding.
+	memberModel, _, ok := memberModelAndTable(group.MemberType)
+	if !ok {
+		return false, fmt.Errorf("unresolvable member family %q", group.MemberType)
+	}
 	var count int64
 	err = api.RDB.DB(ctx).Model(memberModel).
 		Where(table+".id = ?", entityId).

@@ -78,6 +78,14 @@ type DeviceProfile struct {
 	DetectionRules []DetectionRule
 }
 
+// DefaultOrder implements rdb.Sortable with the registry default: newest first, token
+// as the unique tiebreak. Not ordered by ActiveVersion — that names a version of THIS
+// profile, so it is meaningless as a cross-row ordering, and it is nullable until the
+// profile is first published.
+func (DeviceProfile) DefaultOrder() string {
+	return "device_profiles.created_at DESC, device_profiles.token ASC"
+}
+
 // Search criteria for locating device profiles. Pagination-only for now; the
 // category (and type manufacturer/model) facet filters that the indexed columns
 // anticipate land with the authoring UI (ADR-045 slice d), alongside the

@@ -33,6 +33,12 @@ type CustomerType struct {
 	Customers []Customer
 }
 
+// DefaultOrder implements rdb.Sortable with the registry default: newest first, token
+// as the unique tiebreak (created_at alone is not total under a bulk seed).
+func (CustomerType) DefaultOrder() string {
+	return "customer_types.created_at DESC, customer_types.token ASC"
+}
+
 // Search criteria for locating customer types.
 type CustomerTypeSearchCriteria struct {
 	rdb.Pagination
@@ -63,6 +69,13 @@ type Customer struct {
 
 	CustomerTypeId uint
 	CustomerType   *CustomerType
+}
+
+// DefaultOrder implements rdb.Sortable with the registry default: newest first, token
+// as the unique tiebreak. Customers are also paged as a group member family, where the
+// closure's own order leads and this one only tiebreaks.
+func (Customer) DefaultOrder() string {
+	return "customers.created_at DESC, customers.token ASC"
 }
 
 // Search criteria for locating customers.

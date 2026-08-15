@@ -205,6 +205,19 @@ type Command struct {
 	DispatchNonce sql.NullString
 }
 
+// DefaultOrder implements rdb.Sortable. Newest-first is the PRODUCT requirement here,
+// not merely a determinism fix: the command list backs the batch-command console
+// surface, whose dominant use is "I just fired a fleet write — show it to me", and the
+// console does no client-side re-sorting (its data table has no sorted row model), so
+// server order IS display order.
+//
+// created_at is not unique — a batch inserts thousands of rows inside one clock tick —
+// so token ASC carries the totality rule. Both columns are NOT NULL (created_at from
+// gorm.Model, token from rdb.TokenReference), so no NULLS placement is needed.
+func (Command) DefaultOrder() string {
+	return "commands.created_at DESC, commands.token ASC"
+}
+
 // CommandCreateRequest carries the data required to issue a command.
 type CommandCreateRequest struct {
 	Token       string

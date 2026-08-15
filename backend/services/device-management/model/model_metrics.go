@@ -76,6 +76,13 @@ type MetricDefinition struct {
 	Descriptor      sql.NullString  // optional WoT @type / capability tag
 }
 
+// DefaultOrder implements rdb.Sortable with the registry default: newest first, token
+// as the unique tiebreak. A measurement event resolves its definition by MetricKey, not
+// by position in a page, so this clause serves the authoring/list surfaces only.
+func (MetricDefinition) DefaultOrder() string {
+	return "metric_definitions.created_at DESC, metric_definitions.token ASC"
+}
+
 // Data required to create a metric definition.
 type MetricDefinitionCreateRequest struct {
 	Token              string

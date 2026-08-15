@@ -33,6 +33,12 @@ type AreaType struct {
 	Areas []Area
 }
 
+// DefaultOrder implements rdb.Sortable with the registry default: newest first, token
+// as the unique tiebreak (created_at alone is not total under a bulk seed).
+func (AreaType) DefaultOrder() string {
+	return "area_types.created_at DESC, area_types.token ASC"
+}
+
 // Search criteria for locating area types.
 type AreaTypeSearchCriteria struct {
 	rdb.Pagination
@@ -63,6 +69,13 @@ type Area struct {
 
 	AreaTypeId uint
 	AreaType   *AreaType
+}
+
+// DefaultOrder implements rdb.Sortable with the registry default: newest first, token
+// as the unique tiebreak. Areas are also paged as a group member family, where the
+// closure's own order leads and this one only tiebreaks.
+func (Area) DefaultOrder() string {
+	return "areas.created_at DESC, areas.token ASC"
 }
 
 // Search criteria for locating areas.

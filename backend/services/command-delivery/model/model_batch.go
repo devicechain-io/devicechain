@@ -112,6 +112,18 @@ type CommandBatch struct {
 	CancelledCount sql.NullInt32
 }
 
+// DefaultOrder implements rdb.Sortable. Same reasoning as Command: the batch list is the
+// console's "what did I just fire?" surface, and the console does no client-side
+// re-sorting, so newest-first here is the product-visible ordering rather than only a
+// paging fix.
+//
+// created_at alone is not total — two batches fired from a script land in the same clock
+// tick — so token ASC is the tiebreak. Both columns are NOT NULL (gorm.Model and
+// rdb.TokenReference respectively), so NULLS placement does not apply.
+func (CommandBatch) DefaultOrder() string {
+	return "command_batches.created_at DESC, command_batches.token ASC"
+}
+
 // CommandBatchCreateRequest carries the data required to issue a batch.
 //
 // DeviceTokens and GroupToken are alternatives: exactly one must be supplied. Both or

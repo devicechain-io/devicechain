@@ -60,9 +60,15 @@ func BuildInputs(ev *dmmodel.ResolvedEvent, occurred time.Time) []predicate.Inpu
 	if ev.EventType == esmodel.StateChange {
 		return nil
 	}
+	// Collapse to one anchor per type by taking the LOWEST token, not the first one seen. A device
+	// with two relationships of the same type yields two entries here, and the producer's read has
+	// no guaranteed order — so first-wins let the same event resolve to a different anchor between
+	// two runs. Correlation state keys on the anchor, which means a flip strands whatever the old
+	// anchor was holding open. Lowest-token is order-independent, so it also picks the same winner
+	// for messages that were serialized before this code existed; a pinned order upstream could not.
 	anchors := make(map[string]string, len(ev.Anchors))
 	for _, a := range ev.Anchors {
-		if _, seen := anchors[a.AnchorType]; !seen {
+		if cur, seen := anchors[a.AnchorType]; !seen || a.AnchorToken < cur {
 			anchors[a.AnchorType] = a.AnchorToken
 		}
 	}
