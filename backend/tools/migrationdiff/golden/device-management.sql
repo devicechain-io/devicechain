@@ -226,8 +226,12 @@ CREATE INDEX idx_entity_rel_target ON "device-management".entity_relationships U
 CREATE INDEX idx_facet_keys_deleted_at ON "device-management".facet_keys USING btree (deleted_at);
 CREATE INDEX idx_facet_keys_member_type ON "device-management".facet_keys USING btree (member_type);
 CREATE INDEX idx_facet_keys_tenant_id ON "device-management".facet_keys USING btree (tenant_id);
+CREATE INDEX ix_devices_list_order ON "device-management".devices USING btree (tenant_id, created_at DESC, token) WHERE (deleted_at IS NULL);
 CREATE INDEX ix_entity_attributes_facet_lookup ON "device-management".entity_attributes USING btree (tenant_id, entity_type, scope, attr_key, entity_id) WHERE (deleted_at IS NULL);
 CREATE INDEX ix_entity_attributes_facet_value ON "device-management".entity_attributes USING btree (tenant_id, entity_type, scope, attr_key, value) WHERE (deleted_at IS NULL);
+CREATE INDEX ix_entity_attributes_list_order ON "device-management".entity_attributes USING btree (tenant_id, created_at DESC, id DESC) WHERE (deleted_at IS NULL);
+CREATE INDEX ix_entity_relationships_list_order ON "device-management".entity_relationships USING btree (tenant_id, created_at DESC, token) WHERE (deleted_at IS NULL);
+CREATE INDEX ix_geo_fences_list_order ON "device-management".geo_fences USING btree (tenant_id, created_at DESC, token) WHERE (deleted_at IS NULL);
 CREATE SCHEMA "device-management";
 CREATE SEQUENCE "device-management".alarms_id_seq
  START WITH 1

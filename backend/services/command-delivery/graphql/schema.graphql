@@ -368,6 +368,25 @@ type Query {
     commandBatchesByToken(tokens: [String!]!): [CommandBatch!]!
     # List all command batches that match the given criteria.
     commandBatches(criteria: CommandBatchSearchCriteria!): CommandBatchSearchResults!
+    # The head of one device's still-waiting command backlog, for a transport draining it
+    # when the device comes back: HELD and PARKED commands that have not passed their
+    # expiry horizon, OLDEST FIRST.
+    #
+    # Oldest-first is a delivery guarantee, not a display choice. A firmware update is a
+    # sequence whose order is its meaning, and this is where that order survives an
+    # outage — so the caller dispatches the list as given and does not re-sort it.
+    #
+    # `limit` bounds ONE drain, not the backlog: absent, null or <= 0 means 32, and
+    # anything above 1000 is clamped to 1000. A device with more waiting takes the rest on
+    # its next registration.
+    #
+    # Requires `command:claim`, which is system-tier — so this read is reachable only by a
+    # service or identity token, never by a tenant user token, matching markCommandSent and
+    # parkCommand. That is deliberately TIGHTER than the other command reads on this schema
+    # (they take the tenant-tier `command:read`): the answer to this query is the list a
+    # machine is about to actuate hardware from, and its only caller is a transport that
+    # already holds `command:claim` to claim each row it drains.
+    drainableCommands(deviceToken: String!, limit: Int): [Command!]!
 }
 
 type Mutation {

@@ -5,9 +5,6 @@ package downlink
 
 import (
 	"context"
-	"sort"
-	"strconv"
-	"time"
 )
 
 // commandQuerier is the narrow slice of svcclient.Client the drain fetcher needs: one
@@ -28,9 +25,11 @@ const (
 	statusParked = "PARKED"
 )
 
-// drainStatuses is the SET of states a waking device's backlog lives in. It is BOTH the
-// server-side predicate (the criteria this package sends) and the client-side re-check, so
-// the two cannot drift into disagreeing about what is drainable.
+// drainStatuses is the SET of states a waking device's backlog lives in. The server-side
+// predicate now lives in command-delivery's drainableCommands resolver, so this list is this
+// package's INDEPENDENT copy of the same set — kept because the defensive re-check below is
+// what stands between a contract drift and a terminal command re-actuating a device, and
+// asserted against literal wire values in the tests rather than against itself.
 //
 // Both states are here because they are the same backlog reached by two different routes,
 // and both are states in which the PLATFORM STILL HOLDS THE COMMAND:
@@ -61,11 +60,10 @@ const (
 // here too would double-dispatch. A terminal row is done.
 var drainStatuses = []string{statusHeld, statusParked}
 
-// drainable reports whether a fetched row's status is one this package may dispatch. It
-// reads drainStatuses so the client-side defensive re-check and the server-side predicate
-// are literally the same list — a status renamed on one side and not the other cannot leave
-// a row that the query returns but the loop silently discards (a device whose whole backlog
-// vanishes, with no error anywhere).
+// drainable reports whether a fetched row's status is one this package may dispatch. It reads
+// drainStatuses so every place in this package that decides what "drainable" means reads one
+// list — a status renamed here and not there cannot leave a row that the query returns but the
+// loop silently discards (a device whose whole backlog vanishes, with no error anywhere).
 func drainable(status string) bool {
 	for _, s := range drainStatuses {
 		if status == s {
@@ -81,28 +79,34 @@ func drainable(status string) bool {
 // device-edge flood governor (ADR-075 L4b) — a REACT send-command storm (the programmatic
 // flood origin, not operators) cannot slam a constrained radio with an unbounded burst the
 // instant it wakes.
+//
+// It is ALSO the page size now: drainableCommands orders oldest-first in the database, so the
+// N rows it returns ARE the oldest N. There is deliberately no over-fetch, and the two ways a
+// row can be skipped inside the drain loop do NOT create one:
+//
+//   - the per-pod dedupe cache (dispatcher.go) suppresses a row the live path just dispatched
+//     — but such a row is SENT, so it is not in drainStatuses and was never on this page;
+//   - a LOST claim means another actor already moved the row out of the dispatchable set, so
+//     it is likewise no longer drainable.
+//
+// In both cases the skipped row is one that has left the set, not a slot stolen from a row
+// that still needs delivering. What is genuinely left over — a device with a deeper backlog
+// than this cap — drains on its next Register/Update, which was always true.
 const maxDrainPerWake = 32
 
-// maxDrainFetch is the FETCH page size — deliberately larger than the dispatch cap. The
-// commands query has no server-side ORDER BY, so pageSize=N returns an ARBITRARY N rows;
-// sorting a page that is already the wrong N cannot recover the oldest ones (a firmware
-// Write /5/0/1 could be left off a 32-row page while its Execute /5/0/2 is on it → dispatched
-// out of order across wakes). So we fetch a large page (this equals core rdb.MaxPageSize, the
-// server's own clamp — a larger request is clamped to it anyway), sort by id, THEN truncate
-// to maxDrainPerWake, making the selection genuinely oldest-first. A device with more than
-// this many backlogged commands is pathological (bounded by the 7-day TTL horizon); its
-// overflow drains across subsequent wakes.
-const maxDrainFetch = 1000
-
-// drainQuery pulls a device's commands in a given SET of lifecycle states. Field names are
-// pinned to command-delivery's schema; the graphql-go fork rejects an unknown field
-// sent through a variable, so a typo here fails the call loudly rather than silently
-// returning a half-populated row (CLAUDE.md, the forked-dependency note). The query
-// carries NO ordering — the commands resolver has none (only PendingCommands adds
-// Order("id ASC")) — so Pending sorts client-side.
-const drainQuery = `query($criteria: CommandSearchCriteria!) {
-  commands(criteria: $criteria) {
-    results { id token name payload status expiresAt }
+// drainQuery pulls a device's drainable backlog: the commands in drainStatuses (HELD or
+// PARKED) that are not past their expiry horizon, OLDEST FIRST, bounded by `limit`. All three
+// — the status set, the horizon and the ordering — are the SERVER's, evaluated in the
+// database against the server's clock; this package no longer sorts, filters or re-clocks
+// anything it gets back.
+//
+// Field names are pinned to command-delivery's schema; the graphql-go fork rejects an unknown
+// field sent through a variable, so a typo here fails the call loudly rather than silently
+// returning a half-populated row (CLAUDE.md, the forked-dependency note). Note the bare list:
+// drainableCommands is not a paged query, so there is no results/pagination envelope.
+const drainQuery = `query($deviceToken: String!, $limit: Int) {
+  drainableCommands(deviceToken: $deviceToken, limit: $limit) {
+    token name payload status
   }
 }`
 
@@ -130,21 +134,20 @@ type DrainCommand struct {
 	Status  string
 }
 
-// drainRow decodes one row of the commands query. Payload/ExpiresAt are nullable
-// (GraphQL String); Id is the numeric PK stringified (ID!), the enqueue-order proxy.
+// drainRow decodes one row of the drainableCommands query. Payload is nullable (GraphQL
+// String). There is no id and no expiresAt: nothing here sorts or expires any more, and a
+// field selected but unused is a field a reader has to disprove.
 type drainRow struct {
-	Id        string  `json:"id"`
-	Token     string  `json:"token"`
-	Name      string  `json:"name"`
-	Payload   *string `json:"payload"`
-	Status    string  `json:"status"`
-	ExpiresAt *string `json:"expiresAt"`
+	Token   string  `json:"token"`
+	Name    string  `json:"name"`
+	Payload *string `json:"payload"`
+	Status  string  `json:"status"`
 }
 
+// drainResponse decodes the query's BARE list — drainableCommands is not paged, so there is
+// no results/pagination envelope to unwrap.
 type drainResponse struct {
-	Commands struct {
-		Results []drainRow `json:"results"`
-	} `json:"commands"`
+	DrainableCommands []drainRow `json:"drainableCommands"`
 }
 
 // CommandFetcher reads a waking device's backlogged commands — HELD or PARKED, see
@@ -155,72 +158,55 @@ type drainResponse struct {
 // until it is delivered (this) or reaches its TTL horizon. This is the read side of that
 // hold; it builds no second source of truth.
 type CommandFetcher struct {
-	client    commandQuerier
-	baseURL   string
-	fetchSize int // page size requested from command-delivery (large, so the sort sees the oldest)
-	max       int // per-wake dispatch cap (the oldest N after sorting)
+	client  commandQuerier
+	baseURL string
+	max     int // per-wake dispatch cap; sent as the query's `limit` (the server returns the oldest N)
 }
 
 // NewCommandFetcher builds a fetcher over the command-delivery GraphQL client + URL.
 func NewCommandFetcher(client commandQuerier, baseURL string) *CommandFetcher {
-	return &CommandFetcher{client: client, baseURL: baseURL, fetchSize: maxDrainFetch, max: maxDrainPerWake}
+	return &CommandFetcher{client: client, baseURL: baseURL, max: maxDrainPerWake}
 }
 
 // Pending returns a waking device's backlogged commands — those in drainStatuses (HELD or
-// PARKED) — OLDEST FIRST (by numeric id — the commands query has no server-side ordering, and
-// a firmware Write /5/0/1 must not dispatch after its Execute /5/0/2). Already-expired rows
-// are dropped: a command past its horizon will expire within a sweep and must never actuate
-// a device late. The result is capped at the fetch page (maxDrainPerWake); a device with a
-// deeper backlog drains the rest on subsequent wakes as each drained command leaves the
-// drainable set. `now` is injected for testability.
+// PARKED), not past their expiry horizon, OLDEST FIRST, at most maxDrainPerWake of them. Every
+// one of those four properties is the SERVER's: drainableCommands applies the status set, the
+// horizon, the ORDER BY and the limit in the database, and this function hands the rows on in
+// the order it received them.
 //
-// A device with no pending commands is the overwhelmingly common case (one mostly-empty
-// query per Register/Update) and returns an empty slice, not an error.
-func (f *CommandFetcher) Pending(ctx context.Context, tenant, deviceToken string, now time.Time) ([]DrainCommand, error) {
-	// `statuses`, not `status`: the drain wants a SET. 🔴 This and command-delivery's schema
-	// MUST land together — the forked graphql-go rejects an input-object field the schema does
-	// not define when it arrives through a VARIABLE (CLAUDE.md, the forked-dependency note),
-	// which is exactly how this is sent. Against an older command-delivery this call therefore
-	// fails loudly (a counted drain error, retried on the next wake) rather than silently
-	// dropping the filter and draining every device's commands.
-	criteria := map[string]any{
-		"pageNumber":  1,
-		"pageSize":    f.fetchSize,
-		"deviceToken": deviceToken,
-		"statuses":    drainStatuses,
-	}
+// 🔴 In particular there is no `now` argument and no client-side expiry compare any more. The
+// horizon is evaluated against the DATABASE's clock, not this pod's: a skewed pod clock used to
+// be able to drop a still-live command (never delivered, no error anywhere), and the client
+// predicate (`exp <= now`) disagreed with command-delivery's own sweep (`expires_at < now`) at
+// the exact instant of expiry, so the two halves of the platform could classify the same row
+// differently. One clock, one predicate, one answer.
+//
+// A device with more commands than the cap drains the rest on subsequent wakes, as each drained
+// command leaves the drainable set. A device with none pending is the overwhelmingly common case
+// (one mostly-empty query per Register/Update) and returns an empty slice, not an error.
+func (f *CommandFetcher) Pending(ctx context.Context, tenant, deviceToken string) ([]DrainCommand, error) {
+	// 🔴 This and command-delivery's schema MUST land together: drainableCommands is a distinct
+	// query, so against an older command-delivery this call fails loudly (a counted drain error,
+	// retried on the next wake) rather than silently degrading.
+	vars := map[string]any{"deviceToken": deviceToken, "limit": f.max}
 	var resp drainResponse
-	if err := f.client.Query(ctx, f.baseURL, tenant, drainQuery,
-		map[string]any{"criteria": criteria}, &resp); err != nil {
+	if err := f.client.Query(ctx, f.baseURL, tenant, drainQuery, vars, &resp); err != nil {
 		return nil, err
 	}
 
-	rows := resp.Commands.Results
-	// Sort by numeric id ascending — enqueue order. String-compare on queuedTime would
-	// be fragile (timezone/precision); the id is a monotonic PK, exactly what
-	// command-delivery's own PendingCommands orders by. The sort runs over the WHOLE fetched
-	// page (up to maxDrainFetch) so the truncation below selects the genuinely oldest, not an
-	// arbitrary page's oldest.
-	sort.Slice(rows, func(i, j int) bool { return parseID(rows[i].Id) < parseID(rows[j].Id) })
-
+	rows := resp.DrainableCommands
 	out := make([]DrainCommand, 0, min(len(rows), f.max))
 	for _, r := range rows {
 		if len(out) >= f.max {
-			break // per-wake dispatch cap: the oldest f.max; the rest drain on the next wake
+			break // defensive: the server clamps to `limit`, but never dispatch more than the cap
 		}
-		// Defensive: the server already filtered on drainStatuses, but never hand a row
-		// outside that set to dispatch even if the contract ever drifts (a terminal command
-		// must not re-fire). This re-check reads the SAME list the criteria above sent, so
-		// the predicate and the guard cannot disagree about what "drainable" means.
+		// Defensive: the server already filtered on the drainable states, but never hand a row
+		// outside that set to dispatch even if the contract ever drifts (a terminal command must
+		// not re-fire). A status SET is static, so re-checking it costs nothing and cannot go
+		// stale the way a clock comparison can — which is why this guard survives and the expiry
+		// one did not.
 		if !drainable(r.Status) {
 			continue
-		}
-		// Drop an already-expired command: it is about to be TIMEOUT'd by the sweep and
-		// must not actuate the device past its horizon.
-		if r.ExpiresAt != nil {
-			if exp, err := time.Parse(time.RFC3339, *r.ExpiresAt); err == nil && !exp.After(now) {
-				continue
-			}
 		}
 		var payload []byte
 		if r.Payload != nil {
@@ -232,11 +218,4 @@ func (f *CommandFetcher) Pending(ctx context.Context, tenant, deviceToken string
 		out = append(out, DrainCommand{Token: r.Token, Name: r.Name, Payload: payload, Status: r.Status})
 	}
 	return out, nil
-}
-
-// parseID parses the stringified numeric PK; an unparseable id sorts first (0) rather
-// than aborting the whole drain — a single malformed id must not strand a device's queue.
-func parseID(s string) uint64 {
-	v, _ := strconv.ParseUint(s, 10, 64)
-	return v
 }

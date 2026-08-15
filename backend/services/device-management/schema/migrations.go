@@ -26,5 +26,6 @@ var (
 		NewBaselineSchema(),
 		NewProfileLocationDeclarationSchema(),
 		NewGeoFencesSchema(),
+		NewListOrderIndexesSchema(),
 	}
 )

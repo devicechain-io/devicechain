@@ -642,6 +642,48 @@ func terminalStatusStrings() []string {
 	return out
 }
 
+// expiredWhere and liveWhere are the TWO HALVES OF ONE PARTITION over a command's
+// expiry horizon, and they are declared together so that they can only be changed
+// together. For any row at any instant EXACTLY ONE of them matches — that is the
+// property TestExpiryPredicatesPartitionEveryRow asserts, and it is the whole reason
+// they live side by side rather than being written out at each call site.
+//
+// 🔴 THEY WERE TWO DEFINITIONS THAT DISAGREED BY ONE INSTANT. The expiry sweep asked
+// `expires_at < now` while the LwM2M wake drain dropped a row on `expires_at <= now`,
+// so a command sitting exactly on its horizon was in neither set: the drain refused to
+// actuate it because it read as expired, and the sweep refused to expire it because it
+// read as live. The row was invisible to both until the clock moved past it — which is
+// a one-instant window, and therefore the kind of thing that is never reproduced and
+// never explained. Making them complements removes the gap by construction.
+//
+// 🔑 THE BOUNDARY BELONGS TO `live`, NOT TO `expired`: at `expires_at == now` the
+// command is still deliverable. That direction is the safe one — a command actuates one
+// instant early rather than a horizon being enforced one instant late — and it matches
+// the sweep, which is the writer that makes expiry FACT. The drain must not be stricter
+// than the thing that does the expiring, or it declines to deliver rows nothing will
+// ever expire.
+//
+// ExpiresAt is nullable (sql.NullTime) and optional: a caller may supply none, in which
+// case the configured default TTL is stamped at create — but a zero DefaultCommandTTL
+// leaves it NULL, so NULL is a real, reachable state and not just a schema artifact. A
+// NULL horizon means "no horizon": never expired, always live. Both predicates spell
+// that out rather than leaning on SQL's three-valued logic, since `expires_at < ?`
+// against NULL is neither true nor false and would silently drop the row from BOTH
+// sides — the exact hole this pair exists to close.
+//
+// They return (sql, args) rather than taking a *gorm.DB so they compose with the
+// conditional-update builders as easily as with the selects, and so a test can assert on
+// the predicate itself.
+func expiredWhere(now time.Time) (string, []any) {
+	return "expires_at IS NOT NULL AND expires_at < ?", []any{now}
+}
+
+// liveWhere is expiredWhere's exact complement — see there for the boundary rule and the
+// NULL rule, which are the two places this pair is easy to get subtly wrong.
+func liveWhere(now time.Time) (string, []any) {
+	return "(expires_at IS NULL OR expires_at >= ?)", []any{now}
+}
+
 // claimableStatusStrings is the wire form of the states a DISPATCHER may claim a
 // command from: QUEUED (never yet considered), HELD (considered, and deliberately
 // withheld because the device was absent) and PARKED (dispatched once, and the
@@ -733,6 +775,28 @@ func cancellable(status string) bool {
 // again one tick of QUEUED churn, which is what that argument was written for.
 func sweepableStatusStrings() []string {
 	return []string{CommandQueued.String()}
+}
+
+// drainableStatusStrings is the wire form of what a WAKING DEVICE'S BACKLOG lives in:
+// HELD (the presence gate withheld it because the device was absent) and PARKED (a
+// transport published it and found nobody there). Those are the two ways a command ends
+// up waiting on a device to come back, and the wake drain reads exactly their union.
+//
+// 🔴 QUEUED IS ABSENT, AND ITS ABSENCE IS THE DESIGN. A queued command has not yet been
+// through the presence gate, so the sweep still owns it — it will be evaluated on the
+// next tick and dispatched over whichever transport the gate picks. Draining it here
+// would mean the drain and the sweep both handed the same row to a dispatcher, from two
+// different transports, with only the claim to settle it. The drain's job is the rows
+// the sweep has deliberately STOPPED looking at.
+//
+// SENT is absent for the ordinary reason: it is at a device already.
+//
+// Do NOT fold this into claimableStatusStrings just because a drained row is claimed
+// immediately afterwards. That list is QUEUED ∪ HELD ∪ PARKED and answers "what may a
+// dispatcher claim"; this one answers "what is waiting for THIS device to return". The
+// difference IS the QUEUED row above, and merging them would silently add it.
+func drainableStatusStrings() []string {
+	return []string{CommandHeld.String(), CommandParked.String()}
 }
 
 // MarkSent transitions a command QUEUED/HELD/PARKED -> SENT.
@@ -1048,6 +1112,77 @@ func (api *Api) HeldCommands(ctx context.Context, afterId uint, limit int) ([]*C
 	return found, found[len(found)-1].ID, nil
 }
 
+// DefaultDrainLimit is how many backlogged commands one wake drains when the caller
+// names no limit. It is a bound on ONE wake, not on the backlog: a device with more
+// waiting takes the rest on its next registration, which for a queue-mode device is
+// its next wake window.
+//
+// 32 is the LwM2M drain's own figure, moved here because the bound is now the server's
+// to enforce — a client that asked for none used to get 1000 rows and throw away 968.
+const DefaultDrainLimit = 32
+
+// DrainableCommands returns the head of a device's still-waiting backlog: HELD ∪ PARKED
+// commands that have not passed their expiry horizon, OLDEST FIRST, bounded.
+//
+// It exists because the drain's read used to be assembled on the client. The LwM2M
+// downlink drain asked the generic command search for a 1000-row page, sorted it by id
+// in memory and truncated to 32 — three steps of which only the truncation was visible
+// in the contract. The generic search cannot serve this: its order is newest-first (a
+// PRODUCT requirement of the console list, see Command.DefaultOrder), it has no notion
+// of an expiry horizon, and it pages a set the caller wants only the front of.
+//
+// 🔴 OLDEST-FIRST IS A DELIVERY GUARANTEE, NOT A DISPLAY CHOICE. A firmware update is a
+// sequence of commands whose order IS its meaning, and the backlog is where that order
+// is preserved across an outage. Newest-first would hand a waking device the chunks of
+// an image backwards; a bounded newest-first read would hand it the TAIL and silently
+// drop the beginning. id ASC is enqueue order — monotonic, unique, and unlike created_at
+// not tied within a batch.
+//
+// 🔴 THIS DOES NOT GO THROUGH rdb.ListOf, and the reasons are specific to this shape
+// rather than a preference. ListOf appends the model's DefaultOrder AFTER any order the
+// filter closure set, so the SQL would end `ORDER BY id ASC, created_at DESC, token ASC`
+// — three keys, of which Postgres cannot prove the first is already total, so it plans a
+// Sort node and the partial index below (idx_commands_drainable) buys nothing. ListOf
+// also runs an unconditional COUNT before the data query, which is a second round trip
+// per device wake to compute a total this caller never reads. Neither is a defect in
+// ListOf; they are the cost of a paged list, and this is not a page — it is a bounded
+// head with no next.
+//
+// It builds on api.RDB.DB(ctx) exactly as HeldCommands and PendingCommands do. That is
+// the same binding ListOf uses (Database.WithContext), so the dc:tenant_query scope
+// callback still injects the tenant predicate. 🔴 It stays on the gorm builder for that
+// reason — raw SQL would leave the tenant fence behind, and deviceToken is a filter
+// INSIDE the fence, never a substitute for it: device tokens are unique per tenant, not
+// per instance.
+//
+// limit: absent, zero or negative means DefaultDrainLimit; anything above
+// rdb.MaxPageSize is clamped to it. A caller cannot ask for an unbounded drain, which is
+// the point — the backlog of a fleet that was offline for a weekend is exactly the set
+// that must not arrive in one response.
+func (api *Api) DrainableCommands(ctx context.Context, deviceToken string, limit int) ([]*Command, error) {
+	if limit <= 0 {
+		limit = DefaultDrainLimit
+	}
+	if limit > rdb.MaxPageSize {
+		limit = rdb.MaxPageSize
+	}
+	// The horizon is read ONCE, here, rather than per row: a drain that evaluated
+	// `now` while walking would be comparing rows against different instants.
+	liveSQL, liveArgs := liveWhere(time.Now())
+	found := make([]*Command, 0, limit)
+	result := api.RDB.DB(ctx).
+		Where("device_token = ?", deviceToken).
+		Where("status IN ?", drainableStatusStrings()).
+		Where(liveSQL, liveArgs...).
+		Order("id ASC").
+		Limit(limit).
+		Find(&found)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return found, nil
+}
+
 // MarkSentByToken is MarkSent addressed by the command's token rather than its
 // primary key, for a dispatcher that holds the token and not the row.
 //
@@ -1284,13 +1419,18 @@ const expirePageSize = 500
 // row that moves on between pages is simply not expired by us, exactly as before.
 func (api *Api) ExpireStale(ctx context.Context, now time.Time) (int64, map[string]int64, error) {
 	terminal := terminalStatusStrings()
+	// The sweep is the writer that makes expiry fact, so it defines the horizon for
+	// every reader — via the shared predicate rather than by being copied. Its
+	// complement (liveWhere) is what DrainableCommands asks for, which is what keeps
+	// "expirable" and "still deliverable" from overlapping or leaving a gap.
+	expiredSQL, expiredArgs := expiredWhere(now)
 	byFromStatus := make(map[string]int64)
 	var after uint
 	for {
 		stale := make([]*Command, 0, expirePageSize)
 		result := api.RDB.DB(ctx).
 			Where("status NOT IN ?", terminal).
-			Where("expires_at IS NOT NULL AND expires_at < ?", now).
+			Where(expiredSQL, expiredArgs...).
 			Where("id > ?", after).
 			Order("id ASC").
 			Limit(expirePageSize).

@@ -111,14 +111,20 @@ The in-process dedup cache (60s, per-pod, `dedupeTTL`) still exists, but it is n
 says nothing about another replica or about this pod after a restart — the two situations a
 leadership change produces. Do not read it as a re-actuation guarantee.
 
-**Oldest-first is achieved client-side, on purpose.** The `commands` query has **no server-side
-`ORDER BY`**, so a `pageSize=32` request would return an *arbitrary* 32 rows — and sorting a page
-that is already the wrong 32 cannot recover the oldest ones (a firmware Write `/5/0/1` could be left
-off the page while its Execute `/5/0/2` is on it, dispatching them out of order across wakes). So
-the fetcher requests a **large page** (`maxDrainFetch = 1000`, equal to core's `rdb.MaxPageSize`,
-the server's own clamp), sorts by numeric `id`, **then** truncates to `maxDrainPerWake = 32`
-(`downlink/fetcher.go`). That ordering is what the FOTA runbook below depends on. Already-expired
-rows are dropped rather than actuated late.
+**Oldest-first is achieved server-side.** The drain calls `command-delivery`'s dedicated
+`drainableCommands(deviceToken:, limit:)` query, which applies the status set, the expiry horizon,
+the `ORDER BY` **and** the bound in the database, and returns a bare list. So the `limit = 32` rows
+it returns *are* the oldest 32 (`downlink/fetcher.go`). That ordering is what the FOTA runbook below
+depends on.
+
+This replaced a client-side workaround: the general `commands` query had no `ORDER BY`, so
+`pageSize=32` returned an *arbitrary* 32 rows and the fetcher had to over-fetch 1000, sort by
+numeric `id` and truncate — a per-wake, per-device cost paid on every registration to route around a
+missing `ORDER BY`. Two things went with it. Expiry is now evaluated against the **database's**
+clock rather than the pod's, so a skewed replica can no longer drop a still-live command; and there
+is **no over-fetch**, which is safe because the two ways the drain loop skips a row (the per-pod
+dedup cache, a lost claim) both describe a row that has *already left* the drainable set — a skipped
+row is not a slot stolen from a row still awaiting delivery.
 
 The 32-per-wake cap is the **device-edge flood governor**: a REACT `send-command` storm cannot slam
 a constrained radio with an unbounded burst the instant it wakes. A deeper backlog drains across
@@ -217,7 +223,7 @@ firmware state machine itself requires ordering:
    measurements. Push progress needs the allowlist to become configuration first.
 
 For a queue-mode device the whole sequence rides the drain: each command is written, backlogged
-(`HELD` or `PARKED`), and delivered on a wake — oldest-first, which is why the client-side sort
+(`HELD` or `PARKED`), and delivered on a wake — oldest-first, which is why the server-side ordering
 above is load-bearing rather than cosmetic.
 
 ## Interop
