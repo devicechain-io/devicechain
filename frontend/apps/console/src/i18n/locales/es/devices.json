@@ -21,6 +21,7 @@
   "commandNameLabel": "Nombre del comando",
   "commandNamePlaceholder": "p. ej. reboot",
   "commandNameRequired": "El nombre del comando es obligatorio",
+  "commandNotCancelled": "El comando “{{name}}” no se canceló: ya había pasado a {{status}}",
   "commandRejected": "Comando “{{name}}” rechazado: {{reason}}",
   "copiedToClipboard": "Copiado al portapapeles",
   "copyIdAriaLabel": "Copiar id",

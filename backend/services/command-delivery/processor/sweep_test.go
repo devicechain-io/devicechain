@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -151,11 +152,17 @@ func (f *fakeApi) MarkSentByToken(_ context.Context, token string) (bool, error)
 	return true, nil
 }
 
-func (f *fakeApi) MarkSent(_ context.Context, id uint) (bool, error) {
+// MarkSent returns a nonce that VARIES per claim, rather than a fixed string. The value is
+// what a publish carries so a park can name the dispatch it belongs to, and a fake handing
+// out one constant would let a test pass that a real re-claim would break.
+func (f *fakeApi) MarkSent(_ context.Context, id uint) (string, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.markedSent = append(f.markedSent, id)
-	return !f.claimFails, nil
+	if f.claimFails {
+		return "", false, nil
+	}
+	return fmt.Sprintf("nonce-%d-%d", id, len(f.markedSent)), true, nil
 }
 
 func (f *fakeApi) ReleaseClaim(_ context.Context, id uint) (bool, error) {

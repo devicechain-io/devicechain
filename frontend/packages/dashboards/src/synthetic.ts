@@ -80,8 +80,8 @@ const SYNTHETIC_ALARMS: ReadonlyArray<
 
 // A canonical spread of synthetic commands (one per lifecycle stage) so an author
 // previewing a command-button sees a populated, representative history — an in-flight
-// command, one withheld for an absent device, a completed one, a failure, a cancellation
-// — before any real command has been issued.
+// command, one withheld for an absent device, one parked after finding nobody home, a
+// completed one, a failure, a cancellation — before any real command has been issued.
 //
 // `dispatched` says whether this command was ever actually put on the wire, which is
 // what decides sentTime below. It is a per-fixture fact, not something derivable from
@@ -94,6 +94,14 @@ const SYNTHETIC_COMMANDS: ReadonlyArray<
   // Early in the list on purpose: an author can cap the widget's row count, and a
   // withheld command is the state a preview most needs to show.
   { name: 'self-test', status: 'HELD', payload: null, responsePayload: null, error: null, dispatched: false },
+  // The other way a command ends up waiting on an absent device: this one was published
+  // and found nobody there, so it is parked until the device wakes. Included next to HELD
+  // because the two look alike in a list and an author laying out a command-button needs
+  // to see that they are distinguishable. `dispatched` is false, matching the service: it
+  // CLEARS sent_time when it parks a command, because a dispatch that reached nobody sent
+  // nothing. That is also why a parked command is still cancellable — nothing has taken
+  // delivery of it.
+  { name: 'sync-clock', status: 'PARKED', payload: null, responsePayload: null, error: null, dispatched: false },
   { name: 'set-interval', status: 'SUCCESSFUL', payload: '{"seconds":30}', responsePayload: '{"ok":true}', error: null, dispatched: true },
   { name: 'calibrate', status: 'QUEUED', payload: null, responsePayload: null, error: null, dispatched: false },
   { name: 'firmware-update', status: 'FAILED', payload: '{"version":"2.1.0"}', responsePayload: null, error: 'device offline', dispatched: true },
@@ -265,8 +273,9 @@ export class SyntheticDataSource implements WidgetDataSource, WidgetActions {
           responsePayload: c.responsePayload,
           error: c.error,
           queuedTime: queued,
-          // Likewise: only a command that actually went out has a sentTime. QUEUED and
-          // HELD never did, and neither did the cancelled one (called off while held).
+          // Likewise: only a command that actually reached a device has a sentTime. QUEUED,
+          // HELD and PARKED never did, and neither did the cancelled one (called off while
+          // held).
           sentTime: c.dispatched ? queued : null,
           respondedTime: answered ? queued : null,
         };

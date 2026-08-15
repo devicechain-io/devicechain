@@ -236,7 +236,7 @@ query {
   commands(criteria: {
     pageNumber: 1, pageSize: 50,
     batchToken: "nightly-reboot-2026-08-14",
-    statuses: ["QUEUED", "HELD"]
+    statuses: ["QUEUED", "HELD", "PARKED"]
   }) {
     results { token deviceToken status queuedTime }
     pagination { totalRecords }
@@ -261,20 +261,14 @@ mutation {
 }
 ```
 
-`cancelled` is the authoritative number: that many commands moved from `QUEUED` or `HELD` to
-`CANCELLED` and will not be delivered. `alreadySent` were already handed to their devices,
-and **those devices will still act on them**. `alreadyFinished` had already reached a
-terminal state — `SUCCESSFUL`, `FAILED`, `TIMEOUT`, `EXPIRED` or `CANCELLED`.
+`cancelled` is the authoritative number: that many commands moved from `QUEUED`, `HELD` or
+`PARKED` to `CANCELLED` and will not be delivered. `alreadySent` were already dispatched to
+their devices, and **those devices will still act on them**. `alreadyFinished` had already
+reached a terminal state — `SUCCESSFUL`, `FAILED`, `TIMEOUT`, `EXPIRED` or `CANCELLED`.
 
-:::warning It cancels `QUEUED` and `HELD` only — `cancelCommand` also cancels `SENT`
-The two are not the same brake, and the asymmetry is worth internalizing. `SENT` means the
-command is already at the device: nothing the platform does now can recall it, so
-"cancelling" it stops no actuation — it only makes the platform stop listening for the
-device's answer, which turns a real outcome into a record that says the operator called it
-off. A fleet-wide brake should not do that to thousands of commands that are already out.
-`cancelCommand` will be narrowed to match this in a later change. Until it is, a loop of
-`cancelCommand` over a batch's commands is **not** the same operation as this one.
-:::
+This is the same brake `cancelCommand` applies to a single command: both cancel `QUEUED`,
+`HELD` and `PARKED`, and neither touches `SENT`. Why `SENT` is the line is in
+[Cancelling a batch](../concepts/commands.md#cancelling-a-batch).
 
 **It never refuses.** A brake that declined to engage because part of the fleet had already
 moved would leave the rest of the fleet commanded, which is the worst available outcome. So

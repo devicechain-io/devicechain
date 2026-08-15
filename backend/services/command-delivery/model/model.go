@@ -14,7 +14,7 @@ import (
 
 // CommandStatus is the lifecycle state of a persisted command (ADR-012).
 //
-// A command moves QUEUED -> SENT -> SUCCESSFUL on the happy path. The three
+// A command moves QUEUED -> SENT -> SUCCESSFUL on the happy path. The four
 // non-terminal states each answer a different question about a command that has
 // not finished, and keeping them distinct is the point of the vocabulary:
 //
@@ -25,6 +25,9 @@ import (
 //     accumulates, and it can sit for days.
 //   - SENT   — dispatched toward a device believed reachable; awaiting its
 //     response.
+//   - PARKED — dispatched, and the transport found the device unreachable, so it
+//     went NOWHERE. The platform still holds it and will deliver it on the
+//     device's next wake.
 //
 // The distinction is not cosmetic. A single "not finished yet" value cannot
 // answer "is this stuck?", cannot be counted for a backlog ceiling (a healthy
@@ -34,6 +37,25 @@ import (
 // never answered (TIMEOUT) — see ExpireStale. Collapsing them reports a machine
 // that was switched off all weekend as "sent, never answered", which is a lie
 // about the device rather than a fact about the platform.
+//
+// 🔴 PARKED EXISTS BECAUSE SENT WAS TELLING THAT EXACT LIE, IN THE ONE CASE THIS
+// COMMENT DID NOT ANTICIPATE. The platform decides whether to publish from
+// PRESENCE — is the device registered — but only a transport knows REACHABILITY,
+// and for a queue-mode device (an LwM2M sleeper) those differ: it is registered
+// and asleep. The sweep published, the transport found no live connection, and
+// the row stayed SENT. So SENT carried two opposite meanings — "the device has
+// it" and "it went nowhere" — and everything downstream assumed the first. That
+// one ambiguity produced four separate defects: a cancelled fleet write still
+// actuated on the next wake; the cancel reported such rows as beyond recall when
+// they were fully recallable; a command that reached nothing expired as TIMEOUT,
+// blaming the device; and the drain re-dispatched from SENT without claiming,
+// which was the platform's only unclaimed dispatch.
+//
+// So SENT now means exactly what this comment always said it meant, and PARKED
+// carries the other meaning. Note what SENT still does NOT promise: it is
+// "dispatched toward a device believed live", not "the device was reached" — an
+// MQTT device dropping between the presence read and the publish still lands
+// here, because that transport is live-only with no acknowledgment.
 //
 // The terminal states are SUCCESSFUL / FAILED / TIMEOUT / EXPIRED / CANCELLED.
 // No transition is permitted out of a terminal state. CANCELLED is its own
@@ -56,6 +78,7 @@ const (
 	CommandQueued     CommandStatus = "QUEUED"
 	CommandHeld       CommandStatus = "HELD"
 	CommandSent       CommandStatus = "SENT"
+	CommandParked     CommandStatus = "PARKED"
 	CommandSuccessful CommandStatus = "SUCCESSFUL"
 	CommandTimeout    CommandStatus = "TIMEOUT"
 	CommandExpired    CommandStatus = "EXPIRED"
@@ -83,7 +106,7 @@ var terminalStatuses = []CommandStatus{
 // lands on; Valid() is the two lists joined, so a state omitted from BOTH reads
 // as unknown rather than silently defaulting to non-terminal.
 var nonTerminalStatuses = []CommandStatus{
-	CommandQueued, CommandHeld, CommandSent,
+	CommandQueued, CommandHeld, CommandSent, CommandParked,
 }
 
 // Valid reports whether the status is one of the known lifecycle states.
@@ -154,6 +177,32 @@ type Command struct {
 	// question only the command rows can answer.
 	BatchId    sql.NullInt64
 	BatchToken sql.NullString
+
+	// DispatchNonce identifies the CURRENT dispatch attempt. Every write that moves a row
+	// into SENT — the sweep's claim and the wake drain's claim alike — stamps a fresh value,
+	// and the published delivery envelope carries it.
+	//
+	// 🔴 IT EXISTS TO MAKE PARKING AT-MOST-ONCE PER DISPATCH, AND WITHOUT IT PARKING WOULD
+	// RE-ARM A COMMAND THE DEVICE HAD ALREADY RUN. SENT used to be a one-way door: nothing
+	// outside this service could move a row backwards, which is why the drain was allowed to
+	// dispatch from it without claiming. ParkClaim opens that door on purpose, and JetStream
+	// redelivery then walks through it:
+	//
+	//	1. the transport parks the row, and its ACK IS LOST;
+	//	2. the device wakes; the drain claims PARKED -> SENT and ACTUATES;
+	//	3. at AckWait the ORIGINAL message redelivers, finds the device offline again, and a
+	//	   park predicated only on `status = 'SENT'` MATCHES the freshly-actuated row;
+	//	4. the next wake claims and actuates it a SECOND time.
+	//
+	// The transport's in-process dedup cannot cover this: its TTL is exactly AckWait, it is
+	// per-pod, and the amplifying case is a leadership failover — a cold cache and a
+	// whole-fleet re-register storm at the same moment. Predicating the park on the nonce it
+	// was handed closes it by construction: the stale message names a dispatch that no longer
+	// exists, matches zero rows, and is acked as settled.
+	//
+	// It is NOT a delivery counter and must never be read as one. Comparing two values tells
+	// you only "same dispatch" or "not the same dispatch"; nothing orders them.
+	DispatchNonce sql.NullString
 }
 
 // CommandCreateRequest carries the data required to issue a command.

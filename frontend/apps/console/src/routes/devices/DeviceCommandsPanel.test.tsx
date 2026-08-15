@@ -5,14 +5,17 @@
 // importing the i18n config for its side effect, so the assertions below are on the
 // CONTROL AN OPERATOR SEES rather than on a prop or a translation key.
 //
-// Only one seam is faked: the GraphQL transport (`gql`). The panel's real terminality
-// rule decides which rows offer Cancel.
+// Only one seam is faked: the GraphQL transport (`gql`). The panel's real cancellability
+// rule decides which rows offer Cancel — which is a NARROWER rule than terminality, since
+// SENT is in flight and still cannot be called back.
 //
 // 🔴 WHY THIS FILE EXISTS. The panel used to keep its own copy of the terminal status
 // set. When cancellation started writing CANCELLED instead of EXPIRED, that copy never
 // learned the new value, so an already-cancelled command still rendered a Cancel button —
-// and clicking it produced a server error toast. Nothing in the frontend asserted the
-// SET of statuses, so it broke in total silence.
+// and clicking it reported SUCCESS, because the service answers an uncancellable cancel
+// by returning the row unchanged with no error. Nothing in the frontend asserted the SET
+// of statuses, so it broke in total silence — and silently, in the operator's favour, is
+// the worst way for it to break.
 import '@/i18n/config';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -136,45 +139,153 @@ function cancelControlFor(status: string): HTMLElement | null {
 }
 
 describe('DeviceCommandsPanel cancel control', () => {
-  // 🔴🔴 THE ONE THAT MATTERS. CANCELLED is terminal: the server refuses a second
-  // cancellation, so offering the button can only ever produce an error toast. The
-  // non-terminal three are asserted in the SAME render as the counterweight — a panel
-  // that had simply stopped offering Cancel altogether would satisfy the negative
-  // assertion perfectly and fail here.
+  // 🔴🔴 THE ONE THAT MATTERS, and what it asserts is that CANCELLABLE ≠ NON-TERMINAL.
+  // CANCELLED is terminal: a second cancellation is not refused, it is ACCEPTED AND
+  // IGNORED — the service returns the row unchanged — so offering the button there buys
+  // the operator nothing and costs them a toast about work that never happened. SENT is
+  // NOT terminal and still must not offer it — the command is already at the device, and
+  // the service will not call back something it has handed over. The three cancellable
+  // states are asserted in the SAME render as the counterweight: a panel that had simply
+  // stopped offering Cancel altogether would satisfy every negative assertion perfectly
+  // and fail here.
   it('offers Cancel only while a command can still be cancelled', async () => {
-    respondWith(['QUEUED', 'HELD', 'SENT', 'SUCCESSFUL', 'FAILED', 'TIMEOUT', 'EXPIRED', 'CANCELLED']);
+    respondWith([
+      'QUEUED',
+      'HELD',
+      'SENT',
+      'PARKED',
+      'SUCCESSFUL',
+      'FAILED',
+      'TIMEOUT',
+      'EXPIRED',
+      'CANCELLED',
+    ]);
 
     render(<DeviceCommandsPanel deviceToken="therm-1" />);
 
     // The history has painted once the first row is on screen.
     expect(await screen.findByText('cmd-QUEUED')).toBeTruthy();
 
-    for (const live of ['QUEUED', 'HELD', 'SENT']) {
-      expect(cancelControlFor(live), `${live} is still in flight and must offer Cancel`).toBeTruthy();
+    for (const live of ['QUEUED', 'HELD', 'PARKED']) {
+      expect(cancelControlFor(live), `${live} has not reached the device and must offer Cancel`).toBeTruthy();
     }
-    for (const done of ['SUCCESSFUL', 'FAILED', 'TIMEOUT', 'EXPIRED', 'CANCELLED']) {
-      expect(cancelControlFor(done), `${done} is terminal and must NOT offer Cancel`).toBeNull();
+    // 🔴 SENT sits with the terminals here despite being in flight. Gating the column on
+    // !isTerminalCommandStatus — which is what this panel used to do — puts a live button
+    // on this row whose click the server answers with a cheerful 200 and no change at all.
+    for (const uncancellable of ['SENT', 'SUCCESSFUL', 'FAILED', 'TIMEOUT', 'EXPIRED', 'CANCELLED']) {
+      expect(
+        cancelControlFor(uncancellable),
+        `${uncancellable} cannot be cancelled and must NOT offer Cancel`,
+      ).toBeNull();
     }
-    // Exactly three, so a stray button elsewhere in a terminal row can't hide behind the
-    // per-row queries above.
+    // Exactly three, so a stray button elsewhere in an uncancellable row can't hide behind
+    // the per-row queries above.
     expect(screen.getAllByRole('button', { name: CANCEL })).toHaveLength(3);
   });
 
-  // HELD is the new non-terminal state, and it is the one most likely to be mistaken for
-  // a dead command: it can sit for days waiting for an absent device. It is displayed
-  // like the other in-flight states, and it keeps its Cancel control — an operator whose
-  // command is stuck behind an offline machine needs exactly that button.
-  it('shows a held command as still in flight rather than as an outcome', async () => {
-    respondWith(['HELD', 'EXPIRED']);
+  // HELD and PARKED are the states most likely to be mistaken for dead commands: both can
+  // sit for days waiting for an absent device. They are displayed like the other in-flight
+  // states and they keep their Cancel control — an operator whose command is stuck behind
+  // an offline machine needs exactly that button.
+  it('shows a waiting command as still in flight rather than as an outcome', async () => {
+    respondWith(['HELD', 'PARKED', 'EXPIRED']);
 
     render(<DeviceCommandsPanel deviceToken="therm-1" />);
 
     // The status is rendered as the raw uppercase value the service sends — there is no
     // translation catalog for statuses, and this test pins that the new ones are shown
-    // exactly like the six that came before.
+    // exactly like the ones that came before.
     expect(await screen.findByText('HELD')).toBeTruthy();
+    expect(screen.getByText('PARKED')).toBeTruthy();
     expect(cancelControlFor('HELD')).toBeTruthy();
+    expect(cancelControlFor('PARKED')).toBeTruthy();
     expect(cancelControlFor('EXPIRED')).toBeNull();
+  });
+});
+
+// ── Cancel-outcome fixtures ────────────────────────────────────────────────
+//
+// 🔴🔴 THE SERVICE NEVER REFUSES A CANCEL. It gates cancellation on a positive list of
+// statuses and, for anything outside that list, SUCCEEDS AND RETURNS THE COMMAND
+// UNCHANGED — no error, nothing to catch. The only evidence that a cancellation actually
+// happened is therefore the STATUS THAT COMES BACK, so the fixture lets the mutation
+// answer with a status of its own choosing while the history row stays QUEUED (which is
+// what put the button on screen in the first place).
+function respondToCancel(returnedStatus: string) {
+  gqlMock.mockImplementation((service: string, document: unknown) => {
+    if (String(document).includes('mutation CancelCommand')) {
+      return Promise.resolve({
+        cancelCommand: { id: 'id-QUEUED', token: 'tok-QUEUED', status: returnedStatus },
+      });
+    }
+    if (service === 'command-delivery') {
+      return Promise.resolve({
+        commands: {
+          results: [commandRow('QUEUED')],
+          pagination: { pageStart: 0, pageEnd: 1, totalRecords: 1 },
+        },
+      });
+    }
+    return Promise.resolve({ deviceCommandVocabulary: { constrained: false, commands: [] } });
+  });
+}
+
+async function clickCancel() {
+  await screen.findByText('cmd-QUEUED');
+  const button = cancelControlFor('QUEUED');
+  if (!button) throw new Error('the QUEUED row offered no Cancel button');
+  fireEvent.click(button);
+}
+
+describe('DeviceCommandsPanel cancel outcomes', () => {
+  it('reports a cancellation only when the command came back CANCELLED', async () => {
+    respondToCancel('CANCELLED');
+
+    render(<DeviceCommandsPanel deviceToken="therm-1" />);
+    await clickCancel();
+
+    await waitFor(() => expect(toastMock).toHaveBeenCalled());
+    expect(toastMock).toHaveBeenCalledWith('Command “cmd-QUEUED” cancelled');
+    // No variant ⇒ success. The failure arm below asserts 'error', so this is the half
+    // that keeps "always report failure" from passing the pair.
+    expect(toastMock.mock.calls[0]).toHaveLength(1);
+  });
+
+  // 🔴🔴 THE ONE THAT MATTERS. The button was offered against a QUEUED row, but between
+  // that read and the click the platform dispatched the command — and the mutation still
+  // RESOLVES, carrying the untouched SENT row. A panel that reports off `await` alone
+  // passes every other test in this file and tells the operator, wrongly and cheerfully,
+  // that a command now sitting at the device was called off.
+  it('does not claim success when the command was dispatched before the click', async () => {
+    respondToCancel('SENT');
+
+    render(<DeviceCommandsPanel deviceToken="therm-1" />);
+    await clickCancel();
+
+    await waitFor(() => expect(toastMock).toHaveBeenCalled());
+    const [message, variant] = toastMock.mock.calls[0];
+    expect(variant).toBe('error');
+    // The status that came back is the useful part, so the operator is told it by name.
+    expect(message).toContain('SENT');
+    expect(message).toContain('wasn’t cancelled');
+    // …and it is emphatically not the success toast.
+    expect(message).not.toBe('Command “cmd-QUEUED” cancelled');
+  });
+
+  // The same trap with a terminal answer: the device replied first. Still a success on the
+  // wire, still not a cancellation. Asserted separately from SENT so a check that special-
+  // cased one in-flight status rather than testing for CANCELLED is caught.
+  it('does not claim success when the command had already finished', async () => {
+    respondToCancel('SUCCESSFUL');
+
+    render(<DeviceCommandsPanel deviceToken="therm-1" />);
+    await clickCancel();
+
+    await waitFor(() => expect(toastMock).toHaveBeenCalled());
+    const [message, variant] = toastMock.mock.calls[0];
+    expect(variant).toBe('error');
+    expect(message).toContain('SUCCESSFUL');
+    expect(message).not.toBe('Command “cmd-QUEUED” cancelled');
   });
 });
 

@@ -389,6 +389,9 @@ export interface LocationSample {
 //                         so the command waits rather than going into the void; this is
 //                         where an offline fleet's backlog sits, possibly for days
 //                 SENT    dispatched toward a reachable device, awaiting its response
+//                 PARKED  published, but the device was not reachable, so it went
+//                         nowhere; the platform still holds it and delivers it when the
+//                         device wakes
 //   terminal      SUCCESSFUL / FAILED   the device answered
 //                 TIMEOUT               dispatched, never answered
 //                 EXPIRED               TTL elapsed before it ever went out
@@ -397,10 +400,15 @@ export interface LocationSample {
 // EXPIRED and CANCELLED are separate ACTORS reaching the same dead end, not two names
 // for one thing. Cancellation used to write EXPIRED and old rows were never backfilled,
 // so both values legitimately appear in live data.
+//
+// Non-terminal is NOT the same as cancellable — SENT is the first and not the second (see
+// ./command-status). A surface offering a cancel control must ask
+// isCancellableCommandStatus rather than negating isTerminalCommandStatus.
 export interface CommandRow {
   token: string;
   name: string;
-  status: string; // QUEUED | HELD | SENT | SUCCESSFUL | FAILED | TIMEOUT | EXPIRED | CANCELLED
+  // QUEUED | HELD | SENT | PARKED | SUCCESSFUL | FAILED | TIMEOUT | EXPIRED | CANCELLED
+  status: string;
   payload: string | null; // request JSON (as issued)
   responsePayload: string | null; // device response JSON
   error: string | null;

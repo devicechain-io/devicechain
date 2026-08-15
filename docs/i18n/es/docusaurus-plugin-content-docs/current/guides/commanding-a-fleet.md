@@ -249,7 +249,7 @@ query {
   commands(criteria: {
     pageNumber: 1, pageSize: 50,
     batchToken: "nightly-reboot-2026-08-14",
-    statuses: ["QUEUED", "HELD"]
+    statuses: ["QUEUED", "HELD", "PARKED"]
   }) {
     results { token deviceToken status queuedTime }
     pagination { totalRecords }
@@ -274,21 +274,15 @@ mutation {
 }
 ```
 
-`cancelled` es la cifra autoritativa: ese número de comandos pasó de `QUEUED` o `HELD` a
-`CANCELLED` y no se entregará. Los `alreadySent` ya se habían entregado a sus dispositivos, y
-**esos dispositivos actuarán igualmente sobre ellos**. Los `alreadyFinished` ya habían
-alcanzado un estado terminal — `SUCCESSFUL`, `FAILED`, `TIMEOUT`, `EXPIRED` o `CANCELLED`.
+`cancelled` es la cifra autoritativa: ese número de comandos pasó de `QUEUED`, `HELD` o
+`PARKED` a `CANCELLED` y no se entregará. Los `alreadySent` ya se habían despachado a sus
+dispositivos, y **esos dispositivos actuarán igualmente sobre ellos**. Los `alreadyFinished`
+ya habían alcanzado un estado terminal — `SUCCESSFUL`, `FAILED`, `TIMEOUT`, `EXPIRED` o
+`CANCELLED`.
 
-:::warning Cancela solo `QUEUED` y `HELD` — `cancelCommand` también cancela `SENT`
-No son el mismo freno, y vale la pena interiorizar la asimetría. `SENT` significa que el
-comando ya está en el dispositivo: nada de lo que haga la plataforma ahora puede revocarlo,
-así que «cancelarlo» no detiene ninguna actuación — solo hace que la plataforma deje de
-esperar la respuesta del dispositivo, lo que convierte un desenlace real en un registro que
-dice que el operador lo anuló. Un freno para toda la flota no debería hacerle eso a miles de
-comandos que ya están fuera. `cancelCommand` se estrechará para que coincida con esto en un
-cambio posterior. Hasta entonces, un bucle de `cancelCommand` sobre los comandos de un lote
-**no** es la misma operación que esta.
-:::
+Este es el mismo freno que `cancelCommand` aplica a un comando individual: ambos cancelan
+`QUEUED`, `HELD` y `PARKED`, y ninguno toca `SENT`. Por qué `SENT` es la línea está en
+[Cancelar un lote](../concepts/commands.md#cancelling-a-batch).
 
 **Nunca se rechaza.** Un freno que se negara a actuar porque parte de la flota ya se había
 movido dejaría comandado al resto de la flota, que es el peor desenlace disponible. Así que

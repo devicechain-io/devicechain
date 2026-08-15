@@ -18,15 +18,29 @@ import { commandStatusColor, commandStatusLabel, isTerminalStatus } from './comm
 const UNKNOWN_FALLBACK = '#64748b';
 
 describe('commandStatusColor', () => {
-  // 🔴 THE ASSERTION THAT CATCHES THE SILENT COLLAPSE. Three distinct outcomes —
-  // withheld, lapsed, called off — would all render as the same slate if HELD and
-  // CANCELLED were left to the fallback.
-  it('gives HELD, EXPIRED and CANCELLED three distinguishable colours', () => {
+  // 🔴 THE ASSERTION THAT CATCHES THE SILENT COLLAPSE. Four distinct situations —
+  // withheld, published-to-nobody, lapsed, called off — would collapse onto the same
+  // slate if HELD, PARKED and CANCELLED were left to the fallback. PARKED is the newest
+  // and the most damaging to lose: "still coming when the device wakes" wearing EXPIRED's
+  // colour reads as "it died before it ever went out".
+  it('gives HELD, PARKED, EXPIRED and CANCELLED four distinguishable colours', () => {
     const held = commandStatusColor('HELD');
+    const parked = commandStatusColor('PARKED');
     const expired = commandStatusColor('EXPIRED');
     const cancelled = commandStatusColor('CANCELLED');
 
-    expect(new Set([held, expired, cancelled]).size).toBe(3);
+    expect(new Set([held, parked, expired, cancelled]).size).toBe(4);
+  });
+
+  // Spelled out, because the loop below only proves PARKED is not the FALLBACK — and the
+  // fallback is slate, so a PARKED entry accidentally written as EXPIRED's own slate
+  // '#64748b' would satisfy it while rendering the exact confusion this file exists to
+  // prevent. Naming the colour also pins that PARKED sits in the amber "waiting on an
+  // absent device" family with HELD rather than in the sky "moving" family with SENT.
+  it('renders PARKED in the amber waiting family, never in a lapsed slate', () => {
+    expect(commandStatusColor('PARKED')).toBe('#f59e0b');
+    expect(commandStatusColor('PARKED')).not.toBe(commandStatusColor('EXPIRED'));
+    expect(commandStatusColor('PARKED')).not.toBe(commandStatusColor('SENT'));
   });
 
   // The general form of the same rule, so the NEXT status added to the service can't
@@ -61,16 +75,20 @@ describe('isTerminalStatus', () => {
     for (const status of COMMAND_STATUSES) {
       expect(isTerminalStatus(status), status).toBe(isTerminalCommandStatus(status));
     }
-    // Spelled out for the two the widgets package never used to know about, so this test
+    // Spelled out for the ones the widgets package never used to know about, so this test
     // reads as a claim about them rather than a loop that could pass vacuously.
     expect(isTerminalStatus('CANCELLED')).toBe(true);
     expect(isTerminalStatus('HELD')).toBe(false);
+    // PARKED is non-terminal: the platform still holds it and will deliver it when the
+    // device wakes. The widget must keep showing it as an outstanding command.
+    expect(isTerminalStatus('PARKED')).toBe(false);
   });
 });
 
 describe('commandStatusLabel', () => {
   it('renders the new statuses in the same Title Case as the rest', () => {
     expect(commandStatusLabel('HELD')).toBe('Held');
+    expect(commandStatusLabel('PARKED')).toBe('Parked');
     expect(commandStatusLabel('CANCELLED')).toBe('Cancelled');
   });
 });

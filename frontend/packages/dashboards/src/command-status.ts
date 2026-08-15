@@ -12,8 +12,14 @@
 // added to the service and only some of the copies learned about it.
 //
 // The service declares no GraphQL enum for status, so it crosses the wire as a plain
-// string and an UNRECOGNIZED value must stay survivable: callers treat an unknown status
-// as non-terminal (still in flight) rather than throwing.
+// string and an UNRECOGNIZED value must stay survivable: nothing here throws on one. What
+// an unknown status MEANS differs per question, though — see the two predicates at the
+// bottom, which answer for it in opposite directions on purpose.
+//
+// 🔴 "IN FLIGHT" AND "CANCELLABLE" ARE NOT THE SAME SET, and reading one off the other is
+// the bug this file is shaped to prevent. SENT is in flight (the device has not answered
+// yet) but NOT cancellable: the command is already at the device, and letting the platform
+// call it off would only make it discard the real answer that is on its way back.
 
 // Every lifecycle state the command-delivery service can persist. Ordered as a command
 // travels: the non-terminal states first, then the terminal ones.
@@ -27,6 +33,12 @@ export const COMMAND_STATUSES = [
   'HELD',
   // Dispatched toward a device believed reachable; awaiting its response.
   'SENT',
+  // Published, and it went NOWHERE: the device turned out not to be reachable, so the
+  // transport had nothing to hand it to. The platform still holds the command and will
+  // deliver it when the device next wakes. Distinct from HELD (where dispatch was never
+  // attempted, because the device was already known absent) and from TIMEOUT (where the
+  // command reached a device that then said nothing).
+  'PARKED',
   // ── Terminal ───────────────────────────────────────────────────────────
   // The device answered.
   'SUCCESSFUL',
@@ -43,8 +55,8 @@ export const COMMAND_STATUSES = [
 
 export type CommandStatus = (typeof COMMAND_STATUSES)[number];
 
-// The states a command can never leave: no further transition is permitted, so it can
-// no longer be cancelled either.
+// The states a command can never leave: no further transition is permitted, so nothing
+// more will happen to it. Terminal implies not cancellable; the converse does NOT hold.
 export const TERMINAL_COMMAND_STATUSES: ReadonlySet<string> = new Set<string>([
   'SUCCESSFUL',
   'FAILED',
@@ -53,10 +65,51 @@ export const TERMINAL_COMMAND_STATUSES: ReadonlySet<string> = new Set<string>([
   'CANCELLED',
 ]);
 
-// isTerminalCommandStatus reports whether a command has reached a state it can't leave.
-// An unrecognized status is reported as NON-terminal: the surfaces that consume this
-// gate a cancel control on it, and refusing to offer cancel for a state we simply do
-// not recognize would strand a live command with no way to call it off.
+// The states from which the platform will still accept a cancellation — a POSITIVE list,
+// mirroring the service's own gate. All three are states in which the command has not
+// reached the device: QUEUED (not yet dispatched), HELD (dispatch withheld), PARKED
+// (published into a void and waiting for the device to wake). Cancelling any of them
+// takes back something nobody else is holding.
+//
+// SENT is deliberately absent. It is in flight, so !isTerminalCommandStatus('SENT') is
+// true — which is exactly why a cancel control must not be gated on that expression.
+export const CANCELLABLE_COMMAND_STATUSES: ReadonlySet<string> = new Set<string>([
+  'QUEUED',
+  'HELD',
+  'PARKED',
+]);
+
+// 🔴 THE TWO PREDICATES ANSWER FOR AN UNRECOGNIZED STATUS IN OPPOSITE DIRECTIONS, on
+// purpose. Status crosses the wire as a plain string with no GraphQL enum behind it, so a
+// value this build has never heard of is always reachable — a newer service, a hand-edited
+// row — and each question has its own safe side:
+//
+//   isTerminalCommandStatus     negative membership ⇒ unknown reads NON-terminal, i.e.
+//                               STILL IN FLIGHT. A status the service adds is one it added
+//                               because something is still happening to the command, and
+//                               the cost of guessing wrong is only a row that lingers in an
+//                               "outstanding" list instead of settling.
+//
+//   isCancellableCommandStatus  positive membership ⇒ unknown reads NOT CANCELLABLE. This
+//                               file used to argue the other way — that refusing to offer
+//                               cancel for a state we do not recognize would strand a live
+//                               command — and that argument is now false. The service gates
+//                               cancellation on the same positive list, and 🔴 OUTSIDE THAT
+//                               LIST IT DOES NOT REFUSE: it SUCCEEDS and returns the command
+//                               UNCHANGED. So a Cancel button offered on an unknown status is
+//                               a no-op that answers the click with a SUCCESS TOAST for a
+//                               command nobody cancelled — a worse outcome than an error,
+//                               because the operator has no way to tell. The command is
+//                               stranded either way; this way we do not also claim otherwise.
+//                               A host that offers the button anyway must therefore check the
+//                               status that CAME BACK, not the fact that the call resolved.
 export function isTerminalCommandStatus(status: string): boolean {
   return TERMINAL_COMMAND_STATUSES.has(status);
+}
+
+// isCancellableCommandStatus reports whether a cancel request would be accepted. Gate every
+// cancel control on THIS, never on !isTerminalCommandStatus — the two differ by SENT, and
+// by every status added after this build shipped.
+export function isCancellableCommandStatus(status: string): boolean {
+  return CANCELLABLE_COMMAND_STATUSES.has(status);
 }

@@ -376,7 +376,18 @@ func buildMetrics() {
 		NotServed: Microservice.NewCounter("commands_not_served_total",
 			"Commands ack-dropped because no device this adapter serves matches (another protocol's device, or none) — a mirror of the instance's command traffic, not an anomaly.", nil),
 		ServedOffline: Microservice.NewCounter("commands_served_offline_total",
-			"Commands ack-dropped because a device this adapter serves had no live connection (held in command-delivery, drained on the device's next wake — L4b; or TIMEOUT at its TTL if it never wakes).", nil),
+			"Commands for a device this adapter serves that had no live connection — parked in command-delivery and drained on the device's next wake (L4b), or EXPIRED at their TTL if it never wakes.", nil),
+		// Park outcomes are SPLIT for the reason the claim outcomes below are: they mean
+		// opposite things. Settled is the mechanism working — the command finished under us.
+		// Errors mean command-delivery could not be reached, so the row is still SENT and will
+		// blame the device with TIMEOUT if the retries run out. Skipped means parking was not
+		// attempted at all, which on a configured instance should be flat zero.
+		ParkErrors: Microservice.NewCounter("command_park_errors_total",
+			"Undeliverable commands that could NOT be handed back to command-delivery; left unacked to retry on redelivery, and stuck in SENT until one succeeds.", nil),
+		ParkSettled: Microservice.NewCounter("command_park_settled_total",
+			"Hand-backs that moved no row because the command had already been answered, cancelled, expired or re-claimed — a settled outcome, not a fault.", nil),
+		ParkSkipped: Microservice.NewCounter("command_park_skipped_total",
+			"Undeliverable commands NOT handed back because no parker is wired or the delivery envelope carried no dispatch nonce; they stay SENT and ride their TTL.", nil),
 		Poison: Microservice.NewCounter("commands_poison_total",
 			"Commands dropped as unprocessable (no parseable tenant in the subject, or an undecodable envelope).", nil),
 		ResponseFails: Microservice.NewCounter("command_response_publish_failures_total",
@@ -451,9 +462,17 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 	// which it has any business doing. It is also the only holder — event-processing's REACT sink
 	// mints command:write, so gating the claim on that would have made a mutation written for one
 	// caller answer to two.
+	//
+	// 🔑 command:park is the OPPOSITE direction and therefore its own authority rather than part
+	// of the one above: it hands a command that was already DISPATCHED back to command-delivery,
+	// because this adapter is the only thing that learns a registered device was actually asleep.
+	// Folding it into command:claim would have falsified what that authority documents itself to
+	// mean — taking commands OUT of the dispatchable set — and would have granted a re-arm
+	// primitive to every future claim holder.
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "lwm2m-ingest",
 		[]string{string(auth.DeviceRead), string(auth.DeviceWrite), string(auth.StateRead),
-			string(auth.TenantRead), string(auth.CommandRead), string(auth.CommandClaim)})
+			string(auth.TenantRead), string(auth.CommandRead), string(auth.CommandClaim),
+			string(auth.CommandPark)})
 
 	// The ADR-077 gate. It matters more here than on any other ingest front: an LwM2M
 	// device authenticates at the DTLS-PSK handshake against this server directly, so it
@@ -525,9 +544,11 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 	// typed nil.
 	var fetcher *downlink.CommandFetcher
 	var claimer *downlink.CommandClaimer
+	var parker *downlink.CommandParker
 	if cdURL, ok := commandDeliveryEndpoint(infra); ok {
 		fetcher = downlink.NewCommandFetcher(client, cdURL)
 		claimer = downlink.NewCommandClaimer(client, cdURL)
+		parker = downlink.NewCommandParker(client, cdURL)
 	} else {
 		log.Warn().Msg("command-delivery endpoint not configured (infrastructure.commandDelivery) — LwM2M queue-mode drain disabled; a command to an offline device rides its TTL to TIMEOUT instead of draining on the device's next wake.")
 	}
@@ -546,10 +567,16 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 			// reason the registrar's does not cover: this is the second path by which a
 			// command actuates hardware. command-delivery refuses to publish new commands
 			// into a deleted tenant, but a command already durable on the stream still
-			// arrives, and the L4b wake-drain re-fetches commands left HELD or SENT and
+			// arrives, and the L4b wake-drain re-fetches commands left HELD or PARKED and
 			// fires them when a sleeping device next registers — which can be long after
 			// the delete, off a (tenant, token) remembered from before it.
 			TenantDeleted: tenantGate,
+		}
+		// Typed-nil care, as above: assign through the interface only when the concrete
+		// parker exists, so a missing command-delivery endpoint leaves a TRUE nil that the
+		// dispatcher's `d.parker == nil` check can see.
+		if parker != nil {
+			opts.Parker = parker
 		}
 		if fetcher != nil {
 			dispatcher = downlink.NewDispatcher(CommandReader, ResponseWriter, connTable, downlink.NewOps(), fetcher, claimer, downlinkMetrics, opts)

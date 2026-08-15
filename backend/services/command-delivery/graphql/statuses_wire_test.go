@@ -120,7 +120,7 @@ func exec(t *testing.T, ctx context.Context, query string, vars map[string]any) 
 
 // TestStatusesFilterBindsThroughAVariable is the wire test for the multi-status
 // filter the LwM2M wake drain depends on: it asks for the two states a waking
-// device's backlog lives in (HELD ∪ SENT) in a single query.
+// device's backlog lives in (HELD ∪ PARKED) in a single query.
 //
 // The assertion is on the ROWS RETURNED, not on the criteria struct, because the
 // failure this guards against is a filter that binds to nothing and therefore

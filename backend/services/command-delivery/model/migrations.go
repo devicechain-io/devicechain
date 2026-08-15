@@ -30,5 +30,6 @@ var (
 		NewDispatchableStatusIndexSchema(),
 		NewCommandBatchSchema(),
 		NewCommandBatchCancelSchema(),
+		NewCommandDispatchNonceSchema(),
 	}
 )

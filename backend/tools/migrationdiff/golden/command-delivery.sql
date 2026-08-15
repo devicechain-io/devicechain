@@ -97,7 +97,8 @@ CREATE TABLE "command-delivery".commands (
  response_payload jsonb,
  error text,
  batch_id bigint,
- batch_token character varying(128)
+ batch_token character varying(128),
+ dispatch_nonce character varying(64)
 );
 CREATE UNIQUE INDEX uix_command_batches_tenant_token ON "command-delivery".command_batches USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_commands_batch_device ON "command-delivery".commands USING btree (tenant_id, batch_id, device_token) WHERE ((batch_id IS NOT NULL) AND (deleted_at IS NULL));

@@ -102,7 +102,17 @@ type BatchCancellation struct {
 //     it lands in `matched` and in no bucket, which is the gap BatchCancellation documents,
 //     and cancelling again takes it.
 //
-// It is safe to call twice — which is also the remedy for that last case. The second call
+// 🔑 A PARK CAN NOW LAND IN THAT SAME WINDOW, AND IT IS REPORTED WORSE THAN A RELEASE IS.
+// Both routes out of SENT share retireClaim, so both check the cancelled-batch stamp and both
+// miss it on the identical interleaving — the check reads before the stamp commits, the row
+// lands in the target state after the last pass. The difference is what the operator is told:
+// a released row was QUEUED when the passes counted it, so it shows up in `matched` and no
+// bucket. A parked row was still SENT then, so it is counted as `alreadySent` — reported as
+// beyond recall when it is in fact recallable AND armed for the next wake. The remedy is the
+// same (cancel again), but the first report is more misleading, so it is written down here
+// rather than left for someone to infer from the bucket totals.
+//
+// It is safe to call twice — which is also the remedy for both cases. The second call
 // cancels whatever it finds, reports the batch as it now stands, and leaves the original
 // stamp intact.
 func (api *Api) CancelCommandBatch(ctx context.Context, batch *CommandBatch) (*BatchCancellation, error) {
@@ -124,7 +134,7 @@ func (api *Api) CancelCommandBatch(ctx context.Context, batch *CommandBatch) (*B
 			}
 			result.Cancelled += cancelled
 			counts = passCounts
-			if counts[CommandQueued.String()]+counts[CommandHeld.String()] == 0 {
+			if stillCancellable(counts) == 0 {
 				break
 			}
 		}
@@ -159,7 +169,7 @@ func (api *Api) CancelCommandBatch(ctx context.Context, batch *CommandBatch) (*B
 // these rows right up to the moment the UPDATE takes them.
 func cancelBatchPass(tx *gorm.DB, batchId uint) (int, map[string]int, error) {
 	res := tx.Model(&Command{}).
-		Where("batch_id = ? AND status IN ?", batchId, batchCancellableStatusStrings()).
+		Where("batch_id = ? AND status IN ?", batchId, cancellableStatusStrings()).
 		Updates(map[string]any{"status": CommandCancelled.String()})
 	if res.Error != nil {
 		return 0, nil, res.Error
@@ -181,6 +191,26 @@ func cancelBatchPass(tx *gorm.DB, batchId uint) (int, map[string]int, error) {
 		counts[row.Status] = row.Total
 	}
 	return int(res.RowsAffected), counts, nil
+}
+
+// stillCancellable counts, in a pass's snapshot, the rows a FURTHER pass could still take.
+// It is what decides whether the loop has converged.
+//
+// 🔴 IT IS DERIVED FROM cancellableStatusStrings, AND WRITING IT OUT BY HAND WOULD REOPEN
+// THE VERY RACE THIS LOOP EXISTS FOR. The condition here used to be the literal expression
+// `counts[QUEUED] + counts[HELD]`, which was correct exactly as long as those were the only
+// two cancellable states — an expression PARALLEL to the list rather than derived from it.
+// The day PARKED joined the list, a snapshot of {PARKED:1, QUEUED:0, HELD:0} would read as
+// converged: the loop would break with a dispatchable row inside a cancelled batch, commit,
+// and let the next wake actuate it after the brake had been pulled. That is precisely the
+// re-armed-row case the passes were built to catch, defeated by the counting rather than by
+// the cancelling.
+func stillCancellable(counts map[string]int) int {
+	total := 0
+	for _, status := range cancellableStatusStrings() {
+		total += counts[status]
+	}
+	return total
 }
 
 // observe reads the three reported-but-not-measured fields off the FINAL snapshot.

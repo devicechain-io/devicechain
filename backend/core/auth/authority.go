@@ -183,6 +183,34 @@ const (
 	// bounds a tenant access token, including one holding "*", to tenant-tier
 	// authorities, which a resolver-level check could not police.
 	CommandWake Authority = "command:wake"
+	// CommandPark permits handing a DISPATCHED command back because the transport
+	// found the device unreachable, taking it SENT -> PARKED. A queue-mode device is
+	// registered but asleep, so the platform publishes on presence and the transport
+	// discovers only then that there is no live session to deliver over.
+	//
+	// 🔴 IT IS THE ONLY WAY ANYTHING OUTSIDE command-delivery CAN MOVE A ROW BACKWARDS
+	// OUT OF SENT, WHICH MAKES IT STRICTLY STRONGER THAN command:wake. Waking returns a
+	// WITHHELD command to the queue, and its worst case is one extra evaluation.
+	// Parking returns a DISPATCHED one, so a holder aiming it at another transport's
+	// in-flight command re-arms hardware that may already have acted. That is why it is
+	// not folded into either neighbour: command:claim documents itself as taking
+	// commands OUT of the dispatchable set — the opposite direction — and reusing it
+	// would falsify that, while command:wake covers a strictly weaker move (a WITHHELD
+	// command back to the queue, worst case one wasted evaluation) and is held by a
+	// different service, event-sources, which has no unreachable-after-publish case at
+	// all. Granting either would hand a re-arm primitive to a holder that has no use
+	// for one.
+	//
+	// The re-arm it permits is bounded by the dispatch nonce rather than by this grant:
+	// a park names the dispatch it was handed, so it cannot move a row that has since
+	// been re-claimed. The authority bounds WHO may park; the nonce bounds WHICH
+	// dispatch. Neither substitutes for the other.
+	//
+	// System-tier for the same reason its neighbours are: parking is a machine
+	// operation, and the tier is what makes it reachable only by a service token —
+	// satisfies() bounds a tenant access token, including one holding "*", to
+	// tenant-tier authorities, which a resolver-level check could not police.
+	CommandPark Authority = "command:park"
 
 	// Dashboards (dashboard-management, ADR-039). Gate the dashboard-definition
 	// CRUD API; the live telemetry a dashboard renders is still gated by EventRead
@@ -314,6 +342,11 @@ var vocabulary = map[Authority]Tiers{
 	// transport that owns the connection is the only thing that knows the device
 	// came back.
 	CommandWake: system,
+	// Parking a dispatched command is the same kind of machine operation, and the
+	// strongest of the three: it is the only way anything outside command-delivery
+	// moves a row backwards out of SENT. Only a transport can know that a device it
+	// just published to was not actually reachable.
+	CommandPark: system,
 	// The AI provider list is instance config an operator owns — the ADR-065
 	// correction. A tenant only CONSENTS to external routing (a separate flag).
 	AIAdmin:       system,

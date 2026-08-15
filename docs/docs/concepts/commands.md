@@ -57,19 +57,27 @@ These states mean the command is not finished yet:
   days. A held command counts as in flight: it can still be cancelled, and a TTL that
   lapses on one records `EXPIRED` rather than `TIMEOUT`, because the command never went
   out. It returns to `QUEUED` when the device comes back.
-- **`SENT`** — published to the device's own command topic, awaiting its response.
+- **`SENT`** — published to the device's own command topic, awaiting its response. Read it as
+  *dispatched toward a device the platform believed was live*, not as proof the device has
+  it: a device that drops between the presence check and the publish still lands here.
+- **`PARKED`** — it was published, the transport found no live connection to the device, and
+  the platform still holds it. This is the sleeper's state, and it is delivered on the
+  device's next wake. Like `HELD`, it counts as in flight: it can still be cancelled, and a
+  TTL that lapses on one records `EXPIRED` rather than `TIMEOUT`, because the command never
+  reached a device. See [Registered is not the same as
+  reachable](#parked-commands).
 
 These are terminal, and nothing moves out of a terminal state:
 
 - **`SUCCESSFUL`** / **`FAILED`** — the device reported the outcome.
 - **`TIMEOUT`** — it was dispatched and the device never answered.
-- **`EXPIRED`** — its TTL elapsed before it ever went out.
+- **`EXPIRED`** — its TTL elapsed before it ever reached a device.
 - **`CANCELLED`** — an operator or a tenant called it off.
 
 `EXPIRED` and `TIMEOUT` answer different questions, and mistaking one for the other sends
-you looking in the wrong place: `EXPIRED` means the command never left the platform, so a
-run of them says deliveries are not being attempted; `TIMEOUT` means it did go out and
-nothing came back, which points at the device.
+you looking in the wrong place: `EXPIRED` means the command never got to a device, so a run
+of them says deliveries are not landing; `TIMEOUT` means one did go out and nothing came
+back, which points at the device.
 
 ### Commands to a device that is away
 
@@ -96,7 +104,8 @@ Three limits are worth knowing:
   Those commands are dispatched as before.
 - **It is a check, not a queue.** A device that disconnects between the check and the
   publish still loses the command. What is removed is the case the platform could see
-  coming.
+  coming. A transport that keeps its own queue for a sleeping device is handled separately —
+  see [Registered is not the same as reachable](#parked-commands).
 - **Commands to Sparkplug devices are not delivered at all.** The path is not built —
   Sparkplug nodes live on your own MQTT infrastructure rather than the platform's, and
   nothing bridges the two. A command issued to one is recorded `FAILED` immediately, with
@@ -106,11 +115,39 @@ A run of `TIMEOUT` against devices you know are intermittent is therefore still 
 reading as a statement about when they were connected rather than about their firmware —
 but it should now be a much shorter run.
 
+### Registered is not the same as reachable {#parked-commands}
+
+The presence check asks whether a device is **registered**. For a device that sleeps by
+design — an [LwM2M](./lwm2m.md) device in queue mode — that is a different question from
+whether it can be reached right now. It is registered, so the check passes and the command is
+published; the transport then finds no live connection and the command goes nowhere.
+
+That is the same defect as the one above, one layer down, and it used to have the same
+ending. The command sat in `SENT`, which also means "the platform handed it to the device",
+so a single status carried two opposite meanings — and a week later the record read
+`TIMEOUT`, blaming a device that was never given the command.
+
+Such a command now records **`PARKED`**: published, nobody there to receive it, and still the
+platform's to deliver on the device's next wake. Three consequences follow from the platform
+still holding it, and each of them is the point:
+
+- **A lapsed TTL records `EXPIRED`, not `TIMEOUT`.** The command never reached a device, so
+  the record says so rather than blaming the device for not answering.
+- **It can be cancelled** — on its own or as part of a fleet write — because the platform is
+  still holding it, and cancelling stops it from going out on the next wake. That is not a
+  promise the operation never ran: a hand-back can be a retry of a publish that did reach the
+  device before its connection lapsed, so treat a cancel as "it will not be delivered again",
+  not as "it was never carried out". Calling off a fleet write used to report parked commands
+  as already sent and therefore beyond recall, when the platform was still holding them.
+- **It counts against the tenant's undelivered-command ceiling**, exactly like `QUEUED` and
+  `HELD`. It is work the platform is still carrying.
+
 ### How much backlog a tenant may hold {#held-command-ceiling}
 
-A backlog of withheld commands drains two ways and no others: a device comes back, or a
-command's TTL lapses and it records `EXPIRED`. For a fleet that stays off, that means the
-backlog sits until the TTL horizon. So it is bounded per tenant, and the bound is a real
+A backlog of undelivered commands drains three ways and no others: a device comes back or
+wakes up, a command's TTL lapses and it records `EXPIRED`, or someone calls a command off and
+it records `CANCELLED`. For a fleet that stays off and is left alone, that means the backlog
+sits until the TTL horizon. So it is bounded per tenant, and the bound is a real
 number at every level — **no setting means "unlimited."** An unbounded backlog is a
 tenant-triggered, operator-invisible growth in durable storage.
 
@@ -141,8 +178,8 @@ says how much was set aside — so a caller refused at 8,000 against a visible c
 one; it cannot be raised or lowered per tenant.
 
 :::info It bounds undelivered work, not just held work
-The count is every command **`QUEUED` or `HELD`** — not only the ones withheld for absent
-devices. A tenant whose fleet is entirely present can still be refused, purely on in-flight
+The count is every command **`QUEUED`, `HELD` or `PARKED`** — not only the ones withheld for
+absent devices. A tenant whose fleet is entirely present can still be refused, purely on in-flight
 enqueue volume. Queued commands drain within a tick, so their steady-state contribution is
 about one tick of enqueue rate: small, but not zero, and a tenant issuing near its ceiling
 at a high rate will feel it. The bound is on undelivered work, and undelivered is
@@ -221,15 +258,20 @@ when the named sample is short.
 
 ### Cancelling a batch stops what has not gone out {#cancelling-a-batch}
 
-Cancelling a batch moves its commands from `QUEUED` or `HELD` to `CANCELLED`. Commands
-already `SENT` are left alone, and the devices holding them will still act on them.
+Cancelling a batch moves its commands from `QUEUED`, `HELD` or `PARKED` to `CANCELLED`.
+Commands already `SENT` are left alone, and the devices that received them will still act on
+them.
 
-That is narrower than cancelling a single command, deliberately. `SENT` means the command is
-already at the device, so cancelling it recalls nothing — all it does is make the platform
-stop listening for the device's answer, replacing a real outcome with a record saying an
-operator called it off. Doing that to thousands of commands at once would destroy the
-evidence of what the fleet actually did. Cancelling a single command is still permitted from
-`SENT` today; that will be narrowed to match.
+`SENT` is the line, and it is drawn in one place: the platform calls off what it is still
+holding, and leaves alone what it has already put on the wire. A `SENT` command was
+dispatched toward a device believed to be live, so cancelling it recalls nothing — all it
+would do is make the platform stop listening for that device's answer, replacing a real
+outcome with a record saying an operator called it off. Do that across a fleet and the
+devices act, the responses are discarded, and the record says the operation was called off.
+
+Cancelling a **single** command draws exactly the same line: `QUEUED`, `HELD` and `PARKED`
+are cancelled, and a `SENT` command is returned unchanged rather than being driven to
+`CANCELLED`. See [Cancel one](../guides/sending-commands.md#cancel-one).
 
 A batch cancel never refuses. A brake that declined to engage because part of the fleet had
 already moved would leave the rest of the fleet commanded, which is the worst available

@@ -104,7 +104,49 @@ func (r *SchemaResolver) CancelCommand(ctx context.Context, args struct {
 	}, nil
 }
 
-// MarkCommandSent claims a still-dispatchable command (QUEUED or HELD) for
+// ParkCommand hands back a command whose transport found the device UNREACHABLE, taking it
+// SENT -> PARKED so the record says it went nowhere. It reports whether THIS call's park
+// landed.
+//
+// It is the other half of MarkCommandSent for a transport that cannot deliver on demand. A
+// queue-mode device is REGISTERED but asleep, and the platform decides to publish from
+// presence, so the command goes out and the transport finds no live session. Before this,
+// such a row stayed SENT — the state meaning "the device has it" — which made the platform
+// blame the device at TTL (TIMEOUT), told an operator cancelling a fleet write that the
+// command was beyond recall when it was not, and left the row to be re-dispatched without a
+// claim on the next wake.
+//
+// 🔴 IT TAKES THE DISPATCH NONCE, AND A PARK WITHOUT ONE WOULD RE-ARM AN ACTUATED COMMAND.
+// The caller quotes the nonce from the envelope it was handed. A request that is a
+// redelivery of an older publish therefore names a dispatch that has since been superseded,
+// matches nothing, and moves no row. The full sequence is on model.Command.DispatchNonce.
+//
+// 🔴 FALSE IS A SETTLED OUTCOME, NOT A FAILURE. It means the row moved on under the park —
+// answered, cancelled, expired, or re-claimed by a wake drain. A caller that retried on
+// false would burn every redelivery on a row that is already where it should be.
+//
+// 🔴 IT IS GATED ON command:park, ITS OWN AUTHORITY, RATHER THAN REUSING command:claim.
+// The vocabulary already splits on exactly this axis: claiming takes a command OUT of the
+// dispatchable set, waking puts one BACK IN, and they are separate authorities for that
+// reason alone. Parking is the put-back-in direction FROM SENT, which is strictly stronger
+// than waking — it is the only way anything outside this service can move a row backwards
+// out of the dispatched state, and a holder could use it to re-arm another transport's
+// in-flight command. Folding that into command:claim would also falsify what that authority
+// documents itself to mean. Adding an authority is cheap now and breaking once roles exist
+// in the wild.
+func (r *SchemaResolver) ParkCommand(ctx context.Context, args struct {
+	Token         string
+	DispatchNonce string
+}) (bool, error) {
+	if err := auth.Authorize(ctx, auth.CommandPark); err != nil {
+		return false, err
+	}
+
+	api := r.GetApi(ctx)
+	return api.ParkClaim(ctx, args.Token, args.DispatchNonce)
+}
+
+// MarkCommandSent claims a still-dispatchable command (QUEUED, HELD or PARKED) for
 // immediate delivery, moving it to SENT. It reports whether THIS call won the
 // claim.
 //

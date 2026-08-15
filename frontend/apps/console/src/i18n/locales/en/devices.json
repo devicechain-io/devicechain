@@ -21,6 +21,7 @@
   "commandNameLabel": "Command name",
   "commandNamePlaceholder": "e.g. reboot",
   "commandNameRequired": "Command name is required",
+  "commandNotCancelled": "Command “{{name}}” wasn’t cancelled — it had already moved on to {{status}}",
   "commandRejected": "Command “{{name}}” refused: {{reason}}",
   "copiedToClipboard": "Copied to clipboard",
   "copyIdAriaLabel": "Copy id",

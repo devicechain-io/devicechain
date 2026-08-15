@@ -8,7 +8,7 @@ import (
 	"fmt"
 )
 
-// claimMutation moves a still-dispatchable command (QUEUED or HELD) to SENT and reports
+// claimMutation moves a still-dispatchable command (QUEUED, HELD or PARKED) to SENT and reports
 // whether THIS call performed the transition. It is command-delivery's markCommandSent.
 //
 // It returns a boolean rather than the command on purpose, and the drain depends on that:

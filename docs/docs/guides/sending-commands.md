@@ -95,7 +95,7 @@ may change.
 
 | `code` | Meaning | Retry? |
 |---|---|---|
-| `HELD_CEILING_EXCEEDED` | The tenant is at its limit of **undelivered** commands — everything still `QUEUED` or `HELD`, not only what is held for absent devices. | **Yes** — it clears as those commands go out |
+| `HELD_CEILING_EXCEEDED` | The tenant is at its limit of **undelivered** commands — everything still `QUEUED`, `HELD` or `PARKED`, not only what is held for absent devices. | **Yes** — it clears as those commands go out |
 | `DEVICE_NOT_FOUND` | No device with that token in this tenant. | No |
 | `COMMAND_NOT_IN_VOCABULARY` | The profile constrains commands and this key is not one. Check the casing. | No |
 | `PAYLOAD_SCHEMA_VIOLATION` | The payload broke the command's parameter schema — unknown parameter, wrong type, out of range, or a required one missing. | No |
@@ -133,7 +133,7 @@ query {
   commands(criteria: {
     pageNumber: 1, pageSize: 50,
     deviceToken: "sensor-001",
-    statuses: ["HELD", "SENT"]
+    statuses: ["HELD", "PARKED", "SENT"]
   }) {
     results { token name status queuedTime }
     pagination { totalRecords }
@@ -142,13 +142,14 @@ query {
 ```
 
 `statuses` is the one to reach for when what you care about is a set — "everything still in
-flight for this device" is `HELD` plus `SENT`, the commands withheld for it and the ones
-already dispatched and unanswered. An empty list is ignored rather than matching nothing.
+flight for this device" is `HELD`, `PARKED` and `SENT`: the commands withheld because the
+device is away, the ones published to a device that turned out not to be awake, and the ones
+dispatched and unanswered. An empty list is ignored rather than matching nothing.
 
 What each terminal state tells you is in
 [Commands](../concepts/commands.md#command-lifecycle); the pair worth internalizing is that
-**`EXPIRED` means it never left the platform and `TIMEOUT` means it did** — a run of the
-first points at dispatch, a run of the second points at the device.
+**`EXPIRED` means it never got to a device and `TIMEOUT` means it did** — a run of the first
+points at dispatch, a run of the second points at the device.
 
 ## Cancel one
 
@@ -158,18 +159,28 @@ mutation {
 }
 ```
 
-Legal from any non-terminal state — `QUEUED`, `HELD` or `SENT`. Cancelling a held command
-is the useful case: it was withheld for an absent device and can be called off before that
-device ever sees it, which is much of the point of holding it rather than firing it into
-the dark. It records `CANCELLED`.
+Legal from `QUEUED`, `HELD` and `PARKED` — the states in which the platform is still holding
+the command. Those are the useful cases: the command was withheld for an absent device, or
+published to one that turned out to be asleep, and it can be called off before the platform
+delivers it, which is much of the point of holding it rather than firing it into the dark.
+It records `CANCELLED`.
 
-**Cancelling an already-terminal command is not an error.** The command is returned
+**A `SENT` command is not cancelled.** Cancelling does not recall a dispatched command, and
+driving one to `CANCELLED` would stop no actuation — it would only make the platform discard
+the device's real answer when it arrives, so the device acts, the response vanishes, and the
+record says the operation was called off. The call therefore succeeds and returns the command
+unchanged, still `SENT`. Cancel races delivery, and losing that race is ordinary.
+
+**Cancelling an already-terminal command is not an error either.** It too is returned
 unchanged, with whatever status it reached. So a cancel that loses the race with a response
-looks like a successful call that returned `SUCCESSFUL` — check the `status` you get back
-rather than assuming the cancel took effect. A token matching no command *is* an error.
+looks like a successful call that returned `SUCCESSFUL`.
 
-Cancelling does not recall a dispatched command: `SENT` means it is already with the
-device. Cancel races delivery, and losing that race is ordinary.
+Both of those are the same instruction: **check the `status` you get back** rather than
+assuming the cancel took effect. A token matching no command *is* an error.
+
+This is exactly the brake `cancelCommandBatch` applies to a whole fleet write — same states
+cancelled, same line at `SENT`. See [Cancelling a
+batch](../concepts/commands.md#cancelling-a-batch).
 
 ## Set a TTL you can live with {#set-a-ttl-you-can-live-with}
 
@@ -189,11 +200,12 @@ call off, see [Commanding a fleet](./commanding-a-fleet.md). It is not a loop of
 mutation: it pins the group's membership as of the moment it fires, records which devices
 were refused and why, and cancels as one operation.
 
-## Two mutations that are not for you
+## Three mutations that are not for you
 
-`markCommandSent` and `releaseHeldCommands` appear on this schema but are gated on
-**system-tier** authorities (`command:claim` and `command:wake`) that a tenant access token
-does not carry. They exist for transports that own a device's connection — an LwM2M device
-draining its backlog over the session it just opened, or a broker reporting that a device
-came back — and calling them from an application would fight the delivery sweep for control
-of a physical actuation.
+`markCommandSent`, `releaseHeldCommands` and `parkCommand` appear on this schema but are
+gated on **system-tier** authorities (`command:claim`, `command:wake` and `command:park`)
+that a tenant access token does not carry. They exist for transports that own a device's
+connection — an LwM2M device draining its backlog over the session it just opened, a broker
+reporting that a device came back, or a transport handing a command back because the device
+it was published toward turned out to be unreachable — and calling them from an application
+would fight the delivery sweep for control of a physical actuation.

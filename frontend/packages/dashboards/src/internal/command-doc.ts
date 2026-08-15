@@ -24,7 +24,9 @@ export interface CommandSearchCriteriaInput {
   status?: string | null;
   // Match ANY of several lifecycle states. ANDed with `status` when both are given; an
   // empty list is ignored rather than matching nothing. The states a caller cares about
-  // are usually a set — "still outstanding" is HELD ∪ SENT ∪ QUEUED, not one value.
+  // are usually a set — "still outstanding" is QUEUED ∪ HELD ∪ SENT ∪ PARKED, not one
+  // value, and "still cancellable" is a different set again (SENT is outstanding but
+  // cannot be called back).
   statuses?: string[] | null;
 }
 
