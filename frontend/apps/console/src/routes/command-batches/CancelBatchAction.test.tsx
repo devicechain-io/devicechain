@@ -1,0 +1,405 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Runs under jsdom with the REAL i18n catalogs, the real confirm dialog, the real API
+// module and the real query documents. Only the GraphQL transport and the auth claims are
+// faked, so the copy asserted below is the copy an operator reads and the variables
+// asserted are the variables that would go on the wire.
+//
+// 🔴🔴 WHY THIS FILE EXISTS. `cancelCommandBatch` returns four numbers that DELIBERATELY
+// NEED NOT SUM, and every way of getting this screen wrong is a way of making them read
+// better than they are:
+//
+//   • `alreadySent` counts commands that are AT their devices. THOSE DEVICES WILL STILL
+//     ACT. A screen reporting "1,000 cancelled" while 300 of them are about to actuate
+//     hardware is the worst thing this feature could do, and nothing about it would look
+//     wrong — the number is even true, for a definition of "cancelled" nobody holds.
+//
+//   • `matched` above the sum means commands went back into the delivery queue and this
+//     cancel MISSED them. Nothing retries on the operator's behalf, so a screen that
+//     swallows the gap leaves live commands running with no sign of it.
+
+import '@/i18n/config';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const { gqlMock, toastMock, authorities } = vi.hoisted(() => ({
+  gqlMock: vi.fn(),
+  toastMock: vi.fn(),
+  authorities: { value: ['command:read', 'command:write'] as string[] },
+}));
+
+vi.mock('@devicechain/client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@devicechain/client')>();
+  // hasAuthority is deliberately NOT stubbed: the gate under test is the real one.
+  return { ...actual, gql: (...args: unknown[]) => gqlMock(...args) };
+});
+
+vi.mock('@/auth/AuthProvider', () => ({
+  useAuth: () => ({ claims: { authorities: authorities.value } }),
+}));
+
+// The header's CopyToken chip reports a clipboard failure through the toast.
+vi.mock('@/components/ui/toast', () => ({ useToast: () => ({ toast: toastMock }) }));
+
+import { ConfirmProvider } from '@/components/ui/confirm-dialog';
+import CommandBatchDetailPage from './CommandBatchDetailPage';
+
+interface CancelCounts {
+  cancelled: number;
+  alreadySent: number;
+  alreadyFinished: number;
+  matched: number;
+}
+
+// Mutable per-test wiring, so a cancel can change what the page re-reads afterwards.
+const world = {
+  batch: {} as Record<string, unknown>,
+  heldCount: 0 as number | null,
+  cancelResult: { cancelled: 0, alreadySent: 0, alreadyFinished: 0, matched: 0 } as CancelCounts,
+  cancelThrows: null as Error | null,
+  // Applied to the batch record the SECOND and later reads return — a real cancel stamps
+  // cancelledAt, and the page re-reads.
+  afterCancel: null as Record<string, unknown> | null,
+  cancelCalls: [] as unknown[][],
+};
+
+function batch(over: Record<string, unknown> = {}) {
+  return {
+    id: 'id-1',
+    token: 'batch-1',
+    createdAt: '2026-08-12T12:00:00Z',
+    name: 'reboot',
+    payload: null,
+    targetKind: 'GROUP',
+    groupToken: 'north-hvac',
+    groupVersion: 3,
+    allowPartial: true,
+    resolved: 10,
+    accepted: 8,
+    refusals: [] as unknown[],
+    refusalCounts: [] as unknown[],
+    cancelledAt: null,
+    cancelledCount: null,
+    ...over,
+  };
+}
+
+afterEach(cleanup);
+beforeEach(() => {
+  gqlMock.mockReset();
+  toastMock.mockReset();
+  authorities.value = ['command:read', 'command:write'];
+  world.batch = batch();
+  world.heldCount = 4;
+  world.cancelResult = { cancelled: 0, alreadySent: 0, alreadyFinished: 0, matched: 0 };
+  world.cancelThrows = null;
+  world.afterCancel = null;
+  world.cancelCalls = [];
+
+  gqlMock.mockImplementation((_service: string, document: unknown, variables: unknown) => {
+    const doc = String(document);
+    if (doc.includes('mutation CancelCommandBatch')) {
+      world.cancelCalls.push([variables]);
+      if (world.cancelThrows) return Promise.reject(world.cancelThrows);
+      if (world.afterCancel) world.batch = { ...world.batch, ...world.afterCancel };
+      return Promise.resolve({ cancelCommandBatch: world.cancelResult });
+    }
+    if (doc.includes('query CommandBatchesByToken')) {
+      return Promise.resolve({ commandBatchesByToken: [world.batch] });
+    }
+    // Both the still-held COUNT and the rows table use `query Commands`; the count is the
+    // one that narrows by `statuses`.
+    const criteria = (variables as { criteria: Record<string, unknown> }).criteria;
+    if (criteria.statuses) {
+      return Promise.resolve({
+        commands: {
+          results: [],
+          pagination: { pageStart: 1, pageEnd: 1, totalRecords: world.heldCount },
+        },
+      });
+    }
+    return Promise.resolve({
+      commands: { results: [], pagination: { pageStart: 0, pageEnd: 0, totalRecords: 0 } },
+    });
+  });
+});
+
+function renderPage() {
+  render(
+    <ConfirmProvider>
+      <MemoryRouter initialEntries={['/command-batches/batch-1']}>
+        <Routes>
+          <Route path="/command-batches/:token" element={<CommandBatchDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    </ConfirmProvider>,
+  );
+}
+
+/** Press Cancel batch and confirm the dialog. */
+async function cancelAndConfirm(buttonName = 'Cancel batch') {
+  fireEvent.click(await screen.findByRole('button', { name: buttonName }));
+  const dialog = await screen.findByRole('dialog');
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel batch' }));
+}
+
+describe('the cancel action’s gates', () => {
+  // 🔴 The authority gate is the real hasAuthority against the real claim shape.
+  it('offers no cancel action without command:write', async () => {
+    authorities.value = ['command:read'];
+
+    renderPage();
+
+    // The page itself has loaded — so the absence below is the gate, not an empty render.
+    expect(await screen.findByText('Summary')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Cancel batch' })).toBeNull();
+  });
+
+  it('offers the cancel action with command:write', async () => {
+    renderPage();
+
+    expect(await screen.findByRole('button', { name: 'Cancel batch' })).toBeTruthy();
+  });
+
+  // A batch keeps the FIRST cancellation's stamp forever, so re-offering the primary
+  // action on one already called off invites a write whose only visible effect is a second
+  // report of an event that already happened.
+  it('offers no cancel action on a batch that has already been called off', async () => {
+    world.batch = batch({ cancelledAt: '2026-08-12T13:00:00Z', cancelledCount: 6 });
+
+    renderPage();
+
+    expect(await screen.findByText('Summary')).toBeTruthy();
+    // S1's own rendering of the cancellation is still there — this is a cancelled batch,
+    // not a broken page.
+    expect(screen.getByText(/Called off on/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Cancel batch' })).toBeNull();
+  });
+
+  // 🔴 `cancelledCount` IS NULLABLE EVEN WHEN `cancelledAt` IS SET, so the gate must key on
+  // the STAMP. Keying on the count would re-offer the action on a batch that was cancelled
+  // and whose count simply was not recorded.
+  it('still hides the action when the batch was cancelled without a recorded count', async () => {
+    world.batch = batch({ cancelledAt: '2026-08-12T13:00:00Z', cancelledCount: null });
+
+    renderPage();
+
+    // No count in the sentence, because none was recorded — S1's nullable-count arm.
+    expect(await screen.findByText(/^Called off on .*\.$/)).toBeTruthy();
+    expect(screen.queryByText(/which stopped/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Cancel batch' })).toBeNull();
+  });
+});
+
+describe('the confirmation', () => {
+  it('names the batch and how much the platform is still holding', async () => {
+    world.heldCount = 4;
+
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel batch' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Call off “reboot”?')).toBeTruthy();
+    expect(
+      within(dialog).getByText(
+        'The platform is still holding 4 of this batch’s commands and will stop them.',
+      ),
+    ).toBeTruthy();
+    // 🔴 Stated BEFORE the operator commits, not only in the report afterwards.
+    expect(
+      within(dialog).getByText(
+        'Commands already handed to their devices cannot be recalled — those devices will still act on them.',
+      ),
+    ).toBeTruthy();
+    // "Cancel" would name the thing being confirmed, so the dismiss button must not say it.
+    expect(within(dialog).getByRole('button', { name: 'Leave it running' })).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: 'Cancel' })).toBeNull();
+  });
+
+  // A null total is three things at once — still loading, read failed, or a null
+  // `totalRecords` — and all three mean nobody said how much is left to stop. Printing a
+  // confident 0 would read as "there is nothing to stop".
+  it('says the still-held count is unknown rather than printing zero', async () => {
+    world.heldCount = null;
+
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel batch' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(
+      within(dialog).getByText(
+        'How many of this batch’s commands the platform still holds could not be read, so how much this stops is not known in advance.',
+      ),
+    ).toBeTruthy();
+    expect(within(dialog).queryByText(/still holding 0 of/)).toBeNull();
+  });
+
+  it('sends nothing when the operator leaves it running', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel batch' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Leave it running' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(world.cancelCalls.length).toBe(0);
+  });
+});
+
+describe('the outcome report', () => {
+  // 🔴🔴 THE ONE THAT MATTERS. 300 commands are at their devices and about to actuate
+  // hardware. Nothing on this screen may present them as stopped.
+  it('reports commands already at their devices as still going to act, never as stopped', async () => {
+    world.cancelResult = {
+      cancelled: 1000,
+      alreadySent: 300,
+      alreadyFinished: 0,
+      matched: 1300,
+    };
+
+    renderPage();
+    await cancelAndConfirm();
+
+    // What was actually stopped is the measured count alone.
+    expect(
+      await screen.findByText(
+        '1,000 commands the platform still held were stopped and will not be delivered.',
+      ),
+    ).toBeTruthy();
+    // 🔴 And the fleet is explicitly still acting.
+    expect(
+      screen.getByText(
+        '300 commands had already been handed to their devices and could not be recalled. Those devices will still act on them.',
+      ),
+    ).toBeTruthy();
+    // 🔴 THE DEFECT STATED DIRECTLY: the two must never be added into one "stopped" total.
+    expect(screen.queryByText(/1,300 commands the platform still held were stopped/)).toBeNull();
+    // The bucket is labelled by WHERE the commands are, not by what happened to them.
+    expect(screen.getByText('Already at devices')).toBeTruthy();
+  });
+
+  // The counterweight. A panel that ALWAYS warned about in-flight commands would pass the
+  // test above and cry wolf on every clean cancel.
+  it('says nothing is still on its way when no command had reached a device', async () => {
+    world.cancelResult = { cancelled: 8, alreadySent: 0, alreadyFinished: 2, matched: 10 };
+
+    renderPage();
+    await cancelAndConfirm();
+
+    expect(
+      await screen.findByText(
+        'No command had reached a device, so nothing from this batch is still on its way to hardware.',
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/will still act on/)).toBeNull();
+    expect(screen.getByText('Every command this batch still has is accounted for.')).toBeTruthy();
+  });
+
+  // 🔴 The gap between `matched` and the sum is the only evidence that commands went back
+  // into the delivery queue and this cancel missed them.
+  it('tells the operator to cancel again when the counts fall short of the commands found', async () => {
+    world.cancelResult = { cancelled: 900, alreadySent: 60, alreadyFinished: 20, matched: 1000 };
+
+    renderPage();
+    await cancelAndConfirm();
+
+    expect(
+      await screen.findByText(
+        '20 of this batch’s commands went back into the delivery queue while this ran, so this cancel did not stop them.',
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText(/Cancel again — nothing retries on your behalf/)).toBeTruthy();
+    // …and the remedy is an ACTION, right there.
+    expect(screen.getByRole('button', { name: 'Cancel again' })).toBeTruthy();
+    // The reassuring alternative reading must NOT also be on screen.
+    expect(screen.queryByText('Every command this batch still has is accounted for.')).toBeNull();
+  });
+
+  it('does not ask for a second cancel when the numbers settle', async () => {
+    world.cancelResult = { cancelled: 900, alreadySent: 80, alreadyFinished: 20, matched: 1000 };
+
+    renderPage();
+    await cancelAndConfirm();
+
+    expect(
+      await screen.findByText('Every command this batch still has is accounted for.'),
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Cancel again' })).toBeNull();
+    expect(screen.queryByText(/went back into the delivery queue/)).toBeNull();
+  });
+
+  // 🔴 THE REMEDY SURVIVES THE STAMP. By the time this renders the batch IS cancelled, and
+  // cancelling again is exactly what the service prescribes — gating the fix on the
+  // condition it fixes would leave live commands running with no way to stop them.
+  it('keeps offering Cancel again after the batch has been stamped cancelled', async () => {
+    world.cancelResult = { cancelled: 900, alreadySent: 60, alreadyFinished: 20, matched: 1000 };
+    world.afterCancel = { cancelledAt: '2026-08-12T13:00:00Z', cancelledCount: 900 };
+
+    renderPage();
+    await cancelAndConfirm();
+
+    // The re-read landed: the batch now carries its cancellation.
+    expect(await screen.findByText(/Called off on/)).toBeTruthy();
+    // The primary action is gone…
+    expect(screen.queryByRole('button', { name: 'Cancel batch' })).toBeNull();
+    // …and the remedial one is not.
+    expect(screen.getByRole('button', { name: 'Cancel again' })).toBeTruthy();
+    expect(
+      screen.getByText(
+        'The batch’s own record keeps the first cancellation’s time and count — cancelling again stops what is left without rewriting it.',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('cancels by the batch’s own token and re-reads the record afterwards', async () => {
+    world.cancelResult = { cancelled: 3, alreadySent: 0, alreadyFinished: 0, matched: 3 };
+
+    renderPage();
+    const readsBefore = gqlMock.mock.calls.filter((c) =>
+      String(c[1]).includes('query CommandBatchesByToken'),
+    ).length;
+    await cancelAndConfirm();
+
+    await waitFor(() => expect(world.cancelCalls.length).toBe(1));
+    expect(world.cancelCalls[0][0]).toEqual({ token: 'batch-1' });
+    // The stamp, the count and every row's status are stale now.
+    await waitFor(() =>
+      expect(
+        gqlMock.mock.calls.filter((c) => String(c[1]).includes('query CommandBatchesByToken'))
+          .length,
+      ).toBeGreaterThan(readsBefore),
+    );
+  });
+
+  // 🔴 A PANEL, NOT A TOAST. Four numbers that need not sum are a report someone may need
+  // to read twice or quote; a container that vanishes is the wrong one.
+  it('renders the outcome as a persistent panel rather than a toast', async () => {
+    world.cancelResult = { cancelled: 2, alreadySent: 1, alreadyFinished: 0, matched: 3 };
+
+    renderPage();
+    await cancelAndConfirm();
+
+    expect(await screen.findByText('Cancellation result')).toBeTruthy();
+    // All four counts are on screen, each under its own label.
+    for (const label of ['Stopped', 'Already at devices', 'Already finished', 'Commands found']) {
+      expect(screen.getByText(label)).toBeTruthy();
+    }
+    // Nothing about this outcome went through the transient channel.
+    expect(toastMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('a cancel the platform never answered', () => {
+  it('says what is unknown and that trying again is safe', async () => {
+    world.cancelThrows = new Error('command-delivery unreachable');
+
+    renderPage();
+    await cancelAndConfirm();
+
+    expect(await screen.findByText('command-delivery unreachable')).toBeTruthy();
+    expect(screen.getByText(/Cancelling again is safe/)).toBeTruthy();
+    // No report, because there is nothing to report — the four counts never arrived.
+    expect(screen.queryByText('Cancellation result')).toBeNull();
+  });
+});

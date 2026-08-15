@@ -2,9 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // One fleet write, read in full: what was fired, at whom, who did not get it, and where
-// its commands are now.
-//
-// 🔴 READ-ONLY. No cancel control — that is a separate slice.
+// its commands are now — and the one place it can be CALLED OFF.
 //
 // 🔴 THE PAGE ANSWERS TWO DIFFERENT TENSES, AND THEY MUST NOT BE CONFLATED. The batch
 // record's `resolved` / `accepted` / refusals are STORED FACTS ABOUT THE MOMENT IT FIRED
@@ -39,14 +37,17 @@ import { COMMAND_STATUSES } from '@devicechain/dashboards';
 import { formatTime } from '@/lib/utils';
 import { commandStatusVariant } from '@/lib/command-status';
 import { useQuery } from '@/lib/hooks/use-query';
+import { useReload } from '@/routes/common';
 import {
   getCommandBatch,
   listBatchCommands,
   type CommandBatch,
 } from '@/lib/api/command-delivery';
 import { TargetKindBadge } from './TargetKindBadge';
+import { Fact } from './Fact';
 import { groupRefusals, totalRefused, type RefusalGroup } from './refusals';
 import { RefusalGroupList } from './RefusalGroups';
+import { CancelBatchButton, CancelBatchReport, useBatchCancel } from './CancelBatchAction';
 
 const commandsPageSize = 25;
 
@@ -54,7 +55,11 @@ export default function CommandBatchDetailPage() {
   const { t } = useTranslation('commandBatches');
   const { token: rawToken } = useParams<{ token: string }>();
   const token = rawToken ?? '';
-  const { data, loading, error } = useQuery(() => getCommandBatch(token), [token]);
+  // Bumped after a cancellation. Everything on this page goes stale at once — the batch's
+  // cancellation stamp and count, the live still-held count behind the confirm dialog, and
+  // every command row's status — so one counter drives all three re-reads.
+  const [reloadKey, reload] = useReload();
+  const { data, loading, error } = useQuery(() => getCommandBatch(token), [token, reloadKey]);
 
   // First-load gating only: useQuery re-enters `loading` on a refetch while keeping the
   // prior data, so a bare `loading` check would unmount the whole page on every refresh.
@@ -79,13 +84,26 @@ export default function CommandBatchDetailPage() {
       </PageShell>
     );
   }
-  return <CommandBatchDetail batch={data} />;
+  return <CommandBatchDetail batch={data} reloadKey={reloadKey} onCancelled={reload} />;
 }
 
-function CommandBatchDetail({ batch }: { batch: CommandBatch }) {
+function CommandBatchDetail({
+  batch,
+  reloadKey,
+  onCancelled,
+}: {
+  batch: CommandBatch;
+  reloadKey: number;
+  onCancelled: () => void;
+}) {
   const { t } = useTranslation('commandBatches');
   const groups = groupRefusals(batch.refusalCounts, batch.refusals);
   const refused = totalRefused(batch.refusalCounts);
+  // 🔴 THE STATE LIVES HERE, ABOVE BOTH HALVES, and that is what keeps the report on
+  // screen: the button is in the header's action slot and the report is in the body, so a
+  // component owning both would have to be one or the other. Holding it here also means
+  // the refetch this triggers repaints the page underneath a report that stays put.
+  const cancelState = useBatchCancel({ batch, reloadKey, onCancelled });
 
   return (
     <PageShell
@@ -95,6 +113,9 @@ function CommandBatchDetail({ batch }: { batch: CommandBatch }) {
       title={batch.name}
       titleAdornment={<CopyToken value={batch.token} />}
       banner="devices"
+      // The entity's own action, bare — PageShell lays it out. It renders nothing when the
+      // operator lacks command:write or the batch has already been called off.
+      action={<CancelBatchButton state={cancelState} />}
       description={
         <div className="mt-1 flex flex-wrap items-center gap-2">
           <TargetKindBadge targetKind={batch.targetKind} />
@@ -122,24 +143,18 @@ function CommandBatchDetail({ batch }: { batch: CommandBatch }) {
       }
     >
       <div className="space-y-6">
+        {/* First, because it is the most recent thing that happened to this batch and the
+            operator pressed a button to make it happen. */}
+        <CancelBatchReport state={cancelState} />
         <SummaryPanel batch={batch} refused={refused} />
         <RefusalsPanel groups={groups} refused={refused} />
-        <BatchCommandsPanel batchToken={batch.token} />
+        <BatchCommandsPanel batchToken={batch.token} reloadKey={reloadKey} />
       </div>
     </PageShell>
   );
 }
 
 // ── Summary ────────────────────────────────────────────────────────────────
-
-function Fact({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <dt className="text-xs uppercase tracking-wider text-muted-foreground">{label}</dt>
-      <dd className="mt-1 text-sm text-foreground">{children}</dd>
-    </div>
-  );
-}
 
 function SummaryPanel({ batch, refused }: { batch: CommandBatch; refused: number }) {
   const { t } = useTranslation('commandBatches');
@@ -217,12 +232,14 @@ function RefusalsPanel({ groups, refused }: { groups: RefusalGroup[]; refused: n
 
 // ── Commands ───────────────────────────────────────────────────────────────
 
-function BatchCommandsPanel({ batchToken }: { batchToken: string }) {
+function BatchCommandsPanel({ batchToken, reloadKey }: { batchToken: string; reloadKey: number }) {
   const { t } = useTranslation('commandBatches');
   const [pageNumber, setPageNumber] = useState(1);
   const [status, setStatus] = useState('');
   useEffect(() => setPageNumber(1), [status]);
 
+  // reloadKey is in the deps because a cancellation changes the STATUS of these rows —
+  // this panel is the present tense, and after a cancel the present has moved.
   const { data, loading, error } = useQuery(
     () =>
       listBatchCommands({
@@ -231,7 +248,7 @@ function BatchCommandsPanel({ batchToken }: { batchToken: string }) {
         pageSize: commandsPageSize,
         status: status || undefined,
       }),
-    [batchToken, pageNumber, status],
+    [batchToken, pageNumber, status, reloadKey],
   );
 
   const commands = data?.results ?? [];

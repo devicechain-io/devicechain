@@ -84,6 +84,13 @@ export type CancelCommandMutationVariables = Exact<{
 
 export type CancelCommandMutation = { cancelCommand: { id: string, token: string, status: string } };
 
+export type CancelCommandBatchMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type CancelCommandBatchMutation = { cancelCommandBatch: { cancelled: number, alreadySent: number, alreadyFinished: number, matched: number } };
+
 export class TypedDocumentString<TResult, TVariables>
   extends String
   implements DocumentTypeDecoration<TResult, TVariables>
@@ -233,3 +240,13 @@ export const CancelCommandDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<CancelCommandMutation, CancelCommandMutationVariables>;
+export const CancelCommandBatchDocument = new TypedDocumentString(`
+    mutation CancelCommandBatch($token: String!) {
+  cancelCommandBatch(token: $token) {
+    cancelled
+    alreadySent
+    alreadyFinished
+    matched
+  }
+}
+    `) as unknown as TypedDocumentString<CancelCommandBatchMutation, CancelCommandBatchMutationVariables>;

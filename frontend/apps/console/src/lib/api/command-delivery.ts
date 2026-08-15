@@ -13,6 +13,7 @@ import type {
   CommandBatchesByTokenQuery,
   CommandBatchCreateRequest,
   CreateCommandBatchMutation,
+  CancelCommandBatchMutation,
 } from '@/gql/command-delivery/graphql';
 
 // Public types are derived from the generated operation results so they always
@@ -42,6 +43,10 @@ export type CreateCommandBatchResult = CreateCommandBatchMutation['createCommand
 export type CreatedCommandBatch = NonNullable<CreateCommandBatchResult['batch']>;
 export type CommandBatchRejection = NonNullable<CreateCommandBatchResult['rejection']>;
 export type { CommandBatchCreateRequest };
+
+// What cancelling a fleet write was able to do — four counts that DELIBERATELY NEED NOT
+// SUM. See cancelCommandBatch below, and `cancelOutcome.ts` for the rules that read them.
+export type CancelCommandBatchResult = CancelCommandBatchMutation['cancelCommandBatch'];
 
 const COMMANDS = graphql(`
   query Commands($criteria: CommandSearchCriteria!) {
@@ -197,6 +202,20 @@ const CANCEL_COMMAND = graphql(`
   }
 `);
 
+// 🔴 ALL FOUR COUNTS, ALWAYS. Selecting a subset is the one way to misread this answer:
+// `cancelled` alone reads as "the fleet was stopped" while `alreadySent` says part of it
+// was not, and `matched` is the only field that can reveal commands the cancel MISSED.
+const CANCEL_COMMAND_BATCH = graphql(`
+  mutation CancelCommandBatch($token: String!) {
+    cancelCommandBatch(token: $token) {
+      cancelled
+      alreadySent
+      alreadyFinished
+      matched
+    }
+  }
+`);
+
 // List the commands issued to a device, newest first (server default), paged.
 // Requires the command:read authority.
 export async function listCommands(opts: {
@@ -242,6 +261,36 @@ export async function listBatchCommands(opts: {
       },
     })
   ).commands;
+}
+
+// How many of ONE batch's commands are in any of the given lifecycle states, right now.
+// Requires command:read.
+//
+// It asks for a single row and reads `totalRecords`, because the answer wanted is the
+// COUNT and not the rows — a batch can hold thousands of them.
+//
+// 🔴 IT IS A READ, NOT A PROMISE. The number is true at the moment the service answered;
+// commands move on their own. So a caller may state it as what was found, never as what a
+// subsequent write will do — the write reports its own outcome, and that report is the
+// authority. See CancelBatchAction.
+//
+// 🔴 IT CAN ANSWER `null`, AND THAT IS NOT ZERO. `SearchResultsPagination.totalRecords` is
+// a NULLABLE Int, so "the service did not report a total" is a shape this has to pass on
+// rather than flatten with `?? 0` — a caller told "0 commands are still held" would read
+// that as "there is nothing left to stop", which is a claim nobody made.
+export async function countBatchCommands(opts: {
+  batchToken: string;
+  statuses: string[];
+}): Promise<number | null> {
+  const page = await gql('command-delivery', COMMANDS, {
+    criteria: {
+      pageNumber: 1,
+      pageSize: 1,
+      batchToken: opts.batchToken,
+      statuses: opts.statuses,
+    },
+  });
+  return page.commands.pagination.totalRecords;
 }
 
 // List command batches, newest first (server default), paged. Requires command:read.
@@ -341,4 +390,34 @@ export async function createCommandBatch(
 // time to send it; CANCELLED = somebody called it off).
 export async function cancelCommand(token: string) {
   return (await gql('command-delivery', CANCEL_COMMAND, { token })).cancelCommand;
+}
+
+// Call off a fleet write: every command the platform STILL HOLDS for the batch is stopped.
+// Requires command:write; a batch that targeted a GROUP additionally requires device:read,
+// checked BEFORE anything is cancelled. An unknown batch token throws.
+//
+// It never refuses — a brake that declined to engage because part of the fleet had already
+// moved would leave the rest of the fleet commanded — so there is no rejection arm here.
+// What there IS instead is a report, and reading it correctly is the whole job:
+//
+// 🔴 `alreadySent` IS NOT "STOPPED". Those commands are at their devices and THOSE DEVICES
+//    WILL STILL ACT. Nothing recalls them. A caller that adds them to `cancelled` and shows
+//    one total is telling an operator the fleet was stopped when part of it was not.
+//
+// 🔴 THE FOUR COUNTS NEED NOT SUM, and the gap is the answer. `cancelled` is MEASURED —
+//    what the platform actually moved — while the other three are COUNTED A MOMENT LATER
+//    in a table other writers are still using. A command whose dispatcher tried to send it
+//    and failed returns to the delivery queue in between, and lands in none of the three
+//    buckets: it is neither stopped, nor sent, nor finished. It is left out rather than
+//    folded into `alreadyFinished`, which would report a live command as a finished one.
+//    So `matched` above the sum means THIS CANCEL DID NOT STOP EVERYTHING — cancel again.
+//    Nothing retries on the caller's behalf, and it cannot repeat: once a cancellation is
+//    recorded a failed delivery retires its command instead of requeueing it.
+//
+// 🔴 CANCELLING AN ALREADY-CANCELLED BATCH IS FIRST-WINS AND IS NOT AN ERROR. The batch
+//    record keeps the FIRST cancellation's `cancelledAt`/`cancelledCount`; the call still
+//    stops whatever the platform is holding now and reports it here. That is precisely how
+//    a caller acts on the "cancel again" case above.
+export async function cancelCommandBatch(token: string): Promise<CancelCommandBatchResult> {
+  return (await gql('command-delivery', CANCEL_COMMAND_BATCH, { token })).cancelCommandBatch;
 }
