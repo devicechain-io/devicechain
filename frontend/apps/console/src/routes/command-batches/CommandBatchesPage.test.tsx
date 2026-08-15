@@ -193,3 +193,42 @@ describe('CommandBatchesPage filters', () => {
     expect(criteria.pageSize).toBe(20);
   });
 });
+
+describe('CommandBatchesPage create action', () => {
+  // The list is also the way IN to firing a fleet write, and the drawer is mounted by the
+  // action rather than rendered permanently — so nothing about the create form is on the
+  // page until this button is pressed. The form's own behaviour is pinned in
+  // CreateBatchForm.test.tsx; what this asserts is the WIRING, which no test there can
+  // see: a drawer nobody can open is indistinguishable from a feature that never shipped.
+  it('opens the create drawer from the primary action', async () => {
+    // The drawer's own reads (devices, groups) go to different documents; answering them
+    // with the list's shape would throw inside the API module rather than the component.
+    gqlMock.mockImplementation((_service: string, document: unknown) => {
+      const doc = String(document);
+      if (doc.includes('query CommandBatches')) {
+        return Promise.resolve({
+          commandBatches: {
+            results: [batch()],
+            pagination: { pageStart: 1, pageEnd: 1, totalRecords: 1 },
+          },
+        });
+      }
+      if (doc.includes('query Devices(')) {
+        return Promise.resolve({
+          devices: { results: [], pagination: { pageStart: 0, pageEnd: 0, totalRecords: 0 } },
+        });
+      }
+      return Promise.resolve({ entityGroups: { results: [] } });
+    });
+
+    renderPage();
+    await waitFor(() => expect(gqlMock).toHaveBeenCalled());
+
+    // Nothing of the form exists before the press.
+    expect(screen.queryByText('If some devices cannot receive it')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /New batch/ }));
+
+    expect(await screen.findByText('If some devices cannot receive it')).toBeTruthy();
+  });
+});

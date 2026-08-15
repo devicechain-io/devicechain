@@ -45,7 +45,8 @@ import {
   type CommandBatch,
 } from '@/lib/api/command-delivery';
 import { TargetKindBadge } from './TargetKindBadge';
-import { groupRefusals, isSampleTruncated, totalRefused, type RefusalGroup } from './refusals';
+import { groupRefusals, totalRefused, type RefusalGroup } from './refusals';
+import { RefusalGroupList } from './RefusalGroups';
 
 const commandsPageSize = 25;
 
@@ -198,51 +199,6 @@ function SummaryPanel({ batch, refused }: { batch: CommandBatch; refused: number
 
 // ── Refusals ───────────────────────────────────────────────────────────────
 
-function RefusalGroupBlock({ group }: { group: RefusalGroup }) {
-  const { t } = useTranslation('commandBatches');
-  const truncated = isSampleTruncated(group);
-  return (
-    <div className="rounded-md border border-border p-4">
-      <div className="flex flex-wrap items-center gap-2">
-        {/* The code is the backend's stable classification and stays English by policy —
-            rendered verbatim, never translated and never prettified. */}
-        <Badge variant="destructive">{group.code}</Badge>
-        <span className="text-sm font-medium text-foreground">
-          {group.count == null
-            ? t('refusedUnknownTotal')
-            : t('refusedDevices', { count: group.count })}
-        </span>
-      </div>
-      {group.sample.length > 0 && (
-        <>
-          {/* 🔴 THE LABEL IS THE POINT. The sample is capped per code, so a group of 4,312
-              shows 100 names — and presenting those 100 as the whole set tells the
-              operator that 4,212 devices they were never shown are fine. */}
-          <HintText size="md" className="mt-2">
-            {truncated
-              ? t('sampleTruncated', { shown: group.sample.length, total: group.count })
-              : t('sampleComplete', { count: group.sample.length })}
-          </HintText>
-          <ul className="mt-2 space-y-1">
-            {group.sample.map((r) => (
-              <li key={r.deviceToken} className="text-sm">
-                <span className="font-mono text-foreground">{r.deviceToken}</span>{' '}
-                {/* The reason is client-safe prose from the service, English by policy. */}
-                <span className="text-muted-foreground">{r.reason}</span>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-      {group.sample.length === 0 && group.count != null && (
-        <HintText size="md" className="mt-2">
-          {t('sampleNone')}
-        </HintText>
-      )}
-    </div>
-  );
-}
-
 function RefusalsPanel({ groups, refused }: { groups: RefusalGroup[]; refused: number }) {
   const { t } = useTranslation('commandBatches');
   return (
@@ -253,11 +209,7 @@ function RefusalsPanel({ groups, refused }: { groups: RefusalGroup[]; refused: n
       {groups.length === 0 ? (
         <EmptyState description={t('noRefusals')} />
       ) : (
-        <div className="space-y-3">
-          {groups.map((g) => (
-            <RefusalGroupBlock key={g.code} group={g} />
-          ))}
-        </div>
+        <RefusalGroupList groups={groups} />
       )}
     </SectionPanel>
   );

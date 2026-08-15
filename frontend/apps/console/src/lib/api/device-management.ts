@@ -27,6 +27,7 @@ import type {
   DetectionRuleCreateRequest,
   ScopeGroupsQuery,
   EntityGroupVersionsQuery,
+  DeviceGroupTargetsQuery,
   DeviceFacet,
 } from '@/gql/device-management/graphql';
 
@@ -612,6 +613,44 @@ export const createDeviceGroup = (request: GroupFormRequest) =>
 export const updateDeviceGroup = (token: string, request: Required<GroupFormRequest>) =>
   updateEntityGroup(token, { ...request, memberType: 'device' });
 export const deleteDeviceGroup = deleteEntityGroup;
+
+// A device group as the command-batch target picker needs it (ADR-061 / ADR-043).
+//
+// A SEPARATE document rather than a field added to ENTITY_GROUPS, because the two
+// answer different questions and only this one needs the membership mode. Every group
+// screen in the console reads ENTITY_GROUPS, so widening it would change the shape they
+// all compile against to serve one picker.
+//
+// 🔴 `membershipMode` IS THE FIELD THIS EXISTS FOR. A batch may pin `groupVersion`, but
+// only a DYNAMIC group is versioned at all — naming a version for a static one is
+// REFUSED by the service rather than ignored. So the picker has to know the mode before
+// it can decide whether a version input is even offerable, and there is no way to infer
+// it from a group's name, its members or its `activeVersion` (which is null both for a
+// static group and for a dynamic one that was never published).
+const DEVICE_GROUP_TARGETS = graphql(`
+  query DeviceGroupTargets {
+    entityGroups(criteria: { pageNumber: 1, pageSize: 500, memberType: "device" }) {
+      results {
+        token
+        name
+        membershipMode
+        activeVersion
+      }
+    }
+  }
+`);
+
+export type DeviceGroupTarget = DeviceGroupTargetsQuery['entityGroups']['results'][number];
+
+// listDeviceGroupTargets returns the device groups a command batch may be fired at.
+//
+// One large page rather than a paged read: the target picker is a searchable dropdown
+// that filters over fully-materialized options, so a second page it never asks for would
+// simply be a group the operator cannot select and cannot tell is missing.
+export async function listDeviceGroupTargets(): Promise<DeviceGroupTarget[]> {
+  const data = await gql('device-management', DEVICE_GROUP_TARGETS, undefined);
+  return data.entityGroups.results;
+}
 
 // ── Device profiles (ADR-045) ─────────────────────────────────────────────
 

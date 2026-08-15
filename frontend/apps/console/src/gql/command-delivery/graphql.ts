@@ -4,6 +4,18 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+export type CommandBatchCreateRequest = {
+  allowPartial: boolean;
+  deviceTokens?: Array<string> | null | undefined;
+  expiresAt?: string | null | undefined;
+  groupToken?: string | null | undefined;
+  groupVersion?: number | null | undefined;
+  metadata?: string | null | undefined;
+  name: string;
+  payload?: string | null | undefined;
+  token: string;
+};
+
 export type CommandBatchSearchCriteria = {
   groupToken?: string | null | undefined;
   name?: string | null | undefined;
@@ -57,6 +69,13 @@ export type CommandBatchesByTokenQueryVariables = Exact<{
 
 
 export type CommandBatchesByTokenQuery = { commandBatchesByToken: Array<{ id: string, token: string, createdAt: string | null, name: string, payload: string | null, targetKind: string, groupToken: string | null, groupVersion: number | null, allowPartial: boolean, resolved: number, accepted: number, cancelledAt: string | null, cancelledCount: number | null, refusals: Array<{ deviceToken: string, code: string, reason: string }>, refusalCounts: Array<{ code: string, count: number }> }> };
+
+export type CreateCommandBatchMutationVariables = Exact<{
+  request: CommandBatchCreateRequest;
+}>;
+
+
+export type CreateCommandBatchMutation = { createCommandBatch: { batch: { id: string, token: string, name: string, targetKind: string, resolved: number, accepted: number } | null, rejection: { code: string, reason: string, resolved: number | null, refusals: Array<{ deviceToken: string, code: string, reason: string }>, refusalCounts: Array<{ code: string, count: number }> } | null } };
 
 export type CancelCommandMutationVariables = Exact<{
   token: string;
@@ -177,6 +196,34 @@ export const CommandBatchesByTokenDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<CommandBatchesByTokenQuery, CommandBatchesByTokenQueryVariables>;
+export const CreateCommandBatchDocument = new TypedDocumentString(`
+    mutation CreateCommandBatch($request: CommandBatchCreateRequest!) {
+  createCommandBatch(request: $request) {
+    batch {
+      id
+      token
+      name
+      targetKind
+      resolved
+      accepted
+    }
+    rejection {
+      code
+      reason
+      resolved
+      refusals {
+        deviceToken
+        code
+        reason
+      }
+      refusalCounts {
+        code
+        count
+      }
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<CreateCommandBatchMutation, CreateCommandBatchMutationVariables>;
 export const CancelCommandDocument = new TypedDocumentString(`
     mutation CancelCommand($token: String!) {
   cancelCommand(token: $token) {

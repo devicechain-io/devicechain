@@ -8,7 +8,12 @@
 // without this record a refusal leaves no trace at all, and an operator who pushes a
 // firmware command across a fleet and comes back in the morning has nothing to read.
 //
-// 🔴 READ-ONLY, deliberately: no create, no cancel. Both are separate slices.
+// It is where a fleet write is FIRED as well as read: the primary action opens the
+// create drawer, and a batch that fires lands on its own detail page — which already
+// renders every stored fact about it, refusals included, so the outcome is read from the
+// record rather than from a second rendering of the mutation's response.
+//
+// 🔴 STILL NO CANCEL. That is a separate slice.
 //
 // SERVER ORDER IS DISPLAY ORDER. The service returns batches newest-first and this table
 // does not re-sort — which is what makes the page answer "show me what I just fired"
@@ -16,12 +21,14 @@
 
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@/lib/hooks/use-query';
 import { useDebouncedValue } from '@/lib/hooks/use-debounced-value';
 import { listCommandBatches } from '@/lib/api/command-delivery';
 import { PageShell } from '@/components/ui/page-shell';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Combobox } from '@/components/ui/combobox';
 import { LoadingState } from '@/components/ui/loading-state';
@@ -38,7 +45,10 @@ import {
   DataTableHeaderCell,
   DataTableRow,
 } from '@/components/ui/data-table';
+import { FormDrawer } from '@/components/registry';
+import { useToast } from '@/components/ui/toast';
 import { TargetKindBadge } from './TargetKindBadge';
+import { CreateBatchForm } from './CreateBatchForm';
 
 const pageSize = 20;
 
@@ -53,6 +63,8 @@ const TARGET_KIND_OPTIONS = [
 export default function CommandBatchesPage() {
   const { t } = useTranslation('commandBatches');
   const navigate = useNavigate();
+  const { toast } = useToast();
+  const [creating, setCreating] = useState(false);
   const [pageNumber, setPageNumber] = useState(1);
   const [name, setName] = useState('');
   const [groupToken, setGroupToken] = useState('');
@@ -109,9 +121,29 @@ export default function CommandBatchesPage() {
             placeholder={t('filterAllTargets')}
             ariaLabel={t('filterTargetLabel')}
           />
+          <Button onClick={() => setCreating(true)}>
+            <Plus size={16} /> {t('newBatch')}
+          </Button>
         </>
       }
     >
+      <FormDrawer
+        open={creating}
+        onOpenChange={setCreating}
+        title={t('newBatch')}
+        description={t('newBatchDescription')}
+      >
+        <CreateBatchForm
+          onFired={(batch) => {
+            // The headline first, since the next thing on screen is a whole page. Both
+            // numbers, never just the accepted one: 4 accepted is good news out of 4 and
+            // bad news out of 5,000.
+            toast(t('batchFired', { accepted: batch.accepted, resolved: batch.resolved }));
+            setCreating(false);
+            navigate(`/command-batches/${encodeURIComponent(batch.token)}`);
+          }}
+        />
+      </FormDrawer>
       {loading && !data ? (
         <LoadingState description={t('loadingBatches')} />
       ) : error && !data ? (
