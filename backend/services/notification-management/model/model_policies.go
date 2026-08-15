@@ -61,6 +61,17 @@ type NotificationPolicy struct {
 	Rules []NotificationRule `gorm:"foreignKey:PolicyId"`
 }
 
+// DefaultOrder implements rdb.Sortable: the registry default — newest first, tiebroken
+// on the policy's per-tenant token, which is unique and so makes the order total.
+//
+// Qualification earns its keep here even though the paged read adds no JOIN: the search
+// closure preloads Rules and Rules.Channel, and NotificationChannel carries a token
+// column too. A bare `token ASC` is one refactor away from being ambiguous rather than
+// merely unqualified.
+func (NotificationPolicy) DefaultOrder() string {
+	return "notification_policies.created_at DESC, notification_policies.token ASC"
+}
+
 // NotificationRule is one routing rule within a policy: for alarms matching
 // Severity (exact, or SeverityAny), deliver through Channel to Recipients. It is a
 // child of exactly one NotificationPolicy (PolicyId) and is never addressed on its

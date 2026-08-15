@@ -56,6 +56,15 @@ type GeoFence struct {
 	Geometry datatypes.JSON `gorm:"not null"`
 }
 
+// DefaultOrder implements rdb.Sortable with the registry default: newest first, token
+// as the unique tiebreak. Nothing orders by the geometry — it is opaque to every query
+// in this area — so the fence list is ordered by authoring recency like any other
+// registry. Note the table is geo_fences, not geofences: gorm's naming strategy splits
+// the Go name on its word boundary.
+func (GeoFence) DefaultOrder() string {
+	return "geo_fences.created_at DESC, geo_fences.token ASC"
+}
+
 // Geometry kind discriminators. The kind belongs to the FENCE, never to the rule
 // language: a rule says "is this device inside fence X", and that sentence does not
 // change when X becomes a 3D volume. So a new kind here must never require a new rule

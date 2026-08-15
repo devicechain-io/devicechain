@@ -12,7 +12,7 @@ import (
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 )
 
-// BuildInput extracts the device, anchors (first token per type), occurred time, and numeric
+// BuildInput extracts the device, anchors (lowest token per type), occurred time, and numeric
 // measurements; non-numeric and non-finite readings are skipped (ADR-016 numeric-only).
 func TestBuildInputMeasurements(t *testing.T) {
 	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
@@ -20,8 +20,12 @@ func TestBuildInputMeasurements(t *testing.T) {
 		SourceDeviceToken: "d1",
 		OccurredTime:      base,
 		Anchors: []dmmodel.ResolvedAnchor{
+			// Deliberately ANTI-SORTED: two anchors of one type, the higher token first. The
+			// collapse takes the lowest token per type, so this must yield zone-a. Listing
+			// zone-a first would make first-wins and lowest-wins agree, and the assertion
+			// below would hold no matter which rule the code implemented.
+			{AnchorType: "area", AnchorToken: "zone-b"},
 			{AnchorType: "area", AnchorToken: "zone-a"},
-			{AnchorType: "area", AnchorToken: "zone-b"}, // first wins
 			{AnchorType: "gateway", AnchorToken: "gw-1"},
 		},
 		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{

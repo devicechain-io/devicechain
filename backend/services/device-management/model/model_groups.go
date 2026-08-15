@@ -76,6 +76,14 @@ type EntityGroup struct {
 	ActiveVersion sql.NullInt32
 }
 
+// DefaultOrder implements rdb.Sortable with the registry default: newest first, token
+// as the unique tiebreak. This orders the GROUPS themselves; a group's resolved MEMBERS
+// are a different read entirely (ResolveGroupMembers), ordered by the member family's
+// own clause.
+func (EntityGroup) DefaultOrder() string {
+	return "entity_groups.created_at DESC, entity_groups.token ASC"
+}
+
 // Data required to create or replace an entity group.
 type EntityGroupCreateRequest struct {
 	Token           string

@@ -52,7 +52,13 @@ func (rdb *RdbManager) DB(ctx context.Context) *gorm.DB {
 }
 
 // Query for a list of models based on filter and pagination criteria.
-func (rdb *RdbManager) ListOf(ctx context.Context, mdl interface{}, filters func(db *gorm.DB) *gorm.DB, pag Pagination) (*gorm.DB, SearchResultsPagination) {
+//
+// The model is a Sortable, not an interface{}, because LIMIT/OFFSET without an
+// ORDER BY returns rows in an unspecified order that may differ between two calls —
+// so a paged read can repeat a row on one page and skip another. Every model
+// therefore declares the order its lists are read in, and this applies it. See
+// sortable.go for why that is a compile-time requirement rather than a convention.
+func (rdb *RdbManager) ListOf(ctx context.Context, mdl Sortable, filters func(db *gorm.DB) *gorm.DB, pag Pagination) (*gorm.DB, SearchResultsPagination) {
 	// Sanity check page number.
 	if pag.PageNumber < 1 {
 		pag.PageNumber = 1
@@ -76,6 +82,22 @@ func (rdb *RdbManager) ListOf(ctx context.Context, mdl interface{}, filters func
 	if filters != nil {
 		result = filters(result)
 	}
+
+	// Apply the model's declared order, on the DATA query only — the count above
+	// neither needs it nor wants it (gorm strips ORDER BY from a COUNT when there is
+	// no GROUP BY, so it would be dead weight at best).
+	//
+	// It is applied AFTER the filters closure deliberately. gorm merges ORDER BY by
+	// APPENDING, so a closure that set its own order keeps it as the leading key and
+	// this becomes the trailing tiebreak — which is what makes the closure the
+	// sanctioned per-query override. Ordering these two the other way round would
+	// silently demote every caller's order to a tiebreak behind the default.
+	//
+	// This sits outside the Unbounded branch on purpose: an unbounded read has no
+	// LIMIT, but it still has consumers that care which row they see first, and one
+	// of them picks a provisioning credential off the front of the set.
+	result = result.Order(mdl.DefaultOrder())
+
 	result.Scopes(Paginate(pag))
 
 	// Short-circuit for the explicit internal all-rows path (Paginate applied no

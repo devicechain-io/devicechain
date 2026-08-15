@@ -71,6 +71,22 @@ type DeviceState struct {
 	PresenceTime sql.NullTime
 }
 
+// DefaultOrder implements rdb.Sortable: newest projection row first, tiebroken on the
+// row id.
+//
+// The tiebreak is id rather than a token because this table has no registry token —
+// device_token names the DEVICE, and while the projection holds one row per device
+// today, that is an invariant of the merge path rather than a declared unique
+// constraint, so it is not the column to hang a total order on. id is both unique and
+// monotonic, which makes it a truthful tiebreak for "newest" as well as a correct one.
+//
+// 🔴 This is the order for the PAGED search only (DeviceStates). AssertedDeviceStates
+// walks a keyset cursor with its own `id ASC` and does not go through ListOf — its
+// order IS its cursor, and it must stay ascending on id.
+func (DeviceState) DefaultOrder() string {
+	return "device_states.created_at DESC, device_states.id DESC"
+}
+
 // AuditExempt opts the device-state projection out of the audit journal
 // (ADR-019): it is high-volume derived connectivity/activity state recomputed
 // from the event stream, not a control-plane entity mutation.

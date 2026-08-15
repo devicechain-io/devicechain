@@ -70,6 +70,14 @@ type CommandDefinition struct {
 	ParameterSchema *datatypes.JSON // ordered []CommandParameter (JSONB); nil = no declared params
 }
 
+// DefaultOrder implements rdb.Sortable with the registry default: newest first, token
+// as the unique tiebreak. This orders the paged command-definition LIST; it says
+// nothing about parameter order, which is the ordered JSONB document's own business
+// and is never re-derived from a query.
+func (CommandDefinition) DefaultOrder() string {
+	return "command_definitions.created_at DESC, command_definitions.token ASC"
+}
+
 // Data required to create a command definition. ParameterSchema is the JSON
 // encoding of an ordered []CommandParameter; it is validated for well-formedness
 // on create/update (see ValidateParameterSchema). A nil or empty schema declares

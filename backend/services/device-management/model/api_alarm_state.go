@@ -77,11 +77,11 @@ func (api *Api) Alarms(ctx context.Context, criteria AlarmSearchCriteria) (*Alar
 		if criteria.AlarmKey != nil {
 			result = result.Where("alarm_key = ?", *criteria.AlarmKey)
 		}
-		// Deterministic order: newest cycle first, id as a stable tiebreak. Without
-		// it the heap order shifts under every in-place UPDATE (ack, escalation, a
-		// last-value write on each matching measurement), so a live console that
-		// reconciles by re-querying would see rows reshuffle and page boundaries move.
-		return result.Order("raised_time DESC, id DESC")
+		// No .Order() here: the deterministic newest-cycle-first order this search
+		// needs is Alarm.DefaultOrder(), which ListOf injects for every paged read of
+		// the model. One place per model says what the order is, and it says it
+		// table-qualified.
+		return result
 	}, criteria.Pagination)
 	db.Find(&results)
 	if db.Error != nil {

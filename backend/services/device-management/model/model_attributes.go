@@ -83,6 +83,15 @@ type EntityAttribute struct {
 	LastUpdated time.Time
 }
 
+// DefaultOrder implements rdb.Sortable. An attribute has no token — it is addressed by
+// its natural key (entity, scope, key) — so id supplies the uniqueness. created_at
+// rather than LastUpdated is deliberate: this is a mutable upsert row, and ordering a
+// paged read by a column every write moves is the reshuffling-under-the-reader bug the
+// contract exists to prevent. created_at is set once and never moves again.
+func (EntityAttribute) DefaultOrder() string {
+	return "entity_attributes.created_at DESC, entity_attributes.id DESC"
+}
+
 // Data required to set (upsert) an entity attribute. The entity names its owner
 // by its type (one of entity.Type) and token; both are resolved and validated
 // against the entity-type registry on write.

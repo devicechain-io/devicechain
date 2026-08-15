@@ -20,6 +20,14 @@ type EntityRelationshipType struct {
 	Tracked bool
 }
 
+// DefaultOrder implements rdb.Sortable with the registry default: newest first, with
+// the per-tenant token breaking ties uniquely. created_at alone is not total — a
+// bootstrap that seeds several types in one statement shares a timestamp — so the
+// token carries the uniqueness the pagination contract requires.
+func (EntityRelationshipType) DefaultOrder() string {
+	return "entity_relationship_types.created_at DESC, entity_relationship_types.token ASC"
+}
+
 // Data required to create an entity relationship type.
 type EntityRelationshipTypeCreateRequest struct {
 	Token       string
@@ -63,6 +71,19 @@ type EntityRelationship struct {
 	TargetToken        string `gorm:"size:128"`
 	RelationshipTypeId uint
 	RelationshipType   EntityRelationshipType
+}
+
+// DefaultOrder implements rdb.Sortable with the registry default: newest edge first,
+// token as the unique tiebreak.
+//
+// 🔴 THE QUALIFICATION IS LOAD-BEARING HERE, not a stylistic nod to the contract.
+// staticGroupMembers pages this model through a closure that JOINs
+// entity_relationship_types, and both tables carry id, token, created_at and
+// deleted_at. A bare `token ASC` there is not a differently-ordered page, it is
+// `ERROR: column reference "token" is ambiguous` — a 500 on every static group's
+// member list. This is the query the Sortable contract's rule 2 was written for.
+func (EntityRelationship) DefaultOrder() string {
+	return "entity_relationships.created_at DESC, entity_relationships.token ASC"
 }
 
 // Data required to create an entity relationship. The source and target name an

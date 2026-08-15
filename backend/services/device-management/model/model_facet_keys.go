@@ -82,6 +82,14 @@ type FacetKey struct {
 	Label sql.NullString
 }
 
+// DefaultOrder implements rdb.Sortable. A facet key has no token — it is addressed by
+// its natural key (MemberType, Key) — so id carries the uniqueness the token supplies
+// on the registry entities. Newest declaration first, with the monotonic id both
+// breaking ties and agreeing with that direction.
+func (FacetKey) DefaultOrder() string {
+	return "facet_keys.created_at DESC, facet_keys.id DESC"
+}
+
 // FacetKeySetRequest is the data to declare (upsert) a facet key. The natural key
 // (MemberType, Key) selects the row; the remaining fields are (re)written.
 type FacetKeySetRequest struct {

@@ -43,6 +43,24 @@ type Event struct {
 	ProcessedTime time.Time
 }
 
+// DefaultOrder implements rdb.Sortable. The event tables are the exception to the
+// registry default: there is no id and no created_at here at all — the base event's
+// primary key is the composite (tenant_id, event_id, occurred_time) — so the order is
+// time-then-identity rather than created_at-then-id.
+//
+// occurred_time alone is NOT total. A device that samples two sensors and publishes
+// each as its own message under one shared timestamp produces rows that tie, and a tie
+// under LIMIT/OFFSET is the repeat-and-skip defect in miniature. event_id is the event's
+// own content-derived identity and is unique within (tenant, occurred_time) by
+// construction, so it closes the order.
+//
+// The leading column matches idx_events_tenant_device_type_time — declared
+// (tenant_id, device_token, event_type, occurred_time DESC) — so the common per-device
+// read stays index-ordered. Neither column is nullable, so no NULLS placement is needed.
+func (Event) DefaultOrder() string {
+	return "events.occurred_time DESC, events.event_id DESC"
+}
+
 // EventAnchor is one anchor of an event: a device's tracked-relationship target
 // (ADR-013) denormalized so the event is queryable by that (anchor_type,
 // anchor_token) dimension. Both the source device and the anchor target are named
@@ -109,6 +127,15 @@ type LocationEvent struct {
 	Accuracy sql.NullFloat64 `gorm:"type:decimal(12,4);"`
 	Speed    sql.NullFloat64 `gorm:"type:decimal(12,4);"`
 	Heading  sql.NullFloat64 `gorm:"type:decimal(7,4);"`
+}
+
+// DefaultOrder implements rdb.Sortable. Same time-then-identity shape as Event, but
+// the payload tables have no primary key at all, so the tiebreak is payload_id — this
+// ROW's content-derived identity, which is what makes the order total when a batch of
+// samples shares one occurred_time. Both columns are NOT NULL, so NULLS placement does
+// not arise.
+func (LocationEvent) DefaultOrder() string {
+	return "location_events.occurred_time DESC, location_events.payload_id DESC"
 }
 
 // Information required to create a location event.
@@ -178,6 +205,14 @@ type MeasurementEvent struct {
 	DataType *string `gorm:"type:varchar(32)"`
 }
 
+// DefaultOrder implements rdb.Sortable. Time-then-identity, tiebroken on payload_id
+// for the reason given on LocationEvent — and this is the table where the tie is the
+// common case rather than the corner one: a multi-metric report writes every named
+// measurement at one shared occurred_time.
+func (MeasurementEvent) DefaultOrder() string {
+	return "measurement_events.occurred_time DESC, measurement_events.payload_id DESC"
+}
+
 // Information required to create a measurement event.
 type MeasurementEventCreateRequest struct {
 	Event
@@ -233,6 +268,14 @@ type AlertEvent struct {
 	Level        uint32            `gorm:"not null"`
 	Message      string
 	Source       string
+}
+
+// DefaultOrder implements rdb.Sortable. Time-then-identity, tiebroken on payload_id
+// like the other two payload tables. Newest-first is the read this table is actually
+// used for — an alert list is a "what just fired" surface — so the default and the
+// operator's expectation are the same order.
+func (AlertEvent) DefaultOrder() string {
+	return "alert_events.occurred_time DESC, alert_events.payload_id DESC"
 }
 
 // Information required to create an alert event.

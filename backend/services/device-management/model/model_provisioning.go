@@ -86,6 +86,14 @@ type ProvisioningProfile struct {
 	ExpiresAt       sql.NullTime
 }
 
+// DefaultOrder implements rdb.Sortable with the registry default: newest first, token
+// as the unique tiebreak. Note this is NOT ordered by ExpiresAt the way DeviceCredential
+// is — nothing reuses a provisioning profile off the front of a page; a profile is
+// selected by its ProvisionKey, never by position in a list.
+func (ProvisioningProfile) DefaultOrder() string {
+	return "provisioning_profiles.created_at DESC, provisioning_profiles.token ASC"
+}
+
 // Search criteria for locating provisioning profiles.
 type ProvisioningProfileSearchCriteria struct {
 	rdb.Pagination

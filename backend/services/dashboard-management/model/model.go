@@ -25,6 +25,18 @@ type Dashboard struct {
 	Definition datatypes.JSON `gorm:"not null"`
 }
 
+// DefaultOrder implements rdb.Sortable. Newest-first matches how a dashboard list is
+// read — the one you just created is the one you are looking for — and created_at is
+// stable for a dashboard even as its draft definition is edited, so the list does not
+// reshuffle under an author who is saving.
+//
+// created_at is not unique (a seeded install creates several in one tick), so token ASC
+// makes the order total. Both columns are NOT NULL (gorm.Model, rdb.TokenReference), so
+// there are no NULLs to place.
+func (Dashboard) DefaultOrder() string {
+	return "dashboards.created_at DESC, dashboards.token ASC"
+}
+
 // DashboardVersion is an immutable, published SNAPSHOT of a dashboard's definition
 // (ADR-039 versioning). The mutable working copy is the parent Dashboard row (the
 // "draft"); publishing freezes the draft into a new version (N+1). History is

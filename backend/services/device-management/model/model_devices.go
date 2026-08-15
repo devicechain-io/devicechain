@@ -110,6 +110,14 @@ type DeviceType struct {
 	// slice b; a type reaches them through its profile.
 }
 
+// DefaultOrder implements rdb.Sortable with the registry default: newest first, token
+// as the unique tiebreak. Not ordered by Manufacturer/ModelName despite both being
+// indexed — those are nullable discovery facets a caller FILTERS on, and a nullable
+// leading key would need explicit NULLS placement to buy an order nobody asked for.
+func (DeviceType) DefaultOrder() string {
+	return "device_types.created_at DESC, device_types.token ASC"
+}
+
 // Search criteria for locating device types.
 type DeviceTypeSearchCriteria struct {
 	rdb.Pagination
@@ -165,6 +173,17 @@ type Device struct {
 
 	DeviceTypeId uint
 	DeviceType   *DeviceType
+}
+
+// DefaultOrder implements rdb.Sortable with the registry default: newest first, token
+// as the unique tiebreak. created_at is emphatically not total on this table — a bulk
+// create renders up to MaxBulkDeviceCount devices inside ONE transaction, so a
+// thousand rows can share a timestamp to the microsecond, and the token is the only
+// thing keeping those thousand from reshuffling across page boundaries. Devices are
+// also paged as a group member family, where the closure's own order leads and this
+// one only tiebreaks.
+func (Device) DefaultOrder() string {
+	return "devices.created_at DESC, devices.token ASC"
 }
 
 // Search criteria for locating devices.
@@ -235,6 +254,25 @@ type DeviceCredential struct {
 	CredentialValue sql.NullString
 	Enabled         bool
 	ExpiresAt       sql.NullTime
+}
+
+// DefaultOrder implements rdb.Sortable, and this is the one model here where the
+// ordering is a BEHAVIOURAL choice rather than a stability one.
+//
+// mintOrReuseCredential reads a device's live credentials unbounded and reuses
+// whichever comes off the FRONT of the set, so whatever leads this clause is the
+// credential every re-provision hands back. expires_at DESC NULLS FIRST puts a
+// never-expiring credential first, then the one with the most runway left. The
+// obvious id ASC would have done the opposite — handed back the credential CLOSEST
+// to expiry, forcing the earliest possible re-provision.
+//
+// NULLS FIRST is stated rather than implied. Postgres already defaults DESC to NULLS
+// FIRST, but SQLite — what the model tests run on — puts NULLs first either way;
+// saying it makes the harness and production agree instead of differing silently in
+// the direction where the tests still pass. expires_at is far from unique (a fleet
+// provisioned together shares one), so id DESC is the total tiebreak.
+func (DeviceCredential) DefaultOrder() string {
+	return "device_credentials.expires_at DESC NULLS FIRST, device_credentials.id DESC"
 }
 
 // Search criteria for locating device credentials.
