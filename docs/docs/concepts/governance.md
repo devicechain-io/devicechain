@@ -11,6 +11,7 @@ Limits are enforced **at the edges**, before traffic reaches shared infrastructu
 - **Ingest** — a per-tenant rate limit in the event-sources service, applied as device traffic is decoded, before it is published onto the internal pipeline. An over-limit tenant's excess is shed at the front door instead of backing up the shared stream.
 - **Egress** — outbound volume from [REACT actions](./outbound-connectors.md#governance) is rate-limited per tenant at both ends of the hop: the detection engine sheds over-budget emissions before dispatch, and the outbound-connectors service admits sink traffic within a bounded budget.
 - **AI inference** — the opt-in AI service applies a per-tenant rate limit and tracks per-tenant spend, so one tenant's authoring sessions cannot monopolize (or silently run up) the shared inference path.
+- **Undelivered commands** — a per-tenant ceiling on how many commands may be waiting to go out at once, enforced as a command is enqueued. It is the one limit here that **refuses** rather than sheds: the three above drop a tenant's excess traffic, while this one returns a rejection the caller can see and retry — a command is a physical actuation, so quietly dropping one is not available. See [how much backlog a tenant may hold](./commands.md#held-command-ceiling).
 
 All enforcement points resolve limits through one shared **governance library** in the platform core — a single per-tenant limit fetcher/resolver — so every dimension answers the "what is this tenant allowed?" question the same way.
 
@@ -42,7 +43,7 @@ Per-tenant overrides are audited exceptions, not the mechanism — the tier carr
 Shed volume is surfaced as an operational metric, so a tenant that has hit a ceiling — or a rule that has started to over-emit — is visible to an operator before it becomes a support ticket. Governance is meant to be observable pressure, not silent loss.
 
 :::note Status
-**Enforced today:** per-tenant ingest rate limiting (event-sources), outbound egress governance at both ends of the REACT hop (event-processing + outbound-connectors), and per-tenant AI-inference rate limiting with spend observability — all through the shared core governance resolver, all subject to the fail-safe platform-default rule. **Planned behind the same model:** per-tenant API/query governance, per-tenant stream bounds on the internal bus, and a relationship fan-out ceiling.
+**Enforced today:** per-tenant ingest rate limiting (event-sources), outbound egress governance at both ends of the REACT hop (event-processing + outbound-connectors), and per-tenant AI-inference rate limiting with spend observability — all through the shared core governance resolver, all subject to the fail-safe platform-default rule. Also enforced, on the same cascade and the same fail-safe rule but by refusing rather than shedding: the per-tenant undelivered-command ceiling (command-delivery). **Planned behind the same model:** per-tenant API/query governance, per-tenant stream bounds on the internal bus, and a relationship fan-out ceiling.
 :::
 
 ## Related

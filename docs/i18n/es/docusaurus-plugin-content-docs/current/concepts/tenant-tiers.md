@@ -16,7 +16,7 @@ La distinción rectora: **un dial de contención (shed) se ajusta; un nivel se v
 
 Un nivel es un paquete con nombre de configuraciones extraídas de un **registro de claves de configuración**: la lista de la plataforma de los diales que un nivel puede establecer. Dos consumidores leen hoy el nivel de un inquilino:
 
-- **Límites de gobernanza.** Las cuotas por inquilino de un inquilino (tasa de ingesta, tasa de salida, tasa de inferencia de IA) se resuelven a través de su nivel. Consulte [Gobernanza y cuotas](./governance.md). La regla de seguridad ante fallos se mantiene de principio a fin: un límite ausente o en cero se resuelve al **valor predeterminado de la plataforma, nunca a ilimitado**.
+- **Límites de gobernanza.** Las cuotas por inquilino de un inquilino (tasa de ingesta, tasa de salida, tasa de inferencia de IA y el [techo de comandos no entregados](./commands.md#held-command-ceiling)) se resuelven a través de su nivel. Consulte [Gobernanza y cuotas](./governance.md). La regla de seguridad ante fallos se mantiene de principio a fin: un límite ausente o en cero se resuelve al **valor predeterminado de la plataforma, nunca a ilimitado**.
 - **Derecho de uso de modelos de IA.** Qué [modelos de IA](./ai-authoring.md) puede usar un inquilino se empaqueta en el nivel. El modelo que un inquilino ejecuta para una función es una asignación `(inquilino, función) → modelo` que recurre al **valor predeterminado del nivel**; si un nivel no empaqueta ningún modelo, el inquilino no tiene modelo. *Sin menú significa sin modelo.*
 
 Debido a que un nivel es leído por muchos subsistemas pero es propiedad de uno solo, el patrón es siempre el mismo: los subsistemas **leen** el nivel; nunca almacenan su propia copia de "a qué tiene derecho este inquilino".
