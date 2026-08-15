@@ -629,6 +629,30 @@ func insertBatchCommands(tx *gorm.DB, batch *CommandBatch, deviceTokens []string
 			BatchId:     sql.NullInt64{Int64: int64(batch.ID), Valid: true},
 			BatchToken:  sql.NullString{String: batch.Token, Valid: true},
 		}
+		// 🔴 STAMP created_at OURSELVES, ONCE FOR THE WHOLE BATCH. Left to gorm this is
+		// the defect that makes a large batch read back in blocks, newest block first.
+		//
+		// CreateInBatches issues one INSERT per batchInsertChunk rows, and gorm computes
+		// its timestamp ONCE PER STATEMENT (callbacks/create.go, curTime in
+		// ConvertToCreateValues) — not once per row. So a 2,500-device batch gets three
+		// distinct created_at values, one per chunk, hundreds of milliseconds apart.
+		// Command.DefaultOrder is `created_at DESC, token ASC`, so the chunks come back
+		// in REVERSE order while each chunk is internally correct: devices 2000-2499,
+		// then 1000-1999, then 0-999. Measured, not theorised — see
+		// batch_admitted_order_test.go, which fails on 2,500 devices and passes on 500.
+		//
+		// Presetting the field is what stops it: gorm only stamps a zero value
+		// (create.go's isZero check), so a non-zero CreatedAt survives untouched and
+		// every row in the batch shares one instant. That makes Command.DefaultOrder's
+		// stated premise TRUE — a batch really is one clock tick — and its `token ASC`
+		// tiebreak then carries admitted order, which is the order the caller asked for
+		// and the order a partial admission honours.
+		//
+		// The visible consequence, and it is the intended one: a batch now sorts as a
+		// single contiguous block at the instant it started, rather than smearing across
+		// however long its inserts took.
+		cmd.CreatedAt = queuedTime
+		cmd.UpdatedAt = queuedTime
 		cmd.Token = batchCommandToken(batch.ID, i)
 		if len(payload) > 0 {
 			raw := datatypes.JSON(payload)

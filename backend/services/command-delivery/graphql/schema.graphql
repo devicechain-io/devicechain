@@ -108,6 +108,12 @@ input CommandSearchCriteria {
     # the record stays self-auditing — so questions about the present ("of the 5,000
     # queued, how many have gone out?") are answerable only from the command rows.
     # Combine it with `status` or `statuses`.
+    #
+    # Rows of one batch come back in ADMITTED order — the order you gave the devices in,
+    # which is also the order a partially-admitted batch admits them in. Every row of a
+    # batch shares one creation instant, so the newest-first key ties across the whole
+    # batch and the token tiebreak, minted from each device's position, carries that
+    # order. Page 1 is therefore the head of the batch, not an arbitrary slice of it.
     batchToken: String
     # Match a single lifecycle state exactly.
     status: String

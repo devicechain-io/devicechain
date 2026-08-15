@@ -211,9 +211,21 @@ type Command struct {
 // console does no client-side re-sorting (its data table has no sorted row model), so
 // server order IS display order.
 //
-// created_at is not unique — a batch inserts thousands of rows inside one clock tick —
-// so token ASC carries the totality rule. Both columns are NOT NULL (created_at from
-// gorm.Model, token from rdb.TokenReference), so no NULLS placement is needed.
+// created_at is not unique — every row of one batch shares a single instant — so token
+// ASC carries the totality rule. Both columns are NOT NULL (created_at from gorm.Model,
+// token from rdb.TokenReference), so no NULLS placement is needed.
+//
+// 🔑 THAT SHARED INSTANT IS ENFORCED, NOT ASSUMED, AND THE DIFFERENCE WAS A LIVE DEFECT.
+// This comment used to assert it as an obvious fact ("a batch inserts thousands of rows
+// inside one clock tick"). It was false: CreateInBatches issues one INSERT per chunk and
+// gorm stamps once per STATEMENT, so a 2,500-device batch carried three timestamps and
+// read back in reverse chunk order. insertBatchCommands now presets created_at for the
+// whole batch, which is what makes the sentence above true. Anything that inserts
+// commands in bulk must do the same, or this order silently stops meaning what it says.
+//
+// Within a batch, token ASC is not an arbitrary tiebreak: batchCommandToken is
+// zero-padded on the device's position, so it reproduces ADMITTED order — the order the
+// caller gave, and the order a partially-admitted batch honours.
 func (Command) DefaultOrder() string {
 	return "commands.created_at DESC, commands.token ASC"
 }
