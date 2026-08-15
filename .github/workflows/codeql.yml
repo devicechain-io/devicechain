@@ -71,12 +71,36 @@ on:
   # ever created, so it genuinely skips. The two look alike and behave oppositely.
   #
   # 🔴 A WORKFLOW SKIPPED BY A PATH FILTER LEAVES ITS CHECKS "PENDING", NOT
-  # "SKIPPED" — GitHub's documented behaviour. That is harmless today because
-  # `main` carries no branch protection and nothing lists "Analyze Go" as a
-  # required status check. It becomes a deadlock the day someone adds one: every
-  # docs-only PR would wait forever on a check that is never going to report. If
-  # you protect this branch, either leave "Analyze Go" out of the required set or
-  # pair this with a job that reports success on the skipped path.
+  # "SKIPPED" — GitHub's documented behaviour. It is a DEADLOCK for any PR the
+  # filter skips if "Analyze Go" is ever required: the PR waits forever on a check
+  # that is never going to report.
+  #
+  # ⚠️ The condition this warning used to rest on has CHANGED. It said "harmless
+  # today because `main` carries no branch protection"; `main` HAS been protected
+  # since 2026-08-14 (ruleset 20872119). What keeps it harmless now is narrower and
+  # deliberate: that ruleset requires exactly `ci-complete`, `dependency-review`
+  # and `cla`, and "Analyze Go" is NOT among them. So the guidance is no longer
+  # conditional — leave "Analyze Go" out of the required set, or pair this with a
+  # job that reports success on the skipped path. Verify before assuming:
+  #   gh api repos/devicechain-io/devicechain/rulesets/20872119 \
+  #     --jq '.rules[]|select(.type=="required_status_checks")
+  #           |.parameters.required_status_checks[].context'
+  #
+  # 🔑 The same fact is why this workflow's ~10 min is not on the merge critical
+  # path: measured on #766, the required three went green at 4.8 min and this
+  # analysis finished at 11.1 min. It is not a merge gate; it is a scanner whose
+  # result lands shortly after. Optimising its wall clock was considered and
+  # declined on those grounds — see the analysis note below.
+  #
+  # If you ever DO want it faster, the measured lever is not parallelism. A
+  # per-module matrix compiles 9754 packages against a 2749-package union (3.55x)
+  # and would report a `backend/core` finding ~20 times, once per category. The
+  # real weight is one dependency: `bento/public/components/aws` is an
+  # everything-with-AWS-auth bundle, and its elasticsearch/opensearch halves pull
+  # 817 packages — 29.7% of the union, and half of outbound-connectors' own
+  # compile time — that nothing here uses. Pruning them needs a fork or an
+  # upstream narrow bundle, since `internal/impl/aws` cannot be imported directly
+  # and the impls carry no build tags.
   pull_request:
     branches: [main]
     paths:

@@ -333,7 +333,7 @@ func TestDrainDispatchesHeldCommands(t *testing.T) {
 }
 
 // TestDrainSkipsCommandAlreadyDispatchedLive is the drain/live dedup guard: a command the live path
-// just dispatched must NOT be re-actuated when a drain fetches its still-SENT row moments later.
+// just dispatched must NOT be re-actuated when a drain fetches its PARKED row moments later.
 func TestDrainSkipsCommandAlreadyDispatchedLive(t *testing.T) {
 	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
 	pub := &fakePublisher{}

@@ -113,12 +113,16 @@ const drainQuery = `query($criteria: CommandSearchCriteria!) {
 // deliveryEnvelope yields, so the drain reuses the identical dispatch path.
 //
 // Status is carried — rather than reduced to a Held bool here — because it is the honest
-// datum: the row's own lifecycle state, not this package's interpretation of it. The
-// dispatcher needs it to decide whether a CLAIM is required before actuating: a HELD row is
-// still in command-delivery's dispatchable set, so dispatching it without claiming leaves it
-// for the next sweep tick to publish again — a SECOND physical actuation. A SENT row has
-// already left that set and needs no claim. A boolean would have to be recomputed (and could
-// be recomputed differently) the day a third non-terminal state appears.
+// datum: the row's own lifecycle state, not this package's interpretation of it.
+//
+// 🔴 It no longer decides whether to CLAIM: every drained row is claimed, with no exception
+// (see claim() in dispatcher.go). It used to, and the exemption it granted — a SENT row has
+// already left the dispatchable set, so it needs no claim — was the platform's only unclaimed
+// dispatch. The premise failed because SENT also meant "published and nobody was home". Those
+// rows are PARKED now, and PARKED is claimable, so both drainable states take the same path.
+// The field stays because a status is still what a reader wants to see, and because a boolean
+// would have to be recomputed (and could be recomputed differently) the day a third
+// non-terminal state appears.
 type DrainCommand struct {
 	Token   string
 	Name    string
@@ -163,7 +167,7 @@ func NewCommandFetcher(client commandQuerier, baseURL string) *CommandFetcher {
 }
 
 // Pending returns a waking device's backlogged commands — those in drainStatuses (HELD or
-// SENT) — OLDEST FIRST (by numeric id — the commands query has no server-side ordering, and
+// PARKED) — OLDEST FIRST (by numeric id — the commands query has no server-side ordering, and
 // a firmware Write /5/0/1 must not dispatch after its Execute /5/0/2). Already-expired rows
 // are dropped: a command past its horizon will expire within a sweep and must never actuate
 // a device late. The result is capped at the fetch page (maxDrainPerWake); a device with a

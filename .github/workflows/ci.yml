@@ -912,6 +912,17 @@ jobs:
             --set bootstrap.secretName=dc-tsdb-app-credentials >/dev/null
           echo "ok: a valid owner still renders"
 
+      # Self-test first, and it plants each defect ALONE: a self-test that plants
+      # all of them at once is satisfied by a checker that finds any one. Ten
+      # defects here — a required group that stopped rendering, a render with no
+      # rules at all, unparseable PromQL, a group accounted for nowhere, a listed
+      # group that renders nothing, an untested alert, a stale test, a group with
+      # no alerts, a missing test file, and a rule inverted so it can never fire.
+      - name: PrometheusRules guard self-test
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          hack/check-prometheus-rules.sh --self-test
+
       - name: PrometheusRules parse
         # Prometheus loads rule groups ATOMICALLY: one unparseable expression and
         # the entire group is rejected, every other alert in it included. It fails
