@@ -1,21 +1,37 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// 🔴 EVERY REGISTRY EDIT MUST CARRY THE ENTITY'S METADATA BACK.
+// 🔴 NO REGISTRY EDIT MAY DESTROY A FIELD ITS FORM DOES NOT TOUCH.
 //
-// Every registry update is a FULL REPLACE — the stored record is rebuilt from the
-// request — while every form on this side of it edits a name and a description.
-// So an adapter that maps the form's fields straight onto a create request does
-// not "leave metadata alone": it DELETES it, with a success toast, a fresh audit
-// entry, and nothing anywhere that looks wrong. That is how it survived in every
-// family at once until a geofence form went looking for it.
+// Every form on this side edits a name and a description. What the server does
+// with the fields the form did not send is the whole question — and the answer is
+// mid-migration, so this file checks BOTH answers and reads which one applies off
+// the mutation itself.
 //
-// The type system now blocks the mistake as it was actually made: `update*` takes
+// A FULL-REPLACE update rebuilds the stored record from the request, so an adapter
+// that maps the form's fields straight onto a create request does not "leave
+// metadata alone": it DELETES it, with a success toast, a fresh audit entry, and
+// nothing anywhere that looks wrong. That is how it survived in every family at
+// once until a geofence form went looking for it. Those families are held by the
+// type system as the mistake was actually made — `update*` takes
 // `Required<…CreateRequest>` so an omitted field will not compile, and each
 // `…Preserved(entity)` returns `Required<…>` so a NEW schema field breaks the
-// projection rather than starting to be erased. What the compiler cannot see is an
-// adapter that names the field and sends the wrong thing — `metadata: undefined`,
-// or a fresh entity's — which is what this file is for.
+// projection rather than starting to be erased.
+//
+// A PARTIAL update leaves an absent field alone, and there the carry-forward
+// INVERTS from the fix into the bug: a form that sends fields it does not edit is
+// writing them from a snapshot it read minutes ago, so two operators on two tabs
+// each overwrite the other. Its `…Preserved` projection is deleted, and what this
+// file checks is that nothing grows back.
+//
+// 🔑 WHICH CONTRACT A FAMILY IS ON IS READ OFF ITS DOCUMENT, never a list kept
+// here by hand — `$request: …UpdateRequest` is partial, `…CreateRequest` is full
+// replace. The sweep converting the rest flips each family's assertion the moment
+// its mutation changes, and a list would be one more thing to remember instead.
+//
+// What no compiler sees on either contract is an adapter that names a field and
+// sends the wrong thing — `metadata: undefined`, or a fresh entity's — which is
+// why this runs the real forms.
 //
 // 🔑 The list is IMPORTED, never re-declared. `REGISTRY_RESOURCES` is the same
 // array App.tsx routes from, so a family added there is covered here the moment it
@@ -24,7 +40,8 @@
 import '@/i18n/config';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DocumentNode, OperationDefinitionNode, FieldNode } from 'graphql';
+import { parse } from 'graphql';
+import type { DocumentNode, OperationDefinitionNode, FieldNode, TypeNode } from 'graphql';
 
 const { gqlMock } = vi.hoisted(() => ({ gqlMock: vi.fn() }));
 
@@ -40,6 +57,16 @@ vi.mock('@devicechain/client', async (importOriginal) => {
 vi.mock('@/routes/geofences/FenceMap', () => ({
   FenceMap: () => <div data-testid="fake-map" />,
 }));
+
+// The Identity tab gates its Save on `device:write`, and reads that from the auth
+// context rather than a prop — so rendering the tab on its own needs one. The
+// authority is REAL and checked by the real `hasAuthority`; only the provider is
+// faked. Stubbing the check itself would leave the test unable to tell a form that
+// respects the gate from one that ignores it.
+vi.mock('@/auth/AuthProvider', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/auth/AuthProvider')>();
+  return { ...actual, useAuth: () => ({ claims: { authorities: ['device:write'] } }) };
+});
 
 import { REGISTRY_RESOURCES } from './resources';
 import type { RegistryResource } from '@/components/registry';
@@ -104,13 +131,37 @@ const ENTITY = {
   areaType: TYPE_ROW,
 };
 
+// 🔴 THE GENERATED DOCUMENTS ARE NOT DocumentNodes. The console's codegen runs in
+// `documentMode: 'string'`, so `graphql()` hands back a TypedDocumentString — a
+// String subclass with no `.definitions` at all. Anything deriving behaviour from
+// a document has to PARSE it first.
+//
+// Reading `.definitions` off one yields undefined and throws on the next access,
+// and that is not hypothetical: the transport below did exactly that on every
+// call for as long as it existed. The suite still passed, because it asserts over
+// `gqlMock.mock.calls` — which are recorded when the call is MADE, before the fake
+// throws — so every form was being driven against a transport that answered
+// nothing, and no assertion here was in a position to notice. Parse once, keyed by
+// the text, since a render re-sends the same handful.
+const parsedDocs = new Map<string, DocumentNode>();
+
+function docNode(doc: unknown): DocumentNode {
+  const text = String(doc);
+  let node = parsedDocs.get(text);
+  if (!node) {
+    node = parse(text);
+    parsedDocs.set(text, node);
+  }
+  return node;
+}
+
 // The transport answers from the DOCUMENT rather than from a table of operation
 // names: a search selection gets results + pagination, a *ByToken selection gets an
 // array, anything else gets a single row. Deriving it means a query this test has
 // never seen still answers plausibly instead of throwing, so a form is never
 // blocked by scaffolding rather than by the thing under test.
-function answerFor(doc: DocumentNode): Record<string, unknown> {
-  const op = doc.definitions.find(
+function answerFor(doc: unknown): Record<string, unknown> {
+  const op = docNode(doc).definitions.find(
     (d): d is OperationDefinitionNode => d.kind === 'OperationDefinition',
   );
   const out: Record<string, unknown> = {};
@@ -121,7 +172,13 @@ function answerFor(doc: DocumentNode): Record<string, unknown> {
     const children = (field.selectionSet?.selections ?? [])
       .filter((s): s is FieldNode => s.kind === 'Field')
       .map((s) => s.name.value);
-    if (children.includes('results')) {
+    if (!field.selectionSet) {
+      // A leaf selects no children, so its shape is not derivable from the
+      // document — the entity fakes above would all be wrong. An empty list is the
+      // one answer that suits every leaf a form reads here: `facetValues` returns a
+      // list of in-use values, and "none yet" is a real state the field handles.
+      out[key] = [];
+    } else if (children.includes('results')) {
       out[key] = {
         results: [TYPE_ROW],
         pagination: { pageStart: 1, pageEnd: 1, totalRecords: 1 },
@@ -135,19 +192,61 @@ function answerFor(doc: DocumentNode): Record<string, unknown> {
   return out;
 }
 
-/** The mutation requests actually sent to device-management. */
-function requests(): Record<string, unknown>[] {
-  return gqlMock.mock.calls
-    .filter((call) => call[0] === 'device-management')
-    .map((call) => (call[2] as { request?: Record<string, unknown> } | undefined)?.request)
-    .filter((r): r is Record<string, unknown> => r != null);
+/**
+ * The mutation writes actually sent to device-management, each kept WITH the
+ * document that carried it — because the document is what says which of the two
+ * update contracts applies, and they demand opposite assertions.
+ *
+ * A partial update also moves the token out of the request and alongside it, so
+ * the identifying token is captured from either place.
+ */
+type Write = { doc: unknown; request: Record<string, unknown>; token: unknown };
+
+function writes(): Write[] {
+  const out: Write[] = [];
+  for (const call of gqlMock.mock.calls) {
+    if (call[0] !== 'device-management') continue;
+    const vars = call[2] as { request?: Record<string, unknown>; token?: unknown } | undefined;
+    if (vars?.request == null) continue;
+    out.push({ doc: call[1], request: vars.request, token: vars.token });
+  }
+  return out;
+}
+
+/** Unwrap `Foo!` / `[Foo!]!` down to the name. */
+function namedTypeOf(type: TypeNode | undefined): string | undefined {
+  let t = type;
+  while (t && (t.kind === 'NonNullType' || t.kind === 'ListType')) t = t.type;
+  return t?.kind === 'NamedType' ? t.name.value : undefined;
+}
+
+/**
+ * Which update contract a mutation is written against, read off the declared type
+ * of its `$request` variable.
+ *
+ * 🔴 An unrecognised name THROWS rather than defaulting. The two contracts want
+ * opposite things from the same field, so a silent default would quietly pick one
+ * of them for a family nobody had looked at — and the wrong pick passes.
+ */
+function contractOf(doc: unknown): 'partial' | 'full-replace' {
+  const op = docNode(doc).definitions.find(
+    (d): d is OperationDefinitionNode => d.kind === 'OperationDefinition',
+  );
+  const declared = op?.variableDefinitions?.find((d) => d.variable.name.value === 'request');
+  const name = namedTypeOf(declared?.type);
+  if (name?.endsWith('UpdateRequest')) return 'partial';
+  if (name?.endsWith('CreateRequest')) return 'full-replace';
+  throw new Error(
+    `${op?.name?.value ?? 'an unnamed mutation'} declares $request as ${name ?? 'nothing'}, which ` +
+      'names neither update contract — teach contractOf about it rather than letting it guess.',
+  );
 }
 
 afterEach(cleanup);
 beforeEach(() => {
   gqlMock.mockReset();
   window.localStorage.clear();
-  gqlMock.mockImplementation((service: string, doc: DocumentNode) => {
+  gqlMock.mockImplementation((service: string, doc: unknown) => {
     if (service === 'user-management/settings') return Promise.resolve({ tokenMasks: '{}' });
     return Promise.resolve(answerFor(doc));
   });
@@ -163,7 +262,7 @@ beforeEach(() => {
 // operator typed. Renaming is what tells the two apart.
 const RENAMED = 'Renamed by the operator';
 
-async function saveEdit(node: React.ReactNode, rename = true): Promise<Record<string, unknown>[]> {
+async function saveEdit(node: React.ReactNode, rename = true): Promise<Write[]> {
   render(<>{node}</>);
   if (rename) {
     fireEvent.change(await screen.findByLabelText('Name'), { target: { value: RENAMED } });
@@ -171,8 +270,8 @@ async function saveEdit(node: React.ReactNode, rename = true): Promise<Record<st
   const save = await screen.findByRole('button', { name: 'Save changes' });
   await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(save);
-  await waitFor(() => expect(requests().length).toBeGreaterThan(0));
-  return requests();
+  await waitFor(() => expect(writes().length).toBeGreaterThan(0));
+  return writes();
 }
 
 // Fields the forms in this loop actually edit. EVERYTHING else the request names
@@ -181,16 +280,30 @@ async function saveEdit(node: React.ReactNode, rename = true): Promise<Record<st
 // crosses, drops or invents, including ones added to a family later.
 const EDITED = new Set(['name', 'description']);
 
-function assertOnlyTheEditsChanged(path: string, request: Record<string, unknown>) {
+function assertOnlyTheEditsChanged(
+  path: string,
+  request: Record<string, unknown>,
+  contract: 'partial' | 'full-replace',
+) {
   const source = ENTITY as Record<string, unknown>;
-  let checked = 0;
-  for (const [key, value] of Object.entries(request)) {
-    // `memberType` is injected per family by the group wrappers, and a family's
-    // type token comes from the picker rather than the entity — neither is a
-    // carry-forward, so neither is evidence either way.
-    if (EDITED.has(key) || key === 'memberType' || key.endsWith('TypeToken')) continue;
-    if (!(key in source)) continue;
-    checked += 1;
+  // `memberType` is injected per family by the group wrappers, and a family's
+  // type token comes from the picker rather than the entity — neither is a
+  // carry-forward, so neither is evidence either way.
+  const carried = Object.keys(request).filter(
+    (k) => !EDITED.has(k) && k !== 'memberType' && !k.endsWith('TypeToken') && k in source,
+  );
+
+  if (contract === 'partial') {
+    // Here ABSENCE is the carry-forward, so the list has to be empty. A field
+    // named in it is one this form does not edit and is now writing back from a
+    // snapshot it read minutes ago — which is the lost update the server-side
+    // change exists to remove. Naming them makes a regrown projection say which.
+    expect(carried, `${path} carried fields forward on a PARTIAL update`).toEqual([]);
+    return;
+  }
+
+  for (const key of carried) {
+    const value = request[key];
     if (key === 'geometry') {
       // Re-serialized by the editor, so equal documents differ as strings.
       expect(JSON.parse(value as string), `${path} changed the geometry`).toEqual(
@@ -202,7 +315,29 @@ function assertOnlyTheEditsChanged(path: string, request: Record<string, unknown
   }
   // A loop that compared nothing would pass. Every family carries at least a
   // token and its metadata.
-  expect(checked, `${path} had no carried fields to check`).toBeGreaterThanOrEqual(2);
+  expect(carried.length, `${path} had no carried fields to check`).toBeGreaterThanOrEqual(2);
+}
+
+/**
+ * Metadata must survive the save. Under full replace that means SENDING it; under
+ * a partial update it means NOT sending it, since anything sent is written and an
+ * explicit null clears the column outright.
+ */
+function assertMetadataSurvives(
+  path: string,
+  request: Record<string, unknown>,
+  contract: 'partial' | 'full-replace',
+  what: string,
+) {
+  if (contract === 'full-replace') {
+    expect(request.metadata, `${path} dropped metadata on ${what}`).toBe(METADATA);
+    return;
+  }
+  expect(
+    'metadata' in request,
+    `${path} sent metadata on a PARTIAL ${what} — a form that does not edit it must omit it, ` +
+      'and sending null would clear the column',
+  ).toBe(false);
 }
 
 describe('every registry resource carries metadata through an edit', () => {
@@ -217,15 +352,22 @@ describe('every registry resource carries metadata through an edit', () => {
     '%s',
     async (_path, resource: RegistryResource<unknown>) => {
       const sent = await saveEdit(resource.renderForm(ENTITY, vi.fn()));
-      // The LAST request: a form may legitimately send more than one (a picker
+      // The LAST write: a form may legitimately send more than one (a picker
       // save, then the entity), and it is the entity's own write that must carry it.
-      const request = sent[sent.length - 1];
-      expect(request.metadata, `${_path} dropped metadata on save`).toBe(METADATA);
+      const { doc, request, token } = sent[sent.length - 1];
+      const contract = contractOf(doc);
+      assertMetadataSurvives(_path, request, contract, 'save');
       // …and it did not "preserve" everything by sending the stale record whole:
       // the operator's new name has to arrive, or the save did nothing at all.
       expect(request.name, `${_path} discarded the operator's edit`).toBe(RENAMED);
-      expect(request.token).toBe(ENTITY.token);
-      assertOnlyTheEditsChanged(_path, request);
+      // A partial update names its subject alongside the request rather than
+      // inside it — the token left the input entirely, so an update can no longer
+      // MOVE a token the way the full-replace path could.
+      expect(
+        contract === 'partial' ? token : request.token,
+        `${_path} did not identify the entity it was updating`,
+      ).toBe(ENTITY.token);
+      assertOnlyTheEditsChanged(_path, request, contract);
     },
   );
 });
@@ -251,7 +393,7 @@ describe('a device profile keeps the position declaration no form edits', () => 
   // quiet, several steps away from anything anyone had touched.
   it('sends the declaration back unchanged', async () => {
     const sent = await saveEdit(profile!.renderForm(DECLARED, vi.fn()));
-    expect(sent[sent.length - 1].location).toEqual({
+    expect(sent[sent.length - 1].request.location).toEqual({
       expectedAccuracyMeters: 12.5,
       expectedUpdateIntervalSeconds: 30,
     });
@@ -261,7 +403,7 @@ describe('a device profile keeps the position declaration no form edits', () => 
   // rather than start inventing a declaration to be safe.
   it('sends null for a profile that never declared one', async () => {
     const sent = await saveEdit(profile!.renderForm({ ...ENTITY, location: null }, vi.fn()));
-    expect(sent[sent.length - 1].location).toBeNull();
+    expect(sent[sent.length - 1].request.location).toBeNull();
   });
 });
 
@@ -309,15 +451,72 @@ describe('the appearance tab carries metadata through a save', () => {
       target: { value: '#ff0000' },
     });
     fireEvent.click(await screen.findByRole('button', { name: 'Save appearance' }));
-    await waitFor(() => expect(requests().length).toBeGreaterThan(0));
-    const request = requests()[requests().length - 1];
+    await waitFor(() => expect(writes().length).toBeGreaterThan(0));
+    const { doc, request, token } = writes()[writes().length - 1];
+    const contract = contractOf(doc);
 
     expect(request.backgroundColor, `${_path} discarded the colour change`).toBe('#ff0000');
-    // The three fields this tab does NOT edit, each of which it used to erase.
-    expect(request.metadata, `${_path} dropped metadata on an appearance save`).toBe(METADATA);
-    expect(request.imageUrl, `${_path} dropped the imageUrl`).toBe(ENTITY.imageUrl);
-    expect(request.icon, `${_path} dropped the icon`).toBe(ENTITY.icon);
-    expect(request.name, `${_path} dropped the name`).toBe(ENTITY.name);
-    expect(request.token).toBe(ENTITY.token);
+    assertMetadataSurvives(_path, request, contract, 'appearance save');
+
+    // 🔴 The icon IS one of this tab's own fields — it edits an icon and three
+    // colours. It belongs in the request on BOTH contracts, carrying the value the
+    // form seeded from the entity, because the operator changed a colour and left
+    // it alone. That is a real assertion either way: a tab that sent only the
+    // control it touched would drop the icon on every colour save.
+    //
+    // (The list here used to call it untouched. Under full replace the two
+    // readings are indistinguishable — the same bytes go out for both — so the
+    // mislabel cost nothing until absence started to MEAN something.)
+    expect(request.icon, `${_path} dropped the icon it edits`).toBe(ENTITY.icon);
+
+    // These it genuinely does not edit, and used to erase.
+    const untouched = ['imageUrl', 'name'] as const;
+    if (contract === 'full-replace') {
+      for (const key of untouched) {
+        expect(request[key], `${_path} dropped the ${key}`).toBe(ENTITY[key]);
+      }
+    } else {
+      // Under a partial update sending them is the regression, so the same fields
+      // are checked from the other side.
+      expect(
+        untouched.filter((k) => k in request),
+        `${_path} carried fields the appearance tab does not edit`,
+      ).toEqual([]);
+    }
+    expect(
+      contract === 'partial' ? token : request.token,
+      `${_path} did not identify the entity it was updating`,
+    ).toBe(ENTITY.token);
+  });
+});
+
+// 🔴 THE TABS THE TWO LOOPS ABOVE NEVER REACH. They drive `renderForm` and the
+// appearance tab, and nothing else — so a mutation planting `metadata: null` in
+// the Identity tab passed this entire file. Both tabs below were rewritten for the
+// partial contract, which makes "what does it send" the whole question about them.
+describe('a device-type tab sends only the fields it edits', () => {
+  const deviceTypes = REGISTRY_RESOURCES.find((r) => r.basePath === '/device-types');
+  const identity = deviceTypes?.detailTabs?.find((t) => t.value === 'identity');
+
+  // The counterweight, in the same shape as the others here: a `find` that missed
+  // would make every test below vacuous rather than failing.
+  it('is a tab this file actually found', () => {
+    expect(identity).toBeTruthy();
+  });
+
+  it('sends the two discovery facets and nothing else', async () => {
+    render(<>{identity!.render(ENTITY, vi.fn())}</>);
+    fireEvent.change(screen.getByLabelText('Manufacturer'), { target: { value: 'Acme' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Save identity' }));
+    await waitFor(() => expect(writes().length).toBeGreaterThan(0));
+
+    const { doc, request, token } = writes()[writes().length - 1];
+    expect(contractOf(doc)).toBe('partial');
+    expect(token, 'the identity tab did not identify its device type').toBe(ENTITY.token);
+    // Exact, not a subset. The failure this guards is a field ARRIVING — metadata
+    // read when the tab opened, or a null that clears a column nobody edited — so
+    // an assertion that only checked the two facets were present would miss it.
+    expect(Object.keys(request).sort()).toEqual(['manufacturer', 'model']);
+    expect(request.manufacturer, 'the identity tab discarded the edit').toBe('Acme');
   });
 });

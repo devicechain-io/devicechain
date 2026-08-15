@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The "Appearance" tab for registry types: edits the background / text / border
-// colors and icon that drive the type's capsule everywhere it appears. Saves the
-// full type (name + description preserved from the entity) since the type update
-// is a full replace; the parent reloads so the Basic tab stays in sync.
+// colors and icon that drive the type's capsule everywhere it appears. It sends
+// those four fields and nothing else — reconciling them with a family's update
+// contract is the caller's job, since the four families sharing this form are no
+// longer all on the same one. The parent reloads so the Basic tab stays in sync.
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -19,19 +20,30 @@ import { errMessage } from '@/routes/common';
 import { TypeCapsule } from '@/components/TypeCapsule';
 import { TYPE_ICONS, TYPE_ICON_KEYS } from '@/lib/type-icons';
 
-// What this form sends back: the appearance it edits, plus the name and
-// description it does not, so a colour change does not erase them.
-//
-// 🔴 Every field is REQUIRED and non-undefined, deliberately. The type update is a
-// full replace and the caller spreads this over its family's `…Preserved(entity)`
-// projection — an optional field here would spread as `undefined` and clear the
-// preserved value, which is the same deletion by omission the projection exists to
-// stop, just one layer further in. imageUrl and metadata are absent because this
-// form neither edits nor reads them; the projection underneath carries them.
-export interface AppearanceUpdate {
+// What this form READS off the entity. The token and name are not edited here —
+// they feed the live capsule preview, which has to look like the real thing.
+export interface AppearanceSource {
   token: string;
   name: string | null;
-  description: string | null;
+  icon: string | null;
+  backgroundColor: string | null;
+  foregroundColor: string | null;
+  borderColor: string | null;
+}
+
+// 🔴 What this form SENDS: the four fields it edits, and NOTHING else. The
+// carry-forward belongs to the caller, because only the caller knows its family's
+// update contract — a full-replace family spreads these over its
+// `…Preserved(entity)` projection, and a partial-update family passes them through
+// untouched. A form that carried `name` itself would be right for one and a
+// lost-update for the other: it would write a name read when the tab was opened,
+// over whatever the Identity tab saved since.
+//
+// 🔴 Every field is REQUIRED and non-undefined, deliberately. Spread over a
+// preserved projection, an optional field here would arrive as `undefined` and
+// clear the preserved value — the same deletion by omission the projection exists
+// to stop, one layer further in.
+export interface AppearanceEdits {
   icon: string | null;
   backgroundColor: string | null;
   foregroundColor: string | null;
@@ -82,8 +94,8 @@ export function TypeAppearanceForm({
   update,
   onSaved,
 }: {
-  entity: AppearanceUpdate;
-  update: (req: AppearanceUpdate) => Promise<unknown>;
+  entity: AppearanceSource;
+  update: (req: AppearanceEdits) => Promise<unknown>;
   onSaved: () => void;
 }) {
   const { t } = useTranslation('common');
@@ -104,9 +116,6 @@ export function TypeAppearanceForm({
     setBusy(true);
     try {
       await update({
-        token: entity.token,
-        name: entity.name ?? null,
-        description: entity.description ?? null,
         icon: icon ?? null,
         backgroundColor: backgroundColor ?? null,
         foregroundColor: foregroundColor ?? null,

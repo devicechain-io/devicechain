@@ -88,10 +88,10 @@ export function ProfilePanel({
     setSelected('');
   };
 
-  // DeviceType update is full-replace; carry everything forward and override only
-  // the profile ref. null detaches — and it has to be null rather than undefined,
-  // since spreading an undefined over the preserved value is indistinguishable
-  // from never having mentioned the field.
+  // DeviceType update is partial, so this sends the profile ref alone and every
+  // other field is left as it stands. Detaching still has to be an explicit null:
+  // undefined means "not mentioned" and would leave the profile attached, which is
+  // the opposite of what the button says.
   const setProfile = (profileToken: string | null) =>
     updateDeviceType(entity.token, { profileToken });
 
