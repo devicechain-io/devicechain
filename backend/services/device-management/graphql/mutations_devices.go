@@ -32,10 +32,16 @@ func (r *SchemaResolver) CreateDeviceType(ctx context.Context, args struct {
 	return dt, nil
 }
 
-// Update an existing device type.
+// Update an existing device type. The request is a PARTIAL update: a field the
+// caller omitted is left alone, an explicit null clears it, a value sets it.
+//
+// Request is declared non-null in the schema and therefore a VALUE here, not a
+// pointer — graphql-go refuses a pointer field for a required argument. That is
+// the right contract anyway: an update naming no fields at all is a caller error,
+// not a no-op to be absorbed silently.
 func (r *SchemaResolver) UpdateDeviceType(ctx context.Context, args struct {
 	Token   string
-	Request *model.DeviceTypeCreateRequest
+	Request model.DeviceTypeUpdateRequest
 }) (*DeviceTypeResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
@@ -45,7 +51,7 @@ func (r *SchemaResolver) UpdateDeviceType(ctx context.Context, args struct {
 	// profile (ADR-045) changes what the ingest path resolves for this type, so
 	// the update must evict the type's cached metric definitions.
 	api := r.GetCachedApi(ctx)
-	updated, err := api.UpdateDeviceType(ctx, args.Token, args.Request)
+	updated, err := api.UpdateDeviceType(ctx, args.Token, &args.Request)
 	if err != nil {
 		return nil, err
 	}

@@ -5,8 +5,8 @@
 // manufacturer and model discovery facets — the "what device this type is" that
 // stays correct even when many types share one capability profile. Both are
 // free-text with suggestion lists drawn from the values already in use, so a
-// tenant's fleet vocabulary stays consistent. DeviceType update is full-replace, so
-// this carries everything else forward via deviceTypePreserved.
+// tenant's fleet vocabulary stays consistent. DeviceType update is partial, so this
+// sends the two facets it edits and nothing else.
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -18,7 +18,7 @@ import { useToast } from '@/components/ui/toast';
 import { errMessage } from '@/routes/common';
 import { useAuth } from '@/auth/AuthProvider';
 import { hasAuthority } from '@devicechain/client';
-import { updateDeviceType, deviceTypePreserved, type DeviceType } from '@/lib/api/device-management';
+import { updateDeviceType, type DeviceType } from '@/lib/api/device-management';
 
 export function TypeIdentityForm({ entity, onSaved }: { entity: DeviceType; onSaved: () => void }) {
   const { t } = useTranslation('devices');
@@ -41,7 +41,6 @@ export function TypeIdentityForm({ entity, onSaved }: { entity: DeviceType; onSa
     setBusy(true);
     try {
       await updateDeviceType(entity.token, {
-        ...deviceTypePreserved(entity),
         manufacturer: manufacturer.trim() || null,
         model: model.trim() || null,
       });

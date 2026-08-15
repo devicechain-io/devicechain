@@ -26,7 +26,6 @@ import {
   listDeviceProfiles,
   createDeviceProfile,
   updateDeviceType,
-  deviceTypePreserved,
   type DeviceType,
 } from '@/lib/api/device-management';
 
@@ -94,7 +93,7 @@ export function ProfilePanel({
   // since spreading an undefined over the preserved value is indistinguishable
   // from never having mentioned the field.
   const setProfile = (profileToken: string | null) =>
-    updateDeviceType(entity.token, { ...deviceTypePreserved(entity), profileToken });
+    updateDeviceType(entity.token, { profileToken });
 
   const doAttach = async (token: string) => {
     setBusy('attach');

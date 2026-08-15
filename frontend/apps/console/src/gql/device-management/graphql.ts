@@ -245,6 +245,20 @@ export type DeviceTypeSearchCriteria = {
   pageSize: number;
 };
 
+export type DeviceTypeUpdateRequest = {
+  backgroundColor?: string | null | undefined;
+  borderColor?: string | null | undefined;
+  description?: string | null | undefined;
+  foregroundColor?: string | null | undefined;
+  icon?: string | null | undefined;
+  imageUrl?: string | null | undefined;
+  manufacturer?: string | null | undefined;
+  metadata?: string | null | undefined;
+  model?: string | null | undefined;
+  name?: string | null | undefined;
+  profileToken?: string | null | undefined;
+};
+
 export type EntityGroupCreateRequest = {
   backgroundColor?: string | null | undefined;
   borderColor?: string | null | undefined;
@@ -708,7 +722,7 @@ export type CreateDeviceTypeMutation = { createDeviceType: { id: string, token: 
 
 export type UpdateDeviceTypeMutationVariables = Exact<{
   token: string;
-  request?: DeviceTypeCreateRequest | null | undefined;
+  request: DeviceTypeUpdateRequest;
 }>;
 
 
@@ -1957,7 +1971,7 @@ export const CreateDeviceTypeDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateDeviceTypeMutation, CreateDeviceTypeMutationVariables>;
 export const UpdateDeviceTypeDocument = new TypedDocumentString(`
-    mutation UpdateDeviceType($token: String!, $request: DeviceTypeCreateRequest) {
+    mutation UpdateDeviceType($token: String!, $request: DeviceTypeUpdateRequest!) {
   updateDeviceType(token: $token, request: $request) {
     id
     token

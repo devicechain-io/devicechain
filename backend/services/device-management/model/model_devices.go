@@ -6,6 +6,7 @@ package model
 import (
 	"database/sql"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
@@ -31,6 +32,51 @@ type DeviceTypeCreateRequest struct {
 	Manufacturer *string
 	Model        *string
 	Metadata     *string
+}
+
+// DeviceTypeUpdateRequest is the PARTIAL-update counterpart of
+// DeviceTypeCreateRequest, and the first entity converted to the platform-wide
+// partial-update semantic.
+//
+// Every field is optional in the three-state sense the Optional* types carry:
+// omitted leaves the stored value alone, an explicit null clears it, a value sets
+// it. Sending {name: "Excavator"} renames the type and touches nothing else.
+//
+// The old shape reused DeviceTypeCreateRequest, which made an update a FULL
+// REPLACE: a caller renaming a type wiped its imageUrl, icon, three colours,
+// manufacturer, model, metadata and its adopted profile reference — successfully,
+// with a 200 and the emptied entity returned. The console worked around it by
+// reading the whole record and writing it back, which bought a second problem
+// (two operators editing one type now clobber each other across every field);
+// every other caller — dcctl, the SDKs, MCP, any direct API user — kept the footgun.
+//
+// 🔴 TOKEN IS DELIBERATELY ABSENT from this struct, and that is a capability
+// removal, not an oversight. The create request carries a Token and the old update
+// path assigned it (`found.Token = request.Token`), so an update could MOVE a
+// type's token. The token is already the mutation's own argument, so carrying it
+// again in the payload only created a second, disagreeing source for the same
+// identity. Leaving it out makes a token move unrepresentable rather than merely
+// refused, which is the same line user-management admin already drew.
+type DeviceTypeUpdateRequest struct {
+	Name            dcgraphql.OptionalString
+	Description     dcgraphql.OptionalString
+	ImageUrl        dcgraphql.OptionalString
+	Icon            dcgraphql.OptionalString
+	BackgroundColor dcgraphql.OptionalString
+	ForegroundColor dcgraphql.OptionalString
+	BorderColor     dcgraphql.OptionalString
+	// ProfileToken re-points the DeviceProfile this type adopts. Omitted leaves the
+	// current profile in place — which the full-replace shape could not express, and
+	// is why a rename used to silently un-declare position for every device built on
+	// the type. Null (or an empty/whitespace token, preserved from the old behaviour)
+	// detaches the profile. An unknown token is rejected.
+	ProfileToken dcgraphql.OptionalString
+	Manufacturer dcgraphql.OptionalString
+	Model        dcgraphql.OptionalString
+	// Metadata is an opaque JSON string in the schema, not a map, so it replaces
+	// wholesale when sent and clears on null. There is no per-key merge to choose
+	// between: the API has never been able to address an individual key.
+	Metadata dcgraphql.OptionalString
 }
 
 // Represents a device type — the taxonomy/identity of a device (name, appearance,

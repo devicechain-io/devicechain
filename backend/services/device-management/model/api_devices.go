@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
@@ -128,14 +129,17 @@ func (api *Api) CreateDeviceType(ctx context.Context, request *DeviceTypeCreateR
 	return created, nil
 }
 
-// Update an existing device type.
+// Update an existing device type, applying only the fields the caller actually
+// sent. The entity is looked up by the `token` ARGUMENT — the request payload no
+// longer carries one, so an update cannot move a type's token.
+//
+// Each assignment folds the field's three states onto the stored value: absent
+// keeps it, null clears it, a value sets it. Reading `found.X` as the "current"
+// argument is what makes an omitted field a no-op, so these must stay assignments
+// FROM the loaded record rather than from the request alone.
 func (api *Api) UpdateDeviceType(ctx context.Context, token string,
-	request *DeviceTypeCreateRequest) (*DeviceType, error) {
-	profileId, err := api.resolveProfileId(ctx, request.ProfileToken)
-	if err != nil {
-		return nil, err
-	}
-	matches, err := api.DeviceTypesByToken(ctx, []string{request.Token})
+	request *DeviceTypeUpdateRequest) (*DeviceType, error) {
+	matches, err := api.DeviceTypesByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
 	}
@@ -145,18 +149,31 @@ func (api *Api) UpdateDeviceType(ctx context.Context, token string,
 
 	found := matches[0]
 	oldProfileId := found.ProfileId
-	found.Token = request.Token
-	found.Name = rdb.NullStrOf(request.Name)
-	found.Description = rdb.NullStrOf(request.Description)
-	found.ImageUrl = rdb.NullStrOf(request.ImageUrl)
-	found.Icon = rdb.NullStrOf(request.Icon)
-	found.BackgroundColor = rdb.NullStrOf(request.BackgroundColor)
-	found.ForegroundColor = rdb.NullStrOf(request.ForegroundColor)
-	found.BorderColor = rdb.NullStrOf(request.BorderColor)
-	found.Metadata = rdb.MetadataStrOf(request.Metadata)
+
+	// The profile hop resolves BEFORE anything is written, so an unknown profile
+	// token rejects the whole update rather than half-applying it. An absent
+	// profileToken must not re-resolve at all — resolving the type's existing
+	// profile token here would turn a rename into a profile re-point whenever the
+	// referenced profile had since been deleted.
+	profileId := found.ProfileId
+	if request.ProfileToken.Set {
+		profileId, err = api.resolveProfileId(ctx, request.ProfileToken.Value)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	found.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(found.Name)))
+	found.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(found.Description)))
+	found.ImageUrl = rdb.NullStrOf(request.ImageUrl.ApplyTo(dcgraphql.NullStr(found.ImageUrl)))
+	found.Icon = rdb.NullStrOf(request.Icon.ApplyTo(dcgraphql.NullStr(found.Icon)))
+	found.BackgroundColor = rdb.NullStrOf(request.BackgroundColor.ApplyTo(dcgraphql.NullStr(found.BackgroundColor)))
+	found.ForegroundColor = rdb.NullStrOf(request.ForegroundColor.ApplyTo(dcgraphql.NullStr(found.ForegroundColor)))
+	found.BorderColor = rdb.NullStrOf(request.BorderColor.ApplyTo(dcgraphql.NullStr(found.BorderColor)))
+	found.Metadata = rdb.MetadataStrOf(request.Metadata.ApplyTo(dcgraphql.MetadataStr(found.Metadata)))
 	found.ProfileId = profileId
-	found.Manufacturer = rdb.NullStrOf(request.Manufacturer)
-	found.ModelName = rdb.NullStrOf(request.Model)
+	found.Manufacturer = rdb.NullStrOf(request.Manufacturer.ApplyTo(dcgraphql.NullStr(found.Manufacturer)))
+	found.ModelName = rdb.NullStrOf(request.Model.ApplyTo(dcgraphql.NullStr(found.ModelName)))
 
 	result := api.RDB.DB(ctx).Save(found)
 	if result.Error != nil {

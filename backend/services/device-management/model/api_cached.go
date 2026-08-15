@@ -324,7 +324,7 @@ func (capi *CachedApi) CreateEntityRelationship(ctx context.Context,
 // resolution change as a publish/rollback on the profile — so the type's cached
 // def set must be dropped. Bounded further by the cache TTL if eviction fails.
 func (capi *CachedApi) UpdateDeviceType(ctx context.Context, token string,
-	request *DeviceTypeCreateRequest) (*DeviceType, error) {
+	request *DeviceTypeUpdateRequest) (*DeviceType, error) {
 	updated, err := capi.Api.UpdateDeviceType(ctx, token, request)
 	if err != nil {
 		return nil, err

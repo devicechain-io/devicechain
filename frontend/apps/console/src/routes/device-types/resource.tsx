@@ -11,7 +11,6 @@ import {
   getDeviceType,
   createDeviceType,
   updateDeviceType,
-  deviceTypePreserved,
   deleteDeviceType,
   type DeviceType,
 } from '@/lib/api/device-management';
@@ -43,11 +42,10 @@ export const deviceTypeResource: RegistryResource<DeviceType> = {
       entityType="device-type"
       create={(req) => createDeviceType(req)}
       update={(token, req) =>
-        // RegistryTypeForm only calls update when editing, so dt is always set.
-        // Carry forward every field this form doesn't edit (appearance, profile
-        // ref, facets); DeviceType update is full-replace. See deviceTypePreserved.
+        // A partial update: this form edits name and description, so it sends name
+        // and description. Appearance, the profile reference and the facets are
+        // untouched because they are not mentioned.
         updateDeviceType(token, {
-          ...deviceTypePreserved(dt!),
           name: req.name,
           description: req.description,
         })
@@ -68,8 +66,8 @@ export const deviceTypeResource: RegistryResource<DeviceType> = {
         <TypeAppearanceForm
           entity={dt}
           update={(req) =>
-            // The appearance form edits icon/colors; carry the rest forward.
-            updateDeviceType(dt.token, { ...deviceTypePreserved(dt), ...req })
+            // The appearance form edits icon and colors, and sends only those.
+            updateDeviceType(dt.token, req)
           }
           onSaved={reload}
         />

@@ -675,6 +675,34 @@ input DeviceTypeCreateRequest {
     metadata: String
 }
 
+# A PARTIAL update to a device type. Every field is optional in three senses, not
+# two: omit it to leave the stored value untouched, send null to clear it, send a
+# value to set it. Sending only `name` renames the type and changes nothing else.
+#
+# There is deliberately no `token` field — the type is identified by the mutation's
+# `token` argument, and an update cannot move it.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the
+# field arrive already-populated for a caller who never sent it, which collapses
+# "omitted" back into "sent", and turns this input back into the full replace it
+# replaces.
+input DeviceTypeUpdateRequest {
+    name: String
+    description: String
+    imageUrl: String
+    icon: String
+    backgroundColor: String
+    foregroundColor: String
+    borderColor: String
+    # Re-points the DeviceProfile this type adopts (ADR-045). Omit to keep the
+    # current profile; null or an empty token detaches it. An unknown token is
+    # rejected and the whole update is refused.
+    profileToken: String
+    manufacturer: String
+    model: String
+    metadata: String
+}
+
 # Criteria used when searching for device types.
 input DeviceTypeSearchCriteria {
     pageNumber: Int!
@@ -1622,7 +1650,7 @@ type Mutation {
     # Create a new device type.
     createDeviceType(request: DeviceTypeCreateRequest): DeviceType!
     # Update an existing device type.
-    updateDeviceType(token: String!, request: DeviceTypeCreateRequest): DeviceType!
+    updateDeviceType(token: String!, request: DeviceTypeUpdateRequest!): DeviceType!
     # Delete a device type. Refused while any device references it. Its capability
     # definitions live on the DeviceProfile now (ADR-045), which survives. Returns
     # whether a row was deleted.
