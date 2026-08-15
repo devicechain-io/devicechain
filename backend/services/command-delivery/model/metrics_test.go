@@ -130,9 +130,9 @@ func TestRecordBatchOutcomeActuallyWritesTheCounters(t *testing.T) {
 // TestWholeBatchReserveAttributionAtTheCallSite exercises the DECISION, not the predicate.
 //
 // 🔴 THIS EXISTS BECAUSE THE TABLE TEST BELOW COULD NOT SEE THE BUG IT WAS WRITTEN FOR.
-// The predicate was always correct; the defect was which POSITION the whole-batch refusal
-// handed it, and a table over refusedByReserve passes identically either way. Reverting
-// the fix and watching only THIS test fail is what proves the coverage is real.
+// boundAt was always correct; the defect was which POSITION the whole-batch refusal handed
+// it, and a table over boundAt passes identically either way. Reverting the fix and
+// watching only THIS test fail is what proves the coverage is real.
 //
 // It drives decideCommandBatch directly, because the accounting carries the attribution
 // and is deliberately not reachable through the returned batch.

@@ -72,11 +72,18 @@ type CommandEnqueueRejection {
     # — the reason is prose for a person and its wording may change.
     #
     # Produced here: PAYLOAD_NOT_JSON, METADATA_NOT_JSON, EXPIRES_AT_INVALID,
-    # HELD_CEILING_EXCEEDED. Relayed from the enqueue gate that owns the device and
-    # its command vocabulary: DEVICE_NOT_FOUND, COMMAND_NOT_IN_VOCABULARY,
+    # HELD_CEILING_EXCEEDED, TOKEN_IN_USE. Relayed from the enqueue gate that owns the
+    # device and its command vocabulary: DEVICE_NOT_FOUND, COMMAND_NOT_IN_VOCABULARY,
     # PAYLOAD_SCHEMA_VIOLATION. COMMAND_REJECTED means a rejection arrived carrying no
     # classification. The list is open — treat an unrecognized code as a rejection you
     # cannot classify, never as a success.
+    #
+    # TOKEN_IN_USE is the rare one, and it does NOT mean "you sent this twice". A repeat
+    # of a token you already own is an idempotent replay and returns the ORIGINAL command
+    # in `command`. This code fires only when the row holding the token is one you do not
+    # own — in practice one the platform minted for a batch. Returning it would hand you
+    # another device's actuation as though it were yours, so the enqueue is refused
+    # instead. Permanent for that token; pick another.
     #
     # HELD_CEILING_EXCEEDED is the only TEMPORARY one: the tenant is holding its limit
     # of commands for absent devices, and the limit frees as those devices return. The

@@ -83,7 +83,14 @@ func (r *SchemaResolver) CreateCommand(ctx context.Context, args struct {
 	}, nil
 }
 
-// CancelCommand cancels a non-terminal command by token (moves it to CANCELLED).
+// CancelCommand moves a command the platform still holds — QUEUED, HELD or PARKED — to
+// CANCELLED, and answers with the row as it stands.
+//
+// 🔴 NOT "any non-terminal command", which is what this said before. SENT is non-terminal
+// and is deliberately NOT cancellable: the command is at the device and nothing here can
+// recall it. Naming a SENT (or already-terminal) command is not an error — it returns that
+// command unchanged, so a caller must read the status back rather than treat a successful
+// call as proof anything was stopped.
 func (r *SchemaResolver) CancelCommand(ctx context.Context, args struct {
 	Token string
 }) (*CommandResolver, error) {

@@ -245,10 +245,15 @@ type CommandCreateRequest struct {
 // Status and Statuses are independent filters, ANDed like every other criterion
 // — a caller supplying both gets the intersection, which for a single-value
 // Status either matches or returns nothing. Statuses exists because the states a
-// caller cares about are usually a SET (the LwM2M wake drain wants HELD ∪ SENT:
-// the commands withheld for an absent device plus those already dispatched and
-// still unanswered), and expressing that as repeated single-status queries costs
-// a round trip per state and cannot be paged coherently.
+// caller cares about are usually a SET (the LwM2M wake drain wants HELD ∪ PARKED:
+// the commands withheld because the device was known absent, plus those a transport
+// published and handed back on finding nobody there), and expressing that as
+// repeated single-status queries costs a round trip per state and cannot be paged
+// coherently.
+//
+// 🔴 SENT IS NOT IN THAT SET, AND THIS NOTE USED TO SAY IT WAS. A sent command is
+// at the device; re-dispatching it on the next wake actuates hardware a second
+// time. That is the defect PARKED was added to fix — see the status doc above.
 //
 // An EMPTY Statuses slice is treated as "no status filter", not as "match
 // nothing". Both readings are defensible; this one is chosen because a caller

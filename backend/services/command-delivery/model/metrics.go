@@ -37,7 +37,7 @@ const (
 	dispositionRefused  = "refused"
 
 	// boundCeiling / boundReserve answer WHICH limit refused a device, and they are a
-	// counterfactual rather than a state read — see batchHeadroom.refusedByReserve.
+	// counterfactual rather than a state read — see batchHeadroom.boundAt.
 	boundCeiling = "ceiling"
 	boundReserve = "reserve"
 	boundNone    = "none"
@@ -180,14 +180,6 @@ func metricCodeLabel(code RejectionCode) string {
 		return string(code)
 	}
 	return codeOtherLabel
-}
-
-// boundOf names which limit refused a device.
-func boundOf(byReserve bool) string {
-	if byReserve {
-		return boundReserve
-	}
-	return boundCeiling
 }
 
 // targetKindLabel names how a batch's target was specified, for a metric label.

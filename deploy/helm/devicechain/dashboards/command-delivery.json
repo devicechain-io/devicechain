@@ -323,8 +323,8 @@
     {
       "id": 6,
       "type": "stat",
-      "title": "Devices refused /s",
-      "description": "Devices dropped from a fleet write — either the whole batch was refused or a partial batch left them out.",
+      "title": "Devices left out of a partial batch /s",
+      "description": "Devices a fleet write that DID fire left behind. A batch refused whole is deliberately absent: it enqueued to nobody, so counting its target set here would report a fleet-sized device event for a request that never reached the fleet. Whole-batch refusals are in \"Batches refused /s\" and \"Refusals by code\".",
       "gridPos": {
         "h": 4,
         "w": 4,

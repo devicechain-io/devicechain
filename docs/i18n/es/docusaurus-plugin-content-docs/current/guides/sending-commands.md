@@ -76,6 +76,11 @@ sin cambios. Eso hace segura una reintentona tras un fallo de red, lo cual impor
 un comando es una actuación física y no quieres que una respuesta perdida reinicie un
 dispositivo dos veces.
 
+Esa repetición solo aplica a los comandos que **te pertenecen**. Un token que tiene un
+comando acuñado por la plataforma para un lote se rechaza con `TOKEN_IN_USE` en vez de
+devolverse — entregarte la actuación de otro dispositivo como si fuera tuya sería peor que
+decir que no.
+
 ## Cuando se rechaza una admisión {#when-an-enqueue-is-refused}
 
 :::danger Revisa `rejection`, no solo si hay errores
@@ -102,6 +107,7 @@ redacción puede cambiar.
 | `PAYLOAD_SCHEMA_VIOLATION` | La carga útil incumplió el esquema de parámetros del comando — parámetro desconocido, tipo incorrecto, fuera de rango, o falta uno requerido. | No |
 | `PAYLOAD_NOT_JSON` / `METADATA_NOT_JSON` | La cadena no es JSON bien formado. | No |
 | `EXPIRES_AT_INVALID` | `expiresAt` no es una marca de tiempo RFC3339. | No |
+| `TOKEN_IN_USE` | El token lo tiene un comando que no te pertenece — en la práctica, uno que la plataforma acuñó para un lote. | No — elige otro token |
 | `COMMAND_REJECTED` | Llegó un rechazo sin clasificación. | No |
 
 **La lista es abierta.** Trata un código que no reconozcas como un rechazo que no puedes
