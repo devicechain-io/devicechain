@@ -124,12 +124,21 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 
 // buildRules resolves each rule request to a NotificationRule owned by policyId,
 // resolving the channel token to its id (fails closed on an unknown channel) and
-// validating recipients as a JSON string array. It reads through tx, which already
-// carries the tenant-scoped context, so the channel lookup is tenant-isolated.
+// validating the severity against the alarm tier vocabulary and recipients as a JSON
+// string array. It reads through tx, which already carries the tenant-scoped context,
+// so the channel lookup is tenant-isolated.
+//
+// It is the single choke point for rule validation because BOTH policy create and
+// policy update build their rules here — an update replaces the rule set wholesale,
+// so a check placed on the create path alone would let an edit reintroduce exactly
+// what the create refused.
 func (api *Api) buildRules(tx *gorm.DB, policyId uint,
 	requests []*NotificationRuleCreateRequest) ([]*NotificationRule, error) {
 	rules := make([]*NotificationRule, 0, len(requests))
 	for _, rr := range requests {
+		if err := validateSeverity(rr.Severity); err != nil {
+			return nil, err
+		}
 		if err := validateStringArray(rr.Recipients, "recipients"); err != nil {
 			return nil, err
 		}

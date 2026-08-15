@@ -6,6 +6,7 @@ package model
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -30,6 +31,58 @@ func validateChannelType(ct string) error {
 	}
 	return nil
 }
+
+// validateSeverity fails closed on a rule severity outside the alarm tier vocabulary.
+//
+// 🔴 WHY THIS HAS TO BE CHECKED AT THE WRITE. A rule's severity is compared to the ALARM's
+// by an exact string match (processor.severityMatches), and an alarm's tier is uppercase and
+// validated where it is raised. So a rule authored as "critical" writes successfully, reads
+// back byte-for-byte as written, and then matches nothing for the rest of its life. The
+// policy's OTHER rules keep delivering, so the operator sees notifications arriving and has
+// no reason to suspect a gap — which makes this worse than the deviceTypeToken case one field
+// over, where the whole policy visibly refuses.
+//
+// The dispatcher cannot help: its severity skip logs nothing, and deliberately so. A rule
+// that does not match THIS alarm's tier is ordinary operation on every alarm the tenant
+// raises, not a fault, so logging it would bury the genuine misconfigurations its
+// neighbouring branches do report (a missing channel, an absent adapter). A mistyped tier
+// is indistinguishable there from a correctly-typed one that simply did not match. It is
+// distinguishable HERE, which is the whole argument for the check living at the write.
+//
+// The lowercase form is named in the error because it is the LIKELY mistake rather than a
+// random typo: a DETECT rule's own authoring severity is lowercase, and the two vocabularies
+// reject each other's casing by contract (see dmmodel.AlarmSeverityFromRuleSeverity), so an
+// operator arriving from the rule editor has just been typing "major".
+func validateSeverity(severity string) error {
+	if severity == SeverityAny || slices.Contains(ruleSeverities, severity) {
+		return nil
+	}
+	hint := ""
+	if upper := strings.ToUpper(severity); slices.Contains(ruleSeverities, upper) {
+		hint = fmt.Sprintf(" — did you mean %q? a notification rule matches the ALARM's tier, "+
+			"which is uppercase, not a detection rule's lowercase authoring severity", upper)
+	}
+	return fmt.Errorf("unknown severity %q (known: %s, or %q for any)%s",
+		severity, strings.Join(ruleSeverities, ", "), SeverityAny, hint)
+}
+
+// ruleSeverities is the alarm tier vocabulary a rule may name, most severe first.
+//
+// 🔴 IT IS RESTATED HERE RATHER THAN READ FROM device-management, AND THAT IS A
+// DELIBERATE TRADE — do not "fix" it by importing the real vocabulary. The tiers are
+// declared in dmmodel, whose model package transitively pulls cel-go, antlr, NATS and
+// an MQTT client (through its config, selector and messaging imports). This package is
+// consumed by two maintainer tools that touch none of that; importing dmmodel HERE, at
+// run time, added 17 indirect modules to drdrill's go.mod — a DR instrument acquiring
+// a CEL engine so it can spell five words.
+//
+// What makes the copy safe is that it is not trusted: TestTheRuleVocabularyMatchesTheAlarmTiers
+// asserts this slice equals dmmodel.AlarmSeverities() exactly, order included, and that
+// test imports dmmodel from _test.go — where it does not propagate to anyone consuming
+// this package. So a tier added, removed or reordered upstream fails CI here on the same
+// PR, which is the property a shared declaration was wanted for; the weight is what got
+// dropped.
+var ruleSeverities = []string{"CRITICAL", "MAJOR", "MINOR", "WARNING", "INDETERMINATE"}
 
 // channelTypeIds returns the catalog ids for error messages.
 func channelTypeIds() []string {

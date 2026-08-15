@@ -39,6 +39,19 @@
 #   - `Delete(&T{}, ids)` is NOT a hazard: gorm refuses a delete with no WHERE
 #     clause outright (ErrMissingWhereClause, 0 rows affected). Measured — the
 #     assumption that it would silently delete the table was wrong.
+#   - Anything under `.claude/`, which is where this repo's git worktrees live.
+#     What that exclusion SUBTRACTS is small and what it prevents is not: the
+#     exemption list below matches on a path relative to the scan root, so a
+#     worktree's copy of `backend/core/rdb/find_by_ids.go` arrives as
+#     `.claude/worktrees/x/backend/core/rdb/find_by_ids.go`, misses the exemption,
+#     and is reported. The guard therefore passed in CI (which has no worktrees)
+#     and failed for every maintainer who had one, naming the helper it exists to
+#     point people AT. A gate that is red for a reason the reader cannot act on is
+#     a gate the reader learns to skip.
+#     🔴 It is NOT a free exclusion, so do not read it as one: a worktree on an
+#     unmerged branch can carry a violation the primary tree does not, and a local
+#     run no longer sees it. That case is covered where it belongs — CI runs this
+#     guard on that branch's own checkout, where the paths are top-level again.
 #
 # A grep is the right instrument here, unlike hack/check-subscribe-confirmed.sh,
 # which needs a type checker: the discriminator is syntactic, not type-dependent.
@@ -110,7 +123,7 @@ scan() {
     esac
     hits+=("$hit")
     rc=1
-  done < <(cd "$root" && grep -rnE --include='*.go' "$PATTERN" . 2>/dev/null || true)
+  done < <(cd "$root" && grep -rnE --include='*.go' --exclude-dir=.claude "$PATTERN" . 2>/dev/null || true)
 
   if [ "$rc" -ne 0 ]; then
     printf '%s\n' "${hits[@]}" >&2
@@ -225,7 +238,29 @@ EOF
   status=0
   scan "$tmp" 2>/dev/null || status=$?
   [ "$status" -eq 1 ] || { echo "SELF-TEST FAILED: the exemption matched on a substring of the path." >&2; return 1; }
+  rm -r "$tmp/backend/services/y"
   echo "    scoped"
+
+  echo "==> Self-test: a nested worktree is not scanned, and excluding it costs no coverage"
+  # A worktree carries a whole second copy of the tree, INCLUDING the exempt files —
+  # which is the shape that made this a false failure rather than a duplicate report.
+  mkdir -p "$tmp/.claude/worktrees/wt/backend/core/rdb" "$tmp/.claude/worktrees/wt/backend/services/x/model"
+  echo 'func f() { db.Find(&found, ids) }' > "$tmp/.claude/worktrees/wt/backend/core/rdb/find_by_ids.go"
+  echo 'func f() { db.Find(&found, ids) }' > "$tmp/.claude/worktrees/wt/backend/services/x/model/api_things.go"
+  status=0
+  scan "$tmp" 2>/dev/null || status=$?
+  [ "$status" -eq 0 ] || { echo "SELF-TEST FAILED: a nested worktree was scanned." >&2; return 1; }
+
+  # 🔴 The counterweight, and the reason the branch above is not enough on its own:
+  # `--exclude-dir` takes a basename, so a mistake in it — or a future addition that
+  # over-matches — could silence the real tree while this file still looked correct.
+  # Plant the same call in the SCANNED tree and require it to be reported.
+  echo 'func f() { db.Find(&found, ids) }' > "$tmp/backend/services/x/model/api_things.go"
+  status=0
+  scan "$tmp" 2>/dev/null || status=$?
+  [ "$status" -eq 1 ] || { echo "SELF-TEST FAILED: the worktree exclusion swallowed the real tree." >&2; return 1; }
+  rm -rf "$tmp/.claude"
+  echo "    worktree excluded, real tree still scanned"
 
   echo "==> Self-test passed."
 }

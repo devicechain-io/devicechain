@@ -3,6 +3,7 @@ module github.com/devicechain-io/dc-drdrill
 go 1.26.5
 
 require (
+	github.com/devicechain-io/dc-event-management v0.0.0-00010101000000-000000000000
 	github.com/devicechain-io/dc-microservice v0.0.1
 	github.com/devicechain-io/dc-notification-management v0.0.0-00010101000000-000000000000
 	gorm.io/driver/postgres v1.6.2
@@ -51,3 +52,7 @@ replace github.com/devicechain-io/dc-notification-management => ../../services/n
 replace github.com/graph-gophers/graphql-go => github.com/devicechain-io/graphql-go v1.10.2-dc.2
 
 replace github.com/devicechain-io/dc-event-sources => ../../services/event-sources
+
+replace github.com/devicechain-io/dc-device-management => ../../services/device-management
+
+replace github.com/devicechain-io/dc-event-management => ../../services/event-management
