@@ -11,6 +11,8 @@ import type {
   CreateCommandMutation,
   CommandBatchesQuery,
   CommandBatchesByTokenQuery,
+  CommandBatchCreateRequest,
+  CreateCommandBatchMutation,
 } from '@/gql/command-delivery/graphql';
 
 // Public types are derived from the generated operation results so they always
@@ -32,6 +34,14 @@ export type CommandBatchSearchResults = CommandBatchesQuery['commandBatches'];
 export type CommandBatch = CommandBatchesByTokenQuery['commandBatchesByToken'][number];
 export type CommandBatchDeviceRefusal = CommandBatch['refusals'][number];
 export type CommandBatchRefusalCount = CommandBatch['refusalCounts'][number];
+
+// The outcome of a batch attempt, and the two shapes it can carry. Both fields are
+// NULLABLE and this is NOT a union, so a caller has to reckon with all four shapes —
+// see createCommandBatch below.
+export type CreateCommandBatchResult = CreateCommandBatchMutation['createCommandBatch'];
+export type CreatedCommandBatch = NonNullable<CreateCommandBatchResult['batch']>;
+export type CommandBatchRejection = NonNullable<CreateCommandBatchResult['rejection']>;
+export type { CommandBatchCreateRequest };
 
 const COMMANDS = graphql(`
   query Commands($criteria: CommandSearchCriteria!) {
@@ -135,6 +145,44 @@ const COMMAND_BATCHES_BY_TOKEN = graphql(`
       }
       cancelledAt
       cancelledCount
+    }
+  }
+`);
+
+// Firing a batch. The result selection takes BOTH arms in full, because both are the
+// answer: `batch` is the record the console then navigates to, and `rejection` is a
+// decided verdict that has to be read on the spot — it is never stored anywhere, so a
+// caller that did not select its refusal detail could not tell the operator WHICH
+// devices refused a whole-batch refusal.
+//
+// The batch arm selects only the identity and the creation-time counts. Everything else
+// about a created batch is already read in full by the detail page's own query, and
+// duplicating that selection here is how the two would drift.
+const CREATE_COMMAND_BATCH = graphql(`
+  mutation CreateCommandBatch($request: CommandBatchCreateRequest!) {
+    createCommandBatch(request: $request) {
+      batch {
+        id
+        token
+        name
+        targetKind
+        resolved
+        accepted
+      }
+      rejection {
+        code
+        reason
+        resolved
+        refusals {
+          deviceToken
+          code
+          reason
+        }
+        refusalCounts {
+          code
+          count
+        }
+      }
     }
   }
 `);
@@ -246,6 +294,28 @@ export async function getCommandBatch(token: string): Promise<CommandBatch | nul
 // unrecognized code as anything but a rejection.
 export async function createCommand(request: CommandCreateRequest): Promise<CreateCommandResult> {
   return (await gql('command-delivery', CREATE_COMMAND, { request })).createCommand;
+}
+
+// Fan one command out to many devices as a single recorded operation. Requires
+// `command:write`; targeting a GROUP additionally requires `device:read`, because
+// resolving a group to its members is a read of the device registry.
+//
+// 🔴 THE CALLER MINTS A FRESH TOKEN PER ATTEMPT. It is the idempotency key for the whole
+// fan-out, and re-issuing one that already names a batch returns THAT batch UNCHANGED —
+// it is never topped up. So a reused token is not a harmless retry: it answers with a
+// previous batch's stored counts, which a UI would render as the outcome of the write it
+// just made. Fresh token, every submit.
+//
+// 🔴 IT RESOLVES ON A REFUSAL, and `CreateCommandBatchResult` is a pair of NULLABLE
+// fields rather than a union — so the type permits four shapes and only two of them are
+// contractual. Branch on `rejection` first, then require `batch`, and treat "neither" as
+// a failure: a batch that reports success with no record is a fleet actuation nobody can
+// audit. A thrown error means the batch could not be DECIDED, and the service guarantees
+// nothing was created — the token is unspent and the request can simply be retried.
+export async function createCommandBatch(
+  request: CommandBatchCreateRequest,
+): Promise<CreateCommandBatchResult> {
+  return (await gql('command-delivery', CREATE_COMMAND_BATCH, { request })).createCommandBatch;
 }
 
 // Cancel a command by token (QUEUED / HELD / PARKED -> CANCELLED). Requires command:write.

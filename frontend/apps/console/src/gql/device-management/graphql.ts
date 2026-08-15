@@ -771,6 +771,11 @@ export type DeleteEntityGroupMutationVariables = Exact<{
 
 export type DeleteEntityGroupMutation = { deleteEntityGroup: boolean };
 
+export type DeviceGroupTargetsQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type DeviceGroupTargetsQuery = { entityGroups: { results: Array<{ token: string, name: string | null, membershipMode: string, activeVersion: number | null }> } };
+
 export type DeviceProfilesQueryVariables = Exact<{
   criteria: DeviceProfileSearchCriteria;
 }>;
@@ -2083,6 +2088,18 @@ export const DeleteEntityGroupDocument = new TypedDocumentString(`
   deleteEntityGroup(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteEntityGroupMutation, DeleteEntityGroupMutationVariables>;
+export const DeviceGroupTargetsDocument = new TypedDocumentString(`
+    query DeviceGroupTargets {
+  entityGroups(criteria: {pageNumber: 1, pageSize: 500, memberType: "device"}) {
+    results {
+      token
+      name
+      membershipMode
+      activeVersion
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceGroupTargetsQuery, DeviceGroupTargetsQueryVariables>;
 export const DeviceProfilesDocument = new TypedDocumentString(`
     query DeviceProfiles($criteria: DeviceProfileSearchCriteria!) {
   deviceProfiles(criteria: $criteria) {
