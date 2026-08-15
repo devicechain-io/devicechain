@@ -63,8 +63,19 @@ func refusalCountResolvers(counts []model.RefusalCount) []*BatchRefusalCountReso
 // corrupted or hand-edited — and answering that with `[]` would report "nothing was
 // refused", which is the single most misleading answer available: it is indistinguishable
 // from a clean fleet write, and it breaks the `resolved = accepted + refusals` arithmetic
-// that makes the record self-auditing. A field error leaves the rest of the batch readable
-// and says plainly that this part could not be.
+// that makes the record self-auditing. An error says plainly that this part could not be
+// read.
+//
+// 🔴 KNOW WHAT THAT COSTS: THE ERROR NULLS THE WHOLE RESPONSE, NOT JUST THIS FIELD. This
+// comment used to claim it "leaves the rest of the batch readable" — describing the
+// resolver, when the behaviour belongs to the SCHEMA. `refusals` is
+// [CommandBatchDeviceRefusal!]!, on a CommandBatch inside [CommandBatch!]! inside
+// CommandBatchSearchResults!, so null propagation finds no nullable ancestor before the
+// root and `data` comes back null. ONE corrupted row therefore takes out every other
+// batch on the page. That is still the right trade against reporting `[]`, but it is a
+// blast radius, not a graceful degradation, and anything that widens it — a new non-null
+// field decoded this way — widens that too. Pinned by
+// TestOneCorruptRefusalsColumnNullsTheWholePage.
 func decodeStoredJSON[T any](raw *datatypes.JSON, field string) ([]T, error) {
 	decoded := make([]T, 0)
 	if raw == nil {

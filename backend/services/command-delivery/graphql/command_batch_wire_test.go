@@ -688,3 +688,66 @@ func TestCancellingAnUnknownBatchIsAnError(t *testing.T) {
 		t.Fatal("cancelling a token that names no batch must be an error")
 	}
 }
+
+// TestOneCorruptRefusalsColumnNullsTheWholePage reproduces what a decode failure on ONE
+// batch record actually does to a caller.
+//
+// 🔴 IT NULLS THE ENTIRE RESPONSE, and nothing about decodeStoredJSON decides that. Its
+// comment used to claim a field error "leaves the rest of the batch readable" — a
+// property of the RESOLVER. It is a property of the SCHEMA's nullability: `refusals` is
+// [CommandBatchDeviceRefusal!]!, on a CommandBatch inside [CommandBatch!]! inside
+// CommandBatchSearchResults!, so between the failing field and the root there is no
+// nullable ancestor for null propagation to stop at. `data` comes back null, which takes
+// out every OTHER batch on the page along with the corrupt one.
+//
+// It is asserted rather than reasoned about because the reasoning is exactly what was
+// wrong before, and a comment asserting a false invariant is what made the code look
+// correct.
+func TestOneCorruptRefusalsColumnNullsTheWholePage(t *testing.T) {
+	ctx, api := newWireTestCtx(t)
+
+	// Two batches, so "did the clean one survive?" is answerable at all.
+	createBatch(t, ctx, listRequest("page-clean", "pump-a"))
+	createBatch(t, ctx, listRequest("page-corrupt", "pump-b"))
+
+	const pageQuery = `query($criteria: CommandBatchSearchCriteria!) {
+  commandBatches(criteria: $criteria) {
+    results { token refusals { deviceToken } }
+  }
+}`
+	vars := map[string]any{"criteria": map[string]any{
+		"pageNumber": int32(1), "pageSize": int32(10),
+	}}
+	schema := gql.MustParseSchema(SchemaContent, &SchemaResolver{})
+
+	// The negative control. Without it a nulled page below would prove only that this
+	// query never worked.
+	control := schema.Exec(ctx, pageQuery, "", vars)
+	if len(control.Errors) > 0 {
+		t.Fatalf("control: a clean page must read, got %v", control.Errors)
+	}
+	if !strings.Contains(string(control.Data), "page-clean") ||
+		!strings.Contains(string(control.Data), "page-corrupt") {
+		t.Fatalf("control: both batches must be on the page, got %s", control.Data)
+	}
+
+	if err := api.RDB.DB(ctx).Exec(
+		`UPDATE command_batches SET refusals = ? WHERE token = ?`,
+		"{not json", "page-corrupt").Error; err != nil {
+		t.Fatalf("seeding the corrupt column failed: %v", err)
+	}
+
+	res := schema.Exec(ctx, pageQuery, "", vars)
+	if len(res.Errors) == 0 {
+		t.Fatal("a refusals column that cannot be decoded must surface as an error, " +
+			"never as an empty list — `[]` is indistinguishable from a clean fleet write")
+	}
+	if string(res.Data) != "null" {
+		t.Fatalf("one corrupt row must null the WHOLE response — no ancestor of "+
+			"`refusals` is nullable — got data %s", res.Data)
+	}
+	if strings.Contains(string(res.Data), "page-clean") {
+		t.Fatal("the clean batch survived the corrupt one; the schema's nullability " +
+			"does not permit that, so re-check this test before trusting it")
+	}
+}

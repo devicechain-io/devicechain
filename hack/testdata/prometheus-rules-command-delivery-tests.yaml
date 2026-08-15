@@ -256,9 +256,13 @@ tests:
                 undelivered-command ceiling, and were refused only by the headroom the delivery
                 machinery reserves for itself. This is the reserve doing its job — nothing is broken
                 and every caller was told — but a rate sustained for this long means the ceiling and
-                the reserve disagree about what a normal fleet write is for this tenant. Raise the
-                tenant's ceiling, or lower the reserve, deliberately. Split the refusals by code on
-                the Command Delivery dashboard to see which tenants and which writes.
+                the reserve disagree about what a normal fleet write is. Raise the offending
+                tenant's ceiling, or lower the reserve, deliberately. These counters carry NO tenant
+                label — by design, since a tenant is unbounded cardinality — so the Command Delivery
+                dashboard can tell you which codes and which bound, never which tenant. To find the
+                tenant, read the recorded command batches: one that fanned out partially records a
+                per-device HELD_CEILING_EXCEEDED refusal, and a batch refused whole records nothing
+                at all, so a tenant seen here may have left no batch behind.
       - eval_time: 60m
         alertname: CommandClaimsStranded
         exp_alerts: []

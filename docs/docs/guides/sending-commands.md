@@ -75,6 +75,10 @@ returned unchanged. That makes a retry after a network failure safe, which matte
 a command is a physical actuation and you do not want a dropped response to reboot a device
 twice.
 
+That replay applies only to commands **you** own. A token held by a command the platform
+minted for a batch is refused with `TOKEN_IN_USE` rather than returned — handing you another
+device's actuation as though it were your own would be worse than saying no.
+
 ## When an enqueue is refused {#when-an-enqueue-is-refused}
 
 :::danger Check `rejection`, not just for errors
@@ -101,6 +105,7 @@ may change.
 | `PAYLOAD_SCHEMA_VIOLATION` | The payload broke the command's parameter schema — unknown parameter, wrong type, out of range, or a required one missing. | No |
 | `PAYLOAD_NOT_JSON` / `METADATA_NOT_JSON` | The string is not valid JSON. | No |
 | `EXPIRES_AT_INVALID` | `expiresAt` is not an RFC3339 timestamp. | No |
+| `TOKEN_IN_USE` | The token is held by a command you do not own — in practice one the platform minted for a batch. | No — pick another token |
 | `COMMAND_REJECTED` | A rejection arrived carrying no classification. | No |
 
 **The list is open.** Treat a code you do not recognize as a refusal you cannot classify —

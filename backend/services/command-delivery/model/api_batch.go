@@ -288,8 +288,8 @@ func (api *Api) decideCommandBatch(ctx context.Context, request *CommandBatchCre
 				// its LAST device answers.
 				//
 				// 🔴 PROBING THE FIRST DEVICE OVER THE LIMIT IS THE WRONG QUESTION, AND IT
-				// READS AS THE RIGHT ONE. `refusedByReserve(underLimit)` is true whenever
-				// a reserve gap exists at all, whatever the batch's size — so a 12,000
+				// READS AS THE RIGHT ONE. `boundAt(underLimit)` reports the reserve
+				// whenever a reserve gap exists at all, whatever the batch's size — so a 12,000
 				// device batch against a limit of 8,000 inside a ceiling of 10,000 was
 				// blamed on the reserve, when removing the reserve entirely would still
 				// have refused it. Nothing about this refusal is the reserve's doing.
@@ -314,7 +314,7 @@ func (api *Api) decideCommandBatch(ctx context.Context, request *CommandBatchCre
 					Reason:      "the tenant had no remaining room for undelivered commands",
 				})
 				// Attributed one device at a time, because a batch can straddle the two
-				// bounds — see batchHeadroom.refusedByReserve.
+				// bounds — see batchHeadroom.boundAt.
 				acct.refuse(RejectHeldCeilingExceeded,
 					headroom.boundAt(headroom.underLimit+position))
 			}
