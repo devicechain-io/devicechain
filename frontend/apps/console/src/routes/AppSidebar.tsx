@@ -20,6 +20,7 @@ import {
   Package,
   Palette,
   ScrollText,
+  Send,
   SlidersHorizontal,
   Tags,
   Webhook,
@@ -81,6 +82,12 @@ const NAV: NavNode[] = [
       { labelKey: 'deviceTypes', href: '/device-types', icon: Boxes, requires: 'device:read' },
       { labelKey: 'deviceProfiles', href: '/device-profiles', icon: SlidersHorizontal, requires: 'device:read' },
       { labelKey: 'deviceGroups', href: '/device-groups', icon: Layers, requires: 'device:read' },
+      // A command batch is a fleet WRITE — one command fanned out to many devices —
+      // so it belongs under the construct it acts on rather than in a group of one.
+      // command:read is command-delivery's own authority, not device:read: an
+      // identity can be allowed to read the registry without being allowed to see
+      // what has been actuated across it.
+      { labelKey: 'commandBatches', href: '/command-batches', icon: Send, requires: 'command:read' },
     ],
   },
   {

@@ -15,6 +15,8 @@ import DashboardDetailPage from '@/routes/dashboards/DashboardDetailPage';
 import AlarmsPage from '@/routes/alarms/AlarmsPage';
 import { AreaGate } from '@/components/AreaUnavailable';
 import { AREA } from '@/lib/capabilities';
+import CommandBatchesPage from '@/routes/command-batches/CommandBatchesPage';
+import CommandBatchDetailPage from '@/routes/command-batches/CommandBatchDetailPage';
 import ConnectorsPage from '@/routes/connectors/ConnectorsPage';
 import ConnectorDetailPage from '@/routes/connectors/ConnectorDetailPage';
 import AiProvidersPage from '@/routes/admin/ai-providers/AiProvidersPage';
@@ -78,6 +80,11 @@ export default function App() {
           <Route path="dashboards" element={<DashboardsPage />} />
           <Route path="dashboards/:token" element={<DashboardDetailPage />} />
           <Route path="alarms" element={<AlarmsPage />} />
+          {/* Batch commands are read-only here (list + detail); creating and
+              cancelling one are separate slices. Gated because command-delivery is
+              absent from the telemetry / ingest-only profiles. */}
+          <Route path="command-batches" element={<AreaGate area={AREA.commandDelivery}><CommandBatchesPage /></AreaGate>} />
+          <Route path="command-batches/:token" element={<AreaGate area={AREA.commandDelivery}><CommandBatchDetailPage /></AreaGate>} />
           <Route path="connectors" element={<AreaGate area={AREA.outboundConnectors}><ConnectorsPage /></AreaGate>} />
           <Route path="connectors/:token" element={<AreaGate area={AREA.outboundConnectors}><ConnectorDetailPage /></AreaGate>} />
           <Route path="audit" element={<AuditPage />} />

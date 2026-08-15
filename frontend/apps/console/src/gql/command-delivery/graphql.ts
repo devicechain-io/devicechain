@@ -4,6 +4,14 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+export type CommandBatchSearchCriteria = {
+  groupToken?: string | null | undefined;
+  name?: string | null | undefined;
+  pageNumber: number;
+  pageSize: number;
+  targetKind?: string | null | undefined;
+};
+
 export type CommandCreateRequest = {
   deviceToken: string;
   expiresAt?: string | null | undefined;
@@ -35,6 +43,20 @@ export type CreateCommandMutationVariables = Exact<{
 
 
 export type CreateCommandMutation = { createCommand: { command: { id: string, token: string, status: string } | null, rejection: { code: string, reason: string } | null } };
+
+export type CommandBatchesQueryVariables = Exact<{
+  criteria: CommandBatchSearchCriteria;
+}>;
+
+
+export type CommandBatchesQuery = { commandBatches: { results: Array<{ id: string, token: string, createdAt: string | null, name: string, targetKind: string, groupToken: string | null, groupVersion: number | null, allowPartial: boolean, resolved: number, accepted: number, cancelledAt: string | null, cancelledCount: number | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type CommandBatchesByTokenQueryVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type CommandBatchesByTokenQuery = { commandBatchesByToken: Array<{ id: string, token: string, createdAt: string | null, name: string, payload: string | null, targetKind: string, groupToken: string | null, groupVersion: number | null, allowPartial: boolean, resolved: number, accepted: number, cancelledAt: string | null, cancelledCount: number | null, refusals: Array<{ deviceToken: string, code: string, reason: string }>, refusalCounts: Array<{ code: string, count: number }> }> };
 
 export type CancelCommandMutationVariables = Exact<{
   token: string;
@@ -102,6 +124,59 @@ export const CreateCommandDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<CreateCommandMutation, CreateCommandMutationVariables>;
+export const CommandBatchesDocument = new TypedDocumentString(`
+    query CommandBatches($criteria: CommandBatchSearchCriteria!) {
+  commandBatches(criteria: $criteria) {
+    results {
+      id
+      token
+      createdAt
+      name
+      targetKind
+      groupToken
+      groupVersion
+      allowPartial
+      resolved
+      accepted
+      cancelledAt
+      cancelledCount
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<CommandBatchesQuery, CommandBatchesQueryVariables>;
+export const CommandBatchesByTokenDocument = new TypedDocumentString(`
+    query CommandBatchesByToken($tokens: [String!]!) {
+  commandBatchesByToken(tokens: $tokens) {
+    id
+    token
+    createdAt
+    name
+    payload
+    targetKind
+    groupToken
+    groupVersion
+    allowPartial
+    resolved
+    accepted
+    refusals {
+      deviceToken
+      code
+      reason
+    }
+    refusalCounts {
+      code
+      count
+    }
+    cancelledAt
+    cancelledCount
+  }
+}
+    `) as unknown as TypedDocumentString<CommandBatchesByTokenQuery, CommandBatchesByTokenQueryVariables>;
 export const CancelCommandDocument = new TypedDocumentString(`
     mutation CancelCommand($token: String!) {
   cancelCommand(token: $token) {
