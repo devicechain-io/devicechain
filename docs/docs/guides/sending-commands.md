@@ -200,7 +200,7 @@ call off, see [Commanding a fleet](./commanding-a-fleet.md). It is not a loop of
 mutation: it pins the group's membership as of the moment it fires, records which devices
 were refused and why, and cancels as one operation.
 
-## Three mutations that are not for you
+## Four operations that are not for you {#operations-that-are-not-for-you}
 
 `markCommandSent`, `releaseHeldCommands` and `parkCommand` appear on this schema but are
 gated on **system-tier** authorities (`command:claim`, `command:wake` and `command:park`)
@@ -209,3 +209,17 @@ connection — an LwM2M device draining its backlog over the session it just ope
 reporting that a device came back, or a transport handing a command back because the device
 it was published toward turned out to be unreachable — and calling them from an application
 would fight the delivery sweep for control of a physical actuation.
+
+`drainableCommands` is the read those transports do first, and it is gated on
+**`command:claim`** — the same authority as `markCommandSent` rather than a fourth one of its
+own, since a caller entitled to claim a device's commands is exactly the caller entitled to
+find out which ones there are to claim. Given a device token it returns the commands still
+waiting for that device — `HELD` and `PARKED`, minus anything already past its expiry horizon
+— **oldest first**, bounded by `limit`: absent or not positive gives 32, and 1000 is the
+ceiling.
+
+The ordering is the substance of the query rather than a nicety. A firmware update's write
+has to reach the device before its execute, so a backlog drained in any other order does not
+merely arrive late — it runs the rollout backwards. `command:read` does not open this query,
+and an application has no use for it in any case: to see what a device has waiting, use the
+[`commands` query](#follow-it-to-an-outcome) with `statuses: ["HELD", "PARKED"]`.

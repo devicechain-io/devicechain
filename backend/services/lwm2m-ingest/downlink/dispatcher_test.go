@@ -148,7 +148,7 @@ type fakeFetcher struct {
 	calls int
 }
 
-func (f *fakeFetcher) Pending(_ context.Context, _, _ string, _ time.Time) ([]DrainCommand, error) {
+func (f *fakeFetcher) Pending(_ context.Context, _, _ string) ([]DrainCommand, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++

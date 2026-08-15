@@ -96,8 +96,11 @@ type connLookup interface {
 // the live path published and this dispatcher handed back because the device turned out to be
 // asleep, is pulled here at the device's next wake. nil disables draining (an inert or
 // pre-L4b-wiring build, and the disposition unit tests).
+//
+// It takes no clock: the expiry horizon that decides which rows are still drainable is applied
+// in the database against the SERVER's clock, so a skewed pod cannot drop a live command.
 type drainFetcher interface {
-	Pending(ctx context.Context, tenant, deviceToken string, now time.Time) ([]DrainCommand, error)
+	Pending(ctx context.Context, tenant, deviceToken string) ([]DrainCommand, error)
 }
 
 // commandClaimer is the WRITE half of the drain (*CommandClaimer satisfies it): it moves a
@@ -596,7 +599,7 @@ func (d *Dispatcher) drain(ctx context.Context, job drainJob) {
 	if ctx.Err() != nil || d.fetcher == nil {
 		return
 	}
-	cmds, err := d.fetcher.Pending(ctx, job.tenant, job.deviceToken, time.Now())
+	cmds, err := d.fetcher.Pending(ctx, job.tenant, job.deviceToken)
 	if err != nil {
 		if ctx.Err() == nil { // a fetch aborted by eviction is not a drain error
 			incr(d.metrics.DrainErrors, 1)
@@ -613,6 +616,12 @@ func (d *Dispatcher) drain(ctx context.Context, job drainJob) {
 		if reach != ReachLive {
 			return // the device dropped mid-drain: the remaining rows are untouched, for the next wake
 		}
+		// Neither of the two skips below costs this wake a delivery, even though the page is now
+		// exactly maxDrainPerWake rows with no over-fetch: a row the live path just dispatched is
+		// SENT (not drainable, so it was never on the page), and a lost claim means someone else
+		// has already moved the row out of the dispatchable set. A skipped row is one that has
+		// left the backlog, not a slot taken from a row still awaiting delivery. See
+		// maxDrainPerWake in fetcher.go.
 		if d.dedupe.recentlyDispatched(job.tenant, job.deviceToken, c.Token) {
 			continue // already fired by the live path or a prior drain — do not re-actuate
 		}

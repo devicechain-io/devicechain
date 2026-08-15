@@ -116,7 +116,7 @@ trabajo *no entregado*, y los comandos en cola cuentan mientras esperan el sigui
 entrega. Consulta [Cuánta acumulación puede retener un
 inquilino](../concepts/commands.md#held-command-ceiling).
 
-## Síguelo hasta su desenlace
+## Síguelo hasta su desenlace {#follow-it-to-an-outcome}
 
 **No hay suscripción** para comandos — hay que consultar periódicamente. Obtén uno concreto
 por token:
@@ -207,7 +207,7 @@ flota](./commanding-a-fleet.md). No es un bucle de esta mutación: fija la membr
 tal como estaba en el momento de dispararse, registra qué dispositivos fueron rechazados y
 por qué, y se cancela como una sola operación.
 
-## Tres mutaciones que no son para ti
+## Cuatro operaciones que no son para ti {#operations-that-are-not-for-you}
 
 `markCommandSent`, `releaseHeldCommands` y `parkCommand` aparecen en este esquema pero están
 protegidas por autoridades de **nivel de sistema** (`command:claim`, `command:wake` y
@@ -217,3 +217,18 @@ por la sesión que acaba de abrir, un broker informando que un dispositivo regre
 transporte devolviendo un comando porque el dispositivo hacia el que se publicó resultó ser
 inalcanzable — y llamarlas desde una aplicación competiría con el barrido de entrega por el
 control de una actuación física.
+
+`drainableCommands` es la lectura que esos transportes hacen primero, y está protegida por
+**`command:claim`** — la misma autoridad que `markCommandSent`, no una cuarta propia, porque
+quien tiene derecho a reclamar los comandos de un dispositivo es precisamente quien tiene
+derecho a averiguar cuáles hay para reclamar. Dado un token de dispositivo, devuelve los
+comandos que siguen esperando a ese dispositivo — `HELD` y `PARKED`, menos todo lo que ya
+pasó su horizonte de expiración — **del más antiguo al más reciente**, acotados por `limit`:
+ausente o no positivo da 32, y 1000 es el techo.
+
+El orden es la sustancia de la consulta y no un detalle. La escritura de una actualización de
+firmware tiene que llegar al dispositivo antes que su ejecución, así que una acumulación
+drenada en cualquier otro orden no solo llega tarde — ejecuta el despliegue al revés.
+`command:read` no abre esta consulta, y de todos modos una aplicación no la necesita: para
+ver qué tiene esperando un dispositivo, usa la [consulta
+`commands`](#follow-it-to-an-outcome) con `statuses: ["HELD", "PARKED"]`.
