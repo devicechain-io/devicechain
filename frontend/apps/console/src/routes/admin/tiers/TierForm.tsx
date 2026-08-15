@@ -90,9 +90,15 @@ export function TierForm({
       const config = buildTierConfigPatch(dimensions, settings, tier?.config);
       if (editing) {
         await updateTenantTier(tier.token, {
-          name: name.trim() || undefined,
-          description: description.trim() || undefined,
-          config,
+          // Explicit nulls — see the note above createTenant in lib/api/admin.
+          name: name.trim() || null,
+          description: description.trim() || null,
+          // 🔴 `config ?? null` preserves buildTierConfigPatch's meaning exactly, it does
+          // not weaken it. The server leaves the tier's settings alone when config is a
+          // nil pointer (`if in.Config != nil` in UpdateTenantTier), and an explicit
+          // GraphQL null decodes to that same nil pointer as an omitted key. Only "{}"
+          // clears — which is what would re-price every tenant at this tier.
+          config: config ?? null,
           // Color is a full replace, like name: "" is a real value meaning "no pill".
           color,
         });

@@ -30,13 +30,13 @@ import {
   type MetricDefinitionCreateRequest,
   type CommandDefinitionCreateRequest,
 } from '@/lib/api/device-management';
+import { optNum, optText } from '@/lib/utils';
 
-// Optional trimmed string → undefined when empty (so the request omits it).
-// null, not undefined: these requests are full replaces and the update signatures
-// take Required<…>, so "the operator left this blank" has to be SAID.
-const opt = (s: string): string | null => (s.trim() === '' ? null : s.trim());
-// Optional numeric text → number | undefined.
-const optNum = (s: string): number | null => (s.trim() === '' ? null : Number(s));
+// Shared with the other forms that feed a full-replace request — see lib/utils.ts for
+// why they return null rather than undefined. `optNum` there also rejects a
+// non-numeric entry, which the copy that used to live here did not: typing "abc" into
+// a metric bound sent NaN to the API.
+const opt = optText;
 
 function SubmitRow({
   editing,

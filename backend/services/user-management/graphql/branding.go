@@ -23,7 +23,7 @@ import (
 // setting as the tier below a tenant's override; the settings store is instance-
 // global (no tenant scope), so it is safe to read from a tenant-scoped request.
 func (r *SchemaResolver) getSettingsService(ctx context.Context) *settings.Service {
-	return ctx.Value(ContextSettingsKey).(*settings.Service)
+	return settingsFromContext(ctx)
 }
 
 // TenantBrandingResolver resolves the TenantBranding type: a tenant's resolved

@@ -6,6 +6,7 @@
 // This is pure and separate from the form because it is the dangerous part: a tier's
 // config is its packaging, and clearing it silently re-prices every tenant at that
 // tier within a minute. The form renders; this decides what to send.
+import { parseJsonObject } from '@/lib/utils';
 
 // A dimension, reduced to the two config keys it owns. Structural on purpose — the
 // caller passes the server's dimension list, and this needs nothing else from it.
@@ -26,17 +27,9 @@ export function parseTierConfig(raw: string | null | undefined): Record<string, 
   return out;
 }
 
-// parseObject decodes a JSON object string, tolerating null/garbage as "empty".
-function parseObject(raw: string | null | undefined): Record<string, unknown> {
-  if (!raw) return {};
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    return parsed as Record<string, unknown>;
-  } catch {
-    return {};
-  }
-}
+// Shared with the other readers of an operator-authored JSON setting — see
+// parseJsonObject in lib/utils.ts.
+const parseObject = parseJsonObject;
 
 // buildTierConfigPatch decides what to send as a tier's `config` on save, returning
 // UNDEFINED to mean "leave the tier's settings exactly as they are".

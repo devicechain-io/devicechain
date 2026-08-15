@@ -13,6 +13,7 @@ import { SectionPanel } from '@/components/ui/section-panel';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useQuery } from '@/lib/hooks/use-query';
+import { optNum } from '@/lib/utils';
 import { createTenant, updateTenant, listTenantTiers, type AdminTenant } from '@/lib/api/admin';
 import { errMessage } from '@/routes/common';
 import { Textarea } from '@/components/ui/textarea';
@@ -78,22 +79,25 @@ export function TenantForm({
   // reason every override above is: the update is a full REPLACE of the governance
   // fields, so a value this form does not carry is a value the next save clears.
   const [heldCeiling, setHeldCeiling] = useState(tenant?.heldCommandCeiling?.toString() ?? '');
+  // Which tenants degrade LAST when the platform sheds under contention (1–100). A
+  // preference, not a ceiling — unlike every override above it, a bigger number buys
+  // survival rather than throughput, which is why it reads as a band rather than a
+  // rate. Blank inherits the tier's band, then the platform fail-safe.
+  const [shedPriority, setShedPriority] = useState(tenant?.shedPriority?.toString() ?? '');
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const { data: tiers, error: tiersError } = useQuery(() => listTenantTiers(), []);
 
-  // An empty override field submits undefined, so the request omits it and the
-  // tenant inherits the platform default (clearing any existing override).
-  const optNum = (s: string): number | undefined => {
-    const n = Number(s.trim());
-    return s.trim() === '' || !Number.isFinite(n) ? undefined : n;
-  };
-
+  // An empty override field submits an explicit NULL (see optNum in lib/utils.ts),
+  // clearing any existing override so the tenant inherits its tier's value and then the
+  // platform default. Null rather than an omitted key because updateTenant is a full
+  // replace and writes NULL either way — saying it makes the request describe what the
+  // server will actually do, and is what `Required<…>` on the two callees enforces.
   const submit = async () => {
     setFormError(null);
     setBusy(true);
     try {
-      const cfg = config.trim() === '' ? undefined : config;
+      const cfg = config.trim() === '' ? null : config;
       const gov = {
         ingestMessagesPerSecond: optNum(ingestRate),
         ingestBurst: optNum(ingestBurst),
@@ -105,12 +109,13 @@ export function TenantForm({
         aiInferenceRequestsPerMinute: optNum(aiRate),
         aiInferenceBurst: optNum(aiBurst),
         heldCommandCeiling: optNum(heldCeiling),
+        shedPriority: optNum(shedPriority),
       };
       if (editing) {
-        await updateTenant(tenant.token, { name: name.trim() || undefined, tierToken, config: cfg, ...gov });
+        await updateTenant(tenant.token, { name: name.trim() || null, tierToken, config: cfg, ...gov });
         onDone(t('tenantUpdatedToast', { token: tenant.token }));
       } else {
-        await createTenant({ token: token.trim(), name: name.trim() || undefined, tierToken, config: cfg, ...gov });
+        await createTenant({ token: token.trim(), name: name.trim() || null, tierToken, config: cfg, ...gov });
         onDone(t('tenantCreatedToast', { token: token.trim() }));
       }
     } catch (err) {
@@ -280,6 +285,22 @@ export function TenantForm({
           value={heldCeiling}
           placeholder={t('defaultPlaceholder')}
           onChange={(e) => setHeldCeiling(e.target.value)}
+        />
+      </FormField>
+      <FormField
+        label={t('shedPriorityLabel')}
+        htmlFor="t-shed-priority"
+        description={t('shedPriorityDescription')}
+      >
+        <Input
+          id="t-shed-priority"
+          type="number"
+          min="1"
+          max="100"
+          step="1"
+          value={shedPriority}
+          placeholder={t('defaultPlaceholder')}
+          onChange={(e) => setShedPriority(e.target.value)}
         />
       </FormField>
     </>

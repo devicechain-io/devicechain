@@ -52,6 +52,8 @@
   "searchTiersPlaceholder": "Search tiers…",
   "selectTierPlaceholder": "Select a tier…",
   "setByService": "Set by the service",
+  "shedPriorityDescription": "Which tenants keep running longest when the platform is under strain and has to shed load (1–100 — higher survives longer). A preference, not a limit: it changes the order tenants are degraded in, never how much they may do. Leave blank to inherit the tier's band, then the platform default.",
+  "shedPriorityLabel": "Shed priority",
   "settingsExplanation": "What this tenant is metered at, and where each limit comes from. A setting falls back from its own override, to the <tierLink>{{tier}}</tierLink> tier, to the platform default — which is a real limit, never unlimited.",
   "sourcePlatformDefault": "Platform default",
   "tabAiModels": "AI models",

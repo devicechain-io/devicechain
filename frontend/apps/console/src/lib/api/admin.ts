@@ -124,11 +124,18 @@ const TENANTS = graphql(`
       aiExternalEnabled
       aiInferenceRequestsPerMinute
       aiInferenceBurst
-      # Selected so the edit form can ROUND-TRIP it. updateTenant is a full replace of
-      # the governance fields — an omitted override is written as NULL, not left alone —
-      # so a field this query does not read back is a field the next save silently
+      # 🔴 Selected so the edit form can ROUND-TRIP them. updateTenant is a full replace
+      # of the governance fields — an omitted override is written as NULL, not left alone
+      # — so a field this query does not read back is a field the next save silently
       # clears, however unrelated the edit that triggered it.
+      #
+      # This applies to EVERY governance override above, not only the two written
+      # beneath it. The rule was first written here for heldCommandCeiling and
+      # shedPriority was left out for a release, which is exactly the failure it
+      # describes; the compile-time gate is Required<AdminTenantUpdateRequest> on
+      # updateTenant, and this comment is the reason that gate exists.
       heldCommandCeiling
+      shedPriority
       # What the tenant is ACTUALLY metered at, with the provenance that makes it
       # readable as tier + delta (ADR-065 decision 7). Resolved server-side by the
       # same cascade the data plane reads its ceilings through — deliberately not
@@ -287,9 +294,14 @@ const UPDATE_TENANT_TIER = graphql(`
 // tier's settings alone, and only an explicit "{}" clears them. A rename that dropped
 // config would silently re-price every tenant at the tier within a minute, so callers
 // editing settings must send config explicitly.
+// Gated like updateTenant — see the Required<…> note above createTenant. `config` is
+// the exception the note does not cover: it is a PATCH here, not part of the replace,
+// so `null` means "leave the tier's settings alone" rather than "clear them". Naming it
+// is still required, because a caller that forgot it was the likelier accident and a
+// silent re-pricing is the costlier one.
 export async function updateTenantTier(
   token: string,
-  request: AdminTenantTierUpdateRequest,
+  request: Required<AdminTenantTierUpdateRequest>,
 ): Promise<AdminTenantTierDetail> {
   const data = await gql('user-management/admin', UPDATE_TENANT_TIER, { token, request }, { identity: true });
   return data.updateTenantTier;
@@ -642,10 +654,13 @@ const UPDATE_ROLE = graphql(`
   }
 `);
 
+// Also a full replace (the server writes the whole row) — see the Required<…> note
+// above createTenant. Small today, which is exactly the state the tenant request was in
+// before it grew the field that got erased.
 export async function updateRole(
   scope: string,
   token: string,
-  request: AdminRoleUpdateRequest,
+  request: Required<AdminRoleUpdateRequest>,
 ): Promise<AdminRole> {
   const data = await gql('user-management/admin', UPDATE_ROLE, { scope, token, request }, { identity: true });
   return data.updateRole;
@@ -685,13 +700,40 @@ const CREATE_TENANT = graphql(`
       aiInferenceRequestsPerMinute
       aiInferenceBurst
       heldCommandCeiling
+      shedPriority
       createdAt
       updatedAt
     }
   }
 `);
 
-export async function createTenant(request: AdminTenantCreateRequest): Promise<AdminTenantRecord> {
+// 🔴 `Required<…>` is not decoration: it makes an OMITTED field a compile error.
+//
+// updateTenant is a full replace of the tenant's governance overrides — an omitted
+// field is written as NULL, not left alone — so a caller that forgets one does not
+// "leave it alone", it CLEARS it, with a success toast and nothing on screen that
+// changed. That is how shedPriority was erased on every unrelated tenant edit for a
+// release: the registry families got this same gate in the metadata-wipe arc, and
+// the admin plane never did.
+//
+// Required<> forces every key to be NAMED, and — because it strips `undefined` along
+// with the `?` — to be named with a real value or an explicit `null`. Codegen emits
+// these as `?: T | null | undefined`, so `Required<…>` narrows them to `T | null`;
+// `shedPriority: undefined` does NOT compile. Callers therefore say "clear this"
+// rather than omitting the key, which is the truth about a full replace anyway.
+//
+// What it still cannot force is the right VALUE: `null` compiles, and `null` is
+// exactly the erasure this gate exists to prevent. So the compile gate proves the
+// caller CONSIDERED every field, never that it carried one over. That residue is what
+// TenantForm.test.tsx covers, by loading a tenant that HAS an override, editing
+// something unrelated, and asserting the value survives. The two gates are
+// complements, not alternatives — neither is sufficient.
+//
+// Create takes it too. Create is not a full replace, so an omission merely fails to
+// set rather than erasing — but the form builds ONE payload for both paths, so a
+// field missing on create is the same missing field on update, and gating only the
+// destructive path would let the shared object drift out from under it.
+export async function createTenant(request: Required<AdminTenantCreateRequest>): Promise<AdminTenantRecord> {
   const data = await gql('user-management/admin', CREATE_TENANT, { request }, { identity: true });
   return data.createTenant;
 }
@@ -717,13 +759,18 @@ const UPDATE_TENANT = graphql(`
       aiInferenceRequestsPerMinute
       aiInferenceBurst
       heldCommandCeiling
+      shedPriority
       createdAt
       updatedAt
     }
   }
 `);
 
-export async function updateTenant(token: string, request: AdminTenantUpdateRequest): Promise<AdminTenantRecord> {
+// Full replace — see the Required<…> note above createTenant.
+export async function updateTenant(
+  token: string,
+  request: Required<AdminTenantUpdateRequest>,
+): Promise<AdminTenantRecord> {
   const data = await gql('user-management/admin', UPDATE_TENANT, { token, request }, { identity: true });
   return data.updateTenant;
 }
@@ -749,6 +796,7 @@ const SET_TENANT_ENABLED = graphql(`
       aiInferenceRequestsPerMinute
       aiInferenceBurst
       heldCommandCeiling
+      shedPriority
       createdAt
       updatedAt
     }

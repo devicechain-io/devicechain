@@ -9,7 +9,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	util "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-user-management/settings"
-	"github.com/devicechain-io/dc-user-management/settingsdefs"
 )
 
 // SettingResolver resolves the Setting type from a merged effective setting.
@@ -53,20 +52,16 @@ func (r *SettingsResolver) Settings(ctx context.Context) ([]*SettingResolver, er
 	return out, nil
 }
 
-// TokenMasks returns the effective entity token-mask map as a JSON string. Unlike
-// the other settings operations it requires only authentication (any signed-in
-// identity), not settings:read: every console user needs the masks to generate
-// tokens in the create forms, and the masks are non-sensitive UI templates
-// (ADR-042 P3). It is read-only, so there is no write counterpart here.
+// TokenMasks returns the effective entity token-mask map as a JSON string on the
+// IDENTITY lane, for the admin console's create forms — which are guaranteed an
+// identity session by their route guard and are NOT guaranteed a tenant one (an
+// operator creating the instance's first tenant holds no tenant session at all).
+//
+// Unlike the other settings operations it requires only authentication, not
+// settings:read (ADR-042 P3). The body is shared with the tenant data plane's
+// resolver — see tokenMasks in token_masks.go, which explains why both exist.
 func (r *SettingsResolver) TokenMasks(ctx context.Context) (string, error) {
-	if _, ok := auth.ClaimsFromContext(ctx); !ok {
-		return "", auth.ErrUnauthenticated
-	}
-	eff, err := r.getSettingsService(ctx).Get(ctx, settingsdefs.KeyTokenMasks)
-	if err != nil {
-		return "", err
-	}
-	return string(eff.Value), nil
+	return tokenMasks(ctx)
 }
 
 // Setting resolves one known setting by key (requires settings:read).

@@ -27,6 +27,7 @@ type Documents = {
     "\n  query Me {\n    me {\n      email\n      firstName\n      lastName\n    }\n  }\n": typeof types.MeDocument,
     "\n  mutation UpdateProfile($firstName: String, $lastName: String) {\n    updateProfile(firstName: $firstName, lastName: $lastName) {\n      email\n      firstName\n      lastName\n    }\n  }\n": typeof types.UpdateProfileDocument,
     "\n  query FunctionalAreas {\n    functionalAreas\n  }\n": typeof types.FunctionalAreasDocument,
+    "\n  query TenantTokenMasks {\n    tokenMasks\n  }\n": typeof types.TenantTokenMasksDocument,
 };
 const documents: Documents = {
     "\n  mutation Login($email: String!, $password: String!) {\n    login(email: $email, password: $password) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n      }\n    }\n  }\n": types.LoginDocument,
@@ -41,6 +42,7 @@ const documents: Documents = {
     "\n  query Me {\n    me {\n      email\n      firstName\n      lastName\n    }\n  }\n": types.MeDocument,
     "\n  mutation UpdateProfile($firstName: String, $lastName: String) {\n    updateProfile(firstName: $firstName, lastName: $lastName) {\n      email\n      firstName\n      lastName\n    }\n  }\n": types.UpdateProfileDocument,
     "\n  query FunctionalAreas {\n    functionalAreas\n  }\n": types.FunctionalAreasDocument,
+    "\n  query TenantTokenMasks {\n    tokenMasks\n  }\n": types.TenantTokenMasksDocument,
 };
 
 /**
@@ -91,6 +93,10 @@ export function graphql(source: "\n  mutation UpdateProfile($firstName: String, 
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  query FunctionalAreas {\n    functionalAreas\n  }\n"): typeof import('./graphql').FunctionalAreasDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query TenantTokenMasks {\n    tokenMasks\n  }\n"): typeof import('./graphql').TenantTokenMasksDocument;
 
 
 export function graphql(source: string) {

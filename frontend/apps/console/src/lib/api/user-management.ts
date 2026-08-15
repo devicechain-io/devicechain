@@ -360,3 +360,24 @@ export async function listFunctionalAreas(): Promise<string[]> {
   const data = await gql('user-management', FUNCTIONAL_AREAS);
   return data.functionalAreas;
 }
+
+// ── Entity token masks ──────────────────────────────────────────────────
+//
+// The operator's token-mask templates, which create forms use to mint a token.
+// Served on the tenant plane AND the identity lane (settings.ts) for the same
+// reason functionalAreas above is: the create forms straddle both, and neither
+// token subsumes the other. A tenant-scoped form holds a session that lasts days
+// and an identity token that dies in fifteen minutes with no refresh; an operator
+// creating the first tenant holds an identity session and no tenant session at
+// all. See lib/token-masks.ts, which picks the lane.
+
+const TOKEN_MASKS = graphql(`
+  query TenantTokenMasks {
+    tokenMasks
+  }
+`);
+
+export async function getTenantTokenMasks(): Promise<string> {
+  const data = await gql('user-management', TOKEN_MASKS);
+  return data.tokenMasks;
+}
