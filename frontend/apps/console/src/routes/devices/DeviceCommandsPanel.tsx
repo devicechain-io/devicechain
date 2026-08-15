@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Send } from 'lucide-react';
-import { isTerminalCommandStatus, type CommandParameter } from '@devicechain/dashboards';
+import { isCancellableCommandStatus, type CommandParameter } from '@devicechain/dashboards';
 import {
   parseParameterSchema,
   defaultValues,
@@ -45,13 +45,19 @@ import { getDeviceCommandVocabulary, type PublishedCommand } from '@/lib/api/dev
 
 const pageSize = 25;
 
-// Commands that have reached a terminal state can no longer be cancelled; the rest
-// (QUEUED / HELD / SENT) are still in flight.
+// Four states are still in flight — QUEUED / HELD / SENT / PARKED — but only THREE of
+// them can still be cancelled. SENT is the exception: the command is already at the
+// device, so calling it off would only make the platform discard the answer the device is
+// about to give, and the service will not do it. The Cancel column is therefore gated on
+// isCancellableCommandStatus, never on !isTerminalCommandStatus.
 //
-// 🔴 The terminal set is NOT redeclared here. It used to be, and it went stale: when
-// cancellation started writing CANCELLED instead of EXPIRED, this copy still called a
-// cancelled command in-flight, so the panel kept offering Cancel on it and the click
-// came back as a server error. One definition, in @devicechain/dashboards.
+// 🔴 Neither set is redeclared here. A local copy is what went stale before: when
+// cancellation started writing CANCELLED instead of EXPIRED, this file's copy still
+// called a cancelled command in-flight, so the panel kept offering Cancel on it — and
+// because the service ANSWERS AN UNCANCELLABLE CANCEL WITH SUCCESS (the row, unchanged),
+// the click reported "cancelled" for a command nobody had cancelled. One definition, in
+// @devicechain/dashboards — and see cancel() below, which reads the status that came back
+// rather than trusting that the call resolved.
 
 function statusVariant(status: string): 'success' | 'destructive' | 'outline' | 'secondary' {
   switch (status) {
@@ -66,11 +72,14 @@ function statusVariant(status: string): 'success' | 'destructive' | 'outline' | 
     case 'EXPIRED':
     case 'CANCELLED':
       return 'outline';
-    // HELD is waiting on the DEVICE, not lost — it carries the same in-flight styling as
-    // QUEUED / SENT on purpose, because the command still stands and can still be
-    // cancelled. It is spelled out rather than left to the default so this stays a
-    // decision rather than an accident of fall-through.
+    // HELD and PARKED are waiting on the DEVICE, not lost — they carry the same in-flight
+    // styling as QUEUED / SENT on purpose, because the command still stands and can still
+    // be cancelled. HELD was never dispatched (the device was known absent); PARKED was
+    // published and found nobody there, and the platform will deliver it when the device
+    // wakes. Both are spelled out rather than left to the default so this stays a decision
+    // rather than an accident of fall-through.
     case 'HELD':
+    case 'PARKED':
       return 'secondary';
     default:
       // QUEUED / SENT — still in flight, as is any status this console does not yet know.
@@ -209,10 +218,31 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
     }
   };
 
+  // 🔴 A RESOLVED CANCEL IS NOT A CANCELLED COMMAND. The service gates cancellation on a
+  // positive list of states and, for anything outside it, SUCCEEDS AND RETURNS THE ROW
+  // UNCHANGED — there is no refusal to catch. The button is only rendered on a cancellable
+  // status, but the status this panel is looking at was read when the table last loaded:
+  // between that read and the click the command can have been dispatched, answered, or
+  // expired, and the mutation still resolves. Reporting success off `await` alone therefore
+  // tells the operator their command was called off while it is on its way to the device —
+  // the one lie this panel must not tell. So: report the status that CAME BACK.
   const cancel = async (command: Command) => {
     try {
-      await cancelCommand(command.token);
-      toast(t('commandCancelled', { name: command.name }));
+      const cancelled = await cancelCommand(command.token);
+      if (cancelled.status === 'CANCELLED') {
+        toast(t('commandCancelled', { name: command.name }));
+      } else {
+        // Not an outage and not a refusal — the command simply moved on first. The status
+        // it moved to is the useful part, so it is named, raw and uppercase exactly as the
+        // history badge shows it. 'error' matches commandRejected above: a decided verdict
+        // that the operator's action did NOT take effect, styled so it cannot be mistaken
+        // for the success toast one line up.
+        toast(
+          t('commandNotCancelled', { name: command.name, status: cancelled.status }),
+          'error',
+        );
+      }
+      // Reloaded either way: whichever branch ran, the row on screen is now stale.
       reload();
     } catch (err) {
       toast(errMessage(err), 'error');
@@ -344,7 +374,7 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
                   {command.error || command.responsePayload || '—'}
                 </DataTableCell>
                 <DataTableCell className="text-right">
-                  {!isTerminalCommandStatus(command.status) && (
+                  {isCancellableCommandStatus(command.status) && (
                     <Button variant="outline" size="sm" onClick={() => cancel(command)}>
                       {t('cancel')}
                     </Button>

@@ -114,8 +114,22 @@ export async function createCommand(request: CommandCreateRequest): Promise<Crea
   return (await gql('command-delivery', CREATE_COMMAND, { request })).createCommand;
 }
 
-// Cancel a non-terminal command by token (QUEUED / HELD / SENT -> CANCELLED).
-// Requires command:write.
+// Cancel a command by token (QUEUED / HELD / PARKED -> CANCELLED). Requires command:write.
+//
+// 🔴 NOT "any non-terminal command". SENT is non-terminal and is NOT cancellable: the
+// command is already at the device and the service will not call it back, because doing
+// so would make it discard the response the device is about to send. The service gates
+// this on a positive list — but 🔴 OUTSIDE THAT LIST IT DOES NOT FAIL. SENT, a terminal
+// state, or a status this build has never heard of all come back as a 200 carrying the
+// command UNCHANGED, with no error. Only an unknown token errors.
+//
+// Two consequences, and neither is optional:
+//   • Gate the control on isCancellableCommandStatus, so the button is never offered
+//     where pressing it would do nothing.
+//   • Believe the RETURNED status, never the resolved promise. A command can move from
+//     QUEUED to SENT between the render that offered the button and the click, and this
+//     call still succeeds — reporting success off `await` alone tells the operator a
+//     command was cancelled when it is on its way to the device.
 //
 // CANCELLED, not EXPIRED: the two were one value until recently, and cancellation
 // wrote EXPIRED. Historical rows keep it — there is no backfill — so both values

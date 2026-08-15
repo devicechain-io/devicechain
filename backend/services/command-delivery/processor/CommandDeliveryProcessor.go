@@ -29,6 +29,12 @@ type deliveryEnvelope struct {
 	DeviceToken string           `json:"deviceToken"`
 	Name        string           `json:"name"`
 	Payload     *json.RawMessage `json:"payload,omitempty"`
+
+	// DispatchNonce names the claim this publish belongs to. A transport that finds the
+	// device unreachable quotes it back when handing the command over, so a request still
+	// in redelivery cannot park a row that has since been re-claimed and actuated. It is
+	// opaque to a device and nothing needs to read it except the transport that may park.
+	DispatchNonce string `json:"dispatchNonce,omitempty"`
 }
 
 // responseEnvelope is the JSON payload a device publishes on the
@@ -378,27 +384,9 @@ func (cproc *CommandDeliveryProcessor) tenantDeleted(tenant string) bool {
 // published, which ReleaseClaim returns to QUEUED for the next tick. A command delivered
 // late is recoverable; a command delivered twice is not.
 func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *model.Command) error {
-	envelope := deliveryEnvelope{
-		Token:       cmd.Token,
-		DeviceToken: cmd.DeviceToken,
-		Name:        cmd.Name,
-	}
-	if cmd.Payload != nil {
-		raw := json.RawMessage(*cmd.Payload)
-		envelope.Payload = &raw
-	}
-	value, err := json.Marshal(envelope)
-	if err != nil {
-		return err
-	}
-
 	// Publish to the command's tenant subject and mark it SENT under the same
 	// tenant context.
 	tenantCtx := core.WithTenant(ctx, cmd.TenantId)
-	msg := messaging.Message{
-		Key:   []byte(cmd.Token),
-		Value: value,
-	}
 	// Published to the TARGET DEVICE's subject, not the tenant's. Before this, every
 	// command went to one tenant-wide subject that every device in the tenant was
 	// granted to subscribe to, so isolation between devices rested entirely on each
@@ -409,7 +397,7 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 	// Claim first. A lost claim means another dispatcher got there — benign, and now
 	// COUNTED rather than silent: while nothing wrote HELD this could not happen at all,
 	// so a standing rate here is the signal that two dispatch paths are overlapping.
-	claimed, err := cproc.Api.MarkSent(tenantCtx, cmd.ID)
+	nonce, claimed, err := cproc.Api.MarkSent(tenantCtx, cmd.ID)
 	if err != nil {
 		return err
 	}
@@ -418,6 +406,37 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 		log.Debug().Str("command", cmd.Token).Str("device", cmd.DeviceToken).
 			Msg("Another dispatcher claimed this command first; not publishing it again.")
 		return nil
+	}
+
+	// 🔴 THE ENVELOPE IS BUILT AFTER THE CLAIM BECAUSE IT CARRIES THE CLAIM'S NONCE. A
+	// transport that finds the device unreachable hands the command back by naming the
+	// dispatch it was given, so a request still in redelivery cannot park a row that has
+	// since been re-claimed and run. Marshalling before the claim would have nothing to
+	// name. (See model.Command.DispatchNonce.)
+	envelope := deliveryEnvelope{
+		Token:         cmd.Token,
+		DeviceToken:   cmd.DeviceToken,
+		Name:          cmd.Name,
+		DispatchNonce: nonce,
+	}
+	if cmd.Payload != nil {
+		raw := json.RawMessage(*cmd.Payload)
+		envelope.Payload = &raw
+	}
+	value, err := json.Marshal(envelope)
+	if err != nil {
+		// The claim is already placed, so a marshal failure must undo it rather than
+		// leave a row reading SENT for a command no transport will ever see.
+		if _, rerr := cproc.Api.ReleaseClaim(tenantCtx, cmd.ID); rerr != nil {
+			incr(cproc.ClaimsStranded, 1)
+			log.Error().Err(rerr).Str("command", cmd.Token).
+				Msg("Could not release a command whose envelope would not marshal.")
+		}
+		return err
+	}
+	msg := messaging.Message{
+		Key:   []byte(cmd.Token),
+		Value: value,
 	}
 
 	if err := cproc.DeviceCommandsWriter.WriteToDevice(tenantCtx, cmd.DeviceToken, msg); err != nil {
@@ -545,11 +564,13 @@ func (cproc *CommandDeliveryProcessor) sweepLocked(ctx context.Context) {
 		if err != nil {
 			log.Error().Err(err).Msg("command expiry sweep failed")
 		}
-		// Report the breakdown, not just the total. A command that lapsed out of
-		// HELD was never dispatched — the device was absent for its whole TTL — while
-		// one that lapsed out of SENT was delivered to and ignored. Those point at
-		// opposite halves of the system (the fleet vs the devices' firmware), and a
-		// single "expired N commands" line cannot tell an operator which they have.
+		// Report the breakdown, not just the total. A command that lapsed out of HELD was
+		// never dispatched — the device was absent for its whole TTL; one that lapsed out
+		// of PARKED was dispatched and found nobody there; one that lapsed out of SENT was
+		// dispatched toward a device believed live and went unanswered. Those point at
+		// different parts of the system (the fleet, the platform's reachability picture,
+		// the devices' firmware), and a single "expired N commands" line cannot tell an
+		// operator which they have.
 		if count > 0 {
 			log.Info().Int64("expired", count).Interface("fromStatus", byFromStatus).
 				Msg("Command expiry sweep reached a terminal state for stale commands.")

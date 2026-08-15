@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -201,9 +202,11 @@ func NewApi(rdb *rdb.RdbManager) *Api {
 type CommandDeliveryApi interface {
 	CreateCommand(ctx context.Context, request *CommandCreateRequest) (*Command, error)
 
-	// MarkSent claims a command for dispatch, reporting whether THIS caller won it.
-	// Claim before dispatching: a command is a physical actuation.
-	MarkSent(ctx context.Context, id uint) (bool, error)
+	// MarkSent claims a command for dispatch, reporting whether THIS caller won it and
+	// the dispatch nonce it stamped. Claim before dispatching: a command is a physical
+	// actuation. The nonce must be carried in the published envelope so a transport can
+	// park THIS dispatch and no other.
+	MarkSent(ctx context.Context, id uint) (string, bool, error)
 	// ReleaseClaim undoes a claim whose dispatch then failed, returning the row to
 	// QUEUED and clearing sent_time.
 	ReleaseClaim(ctx context.Context, id uint) (bool, error)
@@ -431,9 +434,12 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 // every check passing, and a SINGLE sweep tick could convert the whole backlog at
 // once. That was a hole in the bound, not a rounding error.
 //
-// Counting QUEUED + HELD closes it by making the counted set INVARIANT UNDER
+// Counting every state in which the platform still holds the command — QUEUED, HELD and
+// PARKED — closes it by making the counted set INVARIANT UNDER
 // PROMOTION: QUEUED→HELD moves a row between two counted states, so it cannot change
-// the count, so no sweep tick can overshoot for any backlog size. The residual is
+// the count, and so does the promotion PARKED closed — QUEUED→SENT→PARKED, which for a
+// queue-mode fleet completes within a tick and would otherwise have drained the counted
+// set on every one. No sweep tick can overshoot for any backlog size. The residual is
 // back to the tolerated one-over race described above — which this may now cite
 // honestly, because the two are finally the same kind of thing.
 //
@@ -478,15 +484,30 @@ func undeliveredRefusalReason(undelivered int64, limit, ceiling int) string {
 
 // undeliveredStatusStrings is the set the tenant ceiling bounds: commands accepted by
 // the platform that have not gone out yet. QUEUED is "not yet gated"; HELD is "gated,
-// waiting for the device". Both are the tenant holding work open, which is the thing
-// being limited.
+// waiting for the device"; PARKED is "dispatched, found the device unreachable, still
+// held". All three are the tenant holding work open, which is the thing being limited.
 //
-// 🔴 THIS IS DELIBERATELY A SEPARATE LIST FROM claimableStatusStrings(), even though
-// the two hold the same values today. They answer different questions — "what does the
-// tenant have outstanding" versus "what may a dispatcher claim" — and the day a state
-// belongs to one and not the other, a shared helper would silently change both.
+// 🔴 PARKED IS COUNTED FOR THE REASON QUEUED IS COUNTED, AND LEAVING IT OUT WOULD HAVE
+// RE-OPENED THE HOLE checkUndeliveredCeiling DESCRIBES ABOVE. That comment's argument is
+// that the counted set must be INVARIANT UNDER PROMOTION, or a tenant enqueues freely
+// while rows drain out of the count. QUEUED→SENT→PARKED is exactly such a promotion, and
+// it completes within a sweep tick for a queue-mode fleet: publish, find the device
+// asleep, park. Uncounted, a tenant with a sleeping fleet could fill its ceiling, watch
+// the count fall back to zero, and refill — every tick, with nothing but the command TTL
+// bounding the backlog.
+//
+// It was tempting to leave PARKED out on the grounds that SENT is out and PARKED is where
+// those rows used to sit. That is the wrong comparator: SENT is excluded because the work
+// is no longer the platform's to hold — it is at the device. A parked command is the
+// platform's to hold, by definition. Undelivered is undelivered.
+//
+// 🔴 THIS IS DELIBERATELY A SEPARATE LIST FROM claimableStatusStrings() and
+// cancellableStatusStrings(), even where the values overlap. They answer different
+// questions — "what does the tenant have outstanding", "what may a dispatcher claim",
+// "what may be called off" — and the day a state belongs to one and not the others, a
+// shared helper would silently change all of them.
 func undeliveredStatusStrings() []string {
-	return []string{CommandQueued.String(), CommandHeld.String()}
+	return []string{CommandQueued.String(), CommandHeld.String(), CommandParked.String()}
 }
 
 // effectiveUndeliveredLimit is how many undelivered commands THIS CALLER may hold, and
@@ -622,8 +643,9 @@ func terminalStatusStrings() []string {
 }
 
 // claimableStatusStrings is the wire form of the states a DISPATCHER may claim a
-// command from: QUEUED (never yet considered) and HELD (considered, and deliberately
-// withheld because the device was absent). It is the from-state guard for MarkSent.
+// command from: QUEUED (never yet considered), HELD (considered, and deliberately
+// withheld because the device was absent) and PARKED (dispatched once, and the
+// transport found the device unreachable). It is the from-state guard for MarkSent.
 //
 // 🔴 IT IS NO LONGER THE SWEEP'S SELECTION PREDICATE, AND THE SPLIT IS THE POINT.
 // These were one helper while the two sets genuinely coincided, and collapsing them
@@ -632,47 +654,69 @@ func terminalStatusStrings() []string {
 // release a hold — the LwM2M wake drain, and the wake handler — claim held rows
 // directly.
 //
-// Do NOT re-merge these because they happen to list the same values today. They answer
-// different questions — "what may a dispatcher claim" versus "what does the sweep hand
-// out" — and a shared helper would silently move both the day one of them changes.
+// Do NOT re-merge these because they happen to overlap. They answer different questions
+// — "what may a dispatcher claim" versus "what does the sweep hand out" — and a shared
+// helper would silently move both the day one of them changes. PARKED is the worked
+// example: it belongs here, because the wake drain claims a parked row before actuating
+// it, and must NEVER reach the sweep, because a sweep that republished parked rows would
+// re-publish an offline fleet's whole backlog every tick.
+//
+// SENT is absent, and that absence is load-bearing in both directions: it makes a claim
+// of an already-claimed row lose (RowsAffected 0), which is how two dispatchers racing
+// one command settle it, and it means the wake drain can no longer dispatch out of SENT
+// without claiming — which was the platform's only unclaimed dispatch.
 func claimableStatusStrings() []string {
-	return []string{CommandQueued.String(), CommandHeld.String()}
+	return []string{CommandQueued.String(), CommandHeld.String(), CommandParked.String()}
 }
 
-// batchCancellableStatusStrings is the wire form of the states a BATCH CANCEL takes to
-// CANCELLED: QUEUED and HELD, the two that mean "the platform still has it".
+// cancellableStatusStrings is the wire form of the states a CANCEL takes to CANCELLED:
+// QUEUED, HELD and PARKED — the three that mean "the platform still has it, and nothing
+// has reached the device". It is shared by CancelCommand and CancelCommandBatch, which
+// now answer the same question.
 //
-// 🔴 SENT IS ABSENT, AND ITS ABSENCE IS THE DESIGN — FOR A DEVICE THAT WAS THERE. A sent
-// command has been published to a live device. Driving it to CANCELLED stops no actuation
-// — the hardware acts either way — and MarkResponse's terminal fast path then DROPS the
-// device's real answer when it arrives. So a fleet-wide "cancel" over sent rows would
-// reboot the fleet, discard what each device reported, and leave a record saying the
-// operation was called off. The cancel reports those rows as alreadySent, which is true.
+// 🔴 SENT IS ABSENT, AND ITS ABSENCE IS THE DESIGN. A sent command has been published
+// toward a device believed live. Driving it to CANCELLED stops no actuation — the
+// hardware acts either way — and MarkResponse's terminal fast path then DROPS the
+// device's real answer when it arrives. So a "cancel" over sent rows would reboot the
+// fleet, discard what each device reported, and leave a record saying the operation was
+// called off. The cancel reports those rows as alreadySent, which is true.
 //
-// ⚠️ THAT ARGUMENT DOES NOT COVER EVERY SENT ROW, AND AN EARLIER VERSION OF THIS COMMENT
-// CLAIMED IT DID. SENT carries two meanings: "the device has it", and — on the LwM2M
-// queue-mode path — "we published while the device was asleep and the ack was dropped".
-// The second kind has NOT reached anything, and the LwM2M wake drain dispatches it
-// directly out of SENT without claiming (downlink/fetcher.go's drainStatuses, and
-// dispatcher.go's claim, which returns true for SENT). So a cancelled batch's SENT rows
-// can still actuate a queue-mode device on its next Register.
+// 🔑 THIS USED TO BE TWO LISTS, AND THE COMMENT HERE ARGUED AT LENGTH THAT THEY MUST STAY
+// APART BECAUSE THEY ANSWERED DIFFERENT QUESTIONS. They did not. The batch cancel took
+// QUEUED+HELD while CancelCommand took everything non-terminal, and that divergence was
+// not two questions — it was the bug. CancelCommand fell through to SENT because it was
+// written as a NEGATIVE guard (status NOT IN terminal), so SENT was included by default
+// rather than by decision, and nobody had decided. Merging them is what makes "may this
+// be called off?" have one answer.
 //
-// This is not closed here, deliberately: closing it means deciding what SENT means before
-// deciding who may act on it, which is the same question as narrowing CancelCommand. Both
-// are tracked together rather than half-answered in a fleet-write slice.
+// The earlier version of this comment also claimed the SENT argument covered every sent
+// row. It did not: SENT then carried a second meaning — "we published while the device
+// was asleep and it went nowhere" — and those rows WERE recallable, so a cancelled fleet
+// write still actuated them on the next wake. That second meaning is now PARKED, which is
+// why PARKED is in this list. See CommandStatus in model.go.
 //
-// ⚠️ THIS DISAGREES WITH CancelCommand, WHICH STILL CANCELS FROM SENT. A loop of
-// CancelCommand over a batch's commands therefore does something different from
-// cancelling the batch. That asymmetry is known and is being closed in the other
-// direction — by narrowing CancelCommand — rather than by widening this.
+// Do NOT fold undeliveredStatusStrings or claimableStatusStrings in here just because the
+// three sets overlap today. Those genuinely do answer different questions — "what counts
+// against the backlog ceiling" and "what may a dispatcher claim" — and SENT is the proof:
+// it is in none of them for three unrelated reasons.
+func cancellableStatusStrings() []string {
+	return []string{CommandQueued.String(), CommandHeld.String(), CommandParked.String()}
+}
+
+// cancellable is the in-process form of the same question, for a fast path that skips the
+// UPDATE when the loaded row is already out of reach.
 //
-// It is a fourth QUEUED+HELD list rather than a reuse of undeliveredStatusStrings or
-// claimableStatusStrings for the reason those two already state about each other: they
-// answer different questions, and the day one set moves a shared helper would move all
-// of them silently. The pending CancelCommand change is the live example — it moves
-// this set's question and neither of theirs.
-func batchCancellableStatusStrings() []string {
-	return []string{CommandQueued.String(), CommandHeld.String()}
+// 🔴 It is DERIVED from cancellableStatusStrings rather than written out again. The fast
+// path and the SQL guard answering differently is not a hypothetical: it is the failure the
+// terminal-set comment in model.go describes, where one of the pair treats a row as
+// finished while the other still lets a write through.
+func cancellable(status string) bool {
+	for _, s := range cancellableStatusStrings() {
+		if status == s {
+			return true
+		}
+	}
+	return false
 }
 
 // sweepableStatusStrings is the wire form of what the periodic delivery sweep selects:
@@ -691,7 +735,7 @@ func sweepableStatusStrings() []string {
 	return []string{CommandQueued.String()}
 }
 
-// MarkSent transitions a command QUEUED/HELD -> SENT.
+// MarkSent transitions a command QUEUED/HELD/PARKED -> SENT.
 //
 // HELD is accepted alongside QUEUED because a hold is released by DISPATCHING it,
 // not by first returning it to QUEUED: the release is the same publish the sweep
@@ -716,17 +760,36 @@ func sweepableStatusStrings() []string {
 // the dispatchable set (a fast response, a concurrent sweep, a cancel) — a benign
 // race, not an error; the current row is returned. (A deleted row surfaces as
 // loadCommand's not-found.)
-func (api *Api) MarkSent(ctx context.Context, id uint) (bool, error) {
+//
+// It returns the DISPATCH NONCE it stamped, which the caller must carry in the envelope it
+// publishes. That value is what lets a transport park THIS dispatch and no other; see
+// Command.DispatchNonce and ParkClaim. On a lost claim there is no dispatch, so there is no
+// nonce, and the caller must not publish.
+func (api *Api) MarkSent(ctx context.Context, id uint) (string, bool, error) {
+	nonce := newDispatchNonce()
 	res := api.RDB.DB(ctx).Model(&Command{}).
 		Where("id = ? AND status IN ?", id, claimableStatusStrings()).
 		Updates(map[string]any{
-			"status":    CommandSent.String(),
-			"sent_time": sql.NullTime{Time: time.Now(), Valid: true},
+			"status":         CommandSent.String(),
+			"sent_time":      sql.NullTime{Time: time.Now(), Valid: true},
+			"dispatch_nonce": sql.NullString{String: nonce, Valid: true},
 		})
 	if res.Error != nil {
-		return false, res.Error
+		return "", false, res.Error
 	}
-	return res.RowsAffected == 1, nil
+	if res.RowsAffected != 1 {
+		return "", false, nil
+	}
+	return nonce, true, nil
+}
+
+// newDispatchNonce mints the identifier for ONE dispatch attempt.
+//
+// A UUID rather than a counter on purpose: nothing may order two of these. The only
+// question a nonce ever answers is "is this the dispatch I was handed?", and a value that
+// looked like a sequence would invite a comparison the semantics do not support.
+func newDispatchNonce() string {
+	return uuid.NewString()
 }
 
 // ReleaseClaim returns a claimed-but-undispatched command to QUEUED, clearing the
@@ -759,9 +822,12 @@ func (api *Api) MarkSent(ctx context.Context, id uint) (bool, error) {
 // was stopped — and that row, unlike the ones this design legitimately cannot recall, had
 // never gone anywhere.
 //
-// It is the only path with that property. Every other route back to a dispatchable state
-// predicates on HELD or on QUEUED/HELD, and a cancelled row is terminal, so the hold
-// reconciler and the wake drain already no-op correctly.
+// 🔴 IT IS NO LONGER THE ONLY PATH WITH THAT PROPERTY, AND AN EARLIER VERSION OF THIS COMMENT
+// SAID IT WAS. ParkClaim is a second route out of SENT and back into the dispatchable set —
+// it shares retireClaim with this one for exactly that reason, so the cancelled-batch check is
+// written once and cannot be present on one route and missing on the other. Every OTHER route
+// still predicates on HELD or on QUEUED/HELD/PARKED, and a cancelled row is terminal, so the
+// hold reconciler and the wake drain no-op correctly.
 //
 // The two updates are ORDERED, cancelled-batch first, and both are predicated on SENT so
 // exactly one of them can move the row. That is what makes it safe without a transaction.
@@ -775,10 +841,41 @@ func (api *Api) MarkSent(ctx context.Context, id uint) (bool, error) {
 // the same microsecond. Documented and accepted rather than silently assumed away — if it
 // ever needs closing, close it at the claim, not here.
 func (api *Api) ReleaseClaim(ctx context.Context, id uint) (bool, error) {
+	return api.retireClaim(ctx, "id = ?", []any{id}, CommandQueued)
+}
+
+// ParkClaim retires a claimed command whose transport found the device UNREACHABLE, taking
+// it SENT -> PARKED so the platform's record says it went nowhere. It reports whether this
+// caller's park landed.
+//
+// 🔴 IT IS PREDICATED ON THE DISPATCH NONCE, AND WITHOUT THAT IT WOULD RE-ARM AN
+// ALREADY-ACTUATED COMMAND. The full sequence is in Command.DispatchNonce; the short form is
+// that a park request can be a redelivery of a message whose command has since been claimed
+// and run, and a park matching on status alone would drag that row back into the
+// dispatchable set to be actuated a second time. Matching the nonce means a stale request
+// names a dispatch that no longer exists.
+//
+// 🔑 RowsAffected == 0 IS A BENIGN SUCCESS, NOT A FAILURE, and the caller must treat it as
+// settled. It means the row moved on under this park — answered, cancelled, expired, or
+// re-claimed by a wake drain. A caller that read it as failure and retried would burn every
+// redelivery on a row that is already where it should be.
+func (api *Api) ParkClaim(ctx context.Context, token, nonce string) (bool, error) {
+	return api.retireClaim(ctx, "token = ? AND dispatch_nonce = ?", []any{token, nonce}, CommandParked)
+}
+
+// retireClaim is the shape both ReleaseClaim and ParkClaim need: take a SENT row out of the
+// dispatcher's hands, to CANCELLED if its batch has been called off and to the caller's
+// target otherwise. Callers differ only in how they name the row and where it lands.
+//
+// Both writes are predicated on SENT, so exactly one of them can move the row — which is
+// what makes this safe without a transaction — and both clear sent_time, because a retired
+// claim did not send anything.
+func (api *Api) retireClaim(ctx context.Context, where string, args []any, target CommandStatus) (bool, error) {
 	cancelledBatches := api.RDB.DB(ctx).Model(&CommandBatch{}).
 		Select("id").Where("cancelled_at IS NOT NULL")
 	stopped := api.RDB.DB(ctx).Model(&Command{}).
-		Where("id = ? AND status = ? AND batch_id IN (?)", id, CommandSent.String(), cancelledBatches).
+		Where(where, args...).
+		Where("status = ? AND batch_id IN (?)", CommandSent.String(), cancelledBatches).
 		Updates(map[string]any{
 			"status":    CommandCancelled.String(),
 			"sent_time": sql.NullTime{},
@@ -791,9 +888,10 @@ func (api *Api) ReleaseClaim(ctx context.Context, id uint) (bool, error) {
 	}
 
 	res := api.RDB.DB(ctx).Model(&Command{}).
-		Where("id = ? AND status = ?", id, CommandSent.String()).
+		Where(where, args...).
+		Where("status = ?", CommandSent.String()).
 		Updates(map[string]any{
-			"status":    CommandQueued.String(),
+			"status":    target.String(),
 			"sent_time": sql.NullTime{},
 		})
 	if res.Error != nil {
@@ -987,12 +1085,21 @@ func (api *Api) HeldCommands(ctx context.Context, afterId uint, limit int) ([]*C
 // It reports whether THIS call performed the transition. RowsAffected==0 means
 // the row was not dispatchable — already sent by the sweep, already answered, or
 // cancelled — which is a benign race and not an error.
+//
+// 🔴 IT STAMPS A FRESH DISPATCH NONCE, AND THAT IS WHAT INVALIDATES AN IN-FLIGHT PARK.
+// This claim's caller does not publish an envelope — it dispatches over its own live
+// session — so it never reads the value back. The stamp exists for the other direction:
+// a park request still in JetStream redelivery names the PREVIOUS dispatch, and once this
+// write lands that name matches nothing, so the row this caller is about to actuate
+// cannot be dragged back under it. Omitting the stamp here would leave exactly the
+// re-arm window the nonce was introduced to close.
 func (api *Api) MarkSentByToken(ctx context.Context, token string) (bool, error) {
 	res := api.RDB.DB(ctx).Model(&Command{}).
 		Where("token = ? AND status IN ?", token, claimableStatusStrings()).
 		Updates(map[string]any{
-			"status":    CommandSent.String(),
-			"sent_time": sql.NullTime{Time: time.Now(), Valid: true},
+			"status":         CommandSent.String(),
+			"sent_time":      sql.NullTime{Time: time.Now(), Valid: true},
+			"dispatch_nonce": sql.NullString{String: newDispatchNonce(), Valid: true},
 		})
 	if res.Error != nil {
 		return false, res.Error
@@ -1052,10 +1159,24 @@ func (api *Api) MarkResponse(ctx context.Context, commandToken string, success b
 	return api.loadCommand(ctx, found.ID)
 }
 
-// CancelCommand cancels a non-terminal command by token, moving it to CANCELLED
-// (QUEUED/HELD/SENT -> CANCELLED). A terminal command is returned unchanged. Like the
-// other transitions it is a from-state-predicated conditional UPDATE so a cancel racing a
-// device response does not clobber the response.
+// CancelCommand cancels a command the platform still holds, by token, moving it to
+// CANCELLED (QUEUED/HELD/PARKED -> CANCELLED). A command in any other state is returned
+// unchanged. Like the other transitions it is a from-state-predicated conditional UPDATE so
+// a cancel racing a device response does not clobber the response.
+//
+// 🔴 IT USED TO CANCEL FROM SENT, AND NOT BECAUSE ANYONE DECIDED IT SHOULD. This was
+// written as a NEGATIVE guard — "status NOT IN (terminal)" — so every non-terminal state
+// fell through it by default, SENT included. A sent command is at a device: cancelling it
+// stops no actuation, and MarkResponse's terminal guard then DROPS the answer the device
+// sends back. The hardware acts, the response vanishes, and the record says an operator
+// called it off. The set is now POSITIVE, so a state is cancellable because someone decided
+// it is (see cancellableStatusStrings).
+//
+// 🔑 A CANCEL ON A SENT COMMAND RETURNS IT UNCHANGED RATHER THAN ERRORING, which is the
+// same shape as cancelling an already-terminal one. Callers already handle "the status you
+// get back is the truth"; making this the one cancel that raises would push a new failure
+// mode into every one of them to describe a race they cannot avoid — the command may have
+// been claimed a millisecond before the request arrived.
 //
 // It writes CANCELLED, not EXPIRED. The two were one value, which forced the docs
 // to carry the line "cancelling a command also records EXPIRED" — an apology for a
@@ -1076,11 +1197,16 @@ func (api *Api) CancelCommand(ctx context.Context, token string) (*Command, erro
 		return nil, gorm.ErrRecordNotFound
 	}
 	found := matches[0]
-	if CommandStatus(found.Status).Terminal() {
+	// An OPTIMIZATION, not the guard. The conditional UPDATE below is authoritative — swap this
+	// for the old Terminal() test and behaviour is identical, because a SENT row then reaches
+	// the UPDATE, matches nothing, and is reloaded unchanged. What it buys is skipping a write
+	// that was never going to match. Keep the two in agreement anyway: a fast path that admits
+	// rows the SQL guard refuses is how a "cancelled" command silently stays live.
+	if !cancellable(found.Status) {
 		return found, nil
 	}
 	if res := api.RDB.DB(ctx).Model(&Command{}).
-		Where("id = ? AND status NOT IN ?", found.ID, terminalStatusStrings()).
+		Where("id = ? AND status IN ?", found.ID, cancellableStatusStrings()).
 		Updates(map[string]any{"status": CommandCancelled.String()}); res.Error != nil {
 		return nil, res.Error
 	}
@@ -1091,9 +1217,10 @@ func (api *Api) CancelCommand(ctx context.Context, token string) (*Command, erro
 // deserves. The distinction is the whole reason the platform tracks a hold
 // separately from a dispatch:
 //
-//   - QUEUED / HELD -> EXPIRED. The command never went out. Its TTL elapsed while
-//     the platform still had it — because the device was absent the entire time,
-//     or because it was enqueued too close to its own horizon.
+//   - QUEUED / HELD / PARKED -> EXPIRED. The command never went out. Its TTL elapsed
+//     while the platform still had it — because the device was absent the entire time,
+//     because a transport found it unreachable and handed the command back, or because
+//     it was enqueued too close to its own horizon.
 //   - SENT -> TIMEOUT. The command DID go out and the device never answered.
 //
 // Reporting the first case as TIMEOUT — which is what a single "not finished"
@@ -1102,11 +1229,22 @@ func (api *Api) CancelCommand(ctx context.Context, token string) (*Command, erro
 // it is the common case, and it sends an operator looking for a fault in hardware
 // that was behaving correctly by being off.
 //
+// 🔴 PARKED IS HERE BECAUSE THIS FUNCTION WAS TELLING THAT EXACT LIE ON THE ORDINARY
+// EXPIRY PATH. A queue-mode device's command was published, found unreachable, and left in
+// SENT — so it lapsed as TIMEOUT, "the device was reached and never answered", for a
+// command that reached nothing. Nothing about that involved a fleet write or a cancel; it
+// fired for a single command to a single sleeping device, silently, every time.
+//
+// Note what SENT -> TIMEOUT still does not promise. SENT means "dispatched toward a device
+// believed live", so a device that drops between the presence read and the publish also
+// lands in TIMEOUT for a command it never received. That window is narrow and no state
+// distinguishes it, unlike the queue-mode case, which was systematic.
+//
 // An unrecognised status maps to TIMEOUT, preserving the pre-existing default. It
-// should be unreachable: the only non-terminal states are the three above.
+// should be unreachable: the only non-terminal states are the four above.
 func expiredTerminalFor(status string) string {
 	switch CommandStatus(status) {
-	case CommandQueued, CommandHeld:
+	case CommandQueued, CommandHeld, CommandParked:
 		return CommandExpired.String()
 	default:
 		return CommandTimeout.String()
@@ -1119,17 +1257,24 @@ func expiredTerminalFor(status string) string {
 const expirePageSize = 500
 
 // ExpireStale times out every non-terminal command whose TTL has elapsed. A
-// QUEUED or HELD command that never went out becomes EXPIRED; a SENT command
-// that was never answered becomes TIMEOUT (see expiredTerminalFor). The caller
+// QUEUED, HELD or PARKED command that never reached a device becomes EXPIRED; a
+// SENT command that was never answered becomes TIMEOUT (see expiredTerminalFor). The caller
 // MUST pass a system context (core.WithSystemContext) so the sweep spans all
 // tenants.
 //
 // It returns the number of commands expired AND a breakdown keyed by the state
 // each command lapsed FROM, because those counts mean opposite things
 // operationally: rows dying out of HELD say the fleet is absent and the platform
-// never got to try, while rows dying out of SENT say devices are being reached
-// and are not answering. One total reports both as "expiry is happening", which
-// points an operator at the wrong half of the system.
+// never got to try; rows dying out of PARKED say it tried and found nobody there;
+// rows dying out of SENT say devices are being reached and are not answering. One
+// total reports all three as "expiry is happening", which points an operator at
+// the wrong part of the system.
+//
+// 🔑 SENT is the only one of the three that implicates the DEVICE, and even it is not
+// proof: SENT means "dispatched toward a device believed live", so a device dropping
+// between the presence read and the publish also lands there. PARKED exists because that
+// used to be true of a whole systematic class — every queue-mode command to a sleeping
+// device — and those rows all lapsed as TIMEOUT, blaming hardware that was never reached.
 // 🔑 IT WALKS THE STALE SET IN PAGES, from a cursor. The set is every expired
 // non-terminal row across every tenant, so its size is a property of the fleet and
 // of how long an outage lasted — an instance coming back after a weekend with a

@@ -17,7 +17,7 @@ import (
 // two lists are the thing under test here: deriving the expectation from the
 // implementation would make every assertion below vacuous.
 var allStatuses = []CommandStatus{
-	CommandQueued, CommandHeld, CommandSent,
+	CommandQueued, CommandHeld, CommandSent, CommandParked,
 	CommandSuccessful, CommandFailed,
 	CommandTimeout, CommandExpired, CommandCancelled,
 }
@@ -223,7 +223,7 @@ func TestMarkSentReleasesAHeldCommand(t *testing.T) {
 
 	id := seedWithStatus(t, api, ctx, "held-release", CommandHeld)
 
-	claimed, err := api.MarkSent(ctx, id)
+	_, claimed, err := api.MarkSent(ctx, id)
 	if err != nil {
 		t.Fatalf("MarkSent failed: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestMarkSentByTokenLosesOnTerminal(t *testing.T) {
 // operator auditing a fleet needs to tell them apart: a run of EXPIRED means
 // delivery is failing, a run of CANCELLED means people keep changing their minds.
 func TestCancelRecordsCancelledFromEveryLiveState(t *testing.T) {
-	for _, from := range []CommandStatus{CommandQueued, CommandHeld, CommandSent} {
+	for _, from := range []CommandStatus{CommandQueued, CommandHeld, CommandParked} {
 		t.Run(from.String(), func(t *testing.T) {
 			api := newTestApi(t)
 			ctx := core.WithTenant(context.Background(), "A")
@@ -382,6 +382,41 @@ func TestCancelRecordsCancelledFromEveryLiveState(t *testing.T) {
 				t.Fatalf("cancelling a %s command recorded %s, want CANCELLED", from, got.Status)
 			}
 		})
+	}
+}
+
+// TestCancelLeavesASentCommandAlone is the counterweight to the test above, and the pair is
+// the whole contract: a cancel takes what the platform still HOLDS and refuses what it has
+// already handed over.
+//
+// 🔴 IT PINS A BEHAVIOUR THAT WAS PREVIOUSLY THE OPPOSITE, AND SILENTLY SO. CancelCommand
+// guarded with "status NOT IN (terminal)", so SENT fell through by default rather than by
+// decision. Cancelling a sent command stops no actuation — the device already has it — and
+// CANCELLED is terminal, so MarkResponse then DISCARDS the answer the device sends back. The
+// fleet acts, the responses vanish, and the record says an operator called it off. That is
+// asserted below rather than merely described: the response must still land.
+func TestCancelLeavesASentCommandAlone(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+
+	seedWithStatus(t, api, ctx, "cancel-sent", CommandSent)
+
+	got, err := api.CancelCommand(ctx, "cancel-sent")
+	if err != nil {
+		t.Fatalf("cancelling a SENT command must not error, it must no-op: %v", err)
+	}
+	if got.Status != CommandSent.String() {
+		t.Fatalf("cancelling a SENT command recorded %s, want it left SENT", got.Status)
+	}
+
+	// The point of leaving it alone: the device's real answer still has somewhere to land.
+	answered, err := api.MarkResponse(ctx, "cancel-sent", true, nil, nil)
+	if err != nil {
+		t.Fatalf("MarkResponse failed: %v", err)
+	}
+	if answered.Status != CommandSuccessful.String() {
+		t.Fatalf("a device answered a command a cancel had passed over and it recorded %s, want SUCCESSFUL — "+
+			"if the cancel had taken it to CANCELLED, this answer would have been dropped", answered.Status)
 	}
 }
 
@@ -425,7 +460,7 @@ func TestPendingCommandsCoversTheDispatchableSet(t *testing.T) {
 }
 
 // TestCommandsFilterByStatuses covers the multi-status search filter the LwM2M
-// wake drain needs (it asks for HELD ∪ SENT in one query), including the empty
+// wake drain needs (it asks for HELD ∪ PARKED in one query), including the empty
 // list, which is deliberately "no filter" rather than "match nothing".
 func TestCommandsFilterByStatuses(t *testing.T) {
 	api := newTestApi(t)
@@ -434,6 +469,7 @@ func TestCommandsFilterByStatuses(t *testing.T) {
 	seedWithStatus(t, api, ctx, "f-queued", CommandQueued)
 	seedWithStatus(t, api, ctx, "f-held", CommandHeld)
 	seedWithStatus(t, api, ctx, "f-sent", CommandSent)
+	seedWithStatus(t, api, ctx, "f-parked", CommandParked)
 	seedWithStatus(t, api, ctx, "f-successful", CommandSuccessful)
 
 	search := func(criteria CommandSearchCriteria) map[string]bool {
@@ -450,21 +486,24 @@ func TestCommandsFilterByStatuses(t *testing.T) {
 		return out
 	}
 
-	// The drain's actual query: the two states a waking device's backlog lives in.
-	drain := []string{CommandHeld.String(), CommandSent.String()}
+	// The drain's actual query: the two states a waking device's backlog lives in — the
+	// ones in which the PLATFORM still holds the command. SENT is deliberately not among
+	// them; the fetcher's own wire test pins the same pair from the other side.
+	drain := []string{CommandHeld.String(), CommandParked.String()}
 	got := search(CommandSearchCriteria{Statuses: &drain})
-	if !got["f-held"] || !got["f-sent"] {
-		t.Fatalf("statuses filter must return both HELD and SENT rows, got %v", got)
+	if !got["f-held"] || !got["f-parked"] {
+		t.Fatalf("statuses filter must return both HELD and PARKED rows, got %v", got)
 	}
-	if got["f-queued"] || got["f-successful"] {
-		t.Fatalf("statuses filter returned rows outside the requested set: %v", got)
+	if got["f-queued"] || got["f-successful"] || got["f-sent"] {
+		t.Fatalf("statuses filter returned rows outside the requested set: %v — a SENT row here\n"+
+			"would mean the drain re-dispatching a command the device already has", got)
 	}
 
 	// An empty list is "no filter". Honouring it literally would make the result
 	// depend on how the driver renders an empty IN rather than on the query.
 	empty := []string{}
 	got = search(CommandSearchCriteria{Statuses: &empty})
-	if !got["f-queued"] || !got["f-held"] || !got["f-sent"] || !got["f-successful"] {
+	if !got["f-queued"] || !got["f-held"] || !got["f-sent"] || !got["f-parked"] || !got["f-successful"] {
 		t.Fatalf("an empty statuses list must not filter anything out, got %v", got)
 	}
 

@@ -124,7 +124,7 @@ func TestCreateSentResponseLifecycle(t *testing.T) {
 		t.Fatalf("expected QUEUED, got %s", created.Status)
 	}
 
-	claimed, err := api.MarkSent(ctx, created.ID)
+	_, claimed, err := api.MarkSent(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("MarkSent failed: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestCreateSentResponseLifecycle(t *testing.T) {
 	// 🔑 The claim is EXCLUSIVE, which is what makes claim-before-publish safe: a second
 	// caller must be told it lost rather than told the row's status, because a status read
 	// back cannot distinguish "I claimed it" from "someone else just did".
-	if again, err := api.MarkSent(ctx, created.ID); err != nil {
+	if _, again, err := api.MarkSent(ctx, created.ID); err != nil {
 		t.Fatalf("second MarkSent errored: %v", err)
 	} else if again {
 		t.Fatal("MarkSent claimed the same command twice; two dispatchers would both actuate the device")
@@ -258,8 +258,8 @@ func TestCreateCommandIdempotentOnToken(t *testing.T) {
 
 // TestMarkSentNoOpOnTerminal verifies MarkSent is a no-op on a command that has
 // already left the dispatchable set, leaving it unchanged rather than forcing it to
-// SENT. This is the from-state-predicated guard: MarkSent only advances a row that is
-// still QUEUED or HELD.
+// SENT. This is the from-state-predicated guard: MarkSent only advances a row the platform
+// still holds — QUEUED, HELD or PARKED.
 func TestMarkSentNoOpOnTerminal(t *testing.T) {
 	api := newTestApi(t)
 	ctx := core.WithTenant(context.Background(), "A")
@@ -280,7 +280,7 @@ func TestMarkSentNoOpOnTerminal(t *testing.T) {
 
 	// MarkSent must NOT error, must report that it did not claim, and must NOT drag the
 	// terminal command to SENT.
-	claimed, err := api.MarkSent(ctx, created.ID)
+	_, claimed, err := api.MarkSent(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("MarkSent on a terminal command should be a no-op, got error: %v", err)
 	}
@@ -320,7 +320,7 @@ func TestMarkSentDoesNotClobberResponse(t *testing.T) {
 	}
 
 	// The now-late MarkSent must be a no-op — not a revert to SENT.
-	claimed, err := api.MarkSent(ctx, created.ID)
+	_, claimed, err := api.MarkSent(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("MarkSent failed: %v", err)
 	}
@@ -359,7 +359,7 @@ func TestExpireStale(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create s-old failed: %v", err)
 	}
-	if _, err := api.MarkSent(sysctx, sentOld.ID); err != nil {
+	if _, _, err := api.MarkSent(sysctx, sentOld.ID); err != nil {
 		t.Fatalf("mark s-old sent failed: %v", err)
 	}
 	// HELD + expired -> EXPIRED, NOT TIMEOUT. This is the case the vocabulary

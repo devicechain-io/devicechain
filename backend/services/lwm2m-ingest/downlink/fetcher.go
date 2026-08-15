@@ -23,34 +23,43 @@ type commandQuerier interface {
 // command-delivery/model counterparts (CommandHeld, CommandSent); drainStatuses below is
 // the single definition everything in this package derives from.
 const (
-	statusHeld = "HELD"
-	statusSent = "SENT"
+	statusHeld   = "HELD"
+	statusSent   = "SENT"
+	statusParked = "PARKED"
 )
 
 // drainStatuses is the SET of states a waking device's backlog lives in. It is BOTH the
 // server-side predicate (the criteria this package sends) and the client-side re-check, so
 // the two cannot drift into disagreeing about what is drainable.
 //
-// Both states are here because they are the same backlog recorded by two different
-// mechanisms:
+// Both states are here because they are the same backlog reached by two different routes,
+// and both are states in which the PLATFORM STILL HOLDS THE COMMAND:
 //
 //   - HELD is what the device's ABSENCE produced: command-delivery knew the device was not
 //     reachable and deliberately withheld dispatch rather than publishing into the void.
 //     This is where a sleeping device's queue accumulates.
-//   - SENT is the PRE-EXISTING hold plus genuinely in-flight commands. Before HELD existed,
-//     a command for a sleeping device was published, ack-dropped by this dispatcher because
-//     the device had no live conn, and left in SENT — so a SENT row is either such a hold
-//     awaiting this drain, or a command dispatched moments ago and still unanswered. The
-//     dedup and the claim below tell those apart at dispatch time; the query cannot.
+//   - PARKED is what THIS dispatcher produced: the device read as present (it is
+//     registered), so command-delivery published, and we found no live conn and handed the
+//     command back. It is the queue-mode case — registered and asleep.
 //
-// Dropping SENT would strand every command already holding in it. Reading only SENT is what
-// this package did before HELD existed, and would silently drain nothing once
-// command-delivery starts withholding.
+// 🔴 SENT USED TO BE IN THIS LIST, AND REMOVING IT IS THE POINT OF THE CHANGE THAT ADDED
+// PARKED. A SENT row was ambiguous: either a hold awaiting this drain, or a command
+// dispatched moments ago and still unanswered — and the query could not tell them apart, so
+// this package dispatched out of SENT WITHOUT CLAIMING, which was the platform's only
+// unclaimed dispatch. Nothing but a 60-second per-pod dedup cache stood between that and
+// actuating a device twice. Now the ambiguity is resolved before the query runs: a command
+// that went nowhere is PARKED, and every row this drain sees is claimed before it actuates.
+//
+// ⚠️ ON CUTOVER, ROWS ALREADY SITTING IN SENT ARE NOT DRAINED. They are the ack-dropped
+// backlog of the previous build, and they now ride their TTL to TIMEOUT instead of being
+// delivered on the next wake. That is acceptable only because an instance is RECREATED
+// rather than migrated pre-GA; it is stated here rather than discovered as "the drain
+// broke" on an upgraded dev cluster.
 //
 // QUEUED stays excluded, and the original reason still holds: a QUEUED row is ≤ one sweep
 // old and command-delivery's own redelivery will publish it to the LIVE path, so draining it
 // here too would double-dispatch. A terminal row is done.
-var drainStatuses = []string{statusHeld, statusSent}
+var drainStatuses = []string{statusHeld, statusParked}
 
 // drainable reports whether a fetched row's status is one this package may dispatch. It
 // reads drainStatuses so the client-side defensive re-check and the server-side predicate
@@ -134,13 +143,13 @@ type drainResponse struct {
 	} `json:"commands"`
 }
 
-// CommandFetcher reads a waking device's backlogged commands — HELD or SENT, see
+// CommandFetcher reads a waking device's backlogged commands — HELD or PARKED, see
 // drainStatuses — from command-delivery so the leader can drain them to the now-live CoAP
 // device (ADR-075 L4b, Architecture D). The durable hold is command-delivery's Postgres row:
-// a command withheld for an absent device sits in HELD, and one that was
-// published-and-ack-dropped while the device was offline sits in SENT, until it is delivered
-// (this) or reaches its TTL horizon. This is the read side of that hold; it builds no second
-// source of truth.
+// a command withheld for a device already known absent sits in HELD, and one that was
+// published and handed back because this dispatcher found no live session sits in PARKED,
+// until it is delivered (this) or reaches its TTL horizon. This is the read side of that
+// hold; it builds no second source of truth.
 type CommandFetcher struct {
 	client    commandQuerier
 	baseURL   string

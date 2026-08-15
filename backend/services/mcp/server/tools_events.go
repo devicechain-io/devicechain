@@ -251,11 +251,13 @@ type ListCommandsInput struct {
 	// filter on. A status missing from the string is one an agent can never ask for —
 	// not an error it can recover from, an invisible capability. It must therefore
 	// carry every value in command-delivery's CommandStatus, non-terminal (QUEUED,
-	// HELD, SENT) then terminal (SUCCESSFUL, FAILED, TIMEOUT, EXPIRED, CANCELLED).
-	// HELD and CANCELLED are the two an agent most needs the names of: HELD is why a
-	// command has not moved, and CANCELLED is what a cancel now records instead of
-	// the EXPIRED it used to share with TTL death.
-	Status     string `json:"status,omitempty" jsonschema:"optional command status filter: one of QUEUED, HELD, SENT, SUCCESSFUL, FAILED, TIMEOUT, EXPIRED, CANCELLED"`
+	// HELD, SENT, PARKED) then terminal (SUCCESSFUL, FAILED, TIMEOUT, EXPIRED,
+	// CANCELLED). HELD, PARKED and CANCELLED are the three an agent most needs the
+	// names of: HELD and PARKED are the two different reasons a command has not
+	// moved — never dispatched versus dispatched to a device that turned out to be
+	// unreachable — and CANCELLED is what a cancel now records instead of the EXPIRED
+	// it used to share with TTL death.
+	Status     string `json:"status,omitempty" jsonschema:"optional command status filter: one of QUEUED, HELD, SENT, PARKED, SUCCESSFUL, FAILED, TIMEOUT, EXPIRED, CANCELLED"`
 	PageNumber int    `json:"pageNumber,omitempty" jsonschema:"1-based page number (default 1)"`
 	PageSize   int    `json:"pageSize,omitempty" jsonschema:"commands per page (default 25, max 100)"`
 }

@@ -113,8 +113,11 @@ input CommandSearchCriteria {
     status: String
     # Match any of several lifecycle states. ANDed with `status` if both are given;
     # an empty list is ignored rather than matching nothing. Use this when the states
-    # you care about are a set — a device waking from sleep drains both the commands
-    # withheld for it (HELD) and those already dispatched and still unanswered (SENT).
+    # you care about are a set — a device waking from sleep drains everything the
+    # platform is still holding for it: the commands withheld because it was known to
+    # be absent (HELD) and those published while it was asleep and handed back (PARKED).
+    # SENT is deliberately NOT part of that set: a sent command is at the device, and
+    # re-dispatching one would actuate hardware a second time.
     statuses: [String!]
 }
 
@@ -390,20 +393,26 @@ type Mutation {
     #
     # Returns either the batch or a typed rejection (see CreateCommandBatchResult).
     createCommandBatch(request: CommandBatchCreateRequest!): CreateCommandBatchResult!
-    # Cancel a non-terminal command by token.
+    # Cancel a command the platform still holds, by token: QUEUED, HELD or PARKED.
+    #
+    # A command that has been SENT is returned UNCHANGED rather than cancelled. It is at
+    # the device, so cancelling it stops no actuation — it only makes the platform stop
+    # listening for the device's answer, and the fleet then acts while the record says the
+    # operation was called off. Returning it unchanged rather than raising matches what
+    # cancelling an already-finished command does, and describes a race a caller cannot
+    # avoid: the command may have been dispatched a millisecond before the request landed.
+    # Check the `status` you get back.
     cancelCommand(token: String!): Command!
     # Call off a fleet write: every command the platform still holds for the batch is
     # stopped. Reports what it was able to do, and never refuses — a brake that declined
     # to engage because part of the fleet had already moved would leave the rest of the
     # fleet commanded.
     #
-    # ⚠️ It stops QUEUED and HELD commands only, and this differs from `cancelCommand`,
-    # which also cancels one that has been SENT. The difference is deliberate: a sent
-    # command is already at the device and cancelling it stops no actuation — it only
-    # makes the platform stop listening for the device's answer, so the fleet acts while
-    # the record says the operation was called off. Sent commands are reported as
-    # `alreadySent` instead. `cancelCommand` will be brought into line; until then, a loop
-    # of `cancelCommand` over a batch's commands does NOT do the same thing as this.
+    # It stops QUEUED, HELD and PARKED commands — the three that mean the platform still
+    # has it. A command that has been SENT is at the device and is reported as
+    # `alreadySent` instead; cancelling it would stop no actuation and only discard the
+    # answer the device sends back. `cancelCommand` draws the same line, so a loop of it
+    # over a batch's commands does the same thing as this, one command at a time.
     #
     # Requires `command:write`. A batch that targeted a GROUP additionally requires
     # `device:read`, for the same reason reading one does: the answer describes a set the
@@ -411,7 +420,7 @@ type Mutation {
     #
     # An unknown batch token is an error, not a result.
     cancelCommandBatch(token: String!): CancelCommandBatchResult!
-    # Claim a still-dispatchable command (QUEUED or HELD) for immediate delivery,
+    # Claim a still-dispatchable command (QUEUED, HELD or PARKED) for immediate delivery,
     # moving it to SENT. For a transport that dispatches a device's backlog itself
     # rather than waiting for the delivery sweep — an LwM2M device draining its held
     # commands over the CoAP session it just opened. Claim BEFORE dispatching: the
@@ -419,6 +428,23 @@ type Mutation {
     # and a command is a physical actuation. Returns false if the command was not
     # claimable (already sent, answered or cancelled), which is a benign race.
     markCommandSent(token: String!): Boolean!
+    # Hand back a command whose transport found the device UNREACHABLE, moving it
+    # SENT -> PARKED so the record says it went nowhere. The platform decides to publish
+    # from presence — is the device registered — but a queue-mode device can be registered
+    # and asleep, and only the transport discovers there is no live session to deliver
+    # over. A parked command is delivered on the device's next wake, can be cancelled, and
+    # if its TTL lapses first it records EXPIRED rather than TIMEOUT, because nothing ever
+    # reached the device to time out.
+    #
+    # `dispatchNonce` is the value carried in the delivery envelope this command arrived
+    # in. Quoting it is what makes the hand-back apply to THAT dispatch and no other: a
+    # retried request names a dispatch that has since been superseded and moves nothing,
+    # rather than dragging a command the device has already run back into the queue.
+    #
+    # Returns false when the command moved on under the request — answered, cancelled,
+    # expired, or re-claimed by a wake drain. That is a settled outcome, not a failure,
+    # and must not be retried.
+    parkCommand(token: String!, dispatchNonce: String!): Boolean!
     # Return a device's WITHHELD commands to the delivery queue because the device has
     # come back. For a transport that owns the device's connection and therefore learns
     # of its return the instant it happens, rather than waiting for the periodic pass

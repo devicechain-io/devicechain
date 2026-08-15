@@ -29,6 +29,12 @@ type deliveryEnvelope struct {
 	DeviceToken string           `json:"deviceToken"`
 	Name        string           `json:"name"`
 	Payload     *json.RawMessage `json:"payload,omitempty"`
+
+	// DispatchNonce names the claim this publish belongs to. It is quoted back when parking
+	// an undeliverable command, so a request still in redelivery cannot hand back a row that
+	// has since been re-claimed and actuated. Empty means the publisher stamped none, and
+	// parking is then declined rather than attempted on status alone (see park).
+	DispatchNonce string `json:"dispatchNonce,omitempty"`
 }
 
 // responseEnvelope is the outcome this adapter publishes on the command-responses subject; it must
@@ -84,11 +90,12 @@ type connLookup interface {
 	Lookup(tenant, deviceToken string) (mux.Conn, Reach)
 }
 
-// drainFetcher reads a waking device's backlogged commands (HELD or SENT — drainStatuses)
+// drainFetcher reads a waking device's backlogged commands (HELD or PARKED — drainStatuses)
 // from command-delivery (*CommandFetcher satisfies it). It is the read side of the durable
-// hold (ADR-075 L4b, Architecture D): a command withheld for an absent device, or one a
-// live-path offline ack-drop left in SENT, is pulled here at the device's next wake. nil
-// disables draining (an inert or pre-L4b-wiring build, and the disposition unit tests).
+// hold (ADR-075 L4b, Architecture D): a command withheld for a device known absent, or one
+// the live path published and this dispatcher handed back because the device turned out to be
+// asleep, is pulled here at the device's next wake. nil disables draining (an inert or
+// pre-L4b-wiring build, and the disposition unit tests).
 type drainFetcher interface {
 	Pending(ctx context.Context, tenant, deviceToken string, now time.Time) ([]DrainCommand, error)
 }
@@ -107,6 +114,23 @@ type commandClaimer interface {
 	Claim(ctx context.Context, tenant, commandToken string) (bool, error)
 }
 
+// commandParker is the HAND-BACK seam (*CommandParker satisfies it): it moves a command this
+// adapter could not deliver from SENT to PARKED, naming the dispatch it arrived on.
+//
+// It is the counterpart to commandClaimer on the LIVE path rather than the drain: presence
+// says a registered device is reachable, and only this adapter learns that a queue-mode
+// device was asleep. Its own seam for the same testability reason — the branches that must
+// NOT ack, and the settled-false branch that must, are exactly the ones a fake makes easy to
+// get wrong.
+//
+// nil disables parking, which degrades to the behaviour before PARKED existed: the row stays
+// SENT and rides its TTL. That is a worse outcome, not an unsafe one, so unlike claiming this
+// seam fails OPEN — refusing to ack instead would wedge the consumer on an instance that
+// simply has no command-delivery endpoint configured.
+type commandParker interface {
+	Park(ctx context.Context, tenant, commandToken, dispatchNonce string) (bool, error)
+}
+
 // Metrics are the optional Prometheus instruments the dispatcher updates; any nil field is
 // skipped. Label-free except the bounded op label (read/write/execute/other), per the ADR-023
 // cardinality lesson — never a per-tenant or per-device or raw-command-name label.
@@ -115,9 +139,17 @@ type Metrics struct {
 	Succeeded     *prometheus.CounterVec // commands the device acknowledged 2.xx, by op
 	Failed        *prometheus.CounterVec // commands the device rejected (4.xx/5.xx), timed out, or failed local validation, by op
 	NotServed     prometheus.Counter     // ack-dropped: no index entry (another protocol's device, or none)
-	ServedOffline prometheus.Counter     // ack-dropped: a served device with no live conn (held in command-delivery, drained on its next wake — L4b)
-	Poison        prometheus.Counter     // ack-dropped: unparseable subject tenant or envelope
-	ResponseFails prometheus.Counter     // a command response we could not publish after local retries (outcome lost to TTL)
+	ServedOffline prometheus.Counter     // a served device with no live conn — the command is parked in command-delivery and drained on its next wake (L4b)
+	// Park outcomes for a served-but-offline command, split the same way and for the same
+	// reason as the claim outcomes below. ParkErrors is a FAULT — the message is left unacked
+	// to redeliver, and a sustained rate means commands are sitting in SENT telling the old
+	// lie. ParkSettled is BENIGN: the row moved on under us (answered, cancelled, expired, or
+	// re-claimed by a drain), which is an outcome, not a failure, and must not be retried.
+	ParkErrors    prometheus.Counter // a park that could not be established (redelivers)
+	ParkSettled   prometheus.Counter // a park that moved no row because the command had already moved on
+	ParkSkipped   prometheus.Counter // a park not attempted: no parker wired, or the envelope carried no dispatch nonce
+	Poison        prometheus.Counter // ack-dropped: unparseable subject tenant or envelope
+	ResponseFails prometheus.Counter // a command response we could not publish after local retries (outcome lost to TTL)
 	// L4b wake-drain instruments (ADR-075). Drained/DrainErrors are the operationally interesting
 	// signals; DrainDropped/DrainDedup are load/health signals.
 	Drained      prometheus.Counter // a held command dispatched to a device on its Register/Update wake
@@ -166,13 +198,19 @@ const (
 	// a slow retry rather than a tight busy-loop.
 	readErrorBackoff = time.Second
 	// dedupeTTL bounds how long a just-dispatched (deviceToken, commandToken) suppresses a
-	// re-dispatch of the SAME command by the other path (a wake drain fetching a SENT row the live
-	// stream also just delivered, or vice versa). It only needs to cover the window between an op
+	// re-dispatch of the SAME command by the other path — a wake drain fetching a row the live
+	// stream is also delivering, or vice versa. It only needs to cover the window between an op
 	// issuing and its command-responses reply terminalizing the row (after which the drain no longer
 	// fetches it), so a modest TTL a few times the op timeout is ample.
+	//
+	// 🔑 IT CARRIES MUCH LESS WEIGHT THAN IT USED TO, AND THAT IS THE POINT OF PARKED. The drain
+	// once dispatched out of SENT with NO CLAIM, so this cache was the only thing between an
+	// ambiguous SENT row and a second physical actuation — a job it was never fit for, being
+	// per-pod and TTL-bounded. Every drained row is claimed now, so the exclusion is structural
+	// and this is back to being what it says it is below: an optimization.
 	dedupeTTL = 60 * time.Second
 	// dedupeMax caps the dedup set; beyond it the set is pruned/cleared. The dedup is a re-actuation
-	// OPTIMIZATION, not a correctness guarantee (seal-fate and the SENT-row source already bound
+	// OPTIMIZATION, not a correctness guarantee (seal-fate and the drain's claim already bound
 	// re-fire), so clearing under a pathological burst degrades to the documented at-least-once.
 	dedupeMax = 8192
 )
@@ -189,6 +227,7 @@ type Dispatcher struct {
 	exec      executor
 	fetcher   drainFetcher
 	claimer   commandClaimer
+	parker    commandParker
 	metrics   Metrics
 	// tenantDeleted reports whether a tenant has been through the ADR-077 delete door.
 	// Never nil; see NewDispatcher.
@@ -217,6 +256,19 @@ type Options struct {
 	// A closure rather than the governance resolver type so this package is testable
 	// without a live user-management. Nil disables the gate; see NewDispatcher.
 	TenantDeleted func(tenant string) bool
+	// Parker hands a command back to command-delivery when this adapter finds the device
+	// unreachable (SENT -> PARKED). Nil disables parking.
+	//
+	// 🔑 IT IS HERE RATHER THAN A POSITIONAL PARAMETER, AND THE DISTINCTION IS THE ONE
+	// NewDispatcher's comment draws, not an exception to it. fetcher and claimer are
+	// positional so that omitting the claimer is a COMPILE error, because a nil claimer
+	// takes a FAIL-CLOSED branch whose symptom — a device that never receives its backlog
+	// — is indistinguishable from having nothing queued. A nil parker fails OPEN: the row
+	// stays SENT and rides its TTL, which is exactly the behaviour that existed before
+	// parking did, and it is counted on ParkSkipped rather than being silent. An omission
+	// that degrades to the previous release and shows up on a graph does not need the
+	// compiler to catch it.
+	Parker commandParker
 }
 
 // NewDispatcher builds a Dispatcher over the durable command reader, the command-responses writer,
@@ -252,6 +304,7 @@ func NewDispatcher(rdr reader, responses responsePublisher, conns connLookup, ex
 		exec:          exec,
 		fetcher:       fetcher,
 		claimer:       claimer,
+		parker:        opts.Parker,
 		metrics:       metrics,
 		tenantDeleted: opts.TenantDeleted,
 		workers:       opts.Workers,
@@ -349,12 +402,22 @@ func (d *Dispatcher) Run(ctx context.Context) {
 		}
 		// Pre-filter reachability at ROUTE time (S4 hardening): a command for a device this adapter
 		// does not serve — the DOMINANT case, since this cross-tenant consumer sees every other
-		// protocol adapter's device-commands too — or one that is offline is ack-dropped HERE, so it
-		// never occupies a per-device worker slot. Only a live-dispatchable command is routed to a
-		// shard; the worker re-checks reachability (the device may drop in between). An OFFLINE served
-		// device's command is held in command-delivery (SENT) and delivered by the drain on the
-		// device's next wake (L4b) — dropNonLive just advances our own cursor, it does not lose it.
-		if _, reach := d.conns.Lookup(w.tenant, w.env.DeviceToken); reach != ReachLive {
+		// protocol adapter's device-commands too — is ack-dropped HERE, so it never occupies a
+		// per-device worker slot. It is another protocol's traffic and there is nothing for this
+		// adapter to record about it.
+		//
+		// 🔴 AN OFFLINE SERVED DEVICE IS NO LONGER DROPPED HERE, AND THAT IS DELIBERATE. Its
+		// command has to be PARKED in command-delivery, which is a network round trip, and this
+		// is the JetStream read loop — the one goroutine that must not make one. So it is routed
+		// to the device's shard worker, which parks it there. The alternative considered and
+		// rejected was a third task kind with a non-blocking send like Drain's: a dropped park
+		// task has no next wake to re-trigger it, so a full shard would silently leave the row in
+		// SENT with no signal — losing exactly the fix this exists to deliver.
+		//
+		// The cost is stated rather than hidden: offline-device commands now occupy shard slots,
+		// so while command-delivery is unreachable a shard can be blocked by parks timing out.
+		// That is bounded, self-healing, and preferable to a silent loss.
+		if _, reach := d.conns.Lookup(w.tenant, w.env.DeviceToken); reach == ReachNotServed {
 			d.dropNonLive(reach, w.msg)
 			continue
 		}
@@ -373,7 +436,7 @@ func (d *Dispatcher) Run(ctx context.Context) {
 }
 
 // Drain enqueues a wake-drain for a device onto its shard worker, so the leader pulls that device's
-// backlogged commands (HELD or SENT) from command-delivery and dispatches them to the now-live conn
+// backlogged commands (HELD or PARKED) from command-delivery and dispatches them to the now-live conn
 // (ADR-075 L4b).
 // The /rd handler calls it after a device becomes live (Register/Update) — the LwM2M queue-mode wake
 // signal. It is NON-BLOCKING: a wake must never stall the CoAP read loop, so a full shard drops the
@@ -405,7 +468,7 @@ func (d *Dispatcher) Drain(tenant, deviceToken string) {
 //   - the LIVE path reads the device-commands stream, and a command published in the
 //     moments before the delete is already durable in that stream — command-delivery
 //     refusing to publish more does not unpublish those;
-//   - the WAKE-DRAIN re-fetches commands still HELD or SENT and fires them when a sleeping
+//   - the WAKE-DRAIN re-fetches commands still HELD or PARKED and fires them when a sleeping
 //     device next registers, which can be long after the tenant was deleted. Nothing on
 //     that path had a lifecycle check: the (tenant, token) is remembered from a
 //     registration that predates the delete, and PSK bindings are static config.
@@ -475,11 +538,20 @@ func (d *Dispatcher) dispatch(ctx context.Context, w work) {
 		return // evicted before this queued command started — leave unacked to redeliver to the next leader
 	}
 	conn, reach := d.conns.Lookup(w.tenant, w.env.DeviceToken)
+	if reach == ReachOffline {
+		// A device this adapter SERVES that has no live conn — either it was asleep when the
+		// command was published (the queue-mode case, which reached here because the reader no
+		// longer pre-filters it) or it dropped between the route-time check and now. Either way
+		// the command went nowhere, so hand it back: park it in command-delivery, where it can be
+		// cancelled, expires as EXPIRED rather than blaming the device with TIMEOUT, and is
+		// claimed by the drain on the device's next wake.
+		d.park(ctx, w)
+		return
+	}
 	if reach != ReachLive {
-		// A device we do not serve, or that dropped between the reader's route-time pre-filter and
-		// now, is ack-dropped (no dispatch, no response). A served-but-offline device's command is
-		// held in command-delivery (SENT) and drained on its next wake (L4b); a not-served one is
-		// another protocol's (or none) and just advances our cursor.
+		// Not served: another protocol's device, or none. Nothing to record — ack-dropping just
+		// advances our cursor. This is also the freshness re-check for a command the reader let
+		// through, though a device cannot become not-served between the two.
 		d.dropNonLive(reach, w.msg)
 		return
 	}
@@ -510,7 +582,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, w work) {
 	ackDrop(w.msg)
 }
 
-// drain pulls a waking device's backlogged commands (HELD or SENT) from command-delivery and
+// drain pulls a waking device's backlogged commands (HELD or PARKED) from command-delivery and
 // dispatches them to its now-live conn, oldest-first (ADR-075 L4b). It runs on the device's shard
 // worker (so it never races or reorders the device's live commands), leader-only (Drain no-ops on a
 // standby). A fetch failure is counted and retried on the device's next wake; the device dropping or
@@ -571,15 +643,21 @@ func (d *Dispatcher) drain(ctx context.Context, job drainJob) {
 // restart — exactly the two situations a leadership change produces. It is defence in depth
 // against the drain/live overlap within one pod, no more.
 //
-// A SENT row needs NO claim: it has already left the dispatchable set, and nothing returns
-// it there — a release targets HELD, so a SENT row cannot be pulled back in front of the
-// sweep. Issuing a mutation per drained command "for symmetry" would add a round trip to
-// every wake of every device on the instance for a guarantee the status already carries.
+// 🔴 EVERY DRAINED ROW IS CLAIMED, WITH NO EXCEPTION, AND THE EXCEPTION THIS REPLACES WAS
+// THE PLATFORM'S ONLY UNCLAIMED DISPATCH. A SENT row used to return true here immediately,
+// on the argument that SENT has already left the dispatchable set and nothing returns it
+// there. The argument was sound and the premise was not: a SENT row could be a command that
+// went NOWHERE — published to a registered-but-sleeping device and ack-dropped by this very
+// dispatcher — so the drain was re-dispatching commands whose only protection against a
+// second actuation was the per-pod dedupe disclaimed two paragraphs above. Those rows are
+// now PARKED, which is claimable, so the exclusion is structural for the whole backlog.
 //
-// 🔑 The HELD branch below is LIVE now, which it was not when this was written: the presence
-// gate withholds commands to an absent device, and a sleeping LwM2M device is exactly that.
-// So the claim is no longer a precaution against a state nothing produced — it is the
-// ordinary path for a queue-mode device, and every drained backlog goes through it.
+// 🔑 Both branches are LIVE, which neither was when this was first written: the presence
+// gate produces HELD for a device known absent, and this dispatcher produces PARKED for one
+// that read present and turned out to be asleep. The claim is the ordinary path for a
+// queue-mode device, and every drained backlog goes through it. The round trip per drained
+// command is the price of that, and it is the correct price — the guarantee the status was
+// previously assumed to carry, it did not carry.
 //
 // Both non-dispatch outcomes are counted, and they are counted apart (see Metrics):
 //   - LOST (false, nil): another dispatcher or the sweep won it. Benign, no actuation.
@@ -589,9 +667,6 @@ func (d *Dispatcher) drain(ctx context.Context, job drainJob) {
 //     fetch-failure path: on a real outage this fires once per backlogged command per wake,
 //     and a warn per row would bury the outage in its own noise.
 func (d *Dispatcher) claim(ctx context.Context, tenant string, c DrainCommand) bool {
-	if c.Status == statusSent {
-		return true
-	}
 	if d.claimer == nil {
 		// Claiming disabled but a claimable row arrived: refuse rather than fire. Counted as
 		// an error, not a loss — nobody else took this command, the platform simply cannot
@@ -687,6 +762,73 @@ func (d *Dispatcher) dropNonLive(reach Reach, msg messaging.Message) {
 		incr(d.metrics.ServedOffline, 1)
 	}
 	ackDrop(msg)
+}
+
+// park hands a served-but-offline device's command back to command-delivery (SENT -> PARKED)
+// and then settles the message. It runs on the device's shard worker, never on the reader
+// goroutine, because it makes a network call.
+//
+// 🔴 THE ACK DECISION IS THE WHOLE FUNCTION, AND EACH BRANCH IS DELIBERATE:
+//
+//   - parked, or SETTLED (the row moved on under us): ACK. In both cases the row is where it
+//     should be, and redelivering would at best repeat work and at worst — see below — be the
+//     thing the nonce exists to stop.
+//   - ERROR: do NOT ack. The message redelivers at AckWait and we try again.
+//   - no parker wired, or NO NONCE in the envelope: ack-drop, counted on ParkSkipped. An empty
+//     nonce means the publisher did not stamp one — a command published by an older build, or
+//     by something other than the delivery sweep — and parking on a match that ignores the
+//     nonce is precisely the re-arm this design refuses. Better to leave the row in SENT than
+//     to park the wrong dispatch.
+//
+// 🔴 NOT Nak(). The retry is an ack-wait expiry, not a negative acknowledgement: a Nak
+// redelivers immediately, which turns MaxDeliver into a fuse measured in milliseconds and
+// burns the whole retry budget during the instant of an outage.
+//
+// 🔴 BE HONEST ABOUT THE FLOOR: A ROW WHOSE PARK NEVER LANDS IS WORSE OFF THAN BEFORE PARKING
+// EXISTED, NOT EQUAL TO IT. An earlier version of this comment called exhaustion "the
+// pre-PARKED behaviour", and that is wrong in the one direction that matters. Before this
+// change, SENT was in drainStatuses, so a stuck row was still DELIVERED on the device's next
+// wake. Now SENT is invisible to the drain, the sweep and the cancel alike, so once the retry
+// budget is spent — MaxDeliver × AckWait, on the order of minutes — nothing moves that row
+// again and it lapses to TIMEOUT, which is precisely the mislabel PARKED exists to remove.
+// The exposure needs a command-delivery outage spanning the whole budget. It is bounded, it is
+// rare, and it is the concrete argument for the stranded-SENT reconciler that is filed and not
+// built: that reconciler, not this retry, is what would make the floor honest.
+func (d *Dispatcher) park(ctx context.Context, w work) {
+	// 🔑 COUNTED WHERE THE MESSAGE SETTLES, NOT ON ENTRY. Counting at the top looks equivalent
+	// and is not: a park that errors is retried by redelivery, so one offline command would
+	// increment this once per attempt and read as several. The inflation would land during
+	// exactly the outages an operator consults this counter to understand.
+	settle := func() {
+		incr(d.metrics.ServedOffline, 1)
+		ackDrop(w.msg)
+	}
+
+	if d.parker == nil || w.env.DispatchNonce == "" {
+		incr(d.metrics.ParkSkipped, 1)
+		log.Debug().Str("tenant", w.tenant).Str("command", w.env.Token).
+			Bool("parkerWired", d.parker != nil).
+			Msg("Not parking an undeliverable LwM2M command; it stays SENT and rides its TTL.")
+		settle()
+		return
+	}
+
+	parked, err := d.parker.Park(ctx, w.tenant, w.env.Token, w.env.DispatchNonce)
+	if err != nil {
+		if ctx.Err() != nil {
+			return // evicted mid-park: leave unacked so the next leader redelivers it
+		}
+		incr(d.metrics.ParkErrors, 1)
+		log.Debug().Err(err).Str("tenant", w.tenant).Str("command", w.env.Token).
+			Msg("Could not park an undeliverable LwM2M command; leaving it unacked to retry on redelivery.")
+		return
+	}
+	if !parked {
+		// The command moved on under us — answered, cancelled, expired, or re-claimed by a
+		// wake drain. Settled, not failed.
+		incr(d.metrics.ParkSettled, 1)
+	}
+	settle()
 }
 
 // sleepCtx waits for d or ctx cancellation; it returns false if ctx was cancelled.

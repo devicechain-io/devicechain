@@ -60,19 +60,27 @@ Estos estados significan que el comando aún no ha terminado:
   puede cancelar, y un TTL que vence sobre él registra `EXPIRED` y no `TIMEOUT`, porque el
   comando nunca llegó a salir. Vuelve a `QUEUED` cuando el dispositivo regresa.
 - **`SENT`** — publicado en el topic de comandos propio del dispositivo, esperando su
-  respuesta.
+  respuesta. Léelo como *despachado hacia un dispositivo que la plataforma creía activo*, no
+  como prueba de que el dispositivo lo tenga: un dispositivo que se cae entre la comprobación
+  de presencia y la publicación acaba igualmente aquí.
+- **`PARKED`** — se publicó, el transporte no encontró ninguna conexión viva con el
+  dispositivo, y la plataforma sigue teniéndolo en su poder. Este es el estado del durmiente,
+  y el comando se entrega en el próximo despertar del dispositivo. Igual que `HELD`, cuenta
+  como en tránsito: todavía se puede cancelar, y un TTL que vence sobre él registra `EXPIRED`
+  y no `TIMEOUT`, porque el comando nunca llegó a un dispositivo. Ver [Estar registrado no es
+  lo mismo que ser alcanzable](#parked-commands).
 
 Estos son terminales, y nada sale de un estado terminal:
 
 - **`SUCCESSFUL`** / **`FAILED`** — el dispositivo informó el resultado.
 - **`TIMEOUT`** — se despachó y el dispositivo nunca respondió.
-- **`EXPIRED`** — su TTL transcurrió antes de que llegara a salir.
+- **`EXPIRED`** — su TTL transcurrió antes de que llegara a ningún dispositivo.
 - **`CANCELLED`** — un operador o un inquilino lo canceló.
 
 `EXPIRED` y `TIMEOUT` responden preguntas distintas, y confundir uno con el otro te hace
-buscar en el lugar equivocado: `EXPIRED` significa que el comando nunca salió de la
-plataforma, así que una racha de ellos indica que las entregas no se están intentando;
-`TIMEOUT` significa que sí salió y no volvió nada, lo que apunta al dispositivo.
+buscar en el lugar equivocado: `EXPIRED` significa que el comando nunca llegó a un
+dispositivo, así que una racha de ellos indica que las entregas no están llegando;
+`TIMEOUT` significa que uno sí salió y no volvió nada, lo que apunta al dispositivo.
 
 ### Comandos para un dispositivo ausente {#commands-to-a-device-that-is-away}
 
@@ -101,22 +109,55 @@ Conviene conocer tres límites:
   como antes.
 - **Es una comprobación, no una cola.** Un dispositivo que se desconecta entre la
   comprobación y la publicación pierde el comando igualmente. Lo que se elimina es el caso
-  que la plataforma sí podía prever.
+  que la plataforma sí podía prever. Un transporte que mantiene su propia cola para un
+  dispositivo dormido se trata aparte — ver [Estar registrado no es lo mismo que ser
+  alcanzable](#parked-commands).
 - **Los comandos a dispositivos Sparkplug no se entregan en absoluto.** La ruta no está
   construida: los nodos Sparkplug viven en tu propia infraestructura MQTT y no en la de la
   plataforma, y nada une ambas. Un comando emitido a uno de ellos se registra como `FAILED`
   de inmediato, con ese motivo, en lugar de retenerse a la espera de un regreso que no
   serviría de nada.
 
-Por eso una racha de `TIMEOUT` contra dispositivos que usted sabe que son intermitentes
+Por eso una racha de `TIMEOUT` contra dispositivos que sabes que son intermitentes
 sigue mereciendo leerse como algo que habla de cuándo estuvieron conectados y no de su
 firmware — pero ahora debería ser una racha mucho más corta.
 
+### Estar registrado no es lo mismo que ser alcanzable {#parked-commands}
+
+La comprobación de presencia pregunta si un dispositivo está **registrado**. Para un
+dispositivo que duerme por diseño — un dispositivo [LwM2M](./lwm2m.md) en modo cola — esa es
+una pregunta distinta de si se le puede alcanzar ahora mismo. Está registrado, así que la
+comprobación pasa y el comando se publica; el transporte no encuentra entonces ninguna
+conexión viva y el comando no llega a ninguna parte.
+
+Ese es el mismo defecto que el anterior, una capa más abajo, y solía terminar igual. El
+comando se quedaba en `SENT`, que también significa «la plataforma se lo entregó al
+dispositivo», de modo que un único estado cargaba con dos significados opuestos — y una
+semana después el registro figuraba como `TIMEOUT`, culpando a un dispositivo al que nunca se
+le entregó el comando.
+
+Un comando así ahora registra **`PARKED`**: publicado, sin nadie que lo reciba, y todavía en
+poder de la plataforma para entregarlo en el próximo despertar del dispositivo. De que la
+plataforma siga teniéndolo se derivan tres consecuencias, y cada una es el motivo del cambio:
+
+- **Un TTL vencido registra `EXPIRED`, no `TIMEOUT`.** El comando nunca llegó a un
+  dispositivo, así que el registro lo dice en lugar de culpar al dispositivo por no responder.
+- **Se puede cancelar** — por sí solo o como parte de una escritura de flota — porque la
+  plataforma lo sigue teniendo en su poder, y cancelarlo evita que salga en el próximo
+  despertar. Eso no garantiza que la operación nunca se ejecutara: la devolución puede ser el
+  reintento de una publicación que sí llegó al dispositivo antes de que su conexión se
+  cortara, así que interpreta una cancelación como «ya no se volverá a entregar», no como
+  «nunca se llevó a cabo». Anular una escritura de flota reportaba estos comandos como ya
+  enviados y por tanto irrecuperables, cuando la plataforma todavía los tenía en su poder.
+- **Cuenta contra el techo de comandos no entregados del inquilino**, exactamente igual que
+  `QUEUED` y `HELD`. Es trabajo que la plataforma sigue cargando.
+
 ### Cuánta acumulación puede retener un inquilino {#held-command-ceiling}
 
-Una acumulación de comandos retenidos se drena de dos maneras y de ninguna otra: el
-dispositivo vuelve, o vence el TTL del comando y este registra `EXPIRED`. Para una flota que
-permanece apagada, eso significa que la acumulación se queda ahí hasta el horizonte del TTL.
+Una acumulación de comandos no entregados se drena de tres maneras y de ninguna otra: el
+dispositivo vuelve o despierta, vence el TTL del comando y este registra `EXPIRED`, o alguien
+anula un comando y este registra `CANCELLED`. Para una flota que permanece apagada y a la que
+nadie toca, eso significa que la acumulación se queda ahí hasta el horizonte del TTL.
 Por eso está acotada por inquilino, y la cota es un número real en todos los niveles —
 **ningún ajuste significa «ilimitado»**. Una acumulación sin cota es un crecimiento del
 almacenamiento durable provocado por el inquilino e invisible para el operador.
@@ -151,7 +192,7 @@ techo visible de 10 000 pueda distinguir ambas cifras. La reserva es un ajuste d
 no del inquilino: no se puede subir ni bajar por inquilino.
 
 :::info Acota el trabajo no entregado, no solo el retenido
-La cuenta abarca todo comando en **`QUEUED` o `HELD`** — no solo los retenidos para
+La cuenta abarca todo comando en **`QUEUED`, `HELD` o `PARKED`** — no solo los retenidos para
 dispositivos ausentes. Un inquilino cuya flota está entera y presente igualmente puede ser
 rechazado, únicamente por volumen de emisión en vuelo. Los comandos en cola se drenan en un
 ciclo, así que su aporte en régimen estacionario es aproximadamente un ciclo de ritmo de
@@ -235,16 +276,21 @@ nombrada se queda corta.
 
 ### Cancelar un lote detiene lo que aún no ha salido {#cancelling-a-batch}
 
-Cancelar un lote mueve sus comandos de `QUEUED` o `HELD` a `CANCELLED`. Los comandos que ya
-están `SENT` se dejan en paz, y los dispositivos que los tienen actuarán igualmente sobre
-ellos.
+Cancelar un lote mueve sus comandos de `QUEUED`, `HELD` o `PARKED` a `CANCELLED`. Los
+comandos que ya están `SENT` se dejan en paz, y los dispositivos que los recibieron actuarán
+igualmente sobre ellos.
 
-Eso es más estrecho que cancelar un comando individual, y es deliberado. `SENT` significa que
-el comando ya está en el dispositivo, así que cancelarlo no revoca nada — lo único que hace
-es que la plataforma deje de esperar la respuesta del dispositivo, sustituyendo un desenlace
-real por un registro que dice que un operador lo anuló. Hacer eso con miles de comandos a la
-vez destruiría la evidencia de lo que la flota realmente hizo. Cancelar un comando individual
-todavía se permite desde `SENT` hoy; eso se estrechará para que coincida.
+`SENT` es la línea, y se traza en un solo sitio: la plataforma anula lo que todavía tiene en
+su poder y deja en paz lo que ya ha puesto en camino. Un comando `SENT` se despachó hacia
+un dispositivo que se creía activo, así que cancelarlo no revoca nada — lo único que haría es
+que la plataforma dejara de esperar la respuesta de ese dispositivo, sustituyendo un
+desenlace real por un registro que dice que un operador lo anuló. Haz eso a escala de flota y
+los dispositivos actúan, las respuestas se descartan, y el registro dice que la operación se
+anuló.
+
+Cancelar un comando **individual** traza exactamente la misma línea: `QUEUED`, `HELD` y
+`PARKED` se cancelan, y un comando `SENT` se devuelve sin cambios en lugar de llevarse a
+`CANCELLED`. Ver [Cancela uno](../guides/sending-commands.md#cancel-one).
 
 Cancelar un lote nunca se rechaza. Un freno que se negara a actuar porque parte de la flota
 ya se movió dejaría comandada al resto de la flota, que es el peor desenlace disponible — así

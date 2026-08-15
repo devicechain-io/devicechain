@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/mux"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -38,7 +40,18 @@ func cmdMsg(tenant, token, name, payload string, ack messaging.Acknowledger) mes
 }
 
 func cmdMsgTok(tenant, deviceToken, cmdToken, name, payload string, ack messaging.Acknowledger) messaging.Message {
-	env := deliveryEnvelope{Token: cmdToken, DeviceToken: deviceToken, Name: name}
+	return cmdMsgNonce(tenant, deviceToken, cmdToken, name, payload, "", ack)
+}
+
+// cmdMsgNonce is cmdMsgTok plus the DISPATCH NONCE the delivery sweep stamps on the publish it
+// is making. Every other builder in this file delegates here with an empty nonce, which is not
+// a shortcut but the pre-nonce wire shape a command published by an older build (or by anything
+// other than the sweep) still has — the case park() must decline rather than guess at.
+//
+// The bytes are marshalled ONCE, here, so a nonce test and a non-nonce test cannot end up
+// asserting against two different notions of what went on the wire.
+func cmdMsgNonce(tenant, deviceToken, cmdToken, name, payload, nonce string, ack messaging.Acknowledger) messaging.Message {
+	env := deliveryEnvelope{Token: cmdToken, DeviceToken: deviceToken, Name: name, DispatchNonce: nonce}
 	if payload != "" {
 		raw := json.RawMessage(payload)
 		env.Payload = &raw
@@ -183,10 +196,83 @@ func (c *fakeClaimer) claims() []string {
 	return append([]string(nil), c.claimed...)
 }
 
+// parkCall records ONE call to the parker, with every argument it carried. The arguments are
+// the property under test, not the fact of the call: a park quotes the dispatch nonce so a
+// redelivered publish cannot drag a since-re-claimed row back into the dispatchable set, and a
+// bare counter cannot tell a park of the right dispatch from a park of the wrong one.
+type parkCall struct {
+	tenant       string
+	commandToken string
+	nonce        string
+}
+
+// fakeParker is a stand-in for command-delivery's parkCommand mutation. Like fakeClaimer it
+// records ARGUMENTS rather than a count, and like it, its three outcomes are exactly the ones a
+// fake that always succeeded would skip past: parked (true, nil), SETTLED (false, nil — the row
+// moved on under us, an outcome and not a failure), and an error (the park could not be
+// established at all, so the message must NOT be acked).
+type fakeParker struct {
+	mu     sync.Mutex
+	parked bool  // what a successful park reports: true = this call moved the row
+	err    error // if set, the park could not be established
+	calls  []parkCall
+	// onCall runs inside Park, before it returns — used to model the leadership term being
+	// evicted while the park request is in flight.
+	onCall func()
+}
+
+func (p *fakeParker) Park(_ context.Context, tenant, commandToken, dispatchNonce string) (bool, error) {
+	p.mu.Lock()
+	p.calls = append(p.calls, parkCall{tenant: tenant, commandToken: commandToken, nonce: dispatchNonce})
+	fn := p.onCall
+	p.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+	if p.err != nil {
+		return false, p.err
+	}
+	return p.parked, nil
+}
+
+func (p *fakeParker) parks() []parkCall {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]parkCall(nil), p.calls...)
+}
+
+// parkMetrics builds REAL Prometheus counters for the park dispositions, so the metric
+// assertions measure the production code's increments rather than a test double's bookkeeping.
+// They are constructed with prometheus.NewCounter and NOT promauto: promauto registers against
+// the process-global registry, which panics the second test that builds the same metric name.
+func parkMetrics() Metrics {
+	c := func(name string) prometheus.Counter {
+		return prometheus.NewCounter(prometheus.CounterOpts{Name: name})
+	}
+	return Metrics{
+		NotServed:     c("not_served"),
+		ServedOffline: c("served_offline"),
+		ParkErrors:    c("park_errors"),
+		ParkSettled:   c("park_settled"),
+		ParkSkipped:   c("park_skipped"),
+	}
+}
+
 // liveWorkTok builds a live work item with an explicit command token (production commands are
 // per-tenant unique, ADR-042).
 func liveWorkTok(tenant, deviceToken, cmdToken, name, payload string, ack messaging.Acknowledger) work {
 	msg := cmdMsgTok(tenant, deviceToken, cmdToken, name, payload, ack)
+	var env deliveryEnvelope
+	_ = json.Unmarshal(msg.Value, &env)
+	return work{msg: msg, tenant: tenant, env: env}
+}
+
+// liveWorkNonce is liveWorkTok for a command the delivery sweep stamped with a dispatch nonce.
+// It goes through the wire bytes (marshal then unmarshal) rather than building the envelope
+// directly, so a nonce that failed to survive JSON — a missing or misspelled tag on
+// deliveryEnvelope.DispatchNonce — is caught here rather than papered over.
+func liveWorkNonce(tenant, deviceToken, cmdToken, name, payload, nonce string, ack messaging.Acknowledger) work {
+	msg := cmdMsgNonce(tenant, deviceToken, cmdToken, name, payload, nonce, ack)
 	var env deliveryEnvelope
 	_ = json.Unmarshal(msg.Value, &env)
 	return work{msg: msg, tenant: tenant, env: env}
@@ -216,22 +302,26 @@ func (l *flakyLookup) Lookup(_, _ string) (mux.Conn, Reach) {
 // TestDrainDispatchesHeldCommands proves the core wake-drain: held commands are dispatched to the
 // now-live device, in fetch order (the fetcher already sorts oldest-first), each publishing a response.
 //
-// The fixtures carry Status: statusSent — as does every pre-existing drain test below — and that
-// models the OTHER kind of backlogged row: one published toward a device that had already gone
-// quiet, ack-dropped, and left sitting in SENT. It is not the only kind any more. The presence
-// gate now withholds commands to an absent device, and a sleeping queue-mode device is exactly
-// that, so a real backlog today is a mixture of both — which is why the claim-then-dispatch
-// tests above stage HELD explicitly. Stating the status on every fixture rather than leaving it
-// zero is what makes that contrast expressible at all.
+// The fixtures carry Status: statusParked — as does every pre-existing drain test below — and
+// that models the row a device's own absence produced at DISPATCH time: published toward a
+// device that had already gone quiet, found unreachable by this dispatcher, and handed back.
+// It is not the only kind. The presence gate withholds commands to a device known absent
+// BEFORE publishing, which is HELD, so a real backlog is a mixture of both — which is why the
+// claim-then-dispatch tests above stage HELD explicitly. Stating the status on every fixture
+// rather than leaving it zero is what makes that contrast expressible at all.
+//
+// These fixtures said statusSent until PARKED existed, and the rename is not cosmetic: a SENT
+// row is no longer drained at all, so leaving them would have left this whole block asserting
+// against a state the drain cannot see.
 func TestDrainDispatchesHeldCommands(t *testing.T) {
 	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
 	pub := &fakePublisher{}
 	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
 	ff := &fakeFetcher{cmds: []DrainCommand{
-		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusSent},
-		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`), Status: statusSent},
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusParked},
+		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`), Status: statusParked},
 	}}
-	d := NewDispatcher(nil, pub, look, exec, ff, nil, Metrics{}, Options{})
+	d := NewDispatcher(nil, pub, look, exec, ff, &fakeClaimer{won: true}, Metrics{}, Options{})
 
 	d.drain(context.Background(), drainJob{tenant: "acme", deviceToken: "pump-1"})
 
@@ -249,10 +339,10 @@ func TestDrainSkipsCommandAlreadyDispatchedLive(t *testing.T) {
 	pub := &fakePublisher{}
 	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
 	ff := &fakeFetcher{cmds: []DrainCommand{
-		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusSent}, // already fired live
-		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`), Status: statusSent},           // fresh
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusParked}, // already fired live
+		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`), Status: statusParked},           // fresh
 	}}
-	d := NewDispatcher(nil, pub, look, exec, ff, nil, Metrics{}, Options{})
+	d := NewDispatcher(nil, pub, look, exec, ff, &fakeClaimer{won: true}, Metrics{}, Options{})
 
 	// The live path dispatches c1 first (marks it dispatched).
 	d.dispatch(context.Background(), liveWorkTok("acme", "pump-1", "c1", CommandWrite, `{"path":"/5/0/1","value":"u"}`, newAck()))
@@ -287,11 +377,11 @@ func TestDrainStopsWhenDeviceDropsMidDrain(t *testing.T) {
 	pub := &fakePublisher{}
 	look := &flakyLookup{conn: &fakeConn{}, liveFor: 1} // live for c1 only, offline thereafter
 	ff := &fakeFetcher{cmds: []DrainCommand{
-		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusSent},
-		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`), Status: statusSent},
-		{Token: "c3", Name: CommandRead, Payload: []byte(`{"path":"/3/0/0"}`), Status: statusSent},
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusParked},
+		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`), Status: statusParked},
+		{Token: "c3", Name: CommandRead, Payload: []byte(`{"path":"/3/0/0"}`), Status: statusParked},
 	}}
-	d := NewDispatcher(nil, pub, look, exec, ff, nil, Metrics{}, Options{})
+	d := NewDispatcher(nil, pub, look, exec, ff, &fakeClaimer{won: true}, Metrics{}, Options{})
 
 	d.drain(context.Background(), drainJob{tenant: "acme", deviceToken: "pump-1"})
 
@@ -306,10 +396,10 @@ func TestDrainStopsOnEviction(t *testing.T) {
 	pub := &fakePublisher{}
 	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
 	ff := &fakeFetcher{cmds: []DrainCommand{
-		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusSent},
-		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`), Status: statusSent},
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusParked},
+		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`), Status: statusParked},
 	}}
-	d := NewDispatcher(nil, pub, look, exec, ff, nil, Metrics{}, Options{})
+	d := NewDispatcher(nil, pub, look, exec, ff, &fakeClaimer{won: true}, Metrics{}, Options{})
 
 	d.drain(ctx, drainJob{tenant: "acme", deviceToken: "pump-1"})
 
@@ -344,7 +434,7 @@ func TestDrainDisabledWhenFetcherNil(t *testing.T) {
 // TestDrainTriggerNoOpOnStandby: Drain called when this replica is not the serving leader (Run not
 // active, so no published queues) is a no-op and never panics.
 func TestDrainTriggerNoOpOnStandby(t *testing.T) {
-	ff := &fakeFetcher{cmds: []DrainCommand{{Token: "c1", Name: CommandRead, Payload: []byte(`{"path":"/3/0/0"}`), Status: statusSent}}}
+	ff := &fakeFetcher{cmds: []DrainCommand{{Token: "c1", Name: CommandRead, Payload: []byte(`{"path":"/3/0/0"}`), Status: statusParked}}}
 	d := NewDispatcher(nil, &fakePublisher{}, &fakeLookup{}, &fakeExecutor{}, ff, nil, Metrics{}, Options{})
 
 	d.Drain("acme", "pump-1") // no active term → no-op
@@ -435,31 +525,38 @@ func TestDrainDoesNotDispatchWhenTheClaimErrors(t *testing.T) {
 		"a failed claim skips only ITS command; the rest of the backlog is still attempted (one bad row must not strand the queue)")
 }
 
-// TestDrainDispatchesASentCommandWithoutClaiming pins the NO-NEW-TRAFFIC-TODAY property. A
-// SENT row has already left command-delivery's dispatchable set, so the sweep will not
-// republish it and there is nothing to claim. Nothing writes HELD yet, which means EVERY
-// drained row today is SENT — so a claim issued "for symmetry" here would add a round trip to
-// every wake of every device on the instance and change behaviour this slice is required to
-// leave alone.
-func TestDrainDispatchesASentCommandWithoutClaiming(t *testing.T) {
+// TestDrainClaimsEveryRowItDispatches is the INVERSION of a test that used to assert the
+// opposite, and the inversion is the point of the change that introduced PARKED.
+//
+// The old test pinned "a SENT row is dispatched WITHOUT claiming", on the argument that SENT
+// has already left command-delivery's dispatchable set so there is nothing to claim. The
+// argument was sound; the premise was not. A SENT row could equally be a command that went
+// NOWHERE — published to a registered-but-sleeping device and ack-dropped by this very
+// dispatcher — and re-dispatching one of those with no claim was the platform's only
+// unclaimed dispatch, guarded solely by a 60-second per-pod cache. Those rows are PARKED now,
+// and PARKED is claimable, so no row reaches a device without a claim.
+//
+// 🔴 won:false is the tripwire, kept from the old test and pointed the other way. If the
+// drain fails to claim a parked row, this claimer reports the claim lost and NOTHING is
+// dispatched — so the assertions below fail loudly on a missing claim rather than quietly
+// passing on an extra one.
+func TestDrainClaimsEveryRowItDispatches(t *testing.T) {
 	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
 	pub := &fakePublisher{}
 	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
 	ff := &fakeFetcher{cmds: []DrainCommand{
-		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusSent},
-		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`), Status: statusSent},
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusParked},
+		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`), Status: statusHeld},
 	}}
-	// 🔴 won:false — if the drain DID call the claimer for a SENT row, this claimer would
-	// report the claim lost and both commands would go undispatched. So the assertion below
-	// fails loudly on an unnecessary claim instead of merely not-noticing it.
 	claimer := &fakeClaimer{won: false}
 	d := NewDispatcher(nil, pub, look, exec, ff, claimer, Metrics{}, Options{})
 
 	d.drain(context.Background(), drainJob{tenant: "acme", deviceToken: "pump-1"})
 
-	assert.Empty(t, claimer.claims(), "a SENT row is already out of the dispatchable set — no claim may be issued")
-	assert.Equal(t, 2, exec.callCount(), "both SENT commands still dispatch, exactly as before this change")
-	assert.Len(t, pub.responses(), 2)
+	assert.ElementsMatch(t, []string{"c1", "c2"}, claimer.claims(),
+		"every drained row must be claimed before it actuates — the parked one no less than the held one")
+	assert.Equal(t, 0, exec.callCount(), "a lost claim must not actuate")
+	assert.Empty(t, pub.responses())
 }
 
 // TestDrainWithoutAClaimerRefusesAHeldCommand: claiming wired off (no command-delivery
@@ -518,6 +615,10 @@ func TestDispatchNotServedAcksNoResponse(t *testing.T) {
 	assert.True(t, ack.acked(), "the message is acked (ack-drop, does not steal from another consumer)")
 }
 
+// TestDispatchOfflineAcksNoResponse pins the shape of the offline path with parking WIRED OFF
+// (newDispatcher passes no Parker), which is the pre-PARKED behaviour and still the floor when
+// no command-delivery coordinate is configured. The park dispositions themselves — including
+// this same no-parker case with its ParkSkipped count — are in the park() block below.
 func TestDispatchOfflineAcksNoResponse(t *testing.T) {
 	ack := newAck()
 	exec := &fakeExecutor{}
@@ -581,6 +682,271 @@ func TestPostOpEvictionAcksSealFateNoResponse(t *testing.T) {
 	assert.Equal(t, 1, exec.callCount(), "the op was issued")
 	assert.True(t, ack.acked(), "an op issued before eviction is acked (sealed), never redelivered to re-actuate")
 	assert.Empty(t, pub.responses(), "no response is published from an evicted term (the result is unreliable)")
+}
+
+// --- park(): handing an undeliverable command back (ADR-075 L4b) ------------
+//
+// 🔴 PRESENCE IS NOT REACHABILITY, and that gap is what these tests are about.
+// command-delivery decides whether to publish from presence — is the device registered — and a
+// queue-mode LwM2M device is registered and asleep. So the command is published, arrives here,
+// and finds no conn to deliver over. Before parking, it was ack-dropped and the row stayed
+// SENT: a state meaning "the device has it", which made the platform blame the device at TTL
+// with TIMEOUT, tell an operator cancelling a fleet write that the command was beyond recall
+// when it was not, and leave the row to be re-dispatched by the wake drain WITHOUT a claim.
+//
+// Two properties carry the whole design, and each is asserted on directly below rather than
+// inferred from a call count:
+//
+//   - the NONCE. A park names the dispatch it is handing back. The request that reaches
+//     command-delivery may be a REDELIVERY of a publish whose command has since been claimed by
+//     a wake drain and actually RUN; a park matching on status alone would drag that row back
+//     into the dispatchable set to be actuated a second time. So the nonce that went out on the
+//     envelope must be the nonce that comes back, and an envelope carrying none must not be
+//     parked at all.
+//   - the ACK DECISION. Parked and settled ACK; an ERROR must NOT ack, because the unacked
+//     message redelivering at AckWait is the entire retry mechanism. A park that acked on
+//     failure would strand the row in SENT forever, which is the exact bug parking exists to
+//     fix — and would do it silently, since the metric would show the error and the operator
+//     would have no idea the command was never retried.
+
+// TestOfflineCommandIsParkedQuotingItsDispatchNonce is the core of it: a served device with no
+// live conn has its command handed back, and the nonce the envelope was PUBLISHED with is the
+// nonce quoted to command-delivery. Asserting the whole call — tenant, command token, nonce —
+// is deliberate: a park of the right command under the wrong nonce moves nothing, and a park
+// under a nonce lifted from somewhere else (the command token, say) is the re-arm this design
+// refuses. Only comparing the exact triple can tell those apart.
+func TestOfflineCommandIsParkedQuotingItsDispatchNonce(t *testing.T) {
+	ack := newAck()
+	exec := &fakeExecutor{}
+	pub := &fakePublisher{}
+	look := &fakeLookup{reaches: map[string]Reach{"acme/pump-1": ReachOffline}} // registered, asleep
+	parker := &fakeParker{parked: true}
+	m := parkMetrics()
+	d := NewDispatcher(nil, pub, look, exec, nil, nil, m, Options{Parker: parker})
+
+	d.dispatch(context.Background(),
+		liveWorkNonce("acme", "pump-1", "c1", CommandWrite, `{"path":"/5/0/1","value":"u"}`, "nonce-7", ack))
+
+	assert.Equal(t, []parkCall{{tenant: "acme", commandToken: "c1", nonce: "nonce-7"}}, parker.parks(),
+		"the command is parked under the tenant, command token and dispatch nonce it was published with")
+	assert.Equal(t, 0, exec.callCount(), "an offline device is never actuated")
+	assert.Empty(t, pub.responses(), "a parked command has no outcome to report — it was never sent")
+	assert.True(t, ack.acked(), "a parked command is settled: the row is where it should be, so do not redeliver")
+	assert.Equal(t, 1.0, testutil.ToFloat64(m.ServedOffline), "every offline command counts on ServedOffline")
+	assert.Equal(t, 0.0, testutil.ToFloat64(m.ParkSettled), "a park that MOVED the row is not a settle")
+	assert.Equal(t, 0.0, testutil.ToFloat64(m.ParkErrors))
+	assert.Equal(t, 0.0, testutil.ToFloat64(m.ParkSkipped))
+}
+
+// TestSettledParkAcksAndCountsSettled: (false, nil) means the row moved on under this request —
+// answered, cancelled, expired, or re-claimed by a wake drain. That is an OUTCOME, not a
+// failure. It must ACK (retrying would burn redeliveries on a row already where it belongs) and
+// it must be counted apart from an error, or a normal race would look like a command-delivery
+// outage on the graph an operator pages off.
+func TestSettledParkAcksAndCountsSettled(t *testing.T) {
+	ack := newAck()
+	look := &fakeLookup{reaches: map[string]Reach{"acme/pump-1": ReachOffline}}
+	parker := &fakeParker{parked: false} // the row moved on under us
+	m := parkMetrics()
+	d := NewDispatcher(nil, &fakePublisher{}, look, &fakeExecutor{}, nil, nil, m, Options{Parker: parker})
+
+	d.dispatch(context.Background(),
+		liveWorkNonce("acme", "pump-1", "c1", CommandRead, `{"path":"/3/0/9"}`, "nonce-7", ack))
+
+	assert.Len(t, parker.parks(), 1, "the park was attempted")
+	assert.True(t, ack.acked(), "a settled park ACKS — the row is already where it should be")
+	assert.Equal(t, 1.0, testutil.ToFloat64(m.ParkSettled), "a settle is counted, and counted apart from an error")
+	assert.Equal(t, 0.0, testutil.ToFloat64(m.ParkErrors), "a settle is not a fault")
+	assert.Equal(t, 1.0, testutil.ToFloat64(m.ServedOffline))
+}
+
+// TestFailedParkDoesNotAckSoItRedelivers is the RETRY mechanism, and it is asserted as an ack
+// count of ZERO rather than "not acked" so the failure message names what actually happened.
+//
+// 🔴 If a failed park acked, the row would sit in SENT forever telling the old lie — the very
+// state parking exists to eliminate — and nothing would ever try again. Leaving the message
+// unacked lets it redeliver at AckWait (bounded by MaxDeliver, so a command-delivery outage
+// that outlasts the budget degrades to the pre-PARKED behaviour rather than looping forever).
+func TestFailedParkDoesNotAckSoItRedelivers(t *testing.T) {
+	ack := newAck()
+	look := &fakeLookup{reaches: map[string]Reach{"acme/pump-1": ReachOffline}}
+	parker := &fakeParker{err: errors.New("command-delivery unreachable")}
+	m := parkMetrics()
+	d := NewDispatcher(nil, &fakePublisher{}, look, &fakeExecutor{}, nil, nil, m, Options{Parker: parker})
+
+	d.dispatch(context.Background(),
+		liveWorkNonce("acme", "pump-1", "c1", CommandRead, `{"path":"/3/0/9"}`, "nonce-7", ack))
+
+	assert.Len(t, parker.parks(), 1, "the park was attempted")
+	assert.Equal(t, 0, ack.count(),
+		"a park that could not be established must NOT ack — the redelivery is the only retry this row gets")
+	assert.Equal(t, 1.0, testutil.ToFloat64(m.ParkErrors), "the fault is visible: commands are sitting in SENT")
+	assert.Equal(t, 0.0, testutil.ToFloat64(m.ParkSettled), "an unreachable command-delivery is not a settled row")
+	// 🔴 ServedOffline counts a SETTLED message, not an ATTEMPT. This message was not acked, so
+	// it will be redelivered and pass through here again — up to MaxDeliver times. Counting on
+	// entry would report one offline command as several, and the inflation would land during
+	// exactly the outage an operator is reading this counter to understand.
+	assert.Equal(t, 0.0, testutil.ToFloat64(m.ServedOffline),
+		"an unsettled park must not count the offline command yet; the redelivery will count it")
+}
+
+// TestRetriedParkCountsTheOfflineCommandOnce is the other half of that property, and it is the
+// one a single-attempt test cannot express: the count must not grow with the retries.
+func TestRetriedParkCountsTheOfflineCommandOnce(t *testing.T) {
+	look := &fakeLookup{reaches: map[string]Reach{"acme/pump-1": ReachOffline}}
+	parker := &fakeParker{err: errors.New("command-delivery unreachable")}
+	m := parkMetrics()
+	d := NewDispatcher(nil, &fakePublisher{}, look, &fakeExecutor{}, nil, nil, m, Options{Parker: parker})
+
+	// Two failed attempts — the message redelivering after ack-wait — and then a success.
+	for i := 0; i < 2; i++ {
+		d.dispatch(context.Background(),
+			liveWorkNonce("acme", "pump-1", "c1", CommandRead, `{"path":"/3/0/9"}`, "nonce-7", newAck()))
+	}
+	parker.err = nil
+	parker.parked = true
+	ack := newAck()
+	d.dispatch(context.Background(),
+		liveWorkNonce("acme", "pump-1", "c1", CommandRead, `{"path":"/3/0/9"}`, "nonce-7", ack))
+
+	assert.Len(t, parker.parks(), 3, "every attempt reached command-delivery")
+	assert.Equal(t, 1, ack.count(), "only the attempt that landed settles the message")
+	assert.Equal(t, 2.0, testutil.ToFloat64(m.ParkErrors), "both failures are visible as faults")
+	assert.Equal(t, 1.0, testutil.ToFloat64(m.ServedOffline),
+		"ONE offline command must count once however many redeliveries it took to hand back")
+}
+
+// TestCommandWithNoDispatchNonceIsNotParked: an empty nonce means the publisher stamped none —
+// a command published by an older build, or by something other than the delivery sweep.
+//
+// 🔴 The assertion that matters is that the parker is NOT CALLED. Parking on a match that
+// ignores the nonce is exactly the re-arm the nonce exists to prevent: the row could since have
+// been claimed and RUN, and a status-only park would return it to the dispatchable set for a
+// second physical actuation. Leaving it in SENT is worse operationally and safe; parking it
+// blind is neither.
+func TestCommandWithNoDispatchNonceIsNotParked(t *testing.T) {
+	ack := newAck()
+	look := &fakeLookup{reaches: map[string]Reach{"acme/pump-1": ReachOffline}}
+	parker := &fakeParker{parked: true} // would happily park — the production code must not ask it to
+	m := parkMetrics()
+	d := NewDispatcher(nil, &fakePublisher{}, look, &fakeExecutor{}, nil, nil, m, Options{Parker: parker})
+
+	// liveWorkTok stamps no nonce — the pre-nonce wire shape.
+	d.dispatch(context.Background(), liveWorkTok("acme", "pump-1", "c1", CommandRead, `{"path":"/3/0/9"}`, ack))
+
+	assert.Empty(t, parker.parks(), "a command with no dispatch nonce must NOT be parked — there is nothing to match on")
+	assert.True(t, ack.acked(), "it is ack-dropped exactly as it was before parking existed")
+	assert.Equal(t, 1.0, testutil.ToFloat64(m.ParkSkipped), "the declined park is visible rather than silent")
+	assert.Equal(t, 0.0, testutil.ToFloat64(m.ParkErrors), "declining to park is not a fault")
+	assert.Equal(t, 1.0, testutil.ToFloat64(m.ServedOffline))
+}
+
+// TestNilParkerDegradesToAckDrop: parking is wired OFF (no command-delivery coordinate). Unlike
+// the claimer — whose absence fails CLOSED, because dispatching an unclaimed command is
+// irreversible — the parker fails OPEN: the row stays SENT and rides its TTL, which is
+// precisely the behaviour that existed before parking did. Refusing to ack instead would wedge
+// the durable consumer on an instance that simply has no command-delivery endpoint configured.
+func TestNilParkerDegradesToAckDrop(t *testing.T) {
+	ack := newAck()
+	look := &fakeLookup{reaches: map[string]Reach{"acme/pump-1": ReachOffline}}
+	m := parkMetrics()
+	d := NewDispatcher(nil, &fakePublisher{}, look, &fakeExecutor{}, nil, nil, m, Options{}) // no Parker
+
+	// A nonce IS present: the only reason not to park here is the missing parker, so a nil-check
+	// that had been dropped would fault on the nil interface rather than quietly take the
+	// no-nonce branch and pass this test for the wrong reason.
+	require.NotPanics(t, func() {
+		d.dispatch(context.Background(),
+			liveWorkNonce("acme", "pump-1", "c1", CommandRead, `{"path":"/3/0/9"}`, "nonce-7", ack))
+	}, "an unwired parker must degrade, never fault")
+
+	assert.True(t, ack.acked(), "with no parker the command is ack-dropped, as before parking existed")
+	assert.Equal(t, 1.0, testutil.ToFloat64(m.ParkSkipped), "an unwired parker shows up on a graph")
+	assert.Equal(t, 1.0, testutil.ToFloat64(m.ServedOffline))
+}
+
+// TestNotServedCommandIsNeverParked is the boundary between the two non-live reachabilities,
+// and it matters because they are OTHER PEOPLE'S COMMANDS versus OURS. This cross-tenant
+// consumer sees every other protocol adapter's device-commands traffic — the dominant case by
+// volume. Parking one of those would hand back a command this adapter has no claim on and no
+// knowledge of, moving another adapter's row out from under it. Only a device THIS adapter
+// serves may be parked.
+func TestNotServedCommandIsNeverParked(t *testing.T) {
+	ack := newAck()
+	look := &fakeLookup{reaches: map[string]Reach{}} // no index entry ⇒ another protocol's device
+	parker := &fakeParker{parked: true}
+	m := parkMetrics()
+	d := NewDispatcher(nil, &fakePublisher{}, look, &fakeExecutor{}, nil, nil, m, Options{Parker: parker})
+
+	d.dispatch(context.Background(),
+		liveWorkNonce("acme", "mqtt-dev", "c1", CommandRead, `{"path":"/3/0/9"}`, "nonce-7", ack))
+
+	assert.Empty(t, parker.parks(), "a device we do not serve is another protocol's — never park its command")
+	assert.True(t, ack.acked(), "it is ack-dropped, advancing our cursor without stealing from another consumer")
+	assert.Equal(t, 1.0, testutil.ToFloat64(m.NotServed), "counted as not-served")
+	assert.Equal(t, 0.0, testutil.ToFloat64(m.ServedOffline), "a not-served device is not a served-but-offline one")
+	assert.Equal(t, 0.0, testutil.ToFloat64(m.ParkSkipped), "no park was declined, because none was ever appropriate")
+}
+
+// TestParkAbortedByEvictionLeavesTheMessageUnacked: the leadership term is lost WHILE the park
+// request is in flight. The park's error is then an artifact of losing the context, not
+// evidence that command-delivery is unhealthy — so it must not count as a ParkError (which
+// would make every failover look like an outage) — and the message must be left UNACKED so the
+// next leader redelivers it and parks it properly. Nothing was actuated, so there is no
+// seal-fate reason to ack.
+func TestParkAbortedByEvictionLeavesTheMessageUnacked(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ack := newAck()
+	look := &fakeLookup{reaches: map[string]Reach{"acme/pump-1": ReachOffline}}
+	parker := &fakeParker{err: context.Canceled}
+	parker.onCall = cancel // the term is evicted while this park is in flight
+	m := parkMetrics()
+	d := NewDispatcher(nil, &fakePublisher{}, look, &fakeExecutor{}, nil, nil, m, Options{Parker: parker})
+
+	d.dispatch(ctx, liveWorkNonce("acme", "pump-1", "c1", CommandRead, `{"path":"/3/0/9"}`, "nonce-7", ack))
+
+	assert.Equal(t, 0, ack.count(), "an evicted term leaves the message for the next leader, never acks it")
+	assert.Equal(t, 0.0, testutil.ToFloat64(m.ParkErrors),
+		"a park aborted by eviction is not a park failure — counting it would make every failover read as an outage")
+}
+
+// TestRunRoutesAnOfflineServedDeviceToItsWorker is the ROUTING half, and it exercises the real
+// Run loop because nothing else can.
+//
+// 🔴 The reader's route-time pre-filter used to drop BOTH non-live reachabilities. It now drops
+// only ReachNotServed, because parking is a network round trip and the JetStream read loop is
+// the one goroutine that must not make one — so an offline SERVED device is routed to its shard
+// worker, which parks it there. Every other test in this block calls dispatch() directly and
+// would pass unchanged against a reader that still dropped offline commands at the door; only
+// driving Run can tell the difference. The not-served message is carried alongside as the
+// contrast: it must still be dropped at the door and never reach a worker or the parker.
+func TestRunRoutesAnOfflineServedDeviceToItsWorker(t *testing.T) {
+	offlineAck, mqttAck := newAck(), newAck()
+	rdr := &scriptReader{msgs: []messaging.Message{
+		// A device this adapter serves, registered but asleep: must reach the worker and be parked.
+		cmdMsgNonce("acme", "pump-1", "c1", CommandRead, `{"path":"/3/0/9"}`, "nonce-7", offlineAck),
+		// Another protocol's device: must be dropped at route time, never parked.
+		cmdMsgNonce("acme", "mqtt-dev", "c2", CommandRead, `{"path":"/3/0/9"}`, "nonce-8", mqttAck),
+	}}
+	exec := &fakeExecutor{}
+	look := &fakeLookup{reaches: map[string]Reach{"acme/pump-1": ReachOffline}}
+	parker := &fakeParker{parked: true}
+	m := parkMetrics()
+	d := NewDispatcher(rdr, &fakePublisher{}, look, exec, nil, nil, m, Options{Parker: parker})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { d.Run(ctx); close(done) }()
+
+	require.Eventually(t, func() bool { return offlineAck.acked() && mqttAck.acked() }, 2*time.Second, 5*time.Millisecond)
+	cancel()
+	<-done
+
+	assert.Equal(t, []parkCall{{tenant: "acme", commandToken: "c1", nonce: "nonce-7"}}, parker.parks(),
+		"the offline SERVED device's command reached a worker and was parked there — the reader did not drop it")
+	assert.Equal(t, 0, exec.callCount(), "neither device was actuated")
+	assert.Equal(t, 1.0, testutil.ToFloat64(m.NotServed), "the not-served command was dropped at route time")
+	assert.Equal(t, 1.0, testutil.ToFloat64(m.ServedOffline))
 }
 
 // --- parse() poison ---------------------------------------------------------
@@ -699,11 +1065,11 @@ func TestWakeDrainEndToEnd(t *testing.T) {
 	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
 	pub := &fakePublisher{}
 	ff := &fakeFetcher{cmds: []DrainCommand{
-		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"coaps://fw"}`), Status: statusSent},
-		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`), Status: statusSent},
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"coaps://fw"}`), Status: statusParked},
+		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`), Status: statusParked},
 	}}
 	// An empty reader so Run's consume loop just parks on ctx — the drain is driven purely by the wake.
-	d := NewDispatcher(&scriptReader{}, pub, connTable, exec, ff, nil, Metrics{}, Options{})
+	d := NewDispatcher(&scriptReader{}, pub, connTable, exec, ff, &fakeClaimer{won: true}, Metrics{}, Options{})
 	connTable.SetOnLive(d.Drain)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -807,7 +1173,7 @@ func TestProcessRefusesAWakeDrainForADeletedTenant(t *testing.T) {
 	pub := &fakePublisher{}
 	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
 	ff := &fakeFetcher{cmds: []DrainCommand{
-		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusSent},
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusParked},
 	}}
 	d := NewDispatcher(nil, pub, look, exec, ff, nil, Metrics{},
 		Options{TenantDeleted: func(tenant string) bool { return tenant == "acme" }})
@@ -832,8 +1198,8 @@ func TestProcessStillActuatesWhenTheGateSaysLive(t *testing.T) {
 	assert.Equal(t, 1, exec.callCount(), "a live tenant's command must still actuate")
 
 	exec2 := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
-	ff := &fakeFetcher{cmds: []DrainCommand{{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusSent}}}
-	d2 := NewDispatcher(nil, &fakePublisher{}, look, exec2, ff, nil, Metrics{}, live())
+	ff := &fakeFetcher{cmds: []DrainCommand{{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusParked}}}
+	d2 := NewDispatcher(nil, &fakePublisher{}, look, exec2, ff, &fakeClaimer{won: true}, Metrics{}, live())
 	d2.process(context.Background(), task{deviceToken: "pump-1", drain: &drainJob{tenant: "acme", deviceToken: "pump-1"}})
 	assert.Equal(t, 1, exec2.callCount(), "a live tenant's held command must still drain")
 }

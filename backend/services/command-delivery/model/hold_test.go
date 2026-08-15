@@ -61,7 +61,7 @@ func TestHoldCommandCannotRecallADispatchedCommand(t *testing.T) {
 	created := enqueued(t, api, ctx, "cmd-raced")
 
 	// Another dispatcher claims it between the sweep's read and its hold.
-	claimed, err := api.MarkSent(ctx, created.ID)
+	_, claimed, err := api.MarkSent(ctx, created.ID)
 	if err != nil || !claimed {
 		t.Fatalf("staging the race failed: claimed=%v err=%v", claimed, err)
 	}
@@ -154,7 +154,7 @@ func TestMarkUndeliverableCannotFailADispatchedCommand(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "A")
 	created := enqueued(t, api, ctx, "cmd-sent-then-failed")
 
-	claimed, err := api.MarkSent(ctx, created.ID)
+	_, claimed, err := api.MarkSent(ctx, created.ID)
 	if err != nil || !claimed {
 		t.Fatalf("staging the race failed: claimed=%v err=%v", claimed, err)
 	}
@@ -177,7 +177,8 @@ func TestMarkUndeliverableCannotFailADispatchedCommand(t *testing.T) {
 
 // TestAHoldDoesNotChangeWhatTheCeilingCounts.
 //
-// 🔑 THE CEILING COUNTS QUEUED + HELD PRECISELY SO THIS IS TRUE. A hold moves a row
+// 🔑 THE CEILING COUNTS EVERY STATE THE PLATFORM STILL HOLDS — QUEUED, HELD AND PARKED —
+// PRECISELY SO THIS IS TRUE. A hold moves a row
 // between two counted states, so the count is INVARIANT UNDER PROMOTION and no sweep tick
 // can push a tenant over its ceiling however large its backlog is. While the ceiling
 // counted HELD alone, a tenant whose fleet was absent could enqueue without limit — every

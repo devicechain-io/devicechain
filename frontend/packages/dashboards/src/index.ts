@@ -44,18 +44,24 @@ export type {
   CommandParamDataType,
 } from './types';
 
-// The command-delivery lifecycle vocabulary — the ONE terminal set every surface
-// (console panel, command-button widget, preview) reads, so a new status can't be
-// learned by some of them and not the others.
+// The command-delivery lifecycle vocabulary — the ONE terminal set and the ONE
+// cancellable set every surface (console panel, command-button widget, preview) reads, so
+// a new status can't be learned by some of them and not the others.
 //
-// The terminal SET itself is deliberately not re-exported: isTerminalCommandStatus is
-// the only question a consumer of this package has, and handing out the set invites a
-// hand-rolled membership check per call site — the three-copies problem this module was
-// created to end. It stays exported from ./command-status for the sibling test, which
-// asserts the set's contents against a hand-written list.
+// Two predicates, because "still in flight" and "still cancellable" are different
+// questions with different answers: SENT is in flight but not cancellable. A caller that
+// wants a cancel control asks isCancellableCommandStatus; anything else asks
+// isTerminalCommandStatus.
+//
+// Neither SET is re-exported: the predicates are the only questions a consumer of this
+// package has, and handing out a set invites a hand-rolled membership check per call site
+// — the three-copies problem this module was created to end. They stay exported from
+// ./command-status for the sibling test, which asserts their contents against a
+// hand-written list.
 export {
   COMMAND_STATUSES,
   isTerminalCommandStatus,
+  isCancellableCommandStatus,
   type CommandStatus,
 } from './command-status';
 
