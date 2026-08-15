@@ -18,6 +18,7 @@
 #   npm registry metadata    frontend/packages/*/package.json          -> NO ADR refs
 #   Helm listing prose       deploy/helm/*/{Chart.yaml,README.md}      -> NO ADR refs
 #   NuGet registry metadata  sdks/**/*.csproj <Description>/<PackageTags> -> NO ADR refs
+#   Published GraphQL SDL    the schemas served at /schema/  -> NO ADR refs, CHECKED ELSEWHERE
 #   Source and maintainer    everything else, incl. docusaurus.config.ts -> ADR refs fine
 #
 # The distinguishing question is not "is this file public?" — the whole repo is
@@ -25,6 +26,19 @@
 # is a place where a stranger is SERVED this prose by some other host — the docs
 # site, npmjs.com, Artifact Hub, nuget.org — with no way to follow an ADR
 # citation.
+#
+# 🔴 ONE COVERED SURFACE IS NOT CHECKED IN THIS FILE, deliberately. The GraphQL
+# schemas under backend/services/*/graphql/ are published verbatim at
+# docs.devicechain.io/schema/, which makes them a served surface by exactly the
+# test above. But WHICH of them are published is decided by
+# docs/scripts/schemas.manifest.mjs — one of the fourteen carries `publish:
+# false` and is never served — and bash cannot read that inventory without a
+# second, hand-maintained copy of it. So the check lives beside the manifest, in
+# docs/scripts/schema-publish.test.mjs, driven by the same authority that decides
+# what gets published; the docs CI job runs it alongside this guard, as its
+# "Schema publishing self-tests" step. It is named here rather than left
+# implicit because two guards that each look complete, while one has a hole, is
+# precisely how a citation gets back in.
 #
 #   hack/check-docs-adr-refs.sh              # check
 #   hack/check-docs-adr-refs.sh --self-test  # prove the check can fail
@@ -308,6 +322,10 @@ ${TARGETS[*]}, docs-drafts (body), frontend/packages/*/package.json
 Artifact Hub renders as a chart's listing — and sdks/**/*.csproj
 <Description>/<PackageTags>, which nuget.org renders the same way. Chart
 values/templates, and csproj comments, are source and are NOT covered.
+
+One further served surface, the published GraphQL schemas, is covered by
+docs/scripts/schema-publish.test.mjs instead of by this script — see the header
+for why.
 
 EOF
   exit 1
