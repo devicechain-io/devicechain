@@ -97,6 +97,11 @@ export type FunctionalAreasQueryVariables = Exact<{ [key: string]: never; }>;
 
 export type FunctionalAreasQuery = { functionalAreas: Array<string> };
 
+export type TenantTokenMasksQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type TenantTokenMasksQuery = { tokenMasks: string };
+
 export class TypedDocumentString<TResult, TVariables>
   extends String
   implements DocumentTypeDecoration<TResult, TVariables>
@@ -398,3 +403,8 @@ export const FunctionalAreasDocument = new TypedDocumentString(`
   functionalAreas
 }
     `) as unknown as TypedDocumentString<FunctionalAreasQuery, FunctionalAreasQueryVariables>;
+export const TenantTokenMasksDocument = new TypedDocumentString(`
+    query TenantTokenMasks {
+  tokenMasks
+}
+    `) as unknown as TypedDocumentString<TenantTokenMasksQuery, TenantTokenMasksQueryVariables>;

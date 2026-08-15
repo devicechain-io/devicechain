@@ -60,6 +60,13 @@ vi.mock('@/auth/TenantProvider', () => ({
   useTenantBasemap: () => tenantBasemap.value,
 }));
 
+// The form's TokenField reads the entity token masks over whichever session is
+// live, so it needs the auth flags. A geofence form is a TENANT-scoped screen, so
+// that is the session it is given here — the same lane the real screen would use.
+vi.mock('@/auth/AuthProvider', () => ({
+  useAuth: () => ({ isAuthenticated: true, isIdentityAuthenticated: false }),
+}));
+
 // The fake reflects `disabled` and exposes `onClose` as a button. Both were
 // props the form silently failed to wire, and a fake that ignored them could not
 // have shown that — it would have made the form's omission invisible, which is

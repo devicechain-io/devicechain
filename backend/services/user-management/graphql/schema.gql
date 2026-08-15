@@ -222,6 +222,19 @@ type Query {
     # Reports DESIRED state (what the operator deployed), never health: an area
     # that is enabled but failing still appears here.
     functionalAreas: [String!]!
+    # The effective entity token-mask map, as a JSON object string. Requires only an
+    # authenticated caller — the masks are non-sensitive UI templates that every
+    # create form needs to mint a token, not a settings read.
+    #
+    # Deliberately served HERE AS WELL AS on the settings schema, and that is not a
+    # duplicate. The masks are instance-global, so both planes answer identically;
+    # what differs is which session the ASKING SCREEN holds. A tenant-scoped create
+    # form has a tenant session that lives for days and an identity token that dies
+    # in fifteen minutes, so asking over the identity lane makes the mask stop
+    # applying mid-session. An operator creating the FIRST tenant has the opposite
+    # problem: an identity session and no tenant at all. Neither plane can serve
+    # both, so both serve.
+    tokenMasks: String!
 }
 
 type Mutation {

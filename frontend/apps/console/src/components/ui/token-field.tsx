@@ -14,7 +14,8 @@ import { AlertCircle, Check, Loader2, RefreshCw } from 'lucide-react';
 import { generateToken, isValidToken, resolveMask } from '@devicechain/client';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { getTokenMasks } from '@/lib/api/settings';
+import { useAuth } from '@/auth/AuthProvider';
+import { getTokenMasks, type TokenMasks } from '@/lib/token-masks';
 import type { EntityType } from '@/lib/entity-types';
 
 type Availability = 'idle' | 'checking' | 'available' | 'taken';
@@ -49,19 +50,31 @@ export function TokenField({
   disabled,
 }: TokenFieldProps) {
   const { t } = useTranslation('common');
-  const [mask, setMask] = useState<string | null>(null);
+  const { isAuthenticated, isIdentityAuthenticated } = useAuth();
+  // 🔑 ONE piece of state, three meanings, because two booleans derived from the same
+  // read can disagree and this one must not: `undefined` = not read yet, `null` = the
+  // read FAILED, an object = the masks. Storing "the mask string" and "did it fail"
+  // separately would let a future edit set one and forget the other, and the failure
+  // mode of that is a field confidently showing a pattern it could not read.
+  const [masks, setMasks] = useState<TokenMasks | undefined>(undefined);
   const [availability, setAvailability] = useState<Availability>('idle');
 
-  // Resolve this entity type's mask once (cached across fields).
+  // Generate from the built-in default even when the read failed — a create form must
+  // never be blocked on an advisory template, and the grammar is enforced server-side.
+  // The fix is that the guess is now VISIBLE, not that it stopped happening.
+  const mask = masks === undefined ? null : resolveMask(masks ?? {}, entityType);
+  const masksUnavailable = masks === null;
+
+  // Resolve the masks once (cached across fields).
   useEffect(() => {
     let alive = true;
-    void getTokenMasks().then((masks) => {
-      if (alive) setMask(resolveMask(masks, entityType));
+    void getTokenMasks({ isAuthenticated, isIdentityAuthenticated }).then((read) => {
+      if (alive) setMasks(read);
     });
     return () => {
       alive = false;
     };
-  }, [entityType]);
+  }, [isAuthenticated, isIdentityAuthenticated]);
 
   const invalid = value.length > 0 && !isValidToken(value);
 
@@ -141,6 +154,10 @@ export function TokenField({
         <p className="text-xs text-destructive">{t('tokenInvalid')}</p>
       ) : availability === 'taken' ? (
         <p className="text-xs text-destructive">{t('tokenTaken')}</p>
+      ) : masksUnavailable ? (
+        // Deliberately ahead of the pattern hint: showing the built-in pattern as
+        // though it were the operator's is the misinformation being fixed.
+        <p className="text-xs text-warning">{t('tokenMasksUnavailable')}</p>
       ) : mask ? (
         <p className="text-xs text-muted-foreground">
           <Trans

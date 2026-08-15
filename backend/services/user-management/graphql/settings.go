@@ -23,7 +23,20 @@ const ContextSettingsKey = gqlcore.ContextKey("settings")
 // SettingsResolver is the root resolver for the instance-scoped settings schema.
 type SettingsResolver struct{}
 
+// settingsFromContext retrieves the settings Service injected into a served
+// request's context (main.go puts it in BOTH provider maps, so it is present on the
+// tenant data plane and on the identity lane alike).
+//
+// 🔴 It panics when the key is absent, which is correct for a served request and
+// wrong for one that should already have been refused — so a resolver must run its
+// auth check BEFORE calling this, never pass the result in as an argument. Taking
+// the service as a parameter is what made an unauthenticated token-masks read panic
+// instead of returning ErrUnauthenticated; TestSettingsFailClosed caught it.
+func settingsFromContext(ctx context.Context) *settings.Service {
+	return ctx.Value(ContextSettingsKey).(*settings.Service)
+}
+
 // getSettingsService retrieves the settings Service from context.
 func (r *SettingsResolver) getSettingsService(ctx context.Context) *settings.Service {
-	return ctx.Value(ContextSettingsKey).(*settings.Service)
+	return settingsFromContext(ctx)
 }

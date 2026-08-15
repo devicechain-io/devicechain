@@ -70,9 +70,12 @@ export function RoleForm({ role, onDone }: { role?: AdminRole; onDone: (message:
     setBusy(true);
     try {
       if (editing) {
+        // Explicit nulls, not omitted keys: updateRole is a full replace, so a blank
+        // field is written as NULL either way — saying it is what lets Required<…>
+        // catch a field nobody carried. See the note above createTenant in lib/api/admin.
         await updateRole(role.scope, role.token, {
-          name: name.trim() || undefined,
-          description: description.trim() || undefined,
+          name: name.trim() || null,
+          description: description.trim() || null,
           authorities,
         });
         onDone(t('roleUpdatedToast', { token: role.token }));

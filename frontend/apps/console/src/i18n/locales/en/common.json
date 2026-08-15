@@ -79,6 +79,7 @@
   "tenantFallback": "Tenant",
   "toggleSidebar": "Toggle Sidebar",
   "tokenInvalid": "Only letters, digits, hyphens and underscores; must start with a letter or digit.",
+  "tokenMasksUnavailable": "Could not read this instance's token pattern — generating from the built-in one, which may not match it.",
   "tokenPattern": "Pattern: <mask>{{mask}}</mask>",
   "tokenTaken": "That token is already in use.",
   "tryAgain": "Try again",

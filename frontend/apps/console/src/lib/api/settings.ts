@@ -36,32 +36,25 @@ export async function listSettings(): Promise<Setting[]> {
   return data.settings;
 }
 
-// The effective entity token-mask map, readable by any authenticated user (not
-// just settings admins) so create forms can generate tokens — see the tokenMasks
-// resolver. Cached after the first success (masks change rarely; a page reload
-// re-fetches); a failure is not cached so a later call can retry.
+// The effective entity token-mask map on the IDENTITY lane, readable by any
+// authenticated identity (not just settings admins) so the ADMIN console's create
+// forms can generate tokens — those are guaranteed an identity session by their
+// route guard and are not guaranteed a tenant one.
+//
+// 🔴 Errors propagate. This used to catch everything and return {}, which turned an
+// auth failure into "the operator configured no masks" — indistinguishable at the
+// call site, and wrong in the one way that silently mints differently-shaped tokens.
+// Deciding what to do about a failure belongs to the caller that knows the other
+// lane exists; see lib/token-masks.ts.
 const TOKEN_MASKS = graphql(`
   query TokenMasks {
     tokenMasks
   }
 `);
 
-let masksCache: Record<string, string> | null = null;
-
-export async function getTokenMasks(): Promise<Record<string, string>> {
-  if (masksCache) return masksCache;
-  try {
-    const data = await gql('user-management/settings', TOKEN_MASKS, undefined, { identity: true });
-    const parsed: unknown = JSON.parse(data.tokenMasks);
-    const masks =
-      parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-        ? (parsed as Record<string, string>)
-        : {};
-    masksCache = masks;
-    return masks;
-  } catch {
-    return {}; // never block a create form on masks — fall back to defaults
-  }
+export async function getIdentityTokenMasks(): Promise<string> {
+  const data = await gql('user-management/settings', TOKEN_MASKS, undefined, { identity: true });
+  return data.tokenMasks;
 }
 
 // ── Mutations ───────────────────────────────────────────────────────────

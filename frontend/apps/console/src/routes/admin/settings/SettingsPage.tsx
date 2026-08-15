@@ -39,6 +39,14 @@ import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listSettings, setSetting, clearSetting, type Setting } from '@/lib/api/settings';
+// 🔴 A setting written here can be one another module has memoised — entity.token_masks
+// is, by lib/token-masks.ts, for the life of the tab. Without this the operator saves a
+// new token mask, opens a create form, and sees the OLD pattern presented as this
+// instance's: exactly the confident-wrong-value this screen's own setting exists to
+// prevent, self-inflicted. Called for EVERY key rather than matched against the masks
+// key, because a gate keyed on a value is a gate that fires only while someone keeps
+// the two spellings in step — and the cost of being wrong is one extra query.
+import { forgetCachedSettings } from '@/lib/token-masks';
 import { useReload, errMessage } from '@/routes/common';
 import { SECTIONS } from './sections';
 import { RAW_JSON_SECTION } from './RawJsonEditor';
@@ -200,6 +208,7 @@ function SettingPanel({
     setBusy(true);
     try {
       await setSetting(setting.key, compact(json));
+      forgetCachedSettings();
       toast(t('settingSavedToast', { key: setting.key }));
       onSettled();
     } catch (err) {
@@ -222,6 +231,7 @@ function SettingPanel({
     setBusy(true);
     try {
       await clearSetting(setting.key);
+      forgetCachedSettings();
       toast(t('settingResetToast', { key: setting.key }));
       onSettled();
     } catch (err) {

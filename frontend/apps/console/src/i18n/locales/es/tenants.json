@@ -52,6 +52,8 @@
   "searchTiersPlaceholder": "Buscar niveles…",
   "selectTierPlaceholder": "Selecciona un nivel…",
   "setByService": "Establecido por el servicio",
+  "shedPriorityDescription": "Qué inquilinos siguen funcionando durante más tiempo cuando la plataforma está sobrecargada y debe reducir carga (1–100: un valor más alto sobrevive más). Es una preferencia, no un límite: cambia el orden en que se degradan los inquilinos, nunca cuánto pueden hacer. Déjalo en blanco para heredar la banda del nivel y, después, el valor predeterminado de la plataforma.",
+  "shedPriorityLabel": "Prioridad de reducción",
   "settingsExplanation": "En qué se mide este inquilino, y de dónde proviene cada límite. Un ajuste recurre primero a su propia anulación, luego al nivel <tierLink>{{tier}}</tierLink>, y luego al valor predeterminado de la plataforma — que es un límite real, nunca ilimitado.",
   "sourcePlatformDefault": "Valor predeterminado de la plataforma",
   "tabAiModels": "Modelos de IA",
