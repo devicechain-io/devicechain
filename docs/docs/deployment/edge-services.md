@@ -118,8 +118,11 @@ This is the failure mode to understand before you rely on presence for anything 
 
 **An asserted device that dies without saying so can read online indefinitely.** The inactivity sweep
 deliberately skips asserted devices — the whole point of an asserting transport is that silence is not
-evidence of death — and **nothing else on that side has a timeout, a watchdog or a sweeper.** Only a
-new signal from that device's own transport can clear it.
+evidence of death — and on these two transports **nothing else has a timeout, a watchdog or a
+sweeper.** Only a new signal from that device's own transport can clear it. Devices asserted by
+DeviceChain's own MQTT broker are the exception, and the only one: a repair pass there periodically
+compares the broker's live connection list against what the platform believes and corrects the
+difference. See [Device Presence](../concepts/device-presence.md).
 
 The concrete ways it happens:
 
@@ -136,10 +139,11 @@ The concrete ways it happens:
   credential a device arrived on, and nothing will ever produce another signal for it. Because
   promotion is one-way, it is stranded at its last asserted state permanently.
 
-**The one lever that exists is `maxLifetimeSeconds`**, and it applies to LwM2M only. Every
+**The one lever on these two transports is `maxLifetimeSeconds`**, and it applies to LwM2M only. Every
 registration's lifetime is clamped down to at most that value, so it directly bounds how long a dead
 LwM2M device can read online. Setting it to, say, 3600 caps that at an hour. The constraint is the one
-above: it must stay above the longest lifetime your fleet actually asks for.
+above: it must stay above the longest lifetime your fleet actually asks for. The MQTT path has its own
+bound — the repair pass's interval, `brokerPresence.reconcileSeconds`, five minutes by default.
 
 There is no equivalent lever on the Sparkplug path. If a Sparkplug device reading online is
 operationally load-bearing for you, pair the connectivity signal with a timeout-based

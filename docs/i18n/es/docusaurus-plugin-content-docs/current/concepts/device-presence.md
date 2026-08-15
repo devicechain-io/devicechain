@@ -20,7 +20,7 @@ Todo dispositivo lleva una **fuente de presencia** (presence source) que indica 
 
 Un dispositivo permanece **inferido** hasta que un transporte que afirma presencia produce una señal para él, por lo que nada cambia para los dispositivos existentes a menos que comiencen a llegar a través de un transporte que afirme presencia. Hoy tres transportes afirman presencia:
 
-- **MQTT simple**, para dispositivos conectados al propio broker de DeviceChain. No se requiere ninguna cooperación del dispositivo — no tiene que publicar un mensaje de nacimiento, definir un last will ni anunciarse de ninguna manera. El broker ya sabe el momento exacto en que una conexión se abre y se cierra, y DeviceChain lo lee directamente, de modo que un cliente MQTT corriente obtiene presencia autoritativa con solo conectarse.
+- **MQTT simple**, para dispositivos conectados al propio broker de DeviceChain. No se requiere ninguna cooperación del dispositivo — no tiene que publicar un mensaje de nacimiento, definir un last will ni anunciarse de ninguna manera. El broker ya sabe el momento exacto en que una conexión se abre y se cierra, y DeviceChain lo lee directamente. Lo que hay que equipar para ello es la *instancia*, no el dispositivo: leer esas conexiones necesita una credencial de cuenta de sistema de NATS y una fuente de eventos que apunte al propio broker de esta instancia, y hasta que tenga ambas la toma permanece apagada y los dispositivos MQTT siguen siendo inferidos. `dcctl bootstrap` acuña esa credencial y configura esa fuente, así que una instancia levantada de ese modo afirma la presencia MQTT sin trabajo adicional; un `helm install` a secas deja la credencial vacía y no lo hace. [Confirmar que la toma del broker está realmente en marcha](#confirming-the-tap), más abajo, es cómo se distingue un caso del otro.
 - **[Sparkplug-B](./sparkplug.md)**, cuyos mensajes BIRTH y DEATH son exactamente estas señales explícitas de conexión/desconexión.
 - **[LwM2M](./lwm2m.md)**, cuyo ciclo de vida de registro — registro, actualización periódica y baja de registro (o un tiempo de vida vencido) — hace lo mismo.
 
@@ -44,13 +44,13 @@ La presencia inferida es conveniente pero lenta y ambigua: "fuera de línea" sol
 Mantener los dos modos como una marca explícita por dispositivo significa que un dispositivo en un transporte sin conexión conserva su comportamiento de tiempo de espera habitual, mientras que un dispositivo en un transporte consciente de la presencia obtiene la señal autoritativa, y ambos nunca interfieren entre sí.
 
 :::note Estado
-La presencia de dispositivo — tanto inferida como afirmada — está disponible, con [Sparkplug-B](./sparkplug.md) y [LwM2M](./lwm2m.md) como transportes que afirman presencia. Una **regla de detección puede dispararse directamente sobre un borde de conexión/desconexión**: la [condición de Connectivity](./event-processing.md#condition-types) genera una alarma en el instante en que llega una desconexión autoritativa y la resuelve al reconectar — sin tiempo de espera que ajustar. El motor ya la evalúa hoy, pero ninguna superficie de autoría de la consola la ofrece todavía — el generador de formularios y el lienzo de automatización omiten ambos ese tipo de condición, de modo que una regla de conectividad se define enviando la regla directamente a la API. **No abra ninguna en el editor de formulario de la consola**: no reconoce el tipo, así que lee la regla como una regla de umbral y al guardar reemplaza la definición original, sin aviso alguno. (El lienzo la rechaza correctamente, nombrando el tipo no soportado.) Complementa la regla de Absence basada en tiempo de espera (muerte autoritativa frente a silencio inferido), y ambas están pensadas para usarse en conjunto. Una desconexión autoritativa también actualiza el estado en vivo del dispositivo, de modo que la pestaña Connectivity muestra el dispositivo fuera de línea en el instante en que el transporte lo reporta.
+La presencia de dispositivo — tanto inferida como afirmada — está disponible, con tres transportes que afirman presencia: MQTT simple sobre el propio broker de DeviceChain (que solo afirma una vez que la instancia tiene la credencial de cuenta de sistema descrita más arriba), [Sparkplug-B](./sparkplug.md) y [LwM2M](./lwm2m.md). Una **regla de detección puede dispararse directamente sobre un borde de conexión/desconexión**: la [condición de Connectivity](./event-processing.md#condition-types) genera una alarma en el instante en que llega una desconexión autoritativa y la resuelve al reconectar — sin tiempo de espera que ajustar. El motor ya la evalúa hoy, pero ninguna superficie de autoría de la consola la ofrece todavía — el generador de formularios y el lienzo de automatización omiten ambos ese tipo de condición, de modo que una regla de conectividad se define enviando la regla directamente a la API. **No abra ninguna en el editor de formulario de la consola**: no reconoce el tipo, así que lee la regla como una regla de umbral y al guardar reemplaza la definición original, sin aviso alguno. (El lienzo la rechaza correctamente, nombrando el tipo no soportado.) Complementa la regla de Absence basada en tiempo de espera (muerte autoritativa frente a silencio inferido), y ambas están pensadas para usarse en conjunto. Una desconexión autoritativa también actualiza el estado en vivo del dispositivo, de modo que la pestaña Connectivity muestra el dispositivo fuera de línea en el instante en que el transporte lo reporta.
 :::
 
 ## Cómo se opera
 
-La presencia vale lo que vale la señal que hay detrás, y los dos transportes que la afirman se
-ejecutan cada uno como una única réplica propietaria — lo que le da a la presencia algunas
+La presencia vale lo que vale la señal que hay detrás, y los dos transportes de borde que la afirman
+se ejecutan cada uno como una única réplica propietaria — lo que le da a la presencia algunas
 propiedades operativas que conviene conocer antes de alarmar sobre ella: qué cuesta un relevo, por
 qué un dispositivo afirmado puede quedarse mostrando en línea, y cómo acotar eso. Todo ello se
 cubre en **[Cómo operar los servicios de borde](../deployment/edge-services.md)**.
@@ -84,6 +84,22 @@ una toma sana, y `presence_canary_missed_total` sube cuando la cadena está rota
 La sonda funciona con su propio calendario, independiente de la pasada de reparación descrita más
 abajo. Esa separación es lo que hace fiable al contador: un instrumento que solo pudiera informar
 mientras aquello que vigila estuviera sano se quedaría callado justo en el momento que importa.
+
+### Cómo ajustar la toma {#broker-presence-settings}
+
+La toma se distribuye con valores predeterminados que funcionan, y la mayoría de las instancias nunca
+los cambian. Viven bajo la configuración `brokerPresence` del área `event-sources`.
+
+| Ajuste | Predeterminado | Qué hace |
+|---|---|---|
+| `enabled` | activada si no se define | Ejecuta la toma. Póngalo en `false` para desactivar deliberadamente la presencia MQTT afirmada por el broker — por ejemplo, en una instancia cuyo broker se comparte con algo que no admite un suscriptor de cuenta de sistema. Todos los dispositivos MQTT vuelven entonces a presencia inferida. |
+| `reconcileSeconds` | `300` | Cada cuánto se compara la lista de conexiones vivas del broker con la de la plataforma, en ambos sentidos. **Esto no es una red de seguridad.** Un reinicio ordenado del broker no anuncia desconexión alguna, así que esta pasada es lo único que corrige jamás a esos dispositivos, y un dispositivo afirmado no tiene detrás ningún barrido de inactividad. Bájelo para reparar antes, a cambio de un inventario de todo el clúster más una lectura por inquilino en cada pasada. |
+| `canarySeconds` | `60` | Cada cuánto el servicio abre su propia conexión MQTT para demostrar que la toma sigue viva. Es el calendario contra el que cuenta `presence_canary_missed_total`. |
+| `canaryDeadlineSeconds` | `15` | Acota una sola sonda. Si es demasiado estrecho, informa de fallos que la toma no tiene. |
+| `inventoryGatherSeconds` | `5` | Cuánto tiempo recoge una pasada las respuestas del clúster del broker. Si es demasiado corto, un nodo que solo va lento se lee como ausente, lo que retiene todas las desconexiones de esa pasada. |
+
+Un valor no positivo en cualquiera de los cuatro intervalos recae en el predeterminado de arriba, no
+en cero.
 
 ### Una pasada de reparación que se queda sin tiempo lo dice {#reconcile-pass-timeout}
 

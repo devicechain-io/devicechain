@@ -16,7 +16,7 @@ The guiding distinction: **a shed dial is tuned; a tier is sold.** Operational k
 
 A tier is a named bundle of settings drawn from a **config-key registry** — the platform's list of the dials a tier is allowed to set. Two consumers read a tenant's tier today:
 
-- **Governance ceilings.** A tenant's per-tenant quotas (ingest rate, egress rate, AI inference rate) resolve through its tier. See [Governance & Quotas](./governance.md). The fail-safe rule still holds end to end: a missing or zero limit resolves to the **platform default, never to unlimited**.
+- **Governance ceilings.** A tenant's per-tenant quotas (ingest rate, egress rate, AI inference rate, and the [undelivered-command ceiling](./commands.md#held-command-ceiling)) resolve through its tier. See [Governance & Quotas](./governance.md). The fail-safe rule still holds end to end: a missing or zero limit resolves to the **platform default, never to unlimited**.
 - **AI model entitlement.** Which [AI models](./ai-authoring.md) a tenant may use is packaged on the tier. The model a tenant runs for a function is a `(tenant, function) → model` assignment that falls back to the **tier's default**; if a tier packages no model, the tenant has no model. *No menu means no model.*
 
 Because a tier is read by many subsystems but owned by one, the pattern is always the same: subsystems **read** the tier; they never store their own copy of "what this tenant is entitled to."
