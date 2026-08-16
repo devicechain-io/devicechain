@@ -3,7 +3,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Send } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { ArrowRight, Send } from 'lucide-react';
 import { isCancellableCommandStatus, type CommandParameter } from '@devicechain/dashboards';
 import {
   parseParameterSchema,
@@ -343,7 +344,30 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
                 <DataTableCell className="whitespace-nowrap text-muted-foreground">
                   {formatTime(command.queuedTime)}
                 </DataTableCell>
-                <DataTableCell className="font-medium text-foreground">{command.name}</DataTableCell>
+                <DataTableCell className="font-medium text-foreground">
+                  {command.name}
+                  {/* 🔴 THE LINK IS GATED ON `batchToken` BEING NON-NULL, and on nothing
+                      else. That field is the service's own record of which fleet write
+                      minted this command; a command issued one at a time has it null.
+                      Nothing else on the row can stand in for it — a batch sends the same
+                      command key, to the same device, with the same payload shape a
+                      one-off would have — so sniffing the name or the token would both
+                      miss real batches and invent ones that never existed.
+
+                      Worth the row it takes because the batch answers what this table
+                      structurally cannot: this device got the command, and the devices
+                      that were REFUSED have no row here or on any other device page. Only
+                      the batch knows they were targeted at all. */}
+                  {command.batchToken && (
+                    <Link
+                      to={`/command-batches/${encodeURIComponent(command.batchToken)}`}
+                      title={t('commandFromBatchHint')}
+                      className="mt-0.5 flex w-fit items-center gap-1 text-xs font-normal text-primary hover:underline"
+                    >
+                      {t('commandFromBatch')} <ArrowRight size={12} />
+                    </Link>
+                  )}
+                </DataTableCell>
                 <DataTableCell>
                   <Badge variant={commandStatusVariant(command.status)}>{command.status}</Badge>
                 </DataTableCell>

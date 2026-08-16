@@ -48,6 +48,16 @@ type Command implements Model & TokenReference & MetadataEntity {
     expiresAt: String
     responsePayload: String
     error: String
+    # The batch that created this command; null for a command issued one at a time.
+    #
+    # It is the inverse of `CommandSearchCriteria.batchToken`, and it exists because the
+    # two directions answer different questions. Searching BY the token asks what a fleet
+    # write is doing now; reading it OFF a row asks why this command exists at all — which
+    # is a question a single row cannot answer, because the interesting part of a batch is
+    # the devices that got NO row. A command minted by a batch carries a platform-chosen
+    # token rather than a caller's idempotency key, so this is also the only link back to
+    # the name, payload and target the caller actually asked for.
+    batchToken: String
 }
 
 # Data required to issue a command.

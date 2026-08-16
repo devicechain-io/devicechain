@@ -18,6 +18,7 @@
 // the worst way for it to break.
 import '@/i18n/config';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { gqlMock, toastMock } = vi.hoisted(() => ({ gqlMock: vi.fn(), toastMock: vi.fn() }));
@@ -53,6 +54,11 @@ function commandRow(status: string) {
     id: `id-${status}`,
     token: `tok-${status}`,
     deviceToken: 'therm-1',
+    // Explicitly null rather than omitted: null is what the service sends for a command
+    // issued one at a time, and every fixture in this file except the batch pair below is
+    // one. It also keeps the cancel/issue tests as a standing control on the link — none
+    // of them is wrapped in a Router, so a link rendered unconditionally would blow them up.
+    batchToken: null as string | null,
     name: `cmd-${status}`,
     payload: null,
     status,
@@ -353,5 +359,92 @@ describe('DeviceCommandsPanel issue outcomes', () => {
     expect(message).not.toContain('SQLSTATE');
     expect(message).not.toContain('relation "commands"');
     expect(message).not.toContain('refused');
+  });
+});
+
+// ── Batch provenance ───────────────────────────────────────────────────────
+//
+// 🔴🔴 WHY THIS PAIR EXISTS. A command a fleet write minted is indistinguishable from a
+// one-off on every field this table already showed: same command key, same device, same
+// payload, same lifecycle. `batchToken` is the ONLY thing that says where it came from,
+// so the link has to be gated on that field and on nothing else — and the negative case
+// is not a formality. A link rendered unconditionally satisfies the positive test
+// perfectly, and would tell an operator that a command they issued by hand was part of a
+// fleet write, pointing at a batch page that does not exist.
+//
+// These renders are wrapped in a Router because a <Link> needs one. That matters for the
+// negative test in particular: without the wrapper it would "pass" by throwing, which
+// proves nothing about whether a link was rendered.
+
+const BATCH_LINK = 'Part of a fleet write';
+
+function respondWithBatchToken(batchToken: string | null) {
+  gqlMock.mockImplementation((service: string) => {
+    if (service === 'command-delivery') {
+      return Promise.resolve({
+        commands: {
+          results: [{ ...commandRow('QUEUED'), batchToken }],
+          pagination: { pageStart: 0, pageEnd: 1, totalRecords: 1 },
+        },
+      });
+    }
+    return Promise.resolve({ deviceCommandVocabulary: { constrained: false, commands: [] } });
+  });
+}
+
+function renderRouted() {
+  return render(
+    <MemoryRouter>
+      <DeviceCommandsPanel deviceToken="therm-1" />
+    </MemoryRouter>,
+  );
+}
+
+// The command's own row, so a link found anywhere else on the panel cannot stand in for
+// one on the row that actually came from a batch.
+async function queuedRow(): Promise<HTMLElement> {
+  const row = (await screen.findByText('cmd-QUEUED')).closest('tr');
+  if (!row) throw new Error('no row rendered for the QUEUED command');
+  return row as HTMLElement;
+}
+
+describe('DeviceCommandsPanel batch provenance', () => {
+  it('links a batch-minted command to the fleet write that created it', async () => {
+    respondWithBatchToken('batch-77');
+
+    renderRouted();
+
+    const link = within(await queuedRow()).getByRole('link', { name: BATCH_LINK });
+    // The route registered in App.tsx, not a path this component invented.
+    expect(link.getAttribute('href')).toBe('/command-batches/batch-77');
+  });
+
+  // 🔴 THE CONTROL. The assertion above passes just as well if the link is always there.
+  it('shows no batch link on a command issued one at a time', async () => {
+    respondWithBatchToken(null);
+
+    renderRouted();
+
+    // The row painted — so "no link" is a fact about a rendered row, not about an empty
+    // table that never got as far as deciding.
+    const row = await queuedRow();
+    expect(within(row).queryByRole('link')).toBeNull();
+    expect(screen.queryByText(BATCH_LINK)).toBeNull();
+    // Nothing else on the panel links out either, which is what makes the scoped query
+    // above meaningful.
+    expect(screen.queryAllByRole('link')).toHaveLength(0);
+  });
+
+  // A batch token is minted by whoever fired the batch — the console uses a UUID, but an
+  // SDK caller supplies its own string — so it is arbitrary text and has to be escaped
+  // before it becomes a path segment. Unescaped, a token carrying a slash silently
+  // navigates somewhere else entirely.
+  it('escapes the token before putting it in the path', async () => {
+    respondWithBatchToken('night/shift 1');
+
+    renderRouted();
+
+    const link = within(await queuedRow()).getByRole('link', { name: BATCH_LINK });
+    expect(link.getAttribute('href')).toBe('/command-batches/night%2Fshift%201');
   });
 });

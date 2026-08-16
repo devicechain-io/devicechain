@@ -13,6 +13,8 @@
   "chooseDeviceType": "Elige un tipo de dispositivo.",
   "chooseTargetToAssign": "Elige un destino para asignar",
   "commandCancelled": "Comando “{{name}}” cancelado",
+  "commandFromBatch": "Parte de un envío a la flota",
+  "commandFromBatchHint": "Un lote envió este comando a muchos dispositivos a la vez. Ábralo para ver el envío completo, incluidos los dispositivos que lo rechazaron, que no recibieron nada y no tienen fila de comando en ninguna parte.",
   "commandHint": "Los comandos que declara el perfil publicado de este dispositivo.",
   "commandIssueFailed": "No se pudo emitir el comando. Inténtalo de nuevo.",
   "commandIssued": "Comando “{{name}}” emitido",
