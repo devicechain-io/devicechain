@@ -13,6 +13,8 @@
   "chooseDeviceType": "Choose a device type.",
   "chooseTargetToAssign": "Choose a target to assign",
   "commandCancelled": "Command “{{name}}” cancelled",
+  "commandFromBatch": "Part of a fleet write",
+  "commandFromBatchHint": "One batch sent this command to many devices at once. Open it to see the whole write — including the devices it refused, which received nothing and have no command row anywhere.",
   "commandHint": "The commands this device's published profile declares.",
   "commandIssueFailed": "Couldn’t issue the command. Try again.",
   "commandIssued": "Command “{{name}}” issued",

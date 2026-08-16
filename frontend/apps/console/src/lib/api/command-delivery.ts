@@ -48,6 +48,15 @@ export type { CommandBatchCreateRequest };
 // SUM. See cancelCommandBatch below, and `cancelOutcome.ts` for the rules that read them.
 export type CancelCommandBatchResult = CancelCommandBatchMutation['cancelCommandBatch'];
 
+// One selection, read by BOTH command tables: a device's history and a batch's per-device
+// rows.
+//
+// 🔴 `batchToken` IS THE ONLY THING THAT SAYS A COMMAND CAME FROM A FLEET WRITE. It is
+// null for a command issued one at a time, and non-null naming the batch otherwise —
+// there is nothing else to read. Nothing about the token, the name or the payload of a
+// batch-minted command distinguishes it (the batch sends the SAME command key every
+// member would have received individually), so any rule inferred from those is a guess
+// that will be wrong on real data. Ask this field.
 const COMMANDS = graphql(`
   query Commands($criteria: CommandSearchCriteria!) {
     commands(criteria: $criteria) {
@@ -55,6 +64,7 @@ const COMMANDS = graphql(`
         id
         token
         deviceToken
+        batchToken
         name
         payload
         status

@@ -47,7 +47,7 @@ export type CommandsQueryVariables = Exact<{
 }>;
 
 
-export type CommandsQuery = { commands: { results: Array<{ id: string, token: string, deviceToken: string, name: string, payload: string | null, status: string, queuedTime: string | null, sentTime: string | null, respondedTime: string | null, expiresAt: string | null, responsePayload: string | null, error: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type CommandsQuery = { commands: { results: Array<{ id: string, token: string, deviceToken: string, batchToken: string | null, name: string, payload: string | null, status: string, queuedTime: string | null, sentTime: string | null, respondedTime: string | null, expiresAt: string | null, responsePayload: string | null, error: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type CreateCommandMutationVariables = Exact<{
   request: CommandCreateRequest;
@@ -117,6 +117,7 @@ export const CommandsDocument = new TypedDocumentString(`
       id
       token
       deviceToken
+      batchToken
       name
       payload
       status

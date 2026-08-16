@@ -96,6 +96,12 @@ func (r *CommandResolver) Error() *string {
 	return util.NullStr(r.M.Error)
 }
 
+// BatchToken resolves the denormalized link, not the BatchId foreign key: the column is
+// already on the row, so this costs no join and no second query per command in a page.
+func (r *CommandResolver) BatchToken() *string {
+	return util.NullStr(r.M.BatchToken)
+}
+
 // -------------------------------
 // Command search results resolver
 // -------------------------------

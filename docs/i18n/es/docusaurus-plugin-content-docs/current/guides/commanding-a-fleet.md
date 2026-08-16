@@ -261,6 +261,27 @@ Los tokens de los comandos individuales los genera la plataforma —elegiste el 
 no los suyos— así que `batchToken` es como los encuentras, en lugar de construir un token tú
 mismo.
 
+El vínculo también se lee en sentido contrario. Una fila de comando lleva `batchToken` como
+campo legible, así que quien tenga un solo comando —del historial de un dispositivo, o de una
+respuesta que llegó sin contexto— puede preguntar qué escritura de flota lo creó:
+
+```graphql
+query {
+  commands(criteria: { pageNumber: 1, pageSize: 20, deviceToken: "gw-4471" }) {
+    results { token name status batchToken }
+  }
+}
+```
+
+Es nulo para un comando emitido de uno en uno, y es lo único que dice lo contrario: un lote
+envía la misma clave de comando, con la misma carga útil, que el dispositivo habría recibido
+individualmente. Nada más en la fila distingue los dos casos.
+
+Esa dirección importa porque una sola fila de comando no puede mostrarte la parte interesante
+de una escritura de flota: los dispositivos que *rechazó*. No se les dio ningún comando, así
+que no aparecen en el historial de ningún dispositivo. Solo el registro del lote sabe que
+fueron seleccionados.
+
 ## Anúlalo entero
 
 ```graphql
