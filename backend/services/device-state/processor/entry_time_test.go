@@ -46,7 +46,7 @@ func measurementMessage(t *testing.T, deviceToken string, envelope time.Time,
 		})
 	}
 	event := &dmmodel.ResolvedEvent{
-		Source:            "mqtt",
+		Source:            mqttTestSource,
 		SourceDeviceToken: deviceToken,
 		EventType:         esmodel.Measurement,
 		OccurredTime:      envelope,

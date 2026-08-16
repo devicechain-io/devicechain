@@ -82,14 +82,14 @@ func TestARegressedSessionSurvivesTheWholeChain(t *testing.T) {
 	projection := newProjection(t)
 	if _, err := projection.MergeDeviceState(ctx, device, diedAt, &model.PresenceTransition{
 		Connected: false, SessionId: storedSession, OccurredAt: diedAt,
-	}, model.DeviceIdentity{Source: "mqtt"}); err != nil {
+	}, model.DeviceIdentity{Source: mqttTestSource}); err != nil {
 		t.Fatalf("seeding the dead session failed: %v", err)
 	}
 
 	// --- 1. the emitter: producer struct -> unresolved event on the wire ---
 	writer := &captureWriter{}
 	emitter := adapter.NewEmitter(writer, func() time.Time { return repairAt }, "mq", false)
-	if err := emitter.EmitPresence(ctx, tenant, "mqtt", device, adapter.PresenceEvent{
+	if err := emitter.EmitPresence(ctx, tenant, mqttTestSource, device, adapter.PresenceEvent{
 		Connected:         true,
 		Reason:            "reconcile-connected",
 		SessionId:         liveSession,
@@ -118,7 +118,7 @@ func TestARegressedSessionSurvivesTheWholeChain(t *testing.T) {
 
 	// --- 4. device-management proto round trip ---
 	encoded, err := dmproto.MarshalResolvedEvent(&dmmodel.ResolvedEvent{
-		Source:            "mqtt",
+		Source:            mqttTestSource,
 		SourceDeviceToken: device,
 		EventType:         unresolved.EventType,
 		OccurredTime:      repairAt,
@@ -144,7 +144,7 @@ func TestARegressedSessionSurvivesTheWholeChain(t *testing.T) {
 	}
 
 	// --- 6. the projection write ---
-	state, err := projection.MergeDeviceState(ctx, device, repairAt, pt, model.DeviceIdentity{Source: "mqtt"})
+	state, err := projection.MergeDeviceState(ctx, device, repairAt, pt, model.DeviceIdentity{Source: mqttTestSource})
 	if err != nil {
 		t.Fatalf("merge failed: %v", err)
 	}
@@ -164,12 +164,12 @@ func TestARegressedSessionSurvivesTheWholeChain(t *testing.T) {
 	naked := newProjection(t)
 	if _, err := naked.MergeDeviceState(ctx, device, diedAt, &model.PresenceTransition{
 		Connected: false, SessionId: storedSession, OccurredAt: diedAt,
-	}, model.DeviceIdentity{Source: "mqtt"}); err != nil {
+	}, model.DeviceIdentity{Source: mqttTestSource}); err != nil {
 		t.Fatalf("seeding the control failed: %v", err)
 	}
 	control := *pt
 	control.ExpectedSessionId = 0
-	after, err := naked.MergeDeviceState(ctx, device, repairAt, &control, model.DeviceIdentity{Source: "mqtt"})
+	after, err := naked.MergeDeviceState(ctx, device, repairAt, &control, model.DeviceIdentity{Source: mqttTestSource})
 	if err != nil {
 		t.Fatalf("control merge failed: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestTheChainRejectsAnUnstorableExpectedSession(t *testing.T) {
 	emitter := adapter.NewEmitter(writer, func() time.Time { return at }, "mq", false)
 
 	// Above MaxInt64: unstorable in the signed bigint both sinks use.
-	if err := emitter.EmitPresence(ctx, "acme", "mqtt", "sensor-001", adapter.PresenceEvent{
+	if err := emitter.EmitPresence(ctx, "acme", mqttTestSource, "sensor-001", adapter.PresenceEvent{
 		Connected:         true,
 		SessionId:         42,
 		ExpectedSessionId: 1 << 63,

@@ -26,6 +26,18 @@ import (
 // path requires to build a tenant-scoped context (fail-closed).
 const locationTestSubject = "instance1.tenant1.resolved-events"
 
+// mqttTestSource is what an MQTT event source actually stamps: its own operator-chosen id,
+// whose shipped default is "mqtt1" — NOT the literal "mqtt", which no producer emits.
+//
+// 🔴🔴 USE THIS, NEVER A HAND-WRITTEN "mqtt". These tests never look the value up, so a
+// wrong one costs nothing HERE — which is exactly how the last one survived. A deny list
+// in command-delivery was written against a bare "sparkplug" while every real device emits
+// "sparkplug:{hostId}", so it matched no device alive and every test passed on a string
+// nothing mints (the record is in command-delivery/presence/presence.go). A fixture that
+// disagrees with production is not a harmless inaccuracy; it is a green light waiting for
+// the first caller who reads the field.
+const mqttTestSource = "mqtt1"
+
 // deviceStateMicroservice is the minimal Microservice the processor needs — it uses it
 // only to construct its RED metrics.
 var deviceStateMicroservice = &core.Microservice{
@@ -89,7 +101,7 @@ func locationMessage(t *testing.T, deviceToken string, occurredAt time.Time,
 		stamped[i] = entry
 	}
 	event := &dmmodel.ResolvedEvent{
-		Source:            "mqtt",
+		Source:            mqttTestSource,
 		SourceDeviceToken: deviceToken,
 		EventType:         esmodel.Location,
 		OccurredTime:      occurredAt,
@@ -290,7 +302,7 @@ func TestNonLocationEventLeavesTheProjectionAlone(t *testing.T) {
 	t0 := time.Date(2026, 8, 9, 14, 0, 0, 0, time.UTC)
 
 	event := &dmmodel.ResolvedEvent{
-		Source:            "mqtt",
+		Source:            mqttTestSource,
 		SourceDeviceToken: "dozer-01",
 		EventType:         esmodel.Measurement,
 		OccurredTime:      t0,
