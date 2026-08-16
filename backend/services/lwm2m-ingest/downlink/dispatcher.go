@@ -110,8 +110,9 @@ type drainFetcher interface {
 // or a minted service token, including its LOST and ERRORED branches, which are the two that
 // must not actuate and are therefore the two most easily faked past.
 //
-// nil disables claiming, which means a HELD command is NOT dispatched (see claim below) —
-// fail-closed, because an unclaimed dispatch is a duplicate actuation waiting for the next
+// nil disables claiming, which means a backlogged (HELD or PARKED) command is NOT dispatched
+// (see claim below) — fail-closed, and it applies to the WHOLE drainable set, not just the
+// held half, because an unclaimed dispatch is a duplicate actuation waiting for the next
 // sweep tick.
 type commandClaimer interface {
 	Claim(ctx context.Context, tenant, commandToken string) (bool, error)
@@ -276,7 +277,8 @@ type Options struct {
 
 // NewDispatcher builds a Dispatcher over the durable command reader, the command-responses writer,
 // the conn table, the CoAP op executor, the wake-drain fetcher (nil disables draining) and the
-// wake-drain claimer (nil means a HELD command is not dispatched — fail-closed).
+// wake-drain claimer (nil means a backlogged HELD or PARKED command is not dispatched —
+// fail-closed).
 // tenantDeleted gates ACTUATION on the ADR-077 tenant lifecycle (Options.TenantDeleted).
 // Nil disables the gate, matching the resolver's own fail-open.
 //
@@ -286,7 +288,8 @@ type Options struct {
 // methods, so an external type can satisfy them and an exported Options field of that type would
 // compile at every call site. What is bought by keeping them positional is that omitting the
 // claimer is a COMPILE error rather than a zero value — and the zero value takes the fail-closed
-// branch, where a HELD command is never dispatched. That failure is silent and looks exactly like
+// branch, where no backlogged command (HELD or PARKED) is ever dispatched. That failure is
+// silent and looks exactly like
 // a device having nothing queued. What is paid is a long signature and a change at every call
 // site; if a third seam arrives, move all of them into Options together and make the
 // nil-claimer case loud some other way.

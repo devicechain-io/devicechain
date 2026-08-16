@@ -5,6 +5,9 @@ package downlink
 
 import (
 	"context"
+	"slices"
+
+	"github.com/rs/zerolog/log"
 )
 
 // commandQuerier is the narrow slice of svcclient.Client the drain fetcher needs: one
@@ -14,14 +17,30 @@ type commandQuerier interface {
 	Query(ctx context.Context, baseURL, tenant, query string, variables map[string]any, out any) error
 }
 
-// statusHeld and statusSent are command-delivery lifecycle states, duplicated here as a
+// statusHeld and statusParked are command-delivery lifecycle states, duplicated here as a
 // wire contract (like deliveryEnvelope's JSON tags) rather than imported — downlink does
 // not depend on the command-delivery module. BOTH MUST stay equal to their
-// command-delivery/model counterparts (CommandHeld, CommandSent); drainStatuses below is
+// command-delivery/model counterparts (CommandHeld, CommandParked); drainStatuses below is
 // the single definition everything in this package derives from.
+//
+// 🔴 NOTHING ENFORCES THAT "MUST", AND NOTHING IN THIS MODULE CAN. The two modules do not
+// import each other, so there is no compiler check and no test comparing these literals to
+// CommandHeld/CommandParked — the "MUST" is a request to a future editor, and it used to be
+// the whole of the mechanism. What stands behind it now is DETECTION, not prevention, and the
+// difference is worth being exact about: Pending counts the rows its defensive drainable()
+// re-check discards and warns once per wake, naming the offending statuses. A rename on the
+// other side still ships, and every affected device still loses its entire backlog on the
+// wake it happens. What changed is that the loss is AUDIBLE. Without the warn the symptom is
+// an empty slice, which is indistinguishable from a device with nothing queued — no error, no
+// metric, nothing to notice.
+//
+// There is deliberately no statusSent. One was declared here and, once SENT left the drain
+// set, went unreferenced — a dead constant, which Go does not complain about. It was not
+// neutral clutter: an identifier for the one state this package must NEVER dispatch out of
+// is exactly what a later edit reaches for when putting it back into drainStatuses. Why
+// SENT is excluded is argued at length below, and that argument needs no constant.
 const (
 	statusHeld   = "HELD"
-	statusSent   = "SENT"
 	statusParked = "PARKED"
 )
 
@@ -63,14 +82,13 @@ var drainStatuses = []string{statusHeld, statusParked}
 // drainable reports whether a fetched row's status is one this package may dispatch. It reads
 // drainStatuses so every place in this package that decides what "drainable" means reads one
 // list — a status renamed here and not there cannot leave a row that the query returns but the
-// loop silently discards (a device whose whole backlog vanishes, with no error anywhere).
+// loop discards (a device whose whole backlog vanishes).
+//
+// That is the WITHIN-package half. The cross-module half — this list drifting from
+// command-delivery's — cannot be prevented from here, so Pending counts what this function
+// rejects and says so; see the note on statusHeld.
 func drainable(status string) bool {
-	for _, s := range drainStatuses {
-		if status == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(drainStatuses, status)
 }
 
 // maxDrainPerWake bounds the per-wake DISPATCH: a waking device drains at most this many
@@ -196,6 +214,8 @@ func (f *CommandFetcher) Pending(ctx context.Context, tenant, deviceToken string
 
 	rows := resp.DrainableCommands
 	out := make([]DrainCommand, 0, min(len(rows), f.max))
+	var dropped int
+	var droppedStatuses []string // distinct, in the order first seen
 	for _, r := range rows {
 		if len(out) >= f.max {
 			break // defensive: the server clamps to `limit`, but never dispatch more than the cap
@@ -205,17 +225,52 @@ func (f *CommandFetcher) Pending(ctx context.Context, tenant, deviceToken string
 		// not re-fire). A status SET is static, so re-checking it costs nothing and cannot go
 		// stale the way a clock comparison can — which is why this guard survives and the expiry
 		// one did not.
+		//
+		// 🔴 A ROW ARRIVING HERE IS EVIDENCE, NOT NOISE, AND THIS GUARD USED TO THROW IT AWAY.
+		// drainableCommands applies the SAME predicate server-side before returning anything, so
+		// a row this rejects means the two copies of that predicate disagree — there is no benign
+		// cause. The consequence is the quietest failure this package has: every row rejected,
+		// Pending returns an empty slice, and a device's whole backlog stops being delivered
+		// while looking exactly like a device with nothing queued. So the rejections are counted
+		// and reported below rather than silently skipped.
 		if !drainable(r.Status) {
+			dropped++
+			if !slices.Contains(droppedStatuses, r.Status) {
+				droppedStatuses = append(droppedStatuses, r.Status)
+			}
 			continue
 		}
 		var payload []byte
 		if r.Payload != nil {
 			payload = []byte(*r.Payload)
 		}
-		// Status rides along: the dispatcher claims a HELD row before actuating and leaves a
-		// SENT one alone. Dropping it here would make every drained command look unclaimable,
-		// which is the shape a fake that omits a field produces — the caller's omission hides.
+		// Status rides along as the row's OWN lifecycle state, not as an instruction to anyone.
+		// Nothing downstream branches on it — every drained row is claimed, with no exception
+		// (claim() in dispatcher.go) — and a SENT row cannot reach this line at all, because
+		// drainable() rejected it above. What it buys is DIAGNOSIS: it is the field the
+		// no-claimer refusal logs, so an operator can see which half of a backlog went
+		// undispatched. Dropping it would cost that field, which is the shape a fake omitting a
+		// field produces — the caller's omission hides.
 		out = append(out, DrainCommand{Token: r.Token, Name: r.Name, Payload: payload, Status: r.Status})
+	}
+	// ONE line per wake, not one per row, and that is the point rather than tidiness: this fires
+	// only on contract drift, and drift is not per-device — it hits EVERY waking device on the
+	// instance at once. A warn per row would emit a backlog's worth of identical lines per
+	// device per Register/Update and bury the signal in itself, which is the same reason the
+	// claim-failure path logs at debug. The distinct STATUSES are the whole diagnostic: the
+	// offending name is what says which side renamed what.
+	//
+	// It stays FAIL-CLOSED and non-fatal. The unrecognised rows are skipped (a terminal command
+	// must not re-fire) and the understood ones in the same response are still returned, because
+	// turning drift into an error return would stop delivering the rows this build does
+	// understand — trading a partial outage for a total one.
+	if dropped > 0 {
+		log.Warn().
+			Str("tenant", tenant).
+			Str("device", deviceToken).
+			Int("dropped", dropped).
+			Strs("statuses", droppedStatuses).
+			Msg("Dropped LwM2M backlog rows whose status this build does not recognise as drainable; those commands were NOT delivered to the device. command-delivery applies the same predicate before returning a row, so this can only mean the two disagree about the drainable status set — a version/contract mismatch between this adapter and command-delivery, not a device fault.")
 	}
 	return out, nil
 }
