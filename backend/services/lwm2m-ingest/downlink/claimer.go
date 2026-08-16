@@ -29,8 +29,10 @@ type claimResponse struct {
 	Claimed bool `json:"markCommandSent"`
 }
 
-// CommandClaimer takes ownership of a HELD command in command-delivery immediately before
-// the wake drain issues its CoAP op (ADR-075 L4b).
+// CommandClaimer takes ownership of a backlogged (HELD or PARKED) command in command-delivery
+// immediately before the wake drain issues its CoAP op (ADR-075 L4b). Both drainable states go
+// through it — see claim() in dispatcher.go, where the exemption that used to skip it is
+// argued away.
 //
 // It exists because the delivery sweep publishes anything still dispatchable. A drain that
 // dispatched a HELD row without first claiming it would leave that row HELD for the next
@@ -38,6 +40,13 @@ type claimResponse struct {
 // is a valve opened twice, not a duplicate log line. The dispatcher's in-memory dedupe does
 // not close this: it is per-pod and TTL-bounded, so it cannot be what stands between a
 // leadership change and a duplicate actuation.
+//
+// 🔴 THAT ARGUMENT IS HELD's, AND A PARKED ROW DOES NOT INHERIT IT — which is why the sentence
+// above names HELD and this one exists rather than the wording being widened. The sweep
+// deliberately does NOT look at PARKED (republishing it would re-publish an offline fleet's
+// whole backlog every tick), so PARKED's risk is the other one: two replicas, or a drain and a
+// cancel, reaching the same row at once. Same conditional UPDATE, same exclusion, different
+// thing being excluded. Neither state is exempt.
 //
 // It shares the fetcher's commandQuerier seam (svcclient.Client's Query posts a mutation
 // document just as it posts a query), so downlink stays testable without a live

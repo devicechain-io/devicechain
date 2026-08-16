@@ -109,7 +109,7 @@ func TestLookupReachStates(t *testing.T) {
 
 	c.close() // park
 	_, r = tbl.Lookup(tnA, tok)
-	assert.Equal(t, ReachOffline, r, "a served device with a parked conn ⇒ offline (rides TTL to TIMEOUT)")
+	assert.Equal(t, ReachOffline, r, "a served device with a parked conn ⇒ offline (the command is handed back to command-delivery as PARKED, and lapses to EXPIRED — not TIMEOUT — if the device never wakes)")
 }
 
 func TestBindThenConnReturnsLiveConn(t *testing.T) {

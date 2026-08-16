@@ -4,11 +4,19 @@
 package downlink
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 // fakeQuerier is a stand-in for svcclient.Client: it captures the query arguments and
@@ -216,10 +224,17 @@ func TestDrainableAcceptsExactlyHeldAndParked(t *testing.T) {
 }
 
 // TestPendingDrainsHeldAndParkedCarryingStatus proves both halves of the backlog come through
-// AND that each row's status rides on the DrainCommand. The status is what the dispatcher
-// uses to decide whether a claim is required before it actuates, so a fetcher that dropped
-// the field would leave every command looking un-claimable — a whole-fleet silent stall that
-// no test of the dispatcher alone can see.
+// AND that each row's status rides on the DrainCommand.
+//
+// What a dropped status would cost is DIAGNOSIS, not delivery. Nothing branches on it — every
+// drained row is claimed either way — but it is the field the no-claimer refusal logs, so
+// losing it turns "which half of this backlog went undispatched" into a question the logs
+// cannot answer, and no test of the dispatcher alone can see the field go missing.
+//
+// An earlier version of this comment justified the assertion differently: that the dispatcher
+// reads the status to decide whether a claim is required, so dropping it would stall a whole
+// fleet. That was true of the pre-PARKED claim EXEMPTION and has not been true since it was
+// removed. The assertions below are unchanged; only the reason for them is.
 func TestPendingDrainsHeldAndParkedCarryingStatus(t *testing.T) {
 	q := &fakeQuerier{rows: []drainRow{
 		{Token: "held", Name: "lwm2m.write", Payload: strp(`{"path":"/3/0/0"}`), Status: "HELD"},
@@ -246,6 +261,10 @@ func TestPendingDrainsHeldAndParkedCarryingStatus(t *testing.T) {
 // a row outside the drain's status set (contract drift), the fetcher must never hand a
 // terminal command to dispatch (re-actuation). SUCCESSFUL is the case that matters — a
 // command the device already answered.
+//
+// This drops rows, so it also trips the drift warn — deliberately uncaptured here, because
+// what it owes is the SKIP. The warn's own properties (one line, the status names, the
+// surviving rows) are asserted in TestPendingWarnsOnceNamingTheDriftedStatuses below.
 func TestPendingDropsNonDrainableStatus(t *testing.T) {
 	q := &fakeQuerier{rows: []drainRow{
 		{Token: "done", Name: "lwm2m.write", Payload: strp(`{"path":"/3/0/0"}`), Status: "SUCCESSFUL"},
@@ -262,6 +281,190 @@ func TestPendingDropsNonDrainableStatus(t *testing.T) {
 	// the LIVE path within a tick, so draining it here too would double-dispatch.
 	if len(got) != 1 || got[0].Token != "live" {
 		t.Fatalf("got %+v, want only the drainable (PARKED) command", got)
+	}
+}
+
+// --- drift detection: the defensive guard must be AUDIBLE ---------------------
+//
+// 🔴 THE INVARIANT THESE TWO TESTS STAND IN FOR CANNOT BE COMPILED. statusHeld/statusParked
+// are declared as literals because downlink does not import command-delivery, so nothing
+// compares them to CommandHeld/CommandParked and nothing can. If command-delivery ever renamed
+// a wire value, drainableCommands would return the renamed rows, drainable() would reject every
+// one, and Pending would return an empty slice: a device whose entire backlog silently stops
+// being delivered, indistinguishable from a device with nothing queued.
+//
+// The rejection is therefore reported, not just performed. Both directions are asserted below,
+// and the SILENT one is not optional — without it, a warn wired to fire unconditionally would
+// pass the loud test exactly as well as a correct one.
+
+// drainLogBuffer captures the global zerolog output for the duration of a test. It is
+// synchronized even though Pending is called from a single goroutine here: the drain runs on
+// shard workers in production, and an instrument that is only safe in the test that first used
+// it is the one that goes racy the day it is reused.
+type drainLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *drainLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *drainLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// records returns the decoded log lines whose message contains want. It matches on the
+// message's own distinctive phrase rather than on the level, so an unrelated warning from
+// elsewhere cannot inflate the count and make a per-row warn look aggregated.
+func (b *drainLogBuffer) records(want string) []map[string]any {
+	var found []map[string]any
+	for _, line := range strings.Split(b.String(), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			continue
+		}
+		if msg, _ := rec["message"].(string); strings.Contains(msg, want) {
+			found = append(found, rec)
+		}
+	}
+	return found
+}
+
+// captureDrainLogs redirects the global logger into a buffer for the duration of a test.
+//
+// 🔴 It also FORCES the global level, which is not belt-and-braces. zerolog's global level is
+// process-wide state any suite can leave Disabled, and a muted logger is the worst possible
+// state for a test that counts log lines: "the warning fired zero times" is precisely what the
+// control below asserts, so a muted logger reads as a PASS on the half of this pair that exists
+// to catch an unconditional warn. Setting it here makes the instrument's state a property of
+// this test rather than of whichever test ran before it.
+func captureDrainLogs(t *testing.T) *drainLogBuffer {
+	t.Helper()
+	buf := &drainLogBuffer{}
+	prevLogger, prevLevel := log.Logger, zerolog.GlobalLevel()
+	log.Logger = zerolog.New(buf)
+	zerolog.SetGlobalLevel(zerolog.TraceLevel)
+	t.Cleanup(func() {
+		log.Logger = prevLogger
+		zerolog.SetGlobalLevel(prevLevel)
+	})
+	return buf
+}
+
+// driftWarnPhrase is the message fragment the drift warn is found by. It is a LITERAL, not a
+// slice of the production string, because a test that reads the message off the code it is
+// testing agrees with any rewording, including one that drops the point.
+const driftWarnPhrase = "does not recognise as drainable"
+
+// TestPendingWarnsOnceNamingTheDriftedStatuses is the loud half. A row reaching the
+// drainable() guard means this build's status set and command-delivery's drainableCommands
+// predicate disagree — the server applies the same predicate before returning a row, so there
+// is no benign cause — and the whole failure mode is that the resulting non-delivery looks
+// like an empty queue.
+//
+// Three properties are asserted, and each is a different way the report could be useless:
+// ONE line (not one per row — on real drift this fires for every device on the instance, and a
+// per-row warn buries the signal in itself), the STATUS NAMES (the only datum that says which
+// side renamed what), and the surviving rows (drift must not cost the commands this build does
+// understand).
+func TestPendingWarnsOnceNamingTheDriftedStatuses(t *testing.T) {
+	logs := captureDrainLogs(t)
+	// Two distinct unknown statuses across three rows, so a per-row warn and a per-status warn
+	// are both distinguishable from the one aggregated line, and so the dedupe of the reported
+	// names is exercised rather than assumed.
+	q := &fakeQuerier{rows: []drainRow{
+		{Token: "keep-1", Name: "lwm2m.read", Payload: strp(`{"path":"/3/0/0"}`), Status: "HELD"},
+		{Token: "drift-1", Name: "lwm2m.read", Payload: strp(`{"path":"/3/0/0"}`), Status: "STASHED"},
+		{Token: "drift-2", Name: "lwm2m.read", Payload: strp(`{"path":"/3/0/0"}`), Status: "STASHED"},
+		{Token: "drift-3", Name: "lwm2m.read", Payload: strp(`{"path":"/3/0/0"}`), Status: "WITHHELD"},
+		{Token: "keep-2", Name: "lwm2m.read", Payload: strp(`{"path":"/3/0/0"}`), Status: "PARKED"},
+	}}
+	f := NewCommandFetcher(q, "http://cd/graphql")
+
+	got, err := f.Pending(context.Background(), "tenantA", "dev-1")
+	if err != nil {
+		t.Fatalf("Pending: %v", err)
+	}
+	// Fail closed, not shut: the unknown rows are skipped and the understood ones still ship.
+	// Returning an error instead would stop delivering the rows this build does recognise,
+	// trading a partial outage for a total one.
+	if len(got) != 2 || got[0].Token != "keep-1" || got[1].Token != "keep-2" {
+		t.Fatalf("got %+v, want the HELD and PARKED rows from the SAME response to survive the drift", got)
+	}
+
+	recs := logs.records(driftWarnPhrase)
+	if len(recs) != 1 {
+		t.Fatalf("got %d drift warnings for 3 dropped rows, want exactly 1 aggregated line per "+
+			"Pending call; real drift fires on every waking device at once, so a per-row warn "+
+			"buries the signal in itself\n%s", len(recs), logs.String())
+	}
+	rec := recs[0]
+	if lvl, _ := rec["level"].(string); lvl != "warn" {
+		t.Errorf("the drift record is at level %q, want warn — a debug line here is not audible, "+
+			"which is the entire defect being fixed", lvl)
+	}
+	if v, _ := rec["tenant"].(string); v != "tenantA" {
+		t.Errorf("tenant = %q, want tenantA — without it an operator cannot tell whose fleet stalled", v)
+	}
+	if v, _ := rec["device"].(string); v != "dev-1" {
+		t.Errorf("device = %q, want dev-1 — the device whose backlog was not delivered", v)
+	}
+	if v, _ := rec["dropped"].(float64); int(v) != 3 {
+		t.Errorf("dropped = %v, want 3 — the count is what says how much of the backlog went nowhere", rec["dropped"])
+	}
+	// The offending NAMES, deduped. This is the whole diagnostic: "PARKED became WITHHELD" is
+	// readable from the log alone, whereas a count says only that something is wrong.
+	raw, ok := rec["statuses"].([]any)
+	if !ok {
+		t.Fatalf("statuses = %#v, want the list of offending status names", rec["statuses"])
+	}
+	var names []string
+	for _, s := range raw {
+		names = append(names, fmt.Sprint(s))
+	}
+	sort.Strings(names)
+	if len(names) != 2 || names[0] != "STASHED" || names[1] != "WITHHELD" {
+		t.Errorf("statuses = %v, want exactly [STASHED WITHHELD] — each offending name once, "+
+			"not once per row", names)
+	}
+}
+
+// TestPendingIsSilentWhenEveryRowIsDrainable is the CONTROL, and it is what makes the test
+// above mean anything: a warn wired to fire on every call would satisfy every assertion there.
+// The overwhelmingly common wake — a backlog entirely within the understood status set — must
+// produce no log line at all, or the drift warn is noise an operator learns to scroll past.
+//
+// It asserts the buffer is EMPTY rather than merely free of the drift phrase. Pending logs
+// nothing on a clean path today, and asserting the stronger property is what catches a warn
+// reworded past driftWarnPhrase. If a legitimate log line is ever added to Pending, narrow this
+// to records(driftWarnPhrase) — do not delete it.
+func TestPendingIsSilentWhenEveryRowIsDrainable(t *testing.T) {
+	logs := captureDrainLogs(t)
+	q := &fakeQuerier{rows: []drainRow{
+		{Token: "held", Name: "lwm2m.read", Payload: strp(`{"path":"/3/0/0"}`), Status: "HELD"},
+		{Token: "parked", Name: "lwm2m.read", Payload: strp(`{"path":"/3/0/0"}`), Status: "PARKED"},
+	}}
+	f := NewCommandFetcher(q, "http://cd/graphql")
+
+	got, err := f.Pending(context.Background(), "tenantA", "dev-1")
+	if err != nil {
+		t.Fatalf("Pending: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d commands, want both drainable rows — the control proves nothing if the "+
+			"call under it did no work", len(got))
+	}
+	if s := logs.String(); s != "" {
+		t.Errorf("a drain with nothing to complain about logged:\n%s\nA drift warn that fires on a "+
+			"clean wake is indistinguishable from no warn at all, because it fires on every wake", s)
 	}
 }
 

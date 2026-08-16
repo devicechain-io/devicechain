@@ -190,9 +190,17 @@ const (
 	// ReachNotServed — no (tenant, deviceToken) index entry: this adapter does not serve the device
 	// (it belongs to another protocol adapter, or nothing). The command is ack-dropped with no response.
 	ReachNotServed Reach = iota
-	// ReachOffline — a served device with no live conn right now (parked or dead). The live command
-	// is ack-dropped; it stays held in command-delivery (SENT) and is drained to the device on its
-	// next Register/Update wake (L4b), or reaches TIMEOUT at its TTL if it never wakes.
+	// ReachOffline — a served device with no live conn right now (parked or dead). The live
+	// command reached nothing, so the dispatcher HANDS IT BACK rather than dropping it: park()
+	// moves the row SENT -> PARKED in command-delivery, where the wake drain claims it on the
+	// device's next Register/Update (L4b) and where, if the device never wakes, it lapses to
+	// EXPIRED at its TTL — not TIMEOUT, which would blame the device for a delivery that was
+	// never attempted.
+	//
+	// Ack-dropping without a hand-back survives only as the FALLBACK: no parker is wired, or the
+	// delivery envelope carried no dispatch nonce to park against. Those rows stay SENT, which
+	// is no longer in the drain's status set, so they genuinely do ride their TTL to TIMEOUT —
+	// which is why that path is counted on ParkSkipped instead of being silent.
 	ReachOffline
 	// ReachLive — a served device with a live conn: dispatch.
 	ReachLive

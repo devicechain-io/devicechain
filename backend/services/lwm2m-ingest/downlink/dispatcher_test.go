@@ -300,7 +300,13 @@ func (l *flakyLookup) Lookup(_, _ string) (mux.Conn, Reach) {
 // --- drain() disposition (ADR-075 L4b) --------------------------------------
 
 // TestDrainDispatchesHeldCommands proves the core wake-drain: held commands are dispatched to the
-// now-live device, in fetch order (the fetcher already sorts oldest-first), each publishing a response.
+// now-live device, in the order the fetcher handed them over, each publishing a response.
+//
+// That order is COMMAND-DELIVERY's, not ours: drainableCommands ORDERs oldest-first in the
+// database, and this side sorts nothing — the client-side sort.Slice went with parseID. So the
+// only ordering property either side of this wire can be tested for here is preservation, which
+// is fetcher_test.go's job (see the fakeQuerier note at the top of that file: a fake returning
+// canned rows cannot simulate an ORDER BY, so no test in this package may claim to prove one).
 //
 // The fixtures carry Status: statusParked — as does every pre-existing drain test below — and
 // that models the row a device's own absence produced at DISPATCH time: published toward a
@@ -310,9 +316,10 @@ func (l *flakyLookup) Lookup(_, _ string) (mux.Conn, Reach) {
 // claim-then-dispatch tests above stage HELD explicitly. Stating the status on every fixture
 // rather than leaving it zero is what makes that contrast expressible at all.
 //
-// These fixtures said statusSent until PARKED existed, and the rename is not cosmetic: a SENT
+// These fixtures said "SENT" until PARKED existed, and the rename is not cosmetic: a SENT
 // row is no longer drained at all, so leaving them would have left this whole block asserting
-// against a state the drain cannot see.
+// against a state the drain cannot see. The literal is written out because the package no
+// longer declares a constant for SENT, deliberately — see the note on statusHeld.
 func TestDrainDispatchesHeldCommands(t *testing.T) {
 	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
 	pub := &fakePublisher{}
@@ -370,8 +377,13 @@ func TestDedupIsTenantScoped(t *testing.T) {
 }
 
 // TestDrainStopsWhenDeviceDropsMidDrain proves a device dropping mid-drain stops the drain cleanly —
-// the remaining held commands stay SENT (unfetched-again) for the next wake, never dispatched to a
-// dead conn.
+// the remaining commands are never dispatched to a dead conn, and are still there to deliver on the
+// next wake.
+//
+// What leaves them deliverable is that the loop returns at the reachability check BEFORE claim(),
+// so nothing touches their rows: they stay in the status the fixtures gave them (PARKED), which is
+// exactly what keeps them in the drainable set. Had they been claimed first, they would be SENT —
+// invisible to the next drain and riding their TTL.
 func TestDrainStopsWhenDeviceDropsMidDrain(t *testing.T) {
 	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
 	pub := &fakePublisher{}
@@ -1144,8 +1156,8 @@ func TestCrossDeviceCommandsRunConcurrently(t *testing.T) {
 //
 //   - the LIVE path still receives commands already durable on the stream when the
 //     delete happened;
-//   - the WAKE-DRAIN re-fetches commands left in SENT and fires them when a sleeping
-//     device next registers — arbitrarily long after the delete, off a (tenant, token)
+//   - the WAKE-DRAIN re-fetches commands still HELD or PARKED and fires them when a
+//     sleeping device next registers — arbitrarily long after the delete, off a (tenant, token)
 //     remembered from a registration that predates it, on a path where nothing else
 //     consults the lifecycle (PSK bindings are static config and Update never
 //     re-resolves).
