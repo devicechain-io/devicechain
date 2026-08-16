@@ -23,8 +23,18 @@ import (
 // the event Source stamp and how (or whether) to auto-register a device the source has
 // not seen before. It is fixed per connection (a source's client holds its own).
 type IngestPolicy struct {
-	// Source is stamped onto every emitted UnresolvedEvent (carried through to each
-	// resolved event), e.g. "sparkplug:{hostId}" or "lwm2m:{serverId}".
+	// Source is stamped onto every emitted UnresolvedEvent and carried unchanged to the
+	// resolved event and on into device_states.source, where callers classify a device BY
+	// TRANSPORT by cutting at the first ":".
+	//
+	// 🔴 ONLY SOME SOURCES ARE QUALIFIED, AND WHICH ONES IS NOT A DETAIL A CALLER MAY GUESS.
+	// Sparkplug mints "sparkplug:{hostId}"; LwM2M mints the BARE constant "lwm2m" with no
+	// qualifier and no way to configure one; MQTT and HTTP mint the operator-chosen event-source
+	// id, whose shipped defaults are "mqtt1" and "http1" — so the literal "mqtt" is not a value
+	// this field ever takes. An earlier version of this comment offered "lwm2m:{serverId}" as an
+	// example, which no emitter in the tree mints and which would talk a reader into matching on
+	// a prefix that never arrives. device-state's schema.graphql documents all four cases and is
+	// the authority; keep this line subordinate to it rather than restating it.
 	Source string
 	// DeviceTypeToken is the device type stamped on an auto-registered device.
 	DeviceTypeToken string

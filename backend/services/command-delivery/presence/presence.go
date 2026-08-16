@@ -129,6 +129,18 @@ var nonDeliveringTransports = map[string]bool{
 //
 // An operator can still collide deliberately by naming a source exactly "sparkplug"; that
 // is unchanged by this function and is the deny list's pre-existing shape, not a new hazard.
+// Nothing prevents it — event-sources' Validate() checks the batching bounds and the shed
+// floor and says outright that "the source list is left to the source loaders", so an
+// EventSource.Id is accepted whatever it says.
+//
+// 🔴 THE COST OF THAT COLLISION IS NOT FIXED — IT INVERTS WITH THE LIST'S POLARITY, so read
+// the paragraph above as scoped to a DENY list rather than as a property of this function.
+// Against nonDeliveringTransports a collision is self-inflicted and self-limiting: the
+// operator named their own MQTT source "sparkplug" and their own commands stop. An ALLOW
+// list built on the same reduction fails the other way — the collision makes a foreign
+// transport's device look like a member, and the caller ACTS on a device it was written to
+// exclude. Whoever adds the first allow list here (the stranded-SENT reconciler is the
+// candidate) owes that case a decision rather than this paragraph's reassurance.
 func transportOf(source string) string {
 	transport, _, _ := strings.Cut(source, ":")
 	return transport
