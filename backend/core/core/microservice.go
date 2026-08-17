@@ -14,6 +14,8 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -59,7 +61,57 @@ type Microservice struct {
 	// Internal lifeycle processing
 	lifecycle LifecycleManager
 	shutdown  chan os.Signal
-	done      chan bool
+
+	// outcome carries HOW the process ended: nil for an orderly shutdown, non-nil
+	// when startup was refused or teardown failed. Run turns it into an exit status.
+	//
+	// 🔴 It is deliberately not the `chan bool` it used to be. That channel's value was
+	// always true, so it recorded that the process had stopped while discarding the only
+	// bit anyone can act on — which is how a service that refused its own configuration
+	// came to exit 0 and report Completed.
+	outcome chan error
+
+	// finish makes the FIRST outcome the reported one and every later one a no-op.
+	//
+	// ⚠️ Be exact about what it does NOT do: it does not prevent a deadlock. With a
+	// cap-1 buffer and Run already sitting on the receive, a late sender could never
+	// have blocked for longer than that receive takes. An earlier version of this
+	// comment claimed a stranded-goroutine hazard, in the emphatic register, and the
+	// hazard did not exist.
+	//
+	// What it buys is that "exactly one outcome" is stated rather than inferred from a
+	// buffer size, and that it keeps holding if a third sender is ever added. 🔴 The
+	// property that actually matters — a later nil never painting over an earlier
+	// failure — is pinned by TestARefusedStartupSurvivesTheStopThatFollowsIt, not by
+	// this field.
+	finish sync.Once
+
+	// phase is the distinction whose absence made shutdown incoherent: whether this
+	// service ever actually started. Two goroutines drive the lifecycle — startup, and
+	// the signal handler, which is armed BEFORE startup is launched — and this is what
+	// says which of them owns the process.
+	//
+	// 🔴 Without it, a SIGTERM during initialization ran the full teardown against a
+	// service that did not exist yet. Stop's state guards do not refuse Initializing or
+	// Initialized (they refuse Uninitialized and Starting), and initialization is where
+	// a service spends most of its startup. So Stop and Terminate both SUCCEEDED,
+	// reported an orderly shutdown, and took the outcome slot — and a startup failure
+	// arriving a moment later was dropped, exiting 0. That is the exact defect the
+	// outcome channel exists to fix, reachable through the channel meant to fix it.
+	//
+	// 🔴 IT IS A CAS AND NOT A FLAG, because a flag leaves a window instead of closing
+	// one. Set after InitializeAndStart returns, a plain flag is still false for the
+	// instant after startup has genuinely finished, so a SIGTERM landing there would
+	// treat a fully-started service as never-started: no teardown, and no readiness
+	// drain, severing in-flight requests on a pod that was serving. Exactly one of the
+	// two goroutines can move phase out of phaseStarting, so there is no such instant.
+	//
+	// 🔴 It also supplies a happens-before edge that was missing outright:
+	// LifecycleManager has no synchronization of its own, so reading its State from the
+	// signal goroutine while startup writes it is a data race — one that now decides an
+	// exit status. Startup's CAS publishes every state write it made, and the shutdown
+	// path's CAS observes them. ⚠️ CI runs no -race, so this was proven by hand.
+	phase atomic.Int32
 
 	// rootCtx is the cancelable context handed to Initialize/Start; cancel is
 	// invoked at the start of shutdown so long-running loops (NATS consumers, the
@@ -108,7 +160,7 @@ func NewMicroservice(callbacks LifecycleCallbacks) *Microservice {
 	// Create lifecycle manager and channels for tracking shutdown.
 	ms.lifecycle = NewLifecycleManager(ms.FunctionalArea, ms, callbacks)
 	ms.rootCtx, ms.cancel = context.WithCancel(context.Background())
-	ms.done = make(chan bool, 1)
+	ms.outcome = make(chan error, 1)
 	ms.shutdown = make(chan os.Signal, 1)
 
 	// Hook interrupt and terminate signals for graceful shutdown
@@ -144,20 +196,82 @@ func (ms *Microservice) Banner() {
 	fmt.Println()
 }
 
-// Create microservice and initialize/start it.
+// The phases a process moves through, held in Microservice.phase. Only one goroutine
+// may leave phaseStarting, and whichever does owns what happens next.
+const (
+	phaseStarting int32 = iota // startup has not finished; nothing exists to tear down
+	phaseRunning               // startup succeeded; a shutdown must tear down in full
+	phaseStopping              // a shutdown claimed the process
+)
+
+// exitProcess is os.Exit behind a variable so the exit decision can be tested. Only a
+// test should reassign it, and should restore it — nothing enforces either half; it is
+// a package-level var in a package that also holds production code.
+var exitProcess = os.Exit
+
+// Run creates the microservice, starts it, and blocks until it is over.
+//
+// ⚠️ In a real binary its return value is ALWAYS nil, and a caller must not branch on
+// it: the only non-nil outcome exits the process before Run can return. The signature
+// is what it is because the exit is indirected for testing, and a test does observe
+// the error. Writing `if err := ms.Run(); err != nil { … }` produces dead code.
+//
+// 🔴 THE EXIT LIVES HERE ON PURPOSE, RATHER THAN IN EACH main(). Run has always
+// returned an error and every caller discards it, so "return the error and let main
+// exit" would change nothing observable, would have to be repeated in every service,
+// and would be silently absent from the next service somebody adds. This repo's own
+// rule, from command-delivery/presence: one rule that cannot be forgotten beats two
+// where the weaker one looks like the protection. This costs nothing that would
+// otherwise run — no main() holds a defer, and all teardown happens inside
+// ShutDownNow, well before this point.
+//
+// What a non-zero status actually buys is REPORTING, and it is worth being exact
+// about that: the services are Deployments, whose default restartPolicy of Always
+// restarts a pod whatever its exit code, so a service refusing its own config was
+// already looping. It simply looped reporting Completed — indistinguishable from an
+// orderly stop to `kubectl get pods`, to a container-exit alert, and to anyone
+// reading the event stream.
 func (ms *Microservice) Run() error {
 	log.Info().Msg("Creating new microservice and running intialization/startup...")
 
 	go func() {
 		ms.Banner()
-		err := ms.InitializeAndStart()
-		if err != nil {
-			ms.done <- true
+		if err := ms.InitializeAndStart(); err != nil {
+			ms.finished(err)
+			return
 		}
+		// Losing this means a shutdown claimed the process while startup was on its
+		// last instructions. It has already reported the outcome and is not waiting
+		// for us; the process is going away, and every resource this goroutine
+		// acquired goes with it.
+		ms.phase.CompareAndSwap(phaseStarting, phaseRunning)
 	}()
 
-	ms.waitForShutdown()
-	return nil
+	return ms.reportOutcome(ms.waitForShutdown())
+}
+
+// finished records how the process ended. The first caller wins; later ones are
+// dropped rather than blocking (see the finish field).
+//
+// 🔴 First-wins is only sound because of the phase gate in ShutDownNow, which is what
+// makes a nil outcome reachable ONLY after startup succeeded. Without it, tidying up
+// after an interrupted startup reported success and the real failure was discarded —
+// first-wins was the bug, not the rule. Name the gate before changing either.
+func (ms *Microservice) finished(err error) {
+	ms.finish.Do(func() { ms.outcome <- err })
+}
+
+// reportOutcome logs a failed lifecycle and sets a non-zero exit status for it,
+// leaving an orderly shutdown to exit 0.
+func (ms *Microservice) reportOutcome(err error) error {
+	if err != nil {
+		log.Error().Err(err).Msg("Microservice did not complete its lifecycle; exiting with a non-zero status.")
+		exitProcess(1)
+		// ⚠️ Nothing may be added below this line. In production exitProcess is os.Exit
+		// and never returns; under test it does. A statement here would run in every
+		// test and never in the field — the two would silently disagree.
+	}
+	return err
 }
 
 // Issue initialize and start commands to microservice
@@ -213,6 +327,57 @@ func shutdownDrainDelay() time.Duration {
 
 // Issue stop and terminate commands to microservice
 func (ms *Microservice) ShutDownNow() {
+	// 🔴 A service that never finished starting has nothing to tear down and MUST NOT
+	// try. The lifecycle's own state guards do not stop it: they refuse a stop from
+	// Uninitialized and Starting but permit one from Initializing and Initialized,
+	// which is where a service spends most of its startup — dialing Postgres, running
+	// migrations, connecting to the broker. Teardown then ran against components that
+	// were never built, and each service's stop callback reaches package-level values
+	// that initialization had not yet assigned.
+	//
+	// It also decided the exit status wrongly, which is why the gate lives here rather
+	// than in the lifecycle guards: that teardown SUCCEEDED, reported an orderly
+	// shutdown, and took the outcome slot — so a startup failure arriving a moment
+	// later was dropped and the process exited 0.
+	//
+	// One atomic swap answers all three cases and claims the process in the same step,
+	// so no ordering against the startup goroutine is left to chance.
+	switch ms.phase.Swap(phaseStopping) {
+	case phaseStarting:
+		// 🔴 THIS REPORTS AN ORDERLY STOP, NOT A FAILURE, and that is a deliberate call.
+		// Reaching here means something ASKED this process to stop; not having finished
+		// starting was not its own verdict on itself. Kubernetes terminates a
+		// still-starting pod for entirely routine reasons — a rollout undone, a node
+		// drained, a replica scaled away — and startup here runs for seconds, since it
+		// dials Postgres and applies migrations. Exiting non-zero would report a fault
+		// on every one of those.
+		//
+		// It does NOT weaken the case this change was built for. A startup that REFUSES
+		// itself — bad config, invalid instance id — reports its own error and needs no
+		// signal to do it, so it still exits non-zero. And because the first outcome
+		// wins, a refusal that has ALREADY happened can never be overwritten by a stop
+		// arriving afterwards. Masking would need the failure to occur strictly after
+		// the stop claimed the process — i.e. the service was still trying when it was
+		// killed — and reporting the signal is the honest answer there. Nor does a
+		// genuinely stuck startup go unreported: the chart's startupProbe fails the pod
+		// after failureThreshold × periodSeconds, and Kubernetes says so itself, in
+		// events and in the restart count.
+		//
+		// The readiness drain is skipped for the same reason it exists: it lets endpoint
+		// removal propagate before the pod stops serving, and a service that never
+		// became ready was never in a Service's endpoints. There is nothing to drain,
+		// and no reason to sleep the window before exiting.
+		log.Warn().Msg("Asked to shut down before startup completed; nothing to tear down.")
+		ms.cancel()
+		ms.finished(nil)
+		return
+	case phaseStopping:
+		// A shutdown is already running. Teardown is not idempotent, and the outcome
+		// has an owner already.
+		log.Warn().Msg("Shutdown already in progress; ignoring.")
+		return
+	}
+
 	// Zero-downtime drain (methodology §10.2): flip readiness to 503 FIRST so the
 	// endpoint controllers pull this pod from Service endpoints, then keep serving
 	// for a short window while that removal propagates (kube-proxy is eventually
@@ -235,22 +400,30 @@ func (ms *Microservice) ShutDownNow() {
 	err := ms.Stop(context.Background())
 	if err != nil {
 		log.Error().Err(err).Msg("Unable to stop microservice")
-		ms.done <- true
+		// Terminate is deliberately NOT attempted after a failed Stop. Stop restores
+		// the previous lifecycle state on any error, and Terminate refuses every state
+		// but Stopped, so the only thing a second call could produce here is a second
+		// state-guard error burying the first.
+		//
+		// ⚠️ What that costs, since the reason above explains only why it is pointless:
+		// when Stop fails in its Postprocess — after ExecuteStop already succeeded —
+		// whatever Terminate would have closed is left to the process exit instead.
+		ms.finished(err)
 		return
 	}
 	err = ms.Terminate(context.Background())
 	if err != nil {
 		log.Error().Err(err).Msg("Unable to terminate microservice")
-		ms.done <- true
+		ms.finished(err)
 		return
 	}
 
-	ms.done <- true
+	ms.finished(nil)
 }
 
-// Wait for microservice to shut down
-func (ms *Microservice) waitForShutdown() {
-	<-ms.done
+// Wait for microservice to shut down, returning how it ended.
+func (ms *Microservice) waitForShutdown() error {
+	return <-ms.outcome
 }
 
 // LoadInstanceConfiguration reads the instance configuration from the mounted
