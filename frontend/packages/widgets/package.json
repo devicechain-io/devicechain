@@ -17,7 +17,7 @@
     "@devicechain/client": "*",
     "@devicechain/dashboards": "*",
     "echarts": "^6.0.0",
-    "maplibre-gl": "^6.2.0"
+    "maplibre-gl": "^6.3.0"
   },
   "peerDependencies": {
     "react": "^19.2.8",
@@ -25,7 +25,7 @@
   },
   "devDependencies": {
     "@testing-library/react": "^16.2.0",
-    "@types/node": "^26.1.2",
+    "@types/node": "^26.2.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "jsdom": "^30.0.1",
