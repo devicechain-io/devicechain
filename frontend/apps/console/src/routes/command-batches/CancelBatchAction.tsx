@@ -26,6 +26,12 @@
 //
 // The rules that read the four numbers live in ./cancelOutcome.ts and are unit-tested;
 // this file is the renderer.
+//
+// 🔴 IT ALSO OWNS WHEN THE BRAKE IS OFFERED AT ALL, and that gate reads WHAT IS LEFT rather
+// than WHAT WAS CALLED. Withdrawing the action the moment a batch carries a cancellation
+// stamp is the obvious rule and the wrong one: command-delivery can leave a command live
+// inside a cancelled batch, the report that would have named it has already been rendered,
+// and the stamp then hides the only control that could stop it. See `canCancel` below.
 
 import { useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -49,8 +55,10 @@ import { Fact } from './Fact';
 import { STILL_HELD_STATUSES, needsSecondCancel, unaccounted } from './cancelOutcome';
 
 export interface BatchCancelState {
-  /** The primary action: offered on a batch nobody has called off yet. */
+  /** The header action: offered while pressing it could still change something. */
   canCancel: boolean;
+  /** Whether the batch already carries a cancellation stamp — the action's WORDING, not its gate. */
+  alreadyCancelled: boolean;
   /** The remedial action: offered whenever the operator may write commands. */
   canWrite: boolean;
   busy: boolean;
@@ -82,30 +90,57 @@ export function useBatchCancel({
   const inFlight = useRef(false);
 
   const canWrite = hasAuthority(claims, 'command:write');
-  // 🔴 BOTH GATES, AND THEY ARE DIFFERENT KINDS OF GATE. The authority decides whether the
-  // operator may write commands at all; `cancelledAt` decides whether this batch has
-  // already been called off. A batch that has been cancelled keeps the FIRST
-  // cancellation's stamp forever (first-wins), so re-offering the primary action on it
-  // would invite a write whose only visible effect is a second report of the same event.
-  const canCancel = canWrite && batch.cancelledAt == null;
 
   // How much this cancel could actually stop, read live. The batch record's `accepted` is
   // a stored fact about the moment it fired and is the wrong number here — commands have
   // moved since. This asks the command rows instead, for the three states in which the
   // platform still HOLDS the command.
   //
-  // 🔴 A NULL HERE IS "NOT KNOWN", NOT ZERO. Three different things produce it — the read
-  // is still in flight, the read failed, or the service answered with a null
-  // `totalRecords` (the field is a nullable Int) — and all three mean the same thing to an
-  // operator about to press a brake: nobody said how much is left to stop. The dialog says
-  // that, rather than printing a confident 0 that reads as "there is nothing to stop".
-  //
   // The button is deliberately NOT disabled while this loads. An informational read must
   // never be allowed to hold up a brake.
-  const { data: heldCount } = useQuery(
+  const { data: heldData, error: heldError } = useQuery(
     () => countBatchCommands({ batchToken: batch.token, statuses: STILL_HELD_STATUSES }),
     [batch.token, reloadKey],
   );
+  // 🔴 A NULL HERE IS "NOT KNOWN", NOT ZERO — and BOTH halves of this line are load-bearing.
+  //
+  // `data` is null while the read is in flight, and null when the service answers with a
+  // null `totalRecords` (a nullable Int). But `useQuery` deliberately KEEPS THE PREVIOUS
+  // DATA WHEN A REFETCH FAILS, so on a failed re-read `data` is not null at all — it is the
+  // count from before, presented as though it were the count from after. Folding `error`
+  // back into null is what stops a stale reading arriving as a fresh one, and the stale
+  // reading this screen re-reads most often is 0: the exact value that would otherwise
+  // withdraw the brake below on the strength of a read that never landed.
+  const held = heldError == null ? heldData : null;
+
+  // 🔴 THE QUESTION IS "CAN PRESSING IT STILL CHANGE SOMETHING?", NOT "HAS IT BEEN PRESSED?".
+  // Two different gates, and the second one used to be `batch.cancelledAt == null` alone —
+  // which hid the brake on precisely the batch that most needs it.
+  //
+  // A cancellation is FIRST-WINS, so on a batch with nothing left to stop, re-offering the
+  // primary action invites a write whose only visible effect is a second report of an event
+  // that already happened. But the stamp does not mean the batch is finished with. Two
+  // things a later cancel still changes:
+  //
+  //   • Commands the platform is STILL HOLDING. command-delivery documents an interleaving
+  //     it cannot close from one statement: a release whose subquery saw no committed stamp
+  //     requeues a command whose batch is called off a moment later, and nothing downstream
+  //     re-checks. That command is live, inside a cancelled batch, and it appears AFTER the
+  //     cancellation report that would have named it — so the report cannot surface it and
+  //     the stamp actively hides it. Only a live count of the held states finds it.
+  //
+  //   • Nothing held, no stamp yet. Cancelling is still not a no-op: the stamp is what makes
+  //     a FAILED DELIVERY retire its command instead of putting it back in the queue, so
+  //     pressing it decides what happens to commands already at their devices if they fail.
+  //     That is why "held is 0" alone does not withdraw the action either.
+  //
+  // Hence the conjunction: withdraw the brake only once the batch is stamped AND we have a
+  // count saying nothing is left. An UNKNOWN count keeps the action on offer — the cost of
+  // that direction is a stamped-and-settled batch briefly showing an action it then
+  // withdraws, and the cost of the other direction is withholding a brake for as long as an
+  // informational read is slow, failing or hung.
+  const alreadyCancelled = batch.cancelledAt != null;
+  const canCancel = canWrite && !(alreadyCancelled && held === 0);
 
   const cancel = async () => {
     // A duplicate cancel is harmless where a duplicate FIRE is not — no token is spent and
@@ -116,20 +151,18 @@ export function useBatchCancel({
     const confirmed = await confirm({
       // The batch's name is the command key every targeted device received; it is customer
       // data, interpolated rather than translated.
-      title: t('cancelConfirmTitle', { name: batch.name }),
+      //
+      // A second cancel gets its own question. "Call off X?" asked about a batch already
+      // called off invites the answer "it already is" — and the operator would be right,
+      // which is the wrong thing to be thinking about while deciding whether to stop
+      // commands that are still live.
+      title: alreadyCancelled
+        ? t('cancelAgainConfirmTitle', { name: batch.name })
+        : t('cancelConfirmTitle', { name: batch.name }),
       description: (
         // Spans, not paragraphs: this lands inside the dialog's own <p> description.
         <>
-          <span className="block">
-            {/* Zero is a DIFFERENT STATEMENT, not a plural form of the same one: "holding 0
-                commands" and "holding 2 commands" lead to opposite expectations of what the
-                button will do, so they are separate sentences rather than an ICU category. */}
-            {heldCount == null
-              ? t('cancelConfirmHeldUnknown')
-              : heldCount === 0
-                ? t('cancelConfirmHeldNone')
-                : t('cancelConfirmHeld', { count: heldCount })}
-          </span>
+          <StillHeldSentence batchToken={batch.token} />
           <span className="mt-2 block">{t('cancelConfirmSent')}</span>
         </>
       ),
@@ -165,7 +198,52 @@ export function useBatchCancel({
     }
   };
 
-  return { canCancel, canWrite, busy, cancel, outcome, error, dismissError: () => setError(null) };
+  return {
+    canCancel,
+    alreadyCancelled,
+    canWrite,
+    busy,
+    cancel,
+    outcome,
+    error,
+    dismissError: () => setError(null),
+  };
+}
+
+// What the platform is still holding, stated inside the confirmation — read when the dialog
+// OPENS and corrected in place while it is open.
+//
+// 🔴 IT CANNOT BE THE PAGE'S COUNT, and the reason is structural rather than stylistic.
+// `confirm()` takes a ReactNode and stores it in the provider's state, so whatever is passed
+// is a SNAPSHOT of the values in scope at the instant of the call — it never re-renders
+// against later ones. Passing the page-level count therefore produced a sentence that was
+// wrong in both directions: on a page open for a while it stated a minutes-old number in the
+// present tense, and on a page just opened it said the count "could not be read" and then
+// never corrected itself when the read landed a moment later. An element with its own query
+// re-renders inside the dialog, so what it says stays true for as long as it is on screen.
+//
+// The page's count is a different question and stays where it is: that one decides whether
+// to OFFER the brake at all, this one tells the operator what pressing it will stop.
+function StillHeldSentence({ batchToken }: { batchToken: string }) {
+  const { t } = useTranslation('commandBatches');
+  const { data, error } = useQuery(
+    () => countBatchCommands({ batchToken, statuses: STILL_HELD_STATUSES }),
+    [batchToken],
+  );
+  // Same fold as the gate's, for the same reason: a read that failed is not a count of zero.
+  const held = error == null ? data : null;
+  return (
+    <span className="block">
+      {/* Zero is a DIFFERENT STATEMENT, not a plural form of the same one: "holding 0
+          commands" and "holding 2 commands" lead to opposite expectations of what the
+          button will do, so they are separate sentences rather than an ICU category. */}
+      {held == null
+        ? t('cancelConfirmHeldUnknown')
+        : held === 0
+          ? t('cancelConfirmHeldNone')
+          : t('cancelConfirmHeld', { count: held })}
+    </span>
+  );
 }
 
 // The header button. Rendered only where pressing it can do something.
@@ -174,7 +252,12 @@ export function CancelBatchButton({ state }: { state: BatchCancelState }) {
   if (!state.canCancel) return null;
   return (
     <Button variant="destructive" onClick={state.cancel} loading={state.busy} disabled={state.busy}>
-      <Ban size={14} /> {t('cancelBatch')}
+      {/* Named for what pressing it does NOW. On a stamped batch this is not the first
+          cancellation and must not offer itself as one — "Cancel batch" there reads as an
+          action with no effect, which is exactly the reading that got the header hidden in
+          the first place. It deliberately shares its wording with the report's remedial
+          button below: same action, two entry points. */}
+      <Ban size={14} /> {state.alreadyCancelled ? t('cancelAgain') : t('cancelBatch')}
     </Button>
   );
 }
@@ -242,7 +325,13 @@ function CancelOutcomePanel({
           {/* 🔴 NOT GATED ON `cancelledAt`. By the time this renders the batch IS cancelled,
               and cancelling again is exactly the fix the service prescribes — gating the
               remedy on the condition it exists to remedy would leave live commands running
-              with the screen telling the operator to stop them and no way to do it. */}
+              with the screen telling the operator to stop them and no way to do it.
+              🔴 NOR IS IT MADE REDUNDANT by the header now offering the same action, and it
+              is not kept merely for convenience: the two are gated on DIFFERENT EVIDENCE.
+              This one reads what THIS cancel returned; the header reads what a LATER count
+              found. A count taken while the missed commands are still settling can come back
+              0 and withdraw the header button — leaving this the only way to act on a
+              shortfall the operator is being told about right now. */}
           {state.canWrite && (
             <Button
               variant="destructive"

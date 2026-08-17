@@ -67,8 +67,17 @@ export function unaccounted(counts: BatchCancelCounts): number {
 // Whether the operator has to press cancel a second time. This is an ACTION, not a
 // discrepancy to note in passing: nothing retries on their behalf.
 //
-// It cannot keep being true — once a cancellation is recorded, a failed delivery retires
-// its command rather than requeueing it, so a second call finds a settled batch.
+// It does not normally keep being true: once a cancellation is COMMITTED, a failed delivery
+// retires its command rather than requeueing it — command-delivery predicates that on the
+// batch's own stamp — so a second call usually finds a settled batch.
+//
+// 🔴 USUALLY, NOT ALWAYS, AND THAT DIFFERENCE IS WHY THE HEADER'S CANCEL ACTION IS GATED ON
+// A LIVE COUNT RATHER THAN ON THE STAMP. command-delivery documents the one interleaving a
+// single statement cannot close: a release whose subquery saw no committed stamp requeues a
+// command whose batch is called off an instant later, and nothing downstream re-checks — so
+// the next tick delivers it. That command is live inside a cancelled batch, and it becomes
+// so AFTER the report that would have named it. No reading of these four numbers can find
+// it. Only asking the command rows how many are still held can.
 export function needsSecondCancel(counts: BatchCancelCounts): boolean {
   return unaccounted(counts) > 0;
 }
