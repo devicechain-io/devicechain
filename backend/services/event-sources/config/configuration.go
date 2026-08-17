@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/governance"
+	"github.com/devicechain-io/dc-microservice/transport"
 )
 
 const (
@@ -253,7 +254,11 @@ func (c *EventSourcesConfiguration) ApplyDefaults() {
 
 // Validate enforces semantic constraints after decoding and defaulting, failing
 // the load closed on an invalid configuration (ADR-022 decision 1). Batching
-// bounds must be positive; the source list is left to the source loaders.
+// bounds must be positive, and a source id must be usable AS the value it becomes.
+//
+// It used to say the source list was "left to the source loaders", and the loaders
+// check only that a Type is known and that no source points at the platform broker
+// — an Id was accepted whatever it said. That is what validateSourceIds closes.
 func (c *EventSourcesConfiguration) Validate() error {
 	if c.InboundEventBatching.MaxBatchSize <= 0 {
 		return fmt.Errorf("inboundEventBatching.maxBatchSize must be positive (got %d)", c.InboundEventBatching.MaxBatchSize)
@@ -266,6 +271,79 @@ func (c *EventSourcesConfiguration) Validate() error {
 	// misconfiguration the operator must see, not one to silently reinterpret.
 	if c.Contention.ManualFloor < 0 || c.Contention.ManualFloor > governance.MaxShedLevel {
 		return fmt.Errorf("contention.manualFloor must be between 0 and %d (got %d)", governance.MaxShedLevel, c.Contention.ManualFloor)
+	}
+	return c.validateSourceIds()
+}
+
+// validateSourceIds rejects ids that cannot serve as the value they become.
+//
+// 🔴 AN EventSource.Id IS NOT A LABEL, IT IS A STORED KEY. It is stamped onto every event
+// this source ingests as the projected `source`, lands in device_states.source, and is read
+// back by the asserted-presence reconciler through EXACT SQL EQUALITY. It is also a
+// Prometheus label value on four counters. So an id is not free-form text that happens to be
+// displayed; it is matched, grouped and reconciled on.
+//
+// ⚠️ AND THAT CUTS BOTH WAYS. Rejecting an id an operator is ALREADY RUNNING has the same
+// effect as renaming it: this service refuses to start — taking down ALL ingest for the
+// instance, since every source and the broker-presence tap live in this one process — and if
+// they rename the id to get going again, every asserted device_states row filed under the old
+// one is stranded, because the source-scoped reconciler will never match it and pre-GA there
+// is no backfill.
+//
+// 🔴 SO BE HONEST ABOUT WHAT THE RESERVATION COSTS, because "it only rejects what was already
+// broken" is NOT true and an earlier version of this comment said it was. Of the ids this
+// turns away:
+//
+//   - exactly "lwm2m" IS already broken — it collides whole-value with the LwM2M
+//     reconciler's own read, so the two sweep each other's rows today.
+//   - "sparkplug" or "sparkplug:x" is broken only for an operator who SENDS COMMANDS; the
+//     deny list makes those Undeliverable. A telemetry-only fleet on such an id works fine.
+//   - "lwm2m:site-a" is broken by NOTHING today. The one transport-classified consumer denies
+//     only Sparkplug, and the LwM2M reconciler matches the whole value, so this id is never
+//     swept by it and never denied a command.
+//
+// That last class is rejected PROSPECTIVELY: it is groundwork for the allow list the
+// stranded-SENT reconciler needs, where a collision stops being self-inflicted and starts
+// making a foreign device look like a member. That is a defensible reason to reject a working
+// configuration, but it is a different reason, and pretending otherwise would understate what
+// an upgrade can cost an operator.
+func (c *EventSourcesConfiguration) validateSourceIds() error {
+	seen := make(map[string]int, len(c.EventSources))
+	for i, src := range c.EventSources {
+		// An empty id projects an empty source, and device-state's projection deliberately
+		// never lets an empty overwrite a non-empty. A device's FIRST event still creates its
+		// row with an empty source — it is the merge path that refuses — so the result is not
+		// "no source" but a source that can never be corrected by this gateway and can be
+		// overwritten by any other, which is worse than either.
+		if src.Id == "" {
+			return fmt.Errorf("eventSources[%d].id must not be empty: it is stamped on every event as the projected source, and an empty source never updates the projection", i)
+		}
+		// 🔴 THE RESERVATION, AND IT IS DELIBERATELY ON THE CLASSIFICATION RATHER THAN ON THE
+		// SPELLING. Every consumer that asks "what transport is this device on?" reduces the
+		// source with transport.Of — cutting at the first ":" — so an id of "sparkplug" and
+		// an id of "sparkplug:plant-a" are equally a Sparkplug device to all of them, while
+		// "sparkplug-test" and "acme:line3" are equally not. Testing the reduction is
+		// therefore both stricter and more permissive than a spelling rule, in exactly the
+		// places that matter: it catches the qualified impostor a "no colons" rule would
+		// miss, and it permits the operator's own namespaced id that such a rule would
+		// reject for nothing.
+		if name := transport.Of(src.Id); transport.IsMinted(name) {
+			// 🔴 THE REMEDY IS NAMED HERE BECAUSE THE OBVIOUS ONE HAS A TRAP, and the operator
+			// reads this string rather than the comment above it. Renaming the id starts the
+			// service, and silently orphans every presence row already filed under the old
+			// name — so an operator with live devices needs to know that before they type the
+			// new id, not after.
+			return fmt.Errorf(
+				"eventSources[%d].id %q is reserved: it reads as the %q transport, which the platform mints itself, so this source's devices would be classified as %q by every consumer that asks. Choose an id that does not begin with %q followed by end-of-string or ':' — but note that if this source has been running, renaming it strands the device presence already recorded under the old id, which nothing backfills",
+				i, src.Id, name, name, name)
+		}
+		// Two sources sharing an id are indistinguishable AFTER the fact: they project one
+		// source value, merge into one Prometheus series, and reconcile as one emitter — so
+		// each would re-file the other's asserted rows.
+		if first, dup := seen[src.Id]; dup {
+			return fmt.Errorf("eventSources[%d].id %q duplicates eventSources[%d]: two sources sharing an id are one source to everything downstream", i, src.Id, first)
+		}
+		seen[src.Id] = i
 	}
 	return nil
 }
