@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -59,7 +60,25 @@ type Microservice struct {
 	// Internal lifeycle processing
 	lifecycle LifecycleManager
 	shutdown  chan os.Signal
-	done      chan bool
+
+	// outcome carries HOW the process ended: nil for an orderly shutdown, non-nil
+	// when startup was refused or teardown failed. Run turns it into an exit status.
+	//
+	// 🔴 It is deliberately not the `chan bool` it used to be. That channel's value was
+	// always true, so it recorded that the process had stopped while discarding the only
+	// bit anyone can act on — which is how a service that refused its own configuration
+	// came to exit 0 and report Completed.
+	outcome chan error
+
+	// finish makes the FIRST outcome the reported one and every later one a no-op.
+	// Several paths end the process and only Run receives, so it is also what stops a
+	// late sender blocking forever on a slot nobody will drain — a startup failure and
+	// a SIGTERM racing each other is exactly that case, and it is reachable because the
+	// signal handler is armed before InitializeAndStart is launched.
+	//
+	// 🔴 It only holds while every send goes through finished. Sending to outcome
+	// directly compiles — the field is package-visible — and reintroduces that block.
+	finish sync.Once
 
 	// rootCtx is the cancelable context handed to Initialize/Start; cancel is
 	// invoked at the start of shutdown so long-running loops (NATS consumers, the
@@ -108,7 +127,7 @@ func NewMicroservice(callbacks LifecycleCallbacks) *Microservice {
 	// Create lifecycle manager and channels for tracking shutdown.
 	ms.lifecycle = NewLifecycleManager(ms.FunctionalArea, ms, callbacks)
 	ms.rootCtx, ms.cancel = context.WithCancel(context.Background())
-	ms.done = make(chan bool, 1)
+	ms.outcome = make(chan error, 1)
 	ms.shutdown = make(chan os.Signal, 1)
 
 	// Hook interrupt and terminate signals for graceful shutdown
@@ -144,20 +163,56 @@ func (ms *Microservice) Banner() {
 	fmt.Println()
 }
 
-// Create microservice and initialize/start it.
+// exitProcess is os.Exit behind a variable so the exit decision can be tested.
+// Nothing but a test may reassign it, and a test must restore it.
+var exitProcess = os.Exit
+
+// Run creates the microservice, starts it, and blocks until it is over. It returns
+// the outcome, but a caller does not have to act on it: Run sets the process exit
+// status itself.
+//
+// 🔴 THE EXIT LIVES HERE ON PURPOSE, RATHER THAN IN EACH main(). Run has always
+// returned an error and every caller discards it, so "return the error and let main
+// exit" would change nothing observable, would have to be repeated in every service,
+// and would be silently absent from the next service somebody adds. This repo's own
+// rule, from command-delivery/presence: one rule that cannot be forgotten beats two
+// where the weaker one looks like the protection. This costs nothing that would
+// otherwise run — no main() holds a defer, and all teardown happens inside
+// ShutDownNow, well before this point.
+//
+// What a non-zero status actually buys is REPORTING, and it is worth being exact
+// about that: the services are Deployments, whose default restartPolicy of Always
+// restarts a pod whatever its exit code, so a service refusing its own config was
+// already looping. It simply looped reporting Completed — indistinguishable from an
+// orderly stop to `kubectl get pods`, to a container-exit alert, and to anyone
+// reading the event stream.
 func (ms *Microservice) Run() error {
 	log.Info().Msg("Creating new microservice and running intialization/startup...")
 
 	go func() {
 		ms.Banner()
-		err := ms.InitializeAndStart()
-		if err != nil {
-			ms.done <- true
+		if err := ms.InitializeAndStart(); err != nil {
+			ms.finished(err)
 		}
 	}()
 
-	ms.waitForShutdown()
-	return nil
+	return ms.reportOutcome(ms.waitForShutdown())
+}
+
+// finished records how the process ended. The first caller wins; later ones are
+// dropped rather than blocking (see the finish field).
+func (ms *Microservice) finished(err error) {
+	ms.finish.Do(func() { ms.outcome <- err })
+}
+
+// reportOutcome logs a failed lifecycle and sets a non-zero exit status for it,
+// leaving an orderly shutdown to exit 0.
+func (ms *Microservice) reportOutcome(err error) error {
+	if err != nil {
+		log.Error().Err(err).Msg("Microservice did not complete its lifecycle; exiting with a non-zero status.")
+		exitProcess(1)
+	}
+	return err
 }
 
 // Issue initialize and start commands to microservice
@@ -235,22 +290,26 @@ func (ms *Microservice) ShutDownNow() {
 	err := ms.Stop(context.Background())
 	if err != nil {
 		log.Error().Err(err).Msg("Unable to stop microservice")
-		ms.done <- true
+		// Terminate is deliberately NOT attempted after a failed Stop. Stop restores
+		// the previous lifecycle state on any error, and Terminate refuses every state
+		// but Stopped, so the only thing a second call could produce here is a second
+		// state-guard error burying the first.
+		ms.finished(err)
 		return
 	}
 	err = ms.Terminate(context.Background())
 	if err != nil {
 		log.Error().Err(err).Msg("Unable to terminate microservice")
-		ms.done <- true
+		ms.finished(err)
 		return
 	}
 
-	ms.done <- true
+	ms.finished(nil)
 }
 
-// Wait for microservice to shut down
-func (ms *Microservice) waitForShutdown() {
-	<-ms.done
+// Wait for microservice to shut down, returning how it ended.
+func (ms *Microservice) waitForShutdown() error {
+	return <-ms.outcome
 }
 
 // LoadInstanceConfiguration reads the instance configuration from the mounted
