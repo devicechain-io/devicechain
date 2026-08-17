@@ -62,6 +62,19 @@ const world = {
   // Applied to the batch record the SECOND and later reads return — a real cancel stamps
   // cancelledAt, and the page re-reads.
   afterCancel: null as Record<string, unknown> | null,
+  // Armed at the same moment, so a test can make the still-held count's RE-read fail while
+  // its first read succeeded. That is the only way to reach useQuery's keep-the-prior-data
+  // path, which is where a stale count masquerades as a fresh one.
+  countThrowsAfterCancel: null as Error | null,
+  // null answers every still-held count immediately; an ARRAY holds them all open, collecting
+  // their resolvers here for the test to release. Holding a read open is the only way to
+  // reach `useQuery`'s in-flight state, where it CLEARS the error and KEEPS the prior data.
+  countResolvers: null as Array<() => void> | null,
+  // Armed at the cancel, so a test can let the first read land and hold only the RE-read.
+  holdCountAfterCancel: false,
+  // Every criteria the still-held count went to the wire with — the set of statuses is the
+  // whole meaning of the number, and a gate asking for the wrong ones would look identical.
+  countCriteria: [] as Record<string, unknown>[],
   cancelCalls: [] as unknown[][],
 };
 
@@ -96,7 +109,15 @@ beforeEach(() => {
   world.cancelResult = { cancelled: 0, alreadySent: 0, alreadyFinished: 0, matched: 0 };
   world.cancelThrows = null;
   world.afterCancel = null;
+  world.countThrowsAfterCancel = null;
+  world.countResolvers = null;
+  world.holdCountAfterCancel = false;
+  world.countCriteria = [];
   world.cancelCalls = [];
+
+  // Mock-internal latch rather than a test knob: nothing sets it directly, the cancel arms
+  // it from `countThrowsAfterCancel`.
+  let countThrows: Error | null = null;
 
   gqlMock.mockImplementation((_service: string, document: unknown, variables: unknown) => {
     const doc = String(document);
@@ -104,21 +125,32 @@ beforeEach(() => {
       world.cancelCalls.push([variables]);
       if (world.cancelThrows) return Promise.reject(world.cancelThrows);
       if (world.afterCancel) world.batch = { ...world.batch, ...world.afterCancel };
+      if (world.countThrowsAfterCancel) countThrows = world.countThrowsAfterCancel;
+      if (world.holdCountAfterCancel) world.countResolvers = [];
       return Promise.resolve({ cancelCommandBatch: world.cancelResult });
     }
     if (doc.includes('query CommandBatchesByToken')) {
       return Promise.resolve({ commandBatchesByToken: [world.batch] });
     }
     // Both the still-held COUNT and the rows table use `query Commands`; the count is the
-    // one that narrows by `statuses`.
+    // one that carries `statuses`. Routed on the KEY, not on truthiness — `statuses: []` is
+    // falsy to a truthiness check and means UNFILTERED on the server, so a gate that sent an
+    // empty list would fall through to the rows branch and be invisible here.
     const criteria = (variables as { criteria: Record<string, unknown> }).criteria;
-    if (criteria.statuses) {
-      return Promise.resolve({
+    if ('statuses' in criteria) {
+      world.countCriteria.push(criteria);
+      if (countThrows) return Promise.reject(countThrows);
+      const answer = {
         commands: {
           results: [],
           pagination: { pageStart: 1, pageEnd: 1, totalRecords: world.heldCount },
         },
-      });
+      };
+      if (world.countResolvers) {
+        const resolvers = world.countResolvers;
+        return new Promise((resolve) => resolvers.push(() => resolve(answer)));
+      }
+      return Promise.resolve(answer);
     }
     return Promise.resolve({
       commands: { results: [], pagination: { pageStart: 0, pageEnd: 0, totalRecords: 0 } },
@@ -163,11 +195,12 @@ describe('the cancel action’s gates', () => {
     expect(await screen.findByRole('button', { name: 'Cancel batch' })).toBeTruthy();
   });
 
-  // A batch keeps the FIRST cancellation's stamp forever, so re-offering the primary
-  // action on one already called off invites a write whose only visible effect is a second
-  // report of an event that already happened.
-  it('offers no cancel action on a batch that has already been called off', async () => {
+  // A batch keeps the FIRST cancellation's stamp forever, so on one already called off and
+  // holding nothing more, re-offering the action invites a write whose only visible effect
+  // is a second report of an event that already happened.
+  it('offers no cancel action on a called-off batch the platform is holding nothing of', async () => {
     world.batch = batch({ cancelledAt: '2026-08-12T13:00:00Z', cancelledCount: 6 });
+    world.heldCount = 0;
 
     renderPage();
 
@@ -175,21 +208,159 @@ describe('the cancel action’s gates', () => {
     // S1's own rendering of the cancellation is still there — this is a cancelled batch,
     // not a broken page.
     expect(screen.getByText(/Called off on/)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Cancel batch' })).toBeNull();
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /^Cancel/ })).toBeNull(),
+    );
   });
 
-  // 🔴 `cancelledCount` IS NULLABLE EVEN WHEN `cancelledAt` IS SET, so the gate must key on
-  // the STAMP. Keying on the count would re-offer the action on a batch that was cancelled
-  // and whose count simply was not recorded.
-  it('still hides the action when the batch was cancelled without a recorded count', async () => {
+  // 🔴🔴 THE GAP THIS GATE EXISTS TO CLOSE, and it is not a hypothetical: command-delivery
+  // documents the interleaving that produces it. A release whose subquery saw no committed
+  // stamp requeues a command whose batch is called off an instant later, and nothing
+  // downstream re-checks — so the command is LIVE inside a CANCELLED batch. It becomes so
+  // after the cancellation report has been rendered, so no reading of that report can find
+  // it, and gating on the stamp alone would leave the operator looking at a running fleet
+  // write with no control to stop it.
+  it('offers the action again on a called-off batch the platform is still holding commands of', async () => {
+    world.batch = batch({ cancelledAt: '2026-08-12T13:00:00Z', cancelledCount: 6 });
+    world.heldCount = 2;
+
+    renderPage();
+
+    // Worded for what pressing it does now — this is not the first cancellation.
+    expect(await screen.findByRole('button', { name: 'Cancel again' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Cancel batch' })).toBeNull();
+    // And it asks a question about what is LEFT, not about calling off a batch that is
+    // already called off.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel again' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Stop what is left of “reboot”?')).toBeTruthy();
+    expect(
+      await within(dialog).findByText(
+        'The platform is still holding 2 of this batch’s commands and will stop them.',
+      ),
+    ).toBeTruthy();
+  });
+
+  // 🔴 AN UNKNOWN COUNT IS NOT ZERO. The count is a nullable Int and the read can simply
+  // fail; neither says the batch is settled, and collapsing them into "nothing to stop"
+  // withdraws a brake on the strength of an answer nobody gave.
+  it('keeps offering the action on a called-off batch whose still-held count is unknown', async () => {
+    world.batch = batch({ cancelledAt: '2026-08-12T13:00:00Z', cancelledCount: 6 });
+    world.heldCount = null;
+
+    renderPage();
+
+    expect(await screen.findByRole('button', { name: 'Cancel again' })).toBeTruthy();
+  });
+
+  // 🔴 A BATCH NOBODY HAS CALLED OFF KEEPS THE ACTION EVEN AT ZERO, and the reason is not
+  // symmetry. The stamp is what makes command-delivery retire a failed delivery instead of
+  // putting it back in the queue, so pressing cancel on a batch whose commands are all at
+  // their devices still decides what happens to them if they fail. Withdrawing it here on
+  // "nothing held" would take away a decision, not a no-op.
+  it('offers the action on a live batch even when the platform is holding nothing', async () => {
+    world.heldCount = 0;
+
+    renderPage();
+
+    expect(await screen.findByRole('button', { name: 'Cancel batch' })).toBeTruthy();
+  });
+
+  // 🔴 `cancelledCount` IS NULLABLE EVEN WHEN `cancelledAt` IS SET, so the wording must key
+  // on the STAMP. Keying on the count would call a cancelled batch's action "Cancel batch"
+  // purely because its count was not recorded.
+  it('still treats the batch as called off when no count was recorded', async () => {
     world.batch = batch({ cancelledAt: '2026-08-12T13:00:00Z', cancelledCount: null });
+    world.heldCount = 2;
 
     renderPage();
 
     // No count in the sentence, because none was recorded — S1's nullable-count arm.
     expect(await screen.findByText(/^Called off on .*\.$/)).toBeTruthy();
     expect(screen.queryByText(/which stopped/)).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Cancel batch' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Cancel again' })).toBeTruthy();
+  });
+
+  // 🔴🔴 A FAILED RE-READ IS NOT A COUNT OF ZERO, and `useQuery` is what turns that from a
+  // nicety into a live hazard: it deliberately KEEPS the previous data when a refetch fails,
+  // so the value this gate reads after an unanswered read is the value from before it. On
+  // this page the value from before is very often 0 — so reading `data` alone would let one
+  // failed read withdraw the brake and keep it withdrawn.
+  it('does not read a stale zero as a fresh one when the count re-read fails', async () => {
+    world.heldCount = 0;
+    world.afterCancel = { cancelledAt: '2026-08-12T13:00:00Z', cancelledCount: 0 };
+    world.countThrowsAfterCancel = new Error('command-delivery unreachable');
+
+    renderPage();
+    await cancelAndConfirm();
+
+    // The stamp landed, so a stamp-only gate would hide the action from here on…
+    expect(await screen.findByText(/Called off on/)).toBeTruthy();
+    // …and the only count the gate can still see is the stale 0 from before the cancel.
+    // The action stays on offer, because nobody answered the question after it.
+    expect(await screen.findByRole('button', { name: 'Cancel again' })).toBeTruthy();
+  });
+
+  // 🔴🔴 NOR IS A RE-READ STILL IN FLIGHT, and this is the one `error` CANNOT catch — which
+  // is why it gets its own test rather than riding on the one above. `useQuery`'s deps-change
+  // effect sets `{ ...s, loading: true, error: null }`: it CLEARS the error and KEEPS the
+  // previous data. So for the whole in-flight window — and indefinitely, for a read that
+  // hangs without ever erroring — a stale count is indistinguishable from a fresh one by
+  // `error` alone, and the gate would withdraw the brake for as long as that lasted.
+  it('does not read a stale zero as a fresh one while the count re-read is in flight', async () => {
+    world.heldCount = 0;
+    world.afterCancel = { cancelledAt: '2026-08-12T13:00:00Z', cancelledCount: 0 };
+    world.holdCountAfterCancel = true;
+
+    renderPage();
+    await cancelAndConfirm();
+
+    expect(await screen.findByText(/Called off on/)).toBeTruthy();
+    // Nobody has answered the re-read. The 0 on hand is from before the cancel.
+    expect(await screen.findByRole('button', { name: 'Cancel again' })).toBeTruthy();
+
+    // The control, in the same test: once the answer actually lands, it withdraws. Without
+    // this, "the button is showing" would also pass if the gate had simply stopped reading.
+    world.countResolvers!.forEach((release) => release());
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^Cancel/ })).toBeNull());
+  });
+
+  // The control for the two tests above: same batch, same zero, but the re-read LANDS
+  // normally. Without it, "the button is showing" proves nothing about the fold.
+  it('withdraws the action when the count re-read lands and says nothing is left', async () => {
+    world.heldCount = 0;
+    world.afterCancel = { cancelledAt: '2026-08-12T13:00:00Z', cancelledCount: 0 };
+
+    renderPage();
+    await cancelAndConfirm();
+
+    expect(await screen.findByText(/Called off on/)).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^Cancel/ })).toBeNull());
+  });
+
+  // 🔴 THE STATUSES ARE THE WHOLE MEANING OF THE NUMBER, and every other assertion in this
+  // file would pass unchanged if the gate asked for the wrong ones — the count would just be
+  // a count of something else. `statuses: []` is the dangerous shape: it means UNFILTERED on
+  // the server, so the gate would count every command the batch ever had and keep the brake
+  // offered on every settled batch forever.
+  it('counts exactly the states in which the platform still holds a command', async () => {
+    renderPage();
+
+    await waitFor(() => expect(world.countCriteria.length).toBeGreaterThan(0));
+    const criteria = world.countCriteria[0];
+    expect(criteria.batchToken).toBe('batch-1');
+    expect([...(criteria.statuses as string[])].sort()).toEqual(['HELD', 'PARKED', 'QUEUED']);
+  });
+
+  // A viewer who can never be offered the action is never asked the question either: the
+  // answer would feed a decision the authority gate has already made.
+  it('does not ask what is still held when the operator cannot cancel anything', async () => {
+    authorities.value = ['command:read'];
+
+    renderPage();
+
+    expect(await screen.findByText('Summary')).toBeTruthy();
+    expect(world.countCriteria).toEqual([]);
   });
 });
 
@@ -202,8 +373,11 @@ describe('the confirmation', () => {
 
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText('Call off “reboot”?')).toBeTruthy();
+    // Awaited, because the dialog reads this count ITSELF when it opens rather than being
+    // handed the page's — `confirm()` stores its description in state, so a handed-in value
+    // is frozen at the instant of the click and cannot be corrected afterwards.
     expect(
-      within(dialog).getByText(
+      await within(dialog).findByText(
         'The platform is still holding 4 of this batch’s commands and will stop them.',
       ),
     ).toBeTruthy();
@@ -234,6 +408,42 @@ describe('the confirmation', () => {
       ),
     ).toBeTruthy();
     expect(within(dialog).queryByText(/still holding 0 of/)).toBeNull();
+  });
+
+  // 🔴🔴 THE DIALOG READS THE COUNT ITSELF, and this is what that buys. `confirm()` stores
+  // its description in the provider's state, so a count handed in at the click is a SNAPSHOT
+  // — open the dialog while the read is in flight and it would say "could not be read" for
+  // as long as it stayed open, with the true answer sitting one component away. The same
+  // snapshot is why a page left open for ten minutes would state a ten-minute-old number in
+  // the present tense.
+  it('corrects the still-held sentence when the count lands after the dialog opened', async () => {
+    world.heldCount = 3;
+    world.countResolvers = [];
+
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel batch' }));
+
+    const dialog = await screen.findByRole('dialog');
+    // 🔴 IT SAYS IT IS ASKING, NOT THAT THE ANSWER FAILED. Both leave the gate at "not
+    // known", but a read in flight has not failed, and telling the operator it "could not be
+    // read" during the ordinary loading beat of every dialog open is a false statement about
+    // a request still on the wire.
+    expect(
+      within(dialog).getByText(
+        'Checking how many of this batch’s commands the platform is still holding…',
+      ),
+    ).toBeTruthy();
+    expect(within(dialog).queryByText(/could not be read/)).toBeNull();
+
+    // The answer lands while the operator is still deciding.
+    world.countResolvers.forEach((release) => release());
+
+    expect(
+      await within(dialog).findByText(
+        'The platform is still holding 3 of this batch’s commands and will stop them.',
+      ),
+    ).toBeTruthy();
+    expect(within(dialog).queryByText(/could not be read/)).toBeNull();
   });
 
   it('sends nothing when the operator leaves it running', async () => {
@@ -341,10 +551,12 @@ describe('the outcome report', () => {
 
     // The re-read landed: the batch now carries its cancellation.
     expect(await screen.findByText(/Called off on/)).toBeTruthy();
-    // The primary action is gone…
+    // Nothing offers itself as a FIRST cancellation any more…
     expect(screen.queryByRole('button', { name: 'Cancel batch' })).toBeNull();
-    // …and the remedial one is not.
-    expect(screen.getByRole('button', { name: 'Cancel again' })).toBeTruthy();
+    // …and the remedy is offered twice, on purpose and from two different sources of truth:
+    // this report's own shortfall, and the header's live count of what is still held. The
+    // second can come back 0 while the first is on screen, so neither subsumes the other.
+    expect(screen.getAllByRole('button', { name: 'Cancel again' }).length).toBe(2);
     expect(
       screen.getByText(
         'The batch’s own record keeps the first cancellation’s time and count — cancelling again stops what is left without rewriting it.',

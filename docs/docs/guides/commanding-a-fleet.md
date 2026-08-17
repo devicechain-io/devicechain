@@ -308,8 +308,10 @@ created. Rows removed since — by a purge, or a deletion — are simply not the
 delivery failed can return to the queue between the cancel and the count, and such a command
 is left out of all three buckets rather than folded into `alreadyFinished` — reporting a live
 command as a finished one is the single thing this vocabulary exists to prevent. Cancel again
-and it is caught. It is rare and self-correcting: once a cancel is recorded, a failed delivery
-retires the command instead of requeueing it.
+and it is caught. What keeps it rare is the stamp itself: once a cancellation is committed, a
+failed delivery retires the command instead of putting it back in the queue. The exception is
+a command released in the same instant as the cancellation, which stays live inside a batch
+that has been called off — so cancelling again is the remedy rather than waiting.
 :::
 
 The batch record itself is stamped with `cancelledAt` and `cancelledCount`, so the

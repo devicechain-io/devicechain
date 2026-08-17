@@ -324,8 +324,11 @@ dice nada sobre la cancelación.
 cuya entrega falló puede volver a la cola entre la cancelación y el recuento, y ese comando
 queda fuera de los tres grupos en lugar de contarse en `alreadyFinished` — informar de un
 comando vivo como si hubiera terminado es justo lo que este vocabulario existe para evitar.
-Cancela otra vez y quedará atrapado. Es raro y se corrige solo: una vez registrada una
-cancelación, una entrega fallida retira el comando en lugar de volver a encolarlo.
+Cancela otra vez y quedará atrapado. Lo que hace que sea raro es el propio sello: una vez
+confirmada una cancelación, una entrega fallida retira el comando en lugar de volver a
+encolarlo. La excepción es un comando liberado en el mismo instante que la cancelación, que
+sigue vivo dentro de un lote ya cancelado — por eso el remedio es cancelar otra vez y no
+esperar.
 :::
 
 El registro del lote queda sellado con `cancelledAt` y `cancelledCount`, de modo que la

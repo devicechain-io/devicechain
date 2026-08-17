@@ -114,7 +114,9 @@ function CommandBatchDetail({
       titleAdornment={<CopyToken value={batch.token} />}
       banner="devices"
       // The entity's own action, bare — PageShell lays it out. It renders nothing when the
-      // operator lacks command:write or the batch has already been called off.
+      // operator lacks command:write, or when the batch is stamped cancelled AND a live
+      // count says the platform is holding nothing more of it — deliberately not on the
+      // stamp alone, which hid the brake on a batch that still had commands running.
       action={<CancelBatchButton state={cancelState} />}
       description={
         <div className="mt-1 flex flex-wrap items-center gap-2">
