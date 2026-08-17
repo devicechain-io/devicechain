@@ -12,6 +12,7 @@ import {
   accountedFor,
   hasUnstoppable,
   needsSecondCancel,
+  offerCancel,
   unaccounted,
 } from './cancelOutcome';
 
@@ -73,6 +74,48 @@ describe('commands that cannot be recalled', () => {
     expect(accountedFor(c)).toBe(301);
     expect(c.cancelled).toBe(1);
     expect(needsSecondCancel(c)).toBe(false);
+  });
+});
+
+// 🔴 A TRUTH TABLE, IN LITERALS, because the alternative is what this replaced: reading the
+// rule by rendering a page and looking for a button, where "no button" is indistinguishable
+// from a broken auth mock, a broken query mock, or a page that failed to load at all.
+describe('whether to offer the cancel action', () => {
+  const gate = (over: Partial<Parameters<typeof offerCancel>[0]> = {}) =>
+    offerCancel({ canWrite: true, alreadyCancelled: false, held: 4, ...over });
+
+  it('offers nothing to an operator who may not write commands', () => {
+    // Whatever else is true — this one is not a judgement about the batch.
+    expect(gate({ canWrite: false })).toBe(false);
+    expect(gate({ canWrite: false, alreadyCancelled: true, held: 9 })).toBe(false);
+    expect(gate({ canWrite: false, held: null })).toBe(false);
+  });
+
+  it('offers the action on a batch nobody has called off, whatever is left', () => {
+    expect(gate({ held: 4 })).toBe(true);
+    expect(gate({ held: null })).toBe(true);
+    // 🔴 INCLUDING AT ZERO, and this is the case that looks redundant and is not. The STAMP
+    // is what makes a failed delivery retire its command instead of requeueing it, so
+    // cancelling a batch whose commands are all at their devices still decides what happens
+    // to them if they fail. Withdrawing here would take away a decision, not a no-op.
+    expect(gate({ held: 0 })).toBe(true);
+  });
+
+  it('offers the action again on a called-off batch that is still holding commands', () => {
+    expect(gate({ alreadyCancelled: true, held: 1 })).toBe(true);
+    expect(gate({ alreadyCancelled: true, held: 500 })).toBe(true);
+  });
+
+  // 🔴 THE WHOLE POINT OF THE THIRD VALUE. A null is a nullable Int, a read in flight, or a
+  // read that failed — none of them says the batch is settled, and collapsing them into
+  // "nothing to stop" withdraws a brake on an answer nobody gave.
+  it('offers the action on a called-off batch whose still-held count is not known', () => {
+    expect(gate({ alreadyCancelled: true, held: null })).toBe(true);
+  });
+
+  // The only cell that withdraws it: called off, and known to be holding nothing.
+  it('withdraws the action only when the batch is called off and known to hold nothing', () => {
+    expect(gate({ alreadyCancelled: true, held: 0 })).toBe(false);
   });
 });
 

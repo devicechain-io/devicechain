@@ -52,7 +52,46 @@ import {
   type CommandBatch,
 } from '@/lib/api/command-delivery';
 import { Fact } from './Fact';
-import { STILL_HELD_STATUSES, needsSecondCancel, unaccounted } from './cancelOutcome';
+import { STILL_HELD_STATUSES, needsSecondCancel, offerCancel, unaccounted } from './cancelOutcome';
+
+// The count of the batch's commands the platform is STILL HOLDING — the three states a
+// cancel can actually stop — as a three-valued answer whose null means "not known", plus
+// whether a read is in flight right now.
+//
+// 🔴🔴 `data` ALONE IS NOT THE ANSWER, AND NEITHER IS `data` PLUS `error`. `useQuery` keeps
+// the previous data across a re-read in BOTH of its unfinished states, and the two need
+// separate handling because they are reached differently:
+//
+//   • A re-read that FAILED leaves `data` at the previous generation with `error` set.
+//   • A re-read that is STILL IN FLIGHT leaves `data` at the previous generation with
+//     `error` CLEARED — the deps-change effect sets `{...s, loading: true, error: null}`.
+//     So for the whole in-flight window, and indefinitely for a read that hangs without
+//     erroring, a stale count is indistinguishable from a fresh one by `error` alone.
+//
+// Both are "nobody has answered THIS question yet". The value this screen most often holds
+// from before is 0, which is the one value that withdraws the brake — so admitting either
+// stale reading would withhold a brake on the strength of a read that never landed, which is
+// exactly the failure the gate was rewritten to prevent. Hence `!loading && error == null`.
+//
+// `enabled: false` answers "not known" without asking. It is not an optimization detail: a
+// viewer without command:write is never offered the action and never opens the dialog, so
+// the read would be a round trip taken to feed a decision already made.
+//
+// ⚠️ IT IS READ, NOT WATCHED. One read at mount and one per `reloadKey` bump — there is no
+// poll and no timer. See `offerCancel` for what that leaves open.
+function useStillHeld(
+  batchToken: string,
+  { enabled = true, reloadKey = 0 }: { enabled?: boolean; reloadKey?: number } = {},
+): { held: number | null; checking: boolean } {
+  const { data, loading, error } = useQuery(
+    () =>
+      enabled
+        ? countBatchCommands({ batchToken, statuses: STILL_HELD_STATUSES })
+        : Promise.resolve(null),
+    [batchToken, enabled, reloadKey],
+  );
+  return { held: !loading && error == null ? data : null, checking: loading };
+}
 
 export interface BatchCancelState {
   /** The header action: offered while pressing it could still change something. */
@@ -91,61 +130,28 @@ export function useBatchCancel({
 
   const canWrite = hasAuthority(claims, 'command:write');
 
-  // How much this cancel could actually stop, read live. The batch record's `accepted` is
-  // a stored fact about the moment it fired and is the wrong number here — commands have
-  // moved since. This asks the command rows instead, for the three states in which the
-  // platform still HOLDS the command.
+  // How much this cancel could actually stop. The batch record's `accepted` is a stored fact
+  // about the moment it fired and is the wrong number here — commands have moved since.
   //
-  // The button is deliberately NOT disabled while this loads. An informational read must
-  // never be allowed to hold up a brake.
-  const { data: heldData, error: heldError } = useQuery(
-    () => countBatchCommands({ batchToken: batch.token, statuses: STILL_HELD_STATUSES }),
-    [batch.token, reloadKey],
-  );
-  // 🔴 A NULL HERE IS "NOT KNOWN", NOT ZERO — and BOTH halves of this line are load-bearing.
-  //
-  // `data` is null while the read is in flight, and null when the service answers with a
-  // null `totalRecords` (a nullable Int). But `useQuery` deliberately KEEPS THE PREVIOUS
-  // DATA WHEN A REFETCH FAILS, so on a failed re-read `data` is not null at all — it is the
-  // count from before, presented as though it were the count from after. Folding `error`
-  // back into null is what stops a stale reading arriving as a fresh one, and the stale
-  // reading this screen re-reads most often is 0: the exact value that would otherwise
-  // withdraw the brake below on the strength of a read that never landed.
-  const held = heldError == null ? heldData : null;
-
-  // 🔴 THE QUESTION IS "CAN PRESSING IT STILL CHANGE SOMETHING?", NOT "HAS IT BEEN PRESSED?".
-  // Two different gates, and the second one used to be `batch.cancelledAt == null` alone —
-  // which hid the brake on precisely the batch that most needs it.
-  //
-  // A cancellation is FIRST-WINS, so on a batch with nothing left to stop, re-offering the
-  // primary action invites a write whose only visible effect is a second report of an event
-  // that already happened. But the stamp does not mean the batch is finished with. Two
-  // things a later cancel still changes:
-  //
-  //   • Commands the platform is STILL HOLDING. command-delivery documents an interleaving
-  //     it cannot close from one statement: a release whose subquery saw no committed stamp
-  //     requeues a command whose batch is called off a moment later, and nothing downstream
-  //     re-checks. That command is live, inside a cancelled batch, and it appears AFTER the
-  //     cancellation report that would have named it — so the report cannot surface it and
-  //     the stamp actively hides it. Only a live count of the held states finds it.
-  //
-  //   • Nothing held, no stamp yet. Cancelling is still not a no-op: the stamp is what makes
-  //     a FAILED DELIVERY retire its command instead of putting it back in the queue, so
-  //     pressing it decides what happens to commands already at their devices if they fail.
-  //     That is why "held is 0" alone does not withdraw the action either.
-  //
-  // Hence the conjunction: withdraw the brake only once the batch is stamped AND we have a
-  // count saying nothing is left. An UNKNOWN count keeps the action on offer — the cost of
-  // that direction is a stamped-and-settled batch briefly showing an action it then
-  // withdraws, and the cost of the other direction is withholding a brake for as long as an
-  // informational read is slow, failing or hung.
+  // The button is neither hidden nor disabled while this loads. An informational read must
+  // never be allowed to hold up a brake, and a read in flight is "not known" — which is the
+  // reading `offerCancel` keeps the action on offer for.
   const alreadyCancelled = batch.cancelledAt != null;
-  const canCancel = canWrite && !(alreadyCancelled && held === 0);
+  const { held } = useStillHeld(batch.token, { enabled: canWrite, reloadKey });
+  const canCancel = offerCancel({ canWrite, alreadyCancelled, held });
 
   const cancel = async () => {
     // A duplicate cancel is harmless where a duplicate FIRE is not — no token is spent and
     // the batch's recorded cancellation is first-wins — so this guard is only about not
     // stacking two requests and two reports on top of each other.
+    //
+    // 🔴 IT IS ALSO NOT WHAT STOPS TWO BUTTONS FROM BOTH FIRING, and saying so matters
+    // because there are now two: the header's and the report's. This flag is set AFTER the
+    // confirmation resolves, so it is blind to the window between press and confirm. What
+    // actually holds that window is ConfirmProvider — its overlay makes the page inert, and
+    // a second confirm() SUPERSEDES the first by resolving it false, so at most one awaiter
+    // ever proceeds. If that ever becomes a queue instead of a supersede, two sequential
+    // mutations and two stacked reports become reachable with nothing here going red.
     if (inFlight.current) return;
 
     const confirmed = await confirm({
@@ -213,35 +219,45 @@ export function useBatchCancel({
 // What the platform is still holding, stated inside the confirmation — read when the dialog
 // OPENS and corrected in place while it is open.
 //
-// 🔴 IT CANNOT BE THE PAGE'S COUNT, and the reason is structural rather than stylistic.
-// `confirm()` takes a ReactNode and stores it in the provider's state, so whatever is passed
-// is a SNAPSHOT of the values in scope at the instant of the call — it never re-renders
-// against later ones. Passing the page-level count therefore produced a sentence that was
-// wrong in both directions: on a page open for a while it stated a minutes-old number in the
-// present tense, and on a page just opened it said the count "could not be read" and then
-// never corrected itself when the read landed a moment later. An element with its own query
-// re-renders inside the dialog, so what it says stays true for as long as it is on screen.
+// 🔴 IT CANNOT BE HANDED THE PAGE'S COUNT, and the reason is structural rather than
+// stylistic. `confirm()` stores its `description` in the provider's state, so what is frozen
+// is every VALUE interpolated into it at the instant of the call. Handing over the page's
+// count therefore produced a sentence wrong in both directions: on a page open for a while
+// it stated a minutes-old number in the present tense, and on a page just opened it said the
+// count "could not be read" and never corrected itself when the read landed a moment later.
+//
+// 🔴 A RENDER FUNCTION WOULD NOT HAVE FIXED IT EITHER — its closure is captured at the same
+// instant. What escapes the freeze is an ELEMENT that queries for itself: the element is
+// stored, but it mounts and renders inside the dialog, so its answer is taken when the
+// operator opens the dialog rather than when the page was loaded.
+//
+// ⚠️ THAT MOVES THE SNAPSHOT, IT DOES NOT ABOLISH IT. This reads once, on mount, and does not
+// poll — so it is right as of the moment the question was asked, and a dialog left open for
+// ten minutes states a ten-minute-old number just as the old one did. Moving the instant from
+// page-load to decision-time is the whole of what this buys; anything more would need a poll,
+// which is a lot of machinery for a dialog nobody holds open.
 //
 // The page's count is a different question and stays where it is: that one decides whether
 // to OFFER the brake at all, this one tells the operator what pressing it will stop.
 function StillHeldSentence({ batchToken }: { batchToken: string }) {
   const { t } = useTranslation('commandBatches');
-  const { data, error } = useQuery(
-    () => countBatchCommands({ batchToken, statuses: STILL_HELD_STATUSES }),
-    [batchToken],
-  );
-  // Same fold as the gate's, for the same reason: a read that failed is not a count of zero.
-  const held = error == null ? data : null;
+  const { held, checking } = useStillHeld(batchToken);
   return (
     <span className="block">
-      {/* Zero is a DIFFERENT STATEMENT, not a plural form of the same one: "holding 0
-          commands" and "holding 2 commands" lead to opposite expectations of what the
-          button will do, so they are separate sentences rather than an ICU category. */}
-      {held == null
-        ? t('cancelConfirmHeldUnknown')
-        : held === 0
-          ? t('cancelConfirmHeldNone')
-          : t('cancelConfirmHeld', { count: held })}
+      {/* FOUR statements, not one with substitutions. Zero is a different statement from a
+          count — "holding 0 commands" and "holding 2 commands" lead to opposite expectations
+          of what the button will do — and 🔴 A READ STILL IN FLIGHT IS DIFFERENT AGAIN from
+          one that came back empty. Both leave the gate at "not known", but only one of them
+          justifies telling the operator the count "could not be read": saying that during the
+          ordinary loading beat of every dialog open is a failure claimed about a read nobody
+          has failed yet. */}
+      {checking
+        ? t('cancelConfirmHeldChecking')
+        : held == null
+          ? t('cancelConfirmHeldUnknown')
+          : held === 0
+            ? t('cancelConfirmHeldNone')
+            : t('cancelConfirmHeld', { count: held })}
     </span>
   );
 }

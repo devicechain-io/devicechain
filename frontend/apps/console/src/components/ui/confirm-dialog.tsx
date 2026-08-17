@@ -23,6 +23,22 @@ import { cn } from '@/lib/utils';
 
 export interface ConfirmOptions {
   title: string;
+  /**
+   * 🔴 HELD IN THE PROVIDER'S STATE FOR AS LONG AS THE DIALOG IS OPEN, so every VALUE
+   * interpolated into it is frozen at the instant of the call. A value that can still change
+   * — a live count, an in-flight read — must not be interpolated here: it would state a
+   * stale number in the present tense, or say "not known" and never correct itself when the
+   * answer lands.
+   *
+   * A render function would NOT help; its closure is captured at the same instant. What
+   * escapes the freeze is an ELEMENT that queries for itself, because an element re-renders
+   * here where a value cannot. Worked example:
+   * routes/command-batches/CancelBatchAction.tsx `StillHeldSentence`.
+   *
+   * Interpolating something that cannot change during the interaction — a token, an email,
+   * a version already loaded into the row the button sits on — is correct and is what almost
+   * every call site does.
+   */
   description?: React.ReactNode;
   /** Confirm button label. Defaults to 'Delete'. */
   confirmLabel?: string;

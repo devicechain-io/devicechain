@@ -13,6 +13,7 @@
   "cancelBatch": "Cancel batch",
   "cancelConfirmAction": "Cancel batch",
   "cancelConfirmDismiss": "Leave it running",
+  "cancelConfirmHeldChecking": "Checking how many of this batch’s commands the platform is still holding…",
   "cancelConfirmHeldNone": "The platform is holding none of this batch’s commands right now, so this may stop nothing.",
   "cancelConfirmHeldUnknown": "How many of this batch’s commands the platform still holds could not be read, so how much this stops is not known in advance.",
   "cancelConfirmHeld_one": "The platform is still holding {{count, number}} of this batch’s commands and will stop it.",

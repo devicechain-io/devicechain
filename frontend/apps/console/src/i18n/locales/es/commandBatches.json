@@ -13,6 +13,7 @@
   "cancelBatch": "Cancelar lote",
   "cancelConfirmAction": "Cancelar lote",
   "cancelConfirmDismiss": "Dejarlo en marcha",
+  "cancelConfirmHeldChecking": "Comprobando cuántos comandos de este lote retiene todavía la plataforma…",
   "cancelConfirmHeldNone": "La plataforma no retiene ahora mismo ningún comando de este lote, así que puede que esto no detenga nada.",
   "cancelConfirmHeldUnknown": "No se pudo leer cuántos comandos de este lote retiene todavía la plataforma, así que no se sabe de antemano cuánto detendrá esto.",
   "cancelConfirmHeld_one": "La plataforma aún retiene {{count, number}} de los comandos de este lote y lo detendrá.",
