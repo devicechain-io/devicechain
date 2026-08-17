@@ -66,77 +66,209 @@ func TestRunExitsNonZeroWhenStartupIsRefused(t *testing.T) {
 	ms := &Microservice{InstanceId: "not a valid token", outcome: make(chan error, 1)}
 	err := ms.Run()
 
-	require.Error(t, err, "Run must surface the startup failure, not swallow it")
-	assert.Contains(t, err.Error(), "invalid instance id")
+	// The exit code is the production-observable assertion. The returned error is only
+	// visible because captureExit's stub returns where os.Exit would not, so treat it
+	// as a way to identify WHICH failure was reported, not as a caller contract.
 	assert.Equal(t, []int{1}, *codes)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid instance id")
 }
 
-// The counterweight: reporting a failure is only useful while an orderly shutdown
-// still exits 0. A rolling update terminates every pod on purpose, so a false
-// positive here would paint every deployment red.
+// starting builds a Microservice as it is while still coming up: phase Starting, and a
+// lifecycle in the state where a service spends most of its startup. Both helpers exist
+// so no test hand-rolls the outcome channel — finished() sends on it, and on a
+// zero-value Microservice that is a nil channel, which blocks forever inside the Once.
+func starting(t *testing.T, callbacks LifecycleCallbacks) *Microservice {
+	t.Helper()
+	ms := &Microservice{outcome: make(chan error, 1)}
+	ms.rootCtx, ms.cancel = context.WithCancel(context.Background())
+	ms.lifecycle = NewLifecycleManager("test", ms, callbacks)
+	ms.lifecycle.State = Initializing
+	return ms
+}
+
+// runnable builds a Microservice in the state a real one is in once startup has
+// finished: phase Running, lifecycle Started, ready to be torn down.
+func runnable(t *testing.T, callbacks LifecycleCallbacks) *Microservice {
+	t.Helper()
+	ms := starting(t, callbacks)
+	ms.lifecycle.State = Started
+	ms.phase.Store(phaseRunning)
+	return ms
+}
+
+// 🔴 THE COUNTERWEIGHT. Reporting a failure is only useful while an orderly shutdown
+// still exits 0 — a rolling update terminates every pod on purpose, so a false positive
+// here paints every deployment red.
+//
+// It goes through ShutDownNow deliberately. An earlier version called finished(nil)
+// directly, which skipped the drain, the cancel, Stop, Terminate AND the success send
+// itself — so mutating that send to report a failure left this test green while every
+// orderly shutdown in the fleet exited 1. A counterweight that does not traverse the
+// path it is weighing is not one.
 func TestAnOrderlyShutdownExitsZero(t *testing.T) {
 	codes := captureExit(t)
 
-	ms := &Microservice{outcome: make(chan error, 1)}
-	ms.finished(nil)
-	err := ms.reportOutcome(ms.waitForShutdown())
+	ms := runnable(t, NewNoOpLifecycleCallbacks())
+	ms.ShutDownNow()
 
-	assert.NoError(t, err)
+	assert.NoError(t, ms.reportOutcome(ms.waitForShutdown()))
 	assert.Empty(t, *codes, "an orderly shutdown must not set an exit status")
 }
 
 // A teardown that failed is a failure too, end to end — and this covers the WIRING,
-// not just the helper. ShutDownNow is the only thing that reports one, and its three
-// sends sit within a dozen lines of each other: two failures and one success. A test
-// that only exercised finished() would pass with all three reporting the same thing.
+// not just the helper. ShutDownNow is the only thing that reports one, and its sends
+// sit within a dozen lines of each other: failures and one success. A test that only
+// exercised finished() would pass with all of them reporting the same thing.
 func TestAFailedTeardownIsReported(t *testing.T) {
 	codes := captureExit(t)
 
-	ms := &Microservice{outcome: make(chan error, 1)}
-	ms.rootCtx, ms.cancel = context.WithCancel(context.Background())
-	ms.lifecycle = NewLifecycleManager("test", ms, NewNoOpLifecycleCallbacks())
+	callbacks := NewNoOpLifecycleCallbacks()
+	callbacks.Stopper.Preprocess = func(context.Context) error {
+		return errors.New("could not close the inbound reader")
+	}
+	ms := runnable(t, callbacks)
 
-	// Stop refuses a component that was never initialized, which is the real error
-	// this path sees when a SIGTERM lands while the service is still starting up.
 	ms.ShutDownNow()
 
 	err := ms.reportOutcome(ms.waitForShutdown())
 	require.Error(t, err, "a shutdown that could not stop the service must not report success")
-	assert.Contains(t, err.Error(), "uninitialized")
+	assert.Contains(t, err.Error(), "could not close the inbound reader")
 	assert.Equal(t, []int{1}, *codes)
 }
 
-// The signal handler is armed before InitializeAndStart is launched, so a SIGTERM
-// can race a startup failure and both can report. The first one is the answer: a
-// startup that was refused is why the process is ending, whatever tidying followed.
-func TestTheFirstOutcomeIsTheReportedOne(t *testing.T) {
-	refused := errors.New("startup refused")
+// Terminate reports on its own line, a dozen lines from Stop's. Covering only Stop left
+// this one free to be flipped to report success with the suite green — which a mutation
+// run confirmed before this test existed.
+func TestAFailedTerminateIsReported(t *testing.T) {
+	codes := captureExit(t)
 
-	ms := &Microservice{outcome: make(chan error, 1)}
-	ms.finished(refused)
-	ms.finished(nil)
+	callbacks := NewNoOpLifecycleCallbacks()
+	callbacks.Terminator.Preprocess = func(context.Context) error {
+		return errors.New("could not close the database pool")
+	}
+	ms := runnable(t, callbacks)
 
-	assert.Same(t, refused, ms.waitForShutdown())
+	ms.ShutDownNow()
+
+	err := ms.reportOutcome(ms.waitForShutdown())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "could not close the database pool")
+	assert.Equal(t, []int{1}, *codes)
 }
 
-// ...and the later outcome must be DROPPED, not parked on a channel nobody will
-// drain. Run receives exactly once, so a second sender that blocks would strand its
-// goroutine forever — with the signal handler's goroutine, that is the one holding
-// the process's only response to SIGTERM.
-func TestALateOutcomeDoesNotBlockItsSender(t *testing.T) {
-	ms := &Microservice{outcome: make(chan error, 1)}
+// 🔴 THE REGRESSION TEST. A SIGTERM landing during initialization used to run the full
+// teardown against a service that did not exist yet — Stop's guards permit a stop from
+// Initializing — which in 11 of the 15 services dereferences package values that
+// initialization had not assigned yet. Where it did not panic it SUCCEEDED, reporting an
+// orderly shutdown over the top of whatever startup was about to say.
+//
+// Being asked to stop is not a fault, so this exits 0. What must not happen is the
+// teardown.
+func TestAShutdownBeforeStartupTearsNothingDown(t *testing.T) {
+	codes := captureExit(t)
 
-	sent := make(chan struct{})
-	go func() {
-		defer close(sent)
-		ms.finished(errors.New("first"))
-		ms.finished(errors.New("second"))
-		ms.finished(nil)
-	}()
+	teardownRan := false
+	callbacks := NewNoOpLifecycleCallbacks()
+	callbacks.Stopper.Preprocess = func(context.Context) error { teardownRan = true; return nil }
+
+	// Still initializing — dialing Postgres, running migrations, connecting to the
+	// broker — with phase left at phaseStarting, as it would be.
+	ms := starting(t, callbacks)
+
+	ms.ShutDownNow()
+
+	assert.False(t, teardownRan, "teardown must not run against a service that never started")
+	// Deterministic proof that the lifecycle was never entered — which is also what
+	// removes the data race, since the signal goroutine no longer reads a State the
+	// startup goroutine is still writing. Asserting the state is unchanged says that
+	// without depending on -race tripping, which it will not do while no test drives
+	// the two goroutines against each other.
+	assert.Equal(t, Initializing, ms.lifecycle.State, "shutdown must not have driven the lifecycle")
+	assert.NoError(t, ms.reportOutcome(ms.waitForShutdown()))
+	assert.Empty(t, *codes, "being told to stop before starting is not a fault")
+}
+
+// ...which is only safe because of THIS. A startup that refused itself has already
+// reported, and a stop arriving afterwards must not paint over it. That is what makes
+// exiting 0 above a statement about the signal rather than about the service.
+func TestARefusedStartupSurvivesTheStopThatFollowsIt(t *testing.T) {
+	codes := captureExit(t)
+
+	ms := starting(t, NewNoOpLifecycleCallbacks())
+
+	ms.finished(errors.New("instance configuration invalid"))
+	ms.ShutDownNow()
+
+	err := ms.reportOutcome(ms.waitForShutdown())
+	require.Error(t, err, "a refusal that already happened must not be overwritten by a later stop")
+	assert.Contains(t, err.Error(), "instance configuration invalid")
+	assert.Equal(t, []int{1}, *codes)
+}
+
+// Teardown is not idempotent, so a second shutdown must not re-run it.
+func TestASecondShutdownIsIgnored(t *testing.T) {
+	stops := 0
+	callbacks := NewNoOpLifecycleCallbacks()
+	callbacks.Stopper.Preprocess = func(context.Context) error { stops++; return nil }
+	ms := runnable(t, callbacks)
+
+	ms.ShutDownNow()
+	ms.ShutDownNow()
+
+	assert.Equal(t, 1, stops)
+	assert.NoError(t, ms.waitForShutdown())
+}
+
+// inertComponent stands in for the Microservice as the lifecycle's component so that
+// Initialize and Start SUCCEED. The real one reads the instance config off a mounted
+// volume, which is why nothing could exercise a successful startup before this.
+type inertComponent struct{}
+
+func (inertComponent) Initialize(context.Context) error        { return nil }
+func (inertComponent) ExecuteInitialize(context.Context) error { return nil }
+func (inertComponent) Start(context.Context) error             { return nil }
+func (inertComponent) ExecuteStart(context.Context) error      { return nil }
+func (inertComponent) Stop(context.Context) error              { return nil }
+func (inertComponent) ExecuteStop(context.Context) error       { return nil }
+func (inertComponent) Terminate(context.Context) error         { return nil }
+func (inertComponent) ExecuteTerminate(context.Context) error  { return nil }
+
+// 🔴 The other half of the phase gate, and the one a mutation run caught nothing
+// guarding: startup must PUBLISH that it finished. If it does not, phase stays at
+// phaseStarting and every shutdown reads a healthy, serving pod as one that never
+// started — skipping the teardown and, worse, the readiness drain that keeps in-flight
+// requests from being severed. That is every rolling update, not an edge case.
+func TestAStartedServiceIsTornDownInFull(t *testing.T) {
+	captureExit(t)
+
+	stopped := make(chan struct{})
+	callbacks := NewNoOpLifecycleCallbacks()
+	callbacks.Stopper.Preprocess = func(context.Context) error { close(stopped); return nil }
+
+	ms := &Microservice{InstanceId: "valid-instance", outcome: make(chan error, 1)}
+	ms.rootCtx, ms.cancel = context.WithCancel(context.Background())
+	ms.lifecycle = NewLifecycleManager("test", inertComponent{}, callbacks)
+
+	ran := make(chan error, 1)
+	go func() { ran <- ms.Run() }()
+
+	require.Eventually(t, func() bool { return ms.phase.Load() == phaseRunning },
+		5*time.Second, time.Millisecond, "startup never published that it had finished")
+	ms.ShutDownNow()
 
 	select {
-	case <-sent:
+	case <-stopped:
 	case <-time.After(5 * time.Second):
-		t.Fatal("a later outcome blocked its sender; nothing will ever drain that send")
+		t.Fatal("a fully started service was not torn down")
 	}
+	assert.NoError(t, <-ran)
 }
+
+// Two tests were removed from here rather than kept passing. One asserted first-wins by
+// calling finished twice on one goroutine — the same property
+// TestARefusedStartupSurvivesTheStopThatFollowsIt pins through the real path — while its
+// comment described a concurrent race it had no concurrency for. The other guarded
+// against a sender stranded forever on an undrained slot, a hazard the cap-1 buffer and
+// Run's waiting receive already make impossible; it only failed at all because it sent
+// three times with no receiver, a shape the process never has.
