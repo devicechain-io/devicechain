@@ -11,8 +11,9 @@
 // operator's own EventSource id, which is not a transport name at all. Nothing tied them
 // together, and nothing could: event-sources, lwm2m-ingest and sparkplug-ingest do not all
 // import each other, and command-delivery, which is the only thing that CLASSIFIES a source,
-// imports none of them. So this package is a LEAF, imports nothing, and sits in core where
-// every one of them already depends on it — adding it creates no new module edge.
+// imports none of them. So this package is a LEAF — it depends on nothing in this repository,
+// only stdlib — and sits in core, where every one of those services already depends on it, so
+// adding it creates no new module edge.
 //
 // The cost of having no shared definition is on record. command-delivery's undeliverable
 // deny list held the bare word "sparkplug" and compared it against the WHOLE source, which

@@ -118,8 +118,14 @@ func Resolved(states map[string]State, token string, err error) bool {
 // 🔴 BOTH HALVES NOW COME FROM core/transport — the name from the constant, the reduction
 // from transport.Of. They are minted in sparkplug-ingest and compared here, in modules that
 // do not import each other, and the last time each side wrote its own the two disagreed in
-// exactly the way described above. A rename now breaks the build instead of silently
-// disconnecting the verdict.
+// exactly the way described above. What one definition buys is that THE TWO SIDES CAN NO
+// LONGER DISAGREE: change it and both move together, so the verdict stays connected.
+//
+// ⚠️ THAT IS NOT THE SAME AS THE COMPILER GUARDING THE VALUE, and the difference matters.
+// Renaming the Go identifier breaks the build; changing the STRING breaks nothing anywhere,
+// because it propagates to both sides at once — and the string is a wire contract already
+// written into device_states rows that no longer match. The only tripwire for that is a test
+// in core, which `go test ./...` here will never run.
 //
 // The one collision the reduction cannot prevent — an operator naming a source so that it
 // reduces to a minted transport name — is rejected at config load by event-sources' Validate

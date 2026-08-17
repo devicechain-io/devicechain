@@ -283,19 +283,38 @@ func (c *EventSourcesConfiguration) Validate() error {
 // Prometheus label value on four counters. So an id is not free-form text that happens to be
 // displayed; it is matched, grouped and reconciled on.
 //
-// ⚠️ AND THAT CUTS BOTH WAYS, WHICH IS WHY THIS IS AS NARROW AS IT IS. Rejecting an id an
-// operator is ALREADY RUNNING has the same effect as renaming it: the service refuses to
-// start, and if they rename it to get going again, every asserted device_states row filed
-// under the old id is stranded — the source-scoped reconciler will never see those devices
-// again, and pre-GA there is no backfill. So this rejects only ids that are ALREADY broken
-// or already meaningless, never merely unfashionable ones.
+// ⚠️ AND THAT CUTS BOTH WAYS. Rejecting an id an operator is ALREADY RUNNING has the same
+// effect as renaming it: this service refuses to start — taking down ALL ingest for the
+// instance, since every source and the broker-presence tap live in this one process — and if
+// they rename the id to get going again, every asserted device_states row filed under the old
+// one is stranded, because the source-scoped reconciler will never match it and pre-GA there
+// is no backfill.
+//
+// 🔴 SO BE HONEST ABOUT WHAT THE RESERVATION COSTS, because "it only rejects what was already
+// broken" is NOT true and an earlier version of this comment said it was. Of the ids this
+// turns away:
+//
+//   - exactly "lwm2m" IS already broken — it collides whole-value with the LwM2M
+//     reconciler's own read, so the two sweep each other's rows today.
+//   - "sparkplug" or "sparkplug:x" is broken only for an operator who SENDS COMMANDS; the
+//     deny list makes those Undeliverable. A telemetry-only fleet on such an id works fine.
+//   - "lwm2m:site-a" is broken by NOTHING today. The one transport-classified consumer denies
+//     only Sparkplug, and the LwM2M reconciler matches the whole value, so this id is never
+//     swept by it and never denied a command.
+//
+// That last class is rejected PROSPECTIVELY: it is groundwork for the allow list the
+// stranded-SENT reconciler needs, where a collision stops being self-inflicted and starts
+// making a foreign device look like a member. That is a defensible reason to reject a working
+// configuration, but it is a different reason, and pretending otherwise would understate what
+// an upgrade can cost an operator.
 func (c *EventSourcesConfiguration) validateSourceIds() error {
 	seen := make(map[string]int, len(c.EventSources))
 	for i, src := range c.EventSources {
 		// An empty id projects an empty source, and device-state's projection deliberately
-		// never lets an empty overwrite a non-empty — so this source's events would silently
-		// fail to update the very field they are supposed to set. It is not "unset", it is
-		// permanently invisible.
+		// never lets an empty overwrite a non-empty. A device's FIRST event still creates its
+		// row with an empty source — it is the merge path that refuses — so the result is not
+		// "no source" but a source that can never be corrected by this gateway and can be
+		// overwritten by any other, which is worse than either.
 		if src.Id == "" {
 			return fmt.Errorf("eventSources[%d].id must not be empty: it is stamped on every event as the projected source, and an empty source never updates the projection", i)
 		}
@@ -309,9 +328,14 @@ func (c *EventSourcesConfiguration) validateSourceIds() error {
 		// miss, and it permits the operator's own namespaced id that such a rule would
 		// reject for nothing.
 		if name := transport.Of(src.Id); transport.IsMinted(name) {
+			// 🔴 THE REMEDY IS NAMED HERE BECAUSE THE OBVIOUS ONE HAS A TRAP, and the operator
+			// reads this string rather than the comment above it. Renaming the id starts the
+			// service, and silently orphans every presence row already filed under the old
+			// name — so an operator with live devices needs to know that before they type the
+			// new id, not after.
 			return fmt.Errorf(
-				"eventSources[%d].id %q is reserved: it reads as the %q transport, which the platform mints itself, so this source's devices would be classified as %q by every consumer that asks",
-				i, src.Id, name, name)
+				"eventSources[%d].id %q is reserved: it reads as the %q transport, which the platform mints itself, so this source's devices would be classified as %q by every consumer that asks. Choose an id that does not begin with %q followed by end-of-string or ':' — but note that if this source has been running, renaming it strands the device presence already recorded under the old id, which nothing backfills",
+				i, src.Id, name, name, name)
 		}
 		// Two sources sharing an id are indistinguishable AFTER the fact: they project one
 		// source value, merge into one Prometheus series, and reconcile as one emitter — so

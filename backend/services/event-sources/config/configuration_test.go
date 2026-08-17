@@ -107,9 +107,11 @@ func TestDefaultSourceIdsAreValid(t *testing.T) {
 	assert.NoError(t, core.LoadConfiguration([]byte(``), cfg))
 	assert.NoError(t, cfg.Validate())
 
-	// And the reason they survive is worth pinning: the defaults are "mqtt1"/"http1", not
-	// the bare transport words. If a future default were renamed to "mqtt", it would still
-	// be valid — "mqtt" is not a name the platform mints — but the count below would change.
+	// The reason they survive is that the defaults are "mqtt1"/"http1" rather than the bare
+	// transport words — and those SPELLINGS are pinned by TestLoadDefaultsEventSources above,
+	// which looks each up by id and would fail on a rename. Said here rather than re-asserted,
+	// because an earlier version of this comment claimed the length check below was that
+	// tripwire, and it is not: renaming an id changes no count.
 	assert.Len(t, cfg.EventSources, 2)
 }
 

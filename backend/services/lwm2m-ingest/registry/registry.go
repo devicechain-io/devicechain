@@ -249,11 +249,13 @@ func New(resolver deviceResolver, emitter presenceEmitter, epoch *adapter.EpochS
 // failover reconciliation reads it back (assertedDeviceStates(source:)), so
 // renaming it would strand every previously-asserted LwM2M row.
 //
-// It is now DERIVED from core/transport rather than declared here. The value is unchanged and
-// must stay so, but it is no longer a literal that only agrees with command-delivery's
-// classifier by coincidence — a rename there breaks this build instead of silently
-// disconnecting the classification. The bareness is the contract: there is no
-// lwm2m:{serverId} form and no config field can produce one.
+// It is now DERIVED from core/transport rather than declared here, so it is no longer a
+// literal that agrees with command-delivery's classifier only by coincidence. ⚠️ What that
+// buys is that the two cannot DISAGREE — not that the compiler guards the value. Editing the
+// string in core moves both sides at once and breaks no build, while stranding every row
+// already written; the guard for that is a test in core, which this module never runs. The
+// bareness is the contract: there is no lwm2m:{serverId} form and no config field can
+// produce one.
 const SourceLwM2M = string(transport.LwM2M)
 
 // RegisterResult is the outcome of a Register the handler maps to a CoAP reply.
