@@ -14,10 +14,10 @@ package presence
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/transport"
 )
 
 // Verdict is what the gate does with one command.
@@ -106,7 +106,7 @@ func Resolved(states map[string]State, token string, err error) bool {
 // occupy the tenant's undelivered-command ceiling for a full TTL, letting a Sparkplug
 // fleet crowd out commands to devices that CAN receive them.
 //
-// 🔴🔴 KEYED ON THE TRANSPORT, MATCHED THROUGH transportOf — NEVER ON THE WHOLE `source`.
+// 🔴🔴 KEYED ON THE TRANSPORT, MATCHED THROUGH transport.Of — NEVER ON THE WHOLE `source`.
 // A projected source is `transport` or `transport:qualifier`, and the qualifier is chosen at
 // runtime, so the whole value is not a closed vocabulary and cannot be enumerated here. This
 // list held the bare word "sparkplug" and was looked up with the whole value, which no
@@ -114,36 +114,22 @@ func Resolved(states map[string]State, token string, err error) bool {
 // missed for every real device and the Undeliverable verdict — with failUndeliverable,
 // MarkUndeliverable and command_delivery_undeliverable_total behind it — could not fire at
 // all, while every test passed on a hand-written bare "sparkplug" that nothing emits.
-var nonDeliveringTransports = map[string]bool{
-	"sparkplug": true,
-}
-
-// transportOf reduces a projected `source` to the transport it names, dropping any
-// runtime qualifier: "sparkplug:plant-a" -> "sparkplug", "mqtt" -> "mqtt".
 //
-// 🔴 IT IS NOT A PREFIX MATCH, AND THAT IS THE POINT. Matching by prefix would condemn a
-// source merely NAMED like a denied transport — "sparkplugin", or an operator's gateway
-// source called "sparkplug-test" — and `source` for a plain MQTT gateway is an
-// OPERATOR-CHOSEN id, so those collisions are reachable input, not hypotheticals. Cutting
-// at the first ":" matches the one form producers actually mint and nothing adjacent to it.
+// 🔴 BOTH HALVES NOW COME FROM core/transport — the name from the constant, the reduction
+// from transport.Of. They are minted in sparkplug-ingest and compared here, in modules that
+// do not import each other, and the last time each side wrote its own the two disagreed in
+// exactly the way described above. A rename now breaks the build instead of silently
+// disconnecting the verdict.
 //
-// An operator can still collide deliberately by naming a source exactly "sparkplug"; that
-// is unchanged by this function and is the deny list's pre-existing shape, not a new hazard.
-// Nothing prevents it — event-sources' Validate() checks the batching bounds and the shed
-// floor and says outright that "the source list is left to the source loaders", so an
-// EventSource.Id is accepted whatever it says.
-//
-// 🔴 THE COST OF THAT COLLISION IS NOT FIXED — IT INVERTS WITH THE LIST'S POLARITY, so read
-// the paragraph above as scoped to a DENY list rather than as a property of this function.
-// Against nonDeliveringTransports a collision is self-inflicted and self-limiting: the
-// operator named their own MQTT source "sparkplug" and their own commands stop. An ALLOW
-// list built on the same reduction fails the other way — the collision makes a foreign
-// transport's device look like a member, and the caller ACTS on a device it was written to
-// exclude. Whoever adds the first allow list here (the stranded-SENT reconciler is the
-// candidate) owes that case a decision rather than this paragraph's reassurance.
-func transportOf(source string) string {
-	transport, _, _ := strings.Cut(source, ":")
-	return transport
+// The one collision the reduction cannot prevent — an operator naming a source so that it
+// reduces to a minted transport name — is rejected at config load by event-sources' Validate
+// rather than merely described here. That was worth closing because the cost INVERTS with
+// this list's polarity: against a DENY list it is self-inflicted (the operator's own commands
+// stop), while against an ALLOW list the collision makes a foreign transport's device look
+// like a member and the caller ACTS on a device the list was written to exclude. The
+// stranded-SENT reconciler is that first allow list, and this is the groundwork it asked for.
+var nonDeliveringTransports = map[transport.Name]bool{
+	transport.Sparkplug: true,
 }
 
 // Decide reduces one device's projected state to a verdict.
@@ -169,7 +155,7 @@ func Decide(s State) Verdict {
 		// Dispatch, exactly as before the gate existed.
 		return Dispatch
 	}
-	if nonDeliveringTransports[transportOf(s.Source)] {
+	if nonDeliveringTransports[transport.Of(s.Source)] {
 		return Undeliverable
 	}
 	if s.Asserted && !s.Active {

@@ -33,6 +33,7 @@ import (
 
 	"github.com/devicechain-io/dc-event-sources/adapter"
 	"github.com/devicechain-io/dc-lwm2m-ingest/config"
+	"github.com/devicechain-io/dc-microservice/transport"
 )
 
 const (
@@ -247,7 +248,13 @@ func New(resolver deviceResolver, emitter presenceEmitter, epoch *adapter.EpochS
 // Sparkplug which derives a source per broker/hostId. It is STABLE by contract: the L3
 // failover reconciliation reads it back (assertedDeviceStates(source:)), so
 // renaming it would strand every previously-asserted LwM2M row.
-const SourceLwM2M = "lwm2m"
+//
+// It is now DERIVED from core/transport rather than declared here. The value is unchanged and
+// must stay so, but it is no longer a literal that only agrees with command-delivery's
+// classifier by coincidence — a rename there breaks this build instead of silently
+// disconnecting the classification. The bareness is the contract: there is no
+// lwm2m:{serverId} form and no config field can produce one.
+const SourceLwM2M = string(transport.LwM2M)
 
 // RegisterResult is the outcome of a Register the handler maps to a CoAP reply.
 type RegisterResult int

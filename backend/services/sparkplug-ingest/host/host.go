@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/transport"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
@@ -219,7 +220,12 @@ func NewClient(source config.SparkplugSource, broker Broker, ingester SampleInge
 		metrics:  metrics,
 		ingester: ingester,
 		policy: IngestPolicy{
-			Source:          "sparkplug:" + source.HostId,
+			// Built through transport.Qualify rather than by concatenating ":" here: the
+			// separator is half of a match whose other half lives in command-delivery, and a
+			// hand-written one on either side is how the two drift apart. That already
+			// happened once in the other direction — the deny list held a bare "sparkplug"
+			// and matched the whole value, so it missed every real device.
+			Source:          transport.Qualify(transport.Sparkplug, source.HostId),
 			DeviceTypeToken: source.DeviceTypeToken,
 			AutoRegister:    source.AutoRegister,
 		},
