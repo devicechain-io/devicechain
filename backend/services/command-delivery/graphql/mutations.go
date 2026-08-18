@@ -150,7 +150,13 @@ func (r *SchemaResolver) ParkCommand(ctx context.Context, args struct {
 	}
 
 	api := r.GetApi(ctx)
-	return api.ParkClaim(ctx, args.Token, args.DispatchNonce)
+	// The landing status is deliberately dropped here rather than surfaced. A transport
+	// asks this to be told "the row is no longer yours", and both landings — PARKED, or
+	// CANCELLED if the batch was called off meanwhile — answer that identically. Widening
+	// the mutation to report which would be a breaking change to a served schema in
+	// exchange for a distinction no caller of it acts on.
+	_, parked, err := api.ParkClaim(ctx, args.Token, args.DispatchNonce)
+	return parked, err
 }
 
 // MarkCommandSent claims a still-dispatchable command (QUEUED, HELD or PARKED) for

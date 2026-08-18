@@ -57,6 +57,9 @@ type fakeApi struct {
 	// error.
 	parkLoses bool
 	parkFails bool
+	// parkLandsOn overrides the status the park reports landing on. Empty means PARKED,
+	// the ordinary case; a test stages CANCELLED to exercise the called-off-batch branch.
+	parkLandsOn model.CommandStatus
 
 	lockAttempts    int
 	pendingReads    int
@@ -168,14 +171,25 @@ func (f *fakeApi) StrandedSentCommands(_ context.Context, cursor model.StrandedC
 	return page, model.StrandedCursor{SentTime: last.SentTime.Time, ID: last.ID}, nil
 }
 
-func (f *fakeApi) ParkClaim(_ context.Context, token, nonce string) (bool, error) {
+// ParkClaim answers with the status the row landed on as well as whether it moved.
+// parkLandsOn lets a test stage the CANCELLED branch — the one a caller cannot derive and
+// must be told about.
+func (f *fakeApi) ParkClaim(_ context.Context, token, nonce string) (model.CommandStatus, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.parkCalls = append(f.parkCalls, parkCall{token: token, nonce: nonce})
 	if f.parkFails {
-		return false, errors.New("park failed")
+		return "", false, errors.New("park failed")
 	}
-	return !f.parkLoses, nil
+	if f.parkLoses {
+		// Nothing moved, so nothing landed. The empty status pairs with moved=false and
+		// is not a third outcome — the production write reports the same shape.
+		return "", false, nil
+	}
+	if f.parkLandsOn != "" {
+		return f.parkLandsOn, true, nil
+	}
+	return model.CommandParked, true, nil
 }
 
 // ReleaseHeldForDevice is the wake, which the sweep and reconciler never call — it is

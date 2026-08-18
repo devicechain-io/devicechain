@@ -23,7 +23,7 @@ func TestParkClaimHandsBackAnUndeliveredCommand(t *testing.T) {
 		t.Fatalf("MarkSent: claimed=%v err=%v", claimed, err)
 	}
 
-	parked, err := api.ParkClaim(ctx, "park-me", nonce)
+	_, parked, err := api.ParkClaim(ctx, "park-me", nonce)
 	if err != nil {
 		t.Fatalf("ParkClaim: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestParkClaimRefusesAStaleNonce(t *testing.T) {
 
 	// The device woke, the drain claimed the row and actuated it. That claim re-stamps the
 	// nonce, which is what makes the in-flight park stale.
-	if _, err := api.ParkClaim(ctx, "re-armed", stale); err != nil {
+	if _, _, err := api.ParkClaim(ctx, "re-armed", stale); err != nil {
 		t.Fatalf("park to set up the drain: %v", err)
 	}
 	won, err := api.MarkSentByToken(ctx, "re-armed")
@@ -78,7 +78,7 @@ func TestParkClaimRefusesAStaleNonce(t *testing.T) {
 	}
 
 	// The original message now redelivers and tries to park the dispatch it was handed.
-	parked, err := api.ParkClaim(ctx, "re-armed", stale)
+	_, parked, err := api.ParkClaim(ctx, "re-armed", stale)
 	if err != nil {
 		t.Fatalf("ParkClaim: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestMarkSentStampsADistinctNonceEachTime(t *testing.T) {
 	}
 
 	// Park it and claim again: this time the claim wins, and the nonce must differ.
-	if _, err := api.ParkClaim(ctx, "twice", first); err != nil {
+	if _, _, err := api.ParkClaim(ctx, "twice", first); err != nil {
 		t.Fatalf("park: %v", err)
 	}
 	second, claimed, err := api.MarkSent(ctx, id)
@@ -165,7 +165,7 @@ func TestParkClaimRetiresACancelledBatchsCommand(t *testing.T) {
 		t.Fatalf("CancelCommandBatch: %v", err)
 	}
 
-	parked, err := api.ParkClaim(ctx, "cmd-pump-1", nonce)
+	landed, parked, err := api.ParkClaim(ctx, "cmd-pump-1", nonce)
 	if err != nil {
 		t.Fatalf("ParkClaim: %v", err)
 	}
@@ -175,6 +175,61 @@ func TestParkClaimRetiresACancelledBatchsCommand(t *testing.T) {
 	if got := statusByToken(t, api, ctx, "cmd-pump-1"); got != CommandCancelled.String() {
 		t.Fatalf("status = %s, want CANCELLED — parking a called-off batch's command to PARKED "+
 			"would put it back in the dispatchable set and actuate the device after the brake", got)
+	}
+	// 🔑 THE REPORTED LANDING MUST MATCH THE ROW, and this is the only branch where the two
+	// could disagree. A caller that meters re-armings cannot derive this: whether the batch
+	// is cancelled can change between its scan and this write, so if ParkClaim reported
+	// PARKED here the meter would record a delivery that never happened, and no test
+	// asserting only on the ROW would notice.
+	if landed != CommandCancelled {
+		t.Fatalf("ParkClaim reported landing on %q while the row went to CANCELLED", landed)
+	}
+}
+
+// TestParkClaimReportsWhereItLandedOnTheOrdinaryPath is the counterweight to the test
+// above: rejecting a wrong landing is only useful while the ordinary one is still reported
+// correctly.
+func TestParkClaimReportsWhereItLandedOnTheOrdinaryPath(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+
+	id := seedWithStatus(t, api, ctx, "ordinary", CommandQueued)
+	nonce, claimed, err := api.MarkSent(ctx, id)
+	if err != nil || !claimed {
+		t.Fatalf("MarkSent: claimed=%v err=%v", claimed, err)
+	}
+
+	landed, parked, err := api.ParkClaim(ctx, "ordinary", nonce)
+	if err != nil || !parked {
+		t.Fatalf("ParkClaim: parked=%v err=%v", parked, err)
+	}
+	if landed != CommandParked {
+		t.Fatalf("ParkClaim reported landing on %q, want PARKED", landed)
+	}
+}
+
+// TestParkClaimReportsNoLandingWhenNothingMoved: the status pairs with moved=false rather
+// than naming a third outcome, so a caller that switches on it cannot be handed a status
+// for a write that did nothing.
+func TestParkClaimReportsNoLandingWhenNothingMoved(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+
+	id := seedWithStatus(t, api, ctx, "stale", CommandQueued)
+	nonce, claimed, err := api.MarkSent(ctx, id)
+	if err != nil || !claimed {
+		t.Fatalf("MarkSent: claimed=%v err=%v", claimed, err)
+	}
+
+	landed, parked, err := api.ParkClaim(ctx, "stale", nonce+"-not-this-one")
+	if err != nil {
+		t.Fatalf("ParkClaim: %v", err)
+	}
+	if parked {
+		t.Fatal("a park quoting an unknown nonce moved a row")
+	}
+	if landed != "" {
+		t.Fatalf("ParkClaim named a landing status (%q) for a write that moved nothing", landed)
 	}
 }
 
@@ -301,7 +356,7 @@ func TestParkClaimIsANoOpOnACommandThatMovedOn(t *testing.T) {
 		t.Fatalf("MarkResponse: %v", err)
 	}
 
-	parked, err := api.ParkClaim(ctx, "answered", nonce)
+	_, parked, err := api.ParkClaim(ctx, "answered", nonce)
 	if err != nil {
 		t.Fatalf("parking a command that already finished must not error: %v", err)
 	}

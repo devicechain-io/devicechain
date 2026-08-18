@@ -82,6 +82,53 @@ func TestStrandedParkQuotesTheNonceTheScanObserved(t *testing.T) {
 	}
 }
 
+// TestStrandedRecordsWhereEachRecoveryLanded pins the disposition label against BOTH
+// branches, and the second one is the whole reason the label exists.
+//
+// 🔴 THE CANCELLED BRANCH IS UNOBSERVABLE FROM THIS SIDE. A stranded row whose batch was
+// called off is routed to CANCELLED by the same write, and whether that happens depends on
+// the batch's state AT THE INSTANT OF THE UPDATE — which can change after the scan that
+// selected the row. So this pass cannot derive the label from anything it read; it can only
+// be told. A version that assumed "recovered ⇒ parked" would report a delivery that never
+// happened, and nothing else in this suite would notice.
+func TestStrandedRecordsWhereEachRecoveryLanded(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		lands model.CommandStatus
+	}{
+		{"the ordinary path", model.CommandParked},
+		{"a called-off batch", model.CommandCancelled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := &fakeApi{
+				strandedLockAvailable: true,
+				strandedPage:          []*model.Command{strandedCmd(1, "c1", "dev-1", "n1", time.Hour)},
+				parkLandsOn:           tc.lands,
+			}
+			reader := &scriptedReader{states: map[string]presence.State{
+				"dev-1": asserted(false, lwm2mSource),
+			}}
+			proc := strandedProc(api, reader)
+			proc.StrandedRecovered = prometheus.NewCounterVec(
+				prometheus.CounterOpts{Name: "test_stranded_recovered_total"}, []string{"disposition"})
+
+			proc.reconcileStranded(context.Background())
+
+			if got := testutil.ToFloat64(proc.StrandedRecovered.WithLabelValues(tc.lands.String())); got != 1 {
+				t.Fatalf("recovered{disposition=%q} = %v, want 1", tc.lands, got)
+			}
+			other := model.CommandParked
+			if tc.lands == model.CommandParked {
+				other = model.CommandCancelled
+			}
+			if got := testutil.ToFloat64(proc.StrandedRecovered.WithLabelValues(other.String())); got != 0 {
+				t.Fatalf("recovered{disposition=%q} = %v, want 0 — the pass reported a landing the "+
+					"write did not perform", other, got)
+			}
+		})
+	}
+}
+
 // TestStrandedSkipsEveryTransportButLwM2M is the allow list, and it is asserted as an
 // allow list rather than as "MQTT is excluded".
 //
