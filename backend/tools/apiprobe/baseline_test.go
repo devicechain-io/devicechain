@@ -169,19 +169,25 @@ input DashboardCreateRequest {
 	}
 }
 
-// 🔴 THE ENVELOPE CHECK, both ways. `createCommand` returned `Command!` in
-// v0.11.0 and returns `CreateCommandResult!` at HEAD, so an entity that selects
-// THROUGH `command{…}` cannot be sent to the older release at all — while the
-// mutation name, the argument name and the input type all still match, which is
-// everything the rest of `supports` looks at.
+// 🔴 THE ENVELOPE ADAPTATION, both ways. `createCommand` returned `Command!` in
+// v0.11.0 and returns `CreateCommandResult!` at HEAD, so an entity selecting
+// THROUGH `command{…}` cannot be sent to the older release — while the mutation
+// name, the argument name and the input type all still match, which is everything
+// the rest of `supports` looks at.
+//
+// The row is adapted rather than skipped, because the envelope is the ONLY thing
+// that differs: same input type, same selectable fields, same read query. Skipping
+// would cost command-delivery every row it contributes, since its other entity
+// does not exist in v0.11.0 at all.
 //
 // Both directions are asserted because only the pair distinguishes a working
-// check from one that answers the same way regardless: the bare-object baseline
-// must be refused, and the enveloped one must still be accepted. A check that
-// only refuses would skip the entity against EVERY baseline, including HEAD's own
-// tree — which is the fail-open this file's counterweight test exists to catch,
-// arriving one entity at a time instead of all at once.
-func TestAnUnenvelopedCreateCannotCarryAWrappedSelection(t *testing.T) {
+// adaptation from one that answers the same way regardless. Stripping always would
+// send HEAD a bare document its own schema refuses; stripping never would put the
+// row back where it started. The third and fourth assertions are the ones that
+// matter most: adaptation must change the envelope and NOTHING else — not the
+// selection, not the input, and never the read document, which no baseline
+// difference justifies touching.
+func TestAnUnenvelopedBaselineDropsTheEnvelopeRatherThanTheRow(t *testing.T) {
 	const enveloped = `
 type Mutation {
     createCommand(request: CommandCreateRequest!): CreateCommandResult!
@@ -225,20 +231,75 @@ input CommandCreateRequest {
 	if err != nil {
 		t.Fatalf("load the bare baseline: %v", err)
 	}
-	got, why := b.supports(command)
-	if got {
-		t.Error("a createCommand returning the bare object accepted a document that selects through an envelope")
+	if ok, why := b.supports(command); !ok {
+		t.Fatalf("the bare baseline was refused outright, so nothing is adapted: %s", why)
 	}
-	if !strings.Contains(why, command.Wrap) || !strings.Contains(why, "Command") {
-		t.Errorf("the reason names neither the missing field nor the type it is missing from: %q", why)
+	adapted := b.adapt(command)
+	if adapted.Wrap != "" || adapted.Reject != "" {
+		t.Errorf("the envelope survived adaptation (Wrap=%q Reject=%q), so the create still selects a field the baseline's type does not have",
+			adapted.Wrap, adapted.Reject)
+	}
+	if strings.Contains(adapted.createDoc(), command.Wrap+"{") {
+		t.Errorf("the adapted create still wraps its selection: %s", adapted.createDoc())
+	}
+	// The adaptation must not cost the row anything ELSE. Same selection, same
+	// input, same read — only the envelope goes.
+	if adapted.Fields != command.Fields || adapted.Input != command.Input || adapted.Read != command.Read {
+		t.Error("adaptation changed more than the envelope, so the seeded row is not the row the table describes")
+	}
+	if adapted.readDoc() != command.readDoc() {
+		t.Errorf("adaptation changed the READ document, which no baseline difference justifies:\n  %s\n  %s",
+			command.readDoc(), adapted.readDoc())
 	}
 
 	b, err = loadBaseline(writeBaseline(t, map[string]string{"command-delivery": enveloped}))
 	if err != nil {
 		t.Fatalf("load the enveloped baseline: %v", err)
 	}
-	if got, why := b.supports(command); !got {
-		t.Errorf("an enveloped createCommand was refused, so the check rejects every baseline: %s", why)
+	if ok, why := b.supports(command); !ok {
+		t.Errorf("an enveloped createCommand was refused: %s", why)
+	}
+	if got := b.adapt(command); got.Wrap != command.Wrap || got.Reject != command.Reject {
+		t.Errorf("an enveloped baseline had its envelope stripped anyway (Wrap=%q Reject=%q), so the adaptation fires on everything and the HEAD path is dead",
+			got.Wrap, got.Reject)
+	}
+}
+
+// A nil baseline is a seed against the current release, which must write the table
+// exactly as written — an adaptation there would silently change what a fresh
+// install is verified against.
+func TestNoBaselineAdaptsNothing(t *testing.T) {
+	var b *baseline
+	for _, e := range entities {
+		if got := b.adapt(e); got.Wrap != e.Wrap || got.Reject != e.Reject {
+			t.Errorf("entity %q was adapted with no baseline in hand", e.Name)
+		}
+	}
+}
+
+// 🔴 THE COUNTERWEIGHT for adapt, matching the one supports already has: pointed
+// at the CURRENT tree, nothing may be adapted. The table is written against these
+// schemas, so an entity that loses its envelope here is the detector misreading
+// the tree — and it would seed a document HEAD refuses, reported as the platform
+// declining a row it has always accepted.
+func TestTheCurrentTreeAdaptsNothing(t *testing.T) {
+	b, err := loadBaseline(filepath.Join("..", "..", "services"))
+	if err != nil {
+		t.Fatalf("load the current tree as a baseline: %v", err)
+	}
+	wrapped := 0
+	for _, e := range entities {
+		if e.Wrap != "" {
+			wrapped++
+		}
+		if got := b.adapt(e); got.Wrap != e.Wrap || got.Reject != e.Reject {
+			t.Errorf("entity %q lost its envelope against the tree its own selection was written from", e.Name)
+		}
+	}
+	// Without an enveloped entity in the table the loop above passes vacuously,
+	// and would keep passing if adapt were changed to strip everything.
+	if wrapped == 0 {
+		t.Fatal("no entity in the table declares a Wrap, so this test asserts nothing")
 	}
 }
 

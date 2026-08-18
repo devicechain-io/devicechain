@@ -141,29 +141,55 @@ func (b *baseline) supports(e entity) (bool, string) {
 	if input := inputTypeName(e.Input); !strings.Contains(b.raw[e.Area], "input "+input+" {") {
 		return false, "the baseline does not declare input " + input
 	}
-	// The RESPONSE shape, for the same reason the read argument is matched: an
-	// entity with a Wrap selects THROUGH an envelope, and a baseline whose create
-	// returns the bare object serves no such field. Everything above still
-	// matches — same mutation, same argument, same input type — so without this
-	// the seed sends a document the baseline rejects with "Cannot query field
-	// \"command\" on type \"Command\"", which reads as a platform defect and is
-	// not one.
-	//
-	// This is a document-COMPATIBILITY check, not the field check the header
-	// rules out. It asks whether the baseline can be sent this document at all,
-	// not whether every field in the selection survived — so it cannot discard an
-	// entity over one added field.
-	if e.Wrap != "" {
-		returns, ok := b.returnTypeOf(e.Area, e.Mutation)
-		if !ok {
-			return false, "the baseline declares no return type for " + e.Mutation
-		}
-		if !b.typeDeclaresField(e.Area, returns, e.Wrap) {
-			return false, "the baseline's " + e.Mutation + " returns " + returns +
-				", which has no " + e.Wrap + " field — it returns the object directly rather than in an envelope"
-		}
-	}
 	return true, ""
+}
+
+// adapt returns the entity AS THIS BASELINE CAN EXPRESS IT, which today means one
+// thing: dropping the result envelope when the baseline's create returns the
+// object directly.
+//
+// 🔴 WHY THIS IS AN ADAPTATION AND NOT A SKIP. createCommand returns `Command!` in
+// v0.11.0 and `CreateCommandResult!` at HEAD, and that is the ONLY difference —
+// CommandCreateRequest is byte-identical between the two, every field the table
+// selects is on both `Command` types, and commandsByToken is unchanged. Skipping
+// the row over a response wrapper would cost command-delivery its ENTIRE
+// contribution to the drill (its only other entity, createCommandBatch, does not
+// exist in v0.11.0 at all) — and that is the area this release changed most.
+//
+// 🔑 IT RETURNS AN ENTITY RATHER THAN A FLAG, and that is the whole design. The
+// envelope is read in two places — createDoc renders it, createdObjects unwraps
+// it — and a flag threaded to both is a flag that can reach one and not the
+// other, producing a document whose response is then decoded by the wrong rule.
+// Clearing Wrap on a copy makes them read the SAME field, so they cannot disagree.
+// Same reason Fields is one string used by both documents.
+//
+// A nil baseline adapts nothing: seeding the current release writes the table as
+// written, which is what a fresh install expects.
+//
+// The bare document's SELECTION is not checked here, deliberately and for the
+// reason the header gives: this file matches document SHAPE, never fields. If the
+// older type is missing something the table selects, the platform refuses the
+// create and names the entity — the loud failure, in the right place.
+func (b *baseline) adapt(e entity) entity {
+	if b == nil || e.Wrap == "" {
+		return e
+	}
+	if b.envelopes(e) {
+		return e
+	}
+	e.Wrap = ""
+	e.Reject = ""
+	return e
+}
+
+// envelopes reports whether the baseline's create returns a result envelope
+// carrying this entity's Wrap field, rather than the created object itself.
+func (b *baseline) envelopes(e entity) bool {
+	returns, ok := b.returnTypeOf(e.Area, e.Mutation)
+	if !ok {
+		return false
+	}
+	return b.typeDeclaresField(e.Area, returns, e.Wrap)
 }
 
 // returnTypeOf reads a mutation's declared result type, stripped of its

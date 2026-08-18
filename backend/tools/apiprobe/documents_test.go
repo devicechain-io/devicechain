@@ -242,3 +242,81 @@ func TestTheValidatorRejectsTheDefectsItWasBuiltFor(t *testing.T) {
 		}
 	}
 }
+
+// The adapted document has to be VALID, not merely different — and against the
+// older schema, which is the one thing the working tree cannot supply. So the
+// v0.11.0 shape is written out here and both documents are validated against the
+// schema each is meant for.
+//
+// 🔴 THIS IS THE CHECK THE ADAPTATION EXISTS FOR. Without it, `adapt` is asserted
+// only by its own unit test — which compares the entity against itself and would
+// pass just as happily if the bare document it produced were unsendable. The
+// cluster would say so, twenty minutes in, as a REFUSED naming the platform.
+func TestBothEnvelopeShapesOfTheCommandCreateValidate(t *testing.T) {
+	// v0.11.0's command-delivery, reduced to what the probe touches: the create
+	// returns the object directly, and the read is unchanged.
+	const v011 = `
+type Mutation {
+    createCommand(request: CommandCreateRequest!): Command!
+}
+type Query {
+    commandsByToken(tokens: [String!]!): [Command!]!
+}
+type Command {
+    token: String!
+    deviceToken: String!
+    name: String!
+    payload: String
+    metadata: String
+}
+input CommandCreateRequest {
+    token: String!
+    deviceToken: String!
+    name: String!
+    payload: String
+    metadata: String
+}
+`
+	old, err := graphql.ParseSchema(v011, nil, graphql.UseFieldResolvers())
+	if err != nil {
+		t.Fatalf("parse the v0.11.0 fixture: %v", err)
+	}
+
+	command, ok := entityNamed("command")
+	if !ok {
+		t.Fatal("the coverage table has no \"command\" entity, so this test asserts nothing")
+	}
+	if command.Wrap == "" {
+		t.Fatal("the \"command\" entity no longer wraps, so there is no adaptation to check")
+	}
+	st := newState("apiprobe")
+
+	// The adapted (bare) document against the old schema.
+	bare := command
+	bare.Wrap, bare.Reject = "", ""
+	if errs := old.ValidateWithVariables(bare.createDoc(), bare.Vars(st)); len(errs) > 0 {
+		t.Errorf("the adapted create does not validate against a v0.11.0-shaped schema: %v\n  document: %s",
+			errs, bare.createDoc())
+	}
+	if errs := old.ValidateWithVariables(bare.readDoc(), map[string]any{"token": st.tok("command")}); len(errs) > 0 {
+		t.Errorf("the read-back does not validate against a v0.11.0-shaped schema: %v\n  document: %s",
+			errs, bare.readDoc())
+	}
+
+	// The counterweight: the UNADAPTED document must be refused by that same
+	// schema. Without this the test above would pass even if the two documents
+	// were identical, and the adaptation would be doing nothing.
+	if errs := old.ValidateWithVariables(command.createDoc(), command.Vars(st)); len(errs) == 0 {
+		t.Error("the enveloped create validated against a schema with no envelope, so the adaptation is unnecessary and this test proves nothing")
+	}
+
+	// And the reverse, against the tree HEAD actually serves: the enveloped
+	// document validates, the bare one does not.
+	head := servedSchema(t, "command-delivery", tenantPlane)
+	if errs := head.ValidateWithVariables(command.createDoc(), command.Vars(st)); len(errs) > 0 {
+		t.Errorf("the enveloped create does not validate against the served schema: %v", errs)
+	}
+	if errs := head.ValidateWithVariables(bare.createDoc(), bare.Vars(st)); len(errs) == 0 {
+		t.Error("the bare create validated against HEAD's enveloped schema, so adapting on the wrong baseline would go unnoticed")
+	}
+}

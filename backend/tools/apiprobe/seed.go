@@ -60,6 +60,16 @@ func runSeed(ctx context.Context, argv []string) error {
 			continue
 		}
 
+		// 🔑 REBOUND, not shadowed in a narrower scope, because everything below
+		// has to see the SAME entity: createDoc renders the envelope, and
+		// createdObjects unwraps it. Adapting for one and not the other would
+		// send a document the response is then decoded against the wrong rule.
+		if adapted := base.adapt(e); adapted.Wrap != e.Wrap {
+			fmt.Printf("  adapted %-26s the baseline's %s returns the object directly; seeding without the result envelope\n",
+				e.Name, e.Mutation)
+			e = adapted
+		}
+
 		var envelope map[string]json.RawMessage
 		if err := session.Query(ctx, c.areaURL(e.Area), e.createDoc(), e.Vars(st), &envelope); err != nil {
 			// exitRefused, not exitSetup: the API answered and said no. That is a
