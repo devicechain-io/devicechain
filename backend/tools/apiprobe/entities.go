@@ -213,8 +213,16 @@ var entities = []entity{
 				"commandKey":         probeCommandKey,
 				"name":               "Reboot",
 				"description":        "The command the probe later enqueues.",
-				"parameterSchema":    `{"type":"object","properties":{"delaySeconds":{"type":"integer"}}}`,
-				"metadata":           meta("command-definition"),
+				// 🔴 NOT a JSON Schema. parameterSchema is an ORDERED
+				// []CommandParameter (ADR-043), and the field's GraphQL type is
+				// String — so a JSON-Schema document is accepted by the schema,
+				// by every document check here, and by nothing on a cluster. The
+				// bounds are carried deliberately: they make the stored jsonb a
+				// nested document rather than a flat one, which is what the
+				// upgrade has to bring across intact.
+				"parameterSchema": `[{"name":"delaySeconds","description":"Delay before the reboot.",` +
+					`"kind":"SCALAR","dataType":"INT","required":true,"minValue":0,"maxValue":3600}]`,
+				"metadata": meta("command-definition"),
 			}}
 		},
 	},
@@ -368,16 +376,29 @@ var entities = []entity{
 		Fields:   "token name description provisionKey strategy credentialType enabled expiresAt metadata deviceType{token}",
 		Vars: func(s *state) map[string]any {
 			return map[string]any{"req": map[string]any{
-				"token":           s.tok("provisioning-profile"),
-				"name":            "apiprobe provisioning",
-				"description":     "Self-registration profile; never exercised by the probe.",
-				"provisionKey":    "apiprobe-key",
+				"token":       s.tok("provisioning-profile"),
+				"name":        "apiprobe provisioning",
+				"description": "Self-registration profile; never exercised by the probe.",
+				// 🔴 THE ONE VALUE IN THIS TABLE THAT IS NOT TENANT-SCOPED.
+				// provision_key carries a bare `unique` CONSTRAINT rather than a
+				// per-tenant index — a device presents it before it has a tenant,
+				// and the schema's own snapshot records the global scope as a known
+				// inconsistency. So it is derived from the tenant here: two probe
+				// tenants in one instance would otherwise collide on a duplicate-key
+				// error that names an index rather than the tenancy behind it.
+				"provisionKey":    "apiprobe-key-" + s.tenant,
 				"provisionSecret": "apiprobe-provision-secret",
 				"strategy":        "ALLOW_NEW",
 				"deviceTypeToken": s.tokens["deviceType"],
-				"credentialType":  "MQTT_BASIC",
-				"enabled":         true,
-				"metadata":        meta("provisioning-profile"),
+				// 🔑 The MINTABLE credential types are a strict subset of the
+				// valid ones: provisioning can only mint ACCESS_TOKEN, because
+				// its id IS the bearer token and there is nothing else to hand
+				// back. MQTT_BASIC is a perfectly good credential type — it is
+				// what the device-credential entity above declares — and it is
+				// still refused here.
+				"credentialType": "ACCESS_TOKEN",
+				"enabled":        true,
+				"metadata":       meta("provisioning-profile"),
 			}}
 		},
 	},

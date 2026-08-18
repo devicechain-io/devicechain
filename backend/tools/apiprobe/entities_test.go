@@ -166,78 +166,45 @@ func TestEveryEntityIsComplete(t *testing.T) {
 	}
 }
 
-// 🔑 THE COMPARISON IS ONLY AS GOOD AS THE NAMES IN IT, and every one of them is
-// a string this tool made up. A mistyped query name is not a compile error and
-// not a test failure — it is a REFUSED or SHAPE exit at the end of an upgrade
-// drill on a real cluster, which is the most expensive place to learn it.
+// Bulk has to agree with the mutation's RETURN type. A list decoded as one
+// object, or the reverse, fails at the far end of an upgrade drill with a JSON
+// error — while the schema said which it was all along.
 //
-// So each name is checked against the schema the service actually serves. This
-// is the test that would have caught the read-back queries being guessed rather
-// than read, and the two single-object lookups that broke the list assumption.
-func TestEveryDocumentNamesSomethingTheSchemaDeclares(t *testing.T) {
-	// A GraphQL type reference stripped of its list brackets and non-nulls, e.g.
-	// "[EntityRelationshipCreateRequest!]!" -> "EntityRelationshipCreateRequest".
-	decoration := strings.NewReplacer("[", "", "]", "", "!", "")
-
+// 🔑 THIS IS WHAT IS LEFT of a longer test that also matched each document's
+// names against the schema text: the mutation, the read query, the input type,
+// the argument name and the read's argument spelling. Every one of those is now
+// checked by documents_test.go with the SERVER'S OWN VALIDATOR, which reads the
+// selection set too — something string matching never did, and the reason a
+// broken document could ship. Two checks of the same claim is one that can drift
+// from the other, so the approximation went and the real rule stayed.
+//
+// The return type does NOT go with it, because it is not a claim about the
+// document at all: the document validates either way. It is a claim about how
+// this tool DECODES the response, which no validator can make on its behalf.
+//
+// Skipped for an envelope: there the created object is nested one level down, so
+// the outer return type says nothing about it. No entry is both wrapped and bulk
+// today, and the check would silently pass if one were.
+func TestBulkAgreesWithTheDeclaredReturnType(t *testing.T) {
 	byArea := map[string]string{}
 	for _, e := range entities {
+		if e.Wrap != "" {
+			continue
+		}
 		schema, ok := byArea[e.Area]
 		if !ok {
 			schema = schemaFor(t, e.Area)
 			byArea[e.Area] = schema
 		}
-
-		if !declaresField(schema, e.Mutation) {
-			t.Errorf("entity %q: %s serves no field %q", e.Name, e.Area, e.Mutation)
+		returns, ok := returnTypeOf(schema, e.Mutation)
+		if !ok {
+			t.Errorf("entity %q: could not read the return type of %s", e.Name, e.Mutation)
+			continue
 		}
-		if !declaresField(schema, e.Read) {
-			t.Errorf("entity %q: %s serves no field %q", e.Name, e.Area, e.Read)
-		}
-		input := decoration.Replace(e.Input)
-		if !strings.Contains(schema, "input "+input+" {") {
-			t.Errorf("entity %q: %s declares no input type %q", e.Name, e.Area, input)
-		}
-		// The argument NAME, not just the field. Every create takes `request`
-		// except the bulk-relationship one, which takes `requests` — and a
-		// document naming the wrong one is accepted by the compiler, by every
-		// test that only checks field names, and by nothing on a cluster.
-		if !strings.Contains(stripSpace(schema), e.Mutation+"("+e.arg()+":") {
-			t.Errorf("entity %q: %s does not declare %s(%s:…)", e.Name, e.Area, e.Mutation, e.arg())
-		}
-		// Bulk has to agree with the mutation's RETURN type. A list decoded as
-		// one object, or the reverse, fails at the far end of an upgrade drill
-		// with a JSON error — while the schema said which it was all along.
-		//
-		// Skipped for an envelope: there the created object is nested one level
-		// down, so the outer return type says nothing about it. No entry is both
-		// wrapped and bulk today, and the check would silently pass if one were.
-		if e.Wrap == "" {
-			returns, ok := returnTypeOf(schema, e.Mutation)
-			if !ok {
-				t.Errorf("entity %q: could not read the return type of %s", e.Name, e.Mutation)
-			} else if isList := strings.HasPrefix(returns, "["); isList != e.Bulk {
-				t.Errorf("entity %q: Bulk=%v but %s returns %s", e.Name, e.Bulk, e.Mutation, returns)
-			}
-		}
-		// The two read shapes take different arguments, and picking the wrong
-		// one is how Single silently disagrees with the schema: tokens:[…] on a
-		// single lookup is rejected at query time, on a cluster, at the end of a
-		// drill. The declaration says which it is.
-		wantArg := e.Read + "(tokens:"
-		if e.Single {
-			wantArg = e.Read + "(token:"
-		}
-		if !strings.Contains(stripSpace(schema), wantArg) {
-			t.Errorf("entity %q: Single=%v disagrees with how %s declares %s",
-				e.Name, e.Single, e.Area, e.Read)
+		if isList := strings.HasPrefix(returns, "["); isList != e.Bulk {
+			t.Errorf("entity %q: Bulk=%v but %s returns %s", e.Name, e.Bulk, e.Mutation, returns)
 		}
 	}
-}
-
-// declaresField reports whether the schema declares a field of this name (as
-// opposed to merely mentioning it in a comment or a type name).
-func declaresField(schema, name string) bool {
-	return regexp.MustCompile(`(?m)^[\t ]+` + regexp.QuoteMeta(name) + `\s*\(`).MatchString(schema)
 }
 
 // returnTypeOf reads the declared result type of a field, e.g. "[Device!]!".

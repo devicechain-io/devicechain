@@ -6,6 +6,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -76,9 +77,19 @@ func loadBaseline(dir string) (*baseline, error) {
 		if !e.IsDir() {
 			continue
 		}
-		matches, err := filepath.Glob(filepath.Join(dir, e.Name(), "graphql", "*.graphql"))
-		if err != nil {
-			return nil, failWith(exitSetup, "scan %s: %w", e.Name(), err)
+		// BOTH extensions. user-management spells its schemas `.gql` and every
+		// other area spells them `.graphql`, so globbing one of them makes an
+		// area's schemas invisible — and an invisible area is reported as one the
+		// baseline "serves no schema" for, which skips every entity in it. That is
+		// the fail-open this file's header warns about, arriving through a file
+		// extension rather than through the matching logic.
+		var matches []string
+		for _, ext := range []string{"*.graphql", "*.gql"} {
+			found, err := filepath.Glob(filepath.Join(dir, e.Name(), "graphql", ext))
+			if err != nil {
+				return nil, failWith(exitSetup, "scan %s: %w", e.Name(), err)
+			}
+			matches = append(matches, found...)
 		}
 		var body strings.Builder
 		for _, m := range matches {
@@ -130,7 +141,54 @@ func (b *baseline) supports(e entity) (bool, string) {
 	if input := inputTypeName(e.Input); !strings.Contains(b.raw[e.Area], "input "+input+" {") {
 		return false, "the baseline does not declare input " + input
 	}
+	// The RESPONSE shape, for the same reason the read argument is matched: an
+	// entity with a Wrap selects THROUGH an envelope, and a baseline whose create
+	// returns the bare object serves no such field. Everything above still
+	// matches — same mutation, same argument, same input type — so without this
+	// the seed sends a document the baseline rejects with "Cannot query field
+	// \"command\" on type \"Command\"", which reads as a platform defect and is
+	// not one.
+	//
+	// This is a document-COMPATIBILITY check, not the field check the header
+	// rules out. It asks whether the baseline can be sent this document at all,
+	// not whether every field in the selection survived — so it cannot discard an
+	// entity over one added field.
+	if e.Wrap != "" {
+		returns, ok := b.returnTypeOf(e.Area, e.Mutation)
+		if !ok {
+			return false, "the baseline declares no return type for " + e.Mutation
+		}
+		if !b.typeDeclaresField(e.Area, returns, e.Wrap) {
+			return false, "the baseline's " + e.Mutation + " returns " + returns +
+				", which has no " + e.Wrap + " field — it returns the object directly rather than in an envelope"
+		}
+	}
 	return true, ""
+}
+
+// returnTypeOf reads a mutation's declared result type, stripped of its
+// decoration: `createCommand(request: X!): CreateCommandResult!` yields
+// "CreateCommandResult". The argument list holds no closing paren of its own,
+// which is what makes the lazy match safe.
+func (b *baseline) returnTypeOf(area, field string) (string, bool) {
+	m := regexp.MustCompile(`(?m)^[\t ]+` + regexp.QuoteMeta(field) + `\s*\([^)]*\)\s*:\s*(\S+)\s*$`).
+		FindStringSubmatch(b.raw[area])
+	if m == nil {
+		return "", false
+	}
+	return strings.Trim(m[1], "[]!"), true
+}
+
+// typeDeclaresField reports whether the named object type declares this field.
+// The body is bounded by the type's own closing brace so a field belonging to
+// the NEXT declaration cannot answer for this one.
+func (b *baseline) typeDeclaresField(area, typeName, field string) bool {
+	m := regexp.MustCompile(`(?ms)^type ` + regexp.QuoteMeta(typeName) + `\s*\{(.*?)^\}`).
+		FindStringSubmatch(b.raw[area])
+	if m == nil {
+		return false
+	}
+	return regexp.MustCompile(`(?m)^[\t ]+` + regexp.QuoteMeta(field) + `\s*[:(]`).MatchString(m[1])
 }
 
 // plan decides what a seed should do with one entity: write it, skip it, or

@@ -62,9 +62,9 @@ const (
 	createTenantMutation = `mutation($token:String!,$name:String,$tier:String!){` +
 		`createTenant(request:{token:$token,name:$name,tierToken:$tier}){token}}`
 	createIdentityMutation = `mutation($email:String!,$password:String!){` +
-		`createIdentity(request:{email:$email,password:$password}){email}}`
+		`createIdentity(request:{email:$email,password:$password,enabled:true,systemRoles:[]}){email}}`
 	addMembershipMutation = `mutation($email:String!,$tenant:String!){` +
-		`addTenantAdministrator(email:$email,tenantToken:$tenant){email}}`
+		`addMembership(email:$email,tenant:$tenant,roleTokens:["tenant-admin"]){email}}`
 )
 
 // probeTenantTier is the tier the probe tenant is created under. Gold: the probe

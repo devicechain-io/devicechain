@@ -225,6 +225,75 @@ build_baseline_dcctl() {
   note "$("$baseline_dcctl" version | head -1)"
 }
 
+# pin_baseline_charts gives the BASELINE install the third-party chart versions the
+# working tree pins, for any chart the baseline itself leaves unpinned.
+#
+# 🔴 WITHOUT THIS THE DRILL IS NOT REPRODUCIBLE, AND IT FAILS IN A WAY THAT NAMES
+# NOTHING. v0.11.0 declares nats, ingress-nginx and cert-manager as `default = ""`
+# — "empty installs latest" — and its module renders that as
+# `version = var.chart_version != "" ? var.chart_version : null`. A null version is
+# UNKNOWN at plan time and resolved from the chart repository during apply, so a
+# repo hiccup surfaces as the helm provider's:
+#
+#   Provider produced inconsistent final plan ... .version: was known, but now unknown
+#
+# which mentions neither the chart nor the network. It cost this rig one full run:
+# the first attempt installed cleanly and the second died there, same commit, same
+# cluster config, twenty minutes apart. hack/check-chart-pins.sh is the gate that
+# stops this at HEAD, and the pins it enforces are what this function reads — but a
+# gate on the working tree cannot reach backwards into a release that already
+# shipped, and the rig installs that release's own OpenTofu on purpose.
+#
+# Only the UNPINNED charts are overridden. A chart the baseline pins deliberately
+# keeps its own value, because changing it would silently alter what the drill
+# installs; the ones changed here had no value to alter. The side effect is
+# desirable in its own right: the upgrade then moves the platform's images without
+# moving any third-party chart underneath them, which is the variable this drill
+# exists to isolate.
+#
+# TF_VAR_* is honoured because dcctl passes no `-var` for these (see infraVars) —
+# an explicit -var would outrank the environment.
+pin_baseline_charts() {
+  local var pin baseline_default pinned=()
+  for var in nats_chart_version ingress_nginx_chart_version cert_manager_chart_version; do
+    # The value the WORKING TREE pins, read out of the tree rather than repeated
+    # here, so a deliberate bump at HEAD carries into the rig instead of drifting
+    # away from it behind a second copy nobody remembers to edit.
+    pin="$(tofu_default "$repo_root/deploy/opentofu/variables.tf" "$var")"
+    [[ -n "$pin" ]] || fail "the working tree declares no default for $var, so this rig
+cannot pin the baseline's copy of that chart. Either the variable was renamed or the
+pin was removed — hack/check-chart-pins.sh is the authority on the second."
+
+    baseline_default="$(tofu_default "$baseline_src/deploy/opentofu/variables.tf" "$var")"
+    if [[ -n "$baseline_default" ]]; then
+      note "$baseline_tag pins $var itself ($baseline_default); left alone"
+      continue
+    fi
+    export "TF_VAR_$var=$pin"
+    pinned+=("$var=$pin")
+  done
+
+  if [[ ${#pinned[@]} -gt 0 ]]; then
+    say "pinning charts $baseline_tag left unpinned: ${pinned[*]}"
+  else
+    note "$baseline_tag pins every chart itself; nothing to override"
+  fi
+}
+
+# tofu_default reads a variable's `default` out of an OpenTofu variables file. A
+# quoted empty string reads as empty, which is exactly the case this rig treats as
+# "unpinned" — so the caller cannot tell an absent variable from an empty one, and
+# checks for the absent case itself.
+tofu_default() {
+  local file="$1" name="$2"
+  [[ -f "$file" ]] || return 0
+  awk -v name="$name" '
+    $0 ~ "^variable \"" name "\" \\{" { inside = 1; next }
+    inside && /^}/                    { exit }
+    inside && $1 == "default"         { sub(/^[^=]*=[[:space:]]*/, ""); gsub(/"/, ""); print; exit }
+  ' "$file"
+}
+
 # ensure_registry starts the local registry the NEW images are published to.
 #
 # dcctl creates this itself on its --build path, but this rig's baseline install
@@ -331,6 +400,8 @@ cmd_up() {
     area_args+=(--enable-area "$area")
   done < <("$apiprobe" areas)
   [[ ${#area_args[@]} -gt 0 ]] || fail "apiprobe named no functional areas; the seed would have nothing to write to"
+
+  pin_baseline_charts
 
   say "installing $baseline_tag with its own dcctl"
   note "areas beyond the default profile are requested explicitly: ${area_args[*]}"

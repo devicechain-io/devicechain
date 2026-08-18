@@ -169,6 +169,79 @@ input DashboardCreateRequest {
 	}
 }
 
+// 🔴 THE ENVELOPE CHECK, both ways. `createCommand` returned `Command!` in
+// v0.11.0 and returns `CreateCommandResult!` at HEAD, so an entity that selects
+// THROUGH `command{…}` cannot be sent to the older release at all — while the
+// mutation name, the argument name and the input type all still match, which is
+// everything the rest of `supports` looks at.
+//
+// Both directions are asserted because only the pair distinguishes a working
+// check from one that answers the same way regardless: the bare-object baseline
+// must be refused, and the enveloped one must still be accepted. A check that
+// only refuses would skip the entity against EVERY baseline, including HEAD's own
+// tree — which is the fail-open this file's counterweight test exists to catch,
+// arriving one entity at a time instead of all at once.
+func TestAnUnenvelopedCreateCannotCarryAWrappedSelection(t *testing.T) {
+	const enveloped = `
+type Mutation {
+    createCommand(request: CommandCreateRequest!): CreateCommandResult!
+}
+type Query {
+    commandsByToken(tokens: [String!]!): [Command!]!
+}
+type CreateCommandResult {
+    command: Command
+    rejection: CommandRejection
+}
+type Command {
+    token: String!
+}
+type CommandRejection {
+    code: String!
+    reason: String!
+}
+input CommandCreateRequest {
+    token: String!
+}
+`
+	// The v0.11.0 shape: same mutation, same argument, same input — the object
+	// itself comes back, with no envelope to select through.
+	bare := strings.Replace(enveloped,
+		"createCommand(request: CommandCreateRequest!): CreateCommandResult!",
+		"createCommand(request: CommandCreateRequest!): Command!", 1)
+	if bare == enveloped {
+		t.Fatal("the fixture edit did not apply, so both cases below are the same schema")
+	}
+
+	command, ok := entityNamed("command")
+	if !ok {
+		t.Fatal("the coverage table has no \"command\" entity, so this test asserts nothing")
+	}
+	if command.Wrap == "" {
+		t.Fatal("the \"command\" entity no longer declares a Wrap, so this test asserts nothing")
+	}
+
+	b, err := loadBaseline(writeBaseline(t, map[string]string{"command-delivery": bare}))
+	if err != nil {
+		t.Fatalf("load the bare baseline: %v", err)
+	}
+	got, why := b.supports(command)
+	if got {
+		t.Error("a createCommand returning the bare object accepted a document that selects through an envelope")
+	}
+	if !strings.Contains(why, command.Wrap) || !strings.Contains(why, "Command") {
+		t.Errorf("the reason names neither the missing field nor the type it is missing from: %q", why)
+	}
+
+	b, err = loadBaseline(writeBaseline(t, map[string]string{"command-delivery": enveloped}))
+	if err != nil {
+		t.Fatalf("load the enveloped baseline: %v", err)
+	}
+	if got, why := b.supports(command); !got {
+		t.Errorf("an enveloped createCommand was refused, so the check rejects every baseline: %s", why)
+	}
+}
+
 // A bulk entry names its type inside brackets, and only the bare name is ever
 // declared. Getting this wrong would make every bulk row unsupported against
 // every baseline — a silent halving of the drill on the rows that carry more
