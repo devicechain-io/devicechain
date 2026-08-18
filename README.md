@@ -221,12 +221,14 @@ superuser → waits for readiness → reports the access URL — and is idempote
 re-run: it reads back every credential the instance is already running (root key,
 broker auth, service auth) and reuses it rather than minting a replacement, and
 stops rather than guessing if it cannot tell whether the instance exists.
-It defaults to published images; pass `--build` for the from-source
-(ko → local registry) developer path. Building `dcctl` itself: `cd backend/cli &&
-make build`.
+A released `dcctl` defaults to the images published alongside it; pass `--build`
+for the from-source (ko → local registry) developer path. Building `dcctl`
+itself: `cd backend/cli && make build`.
 
-> Because DeviceChain is pre-release, no image tags have been published yet — use
-> the `--build` path until the first release is cut.
+> A `dcctl` you built yourself has **no default image version**, because a working
+> tree corresponds to no published tag. It will refuse the published path and ask
+> you to choose: `--build` to build from source, or `--version vX.Y.Z` to deploy a
+> release.
 
 ## Domain model
 

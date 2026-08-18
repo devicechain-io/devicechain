@@ -44,8 +44,8 @@ HOST=${HOST:-localhost}
 INGRESS_TLS=${INGRESS_TLS:-0}
 if [ "$INGRESS_TLS" = "1" ]; then INGRESS_SCHEME=https; else INGRESS_SCHEME=http; fi
 
-# Image source. End users deploy published images at the repo VERSION (single
-# source of truth); developers opt into building from source.
+# Image source. The default deploys PUBLISHED images, so the version has to name
+# a tag that was actually pushed; developers opt into building from source.
 BUILD_IMAGES=${BUILD_IMAGES:-0}
 REGISTRY_NAME=${REGISTRY_NAME:-kind-registry}
 REGISTRY_PORT=${REGISTRY_PORT:-5000}
@@ -53,8 +53,26 @@ if [ "$BUILD_IMAGES" = "1" ]; then
   REGISTRY=${REGISTRY:-localhost:${REGISTRY_PORT}}
   VERSION=${VERSION:-dev}
 else
-  REGISTRY=${REGISTRY:-ghcr.io/devicechain-io}                       # published
-  VERSION=${VERSION:-$(cat "$ROOT/VERSION" 2>/dev/null || echo dev)} # override: VERSION=x.y.z
+  REGISTRY=${REGISTRY:-ghcr.io/devicechain-io} # published
+  # 🔴 The newest release TAG, not the repo-root VERSION file.
+  #
+  # This defaulted to that file, which reads 0.0.1 and always has — so the
+  # DEFAULT invocation of this script, the one an end user runs, went after
+  # ghcr.io/devicechain-io/<area>:0.0.1 and ImagePullBackOff'd on every workload.
+  # Nothing in the release pipeline sets that file; it derives everything from
+  # the git tag, which is where a published version actually comes from.
+  #
+  # Prereleases are excluded (`--exclude '*-*'`): an rc IS pushed, but "stand the
+  # published stack up locally" should not silently land on one.
+  VERSION=${VERSION:-$(git -C "$ROOT" describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' 2>/dev/null || true)}
+  if [ -z "$VERSION" ]; then
+    # No tag to be found — a tarball export, a shallow clone, or a fork with no
+    # release. Refuse rather than invent one: guessing here is what produced the
+    # five-minute ImagePullBackOff this replaced.
+    echo "Could not determine a published version: no release tag is reachable from HEAD." >&2
+    echo "Set VERSION=vX.Y.Z to deploy a published release, or BUILD_IMAGES=1 to build from source." >&2
+    exit 1
+  fi
 fi
 OPERATOR_IMG="$REGISTRY/operator:$VERSION"
 

@@ -5,10 +5,16 @@ package bootstrap
 
 import "testing"
 
-// The seam under test: cmd.Version and DefaultImageVersion are stamped from the
-// same VERSION file but diverge for dev builds, because only one of them has to
-// name a real image tag. The conflation is made in the Makefile ldflags, which no
-// Go test runs — so this pins the backstop at the point of consumption instead.
+// The seam under test: cmd.Version describes the BINARY and DefaultImageVersion
+// names an IMAGE TAG, and only the second has to resolve in a registry. The
+// conflation is made in build tooling — a makefile or a goreleaser config, which
+// no Go test runs — so this pins the backstop at the point of consumption.
+//
+// 🔴 Note what the table below asserts about "0.0.1": the guard treats it as
+// PUBLISHED, because it is shaped exactly like a real release tag. That is
+// correct and it is also why the makefile must not stamp the VERSION file here —
+// nothing at this layer can tell that value apart from a genuine release, so the
+// fix has to be that the tooling never produces it. See DefaultImageVersion.
 func TestIsUnpublishedImageVersion(t *testing.T) {
 	tests := []struct {
 		name string
@@ -24,8 +30,9 @@ func TestIsUnpublishedImageVersion(t *testing.T) {
 		},
 		{
 			// The regression this exists to catch: someone "simplifies" the
-			// Makefile to stamp BUILD_VERSION into DefaultImageVersion, and every
-			// published-path bootstrap chases a tag that was never pushed.
+			// build tooling to stamp cmd.Version's value into
+			// DefaultImageVersion. Caught here, so the published path refuses
+			// instead of chasing a tag that was never pushed.
 			name: "a dev build stamp is unpublished",
 			tag:  "0.0.1-dev.20260716T155833Z",
 			want: true,

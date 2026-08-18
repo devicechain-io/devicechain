@@ -25,17 +25,25 @@ const LocalRegistry = "localhost:5000"
 // flag / gcp provider can override this through State.)
 const DefaultIngressHost = "devicechain.local"
 
-// DefaultImageVersion is the published image tag deployed by default: the
-// repo-root VERSION file value, injected via ldflags at build time. "dev" is the
-// unstamped fallback for a plain `go build`.
+// DefaultImageVersion is the published image tag deployed by default, injected
+// via ldflags by GORELEASER — and only by goreleaser, from the git tag it is
+// building. "dev" is the fallback for every other build.
 //
-// This must remain a tag that RESOLVES IN A REGISTRY, which is why it is not
-// simply cmd.Version. A dev build's cmd.Version carries a build stamp
-// ("0.0.1-dev.20260716T155833Z") to distinguish it from every other build of the
-// same VERSION; that value names no image that has ever been pushed. The two
-// therefore differ by design for dev builds and coincide only for releases —
-// `dcctl version` prints both. Stamping cmd.Version's value here would send
-// bootstrap after a nonexistent tag; IsUnpublishedImageVersion is the backstop.
+// 🔑 The fallback is the normal case for anything built locally, and that is
+// deliberate. This must name a tag that RESOLVES IN A REGISTRY, and a working
+// tree corresponds to no such tag: publishing is what a release does. So a
+// locally built dcctl has no default, refuses the published path outright, and
+// says to pass --version <tag> or --build. The makefile used to stamp the
+// repo-root VERSION file here, which reads 0.0.1 and named an image that has
+// never been pushed — an ImagePullBackOff on every workload, minutes into a
+// bootstrap that looked healthy, from a value shaped exactly like a real release
+// so IsUnpublishedImageVersion could not catch it.
+//
+// This is also why it is not simply cmd.Version. A local build's cmd.Version
+// carries a build stamp ("0.0.1-dev.20260716T155833Z") so two binaries months
+// apart can be told apart; that value names no image either. The two differ by
+// design and `dcctl version` prints both, so the pairing stays visible rather
+// than implied by their being equal.
 var DefaultImageVersion = "dev"
 
 // IsUnpublishedImageVersion reports whether tag names an image that the
