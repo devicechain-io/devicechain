@@ -99,7 +99,7 @@ func runSeed(ctx context.Context, argv []string) error {
 			}
 
 			out.Entities = append(out.Entities, Recorded{
-				Name: e.Name, Area: e.Area, Token: token, Object: object,
+				Name: e.Name, Area: e.Area, Token: token, Object: object, Fields: e.Fields,
 			})
 			fmt.Printf("  seeded  %-26s %s\n", e.Name, token)
 		}

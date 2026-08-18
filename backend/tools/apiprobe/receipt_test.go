@@ -185,3 +185,59 @@ func TestAReceiptRoundTrips(t *testing.T) {
 		t.Fatalf("the receipt did not survive the round trip: %+v", back)
 	}
 }
+
+// 🔴 BOTH DIRECTIONS, because a refusal that fires on everything protects nothing
+// and would turn every drill into an inconclusive one. The matching case is the
+// half that says the check discriminates.
+func TestAChangedSelectionIsRefusedRatherThanReportedAsDataLoss(t *testing.T) {
+	e, ok := entityNamed("device-profile")
+	if !ok {
+		t.Fatal("the coverage table has no device-profile entity, so this test asserts nothing")
+	}
+	if e.Fields == "" {
+		t.Fatal("device-profile selects no fields, so neither case below is distinguishable")
+	}
+
+	// Seeded by a build whose selection matches this one: comparable.
+	if err := sameSelection(Recorded{Name: e.Name, Fields: e.Fields}, e); err != nil {
+		t.Errorf("an identical selection was refused, so every verify would be inconclusive: %v", err)
+	}
+
+	// The realistic mistake: a selection edited between seed and verify. It must be
+	// exitSetup — reporting exitMismatch here would name a row and a token and be
+	// entirely about this tool.
+	for _, drift := range []struct{ name, fields string }{
+		{"a field added", e.Fields + " nonesuch"},
+		{"a field removed", strings.TrimSuffix(e.Fields, " "+lastField(e.Fields))},
+		{"an empty selection, as a receipt from before this was recorded would carry", ""},
+	} {
+		err := sameSelection(Recorded{Name: e.Name, Fields: drift.fields}, e)
+		if err == nil {
+			t.Errorf("%s: comparing was allowed, so a tool change would be reported as data loss", drift.name)
+			continue
+		}
+		assertCode(t, err, exitSetup)
+		if !strings.Contains(err.Error(), e.Name) {
+			t.Errorf("%s: the refusal does not name the entity: %v", drift.name, err)
+		}
+	}
+}
+
+// The selection the seed records must be the one the DOCUMENTS are built from, or
+// the check above compares a value nothing else uses — a guard watching a field
+// kept solely to be watched.
+func TestTheRecordedSelectionIsTheOneTheDocumentsCarry(t *testing.T) {
+	for _, e := range entities {
+		if !strings.Contains(e.readDoc(), e.Fields) {
+			t.Errorf("entity %q: Fields is not what readDoc selects, so recording it proves nothing", e.Name)
+		}
+	}
+}
+
+func lastField(fields string) string {
+	parts := strings.Fields(fields)
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[len(parts)-1]
+}

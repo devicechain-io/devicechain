@@ -51,6 +51,10 @@ func runVerify(ctx context.Context, argv []string) error {
 			return failWith(exitSetup, "receipt records %q, which this build of apiprobe cannot read back", r.Name)
 		}
 
+		if err := sameSelection(r, e); err != nil {
+			return err
+		}
+
 		var envelope map[string]json.RawMessage
 		if err := session.Query(ctx, c.areaURL(e.Area), e.readDoc(), map[string]any{"token": r.Token}, &envelope); err != nil {
 			// The server rejected the QUERY. The row may be perfectly intact; a
@@ -148,4 +152,33 @@ func readObject(e entity, envelope map[string]json.RawMessage, token string) (js
 			e.Name, token)
 	}
 	return found[0], nil
+}
+
+// sameSelection refuses to compare a recorded object against a read taken with a
+// different selection.
+//
+// 🔴 THE ONE PLACE THIS DRILL CAN LIE IN ITS MOST CONVINCING VOICE. The two halves
+// run as DIFFERENT BUILDS of apiprobe — seed before the upgrade, verify after —
+// and nothing requires them to agree. Verify reads with the CURRENT build's Fields
+// and compares against an Object the seed captured with whatever Fields it had, so
+// a selection edited between the two yields objects differing in their KEYS. That
+// surfaces as "CHANGED across the upgrade", with a row, a token and a diff: the
+// most credible output this tool produces, about the tool.
+//
+// It happened, in the plainest possible form — the working tree was moved to
+// another branch partway through a live run. The build failed loudly that time,
+// because the branch had no apiprobe at all. A branch that has one, with one
+// field added to one selection, is the same mistake with no noise in it.
+//
+// exitSetup, not exitMismatch: nothing has been learned about the platform either
+// way, and a drill that cannot measure must say so rather than report.
+func sameSelection(r Recorded, e entity) error {
+	if r.Fields == e.Fields {
+		return nil
+	}
+	return failWith(exitSetup,
+		"%s was seeded with a different selection than this build reads back, so the recorded "+
+			"object and a fresh read cannot be compared. This is a receipt from another build of "+
+			"apiprobe, not a platform that changed.\n   seeded with: %s\n   reads back:  %s",
+		r.Name, r.Fields, e.Fields)
 }

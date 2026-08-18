@@ -54,6 +54,21 @@ type Recorded struct {
 	// noticing. That limit is real, and it is why Read must select the same
 	// fields as Create.
 	Object json.RawMessage `json:"object"`
+
+	// Fields is the selection Object was produced with, and it travels because
+	// the two halves of this drill are DIFFERENT BUILDS of apiprobe — nothing
+	// requires them to agree.
+	//
+	// 🔴 WITHOUT IT, EDITING A SELECTION MID-DRILL PRODUCES A CONFIDENT LIE.
+	// Verify reads with the CURRENT build's Fields and compares against an Object
+	// the seed captured with the OLD one, so a selection that gained or lost a
+	// field yields two objects with different keys — reported as
+	// "CHANGED across the upgrade", naming a row and a token, with a diff. It is
+	// the single most convincing output this tool can produce and it would be
+	// about the tool. Recorded here so verify can refuse instead: an
+	// inconclusive setup error, which is what a tool that changed underneath its
+	// own measurement deserves.
+	Fields string `json:"fields"`
 }
 
 func writeReceipt(path string, r Receipt) error {

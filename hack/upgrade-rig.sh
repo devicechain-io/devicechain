@@ -525,13 +525,34 @@ cmd_verify() {
   say "THE DRILL — did every row written on $baseline_tag survive the upgrade?"
   local rc=0
   run_verify || rc=$?
+
+  # 🔴 INCONCLUSIVE IS NOT A FINDING, and this rig used to say it was: every
+  # non-zero code got the same "rows did NOT survive" headline, including the one
+  # whose own legend two lines below read "says nothing either way". That was
+  # measured — a receipt written by a different build of apiprobe exited SETUP and
+  # was announced as data loss, complete with the failure taxonomy.
+  #
+  # It matters most exactly where this rig is heading. A blocking gate that
+  # reports "the upgrade lost data" when it could not run gets a release stopped
+  # for a reason nobody can act on, and teaches everyone to read past the headline
+  # — which is the same as not having one.
+  #
+  # The taxonomy is imported (load_exit_codes) rather than repeated so this cannot
+  # drift from apiprobe's own codes. Having imported it, BRANCH on it.
+  if [[ $rc -eq $APIPROBE_EXIT_SETUP ]]; then
+    fail "THE DRILL COULD NOT RUN, and this says NOTHING about the upgrade either way
+(apiprobe exit $rc = SETUP). No claim is made here: no row was shown to survive, and
+no row was shown to be lost. Read apiprobe's output above for what stopped it — a
+receipt from another build, an unreachable API, a tenant that could not be resolved.
+Fix that and run 'verify' again; the cluster is still up and still upgraded."
+  fi
+
   if [[ $rc -ne 0 ]]; then
     fail "rows written on $baseline_tag did NOT survive the upgrade (apiprobe exit $rc).
 Read apiprobe's output above, and note that the code says which KIND of defect:
   $APIPROBE_EXIT_MISSING  a row is GONE — a migration dropped data, and a schema-only diff cannot see it
   $APIPROBE_EXIT_MISMATCH a field CHANGED — a migration rewrote data, which is the failure this drill exists for
-  $APIPROBE_EXIT_SHAPE  the QUERY was rejected — the schema moved; the row may be perfectly intact
-  $APIPROBE_EXIT_SETUP  the drill could not run, and this says nothing either way"
+  $APIPROBE_EXIT_SHAPE  the QUERY was rejected — the schema moved; the row may be perfectly intact"
   fi
   say "DRILL PASSED — every row written by $baseline_tag reads back unchanged from the working tree"
 }
