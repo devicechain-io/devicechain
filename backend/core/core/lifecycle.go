@@ -5,7 +5,9 @@ package core
 
 import (
 	"context"
-	"errors"
+	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 )
@@ -112,167 +114,116 @@ func (mgr *LifecycleManager) SetLifecycleState(state LifecycleState) {
 	mgr.State = state
 }
 
-// Handle component initialization
-func (mgr *LifecycleManager) Initialize(ctx context.Context) error {
-	if mgr.State != Uninitialized {
-		return errors.New("attempting to initialize component that is already initialized")
+// The states each lifecycle step may be entered FROM.
+//
+// 🔴 THESE ARE ALLOW LISTS, AND THE POLARITY IS THE ENTIRE POINT. Every one of these
+// guards used to be written the other way round — six `if State == X { return error }`
+// clauses on Start, six on Stop — which makes the default PERMIT: any state nobody
+// thought to name is legal by omission. Nobody ever decided that a stop from Initializing
+// was allowed. It simply was not on the list, and a permission granted by omission reads
+// exactly like one that was chosen.
+//
+// That default is what a SIGTERM landing during initialization fell through: teardown ran
+// in full against a service that did not exist yet, SUCCEEDED, reported an orderly
+// shutdown, claimed the process's one outcome slot, and exited 0 for a service that never
+// started. The fix for that lives in Microservice.ShutDownNow, which is the right place
+// for it — but the guards should not have been the thing that let it through.
+//
+// LifecycleState is a stringer-generated enum, and enums gain members. Written this way a
+// new state is refused by every step until someone names it; written the other way it is
+// permitted by every step until someone remembers it.
+var (
+	initializeFrom = []LifecycleState{Uninitialized}
+
+	// Stopped is on startFrom because a start after a stop is a supported sequence, not
+	// an accident of a loose guard: GatewayJetStreamSource rebuilds its channels per
+	// Start and says so in its own comment for exactly this reason.
+	startFrom = []LifecycleState{Initialized, Stopped}
+
+	// ⚠️ Initialized is on stopFrom DELIBERATELY, and narrowing it to Started alone is a
+	// change that looks like a tightening and is a defect. Two things argue against it,
+	// and both were found by going looking rather than by reasoning about the states:
+	//
+	//   - A REFUSAL CASCADES. Every service's beforeMicroserviceStopped stops its
+	//     components in a loop that returns on the first error, so one refused stop
+	//     leaves every component after it un-stopped AND un-terminated. Not
+	//     hypothetical — it is the rdb.Guest defect (see rdb/guest.go): a component that
+	//     was initialized but never started had its Terminate refused by this state
+	//     machine, and its caller returned early, taking the broker and the service's
+	//     own database down un-terminated with it.
+	//   - "Initialized" DOES NOT MEAN "nothing has run". Start restores the previous
+	//     state when ExecuteStart fails, so a component whose start failed HALFWAY reads
+	//     as Initialized with work already in flight — MqttEventSource spawns its decode
+	//     worker goroutines before the subscribe that can fail. Skipping its teardown
+	//     would strand them.
+	//
+	// What IS refused is Initializing: a component mid-initialization on another
+	// goroutine, about which no caller can reason at all. Nothing in the tree reaches
+	// that today — ShutDownNow's phase gate claims the process before any Stop is
+	// issued, and sub-component stops run only from a microservice that finished
+	// starting — so this is the second line, not the first.
+	stopFrom = []LifecycleState{Initialized, Started}
+
+	terminateFrom = []LifecycleState{Stopped}
+)
+
+// transition runs one lifecycle step: guard the starting state, announce the transient
+// one, run preprocess → execute → postprocess, and land on the final state. Any failure
+// puts the state back where it was found.
+//
+// The four steps below were four copies of this, and each copy wrote the restore-and-
+// return block three times. Twelve chances for one to be missing, where the miss would
+// surface only as a component stuck in Starting long after the failure that put it there
+// was reported and handled.
+func (mgr *LifecycleManager) transition(ctx context.Context, verb string, from []LifecycleState,
+	during LifecycleState, cb LifecycleCallback, exec func(context.Context) error, done LifecycleState) error {
+	if !slices.Contains(from, mgr.State) {
+		return fmt.Errorf("cannot %s component %q while it is %s (permitted: %s)",
+			verb, mgr.Name, mgr.State, permittedStates(from))
 	}
 	prev := mgr.State
-	mgr.SetLifecycleState(Initializing)
-
-	// Run callbacks that precede initialization
-	err := mgr.Callbacks.Initializer.Preprocess(ctx)
-	if err != nil {
-		mgr.SetLifecycleState(prev)
-		return err
+	mgr.SetLifecycleState(during)
+	for _, step := range []func(context.Context) error{cb.Preprocess, exec, cb.Postprocess} {
+		if err := step(ctx); err != nil {
+			mgr.SetLifecycleState(prev)
+			return err
+		}
 	}
-
-	// Run primary initialization functionality
-	err = mgr.Component.ExecuteInitialize(ctx)
-	if err != nil {
-		mgr.SetLifecycleState(prev)
-		return err
-	}
-
-	// Run callbacks that follow initialization
-	err = mgr.Callbacks.Initializer.Postprocess(ctx)
-	if err != nil {
-		mgr.SetLifecycleState(prev)
-		return err
-	}
-
-	mgr.SetLifecycleState(Initialized)
+	mgr.SetLifecycleState(done)
 	return nil
+}
+
+// permittedStates renders an allow list into the refusal a caller actually reads. The
+// state it was IN is only half the answer; without the half it was allowed to be in, the
+// message says a call was wrong without saying what would have been right.
+func permittedStates(from []LifecycleState) string {
+	names := make([]string, 0, len(from))
+	for _, state := range from {
+		names = append(names, state.String())
+	}
+	return strings.Join(names, " or ")
+}
+
+// Handle component initialization
+func (mgr *LifecycleManager) Initialize(ctx context.Context) error {
+	return mgr.transition(ctx, "initialize", initializeFrom, Initializing,
+		mgr.Callbacks.Initializer, mgr.Component.ExecuteInitialize, Initialized)
 }
 
 // Handle component startup
 func (mgr *LifecycleManager) Start(ctx context.Context) error {
-	if mgr.State == Uninitialized {
-		return errors.New("attempting to start an uninitialized component")
-	}
-	if mgr.State == Starting {
-		return errors.New("attempting to start a component that is already starting")
-	}
-	if mgr.State == Started {
-		return errors.New("attempting to start a component that is already started")
-	}
-	if mgr.State == Stopping {
-		return errors.New("attempting to start a component that is stopping")
-	}
-	if mgr.State == Terminating {
-		return errors.New("attempting to start a component that is terminating")
-	}
-	if mgr.State == Terminated {
-		return errors.New("attempting to start a component that is terminated")
-	}
-	prev := mgr.State
-	mgr.SetLifecycleState(Starting)
-
-	// Run callbacks that precede startup
-	err := mgr.Callbacks.Starter.Preprocess(ctx)
-	if err != nil {
-		mgr.SetLifecycleState(prev)
-		return err
-	}
-
-	// Run primary startup functionality
-	err = mgr.Component.ExecuteStart(ctx)
-	if err != nil {
-		mgr.SetLifecycleState(prev)
-		return err
-	}
-
-	// Run callbacks that follow startup
-	err = mgr.Callbacks.Starter.Postprocess(ctx)
-	if err != nil {
-		mgr.SetLifecycleState(prev)
-		return err
-	}
-
-	mgr.SetLifecycleState(Started)
-	return nil
+	return mgr.transition(ctx, "start", startFrom, Starting,
+		mgr.Callbacks.Starter, mgr.Component.ExecuteStart, Started)
 }
 
 // Handle component shutdown
 func (mgr *LifecycleManager) Stop(ctx context.Context) error {
-	if mgr.State == Uninitialized {
-		return errors.New("attempting to stop an uninitialized component")
-	}
-	if mgr.State == Starting {
-		return errors.New("attempting to stop a component that is partially started")
-	}
-	if mgr.State == Stopping {
-		return errors.New("attempting to stop a component that is already stopping")
-	}
-	if mgr.State == Stopped {
-		return errors.New("attempting to stop a component that is already stopped")
-	}
-	if mgr.State == Terminating {
-		return errors.New("attempting to stop a component that is terminating")
-	}
-	if mgr.State == Terminated {
-		return errors.New("attempting to stop a component that is terminated")
-	}
-	prev := mgr.State
-	mgr.SetLifecycleState(Stopping)
-
-	// Run callbacks that precede shutdown
-	err := mgr.Callbacks.Stopper.Preprocess(ctx)
-	if err != nil {
-		mgr.SetLifecycleState(prev)
-		return err
-	}
-
-	// Run primary shutdown functionality
-	err = mgr.Component.ExecuteStop(ctx)
-	if err != nil {
-		mgr.SetLifecycleState(prev)
-		return err
-	}
-
-	// Run callbacks that follow shutdown
-	err = mgr.Callbacks.Stopper.Postprocess(ctx)
-	if err != nil {
-		mgr.SetLifecycleState(prev)
-		return err
-	}
-
-	mgr.SetLifecycleState(Stopped)
-	return nil
+	return mgr.transition(ctx, "stop", stopFrom, Stopping,
+		mgr.Callbacks.Stopper, mgr.Component.ExecuteStop, Stopped)
 }
 
 // Handle component termination
 func (mgr *LifecycleManager) Terminate(ctx context.Context) error {
-	if mgr.State == Uninitialized {
-		return errors.New("attempting to terminate component that is not initialized")
-	}
-	if mgr.State != Stopped {
-		return errors.New("attempting to terminate component that is not stopped")
-	}
-	prev := mgr.State
-	mgr.SetLifecycleState(Terminating)
-
-	// Run callbacks that precede terminate
-	err := mgr.Callbacks.Terminator.Preprocess(ctx)
-	if err != nil {
-		mgr.SetLifecycleState(prev)
-		return err
-	}
-
-	// Run primary terminate functionality
-	err = mgr.Component.ExecuteTerminate(ctx)
-	if err != nil {
-		mgr.SetLifecycleState(prev)
-		return err
-	}
-
-	// Run callbacks that follow terminate
-	err = mgr.Callbacks.Terminator.Postprocess(ctx)
-	if err != nil {
-		mgr.SetLifecycleState(prev)
-		return err
-	}
-
-	mgr.SetLifecycleState(Terminated)
-	return nil
+	return mgr.transition(ctx, "terminate", terminateFrom, Terminating,
+		mgr.Callbacks.Terminator, mgr.Component.ExecuteTerminate, Terminated)
 }

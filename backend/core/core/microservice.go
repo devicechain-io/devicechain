@@ -92,12 +92,18 @@ type Microservice struct {
 	// says which of them owns the process.
 	//
 	// 🔴 Without it, a SIGTERM during initialization ran the full teardown against a
-	// service that did not exist yet. Stop's state guards do not refuse Initializing or
-	// Initialized (they refuse Uninitialized and Starting), and initialization is where
-	// a service spends most of its startup. So Stop and Terminate both SUCCEEDED,
+	// service that did not exist yet. Stop's state guards permitted it — they were deny
+	// lists, so every state nobody named was legal by omission — and initialization is
+	// where a service spends most of its startup. So Stop and Terminate both SUCCEEDED,
 	// reported an orderly shutdown, and took the outcome slot — and a startup failure
 	// arriving a moment later was dropped, exiting 0. That is the exact defect the
 	// outcome channel exists to fix, reachable through the channel meant to fix it.
+	//
+	// Those guards are allow lists now and refuse a stop from Initializing, but that is
+	// a second line and NOT a replacement for this field. A stop from Initialized is
+	// still permitted — it has to be, for reasons lifecycle.go sets out — and the guards
+	// can only ever refuse a teardown, never decide whether the process ends orderly or
+	// failed, nor whether a readiness drain is owed. Those are this field's job.
 	//
 	// 🔴 IT IS A CAS AND NOT A FLAG, because a flag leaves a window instead of closing
 	// one. Set after InitializeAndStart returns, a plain flag is still false for the
@@ -328,12 +334,12 @@ func shutdownDrainDelay() time.Duration {
 // Issue stop and terminate commands to microservice
 func (ms *Microservice) ShutDownNow() {
 	// 🔴 A service that never finished starting has nothing to tear down and MUST NOT
-	// try. The lifecycle's own state guards do not stop it: they refuse a stop from
-	// Uninitialized and Starting but permit one from Initializing and Initialized,
-	// which is where a service spends most of its startup — dialing Postgres, running
-	// migrations, connecting to the broker. Teardown then ran against components that
-	// were never built, and each service's stop callback reaches package-level values
-	// that initialization had not yet assigned.
+	// try. The lifecycle's own state guards do not stop it: a stop from Initialized is
+	// permitted, deliberately and for reasons lifecycle.go sets out, and Initialized is
+	// where a service lands the moment it finishes dialing Postgres and running
+	// migrations. Teardown then ran against components that were never built, and each
+	// service's stop callback reaches package-level values that initialization had not
+	// yet assigned.
 	//
 	// It also decided the exit status wrongly, which is why the gate lives here rather
 	// than in the lifecycle guards: that teardown SUCCEEDED, reported an orderly
