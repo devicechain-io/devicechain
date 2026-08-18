@@ -31,15 +31,16 @@ var (
 	buildDate string
 )
 
-// Version is the build version, injected via ldflags at build time. For a
-// release build this is the plain VERSION-file value (e.g. "0.0.1"); for any
-// other build the makefile appends a "-dev.<utc-timestamp>" suffix, because the
-// VERSION file is a slow-moving constant — pre-GA it has read 0.0.1 for the
-// project's entire history, so without the suffix every dev build ever made
-// reports an identical version and no two can be told apart.
+// Version is the build version, injected via ldflags at build time. A release
+// build gets the git tag from goreleaser; every makefile build gets the
+// repo-root VERSION file with a "-dev.<utc-timestamp>" suffix, because that file
+// is a slow-moving constant — pre-GA it has read 0.0.1 for the project's entire
+// history, so without the suffix every local build ever made reports an
+// identical version and no two can be told apart.
 //
-// For dev builds this deliberately does NOT match bootstrap.DefaultImageVersion,
-// which must stay a tag that resolves in a registry; see that value's docs.
+// For local builds this deliberately does NOT match bootstrap.DefaultImageVersion,
+// which must stay a tag that resolves in a registry and is therefore left at its
+// "dev" fallback rather than stamped from a file; see that value's docs.
 // `version` prints both.
 var Version = "dev"
 

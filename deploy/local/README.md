@@ -148,13 +148,21 @@ sequence (ADR-032), at which point the middle of the script collapses to a singl
 
 **By default `make up` deploys published images** from
 `ghcr.io/devicechain-io/<area>:<VERSION>` — no source build, no local registry.
-This mirrors what an end user gets (most users won't even have the source). Pin a
-version with `VERSION`:
+This mirrors what an end user gets (most users won't even have the source).
+
+`VERSION` defaults to the newest release **tag** reachable from `HEAD`,
+prereleases excluded. Pin a different one explicitly:
 
 ```bash
-make up                 # published images at the default version
-VERSION=1.4.0 make up   # published images at a specific version
+make up                  # published images at the newest release tag
+VERSION=v1.4.0 make up    # published images at a specific release
 ```
+
+Note the leading `v`: the release pipeline tags images with the git tag verbatim,
+so `ghcr.io/devicechain-io/device-management:v1.4.0` exists and `:1.4.0` does not.
+If no release tag is reachable — a tarball export, a shallow clone, a fork with no
+releases — `make up` refuses rather than guessing a version that would
+`ImagePullBackOff` several minutes later.
 
 **Developers** who are changing service code build from source instead:
 
