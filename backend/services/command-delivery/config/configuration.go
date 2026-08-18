@@ -30,6 +30,21 @@ const (
 	// transports know the instant a device returns, and this is the net under it.
 	HoldReconcileInterval = 120
 
+	// StrandedReconcileInterval is the cadence (in seconds) of the pass that re-arms
+	// commands abandoned in SENT.
+	//
+	// 🔑 SLOWER THAN THE HOLD RECONCILER, BECAUSE WHAT IT WAITS FOR IS SLOWER. A row is
+	// not even eligible until it has been in SENT for StrandedSentGrace (330s today), so
+	// ticking faster than that would mostly re-ask a question whose answer cannot have
+	// changed. This is a floor under a failure that is already minutes to hours from its
+	// visible consequence; there is no latency to win.
+	//
+	// ⚠️ It is deliberately NOT derived from StrandedSentGrace even though it is close to
+	// it. They are independent: the grace period is a correctness bound (act no sooner
+	// than this, or you race the messaging layer), while this is a polling cadence. Tying
+	// them would mean a change to the broker's ack budget silently retuned a ticker.
+	StrandedReconcileInterval = 300
+
 	// DefaultCommandTTLSeconds is the fallback command time-to-live (168h = 7 days)
 	// stamped onto a command whose creator supplies no explicit expiresAt. It is
 	// deliberately aligned with the device-commands stream MaxAge (core/messaging

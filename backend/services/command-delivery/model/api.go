@@ -222,6 +222,14 @@ type CommandDeliveryApi interface {
 	HeldCommands(ctx context.Context, afterId uint, limit int) ([]*Command, uint, error)
 	// TryReconcileLock serializes the hold-reconcile pass across replicas.
 	TryReconcileLock(ctx context.Context, fn func() error) (bool, error)
+	// TryStrandedLock serializes the stranded-SENT reconcile pass across replicas.
+	TryStrandedLock(ctx context.Context, fn func() error) (bool, error)
+	// ParkClaim retires a claimed command whose transport could not reach the device,
+	// naming the dispatch it observed so it cannot retire a newer one.
+	ParkClaim(ctx context.Context, token, nonce string) (bool, error)
+	// StrandedSentCommands walks the commands stuck in SENT past the grace horizon.
+	StrandedSentCommands(ctx context.Context, cursor StrandedCursor, olderThan time.Time,
+		limit int) ([]*Command, StrandedCursor, error)
 	MarkSentByToken(ctx context.Context, token string) (bool, error)
 	MarkResponse(ctx context.Context, commandToken string, success bool, payload *string, errMsg *string) (*Command, error)
 	CancelCommand(ctx context.Context, token string) (*Command, error)

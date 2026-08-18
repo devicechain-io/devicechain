@@ -90,14 +90,18 @@ tests:
               severity: critical
               devicechain_instance: devicechain
             exp_annotations:
-              summary: "Commands are stranded in SENT and will time out against innocent devices"
+              summary: "Commands are stranded in SENT and may time out against innocent devices"
               description: >-
                 At least one command was left reading SENT after both its publish and its release
-                failed. It was never delivered, nothing will retry it, and it will expire as TIMEOUT —
-                which records the failure against the DEVICE. Treat every TIMEOUT reported in this
-                window as unattributed until this is resolved, and do not send engineers to inspect
-                the devices named. Look for a broker outage overlapping a database outage: it takes
-                BOTH to strand a claim, which is why this counter is normally flat at zero.
+                failed. It was never delivered. What happens next depends on the device's transport,
+                and only one of the two answers is safe. On LwM2M the stranded reconciler re-arms it
+                within about ten minutes, so it is delivered when the device next wakes — check
+                devicechain_commanddelivery_command_delivery_stranded_recovered_total to confirm that
+                happened. On MQTT nothing retries it and it expires as TIMEOUT, which records the
+                failure against the DEVICE. So treat every MQTT TIMEOUT reported in this window as
+                unattributed until this is resolved, and do not send engineers to inspect the devices
+                named. Look for a broker outage overlapping a database outage: it takes BOTH to
+                strand a claim, which is why this counter is normally flat at zero.
       - eval_time: 35m
         alertname: CommandClaimsStranded
         exp_alerts:
@@ -105,14 +109,18 @@ tests:
               severity: critical
               devicechain_instance: devicechain
             exp_annotations:
-              summary: "Commands are stranded in SENT and will time out against innocent devices"
+              summary: "Commands are stranded in SENT and may time out against innocent devices"
               description: >-
                 At least one command was left reading SENT after both its publish and its release
-                failed. It was never delivered, nothing will retry it, and it will expire as TIMEOUT —
-                which records the failure against the DEVICE. Treat every TIMEOUT reported in this
-                window as unattributed until this is resolved, and do not send engineers to inspect
-                the devices named. Look for a broker outage overlapping a database outage: it takes
-                BOTH to strand a claim, which is why this counter is normally flat at zero.
+                failed. It was never delivered. What happens next depends on the device's transport,
+                and only one of the two answers is safe. On LwM2M the stranded reconciler re-arms it
+                within about ten minutes, so it is delivered when the device next wakes — check
+                devicechain_commanddelivery_command_delivery_stranded_recovered_total to confirm that
+                happened. On MQTT nothing retries it and it expires as TIMEOUT, which records the
+                failure against the DEVICE. So treat every MQTT TIMEOUT reported in this window as
+                unattributed until this is resolved, and do not send engineers to inspect the devices
+                named. Look for a broker outage overlapping a database outage: it takes BOTH to
+                strand a claim, which is why this counter is normally flat at zero.
       # 🔑 AND IT CLEARS ITSELF once the 30m window rolls past the increment.
       # That is a property of the window, not of anyone acknowledging anything,
       # and it is asserted so that widening the window (which would make this

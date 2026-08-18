@@ -36,16 +36,30 @@ const (
 	// not capped at ~one RTT per message (ADR-022 review B1). Messages are then
 	// handed to the caller one per ReadMessage from an internal buffer. The whole
 	// batch starts its AckWait timer at fetch, so fetchBatch is kept well below
-	// ackWait * throughput (and within the processors' MESSAGE_BACKLOG channel)
+	// AckWait * throughput (and within the processors' MESSAGE_BACKLOG channel)
 	// so the tail of a batch is not redelivered while still in the pipeline.
 	fetchBatch = 64
 
-	// ackWait is how long JetStream waits for an ack before redelivering a
+	// AckWait is how long JetStream waits for an ack before redelivering a
 	// message. It must comfortably exceed the time a fetched batch takes to clear
 	// the worker pipeline (worst-case per-message DB persist latency * batch /
 	// workers) so a slow-but-succeeding message is not redelivered underneath the
 	// worker (ADR-022 review A4).
-	ackWait = 60 * time.Second
+	//
+	// 🔑 EXPORTED BECAUSE CALLERS MUST SIZE AGAINST IT, AND UNTIL NOW THEY DID SO BY
+	// COPYING THE NUMBER. It is how long the broker will sit on an in-flight message
+	// before handing it to someone else, so any caller reasoning about "how long could
+	// this still be in flight?" needs it — command-delivery derives its stranded-SENT
+	// grace period from it, and outbound-connectors and event-processing already size
+	// their send budgets against it in PROSE. A duplicated literal drifts silently,
+	// because nothing fails when the two disagree; the readings just quietly stop
+	// meaning what they say.
+	//
+	// ⚠️ It is NOT a knob. Every durable reader gets this value, and consumerConfig's
+	// fields are compared against an existing durable on AddConsumer — so changing it
+	// makes a non-fresh cluster crash-loop on startup rather than reconfigure. Read it,
+	// derive from it, do not try to vary it per consumer.
+	AckWait = 60 * time.Second
 
 	// MaxDeliver bounds redelivery of a poison message: after this many delivery
 	// attempts the broker stops redelivering, and consumers route the message to
@@ -899,7 +913,7 @@ func (r *natsReader) consumerConfig() *nats.ConsumerConfig {
 	cfg := &nats.ConsumerConfig{
 		Durable:       r.durable,
 		AckPolicy:     nats.AckExplicitPolicy,
-		AckWait:       ackWait,
+		AckWait:       AckWait,
 		MaxDeliver:    MaxDeliver,
 		MaxAckPending: readerMaxAckPending,
 		FilterSubject: r.subject,

@@ -32,5 +32,6 @@ var (
 		NewCommandBatchCancelSchema(),
 		NewCommandDispatchNonceSchema(),
 		NewDrainableIndexSchema(),
+		NewStrandedSentIndexSchema(),
 	}
 )

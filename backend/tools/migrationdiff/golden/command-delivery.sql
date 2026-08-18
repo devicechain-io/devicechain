@@ -23,6 +23,7 @@ CREATE INDEX idx_audit_tenant_time ON "command-delivery".audit_events USING btre
 CREATE INDEX idx_commands_batch_token ON "command-delivery".commands USING btree (tenant_id, batch_token) WHERE ((batch_token IS NOT NULL) AND (deleted_at IS NULL));
 CREATE INDEX idx_commands_dispatchable_status ON "command-delivery".commands USING btree (status, id) WHERE ((deleted_at IS NULL) AND ((status)::text = ANY ((ARRAY['QUEUED'::character varying, 'HELD'::character varying])::text[])));
 CREATE INDEX idx_commands_drainable ON "command-delivery".commands USING btree (tenant_id, device_token, id) WHERE ((deleted_at IS NULL) AND ((status)::text = ANY ((ARRAY['HELD'::character varying, 'PARKED'::character varying])::text[])));
+CREATE INDEX idx_commands_stranded_sent ON "command-delivery".commands USING btree (sent_time, id) WHERE ((deleted_at IS NULL) AND ((status)::text = 'SENT'::text));
 CREATE INDEX idx_commands_tenant_status ON "command-delivery".commands USING btree (tenant_id, status) WHERE (deleted_at IS NULL);
 CREATE SCHEMA "command-delivery";
 CREATE SEQUENCE "command-delivery".audit_events_id_seq

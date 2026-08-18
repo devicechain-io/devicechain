@@ -108,10 +108,42 @@ type CommandDeliveryProcessor struct {
 	// gate that has become a one-way door.
 	HoldsReleased prometheus.Counter
 
+	// StrandedObserved counts commands the stranded pass found sitting in SENT past the
+	// grace horizon, StrandedRecovered counts those it re-armed to PARKED, and
+	// StrandedSkipped counts those it declined, by reason.
+	//
+	// 🔴🔴 StrandedSkipped IS WHAT STOPS THIS BEING A SILENT NO-OP, and it is the one of
+	// the three that is easy to dismiss as noise. The pass declines far more rows than it
+	// acts on — that is the design, not a defect — so without a reason-labelled count of
+	// the declines, a reconciler that refuses EVERY row looks exactly like one with
+	// nothing to do: observed climbs, recovered stays flat, and both readings are equally
+	// consistent with "working perfectly" and "gate wired backwards".
+	//
+	// ⚠️ ON AN MQTT-HEAVY INSTANCE skipped{reason="transport"} IS THE DOMINANT SERIES BY
+	// DESIGN. It is not a fault and must never be alerted on as one; see the gate in
+	// reconcileStrandedCommand for why MQTT is excluded deliberately.
+	//
+	// ⚠️ StrandedRecovered CARRIES NO disposition LABEL, AND THE OMISSION IS DELIBERATE.
+	// The write it counts routes a command whose batch has been called off to CANCELLED
+	// rather than PARKED, but it reports only THAT it moved the row, not which way — so a
+	// disposition label here would be inferred rather than observed, and inferring it
+	// means guessing at a branch that can flip between the scan and the write. The
+	// cancelled case is already counted where it is actually known, on the batch-cancel
+	// path. Nil is tolerated on all three, like every counter above.
+	StrandedObserved  prometheus.Counter
+	StrandedRecovered prometheus.Counter
+	StrandedSkipped   *prometheus.CounterVec
+
 	// reconcileCursor is where the next reconcile pass resumes its walk of the withheld
 	// set. Per-pod and reset on restart, which merely restarts the walk — it is a
 	// position in a scan, not state anything depends on.
 	reconcileCursor uint
+
+	// strandedCursor is the same idea for the stranded-SENT walk, and it is load-bearing
+	// in a way reconcileCursor is not: most rows this pass reads are DECLINED and stay
+	// just as eligible, so without a cursor the walk would re-read the same undeclinable
+	// page forever and never reach the rows it can act on.
+	strandedCursor model.StrandedCursor
 
 	lifecycle core.LifecycleManager
 	quit      chan struct{}
@@ -139,8 +171,9 @@ func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.Mess
 		ClaimsLost: ms.NewCounter("command_delivery_claims_lost_total",
 			"Dispatches abandoned because another dispatcher claimed the command first", nil),
 		ClaimsStranded: ms.NewCounter("command_delivery_claims_stranded_total",
-			"Commands left reading SENT because their publish failed and the release failed too; "+
-				"each will expire as TIMEOUT, wrongly blaming the device", nil),
+			"Commands left reading SENT because their publish failed and the release failed too. "+
+				"On LwM2M the stranded reconciler re-arms these; on MQTT they still expire as "+
+				"TIMEOUT, wrongly blaming the device", nil),
 		HoldsPlaced: ms.NewCounter("command_delivery_holds_placed_total",
 			"Commands withheld from dispatch because the device is authoritatively absent", nil),
 		UndeliverableFailed: ms.NewCounter("command_delivery_undeliverable_total",
@@ -150,6 +183,15 @@ func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.Mess
 				"standing rate here means commands are being dispatched ungated", nil),
 		HoldsReleased: ms.NewCounter("command_delivery_holds_released_total",
 			"Withheld commands returned to the dispatch queue because their device came back", nil),
+		StrandedObserved: ms.NewCounter("command_delivery_stranded_observed_total",
+			"Commands found sitting in SENT with no outcome for longer than the platform could "+
+				"still have been retrying them", nil),
+		StrandedRecovered: ms.NewCounter("command_delivery_stranded_recovered_total",
+			"Stranded commands re-armed so they are delivered when their device next wakes, "+
+				"instead of expiring as TIMEOUT against a device that was never sent them", nil),
+		StrandedSkipped: ms.NewCounterVec("command_delivery_stranded_skipped_total",
+			"Stranded commands the reconciler declined to act on, by reason. A high and steady "+
+				"reason=\"transport\" rate is expected on MQTT deployments and is not a fault", []string{"reason"}),
 	}
 
 	// Create lifecycle manager.
@@ -351,6 +393,14 @@ const undeliverableReason = "This platform has no command delivery path for the 
 func incr(c prometheus.Counter, n float64) {
 	if c != nil {
 		c.Add(n)
+	}
+}
+
+// incrLabel adds one to a labelled counter, tolerating an unwired vector for the same
+// reason incr tolerates a nil counter: this struct is assembled by literal in tests.
+func incrLabel(c *prometheus.CounterVec, label string) {
+	if c != nil {
+		c.WithLabelValues(label).Inc()
 	}
 }
 
@@ -649,6 +699,23 @@ func (cproc *CommandDeliveryProcessor) ExecuteStart(ctx context.Context) error {
 				return
 			case <-ticker.C:
 				cproc.reconcileHolds(ctx)
+			}
+		}
+	}()
+
+	// The stranded-SENT net, on its own slower ticker again. Same reasoning as the hold
+	// reconciler's separate ticker, plus one of its own: a row is not eligible here until
+	// it has been abandoned for StrandedSentGrace, so this pass has nothing to gain from
+	// running at either of the other two cadences.
+	go func() {
+		ticker := time.NewTicker(config.StrandedReconcileInterval * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-cproc.quit:
+				return
+			case <-ticker.C:
+				cproc.reconcileStranded(ctx)
 			}
 		}
 	}()
