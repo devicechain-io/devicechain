@@ -21,6 +21,14 @@ type Receipt struct {
 	Identity Credential `json:"identity"`
 	Written  time.Time  `json:"written"`
 	Entities []Recorded `json:"entities"`
+
+	// Skipped names the entities the seed could NOT write, because the release it
+	// was seeding did not declare them (see baseline.go). It travels on the
+	// receipt so that verify's report is about the same coverage the seed had —
+	// otherwise "everything read back" would be measured against a table the
+	// other half of the drill never used, and the gap would exist only in the
+	// scrollback of a run that finished hours earlier.
+	Skipped []string `json:"skipped,omitempty"`
 }
 
 // Credential is the tenant identity seed created, carried so verify can log in

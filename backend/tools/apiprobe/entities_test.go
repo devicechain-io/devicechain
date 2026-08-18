@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -249,6 +250,46 @@ func returnTypeOf(schema, field string) (string, bool) {
 		return "", false
 	}
 	return m[1], true
+}
+
+// 🔑 THE AREA LIST IS A SPECIFICATION, not a printout. The upgrade rig reads it
+// to decide which functional areas to DEPLOY, because outbound-connectors is held
+// out of the `default` profile — so an empty or short list means the rig
+// bootstraps an instance with no route for a row it is about to write, and the
+// refusal that follows looks like the API declining rather than like a service
+// that was never installed.
+//
+// The coverage is computed a second way here rather than read back from the same
+// helper: a test that took its expectations from the production list would agree
+// with any list at all, including an empty one.
+func TestTheAreaListCoversEveryEntityExactlyOnce(t *testing.T) {
+	got := probeAreas()
+
+	want := map[string]bool{}
+	for _, e := range entities {
+		want[e.Area] = true
+	}
+	if len(got) != len(want) {
+		t.Errorf("probeAreas returned %d areas for %d distinct areas in the table: %v", len(got), len(want), got)
+	}
+	seen := map[string]bool{}
+	for _, a := range got {
+		if seen[a] {
+			t.Errorf("%q is listed twice; a rig would pass --enable-area for it twice", a)
+		}
+		seen[a] = true
+		if !want[a] {
+			t.Errorf("%q is listed but no entity writes to it", a)
+		}
+	}
+	for a := range want {
+		if !seen[a] {
+			t.Errorf("no entity's area %q is listed, so a rig would not deploy it and every row there would be refused", a)
+		}
+	}
+	if !sort.StringsAreSorted(got) {
+		t.Errorf("the area list is not sorted, so its output is not stable between builds: %v", got)
+	}
 }
 
 func stripSpace(s string) string {

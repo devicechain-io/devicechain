@@ -15,14 +15,24 @@ func runSeed(ctx context.Context, argv []string) error {
 	fs := flagSetFor("seed")
 	var c connection
 	c.bind(fs)
-	var instance, receipt string
+	var instance, receipt, baselineDir string
 	fs.StringVar(&instance, "instance", "", "instance id, recorded on the receipt (required)")
 	fs.StringVar(&receipt, "receipt", "", "path to write the receipt verify will read (required)")
+	fs.StringVar(&baselineDir, "baseline-schemas", "",
+		"a `backend/services` tree from the release being seeded, so entities that release cannot express are skipped instead of refused")
 	if err := fs.Parse(argv); err != nil {
 		return failWith(exitSetup, "%w", err)
 	}
 	if strings.TrimSpace(instance) == "" || strings.TrimSpace(receipt) == "" {
 		return failWith(exitSetup, "--instance and --receipt are both required")
+	}
+
+	var base *baseline
+	if strings.TrimSpace(baselineDir) != "" {
+		var err error
+		if base, err = loadBaseline(baselineDir); err != nil {
+			return err
+		}
 	}
 
 	session, cred, err := c.provision(ctx)
@@ -31,6 +41,7 @@ func runSeed(ctx context.Context, argv []string) error {
 	}
 
 	st := newState(c.tenant)
+	var skipped []string
 	out := Receipt{
 		Instance: instance,
 		Tenant:   c.tenant,
@@ -39,6 +50,16 @@ func runSeed(ctx context.Context, argv []string) error {
 	}
 
 	for _, e := range entities {
+		write, why, err := plan(e, base)
+		if err != nil {
+			return err
+		}
+		if !write {
+			skipped = append(skipped, e.Name)
+			fmt.Printf("  skipped %-26s %s\n", e.Name, why)
+			continue
+		}
+
 		var envelope map[string]json.RawMessage
 		if err := session.Query(ctx, c.areaURL(e.Area), e.createDoc(), e.Vars(st), &envelope); err != nil {
 			// exitRefused, not exitSetup: the API answered and said no. That is a
@@ -84,11 +105,27 @@ func runSeed(ctx context.Context, argv []string) error {
 		}
 	}
 
+	// A receipt with nothing on it makes verify pass instantly, having checked
+	// nothing. That is the vacuous green this whole rig exists to refuse, and a
+	// baseline filter is the most plausible way to produce one by accident.
+	if len(out.Entities) == 0 {
+		return failWith(exitSetup, "nothing was seeded: all %d entities were skipped against the baseline at %s",
+			len(entities), baselineDir)
+	}
+
+	out.Skipped = skipped
 	if err := writeReceipt(receipt, out); err != nil {
 		return err
 	}
-	fmt.Printf("\n%d rows from %d entities seeded into tenant %q; receipt at %s\n",
-		len(out.Entities), len(entities), c.tenant, receipt)
+	fmt.Printf("\n%d rows from %d of %d entities seeded into tenant %q; receipt at %s\n",
+		len(out.Entities), len(entities)-len(skipped), len(entities), c.tenant, receipt)
+	if len(skipped) > 0 {
+		// Named, not just counted. "24 of 26" tells a reader how much was
+		// covered; only the names tell them what a green verify says nothing
+		// about.
+		fmt.Printf("skipped, because the baseline at %s cannot express them: %s\n",
+			baselineDir, strings.Join(skipped, ", "))
+	}
 	return nil
 }
 

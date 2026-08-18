@@ -763,7 +763,10 @@ func probeEdge(s *state, name string) map[string]any {
 // the table needs a row, not just that the constant needs a bump.
 const tenantCreateMutations = 26
 
-func printCoverage() {
+// printCoverage prints the tool's coverage CLAIM. Given a baseline it also
+// prints what a seed against that release would SKIP — so the drill's real
+// coverage can be read before an hour of cluster time is spent discovering it.
+func printCoverage(base *baseline) {
 	byArea := map[string][]string{}
 	for _, e := range entities {
 		byArea[e.Area] = append(byArea[e.Area], e.Name)
@@ -786,14 +789,73 @@ func printCoverage() {
 		fmt.Printf("\n⚠️  %d create mutations are NOT covered. A green verify says the entities\n"+
 			"    listed above survived — it says nothing about the rest of the API.\n",
 			tenantCreateMutations-len(entities))
-		return
+	} else {
+		// Covering every create mutation is still not covering every FIELD: the
+		// comparison only sees what each row SELECTS. Say so, rather than letting
+		// "26 of 26" read as "nothing can slip through".
+		fmt.Print("\nEvery tenant-plane create mutation has a row. The comparison still covers\n" +
+			"only the fields each row SELECTS — derived and operational fields are left\n" +
+			"out deliberately, and the table's comments say which and why.\n")
 	}
-	// Covering every create mutation is still not covering every FIELD: the
-	// comparison only sees what each row SELECTS. Say so, rather than letting
-	// "26 of 26" read as "nothing can slip through".
-	fmt.Print("\nEvery tenant-plane create mutation has a row. The comparison still covers\n" +
-		"only the fields each row SELECTS — derived and operational fields are left\n" +
-		"out deliberately, and the table's comments say which and why.\n")
+
+	if base != nil {
+		var skipped []string
+		for _, e := range entities {
+			if ok, why := base.supports(e); !ok {
+				skipped = append(skipped, fmt.Sprintf("  %-26s %s", e.Name, why))
+			}
+		}
+		fmt.Printf("\nAgainst the baseline at %s:\n", base.dir)
+		if len(skipped) == 0 {
+			fmt.Print("  nothing is skipped — that release can express the whole table.\n")
+		} else {
+			fmt.Printf("  %d of %d entities cannot be seeded there, so a drill from that release\n"+
+				"  says nothing about them:\n", len(skipped), len(entities))
+			for _, s := range skipped {
+				fmt.Println(s)
+			}
+		}
+	}
+
+	// The controls belong in the coverage claim, because they are what makes a
+	// green verify mean anything at all. `apiprobe tamper` breaks these, in this
+	// order, and each names the exit code it proves verify can still produce.
+	fmt.Print("\nNegative controls (apiprobe tamper --mode …), in the order a rig runs them:\n")
+	for _, t := range tampers {
+		what, expect := t.Mutation+"("+t.Arg+":)", "MISSING"
+		if t.Mode == tamperModify {
+			what, expect = t.Mutation+" sets "+t.Field, "MISMATCH"
+		}
+		fmt.Printf("  %-8s %-12s %-32s ⇒ verify must exit %s\n", t.Mode, t.Entity, what, expect)
+	}
+}
+
+// printAreas lists the functional areas the table writes to, one per line, so a
+// rig can DEPLOY them rather than assume them.
+//
+// 🔑 This is not cosmetic. `outbound-connectors` is held out of the `default`
+// profile, so a stock install serves no route for it and the connector row is
+// refused — an entity missing from the drill because of a deployment decision,
+// reported as if the API had rejected it. A rig that reads this list enables
+// every area the table needs, and keeps doing so when the table gains another.
+func printAreas() {
+	for _, a := range probeAreas() {
+		fmt.Println(a)
+	}
+}
+
+// probeAreas is the deduplicated, sorted set of areas the table writes to.
+func probeAreas() []string {
+	seen := map[string]bool{}
+	areas := make([]string, 0, len(entities))
+	for _, e := range entities {
+		if !seen[e.Area] {
+			seen[e.Area] = true
+			areas = append(areas, e.Area)
+		}
+	}
+	sort.Strings(areas)
+	return areas
 }
 
 func str(v any) string {

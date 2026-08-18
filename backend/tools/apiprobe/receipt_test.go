@@ -5,6 +5,7 @@ package main
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -122,6 +123,48 @@ func TestAnEmptyReceiptIsABrokenInstrument(t *testing.T) {
 	}
 	_, err := readReceipt(path)
 	assertCode(t, err, exitSetup)
+}
+
+// 🔑 THE SUMMARY IS THE CLAIM. The exit code says "nothing changed"; only this
+// text says what "nothing" was measured over. An upgrade drill seeds the OLD
+// release, so entities that release never had were never written — and by the
+// time anyone reads a green verify, the seed's own output scrolled past hours
+// ago. A summary that dropped the skips would let a pass over 24 rows read as a
+// pass over the whole API.
+func TestTheSummarySaysWhatWasNotCovered(t *testing.T) {
+	rec := Receipt{
+		Tenant:   "apiprobe",
+		Entities: []Recorded{{Name: "asset"}, {Name: "device"}},
+		Skipped:  []string{"geo-fence", "command-batch"},
+	}
+	got := coverageSummary(rec, 2)
+	for _, want := range []string{"2 of 2", "apiprobe", "geo-fence", "command-batch", "never seeded"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the summary does not mention %q:\n%s", want, got)
+		}
+	}
+}
+
+// The counterweight: a run with nothing skipped must NOT invent a warning. A
+// summary that always cautions is one nobody reads by the third run, which
+// costs exactly the case above.
+func TestTheSummaryIsQuietWhenNothingWasSkipped(t *testing.T) {
+	got := coverageSummary(Receipt{Tenant: "apiprobe", Entities: []Recorded{{Name: "asset"}}}, 1)
+	if strings.Contains(got, "never seeded") {
+		t.Errorf("a complete run warned about skipped entities:\n%s", got)
+	}
+	if !strings.Contains(got, "1 of 1") {
+		t.Errorf("the summary does not report what it checked:\n%s", got)
+	}
+}
+
+// A partial pass must not read as a whole one. checked and recorded are separate
+// numbers precisely so a run that stopped early cannot print a total.
+func TestTheSummaryReportsCheckedNotRecorded(t *testing.T) {
+	rec := Receipt{Tenant: "apiprobe", Entities: []Recorded{{Name: "a"}, {Name: "b"}, {Name: "c"}}}
+	if got := coverageSummary(rec, 1); !strings.Contains(got, "1 of 3") {
+		t.Errorf("the summary does not distinguish checked from recorded:\n%s", got)
+	}
 }
 
 func TestAReceiptRoundTrips(t *testing.T) {

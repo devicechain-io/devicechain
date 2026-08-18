@@ -85,13 +85,34 @@ func runVerify(ctx context.Context, argv []string) error {
 	// A pass is only worth reading if it says how much it covered. "verified"
 	// with no number is how a run that checked nothing reads exactly like one
 	// that checked everything.
-	fmt.Printf("\n%d of %d recorded rows read back unchanged from tenant %q.\n",
+	fmt.Print(coverageSummary(rec, checked))
+	return nil
+}
+
+// coverageSummary is what a PASS actually claims, and it is a function rather
+// than three Printf calls because it is the only thing standing between "every
+// row read back" and a reader taking that as "the API survived".
+//
+// 🔑 Two different gaps have to reach the same reader, and neither is visible
+// from the exit code. The receipt's SKIPPED list is the seed's gap — an upgrade
+// drill seeds the OLD release, so entities that release never had were never
+// written, and there was no old row to carry forward. The table's own shortfall
+// is this build's gap. A run can have both, one, or neither, and the summary has
+// to be as true in each case, because by the time anyone reads it the seed's own
+// output scrolled past hours earlier.
+func coverageSummary(rec Receipt, checked int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n%d of %d recorded rows read back unchanged from tenant %q.\n",
 		checked, len(rec.Entities), rec.Tenant)
+	if len(rec.Skipped) > 0 {
+		fmt.Fprintf(&b, "⚠️  %d entities were never seeded and so are not covered by this pass: %s\n",
+			len(rec.Skipped), strings.Join(rec.Skipped, ", "))
+	}
 	if len(entities) < tenantCreateMutations {
-		fmt.Printf("⚠️  apiprobe covers %d of %d create mutations; run `apiprobe coverage` for the list.\n",
+		fmt.Fprintf(&b, "⚠️  apiprobe covers %d of %d create mutations; run `apiprobe coverage` for the list.\n",
 			len(entities), tenantCreateMutations)
 	}
-	return nil
+	return b.String()
 }
 
 // readObject pulls the one entity out of a read-back response, in whichever of

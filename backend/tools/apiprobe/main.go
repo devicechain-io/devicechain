@@ -62,6 +62,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 )
 
@@ -107,15 +108,30 @@ const usage = `apiprobe — write one of every creatable entity, then prove it r
   apiprobe seed     --instance <id> --receipt <path> [flags]
         Create one of every entity in the coverage table, with deterministic
         literal values, and write the receipt verify will read.
+        --baseline-schemas <dir>  a backend/services tree from the release being
+        seeded; entities that release cannot express are SKIPPED by name instead
+        of being refused mid-run. This is what lets a drill seed an OLD version
+        with a table built from the new one.
 
   apiprobe verify   --receipt <path> [flags]
         Read every entity on the receipt back through the same API and compare
         it field by field.
 
-  apiprobe coverage
-        Print the coverage table: which entities this tool creates, and which
-        service each belongs to. This is the tool's coverage CLAIM — read it
-        before believing a green run means the API is covered.
+  apiprobe tamper   --receipt <path> --mode delete|modify [flags]
+        THE NEGATIVE CONTROL. Break one seeded entity on purpose — delete it, or
+        rewrite a field verify compares — and confirm through verify's own query
+        that the damage is visible. A verify that has never been shown to fail is
+        not a check, and this is what shows it.
+
+  apiprobe coverage [--baseline-schemas <dir>]
+        Print the coverage table: which entities this tool creates, which service
+        each belongs to, and what the controls break. This is the tool's coverage
+        CLAIM — read it before believing a green run means the API is covered.
+        With a baseline, also print what a drill from that release would SKIP.
+
+  apiprobe areas
+        Print the functional areas the table writes to, one per line, so a rig can
+        deploy them. Not every one is in the 'default' profile.
 
   apiprobe codes
         Print the exit codes as shell assignments, for a rig to source.
@@ -152,8 +168,12 @@ func main() {
 		err = runSeed(ctx, os.Args[2:])
 	case "verify":
 		err = runVerify(ctx, os.Args[2:])
+	case "tamper":
+		err = runTamper(ctx, os.Args[2:])
 	case "coverage":
-		printCoverage()
+		err = runCoverage(os.Args[2:])
+	case "areas":
+		printAreas()
 		return
 	case "codes":
 		printExitCodes()
@@ -174,4 +194,23 @@ func main() {
 
 func flagSetFor(name string) *flag.FlagSet {
 	return flag.NewFlagSet("apiprobe "+name, flag.ContinueOnError)
+}
+
+func runCoverage(argv []string) error {
+	fs := flagSetFor("coverage")
+	var baselineDir string
+	fs.StringVar(&baselineDir, "baseline-schemas", "",
+		"also report which entities a seed against this `backend/services` tree would skip")
+	if err := fs.Parse(argv); err != nil {
+		return failWith(exitSetup, "%w", err)
+	}
+	var base *baseline
+	if strings.TrimSpace(baselineDir) != "" {
+		var err error
+		if base, err = loadBaseline(baselineDir); err != nil {
+			return err
+		}
+	}
+	printCoverage(base)
+	return nil
 }
