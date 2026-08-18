@@ -1,0 +1,107 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# A nightly reachable-vulnerability scan of `main`.
+#
+# WHY THIS EXISTS, AND WHY IT IS NOT A SECOND GATE
+#
+# govulncheck fetches the advisory database at run time, so the SAME commit that
+# passed at 09:00 fails at 14:00 with nobody having touched the code. That is
+# the point of the check — a newly published advisory against something we
+# already ship is exactly the news we want — but it has a cost that lands on the
+# wrong person: the failure surfaces on whatever pull request happens to open
+# next, whose author then has to work out that it is not theirs.
+#
+# It has now happened twice. The second time the diagnosis cost a checkout of
+# main and a local re-run to establish that a seven-advisory failure in
+# backend/cli predated the branch entirely.
+#
+# This run makes the news arrive against `main`, where it belongs, before anyone
+# opens a PR into it. It gates nothing: the per-module govulncheck step in ci.yml
+# is still the gate, and this scans the same modules the same way with the same
+# wrapper, so the two cannot disagree about what "covered" means.
+#
+# WHAT IT DELIBERATELY DOES NOT DO
+#
+# It does not open an issue. GitHub already emails the maintainer when a
+# scheduled workflow fails on the default branch, and idempotent issue-filing —
+# find the open one, comment, do not spam a new one every night — is more moving
+# parts than the notification is worth. If the emails start getting missed,
+# that is the point to build it, not before.
+name: govulncheck-nightly
+
+on:
+  schedule:
+    # 06:30 UTC daily. Deliberately not on the hour: GitHub's scheduler queues
+    # heavily at :00, and a run that starts twenty minutes late is a run whose
+    # result arrives after the working day has already started somewhere.
+    - cron: '30 6 * * *'
+  # So the "is main red, or is it my branch?" question can be answered in one
+  # click rather than by checking out main and running the scan by hand — which
+  # is the specific cost that motivated this workflow.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: true
+
+      # 🔴 FIRST, and not as a formality. This whole workflow reports on what the
+      # wrapper decides, so a wrapper that could no longer fail would turn every
+      # night's run into a confident, meaningless green — the exact shape the
+      # wrapper's own header rejects. Proving it can still fail is what makes the
+      # rest of this run evidence rather than decoration.
+      - name: govulncheck wrapper self-test
+        run: hack/govulncheck.sh --self-test
+
+      # The SAME module glob ci.yml's discover job uses. Duplicated rather than
+      # shared, and that is a deliberate trade: a workflow_call would couple the
+      # nightly to the gate's job graph, while a nightly that scanned a DIFFERENT
+      # set than the gate would produce failures with no corresponding PR check
+      # and silences with no corresponding coverage. Same glob, same wrapper,
+      # same answer.
+      #
+      # COVERAGE GAP, carried over verbatim from ci.yml so the two agree: this
+      # globs backend/{cli,core,k8s,edge/*,services/*,sims/*,tools/*}. `deploy` is
+      # a workspace module (deploy/assets.go) that no Go CI job touches, so it is
+      # not scanned here either. The codeql workflow does cover it, because that
+      # one builds from `go list -m` and follows go.work rather than a glob.
+      - name: govulncheck every module
+        run: |
+          # rc is recorded rather than the loop short-circuiting, so ONE bad
+          # module does not hide the state of the twenty after it — the whole
+          # point of a nightly is the full picture, not the first failure.
+          #
+          # And it is recorded rather than `|| echo "FAILED: $m"`, which would
+          # make the loop's status that of the echo — always 0 — so every module
+          # could fail and this step would still pass. That trap is documented in
+          # CLAUDE.md's full-sweep recipe and has shipped in this repo before.
+          rc=0
+          failed=""
+          for d in backend/cli backend/core backend/k8s backend/edge/*/ backend/services/*/ backend/sims/*/ backend/tools/*/; do
+            m="${d%/}"
+            [ -f "$m/go.mod" ] || continue
+            echo "::group::$m"
+            if ! hack/govulncheck.sh "$m"; then
+              rc=1
+              failed="$failed $m"
+            fi
+            echo "::endgroup::"
+          done
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::main has reachable vulnerabilities with no reviewed exception in:$failed"
+            echo "This is a property of main, not of any pull request. Advisories are"
+            echo "published continuously, so this can go red with no code change."
+            echo "Fix the dependency if a fixed version exists; if it genuinely cannot"
+            echo "be fixed, add a justified line to hack/govulncheck-allow.txt."
+          fi
+          exit "$rc"
