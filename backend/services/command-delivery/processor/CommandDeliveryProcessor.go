@@ -109,8 +109,8 @@ type CommandDeliveryProcessor struct {
 	HoldsReleased prometheus.Counter
 
 	// StrandedObserved counts commands the stranded pass found sitting in SENT past the
-	// grace horizon, StrandedRecovered counts those it re-armed to PARKED, and
-	// StrandedSkipped counts those it declined, by reason.
+	// grace horizon, StrandedRecovered counts those it re-armed (by where they landed),
+	// and StrandedSkipped counts those it declined, by reason.
 	//
 	// 🔴🔴 StrandedSkipped IS WHAT STOPS THIS BEING A SILENT NO-OP, and it is the one of
 	// the three that is easy to dismiss as noise. The pass declines far more rows than it
@@ -123,15 +123,23 @@ type CommandDeliveryProcessor struct {
 	// DESIGN. It is not a fault and must never be alerted on as one; see the gate in
 	// reconcileStrandedCommand for why MQTT is excluded deliberately.
 	//
-	// ⚠️ StrandedRecovered CARRIES NO disposition LABEL, AND THE OMISSION IS DELIBERATE.
-	// The write it counts routes a command whose batch has been called off to CANCELLED
-	// rather than PARKED, but it reports only THAT it moved the row, not which way — so a
-	// disposition label here would be inferred rather than observed, and inferring it
-	// means guessing at a branch that can flip between the scan and the write. The
-	// cancelled case is already counted where it is actually known, on the batch-cancel
-	// path. Nil is tolerated on all three, like every counter above.
+	// 🔑 StrandedRecovered IS LABELLED BY WHERE THE ROW ACTUALLY LANDED, and the label is
+	// the write's own report rather than this pass's inference. Re-arming normally lands a
+	// command on PARKED, but one whose batch was called off meanwhile lands on CANCELLED —
+	// two genuinely different events ("we gave a device another chance" versus "we cleaned
+	// up a row from an abandoned batch") that a single number reports as one.
+	//
+	// 🔴 IT HAS TO COME FROM THE WRITE. Which branch fires depends on whether the batch is
+	// cancelled at the instant of the update, which can change after the scan that selected
+	// the row — so a label derived from anything read earlier would be a guess at a race.
+	// An earlier version of this comment justified having no label by claiming the
+	// cancelled case was "already counted on the batch-cancel path". It is not: that path
+	// counts a SENT row as already_sent AT CANCEL TIME, and the row's later arrival at
+	// CANCELLED was metered nowhere at all.
+	//
+	// Nil is tolerated on all three, like every counter above.
 	StrandedObserved  prometheus.Counter
-	StrandedRecovered prometheus.Counter
+	StrandedRecovered *prometheus.CounterVec
 	StrandedSkipped   *prometheus.CounterVec
 
 	// reconcileCursor is where the next reconcile pass resumes its walk of the withheld
@@ -186,9 +194,11 @@ func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.Mess
 		StrandedObserved: ms.NewCounter("command_delivery_stranded_observed_total",
 			"Commands found sitting in SENT with no outcome for longer than the platform could "+
 				"still have been retrying them", nil),
-		StrandedRecovered: ms.NewCounter("command_delivery_stranded_recovered_total",
-			"Stranded commands re-armed so they are delivered when their device next wakes, "+
-				"instead of expiring as TIMEOUT against a device that was never sent them", nil),
+		StrandedRecovered: ms.NewCounterVec("command_delivery_stranded_recovered_total",
+			"Stranded commands re-armed instead of expiring as TIMEOUT against a device that was "+
+				"never sent them, by the status they landed on. PARKED means the command will be "+
+				"delivered when its device next wakes; CANCELLED means its batch had been called "+
+				"off, so the row was cleaned up rather than re-delivered", []string{"disposition"}),
 		StrandedSkipped: ms.NewCounterVec("command_delivery_stranded_skipped_total",
 			"Stranded commands the reconciler declined to act on, by reason. A high and steady "+
 				"reason=\"transport\" rate is expected on MQTT deployments and is not a fault", []string{"reason"}),

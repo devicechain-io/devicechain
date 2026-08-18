@@ -234,7 +234,7 @@ func (cproc *CommandDeliveryProcessor) reconcileStrandedCommand(ctx context.Cont
 		incrLabel(cproc.StrandedSkipped, skipNoNonce)
 		return
 	}
-	parked, err := cproc.Api.ParkClaim(ctx, cmd.Token, cmd.DispatchNonce.String)
+	landed, parked, err := cproc.Api.ParkClaim(ctx, cmd.Token, cmd.DispatchNonce.String)
 	if err != nil {
 		incrLabel(cproc.StrandedSkipped, skipError)
 		log.Error().Err(err).Str("command", cmd.Token).Str("device", cmd.DeviceToken).
@@ -245,7 +245,12 @@ func (cproc *CommandDeliveryProcessor) reconcileStrandedCommand(ctx context.Cont
 		incrLabel(cproc.StrandedSkipped, skipRaced)
 		return
 	}
-	incr(cproc.StrandedRecovered, 1)
+	// 🔑 THE DISPOSITION IS THE WRITE'S OWN REPORT, NOT THIS PASS'S GUESS. A stranded row
+	// whose batch was called off lands on CANCELLED instead of PARKED, and which branch
+	// fires can change between the scan above and the write — so this is a label that can
+	// only be observed, never derived.
+	incrLabel(cproc.StrandedRecovered, landed.String())
 	log.Info().Str("command", cmd.Token).Str("device", cmd.DeviceToken).
-		Msg("Parked a command stranded in SENT; it will be delivered when its device next wakes.")
+		Str("disposition", landed.String()).
+		Msg("Re-armed a command stranded in SENT.")
 }

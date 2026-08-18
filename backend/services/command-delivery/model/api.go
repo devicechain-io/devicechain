@@ -225,8 +225,9 @@ type CommandDeliveryApi interface {
 	// TryStrandedLock serializes the stranded-SENT reconcile pass across replicas.
 	TryStrandedLock(ctx context.Context, fn func() error) (bool, error)
 	// ParkClaim retires a claimed command whose transport could not reach the device,
-	// naming the dispatch it observed so it cannot retire a newer one.
-	ParkClaim(ctx context.Context, token, nonce string) (bool, error)
+	// naming the dispatch it observed so it cannot retire a newer one. It reports the
+	// status the row landed on as well as whether it moved.
+	ParkClaim(ctx context.Context, token, nonce string) (CommandStatus, bool, error)
 	// StrandedSentCommands walks the commands stuck in SENT past the grace horizon.
 	StrandedSentCommands(ctx context.Context, cursor StrandedCursor, olderThan time.Time,
 		limit int) ([]*Command, StrandedCursor, error)
@@ -912,8 +913,13 @@ func newDispatchNonce() string {
 // on the hot path, to buy a window that needs a publish failure and a cancel to land in
 // the same microsecond. Documented and accepted rather than silently assumed away — if it
 // ever needs closing, close it at the claim, not here.
+// It collapses retireClaim's landing status: this caller is returning a command to the
+// dispatchable set after a failed publish, and both landings — QUEUED, or CANCELLED if the
+// batch was called off meanwhile — mean the same thing to it, that the row is no longer its
+// responsibility.
 func (api *Api) ReleaseClaim(ctx context.Context, id uint) (bool, error) {
-	return api.retireClaim(ctx, "id = ?", []any{id}, CommandQueued)
+	_, released, err := api.retireClaim(ctx, "id = ?", []any{id}, CommandQueued)
+	return released, err
 }
 
 // ParkClaim retires a claimed command whose transport found the device UNREACHABLE, taking
@@ -931,7 +937,12 @@ func (api *Api) ReleaseClaim(ctx context.Context, id uint) (bool, error) {
 // settled. It means the row moved on under this park — answered, cancelled, expired, or
 // re-claimed by a wake drain. A caller that read it as failure and retried would burn every
 // redelivery on a row that is already where it should be.
-func (api *Api) ParkClaim(ctx context.Context, token, nonce string) (bool, error) {
+// It returns the status the row LANDED ON as well as whether it moved. A parked command
+// normally lands on PARKED, but a command whose batch has been called off lands on
+// CANCELLED instead — and only this write can tell which, because the batch can be
+// cancelled between a caller's scan and this update. When nothing moved the status is
+// empty; it pairs with moved=false rather than naming a third outcome.
+func (api *Api) ParkClaim(ctx context.Context, token, nonce string) (CommandStatus, bool, error) {
 	return api.retireClaim(ctx, "token = ? AND dispatch_nonce = ?", []any{token, nonce}, CommandParked)
 }
 
@@ -942,7 +953,15 @@ func (api *Api) ParkClaim(ctx context.Context, token, nonce string) (bool, error
 // Both writes are predicated on SENT, so exactly one of them can move the row — which is
 // what makes this safe without a transaction — and both clear sent_time, because a retired
 // claim did not send anything.
-func (api *Api) retireClaim(ctx context.Context, where string, args []any, target CommandStatus) (bool, error) {
+//
+// 🔑 IT REPORTS WHICH STATUS THE ROW LANDED ON, NOT ONLY THAT IT MOVED, and the distinction
+// is only knowable HERE. Which branch fires depends on whether the batch was called off,
+// which can change between a caller's scan and this write — so a caller that tried to
+// derive the landing from anything it read earlier would be guessing at a race. Callers
+// that do not care collapse it at the call site; the one that meters recoveries does not
+// have to invent a label it cannot observe.
+func (api *Api) retireClaim(ctx context.Context, where string, args []any,
+	target CommandStatus) (CommandStatus, bool, error) {
 	cancelledBatches := api.RDB.DB(ctx).Model(&CommandBatch{}).
 		Select("id").Where("cancelled_at IS NOT NULL")
 	stopped := api.RDB.DB(ctx).Model(&Command{}).
@@ -953,10 +972,10 @@ func (api *Api) retireClaim(ctx context.Context, where string, args []any, targe
 			"sent_time": sql.NullTime{},
 		})
 	if stopped.Error != nil {
-		return false, stopped.Error
+		return "", false, stopped.Error
 	}
 	if stopped.RowsAffected == 1 {
-		return true, nil
+		return CommandCancelled, true, nil
 	}
 
 	res := api.RDB.DB(ctx).Model(&Command{}).
@@ -967,9 +986,14 @@ func (api *Api) retireClaim(ctx context.Context, where string, args []any, targe
 			"sent_time": sql.NullTime{},
 		})
 	if res.Error != nil {
-		return false, res.Error
+		return "", false, res.Error
 	}
-	return res.RowsAffected == 1, nil
+	if res.RowsAffected != 1 {
+		// Nothing moved, so nothing landed anywhere. The empty status is not a third
+		// outcome: it is the absence of one, and it pairs with moved=false.
+		return "", false, nil
+	}
+	return target, true, nil
 }
 
 // HoldCommand withholds a queued command because its device is authoritatively absent,
