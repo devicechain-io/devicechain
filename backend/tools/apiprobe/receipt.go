@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -85,9 +86,64 @@ func canonical(raw json.RawMessage) (string, error) {
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return "", fmt.Errorf("parse: %w", err)
 	}
-	out, err := json.Marshal(v)
+	out, err := json.Marshal(normalizeEmbedded(v))
 	if err != nil {
 		return "", fmt.Errorf("encode: %w", err)
 	}
 	return string(out), nil
+}
+
+// normalizeEmbedded rewrites every string that is ITSELF a JSON object or array
+// into its canonical form.
+//
+// 🔑 WITHOUT THIS THE PROBE WOULD REPORT ITS OWN FORMATTING AS DATA LOSS. The
+// platform's opaque documents — metadata, a rule definition, a connector config,
+// a dashboard, a command payload — are `String` in the schema and `jsonb` in
+// Postgres. jsonb does not store bytes; it stores a parsed value and prints it
+// back with its own spacing and key order. A create response is built from the
+// struct that was just written, so it echoes the caller's exact bytes; the
+// read-back a version later comes from the column. `{"probe":"x"}` in,
+// `{"probe": "x"}` out — same data, different string, and a MISMATCH naming a
+// field nobody touched.
+//
+// Nothing real is hidden by this. Canonicalising two documents does not make
+// different documents equal: a changed key, a changed value, an added or dropped
+// entry all still differ. Only the rendering stops counting — which is the
+// rendering this tool never had an opinion about.
+//
+// Only objects and arrays are rewritten. A bare scalar string is left exactly as
+// it is, so an ordinary field that happens to hold "42" or "true" is compared as
+// the text it is rather than quietly reinterpreted as a number.
+func normalizeEmbedded(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, sub := range t {
+			t[k] = normalizeEmbedded(sub)
+		}
+		return t
+	case []any:
+		for i, sub := range t {
+			t[i] = normalizeEmbedded(sub)
+		}
+		return t
+	case string:
+		trimmed := strings.TrimSpace(t)
+		if trimmed == "" || (trimmed[0] != '{' && trimmed[0] != '[') {
+			return t
+		}
+		var inner any
+		if err := json.Unmarshal([]byte(trimmed), &inner); err != nil {
+			// It opens like a document and is not one. Leave it verbatim: this
+			// is a normalizer, not a validator, and rejecting here would turn a
+			// field the platform stores happily into a probe failure.
+			return t
+		}
+		out, err := json.Marshal(normalizeEmbedded(inner))
+		if err != nil {
+			return t
+		}
+		return string(out)
+	default:
+		return v
+	}
 }

@@ -47,6 +47,26 @@ func servedSchemas(t *testing.T) []string {
 	return out
 }
 
+// schemaFor returns the served schema text of one functional area.
+func schemaFor(t *testing.T, area string) string {
+	t.Helper()
+	var body []byte
+	for _, s := range servedSchemas(t) {
+		if !strings.Contains(s, string(os.PathSeparator)+area+string(os.PathSeparator)) {
+			continue
+		}
+		part, err := os.ReadFile(s)
+		if err != nil {
+			t.Fatalf("read %s: %v", s, err)
+		}
+		body = append(body, part...)
+	}
+	if len(body) == 0 {
+		t.Fatalf("no served schema found for area %q", area)
+	}
+	return string(body)
+}
+
 // The denominator in the coverage message is the difference between "5 entities
 // pass" and "5 of 26 pass", and only the second tells a reader what a green run
 // does not cover. A number typed into a constant drifts the moment somebody adds
@@ -87,9 +107,28 @@ func TestCoverageDenominatorMatchesTheSchemas(t *testing.T) {
 	}
 }
 
-// Every entry has to be usable: a create document, a read document, both response
-// keys, and a variable builder. A half-filled row would seed nothing and verify
-// nothing while still counting toward the coverage number printed to an operator.
+// The table claims to cover every create mutation, and that claim is what
+// `apiprobe coverage` prints. A row short of the denominator is a real gap and
+// says so; a row PAST it means the table counts something twice.
+func TestTheTableCoversEveryCreateMutation(t *testing.T) {
+	if len(entities) != tenantCreateMutations {
+		t.Errorf("the table has %d entries for %d create mutations", len(entities), tenantCreateMutations)
+	}
+	seen := map[string]bool{}
+	for _, e := range entities {
+		if seen[e.Mutation] {
+			// Two rows on one mutation would inflate the count while leaving
+			// something else uncovered — the arithmetic still reaching 26.
+			t.Errorf("two entities create via %q", e.Mutation)
+		}
+		seen[e.Mutation] = true
+	}
+}
+
+// Every entry has to be usable: a mutation, an input type, a read query, a
+// selection and a variable builder. A half-filled row would seed nothing and
+// verify nothing while still counting toward the coverage number printed to an
+// operator.
 func TestEveryEntityIsComplete(t *testing.T) {
 	if len(entities) == 0 {
 		t.Fatal("the coverage table is empty")
@@ -103,43 +142,210 @@ func TestEveryEntityIsComplete(t *testing.T) {
 		}
 		seen[e.Name] = true
 
-		if e.Name == "" || e.Area == "" || e.Create == "" || e.Read == "" ||
-			e.CreateKey == "" || e.ReadKey == "" || e.Vars == nil {
+		if e.Name == "" || e.Area == "" || e.Mutation == "" || e.Input == "" ||
+			e.Read == "" || e.Fields == "" || e.Vars == nil {
 			t.Errorf("entity %q is incomplete", e.Name)
 			continue
 		}
-		if !strings.Contains(e.Create, e.CreateKey) {
-			t.Errorf("entity %q: CreateKey %q does not appear in its mutation", e.Name, e.CreateKey)
+		// seed reads the token off the created object to address the read-back.
+		// An entity that never selects one would fail on a cluster, at the end
+		// of a drill, for a reason visible here in milliseconds.
+		if !strings.Contains(e.Fields, "token") {
+			t.Errorf("entity %q does not select a token; verify would have nothing to look it up by", e.Name)
 		}
-		if !strings.Contains(e.Read, e.ReadKey) {
-			t.Errorf("entity %q: ReadKey %q does not appear in its query", e.Name, e.ReadKey)
+		// A result envelope is only unwrappable if the refusal beside it is
+		// asked for too — otherwise a declined create reports as an absent
+		// object with no code and no reason.
+		if e.Wrap != "" && e.Reject == "" {
+			t.Errorf("entity %q unwraps %q but selects no rejection; a refusal would arrive bare", e.Name, e.Wrap)
+		}
+		if e.Wrap == "" && e.Reject != "" {
+			t.Errorf("entity %q selects a rejection but has no envelope to unwrap", e.Name)
 		}
 	}
 }
 
-// 🔑 The comparison is between the create response and the read response, so a
-// read that selects FEWER fields silently narrows what this tool can detect —
-// and narrows it invisibly, because the missing field simply never differs.
-// (A read selecting MORE would fail loudly on the first run, which is why only
-// one direction needs pinning.)
-func TestReadSelectsEveryFieldTheCreateReturns(t *testing.T) {
-	selection := regexp.MustCompile(`\{([a-zA-Z ]+)\}\s*\}?\s*$`)
+// 🔑 THE COMPARISON IS ONLY AS GOOD AS THE NAMES IN IT, and every one of them is
+// a string this tool made up. A mistyped query name is not a compile error and
+// not a test failure — it is a REFUSED or SHAPE exit at the end of an upgrade
+// drill on a real cluster, which is the most expensive place to learn it.
+//
+// So each name is checked against the schema the service actually serves. This
+// is the test that would have caught the read-back queries being guessed rather
+// than read, and the two single-object lookups that broke the list assumption.
+func TestEveryDocumentNamesSomethingTheSchemaDeclares(t *testing.T) {
+	// A GraphQL type reference stripped of its list brackets and non-nulls, e.g.
+	// "[EntityRelationshipCreateRequest!]!" -> "EntityRelationshipCreateRequest".
+	decoration := strings.NewReplacer("[", "", "]", "", "!", "")
+
+	byArea := map[string]string{}
 	for _, e := range entities {
-		created := selection.FindStringSubmatch(e.Create)
-		read := selection.FindStringSubmatch(e.Read)
-		if created == nil || read == nil {
-			t.Errorf("entity %q: could not extract a field selection from its documents", e.Name)
+		schema, ok := byArea[e.Area]
+		if !ok {
+			schema = schemaFor(t, e.Area)
+			byArea[e.Area] = schema
+		}
+
+		if !declaresField(schema, e.Mutation) {
+			t.Errorf("entity %q: %s serves no field %q", e.Name, e.Area, e.Mutation)
+		}
+		if !declaresField(schema, e.Read) {
+			t.Errorf("entity %q: %s serves no field %q", e.Name, e.Area, e.Read)
+		}
+		input := decoration.Replace(e.Input)
+		if !strings.Contains(schema, "input "+input+" {") {
+			t.Errorf("entity %q: %s declares no input type %q", e.Name, e.Area, input)
+		}
+		// The argument NAME, not just the field. Every create takes `request`
+		// except the bulk-relationship one, which takes `requests` — and a
+		// document naming the wrong one is accepted by the compiler, by every
+		// test that only checks field names, and by nothing on a cluster.
+		if !strings.Contains(stripSpace(schema), e.Mutation+"("+e.arg()+":") {
+			t.Errorf("entity %q: %s does not declare %s(%s:…)", e.Name, e.Area, e.Mutation, e.arg())
+		}
+		// Bulk has to agree with the mutation's RETURN type. A list decoded as
+		// one object, or the reverse, fails at the far end of an upgrade drill
+		// with a JSON error — while the schema said which it was all along.
+		//
+		// Skipped for an envelope: there the created object is nested one level
+		// down, so the outer return type says nothing about it. No entry is both
+		// wrapped and bulk today, and the check would silently pass if one were.
+		if e.Wrap == "" {
+			returns, ok := returnTypeOf(schema, e.Mutation)
+			if !ok {
+				t.Errorf("entity %q: could not read the return type of %s", e.Name, e.Mutation)
+			} else if isList := strings.HasPrefix(returns, "["); isList != e.Bulk {
+				t.Errorf("entity %q: Bulk=%v but %s returns %s", e.Name, e.Bulk, e.Mutation, returns)
+			}
+		}
+		// The two read shapes take different arguments, and picking the wrong
+		// one is how Single silently disagrees with the schema: tokens:[…] on a
+		// single lookup is rejected at query time, on a cluster, at the end of a
+		// drill. The declaration says which it is.
+		wantArg := e.Read + "(tokens:"
+		if e.Single {
+			wantArg = e.Read + "(token:"
+		}
+		if !strings.Contains(stripSpace(schema), wantArg) {
+			t.Errorf("entity %q: Single=%v disagrees with how %s declares %s",
+				e.Name, e.Single, e.Area, e.Read)
+		}
+	}
+}
+
+// declaresField reports whether the schema declares a field of this name (as
+// opposed to merely mentioning it in a comment or a type name).
+func declaresField(schema, name string) bool {
+	return regexp.MustCompile(`(?m)^[\t ]+` + regexp.QuoteMeta(name) + `\s*\(`).MatchString(schema)
+}
+
+// returnTypeOf reads the declared result type of a field, e.g. "[Device!]!".
+// The argument list holds no closing paren of its own, which is what makes the
+// lazy match safe here.
+func returnTypeOf(schema, field string) (string, bool) {
+	m := regexp.MustCompile(`(?m)^[\t ]+` + regexp.QuoteMeta(field) + `\s*\([^)]*\)\s*:\s*(\S+)\s*$`).
+		FindStringSubmatch(schema)
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
+}
+
+func stripSpace(s string) string {
+	return strings.Join(strings.Fields(s), "")
+}
+
+// The documents are generated rather than written, so the create and read
+// selections cannot drift apart. This pins the generation itself: both must
+// carry Fields verbatim, and the create must ask for the entity by the argument
+// name the schema uses.
+func TestBothDocumentsCarryTheSameSelection(t *testing.T) {
+	for _, e := range entities {
+		create, read := e.createDoc(), e.readDoc()
+		if !strings.Contains(create, e.Fields) {
+			t.Errorf("entity %q: the create document does not carry Fields", e.Name)
+		}
+		if !strings.Contains(read, e.Fields) {
+			t.Errorf("entity %q: the read document does not carry Fields", e.Name)
+		}
+		if !strings.Contains(create, e.arg()+":$req") {
+			t.Errorf("entity %q: the create document does not pass $req as %q", e.Name, e.arg())
+		}
+		if e.Wrap != "" && !strings.Contains(create, e.Wrap+"{"+e.Fields+"}") {
+			t.Errorf("entity %q: the envelope does not wrap Fields", e.Name)
+		}
+	}
+}
+
+// Dependencies travel through the state by token, and the table is ORDERED so
+// that a producer runs before its consumers. Nothing in the type system enforces
+// that: a reordering leaves the consumer reading an EMPTY string out of the map,
+// which most creates accept as an absent optional and store as a half-built
+// entity — a silent gap in the drill, not a failure.
+func TestEveryEntityCanBeBuiltInTableOrder(t *testing.T) {
+	st := newState("apiprobe")
+	for _, e := range entities {
+		vars := e.Vars(st)
+		req, ok := vars["req"]
+		if !ok {
+			t.Errorf("entity %q builds no $req variable", e.Name)
 			continue
 		}
-		want := strings.Fields(created[1])
-		got := map[string]bool{}
-		for _, f := range strings.Fields(read[1]) {
-			got[f] = true
+		for _, field := range referencedTokens(req) {
+			if field.value == "" {
+				t.Errorf("entity %q reads an empty %q; its producer runs later in the table (or not at all)",
+					e.Name, field.name)
+			}
 		}
-		for _, f := range want {
-			if !got[f] {
-				t.Errorf("entity %q: create selects %q but the read-back query does not", e.Name, f)
+		// Stand in for the platform: record the token this entity would have
+		// been given, so the entries that depend on it see a non-empty value.
+		if e.Record != nil {
+			e.Record(st, map[string]any{"token": e.Name + "-token"})
+		}
+	}
+}
+
+type namedValue struct {
+	name  string
+	value string
+}
+
+// referencedTokens returns the create input's *Token fields plus the few that
+// name a token without saying so (a relationship's endpoints, a batch's device
+// list), which are exactly the fields fed from the state.
+func referencedTokens(req any) []namedValue {
+	var out []namedValue
+	collect := func(m map[string]any) {
+		for k, v := range m {
+			switch k {
+			case "source", "target", "relationshipType":
+			default:
+				if !strings.HasSuffix(k, "Token") {
+					continue
+				}
+			}
+			if s, ok := v.(string); ok {
+				out = append(out, namedValue{name: k, value: s})
+			}
+		}
+		if list, ok := m["deviceTokens"].([]any); ok {
+			for i, v := range list {
+				if s, ok := v.(string); ok {
+					out = append(out, namedValue{name: "deviceTokens[" + string(rune('0'+i)) + "]", value: s})
+				}
 			}
 		}
 	}
+
+	switch t := req.(type) {
+	case map[string]any:
+		collect(t)
+	case []any:
+		for _, item := range t {
+			if m, ok := item.(map[string]any); ok {
+				collect(m)
+			}
+		}
+	}
+	return out
 }

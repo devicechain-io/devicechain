@@ -40,7 +40,7 @@ func runSeed(ctx context.Context, argv []string) error {
 
 	for _, e := range entities {
 		var envelope map[string]json.RawMessage
-		if err := session.Query(ctx, c.areaURL(e.Area), e.Create, e.Vars(st), &envelope); err != nil {
+		if err := session.Query(ctx, c.areaURL(e.Area), e.createDoc(), e.Vars(st), &envelope); err != nil {
 			// exitRefused, not exitSetup: the API answered and said no. That is a
 			// verdict about the platform — a validation rule that tightened, a
 			// field that was renamed — and it must not be filed under "the
@@ -48,36 +48,92 @@ func runSeed(ctx context.Context, argv []string) error {
 			return failWith(exitRefused, "create %s via %s: %w", e.Name, c.areaURL(e.Area), err)
 		}
 
-		object, ok := envelope[e.CreateKey]
+		created, ok := envelope[e.Mutation]
 		if !ok {
-			return failWith(exitShape, "create %s returned no %q key; the mutation's shape has changed", e.Name, e.CreateKey)
+			return failWith(exitShape, "create %s returned no %q key; the mutation's shape has changed", e.Name, e.Mutation)
 		}
 
-		var fields map[string]any
-		if err := json.Unmarshal(object, &fields); err != nil {
-			return failWith(exitShape, "create %s returned a non-object under %q: %w", e.Name, e.CreateKey, err)
+		objects, err := createdObjects(e, created)
+		if err != nil {
+			return err
 		}
-		token := str(fields["token"])
-		if token == "" {
-			// Every entity in the table is token-addressed, because that is how
-			// verify finds it again. One that came back without a token cannot be
-			// read back at all, and recording it would produce a receipt that
-			// verify reports as missing forever.
-			return failWith(exitShape, "create %s returned no token; verify would have nothing to look it up by", e.Name)
-		}
-		if e.Record != nil {
-			e.Record(st, fields)
-		}
+		for i, object := range objects {
+			var fields map[string]any
+			if err := json.Unmarshal(object, &fields); err != nil {
+				return failWith(exitShape, "create %s returned a non-object: %w", e.Name, err)
+			}
+			token := str(fields["token"])
+			if token == "" {
+				// Every entity in the table is token-addressed, because that is
+				// how verify finds it again. One that came back without a token
+				// cannot be read back at all, and recording it would produce a
+				// receipt that verify reports as missing forever.
+				return failWith(exitShape, "create %s returned no token; verify would have nothing to look it up by", e.Name)
+			}
+			// Only the first of a bulk create feeds the state. Later entries
+			// reference ONE token, and silently taking the last of N would make
+			// which one they got depend on the batch size.
+			if e.Record != nil && i == 0 {
+				e.Record(st, fields)
+			}
 
-		out.Entities = append(out.Entities, Recorded{
-			Name: e.Name, Area: e.Area, Token: token, Object: object,
-		})
-		fmt.Printf("  seeded  %-16s %s\n", e.Name, token)
+			out.Entities = append(out.Entities, Recorded{
+				Name: e.Name, Area: e.Area, Token: token, Object: object,
+			})
+			fmt.Printf("  seeded  %-26s %s\n", e.Name, token)
+		}
 	}
 
 	if err := writeReceipt(receipt, out); err != nil {
 		return err
 	}
-	fmt.Printf("\n%d entities seeded into tenant %q; receipt at %s\n", len(out.Entities), c.tenant, receipt)
+	fmt.Printf("\n%d rows from %d entities seeded into tenant %q; receipt at %s\n",
+		len(out.Entities), len(entities), c.tenant, receipt)
 	return nil
+}
+
+// createdObjects unwraps a create response into the objects it actually made:
+// one for most entities, N for a bulk create, and — for a create that answers
+// with a result envelope — the object inside it, or a refusal.
+//
+// 🔑 A REFUSAL IS NOT AN ABSENT OBJECT. createCommand and createCommandBatch
+// answer {command|batch, rejection}: the request reached the platform, was
+// understood, and was declined with a reason. Reporting that as a shape problem
+// would send a reader looking for a schema change; it is exitRefused, and the
+// whole envelope is quoted so the code and reason travel with it.
+func createdObjects(e entity, created json.RawMessage) ([]json.RawMessage, error) {
+	if e.Wrap != "" {
+		var wrapper map[string]json.RawMessage
+		if err := json.Unmarshal(created, &wrapper); err != nil {
+			return nil, failWith(exitShape, "create %s returned a non-object envelope: %w", e.Name, err)
+		}
+		inner, ok := wrapper[e.Wrap]
+		if !ok {
+			return nil, failWith(exitShape, "create %s returned no %q key inside its envelope; the shape has changed", e.Name, e.Wrap)
+		}
+		if isJSONNull(inner) {
+			return nil, failWith(exitRefused, "create %s was REFUSED: %s", e.Name, string(created))
+		}
+		created = inner
+	}
+
+	if !e.Bulk {
+		return []json.RawMessage{created}, nil
+	}
+	var objects []json.RawMessage
+	if err := json.Unmarshal(created, &objects); err != nil {
+		return nil, failWith(exitShape, "create %s returned a non-list: %w", e.Name, err)
+	}
+	if len(objects) == 0 {
+		// A bulk create that made nothing and said so is not a refusal — it is a
+		// success that recorded no rows, which would leave the receipt shorter
+		// than the table and verify passing over the gap without comment.
+		return nil, failWith(exitShape, "create %s returned an empty list; it was asked for rows and made none", e.Name)
+	}
+	return objects, nil
+}
+
+// isJSONNull reports whether raw is a JSON null, tolerating surrounding space.
+func isJSONNull(raw json.RawMessage) bool {
+	return strings.TrimSpace(string(raw)) == "null"
 }
