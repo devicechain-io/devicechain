@@ -17,3 +17,40 @@
 # exists, take the fix.
 
 backend/cli GO-2026-5932 # x/crypto/openpgp, reached via helm.sh/helm/v3/pkg/action's package-init chain (bootstrap/helm.go). Advisory is "unmaintained, unsafe by design" with Fixed in: N/A — there is no patched x/crypto to move to, and helm v3.21.3 is the latest v3. Reachability is init-only: dcctl never performs an OpenPGP operation, it links the code because helm registers provenance verification at init. Removed when helm drops the dependency (helm v4 is the likely route) or dcctl stops embedding helm's action package.
+
+# ---------------------------------------------------------------------------
+# github.com/lib/pq — seven advisories published 2026-08-18, all Fixed in: N/A.
+#
+# THE SHARED REASON, written once here and referenced by each line below so the
+# per-entry justifications stay about their own advisory.
+#
+# lib/pq is not imported anywhere in this repository. It is an indirect
+# requirement of backend/cli alone, pulled in by helm.sh/helm/v3/pkg/storage/driver,
+# which offers a SQL backend for storing Helm release state. dcctl embeds helm's
+# action package, and Go links whole packages, so the code is present.
+#
+# It is never entered. helm's action.Configuration.Init constructs the SQL driver
+# in exactly one place — `case "sql":` — and dcctl passes the LITERAL string
+# "secret" at both of its call sites (bootstrap/helm.go:45 and :275). There is no
+# variable, no flag and no configuration path that reaches the other branch, and
+# even inside it the connection string comes from HELM_DRIVER_SQL_CONNECTION_STRING,
+# which dcctl never sets. govulncheck reports the branch because its call-graph
+# analysis does not evaluate the switch, which is the correct conservative answer
+# for a static tool and an over-approximation here.
+#
+# 🔑 Every one of the seven is in the connection or wire-protocol path: parsing
+# frames a Postgres server sent, or authenticating to one. Reaching any of them
+# requires an open pq connection, and dcctl opens none.
+#
+# There is no version to move to (lib/pq is in maintenance and every advisory says
+# Fixed in: N/A) and no way to drop the dependency short of dcctl no longer
+# embedding helm — the same escape route the openpgp entry above is waiting on.
+# These lines go when that happens, and the staleness check will say so.
+# ---------------------------------------------------------------------------
+backend/cli GO-2026-6166 # lib/pq: GSS authentication completes without mutual proof. Requires dcctl to authenticate to a Postgres server over GSSAPI; it opens no pq connection at all — see the block above for why the code is linked and never entered. No fixed version exists.
+backend/cli GO-2026-6168 # lib/pq/scram: unbounded iteration count causes CPU denial of service. Requires a SCRAM handshake with a hostile Postgres server; dcctl performs none — see the block above. No fixed version exists.
+backend/cli GO-2026-6169 # lib/pq: disclosure of the wrong .pgpass credential via hostaddr. Requires dcctl to resolve pq connection credentials; it never opens a pq connection and reads no .pgpass — see the block above. No fixed version exists.
+backend/cli GO-2026-6170 # lib/pq: malformed backend frame length causes a panic. Requires parsing frames from a Postgres server; dcctl receives none — see the block above. No fixed version exists.
+backend/cli GO-2026-6171 # lib/pq: malformed RowDescription and DataRow messages cause panics. Requires reading a query result from a Postgres server; dcctl issues no pq query — see the block above. No fixed version exists.
+backend/cli GO-2026-6172 # lib/pq: backend frame lengths cause pre-validation memory exhaustion. Requires reading from a Postgres connection; dcctl holds none — see the block above. No fixed version exists.
+backend/cli GO-2026-6173 # lib/pq: pre-protocol error reader permits unbounded memory consumption. Requires a pq connection attempt against a hostile endpoint; dcctl attempts none — see the block above. No fixed version exists.
