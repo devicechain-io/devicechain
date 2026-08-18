@@ -35,6 +35,29 @@ type fakeApi struct {
 	releasedHolds          []uint
 	wokenDevices           []string
 
+	// The stranded-SENT pass's half, same shape and same defaults: its own lock,
+	// UNAVAILABLE by default so tests about the other two passes are unaffected by a
+	// reconciler they are not about.
+	strandedLockAvailable bool
+	strandedLockAttempts  int
+	strandedPage          []*model.Command
+	strandedReads         []model.StrandedCursor
+	strandedHorizons      []time.Time
+	strandedReadErr       error
+	// strandedForceNext makes the fake answer this cursor regardless of what it returned,
+	// so a test can prove the PROCESSOR carries a cursor forward without having to build a
+	// full production-sized page to trigger one.
+	strandedForceNext *model.StrandedCursor
+	// parkCalls records (token, nonce) pairs verbatim. The NONCE is the point: a test
+	// that only checked which tokens were parked would pass just as happily against a
+	// park predicated on nothing at all.
+	parkCalls []parkCall
+	// parkLoses makes ParkClaim report a zero-row update — the nonce predicate declining
+	// a row that has been re-dispatched since the scan observed it. parkFails makes it
+	// error.
+	parkLoses bool
+	parkFails bool
+
 	lockAttempts    int
 	pendingReads    int
 	expireCalls     int
@@ -87,6 +110,72 @@ func (f *fakeApi) HeldCommands(_ context.Context, afterId uint, limit int) ([]*m
 		return page, 0, nil
 	}
 	return page, page[len(page)-1].ID, nil
+}
+
+// parkCall is one park request, recorded whole. The nonce is half the record because it
+// is half the contract.
+type parkCall struct {
+	token string
+	nonce string
+}
+
+func (f *fakeApi) TryStrandedLock(_ context.Context, fn func() error) (bool, error) {
+	f.mu.Lock()
+	f.strandedLockAttempts++
+	available := f.strandedLockAvailable
+	f.mu.Unlock()
+	if !available {
+		return false, nil
+	}
+	return true, fn()
+}
+
+// StrandedSentCommands answers from f.strandedPage, honouring both the cursor and the
+// horizon so a test can drive the walk the way the reconciler does.
+//
+// 🔑 IT FILTERS ON THE HORIZON RATHER THAN IGNORING IT. A fake that returned its whole
+// page regardless would make every "a fresh row is not eligible" assertion pass without
+// the production query having to exclude anything.
+func (f *fakeApi) StrandedSentCommands(_ context.Context, cursor model.StrandedCursor,
+	olderThan time.Time, limit int) ([]*model.Command, model.StrandedCursor, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.strandedReads = append(f.strandedReads, cursor)
+	f.strandedHorizons = append(f.strandedHorizons, olderThan)
+	if f.strandedReadErr != nil {
+		return nil, model.StrandedCursor{}, f.strandedReadErr
+	}
+	page := make([]*model.Command, 0, limit)
+	for _, cmd := range f.strandedPage {
+		if !cmd.SentTime.Valid || !cmd.SentTime.Time.Before(olderThan) {
+			continue
+		}
+		after := cmd.SentTime.Time.After(cursor.SentTime) ||
+			(cmd.SentTime.Time.Equal(cursor.SentTime) && cmd.ID > cursor.ID)
+		if (cursor.ID == 0 && cursor.SentTime.IsZero()) || after {
+			if len(page) < limit {
+				page = append(page, cmd)
+			}
+		}
+	}
+	if f.strandedForceNext != nil {
+		return page, *f.strandedForceNext, nil
+	}
+	if len(page) < limit {
+		return page, model.StrandedCursor{}, nil
+	}
+	last := page[len(page)-1]
+	return page, model.StrandedCursor{SentTime: last.SentTime.Time, ID: last.ID}, nil
+}
+
+func (f *fakeApi) ParkClaim(_ context.Context, token, nonce string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.parkCalls = append(f.parkCalls, parkCall{token: token, nonce: nonce})
+	if f.parkFails {
+		return false, errors.New("park failed")
+	}
+	return !f.parkLoses, nil
 }
 
 // ReleaseHeldForDevice is the wake, which the sweep and reconciler never call — it is

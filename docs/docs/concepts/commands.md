@@ -59,7 +59,10 @@ These states mean the command is not finished yet:
   out. It returns to `QUEUED` when the device comes back.
 - **`SENT`** — published to the device's own command topic, awaiting its response. Read it as
   *dispatched toward a device the platform believed was live*, not as proof the device has
-  it: a device that drops between the presence check and the publish still lands here.
+  it: a device that drops between the presence check and the publish still lands here. A
+  command that stays here with no outcome for several minutes may be one nothing is holding
+  any more — see [When the platform loses track of a
+  command](#stranded-commands).
 - **`PARKED`** — it was published, the transport found no live connection to the device, and
   the platform still holds it. This is the sleeper's state, and it is delivered on the
   device's next wake. Like `HELD`, it counts as in flight: it can still be cancelled, and a
@@ -142,6 +145,37 @@ still holding it, and each of them is the point:
 - **It counts against the tenant's undelivered-command ceiling**, exactly like `QUEUED` and
   `HELD`. It is work the platform is still carrying.
 
+### When the platform loses track of a command {#stranded-commands}
+
+Hand-back only works while something is still holding the command. A command can also reach
+`SENT` and then be reached by nothing at all — the pod that published it dies before it can
+record the outcome, a transport gives up after exhausting its retries, or an instance is
+running without the piece that performs the hand-back. Nothing is wrong with the device, and
+nothing is wrong with the command. It simply has no owner any more, and `SENT` has no exit
+that does not require one — except the TTL, which records `TIMEOUT`.
+
+That is the same mislabel `PARKED` exists to remove, arriving by a different road, so the
+platform closes it the same way. A background pass looks for commands that have been sitting
+in `SENT` with no outcome for longer than the platform could still have been working on them
+— derived from the messaging layer's own retry budget, about five and a half minutes today,
+not a number chosen by hand. Those it can safely re-arm become `PARKED`, and are delivered on
+the device's next wake like any other parked command.
+
+Two limits are worth knowing, because both are deliberate:
+
+- **It applies to LwM2M devices only.** `PARKED` asserts that a command reached nothing, and
+  for a device on plain MQTT the platform cannot honestly say that: an MQTT command is
+  delivered live to whoever is connected at that instant, so a command that appears to have
+  gone nowhere is indistinguishable from one that arrived and whose answer was lost. For
+  those, the behaviour is unchanged.
+- **Re-arming accepts that a command may be carried out twice.** A command with no outcome
+  recorded is not the same thing as a command that was never carried out — the device may
+  have acted and the report of it lost. Re-arming is still the better answer, because the
+  alternative is a guaranteed `TIMEOUT` on a command the platform genuinely never delivered,
+  written against a device that did nothing wrong. Treat it as the same at-least-once
+  guarantee that applies to a hand-back: read a re-armed command as "it will be delivered",
+  not as "it had not been carried out".
+
 ### How much backlog a tenant may hold {#held-command-ceiling}
 
 A backlog of undelivered commands drains three ways and no others: a device comes back or
@@ -204,7 +238,9 @@ cannot carry the command at all. Reporting the result
 is the device's half of the contract — see
 [Responding to a command](../guides/connecting-a-device.md#responding-to-a-command). A
 device that never responds leaves its commands in `SENT` until their TTL turns them into
-`TIMEOUT`. Every command carries a TTL — one you set with `expiresAt`, or the platform
+`TIMEOUT` — except on LwM2M, where a command left without an outcome for several minutes is
+re-armed for the device's next wake instead, as described in [When the platform loses track
+of a command](#stranded-commands). Every command carries a TTL — one you set with `expiresAt`, or the platform
 default of seven days — so set your own if your devices do not report outcomes and a week
 is longer than the command stays useful.
 

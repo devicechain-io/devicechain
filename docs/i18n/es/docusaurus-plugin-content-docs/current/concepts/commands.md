@@ -62,7 +62,9 @@ Estos estados significan que el comando aún no ha terminado:
 - **`SENT`** — publicado en el topic de comandos propio del dispositivo, esperando su
   respuesta. Léelo como *despachado hacia un dispositivo que la plataforma creía activo*, no
   como prueba de que el dispositivo lo tenga: un dispositivo que se cae entre la comprobación
-  de presencia y la publicación acaba igualmente aquí.
+  de presencia y la publicación acaba igualmente aquí. Un comando que permanece aquí varios
+  minutos sin desenlace puede ser uno que ya nadie tiene en su poder — ver [Cuando la
+  plataforma pierde el rastro de un comando](#stranded-commands).
 - **`PARKED`** — se publicó, el transporte no encontró ninguna conexión viva con el
   dispositivo, y la plataforma sigue teniéndolo en su poder. Este es el estado del durmiente,
   y el comando se entrega en el próximo despertar del dispositivo. Igual que `HELD`, cuenta
@@ -152,6 +154,38 @@ plataforma siga teniéndolo se derivan tres consecuencias, y cada una es el moti
 - **Cuenta contra el techo de comandos no entregados del inquilino**, exactamente igual que
   `QUEUED` y `HELD`. Es trabajo que la plataforma sigue cargando.
 
+### Cuando la plataforma pierde el rastro de un comando {#stranded-commands}
+
+La devolución solo funciona mientras algo siga teniendo el comando en su poder. Un comando
+también puede llegar a `SENT` y luego no ser alcanzado por nada en absoluto: el pod que lo
+publicó muere antes de poder registrar el desenlace, un transporte se rinde tras agotar sus
+reintentos, o una instancia funciona sin la pieza que realiza la devolución. Nada va mal en
+el dispositivo, y nada va mal en el comando. Simplemente ya no tiene dueño, y `SENT` no tiene
+ninguna salida que no exija uno — salvo el TTL, que registra `TIMEOUT`.
+
+Esa es la misma etiqueta errónea que `PARKED` existe para eliminar, llegando por otro camino,
+así que la plataforma la cierra de la misma manera. Un proceso en segundo plano busca comandos
+que lleven en `SENT` sin desenlace más tiempo del que la plataforma podría haber seguido
+trabajando en ellos — derivado del propio presupuesto de reintentos de la capa de mensajería,
+unos cinco minutos y medio hoy, no una cifra elegida a mano. Los que puede rearmar con
+seguridad pasan a `PARKED`, y se entregan en el próximo despertar del dispositivo como
+cualquier otro comando aparcado.
+
+Vale la pena conocer dos límites, porque ambos son deliberados:
+
+- **Solo se aplica a dispositivos LwM2M.** `PARKED` afirma que un comando no llegó a nada, y
+  para un dispositivo sobre MQTT simple la plataforma no puede decir eso honestamente: un
+  comando MQTT se entrega en vivo a quien esté conectado en ese instante, así que un comando
+  que parece no haber llegado a ninguna parte es indistinguible de uno que sí llegó y cuya
+  respuesta se perdió. Para esos, el comportamiento no cambia.
+- **Rearmar acepta que un comando pueda ejecutarse dos veces.** Un comando sin desenlace
+  registrado no es lo mismo que un comando que nunca se llevó a cabo: el dispositivo pudo
+  actuar y perderse el informe. Rearmar sigue siendo la mejor respuesta, porque la alternativa
+  es un `TIMEOUT` garantizado sobre un comando que la plataforma realmente nunca entregó,
+  escrito contra un dispositivo que no hizo nada mal. Interprétalo con la misma garantía de
+  al-menos-una-vez que se aplica a una devolución: lee un comando rearmado como «se
+  entregará», no como «no se había llevado a cabo».
+
 ### Cuánta acumulación puede retener un inquilino {#held-command-ceiling}
 
 Una acumulación de comandos no entregados se drena de tres maneras y de ninguna otra: el
@@ -219,7 +253,9 @@ registrado porque el transporte no puede llevar el comando en absoluto. Informar
 es la mitad del contrato que le corresponde al dispositivo — ver
 [Responder a un comando](../guides/connecting-a-device.md#responding-to-a-command). Un
 dispositivo que nunca responde deja sus comandos en `SENT` hasta que su TTL los convierte
-en `TIMEOUT`. Todo comando lleva un TTL — el que definas con `expiresAt`, o el
+en `TIMEOUT` — salvo en LwM2M, donde un comando que queda sin desenlace durante varios
+minutos se rearma para el próximo despertar del dispositivo, como se describe en [Cuando la
+plataforma pierde el rastro de un comando](#stranded-commands). Todo comando lleva un TTL — el que definas con `expiresAt`, o el
 predeterminado de la plataforma de siete días —, así que define el tuyo si tus dispositivos
 no informan resultados y una semana es más de lo que el comando sigue siendo útil.
 

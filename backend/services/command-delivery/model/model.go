@@ -194,9 +194,19 @@ type Command struct {
 	//	   park predicated only on `status = 'SENT'` MATCHES the freshly-actuated row;
 	//	4. the next wake claims and actuates it a SECOND time.
 	//
-	// The transport's in-process dedup cannot cover this: its TTL is exactly AckWait, it is
-	// per-pod, and the amplifying case is a leadership failover — a cold cache and a
-	// whole-fleet re-register storm at the same moment. Predicating the park on the nonce it
+	// The transport's in-process dedup cannot cover this: its TTL is of the same order as
+	// AckWait, it is per-pod, and the amplifying case is a leadership failover — a cold cache
+	// and a whole-fleet re-register storm at the same moment.
+	//
+	// ⚠️ "of the same order", not "exactly", and the weakening is a correction. This comment
+	// used to claim the dedup TTL WAS AckWait. The two numbers are equal today, but nothing
+	// holds them together: the dedup TTL is sized from the op timeout (see dedupeTTL in the
+	// LwM2M dispatcher) and AckWait from worker-pipeline latency, so either can move without
+	// the other. Do not "restore" the exact claim by wiring one constant to the other either
+	// — that would fuse two independently motivated values so a change to one silently
+	// retunes the other. The argument below does not need the equality.
+	//
+	// Predicating the park on the nonce it
 	// was handed closes it by construction: the stale message names a dispatch that no longer
 	// exists, matches zero rows, and is acked as settled.
 	//
