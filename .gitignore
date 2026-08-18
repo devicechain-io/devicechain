@@ -59,3 +59,4 @@ crash.*.log
 # Build artifacts left by "go build ./backend/tools/..." from the repo root.
 dc-migrationdiff
 dc-drdrill
+dc-apiprobe
