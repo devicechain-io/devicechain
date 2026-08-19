@@ -480,7 +480,7 @@ describe('the outcome report', () => {
     // 🔴 And the fleet is explicitly still acting.
     expect(
       screen.getByText(
-        '300 commands had already been handed to their devices and could not be recalled. Those devices will still act on them.',
+        '300 commands had already been sent toward their devices, and this cancel cannot stop them. If they arrived, those devices will act on them.',
       ),
     ).toBeTruthy();
     // 🔴 THE DEFECT STATED DIRECTLY: the two must never be added into one "stopped" total.
@@ -499,17 +499,13 @@ describe('the outcome report', () => {
   // RENDERED rather than that the string was TRUE of the counts that produced it. That is
   // the whole reason this file now enumerates the state space below instead of picking an
   // example per sentence.
-  it('says nothing is still on its way when no command had reached a device', async () => {
+  it('says nothing is still on its way when nothing is', async () => {
     world.cancelResult = { cancelled: 8, alreadySent: 0, alreadyFinished: 0, matched: 8 };
 
     renderPage();
     await cancelAndConfirm();
 
-    expect(
-      await screen.findByText(
-        'No command had reached a device, so nothing from this batch is still on its way to hardware.',
-      ),
-    ).toBeTruthy();
+    expect(await screen.findByText('Nothing from this batch is still on its way to hardware.')).toBeTruthy();
     expect(screen.queryByText(/will still act on/)).toBeNull();
     expect(screen.getByText('Every command this batch still has is accounted for.')).toBeTruthy();
   });
@@ -529,7 +525,12 @@ describe('the outcome report', () => {
         'Nothing from this batch is still on its way to hardware. 300 of its commands had already finished before this cancel ran.',
       ),
     ).toBeTruthy();
-    expect(screen.queryByText(/No command had reached a device/)).toBeNull();
+    // 🔴 ASSERTS THE OTHER VARIANT IS ABSENT, NOT A RETIRED STRING. Checking that the old
+    // "No command had reached a device" wording is gone would pass for the rest of time
+    // whatever the panel did, because that sentence no longer exists in any locale — a
+    // control that cannot fail. The live risk is rendering the wrong ONE of the two
+    // surviving reassurances, so that is what is checked.
+    expect(screen.queryByText('Nothing from this batch is still on its way to hardware.')).toBeNull();
   });
 
   // 🔴 AND THE SECOND HALF OF THE SAME SENTENCE WAS ALSO FALSE. `unaccounted > 0` means
@@ -549,7 +550,6 @@ describe('the outcome report', () => {
       ),
     ).toBeTruthy();
     // ...and nothing beside it says the opposite.
-    expect(screen.queryByText(/No command had reached a device/)).toBeNull();
     expect(screen.queryByText(/is still on its way to hardware/)).toBeNull();
   });
 

@@ -198,6 +198,17 @@ const actionsForbidden = (t: RuleType) => t === 'correlation'; // its series is 
 // now, because the two copies were a divergence waiting for a third kind.
 const scopeUnsupported = (t: RuleType) => t === 'absence' || t === 'correlation';
 
+/**
+ * The compiler's ceiling on one rule's action chain (rules.MaxActionsPerRule).
+ *
+ * Mirrored so the Add button disables at the limit instead of letting an author write a ninth
+ * action and meet the refusal at publish. It DECIDES NOTHING — the compiler re-checks and the
+ * compiler wins — but a stale copy still misinforms at the moment of authoring, which is why
+ * the taxonomy lockstep test pins it against the Go const. It was previously a bare `8` inline
+ * on the button, linked to the backend by nothing at all.
+ */
+export const MAX_ACTIONS_PER_RULE = 8;
+
 // ── Small field helpers ────────────────────────────────────────────────────
 
 function DurationField({
@@ -466,9 +477,17 @@ export function DetectionRuleForm({
   // sentences: an unparseable rule opens blank, a lossy one opens with everything the form
   // did understand still filled in. One warning covering both would be false about one of
   // them, which is the exact class of defect this slice exists to remove.
-  const unparseable = editing && initial == null;
+  //
+  // 🔴 AND THEY APPLY TO THE HANDED-OFF DRAFT TOO, not only to a stored rule being edited.
+  // The "Describe" door hands this form a definition the model wrote, through the very same
+  // parseDefinition — and it is the surface most likely to produce a shape the form cannot
+  // hold, because the prompt teaches kinds and fields without knowing what this form models.
+  // Gating the warnings on `editing` meant the one path that most needed them was the one
+  // path that never showed them.
+  const source = editing ? entity.definition : initialDefinition;
+  const unparseable = source != null && initial == null;
   const lossyOpen =
-    editing && initial != null && !ruleSurvivesRoundTrip(entity.definition, rebuildFrom(initial));
+    source != null && initial != null && !ruleSurvivesRoundTrip(source, rebuildFrom(initial));
 
   // Client-side guard for the obvious omissions, so the button hints instantly (no round
   // trip) before the inline compiler check or the publish gate rejects. It mirrors only the
@@ -1019,7 +1038,7 @@ export function DetectionRuleForm({
               <p className="text-sm font-medium">{t('ruleActionsSectionTitle')}</p>
               <p className="text-sm text-muted-foreground">{t('ruleActionsSectionDescription')}</p>
             </div>
-            <Button size="sm" variant="outline" onClick={addAction} disabled={actions.length >= 8}>
+            <Button size="sm" variant="outline" onClick={addAction} disabled={actions.length >= MAX_ACTIONS_PER_RULE}>
               {t('ruleAddActionButton')}
             </Button>
           </div>
@@ -1344,7 +1363,13 @@ export function rebuildFrom(p: ParsedDefinition): string {
 export function parseDefinition(raw: string): ParsedDefinition | null {
   let d: Record<string, unknown>;
   try {
-    d = JSON.parse(raw) as Record<string, unknown>;
+    const parsed: unknown = JSON.parse(raw);
+    // 🔴 `null` AND `[1,2]` ARE WELL-FORMED JSON, and the draft-save path admits anything
+    // well-formed. Only a THROW was treated as unreadable, so a definition of literal `null`
+    // got past this and died on the first property read — crashing the drawer instead of
+    // showing the warning built for exactly this case.
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    d = parsed as Record<string, unknown>;
   } catch {
     return null;
   }

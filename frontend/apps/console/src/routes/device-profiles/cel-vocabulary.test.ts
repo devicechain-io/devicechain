@@ -23,12 +23,23 @@
 // exists to catch, while a const-name parse stayed green.
 
 import { describe, it, expect } from 'vitest';
-import ENV_GO from '../../../../../../backend/services/event-processing/internal/detect/predicate/env.go?raw';
-import GEO_GO from '../../../../../../backend/services/event-processing/internal/detect/predicate/geo.go?raw';
+// 🔴 THE WHOLE PACKAGE, NOT A NAMED PAIR OF FILES. Reading env.go and geo.go by name was a
+// demonstrated bypass: a `cel.Function("nearFence", …)` added in predicate/fences.go and wired
+// into cel.NewEnv compiles, runs, and is completely invisible to a two-file scan — the gate
+// stayed green over an undocumented function, which is the defect it exists to catch. A glob
+// cannot fall behind a new file the way a list can.
+const PREDICATE_FILES = import.meta.glob('../../../../../../backend/services/event-processing/internal/detect/predicate/*.go', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+}) as Record<string, string>;
 import EN from '@/i18n/locales/en/deviceProfiles.json';
 import ES from '@/i18n/locales/es/deviceProfiles.json';
 
-const PREDICATE_SRC = `${ENV_GO}\n${GEO_GO}`;
+const PREDICATE_SRC = Object.keys(PREDICATE_FILES)
+  .sort()
+  .map((f) => PREDICATE_FILES[f])
+  .join('\n');
 
 /**
  * `Ident = "value"` consts — the env's identifier names live in the predicate package as
@@ -99,6 +110,16 @@ describe('the predicate environment extraction', () => {
   // 🔴 THE NEGATIVE CONTROL FOR EVERY ASSERTION BELOW. All of them are "each registered name
   // is mentioned"; over an empty set that is vacuously true, and a broken regex is exactly
   // how the set becomes empty.
+  it('reads the whole predicate package, not a hand-listed pair of files', () => {
+    // The control for the glob. A pattern that matched nothing would leave PREDICATE_SRC empty
+    // and make every "is it documented" check below vacuously true.
+    const names = Object.keys(PREDICATE_FILES).map((f) => f.split('/').pop());
+    expect(names.length).toBeGreaterThan(2);
+    expect(names).toContain('env.go');
+    expect(names).toContain('geo.go');
+    expect(PREDICATE_SRC.length).toBeGreaterThan(5000);
+  });
+
   it('finds a plausible environment', () => {
     expect(registered('Variable').length).toBeGreaterThanOrEqual(6);
     expect(registered('Variable')).toContain('geo');

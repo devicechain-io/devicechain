@@ -36,15 +36,41 @@ export function sameLogicalRule(a: string, b: string): boolean {
   }
 }
 
-// prune drops the keys stableStringify treats as absent (an empty object), recursively, so
-// the containment check below compares the same normalized shape that equality does.
+// elided reports whether a value is one Go's `omitempty` would leave out of the wire form —
+// so a key carrying it and a key that is absent decode to the SAME rules.Rule.
+//
+// 🔴 ZERO IS NOT IN THIS SET, AND THAT IS THE ONE DELIBERATE ASYMMETRY. `Threshold` is a
+// *float64: omitempty on a pointer elides only nil, so `"threshold": 0` genuinely differs
+// from an absent threshold and survives a Go round-trip. Treating 0 as elidable would make a
+// rebuild that DROPPED a zero threshold compare equal to the stored rule — a missed loss,
+// which is the failure this whole check exists to prevent. `"count": 0` therefore still
+// reports as a difference, and that is the trade taken knowingly: a warning nobody needed
+// costs an operator one sentence, a silent rewrite costs them the rule.
+function elided(v: unknown): boolean {
+  if (v === null) return true;
+  if (v === false) return true;
+  if (v === '') return true;
+  if (Array.isArray(v)) return v.length === 0;
+  return typeof v === 'object' && stableStringify(v) === '{}';
+}
+
+// prune removes the keys that carry nothing, recursively, so the containment check below
+// compares two definitions the way the SERVER would read them rather than the way they happen
+// to be spelled.
+//
+// It matters because the two sides are spelled by different writers. `buildDefinition` omits a
+// field it has nothing to say about; a client whose serializer emits empty collections and
+// strings — the default for .NET and many Python setups — writes `"description": ""` and
+// `"actions": []` instead. Go's decoder cannot tell those apart, so neither may this: without
+// the normalization the form would warn that it was about to lose a description that was never
+// there.
 function prune(v: unknown): unknown {
   if (v === null || typeof v !== 'object') return v;
   if (Array.isArray(v)) return v.map(prune);
   const out: Record<string, unknown> = {};
   for (const [k, raw] of Object.entries(v as Record<string, unknown>)) {
     const pv = prune(raw);
-    if (stableStringify(pv) === '{}') continue;
+    if (elided(pv)) continue;
     out[k] = pv;
   }
   return out;

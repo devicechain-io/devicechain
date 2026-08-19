@@ -17,9 +17,10 @@
 
 import '@/i18n/config';
 import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import { RefusalGroupBlock } from './RefusalGroups';
+import i18n from '@/i18n/config';
+import { RefusalGroupBlock, RefusalGroupList } from './RefusalGroups';
 import { groupRefusals, sampleCoverage, type RefusalGroup } from './refusals';
 
 afterEach(cleanup);
@@ -121,5 +122,73 @@ describe('sampleCoverage', () => {
     expect(mystery).toBeDefined();
     expect(mystery!.count).toBeNull();
     expect(sampleCoverage(mystery!)).toBe('unknown');
+  });
+});
+
+
+// ── The list, and the other locale ──────────────────────────────────────────
+
+describe('RefusalGroupList', () => {
+  // 🔴 EVERY TEST ABOVE RENDERS ONE BLOCK, AND BOTH SCREENS RENDER THE LIST. Narrowing the
+  // list to `groups.slice(0, 1)` makes every refusal code but the first vanish from the batch
+  // detail page AND the create form — and left the whole command-batches suite green, because
+  // nothing rendered more than one group.
+  it('renders every group it is given', () => {
+    render(
+      <RefusalGroupList
+        groups={[
+          { code: 'DEVICE_NOT_FOUND', count: 9, sample: [entry('a', 'DEVICE_NOT_FOUND')] },
+          { code: 'COMMAND_NOT_IN_VOCABULARY', count: 4, sample: [entry('b', 'COMMAND_NOT_IN_VOCABULARY')] },
+          { code: 'DEVICE_DISABLED', count: 1, sample: [entry('c', 'DEVICE_DISABLED')] },
+        ]}
+      />,
+    );
+    for (const code of ['DEVICE_NOT_FOUND', 'COMMAND_NOT_IN_VOCABULARY', 'DEVICE_DISABLED']) {
+      expect(screen.getByText(code), `${code} was not rendered`).toBeTruthy();
+    }
+    expect(screen.getByText('9 devices refused')).toBeTruthy();
+    expect(screen.getByText('1 device refused')).toBeTruthy();
+  });
+});
+
+// 🔴 THE ENGLISH COPY IS NOT THE PRODUCT. Setting the Spanish `sampleUnknownCoverage_other`
+// back to a completeness claim — "Mostrando los N dispositivos rechazados" — reintroduces the
+// exact defect this file was written for, and every assertion above stays green, because they
+// all read English. A locale is a place the fix can be undone.
+describe('the unknown-coverage sentence in Spanish', () => {
+  beforeAll(async () => {
+    await i18n.changeLanguage('es');
+  });
+  afterAll(async () => {
+    await i18n.changeLanguage('en');
+  });
+
+  // Read the WHOLE block rather than one node: "the screen does not contradict itself" is a
+  // property of everything rendered together, and the defect was two adjacent lines
+  // disagreeing. A single-element query cannot express that.
+  it('does not claim completeness when no total was reported', () => {
+    const { container } = render(
+      <RefusalGroupBlock
+        group={{ code: 'MYSTERY', count: null, sample: [entry('a', 'MYSTERY'), entry('b', 'MYSTERY')] }}
+      />,
+    );
+    const text = container.textContent ?? '';
+
+    expect(text).toMatch(/total no informado/); // the badge is honest
+    expect(text).toMatch(/no se sabe/); // and so is the line under it
+    // The claim that must not be made anywhere in the block: "these are all of them".
+    expect(text).not.toMatch(/Mostrando los|Mostrando todos|\btodos los\b/);
+  });
+
+  it('still says how many of how many when the total IS known — the counterweight', () => {
+    const { container } = render(
+      <RefusalGroupBlock group={{ code: 'K', count: 900, sample: [entry('a', 'K'), entry('b', 'K')] }} />,
+    );
+    const text = container.textContent ?? '';
+
+    // A locale that said "no se sabe" for every group would pass the test above and tell an
+    // operator nothing is knowable when the exact total was right there.
+    expect(text).toMatch(/900/);
+    expect(text).not.toMatch(/no se sabe/);
   });
 });

@@ -23,18 +23,34 @@
 import { describe, it, expect } from 'vitest';
 import COMPILE_GO from '../../../../../../backend/services/event-processing/internal/rules/compile.go?raw';
 import SCHEMA_GO from '../../../../../../backend/services/event-processing/internal/rules/schema.go?raw';
-import { RULE_TYPES, parseDefinition, rebuildFrom, ruleTypeOptions } from './DetectionRuleForm';
+import { MAX_ACTIONS_PER_RULE, RULE_TYPES, parseDefinition, rebuildFrom, ruleTypeOptions } from './DetectionRuleForm';
 import FORM_SRC from './DetectionRuleForm.tsx?raw';
+import { CONDITION_TYPES } from './canvas/model';
 import type { TFunction } from 'i18next';
 import { ruleSurvivesRoundTrip } from './rule-equal';
 
 // ── Reading the Go ──────────────────────────────────────────────────────────
 
-/** Every `Ident SomeType = "value"` const in a source file, as ident → wire value. */
-function constValues(src: string): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const m of src.matchAll(/^\s*([A-Z][A-Za-z0-9]*)\s+[A-Za-z][A-Za-z0-9]*\s*=\s*"([^"]*)"/gm)) {
-    out.set(m[1], m[2]);
+/**
+ * Every `Ident SomeType = "value"` const in a source file, as ident → {type, value}.
+ *
+ * 🔴 THE DECLARED TYPE IS KEPT, AND IT IS WHAT THE DISPATCH SCAN FILTERS ON. Filtering case
+ * clauses by ident SPELLING — "does it start with `Type`?" — reads a naming convention, and a
+ * convention is not enforced by anything. A kind added as `KindMaintenance RuleType =
+ * "maintenance"` with a matching case compiles, runs, and is invisible to a prefix filter:
+ * the compiler would accept a kind this console can never author, which is the precise defect
+ * this file was written about. Go's type checker DOES enforce the declared type, so that is
+ * what to read.
+ */
+interface GoConst {
+  type: string;
+  value: string;
+}
+
+function constValues(src: string): Map<string, GoConst> {
+  const out = new Map<string, GoConst>();
+  for (const m of src.matchAll(/^\s*([A-Z][A-Za-z0-9]*)\s+([A-Za-z][A-Za-z0-9]*)\s*=\s*"([^"]*)"/gm)) {
+    out.set(m[1], { type: m[2], value: m[3] });
   }
   return out;
 }
@@ -49,37 +65,53 @@ function funcBody(src: string, signature: string): string {
 }
 
 /**
- * The identifiers named in `case` clauses in a region, with the given prefix.
+ * The wire values a `switch` dispatches on, for consts of one declared Go type.
  *
- * The prefix filter is what keeps a switch that mixes vocabularies (compile.go's main switch
- * is pure, but `forbid` tables and error paths are not) from contributing noise.
+ * 🔴 IT REFUSES WHAT IT CANNOT ACCOUNT FOR RATHER THAN SKIPPING IT. Every ident in a case
+ * clause must resolve to a const of `declaredType`; anything else — a differently-named const,
+ * a `RuleType("literal")` conversion, an alias, a value built by concatenation — THROWS. That
+ * is the difference between a gate and a suggestion: a scan that quietly drops what it does
+ * not recognise reports a complete set every time, and is at its most confident exactly when a
+ * new kind has slipped past it.
+ *
+ * `skip` names the idents that legitimately appear in a scanned region and are not part of the
+ * vocabulary. It is a literal list on purpose — short, reviewed, and it fails loudly the day a
+ * region grows a new one rather than absorbing it.
  */
-function caseIdents(region: string, prefix: string): string[] {
+function dispatchValues(region: string, consts: Map<string, GoConst>, declaredType: string, skip: string[] = []): string[] {
   const out = new Set<string>();
   for (const line of region.split('\n')) {
-    const m = /^\s*case\s+(.+?):/.exec(line);
+    const m = /^\s*case\s+(.+?):\s*$/.exec(line);
     if (!m) continue;
-    for (const id of m[1].split(',')) {
-      const name = id.trim();
-      if (name.startsWith(prefix)) out.add(name);
+    for (const raw of m[1].split(',')) {
+      const id = raw.trim();
+      if (id === '' || skip.includes(id)) continue;
+      const c = consts.get(id);
+      if (c === undefined) {
+        throw new Error(
+          `case ${id}: is not a resolvable string const — a ${declaredType} the console cannot see would be invisible here`,
+        );
+      }
+      if (c.type !== declaredType) continue; // a different vocabulary sharing the region
+      out.add(c.value);
     }
   }
   return [...out];
 }
 
-/** Resolve Go const identifiers to their wire values, failing loudly on an unknown one. */
-function wireValues(idents: string[], consts: Map<string, string>): string[] {
-  return idents.map((id) => {
-    const v = consts.get(id);
-    // A const whose value is NOT a plain string literal (an alias, a concatenation, a
-    // reference to another package) lands here rather than being silently dropped — which is
-    // precisely how a real kind would go missing while every count still looked right.
-    if (v === undefined) throw new Error(`const ${id} has no plain string literal value in schema.go`);
-    return v;
-  });
-}
-
 const SCHEMA_CONSTS = constValues(SCHEMA_GO);
+
+/**
+ * The rule kinds Compile's main dispatch actually lowers — the enforced set.
+ *
+ * `default` is skipped because Go spells the fall-through arm that way and it names no kind;
+ * it is listed explicitly rather than filtered by shape so that any OTHER unrecognised ident
+ * still throws.
+ */
+function ruleTypesTheCompilerAccepts(): string[] {
+  const region = funcBody(COMPILE_GO, 'func Compile(r Rule, limits Limits) (*CompiledRule, error) {');
+  return dispatchValues(region, SCHEMA_CONSTS, 'RuleType', ['default']);
+}
 
 // ── The parse is asserted before anything is compared against it ────────────
 //
@@ -89,11 +121,13 @@ const SCHEMA_CONSTS = constValues(SCHEMA_GO);
 // "the extractor is broken".
 
 describe('the Go extraction itself', () => {
-  it('reads plausible const values out of schema.go', () => {
+  it('reads plausible const values, with their declared types, out of schema.go', () => {
     expect(SCHEMA_CONSTS.size).toBeGreaterThan(20);
-    expect(SCHEMA_CONSTS.get('TypeThreshold')).toBe('threshold');
-    expect(SCHEMA_CONSTS.get('TypeConnectivity')).toBe('connectivity');
-    expect(SCHEMA_CONSTS.get('AggCount')).toBe('count');
+    expect(SCHEMA_CONSTS.get('TypeThreshold')).toEqual({ type: 'RuleType', value: 'threshold' });
+    expect(SCHEMA_CONSTS.get('TypeConnectivity')).toEqual({ type: 'RuleType', value: 'connectivity' });
+    // A different vocabulary in the same file, to prove the declared type is really read and
+    // not assumed — this is what lets the dispatch scan tell kinds from everything else.
+    expect(SCHEMA_CONSTS.get('AggCount')).toEqual({ type: 'AggFunc', value: 'count' });
   });
 
   it('finds a func body, and refuses a signature that is not there', () => {
@@ -101,10 +135,24 @@ describe('the Go extraction itself', () => {
     expect(() => funcBody(SCHEMA_GO, 'func (s Severity) NotAThing() bool {')).toThrow();
   });
 
-  it('refuses a const identifier it cannot resolve — the control for wireValues', () => {
-    // Without this, an unresolvable ident could silently drop out of a set and the
-    // comparison would pass one member short.
-    expect(() => wireValues(['TypeNotReal'], SCHEMA_CONSTS)).toThrow(/TypeNotReal/);
+  // 🔴 THE CONTROL FOR THE BYPASS THAT WAS DEMONSTRATED AGAINST AN EARLIER VERSION OF THIS
+  // FILE. It filtered case idents by the prefix `Type`, so a kind declared as
+  // `KindMaintenance RuleType = "maintenance"` — with a real case in the dispatch, compiling
+  // and running — was silently discarded, and the gate reported the vocabularies in
+  // agreement. The scan now refuses anything it cannot account for.
+  it('refuses a case ident it cannot resolve, whatever it is named', () => {
+    const region = '\tswitch r.Type {\n\tcase KindMaintenance:\n\t\tbreak\n\t}';
+    expect(() => dispatchValues(region, SCHEMA_CONSTS, 'RuleType')).toThrow(/KindMaintenance/);
+    // ...including a conversion expression, which carries no ident to resolve at all.
+    const converted = '\tswitch r.Type {\n\tcase RuleType("maintenance"):\n\t\tbreak\n\t}';
+    expect(() => dispatchValues(converted, SCHEMA_CONSTS, 'RuleType')).toThrow();
+  });
+
+  it('reads a differently-NAMED const of the right type — the counterweight', () => {
+    // The rule is the declared TYPE, not the spelling. A kind named `KindX` that really is a
+    // RuleType must be picked up, or this gate would demand a naming convention Go does not.
+    const consts = new Map([['KindMaintenance', { type: 'RuleType', value: 'maintenance' }]]);
+    expect(dispatchValues('\tcase KindMaintenance:\n', consts, 'RuleType')).toEqual(['maintenance']);
   });
 });
 
@@ -120,7 +168,7 @@ const VOCABULARIES: {
   {
     name: 'rule types',
     // compile.go's main dispatch: the set of kinds that actually lower to something.
-    backend: () => wireValues(caseIdents(funcBody(COMPILE_GO, 'func Compile(r Rule, limits Limits) (*CompiledRule, error) {'), 'Type'), SCHEMA_CONSTS),
+    backend: () => ruleTypesTheCompilerAccepts(),
     console: RULE_TYPES,
     known: 'connectivity',
     min: 8,
@@ -174,7 +222,7 @@ const CORPUS: Record<string, string> = {
 
 describe('the round-trip corpus', () => {
   it('covers exactly the kinds the compiler accepts', () => {
-    const backend = wireValues(caseIdents(funcBody(COMPILE_GO, 'func Compile(r Rule, limits Limits) (*CompiledRule, error) {'), 'Type'), SCHEMA_CONSTS);
+    const backend = ruleTypesTheCompilerAccepts();
     expect(Object.keys(CORPUS).sort()).toEqual([...backend].sort());
   });
 
@@ -182,6 +230,67 @@ describe('the round-trip corpus', () => {
     const parsed = parseDefinition(definition);
     expect(parsed, `${kind}: the form could not parse its own corpus entry`).not.toBeNull();
     expect(parsed!.type, `${kind}: the form relabelled the rule`).toBe(kind);
+    expect(ruleSurvivesRoundTrip(definition, rebuildFrom(parsed!))).toBe(true);
+  });
+
+  // 🔴 THE KIND CORPUS ABOVE IS ONE AXIS, AND IT IS THE THIN ONE. Each entry is a minimal
+  // rule of its type, so between them they exercise almost none of the FIELD surface — and a
+  // round-trip check is only as sharp as the shapes it is fed. Deleting the whole
+  // httpCall/publish verbatim pass-through from parseDefinition, which silently rewrites every
+  // canvas-authored webhook into an empty raiseAlarm on save, left the kind corpus entirely
+  // green. So the second axis: shapes that are all the same KIND and differ in what they
+  // carry, aimed squarely at the fields a rebuild is most likely to drop.
+  //
+  // These are not hypothetical. Every one is a shape the canvas or the API produces, and the
+  // pass-throughs they pin (`raw` for outbound actions, `guard` for canvas branches) exist
+  // precisely because losing them corrupts a rule the form was only supposed to read.
+  const SHAPES: Record<string, string> = {
+    'an httpCall action carried through verbatim': JSON.stringify({
+      name: 'r', type: 'threshold', when: { metric: 'tempC', op: 'gt', threshold: 30 },
+      actions: [{ type: 'httpCall', httpCall: { url: 'https://example.invalid/hook', secretRef: 'h', timeoutMs: 2000 } }],
+    }),
+    'a publish action carried through verbatim': JSON.stringify({
+      name: 'r', type: 'threshold', when: { metric: 'tempC', op: 'gt', threshold: 30 },
+      actions: [{ type: 'publish', publish: { connector: 'c', payload: '"x"' } }],
+    }),
+    'a canvas-authored guard on an action': JSON.stringify({
+      name: 'r', type: 'threshold', when: { metric: 'tempC', op: 'gt', threshold: 30 },
+      actions: [{ type: 'raiseAlarm', guard: 'value > 40', raiseAlarm: { alarmKey: 'hot' } }],
+    }),
+    'a sendCommand action with a payload': JSON.stringify({
+      name: 'r', type: 'threshold', when: { metric: 'tempC', op: 'gt', threshold: 30 },
+      actions: [{ type: 'sendCommand', sendCommand: { command: 'reset', payload: '{"hard":true}' } }],
+    }),
+    'a raw-CEL leaf': JSON.stringify({ name: 'r', type: 'threshold', when: { cel: 'm["tempC"] > 30.0' } }),
+    'a leaf bounded by a device attribute': JSON.stringify({
+      name: 'r', type: 'threshold', when: { metric: 'tempC', op: 'gt', thresholdAttr: 'maxTemp' },
+    }),
+    'a description and a severity': JSON.stringify({
+      name: 'r', description: 'why this exists', severity: 'minor', type: 'threshold',
+      when: { metric: 'tempC', op: 'gt', threshold: 30 },
+    }),
+    'a session-windowed aggregate': JSON.stringify({
+      name: 'r', type: 'aggregate', agg: 'max', op: 'gt', threshold: 5, windowMode: 'session', gap: '2m', metric: 'tempC',
+    }),
+    'a count-windowed aggregate': JSON.stringify({
+      name: 'r', type: 'aggregate', agg: 'count', op: 'ge', threshold: 4, windowMode: 'count', count: 10,
+    }),
+    'a correlation with a member cap': JSON.stringify({
+      name: 'r', type: 'correlation', anchorType: 'area', count: 3, window: '5m', memberCap: 50,
+    }),
+    'several actions at once': JSON.stringify({
+      name: 'r', type: 'threshold', when: { metric: 'tempC', op: 'gt', threshold: 30 },
+      actions: [
+        { type: 'raiseAlarm', raiseAlarm: { alarmKey: 'hot' } },
+        { type: 'sendCommand', sendCommand: { command: 'cool', payload: '' } },
+        { type: 'httpCall', httpCall: { url: 'https://example.invalid/h' } },
+      ],
+    }),
+  };
+
+  it.each(Object.entries(SHAPES))('opens and re-saves %s without losing anything', (_shape, definition) => {
+    const parsed = parseDefinition(definition);
+    expect(parsed).not.toBeNull();
     expect(ruleSurvivesRoundTrip(definition, rebuildFrom(parsed!))).toBe(true);
   });
 
@@ -233,5 +342,116 @@ describe('the rule type picker', () => {
     // The tripwire proper. Anything between the call and the closing brace — `.filter(`,
     // `.slice(`, a conditional — is a narrowing this file cannot otherwise see.
     expect(FORM_SRC).not.toMatch(/ruleTypeOptions\(t\)\s*[.[]/);
+  });
+});
+
+
+// ── The SECOND authoring surface ────────────────────────────────────────────
+//
+// 🔴 THE FORM IS NOT THE WHOLE CONSOLE. The canvas carries its own condition vocabulary, and
+// leaving it ungated would have reproduced this file's own subject one directory down: a kind
+// added to the compiler and to the form passes every check above while the canvas silently
+// cannot express it. The canvas fails CLOSED on a kind it does not know (roundtrip.ts returns
+// `canvasErrorUnsupportedType`), so the cost is a refusal rather than a rewrite — but its
+// documented fallback is "open it in the form", and the form is where the rewrite lived.
+//
+// The canvas is allowed to offer FEWER kinds than the compiler accepts. What it is not allowed
+// to do is drift without anyone deciding: each omission is named here with its reason, and the
+// omission is ASSERTED to still be real. A gap list that is not checked against reality is how
+// a fixed gap turns into a free slot for the next one.
+
+describe('the canvas condition vocabulary', () => {
+  // Kinds the compiler accepts that the canvas deliberately does not offer as a node.
+  const DECLARED_GAPS: Record<string, string> = {
+    connectivity:
+      'no canvas node yet — it is a leaf-less edge trigger with no ports to wire, so it needs a ' +
+      'node shape of its own rather than a copy of an existing condition. Authorable in the form.',
+  };
+
+  it('offers no kind the compiler would refuse', () => {
+    const backend = ruleTypesTheCompilerAccepts();
+    const extra = CONDITION_TYPES.filter((c) => !backend.includes(c));
+    expect({ extra }).toEqual({ extra: [] });
+  });
+
+  it('omits only what is declared, with a reason', () => {
+    const backend = ruleTypesTheCompilerAccepts();
+    const missing = backend.filter((k) => !CONDITION_TYPES.includes(k as never));
+    expect({ missing: missing.sort() }).toEqual({ missing: Object.keys(DECLARED_GAPS).sort() });
+  });
+
+  // 🔴 THE HALF THAT KEEPS THE GAP LIST HONEST. Without it, a gap that gets CLOSED leaves its
+  // entry behind — and a stale entry is a free slot: the next person facing a red gate can swap
+  // the name rather than close the gap, with no assertion edited and no review signal raised.
+  it('has no stale entry — every declared gap is still a real one', () => {
+    for (const kind of Object.keys(DECLARED_GAPS)) {
+      expect(CONDITION_TYPES, `${kind} is now on the canvas; delete its DECLARED_GAPS entry`).not.toContain(kind);
+    }
+  });
+
+  it('derives its condition set from the node catalog', () => {
+    // The control for all three checks above: a CONDITION_TYPES that came back empty would
+    // satisfy "offers nothing the compiler refuses" perfectly.
+    expect(CONDITION_TYPES.length).toBeGreaterThanOrEqual(7);
+    expect(CONDITION_TYPES).toContain('threshold');
+    expect(CONDITION_TYPES).not.toContain('action'); // not a condition
+    expect(CONDITION_TYPES).not.toContain('source');
+  });
+});
+
+
+// ── Mirrored ceilings ───────────────────────────────────────────────────────
+//
+// A number the console repeats from the compiler is the same class of drift as a vocabulary it
+// repeats, and it is easier to miss because a stale number still looks like a number. These are
+// hints, not gates — the server re-checks and wins — but a hint that says 8 when the compiler
+// allows 4 lets an author write work the publish then throws away.
+
+describe('ceilings mirrored from the compiler', () => {
+  /** A plain `const Name = 123` in Go, as a number. */
+  function intConst(src: string, name: string): number {
+    const m = new RegExp(`^\\s*(?:const\\s+)?${name}\\s*(?:[A-Za-z][A-Za-z0-9]*\\s*)?=\\s*(\\d+)`, 'm').exec(src);
+    if (!m) throw new Error(`no integer const ${name}`);
+    return Number(m[1]);
+  }
+
+  it('reads the const, and refuses one that is not there', () => {
+    expect(intConst(SCHEMA_GO, 'MaxActionsPerRule')).toBeGreaterThan(0);
+    expect(() => intConst(SCHEMA_GO, 'MaxNotAThing')).toThrow();
+  });
+
+  it('caps the action chain where the compiler does', () => {
+    expect(MAX_ACTIONS_PER_RULE).toBe(intConst(SCHEMA_GO, 'MaxActionsPerRule'));
+  });
+});
+
+
+// ── What parseDefinition does with input that is not a rule ─────────────────
+//
+// 🔴 ALSO WRITTEN BECAUSE A MUTATION SURVIVED. Deleting the non-object guard broke nothing:
+// the crash it prevents had been FIXED and never PINNED, which leaves the fix one refactor
+// from being undone silently.
+//
+// `null`, `true` and `[…]` are all well-formed JSON, so a definition containing one gets past
+// `JSON.parse` and then dies on the first property read — the drawer throwing instead of
+// showing the warning built for exactly this case.
+
+describe('parseDefinition on input that is not a rule object', () => {
+  it.each([['null'], ['true'], ['42'], ['"a string"'], ['[1,2,3]']])(
+    'returns null rather than throwing for %s',
+    (raw) => {
+      expect(() => parseDefinition(raw)).not.toThrow();
+      expect(parseDefinition(raw)).toBeNull();
+    },
+  );
+
+  it('returns null for malformed JSON', () => {
+    expect(parseDefinition('{not json')).toBeNull();
+  });
+
+  // The counterweight: a real definition must still parse, or "returns null" would be a
+  // trivially correct implementation of this whole function.
+  it('still parses an actual rule', () => {
+    expect(parseDefinition(CORPUS.threshold)).not.toBeNull();
   });
 });
