@@ -33,6 +33,7 @@ type Endpoints struct {
 	EventProcessingWS      string `json:"eventProcessingWS"`
 	EventProcessingGraphQL string `json:"eventProcessingGraphQL"`
 	CommandMgmtGraphQL     string `json:"commandMgmtGraphQL"`
+	DeviceStateGraphQL     string `json:"deviceStateGraphQL"`
 	MqttBroker             string `json:"mqttBroker"`
 }
 
@@ -278,6 +279,7 @@ func ResolveEndpoints(server, ingress, mqttBroker string, tls bool) Endpoints {
 		EventProcessingWS:      fmt.Sprintf("%s://%s/api/event-processing/graphql", ws, server),
 		EventProcessingGraphQL: fmt.Sprintf("%s://%s/api/event-processing/graphql", h, server),
 		CommandMgmtGraphQL:     fmt.Sprintf("%s://%s/api/command-delivery/graphql", h, server),
+		DeviceStateGraphQL:     fmt.Sprintf("%s://%s/api/device-state/graphql", h, server),
 		MqttBroker:             mqttBroker,
 	}
 }
