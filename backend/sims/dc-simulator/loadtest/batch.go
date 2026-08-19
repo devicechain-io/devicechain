@@ -95,7 +95,24 @@ const (
 	InvBatchTargetOnly       = "batch-touched-only-its-target"
 	InvBatchReplayIdempotent = "batch-replay-is-idempotent"
 	InvBatchRefusedWhole     = "batch-refused-whole-creates-nothing"
+	// InvBatchDevicesReceived is the WIRE witness, and it exists because the durable
+	// one is not sufficient on its own — see classifyBatchReceipt.
+	InvBatchDevicesReceived = "batch-devices-actually-received"
 )
+
+// BatchInvariants is the COMPLETE set this harness evaluates, declared beside the
+// classifier rather than derived from it. A verdict — or a negative control — over a
+// partial set is not the verdict this gate promises, and without a declared set an
+// invariant that stopped being appended is invisible to both.
+var BatchInvariants = []string{
+	InvBatchLoadFloor,
+	InvBatchFanoutComplete,
+	InvBatchRoundTrip,
+	InvBatchDevicesReceived,
+	InvBatchTargetOnly,
+	InvBatchReplayIdempotent,
+	InvBatchRefusedWhole,
+}
 
 // Batch-harness defaults.
 const (
@@ -292,6 +309,16 @@ type batchObservations struct {
 	ReplayErrs       []string
 	ReplayTotalAfter int
 
+	// Receipts is the per-device WIRE evidence: how many DISTINCT command tokens each
+	// device's own MQTT subscription actually delivered. Misrouted counts frames that
+	// arrived addressed to a different device — a dispatch defect, and the only signal
+	// that can tell "this device answered" apart from "some device answered".
+	Receipts  map[string]int
+	Misrouted int
+	// Deaf names the target deliberately left without a receiver by the negative
+	// control, which must therefore receive nothing.
+	Deaf string
+
 	// The whole-batch refusal.
 	Refused           batchRecord // Created TRUE here is itself the finding
 	RefusedCode       string
@@ -346,6 +373,9 @@ func classifyBatch(obs batchObservations, targets, bystanders []string, cfg Batc
 			Detail: fmt.Sprintf("all %d command(s) reached the terminal state; statuses %v", len(obs.FanoutRows), sortedTally(obs.Statuses))})
 	}
 
+	// 2b. The wire witness for the round trip above.
+	invs = append(invs, classifyBatchReceipt(obs, targets))
+
 	// 3. Touched only its target. The class a passive oracle cannot catch: a fan-out
 	// that over-resolved writes durable rows on devices nobody named.
 	var touched []string
@@ -378,6 +408,62 @@ func classifyBatch(obs batchObservations, targets, bystanders []string, cfg Batc
 	invs = append(invs, classifyBatchRefusal(obs, targets))
 
 	return invs
+}
+
+// classifyBatchReceipt is the WIRE witness, and it is GATED rather than reported as
+// evidence because the durable one cannot stand alone.
+//
+// 🔴 A DURABLE `SUCCESSFUL` DOES NOT SAY WHICH DEVICE ANSWERED. A device's JWT scopes
+// SUBSCRIBE to its own command topic but grants PUBLISH on the tenant-wide responses
+// subject, and a response carries a command token and no device identity — so the
+// platform marks whatever token it is handed, by whoever hands it over. The sibling
+// command harness calls durable status "an authoritative, non-lossy round-trip
+// proof"; that is a claim about the platform, and the platform does not enforce it.
+//
+// Inside this harness the durable half is still sound BY CONSTRUCTION — every
+// receiver answers only tokens delivered to its own subscription, and the receiver
+// now refuses a frame addressed elsewhere — but "sound by construction" is exactly
+// the kind of premise that stops being true without anyone noticing. So the
+// construction is ASSERTED: every connected target must have received its command on
+// its own wire, the deaf device must have received nothing, and no frame may have
+// been misrouted.
+//
+// It is safe against the documented at-least-once redelivery because it counts
+// DISTINCT tokens and demands at least one: redelivery can only inflate the raw
+// tally, never reduce the distinct one below what a device really got.
+func classifyBatchReceipt(obs batchObservations, targets []string) Invariant {
+	if obs.Misrouted > 0 {
+		return Invariant{Name: InvBatchDevicesReceived, Passed: false,
+			Detail: fmt.Sprintf("%d command(s) were delivered to a device they were not addressed to — a dispatch mis-route. "+
+				"Any durable SUCCESSFUL on this run may have been written by a device that is not the one the command names", obs.Misrouted)}
+	}
+	var silent []string
+	for _, tok := range targets {
+		if tok == obs.Deaf {
+			continue
+		}
+		if obs.Receipts[tok] == 0 {
+			silent = append(silent, tok)
+		}
+	}
+	sort.Strings(silent)
+	if len(silent) > 0 {
+		return Invariant{Name: InvBatchDevicesReceived, Passed: false,
+			Detail: fmt.Sprintf("%d connected target(s) never received their command on their own MQTT subscription: %s. "+
+				"If the durable rows nevertheless read SUCCESSFUL, something other than the target device answered them",
+				len(silent), strings.Join(silent, ", "))}
+	}
+	if obs.Deaf != "" && obs.Receipts[obs.Deaf] > 0 {
+		return Invariant{Name: InvBatchDevicesReceived, Passed: false,
+			Detail: fmt.Sprintf("the control's deaf device %q received %d command(s) despite having no receiver — the control did not arm",
+				obs.Deaf, obs.Receipts[obs.Deaf])}
+	}
+	connected := len(targets)
+	if obs.Deaf != "" {
+		connected--
+	}
+	return Invariant{Name: InvBatchDevicesReceived, Passed: true,
+		Detail: fmt.Sprintf("all %d connected target(s) received their command on their own subscription, none misrouted", connected)}
 }
 
 // classifyBatchFanout is invariant 1: the record's numbers AND the row membership.
@@ -515,11 +601,23 @@ func classifyBatchRefusal(obs batchObservations, targets []string) Invariant {
 
 // batchControlExpectations maps a control to the EXACT set of invariants it must flip.
 //
-// The deaf device's row IS created, so the fan-out invariant still holds; nothing
-// answers it, so the round trip cannot. That the harness's two controls flip
-// DIFFERENT sets is the evidence — the other one, which deletes a command row out of
-// band, must flip the fan-out invariant instead. A probe that reported a shortfall
-// regardless would satisfy one and fail the other.
+// The deaf device's row IS created and DISPATCHED — a device the platform has never
+// heard of has no state row, and the delivery gate dispatches rather than holds when
+// it knows nothing (an earlier comment here had that backwards). Nothing is
+// subscribed to receive it, and command delivery over MQTT is live-only, so the
+// command is simply lost and the row stays SENT. The fan-out invariant therefore
+// still holds and the round trip cannot: exactly one invariant flips.
+//
+// The receipt invariant does NOT flip, and that is deliberate — it EXPECTS the deaf
+// device to receive nothing, so it stays green and the control's expected set stays a
+// single name.
+// 🔴 ONE CONTROL COVERS ONE OF SEVEN INVARIANTS, AND THE COMMENT ABOVE USED TO
+// DESCRIBE A SECOND ONE THAT DOES NOT EXIST. The other — deleting a command row out
+// of band, flipping the fan-out invariant instead — needs the perturber to reach
+// command-delivery, which it deliberately does not. Until it is built,
+// `batch-fanout-complete` (the invariant this whole layer is justified by) has never
+// been shown capable of failing on a cluster, and neither have four others. Recorded
+// here rather than left to be inferred from this map's length.
 var batchControlExpectations = map[string][]string{
 	ControlDeafDevice: {InvBatchRoundTrip},
 }
@@ -527,7 +625,7 @@ var batchControlExpectations = map[string][]string{
 // evaluateBatchControl decides whether a batch negative-control run behaved.
 func evaluateBatchControl(control string, invs []Invariant) (satisfied bool, detail string) {
 	want, known := batchControlExpectations[control]
-	return evaluateExpectedFailureSet(control, want, known, invs)
+	return evaluateExpectedFailureSet(control, BatchInvariants, want, known, invs)
 }
 
 // --- small pure helpers -------------------------------------------------------
@@ -764,7 +862,10 @@ func (o *batchOracle) deviceCommandCounts(ctx context.Context, tokens []string) 
 // A transient read error is treated as "not settled yet" and retried inside the
 // deadline. A timeout is NOT concluded as reached — it is a real undelivered or
 // unanswered command, and the classifier fails it.
-func (o *batchOracle) awaitBatchSettled(ctx context.Context, batchToken string, want int, cfg BatchConfig) (batchRows, bool) {
+// It returns everRead so a caller can tell "the batch created no rows" apart from
+// "this oracle never managed to read". They fold to the same zero value and mean
+// opposite things — one is a fan-out defect, the other is the harness being blind.
+func (o *batchOracle) awaitBatchSettled(ctx context.Context, batchToken string, want int, cfg BatchConfig) (rows batchRows, reached, everRead bool) {
 	deadline := time.Now().Add(cfg.Timeout)
 	var last batchRows
 	for {
@@ -772,17 +873,17 @@ func (o *batchOracle) awaitBatchSettled(ctx context.Context, batchToken string, 
 		if err != nil {
 			log.Warn().Err(err).Str("batch", batchToken).Msg("transient batch read while settling; retrying")
 		} else {
-			last = r
+			last, everRead = r, true
 			if r.Total == want && r.Successful == r.Total && r.Total > 0 {
-				return last, true
+				return last, true, everRead
 			}
 		}
 		if time.Now().After(deadline) {
-			return last, false
+			return last, false, everRead
 		}
 		select {
 		case <-ctx.Done():
-			return last, false
+			return last, false, everRead
 		case <-time.After(cfg.Poll):
 		}
 	}
@@ -792,11 +893,22 @@ func (o *batchOracle) awaitBatchSettled(ctx context.Context, batchToken string, 
 
 // BatchReport is the machine- and human-readable result of one fleet-write run.
 type BatchReport struct {
-	Seed       int64      `json:"seed"`
-	Tenant     string     `json:"tenant"`
-	StartedAt  time.Time  `json:"startedAt"`
-	FinishedAt time.Time  `json:"finishedAt"`
-	Drive      DriveStats `json:"drive"`
+	Seed        int64       `json:"seed"`
+	Tenant      string      `json:"tenant"`
+	StartedAt   time.Time   `json:"startedAt"`
+	FinishedAt  time.Time   `json:"finishedAt"`
+	Drive       DriveStats  `json:"drive"`
+	Disposition Disposition `json:"disposition"`
+	// Reason explains the disposition in one sentence — and for INCONCLUSIVE it is the
+	// whole point of the field: an operator reading a non-zero exit needs to know
+	// whether to hunt a defect or fix a cluster.
+	Reason string `json:"reason"`
+	// cannotMeasure accumulates every reason this run has no opinion. Unexported: it
+	// becomes Reason. Its existence is what gives this harness the third disposition
+	// its sibling was built with from the start — without it, a missing MQTT route, a
+	// dirty tenant and a genuine fleet-write defect all exit 1, and the gate step then
+	// annotates every one of them as "the oracle failed its own control".
+	cannotMeasure measurability
 
 	TargetDevices    int `json:"targetDevices"`
 	BystanderDevices int `json:"bystanderDevices"`
@@ -825,21 +937,28 @@ type BatchReport struct {
 	Invariants []Invariant `json:"invariants"`
 }
 
-// Passed reports whether every invariant held — or, for a control run, whether the
-// control flipped exactly the set it must. An empty invariant set is NOT a pass.
-func (r *BatchReport) Passed() bool {
-	if len(r.Invariants) == 0 {
-		return false
+// Passed is true only for a plain PASS. An INCONCLUSIVE run has NOT passed — it has
+// no opinion — so a caller that only asks this question gets the fail-closed answer.
+func (r *BatchReport) Passed() bool { return r.Disposition == DispositionPass }
+
+// ExitCode is the gate. THREE codes, matching the presence harness, because the
+// alternative is what this one shipped with first: every "could not measure" cause —
+// a missing MQTT route, a tenant that is not fresh, an unauthored vocabulary —
+// exiting 1 and being annotated as a fleet-write defect or a broken oracle.
+//
+//	0 — PASS
+//	1 — FAIL: a batch invariant was violated (or, in a control run, the control did
+//	    not flip exactly the set it must)
+//	2 — INCONCLUSIVE: this run could not measure the fan-out. Not a verdict.
+func (r *BatchReport) ExitCode() int {
+	switch r.Disposition {
+	case DispositionPass:
+		return 0
+	case DispositionFail:
+		return 1
+	default:
+		return 2
 	}
-	if r.Control != "" {
-		return r.ControlSatisfied
-	}
-	for _, inv := range r.Invariants {
-		if !inv.Passed {
-			return false
-		}
-	}
-	return true
 }
 
 // finish folds the invariants into the report's verdict, rewriting it for a control
@@ -849,10 +968,20 @@ func (r *BatchReport) Passed() bool {
 func (r *BatchReport) finish(invs []Invariant, control string) {
 	r.Invariants = invs
 	r.Control = control
-	if control == "" {
+	r.Disposition, r.Reason = decideDisposition(r.cannotMeasure, BatchInvariants, invs)
+	if control == "" || r.Disposition == DispositionInconclusive {
+		// An unevaluated control must not leave a verdict behind, and an INCONCLUSIVE
+		// run is one a control cannot rescue: a perturbation nobody could observe proves
+		// nothing about the oracle either.
+		r.ControlSatisfied, r.ControlDetail = false, ""
 		return
 	}
 	r.ControlSatisfied, r.ControlDetail = evaluateBatchControl(control, invs)
+	if r.ControlSatisfied {
+		r.Disposition, r.Reason = DispositionPass, r.ControlDetail
+	} else {
+		r.Disposition, r.Reason = DispositionFail, r.ControlDetail
+	}
 }
 
 // JSON renders the report for a CI artifact.
@@ -861,11 +990,9 @@ func (r *BatchReport) JSON() ([]byte, error) { return json.MarshalIndent(r, "", 
 // Human renders a terse operator summary.
 func (r *BatchReport) Human() string {
 	var b strings.Builder
-	verdict := "FAIL"
-	if r.Passed() {
-		verdict = "PASS"
-	}
-	fmt.Fprintf(&b, "batch-fanout %s (seed %d, tenant %s)\n", verdict, r.Seed, r.Tenant)
+	fmt.Fprintf(&b, "batch-fanout %s (seed %d, tenant %s) — exit %d [0=pass 1=fleet-write defect 2=could not measure]\n",
+		r.Disposition, r.Seed, r.Tenant, r.ExitCode())
+	fmt.Fprintf(&b, "  %s\n", r.Reason)
 	fmt.Fprintf(&b, "  drive: %d bg devices, achieved %.1f ev/s over %.0fs — accepted %d, shed %d, failed %d\n",
 		r.Drive.Devices, r.Drive.AchievedRatePS, r.Drive.HoldSeconds, r.Drive.Accepted, r.Drive.Shed, r.Drive.Failed)
 	fmt.Fprintf(&b, "  batch %s: resolved %d, accepted %d, statuses %s (settle confirmed: %v); %d target, %d bystander, %d poison, %d concurrent replay(s)\n",
@@ -875,11 +1002,18 @@ func (r *BatchReport) Human() string {
 	fmt.Fprintf(&b, "  mqtt receive (NON-authoritative evidence): %d raw / %d distinct, %d blind device(s)\n",
 		r.Receiver.TotalRaw, r.Receiver.TotalDistinct, len(r.Receiver.Blind))
 	if r.Control != "" {
-		mark := "VIOLATED"
-		if r.ControlSatisfied {
-			mark = "satisfied"
+		// An UNEVALUATED control prints that it was not judged, never "VIOLATED". A
+		// control cannot be violated by a run that could not observe its perturbation,
+		// and printing a verdict beside an INCONCLUSIVE disposition gives the reader two
+		// answers to one question.
+		switch {
+		case r.ControlDetail == "":
+			fmt.Fprintf(&b, "  control %s: NOT EVALUATED — this run could not measure, so the control proves nothing either\n", r.Control)
+		case r.ControlSatisfied:
+			fmt.Fprintf(&b, "  control %s: satisfied — %s\n", r.Control, r.ControlDetail)
+		default:
+			fmt.Fprintf(&b, "  control %s: VIOLATED — %s\n", r.Control, r.ControlDetail)
 		}
-		fmt.Fprintf(&b, "  control %s: %s — %s\n", r.Control, mark, r.ControlDetail)
 	}
 	for _, inv := range r.Invariants {
 		mark := "FAIL"
@@ -1051,18 +1185,26 @@ func RunBatch(ctx context.Context, hs *sim.Handshake, cfg BatchConfig) (*BatchRe
 	defer receiver.Close()
 
 	// 🔴 THE RECEIVERS CONNECT BEFORE THE BATCH FIRES, and the ordering is load-bearing
-	// rather than tidy. A bootstrapped cluster runs broker-asserted presence, so a
-	// device that has never connected is one the platform may believe is absent — and a
-	// command for an absent device is WITHHELD rather than dispatched. Firing first
-	// would measure the hold path while claiming to measure fan-out.
+	// rather than tidy — though not for the reason an earlier comment here gave.
+	//
+	// It is NOT the hold gate: a device the platform has never heard of has no state
+	// row, and the gate dispatches rather than holds when it knows nothing. It is
+	// delivery. A command reaches an MQTT device only over the live path — it is
+	// published over NATS, never enters the broker's message store, and a persistent
+	// subscription's durable consumer never sees it. Firing the batch before the
+	// receivers exist would publish every command to a topic nobody is listening on,
+	// and the whole cohort would sit at SENT while the fan-out itself was perfectly
+	// correct. That is the deaf-device control's mechanism, applied by accident to
+	// every target at once.
 	//
 	// The control leaves the LAST target deaf on purpose: its row is still created, so
 	// the fan-out invariant holds, and nothing ever answers it, so the round trip
 	// cannot complete. One invariant, deterministically, with no privileged access.
 	connect := targets
-	var deaf string
+	var deaf, obsDeaf string
 	if cfg.Control == ControlDeafDevice {
 		deaf = targets[len(targets)-1].Token
+		obsDeaf = deaf
 		connect = targets[:len(targets)-1]
 		log.Warn().Str("control", cfg.Control).Str("device", deaf).
 			Msg("negative control armed: one target device is left without a receiver")
@@ -1126,26 +1268,20 @@ func RunBatch(ctx context.Context, hs *sim.Handshake, cfg BatchConfig) (*BatchRe
 	}
 
 	if rec.Created {
-		rows, reached := oracle.awaitBatchSettled(ctx, rec.Token, rec.Accepted, cfg)
+		rows, reached, everRead := oracle.awaitBatchSettled(ctx, rec.Token, rec.Accepted, cfg)
 		obs.FanoutRows, obs.FanoutTotal = rows.Devices, rows.Total
 		obs.Statuses, obs.Successful, obs.SettleReached = rows.Statuses, rows.Successful, reached
+		// 🔴 A READ THAT NEVER SUCCEEDED IS NOT "THE BATCH CREATED NO ROWS". The zero
+		// value of a failed poll folds into an empty row set, which the classifier
+		// correctly reads as a fan-out that produced nothing — and would print exit 1,
+		// "the batch created no command rows", for a command-delivery GraphQL outage.
+		// The sibling command harness threads exactly this flag out of the identical
+		// loop and calls it oracleReadOK; this one did not.
+		if !everRead {
+			report.cannotMeasure.cannot("the batch's command rows could not be read even once within %s — command-delivery's query was unreachable, "+
+				"which is not evidence that the fan-out created nothing", cfg.Timeout)
+		}
 	}
-
-	// --- bystanders ---------------------------------------------------------
-	//
-	// Guarded before it is trusted: the command query answers an UNRESOLVABLE device
-	// token with an empty set too, so a zero that really means "no such device" would
-	// be a clean bill of health for the wrong reason.
-	if err := requireDevicesExist(ctx, rt, bystanderTokens); err != nil {
-		stopDrive()
-		return nil, fmt.Errorf("bystander existence check: %w", err)
-	}
-	counts, err := oracle.deviceCommandCounts(ctx, bystanderTokens)
-	if err != nil {
-		stopDrive()
-		return nil, fmt.Errorf("bystander command read: %w", err)
-	}
-	obs.BystanderCounts = counts
 
 	// --- the concurrent replay ----------------------------------------------
 	if rec.Created {
@@ -1220,6 +1356,28 @@ func RunBatch(ctx context.Context, hs *sim.Handshake, cfg BatchConfig) (*BatchRe
 		obs.TargetDelta[tok] = afterCounts[tok] - before[tok]
 	}
 
+	// --- bystanders, read LAST ----------------------------------------------
+	//
+	// 🔴 THE OVER-RESOLUTION ORACLE HAS TO SEE EVERY FLEET WRITE, AND IT USED TO SEE
+	// ONE OF THREE. Reading the bystanders straight after the first fan-out left the 8
+	// concurrent replays and the refused batch entirely outside its window — so a
+	// replay that over-resolved, or a refusal that wrote rows onto a device it never
+	// named, was invisible to the invariant whose whole job is catching exactly that.
+	//
+	// Guarded before it is trusted: the command query answers an UNRESOLVABLE device
+	// token with an empty set too, so a zero that really means "no such device" would
+	// be a clean bill of health for the wrong reason.
+	if err := requireDevicesExist(ctx, rt, bystanderTokens); err != nil {
+		stopDrive()
+		return nil, fmt.Errorf("bystander existence check: %w", err)
+	}
+	counts, err := oracle.deviceCommandCounts(ctx, bystanderTokens)
+	if err != nil {
+		stopDrive()
+		return nil, fmt.Errorf("bystander command read: %w", err)
+	}
+	obs.BystanderCounts = counts
+
 	stopDrive()
 	end := time.Now()
 	rt.Stats.Freeze(end)
@@ -1229,6 +1387,29 @@ func RunBatch(ctx context.Context, hs *sim.Handshake, cfg BatchConfig) (*BatchRe
 	}
 
 	receiver.Close()
+	receiverReport := receiver.Report()
+	obs.Receipts = make(map[string]int, len(receiverReport.Devices))
+	for tok, dr := range receiverReport.Devices {
+		obs.Receipts[tok] = dr.Distinct
+	}
+	obs.Misrouted = receiverReport.TotalMisrouted
+	obs.Deaf = obsDeaf
+
+	// The same two driver signals the presence harness reads, and for the same reason:
+	// a shed run is at the tenant's ingest ceiling, which presence transitions share —
+	// and a target the platform believes absent has its command HELD, which fails the
+	// round trip for a governance reason rather than a delivery one. A large FAILED
+	// share is the shared port-forward dropping, which is a tunnel fault.
+	if snap.Shed > 0 {
+		report.cannotMeasure.cannot("the background fleet was shed %d time(s) at the per-tenant ingest ceiling. Presence transitions "+
+			"share that ceiling, and a target the platform believes absent has its command HELD rather than dispatched — so a failed "+
+			"round trip here cannot be told apart from a governed one", snap.Shed)
+	}
+	if snap.Failed > 0 && snap.Failed*10 >= snap.Emitted {
+		report.cannotMeasure.cannot("%d of %d background emit(s) failed outright (not shed — real transport errors), so the contention "+
+			"this verdict rests on was not applied. At this gate the usual cause is the shared device-plane port-forward dropping", snap.Failed, snap.Failed+snap.Emitted)
+	}
+
 	report.FinishedAt = end.UTC()
 	report.Drive = DriveStats{
 		Devices:        len(background),
@@ -1249,7 +1430,7 @@ func RunBatch(ctx context.Context, hs *sim.Handshake, cfg BatchConfig) (*BatchRe
 	}
 	sort.Strings(report.RefusedDevices)
 	report.RefusedRecorded = obs.RefusedRecordSeen
-	report.Receiver = receiver.Report()
+	report.Receiver = receiverReport
 	report.finish(classifyBatch(obs, targetTokens, bystanderTokens, cfg, snap.Emitted), cfg.Control)
 	return report, nil
 }

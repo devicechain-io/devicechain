@@ -19,7 +19,9 @@
 #            an authored raiseAlarm rule; gate on the durable CLEARED+MAJOR alarm.
 #   - L2d-3 command round-trip: authored threshold->sendCommand rule enqueues a
 #            command that a real MQTT cmdreceiver cohort answers; gate on durable
-#            SUCCESSFUL. The ONLY oracle that dials the NATS MQTT gateway -- reached at
+#            SUCCESSFUL. The FIRST oracle that dials the NATS MQTT gateway (L4 and
+#            L2d-4 below dial it too, and run after this one, so its route pre-check
+#            covers them) -- reached at
 #            its default ssl://127.0.0.1:1883 via the local MQTT NodePort (dcctl's
 #            nats_mqtt_node_port, which the kind 1883->31883 host map lands on).
 #   - L4  -- broker-asserted MQTT presence under churn: four cohorts (steady, churn,
@@ -37,7 +39,24 @@
 #   Both L4 and L2d-4 run their NEGATIVE CONTROL FIRST, on the same reasoning as the
 #   instrument check: an oracle that has never been shown to fail is indistinguishable
 #   from one that cannot, and each control must flip EXACTLY its declared invariant set
-#   -- "at least" would be satisfied by an oracle that failed everything.
+#   -- "at least" would be satisfied by an oracle that failed everything, and "only"
+#   would be failed by a healthy one whose other invariants legitimately flip too.
+#
+# WHAT THIS GATE STILL DOES NOT RUN, stated here rather than left to be discovered by
+# counting binaries, because the argument for wiring the self-test in applies to it:
+#   - `dc-loadtest-monitor` (cmd/loadtest-monitor) is built by no workflow and run by
+#     no script. It is the ADR-064 live safety monitor -- continuous per-device
+#     occurred_time monotonicity and bounded-cohort isolation, which no layer here
+#     asserts -- and it is shaped to run ALONGSIDE another layer rather than as its own
+#     step, which is why it was not simply appended. It compiles and unit-tests clean,
+#     which is exactly the state the self-test was in.
+#   - the two oldest layers, L2d-1 detection and L2d-3 command, have no instrument
+#     check of their own: 9 gated invariants between them that have never been shown
+#     able to fail on a cluster.
+#   - each new oracle ships ONE negative control, so 9 of the 13 invariants L4 and
+#     L2d-4 add have not been demonstrated either. The two cheapest to close are a
+#     non-departing departed device (presence) and an out-of-band command-row delete
+#     (batch, mirroring the self-test's perturber).
 #   - L3  -- ADR-063 tiered contention (the acceptance test for preferential
 #            shedding): TWO probe tenants (gold + best-effort) at the same load,
 #            first at floor 0 (negative control -- neither may shed), then at an
@@ -144,7 +163,14 @@ jobs:
     # Pull path is ~4 min end to end (iter 1 measured 120s bring-up). The --build
     # path additionally ko-builds ~14 service images + the frontend on 2 cores, so
     # allow more headroom; a genuine hang still trips the timeout well before the cap.
-    timeout-minutes: 45
+    # Raised from 45 for the four probe runs added with L4/L2d-4. The budget is not a
+    # guess: the batch NEGATIVE CONTROL burns its full settle timeout by construction
+    # (its deaf target can never reach a terminal status, so the wait always runs out),
+    # and presence applies its flip timeout to seven waits in the worst case. A job that
+    # overruns is CANCELLED rather than failed, and `if: failure()` is false for a
+    # cancelled job — so the diagnostics step would not run and every summary would read
+    # "no report produced", which is the least attributable red this workflow can emit.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -443,18 +469,35 @@ jobs:
             >"$RUNNER_TEMP/pf-tsdb.log" 2>&1 &
           pf_pid=$!
           echo "pf_pid=$pf_pid" >> "$GITHUB_OUTPUT"
+          # 🔴 THE LIVENESS CHECK COMES FIRST, AND THE PROBE NEEDS A POD-SIDE ROUND TRIP.
+          # An earlier version did both the other way round, and the pair was a check
+          # that could not fail: kubectl binds its LOCAL listener before any pod-side
+          # stream exists, so a bare TCP connect proves only that something is listening
+          # on 5432 -- including something that was already there when kubectl exited
+          # with "address already in use". The self-test would then talk to whatever
+          # that was and report a database error next to a green port-forward step.
+          # The sibling ingress forward 50 lines up says exactly this and uses curl.
+          # A MISSING TOOL IS NOT A BROKEN TUNNEL. Without this the loop below would
+          # simply never succeed and the step would report "the forward never became
+          # reachable" -- sending the reader at the cluster for a runner-image change.
+          if ! command -v pg_isready >/dev/null 2>&1; then
+            echo "::error::pg_isready is not on PATH, so this step cannot prove the forward carries a real Postgres round trip. Install postgresql-client; do NOT weaken the probe to a bare TCP connect, which succeeds against any listener."
+            kill "$pf_pid" 2>/dev/null || true
+            exit 1
+          fi
+
           ready=0
           for _ in $(seq 1 30); do
-            # A refused connection means the tunnel is not up yet; anything else (an
-            # immediate close, a protocol error) means the socket is being served.
-            if timeout 2 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/5432' 2>/dev/null; then
-              ready=1
-              break
-            fi
             if ! kill -0 "$pf_pid" 2>/dev/null; then
-              echo "::error::event-store port-forward exited before becoming reachable"
+              echo "::error::event-store port-forward exited before becoming reachable -- most likely 5432 was already bound. Its log:"
               cat "$RUNNER_TEMP/pf-tsdb.log" || true
               exit 1
+            fi
+            # A Postgres startup packet the server ANSWERS proves the stream is
+            # established end to end; a local bind with nothing behind it cannot reply.
+            if timeout 5 pg_isready -h 127.0.0.1 -p 5432 -q 2>/dev/null; then
+              ready=1
+              break
             fi
             sleep 2
           done
@@ -594,7 +637,7 @@ jobs:
       # ---------------------------------------------------------------------
       # L2d-3 -- command round-trip over real MQTT.
       # ---------------------------------------------------------------------
-      # This is the one oracle that dials the NATS MQTT gateway (a cmdreceiver cohort
+      # This is the FIRST oracle that dials the NATS MQTT gateway (a cmdreceiver cohort
       # subscribes, and a dispatched command must reach durable SUCCESSFUL through
       # enqueue -> 30s sweep -> dispatch -> MQTT -> device respond). It needs NO
       # port-forward: dcctl exposes MQTT as a NodePort on a local context, which the
@@ -762,6 +805,11 @@ jobs:
             --control deaf-device \
             --target-devices 8 --bystander-devices 3 --poison-devices 1 --replays 6 \
             --bg-devices 30 --bg-interval 500ms --min-accepted 300 \
+            `# The deaf target can never reach a terminal status, so this wait ALWAYS` \
+            `# runs out in full -- it is dead time by construction, and the only lever` \
+            `# on it is this flag. Long enough for the 30s dispatch sweep plus a round` \
+            `# trip on a loaded runner, and no longer.` \
+            --timeout 90s --settle 5s \
             --report "$RUNNER_TEMP/batch-control-report.json"; then
             echo "::error::The batch oracle FAILED ITS OWN CONTROL: a target device with no receiver did not flip exactly the round-trip invariant. Every fleet-write verdict below would be a statement about nothing."
             exit 1
@@ -875,7 +923,7 @@ jobs:
           if [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null && [ -z "$pf_errors" ]; then
             echo "shared device-plane port-forward survived the floor-0 probes cleanly (pid $PF_PID)."
           else
-            echo "::warning::shared device-plane port-forward did not survive cleanly -- any floor-0 probe red (self-test, L1, detection, command, presence, batch, L3-neg) may be a kubectl port-forward drop, not a platform correctness failure. For the presence runs specifically, a dropped forward shows up as SHED/failed background emits, which the harness reports as INCONCLUSIVE (exit 2) rather than as a presence defect. Log tail:"
+            echo "::warning::shared device-plane port-forward did not survive cleanly -- any floor-0 probe red (self-test, L1, detection, command, presence, batch, L3-neg) may be a kubectl port-forward drop, not a platform correctness failure. A dropped tunnel produces FAILED emits, NOT shed ones (shed is a governed 429 at the ingest ceiling and is a different signal); the presence and batch harnesses treat a large failed share as inconclusive for exactly this reason, so prefer exit 2 over exit 1 as the sign that this is what happened. Log tail:"
             tail -30 "$RUNNER_TEMP/pf-eventsources.log" 2>/dev/null || true
           fi
           kill "$PF_PID" 2>/dev/null || true
@@ -1112,7 +1160,8 @@ jobs:
                 batchAccepted:      .batchAccepted,
                 concurrentReplays:  .concurrentReplays,
                 refusedBatchCode:   .refusedBatchCode,
-                passed:             verdict
+                disposition:        .disposition,
+                passed:             (.disposition == "PASS")
               } end),
               contentionFloor1: ($pos | if . == null then null else {
                 goldAccepted:  .gold.Accepted,
@@ -1131,24 +1180,36 @@ jobs:
             echo ""
             echo "| probe | achieved ev/s | accepted | persisted | shed | verdict |"
             echo "| --- | ---: | ---: | ---: | ---: | :---: |"
+            # 🔴 The verdict column takes a STRING, not a boolean, because two probes
+            # here have three states. Folding INCONCLUSIVE into FAIL in the one artifact
+            # a human reads at a glance would undo the whole reason those probes carry a
+            # third disposition -- "we could not measure this" would record identically
+            # to "this is broken", months later, to someone who was not here.
             jq -r '
               def row($name; $rate; $acc; $per; $shed; $ok):
-                "| \($name) | \($rate // "-") | \($acc // "-") | \($per // "-") | \($shed // "-") | \(if $ok == true then "PASS" elif $ok == false then "FAIL" else "-" end) |";
+                "| \($name) | \($rate // "-") | \($acc // "-") | \($per // "-") | \($shed // "-") | \($ok // "-") |";
+              def verdictOf($b): if $b == true then "PASS" elif $b == false then "FAIL" else null end;
               [ row("L1 aggregate";
                     (.l1.achievedRatePerSec | if . then (.*10|round/10) else null end);
-                    .l1.accepted; .l1.persisted; null; .l1.passed),
+                    .l1.accepted; .l1.persisted; null; verdictOf(.l1.passed)),
                 row("detection";
                     (.detection.achievedRatePerSec | if . then (.*10|round/10) else null end);
-                    .detection.accepted; null; null; .detection.passed),
+                    .detection.accepted; null; null; verdictOf(.detection.passed)),
                 row("command round-trip";
                     (.command.achievedRatePerSec | if . then (.*10|round/10) else null end);
-                    .command.accepted; null; null; .command.passed),
+                    .command.accepted; null; null; verdictOf(.command.passed)),
+                row("L4 presence";
+                    (.presence.achievedRatePerSec | if . then (.*10|round/10) else null end);
+                    .presence.accepted; null; .presence.shed; .presence.disposition),
+                row("L2d-4 fleet write";
+                    (.batch.achievedRatePerSec | if . then (.*10|round/10) else null end);
+                    .batch.accepted; null; null; .batch.disposition),
                 row("L3 floor1 gold";
                     null; .contentionFloor1.goldAccepted; .contentionFloor1.goldPersisted;
-                    .contentionFloor1.goldShed; .contentionFloor1.passed),
+                    .contentionFloor1.goldShed; verdictOf(.contentionFloor1.passed)),
                 row("L3 floor1 best-effort";
                     null; .contentionFloor1.shedAccepted; .contentionFloor1.shedPersisted;
-                    .contentionFloor1.shedShed; .contentionFloor1.passed)
+                    .contentionFloor1.shedShed; verdictOf(.contentionFloor1.passed))
               ] | .[]' "$baseline"
             echo ""
             if [ "$BUILD" = "true" ]; then

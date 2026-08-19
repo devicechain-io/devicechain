@@ -76,6 +76,14 @@ func main() {
 		"background load floor for the verdict to count (0 = default)")
 	pageSize := flag.Int("page-size", envIntOr("DC_LOADTEST_PAGE_SIZE", 0),
 		"assertedDeviceStates page size — kept far below the cohort on purpose, so the cursor is genuinely walked (0 = default)")
+	tapTimeout := flag.Duration("tap-timeout", envDurationOr("DC_LOADTEST_TAP_TIMEOUT", 0),
+		"how long to wait, PRE-LOAD and on an idle tenant, for the first device's ASSERTED row before declaring the tap not running (0 = default)")
+	flipTimeout := flag.Duration("flip-timeout", envDurationOr("DC_LOADTEST_FLIP_TIMEOUT", 0),
+		"how long to wait for one churn transition to appear in the projection (0 = default). Applied to 2 waits per round, so it dominates the run's worst case")
+	tailHold := flag.Duration("tail-hold", envDurationOr("DC_LOADTEST_TAIL_HOLD", 0),
+		"how long to keep watching the steady cohort after the last churn round (0 = default)")
+	settle := flag.Duration("settle", envDurationOr("DC_LOADTEST_SETTLE", 0),
+		"how long to hold with the load off before the authoritative reads (0 = default)")
 	control := flag.String("control", "",
 		"run a negative control instead of a plain pass: \""+loadtest.ControlDropSteadyDevice+"\" disconnects one steady device and requires the run to fail on EXACTLY the invariants that departure must flip")
 	reportPath := flag.String("report", envOr("DC_LOADTEST_REPORT", ""),
@@ -102,6 +110,10 @@ func main() {
 		Concurrency:        *concurrency,
 		MinAccepted:        *minAccepted,
 		PageSize:           *pageSize,
+		TapTimeout:         *tapTimeout,
+		FlipTimeout:        *flipTimeout,
+		TailHold:           *tailHold,
+		Settle:             *settle,
 		MqttBroker:         *mqttBroker,
 		MqttTLSInsecure:    *mqttInsecure,
 		Control:            *control,

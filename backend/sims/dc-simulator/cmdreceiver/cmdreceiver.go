@@ -112,10 +112,23 @@ type deviceState struct {
 	raw          int            // total command frames received, INCLUDING redeliveries
 	distinct     map[string]int // command token → times seen (dedup key)
 	malformed    int            // frames that did not decode as a command envelope
-	connLosses   int            // OnConnectionLost callbacks (a blip; auto-reconnect recovers)
-	responded    int            // response publishes that were ACKED by the broker
-	respondErr   error          // first response-publish error, if any
+	// misrouted counts frames addressed to a DIFFERENT device. Kept apart from
+	// malformed because they are opposite diagnoses: a malformed frame is a decoding
+	// problem on this connection, while a misrouted one is a well-formed command that
+	// reached the wrong subscriber — a dispatch defect, and the more serious of the two.
+	misrouted        int
+	firstMisroutedTo string
+	connLosses       int   // OnConnectionLost callbacks (a blip; auto-reconnect recovers)
+	responded        int   // response publishes that were ACKED by the broker
+	respondErr       error // first response-publish error, if any
 }
+
+// newClient builds the paho client for one device. It is a FIELD rather than a direct
+// call to mqtt.NewClient so the attach path can be driven without a broker — and the
+// attach path is where the claim/release accounting lives, which is precisely the part
+// that cannot be checked by calling releaseDevice directly. A mutation that stranded
+// the claim on a failed connect survived every test until this seam existed.
+type clientFactory func(*mqtt.ClientOptions) mqtt.Client
 
 // Receiver manages a bounded cohort of per-device MQTT connections and their
 // receive accounting.
@@ -130,6 +143,11 @@ type Receiver struct {
 	// test can reach the timeout branch without spending the real wait on it.
 	disconnectWait time.Duration
 	disconnectPoll time.Duration
+
+	// newClient builds each device's paho client. Defaulted in New; substitutable so a
+	// test can drive the attach path — and therefore the claim/release accounting on
+	// it — with no broker.
+	newClient clientFactory
 
 	mu      sync.Mutex
 	devices map[string]*deviceState
@@ -148,6 +166,7 @@ func New(instanceId, tenant, broker string, tlsConfig *tls.Config) *Receiver {
 		devices:        make(map[string]*deviceState),
 		disconnectWait: disconnectWait,
 		disconnectPoll: disconnectPoll,
+		newClient:      mqtt.NewClient,
 	}
 }
 
@@ -218,10 +237,25 @@ func (r *Receiver) Subscribe(ctx context.Context, deviceToken, credentialId stri
 	opts.OnConnect = r.onConnect(ds)
 	opts.OnConnectionLost = r.onConnectionLost(ds)
 
-	ds.client = mqtt.NewClient(opts)
+	ds.client = r.newClient(opts)
 	if err := r.claimDevice(deviceToken, ds); err != nil {
 		return err
 	}
+
+	// 🔴 THE CLAIM IS TAKEN BEFORE THE CONNECT AND MUST BE RELEASED IF THE CONNECT
+	// FAILS. It has to be taken first — the OnConnect handler fires on the paho
+	// goroutine and needs the registration already in place — but every path below can
+	// fail with nothing connected, and a claim left behind on a failed attempt turns
+	// the NEXT Subscribe for that token into "device is already connected", which is
+	// both false and a diagnosis pointing at the wrong thing entirely. A harness that
+	// reconnects (the presence churn cohort does, R times per run) would abort mid-run
+	// naming a session collision that never happened.
+	claimed := true
+	defer func() {
+		if claimed {
+			r.releaseDevice(deviceToken, ds)
+		}
+	}()
 
 	tok := ds.client.Connect()
 	if !tok.WaitTimeout(connectTimeout) {
@@ -238,11 +272,24 @@ func (r *Receiver) Subscribe(ctx context.Context, deviceToken, credentialId stri
 		if err != nil {
 			return fmt.Errorf("device %q: subscribe to %q failed: %w", deviceToken, ds.commandTopic, err)
 		}
+		claimed = false // the device is genuinely attached; the claim stands
 		return nil
 	case <-time.After(subscribeTimeout):
 		return fmt.Errorf("device %q: subscribe to %q not acked within %s (blind)", deviceToken, ds.commandTopic, subscribeTimeout)
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+// releaseDevice undoes a claim whose connect or subscribe never completed. It removes
+// the entry ONLY if it is still the one this attempt registered: a concurrent
+// Subscribe that legitimately took the slot after this one gave up must not have its
+// registration deleted by the loser's cleanup.
+func (r *Receiver) releaseDevice(deviceToken string, ds *deviceState) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if cur, ok := r.devices[deviceToken]; ok && cur == ds {
+		delete(r.devices, deviceToken)
 	}
 }
 
@@ -342,6 +389,39 @@ func (r *Receiver) recordFrame(ds *deviceState, payload []byte) (token string, o
 		ds.mu.Unlock()
 		return "", false
 	}
+
+	// 🔴 THE ENVELOPE SAYS WHO IT IS FOR, AND UNTIL NOW NOTHING READ IT.
+	//
+	// A device's JWT scopes SUBSCRIBE to its own command topic but grants PUBLISH on
+	// the TENANT-WIDE command-responses subject, and the response carries only a
+	// command token — no device identity — so command-delivery marks whatever token it
+	// is handed. A receiver that answers a frame addressed to somebody else is
+	// therefore not merely untidy: it stamps a terminal state on another device's
+	// command, and the platform has no way to tell that the wrong device answered.
+	//
+	// That is exactly the failure a fleet-write oracle exists to catch. If dispatch
+	// mis-routes device A's envelope onto device B's topic, B answering it drives A's
+	// row to SUCCESSFUL while A never actuates — and every durable-state invariant
+	// reads green. Refusing here is what keeps the receiver an honest witness: the
+	// misrouted frame is counted and NOT answered, so the real device's command stays
+	// visibly unfinished instead of being closed by a bystander.
+	//
+	// A frame carrying no deviceToken at all is accepted, deliberately. The dispatcher
+	// always sets it, but an empty field is an ABSENT claim about addressing rather
+	// than a wrong one, and refusing on absence would make this receiver unusable
+	// against any future transport that omits it.
+	if env.DeviceToken != "" && env.DeviceToken != ds.token {
+		ds.mu.Lock()
+		ds.misrouted++
+		if ds.firstMisroutedTo == "" {
+			ds.firstMisroutedTo = env.DeviceToken
+		}
+		ds.mu.Unlock()
+		log.Warn().Str("device", ds.token).Str("addressedTo", env.DeviceToken).Str("command", env.Token).
+			Msg("received a command addressed to another device; NOT answering it")
+		return "", false
+	}
+
 	ds.mu.Lock()
 	ds.raw++
 	ds.distinct[env.Token]++
@@ -498,9 +578,16 @@ type DeviceReport struct {
 	Raw        int    `json:"rawReceived"`
 	Distinct   int    `json:"distinctReceived"`
 	Malformed  int    `json:"malformed"`
-	ConnLosses int    `json:"connectionLosses"`
-	Responded  int    `json:"responded"`
-	RespondErr string `json:"respondError,omitempty"`
+	// Misrouted counts commands addressed to a DIFFERENT device that arrived on this
+	// device's subscription, and MisroutedTo names the first such addressee. Any
+	// non-zero value here is a dispatch defect, not a receiver one — and it is the one
+	// piece of evidence that can tell "this device answered" apart from "some device
+	// in the tenant answered", since a command response carries no device identity.
+	Misrouted   int    `json:"misrouted,omitempty"`
+	MisroutedTo string `json:"misroutedTo,omitempty"`
+	ConnLosses  int    `json:"connectionLosses"`
+	Responded   int    `json:"responded"`
+	RespondErr  string `json:"respondError,omitempty"`
 	// Disconnected separates a deliberate departure from a device that never
 	// attached: both stop receiving, and only one of them is a problem.
 	Disconnected bool `json:"disconnected,omitempty"`
@@ -514,7 +601,11 @@ type Report struct {
 	TotalRaw       int                     `json:"totalRawReceived"`
 	TotalDistinct  int                     `json:"totalDistinctReceived"`
 	TotalResponded int                     `json:"totalResponded"`
-	Blind          []string                `json:"blindDevices,omitempty"` // subscribed==false
+	// TotalMisrouted is the cohort-wide count of commands that reached the wrong
+	// device. A harness gates on this being zero: a single misroute means some
+	// device's durable SUCCESSFUL was written by a device that is not it.
+	TotalMisrouted int      `json:"totalMisrouted"`
+	Blind          []string `json:"blindDevices,omitempty"` // subscribed==false
 }
 
 // Report snapshots the cohort's receive evidence.
@@ -530,6 +621,8 @@ func (r *Receiver) Report() Report {
 			Raw:          ds.raw,
 			Distinct:     len(ds.distinct),
 			Malformed:    ds.malformed,
+			Misrouted:    ds.misrouted,
+			MisroutedTo:  ds.firstMisroutedTo,
 			ConnLosses:   ds.connLosses,
 			Responded:    ds.responded,
 			Disconnected: ds.disconnected,
@@ -541,6 +634,7 @@ func (r *Receiver) Report() Report {
 		ds.mu.Unlock()
 		rep.Devices[tok] = dr
 		rep.TotalRaw += dr.Raw
+		rep.TotalMisrouted += dr.Misrouted
 		rep.TotalDistinct += dr.Distinct
 		rep.TotalResponded += dr.Responded
 		if !dr.Subscribed {

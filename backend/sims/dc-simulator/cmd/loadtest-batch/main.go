@@ -15,8 +15,18 @@
 // GraphQL, and the NATS MQTT gateway (port-forward dc-nats:1883, pass --mqtt-broker)
 // for the devices that answer their commands.
 //
-// Exit 0 when every invariant held — or, with --control, when the control flipped
-// exactly the invariants it must. Exit 1 otherwise.
+// 🔴 ITS EXIT CODE HAS THREE VALUES, NOT TWO — the same three its sibling presence
+// binary uses, and for the same reason:
+//
+//	0  every invariant held (or, with --control, the control flipped exactly the
+//	   invariants it must)
+//	1  a fleet-write invariant was violated — a real finding
+//	2  the run COULD NOT MEASURE the fan-out, and has no opinion. A tenant that was
+//	   not fresh, an unreachable MQTT gateway, a command-delivery query that never
+//	   answered, or a background fleet shed at the per-tenant ingest ceiling — which
+//	   presence transitions share, and a target the platform believes absent has its
+//	   command HELD rather than dispatched. Reporting any of those as a fleet-write
+//	   defect sends someone hunting a bug in a cluster that was misconfigured.
 package main
 
 import (
@@ -34,6 +44,9 @@ import (
 	"github.com/devicechain-io/dc-simulator/loadtest"
 	"github.com/devicechain-io/dc-simulator/sim"
 )
+
+// exitCouldNotMeasure is what a run that never produced a verdict exits with.
+const exitCouldNotMeasure = 2
 
 func main() {
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
@@ -61,6 +74,10 @@ func main() {
 		"max background emits in flight per tick (0 derives it from the device count)")
 	minAccepted := flag.Int64("min-accepted", int64(envIntOr("DC_LOADTEST_MIN_ACCEPTED", 0)),
 		"background load floor for the verdict to count (0 = default)")
+	timeout := flag.Duration("timeout", envDurationOr("DC_LOADTEST_BATCH_TIMEOUT", 0),
+		"how long to wait for every command row to reach its terminal state (0 = default). The deaf-device CONTROL always runs this out in full, since its row can never finish — so a control run costs exactly this much wall clock")
+	settle := flag.Duration("settle", envDurationOr("DC_LOADTEST_BATCH_SETTLE", 0),
+		"how long to hold after the refused batch before the delta is re-read (0 = default)")
 	control := flag.String("control", "",
 		"run a negative control instead of a plain pass: \""+loadtest.ControlDeafDevice+"\" leaves one target without a receiver and requires the run to fail on EXACTLY the round-trip invariant")
 	reportPath := flag.String("report", envOr("DC_LOADTEST_REPORT", ""),
@@ -86,6 +103,8 @@ func main() {
 		BackgroundInterval: *bgInterval,
 		Concurrency:        *concurrency,
 		MinAccepted:        *minAccepted,
+		Timeout:            *timeout,
+		Settle:             *settle,
 		MqttBroker:         *mqttBroker,
 		MqttTLSInsecure:    *mqttInsecure,
 		Control:            *control,
@@ -99,7 +118,11 @@ func main() {
 
 	report, err := loadtest.RunBatch(ctx, hs, cfg)
 	if err != nil {
-		log.Fatal().Err(err).Msg("batch run failed")
+		// A harness that could not complete a run has not found a fleet-write defect,
+		// and saying so as though it had is the same mistake as reporting a shed
+		// command as a lost one.
+		log.Error().Err(err).Msgf("the batch harness could not complete a run, so it has no verdict (exit %d)", exitCouldNotMeasure)
+		os.Exit(exitCouldNotMeasure)
 	}
 
 	if *reportPath != "" {
@@ -114,10 +137,7 @@ func main() {
 	}
 
 	os.Stderr.WriteString("\n" + report.Human() + "\n")
-
-	if !report.Passed() {
-		os.Exit(1)
-	}
+	os.Exit(report.ExitCode())
 }
 
 func envOr(key, fallback string) string {

@@ -127,56 +127,97 @@ func TestPresenceConfigFillsOnlyUnsetFields(t *testing.T) {
 
 // --- disposition (pure) -------------------------------------------------------
 
+// allPass builds a full, healthy invariant set for the declared names.
+func allInvariantsPass(names []string) []Invariant {
+	out := make([]Invariant, 0, len(names))
+	for _, n := range names {
+		out = append(out, Invariant{Name: n, Passed: true})
+	}
+	return out
+}
+
 // A tap that is not running is not a presence defect, and the advice has to name
 // every switch: there are six, and naming one would misdiagnose the other five.
 func TestTapOffIsInconclusiveAndNamesEverySwitch(t *testing.T) {
-	d, reason := decideDisposition(false, "", 0, []Invariant{{Name: "x", Passed: true}})
+	var m measurability
+	m.cannot("%s", tapOffAdvice)
+	d, reason := decideDisposition(m, PresenceInvariants, allInvariantsPass(PresenceInvariants))
 	assert.Equal(t, DispositionInconclusive, d)
 	for _, want := range []string{"brokerPresence", "sysUser", "no event source", "serviceAuth", "system-account dial", "advisory subscribe"} {
 		assert.Contains(t, reason, want, "the tap-off advice must name this switch")
 	}
 }
 
-// Presence transitions pass through the SAME per-tenant ingest ceiling as telemetry,
-// so a shed run cannot tell a lost transition from a refused one.
-func TestAnyShedMakesTheRunInconclusive(t *testing.T) {
-	d, reason := decideDisposition(true, "", 1, []Invariant{{Name: "x", Passed: true}})
+// 🔴 PRECEDENCE. A run that could not measure is INCONCLUSIVE even when invariants
+// also failed: the unmeasurability is a reason those invariants would fail for a
+// cause that is not the platform, and reporting FAIL names the platform for the
+// environment's problem.
+func TestUnmeasurabilityOutranksAFailedInvariant(t *testing.T) {
+	var m measurability
+	m.cannot("the background fleet was shed at the ingest ceiling")
+	invs := allInvariantsPass(PresenceInvariants)
+	invs[2].Passed = false
+	d, reason := decideDisposition(m, PresenceInvariants, invs)
 	assert.Equal(t, DispositionInconclusive, d)
 	assert.Contains(t, reason, "ceiling")
 }
 
-// 🔴 PRECEDENCE. A shed run whose invariants also failed is INCONCLUSIVE, not FAIL:
-// the shed is a reason those invariants would fail for a cause that is not presence,
-// and reporting FAIL would name the platform for the environment's problem.
-func TestShedOutranksAFailedInvariant(t *testing.T) {
-	d, _ := decideDisposition(true, "", 3, []Invariant{{Name: "x", Passed: false}})
-	assert.Equal(t, DispositionInconclusive, d)
-}
-
-func TestTapOffOutranksShed(t *testing.T) {
-	_, reason := decideDisposition(false, "", 9, nil)
-	assert.Contains(t, reason, "brokerPresence")
-	assert.NotContains(t, reason, "ceiling")
+// Every reason is reported, not just the first — an operator fixing one and re-running
+// into the next has learned the gate is unreliable rather than that it is thorough.
+func TestEveryReasonIsCarriedIntoTheVerdict(t *testing.T) {
+	var m measurability
+	m.cannot("first cause")
+	m.cannot("second cause")
+	_, reason := decideDisposition(m, PresenceInvariants, allInvariantsPass(PresenceInvariants))
+	assert.Contains(t, reason, "first cause")
+	assert.Contains(t, reason, "second cause")
 }
 
 // An empty invariant set is not a pass: a report with nothing asserted has proven
 // nothing, which is a broken harness rather than a healthy platform.
 func TestNoInvariantsIsAFailure(t *testing.T) {
-	d, reason := decideDisposition(true, "", 0, nil)
+	d, reason := decideDisposition(measurability{}, PresenceInvariants, nil)
 	assert.Equal(t, DispositionFail, d)
-	assert.Contains(t, reason, "asserted nothing")
+	assert.Contains(t, reason, "not evaluated")
+}
+
+// 🔴🔴 THE BACKSTOP UNDER EVERYTHING ELSE. A verdict reads the invariants that ARE in
+// the report, and a control compares only the names it expects to flip — so an
+// invariant that stopped being appended at all is invisible to both. A gate could
+// ship asserting two of its six properties, print PASS, and have its own negative
+// control confirm it was working.
+func TestAPartialInvariantSetIsNotAPass(t *testing.T) {
+	partial := allInvariantsPass(PresenceInvariants)[:2]
+	d, reason := decideDisposition(measurability{}, PresenceInvariants, partial)
+	assert.Equal(t, DispositionFail, d)
+	assert.Contains(t, reason, "evaluated 2 invariant(s)")
+	for _, missing := range PresenceInvariants[2:] {
+		assert.Contains(t, reason, missing)
+	}
+}
+
+func TestAnUnrecognisedOrDuplicatedInvariantIsAFailure(t *testing.T) {
+	extra := append(allInvariantsPass(PresenceInvariants), Invariant{Name: "presence-something-invented", Passed: true})
+	d, reason := decideDisposition(measurability{}, PresenceInvariants, extra)
+	assert.Equal(t, DispositionFail, d)
+	assert.Contains(t, reason, "presence-something-invented")
+
+	dup := append(allInvariantsPass(PresenceInvariants), Invariant{Name: InvPresenceSteadyOnline, Passed: true})
+	d2, reason2 := decideDisposition(measurability{}, PresenceInvariants, dup)
+	assert.Equal(t, DispositionFail, d2)
+	assert.Contains(t, reason2, "duplicated: ["+InvPresenceSteadyOnline)
 }
 
 func TestAFailedInvariantIsNamedInTheReason(t *testing.T) {
-	d, reason := decideDisposition(true, "", 0, []Invariant{
-		{Name: "a", Passed: true}, {Name: InvPresenceSteadyOnline, Passed: false},
-	})
+	invs := allInvariantsPass(PresenceInvariants)
+	invs[2].Passed = false
+	d, reason := decideDisposition(measurability{}, PresenceInvariants, invs)
 	assert.Equal(t, DispositionFail, d)
-	assert.Contains(t, reason, InvPresenceSteadyOnline)
+	assert.Contains(t, reason, invs[2].Name)
 }
 
 func TestAllHeldIsAPass(t *testing.T) {
-	d, _ := decideDisposition(true, "", 0, []Invariant{{Name: "a", Passed: true}, {Name: "b", Passed: true}})
+	d, _ := decideDisposition(measurability{}, PresenceInvariants, allInvariantsPass(PresenceInvariants))
 	assert.Equal(t, DispositionPass, d)
 }
 
@@ -185,62 +226,92 @@ func TestExitCodeHasThreeValues(t *testing.T) {
 		DispositionPass: 0, DispositionFail: 1, DispositionInconclusive: 2,
 	} {
 		assert.Equal(t, want, (&PresenceReport{Disposition: disp}).ExitCode(), "disposition %s", disp)
+		assert.Equal(t, want, (&BatchReport{Disposition: disp}).ExitCode(), "batch disposition %s", disp)
 	}
 	assert.False(t, (&PresenceReport{Disposition: DispositionInconclusive}).Passed(),
 		"an inconclusive run has NOT passed — it has no opinion")
+	assert.False(t, (&BatchReport{Disposition: DispositionInconclusive}).Passed())
 }
 
 // --- the negative control (pure) ----------------------------------------------
 
+// controlFlipping builds a full invariant set with exactly the named ones failing.
+func controlFlipping(declared []string, failing ...string) []Invariant {
+	fail := map[string]bool{}
+	for _, n := range failing {
+		fail[n] = true
+	}
+	out := allInvariantsPass(declared)
+	for i := range out {
+		out[i].Passed = !fail[out[i].Name]
+	}
+	return out
+}
+
 func TestControlIsSatisfiedByExactlyItsExpectedSet(t *testing.T) {
-	ok, detail := evaluateControl(ControlDropSteadyDevice, []Invariant{
-		{Name: InvPresenceLoadFloor, Passed: true},
-		{Name: InvPresenceConnectAsserted, Passed: true},
-		{Name: InvPresenceSteadyOnline, Passed: false},
-		{Name: InvPresenceDepartedOffline, Passed: true},
-		{Name: InvPresenceSessionsMonotonic, Passed: true},
-		{Name: InvPresenceReconcilerExact, Passed: false},
-	})
+	ok, detail := evaluateControl(ControlDropSteadyDevice,
+		controlFlipping(PresenceInvariants, InvPresenceSteadyOnline, InvPresenceReconcilerExact))
 	assert.True(t, ok, detail)
 }
 
 // 🔴 An oracle that failed EVERYTHING would be passed by a control demanding merely
 // "some failure". Demanding the set exactly is what discriminates.
 func TestControlIsViolatedWhenSomethingElseAlsoFails(t *testing.T) {
-	ok, detail := evaluateControl(ControlDropSteadyDevice, []Invariant{
-		{Name: InvPresenceLoadFloor, Passed: false},
-		{Name: InvPresenceSteadyOnline, Passed: false},
-		{Name: InvPresenceReconcilerExact, Passed: false},
-	})
+	ok, detail := evaluateControl(ControlDropSteadyDevice,
+		controlFlipping(PresenceInvariants, InvPresenceSteadyOnline, InvPresenceReconcilerExact, InvPresenceLoadFloor))
 	assert.False(t, ok)
 	assert.Contains(t, detail, InvPresenceLoadFloor)
 }
 
 func TestControlIsViolatedWhenAnExpectedInvariantStillPasses(t *testing.T) {
-	ok, detail := evaluateControl(ControlDropSteadyDevice, []Invariant{
-		{Name: InvPresenceSteadyOnline, Passed: false},
-		{Name: InvPresenceReconcilerExact, Passed: true},
-	})
+	ok, detail := evaluateControl(ControlDropSteadyDevice,
+		controlFlipping(PresenceInvariants, InvPresenceSteadyOnline))
 	assert.False(t, ok)
 	assert.Contains(t, detail, InvPresenceReconcilerExact)
 }
 
-// An expected invariant that is not in the report did not pass — it never ran, and a
-// control cannot be satisfied by an assertion that did not happen.
-func TestControlIsViolatedWhenAnExpectedInvariantWasNeverEvaluated(t *testing.T) {
-	ok, detail := evaluateControl(ControlDropSteadyDevice, []Invariant{
+// 🔴🔴 A CONTROL MUST POLICE THE WHOLE SET, NOT JUST THE PART IT EXPECTS TO FLIP.
+// Otherwise the one check whose entire job is proving the oracle still works will
+// happily certify an oracle that has quietly stopped asserting four of its six
+// properties — and both halves of the gate go green together.
+func TestControlIsViolatedWhenInvariantsHaveVanishedFromTheReport(t *testing.T) {
+	crippled := []Invariant{
 		{Name: InvPresenceSteadyOnline, Passed: false},
-	})
-	assert.False(t, ok)
-	assert.Contains(t, detail, "not evaluated")
+		{Name: InvPresenceReconcilerExact, Passed: false},
+	}
+	ok, detail := evaluateControl(ControlDropSteadyDevice, crippled)
+	assert.False(t, ok, "a 2-of-6 report must not satisfy a control")
+	assert.Contains(t, detail, "cannot be judged")
+	assert.Contains(t, detail, InvPresenceLoadFloor)
+}
+
+func TestBatchControlAlsoPolicesTheWholeSet(t *testing.T) {
+	ok, _ := evaluateBatchControl(ControlDeafDevice, []Invariant{{Name: InvBatchRoundTrip, Passed: false}})
+	assert.False(t, ok, "a 1-of-7 report must not satisfy the batch control")
+
+	ok2, detail := evaluateBatchControl(ControlDeafDevice,
+		controlFlipping(BatchInvariants, InvBatchRoundTrip))
+	assert.True(t, ok2, detail)
 }
 
 func TestControlIsViolatedForAnEmptyReportOrAnUnknownName(t *testing.T) {
 	ok, _ := evaluateControl(ControlDropSteadyDevice, nil)
 	assert.False(t, ok)
-	ok, detail := evaluateControl("no-such-control", []Invariant{{Name: "a", Passed: false}})
-	assert.False(t, ok)
+	ok2, detail := evaluateControl("no-such-control", allInvariantsPass(PresenceInvariants))
+	assert.False(t, ok2)
 	assert.Contains(t, detail, "no expected failure set")
+}
+
+// The declared set must match what the classifier really produces. A list that has
+// drifted from the code makes every verdict above a failure on a healthy run.
+func TestTheDeclaredSetsMatchWhatTheClassifiersProduce(t *testing.T) {
+	obs, steady, churn, departed := healthyObservations(3)
+	assert.NoError(t, requireInvariantSet(PresenceInvariants,
+		classifyPresence(obs, steady, churn, departed, healthyPresenceConfig(3), 5000)))
+
+	bobs, targets, bystanders := healthyBatch()
+	assert.NoError(t, requireInvariantSet(BatchInvariants,
+		classifyBatch(bobs, targets, bystanders, healthyBatchConfig(), 5000)))
 }
 
 // --- classification (pure) ----------------------------------------------------
@@ -275,6 +346,8 @@ func healthyObservations(rounds int) (presenceObservations, []string, []string, 
 		ChurnSessions:    sessions,
 		AssertedActive:   append(append([]string{}, steady...), churn...),
 		Pages:            3,
+		AssertedAll:      append(append(append([]string{}, steady...), churn...), departed...),
+		AssertedAllPages: 3,
 	}
 	return obs, steady, churn, departed
 }
@@ -296,11 +369,27 @@ func invariant(t *testing.T, invs []Invariant, name string) Invariant {
 	return Invariant{}
 }
 
+// assertOnlyTheseFailed pins the exact failure set of a classifier result.
+//
+// 🔴 IT ASSERTS THE NAMED INVARIANTS ARE PRESENT FIRST, AND THAT IS NOT PEDANTRY. The
+// obvious form of this helper iterates the invariants it was GIVEN — so an invariant
+// that stopped being appended at all is never visited, and every test naming it as
+// expected-to-fail passes silently. Seven tests across the two harnesses were relying
+// on exactly that loop.
 func assertOnlyTheseFailed(t *testing.T, invs []Invariant, want ...string) {
 	t.Helper()
 	wantSet := map[string]bool{}
 	for _, n := range want {
 		wantSet[n] = true
+	}
+	present := map[string]bool{}
+	for _, inv := range invs {
+		present[inv.Name] = true
+	}
+	for _, n := range want {
+		if !present[n] {
+			t.Errorf("invariant %q is expected to FAIL but is not in the result at all — an assertion that did not run cannot have failed", n)
+		}
 	}
 	for _, inv := range invs {
 		if wantSet[inv.Name] {
@@ -314,7 +403,8 @@ func assertOnlyTheseFailed(t *testing.T, invs []Invariant, want ...string) {
 func TestAHealthyRunPassesEveryInvariant(t *testing.T) {
 	obs, steady, churn, departed := healthyObservations(3)
 	invs := classifyPresence(obs, steady, churn, departed, healthyPresenceConfig(3), 5000)
-	require.Len(t, invs, 6)
+	require.NoError(t, requireInvariantSet(PresenceInvariants, invs),
+		"the classifier must produce exactly the declared set — a count alone would not say WHICH one drifted")
 	assertOnlyTheseFailed(t, invs)
 }
 
@@ -580,7 +670,7 @@ func pagedFake(t *testing.T, tokens []string, pageSize int) (*fakeSession, *int)
 		rows := make([]map[string]any, 0, pageSize)
 		for _, tok := range tokens[start:end] {
 			rows = append(rows, map[string]any{
-				"id": "id-" + tok, "deviceToken": tok, "active": true, "presenceSource": "ASSERTED",
+				"id": "id-" + tok, "deviceToken": tok, "active": true, "presenceSource": "ASSERTED", "source": "mqtt1",
 			})
 		}
 		body, _ := json.Marshal(map[string]any{"assertedDeviceStates": rows})
@@ -592,7 +682,7 @@ func TestAssertedWalkPagesToAShortPage(t *testing.T) {
 	tokens := []string{"a", "b", "c", "d", "e"}
 	session, calls := pagedFake(t, tokens, 2)
 	o := &presenceOracle{session: session}
-	got, pages, err := o.assertedActiveTokens(context.Background(), "mqtt1", 2)
+	got, pages, err := o.assertedTokens(context.Background(), "mqtt1", true, 2)
 	require.NoError(t, err)
 	assert.Equal(t, tokens, got)
 	assert.Equal(t, 3, pages, "5 rows at 2 per page is two full pages and one short one")
@@ -604,7 +694,7 @@ func TestAssertedWalkAsksAgainAfterAnExactlyFullPage(t *testing.T) {
 	tokens := []string{"a", "b", "c", "d"}
 	session, _ := pagedFake(t, tokens, 2)
 	o := &presenceOracle{session: session}
-	got, pages, err := o.assertedActiveTokens(context.Background(), "mqtt1", 2)
+	got, pages, err := o.assertedTokens(context.Background(), "mqtt1", true, 2)
 	require.NoError(t, err)
 	assert.Equal(t, tokens, got)
 	assert.Equal(t, 3, pages)
@@ -614,10 +704,10 @@ func TestAssertedWalkAsksAgainAfterAnExactlyFullPage(t *testing.T) {
 func TestAssertedWalkRefusesANonAdvancingCursor(t *testing.T) {
 	o := &presenceOracle{session: &fakeSession{respond: func(map[string]any) (json.RawMessage, error) {
 		return json.RawMessage(`{"assertedDeviceStates":[
-			{"id":"same","deviceToken":"a","active":true,"presenceSource":"ASSERTED"},
-			{"id":"same","deviceToken":"b","active":true,"presenceSource":"ASSERTED"}]}`), nil
+			{"id":"same","deviceToken":"a","active":true,"presenceSource":"ASSERTED","source":"mqtt1"},
+			{"id":"same","deviceToken":"b","active":true,"presenceSource":"ASSERTED","source":"mqtt1"}]}`), nil
 	}}}
-	_, _, err := o.assertedActiveTokens(context.Background(), "mqtt1", 2)
+	_, _, err := o.assertedTokens(context.Background(), "mqtt1", true, 2)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not advancing")
 }
@@ -627,18 +717,66 @@ func TestAssertedWalkRefusesANonAdvancingCursor(t *testing.T) {
 func TestAssertedWalkFailsClosedOnARowItsFiltersExclude(t *testing.T) {
 	o := &presenceOracle{session: &fakeSession{respond: func(map[string]any) (json.RawMessage, error) {
 		return json.RawMessage(`{"assertedDeviceStates":[
-			{"id":"1","deviceToken":"a","active":false,"presenceSource":"ASSERTED"}]}`), nil
+			{"id":"1","deviceToken":"a","active":false,"presenceSource":"ASSERTED","source":"mqtt1"}]}`), nil
 	}}}
-	_, _, err := o.assertedActiveTokens(context.Background(), "mqtt1", 2)
+	_, _, err := o.assertedTokens(context.Background(), "mqtt1", true, 2)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "the query's own filters exclude")
+	assert.Contains(t, err.Error(), "its own filter excludes")
+}
+
+// 🔴 THE SOURCE PREDICATE IS THE ONE THIS HARNESS CANNOT SEE ANY OTHER WAY. It owns
+// the whole tenant, so a resolver that stopped scoping by source returns exactly the
+// rows a correct one does. In production that defect is one gateway's reconciler
+// enumerating another's devices and probing devices it does not own.
+func TestAssertedWalkFailsClosedOnARowFromAnotherSource(t *testing.T) {
+	o := &presenceOracle{session: &fakeSession{respond: func(map[string]any) (json.RawMessage, error) {
+		return json.RawMessage(`{"assertedDeviceStates":[
+			{"id":"1","deviceToken":"a","active":true,"presenceSource":"ASSERTED","source":"http1"}]}`), nil
+	}}}
+	_, _, err := o.assertedTokens(context.Background(), "mqtt1", true, 2)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "the source predicate is not being applied")
+}
+
+// 🔴 A PAGE MAY NOT EXCEED THE SIZE ASKED FOR. The walk stops on a page SHORTER than
+// pageSize, which says nothing about the upper side — so a server ignoring the limit
+// and dumping the whole set on page one satisfies the membership check and reports a
+// plausible page count, while in production the response is truncated rather than
+// paged and a reconciler marks live devices offline.
+func TestAssertedWalkRefusesAPageBiggerThanItAskedFor(t *testing.T) {
+	o := &presenceOracle{session: &fakeSession{respond: func(map[string]any) (json.RawMessage, error) {
+		return json.RawMessage(`{"assertedDeviceStates":[
+			{"id":"1","deviceToken":"a","active":true,"presenceSource":"ASSERTED","source":"mqtt1"},
+			{"id":"2","deviceToken":"b","active":true,"presenceSource":"ASSERTED","source":"mqtt1"},
+			{"id":"3","deviceToken":"c","active":true,"presenceSource":"ASSERTED","source":"mqtt1"}]}`), nil
+	}}}
+	_, _, err := o.assertedTokens(context.Background(), "mqtt1", true, 2)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "the page limit is not being applied")
+}
+
+// The activeOnly:false branch must accept the offline rows its own filter admits —
+// this is the branch the broker-presence reconciler reads, and refusing them would
+// make the harness unable to walk it at all.
+func TestAssertedWalkAcceptsOfflineRowsWhenActiveOnlyIsFalse(t *testing.T) {
+	o := &presenceOracle{session: &fakeSession{respond: func(vars map[string]any) (json.RawMessage, error) {
+		if _, seen := vars["afterId"]; seen {
+			return json.RawMessage(`{"assertedDeviceStates":[]}`), nil
+		}
+		return json.RawMessage(`{"assertedDeviceStates":[
+			{"id":"1","deviceToken":"gone-1","active":false,"presenceSource":"ASSERTED","source":"mqtt1"},
+			{"id":"2","deviceToken":"steady-1","active":true,"presenceSource":"ASSERTED","source":"mqtt1"}]}`), nil
+	}}}
+	got, _, err := o.assertedTokens(context.Background(), "mqtt1", false, 2)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"gone-1", "steady-1"}, got)
 }
 
 func TestAssertedWalkPropagatesAReadError(t *testing.T) {
 	o := &presenceOracle{session: &fakeSession{respond: func(map[string]any) (json.RawMessage, error) {
 		return nil, fmt.Errorf("connection reset")
 	}}}
-	_, pages, err := o.assertedActiveTokens(context.Background(), "mqtt1", 2)
+	_, pages, err := o.assertedTokens(context.Background(), "mqtt1", true, 2)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "page 1")
 	assert.Equal(t, 0, pages)
@@ -671,10 +809,21 @@ func TestHumanReportPrintsTheDispositionAndItsLegendTogether(t *testing.T) {
 // not only the decision function underneath it.
 func TestFinishKeepsATapOffRunInconclusive(t *testing.T) {
 	r := &PresenceReport{TapLive: false}
-	r.finish(0, nil, "")
+	r.cannotMeasure.cannot("%s", tapOffAdvice)
+	r.finish(nil, "")
 	assert.Equal(t, DispositionInconclusive, r.Disposition)
 	assert.Equal(t, 2, r.ExitCode())
 	assert.Contains(t, r.Reason, "brokerPresence")
+}
+
+// A caller that knows a SPECIFIC reason says so instead of printing six guesses.
+func TestASpecificReasonReplacesTheGenericAdvice(t *testing.T) {
+	r := &PresenceReport{}
+	r.cannotMeasure.cannot("its row carries no source id")
+	r.finish(nil, "")
+	assert.Equal(t, DispositionInconclusive, r.Disposition)
+	assert.Equal(t, "its row carries no source id", r.Reason)
+	assert.NotContains(t, r.Reason, "brokerPresence")
 }
 
 // 🔴 A CONTROL RUN INVERTS THE MEANING OF ITS OWN INVARIANTS. They are expected to
@@ -682,73 +831,133 @@ func TestFinishKeepsATapOffRunInconclusive(t *testing.T) {
 // reads as a release-blocking finding and the gate teaches people to ignore it.
 func TestFinishReportsASatisfiedControlAsAPass(t *testing.T) {
 	r := &PresenceReport{TapLive: true}
-	r.finish(0, []Invariant{
-		{Name: InvPresenceLoadFloor, Passed: true},
-		{Name: InvPresenceConnectAsserted, Passed: true},
-		{Name: InvPresenceSteadyOnline, Passed: false},
-		{Name: InvPresenceDepartedOffline, Passed: true},
-		{Name: InvPresenceSessionsMonotonic, Passed: true},
-		{Name: InvPresenceReconcilerExact, Passed: false},
-	}, ControlDropSteadyDevice)
+	r.finish(controlFlipping(PresenceInvariants, InvPresenceSteadyOnline, InvPresenceReconcilerExact), ControlDropSteadyDevice)
 	assert.Equal(t, DispositionPass, r.Disposition)
 	assert.True(t, r.ControlSatisfied)
 	assert.Equal(t, 0, r.ExitCode())
 }
 
-// A control that did NOT flip its set is a broken oracle, and that is a failure —
-// including the case that looks most like success: every invariant still green.
+// A control that did NOT flip its set is a broken oracle — including the case that
+// looks most like success: every invariant still green.
 func TestFinishReportsAnUnflippedControlAsAFailure(t *testing.T) {
 	r := &PresenceReport{TapLive: true}
-	r.finish(0, []Invariant{
-		{Name: InvPresenceSteadyOnline, Passed: true},
-		{Name: InvPresenceReconcilerExact, Passed: true},
-	}, ControlDropSteadyDevice)
+	r.finish(allInvariantsPass(PresenceInvariants), ControlDropSteadyDevice)
 	assert.Equal(t, DispositionFail, r.Disposition)
 	assert.False(t, r.ControlSatisfied)
 	assert.Equal(t, 1, r.ExitCode())
 }
 
-// A control cannot rescue an inconclusive run: a perturbation nobody could observe
-// proves nothing about the oracle either, so the disposition stands and the control
-// is not evaluated at all.
+// A control cannot rescue an inconclusive run, and must not leave a verdict behind:
+// a stale "VIOLATED" beside INCONCLUSIVE reads as two answers to one question.
 func TestFinishDoesNotEvaluateAControlOnAnInconclusiveRun(t *testing.T) {
 	r := &PresenceReport{TapLive: true}
-	r.finish(5, []Invariant{
-		{Name: InvPresenceSteadyOnline, Passed: false},
-		{Name: InvPresenceReconcilerExact, Passed: false},
-	}, ControlDropSteadyDevice)
+	r.cannotMeasure.cannot("shed at the ingest ceiling")
+	r.finish(controlFlipping(PresenceInvariants, InvPresenceSteadyOnline, InvPresenceReconcilerExact), ControlDropSteadyDevice)
 	assert.Equal(t, DispositionInconclusive, r.Disposition)
 	assert.False(t, r.ControlSatisfied)
 	assert.Empty(t, r.ControlDetail, "an unevaluated control must not claim a verdict")
 	assert.Equal(t, 2, r.ExitCode())
+	assert.NotContains(t, r.Human(), "VIOLATED", "an unevaluated control must not print a verdict either")
 }
 
 // A plain run must not be rewritten by control logic it never asked for.
 func TestFinishLeavesAPlainRunAlone(t *testing.T) {
 	r := &PresenceReport{TapLive: true}
-	r.finish(0, []Invariant{{Name: InvPresenceSteadyOnline, Passed: false}}, "")
+	r.finish(controlFlipping(PresenceInvariants, InvPresenceSteadyOnline), "")
 	assert.Equal(t, DispositionFail, r.Disposition)
 	assert.Empty(t, r.Control)
 	assert.False(t, r.ControlSatisfied)
 }
 
-// A caller that knows a SPECIFIC reason the tap is unusable says so instead of
-// printing six guesses alongside it.
-func TestASpecificTapReasonReplacesTheGenericAdvice(t *testing.T) {
-	d, reason := decideDisposition(false, "its row carries no source id", 0, nil)
-	assert.Equal(t, DispositionInconclusive, d)
-	assert.Equal(t, "its row carries no source id", reason)
-	assert.NotContains(t, reason, "brokerPresence")
+// 🔴 THE BATCH HARNESS NOW HAS THE THIRD DISPOSITION ITS SIBLING SHIPPED WITH. Before
+// it did, every "could not measure" cause — a missing MQTT route, a tenant that is
+// not fresh, an unauthored vocabulary — exited 1, and the gate step annotated all of
+// them as "the batch oracle FAILED ITS OWN CONTROL".
+func TestBatchFinishHasThreeDispositions(t *testing.T) {
+	pass := &BatchReport{}
+	pass.finish(allInvariantsPass(BatchInvariants), "")
+	assert.Equal(t, DispositionPass, pass.Disposition)
+	assert.Equal(t, 0, pass.ExitCode())
+
+	fail := &BatchReport{}
+	fail.finish(controlFlipping(BatchInvariants, InvBatchRoundTrip), "")
+	assert.Equal(t, DispositionFail, fail.Disposition)
+	assert.Equal(t, 1, fail.ExitCode())
+
+	blind := &BatchReport{}
+	blind.cannotMeasure.cannot("command-delivery was unreachable for the whole settle")
+	blind.finish(allInvariantsPass(BatchInvariants), "")
+	assert.Equal(t, DispositionInconclusive, blind.Disposition)
+	assert.Equal(t, 2, blind.ExitCode())
+	assert.Contains(t, blind.Reason, "unreachable")
 }
 
-// 🔴 EVERY EXIT RUNS THROUGH THE FOLD. A source-less asserted row is the one case
-// that knows more than "no row appeared", and routing it around finish would leave a
-// branch the verdict logic never sees — which is exactly how the upgrade rig shipped
-// an INCONCLUSIVE state no run could reach.
-func TestFinishCarriesASpecificTapReasonThrough(t *testing.T) {
-	r := &PresenceReport{TapLive: false, tapDetail: "no source id on the tap probe's row"}
-	r.finish(0, nil, "")
+// A batch control cannot rescue an inconclusive run either — and must not leave a
+// verdict behind when it was never evaluated.
+func TestBatchFinishDoesNotEvaluateAControlOnAnInconclusiveRun(t *testing.T) {
+	r := &BatchReport{}
+	r.cannotMeasure.cannot("the MQTT gateway was unreachable")
+	r.finish(controlFlipping(BatchInvariants, InvBatchRoundTrip), ControlDeafDevice)
 	assert.Equal(t, DispositionInconclusive, r.Disposition)
+	assert.False(t, r.ControlSatisfied)
+	assert.Empty(t, r.ControlDetail, "an unevaluated control must not claim a verdict")
 	assert.Equal(t, 2, r.ExitCode())
-	assert.Equal(t, "no source id on the tap probe's row", r.Reason)
+	assert.NotContains(t, r.Human(), "VIOLATED")
+	assert.Contains(t, r.Human(), "NOT EVALUATED")
+}
+
+func TestBatchFinishReportsASatisfiedControlAsAPass(t *testing.T) {
+	r := &BatchReport{}
+	r.finish(controlFlipping(BatchInvariants, InvBatchRoundTrip), ControlDeafDevice)
+	assert.True(t, r.ControlSatisfied)
+	assert.Equal(t, DispositionPass, r.Disposition)
+	assert.True(t, r.Passed())
+}
+
+func TestBatchReportWithNoInvariantsIsNotAPass(t *testing.T) {
+	assert.False(t, (&BatchReport{}).Passed())
+	r := &BatchReport{}
+	r.finish(nil, ControlDeafDevice)
+	assert.False(t, r.Passed())
+}
+
+// --- the reconciler's OTHER branch --------------------------------------------
+
+// 🔴 THE BROKER-PRESENCE RECONCILER READS activeOnly:FALSE, and the harness used to
+// walk only the true branch. The offline half is what its synthetic-death path acts
+// on, so a defect confined to that branch leaves the exact-set invariant green while
+// the real reconciler cannot see the devices it is supposed to repair.
+func TestTheDepartedMustAppearInTheActiveOnlyFalseWalk(t *testing.T) {
+	obs, steady, churn, departed := healthyObservations(3)
+	obs.AssertedAll = append(append([]string{}, steady...), churn...) // departed dropped
+	invs := classifyPresence(obs, steady, churn, departed, healthyPresenceConfig(3), 5000)
+	assertOnlyTheseFailed(t, invs, InvPresenceReconcilerAll)
+	d := invariant(t, invs, InvPresenceReconcilerAll).Detail
+	assert.Contains(t, d, departed[0])
+	assert.Contains(t, d, "can never repair")
+}
+
+func TestTheActiveOnlyFalseWalkFailsOnAStranger(t *testing.T) {
+	obs, steady, churn, departed := healthyObservations(3)
+	obs.AssertedAll = append(obs.AssertedAll, "harness-pres-bg-00007")
+	invs := classifyPresence(obs, steady, churn, departed, healthyPresenceConfig(3), 5000)
+	assertOnlyTheseFailed(t, invs, InvPresenceReconcilerAll)
+}
+
+func TestTheActiveOnlyFalseWalkFailsLoudlyOnAReadError(t *testing.T) {
+	obs, steady, churn, departed := healthyObservations(3)
+	obs.AssertedAllReadErr = "assertedDeviceStates page 2: connection reset"
+	obs.AssertedAll = nil
+	invs := classifyPresence(obs, steady, churn, departed, healthyPresenceConfig(3), 5000)
+	assertOnlyTheseFailed(t, invs, InvPresenceReconcilerAll)
+	assert.Contains(t, invariant(t, invs, InvPresenceReconcilerAll).Detail, "did not complete")
+}
+
+// The two branches are separate invariants on purpose: a defect in one must not be
+// masked by the other holding.
+func TestTheTwoReconcilerBranchesFailIndependently(t *testing.T) {
+	obs, steady, churn, departed := healthyObservations(3)
+	obs.AssertedActive = []string{steady[0], churn[0]} // activeOnly:true under-reads
+	invs := classifyPresence(obs, steady, churn, departed, healthyPresenceConfig(3), 5000)
+	assertOnlyTheseFailed(t, invs, InvPresenceReconcilerExact)
 }

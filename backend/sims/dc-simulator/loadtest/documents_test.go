@@ -6,6 +6,7 @@ package loadtest
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -37,9 +38,12 @@ import (
 // can still be refused by the platform. This narrows what a live run has to be spent
 // on; it does not replace one.
 //
-// 🔴 RUN WITH -count=1 AFTER TOUCHING A SCHEMA: the SDL files live outside this
-// module and Go's test cache does not track them, so an edited schema is served a
-// stale PASS.
+// 🔴 THE SDL LIVES OUTSIDE THIS MODULE AND GO'S TEST CACHE DOES NOT TRACK IT, so a
+// plain `go test` serves a stale PASS over an edited schema — measured, not assumed.
+// CI is safe: every module's tests run with `-count=1`. What was not safe is the
+// pre-commit sweep in CLAUDE.md, which omitted the flag and so returned green over a
+// broken schema; it now carries it. An instruction to remember a flag is the same
+// class of thing as a comment asserting an invariant, so the fix is in the recipe.
 
 // servedSchema parses what one functional area serves on its TENANT plane — the only
 // plane this package ever sends to; it holds no admin token and by design never will.
@@ -78,17 +82,32 @@ func servedSchema(t *testing.T, area string) *graphql.Schema {
 	}
 
 	// A nil resolver is enough: validation reads the schema, never a resolver.
-	schema, err := graphql.ParseSchema(sdl.String(), nil, graphql.UseFieldResolvers())
+	//
+	// 🔴 THE SAME OPTIONS THE SERVICES PARSE WITH. MaxDepth bites at VALIDATE time, not
+	// only at execution, so a validator without it is strictly weaker than the server
+	// it stands in for — and a gate weaker than the thing it models will pass a
+	// document the deployment refuses.
+	schema, err := graphql.ParseSchema(sdl.String(), nil,
+		graphql.UseFieldResolvers(), graphql.MaxDepth(15), graphql.MaxQueryLength(100000))
 	if err != nil {
 		t.Fatalf("parse %s: %v", area, err)
 	}
 	return schema
 }
 
-// harnessDocument is one document and the variables the harness really sends with
-// it. The variables are supplied because ValidateWithVariables checks them too, and
-// a document validated with no variables at all reports every one of them as a null
-// violating its own `String!` — noise that would bury the finding this exists for.
+// harnessDocument is one document and the variables the harness really sends with it.
+//
+// The variables are supplied for two reasons, and only one is what it looks like.
+// They stop a document validated with no variables at all from reporting every one as
+// a null violating its own `String!` — noise that would bury the real finding. And
+// they pin the KEY SET, which is the one thing the validator genuinely reads about
+// them: this repo runs a patched graphql-go precisely because upstream DISCARDS an
+// input-object entry the schema does not define when it arrives through a variable.
+//
+// 🔴 WHAT IT DOES NOT DO IS TYPE-CHECK VALUES. `pageSize: Int!` given the string
+// "two", or an enum given a nonsense member, both validate. So a stand-in differing
+// from its real call site in VALUE type is harmless, and one differing in KEY SET
+// silently tests a request nobody makes.
 type harnessDocument struct {
 	name string
 	area string
@@ -161,6 +180,17 @@ func harnessDocuments() []harnessDocument {
 		{"mutationPublishCommandProfile", "device-management", mutationPublishCommandProfile, map[string]any{
 			"token": HarnessCommandProfileToken,
 		}},
+		// The L2d-1 layer's ONLY durable read, and it carries a 5-key criteria input —
+		// exactly the shape (a criteria object with required and optional members) that
+		// shipped broken in the upgrade drill. It was the one document in this package
+		// that no test validated, and the coverage cross-check below is what found it.
+		{"queryHarnessAlarm", "device-management", queryHarnessAlarm, map[string]any{
+			"c": map[string]any{
+				"pageNumber": 1, "pageSize": 1,
+				"originatorType": "device", "originator": "harness-probe-001",
+				"alarmKey": HarnessAlarmKey,
+			},
+		}},
 		{"queryDevicesExist", "device-management", queryDevicesExist, map[string]any{
 			"tokens": []any{"harness-cmd-safe-001"},
 		}},
@@ -171,8 +201,13 @@ func harnessDocuments() []harnessDocument {
 // that does not validate here cannot succeed on a cluster, and finding that out from
 // a unit test costs seconds instead of a deployment.
 func TestEveryHarnessDocumentValidatesAgainstItsServedSchema(t *testing.T) {
+	docs := harnessDocuments()
+	// A table that lost its entries would validate nothing and report green.
+	if len(docs) < 14 {
+		t.Fatalf("harnessDocuments() lists only %d document(s); it has previously listed at least 14, so this test is asserting almost nothing", len(docs))
+	}
 	byArea := map[string]*graphql.Schema{}
-	for _, d := range harnessDocuments() {
+	for _, d := range docs {
 		schema, ok := byArea[d.area]
 		if !ok {
 			schema = servedSchema(t, d.area)
@@ -189,6 +224,16 @@ func TestEveryHarnessDocumentValidatesAgainstItsServedSchema(t *testing.T) {
 // get their own case, because the list above pins the shape and this pins the
 // FIELDS: a rule authored against the wrong input type is the same class of defect
 // as a misnamed mutation, and it has to be caught on the same terms.
+// authoringDocuments names the documents covered by the test below rather than by
+// harnessDocuments(), so the coverage cross-check can see them too.
+func authoringDocuments() []string {
+	return []string{
+		mutationCreateCommandDefinition,
+		mutationCreateCommandRule,
+		mutationCreateDetectionRule,
+	}
+}
+
 func TestTheAuthoringMutationsValidateWithTheRequestsTheHarnessBuilds(t *testing.T) {
 	schema := servedSchema(t, "device-management")
 
@@ -287,5 +332,75 @@ func TestTheValidatorRejectsTheDefectsItExistsFor(t *testing.T) {
 				t.Errorf("the rejection does not mention %q, so it may be failing for another reason: %s", c.want, joined.String())
 			}
 		})
+	}
+}
+
+// documentConstPattern matches a package-level const whose value is a backtick-quoted
+// GraphQL operation. Deliberately narrow: a looser pattern matching other strings
+// would inflate the count and mask a real omission.
+var documentConstPattern = regexp.MustCompile("(?s)const ([A-Za-z][A-Za-z0-9_]*) = `\\s*(query|mutation|subscription)\\b")
+
+// 🔴 THE LIST CAN SHRINK TO NOTHING AND EVERY TEST ABOVE STILL REPORTS GREEN, unless
+// something asserts otherwise. That is exactly the failure this file's own comment
+// accuses a DERIVED list of — and the hand-maintained one has it too, minus the
+// excuse: empty the table and the suite passes, negative control included.
+//
+// So the source is scanned as a CROSS-CHECK rather than as the source of truth. The
+// scan cannot quietly succeed at finding nothing (it fails below its own floor), and
+// the table cannot quietly shrink (every scanned document must appear in it). Each
+// guards the other's failure mode, which is what neither could do alone.
+func TestEveryGraphQLDocumentInThePackageIsCovered(t *testing.T) {
+	covered := map[string]bool{}
+	for _, d := range harnessDocuments() {
+		covered[d.doc] = true
+	}
+	for _, d := range authoringDocuments() {
+		covered[d] = true
+	}
+
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	found := map[string]string{} // const name -> document
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		body, rerr := os.ReadFile(f)
+		if rerr != nil {
+			t.Fatalf("read %s: %v", f, rerr)
+		}
+		src := string(body)
+		for _, loc := range documentConstPattern.FindAllStringSubmatchIndex(src, -1) {
+			name := src[loc[2]:loc[3]]
+			// The document runs from the opening backtick to the next one.
+			open := strings.Index(src[loc[0]:], "`") + loc[0]
+			closeIdx := strings.Index(src[open+1:], "`")
+			if closeIdx < 0 {
+				t.Fatalf("unterminated document constant %s in %s", name, f)
+			}
+			found[name] = src[open+1 : open+1+closeIdx]
+		}
+	}
+
+	// A scan that found nothing would certify everything. The floor is a literal, so a
+	// regex that stops matching fails here rather than reporting full coverage.
+	const minimumDocuments = 17
+	if len(found) < minimumDocuments {
+		t.Fatalf("the source scan found only %d GraphQL document constant(s); it has previously found %d, so the SCAN is broken and this test would otherwise certify everything",
+			len(found), minimumDocuments)
+	}
+
+	var uncovered []string
+	for name, doc := range found {
+		if !covered[doc] {
+			uncovered = append(uncovered, name)
+		}
+	}
+	sort.Strings(uncovered)
+	if len(uncovered) > 0 {
+		t.Errorf("%d GraphQL document(s) in this package are sent to a cluster and validated by nothing: %s",
+			len(uncovered), strings.Join(uncovered, ", "))
 	}
 }

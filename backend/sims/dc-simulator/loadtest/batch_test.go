@@ -163,6 +163,7 @@ func healthyBatch() (batchObservations, []string, []string) {
 
 	obs := batchObservations{
 		Batch:           batchRecord{Created: true, Token: "harness-batch-7", Resolved: 3, Accepted: 3},
+		Receipts:        map[string]int{targets[0]: 1, targets[1]: 1, targets[2]: 1},
 		FanoutRows:      append([]string{}, targets...),
 		FanoutTotal:     3,
 		Statuses:        map[string]int{cmdStatusSuccessful: 3},
@@ -189,7 +190,8 @@ func healthyBatchConfig() BatchConfig {
 func TestAHealthyFleetWritePassesEveryInvariant(t *testing.T) {
 	obs, targets, bystanders := healthyBatch()
 	invs := classifyBatch(obs, targets, bystanders, healthyBatchConfig(), 5000)
-	require.Len(t, invs, 6)
+	require.NoError(t, requireInvariantSet(BatchInvariants, invs),
+		"the classifier must produce exactly the declared set — a count alone would not say WHICH one drifted")
 	assertOnlyTheseFailed(t, invs)
 }
 
@@ -428,6 +430,11 @@ func TestADeafDeviceFlipsExactlyTheControlsExpectedSet(t *testing.T) {
 	obs.Statuses = map[string]int{cmdStatusSuccessful: 2, cmdStatusSent: 1}
 	obs.Successful = 2
 	obs.SettleReached = false
+	// The deaf device is the one with no receiver, so it receives nothing — and the
+	// receipt invariant EXPECTS that, which is what keeps the control's expected set a
+	// single name.
+	obs.Deaf = targets[2]
+	obs.Receipts = map[string]int{targets[0]: 1, targets[1]: 1}
 
 	invs := classifyBatch(obs, targets, bystanders, healthyBatchConfig(), 5000)
 	assertOnlyTheseFailed(t, invs, InvBatchRoundTrip)
@@ -452,54 +459,6 @@ func TestBatchControlIsViolatedWhenSomethingElseFlippedToo(t *testing.T) {
 	ok, detail := evaluateBatchControl(ControlDeafDevice, invs)
 	assert.False(t, ok)
 	assert.Contains(t, detail, InvBatchTargetOnly)
-}
-
-// --- the verdict fold ---------------------------------------------------------
-
-// 🔴 A control run inverts the meaning of its own invariants: the round trip is
-// SUPPOSED to fail, so a control that behaved must report success. Otherwise every
-// green control reads as a release-blocking finding.
-func TestBatchFinishReportsASatisfiedControlAsAPass(t *testing.T) {
-	r := &BatchReport{}
-	r.finish([]Invariant{
-		{Name: InvBatchLoadFloor, Passed: true},
-		{Name: InvBatchFanoutComplete, Passed: true},
-		{Name: InvBatchRoundTrip, Passed: false},
-		{Name: InvBatchTargetOnly, Passed: true},
-		{Name: InvBatchReplayIdempotent, Passed: true},
-		{Name: InvBatchRefusedWhole, Passed: true},
-	}, ControlDeafDevice)
-	assert.True(t, r.ControlSatisfied)
-	assert.True(t, r.Passed(), "a control that flipped exactly its set has passed")
-}
-
-func TestBatchFinishReportsAnUnflippedControlAsAFailure(t *testing.T) {
-	r := &BatchReport{}
-	r.finish([]Invariant{
-		{Name: InvBatchRoundTrip, Passed: true},
-	}, ControlDeafDevice)
-	assert.False(t, r.ControlSatisfied)
-	assert.False(t, r.Passed())
-}
-
-func TestBatchFinishLeavesAPlainRunAlone(t *testing.T) {
-	r := &BatchReport{}
-	r.finish([]Invariant{{Name: InvBatchRoundTrip, Passed: true}}, "")
-	assert.Empty(t, r.Control)
-	assert.True(t, r.Passed())
-
-	r2 := &BatchReport{}
-	r2.finish([]Invariant{{Name: InvBatchRoundTrip, Passed: false}}, "")
-	assert.False(t, r2.Passed())
-}
-
-// An empty invariant set is NOT a pass — for a control run either, where "nothing was
-// evaluated" would otherwise be indistinguishable from "the control behaved".
-func TestBatchReportWithNoInvariantsIsNotAPass(t *testing.T) {
-	assert.False(t, (&BatchReport{}).Passed())
-	r := &BatchReport{}
-	r.finish(nil, ControlDeafDevice)
-	assert.False(t, r.Passed())
 }
 
 // --- the oracle's reads -------------------------------------------------------
@@ -658,8 +617,9 @@ func TestABatchThatCreatedNoRowsFailsBothFanoutAndRoundTrip(t *testing.T) {
 	obs.Statuses = map[string]int{}
 	obs.Successful = 0
 	obs.ReplayTotalAfter = 0
+	obs.Receipts = map[string]int{} // nothing was created, so nothing was received either
 	invs := classifyBatch(obs, targets, bystanders, healthyBatchConfig(), 5000)
-	assertOnlyTheseFailed(t, invs, InvBatchFanoutComplete, InvBatchRoundTrip, InvBatchReplayIdempotent)
+	assertOnlyTheseFailed(t, invs, InvBatchFanoutComplete, InvBatchRoundTrip, InvBatchReplayIdempotent, InvBatchDevicesReceived)
 	assert.Contains(t, invariant(t, invs, InvBatchRoundTrip).Detail, "no command rows")
 }
 
@@ -679,9 +639,44 @@ func TestAwaitBatchSettledConfirmsWhenEveryRowIsTerminal(t *testing.T) {
 			map[string]any{"token": "c2", "deviceToken": "d2", "status": "SUCCESSFUL"}), nil
 	}}}
 	cfg := BatchConfig{Poll: time.Millisecond, Timeout: 5 * time.Second}
-	rows, reached := o.awaitBatchSettled(context.Background(), "b1", 2, cfg)
+	rows, reached, everRead := o.awaitBatchSettled(context.Background(), "b1", 2, cfg)
 	assert.True(t, reached)
+	assert.True(t, everRead)
 	assert.Equal(t, 2, rows.Successful)
+}
+
+// 🔴 "THE BATCH CREATED NO ROWS" AND "THIS ORACLE NEVER MANAGED TO READ" FOLD TO THE
+// SAME ZERO VALUE AND MEAN OPPOSITE THINGS — one is a fan-out defect, the other is the
+// harness being blind. Without the third return the run reports exit 1, "the batch
+// created no command rows", for a command-delivery outage.
+func TestAwaitBatchSettledReportsThatItNeverManagedToRead(t *testing.T) {
+	o := &batchOracle{session: &fakeSession{respond: func(map[string]any) (json.RawMessage, error) {
+		return nil, fmt.Errorf("connection reset")
+	}}}
+	cfg := BatchConfig{Poll: time.Millisecond, Timeout: 10 * time.Millisecond}
+	rows, reached, everRead := o.awaitBatchSettled(context.Background(), "b1", 2, cfg)
+	assert.False(t, reached)
+	assert.False(t, everRead, "no read ever succeeded, and the caller has to be able to tell")
+	assert.Empty(t, rows.Devices)
+}
+
+// One clean read followed by failures still counts as readable: the oracle DID see the
+// batch, so a non-terminal verdict is a real observation rather than blindness.
+func TestAwaitBatchSettledRemembersASingleCleanRead(t *testing.T) {
+	calls := 0
+	o := &batchOracle{session: &fakeSession{respond: func(map[string]any) (json.RawMessage, error) {
+		calls++
+		if calls == 1 {
+			return batchRowsJSON(t, 2,
+				map[string]any{"token": "c1", "deviceToken": "d1", "status": "SENT"},
+				map[string]any{"token": "c2", "deviceToken": "d2", "status": "SENT"}), nil
+		}
+		return nil, fmt.Errorf("connection reset")
+	}}}
+	cfg := BatchConfig{Poll: time.Millisecond, Timeout: 15 * time.Millisecond}
+	_, reached, everRead := o.awaitBatchSettled(context.Background(), "b1", 2, cfg)
+	assert.False(t, reached)
+	assert.True(t, everRead)
 }
 
 // A timeout is NOT concluded as reached: it is a real undelivered or unanswered
@@ -693,7 +688,7 @@ func TestAwaitBatchSettledDoesNotConcludeOnATimeout(t *testing.T) {
 			map[string]any{"token": "c2", "deviceToken": "d2", "status": "SUCCESSFUL"}), nil
 	}}}
 	cfg := BatchConfig{Poll: time.Millisecond, Timeout: 10 * time.Millisecond}
-	rows, reached := o.awaitBatchSettled(context.Background(), "b1", 2, cfg)
+	rows, reached, _ := o.awaitBatchSettled(context.Background(), "b1", 2, cfg)
 	assert.False(t, reached)
 	assert.Equal(t, 1, rows.Successful, "the last observation is still returned, for the report")
 }
@@ -706,7 +701,7 @@ func TestAwaitBatchSettledDoesNotSettleOnAnEmptyBatch(t *testing.T) {
 		return batchRowsJSON(t, 0), nil
 	}}}
 	cfg := BatchConfig{Poll: time.Millisecond, Timeout: 10 * time.Millisecond}
-	_, reached := o.awaitBatchSettled(context.Background(), "b1", 0, cfg)
+	_, reached, _ := o.awaitBatchSettled(context.Background(), "b1", 0, cfg)
 	assert.False(t, reached, "zero rows is never a completed round trip")
 }
 
@@ -717,6 +712,55 @@ func TestAwaitBatchSettledWaitsForTheAcceptedCount(t *testing.T) {
 		return batchRowsJSON(t, 1, map[string]any{"token": "c1", "deviceToken": "d1", "status": "SUCCESSFUL"}), nil
 	}}}
 	cfg := BatchConfig{Poll: time.Millisecond, Timeout: 10 * time.Millisecond}
-	_, reached := o.awaitBatchSettled(context.Background(), "b1", 3, cfg)
+	_, reached, _ := o.awaitBatchSettled(context.Background(), "b1", 3, cfg)
 	assert.False(t, reached)
+}
+
+// --- the wire witness ---------------------------------------------------------
+
+// 🔴 A DURABLE `SUCCESSFUL` DOES NOT SAY WHICH DEVICE ANSWERED. A response carries a
+// command token and no device identity, and a device's JWT grants publish on the
+// tenant-wide responses subject — so if dispatch mis-routes device A's envelope onto
+// device B's topic, B answering it drives A's row to SUCCESSFUL while A never
+// actuates, and every durable-state invariant reads green.
+func TestAMisroutedCommandFailsTheWireWitness(t *testing.T) {
+	obs, targets, bystanders := healthyBatch()
+	obs.Misrouted = 1
+	invs := classifyBatch(obs, targets, bystanders, healthyBatchConfig(), 5000)
+	assertOnlyTheseFailed(t, invs, InvBatchDevicesReceived)
+	d := invariant(t, invs, InvBatchDevicesReceived).Detail
+	assert.Contains(t, d, "mis-route")
+	assert.Contains(t, d, "may have been written by a device that is not the one the command names")
+}
+
+// The scenario that motivates the whole invariant: every durable row is SUCCESSFUL,
+// and one target never saw its command.
+func TestASilentTargetFailsEvenWhenEveryDurableRowIsSuccessful(t *testing.T) {
+	obs, targets, bystanders := healthyBatch()
+	delete(obs.Receipts, targets[1])
+	invs := classifyBatch(obs, targets, bystanders, healthyBatchConfig(), 5000)
+	assertOnlyTheseFailed(t, invs, InvBatchDevicesReceived)
+	assert.True(t, invariant(t, invs, InvBatchRoundTrip).Passed,
+		"the durable half is green — which is exactly why the wire half has to exist")
+	assert.Contains(t, invariant(t, invs, InvBatchDevicesReceived).Detail, targets[1])
+}
+
+// At-least-once redelivery can only inflate the tally, so counting DISTINCT tokens
+// and demanding at least one is safe against it.
+func TestRedeliveryDoesNotFailTheWireWitness(t *testing.T) {
+	obs, targets, bystanders := healthyBatch()
+	obs.Receipts[targets[0]] = 3
+	invs := classifyBatch(obs, targets, bystanders, healthyBatchConfig(), 5000)
+	assertOnlyTheseFailed(t, invs)
+}
+
+// A control that did not arm — the deaf device received something anyway — must be
+// caught, or the control certifies nothing.
+func TestADeafDeviceThatReceivedAnythingFailsTheWireWitness(t *testing.T) {
+	obs, targets, bystanders := healthyBatch()
+	obs.Deaf = targets[2]
+	obs.Receipts = map[string]int{targets[0]: 1, targets[1]: 1, targets[2]: 1}
+	invs := classifyBatch(obs, targets, bystanders, healthyBatchConfig(), 5000)
+	assertOnlyTheseFailed(t, invs, InvBatchDevicesReceived)
+	assert.Contains(t, invariant(t, invs, InvBatchDevicesReceived).Detail, "the control did not arm")
 }

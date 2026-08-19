@@ -110,6 +110,9 @@ const (
 	InvPresenceDepartedOffline   = "presence-departed-offline"
 	InvPresenceSessionsMonotonic = "presence-sessions-monotonic"
 	InvPresenceReconcilerExact   = "presence-reconciler-read-exact"
+	// InvPresenceReconcilerAll covers the OTHER branch of the same surface — the one
+	// the broker-presence reconciler actually reads.
+	InvPresenceReconcilerAll = "presence-reconciler-reads-the-departed-too"
 )
 
 // Presence-harness defaults.
@@ -320,21 +323,19 @@ func (c PresenceConfig) harnessManifest() sim.SimManifest {
 
 // --- disposition --------------------------------------------------------------
 
-// Disposition is the run's verdict, and there are THREE of them because two is a
-// lie. A gate that can only say PASS or FAIL has to report an environment it could
-// not measure in as one of the two, and whichever it picks is wrong: a false green
-// certifies nothing, and a false red sends someone hunting a defect that is not there.
-type Disposition string
-
-const (
-	DispositionPass Disposition = "PASS"
-	DispositionFail Disposition = "FAIL"
-	// DispositionInconclusive means the run could not measure what it claims to
-	// measure. It is NOT a soft failure and NOT a soft pass — it is the statement that
-	// this run has no opinion, and it carries its own exit code so a caller cannot
-	// mistake it for either.
-	DispositionInconclusive Disposition = "INCONCLUSIVE"
-)
+// PresenceInvariants is the COMPLETE set this harness evaluates, declared beside the
+// classifier rather than derived from it. A verdict — or a negative control — over a
+// partial set is not the verdict this gate promises, and without a declared set an
+// invariant that stopped being appended is invisible to both.
+var PresenceInvariants = []string{
+	InvPresenceLoadFloor,
+	InvPresenceConnectAsserted,
+	InvPresenceSteadyOnline,
+	InvPresenceDepartedOffline,
+	InvPresenceSessionsMonotonic,
+	InvPresenceReconcilerExact,
+	InvPresenceReconcilerAll,
+}
 
 // tapOffAdvice is what an INCONCLUSIVE-because-the-tap-is-off run prints. It names
 // every switch that turns broker-asserted presence off, because there are six and
@@ -350,56 +351,18 @@ const tapOffAdvice = "broker-asserted MQTT presence does not appear to be runnin
 	"(5) the NATS system-account dial failed; " +
 	"(6) the advisory subscribe failed."
 
-// decideDisposition folds the run's observations into the verdict. Pure, and
-// deliberately so: the INCONCLUSIVE branches are the ones a live run reaches least
-// often and can least afford to get wrong, so they are decided by a function a unit
-// test can drive into every branch without a cluster.
-//
-// The ORDER is the substance. Inconclusive outranks a failed invariant, because both
-// inconclusive conditions are reasons an invariant would fail for a cause that is not
-// presence: a shed transition never reached device-state, and a tap that is off never
-// produced one. Reporting FAIL in either case would name the platform for the
-// environment's problem.
-func decideDisposition(tapLive bool, tapDetail string, shed int64, invs []Invariant) (Disposition, string) {
-	if !tapLive {
-		// tapDetail lets a caller that knows MORE than "no asserted row appeared" say so.
-		// The default advice names every switch precisely because the usual case knows
-		// nothing; a caller that has a specific reason should not be made to print six
-		// guesses alongside it.
-		if tapDetail != "" {
-			return DispositionInconclusive, tapDetail
-		}
-		return DispositionInconclusive, tapOffAdvice
-	}
-	if shed > 0 {
-		return DispositionInconclusive, fmt.Sprintf("the background fleet was shed %d time(s) at the per-tenant ingest ceiling, "+
-			"and presence transitions pass through that SAME ceiling — so a transition this run did not observe may have been "+
-			"refused rather than lost, and no presence verdict can be told apart from a governance one. Lower the background "+
-			"load (--bg-devices / --bg-interval) or raise the tenant's ingest ceiling, and re-run", shed)
-	}
-	// An empty invariant set is not a pass: a report with nothing asserted has proven
-	// nothing, which is a broken harness rather than a healthy platform.
-	if len(invs) == 0 {
-		return DispositionFail, "no invariants were evaluated, so this run asserted nothing"
-	}
-	var failed []string
-	for _, inv := range invs {
-		if !inv.Passed {
-			failed = append(failed, inv.Name)
-		}
-	}
-	if len(failed) > 0 {
-		return DispositionFail, "failed: " + strings.Join(failed, ", ")
-	}
-	return DispositionPass, "every presence invariant held"
-}
-
 // controlExpectations maps a control name to the EXACT set of invariants its
 // perturbation must flip. Dropping a steady device flips two, not one, and both are
 // load-bearing: the cohort's own continuous-online invariant, and the reconciler's
 // exact-set read, which can no longer enumerate a device that is genuinely offline.
 // A control demanding only the first would be satisfied by an oracle that had lost
 // the ability to enumerate at all.
+//
+// 🔴 ONE CONTROL COVERS TWO OF SIX INVARIANTS. The other four have never been shown
+// capable of failing on a cluster, and `presence-departed-offline` is the one that
+// most deserves its own — the departed cohort is what makes the steady cohort's
+// verdict non-vacuous, and the shipped control cannot exercise it. Recorded here
+// rather than left to be inferred from the map's length.
 var controlExpectations = map[string][]string{
 	ControlDropSteadyDevice: {InvPresenceSteadyOnline, InvPresenceReconcilerExact},
 }
@@ -407,53 +370,7 @@ var controlExpectations = map[string][]string{
 // evaluateControl decides whether a presence negative-control run behaved.
 func evaluateControl(control string, invs []Invariant) (satisfied bool, detail string) {
 	want, known := controlExpectations[control]
-	return evaluateExpectedFailureSet(control, want, known, invs)
-}
-
-// evaluateExpectedFailureSet is the shared control judgement, used by every harness
-// that ships a negative control. Pure.
-//
-// It demands the failure set EXACTLY: the expected invariants red and every other one
-// green. Demanding "at least" would be passed by an oracle that failed everything —
-// the very breakage a control exists to detect — and demanding "only" would fail a
-// healthy oracle whose other invariants legitimately flip as a consequence of the
-// same perturbation. Neither weaker reading discriminates; this one does.
-func evaluateExpectedFailureSet(control string, want []string, known bool, invs []Invariant) (satisfied bool, detail string) {
-	if !known {
-		return false, fmt.Sprintf("no expected failure set is declared for control %q", control)
-	}
-	if len(invs) == 0 {
-		return false, "the control run evaluated no invariants, so it cannot have flipped any"
-	}
-	wantSet := make(map[string]bool, len(want))
-	for _, n := range want {
-		wantSet[n] = true
-	}
-	var missing, unexpected []string
-	seen := make(map[string]bool, len(invs))
-	for _, inv := range invs {
-		seen[inv.Name] = true
-		switch {
-		case wantSet[inv.Name] && inv.Passed:
-			missing = append(missing, inv.Name)
-		case !wantSet[inv.Name] && !inv.Passed:
-			unexpected = append(unexpected, inv.Name)
-		}
-	}
-	// An expected invariant that is not in the report at all did not "pass" — it was
-	// never evaluated, and a control cannot be satisfied by an assertion that did not run.
-	for _, n := range want {
-		if !seen[n] {
-			missing = append(missing, n+" (not evaluated)")
-		}
-	}
-	sort.Strings(missing)
-	sort.Strings(unexpected)
-	if len(missing) == 0 && len(unexpected) == 0 {
-		return true, fmt.Sprintf("the control flipped exactly its expected set {%s}", strings.Join(want, ", "))
-	}
-	return false, fmt.Sprintf("control %q expected exactly {%s} to fail; still passing: [%s]; unexpectedly failing: [%s]",
-		control, strings.Join(want, ", "), strings.Join(missing, ", "), strings.Join(unexpected, ", "))
+	return evaluateExpectedFailureSet(control, PresenceInvariants, want, known, invs)
 }
 
 // --- observations -------------------------------------------------------------
@@ -499,6 +416,11 @@ type presenceObservations struct {
 	// SteadyBad maps a steady token to its first bad observation across the hold.
 	SteadyBad map[string]string
 
+	// ConnectBaselineRead records whether the baseline read ever SUCCEEDED. A failed
+	// read returns no rows, which is indistinguishable from a fleet that never came
+	// online — and one of those is a platform defect while the other is the harness
+	// being blind.
+	ConnectBaselineRead bool
 	// ConnectBaseline is the pre-load read of every cohort device, taken once every
 	// one of them has been connected. It is what makes the departed cohort's verdict
 	// mean something: a device that never came online cannot prove a disconnect edge
@@ -518,10 +440,15 @@ type presenceObservations struct {
 	// failure that would otherwise read as a mystery.
 	ChurnFlipTimeouts map[string]int
 
-	// AssertedActive is the exhaustively-paged reconciler enumeration, and Pages is how
-	// many requests it took. Pages is evidence the cursor was actually exercised.
+	// AssertedActive is the exhaustively-paged reconciler enumeration under
+	// activeOnly:true, and Pages is how many requests it took.
 	AssertedActive []string
 	Pages          int
+	// AssertedAll is the SAME walk under activeOnly:false — the branch the broker-
+	// presence reconciler reads, whose offline half drives its synthetic-death path.
+	AssertedAll        []string
+	AssertedAllPages   int
+	AssertedAllReadErr string
 	// AssertedReadErr is set when the paged walk could not complete. A read that failed
 	// is not an empty set; the classifier fails the invariant rather than reporting an
 	// enumeration of nothing as an exact-set mismatch.
@@ -603,17 +530,27 @@ func classifyPresence(obs presenceObservations, steady, churn, departed []string
 			Detail: fmt.Sprintf("%d departed device(s) did not read asserted-offline: %s", len(stillOn), strings.Join(stillOn, "; "))})
 	}
 
-	// 5. Session ordering. An advisory-driven reconnect must climb, because the
-	// advisory path carries no compare-and-set and presence rejects a lower session
-	// without one.
+	// 5. Session ordering.
 	//
-	// BOUNDED OBSERVATION, stated rather than assumed: a lower session IS accepted when
-	// it arrives with a satisfied compare-and-set, which is exactly the reconciler's
-	// repair path — so a regression that occurred and was repaired between two of this
-	// harness's readings is invisible to it. And on a MULTI-NODE broker a trailing
-	// clock can mint a lower session legitimately; the platform counts that rather than
-	// eliminating it. This invariant therefore states a single-broker-node assumption,
-	// and against an HA broker it would be a standing false finding rather than a defect.
+	// 🔴 WHAT THIS PROVES, STATED HONESTLY, BECAUSE IT IS LESS THAN IT LOOKS. A session
+	// id is the broker's own connection start time in nanoseconds, so successive real
+	// connections on one node produce increasing values whatever the platform does with
+	// them. Deleting presence's ordering rule outright would leave this invariant green.
+	// It does NOT test that presence orders by session.
+	//
+	// What it does test is worth having: that every reconnect was OBSERVED and recorded
+	// — R rounds must yield R+1 distinct, climbing readings — and that no reading ever
+	// goes backwards. The second half is a real detector rather than a tautology,
+	// because a lower session CAN be written: the reconciler's repair path emits a
+	// CONNECT carrying the lower live id with a satisfied compare-and-set, and
+	// device-state stores it. Reading the row rather than the transitions makes such a
+	// decrease directly visible.
+	//
+	// BOUNDED OBSERVATION: on a MULTI-NODE broker a trailing clock mints a lower session
+	// legitimately, and the reconciler then re-files it — which this harness would read
+	// as a violation. It therefore assumes a single broker node, and nothing here checks
+	// that assumption; against an HA broker it is a standing false finding rather than
+	// a defect.
 	wantReadings := cfg.ChurnRounds + 1
 	var badSessions []string
 	for _, tok := range churn {
@@ -632,7 +569,8 @@ func classifyPresence(obs presenceObservations, steady, churn, departed []string
 	sort.Strings(badSessions)
 	if len(badSessions) == 0 {
 		invs = append(invs, Invariant{Name: InvPresenceSessionsMonotonic, Passed: true,
-			Detail: fmt.Sprintf("all %d churn device(s) climbed strictly across %d reconnect(s) (single-broker-node assumption)", len(churn), cfg.ChurnRounds)})
+			Detail: fmt.Sprintf("all %d churn device(s) recorded %d distinct, climbing session(s) across %d reconnect(s), none regressing "+
+				"(single-broker-node assumption; %d departure(s) went unobserved)", len(churn), wantReadings, cfg.ChurnRounds, obs.ChurnFlipTimeouts["offline"])})
 	} else {
 		invs = append(invs, Invariant{Name: InvPresenceSessionsMonotonic, Passed: false,
 			Detail: fmt.Sprintf("%d churn session-ordering violation(s): %s", len(badSessions), strings.Join(badSessions, "; "))})
@@ -682,6 +620,49 @@ func classifyPresence(obs presenceObservations, steady, churn, departed []string
 		}
 	}
 
+	// 7. The SAME enumeration under activeOnly:false — the branch the broker-presence
+	// reconciler reads, and the one whose offline half drives the repair this whole
+	// projection exists to make possible. It must hold every asserted device: the
+	// online cohorts AND the departed ones.
+	//
+	// A defect confined to this branch leaves invariant 6 perfectly green while the
+	// real reconciler cannot see the devices it is supposed to repair.
+	switch {
+	case obs.AssertedAllReadErr != "":
+		invs = append(invs, Invariant{Name: InvPresenceReconcilerAll, Passed: false,
+			Detail: "the paged assertedDeviceStates(activeOnly:false) walk did not complete: " + obs.AssertedAllReadErr})
+	default:
+		wantAll := make(map[string]bool, len(steady)+len(churn)+len(departed))
+		for _, t := range append(append(append([]string{}, steady...), churn...), departed...) {
+			wantAll[t] = true
+		}
+		gotAll := make(map[string]bool, len(obs.AssertedAll))
+		for _, t := range obs.AssertedAll {
+			gotAll[t] = true
+		}
+		var missingAll, extraAll []string
+		for t := range wantAll {
+			if !gotAll[t] {
+				missingAll = append(missingAll, t)
+			}
+		}
+		for t := range gotAll {
+			if !wantAll[t] {
+				extraAll = append(extraAll, t)
+			}
+		}
+		sort.Strings(missingAll)
+		sort.Strings(extraAll)
+		if len(missingAll) == 0 && len(extraAll) == 0 {
+			invs = append(invs, Invariant{Name: InvPresenceReconcilerAll, Passed: true,
+				Detail: fmt.Sprintf("the activeOnly:false walk enumerated all %d asserted device(s), departed included, across %d page(s)", len(wantAll), obs.AssertedAllPages)})
+		} else {
+			invs = append(invs, Invariant{Name: InvPresenceReconcilerAll, Passed: false,
+				Detail: fmt.Sprintf("the activeOnly:false walk (%d row(s), %d page(s)) did not enumerate every asserted device — missing: [%s]; unexpected: [%s]. This is the branch the broker-presence reconciler reads, and a device missing from it is one it can never repair",
+					len(obs.AssertedAll), obs.AssertedAllPages, strings.Join(missingAll, ", "), strings.Join(extraAll, ", "))})
+		}
+	}
+
 	return invs
 }
 
@@ -708,6 +689,7 @@ const queryAssertedStates = `query($source:String!,$activeOnly:Boolean!,$afterId
     deviceToken
     active
     presenceSource
+    source
   }
 }`
 
@@ -757,14 +739,23 @@ func (o *presenceOracle) states(ctx context.Context, tokens []string) (map[strin
 	return obs, nil
 }
 
-// assertedActiveTokens walks assertedDeviceStates to exhaustion the way the contract
+// assertedTokens walks assertedDeviceStates to exhaustion the way the contract
 // documents: from no cursor, then from the last row's id, until a page comes back
 // shorter than pageSize. It returns the tokens in the order the pages served them,
-// plus the number of requests it took — evidence that the cursor was exercised at all.
-func (o *presenceOracle) assertedActiveTokens(ctx context.Context, source string, pageSize int) (tokens []string, pages int, err error) {
+// plus the number of requests it took.
+//
+// 🔴 BOTH VALUES OF activeOnly ARE WALKED BY THE CALLER, AND THAT IS NOT SYMMETRY FOR
+// ITS OWN SAKE. The two production readers of this surface disagree: the broker-
+// presence reconciler — the one that repairs the very projection this harness
+// measures — reads activeOnly:FALSE, because the offline half is what its synthetic-
+// death path acts on; the LwM2M/Sparkplug failover reconciler reads activeOnly:true.
+// A harness that walked only the true branch would leave the branch the real
+// reconciler depends on entirely unexercised, and could call itself "the reconciler's
+// own enumeration" while matching neither caller.
+func (o *presenceOracle) assertedTokens(ctx context.Context, source string, activeOnly bool, pageSize int) (tokens []string, pages int, err error) {
 	var afterId *string
 	for {
-		vars := map[string]any{"source": source, "activeOnly": true, "pageSize": pageSize}
+		vars := map[string]any{"source": source, "activeOnly": activeOnly, "pageSize": pageSize}
 		if afterId != nil {
 			vars["afterId"] = *afterId
 		}
@@ -774,21 +765,48 @@ func (o *presenceOracle) assertedActiveTokens(ctx context.Context, source string
 				DeviceToken    string `json:"deviceToken"`
 				Active         bool   `json:"active"`
 				PresenceSource string `json:"presenceSource"`
+				Source         string `json:"source"`
 			} `json:"assertedDeviceStates"`
 		}
 		if qerr := o.session.Query(ctx, o.endpoint, queryAssertedStates, vars, &out); qerr != nil {
 			return nil, pages, fmt.Errorf("assertedDeviceStates page %d: %w", pages+1, qerr)
 		}
 		pages++
+		// 🔴 A PAGE MAY NOT EXCEED THE SIZE THAT WAS ASKED FOR. The walk stops on a page
+		// SHORTER than pageSize, which says nothing about the upper side — so a server
+		// that ignored the limit and dumped the whole set on page one would satisfy the
+		// membership check and report a plausible page count. That is the unbounded-read
+		// class this project has already been bitten by, and the reconciler's own
+		// contract says a response larger than the caller's read limit is CUT OFF rather
+		// than shortened, which in a reconciler means devices marked offline while
+		// connected. The limit is the property; assert it.
+		if len(out.AssertedDeviceStates) > pageSize {
+			return nil, pages, fmt.Errorf("assertedDeviceStates returned %d row(s) for a pageSize of %d — the page limit is not being applied, so a fleet-sized read would be truncated rather than paged",
+				len(out.AssertedDeviceStates), pageSize)
+		}
 		for _, r := range out.AssertedDeviceStates {
-			// The query already filters to asserted-and-active, so a row that is neither
-			// is the SURFACE misbehaving rather than a device to record. Fail closed: an
-			// enumeration silently carrying rows it was asked to exclude is the class of
-			// defect this invariant exists to find, and folding them into the token set
-			// would report it as a membership mismatch with no hint of the real cause.
-			if !r.Active || r.PresenceSource != presenceSourceAsserted {
-				return nil, pages, fmt.Errorf("assertedDeviceStates returned %q with active=%v presenceSource=%q, which the query's own filters exclude",
-					r.DeviceToken, r.Active, r.PresenceSource)
+			// The query filters on all three of asserted, active and source, so a row
+			// failing any of them is the SURFACE misbehaving rather than a device to
+			// record. Fail closed: an enumeration silently carrying rows it was asked to
+			// exclude is the class of defect this invariant exists to find, and folding
+			// them into the token set would report it as a membership mismatch with no
+			// hint of the real cause.
+			//
+			// 🔴 THE SOURCE CHECK IS THE ONE THIS HARNESS CANNOT DO ANY OTHER WAY. It owns
+			// the whole tenant, so a resolver that stopped applying the source predicate
+			// would return exactly the same rows a correct one does — and in production
+			// that defect means one gateway's reconciler enumerating another's devices and
+			// probing devices it does not own. Selecting the field and comparing it is the
+			// only thing that can see it from out here.
+			if !r.Active && activeOnly {
+				return nil, pages, fmt.Errorf("assertedDeviceStates(activeOnly:true) returned %q with active=false, which its own filter excludes", r.DeviceToken)
+			}
+			if r.PresenceSource != presenceSourceAsserted {
+				return nil, pages, fmt.Errorf("assertedDeviceStates returned %q with presenceSource=%q, which its own filter excludes", r.DeviceToken, r.PresenceSource)
+			}
+			if r.Source != source {
+				return nil, pages, fmt.Errorf("assertedDeviceStates(source:%q) returned %q whose row carries source %q — the source predicate is not being applied, which in a reconciler means enumerating another gateway's devices",
+					source, r.DeviceToken, r.Source)
 			}
 			tokens = append(tokens, r.DeviceToken)
 		}
@@ -934,12 +952,12 @@ type PresenceReport struct {
 	// enumerate an empty set on any instance that renamed it.
 	TapLive          bool   `json:"tapLive"`
 	PresenceSourceId string `json:"presenceSourceId,omitempty"`
-	// tapDetail is a SPECIFIC reason the tap is unusable, when the harness has one.
-	// Unexported because it is not a second wire field — it becomes the report's
-	// Reason. Its existence is what lets every exit path run through finish: an early
-	// return that set the disposition by hand would be a branch the verdict fold never
-	// sees, which is how a run ends up reporting the wrong one of three states.
-	tapDetail string
+	// cannotMeasure accumulates every reason this run has no opinion. Unexported
+	// because it is not a second wire field — it becomes the report's Reason. Its
+	// existence is what lets every exit path run through finish: an early return that
+	// set the disposition by hand would be a branch the verdict fold never sees, which
+	// is how a run ends up reporting the wrong one of three states.
+	cannotMeasure measurability
 
 	SteadyDevices   int `json:"steadyDevices"`
 	ChurnDevices    int `json:"churnDevices"`
@@ -952,6 +970,8 @@ type PresenceReport struct {
 	ChurnFlipTimeouts map[string]int    `json:"churnFlipTimeouts,omitempty"`
 	AssertedPages     int               `json:"assertedReadPages"`
 	AssertedCount     int               `json:"assertedReadRows"`
+	AssertedAllPages  int               `json:"assertedAllReadPages"`
+	AssertedAllCount  int               `json:"assertedAllReadRows"`
 
 	// Control is the negative control that was run, if any, and whether it behaved.
 	Control          string `json:"control,omitempty"`
@@ -999,11 +1019,14 @@ func (r *PresenceReport) ExitCode() int {
 // release-blocking finding. The one thing a control cannot rescue is an INCONCLUSIVE
 // run: a perturbation nobody could observe proves nothing about the oracle either,
 // so that disposition stands and the control is not even evaluated.
-func (r *PresenceReport) finish(shed int64, invs []Invariant, control string) {
+func (r *PresenceReport) finish(invs []Invariant, control string) {
 	r.Invariants = invs
 	r.Control = control
-	r.Disposition, r.Reason = decideDisposition(r.TapLive, r.tapDetail, shed, invs)
+	r.Disposition, r.Reason = decideDisposition(r.cannotMeasure, PresenceInvariants, invs)
 	if control == "" || r.Disposition == DispositionInconclusive {
+		// An unevaluated control must not leave a verdict behind: a stale "VIOLATED"
+		// beside an INCONCLUSIVE disposition reads as two answers to one question.
+		r.ControlSatisfied, r.ControlDetail = false, ""
 		return
 	}
 	r.ControlSatisfied, r.ControlDetail = evaluateControl(control, invs)
@@ -1032,11 +1055,18 @@ func (r *PresenceReport) Human() string {
 	fmt.Fprintf(&b, "  cohorts: %d steady (%d clean poll(s), %d read error(s)), %d churn × %d round(s), %d departed; asserted walk %d row(s) over %d page(s)\n",
 		r.SteadyDevices, r.CleanSteadyPolls, r.SteadyReadErrors, r.ChurnDevices, r.ChurnRounds, r.DepartedDevices, r.AssertedCount, r.AssertedPages)
 	if r.Control != "" {
-		mark := "VIOLATED"
-		if r.ControlSatisfied {
-			mark = "satisfied"
+		// An UNEVALUATED control prints that it was not judged, never "VIOLATED". A
+		// control cannot be violated by a run that could not observe its perturbation,
+		// and printing a verdict beside an INCONCLUSIVE disposition gives the reader two
+		// answers to one question.
+		switch {
+		case r.ControlDetail == "":
+			fmt.Fprintf(&b, "  control %s: NOT EVALUATED — this run could not measure, so the control proves nothing either\n", r.Control)
+		case r.ControlSatisfied:
+			fmt.Fprintf(&b, "  control %s: satisfied — %s\n", r.Control, r.ControlDetail)
+		default:
+			fmt.Fprintf(&b, "  control %s: VIOLATED — %s\n", r.Control, r.ControlDetail)
 		}
-		fmt.Fprintf(&b, "  control %s: %s — %s\n", r.Control, mark, r.ControlDetail)
 	}
 	for _, inv := range r.Invariants {
 		mark := "FAIL"
@@ -1153,7 +1183,8 @@ func RunPresence(ctx context.Context, hs *sim.Handshake, cfg PresenceConfig) (*P
 		deviceStateObs.assertedActive, cfg.TapTimeout, cfg.Poll)
 	if !tapOK {
 		report.FinishedAt = time.Now().UTC()
-		report.finish(0, nil, cfg.Control)
+		report.cannotMeasure.cannot("%s", tapOffAdvice)
+		report.finish(nil, cfg.Control)
 		log.Warn().Str("device", tapDevice.Token).Dur("waited", cfg.TapTimeout).
 			Msg("the tap probe never reached an ASSERTED device-state row; the run is inconclusive")
 		return report, nil
@@ -1163,9 +1194,9 @@ func RunPresence(ctx context.Context, hs *sim.Handshake, cfg PresenceConfig) (*P
 		report.FinishedAt = time.Now().UTC()
 		// TapLive stays FALSE, which is the honest reading: a presence tap whose rows
 		// carry no source id is not one this harness (or a reconciler) can use.
-		report.tapDetail = fmt.Sprintf("the tap probe %q is asserted-online but its row carries no source id, and the "+
+		report.cannotMeasure.cannot("the tap probe %q is asserted-online but its row carries no source id, and the "+
 			"reconciler's enumeration is source-scoped — there is nothing to enumerate it under", tapDevice.Token)
-		report.finish(0, nil, cfg.Control)
+		report.finish(nil, cfg.Control)
 		return report, nil
 	}
 	report.TapLive = true
@@ -1177,7 +1208,7 @@ func RunPresence(ctx context.Context, hs *sim.Handshake, cfg PresenceConfig) (*P
 	// device connected, the reconciler's enumeration must hold exactly that device.
 	// Anything else is another producer on this tenant, which the exact-set invariant
 	// cannot survive — and finding that out here is a refusal, not a finding.
-	if enumerated, _, aerr := oracle.assertedActiveTokens(ctx, source, cfg.PageSize); aerr != nil {
+	if enumerated, _, aerr := oracle.assertedTokens(ctx, source, true, cfg.PageSize); aerr != nil {
 		return nil, fmt.Errorf("pre-load assertedDeviceStates walk: %w", aerr)
 	} else if len(enumerated) != 1 || enumerated[0] != tapDevice.Token {
 		return nil, fmt.Errorf("before this run connected anything but its tap probe, assertedDeviceStates(source:%q) already enumerated %v — this tenant is not exclusively ours, and the reconciler invariant asserts an EXACT set", source, enumerated)
@@ -1191,9 +1222,10 @@ func RunPresence(ctx context.Context, hs *sim.Handshake, cfg PresenceConfig) (*P
 	}
 	baseline, _ := oracle.awaitStates(ctx, cohortTokens, deviceStateObs.assertedActive, cfg.FlipTimeout, cfg.Poll)
 	obs := presenceObservations{
-		ConnectBaseline:   baseline,
-		ChurnSessions:     make(map[string][]int64, len(churnTokens)),
-		ChurnFlipTimeouts: map[string]int{},
+		ConnectBaselineRead: baseline != nil,
+		ConnectBaseline:     baseline,
+		ChurnSessions:       make(map[string][]int64, len(churnTokens)),
+		ChurnFlipTimeouts:   map[string]int{},
 	}
 	for _, t := range churnTokens {
 		obs.ChurnSessions[t] = []int64{baseline[t].SessionID}
@@ -1318,12 +1350,47 @@ func RunPresence(ctx context.Context, hs *sim.Handshake, cfg PresenceConfig) (*P
 	}
 
 	// --- 4. the authoritative reads ------------------------------------------
+	//
+	// 🔴 A READ THAT NEVER SUCCEEDED IS NOT AN OBSERVATION OF AN OFFLINE FLEET. Every
+	// cohort read below folds an unreachable device-state API into rows that are
+	// absent — which the classifier correctly reads as "no device-state row" and fails
+	// on. Failing closed is right for a two-valued gate; here it would print exit 1,
+	// "presence defect", for a GraphQL outage. The steady watcher already makes this
+	// distinction (it counts clean polls apart from read errors); these reads did not,
+	// and that discipline covered 1 of the 4.
 	obs.CleanSteadyPolls, obs.SteadyReadErrors, obs.SteadyBad = watch.snapshot()
-	obs.DepartedFinal, _ = oracle.awaitStates(ctx, departedTokens, deviceStateObs.assertedOffline, cfg.Settle, cfg.Poll)
-	enumerated, pages, aerr := oracle.assertedActiveTokens(ctx, source, cfg.PageSize)
+	if obs.CleanSteadyPolls == 0 && obs.SteadyReadErrors > 0 {
+		report.cannotMeasure.cannot("every one of the %d steady poll(s) failed to read device-state, so nothing was observed about the cohort at all", obs.SteadyReadErrors)
+	}
+
+	departedFinal, departedRead := oracle.awaitStates(ctx, departedTokens, deviceStateObs.assertedOffline, cfg.Settle, cfg.Poll)
+	if departedFinal == nil {
+		report.cannotMeasure.cannot("the departed cohort could not be read at all before the deadline — device-state was unreachable, which is not evidence that a device is still online")
+	}
+	_ = departedRead // the read SUCCEEDING is what matters here; the wait's verdict is the classifier's job
+	obs.DepartedFinal = departedFinal
+
+	enumerated, pages, aerr := oracle.assertedTokens(ctx, source, true, cfg.PageSize)
 	obs.AssertedActive, obs.Pages = enumerated, pages
 	if aerr != nil {
 		obs.AssertedReadErr = aerr.Error()
+	}
+	// The branch the broker-presence reconciler actually reads. It must enumerate
+	// every asserted device — online AND departed — because its offline half is what
+	// the reconciler's synthetic-death path acts on.
+	allAsserted, allPages, allErr := oracle.assertedTokens(ctx, source, false, cfg.PageSize)
+	obs.AssertedAll, obs.AssertedAllPages = allAsserted, allPages
+	if allErr != nil {
+		obs.AssertedAllReadErr = allErr.Error()
+	}
+	if !obs.ConnectBaselineRead {
+		report.cannotMeasure.cannot("the pre-load connect baseline could not be read at all, so the departed cohort's final state has nothing to be a change FROM")
+	}
+	// A churn round whose departure the projection never showed leaves the harness
+	// reconnecting into a session it did not see end — the exact race the wait exists
+	// to prevent. The reading that follows is then not evidence about ordering.
+	if n := obs.ChurnFlipTimeouts["offline"]; n > 0 {
+		report.cannotMeasure.cannot("%d churn round(s) reconnected without the projection ever showing the departure, so those session readings race the departure they should follow", n)
 	}
 
 	invs := classifyPresence(obs, steadyTokens, churnTokens, departedTokens, cfg, snap.Emitted)
@@ -1347,7 +1414,41 @@ func RunPresence(ctx context.Context, hs *sim.Handshake, cfg PresenceConfig) (*P
 	}
 	report.AssertedPages = obs.Pages
 	report.AssertedCount = len(obs.AssertedActive)
-	report.finish(snap.Shed, invs, cfg.Control)
+	report.AssertedAllPages = obs.AssertedAllPages
+	report.AssertedAllCount = len(obs.AssertedAll)
+
+	// 🔴 THE TWO DRIVER SIGNALS, AND THEY MEAN DIFFERENT THINGS.
+	//
+	// SHED is a governed 429 at the per-tenant ingest ceiling — and presence
+	// transitions pass through that SAME gate object (the tap is constructed with it),
+	// metered against the same live bucket. So a shed run is one where a transition
+	// this harness did not see may have been REFUSED rather than lost, and no presence
+	// verdict can be told apart from a governance one.
+	//
+	// 🔴 THAT IS AN INFERENCE, NOT A MEASUREMENT, AND IT IS STATED AS ONE. The direct
+	// count of refused presence transitions is a server-side metric this harness has
+	// no business reading — it is an untrusted external client. What it observes is
+	// that the tenant's ceiling was refusing traffic during the run, which makes the
+	// presence half unmeasurable by the same argument. It also cannot see a refusal
+	// that happened with no HTTP 429 alongside it, so `shed == 0` narrows the risk
+	// rather than eliminating it.
+	//
+	// FAILED is different and was previously unhandled: real transport errors. The
+	// common cause at this gate is the shared kubectl port-forward dropping, which
+	// stops the background load, sinks the accepted count below the floor, and would
+	// otherwise print "presence defect" for a tunnel.
+	if snap.Shed > 0 {
+		report.cannotMeasure.cannot("the background fleet was shed %d time(s) at the per-tenant ingest ceiling, and presence "+
+			"transitions pass through that same ceiling — so a transition this run did not see may have been refused rather "+
+			"than lost. Lower the background load (--bg-devices / --bg-interval) or raise the tenant's ingest ceiling, and re-run", snap.Shed)
+	}
+	if snap.Failed > 0 && snap.Failed*10 >= snap.Emitted {
+		report.cannotMeasure.cannot("%d of %d background emit(s) failed outright (not shed — real transport errors), so the load this "+
+			"verdict rests on was not applied. At this gate the usual cause is the shared device-plane port-forward dropping, "+
+			"which is a tunnel fault rather than a presence one", snap.Failed, snap.Failed+snap.Emitted)
+	}
+
+	report.finish(invs, cfg.Control)
 	return report, nil
 }
 
