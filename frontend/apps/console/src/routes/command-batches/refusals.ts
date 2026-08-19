@@ -51,6 +51,32 @@ export function isSampleTruncated(group: RefusalGroup): boolean {
   return group.count !== null && group.count > group.sample.length;
 }
 
+/**
+ * How much of this code's refused-device set the names below actually cover.
+ *
+ * 🔴 THREE ANSWERS, BECAUSE THE QUESTION HAS THREE. `isSampleTruncated` above is a boolean,
+ * and a boolean over a nullable count has to fold "unknown" into one of its two sides — it
+ * folds it into `false`, which the panel then rendered as "Showing all N refused devices"
+ * for a group whose own badge, one line higher, correctly said the total was not reported.
+ * Claiming completeness is exactly what a null count cannot support: the sample may name
+ * every refused device or a small fraction of them, and nobody said which.
+ *
+ * The boolean is kept — it answers the narrower question "is it short of a KNOWN total?" and
+ * that question is still asked — but the panel branches on this instead.
+ */
+export type SampleCoverage =
+  /** The sample names every refused device, and the exact count says so. */
+  | 'complete'
+  /** The sample is capped and the exact count is higher. */
+  | 'truncated'
+  /** There is no exact count, so how much the sample covers is not knowable. */
+  | 'unknown';
+
+export function sampleCoverage(group: RefusalGroup): SampleCoverage {
+  if (group.count === null) return 'unknown';
+  return group.count > group.sample.length ? 'truncated' : 'complete';
+}
+
 /** The exact total number of devices refused, across every code. */
 export function totalRefused(counts: readonly RefusalCount[]): number {
   return counts.reduce((sum, c) => sum + c.count, 0);

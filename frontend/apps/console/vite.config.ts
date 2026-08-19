@@ -58,7 +58,11 @@ export default defineConfig(({ mode }) => {
         // /@fs/.../packages/client/src/index.ts returned 403 while the chart
         // returned 200. Nothing catches this — fs.allow governs only the dev
         // server, so build, typecheck, lint and vitest all stay green.
-        allow: [searchForWorkspaceRoot(process.cwd()), path.resolve(__dirname, '../../../deploy/helm')],
+        allow: [
+          searchForWorkspaceRoot(process.cwd()),
+          path.resolve(__dirname, '../../../deploy/helm'),
+          path.resolve(__dirname, '../../../backend'),
+        ],
       },
       proxy: {
         '/api': {

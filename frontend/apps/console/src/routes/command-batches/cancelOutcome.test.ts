@@ -10,6 +10,8 @@ import { describe, expect, it } from 'vitest';
 import {
   STILL_HELD_STATUSES,
   accountedFor,
+  cancelMotion,
+  isReassuring,
   hasUnstoppable,
   needsSecondCancel,
   offerCancel,
@@ -130,5 +132,69 @@ describe('the states a cancel can actually stop', () => {
   // "still held" would tell an operator a cancel can take back something it cannot.
   it('excludes SENT', () => {
     expect(STILL_HELD_STATUSES).not.toContain('SENT');
+  });
+});
+
+
+// ── What the panel may SAY about what is still moving ───────────────────────
+//
+// 🔴 ENUMERATED, NOT EXEMPLIFIED, and the difference is the whole point of this block. The
+// panel used to branch on ONE of the three axes (`alreadySent`), and the two sentences that
+// produced were each pinned by a careful example-based test. Examples confirm that a string
+// renders; they cannot notice that the string is false for a state nobody thought to write
+// down. Every cell below is reachable from a real cancel.
+
+describe('cancelMotion over the whole state space', () => {
+  // (alreadySent, alreadyFinished, unaccounted) × {0, +}. `matched` is chosen to put
+  // `unaccounted` where the row wants it, since unaccounted = matched − the other three.
+  const cell = (alreadySent: number, alreadyFinished: number, missed: number) => ({
+    cancelled: 1,
+    alreadySent,
+    alreadyFinished,
+    matched: 1 + alreadySent + alreadyFinished + missed,
+  });
+
+  it.each([
+    // sent  finished  missed  expected
+    [0, 0, 0, 'settledNothingReached'],
+    [0, 2, 0, 'settledSomeFinished'],
+    [0, 0, 3, 'stillQueued'],
+    [0, 2, 3, 'stillQueued'],
+    [5, 0, 0, 'stillActing'],
+    [5, 2, 0, 'stillActing'],
+    [5, 0, 3, 'stillActing'],
+    [5, 2, 3, 'stillActing'],
+  ] as const)('sent=%i finished=%i missed=%i ⇒ %s', (sent, fin, missed, want) => {
+    expect(cancelMotion(cell(sent, fin, missed))).toBe(want);
+  });
+
+  // 🔴 THE CROSS-FAMILY INVARIANT, AND THE ONE THAT WOULD HAVE CAUGHT THE SHIPPED DEFECT.
+  //
+  // Every per-sentence test above asks "is the right one of four shown?". None of them can
+  // ask "do the sentences on this screen contradict each other?" — and that is what went
+  // wrong: a reassurance rendered directly above the block saying N commands were back in
+  // the delivery queue. So the rule is stated once, over the vocabulary rather than over a
+  // hand-listed pair of strings, and it holds for a fifth motion nobody has written yet.
+  it('never reassures while anything is unaccounted for', () => {
+    for (const sent of [0, 5]) {
+      for (const fin of [0, 2]) {
+        for (const missed of [0, 3]) {
+          const counts = cell(sent, fin, missed);
+          if (!isReassuring(cancelMotion(counts))) continue;
+          expect({ counts, unaccounted: unaccounted(counts) }).toEqual({ counts, unaccounted: 0 });
+        }
+      }
+    }
+  });
+
+  // The control for the invariant above. A run in which NO cell was reassuring would satisfy
+  // it vacuously — the loop would simply `continue` eight times and assert nothing.
+  it('has reassuring cells at all', () => {
+    const motions = [0, 5].flatMap((sent) =>
+      [0, 2].flatMap((fin) => [0, 3].map((missed) => cancelMotion(cell(sent, fin, missed)))),
+    );
+    expect(motions.filter(isReassuring).length).toBeGreaterThan(0);
+    // ...and non-reassuring ones, so the invariant is not trivially true of everything.
+    expect(motions.filter((m) => !isReassuring(m)).length).toBeGreaterThan(0);
   });
 });

@@ -1,0 +1,142 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// The pin between the identifiers a CEL condition may USE and the ones this console tells
+// an author about.
+//
+// 🔴 WHAT THIS MEASURES IS DISCOVERABILITY, NOT REACHABILITY, and the distinction is the
+// whole honest framing of it. The raw-CEL box already accepts `geo.inFence("yard")` — it is
+// checked against the same environment that declares `geo`, so the capability WORKS today.
+// What was missing is any way to find out it exists: the field's own help enumerated three
+// of the environment's six variables and none of its functions, so geofencing had exactly
+// one discovery surface in the entire product, and that surface was a documentation page.
+//
+// So a green run here does NOT mean an operator can geofence comfortably. They still cannot
+// pick a fence from a list, and the token they must type is checked by nothing at publish.
+// It means only that the vocabulary is no longer secret. Read that limit as written; a gate
+// whose scope is overstated is worse than no gate, because it retires the question.
+//
+// It reads the REGISTRATION — the `cel.Variable(` / `cel.Function(` call sites that build the
+// environment — rather than the `Var*` / `Func*` const names beside them. The consts are a
+// naming convention one file away from what actually runs: a function registered inline as
+// `cel.Function("distanceTo", …)` with no const would reproduce exactly the defect this file
+// exists to catch, while a const-name parse stayed green.
+
+import { describe, it, expect } from 'vitest';
+import ENV_GO from '../../../../../../backend/services/event-processing/internal/detect/predicate/env.go?raw';
+import GEO_GO from '../../../../../../backend/services/event-processing/internal/detect/predicate/geo.go?raw';
+import EN from '@/i18n/locales/en/deviceProfiles.json';
+import ES from '@/i18n/locales/es/deviceProfiles.json';
+
+const PREDICATE_SRC = `${ENV_GO}\n${GEO_GO}`;
+
+/**
+ * `Ident = "value"` consts — the env's identifier names live in the predicate package as
+ * plain literals.
+ *
+ * 🔴 THE OPTIONAL `const ` PREFIX IS NOT COSMETIC, and leaving it out is how this gate first
+ * ran. The variables sit inside a grouped `const ( … )` block, so they parse with the
+ * identifier at the start of the line; `FuncInFence` is a STANDALONE `const FuncInFence =
+ * "inFence"`, which the grouped-block shape does not match. The one function in the
+ * environment was therefore invisible to the extractor — and the only reason that surfaced
+ * as a failure rather than a silent pass is that an unresolvable registration THROWS below
+ * instead of being skipped.
+ */
+function constValues(src: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const m of src.matchAll(/^\s*(?:const\s+)?([A-Z][A-Za-z0-9]*)\s*=\s*"([^"]*)"/gm)) out.set(m[1], m[2]);
+  return out;
+}
+
+const CONSTS = constValues(PREDICATE_SRC);
+
+/**
+ * The identifiers registered into the CEL environment, by call site.
+ *
+ * A registration names its identifier either as a const (`cel.Variable(VarGeo, …)`) or as a
+ * bare literal (`cel.Function("distanceTo", …)`). Both are read, because the second is the
+ * one a const-name parse would miss.
+ */
+function registered(kind: 'Variable' | 'Function'): string[] {
+  const out = new Set<string>();
+  for (const m of PREDICATE_SRC.matchAll(new RegExp(`cel\\.${kind}\\(\\s*([A-Za-z0-9_"]+)`, 'g'))) {
+    const arg = m[1];
+    if (arg.startsWith('"')) {
+      out.add(arg.slice(1, -1));
+      continue;
+    }
+    const v = CONSTS.get(arg);
+    // An identifier we cannot resolve is NOT skipped. Skipping is how a real one goes
+    // missing while every count still looks right.
+    if (v === undefined) throw new Error(`cel.${kind}(${arg}, …) — ${arg} has no string literal value`);
+    out.add(v);
+  }
+  return [...out];
+}
+
+/**
+ * Whether `name` appears in `text` as a standalone token.
+ *
+ * 🔴 A PLAIN `includes` WOULD MAKE THIS GATE VIRTUALLY VACUOUS. The identifiers are `m`,
+ * `attr`, `device`, `anchors`, `occurred` and `geo` — and "m" is inside "measurement", "geo"
+ * is inside "geocercas" in the Spanish copy, "attr" is inside "attribute". Substring
+ * matching would report the vocabulary fully documented against help text that names none of
+ * it. The boundaries are the only thing making the check mean what it says.
+ */
+function mentionsToken(text: string, name: string): boolean {
+  return new RegExp(`(^|[^A-Za-z0-9_])${name}([^A-Za-z0-9_]|$)`).test(text);
+}
+
+// The one field description that ENUMERATES the vocabulary, in each locale. The canvas's own
+// CEL help is deliberately not gated here: it describes the box without listing identifiers,
+// so it has nothing to fall out of step with. That is a gap, stated rather than papered over.
+const HELP: Record<string, string> = {
+  en: (EN as Record<string, string>).ruleCelDescription,
+  es: (ES as Record<string, string>).ruleCelDescription,
+};
+
+describe('the predicate environment extraction', () => {
+  // 🔴 THE NEGATIVE CONTROL FOR EVERY ASSERTION BELOW. All of them are "each registered name
+  // is mentioned"; over an empty set that is vacuously true, and a broken regex is exactly
+  // how the set becomes empty.
+  it('finds a plausible environment', () => {
+    expect(registered('Variable').length).toBeGreaterThanOrEqual(6);
+    expect(registered('Variable')).toContain('geo');
+    expect(registered('Variable')).toContain('m');
+    expect(registered('Function')).toEqual(['inFence']);
+  });
+
+  it('matches identifiers on token boundaries, not as substrings', () => {
+    // The control for the control. If this ever passed, every check below would be reporting
+    // on the presence of ordinary prose.
+    expect(mentionsToken('a measurement over time', 'm')).toBe(false);
+    expect(mentionsToken('las geocercas del sitio', 'geo')).toBe(false);
+    expect(mentionsToken('the vocabulary: m, attr, geo.', 'm')).toBe(true);
+    expect(mentionsToken('written geo.inFence("yard")', 'geo')).toBe(true);
+  });
+
+  it('refuses a registration it cannot resolve', () => {
+    expect(() => constValues('').get('nope')).not.toThrow();
+    expect(CONSTS.get('VarGeo')).toBe('geo');
+    expect(CONSTS.get('FuncInFence')).toBe('inFence');
+  });
+});
+
+describe.each(Object.keys(HELP))('the CEL help in %s', (locale) => {
+  const text = HELP[locale];
+
+  it('exists and is substantial', () => {
+    expect(typeof text).toBe('string');
+    expect(text.length).toBeGreaterThan(40);
+  });
+
+  it('names every variable a condition may read', () => {
+    const missing = registered('Variable').filter((v) => !mentionsToken(text, v));
+    expect({ locale, missing }).toEqual({ locale, missing: [] });
+  });
+
+  it('names every function a condition may call', () => {
+    const missing = registered('Function').filter((f) => !mentionsToken(text, f));
+    expect({ locale, missing }).toEqual({ locale, missing: [] });
+  });
+});

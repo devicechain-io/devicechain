@@ -35,3 +35,54 @@ export function sameLogicalRule(a: string, b: string): boolean {
     return false;
   }
 }
+
+// prune drops the keys stableStringify treats as absent (an empty object), recursively, so
+// the containment check below compares the same normalized shape that equality does.
+function prune(v: unknown): unknown {
+  if (v === null || typeof v !== 'object') return v;
+  if (Array.isArray(v)) return v.map(prune);
+  const out: Record<string, unknown> = {};
+  for (const [k, raw] of Object.entries(v as Record<string, unknown>)) {
+    const pv = prune(raw);
+    if (stableStringify(pv) === '{}') continue;
+    out[k] = pv;
+  }
+  return out;
+}
+
+// contains reports whether `whole` carries everything in `part`, at equal values.
+function contains(whole: unknown, part: unknown): boolean {
+  if (part === null || typeof part !== 'object') return stableStringify(whole) === stableStringify(part);
+  if (Array.isArray(part)) {
+    // Arrays are compared WHOLE, not element-wise-contained. A rule's `actions` array is
+    // ordered and its length is meaningful — an action the form dropped must register as a
+    // loss, and a per-element containment check would let a shortened array pass.
+    return stableStringify(whole) === stableStringify(part);
+  }
+  if (whole === null || typeof whole !== 'object' || Array.isArray(whole)) return false;
+  const w = whole as Record<string, unknown>;
+  for (const [k, pv] of Object.entries(part as Record<string, unknown>)) {
+    if (!(k in w)) return false;
+    if (!contains(w[k], pv)) return false;
+  }
+  return true;
+}
+
+// ruleSurvivesRoundTrip reports whether `rebuilt` — what this form would emit for a rule it
+// has just read — still carries everything `stored` said. It is the OPEN-time counterpart of
+// sameLogicalRule, and it is deliberately ONE-DIRECTIONAL where that one is symmetric.
+//
+// 🔴 THE DIRECTION IS THE WHOLE DESIGN. Data loss is "the stored rule said something the
+// rebuild does not"; the reverse — the form emitting a key the stored rule omitted, such as
+// the `name: ""` that buildDefinition always writes — loses nothing and must not be reported.
+// A symmetric comparison here would warn on ordinary API-authored rules that simply left an
+// optional field out, and a warning that fires on healthy rules is one nobody reads.
+//
+// A parse failure on either side yields false: unreadable is the worst kind of lossy.
+export function ruleSurvivesRoundTrip(stored: string, rebuilt: string): boolean {
+  try {
+    return contains(prune(JSON.parse(rebuilt)), prune(JSON.parse(stored)));
+  } catch {
+    return false;
+  }
+}

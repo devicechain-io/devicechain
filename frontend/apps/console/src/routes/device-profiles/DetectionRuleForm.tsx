@@ -45,25 +45,61 @@ import {
 } from '@/lib/api/device-management';
 import { previewSelector } from '@/lib/api/browse';
 import { validateDetectionRule } from '@/lib/api/event-processing';
-import { sameLogicalRule } from './rule-equal';
+import { ruleSurvivesRoundTrip, sameLogicalRule } from './rule-equal';
 
-// ── The rule taxonomy (mirrors rules.RuleType) ─────────────────────────────
+// ── The rule taxonomy ──────────────────────────────────────────────────────
 
-type RuleType = 'threshold' | 'duration' | 'absence' | 'repeating' | 'deltaRate' | 'aggregate' | 'correlation';
+// 🔴 ONE LIST, AND THE OTHER THREE DERIVE FROM IT. This file used to carry the taxonomy
+// three times — the union type, `ruleTypeOptions`, and `KNOWN_TYPES` down in
+// `parseDefinition` — and nothing made them agree. `KNOWN_TYPES` was the one that decided
+// whether a stored rule was UNDERSTOOD, so when it went stale the form silently relabelled
+// a real rule as a threshold; the other two copies were the ones a reviewer would notice.
+// That is how `connectivity` came to be a kind the compiler has always accepted and the
+// console could not open, and it is why adding it to the picker alone would not have fixed
+// anything.
+//
+// `as const` + an indexed access type means a fourth copy cannot be added without deleting
+// this one, and `ruleTypeOptions` below is exhaustiveness-checked against it by the
+// compiler rather than by anybody remembering.
+export const RULE_TYPES = [
+  'threshold',
+  'duration',
+  'absence',
+  'repeating',
+  'deltaRate',
+  'aggregate',
+  'correlation',
+  // A leaf-less, config-less EDGE trigger: the presence state change IS the signal, so the
+  // compiler forbids every authorable field for it. It is therefore the SIMPLEST kind in the
+  // taxonomy, not a complicated one — the reason it was missing is that nothing checked.
+  'connectivity',
+] as const;
+
+type RuleType = (typeof RULE_TYPES)[number];
 
 // Option arrays are FUNCTIONS of `t` (called inside the component that renders them), never
 // module-scope useTranslation — only the `value` fields are machine discriminants (serialized
 // into the rule JSON / compared in logic); `label`/`description` are display text.
-function ruleTypeOptions(t: TFunction): ComboboxOption[] {
-  return [
-    { value: 'threshold', label: t('ruleTypeThresholdLabel'), description: t('ruleTypeThresholdDescription') },
-    { value: 'duration', label: t('ruleTypeDurationLabel'), description: t('ruleTypeDurationDescription') },
-    { value: 'absence', label: t('ruleTypeAbsenceLabel'), description: t('ruleTypeAbsenceDescription') },
-    { value: 'repeating', label: t('ruleTypeRepeatingLabel'), description: t('ruleTypeRepeatingDescription') },
-    { value: 'deltaRate', label: t('ruleTypeDeltaRateLabel'), description: t('ruleTypeDeltaRateDescription') },
-    { value: 'aggregate', label: t('ruleTypeAggregateLabel'), description: t('ruleTypeAggregateDescription') },
-    { value: 'correlation', label: t('ruleTypeCorrelationLabel'), description: t('ruleTypeCorrelationDescription') },
-  ];
+// The i18n key stems, one per kind. A `Record<RuleType, string>` rather than a list, so
+// adding a kind to RULE_TYPES above fails to compile until its labels are named here —
+// which is the whole point: the picker cannot fall behind the taxonomy.
+const RULE_TYPE_KEY: Record<RuleType, string> = {
+  threshold: 'Threshold',
+  duration: 'Duration',
+  absence: 'Absence',
+  repeating: 'Repeating',
+  deltaRate: 'DeltaRate',
+  aggregate: 'Aggregate',
+  correlation: 'Correlation',
+  connectivity: 'Connectivity',
+};
+
+export function ruleTypeOptions(t: TFunction): ComboboxOption[] {
+  return RULE_TYPES.map((value) => ({
+    value,
+    label: t(`ruleType${RULE_TYPE_KEY[value]}Label`),
+    description: t(`ruleType${RULE_TYPE_KEY[value]}Description`),
+  }));
 }
 
 // Severity labels are shared with the alarms area's own vocabulary (already translated there);
@@ -137,9 +173,30 @@ interface ActionRow {
 }
 
 // Per-type authoring shape derived from compile.go.
+// isKnownRuleType narrows an arbitrary stored `type` against the ONE taxonomy. A type
+// guard rather than an `includes` at the call site, so the narrowing is the compiler's and
+// no cast is needed to use the result.
+function isKnownRuleType(v: unknown): v is RuleType {
+  return typeof v === 'string' && (RULE_TYPES as readonly string[]).includes(v);
+}
+
 const conditionRequired = (t: RuleType) => t === 'threshold' || t === 'duration';
-const conditionForbidden = (t: RuleType) => t === 'absence';
+// absence is timer-driven off the roster; connectivity reads the typed presence edge and
+// never evaluates a leaf at all (compileConnectivity forbids every authorable field). A leaf
+// offered for either would be authored, saved, and silently do nothing.
+const conditionForbidden = (t: RuleType) => t === 'absence' || t === 'connectivity';
 const actionsForbidden = (t: RuleType) => t === 'correlation'; // its series is an area anchor, not a device
+
+// Whether a group scope cannot apply to this kind. Absence is timer-driven off the roster
+// and correlation is anchor-keyed, so neither is device-keyed enough for a group to select.
+//
+// 🔴 CONNECTIVITY IS DELIBERATELY NOT IN THIS SET, and that was checked against the gate
+// that enforces it rather than inferred from the shape: the publish resolver refuses a
+// scope on exactly {absence, correlation}, so a scoped connectivity rule is accepted. Adding
+// it here "to be safe" would withhold a legal scope and show the author a refusal the
+// server would never make. The set was also written out twice in this file; one predicate
+// now, because the two copies were a divergence waiting for a third kind.
+const scopeUnsupported = (t: RuleType) => t === 'absence' || t === 'correlation';
 
 // ── Small field helpers ────────────────────────────────────────────────────
 
@@ -389,10 +446,29 @@ export function DetectionRuleForm({
 
   const definitionName = name.trim() || token.trim();
   const hasRaiseAlarm = !actionsForbidden(ruleType) && actions.some((a) => a.type === 'raiseAlarm');
-  // A stored definition the form can't parse (hand-/API-authored into a shape it doesn't
-  // model) opens as a blank threshold; warn that saving replaces it rather than silently
-  // clobbering the original (Fable L2).
+  // 🔴 TWO WAYS A STORED RULE FAILS TO SURVIVE THIS FORM, AND ONLY ONE OF THEM USED TO BE
+  // CAUGHT.
+  //
+  //   unparseable  JSON.parse THREW. Loud, rare, and what the original guard checked.
+  //   lossy        it parsed FINE and the form does not model all of it. Silent, and the
+  //                one that actually happened: a `connectivity` rule — a kind the compiler
+  //                has always accepted — hit parseDefinition's fallback and was relabelled a
+  //                threshold on screen, with no warning, because JSON.parse never threw.
+  //
+  // So the check is no longer "did the parse blow up" but "does what we would SAVE still
+  // carry what was STORED" — a question about this form's expressive range, asked against
+  // the rule in front of it. It covers connectivity today, the ninth rule type the day it
+  // lands, and any field this form never learned to model, without anybody remembering to
+  // add a case. That is the difference between a comment promising the invariant and code
+  // enforcing it.
+  //
+  // They stay SEPARATE rather than folding into one flag, because they need different
+  // sentences: an unparseable rule opens blank, a lossy one opens with everything the form
+  // did understand still filled in. One warning covering both would be false about one of
+  // them, which is the exact class of defect this slice exists to remove.
   const unparseable = editing && initial == null;
+  const lossyOpen =
+    editing && initial != null && !ruleSurvivesRoundTrip(entity.definition, rebuildFrom(initial));
 
   // Client-side guard for the obvious omissions, so the button hints instantly (no round
   // trip) before the inline compiler check or the publish gate rejects. It mirrors only the
@@ -548,8 +624,7 @@ export function DetectionRuleForm({
   useEffect(() => {
     // Skip the preview for an unsupported kind (the count line is hidden anyway) and any
     // incomplete scope — no wasted selector query.
-    const unsupportedKind = ruleType === 'absence' || ruleType === 'correlation';
-    if (!scoped || !scopeGroupToken || scopeGroupVersion == null || unsupportedKind) {
+    if (!scoped || !scopeGroupToken || scopeGroupVersion == null || scopeUnsupported(ruleType)) {
       setScopeCount({ status: 'idle' });
       return;
     }
@@ -635,7 +710,7 @@ export function DetectionRuleForm({
   // half-set gate on that, not on the checkbox alone (ticking "scope" without picking a group
   // still saves an UNSCOPED rule, so a refusal warning there would be misleading).
   const scopeChosen = scoped && !!scopeGroupToken;
-  const scopeUnsupportedKind = scopeChosen && (ruleType === 'absence' || ruleType === 'correlation');
+  const scopeUnsupportedKind = scopeChosen && scopeUnsupported(ruleType);
   // The member family of the selected group, to word the count ("3 areas" not "3 entities").
   const scopeMemberType = scopeGroups.find((g) => g.token === scopeGroupToken)?.memberType ?? 'entity';
   // Block save on a half-set scope (a group with no version chosen — an unpublished group, or a
@@ -646,6 +721,7 @@ export function DetectionRuleForm({
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
       {unparseable && <p className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">{t('ruleUnparseableWarning')}</p>}
+      {lossyOpen && <p className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">{t('ruleLossyOpenWarning')}</p>}
 
       <FormField label={t('common:colName')} htmlFor="dr-name" description={t('ruleNameDescription')}>
         <Input id="dr-name" value={name} onChange={(e) => setName(e.target.value)} placeholder={t('ruleNamePlaceholder')} />
@@ -1109,6 +1185,10 @@ function buildDefinition(a: BuildArgs): string {
   switch (a.ruleType) {
     case 'threshold':
       break;
+    // Every authorable field is forbidden by the compiler for this kind — the presence edge
+    // IS the signal — so it emits nothing at all beyond the header and its actions.
+    case 'connectivity':
+      break;
     case 'duration':
       def.hold = a.holdStr.trim();
       break;
@@ -1220,12 +1300,48 @@ interface ParsedDefinition {
   actions: ActionRow[];
 }
 
-const KNOWN_TYPES: RuleType[] = ['threshold', 'duration', 'absence', 'repeating', 'deltaRate', 'aggregate', 'correlation'];
+
+// rebuildFrom re-emits what this form WOULD save for a definition it has just read, with no
+// operator edit in between. It is the second half of the round-trip whose first half is
+// parseDefinition, and it exists only to be compared against the stored bytes.
+//
+// The mapping is 1:1 with ParsedDefinition modulo the form-state field names, which is the
+// point: if the two shapes ever diverge, this stops compiling rather than quietly measuring
+// the wrong thing.
+export function rebuildFrom(p: ParsedDefinition): string {
+  return buildDefinition({
+    definitionName: p.name,
+    description: p.description,
+    severity: p.severity,
+    ruleType: p.type,
+    condMode: p.condMode,
+    condMetric: p.condMetric,
+    condOp: p.condOp,
+    boundKind: p.boundKind,
+    condThreshold: p.condThreshold,
+    condAttr: p.condAttr,
+    cel: p.cel,
+    valueMetric: p.valueMetric,
+    aggFunc: p.aggFunc,
+    windowMode: p.windowMode,
+    windowStr: p.window,
+    holdStr: p.hold,
+    timeoutStr: p.timeout,
+    gapStr: p.gap,
+    countStr: p.count,
+    rate: p.rate,
+    aggOp: p.aggOp,
+    aggThreshold: p.aggThreshold,
+    anchorType: p.anchorType,
+    memberCapStr: p.memberCap,
+    actions: p.actions,
+  });
+}
 
 // Reads a stored definition into form state. It is defensive (a hand- or API-authored rule
 // may carry shapes the form does not model): anything unreadable falls back to a sensible
 // default so the drawer always opens; the compiler re-validates on the next publish.
-function parseDefinition(raw: string): ParsedDefinition | null {
+export function parseDefinition(raw: string): ParsedDefinition | null {
   let d: Record<string, unknown>;
   try {
     d = JSON.parse(raw) as Record<string, unknown>;
@@ -1234,7 +1350,14 @@ function parseDefinition(raw: string): ParsedDefinition | null {
   }
   const str = (v: unknown): string => (typeof v === 'string' ? v : '');
   const numStr = (v: unknown): string => (typeof v === 'number' ? String(v) : '');
-  const type = KNOWN_TYPES.includes(d.type as RuleType) ? (d.type as RuleType) : 'threshold';
+  // 🔴 THE FALLBACK IS STILL HERE, AND IT IS STILL A RELABEL. A type this form does not
+  // know becomes a threshold on screen, which is a lie about a rule that exists. What has
+  // changed is that it can no longer happen SILENTLY: `isKnownRuleType` reads the single
+  // taxonomy above, and the caller compares the rebuilt definition with the stored one and
+  // warns when they differ (see `lossyOpen`). The relabel is kept rather than refused
+  // because the drawer must still open — an operator has to be able to read and rename a
+  // rule the form cannot fully model.
+  const type = isKnownRuleType(d.type) ? d.type : 'threshold';
 
   // Condition.
   const when = (d.when ?? {}) as Record<string, unknown>;
