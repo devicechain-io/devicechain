@@ -360,8 +360,15 @@ const tapOffAdvice = "broker-asserted MQTT presence does not appear to be runnin
 // presence: a shed transition never reached device-state, and a tap that is off never
 // produced one. Reporting FAIL in either case would name the platform for the
 // environment's problem.
-func decideDisposition(tapLive bool, shed int64, invs []Invariant) (Disposition, string) {
+func decideDisposition(tapLive bool, tapDetail string, shed int64, invs []Invariant) (Disposition, string) {
 	if !tapLive {
+		// tapDetail lets a caller that knows MORE than "no asserted row appeared" say so.
+		// The default advice names every switch precisely because the usual case knows
+		// nothing; a caller that has a specific reason should not be made to print six
+		// guesses alongside it.
+		if tapDetail != "" {
+			return DispositionInconclusive, tapDetail
+		}
 		return DispositionInconclusive, tapOffAdvice
 	}
 	if shed > 0 {
@@ -397,16 +404,22 @@ var controlExpectations = map[string][]string{
 	ControlDropSteadyDevice: {InvPresenceSteadyOnline, InvPresenceReconcilerExact},
 }
 
-// evaluateControl decides whether a negative-control run behaved. Pure.
-//
-// It demands the failure set EXACTLY: the expected invariants red and every other
-// one green. Demanding "at least" would be passed by an oracle that failed
-// everything — the very breakage a control exists to detect — and demanding "only"
-// would fail a healthy oracle whose other invariants legitimately flip as a
-// consequence. Neither weaker reading discriminates; this one does.
+// evaluateControl decides whether a presence negative-control run behaved.
 func evaluateControl(control string, invs []Invariant) (satisfied bool, detail string) {
-	want, ok := controlExpectations[control]
-	if !ok {
+	want, known := controlExpectations[control]
+	return evaluateExpectedFailureSet(control, want, known, invs)
+}
+
+// evaluateExpectedFailureSet is the shared control judgement, used by every harness
+// that ships a negative control. Pure.
+//
+// It demands the failure set EXACTLY: the expected invariants red and every other one
+// green. Demanding "at least" would be passed by an oracle that failed everything —
+// the very breakage a control exists to detect — and demanding "only" would fail a
+// healthy oracle whose other invariants legitimately flip as a consequence of the
+// same perturbation. Neither weaker reading discriminates; this one does.
+func evaluateExpectedFailureSet(control string, want []string, known bool, invs []Invariant) (satisfied bool, detail string) {
+	if !known {
 		return false, fmt.Sprintf("no expected failure set is declared for control %q", control)
 	}
 	if len(invs) == 0 {
@@ -921,6 +934,12 @@ type PresenceReport struct {
 	// enumerate an empty set on any instance that renamed it.
 	TapLive          bool   `json:"tapLive"`
 	PresenceSourceId string `json:"presenceSourceId,omitempty"`
+	// tapDetail is a SPECIFIC reason the tap is unusable, when the harness has one.
+	// Unexported because it is not a second wire field — it becomes the report's
+	// Reason. Its existence is what lets every exit path run through finish: an early
+	// return that set the disposition by hand would be a branch the verdict fold never
+	// sees, which is how a run ends up reporting the wrong one of three states.
+	tapDetail string
 
 	SteadyDevices   int `json:"steadyDevices"`
 	ChurnDevices    int `json:"churnDevices"`
@@ -983,7 +1002,7 @@ func (r *PresenceReport) ExitCode() int {
 func (r *PresenceReport) finish(shed int64, invs []Invariant, control string) {
 	r.Invariants = invs
 	r.Control = control
-	r.Disposition, r.Reason = decideDisposition(r.TapLive, shed, invs)
+	r.Disposition, r.Reason = decideDisposition(r.TapLive, r.tapDetail, shed, invs)
 	if control == "" || r.Disposition == DispositionInconclusive {
 		return
 	}
@@ -1142,9 +1161,12 @@ func RunPresence(ctx context.Context, hs *sim.Handshake, cfg PresenceConfig) (*P
 	source := strings.TrimSpace(tapObs[tapDevice.Token].Source)
 	if source == "" {
 		report.FinishedAt = time.Now().UTC()
-		report.Disposition = DispositionInconclusive
-		report.Reason = fmt.Sprintf("the tap probe %q is asserted-online but its row carries no source id, and the reconciler's enumeration is source-scoped — there is nothing to enumerate it under", tapDevice.Token)
-		return report, nil // deliberately NOT via finish: TapLive is true here, so finish would overwrite this with a verdict
+		// TapLive stays FALSE, which is the honest reading: a presence tap whose rows
+		// carry no source id is not one this harness (or a reconciler) can use.
+		report.tapDetail = fmt.Sprintf("the tap probe %q is asserted-online but its row carries no source id, and the "+
+			"reconciler's enumeration is source-scoped — there is nothing to enumerate it under", tapDevice.Token)
+		report.finish(0, nil, cfg.Control)
+		return report, nil
 	}
 	report.TapLive = true
 	report.PresenceSourceId = source

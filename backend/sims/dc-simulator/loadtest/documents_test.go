@@ -121,6 +121,24 @@ func harnessDocuments() []harnessDocument {
 			"c": map[string]any{"pageNumber": 1, "pageSize": 500, "deviceToken": "harness-cmd-probe-001"},
 		}},
 
+		// command-delivery — the fleet-write harness.
+		{"mutationCreateCommandBatch", "command-delivery", mutationCreateCommandBatch, map[string]any{
+			"request": map[string]any{
+				"token": "harness-batch-1", "name": HarnessBatchCommandKey,
+				"deviceTokens": []any{"harness-batch-tgt-001", "harness-batch-tgt-002"},
+				"allowPartial": true,
+			},
+		}},
+		{"queryBatchCommands", "command-delivery", queryBatchCommands, map[string]any{
+			"c": map[string]any{"pageNumber": 1, "pageSize": batchPageSize, "batchToken": "harness-batch-1"},
+		}},
+		{"queryBatchRecord", "command-delivery", queryBatchRecord, map[string]any{
+			"tokens": []any{"harness-batch-1"},
+		}},
+		{"queryBatchDefinitions", "device-management", queryBatchDefinitions, map[string]any{
+			"c": map[string]any{"pageNumber": 1, "pageSize": 100, "deviceProfile": HarnessBatchProfileToken},
+		}},
+
 		// event-management — the L1 oracle.
 		{"countEventsQuery", "event-management", countEventsQuery, map[string]any{
 			"c": map[string]any{

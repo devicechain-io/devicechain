@@ -7,6 +7,12 @@
 # cold-boots green on a hosted `ubuntu-latest` runner. On top of that proven
 # bring-up this job DRIVES LOAD and asserts correctness oracles, each a
 # dc-loadtest* binary whose non-zero exit IS the gate:
+#   - the INSTRUMENT CHECK, first: dc-loadtest-selftest drives a known volume, deletes
+#            one persisted row beneath the API, and requires the L1 oracle's verdict to
+#            flip. It runs BEFORE L1 because certifying a green pass whose instrument
+#            has not been validated certifies nothing -- and for its whole existence
+#            this binary was built by no workflow and run by no script, so the L1
+#            oracle's ability to fail had never once been asserted by a gate.
 #   - L1  -- aggregate reconciliation: drive the seeded devicepulse scenario over
 #            the device-plane HTTP ingress, reconcile PERSISTED == ACCEPTED.
 #   - L2d-1 detection -> durable alarm: safety/edge/background populations through
@@ -16,6 +22,22 @@
 #            SUCCESSFUL. The ONLY oracle that dials the NATS MQTT gateway -- reached at
 #            its default ssl://127.0.0.1:1883 via the local MQTT NodePort (dcctl's
 #            nats_mqtt_node_port, which the kind 1883->31883 host map lands on).
+#   - L4  -- broker-asserted MQTT presence under churn: four cohorts (steady, churn,
+#            departed, background) assert that the platform knows WHO is connected --
+#            continuously, not only at the end -- and that the reconciler's own paged
+#            enumeration equals the asserted set EXACTLY. It has THREE dispositions:
+#            exit 2 means it could not measure (the tap is off, or the background load
+#            was shed at the ceiling presence transitions also pass through), which is
+#            neither a pass nor a finding.
+#   - L2d-4 fleet write: one batch, N durable command rows, compared to the target set
+#            by MEMBERSHIP rather than count -- two rows for one device and none for
+#            another counts correctly and is one machine that never actuated plus one
+#            that actuated twice. Plus concurrent replay idempotency and a whole-batch
+#            refusal that must leave nothing behind.
+#   Both L4 and L2d-4 run their NEGATIVE CONTROL FIRST, on the same reasoning as the
+#   instrument check: an oracle that has never been shown to fail is indistinguishable
+#   from one that cannot, and each control must flip EXACTLY its declared invariant set
+#   -- "at least" would be satisfied by an oracle that failed everything.
 #   - L3  -- ADR-063 tiered contention (the acceptance test for preferential
 #            shedding): TWO probe tenants (gold + best-effort) at the same load,
 #            first at floor 0 (negative control -- neither may shed), then at an
@@ -341,6 +363,13 @@ jobs:
           go build -o "$RUNNER_TEMP/bin/dc-loadtest-detection" ./cmd/loadtest-detection
           go build -o "$RUNNER_TEMP/bin/dc-loadtest-command" ./cmd/loadtest-command
           go build -o "$RUNNER_TEMP/bin/dc-loadtest-contention" ./cmd/loadtest-contention
+          go build -o "$RUNNER_TEMP/bin/dc-loadtest-presence" ./cmd/loadtest-presence
+          go build -o "$RUNNER_TEMP/bin/dc-loadtest-batch" ./cmd/loadtest-batch
+          # The oracle self-test. It was built by nothing and run by nothing for its
+          # whole existence -- the L1 oracle's ability to FAIL had never been asserted
+          # by any gate, which is the exact "check that cannot fail" shape it was
+          # written to close.
+          go build -o "$RUNNER_TEMP/bin/dc-loadtest-selftest" ./cmd/loadtest-selftest
 
       # One shared port-forward for the device-plane ingest, used by every probe
       # (L1, detection, command, contention). Opened once here, closed at the end.
@@ -386,6 +415,88 @@ jobs:
             cat "$RUNNER_TEMP/pf-eventsources.log" || true
             exit 1
           fi
+
+      # ---------------------------------------------------------------------
+      # THE INSTRUMENT CHECK, AND IT RUNS FIRST.
+      # ---------------------------------------------------------------------
+      # dc-loadtest-selftest drives a small known volume, confirms the L1 oracle counts
+      # it exactly over the real tenant GraphQL, then deletes exactly ONE persisted row
+      # directly in Postgres -- beneath the API -- and requires the oracle's verdict to
+      # flip to a detected drop. It exits 0 only when the oracle is SOUND: green intact,
+      # RED perturbed.
+      #
+      # 🔴 IT RUNS BEFORE L1, AND THE ORDER IS THE POINT. Running it afterwards would
+      # certify a green pass whose instrument had not been validated -- and a check that
+      # has never been shown to fail is indistinguishable from one that cannot. For its
+      # entire existence this binary was built by no workflow and run by no script, so
+      # the L1 oracle's ability to fail had never once been asserted by a gate.
+      #
+      # It is the ONE privileged step here: it holds a database connection, which is
+      # exactly why it is a separate tool from the load test proper.
+      - name: Open event-store forward (self-test only)
+        id: pgforward
+        run: |
+          # The alias Service, not a pod: the store is a CloudNativePG Cluster whose
+          # pods are dc-tsdb-N and whose primary moves on failover, while the alias
+          # follows it.
+          kubectl port-forward -n dc-system svc/dc-timescaledb-single 5432:5432 \
+            >"$RUNNER_TEMP/pf-tsdb.log" 2>&1 &
+          pf_pid=$!
+          echo "pf_pid=$pf_pid" >> "$GITHUB_OUTPUT"
+          ready=0
+          for _ in $(seq 1 30); do
+            # A refused connection means the tunnel is not up yet; anything else (an
+            # immediate close, a protocol error) means the socket is being served.
+            if timeout 2 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/5432' 2>/dev/null; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$pf_pid" 2>/dev/null; then
+              echo "::error::event-store port-forward exited before becoming reachable"
+              cat "$RUNNER_TEMP/pf-tsdb.log" || true
+              exit 1
+            fi
+            sleep 2
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "::error::event-store port-forward never became reachable (~60s); the tunnel, not the platform, is the cause."
+            cat "$RUNNER_TEMP/pf-tsdb.log" || true
+            exit 1
+          fi
+
+      - name: Self-test -- prove the L1 oracle can FAIL (the instrument check)
+        run: |
+          "$RUNNER_TEMP/dcctl" sim create selftestprobe -s localhost
+          "$RUNNER_TEMP/bin/dc-loadtest-selftest" \
+            --handshake "$HOME/.devicechain/sims/selftestprobe.json" \
+            --devices 20 --emit-interval 200ms --hold 10s \
+            --report "$RUNNER_TEMP/selftest-report.json"
+
+      - name: Stop event-store forward
+        if: always()
+        run: |
+          pid="${{ steps.pgforward.outputs.pf_pid }}"
+          if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; fi
+
+      - name: Self-test report -> summary
+        if: always()
+        run: |
+          report="$RUNNER_TEMP/selftest-report.json"
+          printf '\n### Instrument check -- can the L1 oracle FAIL?\n' >> "$GITHUB_STEP_SUMMARY"
+          if [ -s "$report" ]; then
+            { printf '\n```json\n'; jq . "$report" 2>/dev/null || cat "$report"; printf '\n```\n'; } >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '_no report produced -- see the self-test step log_\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload self-test report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: selftest-report
+          path: ${{ runner.temp }}/selftest-report.json
+          if-no-files-found: warn
+          overwrite: true
 
       # ---------------------------------------------------------------------
       # L1 -- aggregate reconciliation.
@@ -548,6 +659,149 @@ jobs:
           if-no-files-found: warn
           overwrite: true
 
+      # ---------------------------------------------------------------------
+      # L4 -- broker-asserted MQTT presence under churn.
+      # ---------------------------------------------------------------------
+      # The two largest features of this release -- broker-asserted presence and fleet
+      # writes -- shipped after v0.11.0 with no gate reaching either. An event proves a
+      # device WAS there when it published, which is exactly the inference presence
+      # replaces, so nothing above can speak for it.
+      #
+      # Both oracles run their NEGATIVE CONTROL FIRST, for the same reason the self-test
+      # runs before L1: an oracle whose ability to fail has not been demonstrated turns a
+      # green run into a statement about nothing. The control's exit code is the gate on
+      # the oracle; the plain run's is the gate on the platform.
+      #
+      # 🔴 THE PRESENCE BINARY EXITS 2 FOR "COULD NOT MEASURE", WHICH IS NEITHER A PASS
+      # NOR A FINDING. Presence transitions pass through the same per-tenant ingest
+      # ceiling as telemetry, so a shed background fleet can drop the very transitions
+      # the oracle gates on -- and the tap itself is off unless configured. Both fail
+      # the gate (you cannot ship on "we could not measure"), but they are reported as
+      # a DIFFERENT thing from a presence defect, because sending someone to hunt a bug
+      # in a cluster whose tap was never switched on costs a day.
+      - name: L4 presence NEGATIVE CONTROL -- drop a steady device (the instrument check)
+        run: |
+          "$RUNNER_TEMP/dcctl" sim create presctl -s localhost
+          set +e
+          "$RUNNER_TEMP/bin/dc-loadtest-presence" \
+            --handshake "$HOME/.devicechain/sims/presctl.json" \
+            --mqtt-broker "ssl://127.0.0.1:1883" \
+            --control drop-a-steady-device \
+            --steady-devices 3 --churn-devices 2 --departed-devices 2 --churn-rounds 2 \
+            --bg-devices 30 --bg-interval 500ms --min-accepted 300 \
+            --report "$RUNNER_TEMP/presence-control-report.json"
+          rc=$?
+          set -e
+          case "$rc" in
+            0) echo "the presence control flipped exactly the invariants a dropped steady device must" ;;
+            2) echo "::error::The presence CONTROL could not be measured (exit 2) -- the tap is off, or the background load was shed at the ingest ceiling. This says nothing about the oracle; read the report's reason line." ;;
+            *) echo "::error::The presence oracle FAILED ITS OWN CONTROL: disconnecting a steady device did not flip exactly the invariants that departure must flip. Every presence verdict below would be a statement about nothing." ;;
+          esac
+          exit "$rc"
+
+      - name: L4 presence -- create tenant, drive churn under load (the gate)
+        run: |
+          "$RUNNER_TEMP/dcctl" sim create presprobe -s localhost
+          set +e
+          "$RUNNER_TEMP/bin/dc-loadtest-presence" \
+            --handshake "$HOME/.devicechain/sims/presprobe.json" \
+            --mqtt-broker "ssl://127.0.0.1:1883" \
+            --steady-devices 3 --churn-devices 3 --departed-devices 2 --churn-rounds 3 \
+            --bg-devices 30 --bg-interval 500ms --min-accepted 300 \
+            --report "$RUNNER_TEMP/presence-report.json"
+          rc=$?
+          set -e
+          if [ "$rc" -eq 2 ]; then
+            echo "::error::The presence run COULD NOT MEASURE presence (exit 2) and has no verdict -- this is NOT a presence defect. Either broker-asserted presence is not running on this instance, or the background fleet was shed at the per-tenant ingest ceiling that presence transitions also pass through. The report's reason line names which, and every switch that turns the tap off."
+          fi
+          exit "$rc"
+
+      - name: Presence reports -> summary
+        if: always()
+        run: |
+          printf '\n### L4 -- broker-asserted MQTT presence under churn\n' >> "$GITHUB_STEP_SUMMARY"
+          for r in presence-control-report presence-report; do
+            printf '\n**%s**\n' "$r" >> "$GITHUB_STEP_SUMMARY"
+            report="$RUNNER_TEMP/$r.json"
+            if [ -s "$report" ]; then
+              { printf '\n```json\n'; jq . "$report" 2>/dev/null || cat "$report"; printf '\n```\n'; } >> "$GITHUB_STEP_SUMMARY"
+            else
+              printf '_no report produced -- see the step log_\n' >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+      - name: Upload presence reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: presence-reports
+          path: |
+            ${{ runner.temp }}/presence-control-report.json
+            ${{ runner.temp }}/presence-report.json
+          if-no-files-found: warn
+          overwrite: true
+
+      # ---------------------------------------------------------------------
+      # L2d-4 -- the fleet write under load.
+      # ---------------------------------------------------------------------
+      # L2d-3 proves ONE command reaches ONE device. A batch is a different claim: one
+      # request, one record, and N durable rows that must match the target set in
+      # MEMBERSHIP, not merely in count -- two rows for one device and none for another
+      # counts correctly while one machine never actuates and another actuates twice.
+      #
+      # The control leaves one target without an MQTT receiver: its row is still
+      # created, so the fan-out invariant holds, and nothing answers it, so the round
+      # trip cannot complete. Exactly one invariant flips, deterministically, with no
+      # privileged access at all.
+      - name: L2d-4 batch NEGATIVE CONTROL -- one deaf device (the instrument check)
+        run: |
+          "$RUNNER_TEMP/dcctl" sim create batchctl -s localhost
+          if ! "$RUNNER_TEMP/bin/dc-loadtest-batch" \
+            --handshake "$HOME/.devicechain/sims/batchctl.json" \
+            --mqtt-broker "ssl://127.0.0.1:1883" \
+            --control deaf-device \
+            --target-devices 8 --bystander-devices 3 --poison-devices 1 --replays 6 \
+            --bg-devices 30 --bg-interval 500ms --min-accepted 300 \
+            --report "$RUNNER_TEMP/batch-control-report.json"; then
+            echo "::error::The batch oracle FAILED ITS OWN CONTROL: a target device with no receiver did not flip exactly the round-trip invariant. Every fleet-write verdict below would be a statement about nothing."
+            exit 1
+          fi
+
+      - name: L2d-4 batch -- create tenant, fan out under load (the gate)
+        run: |
+          "$RUNNER_TEMP/dcctl" sim create batchprobe -s localhost
+          "$RUNNER_TEMP/bin/dc-loadtest-batch" \
+            --handshake "$HOME/.devicechain/sims/batchprobe.json" \
+            --mqtt-broker "ssl://127.0.0.1:1883" \
+            --target-devices 12 --bystander-devices 4 --poison-devices 1 --replays 8 \
+            --bg-devices 30 --bg-interval 500ms --min-accepted 300 \
+            --report "$RUNNER_TEMP/batch-report.json"
+
+      - name: Batch reports -> summary
+        if: always()
+        run: |
+          printf '\n### L2d-4 -- fleet write (batch commands) under load\n' >> "$GITHUB_STEP_SUMMARY"
+          for r in batch-control-report batch-report; do
+            printf '\n**%s**\n' "$r" >> "$GITHUB_STEP_SUMMARY"
+            report="$RUNNER_TEMP/$r.json"
+            if [ -s "$report" ]; then
+              { printf '\n```json\n'; jq . "$report" 2>/dev/null || cat "$report"; printf '\n```\n'; } >> "$GITHUB_STEP_SUMMARY"
+            else
+              printf '_no report produced -- see the step log_\n' >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+      - name: Upload batch reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: batch-reports
+          path: |
+            ${{ runner.temp }}/batch-control-report.json
+            ${{ runner.temp }}/batch-report.json
+          if-no-files-found: warn
+          overwrite: true
+
       # =====================================================================
       # ADR-064 L3 -- tiered contention: the acceptance test for ADR-063
       # preferential shedding. Two probe tenants drive the SAME scenario at the
@@ -599,13 +853,14 @@ jobs:
             printf '_no report produced -- see the drive step log_\n' >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Stop shared device-plane forward (+ attribute L1/detection/command/L3-neg)
+      - name: Stop shared device-plane forward (+ attribute every floor-0 probe)
         if: always()
         env:
           PF_PID: ${{ steps.ingress.outputs.pf_pid }}
         run: |
-          # This forward carried EVERY floor-0 probe's HTTP emit path (L1 + detection +
-          # the command round-trip's bg/probe emits + L3 negative control). It can drop
+          # This forward carried EVERY floor-0 probe's HTTP emit path -- the self-test, L1,
+          # detection, the command round-trip's bg/probe emits, both presence runs, both
+          # batch runs, and the L3 negative control. It can drop
           # under sustained req/s -- which surfaces SAFELY as a red (failed emits /
           # accepted skew), never a false green -- but a red must be ATTRIBUTED to the
           # tunnel vs the platform. Two failure shapes: the forward died, OR it stayed
@@ -620,7 +875,7 @@ jobs:
           if [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null && [ -z "$pf_errors" ]; then
             echo "shared device-plane port-forward survived the floor-0 probes cleanly (pid $PF_PID)."
           else
-            echo "::warning::shared device-plane port-forward did not survive cleanly -- an L1/detection/command/L3-neg red may be a kubectl port-forward drop, not a platform correctness failure. Log tail:"
+            echo "::warning::shared device-plane port-forward did not survive cleanly -- any floor-0 probe red (self-test, L1, detection, command, presence, batch, L3-neg) may be a kubectl port-forward drop, not a platform correctness failure. For the presence runs specifically, a dropped forward shows up as SHED/failed background emits, which the harness reports as INCONCLUSIVE (exit 2) rather than as a presence defect. Log tail:"
             tail -30 "$RUNNER_TEMP/pf-eventsources.log" 2>/dev/null || true
           fi
           kill "$PF_PID" 2>/dev/null || true
@@ -792,6 +1047,8 @@ jobs:
           l1="$(read_json "$RUNNER_TEMP/l1-report.json")"
           det="$(read_json "$RUNNER_TEMP/detection-report.json")"
           cmd="$(read_json "$RUNNER_TEMP/command-report.json")"
+          pres="$(read_json "$RUNNER_TEMP/presence-report.json")"
+          bat="$(read_json "$RUNNER_TEMP/batch-report.json")"
           pos="$(read_json "$RUNNER_TEMP/l3-pos-report.json")"
 
           # `passed` per probe mirrors Report.Passed(): an EMPTY invariant set is a
@@ -801,6 +1058,8 @@ jobs:
             --argjson l1 "$l1" \
             --argjson det "$det" \
             --argjson cmd "$cmd" \
+            --argjson pres "$pres" \
+            --argjson bat "$bat" \
             --argjson pos "$pos" '
             def verdict: ((.invariants | length) > 0) and all(.invariants[]; .passed);
             {
@@ -829,6 +1088,30 @@ jobs:
                 commandProbes:      .commandProbes,
                 cycles:             .cycles,
                 commandsReached:    .commandsReachedTarget,
+                passed:             verdict
+              } end),
+              # 🔴 Presence records its DISPOSITION, not a boolean. Folding its third
+              # state into `passed` would make "we could not measure this" record
+              # identically to "presence is broken" -- and a baseline is read months
+              # later by someone who was not here.
+              presence: ($pres | if . == null then null else {
+                achievedRatePerSec: .drive.achievedRatePerSec,
+                accepted:           .drive.accepted,
+                shed:               .drive.shed,
+                disposition:        .disposition,
+                tapLive:            .tapLive,
+                presenceSourceId:   .presenceSourceId,
+                cleanSteadyPolls:   .cleanSteadyPolls,
+                assertedReadPages:  .assertedReadPages,
+                passed:             (.disposition == "PASS")
+              } end),
+              batch: ($bat | if . == null then null else {
+                achievedRatePerSec: .drive.achievedRatePerSec,
+                accepted:           .drive.accepted,
+                targetDevices:      .targetDevices,
+                batchAccepted:      .batchAccepted,
+                concurrentReplays:  .concurrentReplays,
+                refusedBatchCode:   .refusedBatchCode,
                 passed:             verdict
               } end),
               contentionFloor1: ($pos | if . == null then null else {

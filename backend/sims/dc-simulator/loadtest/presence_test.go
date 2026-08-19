@@ -130,7 +130,7 @@ func TestPresenceConfigFillsOnlyUnsetFields(t *testing.T) {
 // A tap that is not running is not a presence defect, and the advice has to name
 // every switch: there are six, and naming one would misdiagnose the other five.
 func TestTapOffIsInconclusiveAndNamesEverySwitch(t *testing.T) {
-	d, reason := decideDisposition(false, 0, []Invariant{{Name: "x", Passed: true}})
+	d, reason := decideDisposition(false, "", 0, []Invariant{{Name: "x", Passed: true}})
 	assert.Equal(t, DispositionInconclusive, d)
 	for _, want := range []string{"brokerPresence", "sysUser", "no event source", "serviceAuth", "system-account dial", "advisory subscribe"} {
 		assert.Contains(t, reason, want, "the tap-off advice must name this switch")
@@ -140,7 +140,7 @@ func TestTapOffIsInconclusiveAndNamesEverySwitch(t *testing.T) {
 // Presence transitions pass through the SAME per-tenant ingest ceiling as telemetry,
 // so a shed run cannot tell a lost transition from a refused one.
 func TestAnyShedMakesTheRunInconclusive(t *testing.T) {
-	d, reason := decideDisposition(true, 1, []Invariant{{Name: "x", Passed: true}})
+	d, reason := decideDisposition(true, "", 1, []Invariant{{Name: "x", Passed: true}})
 	assert.Equal(t, DispositionInconclusive, d)
 	assert.Contains(t, reason, "ceiling")
 }
@@ -149,12 +149,12 @@ func TestAnyShedMakesTheRunInconclusive(t *testing.T) {
 // the shed is a reason those invariants would fail for a cause that is not presence,
 // and reporting FAIL would name the platform for the environment's problem.
 func TestShedOutranksAFailedInvariant(t *testing.T) {
-	d, _ := decideDisposition(true, 3, []Invariant{{Name: "x", Passed: false}})
+	d, _ := decideDisposition(true, "", 3, []Invariant{{Name: "x", Passed: false}})
 	assert.Equal(t, DispositionInconclusive, d)
 }
 
 func TestTapOffOutranksShed(t *testing.T) {
-	_, reason := decideDisposition(false, 9, nil)
+	_, reason := decideDisposition(false, "", 9, nil)
 	assert.Contains(t, reason, "brokerPresence")
 	assert.NotContains(t, reason, "ceiling")
 }
@@ -162,13 +162,13 @@ func TestTapOffOutranksShed(t *testing.T) {
 // An empty invariant set is not a pass: a report with nothing asserted has proven
 // nothing, which is a broken harness rather than a healthy platform.
 func TestNoInvariantsIsAFailure(t *testing.T) {
-	d, reason := decideDisposition(true, 0, nil)
+	d, reason := decideDisposition(true, "", 0, nil)
 	assert.Equal(t, DispositionFail, d)
 	assert.Contains(t, reason, "asserted nothing")
 }
 
 func TestAFailedInvariantIsNamedInTheReason(t *testing.T) {
-	d, reason := decideDisposition(true, 0, []Invariant{
+	d, reason := decideDisposition(true, "", 0, []Invariant{
 		{Name: "a", Passed: true}, {Name: InvPresenceSteadyOnline, Passed: false},
 	})
 	assert.Equal(t, DispositionFail, d)
@@ -176,7 +176,7 @@ func TestAFailedInvariantIsNamedInTheReason(t *testing.T) {
 }
 
 func TestAllHeldIsAPass(t *testing.T) {
-	d, _ := decideDisposition(true, 0, []Invariant{{Name: "a", Passed: true}, {Name: "b", Passed: true}})
+	d, _ := decideDisposition(true, "", 0, []Invariant{{Name: "a", Passed: true}, {Name: "b", Passed: true}})
 	assert.Equal(t, DispositionPass, d)
 }
 
@@ -730,4 +730,25 @@ func TestFinishLeavesAPlainRunAlone(t *testing.T) {
 	assert.Equal(t, DispositionFail, r.Disposition)
 	assert.Empty(t, r.Control)
 	assert.False(t, r.ControlSatisfied)
+}
+
+// A caller that knows a SPECIFIC reason the tap is unusable says so instead of
+// printing six guesses alongside it.
+func TestASpecificTapReasonReplacesTheGenericAdvice(t *testing.T) {
+	d, reason := decideDisposition(false, "its row carries no source id", 0, nil)
+	assert.Equal(t, DispositionInconclusive, d)
+	assert.Equal(t, "its row carries no source id", reason)
+	assert.NotContains(t, reason, "brokerPresence")
+}
+
+// 🔴 EVERY EXIT RUNS THROUGH THE FOLD. A source-less asserted row is the one case
+// that knows more than "no row appeared", and routing it around finish would leave a
+// branch the verdict logic never sees — which is exactly how the upgrade rig shipped
+// an INCONCLUSIVE state no run could reach.
+func TestFinishCarriesASpecificTapReasonThrough(t *testing.T) {
+	r := &PresenceReport{TapLive: false, tapDetail: "no source id on the tap probe's row"}
+	r.finish(0, nil, "")
+	assert.Equal(t, DispositionInconclusive, r.Disposition)
+	assert.Equal(t, 2, r.ExitCode())
+	assert.Equal(t, "no source id on the tap probe's row", r.Reason)
 }
