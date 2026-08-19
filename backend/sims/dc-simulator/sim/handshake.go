@@ -61,6 +61,13 @@ type Endpoints struct {
 	// and runs; the harness enforces it lazily rather than Validate rejecting every
 	// sim record without it.
 	CommandMgmtGraphQL string `json:"commandMgmtGraphQL"`
+	// DeviceStateGraphQL is device-state's tenant-scoped GraphQL endpoint, carrying
+	// the live presence projection (deviceStatesByDeviceToken) and the reconciler's
+	// own enumeration (assertedDeviceStates) that the load-test presence harness
+	// gates on. Optional in the handshake for the same reason as the two above — a
+	// sim record written before the presence harness existed never carried it — and
+	// enforced lazily by the one harness that needs it rather than by Validate.
+	DeviceStateGraphQL string `json:"deviceStateGraphQL"`
 	// MqttBroker is the NATS MQTT gateway a scenario's COMMAND FAR END dials to
 	// receive its devices' commands and answer them (ADR-043 two-way delivery) —
 	// e.g. "ssl://127.0.0.1:1883" for a local kind bring-up, "tcp://..." for a

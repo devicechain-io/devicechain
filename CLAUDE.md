@@ -142,6 +142,11 @@ ends in `exit`). Two details in it are load-bearing, and both are the same trap 
 clothes:
 
 - `gofmt -l` **exits 0 even when it names files**, so its OUTPUT is tested, not its status.
+- `-count=1` is not belt-and-braces. Several tests read files **outside their own module** — the
+  served GraphQL SDL (`loadtest/documents_test.go`), the other module's source
+  (`cli/sim/handshake_lockstep_test.go`) — and Go's test cache does not track those, so a cached
+  PASS survives a schema edit that must fail. CI already passes `-count=1`; this sweep did not, which
+  made the check a maintainer is told to run the one that lies.
 - the loop records `rc=1` rather than just printing `FAILED:`. `… || echo "FAILED: $m"` — the
   obvious way to write it — makes the loop's status that of the last `echo`, i.e. always 0. Every
   module could fail and the sweep would still exit green, which is precisely the gate-that-cannot-
@@ -152,7 +157,7 @@ rc=0
 for m in $(go list -m -f '{{.Dir}}'); do
   ( cd "$m" || exit 1
     fmt="$(gofmt -l .)"; [ -z "$fmt" ] || { echo "not gofmt-clean:"; echo "$fmt"; exit 1; }
-    go build ./... && go vet ./... && go test ./...
+    go build ./... && go vet ./... && go test ./... -count=1
   ) || { echo "FAILED: $m"; rc=1; }
 done
 exit "$rc"

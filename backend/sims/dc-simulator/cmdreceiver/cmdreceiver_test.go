@@ -4,13 +4,18 @@
 package cmdreceiver
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
 // newTestDevice registers a device state on the receiver without opening a
@@ -153,4 +158,305 @@ func TestRespondedCountsOnlyAckedResponses(t *testing.T) {
 	if !strings.Contains(ds.respondErr.Error(), "cmd-3") {
 		t.Errorf("respondErr is %q, want the first failure", ds.respondErr)
 	}
+}
+
+// --- deliberate departure (Disconnect) ------------------------------------------
+
+// An unknown token is an error, never a silent no-op. The presence oracle asks for a
+// departure and then WAITS to observe it, so a token typo has to fail here — if it
+// does not, it resurfaces much later as "the departed device never went offline",
+// which reads as a platform defect rather than a harness mistake.
+func TestDisconnectUnknownDeviceIsAnError(t *testing.T) {
+	r := New("inst-1", "acme", "tcp://x:1883", nil)
+	r.newTestDevice("present-1")
+
+	err := r.Disconnect("never-registered")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "never-registered")
+}
+
+// Disconnect marks the departure and is idempotent — a second call is the same
+// departure, not a new one and not a failure.
+func TestDisconnectMarksDepartureAndIsIdempotent(t *testing.T) {
+	r := New("inst-1", "acme", "tcp://x:1883", nil)
+	ds := r.newTestDevice("leaving-1")
+
+	require.NoError(t, r.Disconnect("leaving-1"))
+	ds.mu.Lock()
+	assert.True(t, ds.disconnected)
+	ds.mu.Unlock()
+
+	require.NoError(t, r.Disconnect("leaving-1"))
+}
+
+// A deliberate departure must NOT be reported as blind. Blind means "never attached,
+// so its silence proves nothing" — a device that attached and was then disconnected
+// on purpose is the opposite of that, and conflating the two would make every
+// presence run report its own departed cohort as a receiver failure.
+func TestDisconnectedDeviceIsNotReportedBlind(t *testing.T) {
+	r := New("inst-1", "acme", "tcp://x:1883", nil)
+	r.newTestDevice("leaving-1")
+	r.newTestDevice("staying-1")
+	require.NoError(t, r.Disconnect("leaving-1"))
+
+	rep := r.Report()
+	assert.Empty(t, rep.Blind)
+	assert.True(t, rep.Devices["leaving-1"].Disconnected)
+	assert.False(t, rep.Devices["staying-1"].Disconnected)
+}
+
+// Two live connections cannot share one client id, so claiming a token that is
+// already connected is refused rather than silently overwriting it — the broker
+// would resolve the collision by kicking a session, and the loser stops receiving
+// with no error raised anywhere.
+func TestClaimRefusesASecondLiveSession(t *testing.T) {
+	r := New("inst-1", "acme", "tcp://x:1883", nil)
+	first := r.newTestDevice("probe-1")
+
+	err := r.claimDevice("probe-1", &deviceState{token: "probe-1", distinct: map[string]int{}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already connected")
+
+	// The refusal left the LIVE connection in place; it did not half-replace it.
+	r.mu.Lock()
+	assert.Same(t, first, r.devices["probe-1"])
+	r.mu.Unlock()
+}
+
+// After a deliberate departure the same token may reconnect, and the reconnect count
+// carries FORWARD across the replacement — otherwise each re-attach would erase the
+// evidence of the previous one and a churning device would look freshly connected
+// every time.
+func TestClaimAfterDisconnectCountsTheReconnect(t *testing.T) {
+	r := New("inst-1", "acme", "tcp://x:1883", nil)
+	r.newTestDevice("churn-1")
+
+	for want := 1; want <= 3; want++ {
+		require.NoError(t, r.Disconnect("churn-1"))
+		next := &deviceState{token: "churn-1", distinct: map[string]int{}, subscribed: true}
+		require.NoError(t, r.claimDevice("churn-1", next))
+		assert.Equal(t, want, next.reconnects)
+		assert.Equal(t, want, r.Report().Devices["churn-1"].Reconnects)
+	}
+}
+
+// --- the live-client half of Disconnect -----------------------------------------
+//
+// The tests above register devices with no client, so they cover the ACCOUNTING and
+// leave the disconnect itself unmeasured. These drive a fake mqtt.Client so the part
+// that actually ends the session is exercised too — without it, a Disconnect that
+// issued no DISCONNECT at all would pass every test in this file.
+
+// withFakeClient registers a device whose connection is a fake, and returns both.
+func (r *Receiver) withFakeClient(token string) (*deviceState, *fakeClient) {
+	ds := r.newTestDevice(token)
+	fc := newFakeClient()
+	ds.client = fc
+	return ds, fc
+}
+
+// The DISCONNECT is really issued, once, with the configured quiesce.
+func TestDisconnectIssuesTheDisconnect(t *testing.T) {
+	r := New("inst-1", "acme", "tcp://x:1883", nil)
+	_, fc := r.withFakeClient("leaving-1")
+
+	require.NoError(t, r.Disconnect("leaving-1"))
+
+	n, quiesce := fc.calls()
+	assert.Equal(t, 1, n)
+	assert.Equal(t, uint(disconnectQuiesceMS), quiesce)
+	assert.False(t, fc.IsConnected())
+}
+
+// A second departure does not re-issue a DISCONNECT — the idempotency the accounting
+// test could not see, because a nil client short-circuits before this point.
+func TestDisconnectDoesNotReIssueOnASecondCall(t *testing.T) {
+	r := New("inst-1", "acme", "tcp://x:1883", nil)
+	_, fc := r.withFakeClient("leaving-1")
+
+	require.NoError(t, r.Disconnect("leaving-1"))
+	require.NoError(t, r.Disconnect("leaving-1"))
+
+	n, _ := fc.calls()
+	assert.Equal(t, 1, n)
+}
+
+// A client whose teardown never completes is reported as an error rather than
+// waited on forever — and the error names the device, since the caller is about to
+// wait on an observable that will now never arrive.
+func TestDisconnectFailsWhenTheClientNeverCloses(t *testing.T) {
+	r := New("inst-1", "acme", "tcp://x:1883", nil)
+	r.disconnectWait = 60 * time.Millisecond
+	r.disconnectPoll = 5 * time.Millisecond
+	_, fc := r.withFakeClient("stuck-1")
+	fc.staysConnected = true
+
+	err := r.Disconnect("stuck-1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "stuck-1")
+	assert.Contains(t, err.Error(), "still reports itself connected")
+}
+
+// The wait is a WAIT: a client that closes only after a few polls is tolerated, not
+// failed. Without this, shrinking the loop to a single look would pass everything.
+func TestDisconnectWaitsForALateClose(t *testing.T) {
+	r := New("inst-1", "acme", "tcp://x:1883", nil)
+	r.disconnectWait = 2 * time.Second
+	r.disconnectPoll = 5 * time.Millisecond
+	_, fc := r.withFakeClient("slow-1")
+	fc.staysConnected = true
+
+	go func() {
+		time.Sleep(40 * time.Millisecond)
+		fc.mu.Lock()
+		fc.staysConnected = false
+		fc.connected = false
+		fc.mu.Unlock()
+	}()
+
+	require.NoError(t, r.Disconnect("slow-1"))
+}
+
+// --- the misrouted frame ------------------------------------------------------
+
+// 🔴 A COMMAND RESPONSE CARRIES NO DEVICE IDENTITY. A device's JWT scopes SUBSCRIBE
+// to its own command topic but grants PUBLISH on the tenant-wide responses subject,
+// and command-delivery marks whatever command token it is handed. So a receiver that
+// answers a frame addressed to somebody else closes another device's command — and
+// nothing downstream can tell that the wrong device answered.
+//
+// That is precisely the fan-out mis-route a fleet-write oracle exists to catch: if
+// device A's envelope lands on device B's topic, B answering it drives A's row to
+// SUCCESSFUL while A never actuates, and every durable-state check reads green.
+func TestAFrameAddressedToAnotherDeviceIsNotAnswered(t *testing.T) {
+	r := New("i1", "t1", "ssl://broker", nil)
+	ds := &deviceState{token: "probe-1", distinct: map[string]int{}}
+
+	payload := []byte(`{"token":"cmd-9","deviceToken":"probe-2","name":"reset"}`)
+	token, ok := r.recordFrame(ds, payload)
+
+	assert.False(t, ok, "a misrouted frame must not be answered")
+	assert.Empty(t, token)
+	assert.Equal(t, 1, ds.misrouted)
+	assert.Equal(t, "probe-2", ds.firstMisroutedTo)
+	assert.Equal(t, 0, ds.raw, "a misrouted frame is not this device's traffic")
+	assert.Empty(t, ds.distinct)
+	assert.Equal(t, 0, ds.malformed, "misrouted and malformed are opposite diagnoses")
+}
+
+func TestAFrameAddressedToThisDeviceIsAnswered(t *testing.T) {
+	r := New("i1", "t1", "ssl://broker", nil)
+	ds := &deviceState{token: "probe-1", distinct: map[string]int{}}
+
+	token, ok := r.recordFrame(ds, []byte(`{"token":"cmd-9","deviceToken":"probe-1","name":"reset"}`))
+	assert.True(t, ok)
+	assert.Equal(t, "cmd-9", token)
+	assert.Equal(t, 1, ds.raw)
+	assert.Equal(t, 0, ds.misrouted)
+}
+
+// An ABSENT addressee is not a WRONG one. The dispatcher always sets deviceToken, but
+// refusing on absence would make this receiver unusable against any transport that
+// omits it — and would convert a missing field into silent non-delivery.
+func TestAFrameWithNoAddresseeIsStillAnswered(t *testing.T) {
+	r := New("i1", "t1", "ssl://broker", nil)
+	ds := &deviceState{token: "probe-1", distinct: map[string]int{}}
+
+	token, ok := r.recordFrame(ds, []byte(`{"token":"cmd-9","name":"reset"}`))
+	assert.True(t, ok)
+	assert.Equal(t, "cmd-9", token)
+	assert.Equal(t, 0, ds.misrouted)
+}
+
+func TestMisroutedFramesSurfaceInTheReport(t *testing.T) {
+	r := New("i1", "t1", "ssl://broker", nil)
+	ds := &deviceState{token: "probe-1", subscribed: true, distinct: map[string]int{}}
+	require.NoError(t, r.claimDevice("probe-1", ds))
+
+	_, _ = r.recordFrame(ds, []byte(`{"token":"cmd-1","deviceToken":"probe-2"}`))
+	_, _ = r.recordFrame(ds, []byte(`{"token":"cmd-2","deviceToken":"probe-3"}`))
+
+	rep := r.Report()
+	assert.Equal(t, 2, rep.TotalMisrouted)
+	assert.Equal(t, 2, rep.Devices["probe-1"].Misrouted)
+	assert.Equal(t, "probe-2", rep.Devices["probe-1"].MisroutedTo, "the FIRST addressee is kept")
+}
+
+// --- the claim is released when the attach fails ------------------------------
+
+// 🔴 The claim is taken before Connect, so a failed attach must give it back. A claim
+// left behind turns the NEXT Subscribe into "device is already connected" — false,
+// and a diagnosis pointing at a session collision that never happened. The presence
+// harness reconnects its churn cohort R times per run, so one transient failure would
+// abort the whole run naming the wrong cause.
+func TestAFailedAttachDoesNotStrandTheClaim(t *testing.T) {
+	r := New("i1", "t1", "ssl://broker", nil)
+	first := &deviceState{token: "probe-1", distinct: map[string]int{}}
+	require.NoError(t, r.claimDevice("probe-1", first))
+
+	r.releaseDevice("probe-1", first)
+
+	_, exists := r.devices["probe-1"]
+	assert.False(t, exists, "a released claim leaves no entry behind")
+
+	second := &deviceState{token: "probe-1", distinct: map[string]int{}}
+	assert.NoError(t, r.claimDevice("probe-1", second), "a retry after a failed attach must be allowed")
+}
+
+// The loser of a race must not delete the winner's registration.
+func TestReleaseOnlyRemovesItsOwnClaim(t *testing.T) {
+	r := New("i1", "t1", "ssl://broker", nil)
+	loser := &deviceState{token: "probe-1", distinct: map[string]int{}}
+	winner := &deviceState{token: "probe-1", distinct: map[string]int{}}
+
+	require.NoError(t, r.claimDevice("probe-1", loser))
+	r.devices["probe-1"] = winner // the winner took the slot after the loser gave up
+
+	r.releaseDevice("probe-1", loser)
+	assert.Same(t, winner, r.devices["probe-1"], "the winner's registration survives the loser's cleanup")
+}
+
+// 🔴 THE ATTACH PATH, WHICH IS WHERE THE CLAIM ACCOUNTING LIVES. Calling releaseDevice
+// directly proves the function works; it says nothing about whether Subscribe calls
+// it. A mutant that stranded the claim on a failed connect survived every test until
+// this one existed — and a stranded claim turns the NEXT Subscribe into "device is
+// already connected", which is false and points at a session collision that never
+// happened. The presence harness reconnects its churn cohort R times per run.
+func TestSubscribeGivesTheClaimBackWhenTheConnectFails(t *testing.T) {
+	r := New("i1", "t1", "ssl://broker", nil)
+	fake := &fakeClient{connectResult: &fakeToken{completes: true, err: fmt.Errorf("connection refused")}}
+	r.newClient = func(*mqtt.ClientOptions) mqtt.Client { return fake }
+
+	err := r.Subscribe(context.Background(), "probe-1", "cred-1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "connection refused")
+
+	r.mu.Lock()
+	_, stranded := r.devices["probe-1"]
+	r.mu.Unlock()
+	assert.False(t, stranded, "a failed attach must leave no claim behind")
+
+	// And the retry a real harness would make must be allowed.
+	err2 := r.Subscribe(context.Background(), "probe-1", "cred-1")
+	require.Error(t, err2)
+	assert.NotContains(t, err2.Error(), "already connected",
+		"the retry must fail on the CONNECT, not on a claim the first attempt stranded")
+}
+
+// A connect that never completes within the timeout is the same class: nothing is
+// attached, so nothing may be claimed.
+func TestSubscribeGivesTheClaimBackWhenTheConnectTimesOut(t *testing.T) {
+	r := New("i1", "t1", "ssl://broker", nil)
+	r.newClient = func(*mqtt.ClientOptions) mqtt.Client {
+		return &fakeClient{connectResult: &fakeToken{completes: false}}
+	}
+
+	err := r.Subscribe(context.Background(), "probe-1", "cred-1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "timed out")
+
+	r.mu.Lock()
+	_, stranded := r.devices["probe-1"]
+	r.mu.Unlock()
+	assert.False(t, stranded)
 }

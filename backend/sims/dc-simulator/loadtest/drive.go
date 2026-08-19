@@ -51,19 +51,54 @@ func (s *probeStats) snapshot() (int, error) {
 // token that fell outside every population prefix means the manifest and this
 // partition disagree, and silently dropping it would understate the probe set.
 func partitionByPrefix(devices []sim.DeviceInstance, safetyPrefix, edgePrefix, bgPrefix string) (safety, edge, background []sim.DeviceInstance, err error) {
-	for _, d := range devices {
-		switch {
-		case strings.HasPrefix(d.Token, safetyPrefix):
-			safety = append(safety, d)
-		case strings.HasPrefix(d.Token, edgePrefix):
-			edge = append(edge, d)
-		case strings.HasPrefix(d.Token, bgPrefix):
-			background = append(background, d)
-		default:
-			return nil, nil, nil, fmt.Errorf("device %q matches no harness population prefix", d.Token)
+	cohorts, err := partitionByPrefixes(devices, []string{safetyPrefix, edgePrefix, bgPrefix})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return cohorts[0], cohorts[1], cohorts[2], nil
+}
+
+// partitionByPrefixes is the n-cohort form: it returns one device slice per prefix,
+// in the order the prefixes were given, and errors on a device matching none. The
+// three-role wrapper above is the common case; the presence harness plants four
+// cohorts and needs the general one.
+//
+// 🔴 The prefixes must be mutually non-prefixing, and that is CHECKED rather than
+// assumed. Matching is first-wins in the given order, so an accidental pair like
+// "harness-pres-" and "harness-pres-gone-" would route every departed device into
+// the earlier cohort and report a full complement in both — the partition would
+// look complete while one cohort was silently a copy of another's members. A
+// harness whose cohorts are its oracle cannot afford to discover that from a
+// verdict.
+func partitionByPrefixes(devices []sim.DeviceInstance, prefixes []string) ([][]sim.DeviceInstance, error) {
+	if len(prefixes) == 0 {
+		return nil, fmt.Errorf("no cohort prefixes given")
+	}
+	for i, a := range prefixes {
+		if a == "" {
+			return nil, fmt.Errorf("cohort prefix %d is empty, so it would claim every device", i)
+		}
+		for j, b := range prefixes {
+			if i != j && strings.HasPrefix(b, a) {
+				return nil, fmt.Errorf("cohort prefix %q is a prefix of %q, so the two cohorts cannot be told apart", a, b)
+			}
 		}
 	}
-	return safety, edge, background, nil
+	out := make([][]sim.DeviceInstance, len(prefixes))
+	for _, d := range devices {
+		matched := false
+		for i, p := range prefixes {
+			if strings.HasPrefix(d.Token, p) {
+				out[i] = append(out[i], d)
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return nil, fmt.Errorf("device %q matches no harness population prefix", d.Token)
+		}
+	}
+	return out, nil
 }
 
 // driveBackground emits a threshold-crossing sine of the temp metric across the
