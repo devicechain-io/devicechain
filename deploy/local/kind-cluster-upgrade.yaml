@@ -1,0 +1,65 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The cluster for the upgrade drill (hack/upgrade-rig.sh).
+#
+# One node, and the drill deploys onto it with --compact: the whole run is a
+# single instance that gets installed at the previous release and then upgraded
+# in place, so there is nothing here that needs topology.
+#
+# WHY THIS IS NOT JUST kind-cluster.yaml
+#
+# The same two silent reasons the DR and HA control clusters give:
+#
+#   1. kind-cluster.yaml carries a top-level `name: devicechain`, and that field
+#      takes precedence over --name. A rig that passed --name would quietly
+#      install onto the developer's own cluster and then delete it.
+#   2. It binds host ports 80, 443 and 1883, which a local cluster almost
+#      certainly already holds.
+#
+# The drill DOES need the ingress from the host: every row it writes and reads
+# goes through the platform's public GraphQL API, which is the whole reason the
+# rows under test are the real thing. So the ingress is mapped onto high ports
+# that nothing else is expected to want — and NOT the DR drill's 18080/18443, so
+# the two rigs can be left standing at the same time without either one's
+# teardown surprising the other.
+apiVersion: kind.x-k8s.io/v1alpha4
+kind: Cluster
+name: devicechain-upgrade
+
+# The registry mirror is REQUIRED here, unlike the DR and HA rigs, and it is the
+# one piece of this file the drill cannot work without.
+#
+# 🔑 The two halves of an upgrade drill come from different places. The OLD half
+# is a published release, pulled from ghcr by tag. The NEW half is the working
+# tree, which has never been published anywhere — so it is built into the local
+# registry and pulled from there by the SAME chart, under a per-run tag. Without
+# this patch the kubelet resolves `localhost:5000` to the node's own loopback and
+# every workload lands in ImagePullBackOff several minutes into a run that looked
+# healthy.
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."localhost:5000"]
+      endpoint = ["http://kind-registry:5000"]
+
+nodes:
+  - role: control-plane
+    # ingress-ready=true is REQUIRED. The infrastructure apply installs
+    # ingress-nginx unconditionally and its controller carries a nodeSelector on
+    # this label; without it the pod sits Pending and the apply fails on a Helm
+    # wait timeout whose message says nothing about a missing label.
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      # No 1883: the drill never connects a device. Telemetry, presence and
+      # command delivery belong to the load harness, which has oracles for them.
+      - containerPort: 80
+        hostPort: 18081
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 18444
+        protocol: TCP

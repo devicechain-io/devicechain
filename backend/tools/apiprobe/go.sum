@@ -1,0 +1,4 @@
+github.com/devicechain-io/graphql-go v1.10.2-dc.2 h1:9+qkaJlmjzkxW3n+Ka+HZi9B8jpYEDLJFekqzMUvj1o=
+github.com/devicechain-io/graphql-go v1.10.2-dc.2/go.mod h1:AsADheC4CCFwd8n1/QbkduTlHgYYMsRgtPihYVAlEsk=
+golang.org/x/sync v0.22.0 h1:SZjpbeLmrCk4xhRSZFNZW5gFUeCeFgjekvI/+gfScek=
+golang.org/x/sync v0.22.0/go.mod h1:9xrNwdLfx4jkKbNva9FpL6vEN7evnE43NNNJQ2LF3+0=

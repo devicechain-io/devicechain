@@ -43,6 +43,7 @@ use (
 	./backend/services/sparkplug-ingest
 	./backend/services/user-management
 	./backend/sims/dc-simulator
+	./backend/tools/apiprobe
 	./backend/tools/drdrill
 	./backend/tools/migrationdiff
 	./backend/tools/subconfirm
