@@ -90,12 +90,16 @@ const (
 //
 // 🔴 Everything that needs the terminal set derives it from here: Terminal()
 // below, and terminalStatusStrings() in api.go, which builds the "status NOT IN
-// (…)" guard shared by MarkResponse, CancelCommand and both of ExpireStale's
-// writes. Those two used to be independent lists, and independent lists of the
-// same thing drift: a state added to one and missed in the other produces a row
-// that the fast-path guard treats as finished while the SQL guard still lets a
-// sweep overwrite it — no error, no test failure, just a cancelled command that
-// silently becomes TIMEOUT.
+// (…)" guard used by both of ExpireStale's writes. Those two used to be independent
+// lists, and independent lists of the same thing drift: a state added to one and
+// missed in the other produces a row that the fast-path guard treats as finished
+// while the SQL guard still lets a sweep overwrite it — no error, no test failure,
+// just a cancelled command that silently becomes TIMEOUT.
+//
+// 🔑 CancelCommand and MarkResponse are NOT on that list any more. Each names the
+// states it accepts positively instead, because "not terminal" quietly admitted every
+// state nobody had considered — which is how a SENT command became cancellable and how
+// a QUEUED one became answerable by a device that had never been sent it.
 var terminalStatuses = []CommandStatus{
 	CommandSuccessful, CommandFailed,
 	CommandTimeout, CommandExpired, CommandCancelled,

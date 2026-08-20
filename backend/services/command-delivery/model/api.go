@@ -232,7 +232,7 @@ type CommandDeliveryApi interface {
 	StrandedSentCommands(ctx context.Context, cursor StrandedCursor, olderThan time.Time,
 		limit int) ([]*Command, StrandedCursor, error)
 	MarkSentByToken(ctx context.Context, token string) (bool, error)
-	MarkResponse(ctx context.Context, commandToken string, success bool, payload *string, errMsg *string) (*Command, error)
+	MarkResponse(ctx context.Context, commandToken, responder string, success bool, payload *string, errMsg *string) (*Command, error)
 	CancelCommand(ctx context.Context, token string) (*Command, error)
 	ExpireStale(ctx context.Context, now time.Time) (int64, map[string]int64, error)
 
@@ -633,9 +633,17 @@ func (api *Api) loadCommand(ctx context.Context, id uint) (*Command, error) {
 }
 
 // terminalStatusStrings is the wire form of the terminal states, for a
-// "status NOT IN (…)" guard. One definition shared by every from-state-predicated
-// update below and by ExpireStale, so the set the sweep skips and the set a
-// transition guards against can never drift.
+// "status NOT IN (…)" guard. One definition shared by ExpireStale's writes and by the
+// stranded-SENT reconciler, so the set the sweep skips and the set a transition guards
+// against can never drift.
+//
+// 🔑 MarkResponse AND CancelCommand NO LONGER USE IT, and neither should a new
+// transition without arguing for it. Both were written as "not terminal" and both were
+// wrong for the same reason: a negative guard admits every state nobody thought about,
+// so SENT was cancellable and a QUEUED command was answerable purely by default. Each
+// now names its own from-set positively (cancellableStatusStrings,
+// answerableStatusStrings). This one survives where the question really is "has this row
+// finished" rather than "may this particular transition run".
 //
 // 🔴 It is DERIVED from model.go's terminalStatuses, not typed out again.
 // It used to be a second hand-written list beside CommandStatus.Terminal(), and
@@ -718,6 +726,46 @@ func liveWhere(now time.Time) (string, []any) {
 // without claiming — which was the platform's only unclaimed dispatch.
 func claimableStatusStrings() []string {
 	return []string{CommandQueued.String(), CommandHeld.String(), CommandParked.String()}
+}
+
+// ErrResponderNotCommandOwner is returned when a device publishes a response for a
+// command belonging to a DIFFERENT device.
+//
+// It is a distinct sentinel rather than a generic failure because the two need opposite
+// handling and produce opposite conclusions. An ordinary persist failure is transient:
+// leave the message unacked and let it retry. This is not retryable at all — the same
+// message will be refused forever — so its consumer must ack it and stop.
+//
+// 🔑 THE SENTINEL IS ALSO WHAT MAKES THE EVENT COUNTABLE. The consumer's shared result
+// vocabulary can only call this message "invalid", which is the same label an undecodable
+// payload gets — a broken device and a device answering for its neighbours reported as one
+// number. Recognising the sentinel is what lets the consumer raise its own
+// ResponsesRefused counter alongside, so the two stay tellable apart.
+var ErrResponderNotCommandOwner = errors.New("command response came from a device that does not own the command")
+
+// answerableStatusStrings is the wire form of the states in which a DEVICE RESPONSE may
+// settle a command: the states a dispatcher has held the row in for that device.
+//
+// 🔴 IT REPLACED A NEGATIVE GUARD ("status NOT IN (terminal)"), and the difference is
+// QUEUED and HELD. Those fell through the old guard by default, so a device could report
+// success for a command no transport had ever handed it — closing out an actuation that
+// then never happened, with the record saying it did. Naming the set positively means a
+// state is answerable because someone decided it is, which is the same correction
+// CancelCommand's from-set already received (see cancellableStatusStrings).
+//
+// 🔑 PARKED IS IN THE SET DELIBERATELY, AND NOT BECAUSE IT IS A DISPATCHED STATE — it is
+// not; ParkClaim records that the transport found the device UNREACHABLE, which is why
+// expiredTerminalFor maps it to EXPIRED rather than TIMEOUT. It is here because a park
+// can land on a row that WAS delivered and actuated: ParkClaim's own note describes a
+// park request arriving as a redelivery for a command since claimed and run. Excluding
+// PARKED would discard that device's true answer and let a command it really executed
+// expire. Admitting it costs nothing now that the responder must own the row.
+//
+// 🔴 DELIBERATELY ITS OWN LIST, like its three siblings above. It happens to be the
+// complement of neither of them, and a shared helper would silently move this set on the
+// day a state is added for one of the other questions.
+func answerableStatusStrings() []string {
+	return []string{CommandSent.String(), CommandParked.String()}
 }
 
 // cancellableStatusStrings is the wire form of the states a CANCEL takes to CANCELLED:
@@ -1274,18 +1322,31 @@ func (api *Api) MarkSentByToken(ctx context.Context, token string) (bool, error)
 	return res.RowsAffected > 0, nil
 }
 
-// MarkResponse records a device response against a command, looked up by its
-// token. If the command is already terminal the response is ignored (the
-// current command is returned). On success the command becomes SUCCESSFUL,
-// otherwise FAILED with the error message recorded.
+// MarkResponse records a device response against a command, looked up by its token.
+// If the command is already terminal the response is ignored (the current command is
+// returned). On success the command becomes SUCCESSFUL, otherwise FAILED with the
+// error message recorded.
 //
-// The write is a from-state-predicated conditional UPDATE guarded on the row still
-// being non-terminal (the same shape ExpireStale uses), touching only the response
-// columns — so a response and a racing MarkSent / expire / cancel never clobber each
-// other via a stale full-row Save. RowsAffected==0 means the row went terminal
-// between the read and the write (a late/duplicate response); the current row is
-// returned unchanged.
-func (api *Api) MarkResponse(ctx context.Context, commandToken string, success bool,
+// responder is the token of the device that ACTUALLY published the response, taken
+// from the delivered subject rather than the payload, and a response from anyone but
+// the command's own device is refused with ErrResponderNotCommandOwner.
+//
+// 🔴 THAT CHECK IS THE WHOLE POINT OF THE PARAMETER, AND ITS ABSENCE WAS A FORGERY.
+// The device grant used to permit publishing on the TENANT-WIDE response subject while
+// the response body carried no identity, so this function marked whatever token it was
+// handed: any device could settle any other device's command, and batch tokens
+// (dcb{id}-{index}) are enumerable, so an entire fleet write could be reported complete
+// with no device acting. The grant is device-scoped now, which is what makes responder
+// trustworthy — the broker refuses a publish to another device's subject — and this is
+// where that authenticated fact is finally USED. A grant nobody checks against would
+// only have moved the hole.
+//
+// The write is a from-state-predicated conditional UPDATE (the same shape ExpireStale
+// uses), touching only the response columns — so a response and a racing MarkSent /
+// expire / cancel never clobber each other via a stale full-row Save. RowsAffected==0
+// means the row left the answerable set between the read and the write (a late or
+// duplicate response); the current row is returned unchanged.
+func (api *Api) MarkResponse(ctx context.Context, commandToken, responder string, success bool,
 	payload *string, errMsg *string) (*Command, error) {
 	matches, err := api.CommandsByToken(ctx, []string{commandToken})
 	if err != nil {
@@ -1295,6 +1356,16 @@ func (api *Api) MarkResponse(ctx context.Context, commandToken string, success b
 		return nil, gorm.ErrRecordNotFound
 	}
 	found := matches[0]
+
+	// 🔴 IDENTITY BEFORE ANYTHING ELSE, INCLUDING BEFORE THE TERMINAL FAST PATH. A
+	// forged response to an already-terminal command changes no row, but it is still a
+	// device claiming to be another device, and returning it the command's current state
+	// would answer a question it had no right to ask. Refusing first also means the one
+	// place that reports this event cannot be skipped by a lucky race.
+	if found.DeviceToken != responder {
+		return nil, fmt.Errorf("%w: device %q answered for command %q, which belongs to device %q",
+			ErrResponderNotCommandOwner, responder, commandToken, found.DeviceToken)
+	}
 
 	// Fast-path: ignore responses to already-terminal commands (idempotent / late).
 	// The conditional WHERE below is the authoritative guard if it races.
@@ -1318,8 +1389,19 @@ func (api *Api) MarkResponse(ctx context.Context, commandToken string, success b
 		updates["status"] = CommandFailed.String()
 		updates["error"] = rdb.NullStrOf(errMsg)
 	}
+	// ⚠️ `device_token = ?` HERE IS NOT INDEPENDENTLY VERIFIED, AND IT IS RECORDED RATHER
+	// THAN QUIETLY LEFT TO READ AS A TESTED GUARD. Deleting it breaks no test, because the
+	// Go check above returns before this runs and nothing in the platform ever WRITES
+	// device_token — it is set once at creation (CreateCommand / the batch enqueue) and
+	// never updated — so `found.DeviceToken` and the row cannot disagree. That makes it a
+	// genuinely equivalent mutation, not a gap a test could close.
+	//
+	// It is kept because this file's convention is that the conditional WHERE is the
+	// AUTHORITATIVE guard and the in-process check is the fast path (see the terminal
+	// fast-path note above), and because the day a device_token update path does appear,
+	// the authority is already where it belongs instead of being remembered.
 	if res := api.RDB.DB(ctx).Model(&Command{}).
-		Where("id = ? AND status NOT IN ?", found.ID, terminalStatusStrings()).
+		Where("id = ? AND device_token = ? AND status IN ?", found.ID, responder, answerableStatusStrings()).
 		Updates(updates); res.Error != nil {
 		return nil, res.Error
 	}

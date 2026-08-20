@@ -320,9 +320,16 @@ const MqttDeliverySubject = "$MQTT.sub.>"
 // be closed against a device that misbehaves on purpose:
 //
 //   - SUB is the device's OWN command subject, plus the MQTT delivery subject.
-//   - PUB is the device's own events topic and the shared command-responses subject
-//     (one subject, one consumer; a response names its command by token, and the
-//     tenant is derived from the subject rather than the payload).
+//   - PUB is the device's own events topic and its own command-responses subject.
+//
+// 🔴 THE RESPONSE GRANT USED TO BE TENANT-WIDE, AND THAT WAS THE HOLE. Downlink was
+// confined to the device while uplink was not, so any authenticated device could
+// publish a response naming any command token in its tenant — and the response carried
+// no identity, so command-delivery stamped whatever it was handed. Batch command tokens
+// are enumerable, which made a whole fleet write markable as complete with no device
+// acting. Both directions are device-scoped now, and the symmetry is the fix: the token
+// in the subject is spliced HERE, into the signed grant, so the broker rejects a publish
+// to anyone else's subject before our code sees the message.
 //
 // The instance-id prefix still closes the cross-instance hole on a shared broker
 // (ADR-048): two instances' devices never share a subject tree even for
@@ -343,7 +350,7 @@ func DevicePermissions(instanceId, tenant, deviceToken string) (jwt.Permissions,
 	// subscription drift apart — which is exactly how internal subjects ended up
 	// inside the ingest subscription. See messaging.DeviceEventsWildcard.
 	events := messaging.DeviceEventsSubject(instanceId, tenant, deviceToken)
-	responses := fmt.Sprintf("%s.%s.%s", instanceId, tenant, messaging.SubjectCommandResponses)
+	responses := messaging.DeviceScopedSubject(instanceId, tenant, messaging.SubjectCommandResponses, deviceToken)
 	commands := messaging.DeviceScopedSubject(instanceId, tenant, messaging.SubjectDeviceCommands, deviceToken)
 
 	var p jwt.Permissions

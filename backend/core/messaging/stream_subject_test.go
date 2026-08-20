@@ -6,6 +6,7 @@ package messaging
 import (
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/nats-io/nats.go"
 )
 
@@ -32,11 +33,52 @@ func TestStreamSubjectCoversTheSubjectsPublished(t *testing.T) {
 	})
 
 	t.Run("a tenant-scoped subject falls inside its stream pattern", func(t *testing.T) {
-		subject := ScopedSubject(instance, "acme", SubjectCommandResponses)
-		pattern := StreamSubject(instance, SubjectCommandResponses)
+		subject := ScopedSubject(instance, "acme", streams.InboundEvents)
+		pattern := StreamSubject(instance, streams.InboundEvents)
 
 		if !subjectMatches(pattern, subject) {
 			t.Fatalf("stream %q does not capture published subject %q", pattern, subject)
+		}
+	})
+
+	// Responses carry the RESPONDING device, and the same two properties must hold for
+	// them as for commands — they are what makes a response attributable at all.
+	t.Run("a response subject falls inside its stream pattern", func(t *testing.T) {
+		subject := DeviceScopedSubject(instance, "acme", SubjectCommandResponses, "sensor-001")
+		pattern := StreamSubject(instance, SubjectCommandResponses)
+
+		if want := "inst-1.acme.command-responses.sensor-001"; subject != want {
+			t.Fatalf("publish subject = %q, want %q", subject, want)
+		}
+		if want := "inst-1.*.command-responses.*"; pattern != want {
+			t.Fatalf("stream pattern = %q, want %q", pattern, want)
+		}
+		if !subjectMatches(pattern, subject) {
+			t.Fatalf("stream %q does not capture published subject %q", pattern, subject)
+		}
+	})
+
+	// 🔴 THE ONE THAT ENCODES THE FIX. A grant confined to sensor-001's response subject
+	// must not reach sensor-002's — that gap is precisely what let one device settle
+	// another device's command.
+	t.Run("one device's response subject is outside another device's filter", func(t *testing.T) {
+		mine := DeviceScopedSubject(instance, "acme", SubjectCommandResponses, "sensor-001")
+		theirFilter := DeviceScopedSubject(instance, "acme", SubjectCommandResponses, "sensor-002")
+
+		if subjectMatches(theirFilter, mine) {
+			t.Fatal("a device-scoped response filter must not match another device's subject")
+		}
+	})
+
+	// And the old tenant-wide response subject must no longer capture anything, or a
+	// device still holding the old grant would keep the ability the cutover removes.
+	t.Run("the old tenant-wide pattern no longer captures responses", func(t *testing.T) {
+		subject := DeviceScopedSubject(instance, "acme", SubjectCommandResponses, "sensor-001")
+		old := WildcardSubject(instance, SubjectCommandResponses)
+
+		if subjectMatches(old, subject) {
+			t.Fatalf("old pattern %q still captures %q; the subject did not actually change shape",
+				old, subject)
 		}
 	})
 

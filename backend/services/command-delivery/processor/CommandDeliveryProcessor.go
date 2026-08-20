@@ -142,6 +142,24 @@ type CommandDeliveryProcessor struct {
 	StrandedRecovered *prometheus.CounterVec
 	StrandedSkipped   *prometheus.CounterVec
 
+	// ResponsesRefused counts device responses rejected because the device that published
+	// them does not own the command they name.
+	//
+	// 🔴🔴 IT IS ITS OWN COUNTER BECAUSE THE SHARED RESULT VOCABULARY CANNOT EXPRESS IT.
+	// ProcessorMetrics labels this message "invalid", the same bucket as an undecodable
+	// payload — and the two mean opposite things. An undecodable payload is a device that
+	// is broken; this is a device that works perfectly and is answering for its
+	// neighbours. Left in that bucket the one signal distinguishing "a fleet has a bad
+	// firmware build" from "something in this tenant is forging outcomes" is a rate an
+	// operator has no way to separate.
+	//
+	// A standing non-zero rate here is not routine noise to be tuned away. It is either a
+	// device doing something its grant should already prevent — which would mean the
+	// broker's authorization is not doing what this design assumes — or the platform's own
+	// dispatch putting a command on the wrong device's subject. Both are worth waking
+	// someone for, and neither is visible anywhere else.
+	ResponsesRefused prometheus.Counter
+
 	// reconcileCursor is where the next reconcile pass resumes its walk of the withheld
 	// set. Per-pod and reset on restart, which merely restarts the walk — it is a
 	// position in a scan, not state anything depends on.
@@ -202,6 +220,10 @@ func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.Mess
 		StrandedSkipped: ms.NewCounterVec("command_delivery_stranded_skipped_total",
 			"Stranded commands the reconciler declined to act on, by reason. A high and steady "+
 				"reason=\"transport\" rate is expected on MQTT deployments and is not a fault", []string{"reason"}),
+		ResponsesRefused: ms.NewCounter("command_delivery_responses_refused_total",
+			"Device responses rejected because the publishing device does not own the command "+
+				"they name. Expected to be zero: either a device is answering for another device, "+
+				"or dispatch addressed a command to the wrong one", nil),
 	}
 
 	// Create lifecycle manager.
@@ -547,6 +569,26 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 		return false
 	}
 
+	// ...and the responding DEVICE from the same subject, for the same reason and with
+	// the same fail-closed disposition.
+	//
+	// 🔴 THE SUBJECT, NEVER THE PAYLOAD. A device's signed grant permits publishing only
+	// to its own response subject, so this token is one the broker has already verified;
+	// the identical-looking field in the JSON would be whatever the sender typed. That
+	// difference is the entire fix for a device settling another device's command, and it
+	// evaporates the moment anyone reads the body instead.
+	//
+	// A subject we cannot parse a device out of is poison rather than a message to
+	// process anonymously: MarkResponse has no anonymous mode, and inventing one here
+	// would be a way back to the behaviour this replaced.
+	responder, ok := messaging.ParseDeviceFromScopedSubject(msg.Subject, messaging.SubjectCommandResponses)
+	if !ok {
+		log.Warn().Str("correlation", msg.CorrelationID()).Msg(fmt.Sprintf("Skipping command response with no parseable device in subject %q", msg.Subject))
+		_ = msg.Ack()
+		done(core.ResultInvalid)
+		return false
+	}
+
 	// An undecodable payload is poison: ack it so it does not redeliver.
 	var response responseEnvelope
 	if err := json.Unmarshal(msg.Value, &response); err != nil {
@@ -556,8 +598,23 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 		return false
 	}
 
-	if _, err := cproc.Api.MarkResponse(tenantCtx, response.CommandToken,
+	if _, err := cproc.Api.MarkResponse(tenantCtx, response.CommandToken, responder,
 		response.Success, response.Payload, response.Error); err != nil {
+		// A device answering for a command it does not own is refused, and the refusal is
+		// TERMINAL, not transient: the same message would be refused on every redelivery,
+		// so retrying it only burns the delivery budget. Ack it, count it as invalid, and
+		// say so — the log line and the counter are the only places this is visible, and a
+		// silent drop here would turn a device misbehaving (or a dispatcher misrouting)
+		// into a command that merely never finishes.
+		if errors.Is(err, model.ErrResponderNotCommandOwner) {
+			incr(cproc.ResponsesRefused, 1)
+			log.Warn().Err(err).Str("device", responder).Str("command", response.CommandToken).
+				Str("correlation", msg.CorrelationID()).
+				Msg("Refusing a command response from a device that does not own the command")
+			_ = msg.Ack()
+			done(core.ResultInvalid)
+			return false
+		}
 		// Treat a failed persist as transient. Leave it unacked to retry until
 		// the redelivery cap, then ack to give up (the device can resend and the
 		// command sweep handles redelivery of the command itself).

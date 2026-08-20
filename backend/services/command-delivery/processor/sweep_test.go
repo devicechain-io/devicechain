@@ -51,6 +51,12 @@ type fakeApi struct {
 	// parkCalls records (token, nonce) pairs verbatim. The NONCE is the point: a test
 	// that only checked which tokens were parked would pass just as happily against a
 	// park predicated on nothing at all.
+	// responseCalls records every MarkResponse the processor made, and responseErr is
+	// what it is answered with (an ErrResponderNotCommandOwner here stands in for the
+	// platform refusing a forged response).
+	responseCalls []responseCall
+	responseErr   error
+
 	parkCalls []parkCall
 	// parkLoses makes ParkClaim report a zero-row update — the nonce predicate declining
 	// a row that has been re-dispatched since the scan observed it. parkFails makes it
@@ -117,6 +123,13 @@ func (f *fakeApi) HeldCommands(_ context.Context, afterId uint, limit int) ([]*m
 
 // parkCall is one park request, recorded whole. The nonce is half the record because it
 // is half the contract.
+// responseCall is one MarkResponse the processor made, verbatim.
+type responseCall struct {
+	commandToken string
+	responder    string
+	success      bool
+}
+
 type parkCall struct {
 	token string
 	nonce string
@@ -281,8 +294,22 @@ func (f *fakeApi) ReleaseClaim(_ context.Context, id uint) (bool, error) {
 func (f *fakeApi) CreateCommand(context.Context, *model.CommandCreateRequest) (*model.Command, error) {
 	return nil, nil
 }
-func (f *fakeApi) MarkResponse(context.Context, string, bool, *string, *string) (*model.Command, error) {
-	return nil, nil
+
+// MarkResponse records WHO the processor said was answering, and for which command.
+//
+// 🔴 THE RESPONDER IS RECORDED BECAUSE IT IS THE ONE ARGUMENT WORTH TESTING HERE. The
+// processor's whole job on this path is to derive the responding device from the
+// broker-verified SUBJECT rather than from anything the sender wrote, and a fake that
+// discarded it would pass identically whether the processor read the subject, read the
+// payload, or passed the empty string.
+func (f *fakeApi) MarkResponse(_ context.Context, commandToken, responder string, success bool,
+	_ *string, _ *string) (*model.Command, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.responseCalls = append(f.responseCalls, responseCall{
+		commandToken: commandToken, responder: responder, success: success,
+	})
+	return nil, f.responseErr
 }
 func (f *fakeApi) CancelCommand(context.Context, string) (*model.Command, error) { return nil, nil }
 func (f *fakeApi) CommandsById(context.Context, []uint) ([]*model.Command, error) {

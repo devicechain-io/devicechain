@@ -130,7 +130,7 @@ public class MqttRealBrokerTests
 
         await peer.ConnectAsync(DeviceOptions("peer-001", "peer"), cts.Token);
         await peer.SubscribeAsync(
-            DevicePlane.CommandResponsesTopic("inst", "acme"), MqttQos.AtLeastOnce, cts.Token);
+            AllCommandResponsesTopic, MqttQos.AtLeastOnce, cts.Token);
 
         await peer.PublishAsync(
             DevicePlane.CommandsTopic("inst", "acme", "sensor-001"),
@@ -272,7 +272,7 @@ public class MqttRealBrokerTests
 
         await peer.ConnectAsync(DeviceOptions("peer-003", "peer"), cts.Token);
         await peer.SubscribeAsync(
-            DevicePlane.CommandResponsesTopic("inst", "acme"), MqttQos.AtLeastOnce, cts.Token);
+            AllCommandResponsesTopic, MqttQos.AtLeastOnce, cts.Token);
 
         // ONE publish. Everything the session sees after this is the broker's own doing.
         await peer.PublishAsync(
@@ -428,7 +428,7 @@ public class MqttRealBrokerTests
 
             await peer.ConnectAsync(DeviceOptions("peer-scene", "peer"), cts.Token);
             await peer.SubscribeAsync(
-                DevicePlane.CommandResponsesTopic("inst", "acme"), MqttQos.AtLeastOnce, cts.Token);
+                AllCommandResponsesTopic, MqttQos.AtLeastOnce, cts.Token);
 
             // One command per machine, each token naming the machine it belongs to so a
             // mis-delivery is identifiable rather than merely a count that does not add up.
@@ -491,6 +491,16 @@ public class MqttRealBrokerTests
     // A short id that is distinct per test run, so traffic this run produced can be told from
     // traffic still sitting on a broker that outlived an earlier one.
     private static string RunId() => Guid.NewGuid().ToString("N").Substring(0, 8);
+
+    // The topic filter an OBSERVER uses to watch every device's responses at once.
+    //
+    // 🔴 NO DEVICE HAS THIS GRANT, and that is the point of spelling it out here rather than
+    // adding it to DevicePlane. Responses are published per-device precisely so a device is
+    // confined to its own; the wildcard works only because these tests run against an
+    // unauthenticated local broker, where the peer stands in for the platform's consumer
+    // rather than for a device. Publishing it as SDK API would hand device code a filter the
+    // real broker refuses.
+    private const string AllCommandResponsesTopic = "inst/acme/command-responses/+";
 
     private static MqttConnectOptions DeviceOptions(string deviceToken, string? discriminator = null) =>
         new(new Uri(BrokerUri!), DevicePlane.DeviceClientId("inst", "acme", deviceToken, discriminator))

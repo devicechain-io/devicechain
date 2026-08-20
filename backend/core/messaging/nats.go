@@ -904,11 +904,21 @@ func ReaderWithDeliverNew() ReaderOption {
 // MaxAckPending is pinned to the value the old PullSubscribe path used implicitly
 // (its subscription channel capacity) rather than left unset — unset would inherit
 // the server default (1000) on freshly-created consumers while upgraded-in-place
-// durables kept the old value, a silent config fork. WARNING: changing any field
-// here (or adding a newly-compared one) will make AddConsumer reject an existing
-// durable and crash-loop startup on a non-fresh cluster — a config change must ride a
-// fresh bring-up (down+up) or an explicit consumer migration (pre-GA: prefer the
-// decisive cutover).
+// durables kept the old value, a silent config fork.
+//
+// WARNING: changing any field here (or adding a newly-compared one) will make
+// AddConsumer reject an existing durable and crash-loop startup on a non-fresh
+// cluster — a config change must ride a fresh bring-up (down+up) or an explicit
+// consumer migration (pre-GA: prefer the decisive cutover).
+//
+// 🔴 FilterSubject IS THE ONE EXCEPTION, AND IT IS THE OPPOSITE OF LOUD. The server
+// does not compare it on the create path at all: AddConsumer against an existing
+// durable with a CHANGED filter returns SUCCESS and leaves the old filter in place
+// (measured — TestAddConsumerSilentlyIgnoresAChangedFilterSubject). Every other
+// field behaves as the warning above describes; this one reports that it did what
+// it did not do. bind() therefore reconciles it explicitly rather than trusting
+// AddConsumer's success, because the alternative is a consumer left filtering for
+// a subject shape no producer publishes to any more.
 func (r *natsReader) consumerConfig() *nats.ConsumerConfig {
 	cfg := &nats.ConsumerConfig{
 		Durable:       r.durable,
@@ -949,11 +959,53 @@ func (r *natsReader) bind() error {
 	if _, err := r.nmgr.js.AddConsumer(r.stream, r.consumerConfig()); err != nil {
 		return err
 	}
+	if err := r.reconcileFilterSubject(); err != nil {
+		return err
+	}
 	sub, err := r.nmgr.js.PullSubscribe(r.subject, r.durable, nats.Bind(r.stream, r.durable))
 	if err != nil {
 		return err
 	}
 	r.sub.Store(sub)
+	return nil
+}
+
+// reconcileFilterSubject moves an existing durable onto THIS build's filter subject.
+//
+// It exists because AddConsumer cannot: the server accepts a create against an
+// existing durable whose filter differs, keeps the old filter, and reports success
+// (see consumerConfig). The mismatch then surfaces one line later, when PullSubscribe
+// binds and the client refuses with "subject does not match consumer" — so the failure
+// is loud, but it is loud in a place that describes the symptom rather than the cause,
+// and there is nothing the operator can do about it short of deleting the durable.
+//
+// This is not hypothetical bookkeeping. A suffix's SHAPE can change (a tenant-scoped
+// subject becoming per-device, which is how command-responses gained the device
+// segment that makes a response attributable), and StreamSubject then returns a filter
+// one wildcard level deeper. The stream itself already reconciles — ensureStream calls
+// applyStreamSubjects — so without this the stream captures the new subjects while the
+// consumer reading them is stuck on the old filter: the two halves of the same
+// declaration, reconciled on one side only.
+//
+// 🔑 IT UPDATES ONLY AFTER AddConsumer HAS ALREADY RETURNED CLEAN, which is what keeps
+// the loud path loud. Any OTHER changed field makes AddConsumer fail above and we never
+// reach here, so this cannot quietly converge a config change that was meant to be
+// refused — it only closes the one gap where the server's own answer is unreliable.
+func (r *natsReader) reconcileFilterSubject() error {
+	info, err := r.nmgr.js.ConsumerInfo(r.stream, r.durable)
+	if err != nil {
+		return err
+	}
+	if info.Config.FilterSubject == r.subject {
+		return nil
+	}
+	log.Info().Str("stream", r.stream).Str("durable", r.durable).
+		Str("from", info.Config.FilterSubject).Str("to", r.subject).
+		Msg("Moving an existing durable consumer onto this build's filter subject")
+	if _, err := r.nmgr.js.UpdateConsumer(r.stream, r.consumerConfig()); err != nil {
+		return fmt.Errorf("moving durable %q from filter %q to %q: %w",
+			r.durable, info.Config.FilterSubject, r.subject, err)
+	}
 	return nil
 }
 

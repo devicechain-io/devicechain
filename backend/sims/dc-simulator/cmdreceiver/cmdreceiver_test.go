@@ -25,7 +25,7 @@ func (r *Receiver) newTestDevice(token string) *deviceState {
 	ds := &deviceState{
 		token:         token,
 		commandTopic:  r.commandTopic(token),
-		responseTopic: r.responseTopic(),
+		responseTopic: r.responseTopic(token),
 		ready:         make(chan error, 1),
 		distinct:      make(map[string]int),
 		subscribed:    true, // a live subscription is assumed for accounting tests
@@ -48,7 +48,14 @@ func frame(t *testing.T, token, device, name string) []byte {
 func TestReceiverTopics(t *testing.T) {
 	r := New("inst-1", "acme", "tcp://127.0.0.1:1883", nil)
 	assert.Equal(t, "inst-1/acme/device-commands/sensor-1", r.commandTopic("sensor-1"))
-	assert.Equal(t, "inst-1/acme/command-responses", r.responseTopic())
+	assert.Equal(t, "inst-1/acme/command-responses/sensor-1", r.responseTopic("sensor-1"))
+
+	// 🔴 THE TWO TOPICS MUST BE DEVICE-SCOPED IN THE SAME WAY. The asymmetry between them
+	// — commands confined to a device, responses tenant-wide — is what let one device
+	// settle another's command, so a response topic that stopped naming the device would
+	// reopen it while every delivery test kept passing.
+	assert.NotEqual(t, r.responseTopic("sensor-1"), r.responseTopic("sensor-2"),
+		"two devices must not share a response topic")
 }
 
 // A well-formed command is recorded once; a REDELIVERY of the same token bumps raw

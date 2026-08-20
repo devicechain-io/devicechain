@@ -160,7 +160,7 @@ func TestAuthorizeGrant(t *testing.T) {
 	// and command responses, and nothing else.
 	want := []string{
 		"inst-1.acme-corp.devices.sensor-001.events",
-		"inst-1.acme-corp.command-responses",
+		"inst-1.acme-corp.command-responses.sensor-001",
 	}
 	if got := []string(uc.Permissions.Pub.Allow); !slices.Equal(got, want) {
 		t.Errorf("pub allow = %v, want %v", got, want)
@@ -199,6 +199,29 @@ func TestAuthorizeGrantIsPerDevice(t *testing.T) {
 	if !ownCommands {
 		t.Errorf("sub allow %v is missing this device's own command subject",
 			[]string(uc.Permissions.Sub.Allow))
+	}
+
+	// 🔴 AND THE PUBLISH SIDE, WHICH IS WHERE THE ASYMMETRY WAS. Confining SUB while
+	// leaving PUB tenant-wide is exactly the shape this grant used to have: the device
+	// could not SEE another device's command, but it could ANSWER one, which settled the
+	// command just as effectively. Checked here, on the issuing path, because this is the
+	// grant a real device is actually handed.
+	var ownResponses bool
+	for _, granted := range uc.Permissions.Pub.Allow {
+		if granted == "inst-1.acme-corp.command-responses.sensor-001" {
+			ownResponses = true
+		}
+		if granted == "inst-1.acme-corp.command-responses" {
+			t.Errorf("pub grant %q is the tenant-wide response subject; this device can answer "+
+				"for every other device in the tenant", granted)
+		}
+		if strings.HasSuffix(granted, ">") && strings.HasPrefix(granted, "inst-1.acme-corp") {
+			t.Errorf("pub grant %q is a tenant-wide wildcard; it reaches other devices", granted)
+		}
+	}
+	if !ownResponses {
+		t.Errorf("pub allow %v is missing this device's own command-response subject",
+			[]string(uc.Permissions.Pub.Allow))
 	}
 }
 

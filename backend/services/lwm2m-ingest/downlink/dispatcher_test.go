@@ -77,22 +77,38 @@ func (l *fakeLookup) Lookup(tenant, token string) (mux.Conn, Reach) {
 	return nil, ReachOffline
 }
 
+// addressedResponse is one published outcome together with the DEVICE it was addressed
+// to — the subject segment, not a payload field.
+//
+// 🔴 THE DEVICE IS RECORDED BECAUSE A FAKE THAT DROPS IT CANNOT SEE THE OMISSION IT EXISTS
+// TO CATCH. The addressing is the whole security property here: a response published under
+// the wrong device is refused by command-delivery and the command silently rides to
+// TIMEOUT. A fake keeping only the envelope would report every such bug as a clean pass,
+// since the envelope is identical either way.
+type addressedResponse struct {
+	device string
+	env    responseEnvelope
+}
+
 type fakePublisher struct {
 	mu   sync.Mutex
-	sent []responseEnvelope
+	sent []addressedResponse
 	fail bool
 }
 
-func (p *fakePublisher) WriteMessages(_ context.Context, msgs ...messaging.Message) error {
+func (p *fakePublisher) WriteToDevice(_ context.Context, deviceToken string, msgs ...messaging.Message) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.fail {
 		return errors.New("command-responses publish failed")
 	}
+	if deviceToken == "" {
+		return errors.New("refusing to publish a response addressed to no device")
+	}
 	for _, m := range msgs {
 		var e responseEnvelope
 		_ = json.Unmarshal(m.Value, &e)
-		p.sent = append(p.sent, e)
+		p.sent = append(p.sent, addressedResponse{device: deviceToken, env: e})
 	}
 	return nil
 }
@@ -100,7 +116,18 @@ func (p *fakePublisher) WriteMessages(_ context.Context, msgs ...messaging.Messa
 func (p *fakePublisher) responses() []responseEnvelope {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return append([]responseEnvelope(nil), p.sent...)
+	out := make([]responseEnvelope, 0, len(p.sent))
+	for _, a := range p.sent {
+		out = append(out, a.env)
+	}
+	return out
+}
+
+// addressed returns what was published together with who it was published as.
+func (p *fakePublisher) addressed() []addressedResponse {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]addressedResponse(nil), p.sent...)
 }
 
 type fakeExecutor struct {
@@ -1214,4 +1241,48 @@ func TestProcessStillActuatesWhenTheGateSaysLive(t *testing.T) {
 	d2 := NewDispatcher(nil, &fakePublisher{}, look, exec2, ff, &fakeClaimer{won: true}, Metrics{}, live())
 	d2.process(context.Background(), task{deviceToken: "pump-1", drain: &drainJob{tenant: "acme", deviceToken: "pump-1"}})
 	assert.Equal(t, 1, exec2.callCount(), "a live tenant's held command must still drain")
+}
+
+// TestResponsesAreAddressedToTheCommandsDevice covers BOTH paths that publish an outcome,
+// because they obtain the device token from different places and only one of them would
+// be caught by a mistake in the other.
+//
+// 🔴 THE ADDRESS IS A SECURITY PROPERTY, NOT A ROUTING DETAIL. command-responses carries
+// the responding device as a subject segment, and command-delivery refuses a response
+// whose device does not own the command — so publishing an outcome under the wrong device
+// does not misroute it, it DISCARDS it: the CoAP op already ran, the answer is thrown
+// away, and the command rides to TIMEOUT looking exactly like a device that never replied.
+// Nothing in the envelope would differ, which is why this asserts the address rather than
+// the payload.
+func TestResponsesAreAddressedToTheCommandsDevice(t *testing.T) {
+	t.Run("live dispatch", func(t *testing.T) {
+		exec := &fakeExecutor{result: OpResult{Op: labelRead, Success: true}}
+		pub := &fakePublisher{}
+		look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
+		d := newDispatcher(nil, pub, look, exec)
+
+		d.dispatch(context.Background(), liveWork("acme", "pump-1", CommandRead, `{"path":"/3/0/9"}`, newAck()))
+
+		sent := pub.addressed()
+		require.Len(t, sent, 1)
+		assert.Equal(t, "pump-1", sent[0].device,
+			"the response must be published as the device the command was for")
+	})
+
+	t.Run("wake drain", func(t *testing.T) {
+		exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
+		pub := &fakePublisher{}
+		look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-7": ReachLive}}
+		ff := &fakeFetcher{cmds: []DrainCommand{
+			{Token: "c1", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`), Status: statusParked},
+		}}
+		d := NewDispatcher(nil, pub, look, exec, ff, &fakeClaimer{won: true}, Metrics{}, Options{})
+
+		d.drain(context.Background(), drainJob{tenant: "acme", deviceToken: "pump-7"})
+
+		sent := pub.addressed()
+		require.Len(t, sent, 1)
+		assert.Equal(t, "pump-7", sent[0].device,
+			"a drained command's response must be published as the drained device")
+	})
 }

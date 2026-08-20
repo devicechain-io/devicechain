@@ -77,7 +77,7 @@ func TestDevicePermissions(t *testing.T) {
 	// What the device MUST be able to do.
 	for _, want := range []string{
 		"inst-1.acme-corp.devices.sensor-001.events",
-		"inst-1.acme-corp.command-responses",
+		"inst-1.acme-corp.command-responses.sensor-001",
 	} {
 		if !pub[want] {
 			t.Errorf("pub allow %v missing %q", []string(p.Pub.Allow), want)
@@ -107,9 +107,16 @@ func TestDevicePermissions(t *testing.T) {
 	// transport-auth marker's whole safety rests on a device being unable to publish a
 	// resolver-bound inbound event (only the dc_service account can), so if a future
 	// grant widening ever let a device reach inbound-events this must fail loudly.
+	//
+	// 🔴 THE RESPONSE SUBJECTS ARE THE B1 CASE, AND BOTH ARE LOAD-BEARING. The tenant-wide
+	// one is what the grant used to be, so a surviving copy of it would leave the hole
+	// exactly as it was; the other device's is what that grant REACHED, and it is the
+	// property a reader actually cares about — one device cannot answer for another.
 	for _, forbidden := range []string{
 		"inst-1.acme-corp.devices.sensor-002.events",
 		"inst-1.acme-corp.device-commands.sensor-001",
+		"inst-1.acme-corp.command-responses",
+		"inst-1.acme-corp.command-responses.sensor-002",
 		"inst-1.acme-corp.inbound-events",
 		"inst-1.acme-corp.anything-else",
 	} {
@@ -189,11 +196,18 @@ func TestSignDeviceUserJWT(t *testing.T) {
 	// so a device's JWT cannot be broader than the policy. Checked by reachability:
 	// nothing in the signed grant may reach another device's command subject.
 	if got := []string(uc.Permissions.Pub.Allow); len(got) != 2 {
-		t.Errorf("pub allow = %v, want the device's events topic and command-responses", got)
+		t.Errorf("pub allow = %v, want the device's events topic and its own command-responses", got)
 	}
 	for _, granted := range uc.Permissions.Sub.Allow {
 		if natsSubjectMatches(granted, "inst-1.plant_07.device-commands.other-device") {
 			t.Errorf("signed sub grant %q reaches another device's commands", granted)
+		}
+	}
+	// The same reachability check on the PUB side, against the signed claim rather than
+	// the policy: a device's JWT must not let it answer for another device.
+	for _, granted := range uc.Permissions.Pub.Allow {
+		if natsSubjectMatches(granted, "inst-1.plant_07.command-responses.other-device") {
+			t.Errorf("signed pub grant %q reaches another device's command responses", granted)
 		}
 	}
 	if !slices.Contains(uc.Permissions.Sub.Allow, "inst-1.plant_07.device-commands.sensor-001") {

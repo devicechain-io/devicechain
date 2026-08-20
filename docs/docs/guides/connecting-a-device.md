@@ -233,10 +233,10 @@ Each message is a JSON envelope:
 
 ## Responding to a command {#responding-to-a-command}
 
-Report the outcome by publishing to the tenant's command-response topic:
+Report the outcome by publishing to the device's **own** command-response topic:
 
 ```
-{instanceId}/{tenant}/command-responses
+{instanceId}/{tenant}/command-responses/{deviceToken}
 ```
 
 ```bash
@@ -245,7 +245,7 @@ mosquitto_pub \
   -h <mqtt-host> -p 1883 \
   -i 'devicechain:acme:sensor-001' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
-  -t "devicechain/acme/command-responses" \
+  -t "devicechain/acme/command-responses/sensor-001" \
   -m '{"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","success":true,"payload":"rebooting in 5s"}'
 ```
 
@@ -256,9 +256,17 @@ mosquitto_pub \
 - **`payload`** / **`error`** are optional strings, surfaced in the console's command
   history and returned by the API.
 
-Unlike the events topic, this one is **not** per-device: every device in a tenant publishes
-to the same subject, and a response identifies its command by token. The tenant is taken
-from the topic rather than the body, so a device cannot answer for another tenant.
+Like the events and command topics, this one is **per-device**, and a device is authorized
+to publish only to its own. Both the tenant and the responding device are taken from the
+topic rather than the body, so a device can answer only for **its own** commands: a response
+naming a command that belongs to a different device is rejected, not recorded.
+
+:::caution The topic changed
+This topic used to be tenant-wide (`{instanceId}/{tenant}/command-responses`, with no device
+segment). A device publishing to the old topic is now refused by the broker, and its
+responses never reach the platform — the commands it answers stay outstanding until they
+`TIMEOUT`. Update the topic wherever your devices build it.
+:::
 
 :::info Responding is what completes the lifecycle
 A command that is never answered stays `SENT` until its TTL turns it into `TIMEOUT`.
