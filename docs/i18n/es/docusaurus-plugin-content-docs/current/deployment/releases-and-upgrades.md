@@ -30,6 +30,10 @@ Cada versión es una única etiqueta git de versión semántica (`vX.Y.Z`). Ese 
 `dcctl` se publican todos con la misma versión. No hay desfase de versión por servicio
 del que preocuparse: un despliegue es un único número coherente.
 
+Mantenerlo así requiere dos comandos en lugar de uno, porque el operador no forma parte del
+chart: consulte [Actualizaciones sin tiempo de inactividad](#zero-downtime-upgrades) para el
+procedimiento.
+
 - Las **versiones estables** son `vX.Y.Z` (por ejemplo, `v1.2.0`). La etiqueta `:latest` sigue a la
   versión estable más reciente.
 - Las **versiones preliminares** son `vX.Y.Z-rc.N` (por ejemplo, `v1.2.0-rc.1`). Estas nunca mueven `:latest`.
@@ -104,18 +108,18 @@ El chart también está publicado en
 [Artifact Hub](https://artifacthub.io/packages/helm/devicechain/devicechain), que muestra
 cada versión publicada junto con sus valores predeterminados y sus plantillas renderizadas.
 
-## Actualizaciones sin tiempo de inactividad
+## Actualizaciones sin tiempo de inactividad {#zero-downtime-upgrades}
 
-Actualizar a una nueva versión es normalmente un `helm upgrade` simple, y el chart y los servicios están
-diseñados para hacer avanzar a los clientes sin perder tráfico. Hasta ahora hay tres versiones que
-son excepciones, todas documentadas más abajo: la transición a la ingesta duradera, que sigue siendo
-un `helm upgrade` pero tiene un efecto secundario visible, y la **`v0.9.0` y la `v0.10.0`, a las que
-no se puede actualizar en absoluto**. Consulte las notas de la versión a la que va a migrar antes de
-ejecutar el comando:
+Actualizar a una nueva versión son **dos comandos**, y el chart y los servicios están diseñados
+para hacer avanzar a los clientes sin perder tráfico. Hasta ahora hay tres versiones que son
+excepciones, todas documentadas más abajo: la transición a la ingesta duradera, que sigue siendo
+una actualización corriente pero tiene un efecto secundario visible, y la **`v0.9.0` y la
+`v0.10.0`, a las que no se puede actualizar en absoluto**. Consulte las notas de la versión a la
+que va a migrar antes de ejecutarlos:
 
 ```bash
-# Traslade los valores de la versión actual y cambie únicamente la versión.
-# Este archivo contiene los secretos de su instancia: elimínelo cuando termine.
+# 1. Los servicios. Traslade los valores de la versión actual y cambie únicamente
+#    la versión. Este archivo contiene los secretos de su instancia: elimínelo al terminar.
 helm get values dc -n default -o yaml > dc-values.yaml
 
 helm upgrade dc deploy/helm/devicechain \
@@ -124,7 +128,26 @@ helm upgrade dc deploy/helm/devicechain \
   --set image.tag=v1.3.0
 
 rm dc-values.yaml
+
+# 2. El operador. No forma parte del chart, así que `helm upgrade` no puede moverlo.
+dcctl upgrade local devicechain --version v1.3.0
 ```
+
+:::warning Ambos pasos, siempre: el segundo no es opcional
+El operador (sus CRD, su RBAC y su controlador) **no lo instala el chart de Helm**. `dcctl` lo
+aplica a partir de manifiestos incrustados en el propio binario, de modo que `helm upgrade` no
+tiene forma de alcanzarlo, y una actualización que se detenga tras el paso 1 deja su instancia
+ejecutando los servicios nuevos contra el controlador con el que se arrancó por primera vez:
+indefinidamente y sin ningún error que se lo indique.
+
+`dcctl upgrade` no toca nada más. No ejecuta la actualización de Helm, no aplica la pila de
+infraestructura y **no genera, lee ni rota ninguna credencial**, por lo que es seguro en una
+instancia en funcionamiento. Úselo en lugar de volver a ejecutar `dcctl bootstrap`, que sí rota
+todas las credenciales generadas.
+
+Pase la misma versión a ambos pasos. Ejecute `dcctl upgrade` con `--dry-run` primero si quiere
+ver exactamente qué objetos movería.
+:::
 
 :::warning Traslade los valores: `--set image.tag=…` por sí solo no funcionará
 No todos los valores de su instancia se escriben a mano. `dcctl bootstrap` genera varios y los
@@ -200,8 +223,8 @@ dispositivos o paneles que le importan, expórtelos antes de empezar. No existe 
 conserve a través de esta versión.
 :::
 
-Normalmente, un cambio de esquema **añade** una nueva migración sobre la línea base, lo que es un
-`helm upgrade` corriente. Esa es la regla, y se cumple en casi todas las versiones.
+Normalmente, un cambio de esquema **añade** una nueva migración sobre la línea base, lo que es una
+actualización in situ corriente. Esa es la regla, y se cumple en casi todas las versiones.
 
 :::note Esta sección prometió una vez que no volvería a ocurrir
 Decía que la compactación describía «una única versión, no una nueva política». Después, la

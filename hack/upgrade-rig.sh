@@ -161,6 +161,10 @@ upgrade_tag="${DC_UPGRADE_TAG:-}"
 work="${DC_UPGRADE_WORK:-$HOME/.devicechain-upgrade-rig}"
 baseline_src="$work/src"
 baseline_dcctl="$baseline_src/backend/cli/build/dcctl"
+# The WORKING TREE's dcctl — the one being released, and the only one that has the
+# `upgrade` verb. Built into the repo's own gitignored build dir, which is where
+# `make -C backend/cli build` puts it and where a developer already looks for it.
+target_dcctl="$repo_root/backend/cli/build/dcctl"
 apiprobe="$work/bin/apiprobe"
 receipt="$work/receipt.json"
 values_file="$work/values.yaml"
@@ -375,6 +379,26 @@ build_baseline_dcctl() {
   make -C "$baseline_src/backend/cli" build >/dev/null
   [[ -x "$baseline_dcctl" ]] || fail "the $baseline_tag dcctl was not built at $baseline_dcctl"
   note "$("$baseline_dcctl" version | head -1)"
+}
+
+# build_target_dcctl builds the dcctl the upgrade is moving TO, which is the one
+# that carries `dcctl upgrade`.
+#
+# 🔴 IT MUST BE THE TARGET'S dcctl AND NOT THE BASELINE'S, for a reason that has
+# nothing to do with the verb existing. `dcctl upgrade` renders the operator
+# overlay EMBEDDED IN THE BINARY — CRDs, RBAC and the controller — so the binary
+# is the source of those manifests, not just the thing that applies them.
+# Upgrading with the baseline's dcctl would move the image tag while re-applying
+# the OLD overlay, which is a subtler version of the defect this whole check
+# exists to catch: an operator that looks upgraded and a CRD set that is not.
+#
+# On the pull path the working tree IS the tag being released (the release
+# workflow checks out that commit), so this is the released dcctl in both modes.
+build_target_dcctl() {
+  say "building the working tree's dcctl (it carries \`dcctl upgrade\`)"
+  make -C "$repo_root/backend/cli" build >/dev/null
+  [[ -x "$target_dcctl" ]] || fail "the working tree's dcctl was not built at $target_dcctl"
+  note "$("$target_dcctl" version | head -1)"
 }
 
 # pin_baseline_charts gives the BASELINE install the third-party chart versions the
@@ -661,6 +685,29 @@ whether it was the migration or the config."
   # --wait returns when the workloads report Ready, and the ingress still has to
   # pick the new pods up as healthy upstreams.
   wait_for_every_api
+
+  # THE SECOND HALF OF THE DOCUMENTED PROCEDURE. `helm upgrade` cannot reach the
+  # operator — it is not in the chart — so an upgrade that stops at the line above
+  # leaves the cluster on the controller it was bootstrapped with. That was a real
+  # release defect, found by this drill; `dcctl upgrade` is the fix and running it
+  # here is what keeps the documented procedure and the tested one identical.
+  #
+  # 🔴 IT IS RUN HERE, NOT IN `cmd_operator`. The operator check must MEASURE, and
+  # a check that performed the upgrade it then asserts would pass unconditionally
+  # — the same instrument-reporting-on-itself shape this rig has already been bitten
+  # by. Keeping the action in `upgrade` and the assertion in `operator` is what
+  # makes the assertion capable of failing.
+  build_target_dcctl
+  say "dcctl upgrade → moving the operator (CRDs + RBAC + controller) to $target_tag"
+  "$target_dcctl" upgrade local "$instance" \
+    --kube-context "$kube_context" \
+    --registry "$target_registry" --version "$target_tag" ||
+    fail "\`dcctl upgrade\` FAILED. The services are now on $target_tag and the operator
+is not, which is the exact state this drill exists to refuse. An operator running
+the documented procedure would be here too. Read the output above: an image that
+cannot be pulled leaves the controller crash-looping on the new tag, while an
+apply error names the object the cluster refused."
+
   say "UPGRADED — $target_registry/*:$target_tag is serving, from the release's own values"
 }
 
@@ -790,29 +837,35 @@ in either direction."
 }
 
 # ---------------------------------------------------------------------------
-# operator — the part of the release the documented procedure never touches
+# operator — the half of the release `helm upgrade` cannot reach
 # ---------------------------------------------------------------------------
-#
-# 🔴 THIS PHASE IS EXPECTED TO FAIL TODAY, AND THAT IS WHY IT EXISTS.
 #
 # docs/docs/deployment/releases-and-upgrades.md tells an operator that one version
 # covers "each service image, the operator, the Helm chart, and dcctl", and that
 # there is "no per-service version skew to reason about". The documented upgrade
 # is a `helm upgrade` — and the operator is NOT IN THE CHART. dcctl applies it
-# from its own embedded manifests during bootstrap (backend/cli/bootstrap/steps.go
-# renders backend/k8s's overlay). No dcctl subcommand moves it afterwards, and
-# re-running bootstrap rotates every generated credential.
+# from its own embedded manifests (backend/cli/bootstrap/steps.go renders
+# backend/k8s's overlay), so nothing Helm does can move it.
 #
-# So an operator who follows the documentation to the letter ends up with the new
-# services and the old controller, holding a promise that says otherwise. That is
-# a defect in the release, not in this rig, and the whole argument for turning this
-# drill into a blocking gate is that a gate says so out loud instead of a comment
-# recording it as a known limitation. It carries its own exit code so a workflow
-# can report THE FINDING rather than "the drill failed".
+# 🔴 THIS PHASE WAS BUILT KNOWING IT WOULD FAIL, AND THAT IS WHY THE FIX EXISTS.
+# When it was written there was no way to move the operator at all: re-running
+# bootstrap rotates every generated credential, and no other subcommand touched
+# it. So an operator following the documentation to the letter ended up with new
+# services, the old controller, and a promise that said otherwise. The gate said
+# so out loud instead of a comment recording it as a known limitation — and
+# `dcctl upgrade` is what that produced. `cmd_upgrade` now runs it as the second
+# half of the documented procedure, and this phase measures the result.
 #
-# It runs LAST. The drill's primary claim — that rows survive — must be measured
-# and reported before a known-red check stops the run, or a real data-loss defect
-# would sit behind a finding everyone already knows about.
+# It still carries its own exit code, and the reason has outlived the finding: a
+# workflow reading `exit 20` knows the release has a version-skew defect, as
+# opposed to a runner that ran out of disk. What changed is what a red here MEANS
+# — no longer "the gap nobody has closed" but "the fix did not hold". The failure
+# text says so, because a stale explanation is worse than none: it would send
+# whoever reads it to build something that already exists.
+#
+# It runs LAST, and that ordering is unchanged. The drill's primary claim — that
+# rows survive — must be measured and reported before any later check can stop the
+# run, or a real data-loss defect would sit behind a version mismatch.
 
 # operator_namespace reads the namespace out of the operator's own kustomize
 # overlay rather than repeating it here, so a rename moves this check with it —
@@ -903,18 +956,25 @@ not a broken rig — and it is the one this drill was extended to make visible.
   still running:  ${skewed[*]}
   services now:   $want
 
-docs/docs/deployment/releases-and-upgrades.md promises an operator that one
-version covers the service images, the operator, the chart and dcctl together,
-with no per-service skew to reason about. The documented upgrade is a
-\`helm upgrade\` — and the operator is not in the chart. dcctl applies it from its
-own embedded manifests during bootstrap, no subcommand moves it afterwards, and
-re-running bootstrap rotates every generated credential.
+docs/docs/deployment/releases-and-upgrades.md promises that one version covers the
+service images, the operator, the chart and dcctl together, with no per-service
+skew to reason about.
 
-An operator who follows the documentation exactly arrives here: new services, old
-controller, and a promise that says otherwise. Closing it means the chart takes
-the operator, or dcctl grows an upgrade path, or the documentation stops making
-the claim. Until one of those lands this phase stays red, which is the point of
-it existing."
+🔴 READ THIS AS A REGRESSION, NOT AS THE KNOWN GAP. It once was the known gap:
+\`helm upgrade\` cannot reach the operator (it is not in the chart), and for a while
+no subcommand moved it either, so this phase was red by design. That is closed —
+\`dcctl upgrade\` exists and \`cmd_upgrade\` above RAN IT, successfully, minutes ago.
+So the controller is on the old tag despite an upgrade that reported success, and
+one of these is true:
+
+  • the operator image for $want was never published, or is not public, and the
+    new pod is stuck pulling while the old ReplicaSet still serves;
+  • \`dcctl upgrade\` applied a Deployment other than the one measured here — read
+    the namespace and names above against backend/k8s/config;
+  • something outside the drill re-applied the baseline's manifests afterwards.
+
+Whichever it is, an operator following the documentation lands exactly here, which
+is why this blocks the release rather than being noted in it."
   fi
 
   say "OPERATOR IN STEP — $matched deployment(s) in $ns are running $want"

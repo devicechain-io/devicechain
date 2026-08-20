@@ -39,7 +39,7 @@ func Destroy(ctx context.Context, provider Provider, opts DestroyOptions) error 
 // destroyInstanceOnly removes just the instance's Helm release, leaving the
 // cluster and platform (infra + operator) warm for a fast re-bootstrap.
 func destroyInstanceOnly(ctx context.Context, opts DestroyOptions) error {
-	kubeContext := destroyContext(opts.Options)
+	kubeContext := instanceContext(opts.Options)
 
 	fmt.Println(GreenUnderline(fmt.Sprintf("\nUninstall instance %q (keeping cluster %s)", opts.Instance, kubeContext)))
 	if opts.DryRun {
@@ -126,14 +126,4 @@ func destroyEverything(ctx context.Context, provider Provider, opts DestroyOptio
 
 	fmt.Println(color.HiGreenString("\nInstance %q destroyed.", opts.Instance))
 	return nil
-}
-
-// destroyContext resolves the kube-context to act on for an instance-only
-// teardown. It mirrors localProvider.EnsureCluster's kind-<instance> convention
-// (an explicit --kube-context wins) but never creates anything.
-func destroyContext(opts Options) string {
-	if opts.KubeContext != "" {
-		return opts.KubeContext
-	}
-	return "kind-" + opts.Instance
 }

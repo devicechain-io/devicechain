@@ -371,11 +371,14 @@ jobs:
   # derives the highest stable tag below this one, so a release never drills a hop
   # its own notes do not claim.
   #
-  # 🔴 THIS GATE IS RED TODAY, and knowingly so: its operator step asserts that the
+  # This gate was landed RED on purpose: its operator step asserts that the
   # controller is running the version the services were upgraded to, which the
-  # documented procedure does not achieve -- the operator is not in the chart and
-  # no dcctl subcommand moves it. That is a release defect, and gating on it is the
-  # point. It blocks `cli` (below), so a red drill means no GitHub Release for this
+  # documented procedure could not achieve -- the operator is not in the chart and
+  # nothing moved it afterwards. That is closed. `dcctl upgrade` exists, the drill
+  # runs it as the second half of the documented procedure, and the step now
+  # measures a fix rather than recording a gap.
+  #
+  # It still blocks `cli` (below), so a red drill means no GitHub Release for this
   # tag even though the images are already on ghcr; a human investigates rather
   # than an unvalidated upgrade claim becoming an official release.
   upgrade-gate:

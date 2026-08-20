@@ -29,6 +29,9 @@ Every release is a single semantic-version git tag (`vX.Y.Z`). That one version 
 `dcctl` CLI are all published at the same version. There is no per-service version skew to
 reason about: a deployment is one coherent number.
 
+Keeping it that way takes two commands rather than one, because the operator is not part of
+the chart — see [Zero-downtime upgrades](#zero-downtime-upgrades) for the procedure.
+
 - **Stable releases** are `vX.Y.Z` (e.g. `v1.2.0`). The `:latest` tag tracks the most
   recent stable release.
 - **Pre-releases** are `vX.Y.Z-rc.N` (e.g. `v1.2.0-rc.1`). These never move `:latest`.
@@ -102,18 +105,17 @@ The chart is also listed on
 [Artifact Hub](https://artifacthub.io/packages/helm/devicechain/devicechain), which
 shows every published version alongside its default values and rendered templates.
 
-## Zero-downtime upgrades
+## Zero-downtime upgrades {#zero-downtime-upgrades}
 
-Upgrading to a new version is normally a plain `helm upgrade`, and the chart and services are
-built to roll customers forward without dropping traffic. Three releases so far are
-exceptions, all documented below: the durable-ingest cutover, which is still a
-`helm upgrade` but has a visible side effect, and **`v0.9.0` and `v0.10.0`, which cannot be
-upgraded into at all**. Check the release notes for the version you are moving to before
-running the command:
+Upgrading to a new version is **two commands**, and the chart and services are built to roll
+customers forward without dropping traffic. Three releases so far are exceptions, all
+documented below: the durable-ingest cutover, which is still an ordinary upgrade but has a
+visible side effect, and **`v0.9.0` and `v0.10.0`, which cannot be upgraded into at all**.
+Check the release notes for the version you are moving to before running them:
 
 ```bash
-# Carry the current release's values forward, then change only the version.
-# This file contains your instance's secrets — delete it when you are done.
+# 1. The services. Carry the current release's values forward, then change only
+#    the version. This file contains your instance's secrets — delete it when done.
 helm get values dc -n default -o yaml > dc-values.yaml
 
 helm upgrade dc deploy/helm/devicechain \
@@ -122,7 +124,25 @@ helm upgrade dc deploy/helm/devicechain \
   --set image.tag=v1.3.0
 
 rm dc-values.yaml
+
+# 2. The operator. Not part of the chart, so `helm upgrade` cannot move it.
+dcctl upgrade local devicechain --version v1.3.0
 ```
+
+:::warning Both steps, every time — the second one is not optional
+The operator (its CRDs, RBAC and controller) is **not installed by the Helm chart**. `dcctl`
+applies it from manifests embedded in the binary, so `helm upgrade` has no way to reach it,
+and an upgrade that stops after step 1 leaves your instance running the new services against
+the controller it was first bootstrapped with — indefinitely, and with no error to tell you.
+
+`dcctl upgrade` touches nothing else. It does not run the Helm upgrade, does not apply the
+infrastructure stack, and **does not generate, read or rotate any credential**, so it is safe
+on a live instance. Use it rather than re-running `dcctl bootstrap`, which *does* rotate every
+generated credential.
+
+Pass the same version to both steps. Run `dcctl upgrade` with `--dry-run` first if you want to
+see exactly which objects it would move.
+:::
 
 :::warning Carry the values forward — `--set image.tag=…` on its own will not work
 Your instance's values are not all typed by hand. `dcctl bootstrap` generates several and
@@ -200,7 +220,7 @@ them across this release.
 :::
 
 A schema change normally **appends** a new migration to the baseline, which is an ordinary
-`helm upgrade`. That is the rule, and it holds for almost every release.
+in-place upgrade. That is the rule, and it holds for almost every release.
 
 :::note This section once promised it would never happen again
 It said the squash described "a single release, not a new policy". Then `v0.10.0` needed a
