@@ -67,6 +67,19 @@ jobs:
       - name: govulncheck wrapper self-test
         run: hack/govulncheck.sh --self-test
 
+      # The upgrade drill needs an hour and a kind cluster, so no part of it runs
+      # on a PR -- which makes its string handling exactly the code that rots
+      # unwatched, correct the day it was written and next exercised while a
+      # release is waiting on it. This is the part that runs every time.
+      #
+      # 🔴 The POSITIVE case is what this buys. The drill's operator check is
+      # expected to FAIL on every real run until the operator gap is closed, so its
+      # red says almost nothing on its own -- a check hard-wired to fail would look
+      # identical. Proving it reports AGREEMENT when the versions agree is what
+      # makes the red mean something.
+      - name: upgrade-rig self-test
+        run: hack/upgrade-rig.sh selftest
+
       - name: Discover services
         id: svc
         run: |

@@ -1,0 +1,343 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# THE UPGRADE GATE — does an existing instance's DATA survive this release?
+#
+# WHAT THIS GATES, and why nothing else can.
+#
+# Not the merge. Every change in a release is landable and CI-tested without a
+# cluster. What needs a real upgrade is the CLAIM the release notes make: that an
+# operator running the previous version can move to this one and still have what
+# they had. `hack/migration-diff.sh verify` is the closest thing to it and it
+# compares `pg_dump --schema-only`, so it captures NO ROWS — a migration that
+# creates every table perfectly and then truncates the data inside them passes it
+# with every area green. The load harness seeds its own world on a FRESH install.
+# `dcctl destroy && bootstrap` is the INSTALL path, which structurally cannot see
+# an upgrade defect at all.
+#
+# So this job installs the previous release, writes one of every entity through
+# its real API, upgrades the way the documentation tells an operator to, and reads
+# every row back. `hack/upgrade-rig.sh` is the drill; this file is the runner.
+#
+# 🔴 IT RUNS `pull` ON THE RELEASE PATH, AND THAT IS THE POINT. The rig's default
+# builds the working tree's images, which is right for a developer and wrong for a
+# release: a source build of the same commit is not the same bytes, was not
+# produced by the release pipeline, and has never been pushed anywhere. Called
+# from release.yml it upgrades to the ALREADY-PUBLISHED tag — the artifact an
+# operator actually installs. (The in-cluster pull is anonymous, so that tag's ghcr
+# packages must be public; a private one surfaces here as a helm --wait timeout.)
+#
+# 🔴 THE `operator` STEP IS EXPECTED TO FAIL UNTIL THE OPERATOR GAP IS CLOSED.
+# It is not a flake and it is not this workflow being wrong. The documented upgrade
+# is a `helm upgrade`, the operator is not in the chart, and no dcctl subcommand
+# moves it — while the documentation promises one version covering the services,
+# the operator, the chart and the CLI together with no skew to reason about. The
+# drill exits 3 for exactly this and nothing else, so the summary can name the
+# finding rather than reporting "the drill failed". See the step's own comment.
+#
+# Tools beyond the runner defaults (docker, kubectl, helm, git, curl are
+# preinstalled): kind and tofu always; ko + a frontend docker build on the --build
+# path only. Everything runs on ONE runner, because everything lives in one kind
+# cluster on it.
+
+name: upgrade-gate
+
+on:
+  # Manual runs default to --build: the skew-free test of the checked-out tree,
+  # which is what a developer wants and what a release must NOT settle for.
+  workflow_dispatch:
+    inputs:
+      build:
+        description: 'Build the working tree''s images (--build) -- skew-free test of the checked-out code. Uncheck to PULL `version` instead, which is what the release path does.'
+        type: boolean
+        default: true
+      version:
+        description: 'Published tag to upgrade TO when build is OFF (must exist in ghcr.io/devicechain-io and its packages must be public)'
+        required: false
+        default: ''
+      baseline:
+        description: 'Release to upgrade FROM. Leave empty to derive it: the highest stable tag below the target.'
+        required: false
+        default: ''
+  # Reusable entry point for release.yml. Input names match workflow_dispatch so
+  # every `inputs.*` read below works identically under either trigger.
+  workflow_call:
+    inputs:
+      build:
+        description: 'Build images vs pull `version`. Release passes false.'
+        type: boolean
+        default: true
+      version:
+        description: 'Published tag to upgrade TO when build is false.'
+        type: string
+        required: false
+        default: ''
+      baseline:
+        description: 'Release to upgrade FROM; empty derives it.'
+        type: string
+        required: false
+        default: ''
+
+# Read-only: this bootstraps a throwaway kind cluster on the runner and either
+# builds images locally or pulls PUBLIC ghcr images. It never pushes an image or
+# writes to the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: upgrade-gate-${{ github.ref }}
+  # A MEASUREMENT run, not PR CI. A second dispatch queues behind the first rather
+  # than cancelling a mid-flight bring-up and throwing away the only evidence the
+  # release's upgrade claim has.
+  cancel-in-progress: false
+
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+    # Two budgets, because the two paths are not the same job. The PULL path does
+    # no image build at all -- it is a bring-up, a rollout and two probe runs, and
+    # it is the one a release waits on. The --build path additionally ko-builds
+    # every service image plus the frontend on 2 cores.
+    #
+    # 🔴 ONE BUDGET SIZED FOR THE SLOWER PATH IS NOT CONSERVATIVE, IT IS BLIND: a
+    # release-path hang would burn two hours before anything noticed, on a job
+    # whose honest work is well under one. A job that OVERRUNS is CANCELLED rather
+    # than failed, and `if: failure()` is false for a cancelled job -- so the
+    # diagnostics below would not run and the summary would read "not reached",
+    # the least attributable red this workflow can emit. Catching that sooner is
+    # worth more than headroom nobody uses.
+    timeout-minutes: ${{ inputs.build && 120 || 60 }}
+    steps:
+      # 🔴 fetch-depth: 0 IS REQUIRED, twice over. The rig `git archive`s the
+      # baseline tag out of THIS checkout to build that release's own dcctl, and
+      # the derivation below reads the tag list. A shallow clone has neither, and
+      # the failure would arrive as "not a tag in this repository" on a tag that
+      # plainly exists.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      # kind: the binary only, pinned to the same version loadtest-gate uses. The
+      # rig runs `kind create cluster` itself from deploy/local's config, so this
+      # job must never create one -- that would fight the rig for the name.
+      - name: Install kind
+        run: |
+          curl -fsSL -o kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+          sudo install -m 0755 kind /usr/local/bin/kind
+          rm -f kind
+          kind version
+
+      # dcctl's infrastructure step shells out to `tofu`. tofu_wrapper off so
+      # exec.LookPath finds the real binary rather than the action's shim.
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2
+        with:
+          tofu_version: 1.9.1
+          tofu_wrapper: false
+
+      # Only the --build path shells out to ko. Both triggers always supply
+      # `inputs.build`, so this reads it directly -- note `github.event_name` is
+      # the CALLER's event under workflow_call, so an event-name test would
+      # wrongly install ko on the release pull path.
+      - name: Install ko (build path only)
+        if: ${{ inputs.build }}
+        uses: ko-build/setup-ko@61b4d1d396f5b2e7d6bb6fefdce3dc38d1a13445 # v0.10
+        with:
+          version: v0.19.1
+
+      # -------------------------------------------------------------------
+      # Which release are we upgrading FROM?
+      # -------------------------------------------------------------------
+      # DERIVED, not pinned. A literal default in this file is bumped by hand once
+      # per release, and the failure mode of a hand-bumped constant in a pipeline
+      # that runs quarterly is that it is FORGOTTEN: v0.13.0 would drill
+      # v0.11.0 -> v0.13.0 and report a green upgrade for a hop no release note
+      # ever claimed, while the hop that WAS claimed went untested.
+      #
+      # The rule: the highest STABLE tag strictly below the target. A prerelease
+      # target is reduced to its own stable version first, so v0.12.0-rc.1 drills
+      # from v0.11.0 -- the release an operator is actually on -- rather than from
+      # some earlier candidate of the release being cut.
+      #
+      # 🔴 An underivable baseline is a HARD FAILURE, never a default. Falling back
+      # to a guess would run the whole drill against the wrong hop and report a
+      # green result for it, which is worse than not running.
+      - name: Derive the baseline release
+        id: baseline
+        env:
+          BASELINE_IN: ${{ inputs.baseline }}
+          VERSION_IN: ${{ inputs.version }}
+          BUILD_IN: ${{ inputs.build }}
+        run: |
+          set -euo pipefail
+          if [ -n "$BASELINE_IN" ]; then
+            baseline="$BASELINE_IN"
+            git rev-parse --verify "${baseline}^{commit}" >/dev/null 2>&1 || {
+              echo "::error::baseline '$baseline' is not a tag in this repository."
+              exit 1
+            }
+            echo "baseline=$baseline" >> "$GITHUB_OUTPUT"
+            echo "Baseline (given): $baseline"
+            exit 0
+          fi
+
+          # Stable tags only: a candidate is not a release anyone is running.
+          # '[-]' rather than -- '-': the second spelling is a portability trap. GNU grep
+          # reads it as a pattern; at least one drop-in replacement reads it as no
+          # pattern at all and exits usage-error, which pipefail then turns into a
+          # step failure nobody would attribute to a grep argument.
+          stable="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -v '[-]' | sort -V)"
+          [ -n "$stable" ] || {
+            echo "::error::no stable vX.Y.Z tags are visible. A shallow clone is the usual cause; this job checks out with fetch-depth: 0."
+            exit 1
+          }
+
+          # On the pull path the target is the tag being released; on the build
+          # path there is no target tag, so the newest stable release is the one an
+          # operator would be upgrading from.
+          if [ "$BUILD_IN" = "true" ]; then
+            baseline="$(printf '%s\n' "$stable" | tail -1)"
+            echo "Baseline (newest stable, build path): $baseline"
+          else
+            [ -n "$VERSION_IN" ] || {
+              echo "::error::build is off but no version was given; there is nothing to upgrade TO."
+              exit 1
+            }
+            # Strip any prerelease segment: an rc drills from the previous STABLE.
+            target="${VERSION_IN%%-*}"
+            baseline=""
+            while read -r t; do
+              [ "$t" = "$target" ] && break
+              baseline="$t"
+            done < <(printf '%s\n%s\n' "$stable" "$target" | sort -V -u)
+            [ -n "$baseline" ] || {
+              echo "::error::no stable release below $target, so there is no upgrade to drill. Tags seen: $(echo "$stable" | tr '\n' ' ')"
+              exit 1
+            }
+            echo "Baseline (derived, upgrading to $VERSION_IN): $baseline"
+          fi
+          echo "baseline=$baseline" >> "$GITHUB_OUTPUT"
+
+      # The self-test costs seconds and covers the rig's string handling, which no
+      # cluster step exercises directly. Run BEFORE the hour-long part: a rig whose
+      # own controls do not hold should not be trusted to spend an hour.
+      - name: Rig self-test
+        run: hack/upgrade-rig.sh selftest
+
+      # -------------------------------------------------------------------
+      # The drill, one phase per step.
+      # -------------------------------------------------------------------
+      # Split rather than `all` in one step so a red is attributable from the step
+      # NAME alone. It also makes the operator step -- the one expected to fail --
+      # structurally separate from every other failure, instead of a code the
+      # summary has to parse out of a shared log.
+      - name: Install the baseline and seed one of every entity
+        env:
+          DC_BASELINE_TAG: ${{ steps.baseline.outputs.baseline }}
+          DC_UPGRADE_IMAGES: ${{ inputs.build && 'build' || 'pull' }}
+          DC_UPGRADE_TAG: ${{ inputs.version }}
+        run: hack/upgrade-rig.sh up
+
+      - name: Upgrade, the way the documentation says to
+        env:
+          DC_BASELINE_TAG: ${{ steps.baseline.outputs.baseline }}
+          DC_UPGRADE_IMAGES: ${{ inputs.build && 'build' || 'pull' }}
+          DC_UPGRADE_TAG: ${{ inputs.version }}
+        run: hack/upgrade-rig.sh upgrade
+
+      - name: THE DRILL -- every seeded row must read back unchanged
+        env:
+          DC_BASELINE_TAG: ${{ steps.baseline.outputs.baseline }}
+          DC_UPGRADE_IMAGES: ${{ inputs.build && 'build' || 'pull' }}
+          DC_UPGRADE_TAG: ${{ inputs.version }}
+        run: hack/upgrade-rig.sh verify
+
+      # The check on the check. A verify whose ability to FAIL has not been shown
+      # in this session has certified nothing -- it would report the same green
+      # against an instance that had lost everything.
+      - name: Negative controls -- break a row two ways, require verify to notice
+        env:
+          DC_BASELINE_TAG: ${{ steps.baseline.outputs.baseline }}
+          DC_UPGRADE_IMAGES: ${{ inputs.build && 'build' || 'pull' }}
+          DC_UPGRADE_TAG: ${{ inputs.version }}
+        run: hack/upgrade-rig.sh control
+
+      # 🔴 EXPECTED RED, AND NOT A FLAKE. The documented upgrade is a
+      # `helm upgrade`; the operator is applied by dcctl from its own embedded
+      # manifests and is not in the chart; no dcctl subcommand moves it afterwards
+      # and re-running bootstrap rotates every generated credential. Meanwhile
+      # docs/docs/deployment/releases-and-upgrades.md promises one version covering
+      # the services, the operator, the chart and the CLI, with no per-service skew
+      # to reason about. An operator following the documentation exactly ends up
+      # with new services and an old controller.
+      #
+      # This step exists to say that out loud on the release path rather than leave
+      # it as a comment in the rig. It stays red until the chart takes the operator,
+      # or dcctl grows an upgrade path, or the documentation stops making the claim.
+      #
+      # Exit 3 means THIS finding and only this finding; anything else from the step
+      # is the check failing to run, which the rig reports separately and never
+      # folds into the finding.
+      - name: The operator must be running the version the services were upgraded to
+        id: operator
+        env:
+          DC_BASELINE_TAG: ${{ steps.baseline.outputs.baseline }}
+          DC_UPGRADE_IMAGES: ${{ inputs.build && 'build' || 'pull' }}
+          DC_UPGRADE_TAG: ${{ inputs.version }}
+        run: hack/upgrade-rig.sh operator
+
+      # -------------------------------------------------------------------
+      # Reporting.
+      # -------------------------------------------------------------------
+      - name: Summary
+        if: always()
+        env:
+          BASELINE: ${{ steps.baseline.outputs.baseline }}
+          TARGET: ${{ inputs.build && 'the working tree (built from source)' || inputs.version }}
+          OPERATOR_OUTCOME: ${{ steps.operator.outcome }}
+        run: |
+          {
+            printf '## Upgrade drill\n\n'
+            printf '| | |\n|---|---|\n'
+            printf '| upgraded from | %s |\n' "$BASELINE"
+            printf '| upgraded to | %s |\n' "$TARGET"
+            printf '| operator check | %s |\n\n' "${OPERATOR_OUTCOME:-not reached}"
+            # No backticks in this prose, deliberately: a backtick inside a shell
+            # string is command substitution, and the spellings that make it safe
+            # (escapes, a quoted heredoc that must then sit at column 0 inside a
+            # YAML block scalar) are each a way to break this file for a code font.
+            if [ "$OPERATOR_OUTCOME" = "failure" ]; then
+              printf '### The operator was not upgraded\n\n'
+              printf 'Every seeded row survived: the data half of this drill passed. What failed is\n'
+              printf 'the operator check, and it is a **finding about the release**, not a broken rig.\n\n'
+              printf 'The documented upgrade is a plain **helm upgrade**, and the operator is not in\n'
+              printf 'the chart -- dcctl applies it from its own embedded manifests during bootstrap,\n'
+              printf 'no subcommand moves it afterwards, and re-running bootstrap rotates every\n'
+              printf 'generated credential. Meanwhile the deployment documentation promises one\n'
+              printf 'version covering the services, the operator, the chart and the CLI together,\n'
+              printf 'with no per-service skew to reason about.\n\n'
+              printf 'Closing it means the chart takes the operator, or dcctl grows an upgrade path,\n'
+              printf 'or the documentation stops making the claim. The step log names the images.\n'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Ordinary `kubectl get` output is worth more than a re-run here: the cluster
+      # is deleted with the runner, so whatever is not printed now is gone.
+      - name: Diagnostics
+        if: failure()
+        run: |
+          ctx=kind-devicechain-upgrade
+          echo "::group::pods"; kubectl --context "$ctx" get pods -A -o wide || true; echo "::endgroup::"
+          echo "::group::deployments in dc-k8s-system"; kubectl --context "$ctx" -n dc-k8s-system get deploy -o wide || true; echo "::endgroup::"
+          echo "::group::helm history"; helm --kube-context "$ctx" history dc -n default || true; echo "::endgroup::"
+          echo "::group::not-ready pods"
+          kubectl --context "$ctx" get pods -A --field-selector=status.phase!=Running -o yaml || true
+          echo "::endgroup::"
+          echo "::group::recent events"
+          kubectl --context "$ctx" get events -A --sort-by=.lastTimestamp | tail -60 || true
+          echo "::endgroup::"
