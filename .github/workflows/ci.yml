@@ -36,7 +36,15 @@ jobs:
       modules: ${{ steps.mod.outputs.modules }}
       smoke: ${{ steps.smoke.outputs.smoke }}
     steps:
+      # 🔴 fetch-depth: 0 — the upgrade-rig self-test below reads the TAG HISTORY.
+      # It checks that the rig would refuse to deploy the working tree's chart around
+      # some other release's images, and the only honest way to ask that is against
+      # real releases. On the default shallow clone it sees no tags at all and
+      # (correctly) refuses to report clean, so the job fails for want of history
+      # rather than for anything wrong with the tree. The clone is ~50 MB.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
 
       # Proves the coverage check can fail before its green run is used as evidence.
       - name: dependabot module-coverage self-test

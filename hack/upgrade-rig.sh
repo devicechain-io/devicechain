@@ -1054,10 +1054,22 @@ $out"
   # makes the refusal mean something. Both are asked of the REAL repository: a
   # tag whose chart differs from HEAD's, and a tag whose chart is HEAD's by
   # construction.
-  [[ -n "$baseline_tag_for_chart_test" ]] ||
-    fail "SELF-TEST FAILED: no stable tag carries a chart different from HEAD's, so the
-refusal case cannot be exercised. That is not a pass — it means this check has
-nothing to measure."
+  # 🔴 TWO DIFFERENT CAUSES, NAMED SEPARATELY. "no tags at all" is a shallow clone
+  # and says nothing about the tree; "tags, but none whose chart differs" is a real
+  # (if unlikely) condition in which this case has nothing to measure. Reporting the
+  # first as the second is the misdiagnosis this whole slice keeps running into —
+  # and it happened here, on the first CI run, where a shallow checkout was reported
+  # as "no stable tag carries a chart different from HEAD's".
+  if [[ -z "$baseline_tag_for_chart_test" ]]; then
+    git -C "$repo_root" tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -qv '[-]' ||
+      fail "SELF-TEST FAILED: this repository shows no stable release tags, so the chart
+lockstep case has no release to measure against. A shallow clone is the usual cause —
+this check needs history (fetch-depth: 0), and it refuses rather than skip, because
+'checked and agreed' must not read the same as 'could not look'."
+    fail "SELF-TEST FAILED: every stable tag carries the same chart as HEAD, so the
+refusal case cannot be exercised. That is not a pass — this check has nothing to
+measure."
+  fi
   # 🔴 The baseline is moved off the target deliberately. The newest stable tag is
   # usually the DEFAULT baseline too, so leaving it alone made this case refuse as a
   # self-upgrade and never reach the chart comparison at all — a green that meant
