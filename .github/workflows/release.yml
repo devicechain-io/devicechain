@@ -345,15 +345,60 @@ jobs:
       skip_preflight: true
 
   # ---------------------------------------------------------------------------
+  # The upgrade drill. Does an existing instance's DATA survive this release?
+  #
+  # Nothing else in this pipeline asks that question. `migration-diff` compares
+  # `pg_dump --schema-only`, so it captures no ROWS -- a migration that creates
+  # every table perfectly and then rewrites the data inside them passes it with
+  # every area green. The load gate above seeds its own world on a FRESH install.
+  # A fresh bootstrap is the INSTALL path, which structurally cannot see an upgrade
+  # defect at all. So this job installs the PREVIOUS release, writes one of every
+  # entity through its real API, upgrades the way the documentation tells an
+  # operator to, and reads every row back.
+  #
+  # Same `needs` as loadtest-gate and for the same reason -- it bootstraps the
+  # baseline from ghcr and then upgrades to THIS tag's published images, so both
+  # the ko matrix and the (slower, cross-compiled) console image must already be
+  # pushed. It runs BESIDE loadtest-gate on its own runner rather than after it:
+  # the two share no state, and serialising them would add this drill's whole wall
+  # clock to every release for nothing.
+  #
+  # `build: false` is the load-bearing input. The rig's default builds the working
+  # tree, which is right for a developer and wrong here: a source build of this
+  # commit is not the same bytes as the release, was not produced by this pipeline,
+  # and has never been pushed anywhere. The release path upgrades to the artifact
+  # an operator actually installs. `baseline` is left empty on purpose -- the gate
+  # derives the highest stable tag below this one, so a release never drills a hop
+  # its own notes do not claim.
+  #
+  # 🔴 THIS GATE IS RED TODAY, and knowingly so: its operator step asserts that the
+  # controller is running the version the services were upgraded to, which the
+  # documented procedure does not achieve -- the operator is not in the chart and
+  # no dcctl subcommand moves it. That is a release defect, and gating on it is the
+  # point. It blocks `cli` (below), so a red drill means no GitHub Release for this
+  # tag even though the images are already on ghcr; a human investigates rather
+  # than an unvalidated upgrade claim becoming an official release.
+  upgrade-gate:
+    needs: [guard, images, frontend]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/upgrade-gate.yml
+    with:
+      build: false
+      version: ${{ needs.guard.outputs.version }}
+
+  # ---------------------------------------------------------------------------
   # Cross-compile dcctl and create the GitHub Release (goreleaser).
   # ---------------------------------------------------------------------------
   cli:
     # Depends on `images` as well as `guard` so the verification step below runs
     # against a registry that already has this release's tags. Without that
     # ordering the check would race the push and fail on a correct release.
-    # Also gated on `loadtest-gate`: the GitHub Release is the auditable release
-    # artifact, so it is not created unless the correctness-under-load gate passed.
-    needs: [guard, images, loadtest-gate]
+    # Also gated on `loadtest-gate` and `upgrade-gate`: the GitHub Release is the
+    # auditable release artifact, so it is not created unless the
+    # correctness-under-load gate passed AND an existing instance's data was shown
+    # to survive the upgrade to this tag.
+    needs: [guard, images, loadtest-gate, upgrade-gate]
     runs-on: ubuntu-latest
     permissions:
       contents: write # goreleaser creates the GitHub Release

@@ -128,26 +128,178 @@ registry="localhost:5000"
 registry_container="kind-registry"
 kind_network="kind"
 
+# The registry the release pipeline publishes to. Read as a constant here rather
+# than pulled from the chart: this is the registry an OPERATOR pulls from, and the
+# rig asserting against the chart's current default would happily follow the chart
+# somewhere else and still call the result a published-image drill.
+published_registry="ghcr.io/devicechain-io"
+
+# WHICH IMAGES THE UPGRADE HALF MOVES TO. Not a preference — the two modes answer
+# different questions and only one of them is the release's claim.
+#
+#   build (default) — ko/docker-build the working tree into the local registry.
+#                     Skew-free: chart, images and this script are one commit.
+#                     The right mode for a developer testing an unreleased change.
+#   pull            — upgrade to an ALREADY-PUBLISHED tag in ghcr. This is the
+#                     release path, and it is the only mode that exercises the
+#                     artifact an operator actually installs. A source build of
+#                     the same commit is not the same bytes, was not produced by
+#                     the release pipeline, and has never been pushed anywhere —
+#                     so a green build-path drill says nothing about whether the
+#                     images on ghcr can be upgraded onto.
+#
+# 🔴 THE BUILD PATH'S PER-RUN TAG IS LOAD-BEARING, AND THE PULL PATH IS EXEMPT FOR
+# A REASON RATHER THAN BY OVERSIGHT. A reused tag lets the kubelet satisfy the new
+# image reference from a layer it already holds: the workloads roll, report Ready,
+# and run the PREVIOUS build — an upgrade drill that silently upgrades to the same
+# code and passes every check it has. A tag that has never existed cannot be served
+# from cache. The pull path needs no such defence: the node pulled $baseline_tag
+# and is being asked for a DIFFERENT published tag, which no cached layer answers.
+upgrade_images="${DC_UPGRADE_IMAGES:-build}"
+upgrade_tag="${DC_UPGRADE_TAG:-}"
+
 work="${DC_UPGRADE_WORK:-$HOME/.devicechain-upgrade-rig}"
 baseline_src="$work/src"
 baseline_dcctl="$baseline_src/backend/cli/build/dcctl"
 apiprobe="$work/bin/apiprobe"
 receipt="$work/receipt.json"
 values_file="$work/values.yaml"
-tag_file="$work/head-tag"
+# What the upgrade moved TO — registry on line 1, tag on line 2. Written by
+# `upgrade` and read by `operator`, so the operator check measures against the
+# version this run actually deployed rather than against one it assumes.
+target_file="$work/upgrade-target"
 
 say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 note() { printf '\033[0;37m    %s\033[0m\n' "$*"; }
-fail() { printf '\n\033[1;31mFAIL: %s\033[0m\n' "$*" >&2; exit 1; }
+# The exit code that means THE OPERATOR-SKEW FINDING and nothing else.
+#
+# 🔴 A drill whose every failure is `exit 1` makes a KNOWN, NAMED finding
+# indistinguishable from a rig that could not run — and a workflow reading it then
+# has to parse prose to tell "the release has a defect" from "the runner was out
+# of disk". This drill has already been bitten once by the same shape in the other
+# direction: an INCONCLUSIVE result was announced as data loss because every
+# non-zero code shared one headline.
+#
+# 🔴 AND IT MUST NOT COLLIDE WITH apiprobe'"'"'S TAXONOMY, which this rig imports,
+# prints and reasons about in the same log. The first spelling of this constant was
+# 3 — which is apiprobe'"'"'s MISMATCH — so one run printed "verify exited 3, exactly
+# as required" (a negative control HOLDING) five lines above the rig itself exiting
+# 3 to mean something entirely different. Both were correct and the pair was
+# unreadable. 20 sits clear of apiprobe'"'"'s range and below the shell'"'"'s own reserved
+# codes (126+), and `selftest` asserts the separation against apiprobe'"'"'s source
+# rather than trusting this comment to stay true.
+exit_operator_skew=20
+
+fail_code() {
+  local code="$1"
+  shift
+  printf '\n\033[1;31mFAIL: %s\033[0m\n' "$*" >&2
+  exit "$code"
+}
+
+fail() { fail_code 1 "$@"; }
 
 need() { command -v "$1" >/dev/null 2>&1 || fail "$1 is required but not on PATH"; }
+# ko_required — will this run shell out to a builder?
+#
+# 🔴 ko IS A BUILD-PATH TOOL, and demanding it unconditionally is not merely strict,
+# it is WRONG. The pull path builds no image at all: the baseline installs published
+# images and the upgrade moves to another published tag. A gate that skips installing
+# ko because it does not need it, and is then refused by the tool list for not having
+# it, fails on the one path a release actually runs. Measured, not imagined — that is
+# exactly how the first pull-path run died, three seconds in.
+#
+# A predicate rather than a condition inlined in need_all, so `selftest` can ask the
+# question without a cluster, a builder, or a doctored PATH. ⚠️ It is the RULE that
+# is covered, not need_all's wiring to it — a mutation that stops need_all calling
+# this at all survives the self-test, and only a run on a machine without ko would
+# see it.
+ko_required() { [[ "$upgrade_images" == build ]]; }
+
 need_all() {
   # Every tool, checked BEFORE anything is provisioned. A missing binary
   # discovered twenty minutes into a bring-up is the posture this script rejects
   # everywhere else.
-  for t in kind kubectl docker helm ko git curl go; do need "$t"; done
+  for t in kind kubectl docker helm git curl go; do need "$t"; done
+  ko_required && need ko
   command -v tofu >/dev/null 2>&1 || command -v terraform >/dev/null 2>&1 ||
     fail "one of tofu or terraform is required but neither is on PATH"
+}
+
+# validate_upgrade_mode checks the image-source choice BEFORE anything is
+# provisioned, for the same reason need_all does: `all` spends forty minutes in
+# `up` before it ever reaches `upgrade`, and discovering there that the run was
+# told to pull a tag nobody named is forty minutes spent proving nothing.
+validate_upgrade_mode() {
+  case "$upgrade_images" in
+  build) ;;
+  pull)
+    [[ -n "$upgrade_tag" ]] || fail "DC_UPGRADE_IMAGES=pull needs DC_UPGRADE_TAG — the published
+tag to upgrade TO. Without it there is nothing to pull and no way to guess: the
+working tree's VERSION file names a tag that was never published."
+
+    # 🔴 Upgrading a release to ITSELF is not a drill, and it is the shape a
+    # release pipeline reaches by accident: derive the baseline wrong by one step
+    # and every check passes, having deployed the images that were already
+    # running. helm would report a successful no-op upgrade and the probe would
+    # read back rows nothing had touched.
+    [[ "$upgrade_tag" != "$baseline_tag" ]] || fail "the baseline and the upgrade target are both
+$baseline_tag. Upgrading a release to itself deploys the images already running,
+so every check here would pass without an upgrade having happened. Set
+DC_BASELINE_TAG to the release being upgraded FROM."
+
+    # 🔴 THE CHART AND THE IMAGES HAVE TO BE THE SAME RELEASE. This is the target
+    # half of the rule the baseline half already follows — the baseline is installed
+    # by its OWN dcctl, carrying its OWN chart, for exactly this reason.
+    #
+    # `helm upgrade` here deploys the WORKING TREE's chart. Point that at some other
+    # release's images and the new chart renders instance config those older binaries
+    # have never seen; typed configuration is fail-closed, so they reject it and
+    # crash-loop. That is not an upgrade — it is a combination no operator has ever
+    # run, failing for a reason that has nothing to do with the release.
+    #
+    # MEASURED, not theorised: a run pairing HEAD's chart with v0.11.0's images spent
+    # the full 20-minute `helm --wait` before dying on a crash-looping
+    # device-management. Twenty minutes to learn what a tree hash answers instantly.
+    #
+    # 🔴 An unreachable tag is REFUSED, not skipped. Waving the comparison through
+    # when the tag is unknown fails OPEN in exactly the case the guard can reason
+    # about least, and makes "checked and agreed" indistinguishable from "could not
+    # look". The release pipeline always has the tag — it checks the tag out.
+    git -C "$repo_root" rev-parse --verify "$upgrade_tag^{commit}" >/dev/null 2>&1 ||
+      fail "$upgrade_tag is not a tag in this repository, so this rig cannot check that the
+chart it is about to deploy belongs to the same release as the images. Fetch the tag
+(the release pipeline checks it out), or drill the build path instead."
+
+    # Compared as the CHART's tree, not as the commit. A commit test would refuse a
+    # branch that has not touched the chart at all, whose deployment of it is
+    # byte-for-byte what the release ships — a legitimate drill, and the only way
+    # this path gets exercised outside a tag checkout.
+    # 🔴 --verify, and it is not decoration. Bare `git rev-parse <rev>:<path>` on a
+    # path the tree does not contain does NOT fail — it ECHOES ITS ARGUMENT BACK, so
+    # `there` comes out as the literal string "sometag:deploy/helm/devicechain",
+    # non-empty, and the emptiness check below can never fire. A tag carrying no
+    # chart at all was then reported as "the chart and the images are different
+    # releases", which sends a reader looking for a version mismatch that does not
+    # exist. Found by the self-test case written to cover exactly this.
+    local here there
+    here="$(git -C "$repo_root" rev-parse --verify -q "HEAD:deploy/helm/devicechain" 2>/dev/null || true)"
+    there="$(git -C "$repo_root" rev-parse --verify -q "$upgrade_tag:deploy/helm/devicechain" 2>/dev/null || true)"
+    [[ -n "$here" && -n "$there" ]] ||
+      fail "could not read the chart tree for HEAD and/or $upgrade_tag, so this rig cannot
+check that they agree. It refuses rather than guesses: the combination it guards against
+fails twenty minutes later, as a rollout timeout that reads like a platform defect."
+    [[ "$here" == "$there" ]] || fail "the chart and the images are different releases.
+  chart at HEAD:          $here
+  chart at $upgrade_tag:  $there
+This upgrade would deploy the working tree's chart around $upgrade_tag's binaries. The new
+chart renders instance config those binaries have never seen, their typed config is
+fail-closed, and they crash-loop — a combination no operator has ever run, failing for a
+reason that has nothing to do with the release. Check out $upgrade_tag (which is what the
+release pipeline does), or drill the build path instead."
+    ;;
+  *) fail "DC_UPGRADE_IMAGES must be 'build' or 'pull'; got '$upgrade_images'" ;;
+  esac
 }
 
 # The values file carries the instance root key and every generated credential.
@@ -440,20 +592,30 @@ cmd_upgrade() {
   [[ -s "$receipt" ]] || fail "$receipt is missing or empty; run 'up' first"
   build_apiprobe
 
-  # A PER-RUN tag, and it is load-bearing rather than tidy.
-  #
-  # 🔴 Reusing a fixed tag (`dev`, or the release name) means the kubelet can
-  # satisfy the new image reference from a layer it already has: the workloads
-  # roll, report Ready, and run the PREVIOUS build. An upgrade drill that silently
-  # upgrades to the same code passes every check it has, which is the worst
-  # available failure. A tag that has never existed before cannot be served from
-  # cache.
-  local head_tag
-  head_tag="head-$(date -u +%Y%m%d%H%M%S)"
-  echo "$head_tag" >"$tag_file"
-
-  say "building the working tree's images → $registry (tag $head_tag)"
-  REGISTRY="$registry" TAG="$head_tag" "$repo_root/deploy/local/build-images.sh"
+  # Where the upgrade is moving TO. The two modes and why the per-run tag is
+  # load-bearing on one of them and unnecessary on the other are documented at
+  # `upgrade_images` above; this is only the plumbing.
+  validate_upgrade_mode
+  local target_registry target_tag
+  if [[ "$upgrade_images" == pull ]]; then
+    target_registry="$published_registry"
+    target_tag="$upgrade_tag"
+    say "upgrading to the PUBLISHED images $target_registry/*:$target_tag"
+    note "nothing is built here — these are the bytes an operator installs"
+    # 🔴 The in-cluster pull is ANONYMOUS. Every one of this tag's ghcr packages
+    # has to be public or the rollout dies in ImagePullBackOff — which `helm
+    # --wait` reports as a plain timeout, indistinguishable from a workload that
+    # crash-looped on the new config. Named here because the release that adds a
+    # NEW service module pushes it private by default, and this is where that
+    # first shows up.
+    note "the pull is anonymous — every package for $target_tag must be public"
+  else
+    target_registry="$registry"
+    target_tag="head-$(date -u +%Y%m%d%H%M%S)"
+    say "building the working tree's images → $target_registry (tag $target_tag)"
+    REGISTRY="$target_registry" TAG="$target_tag" "$repo_root/deploy/local/build-images.sh"
+  fi
+  printf '%s\n%s\n' "$target_registry" "$target_tag" >"$target_file"
 
   # THE DOCUMENTED PROCEDURE. docs/deployment/releases-and-upgrades tells an
   # operator to write the release's values out and pass them back with -f, because
@@ -481,7 +643,7 @@ which is the exact failure this procedure exists to prevent."
   say "helm upgrade → the working tree's chart and images"
   helm --kube-context "$kube_context" upgrade dc "$repo_root/deploy/helm/devicechain" \
     -n default -f "$values_file" \
-    --set image.registry="$registry" --set image.tag="$head_tag" \
+    --set image.registry="$target_registry" --set image.tag="$target_tag" \
     --wait --timeout 20m ||
     fail "the upgrade itself FAILED. This is a finding: an operator on $baseline_tag
 running the documented procedure would see exactly this. Read helm's output above —
@@ -499,7 +661,7 @@ whether it was the migration or the config."
   # --wait returns when the workloads report Ready, and the ingress still has to
   # pick the new pods up as healthy upstreams.
   wait_for_every_api
-  say "UPGRADED — the working tree's images are serving, from the release's own values"
+  say "UPGRADED — $target_registry/*:$target_tag is serving, from the release's own values"
 }
 
 # ---------------------------------------------------------------------------
@@ -628,6 +790,330 @@ in either direction."
 }
 
 # ---------------------------------------------------------------------------
+# operator — the part of the release the documented procedure never touches
+# ---------------------------------------------------------------------------
+#
+# 🔴 THIS PHASE IS EXPECTED TO FAIL TODAY, AND THAT IS WHY IT EXISTS.
+#
+# docs/docs/deployment/releases-and-upgrades.md tells an operator that one version
+# covers "each service image, the operator, the Helm chart, and dcctl", and that
+# there is "no per-service version skew to reason about". The documented upgrade
+# is a `helm upgrade` — and the operator is NOT IN THE CHART. dcctl applies it
+# from its own embedded manifests during bootstrap (backend/cli/bootstrap/steps.go
+# renders backend/k8s's overlay). No dcctl subcommand moves it afterwards, and
+# re-running bootstrap rotates every generated credential.
+#
+# So an operator who follows the documentation to the letter ends up with the new
+# services and the old controller, holding a promise that says otherwise. That is
+# a defect in the release, not in this rig, and the whole argument for turning this
+# drill into a blocking gate is that a gate says so out loud instead of a comment
+# recording it as a known limitation. It carries its own exit code so a workflow
+# can report THE FINDING rather than "the drill failed".
+#
+# It runs LAST. The drill's primary claim — that rows survive — must be measured
+# and reported before a known-red check stops the run, or a real data-loss defect
+# would sit behind a finding everyone already knows about.
+
+# operator_namespace reads the namespace out of the operator's own kustomize
+# overlay rather than repeating it here, so a rename moves this check with it —
+# and, because the self-test calls this against the real tree, a rename that
+# removed it fails in ordinary CI rather than an hour into a cluster run.
+operator_namespace() {
+  awk '$1 == "namespace:" { print $2; exit }' \
+    "$repo_root/backend/k8s/config/default/kustomization.yaml"
+}
+
+# operator_in_step <image-ref> <wanted-tag>
+#
+#   0  the reference carries exactly the wanted tag
+#   1  it carries a DIFFERENT tag — the skew finding
+#   2  it carries no usable tag at all, which is a finding in NEITHER direction
+#      and must never be reported as one
+#
+# 🔴 THE TWO TRAPS ARE BOTH IN THE STRING, and the obvious one-liner
+# (`${ref##*:}`) walks into both. `localhost:5000/operator` has a colon and no tag,
+# and that spelling yields `5000/operator` — a registry PORT read as a version, so
+# an untagged reference reports skew against whatever it is compared to. And
+# `…/operator@sha256:abc…` yields the digest hex, manufacturing a finding out of a
+# pin that is stricter than any tag. Splitting the last path segment first, and
+# refusing a digest outright, is what makes both of those say "cannot tell".
+operator_in_step() {
+  local last="${1##*/}" want="$2"
+  [[ "$last" != *@* ]] || return 2
+  [[ "$last" == *:* ]] || return 2
+  [[ "${last##*:}" == "$want" ]] || return 1
+  return 0
+}
+
+cmd_operator() {
+  need kubectl
+  [[ -s "$target_file" ]] || fail "$target_file is missing; run 'upgrade' first. Without it this
+check has no version to measure the operator AGAINST, and comparing it to a guess
+would report skew or agreement at random."
+
+  local want ns listing
+  want="$(sed -n 2p "$target_file")"
+  [[ -n "$want" ]] || fail "$target_file names no tag; the upgrade did not finish writing it"
+  ns="$(operator_namespace)"
+  [[ -n "$ns" ]] || fail "backend/k8s/config/default/kustomization.yaml declares no namespace, so
+this check cannot find the operator. It was renamed or removed — read that file."
+
+  say "THE OPERATOR — is it running the version the services were upgraded to?"
+
+  # shellcheck disable=SC2016  # $n is a GO TEMPLATE variable; shell must not expand it
+  listing="$(kubectl --context "$kube_context" -n "$ns" get deployments \
+    -o go-template='{{range .items}}{{$n := .metadata.name}}{{range .spec.template.spec.containers}}{{$n}} {{.image}}{{"\n"}}{{end}}{{end}}')" ||
+    fail "could not read deployments in $ns. Nothing is claimed in either direction —
+this is the check failing to run, not the operator failing to be upgraded."
+
+  # 🔴 An EMPTY listing is INCONCLUSIVE, not a pass. `kubectl get` over an empty or
+  # missing namespace exits 0 and prints nothing, so a check that only compared
+  # what it found would report the operator perfectly in step precisely when it
+  # could not see one — the loudest possible silence.
+  [[ -n "$listing" ]] || fail "no deployment at all in namespace $ns, so there is no operator to
+measure. Either the namespace moved (read backend/k8s/config/default/kustomization.yaml)
+or dcctl never installed it. Neither is evidence about the upgrade."
+
+  local name image skewed=() untagged=() matched=0 rc
+  while read -r name image; do
+    [[ -n "$name" ]] || continue
+    rc=0
+    operator_in_step "$image" "$want" || rc=$?
+    case "$rc" in
+    0) matched=$((matched + 1)); note "$name  $image  ✓ at $want" ;;
+    1) skewed+=("$name  $image") ;;
+    2) untagged+=("$name  $image") ;;
+    esac
+  done <<<"$listing"
+
+  # An unreadable reference is INCONCLUSIVE and gets its own exit, for the reason
+  # the whole taxonomy exists: a digest-pinned operator may be perfectly current
+  # and this check simply cannot say, which is not the same claim as skew.
+  if [[ ${#untagged[@]} -gt 0 ]]; then
+    fail "the operator's image carries no tag this check can read:
+  ${untagged[*]}
+A digest pin may name exactly the right build — nothing is claimed here in either
+direction. Compare it by digest, or read the reference by hand."
+  fi
+
+  if [[ ${#skewed[@]} -gt 0 ]]; then
+    fail_code "$exit_operator_skew" "THE OPERATOR WAS NOT UPGRADED. This is a FINDING ABOUT THE RELEASE,
+not a broken rig — and it is the one this drill was extended to make visible.
+
+  still running:  ${skewed[*]}
+  services now:   $want
+
+docs/docs/deployment/releases-and-upgrades.md promises an operator that one
+version covers the service images, the operator, the chart and dcctl together,
+with no per-service skew to reason about. The documented upgrade is a
+\`helm upgrade\` — and the operator is not in the chart. dcctl applies it from its
+own embedded manifests during bootstrap, no subcommand moves it afterwards, and
+re-running bootstrap rotates every generated credential.
+
+An operator who follows the documentation exactly arrives here: new services, old
+controller, and a promise that says otherwise. Closing it means the chart takes
+the operator, or dcctl grows an upgrade path, or the documentation stops making
+the claim. Until one of those lands this phase stays red, which is the point of
+it existing."
+  fi
+
+  say "OPERATOR IN STEP — $matched deployment(s) in $ns are running $want"
+}
+
+# ---------------------------------------------------------------------------
+# selftest — the part of this rig that runs without a cluster
+# ---------------------------------------------------------------------------
+#
+# The drill itself needs an hour and a kind cluster, so nothing about it runs on
+# an ordinary PR. That makes its string handling exactly the kind of code that
+# rots unwatched: correct the day it was written, and first exercised again at the
+# moment a release is waiting on it.
+#
+# 🔴 THE POSITIVE CASE IS THE IMPORTANT ONE. `cmd_operator` is expected to FAIL in
+# every real run until the operator gap is closed, which means its red says almost
+# nothing on its own — a check hard-wired to fail would look identical. Proving it
+# reports AGREEMENT when the tags agree is what makes the red mean something.
+selftest() {
+  local rc baseline_tag_for_chart_test=""
+  # The newest stable tag whose chart is NOT HEAD's — the refusal case, chosen from
+  # the repository rather than written down, so it does not name a tag that will one
+  # day carry the same chart as HEAD and turn this into a silent pass.
+  local t head_chart_tree
+  head_chart_tree="$(git -C "$repo_root" rev-parse "HEAD:deploy/helm/devicechain" 2>/dev/null || true)"
+  while read -r t; do
+    [[ "$(git -C "$repo_root" rev-parse "$t:deploy/helm/devicechain" 2>/dev/null || true)" != "$head_chart_tree" ]] || continue
+    baseline_tag_for_chart_test="$t"
+  done < <(git -C "$repo_root" tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -v '[-]' | sort -V)
+
+  expect_step() {
+    local image="$1" want="$2" expected="$3" label="$4"
+    rc=0
+    operator_in_step "$image" "$want" || rc=$?
+    [[ "$rc" -eq "$expected" ]] ||
+      fail "SELF-TEST FAILED ($label): operator_in_step '$image' '$want' returned $rc, wanted $expected"
+    note "$label"
+  }
+
+  say "operator_in_step"
+  expect_step "ghcr.io/devicechain-io/operator:v0.12.0" "v0.12.0" 0 "a matching published tag is IN STEP"
+  expect_step "ghcr.io/devicechain-io/operator:v0.11.0" "v0.12.0" 1 "the baseline's tag is SKEW"
+  expect_step "localhost:5000/operator:head-20260819" "head-20260819" 0 "a registry PORT is not read as a tag"
+  expect_step "localhost:5000/operator" "head-20260819" 2 "an untagged reference cannot tell, and says so"
+  expect_step "ghcr.io/devicechain-io/operator@sha256:abc123" "v0.12.0" 2 "a digest pin cannot tell, and says so"
+
+  # LOCKSTEP, not a restatement. apiprobe owns the exit codes this rig imports and
+  # branches on; the operator finding needs one of its own, and the two vocabularies
+  # live in different files with nothing but this check between them.
+  say "the operator finding's exit code is apiprobe's to collide with"
+  local apiprobe_src="$repo_root/backend/tools/apiprobe/main.go" taken
+  taken="$(grep -oE '^\s*exit[A-Za-z]+ = [0-9]+' "$apiprobe_src" | grep -oE '[0-9]+$' | sort -u | tr '\n' ' ')"
+  [[ -n "$taken" ]] ||
+    fail "SELF-TEST FAILED: no exit-code constants found in $apiprobe_src. This check
+reads them out of apiprobe's source rather than repeating them, so it has just
+stopped checking anything — the constants moved or were renamed."
+  local code
+  for code in $taken; do
+    [[ "$code" != "$exit_operator_skew" ]] ||
+      fail "SELF-TEST FAILED: exit $exit_operator_skew means the operator-skew finding here AND
+one of apiprobe's verdicts there. The same number in one log for two different
+things is how a control HOLDING reads as a release defect. Pick another."
+  done
+  note "apiprobe uses [$taken]; the operator finding uses $exit_operator_skew"
+
+  say "operator_namespace"
+  local ns
+  ns="$(operator_namespace)"
+  [[ -n "$ns" ]] ||
+    fail "SELF-TEST FAILED: backend/k8s/config/default/kustomization.yaml declares no namespace,
+so the operator check would have nothing to look in. This is the lockstep half of
+the self-test: the rig reads that file rather than repeating the namespace, and
+this is where a rename is supposed to be caught."
+  note "the operator overlay still declares a namespace ($ns)"
+
+  say "ko is a build-path tool"
+  local saved_for_ko="$upgrade_images"
+  upgrade_images=build
+  ko_required || fail "SELF-TEST FAILED: the build path does not think it needs ko, so need_all
+would let a run reach build-images.sh without a builder."
+  note "the build path requires ko"
+  upgrade_images=pull
+  ! ko_required || fail "SELF-TEST FAILED: the pull path thinks it needs ko. It builds no image
+at all, and demanding a builder there is what killed the first pull-path run three
+seconds in — the gate correctly skips installing one."
+  note "the pull path does not"
+  upgrade_images="$saved_for_ko"
+
+  say "the image-source modes"
+  local saved_images="$upgrade_images" saved_tag="$upgrade_tag" saved_baseline="$baseline_tag"
+  # 🔴 ASSERTS THE REASON, NOT JUST THE CODE — and the first version of this did
+  # only the code, which cost three false greens at once. Every refusal here exits
+  # 1, so "returned 1" holds equally against a check that fired for something else
+  # entirely: a mutation that made an unknown tag SKIP the chart comparison still
+  # exited 1 (on the next check down), a mutation that made both sides read the
+  # SAME tree still exited 1 (the case was being refused as a self-upgrade before
+  # it ever reached the comparison), and a broken `-n` guard still exited 1 (the
+  # empty string simply compared unequal). All three passed. This rig already
+  # writes the rule down for its own controls — "a failure for the wrong reason is
+  # not a control" — and the self-test was not following it.
+  #
+  # `want` is a fragment of the message the intended check emits; the empty string
+  # means the call must SUCCEED.
+  expect_mode() {
+    local want="$1" label="$2" out
+    rc=0
+    out="$( ( validate_upgrade_mode ) 2>&1 )" || rc=$?
+    if [[ -z "$want" ]]; then
+      [[ "$rc" -eq 0 ]] ||
+        fail "SELF-TEST FAILED ($label): validate_upgrade_mode refused what it should accept.
+$out"
+      note "$label"
+      return
+    fi
+    [[ "$rc" -ne 0 ]] ||
+      fail "SELF-TEST FAILED ($label): validate_upgrade_mode accepted what it should refuse."
+    [[ "$out" == *"$want"* ]] ||
+      fail "SELF-TEST FAILED ($label): it refused, but for the WRONG REASON — the message
+does not mention '$want'. A refusal that fires from a different check holds just as
+well against a version where the intended one has stopped working. It said:
+$out"
+    note "$label"
+  }
+  upgrade_images="build" upgrade_tag=""
+  expect_mode "" "build needs no tag"
+  upgrade_images="pull" upgrade_tag=""
+  expect_mode "needs DC_UPGRADE_TAG" "pull without a tag is refused"
+  upgrade_images="pull" upgrade_tag="$baseline_tag"
+  expect_mode "both" "upgrading the baseline to itself is refused"
+  upgrade_images="pull" upgrade_tag="v9.9.9"
+  expect_mode "is not a tag in this repository" "a tag this repository has never seen is refused, not skipped"
+  upgrade_images="rebuild" upgrade_tag=""
+  expect_mode "must be 'build' or 'pull'" "an unknown mode is refused"
+
+  # The chart/images lockstep, both directions. A guard that only ever refuses is
+  # indistinguishable from one wired shut, so the agreeing case is the one that
+  # makes the refusal mean something. Both are asked of the REAL repository: a
+  # tag whose chart differs from HEAD's, and a tag whose chart is HEAD's by
+  # construction.
+  # 🔴 TWO DIFFERENT CAUSES, NAMED SEPARATELY. "no tags at all" is a shallow clone
+  # and says nothing about the tree; "tags, but none whose chart differs" is a real
+  # (if unlikely) condition in which this case has nothing to measure. Reporting the
+  # first as the second is the misdiagnosis this whole slice keeps running into —
+  # and it happened here, on the first CI run, where a shallow checkout was reported
+  # as "no stable tag carries a chart different from HEAD's".
+  if [[ -z "$baseline_tag_for_chart_test" ]]; then
+    git -C "$repo_root" tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -qv '[-]' ||
+      fail "SELF-TEST FAILED: this repository shows no stable release tags, so the chart
+lockstep case has no release to measure against. A shallow clone is the usual cause —
+this check needs history (fetch-depth: 0), and it refuses rather than skip, because
+'checked and agreed' must not read the same as 'could not look'."
+    fail "SELF-TEST FAILED: every stable tag carries the same chart as HEAD, so the
+refusal case cannot be exercised. That is not a pass — this check has nothing to
+measure."
+  fi
+  # 🔴 The baseline is moved off the target deliberately. The newest stable tag is
+  # usually the DEFAULT baseline too, so leaving it alone made this case refuse as a
+  # self-upgrade and never reach the chart comparison at all — a green that meant
+  # only that some earlier check still worked.
+  baseline_tag="$baseline_tag_for_chart_test-not-the-target"
+  upgrade_images="pull" upgrade_tag="$baseline_tag_for_chart_test"
+  expect_mode "different releases" "a tag whose chart differs from HEAD is refused"
+
+  # 🔴 NOTHING BELOW WRITES TO THE REPOSITORY. The first version created and deleted
+  # tags, which is wrong twice over: this checkout's .git is shared with other
+  # worktrees, so a self-test killed between create and delete leaves an entry for
+  # someone else to find — the same reason the rig uses `git archive` rather than
+  # `git worktree add`. And it needed `git commit-tree`, which needs a committer
+  # identity; a hosted runner has none, so the check died with a git fatal error
+  # rather than a verdict. Every case here uses a commit-ish the repository already
+  # has.
+  #
+  # HEAD is the accepted case by construction: its chart tree is trivially its own.
+  upgrade_images="pull" upgrade_tag="HEAD"
+  expect_mode "" "a target carrying THIS chart is accepted"
+
+  # 🔴 A target with NO CHART AT ALL must say it could not READ one — not that the
+  # two are different releases. Both refuse, so the outcome is the same and the
+  # SENTENCE is not: "the chart and the images are different releases" sends a
+  # reader after a version mismatch that does not exist. This rig's whole argument
+  # is that INCONCLUSIVE and FINDING are different results.
+  #
+  # The root commit predates the chart, so it is that case without inventing one.
+  local root
+  root="$(git -C "$repo_root" rev-list --max-parents=0 HEAD | tail -1)"
+  [[ -n "$root" ]] || fail "SELF-TEST FAILED: this repository reports no root commit."
+  ! git -C "$repo_root" rev-parse --verify -q "$root:deploy/helm/devicechain" >/dev/null 2>&1 ||
+    fail "SELF-TEST FAILED: the root commit $root already carries deploy/helm/devicechain, so
+the no-chart case has nothing to measure. That is not a pass — find another
+commit-ish without the chart, or this check has quietly stopped checking."
+  upgrade_images="pull" upgrade_tag="$root"
+  expect_mode "could not read the chart tree" "a target carrying no chart says it could not READ one"
+
+  upgrade_images="$saved_images" upgrade_tag="$saved_tag" baseline_tag="$saved_baseline"
+
+  say "SELF-TEST PASSED"
+}
+
+# ---------------------------------------------------------------------------
 # down
 # ---------------------------------------------------------------------------
 
@@ -656,22 +1142,30 @@ up) cmd_up ;;
 upgrade) cmd_upgrade ;;
 verify) cmd_verify ;;
 control) cmd_control ;;
+operator) cmd_operator ;;
+selftest) selftest ;;
 down) cmd_down ;;
 all)
   cmd_up
   cmd_upgrade
   cmd_verify
   cmd_control
-  say "UPGRADE DRILL COMPLETE: rows written through the API on $baseline_tag were read
-back unchanged after the documented upgrade to the working tree, and the probe was
-then shown to FAIL — with the right code — against both a deleted row and a
-rewritten field. This is the evidence the release's upgrade claim rests on.
+  say "DATA SURVIVED: rows written through the API on $baseline_tag were read back
+unchanged after the documented upgrade, and the probe was then shown to FAIL —
+with the right code — against both a deleted row and a rewritten field. This is
+the evidence the release's upgrade claim rests on.
 
 WHAT IS STILL NOT COVERED, so this is not read as more than it is: nothing was
-upgraded under load, so no zero-downtime claim is supported; the operator was not
-upgraded, matching the documented procedure; entities $baseline_tag could not
-express were skipped by name and nothing here speaks for them; and event history
-belongs to the DR drill, not this one."
+upgraded under load, so no zero-downtime claim is supported; entities
+$baseline_tag could not express were skipped by name and nothing here speaks for
+them; and event history belongs to the DR drill, not this one."
+
+  # LAST, and deliberately after the summary above. This phase is expected to fail
+  # until the operator gap is closed, and a known red must never stand between the
+  # drill and its primary result — a real data-loss defect found on a run that
+  # stopped here would be invisible.
+  cmd_operator
+  say "UPGRADE DRILL COMPLETE — data survived AND the operator is in step."
   ;;
-*) fail "unknown command ${1}; try up | upgrade | verify | control | all | down" ;;
+*) fail "unknown command ${1}; try up | upgrade | verify | control | operator | all | selftest | down" ;;
 esac
