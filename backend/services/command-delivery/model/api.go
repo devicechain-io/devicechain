@@ -1389,6 +1389,17 @@ func (api *Api) MarkResponse(ctx context.Context, commandToken, responder string
 		updates["status"] = CommandFailed.String()
 		updates["error"] = rdb.NullStrOf(errMsg)
 	}
+	// ⚠️ `device_token = ?` HERE IS NOT INDEPENDENTLY VERIFIED, AND IT IS RECORDED RATHER
+	// THAN QUIETLY LEFT TO READ AS A TESTED GUARD. Deleting it breaks no test, because the
+	// Go check above returns before this runs and nothing in the platform ever WRITES
+	// device_token — it is set once at creation (CreateCommand / the batch enqueue) and
+	// never updated — so `found.DeviceToken` and the row cannot disagree. That makes it a
+	// genuinely equivalent mutation, not a gap a test could close.
+	//
+	// It is kept because this file's convention is that the conditional WHERE is the
+	// AUTHORITATIVE guard and the in-process check is the fast path (see the terminal
+	// fast-path note above), and because the day a device_token update path does appear,
+	// the authority is already where it belongs instead of being remembered.
 	if res := api.RDB.DB(ctx).Model(&Command{}).
 		Where("id = ? AND device_token = ? AND status IN ?", found.ID, responder, answerableStatusStrings()).
 		Updates(updates); res.Error != nil {
