@@ -58,3 +58,18 @@ func repoRoot() (string, error) {
 		dir = parent
 	}
 }
+
+// instanceContext resolves the kube-context to act on for an instance that
+// already exists. It mirrors localProvider.EnsureCluster's kind-<instance>
+// convention (an explicit --kube-context wins) but never creates anything.
+//
+// Shared by `destroy --keep-cluster` and `upgrade` — the two commands that act on
+// a live instance without bringing one up. Kept in one place because the day a
+// cloud provider derives its context differently, both must move together or the
+// second will quietly target the wrong cluster.
+func instanceContext(opts Options) string {
+	if opts.KubeContext != "" {
+		return opts.KubeContext
+	}
+	return "kind-" + opts.Instance
+}

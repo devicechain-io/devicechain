@@ -39,8 +39,9 @@ helm install dc deploy/helm/devicechain \
   --set image.tag=v1.2.0
 ```
 
-Vea [Versiones y actualizaciones](./releases-and-upgrades.md) para el modelo de versionado y cómo
-`helm upgrade` avanza sin tiempo de inactividad.
+Vea [Versiones y actualizaciones](./releases-and-upgrades.md) para el modelo de versionado y el
+procedimiento de actualización, que es `helm upgrade` para los servicios **más** `dcctl upgrade`
+para el operador, ya que el operador no forma parte del chart.
 
 `user-management` y `device-management` son el núcleo requerido; `event-management`, `device-state`, y `command-delivery` son opcionales de forma independiente. El chart **falla el renderizado** si una selección omite un servicio del núcleo requerido o una dependencia dura de un servicio habilitado — de modo que una topología rota se detecta en el momento de instalación, no después de que los pods entren en crash-loop. Los valores se validan contra el `values.schema.json` del chart en el momento de aplicación.
 

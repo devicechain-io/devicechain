@@ -39,8 +39,9 @@ helm install dc deploy/helm/devicechain \
   --set image.tag=v1.2.0
 ```
 
-See [Releases & Upgrades](./releases-and-upgrades.md) for the versioning model and how
-`helm upgrade` rolls forward with zero downtime.
+See [Releases & Upgrades](./releases-and-upgrades.md) for the versioning model and the
+upgrade procedure — which is `helm upgrade` for the services **plus** `dcctl upgrade` for the
+operator, since the operator is not part of the chart.
 
 `user-management` and `device-management` are the required core; `event-management`, `device-state`, and `command-delivery` are independently optional. The chart **fails the render** if a selection omits a required core service or an enabled service's hard dependency — so a broken topology is caught at install time, not after pods crash-loop. Values are validated against the chart's `values.schema.json` at apply time.
 
