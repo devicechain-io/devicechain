@@ -1054,7 +1054,6 @@ $out"
   # makes the refusal mean something. Both are asked of the REAL repository: a
   # tag whose chart differs from HEAD's, and a tag whose chart is HEAD's by
   # construction.
-  local tmp_tag
   [[ -n "$baseline_tag_for_chart_test" ]] ||
     fail "SELF-TEST FAILED: no stable tag carries a chart different from HEAD's, so the
 refusal case cannot be exercised. That is not a pass — it means this check has
@@ -1067,25 +1066,36 @@ nothing to measure."
   upgrade_images="pull" upgrade_tag="$baseline_tag_for_chart_test"
   expect_mode "different releases" "a tag whose chart differs from HEAD is refused"
 
-  tmp_tag="upgrade-rig-selftest-$$"
-  git -C "$repo_root" tag "$tmp_tag" HEAD
-  upgrade_images="pull" upgrade_tag="$tmp_tag"
-  expect_mode "" "a tag carrying THIS chart is accepted"
-  git -C "$repo_root" tag -d "$tmp_tag" >/dev/null
+  # 🔴 NOTHING BELOW WRITES TO THE REPOSITORY. The first version created and deleted
+  # tags, which is wrong twice over: this checkout's .git is shared with other
+  # worktrees, so a self-test killed between create and delete leaves an entry for
+  # someone else to find — the same reason the rig uses `git archive` rather than
+  # `git worktree add`. And it needed `git commit-tree`, which needs a committer
+  # identity; a hosted runner has none, so the check died with a git fatal error
+  # rather than a verdict. Every case here uses a commit-ish the repository already
+  # has.
+  #
+  # HEAD is the accepted case by construction: its chart tree is trivially its own.
+  upgrade_images="pull" upgrade_tag="HEAD"
+  expect_mode "" "a target carrying THIS chart is accepted"
 
-  # 🔴 A tag with NO CHART AT ALL must say it could not read one — not that the two
-  # are different releases. Both refuse, so the outcome is the same and the SENTENCE
-  # is not: "the chart and the images are different releases" sends a reader looking
-  # for a version mismatch that does not exist. This rig's whole argument is that
-  # INCONCLUSIVE and FINDING are different results, and the check that enforces it
-  # here is one `-n` away from silently degrading into the wrong one.
-  local empty_tag empty_commit
-  empty_tag="upgrade-rig-selftest-empty-$$"
-  empty_commit="$(git -C "$repo_root" commit-tree "$(git -C "$repo_root" hash-object -t tree /dev/null)" -m selftest)"
-  git -C "$repo_root" tag "$empty_tag" "$empty_commit"
-  upgrade_images="pull" upgrade_tag="$empty_tag"
-  expect_mode "could not read the chart tree" "a tag carrying no chart says it could not READ one"
-  git -C "$repo_root" tag -d "$empty_tag" >/dev/null
+  # 🔴 A target with NO CHART AT ALL must say it could not READ one — not that the
+  # two are different releases. Both refuse, so the outcome is the same and the
+  # SENTENCE is not: "the chart and the images are different releases" sends a
+  # reader after a version mismatch that does not exist. This rig's whole argument
+  # is that INCONCLUSIVE and FINDING are different results.
+  #
+  # The root commit predates the chart, so it is that case without inventing one.
+  local root
+  root="$(git -C "$repo_root" rev-list --max-parents=0 HEAD | tail -1)"
+  [[ -n "$root" ]] || fail "SELF-TEST FAILED: this repository reports no root commit."
+  ! git -C "$repo_root" rev-parse --verify -q "$root:deploy/helm/devicechain" >/dev/null 2>&1 ||
+    fail "SELF-TEST FAILED: the root commit $root already carries deploy/helm/devicechain, so
+the no-chart case has nothing to measure. That is not a pass — find another
+commit-ish without the chart, or this check has quietly stopped checking."
+  upgrade_images="pull" upgrade_tag="$root"
+  expect_mode "could not read the chart tree" "a target carrying no chart says it could not READ one"
+
   upgrade_images="$saved_images" upgrade_tag="$saved_tag" baseline_tag="$saved_baseline"
 
   say "SELF-TEST PASSED"
