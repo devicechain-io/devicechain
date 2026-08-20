@@ -356,9 +356,26 @@ var All = []Stream{
 		MaxBytesCap: deviceEventsCaptureMaxBytesCap,
 		Why:         "raw device publishes, captured before PUBACK — the ingest durability floor"},
 
-	// Deliberately NOT per-device: every device publishes to the one subject a
-	// single consumer reads, and a response names its command by token.
-	{Suffix: CommandResponses, Areas: []string{"command-delivery", "event-sources", "lwm2m-ingest"}, Tier: Hot, Why: "device replies to commands — scale with fleet size"},
+	// PER-DEVICE, and it is the device token that makes a response ATTRIBUTABLE.
+	//
+	// 🔴 IT USED TO BE TENANT-SCOPED, AND THE ASYMMETRY WITH DeviceCommands WAS THE BUG.
+	// Downlink was confined to a device's own subject while uplink was granted
+	// tenant-wide, so any authenticated device could publish a response naming any
+	// command token in its tenant and command-delivery would stamp it — the response
+	// carried no identity, and batch tokens are enumerable, so a whole fleet write could
+	// be marked complete with no device acting.
+	//
+	// The subject is the only place that identity can live. A deviceToken FIELD in the
+	// payload is self-asserted and a forger simply fills it in; the broker does not
+	// carry publisher identity into the message, and a device's JWT names its tenant,
+	// not itself. The token here is spliced into the SIGNED grant by natsauth, so the
+	// broker refuses a publish to anyone else's subject before our code ever runs —
+	// which is what turns "the device says it is dev-1" into "the broker verified it".
+	//
+	// One consumer still reads every response: StreamSubject appends the extra wildcard
+	// level for this shape, so the filter follows the declaration automatically. That
+	// the two must move together is the point of deriving both from here.
+	{Suffix: CommandResponses, Areas: []string{"command-delivery", "event-sources", "lwm2m-ingest"}, Tier: Hot, Shape: ShapeTenantDevice, Why: "device replies to commands — scale with fleet size"},
 
 	// One message per fired httpCall/publish action. The stream is auto-provisioned
 	// when event-processing creates the writer, so publishing is safe before the

@@ -61,9 +61,9 @@ func TestEveryStatusIsClassifiedExactlyOnce(t *testing.T) {
 // second hand-written list.
 //
 // 🔴 This is the highest-value assertion in the file. terminalStatusStrings()
-// builds the "status NOT IN (…)" guard used by MarkResponse, CancelCommand and
-// both of ExpireStale's writes, while CommandStatus.Terminal() backs the
-// in-process fast paths. They used to be independent lists of the same set, and
+// builds the "status NOT IN (…)" guard used by both of ExpireStale's writes and by
+// the stranded-SENT reconciler, while CommandStatus.Terminal() backs the in-process
+// fast paths. They used to be independent lists of the same set, and
 // when two such lists disagree nothing fails: the fast path returns a row as
 // finished while the SQL guard still lets a sweep overwrite it, so a cancelled
 // command silently becomes TIMEOUT. Deriving one from the other is the fix; this
@@ -205,7 +205,7 @@ func TestExpireLosesToARowThatMovedOnAfterTheScan(t *testing.T) {
 
 	// And the device's answer still lands, which is the consequence that actually
 	// matters — a row wrongly expired here would swallow it.
-	if _, err := api.MarkResponse(ctx, "raced-expiry", true, nil, nil); err != nil {
+	if _, err := api.MarkResponse(ctx, "raced-expiry", "d", true, nil, nil); err != nil {
 		t.Fatalf("MarkResponse failed: %v", err)
 	}
 	assertStatus(t, api, ctx, "raced-expiry", CommandSuccessful)
@@ -410,7 +410,7 @@ func TestCancelLeavesASentCommandAlone(t *testing.T) {
 	}
 
 	// The point of leaving it alone: the device's real answer still has somewhere to land.
-	answered, err := api.MarkResponse(ctx, "cancel-sent", true, nil, nil)
+	answered, err := api.MarkResponse(ctx, "cancel-sent", "d", true, nil, nil)
 	if err != nil {
 		t.Fatalf("MarkResponse failed: %v", err)
 	}

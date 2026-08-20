@@ -181,7 +181,7 @@ loop directly and is unaffected.
 A device that only POSTs telemetry cannot receive anything, so a scenario with a
 control widget on its board needs a second connection: every device subscribed to
 `{instance}/{tenant}/device-commands/{token}` on the NATS MQTT gateway, answering
-on `{instance}/{tenant}/command-responses` (the `cmdreceiver` package, shared with
+on `{instance}/{tenant}/command-responses/{token}` (the `cmdreceiver` package, shared with
 the load-test command harness). A scenario declares WHO answers with `CommandFarEnd`
 on its manifest, which has three settings:
 

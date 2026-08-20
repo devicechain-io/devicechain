@@ -77,11 +77,18 @@ type reader interface {
 	HandleResponse(err error)
 }
 
-// responsePublisher writes to the tenant-scoped command-responses subject (a *messaging.natsWriter
-// over command-responses satisfies messaging.MessageWriter; WriteMessages takes the tenant from
-// the context).
+// responsePublisher writes to a device's own command-responses subject (a *messaging.natsWriter
+// over command-responses satisfies messaging.MessageWriter; WriteToDevice takes the tenant from
+// the context and the device from its argument).
+//
+// 🔴 WriteToDevice, NOT WriteMessages, AND THE COMPILER WILL NOT TELL YOU. command-responses is
+// per-device: the responding device's token is a subject segment, because that is what makes a
+// response attributable to the device that sent it. The tenant-wide method refuses this suffix at
+// RUNTIME rather than failing to build, so a call site that reaches for the familiar name here
+// publishes nothing and reports an error into a path that only counts it. Narrowing this interface
+// to the one correct method is what turns that into a build failure.
 type responsePublisher interface {
-	WriteMessages(ctx context.Context, msgs ...messaging.Message) error
+	WriteToDevice(ctx context.Context, deviceToken string, msgs ...messaging.Message) error
 }
 
 // connLookup resolves a command's (tenant, deviceToken) to a live conn + reachability
@@ -581,7 +588,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, w work) {
 	// (that would re-actuate a physical device). On a mid-op eviction the publish is skipped (the
 	// result is an unreliable artifact of losing the conn — a spurious FAILED) and the command rides
 	// SENT→TIMEOUT; only the PRE-op eviction check (top of dispatch) redelivers, where the op never ran.
-	d.executeAndReport(ctx, conn, w.tenant, w.env.Name, w.env.Token, payload)
+	d.executeAndReport(ctx, conn, w.tenant, w.env.DeviceToken, w.env.Name, w.env.Token, payload)
 	d.dedupe.mark(w.tenant, w.env.DeviceToken, w.env.Token)
 	// Seal fate: the CoAP op already ran, so ack whether or not the response published — a publish we
 	// could not land leaves the command to TIMEOUT, which is the correct terminal for a lost outcome
@@ -633,7 +640,7 @@ func (d *Dispatcher) drain(ctx context.Context, job drainJob) {
 		if !d.claim(ctx, job.tenant, c) {
 			continue
 		}
-		d.executeAndReport(ctx, conn, job.tenant, c.Name, c.Token, c.Payload)
+		d.executeAndReport(ctx, conn, job.tenant, job.deviceToken, c.Name, c.Token, c.Payload)
 		d.dedupe.mark(job.tenant, job.deviceToken, c.Token)
 		incr(d.metrics.Drained, 1)
 	}
@@ -720,7 +727,7 @@ func (d *Dispatcher) claim(ctx context.Context, tenant string, c DrainCommand) b
 // was drainable, which is the arrangement PARKED replaced. For this window the drain path is
 // at-most-once by construction; closing it is the stranded-SENT reconciler's job, not this
 // function's. It never acks or redelivers anything itself.
-func (d *Dispatcher) executeAndReport(ctx context.Context, conn mux.Conn, tenant, name, token string, payload []byte) {
+func (d *Dispatcher) executeAndReport(ctx context.Context, conn mux.Conn, tenant, deviceToken, name, token string, payload []byte) {
 	opCtx, cancel := context.WithTimeout(ctx, d.opTimeout)
 	res := d.exec.Execute(opCtx, conn, name, payload)
 	cancel()
@@ -733,7 +740,7 @@ func (d *Dispatcher) executeAndReport(ctx context.Context, conn mux.Conn, tenant
 	} else {
 		labelInc(d.metrics.Failed, res.Op, 1)
 	}
-	_ = d.publishResponse(tenant, responseEnvelope{
+	_ = d.publishResponse(tenant, deviceToken, responseEnvelope{
 		CommandToken: token,
 		Success:      res.Success,
 		Payload:      res.Payload,
@@ -741,12 +748,12 @@ func (d *Dispatcher) executeAndReport(ctx context.Context, conn mux.Conn, tenant
 	})
 }
 
-// publishResponse publishes one command outcome to the tenant's command-responses subject, with a
+// publishResponse publishes one command outcome to the DEVICE's command-responses subject, with a
 // bounded LOCAL retry (never a redelivery — see dispatch). The tenant context is built fresh from
 // the tenant string (not the run ctx), so recording the outcome of an op we already ran is not
 // aborted by a leadership eviction that lands during the publish. On exhaustion it counts
 // ResponseFails and returns; the caller acks regardless (seal-fate).
-func (d *Dispatcher) publishResponse(tenant string, env responseEnvelope) bool {
+func (d *Dispatcher) publishResponse(tenant, deviceToken string, env responseEnvelope) bool {
 	data, err := json.Marshal(env)
 	if err != nil {
 		incr(d.metrics.ResponseFails, 1) // unreachable in practice (a fixed struct), but never drop silently
@@ -757,7 +764,7 @@ func (d *Dispatcher) publishResponse(tenant string, env responseEnvelope) bool {
 	// publish. Each publish is bounded by the JetStream client's own default publish timeout.
 	tctx := core.WithTenant(context.Background(), tenant)
 	for attempt := 0; attempt < responsePublishAttempts; attempt++ {
-		if err = d.responses.WriteMessages(tctx, messaging.Message{Value: data}); err == nil {
+		if err = d.responses.WriteToDevice(tctx, deviceToken, messaging.Message{Value: data}); err == nil {
 			return true
 		}
 		if attempt < responsePublishAttempts-1 {

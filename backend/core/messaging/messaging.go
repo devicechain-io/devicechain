@@ -24,9 +24,12 @@ const (
 	// segment, "{instance}.{tenant}.device-commands.{deviceToken}", so the broker
 	// grant can confine a device to its own commands. See DeviceScopedSubject.
 	SubjectDeviceCommands = streams.DeviceCommands
-	// SubjectCommandResponses carries a device's response to a command back IN. It
-	// is tenant-scoped, not per-device: every device publishes to the one subject a
-	// single consumer reads, and a response names its command by token.
+	// SubjectCommandResponses carries a device's response to a command back IN. Like
+	// SubjectDeviceCommands it is PER-DEVICE — "{instance}.{tenant}.command-responses.
+	// {deviceToken}" — because the broker grant confines a device to its own subject,
+	// which makes the token the one AUTHENTICATED statement of who answered. One
+	// consumer still reads them all; see the declaration in core/streams for why the
+	// identity cannot live in the payload instead.
 	SubjectCommandResponses = streams.CommandResponses
 )
 
@@ -295,6 +298,48 @@ func ParseTenantFromSubject(subject string) (string, bool) {
 	}
 	return parts[1], true
 }
+
+// ParseDeviceFromScopedSubject recovers the device token from a per-device subject
+// "{instance}.{tenant}.{suffix}.{deviceToken}" — the inverse of DeviceScopedSubject —
+// checking that the suffix is the one expected. It returns ("", false) for any other
+// shape, which means "this subject carries no device identity", never "no check needed".
+//
+// 🔴 THE TOKEN IT RETURNS IS AUTHENTICATED, AND THAT IS THE WHOLE REASON THIS EXISTS.
+// A device's signed grant permits publishing to its OWN subject and no other, so the
+// broker has already refused anyone else before the message reaches a consumer. A
+// device token read out of the PAYLOAD would carry no such guarantee — a device that
+// wants to answer for its neighbour simply writes the neighbour's token in the JSON.
+// The subject is the only field on the wire the device does not get to choose.
+//
+// The suffix is passed rather than assumed so that a subject from a different stream
+// cannot be misread as this one's. Callers subscribed through StreamSubject already
+// have the shape guaranteed by their filter; this is the second, local check, in the
+// same spirit as the tenant grammar check that sits beside every subject splice.
+func ParseDeviceFromScopedSubject(subject, suffix string) (string, bool) {
+	parts := strings.Split(subject, ".")
+	if len(parts) != deviceScopedSegmentCount {
+		return "", false
+	}
+	for _, p := range parts {
+		if p == "" {
+			return "", false
+		}
+	}
+	if parts[deviceScopedSuffixIndex] != suffix {
+		return "", false
+	}
+	return parts[deviceScopedTokenIndex], true
+}
+
+// The segment layout of a per-device subject, "{instance}.{tenant}.{suffix}.{device}".
+// Named rather than written as literals for the same reason the device-events indices
+// are: the constructor and the parser are inverses, and two hand-counted offsets are
+// how a pair like that drifts apart.
+const (
+	deviceScopedSegmentCount = 4
+	deviceScopedSuffixIndex  = 2
+	deviceScopedTokenIndex   = 3
+)
 
 // TenantContextFromSubject derives the tenant from a scoped subject (see
 // ParseTenantFromSubject) and returns a tenant-scoped context together with the

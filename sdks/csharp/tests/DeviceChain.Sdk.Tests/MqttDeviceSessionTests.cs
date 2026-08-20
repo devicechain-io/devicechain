@@ -130,7 +130,7 @@ public class MqttDeviceSessionTests
     }
 
     [Fact]
-    public async Task ASucceededHandlerIsAnsweredAsSuccessOnTheTenantScopedTopic()
+    public async Task ASucceededHandlerIsAnsweredAsSuccessOnTheDevicesOwnTopic()
     {
         var connection = new FakeMqttConnection();
         await using var session = new MqttDeviceSession(Options(), new FakeMqttClientFactory(connection));
@@ -141,7 +141,12 @@ public class MqttDeviceSessionTests
         var response = connection.LastResponse();
         Assert.True(response.Success);
         Assert.Equal("arrived", response.Payload);
-        Assert.Equal("inst/acme/command-responses", connection.Published[^1].Topic);
+        // 🔴 THE TOPIC IS PART OF THE ANSWER, NOT PLUMBING. The platform reads the responding
+        // device off the topic and refuses a response for a command belonging to someone else,
+        // so a session publishing on the old tenant-wide topic would run the handler, report
+        // success locally, and have its answer discarded — the command then TIMEOUTs looking
+        // like a device that never replied.
+        Assert.Equal("inst/acme/command-responses/sensor-001", connection.Published[^1].Topic);
         Assert.Equal(MqttQos.AtLeastOnce, connection.Published[^1].Qos);
     }
 
@@ -515,7 +520,16 @@ public class MqttDeviceSessionTests
     {
         Assert.Equal("inst/acme/devices/sensor-001/events", DevicePlane.EventsTopic("inst", "acme", "sensor-001"));
         Assert.Equal("inst/acme/device-commands/sensor-001", DevicePlane.CommandsTopic("inst", "acme", "sensor-001"));
-        Assert.Equal("inst/acme/command-responses", DevicePlane.CommandResponsesTopic("inst", "acme"));
+        Assert.Equal("inst/acme/command-responses/sensor-001",
+            DevicePlane.CommandResponsesTopic("inst", "acme", "sensor-001"));
+
+        // 🔴 COMMANDS AND RESPONSES MUST BE SCOPED THE SAME WAY. While responses were
+        // tenant-wide, a device's grant let it report an outcome for any command in the
+        // tenant — so a response topic that stopped naming the device would reopen that
+        // without breaking a single delivery test.
+        Assert.NotEqual(
+            DevicePlane.CommandResponsesTopic("inst", "acme", "sensor-001"),
+            DevicePlane.CommandResponsesTopic("inst", "acme", "sensor-002"));
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

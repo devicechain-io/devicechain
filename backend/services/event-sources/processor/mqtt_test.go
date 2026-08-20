@@ -106,7 +106,9 @@ func TestMqttOnMessage_NoTenantDropped(t *testing.T) {
 func TestMqttOnMessage_CommandPlaneIgnored(t *testing.T) {
 	for _, topic := range []string{
 		"inst-1/acme/device-commands",
+		"inst-1/acme/device-commands/sensor-001",
 		"inst-1/acme/command-responses",
+		"inst-1/acme/command-responses/sensor-001",
 	} {
 		t.Run(topic, func(t *testing.T) {
 			allowCalls := 0

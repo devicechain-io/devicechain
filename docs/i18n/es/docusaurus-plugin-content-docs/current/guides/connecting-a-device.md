@@ -237,10 +237,10 @@ Cada mensaje es un sobre (envelope) JSON:
 
 ## Respuesta a un comando {#responding-to-a-command}
 
-Reporte el resultado publicando en el topic de respuestas de comando del inquilino:
+Reporte el resultado publicando en el topic de respuestas de comando **propio** del dispositivo:
 
 ```
-{instanceId}/{tenant}/command-responses
+{instanceId}/{tenant}/command-responses/{deviceToken}
 ```
 
 ```bash
@@ -249,7 +249,7 @@ mosquitto_pub \
   -h <mqtt-host> -p 1883 \
   -i 'devicechain:acme:sensor-001' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
-  -t "devicechain/acme/command-responses" \
+  -t "devicechain/acme/command-responses/sensor-001" \
   -m '{"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","success":true,"payload":"rebooting in 5s"}'
 ```
 
@@ -260,9 +260,19 @@ mosquitto_pub \
 - **`payload`** / **`error`** son cadenas opcionales, que se muestran en el historial de
   comandos de la consola y se devuelven a través de la API.
 
-A diferencia del topic de eventos, este **no** es por dispositivo: cada dispositivo de un inquilino publica
-en el mismo subject, y una respuesta identifica su comando mediante el token. El inquilino se toma
-del topic en lugar del cuerpo, de modo que un dispositivo no puede responder por otro inquilino.
+Al igual que los topics de eventos y de comandos, este es **por dispositivo**, y un dispositivo
+está autorizado a publicar únicamente en el suyo. Tanto el inquilino como el dispositivo que
+responde se toman del topic en lugar del cuerpo, de modo que un dispositivo solo puede responder
+por **sus propios** comandos: una respuesta que nombre un comando perteneciente a otro
+dispositivo se rechaza, no se registra.
+
+:::caution El topic cambió
+Este topic era antes de alcance de inquilino (`{instanceId}/{tenant}/command-responses`, sin
+segmento de dispositivo). Un dispositivo que publique en el topic antiguo ahora es rechazado por
+el broker, y sus respuestas nunca llegan a la plataforma — los comandos que responde quedan
+pendientes hasta que pasan a `TIMEOUT`. Actualice el topic dondequiera que sus dispositivos lo
+construyan.
+:::
 
 :::info Responder es lo que completa el ciclo de vida
 Un comando que nunca se responde permanece en `SENT` hasta que su TTL lo convierte en

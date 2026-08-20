@@ -127,16 +127,28 @@ public static class DevicePlane
         return $"{instanceId}/{tenant}/device-commands/{deviceToken}";
     }
 
-    /// <summary>The tenant-scoped topic a device publishes command responses to.</summary>
+    /// <summary>The topic a device publishes its own command responses to.</summary>
     /// <remarks>
-    /// Note it is tenant-scoped rather than device-scoped: the response carries the command token,
-    /// which is what correlates it back to the persisted command.
+    /// <para>
+    /// Device-scoped, symmetrically with <see cref="CommandsTopic"/>. The response still carries
+    /// the command token, which is what correlates it back to the persisted command — but the
+    /// device token in the topic is what says WHO answered, and the platform refuses a response
+    /// for a command belonging to a different device.
+    /// </para>
+    /// <para>
+    /// This topic was tenant-scoped before. A device's broker grant permitted publishing to it,
+    /// so any device could report an outcome for any command in its tenant and the platform had
+    /// no way to tell that the wrong device had answered. Sending a response on the old topic
+    /// now fails the broker's authorization check rather than silently settling someone else's
+    /// command.
+    /// </para>
     /// </remarks>
-    public static string CommandResponsesTopic(string instanceId, string tenant)
+    public static string CommandResponsesTopic(string instanceId, string tenant, string deviceToken)
     {
         RequireToken(instanceId, nameof(instanceId));
         RequireToken(tenant, nameof(tenant));
-        return $"{instanceId}/{tenant}/command-responses";
+        RequireToken(deviceToken, nameof(deviceToken));
+        return $"{instanceId}/{tenant}/command-responses/{deviceToken}";
     }
 
     /// <summary>

@@ -98,7 +98,7 @@ public sealed class MqttDeviceSession : IAsyncDisposable
         _clientId = DevicePlane.DeviceClientId(
             options.InstanceId, options.Tenant, options.DeviceToken, options.ClientIdDiscriminator);
         _commandsTopic = DevicePlane.CommandsTopic(options.InstanceId, options.Tenant, options.DeviceToken);
-        _responsesTopic = DevicePlane.CommandResponsesTopic(options.InstanceId, options.Tenant);
+        _responsesTopic = DevicePlane.CommandResponsesTopic(options.InstanceId, options.Tenant, options.DeviceToken);
         _eventsTopic = DevicePlane.EventsTopic(options.InstanceId, options.Tenant, options.DeviceToken);
         _history = new CommandHistory(options.CommandHistorySize);
     }

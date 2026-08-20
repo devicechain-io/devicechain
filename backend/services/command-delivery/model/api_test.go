@@ -146,7 +146,7 @@ func TestCreateSentResponseLifecycle(t *testing.T) {
 	}
 
 	payload := `{"result":"ok"}`
-	responded, err := api.MarkResponse(ctx, "cmd-1", true, &payload, nil)
+	responded, err := api.MarkResponse(ctx, "cmd-1", "device-1", true, &payload, nil)
 	if err != nil {
 		t.Fatalf("MarkResponse failed: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestCreateSentResponseLifecycle(t *testing.T) {
 	}
 
 	// A response to an already-terminal command is ignored (idempotent).
-	again, err := api.MarkResponse(ctx, "cmd-1", false, nil, strPtr("late"))
+	again, err := api.MarkResponse(ctx, "cmd-1", "device-1", false, nil, strPtr("late"))
 	if err != nil {
 		t.Fatalf("MarkResponse (late) failed: %v", err)
 	}
@@ -313,9 +313,22 @@ func TestMarkSentDoesNotClobberResponse(t *testing.T) {
 		t.Fatalf("CreateCommand failed: %v", err)
 	}
 
-	// The response beats the SENT write (the row goes QUEUED -> SUCCESSFUL).
+	// The realistic sequence, and the ONLY one that reaches this race: a dispatcher
+	// claims the row into SENT, publishes, the device answers — and then a REDELIVERED
+	// claim from that same dispatch executes against the answered row.
+	//
+	// 🔴 THIS USED TO RESPOND TO A QUEUED ROW, WHICH CANNOT HAPPEN. Every dispatcher
+	// claims before it publishes, so no device has been told anything while the row is
+	// still QUEUED and no answer can precede the claim. The old arrangement was a
+	// shorter way to reach the same write, but it staged a state the platform never
+	// produces — and once a response must come from a state a dispatcher actually held
+	// (answerableStatusStrings), staging it stopped being a shortcut and started being
+	// a fiction the test would have failed on.
+	if _, claimed, err := api.MarkSent(ctx, created.ID); err != nil || !claimed {
+		t.Fatalf("MarkSent: claimed=%v err=%v", claimed, err)
+	}
 	payload := `{"ok":true}`
-	if _, err := api.MarkResponse(ctx, "cmd-race", true, &payload, nil); err != nil {
+	if _, err := api.MarkResponse(ctx, "cmd-race", "device-1", true, &payload, nil); err != nil {
 		t.Fatalf("MarkResponse failed: %v", err)
 	}
 

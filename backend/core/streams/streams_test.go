@@ -74,11 +74,17 @@ func TestIsPerDevice(t *testing.T) {
 	if !IsPerDevice(DeviceCommands) {
 		t.Errorf("%q addresses an individual device and must report PerDevice", DeviceCommands)
 	}
-	// Responses are deliberately tenant-scoped: one subject, one consumer,
-	// correlated by command token. Marking them per-device would split the
-	// consumer's filter and strand every response.
-	if IsPerDevice(CommandResponses) {
-		t.Errorf("%q is tenant-scoped, not per-device", CommandResponses)
+	// Responses are per-device for the same reason commands are: the device token in
+	// the subject is what the broker grant confines a device to, and therefore the only
+	// AUTHENTICATED statement of who answered. A tenant-scoped response subject let any
+	// device in a tenant settle any other device's command.
+	//
+	// 🔴 THIS TEST USED TO ASSERT THE OPPOSITE, with a reason that was not true: that
+	// per-device "would split the consumer's filter and strand every response". It does
+	// not — StreamSubject appends the wildcard level for this shape, so one filter still
+	// covers every device, exactly as it already did for DeviceCommands.
+	if !IsPerDevice(CommandResponses) {
+		t.Errorf("%q carries the responding device's token and must report PerDevice", CommandResponses)
 	}
 	// An unknown suffix must not claim to be per-device, or its stream would be
 	// created with a wildcard level no publish ever fills.

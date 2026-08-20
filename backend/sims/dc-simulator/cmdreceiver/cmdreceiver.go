@@ -36,7 +36,7 @@
 // device — so a receiver reuses it with no new provisioning. On a command frame the
 // receiver decodes the envelope, records it (de-duped by the command token, since
 // delivery is at-least-once and the same token may arrive more than once), and
-// publishes a success response back on the tenant-scoped command-responses subject.
+// publishes a success response back on its OWN command-responses subject.
 // That response is what drives the durable command QUEUED→SENT→SUCCESSFUL: the
 // harness's authoritative round-trip proof is the durable status, and this receiver
 // is the faithful two-way device (ADR-043) that makes SUCCESSFUL reachable, plus the
@@ -73,10 +73,11 @@ type deliveryEnvelope struct {
 	Payload     json.RawMessage `json:"payload,omitempty"`
 }
 
-// responseEnvelope is the JSON a device publishes back on the tenant-scoped
-// command-responses subject (command-delivery/processor responseEnvelope). The
-// consumer derives the tenant from the subject and matches the command by
-// CommandToken, so a bare success keyed by the delivery token is a complete reply.
+// responseEnvelope is the JSON a device publishes back on its own command-responses
+// subject (command-delivery/processor responseEnvelope). The consumer derives the tenant
+// AND THE RESPONDING DEVICE from the subject and matches the command by CommandToken, so
+// a bare success keyed by the delivery token is a complete reply — the envelope carries no
+// identity because the subject already does, verifiably.
 type responseEnvelope struct {
 	CommandToken string `json:"commandToken"`
 	Success      bool   `json:"success"`
@@ -176,10 +177,17 @@ func (r *Receiver) commandTopic(deviceToken string) string {
 	return fmt.Sprintf("%s/%s/device-commands/%s", r.instanceId, r.tenant, deviceToken)
 }
 
-// responseTopic is the tenant-scoped MQTT topic a device publishes command
-// responses to: "{instance}/{tenant}/command-responses".
-func (r *Receiver) responseTopic() string {
-	return fmt.Sprintf("%s/%s/command-responses", r.instanceId, r.tenant)
+// responseTopic is the MQTT topic a device publishes ITS OWN command responses to:
+// the subject "{instance}.{tenant}.command-responses.{token}" with dots mapped to
+// slashes.
+//
+// 🔴 IT TAKES THE DEVICE TOKEN NOW, AND THAT PARAMETER IS THE PLATFORM FIX. The topic
+// used to be tenant-wide, which meant a device's grant let it answer for any command in
+// its tenant and the platform could not tell who had replied. Both directions are
+// device-scoped now, so the broker refuses a publish to another device's response topic
+// — the same confinement commandTopic above has always had.
+func (r *Receiver) responseTopic(deviceToken string) string {
+	return fmt.Sprintf("%s/%s/command-responses/%s", r.instanceId, r.tenant, deviceToken)
 }
 
 // Subscribe connects one device to the MQTT gateway and subscribes it to its own
@@ -195,7 +203,7 @@ func (r *Receiver) Subscribe(ctx context.Context, deviceToken, credentialId stri
 	ds := &deviceState{
 		token:         deviceToken,
 		commandTopic:  r.commandTopic(deviceToken),
-		responseTopic: r.responseTopic(),
+		responseTopic: r.responseTopic(deviceToken),
 		ready:         make(chan error, 1),
 		distinct:      make(map[string]int),
 	}
@@ -390,21 +398,25 @@ func (r *Receiver) recordFrame(ds *deviceState, payload []byte) (token string, o
 		return "", false
 	}
 
-	// 🔴 THE ENVELOPE SAYS WHO IT IS FOR, AND UNTIL NOW NOTHING READ IT.
+	// 🔴 THE ENVELOPE SAYS WHO IT IS FOR, AND THIS RECEIVER READS IT.
 	//
-	// A device's JWT scopes SUBSCRIBE to its own command topic but grants PUBLISH on
-	// the TENANT-WIDE command-responses subject, and the response carries only a
-	// command token — no device identity — so command-delivery marks whatever token it
-	// is handed. A receiver that answers a frame addressed to somebody else is
-	// therefore not merely untidy: it stamps a terminal state on another device's
-	// command, and the platform has no way to tell that the wrong device answered.
+	// This check was written when the platform could not make it for itself: a device's
+	// JWT scoped SUBSCRIBE to its own command topic but granted PUBLISH on the
+	// TENANT-WIDE command-responses subject, so a response named only a command token
+	// and command-delivery stamped whatever it was handed. If dispatch mis-routed device
+	// A's envelope onto device B's topic, B answering it drove A's row to SUCCESSFUL
+	// while A never actuated — and every durable-state invariant read green.
 	//
-	// That is exactly the failure a fleet-write oracle exists to catch. If dispatch
-	// mis-routes device A's envelope onto device B's topic, B answering it drives A's
-	// row to SUCCESSFUL while A never actuates — and every durable-state invariant
-	// reads green. Refusing here is what keeps the receiver an honest witness: the
-	// misrouted frame is counted and NOT answered, so the real device's command stays
-	// visibly unfinished instead of being closed by a bystander.
+	// 🔑 THE PLATFORM NOW REFUSES THAT TOO, AND THIS CHECK IS KEPT ANYWAY. Responses are
+	// published per-device and command-delivery rejects one whose device does not own the
+	// command, so a bystander's answer no longer closes anybody's row. But the two checks
+	// answer different questions and fail on different sides of the wire: the platform's
+	// asks "may this device settle this command", while this one asks "was this frame
+	// even addressed to me" — and it is the only one positioned to notice a DISPATCH
+	// mis-route, which is a defect in the platform's own routing rather than in a device.
+	// Refusing here is what keeps the receiver an honest witness: the misrouted frame is
+	// counted and NOT answered, so the mis-route shows up as a stuck command attributable
+	// to the right cause rather than as a response the far end quietly discards.
 	//
 	// A frame carrying no deviceToken at all is accepted, deliberately. The dispatcher
 	// always sets it, but an empty field is an ABSENT claim about addressing rather

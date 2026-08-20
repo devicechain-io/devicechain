@@ -87,14 +87,21 @@ func TestCommandReachesOnlyItsOwnDevice(t *testing.T) {
 	}
 }
 
-// A tenant-scoped suffix must still round-trip unchanged — the per-device shape is
-// an addition, not a replacement, and command RESPONSES deliberately stay
-// tenant-scoped (one subject, one consumer, correlated by command token).
-func TestCommandResponseRoundTripsTenantScoped(t *testing.T) {
+// A command RESPONSE round-trips carrying the responding device, and the device token
+// is recoverable from the delivered subject.
+//
+// 🔴 THE RECOVERY IS THE POINT, NOT THE DELIVERY. A response used to arrive on a subject
+// that named only the tenant, so command-delivery had no way to ask WHICH device
+// answered and stamped whatever command token it was handed. This asserts the token
+// survives the broker round trip, because that is the field the authorization check
+// downstream is built on — and a payload field would not do, since the broker verifies
+// the subject and not the body.
+func TestCommandResponseRoundTripsCarryingTheRespondingDevice(t *testing.T) {
 	nmgr, js, cleanup := newRoundTripManager(t)
 	defer cleanup()
 
 	const tenant = "acme"
+	const device = "sensor-001"
 	writer, err := nmgr.NewWriter(SubjectCommandResponses)
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
@@ -104,7 +111,7 @@ func TestCommandResponseRoundTripsTenantScoped(t *testing.T) {
 
 	ctx := core.WithTenant(context.Background(), tenant)
 	body := []byte(`{"commandToken":"cmd-1","success":true}`)
-	if err := writer.WriteMessages(ctx, Message{Value: body}); err != nil {
+	if err := writer.WriteToDevice(ctx, device, Message{Value: body}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -118,8 +125,30 @@ func TestCommandResponseRoundTripsTenantScoped(t *testing.T) {
 		if got, ok := ParseTenantFromSubject(m.Subject); !ok || got != tenant {
 			t.Fatalf("tenant from subject = %q ok=%v, want %q", got, ok, tenant)
 		}
+		// ...and now the device, for the same reason and by the same route.
+		got, ok := ParseDeviceFromScopedSubject(m.Subject, SubjectCommandResponses)
+		if !ok || got != device {
+			t.Fatalf("device from subject %q = %q ok=%v, want %q", m.Subject, got, ok, device)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("command response did not round-trip")
+	}
+}
+
+// The tenant-wide write path must refuse a response, exactly as it refuses a command.
+// Without this a caller reaching for the wrong method publishes to a subject no stream
+// captures, and the answer is lost with no error anywhere.
+func TestTenantWideWriteRefusedForCommandResponses(t *testing.T) {
+	nmgr, _, cleanup := newRoundTripManager(t)
+	defer cleanup()
+
+	writer, err := nmgr.NewWriter(SubjectCommandResponses)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	ctx := core.WithTenant(context.Background(), "acme")
+	if err := writer.WriteMessages(ctx, Message{Value: []byte(`{}`)}); err == nil {
+		t.Fatal("a tenant-wide write of a command response must be refused")
 	}
 }
 
