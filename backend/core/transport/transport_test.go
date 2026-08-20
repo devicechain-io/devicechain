@@ -74,3 +74,30 @@ func TestQualifyRoundTripsThroughOf(t *testing.T) {
 		t.Errorf("Qualify = %q, want the exact form sparkplug-ingest stamps", got)
 	}
 }
+
+// The two predicates answer different questions, and the pair below is the whole reason
+// StampedBare exists: both names are Minted, only one is stamped bare. A caller that used
+// IsMinted where it meant IsStampedBare would treat "sparkplug" as a live collision with
+// rows the platform writes — and no producer writes that value at all.
+func TestStampedBareIsNarrowerThanMinted(t *testing.T) {
+	if !IsMinted(Sparkplug) || !IsMinted(LwM2M) {
+		t.Fatal("both names must be Minted, or this test is not testing the distinction it claims")
+	}
+	if !IsStampedBare(LwM2M) {
+		t.Errorf("%q is stamped bare — lwm2m-ingest files presence under exactly that value", LwM2M)
+	}
+	if IsStampedBare(Sparkplug) {
+		t.Errorf("%q is always qualified as %q; the bare word appears in no row a producer wrote",
+			Sparkplug, Qualify(Sparkplug, "hostId"))
+	}
+}
+
+// A name the platform mints nothing under is neither, so a caller cannot reach either
+// branch with an operator's own id.
+func TestIsStampedBareRejectsANameThePlatformNeverWrites(t *testing.T) {
+	for _, name := range []Name{"mqtt", "http", "mqtt1", "sparkplug-test", ""} {
+		if IsStampedBare(name) {
+			t.Errorf("%q is not a value the platform stamps", name)
+		}
+	}
+}

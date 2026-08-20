@@ -119,3 +119,36 @@ func IsMinted(name Name) bool {
 	}
 	return false
 }
+
+// StampedBare is every minted name that appears in a real row WHOLE and unqualified.
+//
+// It is the checkable form of a distinction the constants above already state in prose:
+// LwM2M is stamped bare, Sparkplug is always "sparkplug:"+hostId and the bare word appears
+// in no row a producer wrote. Leaving that as prose meant the one caller that needs to act
+// on it had to hard-code a transport name.
+//
+// 🔴 MINTED AND StampedBare ANSWER DIFFERENT QUESTIONS AND MUST NOT BE SWAPPED. Minted asks
+// "would this be CLASSIFIED as a transport the platform mints?" — a reservation, tested
+// against the reduction. This asks "is this EXACTLY a source value the platform itself
+// writes into rows?" — a live collision, tested against the whole string. The first is a
+// warning about the future; the second is corruption happening now, because the
+// asserted-presence reconcilers match a source by plain equality, so two writers sharing
+// one whole value re-file each other's rows.
+var StampedBare = []Name{LwM2M}
+
+// IsStampedBare reports whether the platform writes this name into rows unqualified, so an
+// operator-chosen source EQUAL to it collides with rows the platform is already writing.
+//
+// ⚠️ A FALSE ANSWER IS NOT A GUARANTEE OF NO COLLISION, only of no collision that is
+// decidable here. A qualified transport collides on the whole value too — an EventSource
+// named "sparkplug:plant-a" against a Sparkplug host whose hostId is plant-a — but the
+// qualifier is runtime input this package never sees, so that one cannot be settled at
+// config load and is left to the caller to warn about.
+func IsStampedBare(name Name) bool {
+	for _, s := range StampedBare {
+		if name == s {
+			return true
+		}
+	}
+	return false
+}

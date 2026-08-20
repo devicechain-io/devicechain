@@ -115,22 +115,46 @@ func TestDefaultSourceIdsAreValid(t *testing.T) {
 	assert.Len(t, cfg.EventSources, 2)
 }
 
-// 🔴🔴 THE RESERVATION IS ON THE CLASSIFICATION, NOT ON THE SPELLING. Every consumer asking
-// "what transport is this device on?" cuts the source at the first ":", so a bare "sparkplug"
-// and a qualified "sparkplug:plant-a" are equally a Sparkplug device to all of them. Against
-// the existing DENY list that collision stops the operator's own commands; against the ALLOW
-// list the stranded-SENT reconciler needs, it would make a foreign device look like a member
-// and be ACTED ON.
-func TestValidateRejectsAnIdThatReadsAsAMintedTransport(t *testing.T) {
-	for _, id := range []string{"sparkplug", "lwm2m", "sparkplug:plant-a", "lwm2m:site-a"} {
+// 🔴🔴 ONLY A LIVE WHOLE-VALUE COLLISION REFUSES THE LOAD. "lwm2m" is the exact source value
+// lwm2m-ingest files its device presence under, and the presence reconcilers match a source
+// with plain SQL equality — so an operator source of that name and that transport re-file
+// each other's rows on every pass. That is happening now, not in some later release, which
+// is what earns an outage: this process holds every event source and the broker-presence
+// tap, so refusing the load stops ALL ingest for the instance.
+//
+// 🔴 THIS TEST USED TO ASSERT THAT ALL FOUR OF THESE WERE REFUSED, and the reason given was
+// true of only one of them. The other three are groundwork for an allow list that has not
+// landed: "lwm2m:site-a" is swept by nothing and denied by nothing, and "sparkplug*" costs
+// only an operator who sends commands. Refusing them turned an upgrade into an outage for
+// instances where nothing was wrong — see TestValidateWarnsButStartsForAReservedId.
+func TestValidateRejectsAnIdThatCollidesWithAPlatformSource(t *testing.T) {
+	cfg := &EventSourcesConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(``), cfg))
+	cfg.EventSources[0].Id = "lwm2m"
+
+	err := cfg.Validate()
+
+	assert.Error(t, err, `an id equal to a bare-stamped transport name must be refused`)
+	assert.Contains(t, err.Error(), "collides")
+}
+
+// The migration path. Each of these reads as a transport the platform mints, so each is
+// reserved and each is warned about — but none of them collides with a source value the
+// platform writes, so none may stop a running instance from starting.
+//
+// ⚠️ The assertion here is the LOAD SUCCEEDING, which is exactly what a warning cannot be
+// tested through: nothing in this package returns the log line, so a test that "checked the
+// warning" would be checking that Validate returned nil while claiming more. The warning is
+// prose for an operator; the behaviour under test is that ingest comes up.
+func TestValidateWarnsButStartsForAReservedId(t *testing.T) {
+	for _, id := range []string{"sparkplug", "sparkplug:plant-a", "lwm2m:site-a"} {
 		cfg := &EventSourcesConfiguration{}
 		assert.NoError(t, core.LoadConfiguration([]byte(``), cfg))
+		cfg.EventSources = cfg.EventSources[:1]
 		cfg.EventSources[0].Id = id
 
-		err := cfg.Validate()
-
-		assert.Error(t, err, "id %q must be rejected", id)
-		assert.Contains(t, err.Error(), "reserved")
+		assert.NoError(t, cfg.Validate(),
+			"id %q collides with no source the platform writes, so it must warn rather than stop ingest", id)
 	}
 }
 

@@ -210,6 +210,35 @@ func (c *EventProcessingConfiguration) ApplyDefaults() {
 	}
 }
 
+// RetiredConfigKeys names the keys this service accepted in an earlier release and has
+// since removed, so a document still carrying one is reported rather than refused.
+//
+// maxEventFutureSkewSeconds was DETECT's own bound on how far a device-reported time may
+// lead the server's clock. It is gone because that decision moved to the single place the
+// event time is now decided — event resolution in device-management — and every consumer,
+// live and replay alike, reads a time that arrives already bounded. Keeping a second copy
+// here is what allowed live detection and the replay preview to disagree about when an
+// event happened, under the one feature whose value is answering what a rule would have
+// done.
+//
+// 🔴 IT IS LISTED HERE BECAUSE WE PUBLISHED IT. v0.11.0's detection-engine deployment page
+// documented it as an event-processing key, in both locales. Without this entry the strict
+// decode calls it unknown, the load fails closed, and an operator who did exactly what the
+// documentation said gets a crash-looping DETECT engine on upgrade — detection down for
+// every tenant on the instance, with an error message that reads like they typed it wrong.
+//
+// The value is NOT forwarded to device-management. It cannot be: this process does not
+// configure that one, and quietly honouring a stale copy of a setting whose whole purpose
+// was to stop existing in two places would rebuild the defect the move fixed.
+func (c *EventProcessingConfiguration) RetiredConfigKeys() map[string]string {
+	return map[string]string{
+		"maxEventFutureSkewSeconds": "Device clock skew is now bounded once, where the event time is decided: " +
+			"set functionalAreas.device-management.config.maxEventFutureSkewSeconds instead. " +
+			"The detection engine no longer has a bound of its own, and this instance is running with " +
+			"whatever device-management is configured for (300 seconds by default).",
+	}
+}
+
 // Validate is the ADR-022 decision-1 validation hook. It rejects a non-positive
 // checkpoint cadence (fail closed): a zero/negative threshold would either never
 // checkpoint or checkpoint every event, both of which break the ack-on-checkpoint
