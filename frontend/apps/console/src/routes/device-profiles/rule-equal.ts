@@ -51,7 +51,9 @@ function elided(v: unknown): boolean {
   if (v === false) return true;
   if (v === '') return true;
   if (Array.isArray(v)) return v.length === 0;
-  return typeof v === 'object' && stableStringify(v) === '{}';
+  // `prune` has already removed this object's own elided children, so an empty key set IS
+  // emptiness — no need to serialize the subtree to find that out.
+  return typeof v === 'object' && Object.keys(v).length === 0;
 }
 
 // prune removes the keys that carry nothing, recursively, so the containment check below

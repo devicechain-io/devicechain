@@ -126,15 +126,13 @@ export function needsSecondCancel(counts: BatchCancelCounts): boolean {
   return unaccounted(counts) > 0;
 }
 
-// Whether any of the batch's commands had already reached their devices. Those devices
-// WILL still act: a command in flight cannot be recalled, and this is the fact a cancel
-// screen exists to state plainly rather than bury.
-export function hasUnstoppable(counts: BatchCancelCounts): boolean {
-  return counts.alreadySent > 0;
-}
-
 /**
  * Which of the four things the panel may say about what is STILL MOVING after a cancel.
+ *
+ * This replaced a `hasUnstoppable` boolean (`alreadySent > 0`). That predicate is now exactly
+ * `cancelMotion(counts) === 'stillActing'`, and it was deleted rather than left beside this:
+ * once the panel stopped calling it, the only thing keeping two encodings of one rule alive
+ * was its own tests.
  *
  * 🔴 THIS IS A FOUR-VALUED READING OF A THREE-AXIS STATE, and it used to be a two-valued
  * reading of one axis (`alreadySent > 0`). Both of the sentences that produced were wrong in

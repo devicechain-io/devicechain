@@ -23,41 +23,40 @@
 // exists to catch, while a const-name parse stayed green.
 
 import { describe, it, expect } from 'vitest';
+import { constValues, type GoConst } from './go-source';
 // 🔴 THE WHOLE PACKAGE, NOT A NAMED PAIR OF FILES. Reading env.go and geo.go by name was a
 // demonstrated bypass: a `cel.Function("nearFence", …)` added in predicate/fences.go and wired
 // into cel.NewEnv compiles, runs, and is completely invisible to a two-file scan — the gate
 // stayed green over an undocumented function, which is the defect it exists to catch. A glob
 // cannot fall behind a new file the way a list can.
-const PREDICATE_FILES = import.meta.glob('../../../../../../backend/services/event-processing/internal/detect/predicate/*.go', {
-  query: '?raw',
-  import: 'default',
-  eager: true,
-}) as Record<string, string>;
-import EN from '@/i18n/locales/en/deviceProfiles.json';
-import ES from '@/i18n/locales/es/deviceProfiles.json';
+const PREDICATE_FILES = import.meta.glob(
+  [
+    '../../../../../../backend/services/event-processing/internal/detect/predicate/*.go',
+    // 🔴 A Go TEST FILE IS NOT THE ENVIRONMENT. They declare no registrations today, so the
+    // gate reads the same set either way — but a const in a _test.go sharing an identifier
+    // with a real one would silently overwrite it in the lookup, and a registration written
+    // in a test would demand that the console document an identifier production never
+    // declares. Both fail in the confusing direction.
+    '!**/*_test.go',
+  ],
+  {
+    query: '?raw',
+    import: 'default',
+    eager: true,
+  },
+) as Record<string, string>;
+// Globbed rather than named, matching i18n/parity.test.ts — the console's every-locale gate
+// derives its set from the filesystem for the same reason this must: a third locale added
+// later would pass parity wiring while its CEL help sat ungated behind two hardcoded imports.
+const LOCALE_FILES = import.meta.glob('../../i18n/locales/*/deviceProfiles.json', { eager: true }) as Record<
+  string,
+  { default: Record<string, string> }
+>;
 
 const PREDICATE_SRC = Object.keys(PREDICATE_FILES)
   .sort()
   .map((f) => PREDICATE_FILES[f])
   .join('\n');
-
-/**
- * `Ident = "value"` consts — the env's identifier names live in the predicate package as
- * plain literals.
- *
- * 🔴 THE OPTIONAL `const ` PREFIX IS NOT COSMETIC, and leaving it out is how this gate first
- * ran. The variables sit inside a grouped `const ( … )` block, so they parse with the
- * identifier at the start of the line; `FuncInFence` is a STANDALONE `const FuncInFence =
- * "inFence"`, which the grouped-block shape does not match. The one function in the
- * environment was therefore invisible to the extractor — and the only reason that surfaced
- * as a failure rather than a silent pass is that an unresolvable registration THROWS below
- * instead of being skipped.
- */
-function constValues(src: string): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const m of src.matchAll(/^\s*(?:const\s+)?([A-Z][A-Za-z0-9]*)\s*=\s*"([^"]*)"/gm)) out.set(m[1], m[2]);
-  return out;
-}
 
 const CONSTS = constValues(PREDICATE_SRC);
 
@@ -68,15 +67,19 @@ const CONSTS = constValues(PREDICATE_SRC);
  * bare literal (`cel.Function("distanceTo", …)`). Both are read, because the second is the
  * one a const-name parse would miss.
  */
-function registered(kind: 'Variable' | 'Function'): string[] {
+function registered(
+  kind: 'Variable' | 'Function',
+  src: string = PREDICATE_SRC,
+  consts: Map<string, GoConst> = CONSTS,
+): string[] {
   const out = new Set<string>();
-  for (const m of PREDICATE_SRC.matchAll(new RegExp(`cel\\.${kind}\\(\\s*([A-Za-z0-9_"]+)`, 'g'))) {
+  for (const m of src.matchAll(new RegExp(`cel\\.${kind}\\(\\s*([A-Za-z0-9_"]+)`, 'g'))) {
     const arg = m[1];
     if (arg.startsWith('"')) {
       out.add(arg.slice(1, -1));
       continue;
     }
-    const v = CONSTS.get(arg);
+    const v = consts.get(arg)?.value;
     // An identifier we cannot resolve is NOT skipped. Skipping is how a real one goes
     // missing while every count still looks right.
     if (v === undefined) throw new Error(`cel.${kind}(${arg}, …) — ${arg} has no string literal value`);
@@ -101,10 +104,12 @@ function mentionsToken(text: string, name: string): boolean {
 // The one field description that ENUMERATES the vocabulary, in each locale. The canvas's own
 // CEL help is deliberately not gated here: it describes the box without listing identifiers,
 // so it has nothing to fall out of step with. That is a gap, stated rather than papered over.
-const HELP: Record<string, string> = {
-  en: (EN as Record<string, string>).ruleCelDescription,
-  es: (ES as Record<string, string>).ruleCelDescription,
-};
+const HELP: Record<string, string> = Object.fromEntries(
+  Object.entries(LOCALE_FILES).map(([path, mod]) => [
+    path.split('/').slice(-2)[0],
+    mod.default.ruleCelDescription,
+  ]),
+);
 
 describe('the predicate environment extraction', () => {
   // 🔴 THE NEGATIVE CONTROL FOR EVERY ASSERTION BELOW. All of them are "each registered name
@@ -136,10 +141,29 @@ describe('the predicate environment extraction', () => {
     expect(mentionsToken('written geo.inFence("yard")', 'geo')).toBe(true);
   });
 
-  it('refuses a registration it cannot resolve', () => {
-    expect(() => constValues('').get('nope')).not.toThrow();
-    expect(CONSTS.get('VarGeo')).toBe('geo');
-    expect(CONSTS.get('FuncInFence')).toBe('inFence');
+  // 🔴 THE REFUSAL IS NOW ACTUALLY EXERCISED. This test used to assert that `Map.get` does
+  // not throw — which cannot fail — and then re-check two const values pinned three lines
+  // above. The branch it claimed to cover, `registered` throwing on an identifier it cannot
+  // resolve, was unreachable from a test, because the function read module state instead of
+  // taking a source. A control that documents a guarantee without checking it is the same
+  // shape as a comment asserting an invariant nothing enforces.
+  it('refuses a registration whose identifier it cannot resolve', () => {
+    const src = 'cel.Variable(VarSomethingNew, cel.StringType),';
+    expect(() => registered('Variable', src, new Map())).toThrow(/VarSomethingNew/);
+  });
+
+  it('reads a bare string literal registration — the counterweight', () => {
+    // A function registered inline, with no const at all, must still be SEEN. Refusing
+    // everything unresolvable would be easy and would also refuse this.
+    expect(registered('Function', 'cel.Function("distanceTo", …)', new Map())).toEqual(['distanceTo']);
+  });
+});
+
+// The control for the glob: a pattern matching nothing would make describe.each iterate an
+// empty list, running zero assertions and reporting a green file.
+describe('the locale set', () => {
+  it('found every locale the console ships', () => {
+    expect(Object.keys(HELP).sort()).toEqual(['en', 'es']);
   });
 });
 

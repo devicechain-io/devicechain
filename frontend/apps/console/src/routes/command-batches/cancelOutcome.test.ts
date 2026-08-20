@@ -12,7 +12,6 @@ import {
   accountedFor,
   cancelMotion,
   isReassuring,
-  hasUnstoppable,
   needsSecondCancel,
   offerCancel,
   unaccounted,
@@ -65,8 +64,8 @@ describe('commands that cannot be recalled', () => {
   // `alreadySent` is the count of commands that are AT their devices. It is never part of
   // "stopped", and a screen that has any of them has to say the fleet is still acting.
   it('is flagged whenever any command had already reached a device', () => {
-    expect(hasUnstoppable(counts({ cancelled: 999, alreadySent: 1, matched: 1000 }))).toBe(true);
-    expect(hasUnstoppable(counts({ cancelled: 1000, alreadySent: 0, matched: 1000 }))).toBe(false);
+    expect(cancelMotion(counts({ cancelled: 999, alreadySent: 1, matched: 1000 }))).toBe('stillActing');
+    expect(cancelMotion(counts({ cancelled: 1000, alreadySent: 0, matched: 1000 }))).not.toBe('stillActing');
   });
 
   it('is not folded into what the cancel accounted for as though it were stopped', () => {
@@ -175,26 +174,40 @@ describe('cancelMotion over the whole state space', () => {
   // wrong: a reassurance rendered directly above the block saying N commands were back in
   // the delivery queue. So the rule is stated once, over the vocabulary rather than over a
   // hand-listed pair of strings, and it holds for a fifth motion nobody has written yet.
-  it('never reassures while anything is unaccounted for', () => {
+  // 🔴 A BICONDITIONAL, NOT AN IMPLICATION, AND THAT DISTINCTION IS THE TEST. This was first
+  // written as "if it reassures, then nothing is unaccounted" — which a panel that NEVER
+  // reassures satisfies perfectly. A mutation narrowing `isReassuring` to one of its two
+  // motions passed it, and passed the has-reassuring-cells control beside it too, because the
+  // other motion was still reassuring.
+  //
+  // The right-hand side is written from what the word has to MEAN — nothing is at a device
+  // and nothing is queued — rather than from the production list, so this is not the
+  // production rule reading its expectations back from itself.
+  it('reassures in exactly the states where nothing is moving', () => {
     for (const sent of [0, 5]) {
       for (const fin of [0, 2]) {
         for (const missed of [0, 3]) {
           const counts = cell(sent, fin, missed);
-          if (!isReassuring(cancelMotion(counts))) continue;
-          expect({ counts, unaccounted: unaccounted(counts) }).toEqual({ counts, unaccounted: 0 });
+          const nothingMoving = counts.alreadySent === 0 && unaccounted(counts) === 0;
+          expect({ sent, fin, missed, reassures: isReassuring(cancelMotion(counts)) }).toEqual({
+            sent,
+            fin,
+            missed,
+            reassures: nothingMoving,
+          });
         }
       }
     }
   });
 
-  // The control for the invariant above. A run in which NO cell was reassuring would satisfy
-  // it vacuously — the loop would simply `continue` eight times and assert nothing.
-  it('has reassuring cells at all', () => {
+  // The control: the biconditional above is only meaningful if BOTH sides occur. A vocabulary
+  // in which nothing ever reassured, or everything did, would make it a statement about one
+  // constant.
+  it('has cells on both sides of the invariant', () => {
     const motions = [0, 5].flatMap((sent) =>
       [0, 2].flatMap((fin) => [0, 3].map((missed) => cancelMotion(cell(sent, fin, missed)))),
     );
     expect(motions.filter(isReassuring).length).toBeGreaterThan(0);
-    // ...and non-reassuring ones, so the invariant is not trivially true of everything.
     expect(motions.filter((m) => !isReassuring(m)).length).toBeGreaterThan(0);
   });
 });

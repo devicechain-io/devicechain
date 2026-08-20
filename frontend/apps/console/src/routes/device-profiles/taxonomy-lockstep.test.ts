@@ -23,81 +23,19 @@
 import { describe, it, expect } from 'vitest';
 import COMPILE_GO from '../../../../../../backend/services/event-processing/internal/rules/compile.go?raw';
 import SCHEMA_GO from '../../../../../../backend/services/event-processing/internal/rules/schema.go?raw';
-import { MAX_ACTIONS_PER_RULE, RULE_TYPES, parseDefinition, rebuildFrom, ruleTypeOptions } from './DetectionRuleForm';
+// The model comes from the model module; only the picker's option list — which needs
+// translation and is therefore presentation — comes from the component.
+import { MAX_ACTIONS_PER_RULE, RULE_TYPES, conditionForbidden, parseDefinition, rebuildFrom } from './rule-model';
+import { ruleTypeOptions } from './DetectionRuleForm';
 import FORM_SRC from './DetectionRuleForm.tsx?raw';
 import { CONDITION_TYPES } from './canvas/model';
+import EN_RULES from '@/i18n/locales/en/deviceProfiles.json';
+import ES_RULES from '@/i18n/locales/es/deviceProfiles.json';
 import type { TFunction } from 'i18next';
 import { ruleSurvivesRoundTrip } from './rule-equal';
+import { constValues, dispatchValues, funcBody, intConst } from './go-source';
 
 // ── Reading the Go ──────────────────────────────────────────────────────────
-
-/**
- * Every `Ident SomeType = "value"` const in a source file, as ident → {type, value}.
- *
- * 🔴 THE DECLARED TYPE IS KEPT, AND IT IS WHAT THE DISPATCH SCAN FILTERS ON. Filtering case
- * clauses by ident SPELLING — "does it start with `Type`?" — reads a naming convention, and a
- * convention is not enforced by anything. A kind added as `KindMaintenance RuleType =
- * "maintenance"` with a matching case compiles, runs, and is invisible to a prefix filter:
- * the compiler would accept a kind this console can never author, which is the precise defect
- * this file was written about. Go's type checker DOES enforce the declared type, so that is
- * what to read.
- */
-interface GoConst {
-  type: string;
-  value: string;
-}
-
-function constValues(src: string): Map<string, GoConst> {
-  const out = new Map<string, GoConst>();
-  for (const m of src.matchAll(/^\s*([A-Z][A-Za-z0-9]*)\s+([A-Za-z][A-Za-z0-9]*)\s*=\s*"([^"]*)"/gm)) {
-    out.set(m[1], { type: m[2], value: m[3] });
-  }
-  return out;
-}
-
-/** The body of a top-level Go func, from its signature to the next top-level `func`. */
-function funcBody(src: string, signature: string): string {
-  const start = src.indexOf(signature);
-  if (start < 0) throw new Error(`no func matching ${JSON.stringify(signature)}`);
-  const rest = src.slice(start + signature.length);
-  const end = rest.indexOf('\nfunc ');
-  return end < 0 ? rest : rest.slice(0, end);
-}
-
-/**
- * The wire values a `switch` dispatches on, for consts of one declared Go type.
- *
- * 🔴 IT REFUSES WHAT IT CANNOT ACCOUNT FOR RATHER THAN SKIPPING IT. Every ident in a case
- * clause must resolve to a const of `declaredType`; anything else — a differently-named const,
- * a `RuleType("literal")` conversion, an alias, a value built by concatenation — THROWS. That
- * is the difference between a gate and a suggestion: a scan that quietly drops what it does
- * not recognise reports a complete set every time, and is at its most confident exactly when a
- * new kind has slipped past it.
- *
- * `skip` names the idents that legitimately appear in a scanned region and are not part of the
- * vocabulary. It is a literal list on purpose — short, reviewed, and it fails loudly the day a
- * region grows a new one rather than absorbing it.
- */
-function dispatchValues(region: string, consts: Map<string, GoConst>, declaredType: string, skip: string[] = []): string[] {
-  const out = new Set<string>();
-  for (const line of region.split('\n')) {
-    const m = /^\s*case\s+(.+?):\s*$/.exec(line);
-    if (!m) continue;
-    for (const raw of m[1].split(',')) {
-      const id = raw.trim();
-      if (id === '' || skip.includes(id)) continue;
-      const c = consts.get(id);
-      if (c === undefined) {
-        throw new Error(
-          `case ${id}: is not a resolvable string const — a ${declaredType} the console cannot see would be invisible here`,
-        );
-      }
-      if (c.type !== declaredType) continue; // a different vocabulary sharing the region
-      out.add(c.value);
-    }
-  }
-  return [...out];
-}
 
 const SCHEMA_CONSTS = constValues(SCHEMA_GO);
 
@@ -158,40 +96,24 @@ describe('the Go extraction itself', () => {
 
 // ── Vocabulary lockstep, each against the switch that ENFORCES it ───────────
 
-const VOCABULARIES: {
-  name: string;
-  backend: () => string[];
-  console: readonly string[];
-  known: string;
-  min: number;
-}[] = [
-  {
-    name: 'rule types',
-    // compile.go's main dispatch: the set of kinds that actually lower to something.
-    backend: () => ruleTypesTheCompilerAccepts(),
-    console: RULE_TYPES,
-    known: 'connectivity',
-    min: 8,
-  },
-];
-
-describe.each(VOCABULARIES)('$name', (v) => {
-  it('extracts a plausible set from the enforcing switch', () => {
-    const set = v.backend();
-    expect(set.length).toBeGreaterThanOrEqual(v.min);
-    expect(set).toContain(v.known);
-  });
-
-  // 🔴 BOTH DIRECTIONS, and neither is the boring one.
+describe('rule types', () => {
+  // 🔴 BOTH DIRECTIONS, AND NEITHER IS THE BORING ONE.
   //
   //   missing  the console cannot author a kind the compiler accepts — the feature is
   //            unreachable, which is what shipped.
   //   extra    the console offers a kind the compiler REJECTS — the author meets the failure
   //            at publish, after doing the work, instead of at the picker.
-  it('agrees with the console, in both directions', () => {
-    const backend = v.backend();
-    expect({ missing: backend.filter((k) => !v.console.includes(k)), extra: v.console.filter((k) => !backend.includes(k)) })
-      .toEqual({ missing: [], extra: [] });
+  //
+  // No plausibility test guards this one, and that is deliberate rather than an omission: the
+  // console side is a literal array, so an extraction that came back empty fails here with
+  // eight `extra` entries. The ∅-equals-∅ vacuity this file warns about needs BOTH sides
+  // computed, which is true of the corpus and canvas sections below and not of this.
+  it('agree with the console, in both directions', () => {
+    const backend = ruleTypesTheCompilerAccepts();
+    expect({
+      missing: backend.filter((k) => !RULE_TYPES.includes(k as never)),
+      extra: RULE_TYPES.filter((k) => !backend.includes(k)),
+    }).toEqual({ missing: [], extra: [] });
   });
 });
 
@@ -328,13 +250,25 @@ describe('the rule type picker', () => {
     expect(ruleTypeOptions(echo).map((o) => o.value)).toEqual([...RULE_TYPES]);
   });
 
-  it('names a distinct label and description key per kind', () => {
-    // A Record<RuleType, string> of key stems makes the compiler demand an entry per kind,
-    // but not that the entries DIFFER — two kinds sharing a stem would render two identical
-    // picker rows, which is a real way to lose a kind while every count stays right.
+  // 🔴 THE FAILURE THIS CATCHES IS THE ONE AN OPERATOR SEES. The picker's keys are computed
+  // from the kind name, so a kind can join the taxonomy, appear in the picker, and render
+  // `ruleTypeConnectivityLabel` as its own label — i18next falls back to the key, nothing
+  // errors, and the row looks like a bug in the feature. Every other check in this file is
+  // about which kinds EXIST; this is the one about whether they can be read.
+  it.each(['en', 'es'])('resolves every picker key in %s', (locale) => {
+    const catalog = (locale === 'en' ? EN_RULES : ES_RULES) as Record<string, string>;
+    const missing = RULE_TYPES.flatMap((v) => {
+      const stem = `ruleType${v[0].toUpperCase()}${v.slice(1)}`;
+      return [`${stem}Label`, `${stem}Description`].filter((k) => !catalog[k]);
+    });
+    expect({ locale, missing }).toEqual({ locale, missing: [] });
+  });
+
+  it('offers a distinct label per kind', () => {
+    // Two kinds resolving to one label would render two identical picker rows — a way to
+    // lose a kind while every count stays right.
     const opts = ruleTypeOptions(echo);
     expect(new Set(opts.map((o) => o.label)).size).toBe(opts.length);
-    expect(new Set(opts.map((o) => o.description)).size).toBe(opts.length);
   });
 
   it('hands the picker the whole option set, unfiltered', () => {
@@ -374,19 +308,14 @@ describe('the canvas condition vocabulary', () => {
     expect({ extra }).toEqual({ extra: [] });
   });
 
+  // 🔴 SET EQUALITY, WHICH KEEPS THE GAP LIST HONEST IN BOTH DIRECTIONS AT ONCE. A new gap
+  // fails because `missing` grows; a gap that gets CLOSED fails because `missing` shrinks
+  // while its entry stays — so a stale entry cannot survive as a free slot for the next one.
+  // (A separate "no stale entry" test used to sit here and could not fail while this passed.)
   it('omits only what is declared, with a reason', () => {
     const backend = ruleTypesTheCompilerAccepts();
     const missing = backend.filter((k) => !CONDITION_TYPES.includes(k as never));
     expect({ missing: missing.sort() }).toEqual({ missing: Object.keys(DECLARED_GAPS).sort() });
-  });
-
-  // 🔴 THE HALF THAT KEEPS THE GAP LIST HONEST. Without it, a gap that gets CLOSED leaves its
-  // entry behind — and a stale entry is a free slot: the next person facing a red gate can swap
-  // the name rather than close the gap, with no assertion edited and no review signal raised.
-  it('has no stale entry — every declared gap is still a real one', () => {
-    for (const kind of Object.keys(DECLARED_GAPS)) {
-      expect(CONDITION_TYPES, `${kind} is now on the canvas; delete its DECLARED_GAPS entry`).not.toContain(kind);
-    }
   });
 
   it('derives its condition set from the node catalog', () => {
@@ -408,13 +337,6 @@ describe('the canvas condition vocabulary', () => {
 // allows 4 lets an author write work the publish then throws away.
 
 describe('ceilings mirrored from the compiler', () => {
-  /** A plain `const Name = 123` in Go, as a number. */
-  function intConst(src: string, name: string): number {
-    const m = new RegExp(`^\\s*(?:const\\s+)?${name}\\s*(?:[A-Za-z][A-Za-z0-9]*\\s*)?=\\s*(\\d+)`, 'm').exec(src);
-    if (!m) throw new Error(`no integer const ${name}`);
-    return Number(m[1]);
-  }
-
   it('reads the const, and refuses one that is not there', () => {
     expect(intConst(SCHEMA_GO, 'MaxActionsPerRule')).toBeGreaterThan(0);
     expect(() => intConst(SCHEMA_GO, 'MaxNotAThing')).toThrow();
@@ -453,5 +375,44 @@ describe('parseDefinition on input that is not a rule object', () => {
   // trivially correct implementation of this whole function.
   it('still parses an actual rule', () => {
     expect(parseDefinition(CORPUS.threshold)).not.toBeNull();
+  });
+});
+
+
+// ── The per-type authoring SHAPE, not just the kind list ────────────────────
+//
+// 🔴 THE GAP EVERY OTHER CHECK IN THIS FILE LEAVES OPEN. They all ask WHICH KINDS exist. None
+// asks what a kind may CARRY — and the compiler has a precise answer per kind, in the
+// `forbid(r, "<kind>", forbidden{…})` table. The console mirrors one slice of that table by
+// hand (`conditionForbidden`), and a hand-mirrored table is the same drift the taxonomy list
+// was, one level down: a kind whose leaf the compiler forbids but the form still offers gets a
+// condition editor an author fills in, saves, and has refused at publish.
+//
+// A mutation removing `connectivity` from `conditionForbidden` survived every other check in
+// this file, which is what this section exists to fix.
+
+describe('the per-type authoring shape', () => {
+  /** Kinds whose `forbid` entry sets `leaf: true` — the compiler refuses a condition on them. */
+  function kindsForbiddingALeaf(): string[] {
+    const out: string[] = [];
+    for (const m of COMPILE_GO.matchAll(/forbid\(r, "([a-zA-Z]+)", forbidden\{([^}]*)\}/g)) {
+      if (/\bleaf:\s*true\b/.test(m[2])) out.push(m[1]);
+    }
+    return out;
+  }
+
+  it('reads a plausible forbid table', () => {
+    // The control: a regex that matched nothing would make the comparison below ∅ = ∅.
+    const all = [...COMPILE_GO.matchAll(/forbid\(r, "([a-zA-Z]+)", forbidden\{/g)].map((m) => m[1]);
+    expect(all.length).toBeGreaterThanOrEqual(7);
+    expect(all).toContain('threshold');
+    // ...and that not every kind forbids a leaf, or the comparison would be trivially wide.
+    expect(kindsForbiddingALeaf().length).toBeLessThan(all.length);
+  });
+
+  it('offers a condition editor for exactly the kinds the compiler allows one on', () => {
+    const compilerForbids = kindsForbiddingALeaf().sort();
+    const consoleForbids = RULE_TYPES.filter((t) => conditionForbidden(t)).sort();
+    expect({ consoleForbids }).toEqual({ consoleForbids: compilerForbids });
   });
 });

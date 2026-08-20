@@ -46,23 +46,22 @@ export interface RefusalGroup {
   sample: RefusalSampleEntry[];
 }
 
-/** Whether this group's sample is short of the exact total, i.e. names only some of them. */
-export function isSampleTruncated(group: RefusalGroup): boolean {
-  return group.count !== null && group.count > group.sample.length;
-}
-
 /**
  * How much of this code's refused-device set the names below actually cover.
  *
- * 🔴 THREE ANSWERS, BECAUSE THE QUESTION HAS THREE. `isSampleTruncated` above is a boolean,
- * and a boolean over a nullable count has to fold "unknown" into one of its two sides — it
- * folds it into `false`, which the panel then rendered as "Showing all N refused devices"
- * for a group whose own badge, one line higher, correctly said the total was not reported.
- * Claiming completeness is exactly what a null count cannot support: the sample may name
- * every refused device or a small fraction of them, and nobody said which.
+ * 🔴 THREE ANSWERS, BECAUSE THE QUESTION HAS THREE. This replaced a boolean
+ * `isSampleTruncated`, and a boolean over a nullable count has to fold "unknown" into one of
+ * its two sides. It folded it into `false`, which the panel rendered as "Showing all N refused
+ * devices" — for a group whose own badge, one line higher, correctly said the total was not
+ * reported. Claiming completeness is exactly what a null count cannot support: the sample may
+ * name every refused device or a small fraction of them, and nobody said which.
  *
- * The boolean is kept — it answers the narrower question "is it short of a KNOWN total?" and
- * that question is still asked — but the panel branches on this instead.
+ * 🔴 THE BOOLEAN WAS DELETED RATHER THAN KEPT ALONGSIDE. It was briefly retained on the
+ * argument that it still answered the narrower question "is this short of a KNOWN total?" —
+ * which was simply untrue the moment the panel stopped calling it: it had no caller left
+ * outside its own tests, one of which pinned the very fold that was the defect. Two encodings
+ * of one rule, and the surviving justification for the second was a sentence nobody rechecked.
+ * `sampleCoverage(g) === 'truncated'` says it in one place.
  */
 export type SampleCoverage =
   /** The sample names every refused device, and the exact count says so. */
