@@ -204,7 +204,15 @@ need_all() {
   # Every tool, checked BEFORE anything is provisioned. A missing binary
   # discovered twenty minutes into a bring-up is the posture this script rejects
   # everywhere else.
-  for t in kind kubectl docker helm ko git curl go; do need "$t"; done
+  for t in kind kubectl docker helm git curl go; do need "$t"; done
+  # 🔴 ko IS A BUILD-PATH TOOL, and demanding it unconditionally is not merely
+  # strict — it is WRONG. The pull path builds no image at all: the baseline
+  # installs published images and the upgrade moves to another published tag.
+  # A gate that skips installing ko because it does not need it, and is then
+  # refused by this list for not having it, fails on the one path a release
+  # actually runs. (Measured, not imagined — that is exactly how the first
+  # pull-path run died, three seconds in.)
+  [[ "$upgrade_images" != build ]] || need ko
   command -v tofu >/dev/null 2>&1 || command -v terraform >/dev/null 2>&1 ||
     fail "one of tofu or terraform is required but neither is on PATH"
 }
