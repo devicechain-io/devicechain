@@ -43,13 +43,6 @@
 name: upgrade-gate
 
 on:
-  # ⛔ TEMPORARY — REMOVE BEFORE MERGE. A workflow_dispatch cannot be triggered for
-  # a workflow that is not yet on the default branch, and landing a blocking gate
-  # that has never run once is the exact posture this whole arc exists to argue
-  # against. This is how it gets exercised first.
-  push:
-    branches: [v012-slice5-upgrade-gate]
-
   # Manual runs default to --build: the skew-free test of the checked-out tree,
   # which is what a developer wants and what a release must NOT settle for.
   workflow_dispatch:
