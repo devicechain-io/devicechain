@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { groupRefusals, isSampleTruncated, totalRefused } from './refusals';
+import { groupRefusals, sampleCoverage, totalRefused } from './refusals';
 
 const entry = (deviceToken: string, code: string) => ({
   deviceToken,
@@ -26,7 +26,7 @@ describe('groupRefusals', () => {
     // The authority is the count — never sample.length, which is what a naive panel shows.
     expect(groups[0].count).toBe(4312);
     expect(groups[0].sample).toHaveLength(100);
-    expect(isSampleTruncated(groups[0])).toBe(true);
+    expect(sampleCoverage(groups[0])).toBe('truncated');
   });
 
   // The counterweight: a small batch's sample IS the whole set, and calling it truncated
@@ -39,7 +39,7 @@ describe('groupRefusals', () => {
     );
 
     expect(groups[0].count).toBe(2);
-    expect(isSampleTruncated(groups[0])).toBe(false);
+    expect(sampleCoverage(groups[0])).toBe('complete');
   });
 
   it('groups each code separately and attaches only its own devices', () => {
@@ -67,7 +67,7 @@ describe('groupRefusals', () => {
     expect(groups[0].sample).toEqual([]);
     // No total is being withheld — the panel must not claim "showing 0 of 900 names"
     // as though a sample had been cut; it simply has none.
-    expect(isSampleTruncated(groups[0])).toBe(true);
+    expect(sampleCoverage(groups[0])).toBe('truncated');
   });
 
   // The inconsistent-server case. Inventing an exact total from a capped sample is the
@@ -80,7 +80,10 @@ describe('groupRefusals', () => {
     expect(mystery).toBeDefined();
     expect(mystery!.count).toBeNull();
     expect(mystery!.sample).toHaveLength(1);
-    expect(isSampleTruncated(mystery!)).toBe(false);
+    // 🔴 THIS ASSERTION USED TO READ `isSampleTruncated(mystery) === false`, which is the
+    // defect written down as an expectation: a group with no total is not "not truncated",
+    // it is UNKNOWN, and the panel turned that false into "Showing all N refused devices".
+    expect(sampleCoverage(mystery!)).toBe('unknown');
     // …and it sorts last: an anomaly is not a headline.
     expect(groups[groups.length - 1].code).toBe('MYSTERY');
   });

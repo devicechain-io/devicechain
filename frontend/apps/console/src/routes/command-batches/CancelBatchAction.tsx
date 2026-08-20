@@ -52,7 +52,7 @@ import {
   type CommandBatch,
 } from '@/lib/api/command-delivery';
 import { Fact } from './Fact';
-import { STILL_HELD_STATUSES, needsSecondCancel, offerCancel, unaccounted } from './cancelOutcome';
+import { STILL_HELD_STATUSES, cancelMotion, needsSecondCancel, offerCancel, unaccounted } from './cancelOutcome';
 
 // The count of the batch's commands the platform is STILL HOLDING — the three states a
 // cancel can actually stop — as a three-valued answer whose null means "not known", plus
@@ -305,6 +305,7 @@ function CancelOutcomePanel({
 }) {
   const { t } = useTranslation('commandBatches');
   const missed = unaccounted(outcome);
+  const motion = cancelMotion(outcome);
   return (
     <SectionPanel title={t('cancelOutcomeTitle')}>
       <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -323,14 +324,23 @@ function CancelOutcomePanel({
           : t('cancelStopped', { count: outcome.cancelled })}
       </p>
 
-      {/* 🔴 THE SENTENCE THIS SLICE EXISTS FOR. It is `text-destructive` rather than muted
-          because it is the one part of the report that says the fleet was NOT stopped. */}
-      {outcome.alreadySent > 0 ? (
+      {/* 🔴 THE SENTENCE THIS SLICE EXISTS FOR. `stillActing` is `text-destructive` rather
+          than muted because it is the one part of the report that says the fleet was NOT
+          stopped — and `stillQueued` renders NOTHING here on purpose: the block below already
+          states what is back in the queue, and the only sentence this line could add would be
+          a reassurance that contradicts it. Silence is the honest option. */}
+      {motion === 'stillActing' && (
         <p className="mt-1 text-sm text-destructive">
           {t('cancelStillActing', { count: outcome.alreadySent })}
         </p>
-      ) : (
+      )}
+      {motion === 'settledNothingReached' && (
         <p className="mt-1 text-sm text-muted-foreground">{t('cancelNoneInFlight')}</p>
+      )}
+      {motion === 'settledSomeFinished' && (
+        <p className="mt-1 text-sm text-muted-foreground">
+          {t('cancelNoneInFlightSomeFinished', { count: outcome.alreadyFinished })}
+        </p>
       )}
 
       {needsSecondCancel(outcome) ? (

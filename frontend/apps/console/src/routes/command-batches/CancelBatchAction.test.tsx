@@ -480,7 +480,7 @@ describe('the outcome report', () => {
     // 🔴 And the fleet is explicitly still acting.
     expect(
       screen.getByText(
-        '300 commands had already been handed to their devices and could not be recalled. Those devices will still act on them.',
+        '300 commands had already been sent toward their devices, and this cancel cannot stop them. If they arrived, those devices will act on them.',
       ),
     ).toBeTruthy();
     // 🔴 THE DEFECT STATED DIRECTLY: the two must never be added into one "stopped" total.
@@ -491,19 +491,66 @@ describe('the outcome report', () => {
 
   // The counterweight. A panel that ALWAYS warned about in-flight commands would pass the
   // test above and cry wolf on every clean cancel.
-  it('says nothing is still on its way when no command had reached a device', async () => {
-    world.cancelResult = { cancelled: 8, alreadySent: 0, alreadyFinished: 2, matched: 10 };
+  //
+  // 🔴 THIS TEST USED TO PIN A FALSE SENTENCE, and it is worth saying how rather than just
+  // fixing it. It asserted "No command had reached a device" against a fixture carrying
+  // `alreadyFinished: 2` — two commands that had reached devices and finished. The test was
+  // careful, commented, and named for the right idea; it simply checked that a string
+  // RENDERED rather than that the string was TRUE of the counts that produced it. That is
+  // the whole reason this file now enumerates the state space below instead of picking an
+  // example per sentence.
+  it('says nothing is still on its way when nothing is', async () => {
+    world.cancelResult = { cancelled: 8, alreadySent: 0, alreadyFinished: 0, matched: 8 };
+
+    renderPage();
+    await cancelAndConfirm();
+
+    expect(await screen.findByText('Nothing from this batch is still on its way to hardware.')).toBeTruthy();
+    expect(screen.queryByText(/will still act on/)).toBeNull();
+    expect(screen.getByText('Every command this batch still has is accounted for.')).toBeTruthy();
+  });
+
+  // 🔴 THE DEFECT THAT SHIPPED. A batch whose commands all landed and finished reports
+  // `alreadySent: 0` — SENT is where a command sits while travelling, and a delivered one has
+  // moved on to SUCCESSFUL. The panel branched on that single number, so the ordinary shape
+  // of a SUCCESSFUL fleet write rendered "No command had reached a device".
+  it('does not claim nothing reached a device when commands had already finished', async () => {
+    world.cancelResult = { cancelled: 0, alreadySent: 0, alreadyFinished: 300, matched: 300 };
 
     renderPage();
     await cancelAndConfirm();
 
     expect(
       await screen.findByText(
-        'No command had reached a device, so nothing from this batch is still on its way to hardware.',
+        'Nothing from this batch is still on its way to hardware. 300 of its commands had already finished before this cancel ran.',
       ),
     ).toBeTruthy();
-    expect(screen.queryByText(/will still act on/)).toBeNull();
-    expect(screen.getByText('Every command this batch still has is accounted for.')).toBeTruthy();
+    // 🔴 ASSERTS THE OTHER VARIANT IS ABSENT, NOT A RETIRED STRING. Checking that the old
+    // "No command had reached a device" wording is gone would pass for the rest of time
+    // whatever the panel did, because that sentence no longer exists in any locale — a
+    // control that cannot fail. The live risk is rendering the wrong ONE of the two
+    // surviving reassurances, so that is what is checked.
+    expect(screen.queryByText('Nothing from this batch is still on its way to hardware.')).toBeNull();
+  });
+
+  // 🔴 AND THE SECOND HALF OF THE SAME SENTENCE WAS ALSO FALSE. `unaccounted > 0` means
+  // commands went back into the delivery queue and the next tick delivers them — so a
+  // reassurance that nothing is on its way rendered DIRECTLY ABOVE the block saying N
+  // commands are. Two sentences, one screen, flatly contradicting each other.
+  it('says nothing reassuring while commands are back in the delivery queue', async () => {
+    world.cancelResult = { cancelled: 5, alreadySent: 0, alreadyFinished: 0, matched: 10 };
+
+    renderPage();
+    await cancelAndConfirm();
+
+    // The block that tells the truth still renders...
+    expect(
+      await screen.findByText(
+        /5 of this batch’s commands went back into the delivery queue while this ran/,
+      ),
+    ).toBeTruthy();
+    // ...and nothing beside it says the opposite.
+    expect(screen.queryByText(/is still on its way to hardware/)).toBeNull();
   });
 
   // 🔴 The gap between `matched` and the sum is the only evidence that commands went back

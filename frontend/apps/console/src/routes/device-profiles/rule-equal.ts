@@ -35,3 +35,82 @@ export function sameLogicalRule(a: string, b: string): boolean {
     return false;
   }
 }
+
+// elided reports whether a value is one Go's `omitempty` would leave out of the wire form —
+// so a key carrying it and a key that is absent decode to the SAME rules.Rule.
+//
+// 🔴 ZERO IS NOT IN THIS SET, AND THAT IS THE ONE DELIBERATE ASYMMETRY. `Threshold` is a
+// *float64: omitempty on a pointer elides only nil, so `"threshold": 0` genuinely differs
+// from an absent threshold and survives a Go round-trip. Treating 0 as elidable would make a
+// rebuild that DROPPED a zero threshold compare equal to the stored rule — a missed loss,
+// which is the failure this whole check exists to prevent. `"count": 0` therefore still
+// reports as a difference, and that is the trade taken knowingly: a warning nobody needed
+// costs an operator one sentence, a silent rewrite costs them the rule.
+function elided(v: unknown): boolean {
+  if (v === null) return true;
+  if (v === false) return true;
+  if (v === '') return true;
+  if (Array.isArray(v)) return v.length === 0;
+  // `prune` has already removed this object's own elided children, so an empty key set IS
+  // emptiness — no need to serialize the subtree to find that out.
+  return typeof v === 'object' && Object.keys(v).length === 0;
+}
+
+// prune removes the keys that carry nothing, recursively, so the containment check below
+// compares two definitions the way the SERVER would read them rather than the way they happen
+// to be spelled.
+//
+// It matters because the two sides are spelled by different writers. `buildDefinition` omits a
+// field it has nothing to say about; a client whose serializer emits empty collections and
+// strings — the default for .NET and many Python setups — writes `"description": ""` and
+// `"actions": []` instead. Go's decoder cannot tell those apart, so neither may this: without
+// the normalization the form would warn that it was about to lose a description that was never
+// there.
+function prune(v: unknown): unknown {
+  if (v === null || typeof v !== 'object') return v;
+  if (Array.isArray(v)) return v.map(prune);
+  const out: Record<string, unknown> = {};
+  for (const [k, raw] of Object.entries(v as Record<string, unknown>)) {
+    const pv = prune(raw);
+    if (elided(pv)) continue;
+    out[k] = pv;
+  }
+  return out;
+}
+
+// contains reports whether `whole` carries everything in `part`, at equal values.
+function contains(whole: unknown, part: unknown): boolean {
+  if (part === null || typeof part !== 'object') return stableStringify(whole) === stableStringify(part);
+  if (Array.isArray(part)) {
+    // Arrays are compared WHOLE, not element-wise-contained. A rule's `actions` array is
+    // ordered and its length is meaningful — an action the form dropped must register as a
+    // loss, and a per-element containment check would let a shortened array pass.
+    return stableStringify(whole) === stableStringify(part);
+  }
+  if (whole === null || typeof whole !== 'object' || Array.isArray(whole)) return false;
+  const w = whole as Record<string, unknown>;
+  for (const [k, pv] of Object.entries(part as Record<string, unknown>)) {
+    if (!(k in w)) return false;
+    if (!contains(w[k], pv)) return false;
+  }
+  return true;
+}
+
+// ruleSurvivesRoundTrip reports whether `rebuilt` — what this form would emit for a rule it
+// has just read — still carries everything `stored` said. It is the OPEN-time counterpart of
+// sameLogicalRule, and it is deliberately ONE-DIRECTIONAL where that one is symmetric.
+//
+// 🔴 THE DIRECTION IS THE WHOLE DESIGN. Data loss is "the stored rule said something the
+// rebuild does not"; the reverse — the form emitting a key the stored rule omitted, such as
+// the `name: ""` that buildDefinition always writes — loses nothing and must not be reported.
+// A symmetric comparison here would warn on ordinary API-authored rules that simply left an
+// optional field out, and a warning that fires on healthy rules is one nobody reads.
+//
+// A parse failure on either side yields false: unreadable is the worst kind of lossy.
+export function ruleSurvivesRoundTrip(stored: string, rebuilt: string): boolean {
+  try {
+    return contains(prune(JSON.parse(rebuilt)), prune(JSON.parse(stored)));
+  } catch {
+    return false;
+  }
+}

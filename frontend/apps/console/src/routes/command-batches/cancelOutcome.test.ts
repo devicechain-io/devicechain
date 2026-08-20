@@ -10,7 +10,8 @@ import { describe, expect, it } from 'vitest';
 import {
   STILL_HELD_STATUSES,
   accountedFor,
-  hasUnstoppable,
+  cancelMotion,
+  isReassuring,
   needsSecondCancel,
   offerCancel,
   unaccounted,
@@ -63,8 +64,8 @@ describe('commands that cannot be recalled', () => {
   // `alreadySent` is the count of commands that are AT their devices. It is never part of
   // "stopped", and a screen that has any of them has to say the fleet is still acting.
   it('is flagged whenever any command had already reached a device', () => {
-    expect(hasUnstoppable(counts({ cancelled: 999, alreadySent: 1, matched: 1000 }))).toBe(true);
-    expect(hasUnstoppable(counts({ cancelled: 1000, alreadySent: 0, matched: 1000 }))).toBe(false);
+    expect(cancelMotion(counts({ cancelled: 999, alreadySent: 1, matched: 1000 }))).toBe('stillActing');
+    expect(cancelMotion(counts({ cancelled: 1000, alreadySent: 0, matched: 1000 }))).not.toBe('stillActing');
   });
 
   it('is not folded into what the cancel accounted for as though it were stopped', () => {
@@ -130,5 +131,83 @@ describe('the states a cancel can actually stop', () => {
   // "still held" would tell an operator a cancel can take back something it cannot.
   it('excludes SENT', () => {
     expect(STILL_HELD_STATUSES).not.toContain('SENT');
+  });
+});
+
+
+// ── What the panel may SAY about what is still moving ───────────────────────
+//
+// 🔴 ENUMERATED, NOT EXEMPLIFIED, and the difference is the whole point of this block. The
+// panel used to branch on ONE of the three axes (`alreadySent`), and the two sentences that
+// produced were each pinned by a careful example-based test. Examples confirm that a string
+// renders; they cannot notice that the string is false for a state nobody thought to write
+// down. Every cell below is reachable from a real cancel.
+
+describe('cancelMotion over the whole state space', () => {
+  // (alreadySent, alreadyFinished, unaccounted) × {0, +}. `matched` is chosen to put
+  // `unaccounted` where the row wants it, since unaccounted = matched − the other three.
+  const cell = (alreadySent: number, alreadyFinished: number, missed: number) => ({
+    cancelled: 1,
+    alreadySent,
+    alreadyFinished,
+    matched: 1 + alreadySent + alreadyFinished + missed,
+  });
+
+  it.each([
+    // sent  finished  missed  expected
+    [0, 0, 0, 'settledNothingReached'],
+    [0, 2, 0, 'settledSomeFinished'],
+    [0, 0, 3, 'stillQueued'],
+    [0, 2, 3, 'stillQueued'],
+    [5, 0, 0, 'stillActing'],
+    [5, 2, 0, 'stillActing'],
+    [5, 0, 3, 'stillActing'],
+    [5, 2, 3, 'stillActing'],
+  ] as const)('sent=%i finished=%i missed=%i ⇒ %s', (sent, fin, missed, want) => {
+    expect(cancelMotion(cell(sent, fin, missed))).toBe(want);
+  });
+
+  // 🔴 THE CROSS-FAMILY INVARIANT, AND THE ONE THAT WOULD HAVE CAUGHT THE SHIPPED DEFECT.
+  //
+  // Every per-sentence test above asks "is the right one of four shown?". None of them can
+  // ask "do the sentences on this screen contradict each other?" — and that is what went
+  // wrong: a reassurance rendered directly above the block saying N commands were back in
+  // the delivery queue. So the rule is stated once, over the vocabulary rather than over a
+  // hand-listed pair of strings, and it holds for a fifth motion nobody has written yet.
+  // 🔴 A BICONDITIONAL, NOT AN IMPLICATION, AND THAT DISTINCTION IS THE TEST. This was first
+  // written as "if it reassures, then nothing is unaccounted" — which a panel that NEVER
+  // reassures satisfies perfectly. A mutation narrowing `isReassuring` to one of its two
+  // motions passed it, and passed the has-reassuring-cells control beside it too, because the
+  // other motion was still reassuring.
+  //
+  // The right-hand side is written from what the word has to MEAN — nothing is at a device
+  // and nothing is queued — rather than from the production list, so this is not the
+  // production rule reading its expectations back from itself.
+  it('reassures in exactly the states where nothing is moving', () => {
+    for (const sent of [0, 5]) {
+      for (const fin of [0, 2]) {
+        for (const missed of [0, 3]) {
+          const counts = cell(sent, fin, missed);
+          const nothingMoving = counts.alreadySent === 0 && unaccounted(counts) === 0;
+          expect({ sent, fin, missed, reassures: isReassuring(cancelMotion(counts)) }).toEqual({
+            sent,
+            fin,
+            missed,
+            reassures: nothingMoving,
+          });
+        }
+      }
+    }
+  });
+
+  // The control: the biconditional above is only meaningful if BOTH sides occur. A vocabulary
+  // in which nothing ever reassured, or everything did, would make it a statement about one
+  // constant.
+  it('has cells on both sides of the invariant', () => {
+    const motions = [0, 5].flatMap((sent) =>
+      [0, 2].flatMap((fin) => [0, 3].map((missed) => cancelMotion(cell(sent, fin, missed)))),
+    );
+    expect(motions.filter(isReassuring).length).toBeGreaterThan(0);
+    expect(motions.filter((m) => !isReassuring(m)).length).toBeGreaterThan(0);
   });
 });

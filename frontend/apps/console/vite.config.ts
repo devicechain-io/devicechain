@@ -56,9 +56,26 @@ export default defineConfig(({ mode }) => {
         // importing @devicechain/{client,dashboards,widgets} then 403s in
         // `npm run dev`. Measured: with allow: ['..', <helm>], a request for
         // /@fs/.../packages/client/src/index.ts returned 403 while the chart
-        // returned 200. Nothing catches this — fs.allow governs only the dev
-        // server, so build, typecheck, lint and vitest all stay green.
-        allow: [searchForWorkspaceRoot(process.cwd()), path.resolve(__dirname, '../../../deploy/helm')],
+        // returned 200.
+        //
+        // 🔴 AND IT GOVERNS VITEST TOO, not only the dev server — this comment
+        // used to say otherwise and was measured to be wrong. A test importing a
+        // path outside the allow list fails with `Error: Denied ID …`, which is
+        // how the two backend entries below came to be needed at all.
+        //
+        // Each entry is the NARROWEST directory that is actually imported, for
+        // the same reason the chart entry names deploy/helm rather than deploy:
+        // the dev server serves anything reachable under an allowed root via
+        // /@fs/, so a whole-tree grant would also serve every untracked local
+        // file a developer happens to leave there.
+        allow: [
+          searchForWorkspaceRoot(process.cwd()),
+          path.resolve(__dirname, '../../../deploy/helm'),
+          // The rule taxonomy + compiler dispatch (taxonomy-lockstep.test.ts).
+          path.resolve(__dirname, '../../../backend/services/event-processing/internal/rules'),
+          // The CEL predicate environment (cel-vocabulary.test.ts).
+          path.resolve(__dirname, '../../../backend/services/event-processing/internal/detect/predicate'),
+        ],
       },
       proxy: {
         '/api': {

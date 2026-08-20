@@ -126,9 +126,65 @@ export function needsSecondCancel(counts: BatchCancelCounts): boolean {
   return unaccounted(counts) > 0;
 }
 
-// Whether any of the batch's commands had already reached their devices. Those devices
-// WILL still act: a command in flight cannot be recalled, and this is the fact a cancel
-// screen exists to state plainly rather than bury.
-export function hasUnstoppable(counts: BatchCancelCounts): boolean {
-  return counts.alreadySent > 0;
+/**
+ * Which of the four things the panel may say about what is STILL MOVING after a cancel.
+ *
+ * This replaced a `hasUnstoppable` boolean (`alreadySent > 0`). That predicate is now exactly
+ * `cancelMotion(counts) === 'stillActing'`, and it was deleted rather than left beside this:
+ * once the panel stopped calling it, the only thing keeping two encodings of one rule alive
+ * was its own tests.
+ *
+ * 🔴 THIS IS A FOUR-VALUED READING OF A THREE-AXIS STATE, and it used to be a two-valued
+ * reading of one axis (`alreadySent > 0`). Both of the sentences that produced were wrong in
+ * ways the counts could have revealed:
+ *
+ *   • "No command had reached a device" — FALSE whenever `alreadyFinished > 0`, which is the
+ *     ordinary shape of a fleet write that SUCCEEDED. Cancelling a delivered batch told the
+ *     operator it had never reached anything.
+ *
+ *   • "...so nothing from this batch is still on its way to hardware" — FALSE whenever
+ *     `unaccounted > 0`. Those commands went back into the delivery queue and the next tick
+ *     delivers them. The panel rendered that reassurance DIRECTLY ABOVE `cancelAgainNeeded`,
+ *     which says N commands are back in the queue: two sentences on one screen, one saying
+ *     nothing is coming and the other saying N things are.
+ *
+ * 🔴 AND THE OBVIOUS FIX IS ALSO WRONG, which is why this returns a discriminant rather than
+ * a boolean pair. "Commands reached devices and finished" cannot be said either: the terminal
+ * set includes EXPIRED, FAILED and CANCELLED, which are terminal WITHOUT EVER BEING
+ * DISPATCHED. An all-expired batch and a fully-delivered one produce identical counts here.
+ * So no branch claims reach — the counts cannot support that claim, and the honest sentence
+ * is about what is still moving, which they can.
+ *
+ * The invariant that falls out, and which the panel's tests assert directly: a REASSURING
+ * value may be returned only when `unaccounted === 0`.
+ */
+export type CancelMotion =
+  /** Commands are at devices right now and cannot be recalled. The loudest state. */
+  | 'stillActing'
+  /** Nothing is at a device and nothing is queued — and nothing ever got that far. */
+  | 'settledNothingReached'
+  /** Nothing is at a device and nothing is queued, but some commands had already finished. */
+  | 'settledSomeFinished'
+  /**
+   * Commands went back into the delivery queue and this cancel did not stop them. NOTHING
+   * reassuring is said here; `needsSecondCancel` already renders the action, and adding a
+   * calming sentence beside it is exactly the contradiction this type exists to prevent.
+   */
+  | 'stillQueued';
+
+export function cancelMotion(counts: BatchCancelCounts): CancelMotion {
+  if (counts.alreadySent > 0) return 'stillActing';
+  if (unaccounted(counts) > 0) return 'stillQueued';
+  return counts.alreadyFinished > 0 ? 'settledSomeFinished' : 'settledNothingReached';
+}
+
+/**
+ * Whether a CancelMotion makes a reassuring claim about nothing being on its way.
+ *
+ * Exported so the assertion "a reassurance requires unaccounted === 0" can be written against
+ * the vocabulary rather than against a hand-listed pair of strings — a list that would have
+ * to be remembered the day a fifth motion is added.
+ */
+export function isReassuring(motion: CancelMotion): boolean {
+  return motion === 'settledNothingReached' || motion === 'settledSomeFinished';
 }

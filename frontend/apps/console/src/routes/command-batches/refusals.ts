@@ -46,9 +46,34 @@ export interface RefusalGroup {
   sample: RefusalSampleEntry[];
 }
 
-/** Whether this group's sample is short of the exact total, i.e. names only some of them. */
-export function isSampleTruncated(group: RefusalGroup): boolean {
-  return group.count !== null && group.count > group.sample.length;
+/**
+ * How much of this code's refused-device set the names below actually cover.
+ *
+ * 🔴 THREE ANSWERS, BECAUSE THE QUESTION HAS THREE. This replaced a boolean
+ * `isSampleTruncated`, and a boolean over a nullable count has to fold "unknown" into one of
+ * its two sides. It folded it into `false`, which the panel rendered as "Showing all N refused
+ * devices" — for a group whose own badge, one line higher, correctly said the total was not
+ * reported. Claiming completeness is exactly what a null count cannot support: the sample may
+ * name every refused device or a small fraction of them, and nobody said which.
+ *
+ * 🔴 THE BOOLEAN WAS DELETED RATHER THAN KEPT ALONGSIDE. It was briefly retained on the
+ * argument that it still answered the narrower question "is this short of a KNOWN total?" —
+ * which was simply untrue the moment the panel stopped calling it: it had no caller left
+ * outside its own tests, one of which pinned the very fold that was the defect. Two encodings
+ * of one rule, and the surviving justification for the second was a sentence nobody rechecked.
+ * `sampleCoverage(g) === 'truncated'` says it in one place.
+ */
+export type SampleCoverage =
+  /** The sample names every refused device, and the exact count says so. */
+  | 'complete'
+  /** The sample is capped and the exact count is higher. */
+  | 'truncated'
+  /** There is no exact count, so how much the sample covers is not knowable. */
+  | 'unknown';
+
+export function sampleCoverage(group: RefusalGroup): SampleCoverage {
+  if (group.count === null) return 'unknown';
+  return group.count > group.sample.length ? 'truncated' : 'complete';
 }
 
 /** The exact total number of devices refused, across every code. */

@@ -15,11 +15,11 @@
 import { useTranslation } from 'react-i18next';
 import { Badge } from '@/components/ui/badge';
 import { HintText } from '@/components/ui/hint-text';
-import { isSampleTruncated, type RefusalGroup } from './refusals';
+import { sampleCoverage, type RefusalGroup } from './refusals';
 
 export function RefusalGroupBlock({ group }: { group: RefusalGroup }) {
   const { t } = useTranslation('commandBatches');
-  const truncated = isSampleTruncated(group);
+  const coverage = sampleCoverage(group);
   return (
     <div className="rounded-md border border-border p-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -37,10 +37,16 @@ export function RefusalGroupBlock({ group }: { group: RefusalGroup }) {
           {/* 🔴 THE LABEL IS THE POINT. The sample is capped per code, so a group of 4,312
               shows 100 names — and presenting those 100 as the whole set tells the
               operator that 4,212 devices they were never shown are fine. */}
+          {/* 🔴 THREE-WAY, AND THE THIRD BRANCH IS THE ONE THAT WAS MISSING. With no exact
+              count there is no basis for saying the names below are all of them — and saying
+              so directly under a badge reading "total not reported" is a screen contradicting
+              itself in two adjacent lines. */}
           <HintText size="md" className="mt-2">
-            {truncated
+            {coverage === 'truncated'
               ? t('sampleTruncated', { shown: group.sample.length, total: group.count })
-              : t('sampleComplete', { count: group.sample.length })}
+              : coverage === 'complete'
+                ? t('sampleComplete', { count: group.sample.length })
+                : t('sampleUnknownCoverage', { count: group.sample.length })}
           </HintText>
           <ul className="mt-2 space-y-1">
             {group.sample.map((r) => (

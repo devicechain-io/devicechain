@@ -62,17 +62,16 @@ export const NODE_CATALOG: Record<NodeType, NodeSpec> = {
   compute: { category: 'compute', labelKey: 'nodeCompute', in: {}, out: { value: 'value' } },
 };
 
-export const CONDITION_TYPES: NodeType[] = [
-  'threshold',
-  'duration',
-  'absence',
-  'aggregate',
-  'deltaRate',
-  'repeating',
-  'correlation',
-];
-
 export const isConditionType = (t: NodeType): boolean => NODE_CATALOG[t]?.category === 'condition';
+
+// The condition kinds, DERIVED from the catalog rather than listed again.
+//
+// 🔴 IT WAS A SECOND LIST, AND A SECOND LIST OF A SUBSET IS THE WORST KIND. `NODE_CATALOG`
+// already says which nodes are conditions — that is what `category` is for — so a hand-written
+// copy could only ever agree with it by coincidence. A node added to the catalog as a condition
+// and forgotten here would be a kind the canvas can compile and cannot offer, which is exactly
+// the shape that left `connectivity` unauthorable in the form for a whole release.
+export const CONDITION_TYPES: NodeType[] = (Object.keys(NODE_CATALOG) as NodeType[]).filter(isConditionType);
 
 // ── Compile-target vocabularies (rules-native tokens) ─────────────────────
 export type CompareOp = 'gt' | 'ge' | 'lt' | 'le' | 'eq' | 'ne';
