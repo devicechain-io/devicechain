@@ -3,7 +3,11 @@
 
 package config
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/devicechain-io/dc-microservice/core"
+)
 
 // ApplyDefaults fills the checkpoint cadence when unset and leaves explicit values.
 func TestApplyDefaults(t *testing.T) {
@@ -88,5 +92,55 @@ func TestValidateRejectsNonPositiveCadence(t *testing.T) {
 	valid := EventProcessingConfiguration{CheckpointEvents: 100, CheckpointIntervalSeconds: 10}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
+	}
+}
+
+// 🔴 THE UPGRADE THIS EXISTS FOR. v0.11.0 documented maxEventFutureSkewSeconds as an
+// event-processing key, in both locales. The key moved to device-management, and the
+// fail-closed decode calls anything it does not recognise unknown — so without the
+// retirement declaration an operator who followed our own documentation gets a DETECT
+// engine that will not start, and detection is down for every tenant on the instance.
+//
+// It goes through core.LoadConfiguration rather than calling RetiredConfigKeys directly:
+// the map is only worth anything if the loader consults it, and asserting on the map
+// would pass just as happily with the interface unimplemented.
+func TestRetiredSkewKeyDoesNotStopTheService(t *testing.T) {
+	cfg := &EventProcessingConfiguration{}
+	err := core.LoadConfiguration([]byte(`{"maxEventFutureSkewSeconds":600,"checkpointEvents":250}`), cfg)
+
+	if err != nil {
+		t.Fatalf("a document carrying the retired key must load: %v", err)
+	}
+	if cfg.CheckpointEvents != 250 {
+		t.Errorf("settings alongside the retired key must still apply; checkpointEvents = %d, want 250", cfg.CheckpointEvents)
+	}
+}
+
+// The counterweight: retiring one key must not relax the posture for any other. A typo is
+// still a setting the operator believes is in force, and is still refused.
+func TestRetirementDoesNotAdmitATypo(t *testing.T) {
+	cfg := &EventProcessingConfiguration{}
+	err := core.LoadConfiguration([]byte(`{"maxEventFutureSkewSeconds":600,"checkpontEvents":250}`), cfg)
+
+	if err == nil {
+		t.Fatal("an unknown key alongside a retired one must still fail the load closed")
+	}
+}
+
+// The retired value is dropped, never honoured — there is no field for it to reach and
+// nothing forwards it. A future change that wired it back into a live setting would have
+// to make this test say so.
+func TestRetiredSkewValueIsNotHonoured(t *testing.T) {
+	cfg := &EventProcessingConfiguration{}
+	if err := core.LoadConfiguration([]byte(`{"maxEventFutureSkewSeconds":600}`), cfg); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	// Every live field must read as though the key had never been written. Watermark
+	// lateness is the nearest neighbour in meaning — the other event-time knob — so it is
+	// the one a careless re-wiring would most plausibly land on.
+	if cfg.WatermarkLatenessSeconds != DefaultWatermarkLatenessSeconds {
+		t.Errorf("watermarkLatenessSeconds = %d, want the default %d — the retired value must reach no live setting",
+			cfg.WatermarkLatenessSeconds, DefaultWatermarkLatenessSeconds)
 	}
 }

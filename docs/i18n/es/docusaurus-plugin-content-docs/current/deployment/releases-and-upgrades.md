@@ -23,6 +23,13 @@ Si está en cualquiera de las versiones anteriores, lea la sección correspondie
 de hacer nada más.
 :::
 
+:::caution Actualizar a la v0.12.0 requiere algunos cambios previos
+La `v0.12.0` se actualiza en el sitio, pero cambia el tema en el que un dispositivo responde
+a un comando, mueve un permiso y cambia varias cosas cuya forma se mantuvo igual. Un
+`helm upgrade` informará éxito en cualquier caso. Lea
+[v0.12.0: una actualización que cambia contratos](#v0120-upgrade) antes de empezar.
+:::
+
 ## Modelo de versionado
 
 Cada versión es una única etiqueta git de versión semántica (`vX.Y.Z`). Ese único número cubre
@@ -321,6 +328,130 @@ Cuatro límites, indicados con claridad:
 - **La consola web se dejó con su imagen `v0.10.0`** durante la segunda comprobación, así que la
   consola `v0.11.0` no se ejercitó contra una instancia actualizada.
 :::
+
+### v0.12.0: una actualización que cambia contratos {#v0120-upgrade}
+
+Se puede llegar a la `v0.12.0` con `helm upgrade`. Su cambio de esquema **añade**
+migraciones en lugar de reemplazar una línea base, así que una base de datos `v0.11.0`
+existente se conserva con sus filas intactas, y esto se midió sobre una instancia en
+ejecución en lugar de razonarse.
+
+Lo que sí cambia son los **contratos**: el tema MQTT en el que un dispositivo responde a un
+comando, unas cuantas operaciones GraphQL y el significado de varias cosas cuya forma no
+cambió en absoluto. Nada de eso se ve en un `helm upgrade` que informa éxito, así que lea
+esta sección antes de ejecutarlo.
+
+#### Haga esto antes de actualizar
+
+**1. Actualice todo dispositivo que responda a comandos.** El tema en el que un dispositivo
+publica la respuesta a un comando ahora está acotado a ese dispositivo:
+
+```
+# antes
+{instanceId}/{tenant}/command-responses
+# ahora
+{instanceId}/{tenant}/command-responses/{deviceToken}
+```
+
+Las credenciales que se emiten a un dispositivo ya no permiten el tema anterior, así que a
+un dispositivo sin actualizar se le rechazarán las respuestas en el broker: seguirá
+recibiendo los comandos y actuando sobre ellos, pero la plataforma nunca registrará que lo
+hizo, y todos acabarán leyéndose como caducados por tiempo.
+
+El motivo del cambio es que el tema anterior permitía que **cualquier** dispositivo del
+inquilino publicara una respuesta nombrando **cualquier** comando, incluido uno emitido a
+otro dispositivo. Nada en la respuesta decía quién la enviaba, así que nada podía
+distinguirlo. El token del dispositivo forma ahora parte del tema, que forma parte de lo
+que el broker firma, de modo que un dispositivo solo puede responder por sí mismo.
+
+Actualice primero los dispositivos si puede. Las respuestas enviadas en el tema anterior
+durante la transición se rechazan, no se encolan, y el pequeño número de respuestas en
+vuelo justo en el momento de la actualización se descarta en lugar de entregarse.
+
+**2. Renombre una fuente de eventos cuyo id sea exactamente `lwm2m`.** Ese es el valor bajo
+el que el servicio LwM2M archiva la presencia de sus propios dispositivos, y los registros
+de presencia se comparan por igualdad exacta, así que su fuente y ese servicio se
+sobrescriben mutuamente las filas. `event-sources` ahora se niega a arrancar con ese id, lo
+que detiene toda la ingesta de la instancia.
+
+Un id que solo *se lee* como un transporte, como `sparkplug:plant-a` o `lwm2m:site-a`, ahora
+arranca con una advertencia en lugar de negarse. Renómbrelos cuando le venga bien. En ambos
+casos tenga en cuenta la trampa al renombrar: la presencia ya registrada bajo el id anterior
+no se traslada, y nada la rellena después.
+
+**3. Compruebe quién lee el historial de ubicaciones.** Las consultas que devuelven
+posiciones de dispositivos ahora requieren el permiso `location:read` en lugar de
+`event:read`. Ese permiso no está en la base de solo lectura que recibe un visor, así que
+una cuenta que podía leer el historial de posiciones en la `v0.11.0` no puede en la
+`v0.12.0`. Concédalo explícitamente a los roles que lo necesiten.
+
+**4. Busque estas operaciones GraphQL** en cualquier cosa que haya escrito contra la API:
+
+| Operación | Qué cambió |
+| --- | --- |
+| `createCommand` | Devuelve `CreateCommandResult!` en lugar de `Command!`. El comando está ahora bajo un campo `command`, junto a un campo `rejection` que explica un rechazo. |
+| `updateDeviceType` | Su argumento `request` es ahora un `DeviceTypeUpdateRequest!` obligatorio. Los campos no reconocidos dentro de él se rechazan en lugar de ignorarse. |
+| `assertedActiveDeviceStates` | Sustituida por `assertedDeviceStates`, que toma `activeOnly` y pagina mediante `afterId` y `pageSize`. |
+| `deviceCredentials`, `deviceCredentialsById`, `deviceCredentialsByToken` | Ahora requieren `device:write`. Para un tipo de credencial el identificador legible *es* el token portador, así que `device:read` — que tiene todo miembro habilitado — bastaba para abrir una sesión en el broker como cualquier dispositivo del inquilino. |
+| `locationEvents` | Ahora requiere `location:read`, como arriba. |
+| Cualquier consulta `...ById(ids: [])` | Una lista de ids vacía ahora no devuelve nada. Antes devolvía la tabla entera, sin paginar. |
+
+#### Cambios sin cambio de firma
+
+Estos son los que un cliente no puede detectar mirando el esquema.
+
+**Actualizar un perfil de dispositivo borra su declaración de ubicación.** Un perfil puede
+ahora declarar que sus dispositivos informan de su posición, y `updateDeviceProfile`
+reemplaza el perfil completo. Un cliente escrito contra la `v0.11.0` no envía el campo
+nuevo, así que actualizar un perfil por cualquier motivo — renombrarlo, editar su
+descripción — deja de declarar la posición para todos los dispositivos que lo usan, en
+silencio. El único síntoma es que las superficies de mapa se quedan vacías. Envíe el campo,
+o vuelva a establecer la declaración después de cualquier actualización hecha desde un
+cliente antiguo.
+
+**Cancelar un comando registra `CANCELLED`.** Antes registraba `EXPIRED`, que compartía con
+un comando que simplemente agotó su tiempo. Si se bifurca sobre `EXPIRED` para detectar su
+propia cancelación, ya no estará ahí.
+
+**Los comandos pueden quedarse ahora en `HELD` o `PARKED`.** Un comando dirigido a un
+dispositivo que la plataforma sabe ausente se retiene en lugar de publicarse, y uno que se
+despachó a un dispositivo que resultó inalcanzable se aparca. Ambos están esperando, no
+terminados, y ambos son nuevos: el código que trate cualquier cosa distinta de `QUEUED` o
+`SENT` como terminal se equivocará. El conjunto completo es ahora `QUEUED`, `HELD`, `SENT`,
+`PARKED`, `SUCCESSFUL`, `FAILED`, `TIMEOUT`, `EXPIRED`, `CANCELLED`.
+
+**Una lectura se almacena en el instante en que se tomó.** Cuando un mensaje transporta
+muchas muestras, cada una con su propia marca de tiempo — toda carga de Sparkplug y LwM2M lo
+hace, y también cualquier dispositivo que almacene mientras está sin conexión — esas
+muestras se almacenaban en el instante en que llegaba el mensaje. Ahora se almacenan en el
+suyo propio. Un dispositivo que sube una hora de lecturas almacenadas las escribe a lo largo
+de esa hora en lugar de en el momento de la subida, de modo que el historial, las gráficas,
+la retención y la detección las ven donde realmente corresponden.
+
+#### Entradas que antes se aceptaban y ahora no
+
+- Una política de notificación que lleve `deviceTypeToken`. Acotar una política a un tipo de
+  dispositivo no está implementado; la escritura antes tenía éxito y luego no entregaba nada.
+- Una regla de notificación cuya `severity` no sea uno de los niveles en mayúsculas o `*`.
+  Una severidad en minúsculas antes se escribía, se releía sin cambios y nunca coincidía con
+  ninguna alarma.
+- Un `occurredTime` de `0001-01-01T00:00:00Z`. Es una marca de tiempo válida, y la
+  plataforma la reserva para significar que no se informó ninguna hora.
+
+#### Configuración
+
+Una clave se movió. `maxEventFutureSkewSeconds` limitaba cuánto puede adelantarse una marca
+de tiempo informada por el dispositivo respecto al reloj de la plataforma; era un ajuste de
+`event-processing` y ahora es de `device-management`, porque la hora del evento se decide
+ahora en un único lugar, tanto para la detección en vivo como para la reproducción.
+
+Una configuración que siga estableciéndola bajo `event-processing` **arranca con
+normalidad** y registra una advertencia que nombra la nueva ubicación. El valor anterior no
+se aplica: establézcalo bajo `device-management` si lo había cambiado respecto al valor
+predeterminado de 300 segundos.
+
+No se eliminó nada de los valores del chart, así que un archivo de valores `v0.11.0` se
+aplica sin cambios.
 
 ### La transición única a la ingesta duradera
 

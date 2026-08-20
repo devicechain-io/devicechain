@@ -22,6 +22,13 @@ If you are on either earlier version, read the matching section below before you
 anything else.
 :::
 
+:::caution Upgrading to v0.12.0 needs a few changes first
+`v0.12.0` upgrades in place, but it changes the topic a device answers a command on, moves
+one permission, and changes several things whose shape stayed the same. A `helm upgrade`
+will report success either way. Read
+[v0.12.0 — an upgrade that changes contracts](#v0120-upgrade) before you start.
+:::
+
 ## Versioning model
 
 Every release is a single semantic-version git tag (`vX.Y.Z`). That one version covers
@@ -312,6 +319,120 @@ Four limits, stated plainly:
 - **The web console was left at its `v0.10.0` image** during the second check, so the `v0.11.0`
   console was not exercised against an upgraded instance.
 :::
+
+### v0.12.0 — an upgrade that changes contracts {#v0120-upgrade}
+
+`v0.12.0` is reachable with `helm upgrade`. Its schema change **adds** migrations rather
+than replacing a baseline, so an existing `v0.11.0` database is carried forward with its
+rows intact, and this was measured on a running instance rather than reasoned about.
+
+What it does change is **contracts** — the MQTT topic a device answers a command on, a
+handful of GraphQL operations, and the meaning of several things whose shape did not
+change at all. None of that is visible in a `helm upgrade` that reports success, so read
+this section before you run it.
+
+#### Do these before you upgrade
+
+**1. Update any device that answers commands.** The topic a device publishes a command
+response to is now scoped to that device:
+
+```
+# before
+{instanceId}/{tenant}/command-responses
+# now
+{instanceId}/{tenant}/command-responses/{deviceToken}
+```
+
+The old topic is no longer permitted by the credentials a device is issued, so a device
+that is not updated will have its responses refused at the broker — it will still receive
+and act on commands, but the platform will never record that it did, and every one of them
+will eventually read as timed out.
+
+The reason for the change is that the old topic let **any** device in a tenant publish a
+response naming **any** command, including one issued to a different device. Nothing in
+the response said who sent it, so nothing could tell. The device token is now part of the
+topic, which is part of what the broker signs, so a device can only answer for itself.
+
+Upgrade the devices first if you can. Responses sent on the old topic during the changeover
+are refused, not queued, and a small number of responses already in flight at the moment of
+the upgrade are dropped rather than delivered.
+
+**2. Rename an event source whose id is exactly `lwm2m`.** That value is the one the LwM2M
+service files its own device presence under, and presence records are matched by exact
+equality — so your source and that service overwrite each other's rows. `event-sources`
+now refuses to start on it, which stops all ingest for the instance.
+
+An id that merely *reads* as a transport, such as `sparkplug:plant-a` or `lwm2m:site-a`,
+now starts with a warning instead of refusing. Rename those when convenient. In both cases
+note the trap in renaming: the presence already recorded under the old id is not carried
+over, and nothing backfills it.
+
+**3. Check who reads location history.** The queries that return device positions now
+require the `location:read` permission rather than `event:read`. This permission is not in
+the read-only baseline a viewer receives, so an account that could read position history on
+`v0.11.0` cannot on `v0.12.0`. Grant it explicitly to the roles that need it.
+
+**4. Check for these GraphQL operations** in anything you have written against the API:
+
+| Operation | What changed |
+| --- | --- |
+| `createCommand` | Returns `CreateCommandResult!` instead of `Command!`. The command is now under a `command` field, alongside a `rejection` field that explains a refusal. |
+| `updateDeviceType` | Its `request` argument is now a required `DeviceTypeUpdateRequest!`. Unrecognised fields in it are rejected rather than ignored. |
+| `assertedActiveDeviceStates` | Replaced by `assertedDeviceStates`, which takes `activeOnly` and pages through `afterId` and `pageSize`. |
+| `deviceCredentials`, `deviceCredentialsById`, `deviceCredentialsByToken` | Now require `device:write`. For one credential type the readable identifier *is* the bearer token, so `device:read` — which every enabled member holds — was enough to open a broker session as any device in the tenant. |
+| `locationEvents` | Now requires `location:read`, as above. |
+| Any `...ById(ids: [])` query | An empty id list now returns nothing. It used to return the whole table, unpaginated. |
+
+#### Changes with no signature change
+
+These are the ones a client cannot detect by looking at the schema.
+
+**Updating a device profile clears its location declaration.** A profile can now declare
+that its devices report position, and `updateDeviceProfile` replaces the whole profile. A
+client written against `v0.11.0` does not send the new field, so updating a profile for any
+reason — renaming it, editing its description — silently un-declares position for every
+device on it. The only symptom is that map surfaces go quiet. Send the field, or set the
+declaration again after any update from an older client.
+
+**Cancelling a command records `CANCELLED`.** It used to record `EXPIRED`, which it shared
+with a command that simply ran out its time. If you branch on `EXPIRED` to detect your own
+cancellation, it will no longer be there.
+
+**Commands can now sit in `HELD` or `PARKED`.** A command addressed to a device the
+platform knows is absent is held rather than published, and one that was dispatched to a
+device that turned out to be unreachable is parked. Both are waiting, not finished, and
+both are new — code that treats anything other than `QUEUED` or `SENT` as terminal will get
+this wrong. The full set is now `QUEUED`, `HELD`, `SENT`, `PARKED`, `SUCCESSFUL`, `FAILED`,
+`TIMEOUT`, `EXPIRED`, `CANCELLED`.
+
+**A reading is stored at the instant it was taken.** When a message carries many samples,
+each with its own timestamp — every Sparkplug and LwM2M upload does, and so does any device
+that buffers while offline — those samples used to be stored at the instant the message
+arrived. They are now stored at their own. A device uploading an hour of buffered readings
+writes them across that hour rather than at the moment of upload, so history, charts,
+retention and detection all see them where they actually belong.
+
+#### Input that used to be accepted and now is not
+
+- A notification policy carrying `deviceTypeToken`. Scoping a policy to a device type is
+  not implemented; the write used to succeed and then deliver nothing at all.
+- A notification rule whose `severity` is not one of the uppercase tiers or `*`. A
+  lowercase severity used to write, read back unchanged, and never match an alarm.
+- An `occurredTime` of `0001-01-01T00:00:00Z`. It is a valid timestamp, and the platform
+  reserves it to mean no time was reported.
+
+#### Configuration
+
+One key moved. `maxEventFutureSkewSeconds` bounded how far a device-reported timestamp may
+lead the platform's clock; it was an `event-processing` setting and is now a
+`device-management` one, because the event time is now decided in exactly one place for
+live detection and replay alike.
+
+A configuration that still sets it under `event-processing` **starts normally** and logs a
+warning naming the new location. The old value is not applied — set it under
+`device-management` if you had changed it from the default of 300 seconds.
+
+Nothing was removed from the chart's values, so a `v0.11.0` values file applies unchanged.
 
 ### The one-time durable-ingest cutover
 

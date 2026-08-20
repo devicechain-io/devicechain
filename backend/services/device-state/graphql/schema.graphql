@@ -45,12 +45,17 @@ type DeviceState implements Model {
     #   - Sparkplug projects "sparkplug:{hostId}", carrying the host application id.
     # To classify a device BY TRANSPORT, cut at the first ":" and compare that; do not
     # compare the whole value, which for two of the three cases is operator-chosen.
-    # An event source id that would cut to "lwm2m" or "sparkplug" is rejected when the
-    # configuration loads, so a source cannot newly impersonate a transport the platform
-    # mints. Ids cutting to anything else — including your own namespaced "acme:line3" —
-    # are yours to choose. Treat that as a rule about what can be WRITTEN from now on
-    # rather than a guarantee about what you are reading: a value stored before the rule
-    # existed is still served as it was recorded.
+    # An event source id EQUAL to a source value the platform files rows under itself —
+    # "lwm2m" today — is rejected when the configuration loads, because that source and
+    # that transport would re-file each other's presence rows. An id that merely CUTS to
+    # a transport the platform mints, such as "sparkplug:plant-a" or "lwm2m:site-a", is
+    # accepted with a warning: it is reserved and should be renamed, but nothing refuses
+    # those devices today. Ids cutting to anything else — including your own namespaced
+    # "acme:line3" — are yours to choose.
+    #
+    # Treat none of that as a guarantee about what you are READING. It governs what can be
+    # written from now on; a value stored before the rules existed is still served as it
+    # was recorded, and a warned-about id is served exactly like any other.
     # Null before the device has produced an event carrying one. It answers "which transport is this
     # device on", which callers need to know whether a command can reach it at all —
     # the transports differ in whether they have a command path, not only in whether
