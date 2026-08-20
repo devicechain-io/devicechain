@@ -179,7 +179,16 @@ note() { printf '\033[0;37m    %s\033[0m\n' "$*"; }
 # of disk". This drill has already been bitten once by the same shape in the other
 # direction: an INCONCLUSIVE result was announced as data loss because every
 # non-zero code shared one headline.
-exit_operator_skew=3
+#
+# 🔴 AND IT MUST NOT COLLIDE WITH apiprobe'"'"'S TAXONOMY, which this rig imports,
+# prints and reasons about in the same log. The first spelling of this constant was
+# 3 — which is apiprobe'"'"'s MISMATCH — so one run printed "verify exited 3, exactly
+# as required" (a negative control HOLDING) five lines above the rig itself exiting
+# 3 to mean something entirely different. Both were correct and the pair was
+# unreadable. 20 sits clear of apiprobe'"'"'s range and below the shell'"'"'s own reserved
+# codes (126+), and `selftest` asserts the separation against apiprobe'"'"'s source
+# rather than trusting this comment to stay true.
+exit_operator_skew=20
 
 fail_code() {
   local code="$1"
@@ -874,6 +883,25 @@ selftest() {
   expect_step "localhost:5000/operator:head-20260819" "head-20260819" 0 "a registry PORT is not read as a tag"
   expect_step "localhost:5000/operator" "head-20260819" 2 "an untagged reference cannot tell, and says so"
   expect_step "ghcr.io/devicechain-io/operator@sha256:abc123" "v0.12.0" 2 "a digest pin cannot tell, and says so"
+
+  # LOCKSTEP, not a restatement. apiprobe owns the exit codes this rig imports and
+  # branches on; the operator finding needs one of its own, and the two vocabularies
+  # live in different files with nothing but this check between them.
+  say "the operator finding's exit code is apiprobe's to collide with"
+  local apiprobe_src="$repo_root/backend/tools/apiprobe/main.go" taken
+  taken="$(grep -oE '^\s*exit[A-Za-z]+ = [0-9]+' "$apiprobe_src" | grep -oE '[0-9]+$' | sort -u | tr '\n' ' ')"
+  [[ -n "$taken" ]] ||
+    fail "SELF-TEST FAILED: no exit-code constants found in $apiprobe_src. This check
+reads them out of apiprobe's source rather than repeating them, so it has just
+stopped checking anything — the constants moved or were renamed."
+  local code
+  for code in $taken; do
+    [[ "$code" != "$exit_operator_skew" ]] ||
+      fail "SELF-TEST FAILED: exit $exit_operator_skew means the operator-skew finding here AND
+one of apiprobe's verdicts there. The same number in one log for two different
+things is how a control HOLDING reads as a release defect. Pick another."
+  done
+  note "apiprobe uses [$taken]; the operator finding uses $exit_operator_skew"
 
   say "operator_namespace"
   local ns

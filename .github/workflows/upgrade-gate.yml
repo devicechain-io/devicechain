@@ -166,7 +166,13 @@ jobs:
           VERSION_IN: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          if [ "$BUILD_IN" = "false" ]; then
+          # ⛔ TEMPORARY — REMOVE BEFORE MERGE, with the push trigger above. The push
+          # trigger supplies no inputs, so this forces the PULL path for one run:
+          # it is the shape release.yml uses and the only one still unexercised.
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            images=pull
+            VERSION_IN=v0.11.0
+          elif [ "$BUILD_IN" = "false" ]; then
             images=pull
           else
             images=build
