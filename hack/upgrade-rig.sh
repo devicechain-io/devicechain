@@ -200,19 +200,28 @@ fail_code() {
 fail() { fail_code 1 "$@"; }
 
 need() { command -v "$1" >/dev/null 2>&1 || fail "$1 is required but not on PATH"; }
+# ko_required — will this run shell out to a builder?
+#
+# 🔴 ko IS A BUILD-PATH TOOL, and demanding it unconditionally is not merely strict,
+# it is WRONG. The pull path builds no image at all: the baseline installs published
+# images and the upgrade moves to another published tag. A gate that skips installing
+# ko because it does not need it, and is then refused by the tool list for not having
+# it, fails on the one path a release actually runs. Measured, not imagined — that is
+# exactly how the first pull-path run died, three seconds in.
+#
+# A predicate rather than a condition inlined in need_all, so `selftest` can ask the
+# question without a cluster, a builder, or a doctored PATH. ⚠️ It is the RULE that
+# is covered, not need_all's wiring to it — a mutation that stops need_all calling
+# this at all survives the self-test, and only a run on a machine without ko would
+# see it.
+ko_required() { [[ "$upgrade_images" == build ]]; }
+
 need_all() {
   # Every tool, checked BEFORE anything is provisioned. A missing binary
   # discovered twenty minutes into a bring-up is the posture this script rejects
   # everywhere else.
   for t in kind kubectl docker helm git curl go; do need "$t"; done
-  # 🔴 ko IS A BUILD-PATH TOOL, and demanding it unconditionally is not merely
-  # strict — it is WRONG. The pull path builds no image at all: the baseline
-  # installs published images and the upgrade moves to another published tag.
-  # A gate that skips installing ko because it does not need it, and is then
-  # refused by this list for not having it, fails on the one path a release
-  # actually runs. (Measured, not imagined — that is exactly how the first
-  # pull-path run died, three seconds in.)
-  [[ "$upgrade_images" != build ]] || need ko
+  ko_required && need ko
   command -v tofu >/dev/null 2>&1 || command -v terraform >/dev/null 2>&1 ||
     fail "one of tofu or terraform is required but neither is on PATH"
 }
@@ -228,6 +237,7 @@ validate_upgrade_mode() {
     [[ -n "$upgrade_tag" ]] || fail "DC_UPGRADE_IMAGES=pull needs DC_UPGRADE_TAG — the published
 tag to upgrade TO. Without it there is nothing to pull and no way to guess: the
 working tree's VERSION file names a tag that was never published."
+
     # 🔴 Upgrading a release to ITSELF is not a drill, and it is the shape a
     # release pipeline reaches by accident: derive the baseline wrong by one step
     # and every check passes, having deployed the images that were already
@@ -237,6 +247,56 @@ working tree's VERSION file names a tag that was never published."
 $baseline_tag. Upgrading a release to itself deploys the images already running,
 so every check here would pass without an upgrade having happened. Set
 DC_BASELINE_TAG to the release being upgraded FROM."
+
+    # 🔴 THE CHART AND THE IMAGES HAVE TO BE THE SAME RELEASE. This is the target
+    # half of the rule the baseline half already follows — the baseline is installed
+    # by its OWN dcctl, carrying its OWN chart, for exactly this reason.
+    #
+    # `helm upgrade` here deploys the WORKING TREE's chart. Point that at some other
+    # release's images and the new chart renders instance config those older binaries
+    # have never seen; typed configuration is fail-closed, so they reject it and
+    # crash-loop. That is not an upgrade — it is a combination no operator has ever
+    # run, failing for a reason that has nothing to do with the release.
+    #
+    # MEASURED, not theorised: a run pairing HEAD's chart with v0.11.0's images spent
+    # the full 20-minute `helm --wait` before dying on a crash-looping
+    # device-management. Twenty minutes to learn what a tree hash answers instantly.
+    #
+    # 🔴 An unreachable tag is REFUSED, not skipped. Waving the comparison through
+    # when the tag is unknown fails OPEN in exactly the case the guard can reason
+    # about least, and makes "checked and agreed" indistinguishable from "could not
+    # look". The release pipeline always has the tag — it checks the tag out.
+    git -C "$repo_root" rev-parse --verify "$upgrade_tag^{commit}" >/dev/null 2>&1 ||
+      fail "$upgrade_tag is not a tag in this repository, so this rig cannot check that the
+chart it is about to deploy belongs to the same release as the images. Fetch the tag
+(the release pipeline checks it out), or drill the build path instead."
+
+    # Compared as the CHART's tree, not as the commit. A commit test would refuse a
+    # branch that has not touched the chart at all, whose deployment of it is
+    # byte-for-byte what the release ships — a legitimate drill, and the only way
+    # this path gets exercised outside a tag checkout.
+    # 🔴 --verify, and it is not decoration. Bare `git rev-parse <rev>:<path>` on a
+    # path the tree does not contain does NOT fail — it ECHOES ITS ARGUMENT BACK, so
+    # `there` comes out as the literal string "sometag:deploy/helm/devicechain",
+    # non-empty, and the emptiness check below can never fire. A tag carrying no
+    # chart at all was then reported as "the chart and the images are different
+    # releases", which sends a reader looking for a version mismatch that does not
+    # exist. Found by the self-test case written to cover exactly this.
+    local here there
+    here="$(git -C "$repo_root" rev-parse --verify -q "HEAD:deploy/helm/devicechain" 2>/dev/null || true)"
+    there="$(git -C "$repo_root" rev-parse --verify -q "$upgrade_tag:deploy/helm/devicechain" 2>/dev/null || true)"
+    [[ -n "$here" && -n "$there" ]] ||
+      fail "could not read the chart tree for HEAD and/or $upgrade_tag, so this rig cannot
+check that they agree. It refuses rather than guesses: the combination it guards against
+fails twenty minutes later, as a rollout timeout that reads like a platform defect."
+    [[ "$here" == "$there" ]] || fail "the chart and the images are different releases.
+  chart at HEAD:          $here
+  chart at $upgrade_tag:  $there
+This upgrade would deploy the working tree's chart around $upgrade_tag's binaries. The new
+chart renders instance config those binaries have never seen, their typed config is
+fail-closed, and they crash-loop — a combination no operator has ever run, failing for a
+reason that has nothing to do with the release. Check out $upgrade_tag (which is what the
+release pipeline does), or drill the build path instead."
     ;;
   *) fail "DC_UPGRADE_IMAGES must be 'build' or 'pull'; got '$upgrade_images'" ;;
   esac
@@ -874,7 +934,16 @@ it existing."
 # nothing on its own — a check hard-wired to fail would look identical. Proving it
 # reports AGREEMENT when the tags agree is what makes the red mean something.
 selftest() {
-  local rc
+  local rc baseline_tag_for_chart_test=""
+  # The newest stable tag whose chart is NOT HEAD's — the refusal case, chosen from
+  # the repository rather than written down, so it does not name a tag that will one
+  # day carry the same chart as HEAD and turn this into a silent pass.
+  local t head_chart_tree
+  head_chart_tree="$(git -C "$repo_root" rev-parse "HEAD:deploy/helm/devicechain" 2>/dev/null || true)"
+  while read -r t; do
+    [[ "$(git -C "$repo_root" rev-parse "$t:deploy/helm/devicechain" 2>/dev/null || true)" != "$head_chart_tree" ]] || continue
+    baseline_tag_for_chart_test="$t"
+  done < <(git -C "$repo_root" tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -v '[-]' | sort -V)
 
   expect_step() {
     local image="$1" want="$2" expected="$3" label="$4"
@@ -921,26 +990,102 @@ the self-test: the rig reads that file rather than repeating the namespace, and
 this is where a rename is supposed to be caught."
   note "the operator overlay still declares a namespace ($ns)"
 
+  say "ko is a build-path tool"
+  local saved_for_ko="$upgrade_images"
+  upgrade_images=build
+  ko_required || fail "SELF-TEST FAILED: the build path does not think it needs ko, so need_all
+would let a run reach build-images.sh without a builder."
+  note "the build path requires ko"
+  upgrade_images=pull
+  ! ko_required || fail "SELF-TEST FAILED: the pull path thinks it needs ko. It builds no image
+at all, and demanding a builder there is what killed the first pull-path run three
+seconds in — the gate correctly skips installing one."
+  note "the pull path does not"
+  upgrade_images="$saved_for_ko"
+
   say "the image-source modes"
   local saved_images="$upgrade_images" saved_tag="$upgrade_tag" saved_baseline="$baseline_tag"
+  # 🔴 ASSERTS THE REASON, NOT JUST THE CODE — and the first version of this did
+  # only the code, which cost three false greens at once. Every refusal here exits
+  # 1, so "returned 1" holds equally against a check that fired for something else
+  # entirely: a mutation that made an unknown tag SKIP the chart comparison still
+  # exited 1 (on the next check down), a mutation that made both sides read the
+  # SAME tree still exited 1 (the case was being refused as a self-upgrade before
+  # it ever reached the comparison), and a broken `-n` guard still exited 1 (the
+  # empty string simply compared unequal). All three passed. This rig already
+  # writes the rule down for its own controls — "a failure for the wrong reason is
+  # not a control" — and the self-test was not following it.
+  #
+  # `want` is a fragment of the message the intended check emits; the empty string
+  # means the call must SUCCEED.
   expect_mode() {
-    local want_rc="$1" label="$2"
+    local want="$1" label="$2" out
     rc=0
-    ( validate_upgrade_mode ) >/dev/null 2>&1 || rc=$?
-    [[ "$rc" -eq "$want_rc" ]] ||
-      fail "SELF-TEST FAILED ($label): validate_upgrade_mode returned $rc, wanted $want_rc"
+    out="$( ( validate_upgrade_mode ) 2>&1 )" || rc=$?
+    if [[ -z "$want" ]]; then
+      [[ "$rc" -eq 0 ]] ||
+        fail "SELF-TEST FAILED ($label): validate_upgrade_mode refused what it should accept.
+$out"
+      note "$label"
+      return
+    fi
+    [[ "$rc" -ne 0 ]] ||
+      fail "SELF-TEST FAILED ($label): validate_upgrade_mode accepted what it should refuse."
+    [[ "$out" == *"$want"* ]] ||
+      fail "SELF-TEST FAILED ($label): it refused, but for the WRONG REASON — the message
+does not mention '$want'. A refusal that fires from a different check holds just as
+well against a version where the intended one has stopped working. It said:
+$out"
     note "$label"
   }
   upgrade_images="build" upgrade_tag=""
-  expect_mode 0 "build needs no tag"
+  expect_mode "" "build needs no tag"
   upgrade_images="pull" upgrade_tag=""
-  expect_mode 1 "pull without a tag is refused"
+  expect_mode "needs DC_UPGRADE_TAG" "pull without a tag is refused"
   upgrade_images="pull" upgrade_tag="$baseline_tag"
-  expect_mode 1 "upgrading the baseline to itself is refused"
+  expect_mode "both" "upgrading the baseline to itself is refused"
   upgrade_images="pull" upgrade_tag="v9.9.9"
-  expect_mode 0 "pull with a different published tag is accepted"
+  expect_mode "is not a tag in this repository" "a tag this repository has never seen is refused, not skipped"
   upgrade_images="rebuild" upgrade_tag=""
-  expect_mode 1 "an unknown mode is refused"
+  expect_mode "must be 'build' or 'pull'" "an unknown mode is refused"
+
+  # The chart/images lockstep, both directions. A guard that only ever refuses is
+  # indistinguishable from one wired shut, so the agreeing case is the one that
+  # makes the refusal mean something. Both are asked of the REAL repository: a
+  # tag whose chart differs from HEAD's, and a tag whose chart is HEAD's by
+  # construction.
+  local tmp_tag
+  [[ -n "$baseline_tag_for_chart_test" ]] ||
+    fail "SELF-TEST FAILED: no stable tag carries a chart different from HEAD's, so the
+refusal case cannot be exercised. That is not a pass — it means this check has
+nothing to measure."
+  # 🔴 The baseline is moved off the target deliberately. The newest stable tag is
+  # usually the DEFAULT baseline too, so leaving it alone made this case refuse as a
+  # self-upgrade and never reach the chart comparison at all — a green that meant
+  # only that some earlier check still worked.
+  baseline_tag="$baseline_tag_for_chart_test-not-the-target"
+  upgrade_images="pull" upgrade_tag="$baseline_tag_for_chart_test"
+  expect_mode "different releases" "a tag whose chart differs from HEAD is refused"
+
+  tmp_tag="upgrade-rig-selftest-$$"
+  git -C "$repo_root" tag "$tmp_tag" HEAD
+  upgrade_images="pull" upgrade_tag="$tmp_tag"
+  expect_mode "" "a tag carrying THIS chart is accepted"
+  git -C "$repo_root" tag -d "$tmp_tag" >/dev/null
+
+  # 🔴 A tag with NO CHART AT ALL must say it could not read one — not that the two
+  # are different releases. Both refuse, so the outcome is the same and the SENTENCE
+  # is not: "the chart and the images are different releases" sends a reader looking
+  # for a version mismatch that does not exist. This rig's whole argument is that
+  # INCONCLUSIVE and FINDING are different results, and the check that enforces it
+  # here is one `-n` away from silently degrading into the wrong one.
+  local empty_tag empty_commit
+  empty_tag="upgrade-rig-selftest-empty-$$"
+  empty_commit="$(git -C "$repo_root" commit-tree "$(git -C "$repo_root" hash-object -t tree /dev/null)" -m selftest)"
+  git -C "$repo_root" tag "$empty_tag" "$empty_commit"
+  upgrade_images="pull" upgrade_tag="$empty_tag"
+  expect_mode "could not read the chart tree" "a tag carrying no chart says it could not READ one"
+  git -C "$repo_root" tag -d "$empty_tag" >/dev/null
   upgrade_images="$saved_images" upgrade_tag="$saved_tag" baseline_tag="$saved_baseline"
 
   say "SELF-TEST PASSED"

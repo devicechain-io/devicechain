@@ -166,13 +166,7 @@ jobs:
           VERSION_IN: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          # ⛔ TEMPORARY — REMOVE BEFORE MERGE, with the push trigger above. The push
-          # trigger supplies no inputs, so this forces the PULL path for one run:
-          # it is the shape release.yml uses and the only one still unexercised.
-          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
-            images=pull
-            VERSION_IN=v0.11.0
-          elif [ "$BUILD_IN" = "false" ]; then
+          if [ "$BUILD_IN" = "false" ]; then
             images=pull
           else
             images=build
@@ -369,3 +363,20 @@ jobs:
           echo "::group::recent events"
           kubectl --context "$ctx" get events -A --sort-by=.lastTimestamp | tail -60 || true
           echo "::endgroup::"
+          # 🔴 The LOGS of whatever did not come up, and --previous for the ones that
+          # already restarted. Without this a crash-loop is reported as a rollout
+          # timeout and nothing on the page says why: a run that paired the wrong
+          # chart with the wrong images produced exactly one useful line
+          # ("CrashLoopBackOff") and no reason at all, and the cluster dies with the
+          # runner, so what is not printed now cannot be asked for later.
+          for ref in $(kubectl --context "$ctx" get pods -A \
+              -o jsonpath='{range .items[?(@.status.phase!="Succeeded")]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}'); do
+            ns="${ref%%/*}"; pod="${ref##*/}"
+            ready="$(kubectl --context "$ctx" -n "$ns" get pod "$pod" \
+              -o jsonpath='{.status.containerStatuses[*].ready}' 2>/dev/null || echo unknown)"
+            case "$ready" in *false*|unknown) ;; *) continue ;; esac
+            echo "::group::logs $ns/$pod"
+            kubectl --context "$ctx" -n "$ns" logs "$pod" --all-containers --tail=80 || true
+            kubectl --context "$ctx" -n "$ns" logs "$pod" --all-containers --tail=80 --previous 2>/dev/null || true
+            echo "::endgroup::"
+          done
