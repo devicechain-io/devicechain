@@ -33,8 +33,9 @@ func TestADemotionResolvesAnAlarmNothingElseEverWould(t *testing.T) {
 
 	// The latch is genuinely cleared, not merely reported. Note the device is still believed
 	// DOWN — a demotion carries connectivity forward, it does not revive anything — so the
-	// series has to come back up before it can go down again. Both edges below would be
-	// swallowed if the latch had survived the resolve.
+	// series has to come back up before it can go down again. A surviving latch is caught
+	// either way: the reconnect would emit a spurious second Resolved, and if it somehow did
+	// not, the disconnect after it would be swallowed as a re-raise.
 	if d := feedPresence(e, 3, "r", "d", 30, 200, true); len(d) != 0 {
 		t.Fatalf("a reconnect with nothing latched must emit nothing: %+v", d)
 	}
@@ -113,4 +114,43 @@ func TestADemotionResolvesAtTheRaiseWhenItIsStampedEarlier(t *testing.T) {
 	}
 	// The release is ordered against the cursor (20 > 10) but earlier than the raise (50).
 	onlyEdge(t, feedDemotion(e, 3, "r", "d", 20, 200), EdgeResolved, 50)
+}
+
+// TestADemotionResolvesAnAlarmWhoseCursorWasLost is the demotion's half of the snapshot
+// version-skew hazard that TestConnectivityResolvesWhenCursorLostButLatchKept covers for a
+// CONNECT. The latch and the ordering cursor are carried by different mechanisms and can
+// come apart; with the cursor gone, presence.Decide refuses the demotion — no prior stamp
+// to order against and no session to match — and the alarm is then unreachable by anything,
+// because the only other thing that resolves it is a CONNECT from the source that just
+// released custody.
+func TestADemotionResolvesAnAlarmWhoseCursorWasLost(t *testing.T) {
+	e := NewEngine([]Rule{{ID: "r", Kind: Connectivity}}, 0)
+	key := SeriesKey{Rule: "r", Series: "d"}
+	// Simulate the skew directly, as the CONNECT-side test does: an offline alarm latched
+	// at t=10, and no presence cursor at all.
+	e.raised[key] = at(10)
+
+	onlyEdge(t, feedDemotion(e, 1, "r", "d", 20, 100), EdgeResolved, 20)
+
+	// The cursor stays unset: a release asserts nothing about connectivity, so the next
+	// authoritative word starts from assume-online rather than from a stamp invented by an
+	// administrative event. With the latch now clear, a CONNECT is the non-event.
+	if _, ok := e.presenceState[key]; ok {
+		t.Fatalf("a cursorless demotion invented an ordering cursor: %+v", e.presenceState[key])
+	}
+	if d := feedPresence(e, 2, "r", "d", 30, 100, true); len(d) != 0 {
+		t.Fatalf("the latch was not cleared by the demotion: %+v", d)
+	}
+}
+
+// TestACursorlessDemotionWithNothingLatchedIsSilent is the counterweight: the ordinary case
+// the same branch covers is a demotion for a series DETECT has never seen, and that must
+// stay a no-op rather than emit a resolve for an alarm that was never raised.
+func TestACursorlessDemotionWithNothingLatchedIsSilent(t *testing.T) {
+	e := NewEngine([]Rule{{ID: "r", Kind: Connectivity}}, 0)
+	if d := feedDemotion(e, 1, "r", "d", 20, 100); len(d) != 0 {
+		t.Fatalf("a demotion over an unseen series emitted something: %+v", d)
+	}
+	// And the cursor is untouched, so an EARLIER first DISCONNECT still raises normally.
+	onlyEdge(t, feedPresence(e, 2, "r", "d", 15, 100, false), EdgeRaised, 15)
 }

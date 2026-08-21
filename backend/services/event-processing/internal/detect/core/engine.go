@@ -952,6 +952,25 @@ func (e *Engine) applyConnectivity(ev Event, r Rule) {
 		_, raised := e.raised[ev.Key]
 		prior.Connected = !raised
 	}
+	if !prior.HasTime && ev.Presence.Claim == presence.ClaimDemoted {
+		// A custody release for a series with NO ordering cursor. presence.Decide refuses
+		// it, and rightly so for the PROJECTION, where the absence of a stamp means the row
+		// was never asserted and a demotion is a no-op. It is not right HERE, because
+		// DETECT's cursor and its alarm latch are carried by different mechanisms and can
+		// come apart — which is the exact skew the fallback directly above exists for, and
+		// which that fallback repairs for a CONNECT while leaving a demotion refused.
+		//
+		// In that state the alarm is IMMORTAL: it is resolved by a CONNECT, and the source
+		// that would send one has just released custody. So resolve it on the release's own
+		// terms and leave the cursor unset — the release says nothing about connectivity, so
+		// inventing a cursor from it would be worse than having none, and assume-online is
+		// the right footing for whatever speaks for the device next.
+		//
+		// With nothing latched this is a no-op, which is the ordinary case it also covers: a
+		// demotion for a series DETECT has simply never seen.
+		e.resolveLatched(r, ev.Key, ev.Time)
+		return
+	}
 	d := presence.Decide(prior, presence.Incoming{
 		SessionId:         ev.Presence.SessionId,
 		ExpectedSessionId: ev.Presence.ExpectedSessionId,

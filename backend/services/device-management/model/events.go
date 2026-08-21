@@ -95,8 +95,10 @@ type ResolvedAlertsPayload struct {
 	Entries []ResolvedAlertEntry
 }
 
-// Payload with a resolved device presence transition (ADR-067). State is a
-// validated PresenceState (CONNECTED|DISCONNECTED); SessionId is the parsed
+// Payload with a resolved device presence transition (ADR-067). State is a validated
+// PresenceState (CONNECTED|DISCONNECTED|DEMOTED) — read it through Claim() below and
+// never by comparing it to one value, because DEMOTED is not a connectivity claim at all
+// and a comparison answers "is this device up?" for it anyway. SessionId is the parsed
 // producer-supplied monotonic session id (a host-observed connect epoch). The
 // device-state projection applies the transition under a monotonic
 // (SessionId, OccurredTime) guard (ADR-067 decision 4).

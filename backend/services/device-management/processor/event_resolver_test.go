@@ -9,6 +9,7 @@ import (
 	"errors"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-device-management/config"
 	dmodel "github.com/devicechain-io/dc-device-management/model"
@@ -648,9 +649,11 @@ func (suite *EventResolverTestSuite) TestStateChangeSessionIdRange() {
 func (suite *EventResolverTestSuite) TestStateChangeDemotionShape() {
 	rez := suite.resolver(config.AuthModeOptional)
 	dev := deviceWithToken("TEST-123")
+	stamp := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
 	sc := func(session, expected string) *esmodel.UnresolvedEvent {
 		return &esmodel.UnresolvedEvent{
-			EventType: esmodel.StateChange,
+			EventType:    esmodel.StateChange,
+			OccurredTime: stamp,
 			Payload: &esmodel.UnresolvedStateChangePayload{
 				State: esmodel.PresenceDemoted, SessionId: session, ExpectedSessionId: expected,
 			},
@@ -672,6 +675,16 @@ func (suite *EventResolverTestSuite) TestStateChangeDemotionShape() {
 	_, err = rez.ResolveStateChangeEventPayload(context.Background(), dev, nil, sc("42", "41"))
 	assert.Error(suite.T(), err)
 
+	// An UNSTAMPED demotion is the third silent no-op. It is applied only when it is
+	// strictly newer than the row it releases, so a zero instant is rejected downstream as
+	// "stale" — and the row it was releasing stays frozen, which is the condition the
+	// demotion exists to end. Event-time bounding does not save it: eventtime.Effective
+	// bounds the FUTURE direction only.
+	unstamped := sc("42", "")
+	unstamped.OccurredTime = time.Time{}
+	_, err = rez.ResolveStateChangeEventPayload(context.Background(), dev, nil, unstamped)
+	assert.Error(suite.T(), err)
+
 	// THE COUNTERWEIGHT. Neither refusal may leak onto a connectivity claim: a producer that
 	// sends no session id is explicitly supported there (parseSessionId documents empty as
 	// absent), and a compare-and-set is the whole point of the reconnect-repair path.
@@ -683,6 +696,9 @@ func (suite *EventResolverTestSuite) TestStateChangeDemotionShape() {
 			},
 		}
 	}
+	// Deliberately UNSTAMPED, so the demotion-only guard is proven not to leak: a
+	// connectivity claim's ordering behaviour is established and is not this arc's to
+	// change.
 	_, err = rez.ResolveStateChangeEventPayload(context.Background(), dev, nil, conn("", ""))
 	assert.NoError(suite.T(), err)
 	_, err = rez.ResolveStateChangeEventPayload(context.Background(), dev, nil, conn("42", "41"))

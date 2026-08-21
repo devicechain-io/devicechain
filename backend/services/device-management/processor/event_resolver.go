@@ -563,6 +563,26 @@ func (rez *EventResolver) ResolveStateChangeEventPayload(ctx context.Context, de
 		if expectedSessionId != 0 {
 			return nil, fmt.Errorf("state-change event carries expected session id %d on a demotion; a demotion is already matched against the stored session", expectedSessionId)
 		}
+		// The third silent no-op, and the reason it is refused here rather than guarded in
+		// one emitter: a demotion is accepted only when its stamp is strictly AFTER the
+		// row's, so an unstamped one is rejected downstream as "stale" and the row it was
+		// releasing stays frozen. Every other producer defect in this family was made loud
+		// for the same reason. This is the boundary all producers cross — the transports'
+		// emitter and the operator mutation, which does not share it.
+		//
+		// Only the ZERO case is knowable here. A demotion stamped at or before the stored
+		// PresenceTime is the same failure and cannot be seen without reading the
+		// projection, so a producer must stamp a fresh clock rather than echo a value it
+		// read.
+		//
+		// 🔑 IT GUARDS THE ENVELOPE'S TIME, NOT THE PAYLOAD'S. The payload carries a
+		// descriptive copy; the ordering stamp both consumers hand to presence.Decide is
+		// ResolvedEvent.OccurredTime, which comes from the envelope. And event-time
+		// bounding does not rescue this: eventtime.Effective bounds the FUTURE direction
+		// only, so a zero instant passes through it untouched.
+		if event.OccurredTime.IsZero() {
+			return nil, fmt.Errorf("state-change event demotes with no occurred time; a demotion is applied only when it is newer than the row it releases")
+		}
 	}
 	return &model.ResolvedStateChangePayload{
 		State:             string(payload.State),
