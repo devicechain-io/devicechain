@@ -32,14 +32,19 @@ func TestProtectedResourceMetadata(t *testing.T) {
 	if len(md.AuthorizationServers) != 1 || md.AuthorizationServers[0] != issuer {
 		t.Errorf("authorization_servers = %v, want [%s]", md.AuthorizationServers, issuer)
 	}
-	found := false
-	for _, s := range md.ScopesSupported {
-		if s == coreauth.ScopeReadOnly {
-			found = true
+	// Both scopes must be discoverable. A client cannot request what the metadata
+	// does not advertise, so an unadvertised `location` would leave query_locations
+	// unreachable exactly as the missing ceiling once did.
+	for _, want := range []string{coreauth.ScopeReadOnly, coreauth.ScopeLocation} {
+		found := false
+		for _, s := range md.ScopesSupported {
+			if s == want {
+				found = true
+			}
 		}
-	}
-	if !found {
-		t.Errorf("scopes_supported %v missing read-only", md.ScopesSupported)
+		if !found {
+			t.Errorf("scopes_supported %v is missing %q", md.ScopesSupported, want)
+		}
 	}
 
 	rec = httptest.NewRecorder()

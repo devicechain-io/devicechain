@@ -385,6 +385,13 @@ posiciones de dispositivos ahora requieren el permiso `location:read` en lugar d
 una cuenta que podía leer el historial de posiciones en la `v0.11.0` no puede en la
 `v0.12.0`. Concédalo explícitamente a los roles que lo necesiten.
 
+Si ha registrado un cliente OAuth para acceso de IA, necesita la misma atención: leer
+posiciones ahora requiere un alcance `location` aparte, junto a `read-only`, así que añádalo
+a los alcances registrados del cliente y vuelva a autorizarlo. Hasta que lo haga, la
+herramienta `query_locations` de ese cliente se rechaza mientras sus demás herramientas de
+lectura siguen funcionando. La separación es deliberada: es lo que permite autorizar a un
+asistente a observar una flota mientras se le oculta dónde ha estado.
+
 **4. Busque estas operaciones GraphQL** en cualquier cosa que haya escrito contra la API:
 
 | Operación | Qué cambió |

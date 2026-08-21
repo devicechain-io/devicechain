@@ -17,16 +17,124 @@ import (
 // the token endpoint; these identifiers are the shared vocabulary the metadata
 // document advertises and the authorize/token endpoints validate against.
 const (
-	// ScopeReadOnly grants the read-only observability surface — the same capability
-	// set as the console's viewer baseline (device/event/state/command/alarm reads).
-	// It is the only scope in the v1.0 read-only MCP cut; write scopes are a
-	// post-v1.0 fast-follow gated on elevation + human-in-the-loop confirmation.
+	// ScopeReadOnly names the general read-only observability surface: reads of
+	// devices, events, state, commands and alarms — the same SURFACE the console's
+	// viewer baseline covers.
+	//
+	// 🔴 "The same surface" is not "the same list", and the two must not be re-fused.
+	// viewerAuthorities (user-management/identity) is a GRANT — every enabled tenant
+	// member receives it whatever their roles. This is a CEILING — the most a token
+	// minted through this scope may carry, intersected at issue time with what the
+	// subject actually holds. They are kept equal deliberately, in two places, with a
+	// test on each side; wiring one to the other is what produced the defect below.
+	//
+	// It deliberately does NOT cover a device's position: see ScopeLocation.
 	ScopeReadOnly = "read-only"
+
+	// ScopeLocation names one capability on its own: reading where a device — and
+	// therefore, often, where a vehicle or a person — has been.
+	//
+	// 🔴 IT IS SEPARATE FROM ScopeReadOnly ON PURPOSE, and folding it back in is the
+	// mistake this constant exists to prevent. A scope is not an internal cap; it is
+	// the sentence a resource owner is shown on the consent screen and asked to agree
+	// to. Position is the one read capability the platform already treats as
+	// separately grantable — LocationRead is held out of the viewer baseline for
+	// exactly that reason — so a consent screen that could not name it separately
+	// would be unable to express the distinction the authority exists for. With one
+	// combined scope there is also no way to authorize an agent to observe a fleet
+	// while WITHHOLDING where it is, which is the choice a person most often wants to
+	// make.
+	//
+	// It was briefly folded into ScopeReadOnly's allowance to fix an MCP tool that
+	// could not be called by anybody. That worked, and it silently widened every
+	// existing authorization: the consent screen renders the raw scope strings, so a
+	// resource owner saw "read-only" before and after, and a session authorized
+	// before the change would have gained position on its next automatic refresh
+	// (RefreshOAuth re-caps against the CURRENT allowance) with no new consent step.
+	//
+	// A client that wants both asks for "read-only location". Being a ceiling, asking
+	// for it grants nothing on its own: a subject no role gave location:read still
+	// receives a token without it.
+	ScopeLocation = "location"
 )
 
 // SupportedScopes is the set of scopes this Authorization Server will grant,
 // advertised in the RFC 8414 metadata's scopes_supported.
-var SupportedScopes = []string{ScopeReadOnly}
+var SupportedScopes = []string{ScopeReadOnly, ScopeLocation}
+
+// scopeAllowances is the scope→authority ceiling table: the most a token minted
+// through each scope may carry. It lives here, beside the scope vocabulary and
+// IntersectAuthorities, rather than in the authorization server, so that the
+// services which merely CONSUME scoped tokens can see what a scope reaches without
+// importing user-management — the MCP resource server's tool catalog is checked
+// against it, which is the only thing standing between a newly added read tool and
+// the 100%-refusal defect described on ScopeLocation.
+//
+// 🔴 Every entry is a CEILING, never a grant. IntersectAuthorities emits only what
+// the subject actually holds, so adding an authority here gives nobody anything —
+// it decides what a role-granted authority is allowed to SURVIVE into an OAuth
+// token. What it does do is widen what a consent screen's scope name silently
+// covers, so an addition is a product decision, not a maintenance edit.
+//
+// 🔴 Nothing here may be a write authority or AuthorityAll, and the read-only
+// entry must stay in step with user-management's viewer baseline. Both are pinned
+// by test, on both sides of the module boundary.
+var scopeAllowances = map[string][]string{
+	ScopeReadOnly: {
+		string(DeviceRead),
+		string(EventRead),
+		string(StateRead),
+		string(CommandRead),
+		string(AlarmRead),
+	},
+	ScopeLocation: {
+		string(LocationRead),
+	},
+}
+
+// ScopeAllowance returns the authority ceiling for a single scope, and whether the
+// scope is one this AS defines. An undefined scope returns (nil, false) so every
+// caller fails closed rather than minting a token for a scope with no ceiling.
+// The returned slice is a copy: the table is a package global and a caller that
+// unioned into it in place would rewrite the ceiling for every later grant.
+func ScopeAllowance(scope string) ([]string, bool) {
+	// 🔴 ADVERTISED FIRST, THEN DEFINED. A ceiling is only reachable through a scope the
+	// AS actually grants, so an entry in the table that SupportedScopes does not list is
+	// refused here rather than honoured — the two lists have to agree, and this is the
+	// cheaper place to force it than at each mint path. Today ValidateAuthorizeRequest
+	// already rejects an unadvertised scope, but it is one endpoint; this holds for any
+	// caller, including one added later that never touches /authorize.
+	if !IsSupportedScope(scope) {
+		return nil, false
+	}
+	allow, ok := scopeAllowances[scope]
+	if !ok {
+		return nil, false
+	}
+	return append([]string(nil), allow...), true
+}
+
+// scopeDescriptions is what a RESOURCE OWNER is actually asked to approve, per scope.
+//
+// 🔴 THE CONSENT SCREEN IS THE ENTIRE ARGUMENT FOR SPLITTING `location` OUT, so it has
+// to say something a person can weigh. Rendering the raw token asks somebody to approve
+// the word "location", which is a category, not a consequence — and the reason this
+// scope exists at all is that a device's position history can be a record of where a
+// PERSON has been. A scope with no description here renders as its bare token, which is
+// the old behaviour rather than a crash, so ScopeDescription is total.
+var scopeDescriptions = map[string]string{
+	ScopeReadOnly: "Read your devices, their current state, their telemetry, their alarms and the commands sent to them.",
+	ScopeLocation: "Read where your devices have been — their reported position history, not just where they are now.",
+}
+
+// ScopeDescription returns the sentence to show a resource owner for one scope,
+// falling back to the scope token itself so an undescribed scope is still rendered.
+func ScopeDescription(scope string) string {
+	if d, ok := scopeDescriptions[scope]; ok {
+		return d
+	}
+	return scope
+}
 
 // ParseScope splits a space-delimited OAuth scope string into its members,
 // dropping empty fields (RFC 6749 §3.3 encodes scope as space-delimited).

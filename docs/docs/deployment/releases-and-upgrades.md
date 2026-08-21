@@ -372,6 +372,12 @@ require the `location:read` permission rather than `event:read`. This permission
 the read-only baseline a viewer receives, so an account that could read position history on
 `v0.11.0` cannot on `v0.12.0`. Grant it explicitly to the roles that need it.
 
+If you have registered an OAuth client for AI access, it needs the same attention: reading
+positions now requires a separate `location` scope alongside `read-only`, so add it to the
+client's registered scopes and re-authorize. Until you do, that client's `query_locations`
+tool is refused while its other read tools keep working. The split is deliberate — it is what
+lets someone authorize an assistant to watch a fleet while withholding where it has been.
+
 **4. Check for these GraphQL operations** in anything you have written against the API:
 
 | Operation | What changed |

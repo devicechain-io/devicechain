@@ -4,6 +4,7 @@
 package auth
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -103,7 +104,11 @@ func TestScopeSupported(t *testing.T) {
 		{ScopeReadOnly, true},
 		{"read-only", true},
 		{"read-only read-only", true},
+		{ScopeLocation, true},
+		{"read-only location", true},
+		{"location read-only", true},
 		{"write", false},
+		{"read-only location write", false},
 		{"read-only write", false},
 		{"admin", false},
 	}
@@ -217,4 +222,149 @@ func TestParseScope(t *testing.T) {
 	if len(ParseScope("")) != 0 {
 		t.Errorf("ParseScope(\"\") should be empty")
 	}
+}
+
+// 🔴 THE SCOPE CEILINGS, ASSERTED AS EXACT SETS AGAINST A LITERAL WRITTEN HERE.
+//
+// The literal is the point. An earlier version of this check compared
+// ScopeAllowance's output against the very var it returns, which made it unable to
+// fail for any value of that var — a reviewer widened the read-only ceiling with
+// audit:read and connector:read and the whole suite stayed green, on a scope named
+// "read-only" that would then have reached the tenant audit journal.
+//
+// So: any addition or removal must be made deliberately in two places. If this test
+// fails, do not "sync" it — read what changed and decide whether a consent screen
+// showing that scope name still describes what it now grants.
+func TestScopeAllowancesAreExactlyThese(t *testing.T) {
+	want := map[string][]string{
+		"read-only": {"device:read", "event:read", "state:read", "command:read", "alarm:read"},
+		"location":  {"location:read"},
+	}
+
+	// The scope VOCABULARY is pinned too, in both directions: a new supported scope
+	// with no entry here would otherwise sail past every assertion below.
+	if len(SupportedScopes) != len(want) {
+		t.Fatalf("SupportedScopes = %v, but this test specifies %d scopes; a scope was "+
+			"added or removed without deciding what its ceiling is", SupportedScopes, len(want))
+	}
+	for _, s := range SupportedScopes {
+		if _, ok := want[s]; !ok {
+			t.Fatalf("supported scope %q has no ceiling specified in this test", s)
+		}
+	}
+
+	for scope, expected := range want {
+		got, ok := ScopeAllowance(scope)
+		if !ok {
+			t.Errorf("ScopeAllowance(%q) reports the scope is undefined", scope)
+			continue
+		}
+		if len(got) != len(expected) {
+			t.Errorf("ScopeAllowance(%q) = %v, want exactly %v", scope, got, expected)
+			continue
+		}
+		for _, a := range expected {
+			if !containsString(got, a) {
+				t.Errorf("ScopeAllowance(%q) = %v, missing %q", scope, got, a)
+			}
+		}
+		for _, a := range got {
+			if !containsString(expected, a) {
+				t.Errorf("ScopeAllowance(%q) = %v, which contains the unspecified authority "+
+					"%q — a ceiling grew without anyone deciding it should", scope, got, a)
+			}
+		}
+	}
+}
+
+// Position is reachable ONLY through the `location` scope, never through `read-only`.
+// This is the consent property: a resource owner must be able to authorize
+// observability while withholding where a device — or a person — has been, and the
+// only place that choice can be expressed is the scope they are shown.
+func TestLocationIsReachableOnlyThroughItsOwnScope(t *testing.T) {
+	ro, ok := ScopeAllowance(ScopeReadOnly)
+	if !ok {
+		t.Fatalf("read-only is not a defined scope")
+	}
+	if containsString(ro, string(LocationRead)) {
+		t.Errorf("the read-only ceiling %v admits %q. A client asking only for read-only "+
+			"would then receive position, and the consent screen — which renders the raw "+
+			"scope strings — could not tell the resource owner that it had", ro, LocationRead)
+	}
+	loc, ok := ScopeAllowance(ScopeLocation)
+	if !ok {
+		t.Fatalf("location is not a defined scope")
+	}
+	if !containsString(loc, string(LocationRead)) {
+		t.Errorf("the location ceiling %v does not admit %q, so nothing can ever grant "+
+			"position through OAuth", loc, LocationRead)
+	}
+}
+
+// Every ceiling is read-only and never names the super-authority. IntersectAuthorities
+// already drops "*" from an allowance, so this is defence in depth on the table
+// itself: a write authority here would let an OAuth session mutate the tenant, and
+// the scopes are named for reading.
+// 🔴 IT ITERATES THE TABLE, NOT SupportedScopes, AND THE DIFFERENCE IS THE WHOLE TEST.
+// An earlier version walked SupportedScopes, so a ceiling whose key was absent from that
+// list was invisible to every test in every package — an entry naming device:write,
+// user:write and "*" could be added to scopeAllowances and all three packages stayed
+// green. It is not reachable today, because ValidateAuthorizeRequest rejects an
+// unadvertised scope at the front door and IntersectAuthorities drops "*" from an
+// allowance. But scopeAllowance() never consults IsSupportedScope, so that gate lives at
+// exactly one endpoint, and any future mint path that does not route through /authorize
+// would make this table the authority. A table that is the authority has to be the thing
+// the test reads.
+func TestScopeAllowancesAreReadOnly(t *testing.T) {
+	for scope := range scopeAllowances {
+		allow, ok := ScopeAllowance(scope)
+		if !ok {
+			t.Errorf("scope %q has a ceiling in scopeAllowances but is not in SupportedScopes, so "+
+				"ScopeAllowance refuses it — the two lists must agree", scope)
+			continue
+		}
+		if len(allow) == 0 {
+			t.Errorf("scope %q has an empty ceiling, so a token minted for it carries "+
+				"nothing and the scope is unusable", scope)
+		}
+		for _, a := range allow {
+			if a == string(AuthorityAll) {
+				t.Errorf("scope %q names %q", scope, a)
+				continue
+			}
+			if !strings.HasSuffix(a, ":read") {
+				t.Errorf("scope %q names %q, which is not a read authority", scope, a)
+			}
+		}
+	}
+}
+
+// An undefined scope fails closed, and the returned slice is a COPY — a caller that
+// unioned into it in place would otherwise rewrite the ceiling for every later grant
+// in the process. scopeAllowance in the AS does exactly that kind of union.
+func TestScopeAllowanceFailsClosedAndCopies(t *testing.T) {
+	if allow, ok := ScopeAllowance("write"); ok || allow != nil {
+		t.Errorf(`ScopeAllowance("write") = %v, %v; an undefined scope must fail closed`, allow, ok)
+	}
+	if allow, ok := ScopeAllowance(""); ok || allow != nil {
+		t.Errorf(`ScopeAllowance("") = %v, %v; the empty scope is not a scope`, allow, ok)
+	}
+	first, _ := ScopeAllowance(ScopeLocation)
+	first[0] = "mutated"
+	second, _ := ScopeAllowance(ScopeLocation)
+	if second[0] == "mutated" {
+		t.Errorf("ScopeAllowance handed out the package global: mutating one result changed "+
+			"the next (%v)", second)
+	}
+}
+
+// containsString is a local membership helper (the package targets no generics-heavy
+// helpers and this keeps the assertions above readable).
+func containsString(haystack []string, needle string) bool {
+	for _, h := range haystack {
+		if h == needle {
+			return true
+		}
+	}
+	return false
 }

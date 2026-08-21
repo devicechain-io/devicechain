@@ -20,12 +20,29 @@ import (
 // tool this one forwards the CALLER'S OWN access token (callerToken → gql.Query)
 // and the MCP server holds no credential of its own, so the locationEvents resolver
 // runs under the caller's claims and applies its own gate. Position is gated on
-// `location:read` — an authority deliberately absent from the read-only viewer
-// baseline and distinct from the `event:read` that the measurement tools need — so
-// an agent acting for a user who was never granted it gets the resolver's refusal
-// surfaced as a failed tool call, without this file knowing the authority's name.
-// That is the whole point: adding a check here would be a second copy of the policy,
-// free to drift from the one that actually protects the data.
+// `location:read`, distinct from the `event:read` the measurement tools need, so an
+// agent acting for a user who lacks it gets the resolver's refusal surfaced as a
+// failed tool call without this file knowing the authority's name. That is the whole
+// point: a check here would be a second copy of the policy, free to drift from the
+// one that actually protects the data.
+//
+// 🔴 THIS TOOL NEEDS TWO SEPARATE THINGS, and the difference is not decoration:
+//
+//   - the `location` OAuth SCOPE, which the client must request and the resource
+//     owner must approve on the consent screen. A token granted only `read-only`
+//     cannot reach position however the subject's roles are configured — the token
+//     endpoint caps it out. A client that wants both asks for "read-only location".
+//   - the caller's own `location:read` AUTHORITY, which a tenant ROLE must grant. The
+//     scope is a ceiling and grants nothing: requesting `location` when no role gave
+//     you the authority still yields a token without it.
+//
+// The two were once fused — `read-only` was the only scope and its allowance was
+// literally user-management's viewer baseline, which holds location:read out on
+// purpose — and the result was that this tool could not be called by ANYBODY, a
+// tenant superuser included ("*" is capped to the allowance, never expanded). The
+// scope table now lives in core/auth (auth.ScopeAllowance) precisely so the fix is
+// visible from here; server_test.go asserts every tool's authority is reachable
+// through some supported scope, so the next read tool cannot repeat it silently.
 
 type QueryLocationsInput struct {
 	DeviceToken string `json:"deviceToken" jsonschema:"the device whose position history to query"`

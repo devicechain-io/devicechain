@@ -240,7 +240,7 @@ func (m *Manager) RefreshOAuth(ctx context.Context, refreshToken, requestedScope
 		} else if cerr != nil {
 			return nil, errServer(cerr.Error())
 		}
-		if berr := checkRefreshClientBinding(boundClient, requestClientID, client, found); berr != nil {
+		if berr := checkRefreshClientBinding(boundClient, requestClientID, claims.Scope, client, found); berr != nil {
 			return nil, berr
 		}
 	}
@@ -283,7 +283,22 @@ func (m *Manager) RefreshOAuth(ctx context.Context, refreshToken, requestedScope
 // token cannot be used without the secret. A PUBLIC client's token stays lenient (it
 // has no secret to enforce, and requiring client_id would break existing public
 // clients that refresh with the token alone).
-func checkRefreshClientBinding(boundClientID, requestClientID string, client *iam.OAuthClient, found bool) *oauthError {
+//
+// 🔴 IT ALSO RE-CHECKS THE BOUND SCOPE AGAINST THE REGISTRATION, AND THAT IS THE HALF
+// THAT WAS MISSING. scopesRegistered ran only at /authorize, so narrowing a client's
+// registered scopes had no effect on any session already holding a refresh token: the
+// scope rode the signed token forever and rotation renewed its TTL each time. The
+// asymmetry made it worse than a plain gap — revoking the ROLE that grants an authority
+// took effect on the very next refresh, because mintScopedGrant re-resolves roles, so
+// an operator watching one lever work would reasonably assume the other did too. It did
+// not, and the only kill switches that actually worked were disabling the client or the
+// identity.
+//
+// It is invalid_grant rather than invalid_scope on purpose. A refresh request need not
+// name a scope at all, so the fault is not in what was asked for — the grant this token
+// represents has been partially revoked, which is the same category as the disabled and
+// deleted cases immediately below, and the same remedy: re-authorize.
+func checkRefreshClientBinding(boundClientID, requestClientID, boundScope string, client *iam.OAuthClient, found bool) *oauthError {
 	if boundClientID == "" {
 		return nil
 	}
@@ -298,6 +313,9 @@ func checkRefreshClientBinding(boundClientID, requestClientID string, client *ia
 	}
 	if client.IsConfidential() && requestClientID != boundClientID {
 		return errInvalidGrant("refresh token was issued to another client")
+	}
+	if !scopesRegistered(client.Scopes, boundScope) {
+		return errInvalidGrant("the client this refresh token was issued to is no longer registered for its scope")
 	}
 	return nil
 }
@@ -356,9 +374,8 @@ func (m *Manager) mintScopedGrant(ctx context.Context, email, tenant, accessScop
 	// would carry, viewer baseline included) to each token's scope allowance.
 	// Intersect caps even the superuser "*" to the allowance, so an OAuth session
 	// can never exceed its scope.
-	effective := effectiveAuthorities(authorities, su)
-	accessCapped := auth.IntersectAuthorities(effective, accessAllow)
-	refreshCapped := auth.IntersectAuthorities(effective, refreshAllow)
+	accessCapped := capToScope(authorities, su, accessAllow)
+	refreshCapped := capToScope(authorities, su, refreshAllow)
 
 	m.mu.RLock()
 	issuer := m.issuer
@@ -394,18 +411,34 @@ func effectiveAuthorities(authorities []string, sudo bool) []string {
 	return unionStrings(authorities, viewerAuthorities)
 }
 
+// capToScope is the whole scope cap in one place: a grant's effective authorities
+// (the set a console token would carry, viewer baseline included, or the superuser's
+// "*") intersected with a scope allowance. IntersectAuthorities caps "*" too, so the
+// result never exceeds allow and never exceeds what the subject holds — the allowance
+// is a ceiling, the roles are the grant, and a token carries the smaller of the two.
+func capToScope(authorities []string, sudo bool, allow []string) []string {
+	return auth.IntersectAuthorities(effectiveAuthorities(authorities, sudo), allow)
+}
+
 // scopeAllowance returns the authorities a (space-delimited) scope set permits: the
-// union of each member scope's allowance. An unknown scope is an error (fail-closed
-// — a token is never minted for a scope with no defined allowance).
+// union of each member scope's ceiling, read from the one table in core/auth. An
+// unknown scope is an error (fail-closed — a token is never minted for a scope with
+// no defined allowance), which is also what keeps a multi-scope request honest: a
+// client asking for "read-only location" gets the union of both ceilings, and a
+// client asking for "read-only" gets a token that cannot reach position however the
+// subject's roles are configured.
+//
+// 🔴 A ceiling, not a grant. IntersectAuthorities emits only what the subject holds,
+// so requesting a scope grants nothing on its own — asking for `location` when no
+// role gave you location:read yields a token without it.
 func scopeAllowance(scope string) ([]string, error) {
 	var out []string
 	for _, s := range auth.ParseScope(scope) {
-		switch s {
-		case auth.ScopeReadOnly:
-			out = unionStrings(out, viewerAuthorities)
-		default:
+		allow, ok := auth.ScopeAllowance(s)
+		if !ok {
 			return nil, fmt.Errorf("unknown scope %q", s)
 		}
+		out = unionStrings(out, allow)
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("no scope requested")
