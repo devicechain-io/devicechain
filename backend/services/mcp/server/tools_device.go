@@ -75,6 +75,17 @@ type DeviceStateSummary struct {
 	LastDisconnectTime string `json:"lastDisconnectTime,omitempty"`
 	LastActivityTime   string `json:"lastActivityTime,omitempty"`
 	InactivityTimeout  int    `json:"inactivityTimeout"`
+	// PresenceSource says where Active came from: ASSERTED (a transport reported the
+	// device's connection state directly) or INFERRED (derived from data arriving, or
+	// not arriving, within InactivityTimeout). The two do not support the same
+	// conclusion from Active == false, which is why it is reported at all — see the
+	// tool description in server.go (ADR-067 decision 3).
+	//
+	// Deliberately NO omitempty: an empty value means the platform served no presence
+	// source, and that must not be indistinguishable from a device the platform told
+	// us nothing about. Omitting the key would make "we did not ask" and "the state is
+	// inferred" look identical to a reader that only sees the emitted JSON.
+	PresenceSource string `json:"presenceSource"`
 }
 
 type GetDeviceStateOutput struct {
@@ -83,7 +94,7 @@ type GetDeviceStateOutput struct {
 
 const getDeviceStateQuery = `query GetDeviceState($deviceTokens: [String!]!) {
   deviceStatesByDeviceToken(deviceTokens: $deviceTokens) {
-    deviceToken active lastConnectTime lastDisconnectTime lastActivityTime inactivityTimeout
+    deviceToken active lastConnectTime lastDisconnectTime lastActivityTime inactivityTimeout presenceSource
   }
 }`
 
