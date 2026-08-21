@@ -48,6 +48,10 @@ func TestBuildAuthorizationServerMetadata(t *testing.T) {
 	assertContains(t, "token_endpoint_auth_methods", md.TokenEndpointAuthMethodsSupported, "client_secret_basic")
 	assertContains(t, "token_endpoint_auth_methods", md.TokenEndpointAuthMethodsSupported, "client_secret_post")
 	assertContains(t, "scopes", md.ScopesSupported, auth.ScopeReadOnly)
+	// A client can only request what discovery advertises, so an unadvertised scope
+	// is an unreachable capability: `location` must appear here or nothing can ever
+	// be authorized to read a device's position over OAuth.
+	assertContains(t, "scopes", md.ScopesSupported, auth.ScopeLocation)
 }
 
 // The handler serves the JSON document on GET and rejects other methods.
