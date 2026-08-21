@@ -99,7 +99,7 @@ backlog is still released if that announcement is itself lost. Both paths depend
 platform learning the device is back: it is the presence record changing that releases the
 hold, and the announcement only makes it happen sooner.
 
-Three limits are worth knowing:
+Four limits are worth knowing:
 
 - **The check needs a transport that reports connections.** For a device whose transport
   only carries data, "no events recently" is not evidence the device cannot receive — a
@@ -113,6 +113,11 @@ Three limits are worth knowing:
   Sparkplug nodes live on your own MQTT infrastructure rather than the platform's, and
   nothing bridges the two. A command issued to one is recorded `FAILED` immediately, with
   that as its reason, rather than being held for a return that would not help.
+- **A hold outlives the transport that caused it.** Only the transport that reported the
+  device absent can report it back, so if that transport stops running the backlog waits
+  until each command's own expiry. [Returning the device to inferred
+  presence](../deployment/edge-services.md#demoting-a-device) releases it: the hold is keyed
+  on a device being reported absent, and an inferred device is not.
 
 A run of `TIMEOUT` against devices you know are intermittent is therefore still worth
 reading as a statement about when they were connected rather than about their firmware —

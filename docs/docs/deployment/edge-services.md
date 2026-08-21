@@ -85,9 +85,11 @@ handover.
 Every device carries a **presence source** — `INFERRED` or `ASSERTED` — and the rules around it are
 narrower than they look.
 
-**Promotion is one-way.** A device becomes asserted the first time an authoritative transport speaks
-for it, and **nothing ever moves it back to inferred.** There is no operation, no setting and no
-timeout that demotes a device. A device that used to arrive over Sparkplug or LwM2M and now arrives
+**Only the source can give a device back.** A device becomes asserted the first time an authoritative
+transport speaks for it, and no timeout, no data event and no amount of silence moves it back to
+inferred. The one thing that does is a **demotion** — a claim by the *source* that it is no longer
+speaking for the device, never a claim about the device itself. See [returning a device to inferred
+presence](#demoting-a-device). A device that used to arrive over Sparkplug or LwM2M and now arrives
 over plain MQTT keeps its asserted source, and keeps being exempt from the inactivity sweep.
 
 **Ordering is by a platform-minted session identity, never by anything the device sends.** Each
@@ -110,7 +112,8 @@ able to declare itself connected could pin itself online permanently.
 
 **The inferred timeout is ten minutes and is not adjustable.** Devices without an asserting transport
 are swept offline after ten minutes of silence, re-checked every minute. There is no per-device
-override and no setting for it today, so do not go looking for one.
+override and no setting for it today, so do not go looking for one. It is also the timeout a demoted
+device comes back under, which is most of the point of demoting one.
 
 ## A device that reads online and is not
 
@@ -119,10 +122,17 @@ This is the failure mode to understand before you rely on presence for anything 
 **An asserted device that dies without saying so can read online indefinitely.** The inactivity sweep
 deliberately skips asserted devices — the whole point of an asserting transport is that silence is not
 evidence of death — and on these two transports **nothing else has a timeout, a watchdog or a
-sweeper.** Only a new signal from that device's own transport can clear it. Devices asserted by
-DeviceChain's own MQTT broker are the exception, and the only one: a repair pass there periodically
-compares the broker's live connection list against what the platform believes and corrects the
-difference. See [Device Presence](../concepts/device-presence.md).
+sweeper.** Two things clear it, and neither of them is a timeout.
+
+The first is a new signal from the device's own transport. Devices asserted by DeviceChain's own MQTT
+broker get one without the device doing anything: a repair pass there periodically compares the
+broker's live connection list against what the platform believes and corrects the difference. See
+[Device Presence](../concepts/device-presence.md). On Sparkplug and LwM2M there is no such pass, so
+the signal has to come from the device.
+
+The second is a [demotion](#demoting-a-device), and it is the answer when the first will never
+arrive — because the source that would have to produce it is gone. It works on all three asserting
+transports.
 
 The concrete ways it happens:
 
@@ -136,8 +146,10 @@ The concrete ways it happens:
 - **An LwM2M registration that is simply long.** A device that vanishes is marked offline when its
   registration lifetime lapses — with the default that is **86400 seconds**, one full day.
 - **A device whose asserting transport is removed.** Decommission the Sparkplug source or the LwM2M
-  credential a device arrived on, and nothing will ever produce another signal for it. Because
-  promotion is one-way, it is stranded at its last asserted state permanently.
+  credential a device arrived on, and nothing will ever produce another signal for it. It is stranded
+  at its last asserted state until someone [releases it](#demoting-a-device) — which is precisely
+  what that operation is for, since a source that is gone will not be telling the platform anything
+  more.
 
 **The one lever on these two transports is `maxLifetimeSeconds`**, and it applies to LwM2M only. Every
 registration's lifetime is clamped down to at most that value, so it directly bounds how long a dead
@@ -149,6 +161,91 @@ There is no equivalent lever on the Sparkplug path. If a Sparkplug device readin
 operationally load-bearing for you, pair the connectivity signal with a timeout-based
 [absence rule](../concepts/event-processing.md), which fires on silence regardless of what presence
 says.
+
+### Returning a device to inferred presence {#demoting-a-device}
+
+A **demotion** is the only transition from `ASSERTED` back to `INFERRED`. It is a claim by the
+source, not about the device: it says the source is releasing custody, and it asserts nothing
+whatever about connectivity. Whether the device reads online, when it last connected, when it last
+disconnected and when it last reported are all left exactly as they were.
+
+What changes is who is allowed to correct them. An asserted device suppresses both of the platform's
+repair mechanisms; releasing it hands the device back to them, which repairs both directions of the
+freeze at once:
+
+- A device frozen **online** becomes visible to the inactivity sweep again, and is marked offline ten
+  minutes after its real last activity.
+- A device frozen **offline** stops having its commands withheld. The hold is keyed on a device being
+  asserted *and* not active, so an inferred device is dispatched to; the periodic pass that re-checks
+  the withheld set releases the backlog within a couple of minutes, and the device itself reads online
+  again on its next reading. This is the direction worth fixing promptly, because held commands count
+  against a [per-tenant ceiling](../concepts/commands.md#held-command-ceiling) — devices wedged
+  offline by a departed source can eventually refuse enqueues for the healthy devices beside them.
+
+There are two ways it happens.
+
+#### A source releases its own devices when it is switched off
+
+When broker-asserted MQTT presence declines to start because it was **deliberately disabled** or
+because the **NATS system-account credential is missing**, `event-sources` walks the devices it still
+has asserted and releases them.
+
+Those are two of the six reasons the tap can fail to start, and the line is deliberate: both are
+configuration, so every replica of the instance reads the same values and reaches the same
+conclusion — the release is the instance speaking rather than one replica guessing. A failed dial or
+a failed subscription is that replica's own bad luck, its peers may be reading advisories perfectly
+well, and releasing a fleet on that evidence would undo something that was never broken. All six set
+`presence_tap_off{reason}` regardless, which is how you tell which one you have.
+
+Three properties of the automatic release are worth knowing before relying on it:
+
+- **A missing credential waits two minutes first.** A bring-up mints that credential in the same run
+  that starts the services, so an absent value can simply be a race with the run that is creating it.
+  A written `enabled: false` is unambiguous, and acts immediately.
+- **It needs a gateway source and service-to-service configuration of its own** — something to emit
+  under, and a way to enumerate tenants and read the projection. Without them it does not run at all.
+  It logs that it did not, and points at the manual door, which is then the only one.
+- **It is paced and self-emptying.** Releases go out at 25 devices a second, and a released device
+  leaves the set being walked, so an interrupted pass resumes for free rather than starting again.
+  `presence_still_asserted` is how much is left; a healthy release walks it to zero and leaves it
+  there.
+
+Nothing releases Sparkplug or LwM2M devices automatically. Those sources go away because an operator
+removed them, not because a flag changed, so an operator is what releases them.
+
+#### An operator releases them by hand
+
+`dcctl presence demote` walks one source's asserted devices in a tenant and releases each:
+
+```
+dcctl presence demote --tenant acme --source sparkplug:plant-a \
+  --reason "plant-a gateway decommissioned"
+```
+
+| Flag | |
+|---|---|
+| `--tenant` | Required. A demotion acts on one tenant. |
+| `--source` | Required, and never inferred — the blast radius is an entire event source. Pass it exactly as the device's state reports it: the source's own configured id for MQTT and HTTP (`mqtt1`, `http1`), `sparkplug:{hostId}` for Sparkplug, `lwm2m` for LwM2M. |
+| `--device` | Repeatable. Narrows to named devices *within* the source; omit it to release the whole source. |
+| `--reason` | Required. Recorded with every event the run emits — the only record of a fleet-wide presence write. |
+| `--page` | Devices per call, `200` by default. |
+| `--dry-run` | Reports what would be released, and releases nothing. |
+
+A source nobody uses is not an error — it simply matches nothing. So a first page that matches zero
+devices is far more likely to be a mistyped `--source` than a finished job, and the command says so
+rather than reporting success.
+
+The same operation is available on the API as `device-state`'s `demoteAssertedPresence` mutation. It
+requires the `state:demote` permission, which is a write, is not part of the read-only baseline every
+member receives, and is granted to no role by default — give it explicitly to the role that needs it.
+
+#### A release is metered like any other presence event
+
+It passes the same per-tenant [ingest ceiling](../concepts/governance.md) as a connect or a
+disconnect, so a tenant already at its ceiling can have its *repair* refused along with the churn
+causing the pressure — counted in `presence_events_refused_total`. Nothing is lost: a refused release
+leaves the device asserted, so the next pass finds it again. The repair simply arrives no sooner than
+the ceiling allows.
 
 ## Tenancy on both transports
 

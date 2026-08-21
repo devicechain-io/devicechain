@@ -24,7 +24,7 @@ El servidor expone diez herramientas de **lectura**. Cada una es una consulta co
 
 **Estado en vivo y telemetría**
 
-- `get_device_state` — el estado actual de último valor conocido de un dispositivo.
+- `get_device_state` — el estado actual de último valor conocido de un dispositivo, incluido si ese estado lo **reportó el transporte** o se **infirió del silencio**. La distinción cambia lo que significa «no activo»: reportado significa que se sabe que el dispositivo está desconectado; inferido significa solo que no ha llegado nada recientemente, que es también el aspecto que tiene un dispositivo sano con un intervalo de reporte largo.
 - `get_latest_measurements` — el valor más reciente por medición.
 - `query_measurements` — lecturas de series temporales sin procesar en un rango de tiempo.
 - `aggregate_measurements` — agregados por intervalos (min/max/promedio y similares) en un rango.

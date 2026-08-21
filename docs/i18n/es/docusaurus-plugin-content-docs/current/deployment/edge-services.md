@@ -92,10 +92,13 @@ muertos en cada relevo.
 Todo dispositivo lleva una **fuente de presencia** —`INFERRED` o `ASSERTED`— y las reglas que la rigen
 son más estrechas de lo que parecen.
 
-**La promoción es de un solo sentido.** Un dispositivo pasa a afirmado la primera vez que un
-transporte autoritativo habla por él, y **nada lo devuelve nunca a inferido.** No hay operación, ni
-ajuste, ni tiempo de espera que lo degrade. Un dispositivo que antes llegaba por Sparkplug o LwM2M y
-ahora llega por MQTT simple conserva su fuente afirmada, y sigue exento del barrido de inactividad.
+**Solo la fuente puede devolver un dispositivo.** Un dispositivo pasa a afirmado la primera vez que un
+transporte autoritativo habla por él, y ningún tiempo de espera, ningún evento de datos y ninguna
+cantidad de silencio lo devuelven a inferido. Lo único que lo hace es una **degradación**: una
+afirmación de la *fuente* de que ya no habla por ese dispositivo, nunca una afirmación sobre el
+dispositivo en sí. Vea [Devolver un dispositivo a presencia inferida](#demoting-a-device). Un
+dispositivo que antes llegaba por Sparkplug o LwM2M y ahora llega por MQTT simple conserva su fuente
+afirmada, y sigue exento del barrido de inactividad.
 
 **El orden lo fija una identidad de sesión acuñada por la plataforma, nunca nada que envíe el
 dispositivo.** Cada par de conexión/desconexión se sella con un marcador de sesión que genera la
@@ -121,6 +124,8 @@ permanente.
 **El tiempo de espera inferido es de diez minutos y no es ajustable.** Los dispositivos sin un
 transporte que afirme presencia se marcan fuera de línea tras diez minutos de silencio, con una
 revisión cada minuto. Hoy no hay ni anulación por dispositivo ni ajuste alguno, así que no lo busque.
+Es además el tiempo de espera bajo el que vuelve a quedar un dispositivo degradado, que es buena
+parte del sentido de degradarlo.
 
 ## Un dispositivo que figura en línea y no lo está
 
@@ -130,11 +135,18 @@ despierte a una persona.
 **Un dispositivo afirmado que muere sin decirlo puede figurar en línea indefinidamente.** El barrido
 de inactividad omite deliberadamente a los dispositivos afirmados —el sentido mismo de un transporte
 que afirma presencia es que el silencio no es prueba de muerte— y en estos dos transportes **no hay
-nada más que tenga un tiempo de espera, un perro guardián ni un barredor.** Solo una señal nueva del
-propio transporte de ese dispositivo puede limpiarlo. Los dispositivos afirmados por el broker propio
-de DeviceChain son la excepción, y la única: allí una pasada de reparación compara periódicamente la
-lista de conexiones vivas del broker con lo que la plataforma cree y corrige la diferencia. Vea
-[Presencia de dispositivo](../concepts/device-presence.md).
+nada más que tenga un tiempo de espera, un perro guardián ni un barredor.** Dos cosas lo limpian, y
+ninguna de ellas es un tiempo de espera.
+
+La primera es una señal nueva del propio transporte del dispositivo. Los dispositivos afirmados por el
+broker propio de DeviceChain obtienen una sin que el dispositivo haga nada: allí una pasada de
+reparación compara periódicamente la lista de conexiones vivas del broker con lo que la plataforma
+cree y corrige la diferencia. Vea [Presencia de dispositivo](../concepts/device-presence.md). En
+Sparkplug y LwM2M no existe tal pasada, así que la señal tiene que venir del dispositivo.
+
+La segunda es una [degradación](#demoting-a-device), y es la respuesta cuando la primera no va a
+llegar nunca, porque la fuente que tendría que producirla ya no está. Funciona en los tres
+transportes que afirman presencia.
 
 Las formas concretas en que ocurre:
 
@@ -151,8 +163,9 @@ Las formas concretas en que ocurre:
   segundos**, un día entero.
 - **Un dispositivo cuyo transporte afirmante se elimina.** Dé de baja la fuente de Sparkplug o la
   credencial LwM2M por la que llegaba un dispositivo y nunca volverá a producirse una señal para él.
-  Como la promoción es de un solo sentido, queda varado en su último estado afirmado de forma
-  permanente.
+  Queda varado en su último estado afirmado hasta que alguien lo [libere](#demoting-a-device), que es
+  exactamente para lo que existe esa operación: una fuente que ya no está no va a contarle nada más a
+  la plataforma.
 
 **La única palanca en estos dos transportes es `maxLifetimeSeconds`**, y solo se aplica a LwM2M. El tiempo de vida
 de cada registro se recorta hasta ese valor como máximo, de modo que acota directamente cuánto tiempo
@@ -165,6 +178,96 @@ En la vía de Sparkplug no hay palanca equivalente. Si que un dispositivo Sparkp
 tiene peso operativo para usted, empareje la señal de conectividad con una
 [regla de ausencia](../concepts/event-processing.md) basada en tiempo de espera, que se dispara con el
 silencio independientemente de lo que diga la presencia.
+
+### Devolver un dispositivo a presencia inferida {#demoting-a-device}
+
+Una **degradación** es la única transición de `ASSERTED` de vuelta a `INFERRED`. Es una afirmación de
+la fuente, no sobre el dispositivo: dice que la fuente renuncia a su custodia, y no afirma
+absolutamente nada sobre la conectividad. Si el dispositivo figura en línea, cuándo se conectó por
+última vez, cuándo se desconectó y cuándo reportó por última vez quedan exactamente como estaban.
+
+Lo que cambia es quién puede corregir esos valores. Un dispositivo afirmado suprime los dos mecanismos
+de reparación de la plataforma; liberarlo se lo devuelve a ambos, lo que repara los dos sentidos de la
+congelación a la vez:
+
+- Un dispositivo congelado **en línea** vuelve a ser visible para el barrido de inactividad, y se
+  marca fuera de línea diez minutos después de su última actividad real.
+- Un dispositivo congelado **fuera de línea** deja de tener sus comandos retenidos. La retención
+  depende de que el dispositivo esté afirmado *y* no activo, así que a un dispositivo inferido se le
+  despacha; la pasada periódica que revisa el conjunto retenido libera la acumulación en un par de
+  minutos, y el propio dispositivo vuelve a figurar en línea con su siguiente lectura. Este es el
+  sentido que conviene arreglar pronto, porque los comandos retenidos cuentan contra un
+  [techo por inquilino](../concepts/commands.md#held-command-ceiling): los dispositivos atascados
+  fuera de línea por una fuente que se fue pueden acabar rechazando encolados de los dispositivos
+  sanos que tienen al lado.
+
+Hay dos formas de que ocurra.
+
+#### Una fuente libera sus propios dispositivos cuando se apaga
+
+Cuando la presencia MQTT afirmada por el broker se niega a arrancar porque se **desactivó
+deliberadamente** o porque **falta la credencial de cuenta de sistema de NATS**, `event-sources`
+recorre los dispositivos que aún tiene afirmados y los libera.
+
+Son dos de las seis razones por las que la toma puede no arrancar, y la línea es deliberada: ambas son
+configuración, así que todas las réplicas de la instancia leen los mismos valores y llegan a la misma
+conclusión — la liberación es la instancia hablando, no una réplica adivinando. Un fallo al marcar o
+al suscribirse es mala suerte de esa réplica en concreto, sus pares pueden estar leyendo los avisos
+perfectamente, y liberar una flota entera con esa evidencia desharía algo que nunca estuvo roto. Las
+seis ponen `presence_tap_off{reason}` de todos modos, que es cómo se distingue cuál se tiene.
+
+Tres propiedades de la liberación automática conviene conocerlas antes de depender de ella:
+
+- **Una credencial ausente espera dos minutos primero.** Un arranque inicial acuña esa credencial en
+  la misma ejecución que pone en marcha los servicios, así que un valor ausente puede ser simplemente
+  una carrera con la ejecución que lo está creando. Un `enabled: false` escrito es inequívoco, y actúa
+  de inmediato.
+- **Necesita una fuente de pasarela y configuración de llamadas entre servicios propias**: algo bajo
+  lo que emitir, y una manera de enumerar inquilinos y leer la proyección. Sin eso no se ejecuta en
+  absoluto. Registra que no lo hizo y apunta a la puerta manual, que entonces es la única.
+- **Va a ritmo pausado y se vacía sola.** Las liberaciones salen a 25 dispositivos por segundo, y un
+  dispositivo liberado abandona el conjunto que se recorre, así que una pasada interrumpida se reanuda
+  gratis en lugar de empezar de nuevo. `presence_still_asserted` es cuánto queda; una liberación sana
+  lo lleva a cero y lo deja ahí.
+
+Nada libera automáticamente los dispositivos de Sparkplug ni de LwM2M. Esas fuentes desaparecen porque
+un operador las retiró, no porque cambiara una bandera, así que un operador es quien las libera.
+
+#### Un operador los libera a mano
+
+`dcctl presence demote` recorre los dispositivos afirmados de una fuente en un inquilino y libera cada
+uno:
+
+```
+dcctl presence demote --tenant acme --source sparkplug:plant-a \
+  --reason "plant-a gateway decommissioned"
+```
+
+| Opción | |
+|---|---|
+| `--tenant` | Obligatoria. Una degradación actúa sobre un inquilino. |
+| `--source` | Obligatoria, y nunca se infiere: el radio de acción es una fuente de eventos entera. Pásela exactamente como la reporta el estado del dispositivo: el identificador configurado de la propia fuente para MQTT y HTTP (`mqtt1`, `http1`), `sparkplug:{hostId}` para Sparkplug, `lwm2m` para LwM2M. |
+| `--device` | Repetible. Acota a dispositivos concretos *dentro* de la fuente; omítala para liberar la fuente entera. |
+| `--reason` | Obligatoria. Se registra con cada evento que emite la ejecución: el único rastro de una escritura de presencia sobre toda una flota. |
+| `--page` | Dispositivos por llamada, `200` de forma predeterminada. |
+| `--dry-run` | Informa de lo que se liberaría, y no libera nada. |
+
+Una fuente que nadie usa no es un error: sencillamente no coincide con nada. Así que una primera
+página que no coincide con ningún dispositivo es mucho más probable que sea un `--source` mal escrito
+que un trabajo terminado, y el comando lo dice en lugar de informar de éxito.
+
+La misma operación está disponible en la API como la mutación `demoteAssertedPresence` de
+`device-state`. Requiere el permiso `state:demote`, que es de escritura, no forma parte de la base de
+solo lectura que recibe todo miembro, y no lo tiene ningún rol de forma predeterminada: concédalo
+explícitamente al rol que lo necesite.
+
+#### Una liberación se contabiliza como cualquier otro evento de presencia
+
+Pasa por el mismo [techo de ingesta](../concepts/governance.md) por inquilino que una conexión o una
+desconexión, así que a un inquilino ya en su techo se le puede rechazar la *reparación* junto con la
+rotación que causa la presión — contadas en `presence_events_refused_total`. No se pierde nada: una
+liberación rechazada deja el dispositivo afirmado, así que la siguiente pasada lo vuelve a encontrar.
+La reparación simplemente llega no antes de lo que el techo permita.
 
 ## Pertenencia a inquilino en ambos transportes
 

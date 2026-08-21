@@ -710,12 +710,25 @@ functionalAreas:
     # published recently", and every alarm, dashboard and command-delivery decision
     # inherits that guess. It also needs a system-account credential
     # (infrastructure.nats.auth.sysUser) and a source pointed at this instance's own
-    # broker; any of those missing leaves it off, with a log line saying which.
+    # broker; any of those missing leaves it off, with a log line saying which — and
+    # sets presence_tap_off{reason}, which is the ONLY external signal that presence is
+    # not being read. A long-lived MQTT fleet emits no advisories for days, so the
+    # presence counters read the same whether the tap is healthy or was never started.
+    #
+    # 🔑 SETTING enabled: false ON A RUNNING INSTANCE RELEASES ITS DEVICES, it does not
+    # freeze them (ADR-067 demotion). Every device this source has ASSERTED is walked
+    # back to INFERRED at 25/s, asserting nothing about connectivity — which is what
+    # hands them back to the inactivity sweep and to their own data events. The same
+    # happens when the system-account credential goes missing, after a 120s settle
+    # window (a bring-up mints it in the run that starts the services, so an absent
+    # value can be a race). The other bail paths do NOT release: a failed dial or
+    # subscription is one replica's bad luck, not the instance's configuration. Release
+    # those by hand with `dcctl presence demote`.
     #
     # reconcileSeconds is not a backstop knob. A graceful broker restart emits NO
     # disconnect notices for the connections it was holding, so this pass is the only
     # thing that ever corrects those devices — and an asserted device is skipped by the
-    # inactivity sweep, so nothing else would.
+    # inactivity sweep, so nothing else corrects them short of a demotion.
     #   config:
     #     brokerPresence:
     #       enabled: true              # unset = on

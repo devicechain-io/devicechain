@@ -44,7 +44,7 @@ it reaches that service's own `/graphql`. So every endpoint below is
 | `user-management` | authentication — `login`, `selectTenant`, `refresh` — and the tenant's own governance view |
 | `device-management` | devices, device types, profiles, assets, areas, customers, groups, relationships, alarms, credentials, detection-rule authoring |
 | `event-management` | time-series event queries — `events`, `locationEvents`, `measurementEvents`, `alertEvents`, `bucketedMeasurements` |
-| `device-state` | live last-known state — `latestMeasurements`, `latestLocation`, `deviceStates` |
+| `device-state` | live last-known state — `latestMeasurements`, `latestLocation`, `deviceStates` — plus `demoteAssertedPresence`, which returns an event source's asserted devices to inferred presence |
 | `command-delivery` | command dispatch — `createCommand`, `cancelCommand`, fleet-wide batches (`createCommandBatch`, `cancelCommandBatch`), command history |
 | `event-processing` | detection-rule validation, replay preview, rule health |
 | `dashboard-management` | dashboard CRUD and versioning |
@@ -65,7 +65,9 @@ Authorization across the data-plane services is **capability-based**: each resol
 specific authority (e.g. `device:write`) carried on the caller's tenant token. Note that a few
 authorities do not line up with intuition — reading device credentials requires `device:write`,
 not `device:read`, and `latestLocation` requires `location:read` while its `device-state` siblings
-require `state:read`.
+require `state:read`. `demoteAssertedPresence` requires `state:demote`, which is neither of those and
+is granted to no role by default: it is the only thing outside the event pipeline that writes the
+live-state projection, and one call reaches an entire event source's devices.
 
 `sparkplug-ingest` and `lwm2m-ingest` serve no GraphQL at all and are deliberately kept off the
 `/api` router entirely. `event-sources` is routed but answers with a placeholder schema — ingest

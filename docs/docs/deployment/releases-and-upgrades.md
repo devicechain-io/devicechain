@@ -423,6 +423,21 @@ arrived. They are now stored at their own. A device uploading an hour of buffere
 writes them across that hour rather than at the moment of upload, so history, charts,
 retention and detection all see them where they actually belong.
 
+**A presence source that stops running now hands its devices back.** A device marked `ASSERTED` used
+to keep whatever presence it last had, indefinitely: the inactivity sweep skips asserted devices and
+a data event cannot flip one, so a device that was connected when its source went away read connected
+forever, and one that was offline had its commands held forever. Broker-asserted MQTT presence now
+releases the devices it asserted when it is deliberately disabled, or when its NATS system-account
+credential is missing — returning them to `INFERRED` without asserting anything about connectivity.
+On an instance where that applies, expect one state-change event per device, paced, counted under
+`presence_events_total{state="demoted"}`, and expect those devices to come back under the ten-minute
+inactivity sweep. Sparkplug and LwM2M have no automatic release: `dcctl presence demote` and
+`device-state`'s new `demoteAssertedPresence` mutation do it by hand, for any source. The mutation
+needs a new `state:demote` permission that no role holds by default. A new gauge,
+`presence_tap_off{reason}`, reports whether broker-asserted presence is running at all — something
+nothing reported before, because a quiet fleet and a tap that never started look identical from
+outside. See [returning a device to inferred presence](./edge-services.md#demoting-a-device).
+
 #### Input that used to be accepted and now is not
 
 - A notification policy carrying `deviceTypeToken`. Scoping a policy to a device type is

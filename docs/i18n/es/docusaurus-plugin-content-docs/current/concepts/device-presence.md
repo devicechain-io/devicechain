@@ -20,7 +20,7 @@ Todo dispositivo lleva una **fuente de presencia** (presence source) que indica 
 
 Un dispositivo permanece **inferido** hasta que un transporte que afirma presencia produce una señal para él, por lo que nada cambia para los dispositivos existentes a menos que comiencen a llegar a través de un transporte que afirme presencia. Hoy tres transportes afirman presencia:
 
-- **MQTT simple**, para dispositivos conectados al propio broker de DeviceChain. No se requiere ninguna cooperación del dispositivo — no tiene que publicar un mensaje de nacimiento, definir un last will ni anunciarse de ninguna manera. El broker ya sabe el momento exacto en que una conexión se abre y se cierra, y DeviceChain lo lee directamente. Lo que hay que equipar para ello es la *instancia*, no el dispositivo: leer esas conexiones necesita una credencial de cuenta de sistema de NATS y una fuente de eventos que apunte al propio broker de esta instancia, y hasta que tenga ambas la toma permanece apagada y los dispositivos MQTT siguen siendo inferidos. `dcctl bootstrap` acuña esa credencial y configura esa fuente, así que una instancia levantada de ese modo afirma la presencia MQTT sin trabajo adicional; un `helm install` a secas deja la credencial vacía y no lo hace. [Confirmar que la toma del broker está realmente en marcha](#confirming-the-tap), más abajo, es cómo se distingue un caso del otro.
+- **MQTT simple**, para dispositivos conectados al propio broker de DeviceChain. No se requiere ninguna cooperación del dispositivo — no tiene que publicar un mensaje de nacimiento, definir un last will ni anunciarse de ninguna manera. El broker ya sabe el momento exacto en que una conexión se abre y se cierra, y DeviceChain lo lee directamente. Lo que hay que equipar para ello es la *instancia*, no el dispositivo: leer esas conexiones necesita una credencial de cuenta de sistema de NATS y una fuente de eventos que apunte al propio broker de esta instancia, y hasta que tenga ambas la toma permanece apagada y los dispositivos MQTT siguen siendo inferidos. Una instancia que *sí tuvo* toma y luego pierde esa credencial es un caso distinto de una que nunca la tuvo: los dispositivos que ya había afirmado se quedarían congelados en lo último que reportaron, así que en su lugar se los devuelve a presencia inferida. Vea [Devolver un dispositivo a presencia inferida](../deployment/edge-services.md#demoting-a-device). `dcctl bootstrap` acuña esa credencial y configura esa fuente, así que una instancia levantada de ese modo afirma la presencia MQTT sin trabajo adicional; un `helm install` a secas deja la credencial vacía y no lo hace. [Confirmar que la toma del broker está realmente en marcha](#confirming-the-tap), más abajo, es cómo se distingue un caso del otro.
 - **[Sparkplug-B](./sparkplug.md)**, cuyos mensajes BIRTH y DEATH son exactamente estas señales explícitas de conexión/desconexión.
 - **[LwM2M](./lwm2m.md)**, cuyo ciclo de vida de registro — registro, actualización periódica y baja de registro (o un tiempo de vida vencido) — hace lo mismo.
 
@@ -29,13 +29,13 @@ Dos detalles del caso MQTT conviene conocerlos antes de construir sobre él:
 - **Sigue la conexión principal del dispositivo.** Un dispositivo puede abrir conexiones adicionales añadiendo su propio sufijo al identificador de cliente (el flujo de trabajo de dos terminales `mosquitto_sub` / `mosquitto_pub`). Esas conexiones adicionales se ignoran deliberadamente para la presencia: el estado del dispositivo sigue su sesión principal, de modo que cerrar una conexión secundaria nunca hace que un dispositivo conectado se lea como fuera de línea. Un dispositivo que *solo* se conecta con un identificador de cliente con sufijo no se afirma en absoluto y permanece inferido.
 - **Cubre los dispositivos del broker de esta instancia.** Un dispositivo que llega a DeviceChain a través de un broker que usted mismo opera no es algo cuyas conexiones DeviceChain pueda observar, así que permanece inferido.
 
-La consecuencia de esa omisión es deliberada, y conviene entenderla antes de depender de ella: **un dispositivo afirmado no tiene una red de seguridad por inactividad.** Su señal de desconexión solo puede venir del transporte, así que si esa señal nunca llega — un certificado de muerte (death) de Sparkplug perdido junto con la conexión, o un dispositivo LwM2M cuyo tiempo de vida de registro aún no ha vencido (el valor predeterminado del propio LwM2M es de 86400 segundos, un día completo) — el dispositivo sigue apareciendo en línea sin nada que lo corrija. Qué vigilar, y cómo acotar esa ventana, está en **[Cómo operar los servicios de borde](../deployment/edge-services.md)**.
+La consecuencia de esa omisión es deliberada, y conviene entenderla antes de depender de ella: **un dispositivo afirmado no tiene una red de seguridad por inactividad.** Su señal de desconexión solo puede venir del transporte, así que si esa señal nunca llega — un certificado de muerte (death) de Sparkplug perdido junto con la conexión, o un dispositivo LwM2M cuyo tiempo de vida de registro aún no ha vencido (el valor predeterminado del propio LwM2M es de 86400 segundos, un día completo) — el dispositivo sigue apareciendo en línea sin nada que lo corrija. Qué vigilar, y cómo acotar esa ventana, está en **[Cómo operar los servicios de borde](../deployment/edge-services.md)**. Si el transporte que lo habría dicho se ha ido para siempre y no solo está callado, [devolver el dispositivo a presencia inferida](../deployment/edge-services.md#demoting-a-device) es lo que vuelve a poner una corrección a su alcance.
 
 Para los dispositivos MQTT, DeviceChain cierra esa brecha por sí mismo en lugar de dejársela a usted. Hay un caso en el que el broker no puede avisar de que un dispositivo se ha ido: cuando el propio broker se reinicia, las conexiones que mantenía simplemente desaparecen y nunca se anuncia una desconexión para ellas. Por eso DeviceChain compara periódicamente la lista de conexiones vivas del broker con lo que cree, y corrige la diferencia en ambos sentidos — dispositivos que no sabía que estaban conectados, y dispositivos que cree conectados y que el broker no mantiene. Los dispositivos que se reconectan tras un reinicio del broker se corrigen con su propia reconexión; el resto se corrige en una comparación posterior — una que pueda dar cuenta de todo el clúster, según el párrafo siguiente y la [advertencia sobre reducir el clúster](#resizing-the-broker-cluster).
 
 Esa comparación se niega deliberadamente a marcar nada como fuera de línea salvo que pueda dar cuenta de **todos** los nodos del clúster del broker. Si un nodo está lento o inaccesible, sus dispositivos faltan de la lista y son indistinguibles de dispositivos que realmente se han ido — y marcar erróneamente como fuera de línea a un dispositivo vivo es el error más dañino, porque todo lo que depende de la presencia actúa en consecuencia: el dispositivo aparece fuera de línea en su pestaña Connectivity, y una [regla de Connectivity](./event-processing.md#condition-types) genera una alarma de desconexión para un dispositivo que era alcanzable todo el tiempo. En esa situación DeviceChain sigue marcando como en línea los dispositivos recién vistos y simplemente espera a la siguiente pasada para decidir sobre los que faltan.
 
-La *fuente* de presencia no se expone todavía en ninguna interfaz. Tanto la pestaña Connectivity de la consola como las herramientas de dispositivo de [MCP](./mcp.md) muestran el estado en línea/fuera de línea resultante y las horas de última conexión, desconexión y actividad — pero no si ese estado fue afirmado por el transporte o inferido a partir de un tiempo de espera. Sin embargo, sí puede leerse mediante la API: `presenceSource` es un campo del tipo `DeviceState` de `device-state` y devuelve `ASSERTED` o `INFERRED`, así que una integración puede distinguir ambos casos aunque ninguna pantalla lo haga.
+La *fuente* de presencia se expone allí donde cambia el significado de una lectura. La pestaña Connectivity de la consola la nombra —*Reportado por el transporte* o *Inferido a partir de la actividad*— y distingue un dispositivo que el transporte reportó como **Desconectado** de otro que simplemente está **Fuera de línea**, es decir, que no ha llegado nada recientemente, que es también exactamente el aspecto que tiene un dispositivo sano con un intervalo de reporte largo. La herramienta `get_device_state` de [MCP](./mcp.md) devuelve `presenceSource` junto al estado y le indica al asistente que no reporte como caído un dispositivo inactivo inferido. Y puede leerse mediante la API: `presenceSource` es un campo del tipo `DeviceState` de `device-state` y devuelve `ASSERTED` o `INFERRED`.
 
 ## Por qué importa la distinción
 
@@ -60,9 +60,9 @@ Otras tres propiedades pertenecen específicamente a la presencia MQTT afirmada 
 ### Confirmar que la toma del broker está realmente en marcha {#confirming-the-tap}
 
 Leer conexiones del broker propio de DeviceChain necesita cuatro cosas, y si falta alguna la toma
-**se niega a arrancar**. Registra el motivo y todos los dispositivos MQTT vuelven a presencia
-inferida — lo que se ve exactamente igual que una instancia que nunca tuvo presencia afirmada,
-porque funcionalmente lo es. Las cuatro:
+**se niega a arrancar**. Registra el motivo, pone `presence_tap_off{reason}` para decir cuál es, y
+los dispositivos MQTT que nunca fueron afirmados siguen siendo inferidos — lo que se ve exactamente
+igual que una instancia que nunca tuvo presencia afirmada, porque funcionalmente lo es. Las cuatro:
 
 - que `brokerPresence.enabled` no esté puesto a `false`
 - que haya una credencial de cuenta de sistema de NATS configurada (`dcctl bootstrap` acuña una;
@@ -73,15 +73,38 @@ porque funcionalmente lo es. Las cuatro:
   reparación, así que se queda apagada deliberadamente en lugar de funcionar a medias: un
   dispositivo cuya desconexión el broker nunca anunció se leería como conectado para siempre
 
-**El contador sobre el que alarmar es `presence_canary_missed_total`, no los contadores de
-presencia.** Una flota MQTT de larga vida legítimamente no emite avisos de conexión ni desconexión
-durante días, así que `presence_events_total` marca lo mismo tanto si la toma está sana como si
-está muerta. Por eso el servicio abre su propia conexión MQTT una vez por minuto exclusivamente
-para que una toma que funciona tenga algo que observar: `presence_canary_observed_total` sube con
-una toma sana, y `presence_canary_missed_total` sube cuando la cadena está rota. Ese par es lo
-único que distingue una toma muerta de una flota en silencio.
+Eso es toda la historia en una instancia que nunca tuvo toma. Una que **sí la tuvo** tiene un segundo
+problema: los dispositivos ya marcados como afirmados conservan la presencia que tuvieran por última
+vez, porque un dispositivo afirmado está exento del barrido de inactividad y un evento de datos no
+puede cambiarlo. Así que, por los dos primeros motivos de la lista —un `enabled: false` escrito y una
+credencial de cuenta de sistema ausente—, `event-sources` devuelve por sí mismo esos dispositivos a
+presencia inferida. Ambos son configuración que todas las réplicas leen igual, que es lo que hace
+seguro automatizar la liberación de una flota entera a partir de ellos. Por los otros dos, y cuando la
+toma no consigue alcanzar el broker o falla su suscripción, no se libera nada automáticamente;
+`dcctl presence demote` es la puerta en esos casos. Ambas vías están descritas en [Devolver un dispositivo a presencia
+inferida](../deployment/edge-services.md#demoting-a-device).
 
-La sonda funciona con su propio calendario, independiente de la pasada de reparación descrita más
+**Dos señales le dicen que la toma no está en marcha, y cubren fallos distintos.**
+
+`presence_tap_off{reason}` es la directa. Se pone a 1 en cada vía por la que la toma se niega a
+arrancar, con la etiqueta nombrando cuál, y responde a una pregunta que una flota en silencio deja
+sin respuesta de otro modo: una flota MQTT de larga vida legítimamente no emite avisos de conexión ni
+desconexión durante días, así que nada en el flujo ordinario de eventos de presencia distingue una
+instancia que está afirmando presencia de otra que sencillamente nunca la arrancó.
+
+No cubre una toma que arrancó y luego dejó de funcionar, porque en ese caso nada se niega a arrancar.
+**Para eso está `presence_canary_missed_total`, y es el contador sobre el que alarmar.** El servicio
+abre su propia conexión MQTT una vez por minuto exclusivamente para que una toma que funciona tenga
+algo que observar: `presence_canary_observed_total` sube con una toma sana, y
+`presence_canary_missed_total` sube cuando la cadena está rota.
+
+Lea los contadores de presencia como tráfico, no como salud. `presence_events_total` está
+legítimamente plano en una flota en silencio — y legítimamente *no* plano en una toma que se acaba de
+apagar, porque liberar los dispositivos que esa toma tenía afirmados emite un evento por dispositivo
+bajo `presence_events_total{state="demoted"}`. Ninguna de las dos formas dice nada sobre si la
+presencia se está leyendo.
+
+El canario funciona con su propio calendario, independiente de la pasada de reparación descrita más
 abajo. Esa separación es lo que hace fiable al contador: un instrumento que solo pudiera informar
 mientras aquello que vigila estuviera sano se quedaría callado justo en el momento que importa.
 
@@ -92,7 +115,7 @@ los cambian. Viven bajo la configuración `brokerPresence` del área `event-sour
 
 | Ajuste | Predeterminado | Qué hace |
 |---|---|---|
-| `enabled` | activada si no se define | Ejecuta la toma. Póngalo en `false` para desactivar deliberadamente la presencia MQTT afirmada por el broker — por ejemplo, en una instancia cuyo broker se comparte con algo que no admite un suscriptor de cuenta de sistema. Todos los dispositivos MQTT vuelven entonces a presencia inferida. |
+| `enabled` | activada si no se define | Ejecuta la toma. Póngalo en `false` para desactivar deliberadamente la presencia MQTT afirmada por el broker — por ejemplo, en una instancia cuyo broker se comparte con algo que no admite un suscriptor de cuenta de sistema. Los dispositivos MQTT pasan entonces a presencia inferida, y los que la toma ya hubiera afirmado se liberan de vuelta a ella, a ritmo pausado, en los minutos siguientes. |
 | `reconcileSeconds` | `300` | Cada cuánto se compara la lista de conexiones vivas del broker con la de la plataforma, en ambos sentidos. **Esto no es una red de seguridad.** Un reinicio ordenado del broker no anuncia desconexión alguna, así que esta pasada es lo único que corrige jamás a esos dispositivos, y un dispositivo afirmado no tiene detrás ningún barrido de inactividad. Bájelo para reparar antes, a cambio de un inventario de todo el clúster más una lectura por inquilino en cada pasada. |
 | `canarySeconds` | `60` | Cada cuánto el servicio abre su propia conexión MQTT para demostrar que la toma sigue viva. Es el calendario contra el que cuenta `presence_canary_missed_total`. |
 | `canaryDeadlineSeconds` | `15` | Acota una sola sonda. Si es demasiado estrecho, informa de fallos que la toma no tiene. |
@@ -137,6 +160,12 @@ Las transiciones de conexión y desconexión pasan por el mismo [límite de inge
 por inquilino que la telemetría, y **se rechazan cuando un inquilino está en su techo** — contadas
 en `presence_events_refused_total`.
 
+**Una degradación pasa por la misma puerta**, y eso conviene preverlo por sí solo: a un inquilino
+apretado contra su techo se le puede rechazar la *reparación* junto con la rotación que causa la
+presión. No se pierde nada —una liberación rechazada deja el dispositivo afirmado, así que la
+siguiente pasada lo vuelve a encontrar—, pero la reparación llega no antes de lo que el techo
+permita.
+
 Es deliberado, no un descuido. La rotación de conexiones la controla enteramente el dispositivo y
 por lo demás es gratis: un dispositivo reconectándose en bucle sería un amplificador de escrituras
 no medido que el limitador de ingesta nunca ve. Pero la consecuencia conviene preverla — un
@@ -161,9 +190,15 @@ El coste de ese diseño es un caso que no puede distinguir: **reducir el clúste
 propósito**. Responden menos nodos que el máximo recordado, así que toda pasada posterior se trata
 como incompleta y no se hace ninguna reparación de desconexión — no hasta la pasada siguiente, sino
 durante toda la vida del proceso. Los dispositivos huérfanos del nodo retirado se leen en línea
-indefinidamente, y como un dispositivo afirmado no tiene red de seguridad por inactividad, nada más
-los corrige.
+indefinidamente, y como un dispositivo afirmado no tiene red de seguridad por inactividad, ningún
+tiempo de espera los corrige.
 
 **Tras reducir el clúster de NATS, reinicie `event-sources`.** La señal de que hacía falta y no se
 hizo es `presence_reconcile_withheld_disconnects_total` subiendo sin estabilizarse. Ampliar el
 clúster no requiere nada.
+
+Si el reinicio tiene que esperar, los dispositivos huérfanos no. `dcctl presence demote` sobre esa
+fuente los devuelve a presencia inferida, donde el barrido de inactividad de diez minutos puede
+marcarlos fuera de línea con su propia evidencia — vea [Devolver un dispositivo a presencia
+inferida](../deployment/edge-services.md#demoting-a-device). Repara los dispositivos que ya están
+mal; el reinicio sigue siendo lo que impide que los siguientes se estropeen.

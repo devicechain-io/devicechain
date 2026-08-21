@@ -45,7 +45,7 @@ que llegue al `/graphql` propio de ese servicio. Así que todos los endpoints si
 | `user-management` | autenticación — `login`, `selectTenant`, `refresh` — y la vista de gobernanza del propio inquilino |
 | `device-management` | dispositivos, tipos de dispositivo, perfiles, activos, áreas, clientes, grupos, relaciones, alarmas, credenciales, autoría de reglas de detección |
 | `event-management` | consultas de eventos de series temporales — `events`, `locationEvents`, `measurementEvents`, `alertEvents`, `bucketedMeasurements` |
-| `device-state` | último estado conocido en vivo — `latestMeasurements`, `latestLocation`, `deviceStates` |
+| `device-state` | último estado conocido en vivo — `latestMeasurements`, `latestLocation`, `deviceStates` — más `demoteAssertedPresence`, que devuelve los dispositivos afirmados de una fuente de eventos a presencia inferida |
 | `command-delivery` | envío de comandos — `createCommand`, `cancelCommand`, lotes para toda la flota (`createCommandBatch`, `cancelCommandBatch`), historial de comandos |
 | `event-processing` | validación de reglas de detección, vista previa de reproducción, salud de reglas |
 | `dashboard-management` | CRUD y versionado de paneles |
@@ -67,6 +67,9 @@ verifica una autoridad específica (por ejemplo, `device:write`) que lleva el to
 llamador. Ten en cuenta que algunas autoridades no coinciden con la intuición — leer credenciales
 de dispositivo requiere `device:write`, no `device:read`, y `latestLocation` requiere
 `location:read` mientras que sus hermanas en `device-state` requieren `state:read`.
+`demoteAssertedPresence` requiere `state:demote`, que no es ninguna de las dos y no lo tiene ningún
+rol de forma predeterminada: es lo único fuera del canal de eventos que escribe la proyección de
+estado en vivo, y una sola llamada alcanza los dispositivos de una fuente de eventos entera.
 
 `sparkplug-ingest` y `lwm2m-ingest` no sirven GraphQL en absoluto y se mantienen deliberadamente
 fuera del router `/api`. `event-sources` sí está enrutado, pero responde con un esquema marcador
