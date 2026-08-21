@@ -226,6 +226,16 @@ const GEO_FENCE_SET_SNAPSHOT = graphql(`
  */
 const SNAPSHOT_PAGE_SIZE = 100;
 
+/**
+ * The most pages this loop will ask for before giving up.
+ *
+ * It runs inside a render path, so an unbounded loop here is a hung tab rather
+ * than a slow one. A hundred fences at a page size of a hundred is one request,
+ * so eight is several times anything reachable — a runaway stop, not a second
+ * limit on how many fences a set may hold.
+ */
+const SNAPSHOT_MAX_PAGES = 8;
+
 export type GeoFenceSetSnapshotFence = NonNullable<
   GeoFenceSetSnapshotQuery['geoFenceSetSnapshot']
 >['fences']['results'][number];
@@ -252,7 +262,7 @@ export interface GeoFenceSetSnapshot {
 export async function getGeoFenceSetSnapshot(version: number): Promise<GeoFenceSetSnapshot> {
   const fences: GeoFenceSetSnapshotFence[] = [];
   let resolved = version;
-  for (let pageNumber = 1; ; pageNumber++) {
+  for (let pageNumber = 1; pageNumber <= SNAPSHOT_MAX_PAGES; pageNumber++) {
     const data = await gql('device-management', GEO_FENCE_SET_SNAPSHOT, {
       version,
       pagination: { pageNumber, pageSize: SNAPSHOT_PAGE_SIZE },
@@ -260,11 +270,30 @@ export async function getGeoFenceSetSnapshot(version: number): Promise<GeoFenceS
     const snapshot = data.geoFenceSetSnapshot;
     resolved = snapshot.version;
     fences.push(...snapshot.fences.results);
-    const total = snapshot.fences.pagination.totalRecords ?? 0;
-    // Stop on the total, and stop on an empty page too: without the second
-    // condition a server that reported a total its pages never reach would spin
-    // this loop forever inside a render path.
-    if (fences.length >= total || snapshot.fences.results.length === 0) break;
+
+    // 🔴 A MISSING TOTAL IS AN ERROR, NOT A ZERO. `?? 0` would end the loop after
+    // the first page and hand back whatever arrived — and a truncated fence set
+    // is indistinguishable from a small one, so the panel would draw a confident
+    // picture of a set that is not the set. The server-side reader refuses the
+    // same wire condition for the same reason; two readers of one field must not
+    // disagree about what a null there means.
+    const total = snapshot.fences.pagination.totalRecords;
+    if (total == null) {
+      throw new Error(
+        'The fence set came back without a record count, so there is no way to tell a ' +
+          'complete set from a truncated one.',
+      );
+    }
+    if (fences.length >= total) return { version: resolved, fences };
+    // A page that returns nothing while the total says otherwise cannot be
+    // completed by asking again.
+    if (snapshot.fences.results.length === 0) {
+      throw new Error(
+        `The fence set reported ${total} fences but stopped answering after ${fences.length}.`,
+      );
+    }
   }
-  return { version: resolved, fences };
+  throw new Error(
+    `The fence set did not finish loading within ${SNAPSHOT_MAX_PAGES} pages.`,
+  );
 }

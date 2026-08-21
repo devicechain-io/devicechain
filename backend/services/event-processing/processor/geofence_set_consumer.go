@@ -294,18 +294,8 @@ func (rp *ResolvedEventsProcessor) resolveOmittedFenceSet(msg messaging.Message,
 		rp.ackFact(msg, "geofence-set")
 		return true
 	}
-	if rp.VersionedFenceSets == nil {
-		// The projection is live but the archive seam is not wired, so this version's fences
-		// are unreachable. Say so loudly: containment for this tenant reports unresolvable
-		// until the seam is configured, and no amount of waiting changes that.
-		rp.metrics.recordFenceSetPointerUnresolved()
-		log.Error().Str("tenant", tenant).Int32("version", version).
-			Msg("A geofence-set fact arrived without its fences (the set is too large for one broker message) and no fence-set archive seam is configured; containment for this tenant reports unresolvable at this version.")
-		rp.ackFact(msg, "geofence-set")
-		return true
-	}
-	set, err := rp.VersionedFenceSets.FenceSetAt(rp.procCtx, tenant, version)
-	if err != nil || set == nil {
+	set, err := rp.fetchOmittedFenceSet(tenant, version)
+	if err != nil {
 		rp.metrics.recordFenceSetPointerUnresolved()
 		log.Error().Err(err).Str("tenant", tenant).Int32("version", version).
 			Msg("Unable to resolve a geofence-set fact that arrived without its fences; containment for this tenant reports unresolvable at this version until the next reconcile sweep.")
@@ -317,6 +307,41 @@ func (rp *ResolvedEventsProcessor) resolveOmittedFenceSet(msg messaging.Message,
 	}
 	rp.ackFact(msg, "geofence-set")
 	return true
+}
+
+// errNoFenceSetArchive reports that no archive seam is wired, so a pointer fact's fences are
+// unreachable.
+//
+// 🔴 IT IS AN ERROR AND NOT A BRANCH OF ITS OWN, DELIBERATELY. Written as a separate early
+// return with its own log line and its own metric increment, it was UNREACHABLE in production:
+// it needs fenceView non-nil and VersionedFenceSets nil, but fenceView is built only when the
+// seam exists and buildFenceSetSeam returns both halves of one client or two nils. A dead
+// branch carrying the only report of the state it describes is worse than no branch — it reads
+// as coverage. Folded in here it is genuinely reachable (any caller assembling a processor by
+// hand can produce it), it goes through the same counted, logged path as every other failure to
+// resolve, and the nil check still stands between this code and a nil-interface call.
+var errNoFenceSetArchive = errors.New("no fence-set archive seam is configured; a fact that arrived without its fences cannot be resolved")
+
+// errFenceSetArchiveEmpty reports an archive read that succeeded and returned nothing. The
+// source's contract is an error or a set, never a silent nil, so this is a broken implementation
+// rather than a missing version — but it is folded into the same reported failure because the
+// consequence is identical and the alternative is installing nil as a fence set.
+var errFenceSetArchiveEmpty = errors.New("the fence-set archive returned no set and no error")
+
+// fetchOmittedFenceSet reads one version out of the archive, turning every way the read can
+// fail to produce a usable set into an error the caller reports once.
+func (rp *ResolvedEventsProcessor) fetchOmittedFenceSet(tenant string, version int32) (*geofence.FenceSet, error) {
+	if rp.VersionedFenceSets == nil {
+		return nil, errNoFenceSetArchive
+	}
+	set, err := rp.VersionedFenceSets.FenceSetAt(rp.procCtx, tenant, version)
+	if err != nil {
+		return nil, err
+	}
+	if set == nil {
+		return nil, errFenceSetArchiveEmpty
+	}
+	return set, nil
 }
 
 // decodeFenceSetFact unmarshals one geofence-set fact into its owning tenant (from the per-tenant

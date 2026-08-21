@@ -85,12 +85,14 @@ type detectMetrics struct {
 	// broker message — and that this service then could not resolve from the archive. Bounded
 	// cardinality (no labels; the tenant is in the accompanying error log).
 	//
-	// It is separate from the fan-out eval-error counter on purpose. A rising eval-error rate is
-	// the SYMPTOM every geofence fault shares, and it cannot say which fault it is; this series
-	// names one specific cause and is the only signal that distinguishes "the fence set outgrew
-	// the wire and the archive read is failing too" from a rule aimed at a fence that does not
-	// exist. A non-zero value here means a tenant's containment is dead until the next reconcile
-	// sweep, so it is worth an alert; the eval-error counter is not.
+	// It is separate from the fan-out eval-error counter on purpose, and the two are alerted on
+	// TOGETHER rather than instead of each other — the chart ships DetectFanoutEvalErrors on that
+	// one and DetectFenceSetPointerUnresolved on this one. A rising eval-error rate is the
+	// SYMPTOM every geofence fault shares and cannot say which fault it is, so it is the alert
+	// that tells an operator something is wrong; this series names one specific cause, and is
+	// what turns "rules are erroring somewhere" into "a tenant's fence set outgrew the wire and
+	// the archive read is failing too". A non-zero value here means that tenant's containment is
+	// dead until the next reconcile sweep at best.
 	fenceSetPointerUnresolved prometheus.Counter
 
 	// Slice-6c per-tenant state-budget gauges (ADR-023 amendment). Bounded cardinality — NO

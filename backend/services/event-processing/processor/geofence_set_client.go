@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
@@ -13,24 +14,45 @@ import (
 	"github.com/devicechain-io/dc-microservice/svcclient"
 )
 
-// fenceSetPageSize is how many fences one page of the frozen-set read asks for.
+// fenceSetPageSize is the page size the frozen-set read OPENS with. It is a starting point,
+// not a bound — the bound is discovered by the walk below, and it is in bytes.
 //
-// 🔴 IT IS SIZED AGAINST THE CLIENT'S READ CAP, NOT AGAINST ROUND-TRIP COUNT.
-// svcclient.maxResponseBytes refuses a response over 1 MiB, and one fence at the authoring
-// ceiling (device-management's MaxGeoFenceVertices = 512 positions) is roughly 10 KB of
-// coordinate text before the GraphQL response escapes it into a JSON string, which is where
-// the worst case lands nearer 20 KB. 25 of those is about half the cap — headroom enough
-// that a tenant sitting exactly on the documented limits is not one geometry document away
-// from the wall again. At the fence-count ceiling (MaxGeoFencesPerTenant = 100) that is
-// four round trips, taken on a startup reconcile or a fence edit, never on the DETECT loop.
+// 🔴 PAGING IS FORCED BY ARITHMETIC, NOT CHOSEN FOR TIDINESS, so this number is about round
+// trips and nothing else. A fence set at device-management's documented limits is larger than
+// svcclient.MaxResponseBytes at every coordinate precision anyone would use: 100 fences × 512
+// positions is ~980 KB of stored GeoJSON at five decimal places (~1.1 m, already below useful
+// geofencing precision) and 1,105,765 bytes once the schema serializes it, against a 1,048,576
+// -byte cap. There is no per-fence bound that makes the whole set fit in one response while
+// MaxGeoFenceVertices stays at 512 — one tight enough would be below a legitimate fence.
+//
+// 🔴 AND A PAGE SIZE COUNTED IN FENCES CANNOT DEFEND A CAP COUNTED IN BYTES. MaxGeoFenceVertices
+// bounds positions, not size; only MaxGeoFenceGeometryBytes says anything about what a response
+// weighs, and even under it 25 fences at the byte ceiling is ~800 KB — inside the cap, but not
+// by much. Against that, an ordinary fence set is nowhere near it: a fence at the vertex ceiling
+// at nine decimal places stores at ~13.9 KB and gains about 9% in GraphQL string escaping, so 25
+// of those is ~380 KB and the whole ceiling set is four round trips, taken on a startup
+// reconcile or a fence edit, never on the DETECT loop.
+//
+// So 25 makes the COMMON case cheap, and fenceWalk is what makes the pathological case work: a
+// page the peer refuses for being too large halves this and tries again, down to one fence.
+//
+// All of this is expected to be temporary. The root cause is that a coordinate is JSON text of
+// unbounded length; storing coordinates as int32 degrees × 10^7 puts the whole ceiling set at
+// ~411 KB, inside one response, and this walk could be deleted rather than tuned. That change is
+// scheduled for v0.13.0 — see MaxGeoFenceGeometryBytes.
 const fenceSetPageSize = 25
 
-// maxFenceSetPages bounds the paging loop, so a peer that reports a totalRecords its pages
-// never reach cannot spin this goroutine forever. It is deliberately far above the reachable
-// page count (MaxGeoFencesPerTenant / fenceSetPageSize = 4): it is a runaway stop, not a
-// second fence-count limit, and sizing it near the real bound would turn a raised authoring
-// ceiling into a silently truncated fence set.
-const maxFenceSetPages = 64
+// maxFenceSetResponses bounds the total GraphQL responses one fence-set read may spend, across
+// every page and every halved retry, so a peer that reports a totalRecords its pages never
+// reach cannot spin this goroutine forever.
+//
+// It is a RUNAWAY STOP, not a second fence-count limit, so it is sized well above anything
+// reachable: the worst legitimate walk is MaxGeoFencesPerTenant fences at a page size of one,
+// i.e. 100 responses, plus the few spent on attempts refused on the way down from 25 (a
+// refused attempt aborts at the page that was refused, so it costs pages, not whole walks).
+// 512 leaves that room several times over, and it ERRORS rather than truncating when it runs
+// out — a short fence set is indistinguishable downstream from a small one.
+const maxFenceSetResponses = 512
 
 // geoFenceSetSnapshotQuery reads the FROZEN fence set of one fence-set version from
 // device-management (ADR-078). It carries NO tenant argument: the tenant travels as the
@@ -52,8 +74,8 @@ const geoFenceSetSnapshotQuery = `query($version: Int!, $pagination: PaginationI
 // together from one row, so a fence edit landing mid-read cannot yield a set filed under a
 // version that is not its own. Same tenancy story as above.
 //
-// Only its FIRST page is read through this query; see CurrentFenceSet for why the rest are
-// read by version instead.
+// Only its FIRST page is read through this query; see fetchCurrentSnapshot for why the rest
+// are read by version instead.
 const currentGeoFenceSetQuery = `query($pagination: PaginationInput!) {
   currentGeoFenceSet {
     version
@@ -92,10 +114,13 @@ func NewFenceSetClient(client *svcclient.Client, url string) (runtime.FenceSetSo
 }
 
 // fenceSetExec runs one fence-set query for a tenant and decodes its "data" object into out.
-// It is the ONE thing the paging loops below need from a transport, which is what lets those
-// loops be shared by the production HTTP client and by a test that drives device-management's
-// real schema in-process: the paging, the stitching and the completeness check are then the
-// same code in both, rather than a stub that skips the step under test.
+// It is the ONE thing the paging walk below needs from a transport, which is what lets that
+// walk be shared by the production HTTP client and by a test that drives device-management's
+// real schema in-process: the paging, the halving, the stitching and the completeness check
+// are then the same code in both, rather than a stub that skips the step under test.
+//
+// An implementation MUST report a response it could not carry as svcclient.ErrResponseTooLarge
+// (errors.Is-comparable). That is the signal the walk halves on; any other error is terminal.
 type fenceSetExec func(ctx context.Context, tenant, query string, vars map[string]any, out any) error
 
 // exec is the production transport: a service-token GraphQL call over HTTP.
@@ -164,88 +189,190 @@ func (f fencePage) appendTo(acc []geofence.SnapshotFence) []geofence.SnapshotFen
 }
 
 // pageVars builds the pagination input for one page.
-func pageVars(page int) map[string]any {
-	return map[string]any{"pageNumber": page, "pageSize": fenceSetPageSize}
+func pageVars(pageNumber, pageSize int32) map[string]any {
+	return map[string]any{"pageNumber": pageNumber, "pageSize": pageSize}
 }
 
-// fetchRemainingPages reads pages 2..N of ONE fence-set version and appends them to acc,
-// stopping when the accumulated count reaches total.
+// fenceWalk is one fence-set read: a transport, the tenant it runs for, and the response
+// budget shared across every attempt it makes.
 //
-// It reads by VERSION even when the first page came from currentGeoFenceSet, and that is the
-// whole reason the two entry points below are not one function. A version's snapshot is frozen
-// at mint and nothing rewrites it, so pages taken from it minutes apart belong to the same set
-// by construction; "current" is a moving target, and a fence edit between two of its pages
-// would stitch half of version 7 onto half of version 8 and file the result under one number.
+// 🔴 IT RETRIES AT A SMALLER PAGE SIZE, AND THAT IS WHAT MAKES THE READ TOTAL. A page size
+// counted in fences is a guess about bytes, and svcclient.MaxResponseBytes is what the guess
+// is aimed at. Any fixed guess can be wrong: a coordinate is a JSON number of unbounded
+// length and a position may carry ordinates beyond [lon, lat], so the same 100 × 512 fence set
+// is ~670 KB at two decimal places and ~2.5 MB at twenty. Rather than assume a number, the
+// walk asks and halves when the answer is "too large" — down to one fence, which
+// device-management's MaxGeoFenceGeometryBytes guarantees fits with room to spare. Below one
+// there is nothing left to halve, which is exactly why that authoring bound has to exist: a
+// reader cannot page its way under a cap that one row already exceeds.
+//
+// The halving is also what makes this correct for fences ALREADY STORED. MaxGeoFenceGeometryBytes
+// binds new writes; rows written before it can be any size, and those sets have to stay readable.
+type fenceWalk struct {
+	exec   fenceSetExec
+	tenant string
+	// spent counts responses across ALL attempts, so the halving retries cannot escape the
+	// runaway bound by starting over.
+	spent int
+}
+
+// query runs one GraphQL request against the walk's budget.
+func (w *fenceWalk) query(ctx context.Context, query string, vars map[string]any, out any) error {
+	if w.spent >= maxFenceSetResponses {
+		return fmt.Errorf("geofence set read for tenant %q did not complete within %d responses",
+			w.tenant, maxFenceSetResponses)
+	}
+	w.spent++
+	return w.exec(ctx, w.tenant, query, vars, out)
+}
+
+// snapshotPage reads one page of one VERSION.
+func (w *fenceWalk) snapshotPage(ctx context.Context, version, pageNumber, pageSize int32) (snapshotPayload, error) {
+	var out geoFenceSetSnapshotResponse
+	vars := map[string]any{"version": version, "pagination": pageVars(pageNumber, pageSize)}
+	if err := w.query(ctx, geoFenceSetSnapshotQuery, vars, &out); err != nil {
+		return snapshotPayload{}, err
+	}
+	return out.GeoFenceSetSnapshot, nil
+}
+
+// versionPagesFrom walks ONE fence-set version at ONE page size, appending to acc from
+// pageNumber onward, until the accumulated count reaches total.
+//
+// It reads by VERSION rather than by "current", and that is the reason the two entry points
+// below are not one function. A version's snapshot is frozen at mint and nothing rewrites it,
+// so pages taken from it minutes apart belong to the same set by construction; "current" is a
+// moving target, and a fence edit between two of its pages would stitch half of version 7 onto
+// half of version 8 and file the result under one number.
 //
 // A page that returns nothing while the total says otherwise is an ERROR rather than a short
 // set: the caller turns a returned error into ErrNoFenceSet, which containment reports as
 // unknowable and the runtime counts. Returning what was read so far would present a truncated
 // fence set as the tenant's fence set, which nothing downstream can detect.
-func fetchRemainingPages(ctx context.Context, exec fenceSetExec, tenant string, version int32,
-	acc []geofence.SnapshotFence, total int32) ([]geofence.SnapshotFence, error) {
-	for page := 2; int32(len(acc)) < total; page++ {
-		if page > maxFenceSetPages {
-			return nil, fmt.Errorf("geofence set version %d did not complete within %d pages (%d of %d fences read)",
-				version, maxFenceSetPages, len(acc), total)
-		}
-		var out geoFenceSetSnapshotResponse
-		vars := map[string]any{"version": version, "pagination": pageVars(page)}
-		if err := exec(ctx, tenant, geoFenceSetSnapshotQuery, vars, &out); err != nil {
+func (w *fenceWalk) versionPagesFrom(ctx context.Context, version, pageSize int32,
+	acc []geofence.SnapshotFence, pageNumber, total int32) ([]geofence.SnapshotFence, error) {
+	for ; int32(len(acc)) < total; pageNumber++ {
+		page, err := w.snapshotPage(ctx, version, pageNumber, pageSize)
+		if err != nil {
 			return nil, err
 		}
-		if len(out.GeoFenceSetSnapshot.Fences.Results) == 0 {
+		if len(page.Fences.Results) == 0 {
 			return nil, fmt.Errorf("geofence set version %d reported %d fences but page %d was empty after %d",
-				version, total, page, len(acc))
+				version, total, pageNumber, len(acc))
 		}
-		acc = out.GeoFenceSetSnapshot.Fences.appendTo(acc)
+		acc = page.Fences.appendTo(acc)
 	}
 	return acc, nil
 }
 
-// fetchSnapshotAt reads the WHOLE frozen fence set of one version, paging until complete.
-func fetchSnapshotAt(ctx context.Context, exec fenceSetExec, tenant string, version int32) (*geofence.FenceSet, error) {
-	var out geoFenceSetSnapshotResponse
-	vars := map[string]any{"version": version, "pagination": pageVars(1)}
-	if err := exec(ctx, tenant, geoFenceSetSnapshotQuery, vars, &out); err != nil {
-		return nil, err
+// halve returns the next page size to try, or 0 when there is nothing left to halve.
+func halve(size int32) int32 {
+	if size <= 1 {
+		return 0
 	}
-	total, err := out.GeoFenceSetSnapshot.Fences.Pagination.total()
+	next := size / 2
+	if next < 1 {
+		next = 1
+	}
+	return next
+}
+
+// wholeVersion reads a whole fence-set version, halving the page size and starting the walk
+// again whenever the peer refuses a response for being too large.
+//
+// It RESTARTS rather than continuing at the smaller size, and the reason is arithmetic, not
+// caution: the wire addresses a page by (pageNumber, pageSize), so an offset reached at one
+// size is not generally expressible at another — 25 fences in hand is not a whole number of
+// 12-fence pages. Restarting is exact, and the version being IMMUTABLE is what makes starting
+// over yield the same set rather than a different one. It costs nothing in any case that is
+// not already pathological, because the first attempt succeeds for every fence set a real
+// editor produces.
+func (w *fenceWalk) wholeVersion(ctx context.Context, version int32) ([]geofence.SnapshotFence, error) {
+	for size := int32(fenceSetPageSize); size > 0; size = halve(size) {
+		fences, err := w.versionAtPageSize(ctx, version, size)
+		if err == nil {
+			return fences, nil
+		}
+		if !errors.Is(err, svcclient.ErrResponseTooLarge) || halve(size) == 0 {
+			return nil, err
+		}
+	}
+	// Unreachable: the loop returns on the size-1 attempt either way.
+	return nil, fmt.Errorf("geofence set version %d could not be read at any page size", version)
+}
+
+// versionAtPageSize is one attempt: the whole version, from page one, at a fixed page size.
+func (w *fenceWalk) versionAtPageSize(ctx context.Context, version, pageSize int32) ([]geofence.SnapshotFence, error) {
+	first, err := w.snapshotPage(ctx, version, 1, pageSize)
 	if err != nil {
 		return nil, err
 	}
-	fences := out.GeoFenceSetSnapshot.Fences.appendTo(make([]geofence.SnapshotFence, 0, total))
-	// Paged by the version ASKED FOR, not by the one the payload reports. They agree, but
-	// only the requested one is the key the archive was addressed by, so continuing on it
-	// cannot follow a payload's own version field somewhere else.
-	fences, err = fetchRemainingPages(ctx, exec, tenant, version, fences, total)
+	total, err := first.Fences.Pagination.total()
+	if err != nil {
+		return nil, err
+	}
+	fences := first.Fences.appendTo(make([]geofence.SnapshotFence, 0, total))
+	return w.versionPagesFrom(ctx, version, pageSize, fences, 2, total)
+}
+
+// fetchSnapshotAt reads the WHOLE frozen fence set of one version.
+func fetchSnapshotAt(ctx context.Context, exec fenceSetExec, tenant string, version int32) (*geofence.FenceSet, error) {
+	w := &fenceWalk{exec: exec, tenant: tenant}
+	fences, err := w.wholeVersion(ctx, version)
 	if err != nil {
 		return nil, err
 	}
 	// A fence whose geometry cannot be compiled is retained WITH its error by NewFenceSet
-	// (never dropped), so one malformed fence cannot disable containment for every other
-	// fence the tenant owns.
-	return geofence.NewFenceSet(out.GeoFenceSetSnapshot.Version, fences), nil
+	// (never dropped), so one malformed fence cannot disable containment for every other fence
+	// the tenant owns.
+	//
+	// Filed under the version ASKED FOR, not the one the payload reports. They agree, but only
+	// the requested one is the key the archive was addressed by.
+	return geofence.NewFenceSet(version, fences), nil
 }
 
-// fetchCurrentSnapshot reads the WHOLE frozen fence set of the tenant's CURRENT version: page
-// one from currentGeoFenceSet (which reads the version and its fences from one row, so the two
-// cannot disagree), then the rest addressed by the version that page reported.
+// fetchCurrentSnapshot reads the WHOLE frozen fence set of the tenant's CURRENT version: the
+// first page from currentGeoFenceSet (which reads the version and its fences from one row, so
+// the two cannot disagree), then — only if there is more — the rest addressed by the version
+// that page reported.
+//
+// The first page is retried at a halved size like any other, and that is safe precisely
+// because it is PAGE ONE: page one is page one at every page size, so a retry cannot land on a
+// different offset. Everything after it is version-addressed, so no later page and no later
+// retry can be answered from a fence set the first page did not come from.
 func fetchCurrentSnapshot(ctx context.Context, exec fenceSetExec, tenant string) (*geofence.FenceSet, error) {
-	var out currentGeoFenceSetResponse
-	vars := map[string]any{"pagination": pageVars(1)}
-	if err := exec(ctx, tenant, currentGeoFenceSetQuery, vars, &out); err != nil {
-		return nil, err
+	w := &fenceWalk{exec: exec, tenant: tenant}
+
+	var first snapshotPayload
+	var total int32
+	for size := int32(fenceSetPageSize); ; size = halve(size) {
+		var out currentGeoFenceSetResponse
+		err := w.query(ctx, currentGeoFenceSetQuery, map[string]any{"pagination": pageVars(1, size)}, &out)
+		if err == nil {
+			first = out.CurrentGeoFenceSet
+			total, err = first.Fences.Pagination.total()
+			if err == nil {
+				break
+			}
+		}
+		if !errors.Is(err, svcclient.ErrResponseTooLarge) || halve(size) == 0 {
+			return nil, err
+		}
 	}
-	total, err := out.CurrentGeoFenceSet.Fences.Pagination.total()
+
+	// The common case: the whole set arrived in one response, and no second question is asked.
+	if int32(len(first.Fences.Results)) >= total {
+		return geofence.NewFenceSet(first.Version, first.Fences.appendTo(nil)), nil
+	}
+
+	// More to read. Hand the rest to the version-addressed walk, which re-reads page one at the
+	// cost of one response. Paying it buys the guarantee: every page of the set, including any
+	// read after a halving retry, is answered from the ONE version the first page named.
+	fences, err := w.wholeVersion(ctx, first.Version)
 	if err != nil {
 		return nil, err
 	}
-	fences := out.CurrentGeoFenceSet.Fences.appendTo(make([]geofence.SnapshotFence, 0, total))
-	fences, err = fetchRemainingPages(ctx, exec, tenant, out.CurrentGeoFenceSet.Version, fences, total)
-	if err != nil {
-		return nil, err
-	}
-	return geofence.NewFenceSet(out.CurrentGeoFenceSet.Version, fences), nil
+	return geofence.NewFenceSet(first.Version, fences), nil
 }
 
 // FenceSetAt resolves the frozen fence set of one (tenant, version).
@@ -262,8 +389,8 @@ func (c *fenceSetClient) FenceSetAt(ctx context.Context, tenant string, version 
 
 // CurrentFenceSet resolves the tenant's current frozen fence set, for the startup reconcile.
 // A tenant that has never had a fence answers version 0 with no fences — the known-empty set,
-// which is exactly what its events' version-0 stamp means, and which pages to completion in
-// one round trip because its total is zero.
+// which is exactly what its events' version-0 stamp means, and which completes in one round
+// trip because its total is zero.
 func (c *fenceSetClient) CurrentFenceSet(ctx context.Context, tenant string) (*geofence.FenceSet, error) {
 	return fetchCurrentSnapshot(ctx, c.exec, tenant)
 }

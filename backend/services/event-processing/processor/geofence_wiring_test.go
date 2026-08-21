@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"testing"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
@@ -120,6 +122,10 @@ type schemaFenceSource struct {
 	pagesServed  int
 	bytesServed  int
 	largestBytes int
+	// refusals counts responses this source refused for exceeding the read cap, so a test can
+	// prove the halving retry was actually provoked rather than assuming a large fixture
+	// reached it.
+	refusals int
 }
 
 // dmContext builds the request context device-management's GraphQL layer expects: the Api, the
@@ -149,6 +155,15 @@ func (s *schemaFenceSource) exec(_ context.Context, tenant, query string, vars m
 	s.bytesServed += len(resp.Data)
 	if len(resp.Data) > s.largestBytes {
 		s.largestBytes = len(resp.Data)
+	}
+	// 🔴 IT ENFORCES THE READ CAP, because the cap is half of what is under test. The
+	// production transport is svcclient, which refuses a response over MaxResponseBytes and
+	// says so as ErrResponseTooLarge; a test transport that happily returned 1.5 MB would let
+	// a paging loop that cannot survive the cap pass every test in this package. Standing in
+	// for the HTTP hop means standing in for its limits too, not just its shape.
+	if len(resp.Data) > svcclient.MaxResponseBytes {
+		s.refusals++
+		return fmt.Errorf("%w: %d bytes", svcclient.ErrResponseTooLarge, len(resp.Data))
 	}
 	return json.Unmarshal(resp.Data, out)
 }

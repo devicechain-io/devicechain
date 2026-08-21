@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -40,8 +41,9 @@ import (
 // these tests: a ring of 512 rounded two-decimal positions is a quarter the size of the ring a
 // real author's editor produces, and sizing the fixture down would move the fence set back under
 // the very cap it exists to cross.
-func maxVertexRing(cx, cy, r float64) string {
+func maxVertexRing(prec int, cx, cy, r float64) string {
 	n := dmmodel.MaxGeoFenceVertices - 1 // the closing position repeats the first
+	pos := fmt.Sprintf("[%%.%df,%%.%df]", prec, prec)
 	var b strings.Builder
 	b.WriteString("[[")
 	for i := 0; i < n; i++ {
@@ -49,18 +51,28 @@ func maxVertexRing(cx, cy, r float64) string {
 			b.WriteString(",")
 		}
 		theta := 2 * math.Pi * float64(i) / float64(n)
-		fmt.Fprintf(&b, "[%.9f,%.9f]", cx+r*math.Cos(theta), cy+r*math.Sin(theta))
+		fmt.Fprintf(&b, pos, cx+r*math.Cos(theta), cy+r*math.Sin(theta))
 	}
 	// Close the ring on its first position, exactly.
-	fmt.Fprintf(&b, ",[%.9f,%.9f]]]", cx+r*math.Cos(0), cy+r*math.Sin(0))
+	fmt.Fprintf(&b, ","+pos+"]]", cx+r*math.Cos(0), cy+r*math.Sin(0))
 	return b.String()
 }
 
 // maxVertexFence wraps a max-vertex ring in the platform's stored geometry envelope.
-func maxVertexFence(cx, cy, r float64) string {
+//
+// 🔴 THE PRECISION IS A PARAMETER BECAUSE THE SIZE IS THE VARIABLE, NOT THE VERTEX COUNT.
+// A 100 × 512 fence set is ~670 KB at two decimal places and ~2.5 MB at twenty — the same
+// fence count, the same position count, four times the bytes. Every fixture here having been
+// written at one precision is how a page size chosen in FENCES could look adequate while
+// being a guess about a quantity nobody was measuring.
+func maxVertexFenceAt(prec int, cx, cy, r float64) string {
 	return `{"kind":"` + geofence.KindPolygon2D + `","geometry":{"type":"Polygon","coordinates":` +
-		maxVertexRing(cx, cy, r) + `}}`
+		maxVertexRing(prec, cx, cy, r) + `}}`
 }
+
+// maxVertexFence is the ordinary fixture: nine decimal places, about a millimetre at the
+// equator and more precision than any real editor emits.
+func maxVertexFence(cx, cy, r float64) string { return maxVertexFenceAt(9, cx, cy, r) }
 
 // ceilingFenceSet seeds a tenant with the largest fence set device-management admits:
 // MaxGeoFencesPerTenant fences of MaxGeoFenceVertices positions each, every one authored through
@@ -72,6 +84,13 @@ func maxVertexFence(cx, cy, r float64) string {
 // writer is handed the real broker ceiling and the facts accumulate as the fence set grows past it.
 func ceilingFenceSet(t *testing.T, omitted prometheus.Counter) (*dmmodel.Api, *fenceFactWriter) {
 	t.Helper()
+	return ceilingFenceSetAt(t, 9, omitted)
+}
+
+// ceilingFenceSetAt is ceilingFenceSet at a chosen coordinate precision — the knob that moves
+// the fence set's SIZE without moving its fence count or its vertex count.
+func ceilingFenceSetAt(t *testing.T, prec int, omitted prometheus.Counter) (*dmmodel.Api, *fenceFactWriter) {
+	t.Helper()
 	api := newFenceDmApi(t)
 	dmCtx := dccore.WithTenant(context.Background(), "acme")
 	facts := &fenceFactWriter{}
@@ -81,13 +100,13 @@ func ceilingFenceSet(t *testing.T, omitted prometheus.Counter) (*dmmodel.Api, *f
 	// "yard" is a circle of radius 1 around the origin, so 0.5,0.5 is inside it (0.707 < 1).
 	// The rest are disjoint circles parked far away, each also at the vertex ceiling.
 	if _, err := api.CreateGeoFence(dmCtx, &dmmodel.GeoFenceCreateRequest{
-		Token: "yard", Geometry: maxVertexFence(0, 0, 1)}); err != nil {
+		Token: "yard", Geometry: maxVertexFenceAt(prec, 0, 0, 1)}); err != nil {
 		t.Fatalf("create yard: %v", err)
 	}
 	for i := 1; i < dmmodel.MaxGeoFencesPerTenant; i++ {
 		if _, err := api.CreateGeoFence(dmCtx, &dmmodel.GeoFenceCreateRequest{
 			Token:    fmt.Sprintf("far-%03d", i),
-			Geometry: maxVertexFence(float64(100+i%70), float64(i%80)-40, 0.25)}); err != nil {
+			Geometry: maxVertexFenceAt(prec, float64(100+i%70), float64(i%80)-40, 0.25)}); err != nil {
 			t.Fatalf("create far-%03d: %v", i, err)
 		}
 	}
@@ -369,24 +388,20 @@ func TestPagedFenceSetFetchReassemblesASetLargerThanTheResponseCap(t *testing.T)
 	api, facts := ceilingFenceSet(t, nil)
 	_, ev := lastFact(t, facts)
 
-	// PREMISE: one response holding the whole set is over the cap.
+	// PREMISE: one response holding the whole set is REFUSED by the cap. Not "is large" —
+	// refused, by the same error the production transport raises, so what follows is measured
+	// against the wall rather than against an estimate of where the wall is.
 	oneShot := &schemaFenceSource{t: t, api: api}
 	var whole geoFenceSetSnapshotResponse
 	err := oneShot.exec(context.Background(), "acme", geoFenceSetSnapshotQuery, map[string]any{
 		"version":    ev.Version,
 		"pagination": map[string]any{"pageNumber": 1, "pageSize": dmmodel.MaxGeoFencesPerTenant},
 	}, &whole)
-	if err != nil {
-		t.Fatalf("single-page read: %v", err)
+	if !errors.Is(err, svcclient.ErrResponseTooLarge) {
+		t.Fatalf("a single response holding the whole set was accepted (%d bytes, err=%v); this "+
+			"test exercises nothing the cap ever broke", oneShot.largestBytes, err)
 	}
-	if n := len(whole.GeoFenceSetSnapshot.Fences.Results); n != dmmodel.MaxGeoFencesPerTenant {
-		t.Fatalf("the single-page control returned %d fences, want %d", n, dmmodel.MaxGeoFencesPerTenant)
-	}
-	if oneShot.largestBytes <= svcclient.MaxResponseBytes {
-		t.Fatalf("the whole set fits in one %d-byte response (%d bytes), so this test exercises "+
-			"nothing the cap ever broke", svcclient.MaxResponseBytes, oneShot.largestBytes)
-	}
-	t.Logf("whole-set response: %d bytes against a %d-byte read cap",
+	t.Logf("whole-set response: %d bytes against a %d-byte read cap (refused)",
 		oneShot.largestBytes, svcclient.MaxResponseBytes)
 
 	// THE FIX: the shipped paging loop gets all of it, and no page comes close to the cap.

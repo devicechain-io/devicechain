@@ -56,6 +56,15 @@ spec:
           annotations:
             summary: "DETECT leaf-predicate evaluation errors"
             description: "Rule leaf predicates are erroring during fan-out. The sample is SKIPPED, not treated as a non-match, so firings may be silently missed. This counter is unlabelled and nothing logs the rule id — use the canvas preview on each suspect rule to attribute the error."
+        - alert: DetectFenceSetPointerUnresolved
+          expr: sum(rate(devicechain_eventprocessing_detect_fence_set_pointer_unresolved_total{namespace="{{ $ns }}"}[5m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "A geofence set is too large for the broker AND cannot be read back"
+            description: "A fence set outgrew the per-message ceiling, so its fact carried only a version and the fences must be fetched from device-management — and that fetch is failing. Containment for the affected tenant reports unresolvable at that version until a reconcile sweep succeeds, which shows up as DetectFanoutEvalErrors. Check device-management's health and the service-token seam; the tenant is named in event-processing's error log, never in this counter."
         - alert: ReactPoisonDropping
           expr: sum(rate(devicechain_eventprocessing_react_events_poison_dropped_total{namespace="{{ $ns }}"}[5m])) > 0
           for: 10m

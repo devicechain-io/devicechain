@@ -114,7 +114,7 @@ type GeoFenceGeometry struct {
 	Geometry json.RawMessage `json:"geometry"`
 }
 
-// Bounds enforced at AUTHORING time. Both exist for one reason:
+// Bounds enforced at AUTHORING time. The first two exist for one reason:
 //
 // 🔴 THE PUBLISH-TIME CEL COST GATE CANNOT SEE EITHER OF THESE NUMBERS. It estimates an
 // expression's cost STATICALLY, from the expression tree. A containment call's real cost
@@ -122,6 +122,9 @@ type GeoFenceGeometry struct {
 // scope — and neither is in the tree. A static estimator therefore prices `inFence(…)`
 // as one call whether it tests a 4-vertex yard or a 40,000-vertex coastline. The cost
 // has to be bounded where the data is written, which is here.
+//
+// The third bounds a different quantity for a different consumer; see it for why counting
+// positions does not bound bytes.
 const (
 	// MaxGeoFenceVertices bounds a single fence's total position count across every
 	// ring (the closing position of each ring counts; it is cheaper to be conservative
@@ -141,10 +144,71 @@ const (
 	// prefilter makes the realistic cost one fence, but a prefilter is an optimization
 	// and this is a bound, so the number is justified without assuming it.
 	//
-	// It also bounds the frozen fence-set snapshot minted on every fence change: 100
-	// fences × 512 positions is ~1 MB of JSON in the worst case, written once per
-	// authoring action, never on the hot path.
+	// 🔴 IT DOES NOT BOUND THE FENCE SET'S SIZE, AND THE PRODUCT OF THESE TWO NUMBERS IS
+	// NOT ONE EITHER. Both seams that carry a whole fence set have a 1 MiB budget — the
+	// broker's per-message ceiling and the cross-service response cap — and the set is
+	// over BOTH at these limits, at every coordinate precision anyone would use.
+	// Measured, 100 × 512 as stored GeoJSON text: 672 KB at 2 decimal places, 980 KB at
+	// 5, 1.18 MB at 7, 1.39 MB at 9. Five decimal places is about 1.1 m, which is below
+	// useful geofencing precision, and the whole-set GraphQL response at 5 dp measures
+	// 1,105,765 bytes against a 1,048,576-byte cap. So the set has been over the wire's
+	// budget at its own documented limits the whole time.
+	//
+	// That is why the delivery paths PAGE and why an oversized set is announced by a
+	// pointer fact rather than carried. Neither is tidiness: no bound on a single fence
+	// can make 100 of them fit in one message while MaxGeoFenceVertices stays at 512, so
+	// the aggregate has to be split. See MaxGeoFenceGeometryBytes.
 	MaxGeoFencesPerTenant = 100
+
+	// MaxGeoFenceGeometryBytes bounds a single fence's stored geometry DOCUMENT.
+	//
+	// 🔴 IT IS IN BYTES, AND THAT IS THE ENTIRE POINT: COUNTING POSITIONS DOES NOT BOUND
+	// SIZE. MaxGeoFenceVertices bounds how many positions a fence has, which is what
+	// containment's O(vertices) cost depends on. It says nothing about how many bytes
+	// those positions occupy, because validatePolygon2D checks only that a position has
+	// at least two ordinates in the WGS84 ranges — a position may carry EXTRA ordinates
+	// beyond [lon, lat], and each ordinate is a JSON number of unbounded length. So a
+	// document that satisfies every other rule here can be any size at all: 512 positions
+	// of 700 ordinates each was accepted and stored at 1.4 MB, and 512 two-ordinate
+	// positions written at 40 decimal places is over 1 MB by itself.
+	//
+	// That mattered the moment anything downstream had a byte budget. Both seams that
+	// carry a fence set have one — the broker's per-message ceiling and the cross-service
+	// client's response cap — and neither can be defended by a page size counted in
+	// FENCES, because a single fence can exceed either. This bound is what makes "one
+	// fence always fits" true, which is what lets a paging reader be total: with it, a
+	// page of one is always readable.
+	//
+	// 🔴 IT IS DELIBERATELY GENEROUS, AND TIGHTENING IT WOULD NOT BUY WHAT IT LOOKS LIKE
+	// IT WOULD BUY. Its job is NOT to make a whole fence set fit in one message or one
+	// response — that is arithmetically unavailable. A bound tight enough for 100 fences
+	// to fit in 1 MiB would have to be about 10 KB per fence, which is BELOW a
+	// 512-position fence at five decimal places, i.e. below useful precision at the
+	// vertex ceiling this package already promises. Keeping MaxGeoFenceVertices,
+	// MaxGeoFencesPerTenant and a single-response read all three is not a choice anyone
+	// has; the aggregate is handled by PAGING, and always will be while coordinates are
+	// text.
+	//
+	// What this bound is for is narrower and still necessary: keeping a SINGLE page
+	// satisfiable. A reader that halves its page size on a refusal terminates only if one
+	// fence fits on its own — and without this, one does not have to. A single 512-position
+	// fence carrying extra ordinates was accepted and stored at 1.44 MB, over the cap by
+	// itself, and no page size can carry it.
+	//
+	// 32 KiB is chosen from measurement: a fence at the vertex ceiling written at nine
+	// decimal places (about a millimetre at the equator, more precision than any real
+	// editor emits) stores at ~13.9 KB, so this is ~2.4× the largest realistic authored
+	// fence while refusing the pathological documents by two orders of magnitude.
+	//
+	// THE ROOT CAUSE, and the reason all of this machinery is expected to be temporary: a
+	// coordinate is JSON TEXT of unbounded length, so a fence's byte size is not a function
+	// of its position count at all. Storing coordinates as int32 degrees × 10^7 — 8 bytes
+	// per position, the convention OSM and Android already use — puts a ceiling fence at
+	// ~4.1 KB and the whole ceiling set at ~411 KB, which fits in one message and one
+	// response. That is a storage-format, wire and cross-service-codec change scheduled for
+	// v0.13.0, not a release-blocker fix; when it lands, the pointer fact and the paged read
+	// can both be deleted rather than maintained.
+	MaxGeoFenceGeometryBytes = 32 << 10
 )
 
 // GeoFenceSetVersion is one immutable, tenant-wide version of the WHOLE fence set,
@@ -271,6 +335,17 @@ type geoJSONGeometry struct {
 func validateGeoFenceGeometry(raw string) (*GeoFenceGeometry, error) {
 	if raw == "" {
 		return nil, fmt.Errorf("a geofence geometry is required")
+	}
+	// 🔴 THE BYTE BOUND IS CHECKED FIRST, BEFORE ANY PARSE. It is an O(1) read of a
+	// length, where json.Valid and the ring scan below both walk the document; putting it
+	// last would mean an oversized payload still paid for every parse that was going to
+	// refuse it. Same ordering argument as the vertex budget inside validatePolygon2D,
+	// and the same reason: the cheap refusal goes in front of the expensive one.
+	if len(raw) > MaxGeoFenceGeometryBytes {
+		return nil, fmt.Errorf("geofence geometry is %d bytes; the limit is %d (a fence set is "+
+			"carried whole over seams with byte budgets, and a position count cannot bound bytes "+
+			"— extra ordinates and long coordinates are both unbounded otherwise)",
+			len(raw), MaxGeoFenceGeometryBytes)
 	}
 	if !json.Valid([]byte(raw)) {
 		return nil, fmt.Errorf("geofence geometry is not valid JSON")
