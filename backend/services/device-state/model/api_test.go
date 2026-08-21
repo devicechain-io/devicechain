@@ -11,6 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-device-state/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/presence"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -157,10 +158,10 @@ func TestPresenceNonEventSplit(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "A")
 	t0 := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
 	conn := func(s uint64, tm time.Time) *PresenceTransition {
-		return &PresenceTransition{Connected: true, SessionId: s, OccurredAt: tm}
+		return &PresenceTransition{Claim: presence.ClaimConnected, SessionId: s, OccurredAt: tm}
 	}
 	disc := func(s uint64, tm time.Time) *PresenceTransition {
-		return &PresenceTransition{Connected: false, SessionId: s, OccurredAt: tm}
+		return &PresenceTransition{Claim: presence.ClaimDisconnected, SessionId: s, OccurredAt: tm}
 	}
 
 	t.Run("higher-session disconnect over dead device freezes LastDisconnectTime", func(t *testing.T) {
@@ -247,10 +248,10 @@ func TestAssertedPresenceProjection(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "A")
 	t0 := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
 	conn := func(s uint64, tm time.Time) *PresenceTransition {
-		return &PresenceTransition{Connected: true, SessionId: s, OccurredAt: tm}
+		return &PresenceTransition{Claim: presence.ClaimConnected, SessionId: s, OccurredAt: tm}
 	}
 	disc := func(s uint64, tm time.Time) *PresenceTransition {
-		return &PresenceTransition{Connected: false, SessionId: s, OccurredAt: tm}
+		return &PresenceTransition{Claim: presence.ClaimDisconnected, SessionId: s, OccurredAt: tm}
 	}
 
 	// A CONNECTED StateChange creates an ASSERTED, active device.
@@ -313,7 +314,7 @@ func TestFirstEventDisconnectRecordsDead(t *testing.T) {
 	api := newTestApi(t)
 	ctx := core.WithTenant(context.Background(), "A")
 	t0 := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
-	ds, err := api.MergeDeviceState(ctx, "sp-dead", t0, &PresenceTransition{SessionId: 1, OccurredAt: t0}, DeviceIdentity{})
+	ds, err := api.MergeDeviceState(ctx, "sp-dead", t0, &PresenceTransition{Claim: presence.ClaimDisconnected, SessionId: 1, OccurredAt: t0}, DeviceIdentity{})
 	if err != nil {
 		t.Fatalf("first-disconnect merge: %v", err)
 	}
@@ -335,7 +336,7 @@ func TestSweepSkipsAsserted(t *testing.T) {
 	if _, err := api.MergeDeviceState(ctx, "inferred-1", t0, nil, DeviceIdentity{}); err != nil {
 		t.Fatalf("inferred merge: %v", err)
 	}
-	if _, err := api.MergeDeviceState(ctx, "asserted-1", t0, &PresenceTransition{Connected: true, SessionId: 1, OccurredAt: t0}, DeviceIdentity{}); err != nil {
+	if _, err := api.MergeDeviceState(ctx, "asserted-1", t0, &PresenceTransition{Claim: presence.ClaimConnected, SessionId: 1, OccurredAt: t0}, DeviceIdentity{}); err != nil {
 		t.Fatalf("asserted merge: %v", err)
 	}
 
@@ -437,7 +438,7 @@ func TestAssertedDeviceStatesSplitsActiveFromAssertedAndScopesBySource(t *testin
 	connect := func(token string, session uint64) {
 		t.Helper()
 		if _, err := api.MergeDeviceState(ctx, token, t0,
-			&PresenceTransition{Connected: true, SessionId: session, OccurredAt: t0},
+			&PresenceTransition{Claim: presence.ClaimConnected, SessionId: session, OccurredAt: t0},
 			DeviceIdentity{Source: "mqtt1"}); err != nil {
 			t.Fatalf("connect %s: %v", token, err)
 		}
@@ -446,13 +447,13 @@ func TestAssertedDeviceStatesSplitsActiveFromAssertedAndScopesBySource(t *testin
 	connect("live-1", 100)
 	connect("dead-1", 200)
 	if _, err := api.MergeDeviceState(ctx, "dead-1", t0.Add(time.Minute),
-		&PresenceTransition{Connected: false, SessionId: 200, OccurredAt: t0.Add(time.Minute)},
+		&PresenceTransition{Claim: presence.ClaimDisconnected, SessionId: 200, OccurredAt: t0.Add(time.Minute)},
 		DeviceIdentity{Source: "mqtt1"}); err != nil {
 		t.Fatalf("disconnect dead-1: %v", err)
 	}
 	// A device on a different source must never appear for mqtt1.
 	if _, err := api.MergeDeviceState(ctx, "other-1", t0,
-		&PresenceTransition{Connected: true, SessionId: 300, OccurredAt: t0},
+		&PresenceTransition{Claim: presence.ClaimConnected, SessionId: 300, OccurredAt: t0},
 		DeviceIdentity{Source: "sparkplug:h1"}); err != nil {
 		t.Fatalf("connect other-1: %v", err)
 	}

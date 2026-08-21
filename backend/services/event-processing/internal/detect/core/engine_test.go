@@ -5,6 +5,7 @@ package core
 
 import (
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/presence"
 	"testing"
 	"time"
 )
@@ -321,8 +322,8 @@ func TestLiveKeyCounts(t *testing.T) {
 	// conn: a DISCONNECT raises (cursor + latch) then a CONNECT resolves (latch cleared) — but the
 	// ordering CURSOR persists, so the rule keeps ONE live key after the alarm clears. This is the
 	// entry the ADR-023 budget must see (never expires; one per device-ever-seen).
-	e.ProcessEvent(Event{Seq: 9, Key: SeriesKey{Rule: "acme/p@1/conn", Series: "d1"}, Time: at(1), Presence: &PresenceEdge{SessionId: 100, Connected: false}})
-	e.ProcessEvent(Event{Seq: 10, Key: SeriesKey{Rule: "acme/p@1/conn", Series: "d1"}, Time: at(2), Presence: &PresenceEdge{SessionId: 200, Connected: true}})
+	e.ProcessEvent(Event{Seq: 9, Key: SeriesKey{Rule: "acme/p@1/conn", Series: "d1"}, Time: at(1), Presence: &PresenceEdge{SessionId: 100, Claim: presence.ClaimDisconnected}})
+	e.ProcessEvent(Event{Seq: 10, Key: SeriesKey{Rule: "acme/p@1/conn", Series: "d1"}, Time: at(2), Presence: &PresenceEdge{SessionId: 200, Claim: presence.ClaimConnected}})
 	e.Drain()
 
 	counts := e.LiveKeyCounts()

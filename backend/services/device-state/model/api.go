@@ -42,13 +42,18 @@ type DeviceStateApi interface {
 	LatestLocationsByDeviceToken(ctx context.Context, deviceTokens []string) ([]*LatestLocation, error)
 }
 
-// PresenceTransition is an authoritative connectivity edge (ADR-067) carried by a
+// PresenceTransition is an authoritative presence claim (ADR-067) carried by a
 // StateChange event from a presence-asserting transport. It is nil for a plain data
-// event. Connected true = CONNECTED, false = DISCONNECTED. SessionId is the
-// producer's monotone per-session id (a host-observed connect epoch, not e.g. a raw
-// Sparkplug bdSeq). OccurredAt is the transition's event time.
+// event. SessionId is the producer's monotone per-session id (a host-observed connect
+// epoch, not e.g. a raw Sparkplug bdSeq). OccurredAt is the transition's event time.
+//
+// Claim carries what is being asserted, and it is an enum rather than the bool it
+// replaced because CONNECTED and DISCONNECTED are no longer the whole vocabulary: a
+// DEMOTED claim releases the source's custody of the device and says nothing at all
+// about connectivity. Its zero value is invalid, so a literal that forgets the field
+// is refused by presence.Decide instead of silently reading as a death.
 type PresenceTransition struct {
-	Connected bool
+	Claim     presence.Claim
 	SessionId uint64
 	// ExpectedSessionId is a compare-and-set precondition, zero for every ordinary
 	// transport advisory. It is the only way a transition whose SessionId is LOWER than
@@ -74,9 +79,23 @@ type DeviceIdentity struct {
 }
 
 // newDeviceState builds the row for the first event ever seen for a device. A plain
-// data event creates it active (today's behavior); an authoritative presence
+// data event creates it active (today's behavior); an authoritative CONNECTIVITY
 // transition creates it ASSERTED with Active set to exactly the transition — so a
 // first-ever DISCONNECT records a dead device, never a connected one (ADR-067).
+//
+// 🔴 A DEMOTION CREATES NOTHING AUTHORITATIVE, and this branch is the reason the check
+// is written here rather than left to presence.Decide. Row creation does not go through
+// Decide at all — there is no Prior to weigh against — so acceptsDemotion's
+// prior.HasTime conjunct, which is what refuses a demotion of a device that was never
+// asserted, cannot fire on this path. Without the guard below, a demotion for a device
+// with no row would CREATE one marked ASSERTED: the exact state the demotion exists to
+// leave, conjured by the event that meant to leave it.
+//
+// What it creates instead is a bare INFERRED row: no session, no presence time, no
+// connect or activity stamps. That is the honest record — a source has released custody
+// of a device the projection never knew about, so the platform knows nothing about its
+// presence. The row is inert (SweepInactive only scans active rows) and the device's
+// next data event populates it the ordinary inferred way.
 func newDeviceState(deviceToken string, occurredAt time.Time, pt *PresenceTransition, id DeviceIdentity) *DeviceState {
 	ds := &DeviceState{
 		DeviceToken:       deviceToken,
@@ -85,12 +104,15 @@ func newDeviceState(deviceToken string, occurredAt time.Time, pt *PresenceTransi
 		PresenceSource:    PresenceSourceInferred,
 		InactivityTimeout: config.DefaultInactivityTimeout,
 	}
+	if pt != nil && pt.Claim == presence.ClaimDemoted {
+		return ds
+	}
 	if pt != nil {
 		ds.PresenceSource = PresenceSourceAsserted
 		ds.SessionId = pt.SessionId
 		ds.PresenceTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
-		ds.Active = pt.Connected
-		if pt.Connected {
+		ds.Active = pt.Claim == presence.ClaimConnected
+		if pt.Claim == presence.ClaimConnected {
 			ds.LastConnectTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
 			ds.LastActivityTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
 		} else {
@@ -169,14 +191,14 @@ func (api *Api) MergeDeviceState(ctx context.Context, deviceToken string, occurr
 					SessionId:         pt.SessionId,
 					ExpectedSessionId: pt.ExpectedSessionId,
 					OccurredAt:        pt.OccurredAt,
-					Connected:         pt.Connected,
+					Claim:             pt.Claim,
 				},
 			)
 			if d.Ordered {
 				found.SessionId = pt.SessionId
 				found.PresenceTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
-				found.Active = pt.Connected // idempotent when the state did not flip
-				if pt.Connected {
+				found.Active = pt.Claim == presence.ClaimConnected // idempotent when the state did not flip
+				if pt.Claim == presence.ClaimConnected {
 					// A higher session is a genuine reconnect even when Active was already true
 					// (a new epoch is a new physical connection), so refresh LastConnectTime on a
 					// flip OR a new session OR the first authoritative word; a same-session
@@ -197,7 +219,7 @@ func (api *Api) MergeDeviceState(ctx context.Context, deviceToken string, occurr
 			}
 			// A CONNECTED is also activity; a DISCONNECTED is the opposite of activity,
 			// so it must not advance LastActivityTime.
-			if pt.Connected && (!found.LastActivityTime.Valid || pt.OccurredAt.After(found.LastActivityTime.Time)) {
+			if pt.Claim == presence.ClaimConnected && (!found.LastActivityTime.Valid || pt.OccurredAt.After(found.LastActivityTime.Time)) {
 				found.LastActivityTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
 			}
 			return tx.Save(found).Error

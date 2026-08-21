@@ -6,16 +6,22 @@ package core
 import (
 	"testing"
 	"time"
+
+	"github.com/devicechain-io/dc-microservice/presence"
 )
 
 // feedPresence feeds one authoritative presence edge to a Connectivity rule and returns its
 // detections. session is the producer's monotone connect epoch; connected is the direction.
 func feedPresence(e *Engine, seq uint64, rule, series string, sec int, session uint64, connected bool) []Detection {
+	claim := presence.ClaimDisconnected
+	if connected {
+		claim = presence.ClaimConnected
+	}
 	e.ProcessEvent(Event{
 		Seq:      seq,
 		Key:      SeriesKey{Rule: rule, Series: series},
 		Time:     at(sec),
-		Presence: &PresenceEdge{SessionId: session, Connected: connected},
+		Presence: &PresenceEdge{SessionId: session, Claim: claim},
 	})
 	return e.Drain()
 }

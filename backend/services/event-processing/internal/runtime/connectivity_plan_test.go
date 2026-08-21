@@ -10,6 +10,7 @@ import (
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/presence"
 )
 
 // stateChange builds a resolved presence StateChange for a device under a profile version.
@@ -42,17 +43,17 @@ func TestPlanStateChangeFeedsConnectivityEdge(t *testing.T) {
 	if e.Presence == nil {
 		t.Fatalf("connectivity event must carry a typed PresenceEdge, got %+v", e)
 	}
-	if e.Presence.SessionId != 100 || e.Presence.Connected {
+	if e.Presence.SessionId != 100 || e.Presence.Claim != presence.ClaimDisconnected {
 		t.Fatalf("edge session/direction wrong: %+v", e.Presence)
 	}
 	if e.Key.Series != "d1" || e.Key.Rule != connRule().ID {
 		t.Fatalf("edge must key on (rule, device); got %+v", e.Key)
 	}
 
-	// A CONNECTED state maps to Connected=true.
+	// A CONNECTED state maps to ClaimConnected.
 	up := planEv(reg, 2, "acme", stateChange("acme", "d1", "p@1", base, "CONNECTED", 200))
-	if len(up.Events) != 1 || !up.Events[0].Presence.Connected {
-		t.Fatalf("a CONNECTED StateChange must carry Connected=true: %+v", up.Events)
+	if len(up.Events) != 1 || up.Events[0].Presence.Claim != presence.ClaimConnected {
+		t.Fatalf("a CONNECTED StateChange must carry ClaimConnected: %+v", up.Events)
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/presence"
 	"github.com/rs/zerolog/log"
 )
 
@@ -412,8 +413,16 @@ func presenceTransitionFor(event *dmmodel.ResolvedEvent) *model.PresenceTransiti
 	if !ok {
 		return nil
 	}
+	// C1 keeps this as the existing string compare, mechanically retyped. C3 replaces
+	// both this and its twin in event-processing's fanout with one shared TOTAL mapper —
+	// the point being that a string compare cannot express "this is not a connectivity
+	// claim at all", which is exactly what a DEMOTED state is.
+	claim := presence.ClaimDisconnected
+	if p.State == string(esmodel.PresenceConnected) {
+		claim = presence.ClaimConnected
+	}
 	return &model.PresenceTransition{
-		Connected:         p.State == string(esmodel.PresenceConnected),
+		Claim:             claim,
 		SessionId:         p.SessionId,
 		ExpectedSessionId: p.ExpectedSessionId,
 		OccurredAt:        event.OccurredTime,

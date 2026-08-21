@@ -101,9 +101,14 @@ type Event struct {
 }
 
 // PresenceEdge is the payload of a Connectivity Event: the transition's session epoch (the
-// producer's monotone connect id, a host-observed epoch, not a raw bdSeq) and its direction
-// (Connected true = CONNECTED, false = DISCONNECTED).
+// producer's monotone connect id, a host-observed epoch, not a raw bdSeq) and what it claims.
+//
+// Claim is an enum rather than the bool it replaced because a presence transition is no
+// longer necessarily about connectivity: a DEMOTED claim releases the asserting source's
+// custody of the device. Its zero value is invalid, so an edge built without setting it is
+// refused by presence.Decide rather than folding as a death.
 type PresenceEdge struct {
+	Claim     presence.Claim
 	SessionId uint64
 	// ExpectedSessionId is the compare-and-set precondition carried by the resolved
 	// event, zero for every ordinary transport advisory. DETECT must honour it for the
@@ -115,7 +120,6 @@ type PresenceEdge struct {
 	// per-series presence.Prior the engine snapshots — the snapshot round-trip
 	// (loadPresenceState/snapshotPresenceState) is unchanged by this field existing.
 	ExpectedSessionId uint64
-	Connected         bool
 }
 
 // EdgeKind discriminates the two edges of an alarm-bearing detection (ADR-057). A rule is
@@ -958,7 +962,7 @@ func (e *Engine) applyConnectivity(ev Event, r Rule) {
 		SessionId:         ev.Presence.SessionId,
 		ExpectedSessionId: ev.Presence.ExpectedSessionId,
 		OccurredAt:        ev.Time,
-		Connected:         ev.Presence.Connected,
+		Claim:             ev.Presence.Claim,
 	})
 	if !d.Ordered {
 		return // stale / out-of-order edge: neither the cursor nor the alarm moves
@@ -967,12 +971,12 @@ func (e *Engine) applyConnectivity(ev Event, r Rule) {
 		SessionId: ev.Presence.SessionId,
 		Time:      ev.Time,
 		HasTime:   true,
-		Connected: ev.Presence.Connected,
+		Connected: ev.Presence.Claim == presence.ClaimConnected,
 	}
 	if !d.Flipped {
 		return // same-state higher-session non-event: cursor advanced, no edge
 	}
-	if ev.Presence.Connected {
+	if ev.Presence.Claim == presence.ClaimConnected {
 		// Back online → resolve the offline alarm. Connectivity ordering is session-DOMINANT: a
 		// newer session applies even at an EARLIER wall clock (a failover reconnect mints on
 		// another host's clock), so resolve at max(at, rising-edge) — NOT the value kinds' stale

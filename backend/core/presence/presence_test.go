@@ -97,11 +97,15 @@ func TestDecide(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			claim := ClaimDisconnected
+			if c.connected {
+				claim = ClaimConnected
+			}
 			d := Decide(c.prior, Incoming{
 				SessionId:         c.session,
 				ExpectedSessionId: c.expected,
 				OccurredAt:        c.at,
-				Connected:         c.connected,
+				Claim:             claim,
 			})
 			if d.Ordered != c.ordered {
 				t.Errorf("Ordered = %v, want %v", d.Ordered, c.ordered)
@@ -126,22 +130,29 @@ func TestDecideFlippedImpliesOrdered(t *testing.T) {
 	t0 := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	for _, session := range []uint64{0, 50, 100, 150} {
 		for _, expected := range []uint64{0, 50, 100, 150} {
-			for _, connected := range []bool{true, false} {
+			// Every claim, INCLUDING the invalid zero and the demotion: the invariant is
+			// about Decision's internal consistency, so it must hold for a claim Decide
+			// refuses outright and for one that returns from the demotion branch.
+			for _, claim := range []Claim{ClaimConnected, ClaimDisconnected, ClaimDemoted, ClaimUnset} {
 				for _, dt := range []time.Duration{-time.Hour, 0, time.Hour} {
 					prior := Prior{SessionId: 100, Time: t0, HasTime: true, Connected: true}
 					d := Decide(prior, Incoming{
 						SessionId:         session,
 						ExpectedSessionId: expected,
 						OccurredAt:        t0.Add(dt),
-						Connected:         connected,
+						Claim:             claim,
 					})
 					if d.Flipped && !d.Ordered {
-						t.Fatalf("Flipped without Ordered: session=%d expected=%d connected=%v dt=%v",
-							session, expected, connected, dt)
+						t.Fatalf("Flipped without Ordered: session=%d expected=%d claim=%v dt=%v",
+							session, expected, claim, dt)
 					}
 					if d.NewSession && !d.Ordered {
-						t.Fatalf("NewSession without Ordered: session=%d expected=%d connected=%v dt=%v",
-							session, expected, connected, dt)
+						t.Fatalf("NewSession without Ordered: session=%d expected=%d claim=%v dt=%v",
+							session, expected, claim, dt)
+					}
+					if d.Demoted && !d.Ordered {
+						t.Fatalf("Demoted without Ordered: session=%d expected=%d claim=%v dt=%v",
+							session, expected, claim, dt)
 					}
 				}
 			}
@@ -172,7 +183,7 @@ func TestDecideNeverAcceptsOverAHigherSession(t *testing.T) {
 							SessionId:         session,
 							ExpectedSessionId: expected,
 							OccurredAt:        t0.Add(dt),
-							Connected:         connected,
+							Claim:             claimOf(connected),
 						})
 						if !d.Ordered {
 							continue
@@ -203,7 +214,7 @@ func TestDecideNeverAcceptsOverAHigherSession(t *testing.T) {
 func TestAcceptsRegressedSessionGuardsZero(t *testing.T) {
 	t0 := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	prior := Prior{SessionId: 0, Time: t0, HasTime: true, Connected: false}
-	in := Incoming{SessionId: 0, ExpectedSessionId: 0, OccurredAt: t0.Add(time.Hour), Connected: true}
+	in := Incoming{SessionId: 0, ExpectedSessionId: 0, OccurredAt: t0.Add(time.Hour), Claim: ClaimConnected}
 	if acceptsRegressedSession(prior, in) {
 		t.Fatal("a zero expectation matched a zero prior session: the exception is open to " +
 			"every producer that never set ExpectedSessionId")
@@ -219,7 +230,7 @@ func TestDecideCASIsIdempotent(t *testing.T) {
 
 	// The projection holds a dead, higher session; the device is live on a lower one.
 	prior := Prior{SessionId: 200, Time: t0, HasTime: true, Connected: false}
-	in := Incoming{SessionId: 100, ExpectedSessionId: 200, OccurredAt: repairAt, Connected: true}
+	in := Incoming{SessionId: 100, ExpectedSessionId: 200, OccurredAt: repairAt, Claim: ClaimConnected}
 
 	first := Decide(prior, in)
 	if !first.Ordered || !first.Flipped {
@@ -227,8 +238,18 @@ func TestDecideCASIsIdempotent(t *testing.T) {
 	}
 
 	// Apply it the way device-state's merge does, then redeliver the identical event.
-	applied := Prior{SessionId: in.SessionId, Time: in.OccurredAt, HasTime: true, Connected: in.Connected}
+	applied := Prior{SessionId: in.SessionId, Time: in.OccurredAt, HasTime: true, Connected: in.Claim == ClaimConnected}
 	if replay := Decide(applied, in); replay.Ordered {
 		t.Fatalf("the redelivered repair applied a second time: %+v", replay)
 	}
+}
+
+// claimOf maps a test table's boolean direction onto a Claim. Tests that predate the
+// Claim enum express direction as a bool; this keeps their tables readable without
+// letting a bool back into the production type.
+func claimOf(connected bool) Claim {
+	if connected {
+		return ClaimConnected
+	}
+	return ClaimDisconnected
 }
