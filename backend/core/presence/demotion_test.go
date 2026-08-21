@@ -210,3 +210,35 @@ func TestAConnectivityClaimIsUnaffectedByTheDemotionBranch(t *testing.T) {
 		t.Fatalf("the compare-and-set repair still applies: %+v", d)
 	}
 }
+
+// TestAcceptsRegressedSessionRefusesADemotionOnItsOwnTerms calls the predicate DIRECTLY,
+// for the same reason TestAcceptsRegressedSessionGuardsZero does: at the ONE call site
+// this is unreachable, because isOrdered routes a demotion to acceptsDemotion before the
+// regressed-session branch. Reachability is a property of today's caller, not of the rule.
+//
+// It matters because the compare-and-set exception is the only way a LOWER session is ever
+// accepted, and a demotion carrying a lower session must never take it: that would let a
+// custody release re-file a device onto a dead session and mark it CONNECTED.
+//
+// Killing mutation: `in.Claim == ClaimConnected` → `in.Claim != ClaimDisconnected`, the
+// natural-looking rewrite. It is invisible through Decide and lethal to any fourth claim
+// added later, which would fall into this exception by default.
+func TestAcceptsRegressedSessionRefusesADemotionOnItsOwnTerms(t *testing.T) {
+	prior := Prior{SessionId: 200, Time: demoT0, HasTime: true, Connected: false}
+	in := Incoming{
+		SessionId:         100,
+		ExpectedSessionId: 200,
+		OccurredAt:        demoT0.Add(time.Hour),
+		Claim:             ClaimDemoted,
+	}
+	if acceptsRegressedSession(prior, in) {
+		t.Fatal("a demotion satisfied the regressed-session compare-and-set: a custody " +
+			"release would re-file the device onto a lower session and mark it connected")
+	}
+	// The counterweight: the identical shape with a CONNECTED claim is exactly what the
+	// exception exists for, and must still be accepted.
+	in.Claim = ClaimConnected
+	if !acceptsRegressedSession(prior, in) {
+		t.Fatal("the repair the exception exists for is now refused")
+	}
+}
