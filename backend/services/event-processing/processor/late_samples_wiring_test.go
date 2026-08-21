@@ -71,6 +71,7 @@ func repeatingReg(t *testing.T) *runtime.RuleRegistry {
 // the engine is the observable that actually distinguishes a wired drain from an absent one.
 func TestProcessorDrainsTheEngineLateSampleCount(t *testing.T) {
 	ctx := context.Background()
+	reg := repeatingReg(t)
 	rp := &ResolvedEventsProcessor{
 		Store: newTestStore(t),
 		cfg: Config{
@@ -80,8 +81,8 @@ func TestProcessorDrainsTheEngineLateSampleCount(t *testing.T) {
 			TickInterval:       time.Hour,
 			Clock:              detectcore.RealClock{},
 		},
-		registry:  repeatingReg(t),
-		publisher: runtime.NewPublisher(&captureWriter{}, repeatingReg(t), (*detectMetrics)(nil)),
+		registry:  reg,
+		publisher: runtime.NewPublisher(&captureWriter{}, reg, (*detectMetrics)(nil)),
 		clock:     detectcore.RealClock{},
 		procCtx:   ctx,
 	}
