@@ -301,3 +301,65 @@ func TestADemotionForAnUnknownDeviceDoesNotCreateAnAssertedRow(t *testing.T) {
 		t.Fatalf("a demotion for an unknown device invented timestamps: %+v", ds)
 	}
 }
+
+// TestAnInertRowIsPopulatedByItsFirstDataEvent guards newDeviceState's own promise about
+// the row a demotion for an unknown device leaves behind: it is inert, and "the device's
+// next data event populates it the ordinary inferred way". That row has no
+// LastActivityTime at all, so a freshness test spelled as `Valid && After(...)` — rather
+// than `!Valid || After(...)` — would make it inert permanently. The same shape is
+// reachable without any demotion, from a row created by a first-event DISCONNECTED.
+func TestAnInertRowIsPopulatedByItsFirstDataEvent(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+	t0 := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+
+	inert, err := api.MergeDeviceState(ctx, "sp-inert", t0, demote(100, t0), DeviceIdentity{})
+	if err != nil {
+		t.Fatalf("demotion merge: %v", err)
+	}
+	if inert.LastActivityTime.Valid {
+		t.Fatalf("precondition: expected a row with no activity time, got %+v", inert)
+	}
+
+	ds, err := api.MergeDeviceState(ctx, "sp-inert", t0.Add(time.Minute), nil, DeviceIdentity{})
+	if err != nil {
+		t.Fatalf("first data merge: %v", err)
+	}
+	if !ds.Active {
+		t.Fatalf("an inert row was not brought to life by its first data event: %+v", ds)
+	}
+	if !ds.LastActivityTime.Valid || !ds.LastActivityTime.Time.Equal(t0.Add(time.Minute)) {
+		t.Fatalf("first data event did not record activity: %+v", ds)
+	}
+}
+
+// TestAFirstAuthoritativeConnectStampsWithoutASessionId is the one shape in which
+// neverAsserted is the ONLY thing that stamps a connect. A producer may legitimately send
+// no session id — the resolver parses an empty one to zero and calls it absent — so an
+// INFERRED-active device receiving its first authoritative CONNECTED sees neither a flip
+// (it was already active) nor a new session (zero to zero). Without the first-word term
+// the platform's first authoritative word about the device would leave no mark.
+func TestAFirstAuthoritativeConnectStampsWithoutASessionId(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+	t0 := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+
+	seeded, err := api.MergeDeviceState(ctx, "sp-nosession", t0, nil, DeviceIdentity{})
+	if err != nil {
+		t.Fatalf("seed merge: %v", err)
+	}
+	if !seeded.Active || seeded.SessionId != 0 || seeded.PresenceTime.Valid {
+		t.Fatalf("precondition: expected an inferred active row with no presence stamp, got %+v", seeded)
+	}
+
+	ds, err := api.MergeDeviceState(ctx, "sp-nosession", t0.Add(time.Minute), conn(0, t0.Add(time.Minute)), DeviceIdentity{})
+	if err != nil {
+		t.Fatalf("first connect merge: %v", err)
+	}
+	if ds.PresenceSource != PresenceSourceAsserted {
+		t.Fatalf("first authoritative connect did not promote: %+v", ds)
+	}
+	if !ds.LastConnectTime.Time.Equal(t0.Add(time.Minute)) {
+		t.Fatalf("first authoritative connect left LastConnectTime at %v: %+v", ds.LastConnectTime.Time, ds)
+	}
+}
