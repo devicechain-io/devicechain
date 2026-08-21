@@ -450,9 +450,19 @@ func (jd *JsonDecoder) Decode(payload []byte) (*model.UnresolvedEvent, interface
 		// asserting adapter (the Sparkplug host) emits it directly over the wire
 		// contract (proto), never through this device-facing JSON decoder. Accepting it
 		// here would let any device credential forge its own presence — assert itself
-		// permanently CONNECTED with an unbeatable session id, which the projection can
-		// never supersede (the sweep skips ASSERTED and no data event flips it), hiding
-		// the device's own death from monitoring. Reject it as an unsupported device event.
+		// permanently CONNECTED with an unbeatable session id, which the ordinary repair
+		// mechanisms cannot touch (the sweep skips ASSERTED and no data event flips it),
+		// hiding the device's own death from monitoring. Reject it as an unsupported
+		// device event.
+		//
+		// 🔑 THE JUSTIFICATION USED TO SAY "which the projection can never supersede", and
+		// that is no longer true: a DEMOTED claim releases custody and hands the row back
+		// to inferred presence. The rejection is unchanged and the reason is unweakened —
+		// it rests on FORGERY, not on irreversibility. A device that could assert itself
+		// would be lying about its own liveness for as long as nobody noticed, and the
+		// remedy would be an operator demoting it by hand, which is not a remedy for a
+		// device that simply does it again. What the demotion changes is the cost of the
+		// mistake, not whether it is one.
 		return nil, nil, fmt.Errorf("state-change (presence) events are platform-produced and not accepted from device ingest")
 	}
 
