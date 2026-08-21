@@ -19,6 +19,11 @@ import (
 
 type Api struct {
 	RDB *rdb.RdbManager
+	// demotions publishes operator presence demotions onto the inbound-events stream.
+	// It is wired during startup rather than at construction because it needs an
+	// initialized NatsManager, which does not exist when the Api is built; nil means
+	// the process cannot emit, and DemoteAssertedPresence fails closed on it.
+	demotions *DemotionEmitter
 }
 
 // Create a new API instance.
@@ -34,6 +39,8 @@ type DeviceStateApi interface {
 	DeviceStatesByDeviceToken(ctx context.Context, deviceTokens []string) ([]*DeviceState, error)
 	DeviceStatesByExternalId(ctx context.Context, externalIds []string) ([]*DeviceState, error)
 	AssertedDeviceStates(ctx context.Context, source string, activeOnly bool, afterId uint64, pageSize int) ([]*DeviceState, error)
+	AssertedStatesForDemotion(ctx context.Context, source string, tokens *[]string, afterId uint64, limit int) ([]*DeviceState, error)
+	DemoteAssertedPresence(ctx context.Context, source string, tokens *[]string, afterId uint64, limit int, actor, reason string) (*PresenceDemotionResult, error)
 	DeviceStates(ctx context.Context, criteria DeviceStateSearchCriteria) (*DeviceStateSearchResults, error)
 	SweepInactive(ctx context.Context, now time.Time) (int64, error)
 	MergeLatestMeasurements(ctx context.Context, deviceToken string, inputs []LatestMeasurementInput) error
@@ -520,6 +527,72 @@ func (api *Api) AssertedDeviceStates(ctx context.Context, source string, activeO
 		Limit(pageSize)
 	if activeOnly {
 		db = db.Where("active = ?", true)
+	}
+	if result := db.Find(&found); result.Error != nil {
+		return nil, result.Error
+	}
+	return found, nil
+}
+
+// AssertedStatesForDemotion returns ONE PAGE of the calling tenant's ASSERTED device
+// states for one event source — the set demoteAssertedPresence releases (ADR-067
+// demotion). It is the sibling of AssertedDeviceStates and shares its keyset walk and
+// its refusal to serve an unusable page, for the same reasons recorded there.
+//
+// It differs from that query in two ways, both deliberate. There is no activeOnly:
+// a stopped presence tap freezes rows in BOTH directions — the ones it left connected
+// and the ones it left dead — and one demotion repairs both, so a demotion that could
+// only reach half the set would leave the louder half wedged. And it takes an optional
+// device-token narrowing, because an operator repairing one machine should not have to
+// aim a fleet-wide write to do it.
+//
+// 🔴 tokens IS THREE-STATE, AND THE EMPTY STATE IS THE ONE THAT MATTERS:
+//
+//   - nil — no narrowing. The whole source.
+//   - a NON-EMPTY slice — only those devices, ANDed with the source. It narrows
+//     WITHIN the source and can never reach past it, so a token belonging to another
+//     source is simply not found rather than demoted.
+//   - an EMPTY slice — NO DEVICES. Zero rows, deliberately and without touching the
+//     database.
+//
+// The empty case is the opposite of the choice CommandSearchCriteria.Statuses makes
+// with the same Go shape, and the divergence is the point. That one is a READ filter,
+// where a caller who built a list and ended up with none of them almost always means
+// "no preference", and the other reading turns that into a silently empty page. This
+// is a WRITE whose unnarrowed blast radius is an entire event source's fleet, so the
+// same slip has to fail in the direction that does nothing rather than the direction
+// that does everything. `deviceTokens: []` demotes nothing.
+//
+// ⚠️ THE SHORT-CIRCUIT BELOW IS NOT WHAT MAKES THE EMPTY CASE SAFE TODAY, and saying
+// otherwise would be the comment-asserts-the-invariant trap. Measured, not inferred:
+// gorm renders `device_token IN ?` over an empty slice as a predicate that matches
+// nothing, so deleting the short-circuit changes no result — a mutation pass reports it
+// as an equivalent mutant, correctly. The trap that DOES exist is gorm's INLINE-condition
+// form, `Find(&out, ids)`, which drops an empty slice and degrades into an unfiltered
+// select; core/rdb.FindByIds owns that case and pins it. The two forms sit side by side
+// across this codebase and behave oppositely on the same input, which is exactly why the
+// distinction is written down here rather than assumed.
+//
+// It is kept for two reasons that do not depend on gorm: it makes "an empty list demotes
+// nothing" a property of THIS code rather than of a rendering decision in a dependency —
+// the one place a version bump could silently invert the answer for a WRITE — and it
+// spares a round trip for a request that cannot return anything.
+func (api *Api) AssertedStatesForDemotion(ctx context.Context, source string, tokens *[]string,
+	afterId uint64, limit int) ([]*DeviceState, error) {
+	if limit < 1 || limit > MaxAssertedPageSize {
+		return nil, fmt.Errorf("limit must be between 1 and %d, got %d", MaxAssertedPageSize, limit)
+	}
+	if tokens != nil && len(*tokens) == 0 {
+		return nil, nil
+	}
+	found := make([]*DeviceState, 0, limit)
+	db := api.RDB.DB(ctx).
+		Where("presence_source = ? AND source = ?", PresenceSourceAsserted, source).
+		Where("id > ?", afterId).
+		Order("id ASC").
+		Limit(limit)
+	if tokens != nil {
+		db = db.Where("device_token IN ?", *tokens)
 	}
 	if result := db.Find(&found); result.Error != nil {
 		return nil, result.Error

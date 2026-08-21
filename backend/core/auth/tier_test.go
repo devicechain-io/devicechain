@@ -136,7 +136,7 @@ func TestAuthorizeAnyAppliesTheTier(t *testing.T) {
 func TestEveryAuthorityDeclaresATier(t *testing.T) {
 	expected := []Authority{
 		UserRead, UserWrite, RoleRead, RoleWrite, TenantRead, TenantWrite,
-		DeviceRead, DeviceWrite, EventRead, StateRead, LocationRead, AlarmRead, AlarmWrite,
+		DeviceRead, DeviceWrite, EventRead, StateRead, StateDemote, LocationRead, AlarmRead, AlarmWrite,
 		CommandRead, CommandWrite, CommandClaim, CommandWake, CommandPark,
 		DashboardRead, DashboardWrite,
 		NotificationRead, NotificationWrite, AuditRead, SettingsRead, SettingsWrite,

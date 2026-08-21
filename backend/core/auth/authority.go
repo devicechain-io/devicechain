@@ -107,6 +107,29 @@ const (
 	EventRead Authority = "event:read"
 	StateRead Authority = "state:read"
 
+	// StateDemote permits returning a source's ASSERTED device-state rows to
+	// INFERRED — releasing a presence source's custody of devices it is no longer
+	// speaking for (ADR-067 demotion). It gates device-state's
+	// demoteAssertedPresence mutation, the manual door beside the automatic
+	// release a source performs at its own disable boundary.
+	//
+	// 🔴 SEPARATE FROM state:read BECAUSE IT IS A WRITE, AND SEPARATE FROM ANY
+	// state:write BECAUSE THERE ISN'T ONE. Every other door onto this projection is
+	// a read; this is the only thing that writes it from outside the event pipeline,
+	// and its blast radius is an entire event source's devices in one call. Folding
+	// it into state:read would hand a fleet-wide presence write to every viewer, and
+	// the read-only baseline every enabled member receives carries state:read.
+	//
+	// It is tenant-tier: a demotion acts on ONE tenant's own projection rows, scoped
+	// by the same RDB callback as every read beside it. Nothing about it spans
+	// tenants, so system-tier would be a category error — and would make the
+	// mutation unreachable from the plane it is served on.
+	//
+	// It is deliberately absent from user-management's read-only viewer baseline,
+	// which needs no test of its own: that baseline is asserted to hold only
+	// authorities ending in ":read", and this one does not.
+	StateDemote Authority = "state:demote"
+
 	// Position (event-management history + device-state's last-known projection).
 	//
 	// 🔴 SEPARATE FROM EventRead ON PURPOSE, and the separation only works while the
@@ -356,10 +379,14 @@ var vocabulary = map[Authority]Tiers{
 	ClientWrite:   system,
 
 	// A tenant's own resources.
-	DeviceRead:        tenant,
-	DeviceWrite:       tenant,
-	EventRead:         tenant,
-	StateRead:         tenant,
+	DeviceRead:  tenant,
+	DeviceWrite: tenant,
+	EventRead:   tenant,
+	StateRead:   tenant,
+	// A demotion writes one tenant's own projection rows. Tenant-tier is what makes
+	// it reachable at all from the data plane the mutation is served on; the reason
+	// it is not simply state:read is on the constant.
+	StateDemote:       tenant,
 	LocationRead:      tenant,
 	AlarmRead:         tenant,
 	AlarmWrite:        tenant,

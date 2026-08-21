@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"time"
 
 	"github.com/devicechain-io/dc-device-state/config"
 	"github.com/devicechain-io/dc-device-state/graphql"
@@ -28,6 +29,7 @@ var (
 	Api *model.Api
 
 	ResolvedEventsReader messaging.MessageReader
+	InboundEventsWriter  messaging.MessageWriter
 	StateProcessor       *processor.StateProcessor
 )
 
@@ -74,6 +76,22 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		return err
 	}
 	ResolvedEventsReader = revents
+
+	// The service's ONE producer, and this is the only place it can be built: the
+	// operator demotion mutation (ADR-067) publishes onto the shared inbound-events
+	// stream, which needs an initialized NatsManager, and the Api it hangs off is
+	// constructed before that manager exists.
+	//
+	// 🔴 IT PUBLISHES RATHER THAN WRITING THE ROW IT OWNS, deliberately. device-state
+	// owns device_states and could update them in place; doing so would leave the
+	// DETECT engine's presence cursor — keyed on the identical ordering predicate —
+	// describing a different device from the projection. See model.DemotionEmitter.
+	inbound, err := nmgr.NewWriter(streams.InboundEvents)
+	if err != nil {
+		return err
+	}
+	InboundEventsWriter = inbound
+	Api.SetDemotionEmitter(model.NewDemotionEmitter(InboundEventsWriter, time.Now))
 
 	// Add and initialize device state processor.
 	StateProcessor = processor.NewStateProcessor(Microservice, ResolvedEventsReader,
