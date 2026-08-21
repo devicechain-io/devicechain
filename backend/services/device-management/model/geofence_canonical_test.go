@@ -4,11 +4,14 @@
 package model
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
 	"testing"
+
+	"github.com/devicechain-io/dc-microservice/core"
 )
 
 // 🔴 THIS FILE EXISTS BECAUSE A LENGTH WAS MEASURED ON THE WRONG DOCUMENT.
@@ -285,5 +288,110 @@ func TestCanonicalGeometryIsStableAndPreservesCoordinates(t *testing.T) {
 		if got[i][0] != want[i][0] || got[i][1] != want[i][1] {
 			t.Errorf("position %d canonicalised to %v, want %v", i, got[i], want[i])
 		}
+	}
+}
+
+// ── what is actually STORED ──────────────────────────────────────────────────────────────────
+
+// 🔴 THESE EXIST BECAUSE A MUTANT SURVIVED. Reverting CreateGeoFence and UpdateGeoFence to
+// persist request.Geometry — validating the canonical document and storing the authored one —
+// broke no test in this repository. Every test above calls validateGeoFenceGeometry directly,
+// and every read-path fixture was written in a form that is already close to canonical, so
+// "what was validated" and "what was stored" being different was invisible.
+//
+// That is exactly the defect canonicalisation exists to prevent: a bound applied to a document
+// nobody keeps. The assertions here are therefore about the ROW and about the SNAPSHOT — the
+// two things downstream actually reads.
+
+// nonCanonicalRequest is a VALID fence document that differs from its canonical form in three
+// independent ways: exponent notation, key ordering, and insignificant whitespace. Any one of
+// them is enough to make stored-vs-validated observable; all three make it unmissable.
+const nonCanonicalRequest = `{ "geometry" : { "coordinates" : [ [ [1e-2,0], [1,0], [1,1], [1e-2,0] ] ] , "type" : "Polygon" } , "kind" : "POLYGON_2D" }`
+
+// A created fence stores the CANONICAL document, not the request text.
+func TestCreateStoresTheCanonicalGeometry(t *testing.T) {
+	api := newGeoFenceTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	_, canonical, err := validateGeoFenceGeometry(nonCanonicalRequest)
+	if err != nil {
+		t.Fatalf("fixture does not validate: %v", err)
+	}
+	if canonical == nonCanonicalRequest {
+		t.Fatal("fixture is already canonical, so it cannot tell the two apart")
+	}
+
+	created, err := api.CreateGeoFence(ctx, &GeoFenceCreateRequest{
+		Token: "yard", Geometry: nonCanonicalRequest})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if got := string(created.Geometry); got != canonical {
+		t.Errorf("the stored geometry is not the canonical document.\n stored: %s\ncanonical: %s", got, canonical)
+	}
+
+	// And the row on disk, not just the struct handed back.
+	found, err := api.GeoFencesByToken(ctx, []string{"yard"})
+	if err != nil || len(found) != 1 {
+		t.Fatalf("read back: %v (%d rows)", err, len(found))
+	}
+	if got := string(found[0].Geometry); got != canonical {
+		t.Errorf("the persisted row is not the canonical document: %s", got)
+	}
+}
+
+// An updated fence stores the canonical document too. The two write paths are separate call
+// sites, so one being right says nothing about the other.
+func TestUpdateStoresTheCanonicalGeometry(t *testing.T) {
+	api := newGeoFenceTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	if _, err := api.CreateGeoFence(ctx, &GeoFenceCreateRequest{
+		Token: "yard", Geometry: polygonGeometry(0, 0, 1, 0, 1, 1, 0, 0)}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	_, canonical, err := validateGeoFenceGeometry(nonCanonicalRequest)
+	if err != nil {
+		t.Fatalf("fixture does not validate: %v", err)
+	}
+
+	updated, err := api.UpdateGeoFence(ctx, "yard", &GeoFenceCreateRequest{
+		Token: "yard", Geometry: nonCanonicalRequest})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if got := string(updated.Geometry); got != canonical {
+		t.Errorf("update stored the request text rather than the canonical document: %s", got)
+	}
+}
+
+// 🔴 AND THE SNAPSHOT CARRIES IT. The frozen fence-set snapshot is what the fact publishes and
+// what the paged GraphQL door serves, so it — not the live row — is the document every byte
+// budget downstream is spent on. mintGeoFenceSetVersion copies the stored geometry verbatim,
+// which means storing the authored text would put it straight onto the wire, past a bound that
+// was measured against something else.
+func TestTheFrozenSnapshotCarriesTheCanonicalGeometry(t *testing.T) {
+	api := newGeoFenceTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	_, canonical, err := validateGeoFenceGeometry(nonCanonicalRequest)
+	if err != nil {
+		t.Fatalf("fixture does not validate: %v", err)
+	}
+	if _, err := api.CreateGeoFence(ctx, &GeoFenceCreateRequest{
+		Token: "yard", Geometry: nonCanonicalRequest}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	snapshot, err := api.CurrentGeoFenceSetSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if len(snapshot.Fences) != 1 {
+		t.Fatalf("the snapshot holds %d fences, want 1", len(snapshot.Fences))
+	}
+	if got := string(snapshot.Fences[0].Geometry); got != canonical {
+		t.Errorf("the frozen snapshot carries the request text, so the size bound was applied to "+
+			"a document nobody publishes.\n frozen: %s\ncanonical: %s", got, canonical)
 	}
 }
