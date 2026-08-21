@@ -114,6 +114,12 @@ type schemaFenceSource struct {
 	// versionsAsked records every version resolved through the source, so a test can prove the
 	// preview really went to the archive rather than answering from a set it already had.
 	versionsAsked []int32
+	// pagesServed / bytesServed record how many GraphQL responses the source produced and how
+	// large the largest one was, so a test about the response-size cap can show it actually paged
+	// rather than trusting that a big fence set was big.
+	pagesServed  int
+	bytesServed  int
+	largestBytes int
 }
 
 // dmContext builds the request context device-management's GraphQL layer expects: the Api, the
@@ -125,32 +131,35 @@ func (s *schemaFenceSource) dmContext(tenant string) context.Context {
 	return auth.WithClaims(ctx, &auth.Claims{Tenant: tenant, Authorities: []string{string(auth.DeviceRead)}})
 }
 
-// exec runs one query against device-management's schema and unmarshals its data into out.
-func (s *schemaFenceSource) exec(tenant, query string, vars map[string]any, out any) error {
+// exec runs one query against device-management's schema and unmarshals its data into out. It
+// satisfies fenceSetExec, which is what lets the two methods below run the PRODUCTION paging
+// loops — the page walk, the stitching and the completeness check are the shipped code here, not
+// a test reimplementation of it, so a defect in the loop fails these tests.
+//
+// It also records every page it serves, so a test can prove a set really was read in more than
+// one round trip rather than assuming the cap it is about was ever approached.
+func (s *schemaFenceSource) exec(_ context.Context, tenant, query string, vars map[string]any, out any) error {
 	s.t.Helper()
+	s.pagesServed++
 	schema := gqlcore.MustParseSchema(dmgraphql.SchemaContent, &dmgraphql.SchemaResolver{})
 	resp := schema.Exec(s.dmContext(tenant), query, "", vars)
 	if len(resp.Errors) > 0 {
 		return resp.Errors[0]
 	}
+	s.bytesServed += len(resp.Data)
+	if len(resp.Data) > s.largestBytes {
+		s.largestBytes = len(resp.Data)
+	}
 	return json.Unmarshal(resp.Data, out)
 }
 
-func (s *schemaFenceSource) FenceSetAt(_ context.Context, tenant string, version int32) (*geofence.FenceSet, error) {
+func (s *schemaFenceSource) FenceSetAt(ctx context.Context, tenant string, version int32) (*geofence.FenceSet, error) {
 	s.versionsAsked = append(s.versionsAsked, version)
-	var out geoFenceSetSnapshotResponse
-	if err := s.exec(tenant, geoFenceSetSnapshotQuery, map[string]any{"version": int(version)}, &out); err != nil {
-		return nil, err
-	}
-	return out.GeoFenceSetSnapshot.compile(), nil
+	return fetchSnapshotAt(ctx, s.exec, tenant, version)
 }
 
-func (s *schemaFenceSource) CurrentFenceSet(_ context.Context, tenant string) (*geofence.FenceSet, error) {
-	var out currentGeoFenceSetResponse
-	if err := s.exec(tenant, currentGeoFenceSetQuery, nil, &out); err != nil {
-		return nil, err
-	}
-	return out.CurrentGeoFenceSet.compile(), nil
+func (s *schemaFenceSource) CurrentFenceSet(ctx context.Context, tenant string) (*geofence.FenceSet, error) {
+	return fetchCurrentSnapshot(ctx, s.exec, tenant)
 }
 
 var (
@@ -265,7 +274,7 @@ func TestFenceEditReachesTheDetectEngineEndToEnd(t *testing.T) {
 	api := newFenceDmApi(t)
 	dmCtx := dccore.WithTenant(ctx, "acme")
 	factWriter := &fenceFactWriter{}
-	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(factWriter)
+	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(factWriter, 0, nil)
 
 	w := &captureWriter{}
 	rp := newFenceProcessor(t, fenceRuleReg(t, "acme", "p@1", "yard"), w, nil)
@@ -322,7 +331,7 @@ func TestFenceEditsAreFiledByVersionNotReplaced(t *testing.T) {
 	api := newFenceDmApi(t)
 	dmCtx := dccore.WithTenant(ctx, "acme")
 	factWriter := &fenceFactWriter{}
-	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(factWriter)
+	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(factWriter, 0, nil)
 
 	if _, err := api.CreateGeoFence(dmCtx, &dmmodel.GeoFenceCreateRequest{
 		Token: "yard", Geometry: fenceBox(0, 0, 1, 1)}); err != nil {
@@ -468,7 +477,7 @@ func TestRestartedProcessorStillEvaluatesAFenceRule(t *testing.T) {
 	api := newFenceDmApi(t)
 	dmCtx := dccore.WithTenant(ctx, "acme")
 	factWriter := &fenceFactWriter{}
-	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(factWriter)
+	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(factWriter, 0, nil)
 	if _, err := api.CreateGeoFence(dmCtx, &dmmodel.GeoFenceCreateRequest{
 		Token: "yard", Geometry: fenceBox(0, 0, 1, 1)}); err != nil {
 		t.Fatalf("create: %v", err)

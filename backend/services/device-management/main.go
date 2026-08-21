@@ -168,11 +168,21 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// version's FROZEN fence set to event-processing's live containment projection — so a
 	// location event's inFence resolves from memory and never blocks the DETECT loop on a
 	// read back into this service.
+	//
+	// It is handed the broker's per-message ceiling because a tenant at the documented
+	// authoring ceiling does not fit under it: over that size the writer publishes a
+	// POINTER fact (version only) rather than a publish the broker refuses, and the counter
+	// is what points an operator at the cause when containment starts reporting eval errors.
 	fencepub, err := nmgr.NewWriter(streams.GeoFenceSet)
 	if err != nil {
 		return err
 	}
-	Api.GeoFenceSetPublisher = processor.NewGeoFenceSetWriter(fencepub)
+	Api.GeoFenceSetPublisher = processor.NewGeoFenceSetWriter(fencepub,
+		Microservice.InstanceConfiguration.Infrastructure.Nats.StreamMaxMsgSize,
+		Microservice.NewCounter(
+			"geofence_set_facts_without_fences_total",
+			"Geofence-set facts published carrying only their version because the frozen fence set exceeded the broker's per-message ceiling. Consumers resolve these from the frozen archive, so containment stays correct — but each one costs a cross-service read, and a steadily rising value means a tenant's fence set has outgrown the wire.",
+			nil))
 
 	// Add and initialize inbound events processor.
 	InboundEventsProcessor = processor.NewInboundEventsProcessor(Microservice, InboundEventsReader,

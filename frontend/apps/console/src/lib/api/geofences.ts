@@ -199,18 +199,42 @@ export async function getCurrentFenceSetVersion(): Promise<number> {
 }
 
 const GEO_FENCE_SET_SNAPSHOT = graphql(`
-  query GeoFenceSetSnapshot($version: Int!) {
+  query GeoFenceSetSnapshot($version: Int!, $pagination: PaginationInput!) {
     geoFenceSetSnapshot(version: $version) {
       version
-      fences {
-        token
-        geometry
+      fences(pagination: $pagination) {
+        results {
+          token
+          geometry
+        }
+        pagination {
+          totalRecords
+        }
       }
     }
   }
 `);
 
-export type GeoFenceSetSnapshot = GeoFenceSetSnapshotQuery['geoFenceSetSnapshot'];
+/**
+ * The page size this panel reads a frozen set in.
+ *
+ * A fence set cannot hold more than a hundred fences — the server refuses the
+ * hundred-and-first — so one page of that size is the whole set for every fence
+ * set that can exist today. The loop below runs anyway, because "the limit is a
+ * hundred" is the server's decision to change and a panel that silently showed
+ * the first page of a raised limit would be wrong without ever looking wrong.
+ */
+const SNAPSHOT_PAGE_SIZE = 100;
+
+export type GeoFenceSetSnapshotFence = NonNullable<
+  GeoFenceSetSnapshotQuery['geoFenceSetSnapshot']
+>['fences']['results'][number];
+
+/** A whole frozen fence set, reassembled from however many pages it took. */
+export interface GeoFenceSetSnapshot {
+  version: number;
+  fences: GeoFenceSetSnapshotFence[];
+}
 
 /**
  * The whole fence set as it stood at `version`, geometry frozen.
@@ -218,8 +242,29 @@ export type GeoFenceSetSnapshot = GeoFenceSetSnapshotQuery['geoFenceSetSnapshot'
  * The entries carry token and geometry only: a fence's NAME is deliberately not
  * frozen, so this cannot answer "what was it called then" and the panel must not
  * imply that it can.
+ *
+ * The fences arrive PAGED. That is not for this panel's benefit — a hundred
+ * fences is a small render — it is because the same field is read across a
+ * service boundary by a client that caps a response at a megabyte, and a fence
+ * set at the documented authoring limits is larger than that. This function
+ * hides the paging so the panel keeps working with a whole set.
  */
 export async function getGeoFenceSetSnapshot(version: number): Promise<GeoFenceSetSnapshot> {
-  const data = await gql('device-management', GEO_FENCE_SET_SNAPSHOT, { version });
-  return data.geoFenceSetSnapshot;
+  const fences: GeoFenceSetSnapshotFence[] = [];
+  let resolved = version;
+  for (let pageNumber = 1; ; pageNumber++) {
+    const data = await gql('device-management', GEO_FENCE_SET_SNAPSHOT, {
+      version,
+      pagination: { pageNumber, pageSize: SNAPSHOT_PAGE_SIZE },
+    });
+    const snapshot = data.geoFenceSetSnapshot;
+    resolved = snapshot.version;
+    fences.push(...snapshot.fences.results);
+    const total = snapshot.fences.pagination.totalRecords ?? 0;
+    // Stop on the total, and stop on an empty page too: without the second
+    // condition a server that reported a total its pages never reach would spin
+    // this loop forever inside a render path.
+    if (fences.length >= total || snapshot.fences.results.length === 0) break;
+  }
+  return { version: resolved, fences };
 }

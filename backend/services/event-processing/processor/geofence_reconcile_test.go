@@ -121,7 +121,7 @@ func editedYard(t *testing.T) (*dmmodel.Api, *fenceFactWriter) {
 	api := newFenceDmApi(t)
 	dmCtx := dccore.WithTenant(context.Background(), "acme")
 	facts := &fenceFactWriter{}
-	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(facts)
+	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(facts, 0, nil)
 
 	if _, err := api.CreateGeoFence(dmCtx, &dmmodel.GeoFenceCreateRequest{
 		Token: "yard", Geometry: fenceBox(0, 0, 1, 1)}); err != nil {

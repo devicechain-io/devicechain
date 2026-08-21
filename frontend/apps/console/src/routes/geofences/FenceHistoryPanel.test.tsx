@@ -80,6 +80,24 @@ function fence(over: Partial<GeoFence> = {}): GeoFence {
   };
 }
 
+/**
+ * The wire shape of one frozen-set answer: the fences arrive PAGED, and the
+ * pagination record is what the caller loops on.
+ *
+ * The fixtures here are single-page by construction (a handful of fences), so the
+ * totalRecords is simply the length. Stating it rather than omitting it is the
+ * point: a reply with no total is the shape that would let the panel's loop stop
+ * after one page and call it the whole set.
+ */
+function snapshotReply(version: number, fences: { token: string; geometry: string }[]) {
+  return {
+    geoFenceSetSnapshot: {
+      version,
+      fences: { results: fences, pagination: { totalRecords: fences.length } },
+    },
+  };
+}
+
 /** Answers the two archive queries; `fences` is what the snapshot contains. */
 function transport(
   latest: number,
@@ -98,7 +116,7 @@ function transport(
       }
       // 🔴 Echoes the version ASKED FOR. Returning `latest` regardless is what let
       // a stale snapshot render under a new version number unnoticed.
-      return Promise.resolve({ geoFenceSetSnapshot: { version: asked, fences } });
+      return Promise.resolve(snapshotReply(asked, fences));
     },
   );
 }
@@ -248,9 +266,9 @@ describe('FenceHistoryPanel', () => {
         return Promise.resolve({ currentFenceSetVersion: 4 });
       }
       if (v?.version === 3) return new Promise((res) => { release = res; });
-      return Promise.resolve({
-        geoFenceSetSnapshot: { version: v?.version ?? 4, fences: [{ token: 'yard', geometry: doc([OTHER_RING]) }] },
-      });
+      return Promise.resolve(
+        snapshotReply(v?.version ?? 4, [{ token: 'yard', geometry: doc([OTHER_RING]) }]),
+      );
     });
     render(<FenceHistoryPanel entity={fence()} />);
     expect(await screen.findByTestId('fake-map')).toBeTruthy();
@@ -259,7 +277,7 @@ describe('FenceHistoryPanel', () => {
 
     await waitFor(() => expect(screen.getByTestId('fence-history-loading')).toBeTruthy());
     expect(screen.queryByTestId('fake-map')).toBeNull();
-    release({ geoFenceSetSnapshot: { version: 3, fences: [{ token: 'yard', geometry: doc([OTHER_RING]) }] } });
+    release(snapshotReply(3, [{ token: 'yard', geometry: doc([OTHER_RING]) }]));
     await waitFor(() => expect(screen.getByTestId('fake-map')).toBeTruthy());
   });
 

@@ -45,12 +45,18 @@ const (
 	// refreshSkew re-mints this far ahead of the cached token's expiry so a call
 	// never rides a token that expires mid-flight.
 	refreshSkew = 1 * time.Minute
-	// maxResponseBytes caps a response read so a misbehaving peer cannot exhaust
+	// MaxResponseBytes caps a response read so a misbehaving peer cannot exhaust
 	// memory.
-	maxResponseBytes = 1 << 20
+	//
+	// It is EXPORTED because a caller whose read can outgrow it has to page, and a
+	// paging caller's test has to be able to prove the page it built is actually
+	// smaller than the wall it was built for. Written as a literal in that test
+	// instead, the two numbers drift apart the day this one moves and the test goes
+	// on passing while measuring nothing.
+	MaxResponseBytes = 1 << 20
 )
 
-// ErrResponseTooLarge reports that a peer's response exceeded maxResponseBytes.
+// ErrResponseTooLarge reports that a peer's response exceeded MaxResponseBytes.
 //
 // 🔴 IT EXISTS BECAUSE THE ALTERNATIVE IS A LIE ABOUT WHOSE FAULT IT IS. io.LimitReader
 // returns no error at the cap — it simply stops — so a response that outgrew the cap
@@ -59,7 +65,7 @@ const (
 // when the truth is "this query asks for more than the transport carries". Those need
 // opposite responses: one is somebody else's bug, the other is a caller that must page.
 //
-// The read is capped at maxResponseBytes+1 so that overflow is DETECTED rather than
+// The read is capped at MaxResponseBytes+1 so that overflow is DETECTED rather than
 // inferred; the extra byte is never used for anything else.
 var ErrResponseTooLarge = errors.New("svcclient: response exceeded the read cap")
 
@@ -85,12 +91,12 @@ var responsesTruncated = promauto.NewCounterVec(prometheus.CounterOpts{
 // is complete and must be treated as ordinary, and the only way to tell "exactly full"
 // from "overflowing" is to ask for one more byte than can legitimately arrive.
 func readCapped(body io.Reader) ([]byte, bool, error) {
-	raw, err := io.ReadAll(io.LimitReader(body, maxResponseBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(body, MaxResponseBytes+1))
 	if err != nil {
 		return nil, false, err
 	}
-	if len(raw) > maxResponseBytes {
-		return raw[:maxResponseBytes], true, nil
+	if len(raw) > MaxResponseBytes {
+		return raw[:MaxResponseBytes], true, nil
 	}
 	return raw, false, nil
 }
@@ -180,7 +186,7 @@ func (c *Client) Query(ctx context.Context, baseURL, tenant, query string, varia
 	if truncated {
 		responsesTruncated.WithLabelValues(baseURL).Inc()
 		return fmt.Errorf("%w: %s returned more than %d bytes; the caller must page this query",
-			ErrResponseTooLarge, baseURL, maxResponseBytes)
+			ErrResponseTooLarge, baseURL, MaxResponseBytes)
 	}
 
 	var envelope struct {
@@ -278,7 +284,7 @@ func (c *Client) mint(ctx context.Context) (string, time.Time, error) {
 	if truncated {
 		responsesTruncated.WithLabelValues(c.mintURL).Inc()
 		return "", time.Time{}, fmt.Errorf("%w: the mint endpoint returned more than %d bytes",
-			ErrResponseTooLarge, maxResponseBytes)
+			ErrResponseTooLarge, MaxResponseBytes)
 	}
 	var minted auth.ServiceTokenResponse
 	if err := json.Unmarshal(raw, &minted); err != nil {

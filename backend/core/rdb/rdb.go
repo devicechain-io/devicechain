@@ -335,3 +335,52 @@ func (rdb *RdbManager) ExecuteTerminate(context.Context) error {
 	sqldb.Close()
 	return nil
 }
+
+// PageSlice applies the ListOf pagination contract to a collection that is ALREADY in
+// memory, returning the requested page and the SearchResultsPagination that describes it.
+//
+// 🔴 IT LIVES HERE, BESIDE ListOf, BECAUSE THE TWO MUST AGREE. A paginated GraphQL field
+// whose page arithmetic is spelled out at its own call site is one refactor away from
+// reporting a different pageStart/pageEnd than every SQL-backed list on the same schema —
+// and a client that pages until pageEnd == totalRecords would then either stop early or
+// spin. The clamp (EffectivePageSize), the 1-based page floor, and the past-the-end
+// behaviour are all read from the same place ListOf reads them.
+//
+// Its caller is a field whose whole collection is a bounded document already held in
+// memory — the frozen geofence-set snapshot — where paging is about what crosses the WIRE,
+// not about what is read from the database. It is not a licence to load a table and slice
+// it; an unbounded row set still belongs behind ListOf's LIMIT.
+func PageSlice[T any](items []T, pag Pagination) ([]T, SearchResultsPagination) {
+	total := int32(len(items))
+	if pag.Unbounded {
+		return items, SearchResultsPagination{PageStart: 1, PageEnd: total, TotalRecords: total}
+	}
+	if pag.PageNumber < 1 {
+		pag.PageNumber = 1
+	}
+	size := pag.EffectivePageSize()
+	// int64 so a large PageNumber (up to the GraphQL Int max) cannot overflow the offset
+	// and wrap back to an early page — the same guard Paginate applies to the SQL OFFSET.
+	offset := (int64(pag.PageNumber) - 1) * int64(size)
+	if offset < 0 {
+		offset = 0
+	}
+	last := pag.PageNumber * size
+	if total < last {
+		last = total
+	}
+	srpag := SearchResultsPagination{
+		PageStart:    (pag.PageNumber-1)*size + 1,
+		PageEnd:      last,
+		TotalRecords: total,
+	}
+	if offset >= int64(total) {
+		// Past the end: an empty page, exactly as an OFFSET beyond the last row yields.
+		return []T{}, srpag
+	}
+	end := offset + int64(size)
+	if end > int64(total) {
+		end = int64(total)
+	}
+	return items[offset:end], srpag
+}

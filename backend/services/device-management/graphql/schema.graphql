@@ -504,8 +504,25 @@ type GeoFenceSetSnapshot {
     # The version this set is the frozen state of. 0 means the tenant had never created a
     # fence when the event was resolved — an empty fence set as knowledge, not as absence.
     version: Int!
-    # The fences as of this version, ordered by token.
-    fences: [GeoFenceSnapshotEntry!]!
+    # The fences as of this version, ordered by token, one bounded page at a time.
+    #
+    # It is PAGINATED because a fence set at the documented authoring ceiling does not fit
+    # in one cross-service response: the service-token client that reads this door caps a
+    # response at 1 MiB, and a hundred fences of five hundred vertices is more than that.
+    # Unpaginated, the read failed for exactly the tenants who had used the product as
+    # documented, and the failure surfaced only as containment eval errors. Read pages
+    # until pagination.pageEnd reaches pagination.totalRecords.
+    #
+    # Paging a SNAPSHOT is safe in a way paging a live list is not: a version's fence set
+    # is frozen at mint and nothing ever rewrites it, so two pages of one version cannot
+    # come from two different fence sets however long the read takes.
+    fences(pagination: PaginationInput!): GeoFenceSnapshotEntrySearchResults!
+}
+
+# One page of a frozen fence set's fences.
+type GeoFenceSnapshotEntrySearchResults {
+    results: [GeoFenceSnapshotEntry!]!
+    pagination: SearchResultsPagination!
 }
 
 # One fence inside a frozen snapshot. Name and description are deliberately absent: the
@@ -1539,6 +1556,12 @@ type Query {
     geoFenceSetSnapshot(version: Int!): GeoFenceSetSnapshot!
     # The frozen fence set of the tenant's CURRENT version — the version and its fences
     # read together, so the two cannot disagree across a concurrent fence edit.
+    #
+    # That guarantee holds WITHIN one response. A caller reading a multi-page fence set
+    # must take page 1 from here and every later page from geoFenceSetSnapshot at the
+    # version this one reported: asking here twice is two questions about a moving target,
+    # and a fence edit between them yields two pages of two different sets stitched
+    # together under one version number.
     currentGeoFenceSet: GeoFenceSetSnapshot!
     # Find raised alarms by unique id.
     alarmsById(ids: [ID!]!): [Alarm!]!

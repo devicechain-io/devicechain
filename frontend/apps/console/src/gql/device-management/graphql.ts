@@ -1021,10 +1021,11 @@ export type CurrentFenceSetVersionQuery = { currentFenceSetVersion: number };
 
 export type GeoFenceSetSnapshotQueryVariables = Exact<{
   version: number;
+  pagination: PaginationInput;
 }>;
 
 
-export type GeoFenceSetSnapshotQuery = { geoFenceSetSnapshot: { version: number, fences: Array<{ token: string, geometry: string }> } };
+export type GeoFenceSetSnapshotQuery = { geoFenceSetSnapshot: { version: number, fences: { results: Array<{ token: string, geometry: string }>, pagination: { totalRecords: number | null } } } };
 
 export type EntityRelationshipsQueryVariables = Exact<{
   criteria: EntityRelationshipSearchCriteria;
@@ -2505,12 +2506,17 @@ export const CurrentFenceSetVersionDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CurrentFenceSetVersionQuery, CurrentFenceSetVersionQueryVariables>;
 export const GeoFenceSetSnapshotDocument = new TypedDocumentString(`
-    query GeoFenceSetSnapshot($version: Int!) {
+    query GeoFenceSetSnapshot($version: Int!, $pagination: PaginationInput!) {
   geoFenceSetSnapshot(version: $version) {
     version
-    fences {
-      token
-      geometry
+    fences(pagination: $pagination) {
+      results {
+        token
+        geometry
+      }
+      pagination {
+        totalRecords
+      }
     }
   }
 }

@@ -220,6 +220,21 @@ type ResolvedEventsProcessor struct {
 	// projection that errors is visible, an empty one that answers "outside" would not be.
 	FenceSets runtime.CurrentFenceSetSource
 
+	// VersionedFenceSets is the VERSION-ADDRESSED half of the same archive seam, used by the fact
+	// consumer to resolve a POINTER fact — one whose fence set was too large to ride in a single
+	// broker message, so the fact carries the version and nothing else.
+	//
+	// It is a second field rather than a second use of FenceSets because the two answer different
+	// questions and only one of them is right here: "what is the current set" would install a
+	// LATER version under a fact that announced an earlier one, leaving the announced version
+	// permanently missing from the view. See runtime.FenceSetSource / CurrentFenceSetSource for why
+	// the split is enforced by the compiler and not by a comment.
+	//
+	// 🔴 IT IS NEVER CONSULTED ON THE LOOP either — the read happens on the fact consumer's own
+	// goroutine, which is already where the fence compile happens. Nil means a pointer fact cannot
+	// be resolved, which is reported loudly and counted rather than installed as an empty set.
+	VersionedFenceSets runtime.FenceSetSource
+
 	// armer arms dead-man absence timers for never-seen devices, cross-referencing the roster +
 	// active-version read-models (ADR-051 slice 4c-2b-2b). It is built in ExecuteStart once the
 	// engine is final (after replay), reconciled from the durable projections, then driven live on

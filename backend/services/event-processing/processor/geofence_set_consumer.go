@@ -241,6 +241,16 @@ func (rp *ResolvedEventsProcessor) handleFenceSetFact(msg messaging.Message) boo
 		rp.ackFact(msg, "geofence-set")
 		return true
 	}
+	// A POINTER fact carries no fences and must be resolved from the archive. It is
+	// checked BEFORE ev.Fences is read, because after decoding the two are identical:
+	// a pointer fact and a genuinely-empty set both hold an empty list, and only this
+	// flag separates "go and fetch it" from "this tenant has no fences", which is a
+	// real and meaningful state (a tenant that deleted its last fence). Reading the
+	// list first would install a hundred fences as none, and containment would then
+	// answer "outside" forever — a healthy-looking rule that never fires.
+	if ev.FencesOmitted {
+		return rp.resolveOmittedFenceSet(msg, tenant, ev.Version)
+	}
 	fences := make([]geofence.SnapshotFence, 0, len(ev.Fences))
 	for _, f := range ev.Fences {
 		fences = append(fences, geofence.SnapshotFence{Token: f.Token, Geometry: f.Geometry})
@@ -251,6 +261,58 @@ func (rp *ResolvedEventsProcessor) handleFenceSetFact(msg messaging.Message) boo
 	// geometry will not compile is retained with its error rather than dropped, so one bad fence
 	// cannot disable containment for the rest of the tenant's set.
 	if !rp.signalFenceSet(tenant, geofence.NewFenceSet(ev.Version, fences)) {
+		return false // shutdown mid-send: leave unacked; it redelivers next start
+	}
+	rp.ackFact(msg, "geofence-set")
+	return true
+}
+
+// resolveOmittedFenceSet resolves a POINTER fact — one whose fence set was too large for a single
+// broker message — by reading that version out of device-management's frozen archive, then
+// installing it on the single-writer loop exactly as an ordinary fact's set is installed.
+//
+// 🔴 IT READS THE VERSION THE FACT NAMES, NEVER THE CURRENT ONE. Those differ the moment a second
+// fence edit lands while this one is being resolved, and installing "current" under a fact that
+// announced version 7 would leave the view holding 8 with 7 still missing — every event stamped 7
+// would report unresolvable, which is the exact fault the pointer fact exists to prevent. The
+// version-addressed read is also the only deterministic one: version 7's snapshot is frozen and
+// cannot become something else between the fact and the fetch.
+//
+// The blocking read is legal HERE and would not be one line further in. This runs on the fact
+// consumer's own goroutine, which already does the fence compile for the same reason; the
+// single-writer loop — where every tenant's event processing is serialized — is on the far side of
+// signalFenceSet and never waits on this.
+//
+// A failed read is logged and ACKED rather than left to redeliver. Redelivery would re-run the same
+// read against the same unavailable peer on the broker's schedule, while the five-minute reconcile
+// sweep already exists to repair precisely a version the view never received and will retry with
+// backoff-shaped cadence forever. Acking also keeps a persistently unreadable version from parking
+// the stream behind it. The residual — up to one sweep interval of eval errors for that tenant — is
+// the same trade the sweep's other callers make, and it is reported, not silent.
+func (rp *ResolvedEventsProcessor) resolveOmittedFenceSet(msg messaging.Message, tenant string, version int32) bool {
+	if rp.fenceView == nil {
+		rp.ackFact(msg, "geofence-set")
+		return true
+	}
+	if rp.VersionedFenceSets == nil {
+		// The projection is live but the archive seam is not wired, so this version's fences
+		// are unreachable. Say so loudly: containment for this tenant reports unresolvable
+		// until the seam is configured, and no amount of waiting changes that.
+		rp.metrics.recordFenceSetPointerUnresolved()
+		log.Error().Str("tenant", tenant).Int32("version", version).
+			Msg("A geofence-set fact arrived without its fences (the set is too large for one broker message) and no fence-set archive seam is configured; containment for this tenant reports unresolvable at this version.")
+		rp.ackFact(msg, "geofence-set")
+		return true
+	}
+	set, err := rp.VersionedFenceSets.FenceSetAt(rp.procCtx, tenant, version)
+	if err != nil || set == nil {
+		rp.metrics.recordFenceSetPointerUnresolved()
+		log.Error().Err(err).Str("tenant", tenant).Int32("version", version).
+			Msg("Unable to resolve a geofence-set fact that arrived without its fences; containment for this tenant reports unresolvable at this version until the next reconcile sweep.")
+		rp.ackFact(msg, "geofence-set")
+		return true
+	}
+	if !rp.signalFenceSet(tenant, set) {
 		return false // shutdown mid-send: leave unacked; it redelivers next start
 	}
 	rp.ackFact(msg, "geofence-set")

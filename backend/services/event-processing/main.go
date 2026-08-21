@@ -220,8 +220,13 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// fact stream carries only changes from now on. FenceSets is nil when the cross-service seam is
 	// unconfigured, which leaves the projection disabled — every containment call then reports an
 	// unresolvable fence set (counted) rather than the invisible lie of "outside".
+	//
+	// The version-addressed half goes in too, for the one fact the consumer cannot install
+	// directly: a set too large for a single broker message arrives as a POINTER — its version
+	// and nothing else — and is resolved from the archive at exactly that version.
 	ResolvedEventsProcessor.FenceSetReader = fenceReader
 	ResolvedEventsProcessor.FenceSets = CurrentFenceSets
+	ResolvedEventsProcessor.VersionedFenceSets = FenceSets
 	if err := ResolvedEventsProcessor.Initialize(context.Background()); err != nil {
 		return err
 	}
