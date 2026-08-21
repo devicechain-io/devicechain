@@ -379,12 +379,24 @@ to the `device:read` every preview takes. A rule author who could preview every 
 `v0.11.0` is refused on containment drafts until that permission is granted. Previews that
 test no containment are unaffected.
 
-If you have registered an OAuth client for AI access, it needs the same attention: reading
-positions now requires a separate `location` scope alongside `read-only`, so add it to the
-client's registered scopes and re-authorize. Until you do, that client's `query_locations`
-tool is refused while its other read tools keep working. The split is deliberate — it is what
-lets someone authorize an assistant to watch a fleet while withholding where it has been. See
-[AI Access (MCP)](../concepts/mcp.md).
+**And check who reads it through an AI assistant.** The MCP server gained a `query_locations`
+tool that returns a device's reported positions, and reaching it takes **two** grants that are
+deliberately kept apart. The agent's authorization must include a new `location` OAuth scope,
+*and* the person who authorized it must hold a role granting `location:read`. Neither alone is
+enough: the scope is a ceiling on what a token may carry, not a grant of anything.
+
+An agent authorized for `read-only` alone cannot read position, however much its user holds.
+That is the point of a separate scope rather than a wider `read-only`: the consent screen shows
+a person the raw scope string, so folding position into `read-only` would have meant an
+authorization that looks identical before and after while now including where devices — and,
+often enough, where the people carrying them — have been. Keeping it separate means granting an
+agent observability is not the same act as granting it location history, and a user can allow
+one while withholding the other.
+
+An MCP client you have already registered will keep working and will keep being refused
+position until its authorization request asks for `read-only location` and the user
+re-authorizes it. The viewer baseline is unchanged: `location:read` is still not something a
+member receives by default. See [AI Access (MCP)](../concepts/mcp.md).
 
 **4. Check for these GraphQL operations** in anything you have written against the API:
 

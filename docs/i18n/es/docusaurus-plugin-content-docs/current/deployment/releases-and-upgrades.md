@@ -393,13 +393,26 @@ un autor de reglas que en la `v0.11.0` podía previsualizar cualquier borrador s
 los borradores con contención hasta que se le conceda ese permiso. Las vistas previas que no
 comprueban contención no se ven afectadas.
 
-Si ha registrado un cliente OAuth para acceso de IA, necesita la misma atención: leer
-posiciones ahora requiere un alcance `location` aparte, junto a `read-only`, así que añádalo
-a los alcances registrados del cliente y vuelva a autorizarlo. Hasta que lo haga, la
-herramienta `query_locations` de ese cliente se rechaza mientras sus demás herramientas de
-lectura siguen funcionando. La separación es deliberada: es lo que permite autorizar a un
-asistente a observar una flota mientras se le oculta dónde ha estado. Vea [Acceso de IA
-(MCP)](../concepts/mcp.md).
+**Y compruebe quién lo lee a través de un asistente de IA.** El servidor MCP incorporó una
+herramienta `query_locations` que devuelve las posiciones reportadas de un dispositivo, y llegar
+a ella exige **dos** concesiones que se mantienen separadas de forma deliberada. La autorización
+del agente debe incluir un alcance OAuth nuevo, `location`, *y* la persona que lo autorizó debe
+tener un rol que conceda `location:read`. Ninguna de las dos basta por sí sola: el alcance es un
+techo sobre lo que un token puede portar, no una concesión de nada.
+
+Un agente autorizado solo con `read-only` no puede leer posiciones, por mucho que tenga su
+usuario. Ese es justamente el sentido de un alcance aparte en lugar de un `read-only` más
+amplio: la pantalla de consentimiento le muestra a la persona la cadena de alcance en crudo, así
+que meter la posición dentro de `read-only` habría significado una autorización idéntica antes y
+después que ahora incluye dónde han estado los dispositivos — y, con bastante frecuencia, dónde
+han estado las personas que los llevan. Mantenerlo separado hace que conceder observabilidad a
+un agente no sea el mismo acto que concederle el historial de ubicaciones, y permite a un
+usuario permitir lo uno reteniendo lo otro.
+
+Un cliente MCP que ya tenga registrado seguirá funcionando y seguirá recibiendo un rechazo en
+las posiciones hasta que su petición de autorización pida `read-only location` y el usuario lo
+vuelva a autorizar. La base del visor no cambia: `location:read` sigue sin ser algo que un
+miembro reciba de forma predeterminada. Vea [Acceso de IA (MCP)](../concepts/mcp.md).
 
 **4. Busque estas operaciones GraphQL** en cualquier cosa que haya escrito contra la API:
 
