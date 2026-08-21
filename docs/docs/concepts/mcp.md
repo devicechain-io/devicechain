@@ -24,7 +24,7 @@ The server exposes ten **read** tools. Each one is a query against the same Grap
 
 **Live state & telemetry**
 
-- `get_device_state` — the current last-known state of a device.
+- `get_device_state` — the current last-known state of a device, including whether that state was **reported by the transport** or **inferred from silence**. The distinction changes what "not active" means: reported means the device is known to be disconnected, inferred means only that nothing has arrived recently — which is also what a healthy device on a slow reporting interval looks like.
 - `get_latest_measurements` — the most recent value per measurement.
 - `query_measurements` — raw time-series readings over a time range.
 - `aggregate_measurements` — bucketed aggregates (min/max/avg and the like) over a range.

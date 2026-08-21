@@ -440,6 +440,24 @@ suyo propio. Un dispositivo que sube una hora de lecturas almacenadas las escrib
 de esa hora en lugar de en el momento de la subida, de modo que el historial, las gráficas,
 la retención y la detección las ven donde realmente corresponden.
 
+**Una fuente de presencia que deja de ejecutarse ahora devuelve sus dispositivos.** Un dispositivo
+marcado como `ASSERTED` conservaba indefinidamente la presencia que tuviera por última vez: el
+barrido de inactividad omite los dispositivos afirmados y un evento de datos no puede cambiarlos, así
+que un dispositivo que estaba conectado cuando su fuente desapareció figuraba conectado para siempre,
+y uno que estaba fuera de línea tenía sus comandos retenidos para siempre. La presencia MQTT afirmada
+por el broker ahora libera los dispositivos que afirmó cuando se la desactiva deliberadamente, o
+cuando falta su credencial de cuenta de sistema de NATS, devolviéndolos a `INFERRED` sin afirmar nada
+sobre la conectividad. En una instancia donde eso aplique, espere un evento de cambio de estado por
+dispositivo, a ritmo pausado, contado bajo `presence_events_total{state="demoted"}`, y espere que
+esos dispositivos vuelvan a quedar bajo el barrido de inactividad de diez minutos. Sparkplug y LwM2M
+no tienen liberación automática: `dcctl presence demote` y la nueva mutación `demoteAssertedPresence`
+de `device-state` lo hacen a mano, para cualquier fuente. La mutación necesita un permiso nuevo,
+`state:demote`, que ningún rol tiene de forma predeterminada. Un medidor nuevo,
+`presence_tap_off{reason}`, informa de si la presencia afirmada por el broker está funcionando
+siquiera — algo que nada reportaba antes, porque desde fuera una flota en silencio y una toma que
+nunca arrancó son idénticas. Vea [Devolver un dispositivo a presencia
+inferida](./edge-services.md#demoting-a-device).
+
 #### Entradas que antes se aceptaban y ahora no
 
 - Una política de notificación que lleve `deviceTypeToken`. Acotar una política a un tipo de
