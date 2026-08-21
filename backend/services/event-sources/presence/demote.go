@@ -160,7 +160,9 @@ func (d *Demoter) Run(ctx context.Context, now time.Time) error {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
-			return err
+			log.Warn().Err(err).Str("tenant", tenant).Str("source", d.source).
+				Msg("Could not read this tenant's asserted devices to release them; its rows stay " +
+					"asserted until the next pass.")
 		}
 	}
 
