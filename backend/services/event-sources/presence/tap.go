@@ -20,6 +20,7 @@ import (
 // rather than what was published.
 type Emitter interface {
 	EmitPresence(ctx context.Context, tenant, source, deviceToken string, ev adapter.PresenceEvent) error
+	EmitPresenceDemotion(ctx context.Context, tenant, source, deviceToken string, ev adapter.DemotionEvent) error
 }
 
 // Gate is the service's shared ingest admission gate (processor.RateGate): the
@@ -66,13 +67,19 @@ type Metrics struct {
 	RegressedSessions prometheus.Counter
 }
 
-func (m Metrics) emitted(connected bool) {
+// Emitted's state labels. They mirror the wire vocabulary rather than the tap's internal
+// bool, so a reader of the metric and a reader of the event see the same words — and so a
+// claim that is not about connectivity cannot be forced into one of two connectivity
+// buckets on its way to a dashboard.
+const (
+	labelConnected    = "connected"
+	labelDisconnected = "disconnected"
+	labelDemoted      = "demoted"
+)
+
+func (m Metrics) emitted(state string) {
 	if m.Emitted == nil {
 		return
-	}
-	state := "disconnected"
-	if connected {
-		state = "connected"
 	}
 	m.Emitted.WithLabelValues(state).Inc()
 }
@@ -97,33 +104,19 @@ func incr(c prometheus.Counter) {
 // therefore a partial view, which is why the ordering rules live in presence.Decide
 // against the projection's stored session and not here.
 type Tap struct {
+	// Publisher is embedded rather than held in a named field so Tap.Apply, and every
+	// caller that already had one, keep working unchanged. Tap is the BROKER-FACING half
+	// — a subscription, a queue group, an advisory classifier — and it owns nothing about
+	// admission or emission any more.
+	*Publisher
 	instanceId string
-	source     string
-	emitter    Emitter
-	gate       Gate
-	metrics    Metrics
-	// lastSession is the best-effort regression detector described on
-	// Metrics.RegressedSessions. Bounded by definition to the devices this replica has
-	// seen, and deliberately never consulted for a decision — only for the counter.
-	lastSession *sessionWatermarks
-	// waker releases a returning device's withheld commands. MAY BE NIL, which simply
-	// means no wake — held commands then wait for command-delivery's reconcile pass.
-	//
-	// 🔴 IT HANGS HERE, ON THE BROKER TAP, RATHER THAN INSIDE EmitPresence, AND THAT IS
-	// NOT AN ARBITRARY PLACEMENT. EmitPresence is shared: lwm2m-ingest calls it too, and
-	// LwM2M already dispatches a returning device's backlog ITSELF over the CoAP session
-	// it opens on Register. A wake there would race that drain — both would put the same
-	// commands in front of a dispatcher, and a command is a physical actuation. The tap
-	// is the broker-asserted MQTT path specifically, which is exactly the transport that
-	// delivers by publishing and therefore has no drain of its own.
-	waker Waker
 }
 
 // WithWaker attaches the command wake to a tap. Separate from NewTap because the waker
 // needs command-delivery's coordinates, which are resolved later than the tap itself and
 // may legitimately be absent.
 func (t *Tap) WithWaker(w Waker) *Tap {
-	t.waker = w
+	t.Publisher.waker = w
 	return t
 }
 
@@ -131,12 +124,8 @@ func (t *Tap) WithWaker(w Waker) *Tap {
 // tests; the service always supplies the shared one.
 func NewTap(instanceId, source string, emitter Emitter, gate Gate, metrics Metrics) *Tap {
 	return &Tap{
-		instanceId:  instanceId,
-		source:      source,
-		emitter:     emitter,
-		gate:        gate,
-		metrics:     metrics,
-		lastSession: newSessionWatermarks(),
+		Publisher:  NewPublisher(source, emitter, gate, metrics),
+		instanceId: instanceId,
 	}
 }
 
@@ -209,61 +198,4 @@ func (t *Tap) Handle(ctx context.Context, connected bool, raw []byte) {
 		return
 	}
 	t.Apply(ctx, transition)
-}
-
-// Apply gates and emits an already-classified transition, reporting whether it actually
-// reached the stream. Shared with reconciliation, so a synthetic transition passes
-// exactly the same admission checks as one the broker announced — a repair must not be a
-// way around the deleted-tenant refusal.
-//
-// 🔑 THE RETURN VALUE IS WHAT KEEPS THE REPAIR COUNTER HONEST. Refusals and write
-// failures are both ordinary here, and a caller that counted attempts would report
-// repairs it did not make — which is worst precisely when something is wrong, since a
-// tenant over its ceiling would show a healthy repair rate while nothing was written.
-func (t *Tap) Apply(ctx context.Context, transition Transition) bool {
-	// 🔴 THE GATE IS METERED AS LIVE TRAFFIC, NOT AT THE EVENT'S OWN TIME. The gate
-	// routes anything older than BacklogThreshold to the BACKLOG limiter, and a
-	// reconcile-connect carries the connection's start — which can be days old. That
-	// bucket accrues from the last timestamp it saw, so feeding it a rewound mark
-	// re-accrues to burst on the next forward jump, which is the token-minting hazard
-	// the live/backlog split exists to close (measured at ~2000 admissions against a
-	// 100/s ceiling). A zero time means "now" to the gate and keeps each bucket on
-	// exactly one clock. The event's own OccurredAt is untouched.
-	if t.gate != nil && !t.gate(t.source, transition.Tenant, time.Time{}, false) {
-		incr(t.metrics.Refused)
-		return false
-	}
-	if t.lastSession.regressed(transition.Tenant, transition.DeviceToken, transition.Event.SessionId) {
-		// Emitted anyway: the projection's stored session is the authority on whether
-		// this is stale, and this replica's view is partial. The counter is what makes
-		// the clock-skew hazard visible.
-		incr(t.metrics.RegressedSessions)
-		log.Warn().Str("tenant", transition.Tenant).Str("device", transition.DeviceToken).
-			Uint64("session", transition.Event.SessionId).
-			Msg("Presence session id went backwards for a device; a broker node's clock may be trailing its peers.")
-	}
-	if err := t.emitter.EmitPresence(ctx, transition.Tenant, t.source, transition.DeviceToken, transition.Event); err != nil {
-		incr(t.metrics.Failed)
-		log.Error().Err(err).Str("transition", transition.describe()).
-			Msg("Failed to emit a broker presence transition; reconciliation will have to recover it.")
-		return false
-	}
-	t.metrics.emitted(transition.Event.Connected)
-
-	// 🔑 THE WAKE FIRES ONLY AFTER A SUCCESSFUL CONNECT EMIT, AND BOTH HALVES OF THAT
-	// MATTER. Only on a CONNECT because a disconnect has nothing to release. Only after
-	// the emit lands because the wake races it: command-delivery re-reads presence when
-	// it dispatches, so a wake that arrived before the projection had the connect would
-	// release the commands into a sweep that reads the device as still absent and simply
-	// withholds them again — a wasted round trip that also looks, on the counters, like
-	// the wake working.
-	//
-	// The ordering is not a guarantee, only the best this side can do: the emit is
-	// asynchronous downstream, so the projection may still be behind. What makes that
-	// acceptable is that the failure is benign and self-correcting — the commands stay
-	// held and the reconcile pass releases them once presence has caught up.
-	if transition.Event.Connected && t.waker != nil {
-		t.waker.Wake(transition.Tenant, transition.DeviceToken)
-	}
-	return true
 }

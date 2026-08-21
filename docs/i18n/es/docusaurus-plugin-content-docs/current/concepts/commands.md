@@ -102,7 +102,7 @@ de cada dispositivo, de modo que el pendiente igual se libera si ese aviso se pi
 vías dependen de que la plataforma se entere de que el dispositivo volvió: es el registro de
 presencia al cambiar lo que libera la retención, y el aviso solo hace que ocurra antes.
 
-Conviene conocer tres límites:
+Conviene conocer cuatro límites:
 
 - **La comprobación necesita un transporte que informe de las conexiones.** Para un
   dispositivo cuyo transporte solo transporta datos, "sin eventos recientes" no es prueba de
@@ -119,6 +119,13 @@ Conviene conocer tres límites:
   plataforma, y nada une ambas. Un comando emitido a uno de ellos se registra como `FAILED`
   de inmediato, con ese motivo, en lugar de retenerse a la espera de un regreso que no
   serviría de nada.
+- **Una retención sobrevive al transporte que la causó.** Solo el transporte que informó de
+  la ausencia del dispositivo puede informar de su regreso, así que si ese transporte deja
+  de ejecutarse la acumulación espera hasta que cada comando caduque por su cuenta.
+  [Devolver el dispositivo a presencia
+  inferida](../deployment/edge-services.md#demoting-a-device) la libera: la retención
+  depende de que se haya informado de la ausencia del dispositivo, y de un dispositivo
+  inferido no se informa.
 
 Por eso una racha de `TIMEOUT` contra dispositivos que sabes que son intermitentes
 sigue mereciendo leerse como algo que habla de cuándo estuvieron conectados y no de su

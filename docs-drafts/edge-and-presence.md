@@ -54,14 +54,22 @@ tenant-scoped, holding `Active`, the connect/disconnect/activity stamps, and the
 carry the whole design: `PresenceSource` (`INFERRED` or `ASSERTED`), `SessionId`, and
 `PresenceTime`.
 
-There is exactly **one writer**: `MergeDeviceState`
-(`backend/services/device-state/model/api.go:104-208`), driven for *every* resolved event, plus the
+There is still exactly **one writer**: `MergeDeviceState`
+(`backend/services/device-state/model/api.go:158-316`), driven for *every* resolved event, plus the
 inactivity sweep. It is a row-locked read-modify-write because five decode workers can race on one
-device.
+device. The demotion door does not break that, and it is worth being precise about why:
+`DemoteAssertedPresence` (`backend/services/device-state/model/emit.go:230`) never touches
+`device_states` at all. It READS the rows a source still has asserted and **emits** a demotion event
+per row, and each one reaches the projection through the same resolve-and-merge path as every other
+presence claim. The operator door is a producer, not a second writer.
 
-**`PresenceSource` is a one-way promotion.** A device becomes `ASSERTED` the first time an
-authoritative transport speaks for it, and **nothing demotes it** — there is no code path back to
-`INFERRED` anywhere in the tree. That matters more than it looks; see §7.
+**`PresenceSource` promotes on first assertion and comes back only by DEMOTION.** A device
+becomes `ASSERTED` the first time an authoritative transport speaks for it. The one path back to
+`INFERRED` is a `ClaimDemoted` transition, which is a claim by the SOURCE about custody, not a claim
+about the device: the demotion arm of the merge fold writes `PresenceSource` and `PresenceTime` and
+leaves `Active`, `SessionId` and every connectivity stamp untouched. Two producers — the
+disable-boundary drain in `event-sources/presence/demote.go`, and the mutation. That distinction
+matters more than it looks; see §7.
 
 **Three states, not four.** `Active` × `PresenceSource`. "Unknown" is representable only as *no
 row*, before the device's first event.
@@ -276,9 +284,9 @@ limiter unchanged.
 **An asserted device that dies without saying so can read online indefinitely.**
 
 The inactivity sweep marks a quiet device offline after ten minutes — but it **explicitly skips
-asserted devices** (`backend/services/device-state/model/api.go:341`), and nothing else on the
-asserted side of device-state has a TTL, a sweeper, or a watchdog. Only a new state change from the
-device's own source can clear it. So:
+asserted devices** (`SweepInactive`, `backend/services/device-state/model/api.go:628-662`, predicate
+at `:634`), and nothing else on the asserted side of device-state has a TTL, a sweeper, or a
+watchdog. Only a new state change from the device's own source clears it. So:
 
 - A lost Sparkplug death certificate leaves the device online until the next reconcile probe, which
   runs **only on a client reconnect** — a steadily-connected Host that simply never hears from the
@@ -286,28 +294,36 @@ device's own source can clear it. So:
 - The NBIRTH stranding in §3 leaves child devices online with nothing to correct them.
 - An LwM2M device is bounded by its lifetime plus grace, but the default lifetime is **86400
   seconds**, and only the maximum is configurable.
-- A device whose asserted source is removed entirely can never return to inferred, so it is stranded
-  at its last asserted state permanently.
+- A device whose asserted source is removed entirely is stranded at its last asserted state until it
+  is demoted. **Demotion is now the answer to this whole list**, and it is a repair rather than a
+  backstop: it does not decide the device is dead, it returns the row to `INFERRED` so the sweep and
+  the device's own data events can decide. Automatic on two of `presence_wiring.go`'s six bail paths
+  (`disabled`, `no_system_credential` — the config-evident, replica-uniform pair), manual everywhere
+  else. Sparkplug and LwM2M have no automatic release at all.
 
 The published page presents the sweep's skip as safe **because "if it had died the transport would
 have said so"** — which is a claim about the transport, not about the code. The skip is correct; the
-justification is a dependency on reconcile paths that can each fail.
+justification is a dependency on reconcile paths that can each fail. What demotion adds is a way to
+withdraw the claim when the transport is no longer making it.
 
 ## 8. Things that exist in name only
 
 Each of these reads as a feature and is not one.
 
 - **`InactivityTimeout` is documented as a per-device override** (`device-state/model/model.go:46`)
-  and has **no write path** — device-state's GraphQL schema declares a query and no mutation, so
-  every row holds the compile-time default of 600.
+  and has **no write path** — device-state's schema now declares one mutation
+  (`demoteAssertedPresence`) and it does not touch this field, so every row still holds the
+  compile-time default of 600.
 - **`InactivityAlarmTime`** is written by the sweep, cleared on reconnect, and exposed over GraphQL —
   and **read by nothing**. Despite the name, no alarm is raised from it.
 - **`state_change_events` has no read surface.** The hypertable is written and indexed for
   idempotency, and there is no query field for it anywhere, so the presence timeline its model
   comment advertises as "the history DETECT/audit reads" is write-only.
-- **`presenceSource`, `sessionId` and `presenceTime` are selected by no client** — neither the
-  console nor the MCP tool asks for them. The asserted-versus-inferred distinction the whole
-  presence page is about is invisible in every user interface.
+- **`sessionId` and `presenceTime` are selected by no client.** `presenceSource` no longer belongs
+  on this list: the console's Connectivity tab reads it to split "Disconnected" (asserted) from
+  "Offline" (inferred, i.e. merely quiet), and the MCP `get_device_state` tool returns it with a
+  description telling the model the two do not support the same conclusion. The other two are still
+  ordering machinery nothing outside the pipeline asks for.
 
 ## 9. What is validated, and what is not
 

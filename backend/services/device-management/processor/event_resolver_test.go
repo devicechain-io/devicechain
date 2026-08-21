@@ -9,6 +9,7 @@ import (
 	"errors"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-device-management/config"
 	dmodel "github.com/devicechain-io/dc-device-management/model"
@@ -637,6 +638,80 @@ func (suite *EventResolverTestSuite) TestStateChangeSessionIdRange() {
 
 	// One above the boundary (here MaxUint64) is unstorable → deterministic rejection.
 	_, err = rez.ResolveStateChangeEventPayload(context.Background(), dev, nil, sc("18446744073709551615"))
+	assert.Error(suite.T(), err)
+}
+
+// A demotion is admitted, but only in the one shape that can actually do anything. Both
+// refusals below exist because the alternative is a SILENT no-op: presence.Decide accepts a
+// demotion only against the session the row already holds, so a session-less one is dropped
+// downstream as "stale" — indistinguishable from a late echo, and leaving the row exactly as
+// wedged as it was. Failing here makes it a producer defect instead of a mystery.
+func (suite *EventResolverTestSuite) TestStateChangeDemotionShape() {
+	rez := suite.resolver(config.AuthModeOptional)
+	dev := deviceWithToken("TEST-123")
+	stamp := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	sc := func(session, expected string) *esmodel.UnresolvedEvent {
+		return &esmodel.UnresolvedEvent{
+			EventType:    esmodel.StateChange,
+			OccurredTime: stamp,
+			Payload: &esmodel.UnresolvedStateChangePayload{
+				State: esmodel.PresenceDemoted, SessionId: session, ExpectedSessionId: expected,
+			},
+		}
+	}
+
+	// A demotion naming the session it releases resolves.
+	out, err := rez.ResolveStateChangeEventPayload(context.Background(), dev, nil, sc("42", ""))
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), "DEMOTED", out.(*dmodel.ResolvedStateChangePayload).State)
+	assert.Equal(suite.T(), uint64(42), out.(*dmodel.ResolvedStateChangePayload).SessionId)
+
+	// A demotion naming NO session is admitted, and must be: a row asserted by a producer
+	// that sent no session id holds zero, so zero matches zero. Refusing it would make
+	// exactly those rows the one population that can never be handed back to inferred.
+	out, err = rez.ResolveStateChangeEventPayload(context.Background(), dev, nil, sc("", ""))
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), uint64(0), out.(*dmodel.ResolvedStateChangePayload).SessionId)
+
+	// A compare-and-set precondition on a demotion is incoherent: the demotion is already
+	// matched against the stored session.
+	_, err = rez.ResolveStateChangeEventPayload(context.Background(), dev, nil, sc("42", "41"))
+	assert.Error(suite.T(), err)
+
+	// An UNSTAMPED demotion is the third silent no-op. It is applied only when it is
+	// strictly newer than the row it releases, so a zero instant is rejected downstream as
+	// "stale" — and the row it was releasing stays frozen, which is the condition the
+	// demotion exists to end. Event-time bounding does not save it: eventtime.Effective
+	// bounds the FUTURE direction only.
+	unstamped := sc("42", "")
+	unstamped.OccurredTime = time.Time{}
+	_, err = rez.ResolveStateChangeEventPayload(context.Background(), dev, nil, unstamped)
+	assert.Error(suite.T(), err)
+
+	// THE COUNTERWEIGHT. Neither refusal may leak onto a connectivity claim: a producer that
+	// sends no session id is explicitly supported there (parseSessionId documents empty as
+	// absent), and a compare-and-set is the whole point of the reconnect-repair path.
+	conn := func(session, expected string) *esmodel.UnresolvedEvent {
+		return &esmodel.UnresolvedEvent{
+			EventType: esmodel.StateChange,
+			Payload: &esmodel.UnresolvedStateChangePayload{
+				State: esmodel.PresenceConnected, SessionId: session, ExpectedSessionId: expected,
+			},
+		}
+	}
+	// Deliberately UNSTAMPED, so the demotion-only guard is proven not to leak: a
+	// connectivity claim's ordering behaviour is established and is not this arc's to
+	// change.
+	_, err = rez.ResolveStateChangeEventPayload(context.Background(), dev, nil, conn("", ""))
+	assert.NoError(suite.T(), err)
+	_, err = rez.ResolveStateChangeEventPayload(context.Background(), dev, nil, conn("42", "41"))
+	assert.NoError(suite.T(), err)
+
+	// And the enum stays closed: a state nobody named is still a deterministic failure.
+	_, err = rez.ResolveStateChangeEventPayload(context.Background(), dev, nil, &esmodel.UnresolvedEvent{
+		EventType: esmodel.StateChange,
+		Payload:   &esmodel.UnresolvedStateChangePayload{State: esmodel.PresenceState("RETIRED"), SessionId: "42"},
+	})
 	assert.Error(suite.T(), err)
 }
 

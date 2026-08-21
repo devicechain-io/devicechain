@@ -71,7 +71,7 @@ func registerTools(s *mcp.Server, t *Tools) {
 	}, t.GetDevice)
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_device_state",
-		Description: "Read the live last-known connectivity state of one or more devices by token: whether active, last connect/disconnect/activity times (RFC3339), and the inactivity timeout in seconds. A device with no state yet (never reported) is omitted from the result.",
+		Description: "Read the live last-known connectivity state of one or more devices by token: whether active, last connect/disconnect/activity times (RFC3339), the inactivity timeout in seconds, and `presenceSource`. A device with no state yet (never reported) is omitted from the result. `presenceSource` says WHERE `active` came from, and the two values do not support the same conclusion. ASSERTED means the device's transport reported its connection state directly (a broker session opening or dropping), so `active` is authoritative: false means the device is known to be disconnected. INFERRED means the state was derived from data arriving — or not arriving within the inactivity timeout — so `active` false means only that nothing has been heard recently, NOT that the device is known to be down; a healthy device that reports less often than the timeout reads inactive. Describe an inferred inactive device as not reporting, never as offline or down, and say which of the two you are reading whenever the difference could change what someone does. Treat any `presenceSource` that is not exactly ASSERTED, including an empty one, as inferred.",
 	}, t.GetDeviceState)
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_latest_measurements",

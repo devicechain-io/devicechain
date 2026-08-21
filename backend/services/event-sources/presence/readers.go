@@ -110,15 +110,45 @@ func NewGraphQLProjectionReader(client adapter.GraphQLClient, url string) *Graph
 // caller already handles a failed read correctly, by skipping this tenant for the pass.
 func (r *GraphQLProjectionReader) AssertedStates(ctx context.Context, tenant, source string) (map[string]StoredDevice, error) {
 	devices := make(map[string]StoredDevice, assertedStatesPageSize)
+	err := r.WalkAsserted(ctx, tenant, source, func(d StoredDevice) error {
+		devices[DeviceKey(d.Tenant, d.DeviceToken)] = d
+		return nil
+	})
+	if err != nil {
+		// All-or-nothing, for the reason above: a partial map is a lie to the diff.
+		return nil, err
+	}
+	return devices, nil
+}
+
+// WalkAsserted streams the same rows AssertedStates collects, calling fn once per row as
+// each page arrives, and stops early if fn returns an error (returning it unchanged).
+//
+// 🔑 IT EXISTS SO A CONSUMER THAT ACTS PER ROW DOES NOT HAVE TO BUY THE WHOLE SET FIRST.
+// The diff genuinely needs every row before it can decide anything — a device missing from
+// its map is indistinguishable from a device the projection does not hold. A drain does
+// not: it acts on each row independently, it is paced deliberately slowly, and the set it
+// walks is CUMULATIVE (nothing prunes an asserted row), so materializing it would hold the
+// whole history of a tenant's asserted devices in memory for the length of a slow walk to
+// learn nothing the streaming form does not already tell it.
+//
+// The all-or-nothing contract is preserved where it matters by AssertedStates above, which
+// is now expressed on top of this — one paged walk, one cursor-advance guard, one place
+// where a page failure is decided.
+func (r *GraphQLProjectionReader) WalkAsserted(ctx context.Context, tenant, source string, fn func(StoredDevice) error) error {
 	var afterId string
 	for {
 		rows, next, err := r.assertedPage(ctx, tenant, source, afterId)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		r.foldAssertedPage(tenant, rows, devices)
+		for _, d := range r.assertedPageDevices(tenant, rows) {
+			if err := fn(d); err != nil {
+				return err
+			}
+		}
 		if len(rows) < assertedStatesPageSize {
-			return devices, nil
+			return nil
 		}
 		// 🔴🔴 THE GUARD IS THAT THE CURSOR MOVED, NOT THAT THE PAGE COUNT IS SMALL. Row
 		// ids ascend strictly, so a FULL page always advances the cursor; one that does
@@ -135,7 +165,7 @@ func (r *GraphQLProjectionReader) AssertedStates(ctx context.Context, tenant, so
 		// sized against fleet size can only ever move that cliff; asking whether the walk
 		// is making progress removes it.
 		if next == afterId {
-			return nil, fmt.Errorf("the asserted-state walk for source %s is not advancing past id %q; "+
+			return fmt.Errorf("the asserted-state walk for source %s is not advancing past id %q; "+
 				"the server is ignoring the page cursor", source, afterId)
 		}
 		afterId = next
@@ -174,8 +204,10 @@ func (r *GraphQLProjectionReader) assertedPage(ctx context.Context, tenant, sour
 	return rows, rows[len(rows)-1].Id, nil
 }
 
-// foldAssertedPage folds one page's rows into the accumulating projection snapshot.
-func (r *GraphQLProjectionReader) foldAssertedPage(tenant string, rows []assertedRow, devices map[string]StoredDevice) {
+// assertedPageDevices turns one page's rows into StoredDevices, dropping the ones it
+// cannot make sense of.
+func (r *GraphQLProjectionReader) assertedPageDevices(tenant string, rows []assertedRow) []StoredDevice {
+	out := make([]StoredDevice, 0, len(rows))
 	for _, d := range rows {
 		if d.DeviceToken == "" {
 			continue
@@ -201,11 +233,12 @@ func (r *GraphQLProjectionReader) foldAssertedPage(tenant string, rows []asserte
 				Msg("Skipping a device with an unreadable presence session during reconciliation.")
 			continue
 		}
-		devices[DeviceKey(tenant, d.DeviceToken)] = StoredDevice{
+		out = append(out, StoredDevice{
 			Tenant:      tenant,
 			DeviceToken: d.DeviceToken,
 			SessionId:   session,
 			Active:      d.Active,
-		}
+		})
 	}
+	return out
 }

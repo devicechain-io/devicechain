@@ -451,11 +451,65 @@ func formatOptionalSessionId(id uint64) string {
 // DedupID makes a retry — or a failover re-derivation — of the same (device, session,
 // state) transition idempotent at JetStream.
 func (e *Emitter) EmitPresence(ctx context.Context, tenant, source, deviceToken string, ev PresenceEvent) error {
+	return e.emitStateChange(ctx, tenant, source, deviceToken, presenceStateChange(ev))
+}
+
+// presenceStateChange and demotionStateChange are the ONLY mappings from a public event
+// onto the wire shape. They are named functions rather than literals inside the emitters
+// so the dedup-id golden tests can assert the frozen key through the SAME mapping
+// production uses — a golden built from a hand-written literal agrees with whatever the
+// real mapping forgot.
+func presenceStateChange(ev PresenceEvent) stateChange {
 	state := esmodel.PresenceDisconnected
 	if ev.Connected {
 		state = esmodel.PresenceConnected
 	}
-	occurred := ev.OccurredAt.UTC()
+	return stateChange{
+		state:             state,
+		reason:            ev.Reason,
+		sessionId:         ev.SessionId,
+		expectedSessionId: ev.ExpectedSessionId,
+		occurredAt:        ev.OccurredAt,
+		dedupNonce:        ev.DedupNonce,
+	}
+}
+
+func demotionStateChange(ev DemotionEvent) stateChange {
+	// expectedSessionId is unset and unreachable: the resolver refuses a demotion that
+	// carries one.
+	return stateChange{
+		state:      esmodel.PresenceDemoted,
+		reason:     ev.Reason,
+		sessionId:  ev.SessionId,
+		occurredAt: ev.OccurredAt,
+		dedupNonce: ev.DedupNonce,
+	}
+}
+
+// EmitPresenceDemotion writes one custody release as a StateChange UnresolvedEvent
+// (ADR-067). It carries no compare-and-set claim, and cannot: the resolver REFUSES a
+// demotion with a non-zero ExpectedSessionId, because a demotion is already matched
+// against the stored session and a second precondition either restates that or
+// contradicts it.
+func (e *Emitter) EmitPresenceDemotion(ctx context.Context, tenant, source, deviceToken string, ev DemotionEvent) error {
+	return e.emitStateChange(ctx, tenant, source, deviceToken, demotionStateChange(ev))
+}
+
+// stateChange is the wire shape shared by every presence claim. It exists so the two
+// public emitters differ ONLY in the fields they are allowed to set — a demotion cannot
+// reach expectedSessionId at all — rather than in two hand-written copies of the same
+// marshalling, which is where a newly added field goes missing on one path.
+type stateChange struct {
+	state             esmodel.PresenceState
+	reason            string
+	sessionId         uint64
+	expectedSessionId uint64
+	occurredAt        time.Time
+	dedupNonce        string
+}
+
+func (e *Emitter) emitStateChange(ctx context.Context, tenant, source, deviceToken string, sc stateChange) error {
+	occurred := sc.occurredAt.UTC()
 	occStr := occurred.Format(time.RFC3339Nano)
 	uev := &esmodel.UnresolvedEvent{
 		Source:                 source,
@@ -465,13 +519,13 @@ func (e *Emitter) EmitPresence(ctx context.Context, tenant, source, deviceToken 
 		ProcessedTime:          e.now().UTC(),
 		AuthenticatedTransport: e.authenticatedTransport,
 		Payload: &esmodel.UnresolvedStateChangePayload{
-			State:  state,
-			Reason: ev.Reason,
+			State:  sc.state,
+			Reason: sc.reason,
 			// Left EMPTY rather than "0" when there is no compare-and-set claim, which is
 			// every transport advisory. The resolver reads empty as "no claim", so the wire
 			// shape of an ordinary presence event is unchanged by this field existing.
-			ExpectedSessionId: formatOptionalSessionId(ev.ExpectedSessionId),
-			SessionId:         strconv.FormatUint(ev.SessionId, 10),
+			ExpectedSessionId: formatOptionalSessionId(sc.expectedSessionId),
+			SessionId:         strconv.FormatUint(sc.sessionId, 10),
 			OccurredTime:      &occStr,
 		},
 	}
@@ -483,7 +537,7 @@ func (e *Emitter) EmitPresence(ctx context.Context, tenant, source, deviceToken 
 	return e.writer.WriteMessages(tctx, messaging.Message{
 		Key:     []byte(deviceToken),
 		Value:   encoded,
-		DedupID: presenceDedupID(e.dedupPrefix, tenant, deviceToken, ev),
+		DedupID: stateChangeDedupID(e.dedupPrefix, tenant, deviceToken, sc),
 	})
 }
 
@@ -501,7 +555,7 @@ func dedupID(prefix string, parts ...string) string {
 	return prefix + strconv.FormatUint(h.Sum64(), 36)
 }
 
-// presenceDedupID keys a StateChange on (tenant, device, session, state): a given
+// stateChangeDedupID keys a StateChange on (tenant, device, session, state): a given
 // session's CONNECTED and DISCONNECTED are each emitted once, so a retry or a failover
 // re-derivation dedups, while a genuinely new session (new epoch) or the opposite
 // transition is distinct.
@@ -510,16 +564,35 @@ func dedupID(prefix string, parts ...string) string {
 // identical one — see PresenceEvent.DedupNonce for why reconciliation needs that and
 // advisories must not have it. It is appended only when set, so every id an advisory
 // produces is byte-identical to what it produced before the field existed.
-func presenceDedupID(prefix, tenant, deviceToken string, ev PresenceEvent) string {
-	state := "0"
-	if ev.Connected {
-		state = "1"
-	}
-	parts := []string{"sc", tenant, deviceToken, strconv.FormatUint(ev.SessionId, 10), state}
-	if ev.DedupNonce != "" {
-		parts = append(parts, ev.DedupNonce)
+func stateChangeDedupID(prefix, tenant, deviceToken string, sc stateChange) string {
+	parts := []string{"sc", tenant, deviceToken, strconv.FormatUint(sc.sessionId, 10), dedupStateToken(sc.state)}
+	if sc.dedupNonce != "" {
+		parts = append(parts, sc.dedupNonce)
 	}
 	return dedupID(prefix, parts...)
+}
+
+// dedupStateToken is the state's contribution to the dedup key. The two connectivity
+// tokens are frozen at "0" and "1" — changing either would make every in-flight
+// duplicate-window entry unreachable and re-admit transitions the stream has already
+// accepted — so DEMOTED takes "2" rather than renumbering.
+//
+// 🔑 THE DEFAULT RETURNS THE STATE ITSELF RATHER THAN A SENTINEL. A shared fallback
+// would give two different future states the SAME dedup key, which does not fail: it
+// silently drops the second one for the length of the duplicate window, and reports
+// success while doing it. The raw name cannot collide with the digits above, so a state
+// added later is distinct by default even if nobody remembers this function exists.
+func dedupStateToken(s esmodel.PresenceState) string {
+	switch s {
+	case esmodel.PresenceDisconnected:
+		return "0"
+	case esmodel.PresenceConnected:
+		return "1"
+	case esmodel.PresenceDemoted:
+		return "2"
+	default:
+		return string(s)
+	}
 }
 
 // measurementDedupID keys a measurement batch on (tenant, device, occurred-time, and the

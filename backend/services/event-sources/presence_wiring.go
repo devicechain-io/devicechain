@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"sync"
 	"time"
@@ -66,20 +67,24 @@ func startBrokerPresence(ctx context.Context) {
 	switch {
 	case !cfg.IsEnabled():
 		log.Info().Msg("Broker-asserted MQTT presence is disabled by configuration; MQTT presence stays inferred.")
+		tapOff(presence.TapOffDisabled)
 		return
 	case infra.Nats.Auth.SysUser == "" || infra.Nats.Auth.SysPassword == "":
 		log.Info().Msg("No NATS system-account credential is configured, so broker-asserted MQTT presence is " +
 			"off and MQTT presence stays inferred. Re-run the bring-up to mint one.")
+		tapOff(presence.TapOffNoSystemCredential)
 		return
 	case !ok:
 		log.Info().Msg("No event source is pointed at the platform broker, so there are no broker " +
 			"connection advisories to read; MQTT presence stays inferred.")
+		tapOff(presence.TapOffNoGatewaySource)
 		return
 	case infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "":
 		log.Warn().Msg("Broker-asserted MQTT presence needs service-to-service calls to enumerate tenants " +
 			"and read presence state, which are not configured. It stays OFF rather than running without " +
 			"its repair path: a device whose disconnect the broker never announced would otherwise read " +
 			"as connected forever.")
+		tapOff(presence.TapOffNoServiceAuth)
 		return
 	}
 
@@ -87,6 +92,7 @@ func startBrokerPresence(ctx context.Context) {
 	if err != nil {
 		log.Error().Err(err).Msg("Could not connect to the NATS system account; broker-asserted MQTT " +
 			"presence is OFF and MQTT presence stays inferred.")
+		tapOff(presence.TapOffBrokerUnreachable)
 		return
 	}
 
@@ -96,7 +102,13 @@ func startBrokerPresence(ctx context.Context) {
 		conn.Close()
 		log.Error().Err(err).Msg("Could not subscribe to the broker's connection advisories; " +
 			"broker-asserted MQTT presence is OFF.")
+		tapOff(presence.TapOffSubscribeFailed)
 		return
+	}
+	// The tap is running: clear every off-reason, not just the one that might be standing.
+	// See presence.AllTapOffReasons.
+	for _, reason := range presence.AllTapOffReasons() {
+		PresenceTapOffGauge.WithLabelValues(string(reason)).Set(0)
 	}
 
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -155,6 +167,103 @@ func startBrokerPresence(ctx context.Context) {
 	}
 	go runPresenceLoops(runCtx, rt, reconciler, probe, cfg.ReconcileInterval(), cfg.CanaryInterval())
 	brokerPresence = rt
+}
+
+// tapOff records WHY broker-asserted presence is not running and, on the two paths where
+// it can be sure, releases the devices this source has left asserted.
+//
+// 🔴 THE GAUGE IS SET ON EVERY PATH, INCLUDING THE ONES THAT CANNOT RELEASE ANYTHING, and
+// that is most of what this function is worth. A tap that never started is invisible from
+// outside: a long-lived MQTT fleet legitimately emits no advisories for days, so the
+// presence counters read the same whether presence is being asserted or silently is not.
+// The canary covers a tap that started and then stopped working. Nothing covered this.
+func tapOff(reason presence.TapOffReason) {
+	PresenceTapOffGauge.WithLabelValues(string(reason)).Set(1)
+	startPresenceDemotion(reason)
+}
+
+// startPresenceDemotion drains this source's asserted rows back to inferred, when the
+// reason the tap is off is one that can be trusted to mean it.
+//
+// 🔑 IT ACTS ON TWO OF THE SIX BAIL PATHS, and the line is what the evidence is made of.
+// A written `enabled: false` and a missing system-account credential are CONFIGURATION:
+// every replica of the instance reads the same values and reaches the same conclusion, so
+// a demotion is the instance speaking, not one replica guessing. A failed dial or a failed
+// subscription is this replica's own bad luck — its peers may be reading advisories
+// perfectly well — and demoting a fleet on that evidence would cost two durable events per
+// device to undo something that was never broken. Those paths get the gauge and nothing
+// more; the gauge is what makes them visible, which is the actual gap they had.
+//
+// 🔴 THE PRECONDITIONS ARE RE-CHECKED HERE RATHER THAN INFERRED FROM THE BRANCH, because
+// the switch above is ORDERED: `!cfg.IsEnabled()` returns before GatewaySourceId or
+// ServiceAuth are ever read, so arriving on that path says nothing whatever about them. A
+// drain needs a source name to emit under and service-to-service calls to enumerate
+// tenants and read the projection. Missing any of those, it says so and points at the
+// manual door rather than starting a loop that can only fail.
+func startPresenceDemotion(reason presence.TapOffReason) {
+	if !reasonIsInstanceWide(reason) {
+		return
+	}
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if !drainEndpointsReady(GatewaySourceId, infra.ServiceAuth.Secret, infra.UserManagement.Hostname,
+		infra.DeviceState.Hostname, infra.DeviceState.Port) {
+		log.Warn().Str("reason", string(reason)).Msg("Broker-asserted MQTT presence is off, so the devices " +
+			"this instance already asserted are frozen at their last known state — but releasing them " +
+			"automatically needs a gateway source and service-to-service calls, which are not configured. " +
+			"Release them with `dcctl presence demote` instead.")
+		return
+	}
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	rt := &presenceRuntime{cancel: cancel, stopped: make(chan struct{})}
+
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources",
+		[]string{string(auth.TenantRead), string(auth.StateRead)})
+	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+	dsURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceState.Hostname, infra.DeviceState.Port)
+	reader := presence.NewGraphQLProjectionReader(client, dsURL)
+
+	demoter := presence.NewDemoter(GatewaySourceId,
+		presence.NewPublisher(GatewaySourceId, presenceEmitter(), presence.Gate(ingestGate), presenceMetrics()),
+		presence.NewGraphQLTenantLister(client, umURL, Microservice.InstanceId),
+		reader, presence.NewRateWaiter(),
+		presence.DemoterMetrics{Released: PresenceReleasedCounter, Remaining: PresenceStillAssertedGauge})
+
+	interval := Configuration.BrokerPresence.ReconcileInterval()
+	delay := presence.StartDelayFor(reason, demotionStartJitter())
+	go func() {
+		// Closes rt.stopped so stopBrokerPresence's five-second wait does not fire on every
+		// disabled instance — the runtime is shaped the same whether the tap ran or not.
+		defer close(rt.stopped)
+		presence.RunDemoteLoop(runCtx, demoter, interval, delay, time.Now)
+	}()
+	brokerPresence = rt
+}
+
+// reasonIsInstanceWide reports whether a bail reason is evidence about the INSTANCE rather
+// than about this replica. Only instance-wide evidence justifies emitting durable events
+// for a whole fleet; see startPresenceDemotion.
+func reasonIsInstanceWide(reason presence.TapOffReason) bool {
+	return reason == presence.TapOffDisabled || reason == presence.TapOffNoSystemCredential
+}
+
+// drainEndpointsReady reports whether the drain has what it needs: a source name to emit
+// under, a service credential, and both service endpoints it reads through.
+//
+// 🔴 IT IS A SEPARATE, TOTAL PREDICATE BECAUSE THE BAIL SWITCH IS ORDERED. `enabled:
+// false` returns before GatewaySourceId or ServiceAuth are ever looked at, so the branch a
+// caller arrived on carries NO information about these values. Deriving them from the
+// branch would work for one path and be silently wrong for the other — which is the whole
+// reason this is checked rather than assumed.
+func drainEndpointsReady(source, serviceSecret, umHost, dsHost string, dsPort uint32) bool {
+	return source != "" && serviceSecret != "" && umHost != "" && dsHost != "" && dsPort != 0
+}
+
+// demotionStartJitter spreads the first drain pass across replicas that all restarted
+// together, which is every replica of an instance whose configuration just changed. It is
+// pacing, not security, so the default source is right.
+func demotionStartJitter() time.Duration {
+	return time.Duration(rand.Int63n(int64(30 * time.Second)))
 }
 
 // attachCommandWake gives the tap a way to tell command-delivery that a device is back,
@@ -302,7 +411,12 @@ func stopBrokerPresence() {
 	for _, stop := range rt.stops {
 		stop()
 	}
-	rt.conn.Close()
+	// MAY BE NIL. When the tap never started, this runtime holds only the demotion drain,
+	// which has no broker connection — it reaches device-state and user-management over
+	// GraphQL, not over NATS.
+	if rt.conn != nil {
+		rt.conn.Close()
+	}
 }
 
 // dialSystemAccount opens the SECOND broker connection this service holds — the
@@ -444,17 +558,20 @@ func wakerMetrics() presence.WakerMetrics {
 // the unverified strings off a client id, which is an unbounded, device-influenceable
 // cardinality vector.
 var (
-	PresenceEmittedCounter    *prometheus.CounterVec
-	PresenceSkippedCounter    *prometheus.CounterVec
-	PresenceRefusedCounter    prometheus.Counter
-	PresenceFailedCounter     prometheus.Counter
-	PresenceRegressedCounter  prometheus.Counter
-	PresenceReconcileCounter  *prometheus.CounterVec
-	PresenceRepairedCounter   *prometheus.CounterVec
-	PresenceWithheldCounter   prometheus.Counter
-	PresenceRegressedGauge    prometheus.Gauge
-	PresenceCanaryOkCounter   prometheus.Counter
-	PresenceCanaryMissCounter prometheus.Counter
+	PresenceEmittedCounter     *prometheus.CounterVec
+	PresenceSkippedCounter     *prometheus.CounterVec
+	PresenceRefusedCounter     prometheus.Counter
+	PresenceFailedCounter      prometheus.Counter
+	PresenceRegressedCounter   prometheus.Counter
+	PresenceReconcileCounter   *prometheus.CounterVec
+	PresenceRepairedCounter    *prometheus.CounterVec
+	PresenceWithheldCounter    prometheus.Counter
+	PresenceRegressedGauge     prometheus.Gauge
+	PresenceTapOffGauge        *prometheus.GaugeVec
+	PresenceReleasedCounter    prometheus.Counter
+	PresenceStillAssertedGauge prometheus.Gauge
+	PresenceCanaryOkCounter    prometheus.Counter
+	PresenceCanaryMissCounter  prometheus.Counter
 
 	CommandWakeRequestedCounter prometheus.Counter
 	CommandWakeDroppedCounter   prometheus.Counter
@@ -514,6 +631,22 @@ func initializePresenceMetrics() {
 		"presence_reconcile_regressed_sessions",
 		"Devices found LIVE on a session id lower than the one the projection holds, as of the last "+
 			"reconciliation pass. A standing non-zero value means the repairs are not converging",
+		nil)
+	PresenceTapOffGauge = Microservice.NewGaugeVec(
+		"presence_tap_off",
+		"1 when broker-asserted MQTT presence is NOT running on this replica, labelled by why. A "+
+			"long-lived MQTT fleet emits no advisories for days, so the presence counters read the "+
+			"same whether presence is being asserted or silently is not — this is the difference",
+		[]string{"reason"})
+	PresenceReleasedCounter = Microservice.NewCounter(
+		"presence_released_total",
+		"Devices handed back from asserted to inferred presence because this source stopped reading "+
+			"the broker",
+		nil)
+	PresenceStillAssertedGauge = Microservice.NewGauge(
+		"presence_still_asserted",
+		"Devices this source still had asserted at the start of the last release pass. The work "+
+			"empties itself, so a healthy drain walks this to zero and stays there",
 		nil)
 	PresenceCanaryOkCounter = Microservice.NewCounter(
 		"presence_canary_observed_total",

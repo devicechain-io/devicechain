@@ -150,13 +150,22 @@ type UnresolvedAlertsPayload struct {
 	Entries []UnresolvedAlertEntry
 }
 
-// Presence state carried by a StateChange event (ADR-067). A closed enum: a
-// connectivity transition, not a free-form status.
+// Presence state carried by a StateChange event (ADR-067). A closed enum, and NOT
+// purely a connectivity vocabulary: CONNECTED and DISCONNECTED are claims about the
+// device, while DEMOTED is a claim about the SOURCE — it says the source is releasing
+// custody and asserting nothing whatsoever about whether the device is up or down.
+//
+// 🔴 The distinction is load-bearing downstream. Both consumers used to derive
+// connectivity by string-comparing to CONNECTED, which reads every other value —
+// including one that means "no claim" — as a death. That is why the mapping onto a
+// presence.Claim is a single TOTAL function that reports its own failure
+// (ResolvedStateChangePayload.Claim) rather than a comparison repeated per consumer.
 type PresenceState string
 
 const (
 	PresenceConnected    PresenceState = "CONNECTED"
 	PresenceDisconnected PresenceState = "DISCONNECTED"
+	PresenceDemoted      PresenceState = "DEMOTED"
 )
 
 // Payload for a transport-level device presence transition (ADR-067). SessionId

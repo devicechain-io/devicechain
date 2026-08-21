@@ -10,6 +10,7 @@ import (
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/presence"
 )
 
 // stateChange builds a resolved presence StateChange for a device under a profile version.
@@ -42,17 +43,17 @@ func TestPlanStateChangeFeedsConnectivityEdge(t *testing.T) {
 	if e.Presence == nil {
 		t.Fatalf("connectivity event must carry a typed PresenceEdge, got %+v", e)
 	}
-	if e.Presence.SessionId != 100 || e.Presence.Connected {
+	if e.Presence.SessionId != 100 || e.Presence.Claim != presence.ClaimDisconnected {
 		t.Fatalf("edge session/direction wrong: %+v", e.Presence)
 	}
 	if e.Key.Series != "d1" || e.Key.Rule != connRule().ID {
 		t.Fatalf("edge must key on (rule, device); got %+v", e.Key)
 	}
 
-	// A CONNECTED state maps to Connected=true.
+	// A CONNECTED state maps to ClaimConnected.
 	up := planEv(reg, 2, "acme", stateChange("acme", "d1", "p@1", base, "CONNECTED", 200))
-	if len(up.Events) != 1 || !up.Events[0].Presence.Connected {
-		t.Fatalf("a CONNECTED StateChange must carry Connected=true: %+v", up.Events)
+	if len(up.Events) != 1 || up.Events[0].Presence.Claim != presence.ClaimConnected {
+		t.Fatalf("a CONNECTED StateChange must carry ClaimConnected: %+v", up.Events)
 	}
 }
 
@@ -123,5 +124,31 @@ func TestPlanConnectivityGroupScopeDescopes(t *testing.T) {
 	inScope := planEv(reg, 2, "acme", ev)
 	if len(inScope.Events) != 1 || inScope.Events[0].Presence == nil {
 		t.Fatalf("an in-scope connectivity rule must feed the edge, got %+v", inScope.Events)
+	}
+}
+
+// TestPlanStateChangeIgnoresAStateItCannotMap. The mapper reports its own failure, and
+// the fan-out's disposition for that is the same as for a malformed payload: plan nothing.
+//
+// 🔑 THE ALTERNATIVE IS NOT AN ERROR, IT IS A LIE THAT COSTS WORK. Dropping the `ok` gives
+// the edge presence.ClaimUnset, which the engine's ordering guard refuses — so the defect
+// looks harmless right up until someone makes the zero value mean something. Feeding an
+// unusable claim into the engine and relying on the engine to throw it away puts the
+// vocabulary's fail-closed property in the wrong component.
+func TestPlanStateChangeIgnoresAStateItCannotMap(t *testing.T) {
+	base := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	reg := NewRuleRegistry([]ScopedRule{compileScoped(t, "acme", "p@1", connRule())})
+
+	res := planEv(reg, 1, "acme", stateChange("acme", "d1", "p@1", base, "RETIRED", 100))
+	if len(res.Events) != 0 {
+		t.Fatalf("an unmappable presence state was planned as a connectivity edge: %+v", res.Events)
+	}
+
+	// The counterweight: a state the vocabulary DOES name is still planned, so the guard
+	// above is not satisfied by a fan-out that plans nothing at all.
+	ok := planEv(reg, 2, "acme", stateChange("acme", "d1", "p@1", base, "DEMOTED", 100))
+	if len(ok.Events) != 1 || ok.Events[0].Presence == nil ||
+		ok.Events[0].Presence.Claim != presence.ClaimDemoted {
+		t.Fatalf("a DEMOTED StateChange must be planned as a custody release: %+v", ok.Events)
 	}
 }

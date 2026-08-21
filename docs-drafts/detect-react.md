@@ -188,21 +188,28 @@ than accidental:
 | Correlation | accepted, but never regresses a member's timestamp | `internal/detect/core/correlation.go:44-47` |
 | Repeating | accepted; eviction is by event time, not watermark | `window.go:203` |
 | Absence, Session timers | cannot *shrink* a deadline (`scheduleForward`) | `internal/detect/core/timers.go:103-108` |
-| a **value-kind** falling edge | refused if it predates the raise | `engine.go:954-961` |
+| a **value-kind** falling edge | refused if it predates the raise | `engine.go:1144-1148` |
 
 The last row is the one to state narrowly, because the tempting generalisation — "a falling edge that
 predates its raise is always refused" — is wrong in both places it matters, and deliberately so.
 `resolve` drops a stale falling edge because an older reading is not evidence the condition ended;
-the latest reading still supports it (`:948-953`). Two paths that are *not* value readings therefore
-clamp to `max(at, raisedAt)` instead, so they can never be refused:
+the latest reading still supports it (`:1144-1148`). Three kinds of path that are *not* value
+readings therefore clamp to `max(at, raisedAt)` instead, so they can never be refused — all four
+call sites go through the shared `resolveLatched` (`engine.go:1133`):
 
-- **Descope** (`engine.go:436-442`, argued at `:430-435`, pinned by
+- **Descope** (`engine.go:471`, argued at `:465-470`, pinned by
   `TestDescopeLateStillResolvesAtRisingEdge`). Membership is stamped at resolution and is monotone
   with stream sequence, so a bounded-late out-of-scope event is still the current word on membership.
   Suppressing its resolve would strand the alarm raised forever if the device never reported again.
-- **Connectivity CONNECT** (`engine.go:844-848`). Presence ordering is session-dominant: a failover
+- **Connectivity CONNECT** (`engine.go:1014-1015`). Presence ordering is session-dominant: a failover
   reconnect mints its session on another host's clock, so a resolve can legitimately carry an
   *earlier* wall clock than the raise it clears.
+- **A connectivity DEMOTION** (`engine.go:971` and `:995`). The source is releasing custody, not
+  reporting a death — so the offline alarm it raised is one nothing will ever resolve, because the
+  resolve comes from a CONNECT and a released source sends none. Both arms resolve at resolution
+  time, like a descope. The ordered arm advances the cursor while carrying `Connected` forward
+  unchanged; the session-less arm (no cursor at all, reachable when DETECT's latch and its cursor
+  come apart) resolves and leaves the cursor unset, since a release says nothing about connectivity.
 
 **A documented silence gap.** `engine.go:143-171`: the event-driven kinds only re-evaluate when an
 event arrives, so a series that goes **completely silent while raised stays raised**. Two kinds carry

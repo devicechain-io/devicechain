@@ -271,6 +271,46 @@ func TestEmitPresenceProducesResolverReadableStateChange(t *testing.T) {
 	assert.Equal(t, "acme", tenant)
 }
 
+// TestEmitPresenceDemotionProducesResolverReadableStateChange pins the demotion's wire
+// shape, and the ExpectedSessionId assertion is the load-bearing one.
+//
+// 🔴 A DEMOTION MUST CARRY NO COMPARE-AND-SET PRECONDITION, and the failure mode if it
+// does is silence rather than an error here: the device-management resolver REFUSES such
+// an event (TestStateChangeDemotionShape), so every demotion this source emitted would be
+// dead-lettered and every row it was releasing would stay asserted and frozen — which is
+// the exact condition the demotion exists to end. Nothing between here and there would
+// say so. The obvious way to write demotionStateChange is to copy the presence one, and
+// the presence one sets this field.
+func TestEmitPresenceDemotionProducesResolverReadableStateChange(t *testing.T) {
+	w := &fakeWriter{}
+	e := NewEmitter(w, fixedNow, "sp", false)
+	occurred := time.UnixMilli(1_700_000_000_500).UTC()
+	epoch := uint64(1_799_000_000_123_456_789)
+
+	require.NoError(t, e.EmitPresenceDemotion(context.Background(), "acme", "mqtt1", "dev-1",
+		DemotionEvent{SessionId: epoch, OccurredAt: occurred, Reason: "presence tap disabled"}))
+	require.Len(t, w.msgs, 1)
+	assert.NotEmpty(t, w.msgs[0].DedupID)
+	assert.Equal(t, []byte("dev-1"), w.msgs[0].Key)
+
+	ev, err := esproto.UnmarshalUnresolvedEvent(w.msgs[0].Value)
+	require.NoError(t, err)
+	assert.Equal(t, esmodel.StateChange, ev.EventType)
+	assert.Equal(t, "mqtt1", ev.Source, "the demotion must be attributed to the RELEASING source")
+	p, ok := ev.Payload.(*esmodel.UnresolvedStateChangePayload)
+	require.True(t, ok)
+	assert.Equal(t, esmodel.PresenceDemoted, p.State)
+	assert.Equal(t, "presence tap disabled", p.Reason)
+	assert.Equal(t, "1799000000123456789", p.SessionId,
+		"a demotion must NAME the session it releases; the projection matches on it")
+	assert.Equal(t, "", p.ExpectedSessionId,
+		"a demotion carrying a compare-and-set precondition is refused by the resolver and dead-lettered")
+
+	tenant, ok := core.TenantFromContext(w.ctxs[0])
+	assert.True(t, ok)
+	assert.Equal(t, "acme", tenant)
+}
+
 // TestDedupIDStableAndDistinct is the idempotency pin: the same logical event re-emitted
 // (a retry, or a failover re-derivation) carries the SAME DedupID so JetStream dedups it,
 // while genuinely-different events carry DISTINCT ids so nothing is silently dropped —
@@ -288,7 +328,7 @@ func TestDedupIDStableAndDistinct(t *testing.T) {
 
 	// Presence: stable per (device, session, state); distinct across state and session.
 	ev := PresenceEvent{ExternalId: "g/n", Connected: true, SessionId: 5, OccurredAt: time.Unix(1, 0)}
-	pid := func(e PresenceEvent) string { return presenceDedupID("sp", "acme", "dev-1", e) }
+	pid := func(e PresenceEvent) string { return stateChangeDedupID("sp", "acme", "dev-1", presenceStateChange(e)) }
 	// OccurredAt is deliberately NOT in the key — a retry re-stamps a fresh receipt
 	// clock, so keying on it would defeat the dedup.
 	assert.Equal(t, pid(ev), pid(PresenceEvent{Connected: true, SessionId: 5, OccurredAt: time.Unix(9, 0)}), "same (device,session,state) dedups regardless of receipt time")

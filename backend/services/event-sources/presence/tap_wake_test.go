@@ -23,6 +23,10 @@ func (f failingEmitter) EmitPresence(context.Context, string, string, string, ad
 	return f.err
 }
 
+func (f failingEmitter) EmitPresenceDemotion(context.Context, string, string, string, adapter.DemotionEvent) error {
+	return f.err
+}
+
 // spyWaker records what the tap asked to wake.
 type spyWaker struct {
 	mu    sync.Mutex

@@ -217,10 +217,14 @@ func (res *PlanResult) planConnectivity(seq uint64, ev *dmmodel.ResolvedEvent, o
 	if !ok {
 		return // malformed presence payload: nothing to feed (the persist/projection paths log it)
 	}
+	claim, ok := p.Claim()
+	if !ok {
+		return // unmappable presence state: the same disposition as a malformed payload
+	}
 	edge := &core.PresenceEdge{
+		Claim:             claim,
 		SessionId:         p.SessionId,
 		ExpectedSessionId: p.ExpectedSessionId,
-		Connected:         p.State == string(esmodel.PresenceConnected),
 	}
 	for _, sr := range scoped {
 		if sr.Compiled.Core.Kind != core.Connectivity {

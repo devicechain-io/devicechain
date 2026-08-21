@@ -291,10 +291,12 @@ type AlertEventCreateRequest struct {
 }
 
 // StateChangeEvent is the append-only history of an authoritative presence
-// transition (ADR-067 decision 5): one row per resolved connect/disconnect edge, so
-// a device's connectivity timeline is queryable alongside its telemetry (the live
-// device-state projection holds only the LATEST presence — this table is the history
-// DETECT/audit reads). State is the wire enum (CONNECTED|DISCONNECTED); SessionId is
+// transition (ADR-067 decision 5): one row per resolved presence edge, so a device's
+// connectivity timeline is queryable alongside its telemetry (the live device-state
+// projection holds only the LATEST presence — this table is the history DETECT/audit
+// reads). State is the wire enum (CONNECTED|DISCONNECTED|DEMOTED); a DEMOTED row is a
+// custody release, not a connectivity edge, and is the audit trail of WHY a device
+// stopped having authoritative presence at all. SessionId is
 // the producer's monotonic connect epoch (a host-observed session id, not a raw
 // bdSeq). PresenceSource is deliberately NOT recorded — it is a projection-derived
 // classification, not a fact of the resolved event. Like the other event tables it is

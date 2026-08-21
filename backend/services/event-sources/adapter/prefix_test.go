@@ -54,7 +54,7 @@ func TestDedupPrefixNamespacesIdsByProtocol(t *testing.T) {
 	require.Equal(t, spM, measurementDedupID("sp", "acme", "dev-1", 1000, samples), "stable within a protocol (a retry dedups)")
 
 	ev := PresenceEvent{ExternalId: "g/n", Connected: true, SessionId: 5, OccurredAt: time.Unix(1, 0)}
-	spP := presenceDedupID("sp", "acme", "dev-1", ev)
-	lwP := presenceDedupID("lw", "acme", "dev-1", ev)
+	spP := stateChangeDedupID("sp", "acme", "dev-1", presenceStateChange(ev))
+	lwP := stateChangeDedupID("lw", "acme", "dev-1", presenceStateChange(ev))
 	assert.NotEqual(t, spP, lwP, "the same presence transition under two protocols must carry distinct dedup ids")
 }

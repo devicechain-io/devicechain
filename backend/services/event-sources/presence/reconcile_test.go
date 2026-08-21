@@ -159,11 +159,15 @@ func TestARepairConnectIsNotRejectedAfterAFalseDeath(t *testing.T) {
 	require.Equal(t, 1, counts.Connects)
 	got := emitter.await(t, "a repair connect", isDevice("acme", "sensor-001", true))
 
+	repairClaim := presence.ClaimDisconnected
+	if got.Event.Connected {
+		repairClaim = presence.ClaimConnected
+	}
 	d := presence.Decide(prior, presence.Incoming{
 		SessionId:         got.Event.SessionId,
 		ExpectedSessionId: got.Event.ExpectedSessionId,
 		OccurredAt:        got.Event.OccurredAt,
-		Connected:         got.Event.Connected,
+		Claim:             repairClaim,
 	})
 	require.True(t, d.Ordered,
 		"the repair at %v is not ordered against a row last written at %v, so it is silently discarded "+
@@ -174,7 +178,7 @@ func TestARepairConnectIsNotRejectedAfterAFalseDeath(t *testing.T) {
 	// this test exists to reject — really would be discarded. Without it, the assertion
 	// above passes against any implementation whose clock happens to run forward.
 	stale := presence.Decide(prior, presence.Incoming{
-		SessionId: session, ExpectedSessionId: got.Event.ExpectedSessionId, OccurredAt: start, Connected: true,
+		SessionId: session, ExpectedSessionId: got.Event.ExpectedSessionId, OccurredAt: start, Claim: presence.ClaimConnected,
 	})
 	require.False(t, stale.Ordered,
 		"a repair stamped at the connection's start was ACCEPTED, so this test cannot tell the two "+
@@ -385,11 +389,15 @@ func TestARepairReFilesADeviceOntoARegressedBrokerSession(t *testing.T) {
 	require.Equal(t, storedSession, got.Event.ExpectedSessionId,
 		"without the compare-and-set the lower session is refused by presence ordering")
 
+	casClaim := presence.ClaimDisconnected
+	if got.Event.Connected {
+		casClaim = presence.ClaimConnected
+	}
 	dec := presence.Decide(prior, presence.Incoming{
 		SessionId:         got.Event.SessionId,
 		ExpectedSessionId: got.Event.ExpectedSessionId,
 		OccurredAt:        got.Event.OccurredAt,
-		Connected:         got.Event.Connected,
+		Claim:             casClaim,
 	})
 	require.True(t, dec.Ordered, "the repair is not ordered against the stored row, so it is discarded")
 	require.True(t, dec.Flipped, "the repair was ordered but did not bring the device back online")
@@ -398,7 +406,7 @@ func TestARepairReFilesADeviceOntoARegressedBrokerSession(t *testing.T) {
 	// (1) Drop the compare-and-set and the same repair must be REFUSED — otherwise the
 	// test cannot tell the fix from an implementation that simply emits the low id.
 	naked := presence.Decide(prior, presence.Incoming{
-		SessionId: regressed, OccurredAt: got.Event.OccurredAt, Connected: true,
+		SessionId: regressed, OccurredAt: got.Event.OccurredAt, Claim: presence.ClaimConnected,
 	})
 	require.False(t, naked.Ordered,
 		"the regressed session was accepted WITHOUT a compare-and-set, so this test proves nothing")
@@ -407,7 +415,7 @@ func TestARepairReFilesADeviceOntoARegressedBrokerSession(t *testing.T) {
 	// repair produced. This is the property the earlier fix did not have.
 	afterRepair := presence.Prior{SessionId: regressed, Time: got.Event.OccurredAt, HasTime: true, Connected: true}
 	death := presence.Decide(afterRepair, presence.Incoming{
-		SessionId: regressed, OccurredAt: got.Event.OccurredAt.Add(time.Minute), Connected: false,
+		SessionId: regressed, OccurredAt: got.Event.OccurredAt.Add(time.Minute), Claim: presence.ClaimDisconnected,
 	})
 	require.True(t, death.Ordered && death.Flipped,
 		"after the re-file the connection's own DISCONNECT is still rejected, so the device would "+
@@ -446,7 +454,7 @@ func TestAnActiveRowOnARegressedSessionIsReFiled(t *testing.T) {
 		SessionId:         got.Event.SessionId,
 		ExpectedSessionId: got.Event.ExpectedSessionId,
 		OccurredAt:        got.Event.OccurredAt,
-		Connected:         got.Event.Connected,
+		Claim:             claimOf(got.Event.Connected),
 	})
 	require.True(t, dec.Ordered, "the re-file was refused, so the row stays on a dead session")
 	require.True(t, dec.NewSession, "the re-file must read as a new session or LastConnectTime never moves")
@@ -536,4 +544,14 @@ func TestASyntheticDeathCarriesAPassNonce(t *testing.T) {
 	got := emitter.await(t, "a synthetic death", isDevice("acme", "sensor-001", false))
 	require.Equal(t, stored.SessionId, got.Event.SessionId, "the death must reuse the stored session")
 	require.NotEmpty(t, got.Event.DedupNonce, "a death carried no dedup nonce, so a retry is swallowed")
+}
+
+// claimOf maps the adapter event's boolean direction onto a presence.Claim. The
+// adapter's PresenceEvent still carries a bool — it describes a connectivity advisory,
+// which only ever has two directions — while presence.Decide now takes the wider claim.
+func claimOf(connected bool) presence.Claim {
+	if connected {
+		return presence.ClaimConnected
+	}
+	return presence.ClaimDisconnected
 }

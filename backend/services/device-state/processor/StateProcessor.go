@@ -200,7 +200,16 @@ func (sp *StateProcessor) mergeOne(ctx context.Context, msg messaging.Message) {
 		}
 	}
 
-	pt := presenceTransitionFor(event)
+	pt, err := presenceTransitionFor(event)
+	if err != nil {
+		log.Warn().Err(err).Str("correlation", msg.CorrelationID()).Msg(fmt.Sprintf("Skipping unmappable state-change event for device %s", event.SourceDeviceToken))
+		// Poison message: redelivery cannot make the state mappable. Dropping it is the
+		// only safe disposition — folding it as a plain data event would let an
+		// unreadable presence claim act as a liveness heartbeat.
+		msg.Ack()
+		done(core.ResultInvalid)
+		return
+	}
 
 	// Update the originating device's live connectivity projection for every event.
 	if _, err := sp.Api.MergeDeviceState(msgctx, event.SourceDeviceToken, event.OccurredTime, pt,
@@ -398,24 +407,36 @@ func (sp *StateProcessor) ExecuteTerminate(context.Context) error {
 // (ADR-067), or nil when the event is a plain data heartbeat. The transition time is the
 // event's occurred time — one canonical clock, set by the producer.
 //
+// 🔴 IT RETURNS AN ERROR RATHER THAN A nil, and the difference is not cosmetic. A nil
+// here does not mean "nothing to do": it means "plain data event", which MergeDeviceState
+// folds as an implicit heartbeat that advances LastActivityTime. So a StateChange this
+// function could not map would arrive at the projection disguised as a heartbeat and
+// keep an asserted device looking alive on the strength of an event nobody could read.
+// An unmappable presence state is a deterministic producer defect; it is dropped as a
+// poison message, loudly.
+//
 // 🔑 EXTRACTED SO THE SEAM CAN BE TESTED AS THE CALLER, NOT RE-IMPLEMENTED BY A TEST.
 // This is a hand-written field-by-field mapping at the end of a chain of four other
 // hand-written mappings, which makes it exactly the kind of place a newly added field is
 // silently dropped: every layer still compiles, every existing test still passes, and the
 // field simply never arrives. A test that rebuilt this mapping itself would agree with
 // whatever the mapping forgot. See TestARegressedSessionSurvivesTheWholeChain.
-func presenceTransitionFor(event *dmmodel.ResolvedEvent) *model.PresenceTransition {
+func presenceTransitionFor(event *dmmodel.ResolvedEvent) (*model.PresenceTransition, error) {
 	if event.EventType != esmodel.StateChange {
-		return nil
+		return nil, nil
 	}
 	p, ok := event.Payload.(*dmmodel.ResolvedStateChangePayload)
 	if !ok {
-		return nil
+		return nil, fmt.Errorf("state-change event carries a %T payload", event.Payload)
+	}
+	claim, ok := p.Claim()
+	if !ok {
+		return nil, fmt.Errorf("state-change event carries unmappable presence state %q", p.State)
 	}
 	return &model.PresenceTransition{
-		Connected:         p.State == string(esmodel.PresenceConnected),
+		Claim:             claim,
 		SessionId:         p.SessionId,
 		ExpectedSessionId: p.ExpectedSessionId,
 		OccurredAt:        event.OccurredTime,
-	}
+	}, nil
 }

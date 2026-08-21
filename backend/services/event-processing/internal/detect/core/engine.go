@@ -101,9 +101,14 @@ type Event struct {
 }
 
 // PresenceEdge is the payload of a Connectivity Event: the transition's session epoch (the
-// producer's monotone connect id, a host-observed epoch, not a raw bdSeq) and its direction
-// (Connected true = CONNECTED, false = DISCONNECTED).
+// producer's monotone connect id, a host-observed epoch, not a raw bdSeq) and what it claims.
+//
+// Claim is an enum rather than the bool it replaced because a presence transition is no
+// longer necessarily about connectivity: a DEMOTED claim releases the asserting source's
+// custody of the device. Its zero value is invalid, so an edge built without setting it is
+// refused by presence.Decide rather than folding as a death.
 type PresenceEdge struct {
+	Claim     presence.Claim
 	SessionId uint64
 	// ExpectedSessionId is the compare-and-set precondition carried by the resolved
 	// event, zero for every ordinary transport advisory. DETECT must honour it for the
@@ -115,7 +120,6 @@ type PresenceEdge struct {
 	// per-series presence.Prior the engine snapshots — the snapshot round-trip
 	// (loadPresenceState/snapshotPresenceState) is unchanged by this field existing.
 	ExpectedSessionId uint64
-	Connected         bool
 }
 
 // EdgeKind discriminates the two edges of an alarm-bearing detection (ADR-057). A rule is
@@ -464,13 +468,7 @@ func (e *Engine) Descope(ruleID, series string, at time.Time) bool {
 	// seq order) — suppressing its resolve would strand the alarm raised forever if the device
 	// never reports again. So resolve at max(at, rising-edge): never before the raise (which
 	// would be a nonsensical negative-duration alarm) but always emitted.
-	if raisedAt, raised := e.raised[key]; raised {
-		resolveAt := at
-		if resolveAt.Before(raisedAt) {
-			resolveAt = raisedAt
-		}
-		e.resolve(r, key, resolveAt) // resolveAt >= raisedAt, so resolve() always emits + clears
-	}
+	e.resolveLatched(r, key, at)
 	dropped := e.dropSeriesKey(key, r.Kind)
 	return dropped || len(e.out) > before
 }
@@ -954,34 +952,67 @@ func (e *Engine) applyConnectivity(ev Event, r Rule) {
 		_, raised := e.raised[ev.Key]
 		prior.Connected = !raised
 	}
+	if !prior.HasTime && ev.Presence.Claim == presence.ClaimDemoted {
+		// A custody release for a series with NO ordering cursor. presence.Decide refuses
+		// it, and rightly so for the PROJECTION, where the absence of a stamp means the row
+		// was never asserted and a demotion is a no-op. It is not right HERE, because
+		// DETECT's cursor and its alarm latch are carried by different mechanisms and can
+		// come apart — which is the exact skew the fallback directly above exists for, and
+		// which that fallback repairs for a CONNECT while leaving a demotion refused.
+		//
+		// In that state the alarm is IMMORTAL: it is resolved by a CONNECT, and the source
+		// that would send one has just released custody. So resolve it on the release's own
+		// terms and leave the cursor unset — the release says nothing about connectivity, so
+		// inventing a cursor from it would be worse than having none, and assume-online is
+		// the right footing for whatever speaks for the device next.
+		//
+		// With nothing latched this is a no-op, which is the ordinary case it also covers: a
+		// demotion for a series DETECT has simply never seen.
+		e.resolveLatched(r, ev.Key, ev.Time)
+		return
+	}
 	d := presence.Decide(prior, presence.Incoming{
 		SessionId:         ev.Presence.SessionId,
 		ExpectedSessionId: ev.Presence.ExpectedSessionId,
 		OccurredAt:        ev.Time,
-		Connected:         ev.Presence.Connected,
+		Claim:             ev.Presence.Claim,
 	})
 	if !d.Ordered {
 		return // stale / out-of-order edge: neither the cursor nor the alarm moves
+	}
+	if d.Demoted {
+		// The source is releasing custody: it is not saying the device died, it is saying it
+		// will no longer say anything. Any offline alarm latched for this series was raised on
+		// an assertion nobody is making any more, and NOTHING will ever resolve it — the
+		// resolve comes from a CONNECT, and a released source sends none. So resolve it here,
+		// stamped at resolution like a descope, which is the edge a demotion actually is.
+		//
+		// The cursor ADVANCES while Connected is carried forward unchanged, mirroring the
+		// projection exactly: the released session stays named so a late echo from it is still
+		// refused, and no connectivity edge is invented from an administrative one. Deriving
+		// Connected from the claim here — as the line below does for a real edge — would record
+		// the device as DOWN and hand the next CONNECT a spurious flip.
+		e.resolveLatched(r, ev.Key, ev.Time)
+		e.presenceState[ev.Key] = presence.Prior{
+			SessionId: prior.SessionId,
+			Time:      ev.Time,
+			HasTime:   true,
+			Connected: prior.Connected,
+		}
+		return
 	}
 	e.presenceState[ev.Key] = presence.Prior{
 		SessionId: ev.Presence.SessionId,
 		Time:      ev.Time,
 		HasTime:   true,
-		Connected: ev.Presence.Connected,
+		Connected: ev.Presence.Claim == presence.ClaimConnected,
 	}
 	if !d.Flipped {
 		return // same-state higher-session non-event: cursor advanced, no edge
 	}
-	if ev.Presence.Connected {
-		// Back online → resolve the offline alarm. Connectivity ordering is session-DOMINANT: a
-		// newer session applies even at an EARLIER wall clock (a failover reconnect mints on
-		// another host's clock), so resolve at max(at, rising-edge) — NOT the value kinds' stale
-		// guard, which would ignore an earlier-stamped resolve and strand the alarm raised forever.
-		resolveAt := ev.Time
-		if raisedAt, raised := e.raised[ev.Key]; raised && resolveAt.Before(raisedAt) {
-			resolveAt = raisedAt
-		}
-		e.resolve(r, ev.Key, resolveAt)
+	if ev.Presence.Claim == presence.ClaimConnected {
+		// Back online → resolve the offline alarm, stamped at resolution (see resolveLatched).
+		e.resolveLatched(r, ev.Key, ev.Time)
 	} else {
 		// Went offline → raise the offline alarm (idempotent via the latch: a re-raise is a no-op).
 		e.emit(r, ev.Key, ev.Time)
@@ -1087,6 +1118,29 @@ func (e *Engine) emitSample(r Rule, ev Event) {
 // still supports it), so resolving on it would spuriously clear-then-re-raise. Every value-folding
 // kind already rejects stale samples (DeltaRate, Correlation) or schedules forward-only (Absence,
 // Session); this extends the same discipline to the level kinds' falling edges.
+// resolveLatched resolves a latched alarm for key at max(at, rising-edge), and is a no-op
+// when nothing is latched. It is the disposition for every RESOLUTION-STAMPED edge — a
+// reconnect, a descope, a custody release — as opposed to the value kinds' falling edge,
+// which IS subject to the event-time stale guard.
+//
+// The clamp is what distinguishes them, and it must not be mistaken for belt-and-braces.
+// Connectivity ordering is session-DOMINANT: a newer session applies even at an EARLIER
+// wall clock, because a failover reconnect mints its epoch on another host's clock. So a
+// resolve can legitimately carry a stamp before the raise. Passed to resolve() unclamped
+// it would be silently discarded by that function's own `at.Before(raisedAt)` guard and
+// the alarm would stay raised forever — for a device that has, by then, already come
+// back. Clamping to the raise emits a zero-length alarm rather than an immortal one.
+func (e *Engine) resolveLatched(r Rule, key SeriesKey, at time.Time) {
+	raisedAt, raised := e.raised[key]
+	if !raised {
+		return
+	}
+	if at.Before(raisedAt) {
+		at = raisedAt
+	}
+	e.resolve(r, key, at) // at >= raisedAt, so resolve() always emits + clears
+}
+
 func (e *Engine) resolve(r Rule, key SeriesKey, at time.Time) {
 	raisedAt, ok := e.raised[key]
 	if !ok || at.Before(raisedAt) {

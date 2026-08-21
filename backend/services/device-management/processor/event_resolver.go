@@ -531,7 +531,7 @@ func (rez *EventResolver) ResolveStateChangeEventPayload(ctx context.Context, de
 		return nil, fmt.Errorf("can not resolve state-change payload. invalid unresolved payload type")
 	}
 	switch payload.State {
-	case esmodel.PresenceConnected, esmodel.PresenceDisconnected:
+	case esmodel.PresenceConnected, esmodel.PresenceDisconnected, esmodel.PresenceDemoted:
 	default:
 		return nil, fmt.Errorf("invalid presence state %q in state-change event", payload.State)
 	}
@@ -546,6 +546,45 @@ func (rez *EventResolver) ResolveStateChangeEventPayload(ctx context.Context, de
 	expectedSessionId, err := parseSessionId(payload.ExpectedSessionId, "expected session id")
 	if err != nil {
 		return nil, err
+	}
+	// These refusals exist because the alternative is a silent no-op rather than an error:
+	// a demotion the ordering guard drops is indistinguishable from a genuinely late echo,
+	// and it leaves the row exactly as wedged as it was.
+	//
+	// 🔴 A ZERO SESSION ID IS NOT ONE OF THEM, AND THE REASONING THAT SAID IT WAS IS
+	// WRONG. The claim was that a session-less demotion can never match anything, because
+	// a demotion applies only against the session the row already holds. But a row asserted
+	// by a producer that sent no session id HOLDS ZERO — parseSessionId documents empty as
+	// absent, and that is a supported way to report presence — so zero matches zero and the
+	// demotion applies exactly where it should. Refusing it would make those rows the one
+	// population that can never be handed back to inferred: permanently frozen, by the
+	// guard written to stop rows freezing. The blast radius is bounded by the same equality
+	// that makes it work, since a zero-session demotion can reach nothing else, and an
+	// INFERRED row is refused on the stamp instead.
+	if payload.State == esmodel.PresenceDemoted {
+		if expectedSessionId != 0 {
+			return nil, fmt.Errorf("state-change event carries expected session id %d on a demotion; a demotion is already matched against the stored session", expectedSessionId)
+		}
+		// The third silent no-op, and the reason it is refused here rather than guarded in
+		// one emitter: a demotion is accepted only when its stamp is strictly AFTER the
+		// row's, so an unstamped one is rejected downstream as "stale" and the row it was
+		// releasing stays frozen. Every other producer defect in this family was made loud
+		// for the same reason. This is the boundary all producers cross — the transports'
+		// emitter and the operator mutation, which does not share it.
+		//
+		// Only the ZERO case is knowable here. A demotion stamped at or before the stored
+		// PresenceTime is the same failure and cannot be seen without reading the
+		// projection, so a producer must stamp a fresh clock rather than echo a value it
+		// read.
+		//
+		// 🔑 IT GUARDS THE ENVELOPE'S TIME, NOT THE PAYLOAD'S. The payload carries a
+		// descriptive copy; the ordering stamp both consumers hand to presence.Decide is
+		// ResolvedEvent.OccurredTime, which comes from the envelope. And event-time
+		// bounding does not rescue this: eventtime.Effective bounds the FUTURE direction
+		// only, so a zero instant passes through it untouched.
+		if event.OccurredTime.IsZero() {
+			return nil, fmt.Errorf("state-change event demotes with no occurred time; a demotion is applied only when it is newer than the row it releases")
+		}
 	}
 	return &model.ResolvedStateChangePayload{
 		State:             string(payload.State),

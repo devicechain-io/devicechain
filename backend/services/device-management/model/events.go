@@ -7,6 +7,7 @@ import (
 	"time"
 
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/presence"
 )
 
 // Payload with resolved relationship info. The target is a uniform
@@ -94,8 +95,10 @@ type ResolvedAlertsPayload struct {
 	Entries []ResolvedAlertEntry
 }
 
-// Payload with a resolved device presence transition (ADR-067). State is a
-// validated PresenceState (CONNECTED|DISCONNECTED); SessionId is the parsed
+// Payload with a resolved device presence transition (ADR-067). State is a validated
+// PresenceState (CONNECTED|DISCONNECTED|DEMOTED) — read it through Claim() below and
+// never by comparing it to one value, because DEMOTED is not a connectivity claim at all
+// and a comparison answers "is this device up?" for it anyway. SessionId is the parsed
 // producer-supplied monotonic session id (a host-observed connect epoch). The
 // device-state projection applies the transition under a monotonic
 // (SessionId, OccurredTime) guard (ADR-067 decision 4).
@@ -108,6 +111,31 @@ type ResolvedStateChangePayload struct {
 	ExpectedSessionId uint64
 	SessionId         uint64
 	OccurredTime      *string
+}
+
+// Claim maps the wire state onto the presence claim that presence.Decide consumes. It
+// is the ONE implementation for BOTH consumers — the device-state projection and the
+// DETECT engine — which is the whole point: they are the two halves presence.Decide
+// exists to keep in lockstep, and each was deriving the claim from its own hand-written
+// copy of the same string compare.
+//
+// 🔑 IT REPORTS ITS OWN FAILURE, and that is why it replaced the compare. `state ==
+// "CONNECTED"` is a total function onto a bool, so it answers "is this device up?" for
+// every input including the inputs that are not about the device being up. It read an
+// unrecognised state as a DISCONNECT — a death — and it had no way to express DEMOTED,
+// which asserts nothing about connectivity at all. A false ok is a malformed payload
+// and the caller must dispose of it as one, never guess.
+func (p *ResolvedStateChangePayload) Claim() (presence.Claim, bool) {
+	switch p.State {
+	case string(esmodel.PresenceConnected):
+		return presence.ClaimConnected, true
+	case string(esmodel.PresenceDisconnected):
+		return presence.ClaimDisconnected, true
+	case string(esmodel.PresenceDemoted):
+		return presence.ClaimDemoted, true
+	default:
+		return presence.ClaimUnset, false
+	}
 }
 
 // Event with token references resolved and the originating device's tracked

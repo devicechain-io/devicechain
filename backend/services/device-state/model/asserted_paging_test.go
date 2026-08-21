@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/presence"
 )
 
 // seedAsserted seeds n asserted devices for one source and returns the api + ctx.
@@ -20,7 +21,7 @@ func seedAsserted(t *testing.T, n int) (*Api, context.Context) {
 	at := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	for i := range n {
 		_, err := api.MergeDeviceState(ctx, fmt.Sprintf("dev-%03d", i), at,
-			&PresenceTransition{Connected: true, SessionId: uint64(i + 1), OccurredAt: at},
+			&PresenceTransition{Claim: presence.ClaimConnected, SessionId: uint64(i + 1), OccurredAt: at},
 			DeviceIdentity{Source: "mqtt1", ExternalId: fmt.Sprintf("ext-%03d", i)})
 		if err != nil {
 			t.Fatalf("seeding device %d: %v", i, err)

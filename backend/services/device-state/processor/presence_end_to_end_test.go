@@ -16,6 +16,7 @@ import (
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/presence"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -81,7 +82,7 @@ func TestARegressedSessionSurvivesTheWholeChain(t *testing.T) {
 	// --- the projection's starting point: offline, filed under the HIGHER session ---
 	projection := newProjection(t)
 	if _, err := projection.MergeDeviceState(ctx, device, diedAt, &model.PresenceTransition{
-		Connected: false, SessionId: storedSession, OccurredAt: diedAt,
+		Claim: presence.ClaimDisconnected, SessionId: storedSession, OccurredAt: diedAt,
 	}, model.DeviceIdentity{Source: mqttTestSource}); err != nil {
 		t.Fatalf("seeding the dead session failed: %v", err)
 	}
@@ -134,7 +135,10 @@ func TestARegressedSessionSurvivesTheWholeChain(t *testing.T) {
 	}
 
 	// --- 5. the projection's transition mapper (the real one, not a restatement) ---
-	pt := presenceTransitionFor(resolved)
+	pt, err := presenceTransitionFor(resolved)
+	if err != nil {
+		t.Fatalf("the resolved event could not be mapped to a presence transition: %v", err)
+	}
 	if pt == nil {
 		t.Fatal("the resolved event produced no presence transition")
 	}
@@ -163,7 +167,7 @@ func TestARegressedSessionSurvivesTheWholeChain(t *testing.T) {
 	// REFUSED.
 	naked := newProjection(t)
 	if _, err := naked.MergeDeviceState(ctx, device, diedAt, &model.PresenceTransition{
-		Connected: false, SessionId: storedSession, OccurredAt: diedAt,
+		Claim: presence.ClaimDisconnected, SessionId: storedSession, OccurredAt: diedAt,
 	}, model.DeviceIdentity{Source: mqttTestSource}); err != nil {
 		t.Fatalf("seeding the control failed: %v", err)
 	}

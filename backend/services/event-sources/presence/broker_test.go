@@ -99,6 +99,10 @@ type recordingEmitter struct {
 type recorded struct {
 	Tenant, Source, Device string
 	Event                  adapter.PresenceEvent
+	// Demotion is non-nil exactly when this emission was a custody release rather than a
+	// connectivity claim. A demotion has no Connected field to inspect, so the only honest
+	// way to record both on one timeline is to keep them in distinct fields.
+	Demotion *adapter.DemotionEvent
 }
 
 func newRecordingEmitter() *recordingEmitter {
@@ -107,7 +111,22 @@ func newRecordingEmitter() *recordingEmitter {
 
 func (e *recordingEmitter) EmitPresence(_ context.Context, tenant, source, device string, ev adapter.PresenceEvent) error {
 	e.mu.Lock()
-	e.events = append(e.events, recorded{tenant, source, device, ev})
+	e.events = append(e.events, recorded{Tenant: tenant, Source: source, Device: device, Event: ev})
+	e.mu.Unlock()
+	select {
+	case e.ch <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+// EmitPresenceDemotion records a custody release on the SAME timeline as the presence
+// events, so a test can assert what a source emitted in order rather than reconciling two
+// independent logs. Demotion is nil on a presence record and non-nil on a demotion, which
+// is what makes "this emission was not a connectivity claim" checkable.
+func (e *recordingEmitter) EmitPresenceDemotion(_ context.Context, tenant, source, device string, ev adapter.DemotionEvent) error {
+	e.mu.Lock()
+	e.events = append(e.events, recorded{Tenant: tenant, Source: source, Device: device, Demotion: &ev})
 	e.mu.Unlock()
 	select {
 	case e.ch <- struct{}{}:
