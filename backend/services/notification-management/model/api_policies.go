@@ -23,12 +23,17 @@ func (api *Api) CreateNotificationPolicy(ctx context.Context,
 		return nil, err
 	}
 
+	// Converted out here, beside the validation it duplicates, rather than inside the
+	// transaction. validateJSONObject above is strictly stronger — it requires an OBJECT,
+	// not merely valid JSON — so this can never be the thing that fails; opening a
+	// transaction to discover that would be work for an outcome already decided.
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+
 	var created *NotificationPolicy
-	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
-		if err != nil {
-			return err
-		}
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		policy := &NotificationPolicy{
 			TokenReference: rdb.TokenReference{Token: request.Token},
 			NamedEntity: rdb.NamedEntity{

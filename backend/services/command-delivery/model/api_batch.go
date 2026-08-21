@@ -243,13 +243,20 @@ func (api *Api) decideCommandBatch(ctx context.Context, request *CommandBatchCre
 		acct.refuse(refusal.Code, boundNone)
 	}
 
+	// 🔴 CODED, NOT BARE, EVEN THOUGH THE GUARD ABOVE MAKES THESE UNREACHABLE TODAY. Every
+	// client-fault refusal in this service carries a RejectionCode so rejectionCodeOf and
+	// recordBatchOutcome can classify it and the documented rejection table stays true. A
+	// bare error here would be a trap rather than a bug: the day somebody reads the two
+	// checks as duplication and deletes the earlier one, malformed payloads would start
+	// producing uncoded errors, PAYLOAD_NOT_JSON would quietly vanish from the metrics, and
+	// nothing would fail. Agreeing with the layer above costs one line each.
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
 	if err != nil {
-		return nil, err
+		return nil, rejected(RejectMetadataNotJSON, "command metadata is not valid JSON")
 	}
 	payloadJSON, err := rdb.JSONInputOf("payload", request.Payload)
 	if err != nil {
-		return nil, err
+		return nil, rejected(RejectPayloadNotJSON, "command payload is not valid JSON")
 	}
 	created := &CommandBatch{
 		TokenReference: rdb.TokenReference{Token: request.Token},

@@ -95,8 +95,18 @@ type MetadataEntity struct {
 // sets — and hands down a *string. A malformed value is a VALUE, so it arrives here as
 // the third state and, under the old shape, silently produced the second. It is a
 // fourth outcome collapsing onto one of the three, inside the mechanism whose entire
-// purpose is keeping them distinct. Refusal is the fourth outcome, and it has to live
-// here: this is the only layer every write shares.
+// purpose is keeping them distinct. Refusal is the fourth outcome.
+//
+// 🔴 THIS IS THE LAST LAYER, NOT THE ONLY ONE, AND THE DIFFERENCE IS WORTH STATING because
+// an earlier draft of this comment claimed the latter and it was false. Several fields
+// reach a JSON column through a guard that runs BEFORE this and refuses more than
+// json.Valid does: command-delivery checks payload and metadata with a coded rejection,
+// notification-management requires config and metadata to be JSON OBJECTS, a command
+// definition's parameterSchema has its own validator, and detection-rule definitions,
+// authoring graphs and fence geometries are each parsed by the thing that will later read
+// them. Those are stronger and they win; behind them this function cannot fire. What it
+// covers is everything else — and "everything else" was, until it returned an error, a
+// silent write of NULL over whatever the column already held.
 //
 // An absent value (nil), or one that is empty or whitespace, is NOT an error — it is
 // "no value", the same reading NullStrOf gives, and it clears the column exactly as it

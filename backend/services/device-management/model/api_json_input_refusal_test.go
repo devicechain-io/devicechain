@@ -24,8 +24,16 @@ import (
 // value, send a bad one, read the row back.
 //
 // The measure of how invisible it was: converting all 52 call sites to the refusing form
-// changed no test result anywhere in the workspace. Every one of them passed before and
-// after, because not one of them sent a malformed JSON field through an API at all.
+// changed no test result anywhere in the workspace.
+//
+// 🔴 THE REASON IS NOT "NOBODY TESTED IT", WHICH IS WHAT THIS COMMENT SAID FIRST AND WHICH
+// IS FALSE. notification-management/model/api_test.go does send `{not json` and `{nope`
+// through CreateNotificationChannel and asserts refusal. The reason those tests were
+// unmoved is sharper and worse: the services that HAD end-to-end coverage of malformed
+// JSON are exactly the services that never had the defect, because each of them guards the
+// field upstream with something stronger than json.Valid. Coverage and exposure were
+// perfectly anti-correlated, so a green suite was evidence of nothing either way. This
+// package is where the gap actually was, which is why the tests live here.
 
 func seedTypeWithMetadata(t *testing.T, api *Api, ctx context.Context) {
 	t.Helper()

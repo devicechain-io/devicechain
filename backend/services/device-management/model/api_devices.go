@@ -13,6 +13,7 @@ import (
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -321,17 +322,28 @@ func (api *Api) CreateDevices(ctx context.Context, requests []*DeviceCreateReque
 		typesByToken[m.Token] = m
 	}
 
+	// Convert every row's metadata BEFORE the transaction opens, for the same reason the
+	// device types are resolved up here: a bad row is a property of the request, and a
+	// request that cannot succeed should not first insert N-1 rows and roll them back. It
+	// also means the refusal names the offending device without the caller having to
+	// correlate it against a transaction that left nothing behind.
+	metadataByIndex := make([]*datatypes.JSON, len(requests))
+	for i, request := range requests {
+		metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+		if err != nil {
+			return nil, fmt.Errorf("device %q: %w", request.Token, err)
+		}
+		metadataByIndex[i] = metadataJSON
+	}
+
 	created := make([]*Device, 0, len(requests))
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		for _, request := range requests {
+		for i, request := range requests {
 			dt := typesByToken[request.DeviceTypeToken]
 			if dt == nil {
 				return fmt.Errorf("device type %q: %w", request.DeviceTypeToken, gorm.ErrRecordNotFound)
 			}
-			metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
-			if err != nil {
-				return err
-			}
+			metadataJSON := metadataByIndex[i]
 			device := &Device{
 				TokenReference:    rdb.TokenReference{Token: request.Token},
 				ExternalReference: rdb.ExternalReference{ExternalId: rdb.NullStrOf(request.ExternalId)},
