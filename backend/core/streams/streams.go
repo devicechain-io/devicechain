@@ -320,7 +320,7 @@ var All = []Stream{
 	// IS NOT NULL" — and alternate ids are optional and usually absent, so it
 	// backstops only the events that carry one. Widening the window trades memory
 	// for a longer covered outage; it does not remove the residual.
-	{Suffix: InboundEvents, Areas: []string{"device-management", "event-sources", "lwm2m-ingest", "sparkplug-ingest"}, Tier: Hot, DuplicateWindowSeconds: 1800,
+	{Suffix: InboundEvents, Areas: []string{"device-management", "device-state", "event-sources", "lwm2m-ingest", "sparkplug-ingest"}, Tier: Hot, DuplicateWindowSeconds: 1800,
 		Why: "raw device telemetry — the primary ingest path"},
 	{Suffix: ResolvedEvents, Areas: []string{"device-management", "device-state", "event-management", "event-processing"}, Tier: Hot, Why: "every ingested event after resolution; device-management produces it, every other area listed is a durable reader"},
 

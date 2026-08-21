@@ -176,6 +176,83 @@ type Query {
     latestLocations(deviceTokens: [String!]!): [LatestLocation!]!
 }
 
+# The outcome of ONE PAGE of a presence demotion (ADR-067 demotion). It is flat —
+# four scalars, no refusal union — because everything that can go wrong short of an
+# error is a per-row condition a count answers better than a type would.
+type PresenceDemotionResult {
+    # How many ASSERTED rows this page examined.
+    #
+    # 🔴 THIS IS THE TERMINATION SIGNAL, NOT `demoted`. Keep walking while `scanned`
+    # equals the `limit` you asked for; stop on the first page that comes back short.
+    # A page whose rows were all skippable demotes nothing and is not the end of the
+    # set, so a loop keyed on `demoted` stops with most of the source untouched.
+    scanned: Int!
+    # How many demotion events were published — the devices handed back to inferred
+    # presence by this page.
+    demoted: Int!
+    # `scanned` minus `demoted`: rows this page could not release. A row is skipped when
+    # it holds no session (there is no custody to release), when it holds no presence
+    # time (the ordering guard has nothing to judge a demotion against), or when its
+    # presence time is not in the past (a demotion stamped now would be refused as stale
+    # by a producer whose clock leads the platform's). All three are states in which an
+    # emitted demotion could not have applied; each is logged with the device it
+    # concerns. A page that skips everything is a signal, not a failure.
+    skipped: Int!
+    # The id of the last row SCANNED — the cursor to pass as the next call's `afterId`.
+    # Null when the page was empty. It is the last row scanned rather than the last one
+    # demoted deliberately: resuming from the last row KEPT would re-read every skipped
+    # row on the next page, and a permanently-skippable row would make the walk never
+    # end.
+    lastId: ID
+}
+
+# Mutations for device state.
+type Mutation {
+    # Return one page of an event source's ASSERTED device states to INFERRED presence,
+    # releasing that source's custody of them (ADR-067 demotion).
+    #
+    # 🔴 WHAT THIS IS FOR. A device whose presence source stops running keeps whatever
+    # presence it had, forever: the inactivity sweep skips ASSERTED rows and a data
+    # event cannot flip one, so the two mechanisms that repair a stale row are both
+    # suppressed while the source that stopped speaking still holds custody. Demoting
+    # returns the row to INFERRED and asserts NOTHING about connectivity — active, both
+    # connect timestamps and the alarm stamp are untouched — which hands the device back
+    # to the ordinary inference machinery. A stale-online row becomes sweepable again;
+    # a wedged-offline row is reconnected by its next data event.
+    #
+    # 🔴 THE BLAST RADIUS IS AN ENTIRE EVENT SOURCE, so `source` is required and is
+    # never inferred. Pass it EXACTLY as `DeviceState.source` reports it — for MQTT and
+    # HTTP that is the event source's own configured id ("mqtt1", "http1"), for
+    # Sparkplug "sparkplug:{hostId}", for LwM2M "lwm2m". A source nobody uses is not an
+    # error: it simply matches no rows, which is why a caller should treat a first page
+    # of zero as a probable typo rather than as a finished walk.
+    #
+    # 🔴 `deviceTokens` IS NULLABLE AND AN EMPTY LIST DEMOTES NOTHING. Omit it to demote
+    # the whole source; pass a non-empty list to narrow WITHIN the source (a token
+    # belonging to another source is not found, never demoted); pass an empty list and
+    # nothing happens at all. That is the opposite of what `CommandSearchCriteria.statuses`
+    # does with an empty list, and the divergence is deliberate: that one is a read
+    # filter, where "I built a list and it came out empty" almost always means "no
+    # preference", while this is a write over a whole fleet — so the same slip has to
+    # fail in the direction that does nothing.
+    #
+    # `limit` is required and must be between 1 and 1000, refused rather than clamped,
+    # for the reason `assertedDeviceStates` records: a caller that stops on a short page
+    # would read a silently reduced one as the end of the set. Walk the source by
+    # passing the previous result's `lastId` as `afterId`; the keyset cursor stays
+    # correct while rows are written underneath the walk, which OFFSET would not.
+    #
+    # `reason` is required and must not be blank. It is stamped onto every emitted event
+    # alongside the authenticated subject and logged with the call — the only record of
+    # a fleet-wide presence write.
+    #
+    # Requires state:demote, which is separate from the state:read that covers every
+    # other operation here and is not part of the read-only baseline: this is the only
+    # thing outside the event pipeline that writes this projection.
+    demoteAssertedPresence(source: String!, deviceTokens: [String!], limit: Int!, afterId: ID, reason: String!): PresenceDemotionResult!
+}
+
 schema {
     query: Query
+    mutation: Mutation
 }
