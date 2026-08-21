@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listDevices } from '@/lib/api/device-management';
 import { getDeviceStates } from '@/lib/api/device-state';
+import { presenceKind, type PresenceFacts } from '@/lib/presence';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
 import { LoadingState } from '@/components/ui/loading-state';
@@ -32,17 +33,27 @@ import {
 
 const pageSize = 20;
 
-// StatusDot shows a device's connectivity at a glance. `active` is undefined when
+// StatusDot shows a device's connectivity at a glance. It is handed the whole state
+// row rather than its `active` flag, because the flag alone cannot tell a REPORTED
+// disconnect from silence and the column now says which one it is. `undefined` means
 // no state is known (no state:read authority, or the device has never reported) —
 // rendered as a neutral dash so the list stays useful without it.
-function StatusDot({ active }: { active: boolean | undefined }) {
+//
+// 🔴 The inferred rendering is byte-identical to what shipped before the split: same
+// dot, same muted text, same "Offline". Only the ASSERTED case gains new wording —
+// nothing an operator already recognises moved, and the dot is deliberately NOT split
+// as well, because a colour is not where a distinction this specific belongs. The
+// detail view is where the difference is spelled out.
+function StatusDot({ state }: { state: PresenceFacts | undefined }) {
   const { t } = useTranslation('devices');
-  if (active === undefined) return <span className="text-muted-foreground">—</span>;
+  const kind = presenceKind(state);
+  if (kind === 'unknown') return <span className="text-muted-foreground">—</span>;
+  const online = kind === 'online';
   return (
     <span className="inline-flex items-center gap-1.5 text-sm">
-      <span className={cn('inline-block size-2 rounded-full', active ? 'bg-success' : 'bg-muted-foreground/40')} />
-      <span className={active ? 'text-foreground' : 'text-muted-foreground'}>
-        {active ? t('online') : t('offline')}
+      <span className={cn('inline-block size-2 rounded-full', online ? 'bg-success' : 'bg-muted-foreground/40')} />
+      <span className={online ? 'text-foreground' : 'text-muted-foreground'}>
+        {online ? t('online') : kind === 'disconnected' ? t('disconnected') : t('offline')}
       </span>
     </span>
   );
@@ -66,7 +77,7 @@ export default function DevicesPage() {
   // Status is best-effort and loaded separately: if state:read is missing or no
   // state exists yet, this query just yields nothing and the list is unaffected.
   const { data: states } = useQuery(() => getDeviceStates(tokens), [tokens.join(',')]);
-  const activeByToken = new Map((states ?? []).map((s) => [s.deviceToken, s.active]));
+  const stateByToken = new Map((states ?? []).map((s) => [s.deviceToken, s]));
 
   return (
     <PageShell
@@ -126,7 +137,7 @@ export default function DevicesPage() {
                   {...rowLinkProps(() => navigate(`/devices/${encodeURIComponent(device.token)}`))}
                 >
                   <DataTableCell>
-                    <StatusDot active={activeByToken.get(device.token)} />
+                    <StatusDot state={stateByToken.get(device.token)} />
                   </DataTableCell>
                   <DataTableCell>
                     <span className="font-mono text-xs text-foreground">{device.token}</span>

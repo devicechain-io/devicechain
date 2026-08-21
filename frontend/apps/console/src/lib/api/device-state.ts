@@ -17,6 +17,16 @@ export type DeviceState = DeviceStatesByDeviceTokenQuery['deviceStatesByDeviceTo
 export type LatestMeasurement = LatestMeasurementsQuery['latestMeasurements'][number];
 export type LatestLocation = NonNullable<LatestLocationQuery['latestLocation']>;
 
+// 🔴 `presenceSource` is not decoration. It discriminates a REPORTED disconnect
+// (ASSERTED — a transport told us the device went away) from mere silence (INFERRED —
+// nothing has arrived inside the inactivity window). Without it every screen reads
+// `active: false` as the former, which is a claim about the DEVICE the platform cannot
+// support for an inferred row. lib/presence.ts is the one place that folds the two
+// fields into an answer; do not re-derive it from `active` alone.
+//
+// The explanation lives here rather than inside the document because the client preset
+// keys its generated lookup tables on the document's LITERAL TEXT — a comment in the
+// template is copied verbatim into three generated string keys and ships in the bundle.
 const DEVICE_STATES_BY_DEVICE_TOKEN = graphql(`
   query DeviceStatesByDeviceToken($deviceTokens: [String!]!) {
     deviceStatesByDeviceToken(deviceTokens: $deviceTokens) {
@@ -27,6 +37,7 @@ const DEVICE_STATES_BY_DEVICE_TOKEN = graphql(`
       lastDisconnectTime
       lastActivityTime
       inactivityTimeout
+      presenceSource
     }
   }
 `);

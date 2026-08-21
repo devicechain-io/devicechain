@@ -3,7 +3,7 @@
 
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Trash2, Wifi, WifiOff } from 'lucide-react';
+import { AlertTriangle, HelpCircle, Trash2, Wifi, WifiOff } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
 import { CopyToken } from '@/components/ui/copy-token';
 import { SectionPanel } from '@/components/ui/section-panel';
@@ -31,6 +31,7 @@ import { getDevice, deleteDevice } from '@/lib/api/device-management';
 import { getDeviceState, getLatestMeasurements } from '@/lib/api/device-state';
 import { listEvents } from '@/lib/api/event-management';
 import { formatTime } from '@/lib/utils';
+import { presenceKind, presenceSourceLabelKey } from '@/lib/presence';
 import { errMessage, useReload } from '@/routes/common';
 import { DeviceForm } from '@/routes/devices/DeviceForm';
 import { DeviceCommandsPanel } from '@/routes/devices/DeviceCommandsPanel';
@@ -194,20 +195,61 @@ function DeviceStatePanel({ deviceToken }: { deviceToken: string }) {
   if (error) return <ErrorState description={error} />;
   if (!state) return <EmptyState description={t('noStateRecorded')} />;
 
+  const kind = presenceKind(state);
+  const sourceKey = presenceSourceLabelKey(state.presenceSource);
+
   return (
     <div className="space-y-4">
       <div>
-        {state.active ? (
+        {kind === 'online' ? (
           <Badge variant="success" className="gap-1">
             <Wifi size={12} /> {t('online')}
           </Badge>
-        ) : (
+        ) : kind === 'disconnected' ? (
+          // A transport reported this device gone, so the confident word is earned.
           <Badge variant="outline" className="gap-1 text-muted-foreground">
-            <WifiOff size={12} /> {t('offline')}
+            <WifiOff size={12} /> {t('disconnected')}
+          </Badge>
+        ) : (
+          // Silence, not a reported death. Amber rather than muted because this is
+          // unresolved, not settled — and it keeps the shipped "Offline" wording.
+          <Badge variant="warning" className="gap-1">
+            <HelpCircle size={12} /> {t('offline')}
           </Badge>
         )}
       </div>
+      {/*
+        The quiet case, and no other. An operator who reads "Offline" is owed the one
+        sentence that says what the platform actually observed, because on an inferred
+        row it observed nothing at all.
+
+        🔴 It states the PRESENCE fact and points at the Commands tab rather than
+        predicting what will happen to a command. Whether a command is held, parked or
+        refused outright depends on the device's TRANSPORT, which this screen has no
+        vocabulary for — command-delivery decides that, and re-deriving its verdict
+        here is how the two come to disagree.
+
+        🔴 It also does not name a timeout. The inferred window is a platform-wide ten
+        minutes and is documented as not adjustable; rendering the row's own
+        inactivityTimeout beside this text would imply a per-device override the
+        product does not offer.
+      */}
+      {kind === 'quiet' && (
+        <div className="space-y-1 rounded-md border border-warning/40 bg-warning/5 p-3">
+          <p className="flex items-center gap-2 text-sm font-medium text-warning">
+            <AlertTriangle size={16} /> {t('quietPresenceTitle')}
+          </p>
+          <p className="text-sm text-muted-foreground">{t('quietPresenceBody')}</p>
+        </div>
+      )}
       <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
+        <dt className="text-muted-foreground">{t('presenceSourceLabel')}</dt>
+        {/*
+          An unrecognised source is shown verbatim rather than worded as one of the
+          two we know. presenceKind has already treated it conservatively; dressing it
+          up as "Inferred" would hide the disagreement worth seeing.
+        */}
+        <dd className="text-foreground">{sourceKey ? t(sourceKey) : state.presenceSource}</dd>
         <dt className="text-muted-foreground">{t('lastConnectLabel')}</dt>
         <dd className="text-foreground">{formatTime(state.lastConnectTime)}</dd>
         <dt className="text-muted-foreground">{t('lastActivityLabel')}</dt>
