@@ -531,7 +531,7 @@ func (rez *EventResolver) ResolveStateChangeEventPayload(ctx context.Context, de
 		return nil, fmt.Errorf("can not resolve state-change payload. invalid unresolved payload type")
 	}
 	switch payload.State {
-	case esmodel.PresenceConnected, esmodel.PresenceDisconnected:
+	case esmodel.PresenceConnected, esmodel.PresenceDisconnected, esmodel.PresenceDemoted:
 	default:
 		return nil, fmt.Errorf("invalid presence state %q in state-change event", payload.State)
 	}
@@ -546,6 +546,23 @@ func (rez *EventResolver) ResolveStateChangeEventPayload(ctx context.Context, de
 	expectedSessionId, err := parseSessionId(payload.ExpectedSessionId, "expected session id")
 	if err != nil {
 		return nil, err
+	}
+	// A demotion releases a NAMED session, and both of these refusals exist because the
+	// alternative is a silent no-op rather than an error. presence.Decide accepts a
+	// demotion only when its session equals the one the row already holds, so a
+	// session-less demotion can never match anything: it would be admitted here, travel
+	// the whole pipeline, and be dropped by the ordering guard as "stale" — indis-
+	// tinguishable from a genuinely late echo, and leaving the row exactly as wedged as
+	// before. And a compare-and-set precondition on a demotion is incoherent by
+	// construction: the demotion is ALREADY matched against the stored session, so an
+	// ExpectedSessionId either restates that or contradicts it.
+	if payload.State == esmodel.PresenceDemoted {
+		if sessionId == 0 {
+			return nil, fmt.Errorf("state-change event demotes with no session id; a demotion must name the session it releases")
+		}
+		if expectedSessionId != 0 {
+			return nil, fmt.Errorf("state-change event carries expected session id %d on a demotion; a demotion is already matched against the stored session", expectedSessionId)
+		}
 	}
 	return &model.ResolvedStateChangePayload{
 		State:             string(payload.State),

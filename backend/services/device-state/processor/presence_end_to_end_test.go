@@ -135,7 +135,10 @@ func TestARegressedSessionSurvivesTheWholeChain(t *testing.T) {
 	}
 
 	// --- 5. the projection's transition mapper (the real one, not a restatement) ---
-	pt := presenceTransitionFor(resolved)
+	pt, err := presenceTransitionFor(resolved)
+	if err != nil {
+		t.Fatalf("the resolved event could not be mapped to a presence transition: %v", err)
+	}
 	if pt == nil {
 		t.Fatal("the resolved event produced no presence transition")
 	}

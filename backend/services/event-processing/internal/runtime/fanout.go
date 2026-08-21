@@ -12,7 +12,6 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
-	"github.com/devicechain-io/dc-microservice/presence"
 )
 
 // PlanResult is the outcome of fanning one resolved event out across its applicable rules.
@@ -218,13 +217,9 @@ func (res *PlanResult) planConnectivity(seq uint64, ev *dmmodel.ResolvedEvent, o
 	if !ok {
 		return // malformed presence payload: nothing to feed (the persist/projection paths log it)
 	}
-	// C1 keeps this as the existing string compare, mechanically retyped; C3 replaces it
-	// and its twin in device-state's projection with one shared TOTAL mapper. Both halves
-	// must move together — they are the two consumers presence.Decide exists to keep in
-	// lockstep, and a string compare cannot say "this is not a connectivity claim".
-	claim := presence.ClaimDisconnected
-	if p.State == string(esmodel.PresenceConnected) {
-		claim = presence.ClaimConnected
+	claim, ok := p.Claim()
+	if !ok {
+		return // unmappable presence state: the same disposition as a malformed payload
 	}
 	edge := &core.PresenceEdge{
 		Claim:             claim,

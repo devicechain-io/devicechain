@@ -640,6 +640,62 @@ func (suite *EventResolverTestSuite) TestStateChangeSessionIdRange() {
 	assert.Error(suite.T(), err)
 }
 
+// A demotion is admitted, but only in the one shape that can actually do anything. Both
+// refusals below exist because the alternative is a SILENT no-op: presence.Decide accepts a
+// demotion only against the session the row already holds, so a session-less one is dropped
+// downstream as "stale" — indistinguishable from a late echo, and leaving the row exactly as
+// wedged as it was. Failing here makes it a producer defect instead of a mystery.
+func (suite *EventResolverTestSuite) TestStateChangeDemotionShape() {
+	rez := suite.resolver(config.AuthModeOptional)
+	dev := deviceWithToken("TEST-123")
+	sc := func(session, expected string) *esmodel.UnresolvedEvent {
+		return &esmodel.UnresolvedEvent{
+			EventType: esmodel.StateChange,
+			Payload: &esmodel.UnresolvedStateChangePayload{
+				State: esmodel.PresenceDemoted, SessionId: session, ExpectedSessionId: expected,
+			},
+		}
+	}
+
+	// A demotion naming the session it releases resolves.
+	out, err := rez.ResolveStateChangeEventPayload(context.Background(), dev, nil, sc("42", ""))
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), "DEMOTED", out.(*dmodel.ResolvedStateChangePayload).State)
+	assert.Equal(suite.T(), uint64(42), out.(*dmodel.ResolvedStateChangePayload).SessionId)
+
+	// A demotion that names no session can never match a stored one.
+	_, err = rez.ResolveStateChangeEventPayload(context.Background(), dev, nil, sc("", ""))
+	assert.Error(suite.T(), err)
+
+	// A compare-and-set precondition on a demotion is incoherent: the demotion is already
+	// matched against the stored session.
+	_, err = rez.ResolveStateChangeEventPayload(context.Background(), dev, nil, sc("42", "41"))
+	assert.Error(suite.T(), err)
+
+	// THE COUNTERWEIGHT. Neither refusal may leak onto a connectivity claim: a producer that
+	// sends no session id is explicitly supported there (parseSessionId documents empty as
+	// absent), and a compare-and-set is the whole point of the reconnect-repair path.
+	conn := func(session, expected string) *esmodel.UnresolvedEvent {
+		return &esmodel.UnresolvedEvent{
+			EventType: esmodel.StateChange,
+			Payload: &esmodel.UnresolvedStateChangePayload{
+				State: esmodel.PresenceConnected, SessionId: session, ExpectedSessionId: expected,
+			},
+		}
+	}
+	_, err = rez.ResolveStateChangeEventPayload(context.Background(), dev, nil, conn("", ""))
+	assert.NoError(suite.T(), err)
+	_, err = rez.ResolveStateChangeEventPayload(context.Background(), dev, nil, conn("42", "41"))
+	assert.NoError(suite.T(), err)
+
+	// And the enum stays closed: a state nobody named is still a deterministic failure.
+	_, err = rez.ResolveStateChangeEventPayload(context.Background(), dev, nil, &esmodel.UnresolvedEvent{
+		EventType: esmodel.StateChange,
+		Payload:   &esmodel.UnresolvedStateChangePayload{State: esmodel.PresenceState("RETIRED"), SessionId: "42"},
+	})
+	assert.Error(suite.T(), err)
+}
+
 func TestEventResolverTestSuite(t *testing.T) {
 	suite.Run(t, new(EventResolverTestSuite))
 }
