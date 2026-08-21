@@ -168,6 +168,13 @@ query {
 }
 ```
 
+Habilitar las herramientas de desarrollo sirve además un **explorador GraphiQL** en `/graphiql` en
+cada servicio — a través del ingress eso es `/api/<área>/graphiql`, y en un port-forward directo
+contra el pod es `/graphiql`. Antes de la `v0.12.0` la página cargaba y luego fallaba en cada
+consulta que enviaba, porque apuntaba a una ruta que ningún servicio sirve; ahora envía al punto
+final por el que se llegó a ella, así que funciona en las tres rutas (ingress, port-forward y el
+proxy de desarrollo de la consola).
+
 ## Convenciones
 
 - Las entidades se direccionan mediante un **token** legible por humanos, además de un id interno.

@@ -9,12 +9,12 @@ AI assistants — Claude Desktop and Claude Code, Cursor, VS Code — can operat
 DeviceChain's MCP server is built around a single principle: **an AI agent can never do more than the person who authorized it.** Rather than a broad, over-permissioned gateway, it is a thin, curated, read-only layer over the platform's existing GraphQL API, carrying the signed-in user's own tenant-scoped token.
 
 :::note Status
-**Available today (read-only):** an opt-in `mcp` service exposing ten curated read tools, fronted by a full OAuth 2.1 authorization server on `user-management` (authorization-code flow with PKCE, RFC 8414 metadata, refresh-token rotation, RFC 8707 audience binding). **Planned:** write tools (send command, acknowledge/clear alarm) behind an elevated scope and a mandatory human-in-the-loop confirmation; and dynamic client registration (RFC 7591) — today clients are registered by an administrator. This repository is the source of truth for what currently builds.
+**Available today (read-only):** an opt-in `mcp` service exposing eleven curated read tools, fronted by a full OAuth 2.1 authorization server on `user-management` (authorization-code flow with PKCE, RFC 8414 metadata, refresh-token rotation, RFC 8707 audience binding). **Planned:** write tools (send command, acknowledge/clear alarm) behind an elevated scope and a mandatory human-in-the-loop confirmation; and dynamic client registration (RFC 7591) — today clients are registered by an administrator. This repository is the source of truth for what currently builds.
 :::
 
 ## What an assistant can do
 
-The server exposes ten **read** tools. Each one is a query against the same GraphQL API the console uses, run under the caller's token — so a tool returns exactly what that user, in that tenant, is allowed to see, and nothing more.
+The server exposes eleven **read** tools. Each one is a query against the same GraphQL API the console uses, run under the caller's token — so a tool returns exactly what that user, in that tenant, is allowed to see, and nothing more.
 
 **Devices**
 
@@ -28,6 +28,10 @@ The server exposes ten **read** tools. Each one is a query against the same Grap
 - `get_latest_measurements` — the most recent value per measurement.
 - `query_measurements` — raw time-series readings over a time range.
 - `aggregate_measurements` — bucketed aggregates (min/max/avg and the like) over a range.
+
+**Position**
+
+- `query_locations` — a device's reported positions over an optional time window, paged and bounded. Results are **newest first**, so the first one is the device's last known position; asking for a single result with no window answers "where is it now". Each position carries latitude and longitude and, when the receiver reported them, elevation, accuracy, speed and heading — a field that is absent was not reported, and means unknown rather than zero. Reading positions needs the separate **location** permission, which is deliberately not part of the read-only viewer baseline, so this one tool can be refused for a caller whose other read tools all work.
 
 **Alarms**
 

@@ -9,12 +9,12 @@ Los asistentes de IA — Claude Desktop y Claude Code, Cursor, VS Code — puede
 El servidor MCP de DeviceChain se construye alrededor de un único principio: **un agente de IA nunca puede hacer más que la persona que lo autorizó.** En lugar de una puerta de enlace amplia y sobre-permisionada, es una capa delgada, curada y de solo lectura sobre la API GraphQL existente de la plataforma, que porta el propio token con alcance de inquilino del usuario autenticado.
 
 :::note Estado
-**Disponible hoy (de solo lectura):** un servicio `mcp` opcional que expone diez herramientas de lectura curadas, respaldado por un servidor de autorización OAuth 2.1 completo en `user-management` (flujo de código de autorización con PKCE, metadatos RFC 8414, rotación de tokens de actualización, vinculación de audiencia RFC 8707). **Planeado:** herramientas de escritura (enviar comando, reconocer/limpiar alarma) detrás de un alcance elevado y una confirmación obligatoria con humano en el bucle; y registro dinámico de clientes (RFC 7591) — hoy los clientes son registrados por un administrador. Este repositorio es la fuente de verdad de lo que actualmente está implementado.
+**Disponible hoy (de solo lectura):** un servicio `mcp` opcional que expone once herramientas de lectura curadas, respaldado por un servidor de autorización OAuth 2.1 completo en `user-management` (flujo de código de autorización con PKCE, metadatos RFC 8414, rotación de tokens de actualización, vinculación de audiencia RFC 8707). **Planeado:** herramientas de escritura (enviar comando, reconocer/limpiar alarma) detrás de un alcance elevado y una confirmación obligatoria con humano en el bucle; y registro dinámico de clientes (RFC 7591) — hoy los clientes son registrados por un administrador. Este repositorio es la fuente de verdad de lo que actualmente está implementado.
 :::
 
 ## Qué puede hacer un asistente
 
-El servidor expone diez herramientas de **lectura**. Cada una es una consulta contra la misma API GraphQL que usa la consola, ejecutada bajo el token del solicitante — de modo que una herramienta devuelve exactamente lo que ese usuario, en ese inquilino, tiene permitido ver, y nada más.
+El servidor expone once herramientas de **lectura**. Cada una es una consulta contra la misma API GraphQL que usa la consola, ejecutada bajo el token del solicitante — de modo que una herramienta devuelve exactamente lo que ese usuario, en ese inquilino, tiene permitido ver, y nada más.
 
 **Dispositivos**
 
@@ -28,6 +28,10 @@ El servidor expone diez herramientas de **lectura**. Cada una es una consulta co
 - `get_latest_measurements` — el valor más reciente por medición.
 - `query_measurements` — lecturas de series temporales sin procesar en un rango de tiempo.
 - `aggregate_measurements` — agregados por intervalos (min/max/promedio y similares) en un rango.
+
+**Posición**
+
+- `query_locations` — las posiciones reportadas de un dispositivo en una ventana de tiempo opcional, paginadas y acotadas. Los resultados vienen **de más reciente a más antiguo**, así que el primero es la última posición conocida del dispositivo; pedir un único resultado sin ventana responde «¿dónde está ahora?». Cada posición lleva latitud y longitud y, cuando el receptor las reportó, elevación, precisión, velocidad y rumbo — un campo ausente no se reportó, y significa desconocido, nunca cero. Leer posiciones requiere el permiso de **ubicación** aparte, que deliberadamente no forma parte de la base de solo lectura de un visor, así que esta herramienta en concreto puede rechazarse para un solicitante al que el resto de herramientas de lectura le funcionan.
 
 **Alarmas**
 

@@ -385,24 +385,69 @@ posiciones de dispositivos ahora requieren el permiso `location:read` en lugar d
 una cuenta que podía leer el historial de posiciones en la `v0.11.0` no puede en la
 `v0.12.0`. Concédalo explícitamente a los roles que lo necesiten.
 
-Si ha registrado un cliente OAuth para acceso de IA, necesita la misma atención: leer
-posiciones ahora requiere un alcance `location` aparte, junto a `read-only`, así que añádalo
-a los alcances registrados del cliente y vuelva a autorizarlo. Hasta que lo haga, la
-herramienta `query_locations` de ese cliente se rechaza mientras sus demás herramientas de
-lectura siguen funcionando. La separación es deliberada: es lo que permite autorizar a un
-asistente a observar una flota mientras se le oculta dónde ha estado.
+Ese mismo permiso pasa a controlar además la **vista previa de una regla que comprueba la
+contención en una geocerca**. Una vista previa de ese tipo devuelve, por dispositivo, cuándo
+entró en una región y cuándo salió — una lectura de posición, se pida como se pida — así que
+`previewRule` requiere `location:read` además del `device:read` que toma toda vista previa. A
+un autor de reglas que en la `v0.11.0` podía previsualizar cualquier borrador se le rechazan
+los borradores con contención hasta que se le conceda ese permiso. Las vistas previas que no
+comprueban contención no se ven afectadas.
+
+**Y compruebe quién lo lee a través de un asistente de IA.** El servidor MCP incorporó una
+herramienta `query_locations` que devuelve las posiciones reportadas de un dispositivo, y llegar
+a ella exige **dos** concesiones que se mantienen separadas de forma deliberada. La autorización
+del agente debe incluir un alcance OAuth nuevo, `location`, *y* la persona que lo autorizó debe
+tener un rol que conceda `location:read`. Ninguna de las dos basta por sí sola: el alcance es un
+techo sobre lo que un token puede portar, no una concesión de nada.
+
+Un agente autorizado solo con `read-only` no puede leer posiciones, por mucho que tenga su
+usuario. Ese es justamente el sentido de un alcance aparte en lugar de un `read-only` más
+amplio: la pantalla de consentimiento le muestra a la persona la cadena de alcance en crudo, así
+que meter la posición dentro de `read-only` habría significado una autorización idéntica antes y
+después que ahora incluye dónde han estado los dispositivos — y, con bastante frecuencia, dónde
+han estado las personas que los llevan. Mantenerlo separado hace que conceder observabilidad a
+un agente no sea el mismo acto que concederle el historial de ubicaciones, y permite a un
+usuario permitir lo uno reteniendo lo otro.
+
+Un cliente MCP que ya tenga registrado seguirá funcionando y seguirá recibiendo un rechazo en
+las posiciones hasta que su petición de autorización pida `read-only location` y el usuario lo
+vuelva a autorizar. La base del visor no cambia: `location:read` sigue sin ser algo que un
+miembro reciba de forma predeterminada. Vea [Acceso de IA (MCP)](../concepts/mcp.md).
 
 **4. Busque estas operaciones GraphQL** en cualquier cosa que haya escrito contra la API:
 
 | Operación | Qué cambió |
 | --- | --- |
 | `createCommand` | Devuelve `CreateCommandResult!` en lugar de `Command!`. El comando está ahora bajo un campo `command`, junto a un campo `rejection` que explica un rechazo. |
-| `updateDeviceType` | Su argumento `request` es ahora un `DeviceTypeUpdateRequest!` obligatorio, y con él cambió la semántica: esto es una **actualización parcial**. Un campo omitido ahora CONSERVA su valor almacenado en lugar de borrarlo, y un null explícito lo limpia. Así que un cliente que limpiaba un campo dejándolo fuera ahora tiene que enviarle null — y, en el otro sentido, renombrar un tipo ya no desvincula el perfil a través del cual sus dispositivos resuelven sus capacidades. `token` también ha desaparecido de la entrada, así que una actualización ya no puede mover el token de un tipo. Los campos no reconocidos dentro de la solicitud se rechazan en lugar de ignorarse. |
+| `updateDeviceType` | Su argumento `request` es ahora un `DeviceTypeUpdateRequest!` obligatorio, y con él cambió la semántica: esto es una **actualización parcial**. Un campo omitido ahora CONSERVA su valor almacenado en lugar de borrarlo, y un null explícito lo limpia. Así que un cliente que limpiaba un campo dejándolo fuera ahora tiene que enviarle null — y, en el otro sentido, renombrar un tipo ya no desvincula el perfil a través del cual sus dispositivos resuelven sus capacidades. Un cliente escrito contra el comportamiento anterior de registro completo — uno que lee el tipo y devuelve todos los campos — sigue funcionando y sigue escribiendo lo que envía. `token` también ha desaparecido de la entrada, así que una actualización ya no puede mover el token de un tipo. Los campos no reconocidos dentro de la solicitud se rechazan en lugar de ignorarse. |
 | `assertedActiveDeviceStates` | Sustituida por `assertedDeviceStates`, que toma `activeOnly` y pagina mediante `afterId` y `pageSize`. |
 | `deviceCredentials`, `deviceCredentialsById`, `deviceCredentialsByToken` | Ahora requieren `device:write`. Para un tipo de credencial el identificador legible *es* el token portador, así que `device:read` — que tiene todo miembro habilitado — bastaba para abrir una sesión en el broker como cualquier dispositivo del inquilino. |
 | `locationEvents` | Ahora requiere `location:read`, como arriba. |
 | `geoFenceSetSnapshot`, `currentGeoFenceSet` | Su campo `fences` ahora está paginado: toma un argumento `pagination` obligatorio y devuelve `results` junto a un registro `pagination`, en lugar de una lista simple. Lea páginas hasta que `pageEnd` alcance `totalRecords`. Un conjunto de geocercas en los límites documentados es mayor de lo que puede transportar una sola respuesta, así que la forma de lista no podía devolverse en absoluto para los inquilinos con más probabilidad de pedirla. |
 | Cualquier consulta `...ById(ids: [])` | Una lista de ids vacía ahora no devuelve nada. Antes devolvía la tabla entera, sin paginar. |
+
+**5. Deje de rellenar los ids con ceros a la izquierda.** Un argumento `id` se interpreta
+ahora como un número decimal y nada más. Antes se interpretaba deduciendo la base del propio
+literal, así que un `"017"` rellenado con ceros — exactamente lo que envía un cliente que
+formatea los ids a un ancho fijo — se leía como **octal** y resolvía a la fila 15: la entidad
+equivocada, devuelta con éxito y sin ningún error que lo delatara. `"0x2"`, `"0b101"` y `"1_0"`
+se aceptaban de la misma manera. Las cuatro formas se rechazan ahora de plano. Envíe `"17"`.
+
+**6. Cuente con que todos los pods de servicio se reinicien, una vez.** El documento de
+configuración de instancia que se entrega a los servicios tiene ahora eliminada la coordenada
+de cualquier área funcional que este despliegue no habilitó. En un despliegue sin
+`ai-inference` — es decir, todos los perfiles salvo `full` — eso cambia los bytes del documento
+y por tanto la anotación de suma de verificación que reinicia los pods, así que el
+`helm upgrade` reinicia todos los servicios y no solo aquellos cuya imagen se movió. Es una
+actualización progresiva normal y no requiere nada de usted; figura aquí para que un reinicio
+completo no se lea como un síntoma.
+
+El motivo de eliminar la coordenada es que un nombre de host de un servicio que nadie desplegó
+era peor que ningún nombre de host: la superficie de autoría de reglas construía su puerta de
+lenguaje natural «Describe» contra él, fallaba al resolver el nombre e informaba de que el
+inquilino no había consentido el enrutamiento externo de IA — culpando a un ajuste del
+inquilino por un servicio que el operador nunca instaló. Ahora dice que la función no está
+habilitada en este despliegue, que es la verdad.
 
 #### Cambios sin cambio de firma
 
@@ -488,6 +533,79 @@ siquiera — algo que nada reportaba antes, porque desde fuera una flota en sile
 nunca arrancó son idénticas. Vea [Devolver un dispositivo a presencia
 inferida](./edge-services.md#demoting-a-device).
 
+**Una lectura reentregada ya no duplica sus filas.** La identidad de un evento de medición se
+deriva de un resumen de su propio contenido, y esa identidad es lo que hace inofensiva una
+reentrega. Para una lectura que lleva más de una métrica sobre un transporte JSON, el resumen se
+calculaba sobre un orden que inventaba la plataforma y no sobre el que envió el dispositivo, así
+que la misma lectura resolvía a una identidad distinta aproximadamente cuatro de cada cinco
+veces. Cuando la plataforma reentregaba uno de esos mensajes — cosa que hace de forma rutinaria,
+ante una publicación sin confirmar o un fallo de escritura transitorio — el duplicado no se
+reconocía: las filas de medición se escribían una segunda vez y los resúmenes horarios las
+contaban dos veces. Las lecturas de una sola métrica, y las que llegan por Sparkplug o LwM2M,
+nunca se vieron afectadas. La corrección es solo hacia adelante: los duplicados ya escritos antes
+de la actualización se quedan donde están, y sus resúmenes siguen inflados. Si tiene gráficas que
+se veían demasiado altas en dispositivos de varias métricas, este es el motivo, y a partir de la
+actualización se leerán correctamente.
+
+**Toda lista paginada devuelve ahora las filas en un orden declarado.** De los 37 puntos finales
+de lista de la plataforma, 31 no nombraban ningún orden, lo que deja a una lectura paginada libre
+de entregar la misma fila en dos páginas y no mostrar nunca otra — un defecto real que ya se
+había reportado dos veces como una pantalla que se reordenaba bajo un operador. Cada lista ordena
+ahora por una clave total y sin ambigüedad. Si tiene código que dependía del orden incidental que
+una consulta concreta devolvía por casualidad, verá ahora uno estable, que puede no ser el mismo.
+Un orden se eligió deliberadamente en lugar de mecánicamente: las credenciales de dispositivo se
+listan con la de mayor margen restante primero, porque una lectura sin acotar de ellas alimenta
+la reutilización de credenciales, y ordenar por id habría devuelto la credencial más próxima a
+caducar.
+
+**Un comando respondido en texto plano registra ahora su respuesta.** Un dispositivo que
+respondía a un comando con algo que no es JSON — `acknowledged`, una palabra de estado suelta —
+hacía fallar la escritura con un error de tipo de la base de datos y dejaba el comando en `SENT`,
+reintentando la misma escritura condenada una vez por minuto durante toda la vida de la fila. El
+comando acababa caducando por tiempo contra un dispositivo que lo había respondido
+correctamente. Una respuesta así se almacena ahora, sin pérdida, como una cadena JSON. Los
+valores que suministra un **cliente de la API** no cambian: esos deben seguir siendo JSON válido,
+porque a un cliente que envía JSON mal formado hay que decírselo.
+
+**Los comandos a dispositivos Sparkplug fallan ahora de inmediato en lugar de perderse.** La
+plataforma no tiene ruta de comandos hacia un dispositivo Sparkplug — esos nodos viven en tu
+propia infraestructura MQTT y nada tiende un puente entre ambas — y la comprobación que debía
+rechazar uno de esos comandos se comparaba contra un valor que ningún dispositivo lleva jamás,
+así que no coincidía con nada y todos esos comandos se aceptaban y luego se iban en silencio a
+ninguna parte. Ahora se registran `FAILED` de inmediato con ese motivo, y se cuentan bajo
+`command_delivery_undeliverable_total`. Espere que los comandos que antes se quedaban hasta su
+TTL y registraban `TIMEOUT` aparezcan ahora como fallos inmediatos. Vea
+[Comandos](../concepts/commands.md).
+
+**Un comando cuyo rastro perdió la plataforma se rearma en lugar de culpar al dispositivo.** Un
+comando podía llegar a `SENT` y luego no ser alcanzable por nada — el pod que lo publicó muere
+antes de registrar el desenlace — y `SENT` no tenía más salida que el TTL, que registraba
+`TIMEOUT` contra un dispositivo al que nunca se le envió nada. Una pasada en segundo plano
+encuentra ahora esos casos y los rearma a `PARKED`, de modo que se entregan en el siguiente
+despertar del dispositivo. `command_delivery_stranded_recovered_total` lleva una etiqueta
+`{disposition}` que dice dónde acabó cada uno. **Esto aplica solo a dispositivos LwM2M**: en MQTT
+plano, un comando que parece no haber llegado a nada no se distingue de uno que llegó y cuya
+respuesta se perdió, así que ahí el comportamiento no cambia y
+`command_delivery_stranded_skipped_total{reason="transport"}` mostrará un ritmo constante que no
+es un fallo. Vea [cuando la plataforma pierde el rastro de un
+comando](../concepts/commands.md#stranded-commands).
+
+**Una acción de regla que la plataforma nunca podrá entregar se descarta en lugar de
+reintentarse.** Cuando una acción REACT se rechaza por un motivo que ningún reintento puede
+cambiar — un `sendCommand` dirigido a un dispositivo que ya no existe, o a un comando fuera del
+vocabulario publicado de ese dispositivo — antes se reintentaba hasta el límite de reentregas y
+luego se contaba como envenenada, lo que ponía un error de autoría en el mismo estante que un
+fallo de infraestructura. Ahora se descarta al primer rechazo de ese tipo y se cuenta bajo
+`react_actions_permanently_rejected_total`, etiquetada por tipo de acción. Un ritmo sostenido en
+ese contador significa que una regla apunta a algo que sus dispositivos no pueden aceptar; el
+contador de envenenadas que antes inflaba significa ahora lo que dice.
+
+**Una respuesta truncada entre servicios se cuenta.** Los servicios leen las respuestas de los
+demás hasta un tope fijo de 1 MiB, y una respuesta mayor se cortaba en silencio. Ahora la cuenta
+`devicechain_svcclient_responses_truncated_total`, etiquetada por par. La lectura debería ser
+plana en cero; una distinta de cero significa que algún servicio está actuando sobre una
+respuesta parcial, algo que conviene saber antes de que el síntoma llegue a una pantalla.
+
 #### Entradas que antes se aceptaban y ahora no
 
 - Una política de notificación que lleve `deviceTypeToken`. Acotar una política a un tipo de
@@ -497,6 +615,61 @@ inferida](./edge-services.md#demoting-a-device).
   ninguna alarma.
 - Un `occurredTime` de `0001-01-01T00:00:00Z`. Es una marca de tiempo válida, y la
   plataforma la reserva para significar que no se informó ninguna hora.
+- Un encolado que llevaría a un inquilino por encima de su **techo de comandos retenidos**. Los
+  comandos retenidos para un dispositivo ausente se acumulan sin freno natural — la acumulación
+  de una flota dormida puede quedarse días — y antes nada la acotaba. El límite se resuelve desde
+  la anulación propia del inquilino, si no la de su nivel, si no un valor predeterminado de
+  plataforma de 10 000, y no hay ningún valor, en ningún nivel, que signifique ilimitado. El
+  rechazo lleva el código `HELD_CEILING_EXCEEDED` y es el único temporal que produce la puerta de
+  encolado: se libera a medida que esos dispositivos vuelven. Un cliente que trate todo rechazo
+  como permanente debería tratarlo como caso aparte. Vea [cuánta acumulación puede retener un
+  inquilino](../concepts/commands.md#held-command-ceiling).
+- Un encolado que llevaría a un inquilino por encima de la parte de ese techo **reservada para la
+  entrega**. Una parte del límite — el 20 % de forma predeterminada — se guarda para la entrega de
+  comandos de la propia plataforma, de modo que una sola escritura de flota no pueda consumirlo
+  todo y dejar rechazado cada `sendCommand` automatizado de ese inquilino hasta que la acumulación
+  drene. Todo lo que emite comandos en su nombre queda acotado por el resto: la consola, los SDK,
+  `dcctl` y sus propias integraciones por igual. La consecuencia práctica es que un lote grande
+  que antes se habría admitido entero puede ahora rechazarse en parte; cuando el lote pudo
+  desplegarse parcialmente, su registro dice qué dispositivos no cupieron. Vea [una parte del techo
+  está reservada para la entrega](../concepts/commands.md#delivery-machinery-reserve).
+
+#### Arranque inicial y la CLI
+
+Estos llegan a una instancia a través de `dcctl bootstrap` y de la aplicación de la
+infraestructura, no de `helm upgrade`, así que ninguno se materializa durante la actualización
+descrita arriba. Figuran aquí porque cada uno es un cambio en lo que sale mal.
+
+**Un cambio en la configuración del bróker reinicia ahora el bróker.** `nats-server` no puede
+recargar en caliente su bloque de callout de autorización ni sus límites de JetStream, y su
+negativa es total: abandona la recarga entera, incluido todo cambio no relacionado que viajara
+en la misma aplicación. Visto desde fuera eso era la peor clase de nada: la aplicación informaba
+éxito, el ConfigMap mostraba los valores nuevos, y el bróker en ejecución seguía con la
+configuración con la que arrancó, con la única evidencia en una línea dentro del propio registro
+del bróker. Los servicios fallaban entonces al autenticarse contra un ConfigMap que demostraba
+que sus credenciales eran correctas. El StatefulSet del bróker lleva ahora en su plantilla de pod
+un hash de su configuración renderizada, de modo que el servidor siempre arranca con el archivo
+que se le dio. El coste es que los cambios de configuración del bróker reinician ahora esos pods,
+donde antes solo lo hacía un cambio de chart o de imagen: presupueste unos 50–70 segundos por
+pod, lo que en un bróker de un solo servidor es una interrupción total breve y en tres es un
+reinicio continuo.
+
+**Las versiones de los charts de terceros están fijadas.** `ingress-nginx` y `cert-manager` se
+instalaban con lo último que hubiera publicado su repositorio, lo que convertía al repositorio de
+charts en una dependencia de la *planificación* además de la aplicación: cuando su host de
+artefactos devolvió un 503, el plan falló con un error que no nombraba ni el chart ni la red, y
+costó dos arranques fallidos hasta dar con la causa. Quedan fijados en `4.15.1` y `v1.21.1`
+respectivamente — las versiones que ejecuta el clúster con el que se hicieron las pruebas. Si
+contaba con recoger una más nueva automáticamente, ahora la actualiza deliberadamente.
+
+**Un `dcctl` compilado por usted tiene ahora una etiqueta de imagen predeterminada utilizable.**
+`make -C backend/cli build` producía un binario cuya etiqueta de imagen predeterminada salía del
+archivo `VERSION` del repositorio — un valor que ninguna versión establece y bajo el que nunca se
+publicó ninguna imagen. Todas las cargas de trabajo acababan en `ImagePullBackOff`, varios minutos
+dentro de un arranque que había informado progreso sano todo el camino. Un `dcctl` compilado
+localmente usa ahora `dev` de forma predeterminada, que el guardián de versiones no publicadas
+reconoce y rechaza pronto con un mensaje legible, en vez de tarde con uno que no lo es. Un `dcctl`
+publicado nunca estuvo afectado: su etiqueta viene de la propia versión.
 
 #### Configuración
 
@@ -512,6 +685,16 @@ predeterminado de 300 segundos.
 
 No se eliminó nada de los valores del chart, así que un archivo de valores `v0.11.0` se
 aplica sin cambios.
+
+**Un servicio que rechaza su propia configuración sale ahora con un estado distinto de cero.**
+Antes registraba «refusing to start» y terminaba con estado 0, así que el pod informaba
+`Completed` — exactamente lo que informa un apagado ordenado, e indistinguible de uno a simple
+vista. Esos pods entrarán ahora en `CrashLoopBackOff`. No ha cambiado nada sobre qué
+configuraciones se rechazan; lo que cambió es que el rechazo se ve ahora en `kubectl get pods`,
+en un contador de reinicios y para cualquier cosa que alerte sobre ellos. Un servicio que no
+consigue apagarse limpiamente se informa igual, por el mismo motivo. Si tiene una alerta que
+trata un pod de servicio en `Completed` como benigno, esta es la versión en la que el fallo
+subyacente empieza a llegarle.
 
 ### La transición única a la ingesta duradera
 

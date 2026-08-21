@@ -20,14 +20,14 @@
     "`breaking` drives an automatic warning on the website and in the docs. Set it true when an",
     "upgrade is not a plain `helm upgrade`, and say so in the first highlight."
   ],
-  "version": "v0.11.0",
-  "breaking": false,
+  "version": "v0.12.0",
+  "breaking": true,
   "highlights": [
-    "Upgradeable in place: the first release since v0.8.5 reachable with helm upgrade, no recreate needed.",
-    "Deleting a tenant now erases its data — relational, telemetry, broker, object and key-value stores, and the running rule engine.",
-    "A deleted tenant's token is held before reuse, so a new tenant cannot inherit its predecessor's data.",
-    "The console shows deletion progress and history, with a per-store record of what was erased.",
-    "A device can no longer take over another tenant's MQTT session by reusing its client id.",
-    "The console refuses to publish a dashboard whose widgets are misconfigured."
+    "This upgrade is not a plain helm upgrade \u2014 read the upgrade notes first. Devices must move to the per-device command-response topic, two configuration keys moved between areas, and a reading is now stored at its own sample time rather than the moment it arrived.",
+    "Geofences: a detection rule can ask whether a device is inside a named fence, answered against the fences that were live when the event happened, so a replay agrees with the original.",
+    "Fleet commands: send one command to a device group, watch it land device by device, and cancel it mid-flight.",
+    "A command to an absent device is now held until the device returns instead of being published into the void.",
+    "A presence source that stops reporting hands its devices back instead of leaving them frozen offline.",
+    "Buffered uploads keep their own timestamps, so a device that stores and forwards no longer lands an hour of history at a single instant."
   ]
 }
