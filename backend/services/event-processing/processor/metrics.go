@@ -80,6 +80,21 @@ type detectMetrics struct {
 	// false edge under the stable contributor id. Bounded cardinality (no labels).
 	supersededFrontierDropped prometheus.Counter
 
+	// fenceSetPointerUnresolved counts geofence-set facts that arrived WITHOUT their fences —
+	// device-management publishes the version alone when the frozen set is too large for one
+	// broker message — and that this service then could not resolve from the archive. Bounded
+	// cardinality (no labels; the tenant is in the accompanying error log).
+	//
+	// It is separate from the fan-out eval-error counter on purpose, and the two are alerted on
+	// TOGETHER rather than instead of each other — the chart ships DetectFanoutEvalErrors on that
+	// one and DetectFenceSetPointerUnresolved on this one. A rising eval-error rate is the
+	// SYMPTOM every geofence fault shares and cannot say which fault it is, so it is the alert
+	// that tells an operator something is wrong; this series names one specific cause, and is
+	// what turns "rules are erroring somewhere" into "a tenant's fence set outgrew the wire and
+	// the archive read is failing too". A non-zero value here means that tenant's containment is
+	// dead until the next reconcile sweep at best.
+	fenceSetPointerUnresolved prometheus.Counter
+
 	// Slice-6c per-tenant state-budget gauges (ADR-023 amendment). Bounded cardinality — NO
 	// per-tenant labels (the G.3 DoS lesson): liveKeys/retainedSamples are AGGREGATE totals across
 	// all tenants, and the three "over budget" gauges are COUNTS of tenants breaching each ceiling,
@@ -125,6 +140,7 @@ func newDetectMetrics(ms *core.Microservice) *detectMetrics {
 
 		staleAbsenceDropped:       ms.NewCounter("detect_stale_absence_dropped_total", "Absence detections dropped at publish because the device left the rule's scope (deleted/re-typed/version superseded).", nil),
 		supersededFrontierDropped: ms.NewCounter("detect_superseded_frontier_dropped_total", "Non-absence frontier-triggered detections (Duration/Session/Aggregate) dropped at publish because their profile version is superseded (ADR-057 D6).", nil),
+		fenceSetPointerUnresolved: ms.NewCounter("detect_fence_set_pointer_unresolved_total", "Geofence-set facts that arrived carrying only their version (the frozen set was too large for one broker message) and could not then be read from device-management's archive. Each one leaves a tenant's containment reporting unresolvable at that version until the next reconcile sweep.", nil),
 
 		liveKeys:                 ms.NewGauge("detect_live_keys", "Total live keyed window/timer state entries across all tenants (the per-tenant state-budget aggregate).", nil),
 		tenantsOverRuleBudget:    ms.NewGauge("detect_tenants_over_rule_budget", "Tenants currently exceeding the per-tenant rule-count budget (ADR-023).", nil),
@@ -160,6 +176,15 @@ func (m *detectMetrics) recordStaleAbsenceDropped() {
 		return
 	}
 	m.staleAbsenceDropped.Inc()
+}
+
+// recordFenceSetPointerUnresolved records one fences-omitted geofence-set fact whose fences could
+// not be read back from device-management's frozen archive. Nil-safe.
+func (m *detectMetrics) recordFenceSetPointerUnresolved() {
+	if m == nil {
+		return
+	}
+	m.fenceSetPointerUnresolved.Inc()
 }
 
 // recordSupersededFrontierDropped records one non-absence frontier detection dropped at publish

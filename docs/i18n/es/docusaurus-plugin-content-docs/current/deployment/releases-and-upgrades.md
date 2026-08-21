@@ -401,6 +401,7 @@ asistente a observar una flota mientras se le oculta dónde ha estado.
 | `assertedActiveDeviceStates` | Sustituida por `assertedDeviceStates`, que toma `activeOnly` y pagina mediante `afterId` y `pageSize`. |
 | `deviceCredentials`, `deviceCredentialsById`, `deviceCredentialsByToken` | Ahora requieren `device:write`. Para un tipo de credencial el identificador legible *es* el token portador, así que `device:read` — que tiene todo miembro habilitado — bastaba para abrir una sesión en el broker como cualquier dispositivo del inquilino. |
 | `locationEvents` | Ahora requiere `location:read`, como arriba. |
+| `geoFenceSetSnapshot`, `currentGeoFenceSet` | Su campo `fences` ahora está paginado: toma un argumento `pagination` obligatorio y devuelve `results` junto a un registro `pagination`, en lugar de una lista simple. Lea páginas hasta que `pageEnd` alcance `totalRecords`. Un conjunto de geocercas en los límites documentados es mayor de lo que puede transportar una sola respuesta, así que la forma de lista no podía devolverse en absoluto para los inquilinos con más probabilidad de pedirla. |
 | Cualquier consulta `...ById(ids: [])` | Una lista de ids vacía ahora no devuelve nada. Antes devolvía la tabla entera, sin paginar. |
 
 #### Cambios sin cambio de firma
@@ -427,6 +428,28 @@ regla en cualquier flota que suba por lotes, y consulte `detect_late_samples_tot
 cuánto se está descartando. Las lecturas se almacenan y grafican exactamente igual que antes;
 esto afecta solo a la detección. Véase [ejecutar el motor de
 detección](./detection-engine.md#timing-what-when-means).
+
+**La geometría de una geocerca se valida de forma más estricta y se almacena tal como queda
+escrita, no tal como se envía.** Tres cambios, todos en el momento de crear o actualizar una
+geocerca:
+
+- Una posición debe ser exactamente `[longitud, latitud]`. Antes se aceptaba e ignoraba una
+  tercera ordenada o posteriores.
+- El documento de geometría solo puede llevar las claves que la plataforma lee — `kind` y
+  `geometry` en el nivel superior, `type` y `coordinates` dentro. Cualquier otra clave antes
+  se almacenaba y nunca se consultaba.
+- Las coordenadas se reescriben en notación decimal simple antes de almacenarse. Una
+  coordenada enviada como `1e-300` se devuelve como su expansión decimal completa. No se
+  redondea ningún valor y ninguna geocerca cambia de forma, pero un documento leído de vuelta
+  no es idéntico byte a byte al enviado.
+
+Una geocerca también se rechaza ahora si su forma almacenada supera 32 KiB. Eso es
+aproximadamente el doble del tamaño de una geocerca que use todos los vértices que la
+plataforma permite, así que la geometría ordinaria no se ve afectada; lo que se rechaza es un
+documento cuyo tamaño proviene de la notación y no de la forma. La consola siempre ha escrito
+las posiciones en la forma aceptada, así que las geocercas dibujadas en la consola no se ven
+afectadas. Las geocercas ya almacenadas **no** se reescriben y siguen funcionando, pero una
+que incumpla alguna regla anterior será rechazada la próxima vez que se guarde.
 
 **Cancelar un comando registra `CANCELLED`.** Antes registraba `EXPIRED`, que compartía con
 un comando que simplemente agotó su tiempo. Si se bifurca sobre `EXPIRED` para detectar su

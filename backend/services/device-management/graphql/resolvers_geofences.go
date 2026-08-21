@@ -9,6 +9,7 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/model"
 	util "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	gql "github.com/graph-gophers/graphql-go"
 )
 
@@ -79,13 +80,55 @@ type GeoFenceSetSnapshotResolver struct {
 func (r *GeoFenceSetSnapshotResolver) Version() int32 { return r.M.Version }
 
 // Fences are the fences as of this version, ordered by token (the mint path orders them,
-// so the document is a function of the fence set alone).
-func (r *GeoFenceSetSnapshotResolver) Fences() []*GeoFenceSnapshotEntryResolver {
-	resolvers := make([]*GeoFenceSnapshotEntryResolver, 0, len(r.M.Fences))
-	for _, current := range r.M.Fences {
+// so the document is a function of the fence set alone), one bounded page at a time.
+//
+// 🔴 IT IS PAGINATED FOR THE WIRE, NOT FOR THE DATABASE. The whole snapshot is one already-
+// decoded document in memory by the time this runs — there is no query here to bound. What
+// the page bounds is the RESPONSE, because the cross-service client that reads this door
+// caps a response at 1 MiB and a fence set at the documented authoring ceiling
+// (model.MaxGeoFencesPerTenant × model.MaxGeoFenceVertices) is larger than that. Before the
+// page existed, the tenants who had used geofencing as documented were the ones whose reads
+// failed, and the only symptom was a counted containment eval error.
+//
+// It pages through rdb.PageSlice rather than slicing here, so its pageStart/pageEnd/
+// totalRecords mean the same thing they mean on every SQL-backed list in this schema — a
+// client that pages until pageEnd reaches totalRecords must not have to learn a second
+// convention for this one field.
+//
+// No authority check of its own, unlike EntityGroup.members: a GeoFenceSetSnapshot is
+// produced by exactly two queries and both gate on device:read before constructing it.
+// There is no write mutation that hands one out, which is what makes the parent's gate
+// sufficient here and insufficient there.
+func (r *GeoFenceSetSnapshotResolver) Fences(args struct {
+	Pagination PaginationInput
+}) *GeoFenceSnapshotEntrySearchResultsResolver {
+	page, pag := rdb.PageSlice(r.M.Fences, rdbPagination(args.Pagination))
+	resolvers := make([]*GeoFenceSnapshotEntryResolver, 0, len(page))
+	for _, current := range page {
 		resolvers = append(resolvers, &GeoFenceSnapshotEntryResolver{M: current, S: r.S, C: r.C})
 	}
-	return resolvers
+	return &GeoFenceSnapshotEntrySearchResultsResolver{Entries: resolvers, Pag: pag, S: r.S, C: r.C}
+}
+
+// GeoFenceSnapshotEntrySearchResultsResolver resolves one page of a frozen fence set.
+//
+// It carries the already-built entry resolvers rather than a model search-results struct,
+// because there is no such struct to carry: the fences are a field of a snapshot document,
+// not a table, so paging them produces a slice and a pagination record and nothing that
+// would earn a model type of its own.
+type GeoFenceSnapshotEntrySearchResultsResolver struct {
+	Entries []*GeoFenceSnapshotEntryResolver
+	Pag     rdb.SearchResultsPagination
+	S       *SchemaResolver
+	C       context.Context
+}
+
+func (r *GeoFenceSnapshotEntrySearchResultsResolver) Results() []*GeoFenceSnapshotEntryResolver {
+	return r.Entries
+}
+
+func (r *GeoFenceSnapshotEntrySearchResultsResolver) Pagination() *SearchResultsPaginationResolver {
+	return &SearchResultsPaginationResolver{M: r.Pag, S: r.S, C: r.C}
 }
 
 // GeoFenceSnapshotEntryResolver resolves one fence inside a frozen snapshot: the token a

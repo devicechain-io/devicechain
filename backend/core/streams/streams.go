@@ -188,11 +188,32 @@ const (
 	DetectionRulesPublished = "detection-rules-published"
 	DeviceRoster            = "device-roster"
 	GeoFenceSet             = "geofence-set"
-	EntityDeleted           = "entity-deleted"
-	AlarmEvents             = "alarm-events"
-	RaiseAlarm              = "raise-alarm"
-	FailedDecode            = "failed-decode"
-	FailedEvents            = "failed-events"
+
+	// GeoFenceSetPointer carries a fence-set fact whose fences were too large to ride in
+	// one broker message: the version alone, for a consumer to resolve from the archive.
+	//
+	// 🔴 IT IS A SEPARATE SUBJECT PURELY SO AN OLD CONSUMER CANNOT SEE IT, and that is the
+	// entire justification for a second stream rather than a flag on the existing fact. The
+	// pointer form is distinguished on the wire by a field, and a field is invisible to a
+	// decoder that predates it: json.Unmarshal ignores what it does not know, so a consumer
+	// from before this existed decodes a pointer fact as a fence set holding ZERO fences and
+	// installs it — containment then answers "outside" for a device that is inside, with
+	// nothing logged and nothing counted, because an empty fence set is a legitimate state.
+	// device-management and event-processing roll as independent Deployments, so that
+	// mixed-version window happens on every upgrade and again on any rollback of one of them.
+	//
+	// Publishing to a subject the old consumer never subscribed to makes the old behaviour
+	// exactly what it was before the pointer fact existed: the fact does not arrive, the
+	// version stays missing, containment reports a COUNTED eval error, and the five-minute
+	// reconcile sweep repairs it. Degrading to a loud, already-handled failure beats
+	// degrading to a silent wrong answer, and this needs no feature flag and no upgrade
+	// ordering to do it.
+	GeoFenceSetPointer = "geofence-set-pointer"
+	EntityDeleted      = "entity-deleted"
+	AlarmEvents        = "alarm-events"
+	RaiseAlarm         = "raise-alarm"
+	FailedDecode       = "failed-decode"
+	FailedEvents       = "failed-events"
 )
 
 // ConnectorDispatchDead is the terminal dead-letter sink for connector dispatch
@@ -406,6 +427,12 @@ var All = []Stream{
 	// by READING them back rather than from a second copy of its own. A fact that never
 	// reaches the stream is therefore recovered by that startup reconcile, not by replay.
 	{Suffix: GeoFenceSet, Areas: []string{"device-management", "event-processing"}, Tier: Cold, Why: "a fence edit — a human authoring action"},
+
+	// The pointer form of the same fact, on its own subject so a consumer that predates it
+	// never receives one — see GeoFenceSetPointer for why that separation is the whole
+	// point. Same producer, same consumer, same cold tier and the same rate: it carries a
+	// version and a timestamp for the fence sets too large to send whole.
+	{Suffix: GeoFenceSetPointer, Areas: []string{"device-management", "event-processing"}, Tier: Cold, Why: "a fence edit whose set is too large to carry"},
 
 	// ADR-044. Emitted when an edge entity (device, customer, area, asset, and
 	// their groups) is deleted, so cross-service reference holders — such as

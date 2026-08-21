@@ -55,7 +55,7 @@ func TestAnOversizedResponseSaysSoInsteadOfFailingToParse(t *testing.T) {
 	mint := mintServer(t, "shh", &mints)
 	defer mint.Close()
 
-	target := respondingWith(http.StatusOK, envelopeOfSize(t, maxResponseBytes+1))
+	target := respondingWith(http.StatusOK, envelopeOfSize(t, MaxResponseBytes+1))
 	defer target.Close()
 
 	client := clientFor(mint, "shh")
@@ -86,7 +86,7 @@ func TestAResponseOfExactlyTheCapIsOrdinary(t *testing.T) {
 	mint := mintServer(t, "shh", &mints)
 	defer mint.Close()
 
-	target := respondingWith(http.StatusOK, envelopeOfSize(t, maxResponseBytes))
+	target := respondingWith(http.StatusOK, envelopeOfSize(t, MaxResponseBytes))
 	defer target.Close()
 
 	client := clientFor(mint, "shh")
@@ -112,7 +112,7 @@ func TestALargeErrorPageReportsTheStatusNotTheSize(t *testing.T) {
 	mint := mintServer(t, "shh", &mints)
 	defer mint.Close()
 
-	target := respondingWith(http.StatusInternalServerError, strings.Repeat("y", maxResponseBytes+1))
+	target := respondingWith(http.StatusInternalServerError, strings.Repeat("y", MaxResponseBytes+1))
 	defer target.Close()
 
 	client := clientFor(mint, "shh")

@@ -67,7 +67,11 @@ func (api *Api) CreateGeoFence(ctx context.Context, request *GeoFenceCreateReque
 	if err := validateGeoFenceToken(request.Token); err != nil {
 		return nil, err
 	}
-	if _, err := validateGeoFenceGeometry(request.Geometry); err != nil {
+	// The CANONICAL document is what gets stored, never request.Geometry. Storing the
+	// authored text would put a document in the column that the size bound was never
+	// applied to — see validateGeoFenceGeometry.
+	_, canonicalGeometry, err := validateGeoFenceGeometry(request.Geometry)
+	if err != nil {
 		return nil, err
 	}
 
@@ -82,7 +86,7 @@ func (api *Api) CreateGeoFence(ctx context.Context, request *GeoFenceCreateReque
 			Description: rdb.NullStrOf(request.Description),
 		},
 		MetadataEntity: rdb.MetadataEntity{Metadata: metadataJSON},
-		Geometry:       datatypes.JSON(request.Geometry),
+		Geometry:       datatypes.JSON(canonicalGeometry),
 	}
 	var minted *GeoFenceSetVersion
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
@@ -132,7 +136,8 @@ func (api *Api) UpdateGeoFence(ctx context.Context, token string,
 	if err := errGeoFenceTokenImmutable(token, request.Token); err != nil {
 		return nil, err
 	}
-	if _, err := validateGeoFenceGeometry(request.Geometry); err != nil {
+	_, canonicalGeometry, err := validateGeoFenceGeometry(request.Geometry)
+	if err != nil {
 		return nil, err
 	}
 
@@ -152,7 +157,7 @@ func (api *Api) UpdateGeoFence(ctx context.Context, token string,
 		return nil, err
 	}
 	updated.Metadata = metadataJSON
-	updated.Geometry = datatypes.JSON(request.Geometry)
+	updated.Geometry = datatypes.JSON(canonicalGeometry)
 
 	var minted *GeoFenceSetVersion
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {

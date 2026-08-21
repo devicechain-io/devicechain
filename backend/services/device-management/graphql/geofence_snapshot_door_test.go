@@ -60,6 +60,32 @@ func twoTenantFenceCtx(t *testing.T) (acme, globex context.Context) {
 	return acme, globex
 }
 
+// allSnapshotFences reads a frozen fence set's fences through the REAL paginated field, paging
+// until the reported total is in hand. The tests below assert about the whole set, and the field
+// hands out one page — a helper that asked for page 1 and stopped would quietly turn "the set has
+// one fence" into "the first page has one fence", which is the exact confusion pagination
+// introduces and the exact thing these tenancy assertions must not inherit.
+func allSnapshotFences(t *testing.T, res *GeoFenceSetSnapshotResolver) []*GeoFenceSnapshotEntryResolver {
+	t.Helper()
+	all := make([]*GeoFenceSnapshotEntryResolver, 0)
+	for page := int32(1); ; page++ {
+		got := res.Fences(struct{ Pagination PaginationInput }{
+			Pagination: PaginationInput{PageNumber: page, PageSize: 2},
+		})
+		all = append(all, got.Results()...)
+		total := got.Pagination().TotalRecords()
+		if total == nil {
+			t.Fatalf("fences page %d reported no totalRecords", page)
+		}
+		if int32(len(all)) >= *total {
+			return all
+		}
+		if len(got.Results()) == 0 {
+			t.Fatalf("fences page %d was empty with %d of %d read", page, len(all), *total)
+		}
+	}
+}
+
 // Each tenant's CURRENT fence set holds its OWN fence and only its own. Both directions are
 // asserted, so this cannot pass by the door returning nothing to anybody.
 func TestCurrentGeoFenceSetDoorIsTenantScoped(t *testing.T) {
@@ -71,7 +97,7 @@ func TestCurrentGeoFenceSetDoorIsTenantScoped(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s currentGeoFenceSet: %v", who, err)
 		}
-		fences := res.Fences()
+		fences := allSnapshotFences(t, res)
 		if len(fences) != 1 {
 			t.Fatalf("%s currentGeoFenceSet returned %d fences, want exactly 1 (its own)", who, len(fences))
 		}
@@ -101,7 +127,7 @@ func TestGeoFenceSetSnapshotDoorCannotReachAnotherTenantsVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acme geoFenceSetSnapshot(1): %v", err)
 	}
-	fences := res.Fences()
+	fences := allSnapshotFences(t, res)
 	if len(fences) != 1 || fences[0].Token() != "acme-yard" {
 		t.Fatalf("control: acme's own version 1 must resolve to its own fence, got %d fences", len(fences))
 	}
@@ -111,7 +137,7 @@ func TestGeoFenceSetSnapshotDoorCannotReachAnotherTenantsVersion(t *testing.T) {
 		// globex has a version 1 of its own, so this must resolve — to ITS fence.
 		t.Fatalf("globex geoFenceSetSnapshot(1): %v", err)
 	}
-	fences = res.Fences()
+	fences = allSnapshotFences(t, res)
 	if len(fences) != 1 {
 		t.Fatalf("globex's own version 1 returned %d fences, want 1", len(fences))
 	}

@@ -208,6 +208,18 @@ type ResolvedEventsProcessor struct {
 	// read back into device-management. Nil disables live fence updates (the scaffold/test path).
 	FenceSetReader messaging.MessageReader
 
+	// FenceSetPointerReader is the durable consumer of the geofence-set-POINTER stream: the
+	// same fact for the sets that were too large to carry, on a subject of its own.
+	//
+	// 🔴 IT IS A SECOND READER BECAUSE THE SEPARATION IS THE UPGRADE-SAFETY MECHANISM. The
+	// pointer form is marked by a FIELD, and a field means nothing to a decoder that predates
+	// it — an older build of this service reads a pointer fact as a fence set of zero fences
+	// and installs it, which answers "outside" for a device that is inside and reports
+	// nothing, because an empty set is a legitimate state. Keeping pointers on a subject such
+	// a build never subscribed to makes its behaviour identical to what it was before they
+	// existed. Nil disables the pointer feed (the scaffold/test path).
+	FenceSetPointerReader messaging.MessageReader
+
 	// FenceSets is the OFF-LOOP seam onto device-management's frozen fence-set archive, used to
 	// re-seed fenceView at startup (CurrentFenceSet) — a live cache survives no restart, and the
 	// fact stream carries only changes from now on, so without this a restarted engine would be
@@ -219,6 +231,21 @@ type ResolvedEventsProcessor struct {
 	// view disabled entirely (the scaffold/test path), which is the honest state: an unfed
 	// projection that errors is visible, an empty one that answers "outside" would not be.
 	FenceSets runtime.CurrentFenceSetSource
+
+	// VersionedFenceSets is the VERSION-ADDRESSED half of the same archive seam, used by the fact
+	// consumer to resolve a POINTER fact — one whose fence set was too large to ride in a single
+	// broker message, so the fact carries the version and nothing else.
+	//
+	// It is a second field rather than a second use of FenceSets because the two answer different
+	// questions and only one of them is right here: "what is the current set" would install a
+	// LATER version under a fact that announced an earlier one, leaving the announced version
+	// permanently missing from the view. See runtime.FenceSetSource / CurrentFenceSetSource for why
+	// the split is enforced by the compiler and not by a comment.
+	//
+	// 🔴 IT IS NEVER CONSULTED ON THE LOOP either — the read happens on the fact consumer's own
+	// goroutine, which is already where the fence compile happens. Nil means a pointer fact cannot
+	// be resolved, which is reported loudly and counted rather than installed as an empty set.
+	VersionedFenceSets runtime.FenceSetSource
 
 	// armer arms dead-man absence timers for never-seen devices, cross-referencing the roster +
 	// active-version read-models (ADR-051 slice 4c-2b-2b). It is built in ExecuteStart once the
@@ -694,6 +721,14 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 	if rp.FenceSetReader != nil {
 		rp.readerWG.Add(1)
 		go rp.runFenceSetConsumer()
+	}
+	// The pointer stream carries the same fact for sets too large to send whole, and is
+	// drained by a consumer of its own. Both feed one projection, and that is safe for the
+	// reason the fact's own design note gives: a fence-set VERSION is immutable, so there is
+	// no order in which two of these can arrive that makes either wrong.
+	if rp.FenceSetPointerReader != nil {
+		rp.readerWG.Add(1)
+		go rp.runFenceSetPointerConsumer()
 	}
 	return nil
 }
