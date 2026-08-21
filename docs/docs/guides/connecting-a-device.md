@@ -52,7 +52,14 @@ discovering in a dead-letter queue.
 
 ### How much one message may carry
 
-**A message carries at most 1000 readings.** A reading is one stored datum — for measurements that
+**A message on this page's transports carries at most 1000 readings.** The ceiling belongs to the
+JSON device event described above — MQTT and HTTP. The two transports this page's introduction
+points constrained and brownfield fleets at do **not** share it: [LwM2M](../concepts/lwm2m.md)
+bounds a single Notify at 256 samples instead, and [Sparkplug B](../concepts/sparkplug.md) applies
+no per-message ceiling at all (see [what an operator must
+know](../deployment/edge-services.md#sparkplug-what-an-operator-must-know)).
+
+A reading is one stored datum — for measurements that
 is one *metric key*, so an entry with twelve metrics is twelve readings; for locations and alerts it
 is one entry. Counting keys rather than entries is deliberate: a single entry can hold thousands of
 metrics, and it is the readings, not the entries, that become stored rows, state updates and rule

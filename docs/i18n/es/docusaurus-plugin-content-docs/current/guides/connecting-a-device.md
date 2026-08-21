@@ -54,7 +54,14 @@ conviene descartarlo en el firmware antes que descubrirlo en una cola de mensaje
 
 ### Cuánto puede llevar un mensaje
 
-**Un mensaje admite como máximo 1000 lecturas.** Una lectura es un dato almacenado: en mediciones,
+**Un mensaje en los transportes de esta página admite como máximo 1000 lecturas.** El techo pertenece
+al evento JSON de dispositivo descrito arriba: MQTT y HTTP. Los dos transportes a los que la
+introducción de esta página dirige las flotas restringidas y de brownfield **no** lo comparten:
+[LwM2M](../concepts/lwm2m.md) acota un solo Notify en 256 muestras, y
+[Sparkplug B](../concepts/sparkplug.md) no aplica techo por mensaje alguno (véase [lo que un operador
+debe saber](../deployment/edge-services.md#sparkplug-lo-que-un-operador-debe-saber)).
+
+Una lectura es un dato almacenado: en mediciones,
 una *clave de métrica* —así que una entrada con doce métricas son doce lecturas—; en ubicaciones y
 alertas, una entrada. Contar claves en lugar de entradas es deliberado: una sola entrada puede
 llevar miles de métricas, y son las lecturas, no las entradas, las que se convierten en filas

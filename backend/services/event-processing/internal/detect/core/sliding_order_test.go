@@ -4,6 +4,7 @@
 package core
 
 import (
+	"math"
 	"math/rand"
 	"testing"
 	"time"
@@ -351,29 +352,62 @@ func TestSnapshotFoldsAnOpenOverlay(t *testing.T) {
 // return to a memmove of the whole overlay per late sample — the quadratic this replaced,
 // wearing a different name. So the bound is asserted, not assumed.
 //
-// The numbers are chosen independently of the trigger: 5000 late samples into a
-// 10 000-deep window. An overlay that never merged would hold ~5000.
+// 🔴 IT IS TWO-SIDED, AND THE SECOND SIDE IS THE ONE A NUMBER CANNOT STATE. An upper bound
+// alone reads as "smaller is safer", and smaller is not: the trigger trades a memmove of the
+// overlay per late sample against a pass of the whole window per fold, and folding EARLIER
+// buys a smaller overlay by paying O(W) far more often. Change len(late)*len(late) to a cube
+// and a one-sided test passes while the code gets slower on exactly the batch it exists for.
+// So the overlay is pinned to a BAND, and the fold count with it — the O(W) work itself,
+// which is the quantity the size is only a proxy for.
+//
+// Every bound below is derived from the window rather than measured from a run, so a
+// deliberate change to the trigger has to restate the property rather than re-record it:
+// nothing evicts here, so len(buf) stays within [depth, depth+batch] for the whole loop, and
+// the fold fires the moment len(late) reaches sqrt(len(buf)).
 func TestOverlayStaysBounded(t *testing.T) {
-	const depth, batch, bound = 10000, 5000, 200
+	const depth, batch = 10000, 5000
+	// The largest overlay ever OBSERVED is the largest that did not fold, so it sits one
+	// below the trigger at the shallowest buf and at most at the trigger for the deepest.
+	lo := int(math.Sqrt(float64(depth))) - 1
+	hi := int(math.Ceil(math.Sqrt(float64(depth + batch))))
+	// Each fold empties the overlay, so refilling it to the trigger costs at least lo+1
+	// inserts — which caps how often the O(W) pass can run over one batch.
+	maxFolds := batch / (lo + 1)
+
 	s := &slidingState{}
 	for i := 0; i < depth; i++ {
 		s.insert(sample{t: at(i), v: float64(i % 977)})
 	}
 	r := rand.New(rand.NewSource(5))
-	worst := 0
+	worst, folds, prev := 0, 0, 0
 	for i := 0; i < batch; i++ {
 		s.insert(sample{t: at(depth/4 + r.Intn(depth/2)), v: float64(r.Intn(977))})
+		if len(s.late) == 0 && prev > 0 {
+			folds++ // the overlay was emptied: mergeLate just walked the whole window
+		}
 		if len(s.late) > worst {
 			worst = len(s.late)
 		}
+		prev = len(s.late)
 	}
-	if worst > bound {
-		t.Fatalf("the overlay grew to %d samples; it must stay under %d (an overlay that never "+
-			"merged would reach ~%d, and each insert into it is a memmove of the whole thing)",
-			worst, bound, batch)
+
+	if worst > hi {
+		t.Errorf("the overlay grew to %d samples; sqrt of the deepest window is %d, and an "+
+			"overlay that never folded would reach ~%d — each insert into it is a memmove "+
+			"of the whole thing", worst, hi, batch)
 	}
-	if worst == 0 {
-		t.Fatal("no sample was ever deferred — this test measured nothing")
+	if worst < lo {
+		t.Errorf("the overlay never passed %d samples, under the %d the trigger implies: it is "+
+			"folding EARLY, which buys a small overlay with %d more passes over the window",
+			worst, lo, batch)
+	}
+	if folds == 0 {
+		t.Fatal("the overlay never folded — this test measured nothing")
+	}
+	if folds > maxFolds {
+		t.Errorf("the window was walked %d times for %d late samples, over the %d the trigger "+
+			"admits; each walk is O(window), which is the cost the overlay exists to defer",
+			folds, batch, maxFolds)
 	}
 	if got := s.count(); got != depth+batch {
 		t.Fatalf("the window holds %d samples, want %d — merging must not lose any", got, depth+batch)

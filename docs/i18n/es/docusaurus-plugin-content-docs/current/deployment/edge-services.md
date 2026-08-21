@@ -374,12 +374,20 @@ de borde pueda rechazar una muerte retrasada de una sesión anterior. Es tambié
 todas las réplicas comparten un mismo client id: lo que expulsa a un host zombi es el propio
 desalojo por identificador duplicado del broker.
 
-:::caution En la vía de Sparkplug no hay límite de tasa por inquilino ni descarte
+:::caution En la vía de Sparkplug no se acota ni la tasa de mensajes ni el tamaño de un mensaje
 A diferencia de LwM2M y de las vías de ingesta de dispositivo habituales, la ingesta de Sparkplug **no
 aplica ningún techo de ingesta por inquilino y no descarta nada**. El razonamiento es que su exposición
 es un broker al que usted eligió conectarse deliberadamente, y no un endpoint abierto; pero la
 consecuencia es suya: un nodo de borde desbocado en un broker configurado no se limita en la puerta.
 Acótelo en el broker, o mediante los grupos a los que se suscribe.
+
+**Son dos límites distintos, y aquí no se aplica ninguno.** El límite de tasa anterior mide
+*mensajes*; el [techo de lecturas por mensaje](../guides/connecting-a-device.md#cuánto-puede-llevar-un-mensaje)
+acota lo que un mensaje puede costar una vez admitido. Un DDATA de Sparkplug que lleve miles de
+métricas es un solo mensaje y se convierte en una lectura almacenada por métrica: cada una, su propia
+fila, actualización de estado y evaluación de reglas en la goroutine de detección compartida. Acote
+el número de métricas por publicación en el nodo de borde, del mismo modo y por la misma razón por la
+que acota su tasa.
 
 La [puerta del ciclo de vida del inquilino](./tenant-deletion.md) sí sigue aplicándose: el tráfico de
 un inquilino en eliminación se rechaza en esta vía como en cualquier otra, y se cuenta en

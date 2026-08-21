@@ -75,6 +75,14 @@ func BenchmarkCappedMessageDeepWindow(b *testing.B) {
 
 // The other axis held fixed: batch size against a FIXED deep window, which is what says
 // whether the per-message cost is linear in k or quadratic in it.
+//
+// 🔑 THE CURVE IS PIECEWISE, NOT LINEAR, and reading it as linear reads the wrong half. The
+// overlay only folds once it reaches sqrt(W), so at W=86 400 that is 294 late samples: a
+// batch under ~294 pays no fold AT ALL, and the first fold is a step, not a slope. Measured
+// here, k -> ns/op: 125 46.6us, 250 83.3us (1.79x — linear, and below the first fold),
+// 500 546us (6.6x — the step), 1000 1.40ms, 2000 2.99ms (2.13x — linear again, above it).
+// The claim to check against these numbers is O(k*sqrt(W)) once the folds start, which the
+// 500 -> 1000 -> 2000 tail is; the 6.6x step is the fold arriving, not a regression.
 func BenchmarkBatchSizeFixedWindow(b *testing.B) {
 	for _, k := range []int{125, 250, 500, 1000, 2000} {
 		b.Run(fmt.Sprintf("k=%d", k), func(b *testing.B) { benchDeepWindow(b, AggMin, 86400, k) })

@@ -442,6 +442,15 @@ func (e *Engine) snapshotSlides() []snapSlide {
 		// The snapshot is the window as one ordered sequence — the second and last place
 		// that needs the overlay folded in (see mergeLate). Restoring an unmerged pair as
 		// one array would silently reorder the window.
+		//
+		// 🔴 IT MERGES THE LIVE STATE, AND THAT WRITE IS LOAD-BEARING. Folding into a copy
+		// instead looks like the tidier thing — a snapshot has no business mutating what it
+		// reads — and it would leave the live engine holding TWO runs where the restored one
+		// holds ONE. evictRun subtracts per run, so the two would then evict in different
+		// ORDERS, and float subtraction is not associative: the same window answers a sum
+		// differing in the last ulp, which is enough to flip a threshold sitting exactly on
+		// an AggSum or AggAvg. That is the divergence restoreSlides' own comment below
+		// exists to prevent; it is prevented here, by snapshot == live.
 		st.mergeLate()
 		times := make([]time.Time, len(st.buf))
 		values := make([]float64, len(st.buf))

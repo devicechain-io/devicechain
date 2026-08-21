@@ -301,21 +301,31 @@ var ErrTooManyReadings = errors.New("too many readings in one message")
 // This is also the unit the rest of the platform already meters in — LwM2M's
 // MaxSamplesPerNotify and adapter.DefaultSamplesPerMessage both count samples — so the
 // three numbers are directly comparable instead of merely similar-looking.
-func readingCount(payload interface{}) int {
+//
+// 🔴 IT REPORTS ok, AND THE FALL-THROUGH REFUSES rather than answering 1. Every payload
+// kind is named explicitly, including the one that genuinely is a single unit. The
+// difference only shows up for a kind added LATER: an entry-carrying payload wired into
+// Decode without a case here would be metered as one reading — uncapped, while
+// checkReadingCount above it still reads as though it were guarding the fan-out. That is
+// the same fail-open shape errNoEntries and BuildLocationsPayload were fixed for, and the
+// cost of getting it wrong is paid by the shared DETECT goroutine, not here.
+func readingCount(payload interface{}) (int, bool) {
 	switch p := payload.(type) {
 	case *model.UnresolvedMeasurementsPayload:
 		n := 0
 		for i := range p.Entries {
 			n += len(p.Entries[i].Measurements)
 		}
-		return n
+		return n, true
 	case *model.UnresolvedLocationsPayload:
-		return len(p.Entries)
+		return len(p.Entries), true
 	case *model.UnresolvedAlertsPayload:
-		return len(p.Entries)
+		return len(p.Entries), true
+	case *model.UnresolvedNewRelationshipPayload:
+		// A relationship carries no entries: it is one indivisible unit of work.
+		return 1, true
 	}
-	// Anything else (a relationship event) is one indivisible unit of work.
-	return 1
+	return 0, false
 }
 
 // checkReadingCount is the upper bound that pairs with errNoEntries' lower one: not
@@ -333,7 +343,16 @@ func readingCount(payload interface{}) int {
 // this bounds is FAN-OUT — the stored rows, the projection writes and the evaluations
 // on the shared DETECT goroutine that one message becomes.
 func checkReadingCount(kind string, payload interface{}, max int) error {
-	count := readingCount(payload)
+	count, ok := readingCount(payload)
+	if !ok {
+		// Deliberately NOT ErrTooManyReadings: this is an unmetered payload kind, not an
+		// oversized batch, and counting it as one would put a code defect into the counter
+		// an operator reads as "the fleet is batching too large". It is still terminal, so
+		// the message routes to the failed-decode subject like any other refused decode.
+		return fmt.Errorf("%s payload of type %T has no reading count, so the per-message "+
+			"ceiling cannot be applied to it; give readingCount a case for it before "+
+			"routing it through this check", kind, payload)
+	}
 	if count <= max {
 		return nil
 	}

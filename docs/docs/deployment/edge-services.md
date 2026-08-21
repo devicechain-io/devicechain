@@ -342,12 +342,19 @@ host's birth and its death certificate to carry the same timestamp so an edge no
 delayed death from a previous session. This is also why every replica shares one client id: the
 broker's own duplicate-id takeover is what evicts a zombie host.
 
-:::caution There is no per-tenant rate limit or shedding on the Sparkplug path
+:::caution Neither the message rate nor the size of one message is bounded on the Sparkplug path
 Unlike LwM2M and the standard device ingest paths, Sparkplug ingestion applies **no per-tenant ingest
 ceiling and sheds nothing**. The reasoning is that its exposure is a broker you deliberately chose to
 connect to, rather than an open endpoint — but the consequence is yours: a runaway edge node on a
 configured broker is not throttled at the door. Bound it at the broker, or by the groups you subscribe
 to.
+
+**The two limits are separate, and neither applies here.** The rate limit above meters *messages*;
+the [per-message reading ceiling](../guides/connecting-a-device.md#how-much-one-message-may-carry)
+bounds what one message may cost once admitted. A Sparkplug DDATA carrying thousands of metrics is
+one message and becomes one stored reading per metric — each its own row, state update and rule
+evaluation on the shared detection goroutine. Bound the metric count per publish at the edge node,
+the same way and for the same reason you bound its rate.
 
 The [tenant lifecycle gate](./tenant-deletion.md) does still apply — traffic for a deleting tenant is
 refused on this path like any other, and counted in `tenant_deleted_dropped_total`.

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-event-sources/config"
+	"github.com/devicechain-io/dc-event-sources/model"
 )
 
 // entriesBody builds one inbound message of the given kind carrying n entries, each with a
@@ -165,5 +166,31 @@ func TestConfigDefaultsTheReadingCeiling(t *testing.T) {
 	c.ApplyDefaults()
 	if c.MaxReadingsPerMessage != 25 {
 		t.Errorf("an explicit ceiling must survive defaulting, got %d", c.MaxReadingsPerMessage)
+	}
+}
+
+// The fall-through is the part of the ceiling nothing in production reaches today, which is
+// exactly why it is pinned here. checkReadingCount is called for three payload kinds and
+// readingCount names four; a fifth added to Decode without a case would, under the old
+// `return 1`, be metered as a single reading and pass any ceiling — silently uncapped while
+// the check above it still read as a guard. It must refuse instead.
+func TestAnUnmeteredPayloadKindIsRefusedRatherThanCountedAsOne(t *testing.T) {
+	type payloadNobodyTaughtItAbout struct{ Entries []int }
+
+	err := checkReadingCount("mystery", &payloadNobodyTaughtItAbout{Entries: make([]int, 5000)}, 10)
+	if err == nil {
+		t.Fatal("an unmetered payload kind passed the ceiling; the fall-through fails OPEN")
+	}
+	// It must NOT be counted as an oversized batch: that counter is what tells an operator
+	// their fleet is batching too large, and a code defect landing in it sends them to the
+	// firmware. Same terminal outcome, different diagnosis.
+	if errors.Is(err, ErrTooManyReadings) {
+		t.Errorf("an unmetered kind was reported as an oversized batch: %v", err)
+	}
+
+	// The counterweight: a kind that IS named still passes, so the refusal above is the
+	// fall-through and not a check that refuses everything.
+	if err := checkReadingCount("relationship", &model.UnresolvedNewRelationshipPayload{}, 10); err != nil {
+		t.Errorf("a relationship is one indivisible unit and must pass a ceiling of 10: %v", err)
 	}
 }
