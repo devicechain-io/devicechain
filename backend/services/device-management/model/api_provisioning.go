@@ -78,6 +78,10 @@ func (api *Api) CreateProvisioningProfile(ctx context.Context, request *Provisio
 		return nil, err
 	}
 
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
 	created := &ProvisioningProfile{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -87,7 +91,7 @@ func (api *Api) CreateProvisioningProfile(ctx context.Context, request *Provisio
 			Description: rdb.NullStrOf(request.Description),
 		},
 		MetadataEntity: rdb.MetadataEntity{
-			Metadata: rdb.MetadataStrOf(request.Metadata),
+			Metadata: metadataJSON,
 		},
 		ProvisionKey:    request.ProvisionKey,
 		ProvisionSecret: request.ProvisionSecret,
@@ -137,7 +141,11 @@ func (api *Api) UpdateProvisioningProfile(ctx context.Context, token string,
 	updated.Token = request.Token
 	updated.Name = rdb.NullStrOf(request.Name)
 	updated.Description = rdb.NullStrOf(request.Description)
-	updated.Metadata = rdb.MetadataStrOf(request.Metadata)
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	updated.Metadata = metadataJSON
 	updated.ProvisionKey = request.ProvisionKey
 	updated.ProvisionSecret = request.ProvisionSecret
 	updated.Strategy = request.Strategy

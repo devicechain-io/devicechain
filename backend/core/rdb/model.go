@@ -6,6 +6,7 @@ package rdb
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"gorm.io/datatypes"
@@ -65,27 +66,60 @@ type MetadataEntity struct {
 	Metadata *datatypes.JSON
 }
 
-// MetadataStrOf creates a JSON column value from a string, returning nil when the
-// string is not valid JSON.
+// JSONInputOf creates a JSON column value from a string an API CALLER supplied,
+// refusing the write when that string is not valid JSON. field names the request
+// field in the error, because a request can carry several of these — metadata,
+// payload, config, parameterSchema, enum, recipients — and "invalid JSON" without
+// a field name leaves the caller guessing which one.
 //
-// 🔴 THE GUARD HERE USED TO BE UNABLE TO FIRE. It checked the error from
+// 🔴 IT RETURNS AN ERROR BECAUSE THE TWO EARLIER SHAPES WERE BOTH SILENT, IN
+// OPPOSITE DIRECTIONS. The original guard checked the error from
 // json.RawMessage.UnmarshalJSON, which only copies its input — it returns an error
 // solely on a nil receiver, never for malformed JSON. So every invalid value sailed
 // through and became a JSON column write that Postgres rejected at execution time:
 //
 //	ERROR: invalid input syntax for type json (SQLSTATE 22P02)
 //
-// Found end to end, not by reading: a device answered a command with the plain text
-// "acknowledged by livedevice", which left the UPDATE failing, the command stuck in
-// SENT, and the redelivery sweep retrying the same doomed write once a minute
-// forever. json.Valid is the check the original was reaching for.
-func MetadataStrOf(value *string) *datatypes.JSON {
-	if value == nil || !json.Valid([]byte(*value)) {
-		return nil
+// That was found end to end, not by reading: a device answered a command with the
+// plain text "acknowledged by livedevice", which left the UPDATE failing, the command
+// stuck in SENT, and the redelivery sweep retrying the same doomed write once a minute
+// forever. Swapping in json.Valid stopped the doomed write — and replaced it with a
+// worse failure, because returning nil for a malformed value does not mean "reject",
+// it means "write NULL". An update carrying one bad field therefore ERASED whatever
+// that column already held and answered 200. Loud breakage became silent data loss:
+// the caller is told the write succeeded, and the value they did not mean to touch is
+// gone with nothing to indicate it.
+//
+// 🔴 PARTIAL-UPDATE SEMANTICS DO NOT SUBSUME THIS, AND THAT WAS CHECKED RATHER THAN
+// ASSUMED. An Optional* field folds three states — omitted keeps, null clears, a value
+// sets — and hands down a *string. A malformed value is a VALUE, so it arrives here as
+// the third state and, under the old shape, silently produced the second. It is a
+// fourth outcome collapsing onto one of the three, inside the mechanism whose entire
+// purpose is keeping them distinct. Refusal is the fourth outcome, and it has to live
+// here: this is the only layer every write shares.
+//
+// An absent value (nil), or one that is empty or whitespace, is NOT an error — it is
+// "no value", the same reading NullStrOf gives, and it clears the column exactly as it
+// did before. Clearing is spelled with an explicit null or an empty string; refusing
+// those would be a second behaviour change riding along with this one, affecting
+// callers who were never doing anything wrong.
+//
+// Compare JSONTextOf below, which is the DEVICE-supplied counterpart and deliberately
+// never refuses. The split is by who wrote the value, which is why the two now have
+// names that say so.
+func JSONInputOf(field string, value *string) (*datatypes.JSON, error) {
+	if value == nil {
+		return nil, nil
+	}
+	if strings.TrimSpace(*value) == "" {
+		return nil, nil
+	}
+	if !json.Valid([]byte(*value)) {
+		return nil, fmt.Errorf("%s must be valid JSON", field)
 	}
 
 	conv := datatypes.JSON(json.RawMessage(*value))
-	return &conv
+	return &conv, nil
 }
 
 // JSONTextOf creates a JSON column value from a string that is NOT required to be
@@ -96,8 +130,10 @@ func MetadataStrOf(value *string) *datatypes.JSON {
 // reporting "bucket raised" is answering correctly, and the alternative readings are
 // both worse than encoding it: dropping the payload discards what the device said,
 // and rejecting it strands a command that was in fact carried out. An API caller who
-// sends malformed JSON should still be told so — that is MetadataStrOf's job, and
-// this deliberately does not replace it.
+// sends malformed JSON is told so, by JSONInputOf above — a sentence this comment
+// asserted for some time while JSONInputOf's predecessor did no such thing, which is
+// how the silent erasure survived review. The two are counterparts, not duplicates,
+// and the difference is who wrote the value rather than what it looks like.
 func JSONTextOf(value *string) *datatypes.JSON {
 	if value == nil {
 		return nil

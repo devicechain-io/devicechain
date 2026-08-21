@@ -100,6 +100,10 @@ func (api *Api) CreateDeviceType(ctx context.Context, request *DeviceTypeCreateR
 	if err != nil {
 		return nil, err
 	}
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
 	created := &DeviceType{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -116,7 +120,7 @@ func (api *Api) CreateDeviceType(ctx context.Context, request *DeviceTypeCreateR
 			BorderColor:     rdb.NullStrOf(request.BorderColor),
 		},
 		MetadataEntity: rdb.MetadataEntity{
-			Metadata: rdb.MetadataStrOf(request.Metadata),
+			Metadata: metadataJSON,
 		},
 		ProfileId:    profileId,
 		Manufacturer: rdb.NullStrOf(request.Manufacturer),
@@ -170,7 +174,11 @@ func (api *Api) UpdateDeviceType(ctx context.Context, token string,
 	found.BackgroundColor = rdb.NullStrOf(request.BackgroundColor.ApplyTo(dcgraphql.NullStr(found.BackgroundColor)))
 	found.ForegroundColor = rdb.NullStrOf(request.ForegroundColor.ApplyTo(dcgraphql.NullStr(found.ForegroundColor)))
 	found.BorderColor = rdb.NullStrOf(request.BorderColor.ApplyTo(dcgraphql.NullStr(found.BorderColor)))
-	found.Metadata = rdb.MetadataStrOf(request.Metadata.ApplyTo(dcgraphql.MetadataStr(found.Metadata)))
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(found.Metadata)))
+	if err != nil {
+		return nil, err
+	}
+	found.Metadata = metadataJSON
 	found.ProfileId = profileId
 	found.Manufacturer = rdb.NullStrOf(request.Manufacturer.ApplyTo(dcgraphql.NullStr(found.Manufacturer)))
 	found.ModelName = rdb.NullStrOf(request.Model.ApplyTo(dcgraphql.NullStr(found.ModelName)))
@@ -242,6 +250,10 @@ func (api *Api) CreateDevice(ctx context.Context, request *DeviceCreateRequest) 
 		return nil, gorm.ErrRecordNotFound
 	}
 
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
 	created := &Device{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -254,7 +266,7 @@ func (api *Api) CreateDevice(ctx context.Context, request *DeviceCreateRequest) 
 			Description: rdb.NullStrOf(request.Description),
 		},
 		MetadataEntity: rdb.MetadataEntity{
-			Metadata: rdb.MetadataStrOf(request.Metadata),
+			Metadata: metadataJSON,
 		},
 		DeviceType: matches[0],
 	}
@@ -316,6 +328,10 @@ func (api *Api) CreateDevices(ctx context.Context, requests []*DeviceCreateReque
 			if dt == nil {
 				return fmt.Errorf("device type %q: %w", request.DeviceTypeToken, gorm.ErrRecordNotFound)
 			}
+			metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+			if err != nil {
+				return err
+			}
 			device := &Device{
 				TokenReference:    rdb.TokenReference{Token: request.Token},
 				ExternalReference: rdb.ExternalReference{ExternalId: rdb.NullStrOf(request.ExternalId)},
@@ -323,7 +339,7 @@ func (api *Api) CreateDevices(ctx context.Context, requests []*DeviceCreateReque
 					Name:        rdb.NullStrOf(request.Name),
 					Description: rdb.NullStrOf(request.Description),
 				},
-				MetadataEntity: rdb.MetadataEntity{Metadata: rdb.MetadataStrOf(request.Metadata)},
+				MetadataEntity: rdb.MetadataEntity{Metadata: metadataJSON},
 				// Set the FK by id (not the association) so a bulk create of N
 				// devices sharing a type does not re-touch device_types per row.
 				DeviceTypeId: dt.ID,
@@ -598,7 +614,11 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceC
 	updated.ExternalId = rdb.NullStrOf(request.ExternalId)
 	updated.Name = rdb.NullStrOf(request.Name)
 	updated.Description = rdb.NullStrOf(request.Description)
-	updated.Metadata = rdb.MetadataStrOf(request.Metadata)
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	updated.Metadata = metadataJSON
 
 	// Update device type if changed.
 	retyped := request.DeviceTypeToken != updated.DeviceType.Token

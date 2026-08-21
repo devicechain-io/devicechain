@@ -33,6 +33,14 @@ func (api *Api) CreateMetricDefinition(ctx context.Context,
 			"model string-valued telemetry as device state (ADR-016 amd)", request.DataType)
 	}
 
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	enumJSON, err := rdb.JSONInputOf("enum", request.Enum)
+	if err != nil {
+		return nil, err
+	}
 	created := &MetricDefinition{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -42,7 +50,7 @@ func (api *Api) CreateMetricDefinition(ctx context.Context,
 			Description: rdb.NullStrOf(request.Description),
 		},
 		MetadataEntity: rdb.MetadataEntity{
-			Metadata: rdb.MetadataStrOf(request.Metadata),
+			Metadata: metadataJSON,
 		},
 		DeviceProfile: matches[0],
 		MetricKey:     request.MetricKey,
@@ -50,7 +58,7 @@ func (api *Api) CreateMetricDefinition(ctx context.Context,
 		Unit:          rdb.NullStrOf(request.Unit),
 		MinValue:      rdb.NullFloat64Of(request.MinValue),
 		MaxValue:      rdb.NullFloat64Of(request.MaxValue),
-		Enum:          rdb.MetadataStrOf(request.Enum),
+		Enum:          enumJSON,
 		Descriptor:    rdb.NullStrOf(request.Descriptor),
 	}
 	result := api.RDB.DB(ctx).Create(created)
@@ -87,13 +95,21 @@ func (api *Api) UpdateMetricDefinition(ctx context.Context, token string,
 	updated.Token = request.Token
 	updated.Name = rdb.NullStrOf(request.Name)
 	updated.Description = rdb.NullStrOf(request.Description)
-	updated.Metadata = rdb.MetadataStrOf(request.Metadata)
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	updated.Metadata = metadataJSON
 	updated.MetricKey = request.MetricKey
 	updated.DataType = request.DataType
 	updated.Unit = rdb.NullStrOf(request.Unit)
 	updated.MinValue = rdb.NullFloat64Of(request.MinValue)
 	updated.MaxValue = rdb.NullFloat64Of(request.MaxValue)
-	updated.Enum = rdb.MetadataStrOf(request.Enum)
+	enumJSON, err := rdb.JSONInputOf("enum", request.Enum)
+	if err != nil {
+		return nil, err
+	}
+	updated.Enum = enumJSON
 	updated.Descriptor = rdb.NullStrOf(request.Descriptor)
 
 	// Update device profile if changed.

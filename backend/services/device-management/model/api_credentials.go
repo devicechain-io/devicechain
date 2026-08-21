@@ -38,12 +38,16 @@ func (api *Api) CreateDeviceCredential(ctx context.Context, request *DeviceCrede
 		expiresAt = sql.NullTime{Time: parsed, Valid: true}
 	}
 
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
 	created := &DeviceCredential{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
 		},
 		MetadataEntity: rdb.MetadataEntity{
-			Metadata: rdb.MetadataStrOf(request.Metadata),
+			Metadata: metadataJSON,
 		},
 		Device:          matches[0],
 		CredentialType:  request.CredentialType,
@@ -88,7 +92,11 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	// Update fields that changed.
 	updated := matches[0]
 	updated.Token = request.Token
-	updated.Metadata = rdb.MetadataStrOf(request.Metadata)
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	updated.Metadata = metadataJSON
 	updated.CredentialType = request.CredentialType
 	updated.CredentialId = request.CredentialId
 	updated.CredentialValue = rdb.NullStrOf(request.CredentialValue)

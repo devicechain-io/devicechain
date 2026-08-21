@@ -150,9 +150,13 @@ func (api *Api) CreateEntityRelationships(ctx context.Context,
 			if err != nil {
 				return fmt.Errorf("target: %w", err)
 			}
+			metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+			if err != nil {
+				return err
+			}
 			edge := &EntityRelationship{
 				TokenReference:     rdb.TokenReference{Token: request.Token},
-				MetadataEntity:     rdb.MetadataEntity{Metadata: rdb.MetadataStrOf(request.Metadata)},
+				MetadataEntity:     rdb.MetadataEntity{Metadata: metadataJSON},
 				SourceType:         request.SourceType,
 				SourceId:           sourceId,
 				TargetType:         request.TargetType,

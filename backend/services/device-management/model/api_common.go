@@ -18,13 +18,17 @@ import (
 // CreateEntityRelationshipType creates a new relationship type.
 func (api *Api) CreateEntityRelationshipType(ctx context.Context,
 	request *EntityRelationshipTypeCreateRequest) (*EntityRelationshipType, error) {
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
 	created := &EntityRelationshipType{
 		TokenReference: rdb.TokenReference{Token: request.Token},
 		NamedEntity: rdb.NamedEntity{
 			Name:        rdb.NullStrOf(request.Name),
 			Description: rdb.NullStrOf(request.Description),
 		},
-		MetadataEntity: rdb.MetadataEntity{Metadata: rdb.MetadataStrOf(request.Metadata)},
+		MetadataEntity: rdb.MetadataEntity{Metadata: metadataJSON},
 		Tracked:        request.Tracked,
 	}
 	if err := api.RDB.DB(ctx).Create(created).Error; err != nil {
@@ -47,7 +51,11 @@ func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
 	updated.Token = request.Token
 	updated.Name = rdb.NullStrOf(request.Name)
 	updated.Description = rdb.NullStrOf(request.Description)
-	updated.Metadata = rdb.MetadataStrOf(request.Metadata)
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	updated.Metadata = metadataJSON
 	updated.Tracked = request.Tracked
 	if err := api.RDB.DB(ctx).Save(updated).Error; err != nil {
 		return nil, err
@@ -102,9 +110,13 @@ func (api *Api) CreateEntityRelationship(ctx context.Context,
 		return nil, gorm.ErrRecordNotFound
 	}
 
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
 	created := &EntityRelationship{
 		TokenReference:     rdb.TokenReference{Token: request.Token},
-		MetadataEntity:     rdb.MetadataEntity{Metadata: rdb.MetadataStrOf(request.Metadata)},
+		MetadataEntity:     rdb.MetadataEntity{Metadata: metadataJSON},
 		SourceType:         request.SourceType,
 		SourceId:           sourceId,
 		TargetType:         request.TargetType,

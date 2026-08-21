@@ -17,6 +17,10 @@ func (api *Api) CreateDeviceProfile(ctx context.Context, request *DeviceProfileC
 	if err != nil {
 		return nil, err
 	}
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
 	created := &DeviceProfile{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -26,7 +30,7 @@ func (api *Api) CreateDeviceProfile(ctx context.Context, request *DeviceProfileC
 			Description: rdb.NullStrOf(request.Description),
 		},
 		MetadataEntity: rdb.MetadataEntity{
-			Metadata: rdb.MetadataStrOf(request.Metadata),
+			Metadata: metadataJSON,
 		},
 		Category:            rdb.NullStrOf(request.Category),
 		LocationDeclaration: location,
@@ -84,7 +88,11 @@ func (api *Api) UpdateDeviceProfile(ctx context.Context, token string,
 	found.Name = rdb.NullStrOf(request.Name)
 	found.Description = rdb.NullStrOf(request.Description)
 	found.Category = rdb.NullStrOf(request.Category)
-	found.Metadata = rdb.MetadataStrOf(request.Metadata)
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	found.Metadata = metadataJSON
 
 	// The position declaration (ADR-078) is replaced wholesale like every other field
 	// on this request, so a request carrying no declaration CLEARS one that was there.

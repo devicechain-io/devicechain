@@ -243,11 +243,19 @@ func (api *Api) decideCommandBatch(ctx context.Context, request *CommandBatchCre
 		acct.refuse(refusal.Code, boundNone)
 	}
 
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	payloadJSON, err := rdb.JSONInputOf("payload", request.Payload)
+	if err != nil {
+		return nil, err
+	}
 	created := &CommandBatch{
 		TokenReference: rdb.TokenReference{Token: request.Token},
-		MetadataEntity: rdb.MetadataEntity{Metadata: rdb.MetadataStrOf(request.Metadata)},
+		MetadataEntity: rdb.MetadataEntity{Metadata: metadataJSON},
 		Name:           request.Name,
-		Payload:        rdb.MetadataStrOf(request.Payload),
+		Payload:        payloadJSON,
 		TargetKind:     targets.kind.String(),
 		GroupToken:     targets.groupToken,
 		GroupVersion:   targets.groupVersion,

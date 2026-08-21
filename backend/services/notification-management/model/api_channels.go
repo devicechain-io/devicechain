@@ -27,15 +27,23 @@ func (api *Api) CreateNotificationChannel(ctx context.Context,
 		return nil, err
 	}
 
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	configJSON, err := rdb.JSONInputOf("config", request.Config)
+	if err != nil {
+		return nil, err
+	}
 	created := &NotificationChannel{
 		TokenReference: rdb.TokenReference{Token: request.Token},
 		NamedEntity: rdb.NamedEntity{
 			Name:        rdb.NullStrOf(request.Name),
 			Description: rdb.NullStrOf(request.Description),
 		},
-		MetadataEntity: rdb.MetadataEntity{Metadata: rdb.MetadataStrOf(request.Metadata)},
+		MetadataEntity: rdb.MetadataEntity{Metadata: metadataJSON},
 		ChannelType:    request.ChannelType,
-		Config:         rdb.MetadataStrOf(request.Config),
+		Config:         configJSON,
 		Enabled:        request.Enabled,
 	}
 	result := api.RDB.DB(ctx).Create(created)
@@ -87,9 +95,17 @@ func (api *Api) UpdateNotificationChannel(ctx context.Context, token string,
 	updated.Token = request.Token
 	updated.Name = rdb.NullStrOf(request.Name)
 	updated.Description = rdb.NullStrOf(request.Description)
-	updated.Metadata = rdb.MetadataStrOf(request.Metadata)
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	updated.Metadata = metadataJSON
 	updated.ChannelType = request.ChannelType
-	updated.Config = rdb.MetadataStrOf(request.Config)
+	configJSON, err := rdb.JSONInputOf("config", request.Config)
+	if err != nil {
+		return nil, err
+	}
+	updated.Config = configJSON
 	updated.Enabled = request.Enabled
 
 	result := api.RDB.DB(ctx).Save(updated)

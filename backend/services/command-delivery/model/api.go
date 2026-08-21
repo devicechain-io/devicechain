@@ -351,16 +351,24 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 		}
 	}
 
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	payloadJSON, err := rdb.JSONInputOf("payload", request.Payload)
+	if err != nil {
+		return nil, err
+	}
 	created := &Command{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
 		},
 		MetadataEntity: rdb.MetadataEntity{
-			Metadata: rdb.MetadataStrOf(request.Metadata),
+			Metadata: metadataJSON,
 		},
 		DeviceToken: request.DeviceToken,
 		Name:        request.Name,
-		Payload:     rdb.MetadataStrOf(request.Payload),
+		Payload:     payloadJSON,
 		Status:      CommandQueued.String(),
 		QueuedTime:  time.Now(),
 		ExpiresAt:   expiresAt,

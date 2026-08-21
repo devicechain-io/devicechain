@@ -12,6 +12,10 @@ import (
 
 // Create a new customer type.
 func (api *Api) CreateCustomerType(ctx context.Context, request *CustomerTypeCreateRequest) (*CustomerType, error) {
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
 	created := &CustomerType{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -28,7 +32,7 @@ func (api *Api) CreateCustomerType(ctx context.Context, request *CustomerTypeCre
 			BorderColor:     rdb.NullStrOf(request.BorderColor),
 		},
 		MetadataEntity: rdb.MetadataEntity{
-			Metadata: rdb.MetadataStrOf(request.Metadata),
+			Metadata: metadataJSON,
 		},
 	}
 	result := api.RDB.DB(ctx).Create(created)
@@ -58,7 +62,11 @@ func (api *Api) UpdateCustomerType(ctx context.Context, token string,
 	found.BackgroundColor = rdb.NullStrOf(request.BackgroundColor)
 	found.ForegroundColor = rdb.NullStrOf(request.ForegroundColor)
 	found.BorderColor = rdb.NullStrOf(request.BorderColor)
-	found.Metadata = rdb.MetadataStrOf(request.Metadata)
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	found.Metadata = metadataJSON
 
 	result := api.RDB.DB(ctx).Save(found)
 	if result.Error != nil {
@@ -108,6 +116,10 @@ func (api *Api) CreateCustomer(ctx context.Context, request *CustomerCreateReque
 		return nil, gorm.ErrRecordNotFound
 	}
 
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
 	created := &Customer{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -117,7 +129,7 @@ func (api *Api) CreateCustomer(ctx context.Context, request *CustomerCreateReque
 			Description: rdb.NullStrOf(request.Description),
 		},
 		MetadataEntity: rdb.MetadataEntity{
-			Metadata: rdb.MetadataStrOf(request.Metadata),
+			Metadata: metadataJSON,
 		},
 		CustomerType: matches[0],
 	}
@@ -143,7 +155,11 @@ func (api *Api) UpdateCustomer(ctx context.Context, token string, request *Custo
 	updated.Token = request.Token
 	updated.Name = rdb.NullStrOf(request.Name)
 	updated.Description = rdb.NullStrOf(request.Description)
-	updated.Metadata = rdb.MetadataStrOf(request.Metadata)
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	updated.Metadata = metadataJSON
 
 	// Update customer type if changed.
 	if request.CustomerTypeToken != updated.CustomerType.Token {

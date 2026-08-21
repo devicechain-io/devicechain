@@ -75,6 +75,10 @@ func (api *Api) CreateEntityGroup(ctx context.Context, request *EntityGroupCreat
 		selectorCol = sql.NullString{String: membership.Sel.Source(), Valid: true}
 		selectorSchema = selector.SchemaVersion
 	}
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
 	created := &EntityGroup{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -91,7 +95,7 @@ func (api *Api) CreateEntityGroup(ctx context.Context, request *EntityGroupCreat
 			BorderColor:     rdb.NullStrOf(request.BorderColor),
 		},
 		MetadataEntity: rdb.MetadataEntity{
-			Metadata: rdb.MetadataStrOf(request.Metadata),
+			Metadata: metadataJSON,
 		},
 		MemberType:     request.MemberType,
 		MembershipMode: string(mode),
@@ -152,7 +156,11 @@ func (api *Api) UpdateEntityGroup(ctx context.Context, token string,
 	updated.BackgroundColor = rdb.NullStrOf(request.BackgroundColor)
 	updated.ForegroundColor = rdb.NullStrOf(request.ForegroundColor)
 	updated.BorderColor = rdb.NullStrOf(request.BorderColor)
-	updated.Metadata = rdb.MetadataStrOf(request.Metadata)
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	updated.Metadata = metadataJSON
 
 	// Omit active_version: a draft edit must never write the version pointer back.
 	// The struct was loaded before this Save, so writing it whole would let an edit
