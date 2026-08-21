@@ -107,7 +107,7 @@ func startCaptureSource(t *testing.T, id string, reader messaging.MessageReader)
 	t.Helper()
 
 	out := make(chan decodedEvent, 32)
-	src := NewGatewayJetStreamSource(id, NewJsonDecoder(map[string]string{}),
+	src := NewGatewayJetStreamSource(id, NewJsonDecoder(map[string]string{}, 0),
 		func(string, []byte) {},
 		// The decoded callback is (sourceId, tenant, event, payload, captureSeq); the
 		// device token the payload claims is on the event, not a positional argument.

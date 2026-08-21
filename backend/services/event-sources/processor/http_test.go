@@ -22,7 +22,7 @@ func newTestHttpSource(t *testing.T, allow RateGate) (*HttpEventSource, *capture
 	t.Helper()
 	dec := &capturedDecode{}
 	fail := &capturedFailure{}
-	es, err := NewHttpEventSource("http-test", map[string]string{}, "inst-1", NewJsonDecoder(map[string]string{}),
+	es, err := NewHttpEventSource("http-test", map[string]string{}, "inst-1", NewJsonDecoder(map[string]string{}, 0),
 		func(string, []byte) {},
 		func(source string, tenant string, event *model.UnresolvedEvent, payload interface{}, captureSeq uint64) error {
 			dec.called = true
@@ -172,17 +172,17 @@ func TestHttpEventSource_WrongMethod(t *testing.T) {
 
 // The configured port is parsed; an invalid port fails construction.
 func TestNewHttpEventSource_Port(t *testing.T) {
-	es, err := NewHttpEventSource("http-test", map[string]string{"port": "9000"}, "inst-1", NewJsonDecoder(map[string]string{}),
+	es, err := NewHttpEventSource("http-test", map[string]string{"port": "9000"}, "inst-1", NewJsonDecoder(map[string]string{}, 0),
 		func(string, []byte) {}, nil, nil, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, 9000, es.Port)
 
-	_, err = NewHttpEventSource("http-test", map[string]string{"port": "abc"}, "inst-1", NewJsonDecoder(map[string]string{}),
+	_, err = NewHttpEventSource("http-test", map[string]string{"port": "abc"}, "inst-1", NewJsonDecoder(map[string]string{}, 0),
 		func(string, []byte) {}, nil, nil, nil)
 	assert.Error(t, err)
 
 	// Absent port falls back to the default.
-	es, err = NewHttpEventSource("http-test", map[string]string{}, "inst-1", NewJsonDecoder(map[string]string{}),
+	es, err = NewHttpEventSource("http-test", map[string]string{}, "inst-1", NewJsonDecoder(map[string]string{}, 0),
 		func(string, []byte) {}, nil, nil, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, DEFAULT_HTTP_PORT, es.Port)

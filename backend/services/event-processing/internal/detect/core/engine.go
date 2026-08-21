@@ -624,7 +624,7 @@ func (e *Engine) RetainedSampleCounts() map[string]int {
 		counts[k.Rule] += len(times)
 	}
 	for k, st := range e.slides {
-		counts[k.Rule] += len(st.buf)
+		counts[k.Rule] += st.count()
 	}
 	for k, members := range e.corr {
 		counts[k.Rule] += len(members)

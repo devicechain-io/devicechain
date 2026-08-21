@@ -624,6 +624,17 @@ func measurementDedupID(prefix, tenant, deviceToken string, occurredMillis int64
 // this Ingester on its Register/Update and Notify paths. The Sparkplug source does NOT yet
 // gate: its exposure is bounded (an opt-in broker an operator deliberately connects to, not
 // open-internet device ingest), and it can adopt IngestLimiter unchanged when that changes.
+//
+// 🔴 THAT GAP IS NOT ONLY ABOUT RATE, AND THE SECOND HALF IS EASIER TO MISS. Emit builds one
+// entry per sample handed to it, so the samples in ONE call are also the FAN-OUT of one
+// message — the stored rows, the projection writes and the evaluations on the single DETECT
+// goroutine every tenant shares. The JSON transports bound that with a hard per-message
+// ceiling (config.MaxReadingsPerMessage) and LwM2M with decode.MaxSamplesPerNotify, but
+// neither reaches HERE: Emit is downstream of both. Sparkplug is therefore unbounded on this
+// axis too — samplesFrom appends one Sample per numeric metric in a DDATA with no cap — and
+// it runs on paho's ordered receive goroutine, so a wide DDATA blocks that client's receive
+// as well. Adopting IngestLimiter closes the RATE half; the fan-out half wants a cap on the
+// Sparkplug decode, in the same shape as the other two sources have.
 // Any gate here MUST stay label-free per tenant (no per-tenant metric labels — the ADR-023
 // cardinality lesson), as these counters and IngestLimiter's do.
 type Ingester struct {

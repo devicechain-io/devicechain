@@ -40,7 +40,8 @@ la cola de mensajes fallidos en lugar de aceptarse en silencio.
 **Una entrada es una lectura, tomada en un instante.** Una entrada puede llevar su propio
 `occurredTime`, y ese es el instante con el que la lectura se almacena, se grafica, se evalúa y se
 devuelve —de modo que un dispositivo que acumula lecturas mientras está sin conexión puede subir
-toda la serie en un solo mensaje y conservar el historial que realmente registró. Una entrada sin
+una serie acumulada, hasta el tope por mensaje descrito más abajo, y conservar el historial que
+realmente registró. Una entrada sin
 `occurredTime` toma la del sobre. `occurredTime` es RFC 3339 (`2026-08-09T12:00:00.125Z`) donde
 aparezca; un valor que no lo sea es **rechazado** indicando la entrada culpable, nunca sustituido en
 silencio.
@@ -51,8 +52,39 @@ plataforma reserva para significar «no se informó ninguna hora». Un dispositi
 lleva por delante **el mensaje entero** — todas las lecturas hermanas del mismo lote —, así que
 conviene descartarlo en el firmware antes que descubrirlo en una cola de mensajes fallidos.
 
+### Cuánto puede llevar un mensaje
+
+**Un mensaje admite como máximo 1000 lecturas.** Una lectura es un dato almacenado: en mediciones,
+una *clave de métrica* —así que una entrada con doce métricas son doce lecturas—; en ubicaciones y
+alertas, una entrada. Contar claves en lugar de entradas es deliberado: una sola entrada puede
+llevar miles de métricas, y son las lecturas, no las entradas, las que se convierten en filas
+almacenadas, actualizaciones de estado y evaluaciones de reglas.
+
+Ese abanico es la razón de ser del tope. El limitador de ingesta por inquilino mide *mensajes*, y
+cobra lo mismo por un mensaje de una lectura que por uno de cuarenta mil, de modo que sin esto un
+solo mensaje es un coste ilimitado que asume toda la instancia. Un dispositivo con un backlog más
+profundo lo sube en varios mensajes.
+
+Por encima del tope, el mensaje se **rechaza entero**, nunca se recorta para que quepa: un lote
+recortado en silencio se respondería con `202` y las lecturas ausentes serían indetectables desde
+ambos extremos. No se almacena nada, y tampoco se pierde nada: el mensaje se enruta íntegro al flujo
+de decodificación fallida.
+
+Cómo se entera uno depende del transporte, y la diferencia importa:
+
+- **HTTP** responde `400`, indicando el número de lecturas y el tope.
+- **MQTT** no le dice nada al dispositivo. El broker confirma una publicación cuando la captura de
+  forma duradera, es decir antes de decodificarla, así que un `PUBACK` no promete que el mensaje
+  fuera aceptado: un rechazo posterior solo es visible para el operador.
+
+Los operadores ven todos los rechazos en el contador `total_msg_too_many_readings`, y el tope es un
+ajuste de operador (`maxReadingsPerMessage`) para una instancia cuya flota necesite realmente otro
+valor. Bajarlo no reescribe el historial, pero sí se aplica a lo que siga en cola: los mensajes ya
+capturados y aún sin decodificar se rechazan con el valor nuevo.
+
 :::caution Un lote muy acumulado se almacena entero, pero la detección puede no verlo todo
-La frase anterior habla de *almacenamiento*, y ahí se cumple sin matices: cada lectura aterriza y se
+«Una entrada es una lectura, tomada en un instante» habla de *almacenamiento*, y ahí se cumple sin
+matices: cada lectura aterriza y se
 grafica en su propio instante. La detección es otra cosa. El motor mantiene una única frontera para
 toda la instancia y la avanza con la hora de cada mensaje, así que **un dispositivo que estuvo un
 rato sin conexión y luego sube toda su serie de golpe puede hacer que sus lecturas más antiguas

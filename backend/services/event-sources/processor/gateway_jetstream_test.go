@@ -82,7 +82,7 @@ type captureHarness struct {
 func newCaptureHarness(t *testing.T) *captureHarness {
 	t.Helper()
 	h := &captureHarness{allowResult: true}
-	h.source = NewGatewayJetStreamSource("gw-test", NewJsonDecoder(map[string]string{}),
+	h.source = NewGatewayJetStreamSource("gw-test", NewJsonDecoder(map[string]string{}, 0),
 		func(string, []byte) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
@@ -574,7 +574,7 @@ func TestFutureAppendTimeCannotMintTokens(t *testing.T) {
 // runs. So this asserts the one thing that was actually checkable: that the source
 // refuses to start unwired, at the point of consumption.
 func TestStartingWithoutACaptureReaderFailsLoudly(t *testing.T) {
-	source := NewGatewayJetStreamSource("gw-unwired", NewJsonDecoder(map[string]string{}),
+	source := NewGatewayJetStreamSource("gw-unwired", NewJsonDecoder(map[string]string{}, 0),
 		func(string, []byte) {},
 		func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil },
 		func(string, string, []byte, error) error { return nil },
