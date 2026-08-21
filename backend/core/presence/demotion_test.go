@@ -57,8 +57,14 @@ func TestAcceptsDemotionConjunctByConjunct(t *testing.T) {
 			want:  false,
 		},
 		{
-			// A higher stored session means the source spoke again AFTER the read the
-			// demotion is built on — it is demonstrably alive, so the premise is gone.
+			// The conjunct is an EQUALITY, so it refuses a mismatch in either direction, and
+			// each direction is refused for its own reason. Incoming higher than stored (the
+			// row below): the demotion names a session the row has not reached, so the
+			// precondition that makes a demotion safe — that it releases the session actually
+			// on file — is simply not met. Stored higher than incoming: the source spoke
+			// again after the read this demotion was built on, so it is demonstrably still
+			// alive and the premise is gone. Neither is a one-way door; the demoter re-reads
+			// and re-issues on its next pass.
 			name:  "demotion names a DIFFERENT (higher) session than the row holds",
 			prior: base,
 			in:    Incoming{SessionId: 200, OccurredAt: demoT0.Add(time.Minute), Claim: ClaimDemoted},

@@ -363,3 +363,70 @@ func TestAFirstAuthoritativeConnectStampsWithoutASessionId(t *testing.T) {
 		t.Fatalf("first authoritative connect left LastConnectTime at %v: %+v", ds.LastConnectTime.Time, ds)
 	}
 }
+
+// TestAnInvalidClaimDoesNotCreateAnAssertedRow closes the same hole the demotion guard
+// closes, for the claim nobody writes on purpose. Row creation never consults
+// presence.Decide, so the Claim type's central promise — that a literal which forgets the
+// field is REFUSED rather than read as a death — held only on the update path. A struct
+// literal omitting Claim is exactly what the mapper produces on a state it cannot map, and
+// the resulting row is asserted-dead: commands to it are then HELD, on the strength of a
+// death nobody ever reported.
+func TestAnInvalidClaimDoesNotCreateAnAssertedRow(t *testing.T) {
+	ctx := core.WithTenant(context.Background(), "A")
+	t0 := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+
+	for name, claim := range map[string]presence.Claim{
+		"the zero value a literal produces by omission": presence.ClaimUnset,
+		"a claim from outside the vocabulary":           presence.Claim(99),
+	} {
+		t.Run(name, func(t *testing.T) {
+			api := newTestApi(t)
+			ds, err := api.MergeDeviceState(ctx, "sp-bogus", t0,
+				&PresenceTransition{Claim: claim, SessionId: 5, OccurredAt: t0}, DeviceIdentity{})
+			if err != nil {
+				t.Fatalf("merge: %v", err)
+			}
+			if ds.PresenceSource != PresenceSourceInferred {
+				t.Fatalf("an unusable claim created an asserted row: %+v", ds)
+			}
+			if ds.LastDisconnectTime.Valid {
+				t.Fatalf("an unusable claim fabricated a death time: %+v", ds)
+			}
+			if ds.Active || ds.PresenceTime.Valid || ds.SessionId != 0 {
+				t.Fatalf("an unusable claim invented presence state: %+v", ds)
+			}
+		})
+	}
+}
+
+// TestAFrozenClockDeviceIsNotPermanentlyOffline pins the boundary of the freshness gate.
+// A device whose clock is stuck stamps every event with the same time — broken, but still
+// a device SENDING DATA. Gating the resurrect on a STRICT "newer than recorded activity"
+// makes its first sweep its last state change: every later event compares equal, never
+// resurrects, and the row reads inactive forever while telemetry keeps arriving. The gate
+// exists to refuse events from the PAST, and an equal stamp is not the past.
+func TestAFrozenClockDeviceIsNotPermanentlyOffline(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+	sys := core.WithSystemContext(ctx)
+	t0 := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+
+	if _, err := api.MergeDeviceState(ctx, "stuck-clock", t0, nil, DeviceIdentity{}); err != nil {
+		t.Fatalf("initial merge: %v", err)
+	}
+	if flipped, err := api.SweepInactive(sys, t0.Add(2*time.Hour)); err != nil || flipped != 1 {
+		t.Fatalf("sweep: %v (flipped=%d)", err, flipped)
+	}
+
+	// The device keeps reporting, always stamping the same instant.
+	ds, err := api.MergeDeviceState(ctx, "stuck-clock", t0, nil, DeviceIdentity{})
+	if err != nil {
+		t.Fatalf("post-sweep merge: %v", err)
+	}
+	if !ds.Active {
+		t.Fatalf("a device that is still sending data reads permanently inactive: %+v", ds)
+	}
+	if ds.InactivityAlarmTime.Valid {
+		t.Fatalf("the inactivity alarm was not cleared on resurrect: %+v", ds)
+	}
+}

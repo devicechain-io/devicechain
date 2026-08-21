@@ -104,10 +104,23 @@ func newDeviceState(deviceToken string, occurredAt time.Time, pt *PresenceTransi
 		PresenceSource:    PresenceSourceInferred,
 		InactivityTimeout: config.DefaultInactivityTimeout,
 	}
-	if pt != nil && pt.Claim == presence.ClaimDemoted {
-		return ds
-	}
 	if pt != nil {
+		// 🔴 THE GUARD IS POSITIVE, AND IT HAS TO BE. Row creation is the ONE presence path
+		// that never consults presence.Decide, so nothing here refuses a claim on its own
+		// terms: whatever this branch admits becomes an ASSERTED row with a fabricated
+		// connectivity edge, and command-delivery HOLDS commands for an asserted-dead
+		// device. Naming only the claims that are refused leaves every claim that is merely
+		// NOT ClaimConnected reading as a death — which is the exact bool-shaped misreading
+		// the Claim type exists to forbid, and which the zero value walks straight into.
+		//
+		// So a DEMOTED claim (custody released for a device the projection never knew) and
+		// an INVALID one (a producer defect) both fall through to the inert row, as does any
+		// claim added later. Nothing authoritative has been said about this device; the row
+		// is created knowing nothing, and its next data event populates it the ordinary
+		// inferred way.
+		if pt.Claim != presence.ClaimConnected && pt.Claim != presence.ClaimDisconnected {
+			return ds
+		}
 		ds.PresenceSource = PresenceSourceAsserted
 		ds.SessionId = pt.SessionId
 		ds.PresenceTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
@@ -259,13 +272,26 @@ func (api *Api) MergeDeviceState(ctx context.Context, deviceToken string, occurr
 		// Plain data event. An ASSERTED device takes Active ONLY from a StateChange, so
 		// a data event must not flip it (it still advances activity below); an INFERRED
 		// device treats every event as an implicit heartbeat (unchanged behavior).
-		// A data event older than the activity already recorded is evidence about the
-		// past, not the present. The activity advance has always been guarded that way;
-		// the resurrect was not, so a redelivered or store-and-forward event from before
-		// the silence could bring a swept device back to life and then immediately be
-		// swept again. Both effects read the SAME freshness test — a stale event is stale
-		// for every purpose, not just for the timestamp.
-		fresh := !found.LastActivityTime.Valid || occurredAt.After(found.LastActivityTime.Time)
+
+		// A data event OLDER than the activity already recorded is evidence about the past,
+		// not the present. The activity advance has always been guarded that way; the
+		// resurrect was not, so a redelivered or store-and-forward event from before the
+		// silence could bring a swept device back to life and then immediately be swept
+		// again. Both effects now read the SAME test — a stale event is stale for every
+		// purpose, not just for the timestamp.
+		//
+		// 🔴 THE TEST IS "NOT OLDER" RATHER THAN "NEWER", AND THE BOUNDARY CASE IS WHY. A
+		// device with a frozen clock stamps every event identically — broken, but still a
+		// device SENDING DATA. Under a strict After() its first sweep would be its last
+		// state change: every later event compares equal, never resurrects, and the row
+		// reads inactive forever while telemetry keeps arriving. Trading a flap for a
+		// permanent lie is not a repair.
+		//
+		// It deliberately does not close every re-sweep. The sweep leaves LastActivityTime
+		// alone, so an event newer than the last recorded activity but still from inside the
+		// silence resurrects and is swept again next pass. That device really did produce
+		// data at that time; whether it is alive NOW is the sweep's question, not this one's.
+		fresh := !found.LastActivityTime.Valid || !occurredAt.Before(found.LastActivityTime.Time)
 		if fresh && found.PresenceSource != PresenceSourceAsserted && !found.Active {
 			found.Active = true
 			found.LastConnectTime = sql.NullTime{Time: occurredAt, Valid: true}
