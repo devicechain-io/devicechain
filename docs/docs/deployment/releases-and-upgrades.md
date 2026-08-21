@@ -407,8 +407,8 @@ member receives by default. See [AI Access (MCP)](../concepts/mcp.md).
 | `assertedActiveDeviceStates` | Replaced by `assertedDeviceStates`, which takes `activeOnly` and pages through `afterId` and `pageSize`. |
 | `deviceCredentials`, `deviceCredentialsById`, `deviceCredentialsByToken` | Now require `device:write`. For one credential type the readable identifier *is* the bearer token, so `device:read` — which every enabled member holds — was enough to open a broker session as any device in the tenant. |
 | `locationEvents` | Now requires `location:read`, as above. |
-| Any `...ById(ids: [])` query | An empty id list now returns nothing. It used to return the whole table, unpaginated. |
 | `geoFenceSetSnapshot`, `currentGeoFenceSet` | Their `fences` field is now paginated: it takes a required `pagination` argument and returns `results` alongside a `pagination` record, instead of a plain list. Read pages until `pageEnd` reaches `totalRecords`. A fence set at the documented limits is larger than a single response can carry, so the list form could not be returned at all for the tenants most likely to ask for it. |
+| Any `...ById(ids: [])` query | An empty id list now returns nothing. It used to return the whole table, unpaginated. |
 
 **5. Stop zero-padding entity ids.** An `id` argument is now parsed as a decimal number
 and nothing else. It used to be parsed with the base inferred from the literal, so a
