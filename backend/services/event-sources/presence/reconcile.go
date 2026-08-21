@@ -149,7 +149,7 @@ type Reconciler struct {
 }
 
 // 🔑 A REPAIR AND THE TRANSITION IT REPLACES SHARE A DEDUP ID, WHICH IS WANTED AND
-// SURPRISING. presenceDedupID keys on (tenant, device, session, state), so two repair
+// SURPRISING. stateChangeDedupID keys on (tenant, device, session, state), so two repair
 // passes emitting the same synthetic transition inside the JetStream dedup window
 // collapse to one write — idempotent, which is the point. The consequence to know before
 // reading a test result: a repair issued moments after the transition it is replacing can

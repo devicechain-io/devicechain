@@ -288,7 +288,7 @@ func TestDedupIDStableAndDistinct(t *testing.T) {
 
 	// Presence: stable per (device, session, state); distinct across state and session.
 	ev := PresenceEvent{ExternalId: "g/n", Connected: true, SessionId: 5, OccurredAt: time.Unix(1, 0)}
-	pid := func(e PresenceEvent) string { return presenceDedupID("sp", "acme", "dev-1", e) }
+	pid := func(e PresenceEvent) string { return stateChangeDedupID("sp", "acme", "dev-1", presenceStateChange(e)) }
 	// OccurredAt is deliberately NOT in the key — a retry re-stamps a fresh receipt
 	// clock, so keying on it would defeat the dedup.
 	assert.Equal(t, pid(ev), pid(PresenceEvent{Connected: true, SessionId: 5, OccurredAt: time.Unix(9, 0)}), "same (device,session,state) dedups regardless of receipt time")

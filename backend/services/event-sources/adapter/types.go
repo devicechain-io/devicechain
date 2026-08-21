@@ -33,6 +33,31 @@ type Sample struct {
 // transition. OccurredAt is the host RECEIPT clock, never a device-supplied payload
 // timestamp — a death-signal (a Sparkplug will built at connect time, a lifetime timer
 // firing) has no meaningful device timestamp and a payload ts could read as stale.
+// DemotionEvent is a source RELEASING CUSTODY of a device (ADR-067): it will no longer
+// speak for the device's connectivity, and it is asserting nothing about whether the
+// device is up or down. The projection returns the row to INFERRED — which hands it back
+// to the inactivity sweep and the implicit-heartbeat path, the two repair mechanisms an
+// asserted row suppresses — and DETECT resolves any offline alarm it was holding, since
+// the resolve would otherwise come from a CONNECT this source will never send.
+//
+// 🔴 THERE IS DELIBERATELY NO Connected FIELD, AND ITS ABSENCE IS THE TYPE'S WHOLE JOB.
+// A demotion carried in a PresenceEvent would have to put SOMETHING in that bool, and
+// whatever it put would be read downstream as a connectivity edge — false meaning a death
+// nobody reported, and an offline alarm for every device a disabled source releases. The
+// separate type makes the wrong emission unwritable rather than merely discouraged.
+//
+// SessionId names the session being released, and naming it is not bookkeeping: the
+// projection accepts a demotion ONLY against the session it currently holds, so a
+// demotion that names the wrong one is refused rather than misapplied. OccurredAt is the
+// releasing clock's time. Reason is descriptive metadata for the audit trail, never an
+// ordering or authorization input. DedupNonce follows PresenceEvent's rules below.
+type DemotionEvent struct {
+	SessionId  uint64
+	OccurredAt time.Time
+	Reason     string
+	DedupNonce string
+}
+
 type PresenceEvent struct {
 	ExternalId string
 	Connected  bool

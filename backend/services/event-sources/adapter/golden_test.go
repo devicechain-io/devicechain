@@ -48,9 +48,26 @@ func TestGoldenDedupIDs(t *testing.T) {
 		ExternalId: "plant-a/n1", Connected: true, Reason: "birth",
 		SessionId: 1_700_000_000_123456789, OccurredAt: time.Unix(1_700_000_000, 0),
 	}
-	assert.Equal(t, "sp1gip9ahddziq7", presenceDedupID("sp", "acme", "sp-dev-abc", ev),
+	assert.Equal(t, "sp1gip9ahddziq7", stateChangeDedupID("sp", "acme", "sp-dev-abc", presenceStateChange(ev)),
 		"connected presence dedup id must not drift")
 	ev.Connected = false
-	assert.Equal(t, "sp1gifu7otvqvza", presenceDedupID("sp", "acme", "sp-dev-abc", ev),
+	assert.Equal(t, "sp1gifu7otvqvza", stateChangeDedupID("sp", "acme", "sp-dev-abc", presenceStateChange(ev)),
 		"disconnected presence dedup id must not drift")
+
+	// A demotion of the SAME device and the SAME session must key distinctly from both
+	// connectivity claims. Sharing a key would let a demotion be silently swallowed as a
+	// duplicate of the connect or disconnect it follows — reported as success, for the
+	// length of the duplicate window, on the one emission that repairs a frozen row.
+	dem := DemotionEvent{
+		Reason: "tap disabled", SessionId: 1_700_000_000_123456789, OccurredAt: time.Unix(1_700_000_000, 0),
+	}
+	demID := stateChangeDedupID("sp", "acme", "sp-dev-abc", demotionStateChange(dem))
+	assert.NotEqual(t, "sp1gip9ahddziq7", demID, "a demotion must not collide with the connect it follows")
+	assert.NotEqual(t, "sp1gifu7otvqvza", demID, "a demotion must not collide with the disconnect it follows")
+	assert.Equal(t, "sp1ghx023qv9mhg", demID, "demotion dedup id must not drift")
+
+	// Two demotions releasing DIFFERENT sessions are different events and must key apart.
+	dem.SessionId++
+	assert.NotEqual(t, demID, stateChangeDedupID("sp", "acme", "sp-dev-abc", demotionStateChange(dem)),
+		"demotions of different sessions must key distinctly")
 }
