@@ -547,19 +547,21 @@ func (rez *EventResolver) ResolveStateChangeEventPayload(ctx context.Context, de
 	if err != nil {
 		return nil, err
 	}
-	// A demotion releases a NAMED session, and both of these refusals exist because the
-	// alternative is a silent no-op rather than an error. presence.Decide accepts a
-	// demotion only when its session equals the one the row already holds, so a
-	// session-less demotion can never match anything: it would be admitted here, travel
-	// the whole pipeline, and be dropped by the ordering guard as "stale" — indis-
-	// tinguishable from a genuinely late echo, and leaving the row exactly as wedged as
-	// before. And a compare-and-set precondition on a demotion is incoherent by
-	// construction: the demotion is ALREADY matched against the stored session, so an
-	// ExpectedSessionId either restates that or contradicts it.
+	// These refusals exist because the alternative is a silent no-op rather than an error:
+	// a demotion the ordering guard drops is indistinguishable from a genuinely late echo,
+	// and it leaves the row exactly as wedged as it was.
+	//
+	// 🔴 A ZERO SESSION ID IS NOT ONE OF THEM, AND THE REASONING THAT SAID IT WAS IS
+	// WRONG. The claim was that a session-less demotion can never match anything, because
+	// a demotion applies only against the session the row already holds. But a row asserted
+	// by a producer that sent no session id HOLDS ZERO — parseSessionId documents empty as
+	// absent, and that is a supported way to report presence — so zero matches zero and the
+	// demotion applies exactly where it should. Refusing it would make those rows the one
+	// population that can never be handed back to inferred: permanently frozen, by the
+	// guard written to stop rows freezing. The blast radius is bounded by the same equality
+	// that makes it work, since a zero-session demotion can reach nothing else, and an
+	// INFERRED row is refused on the stamp instead.
 	if payload.State == esmodel.PresenceDemoted {
-		if sessionId == 0 {
-			return nil, fmt.Errorf("state-change event demotes with no session id; a demotion must name the session it releases")
-		}
 		if expectedSessionId != 0 {
 			return nil, fmt.Errorf("state-change event carries expected session id %d on a demotion; a demotion is already matched against the stored session", expectedSessionId)
 		}

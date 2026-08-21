@@ -430,3 +430,48 @@ func TestAFrozenClockDeviceIsNotPermanentlyOffline(t *testing.T) {
 		t.Fatalf("the inactivity alarm was not cleared on resurrect: %+v", ds)
 	}
 }
+
+// TestASessionlessRowCanStillBeHandedBack is the counterpart to
+// TestAFirstAuthoritativeConnectStampsWithoutASessionId, which builds the row this one
+// releases. A producer may legitimately send no session id, so an ASSERTED row can hold
+// zero — and a demotion applies only against the session the row already holds, which for
+// such a row IS zero. If a zero-session demotion were refused anywhere in the chain, these
+// rows would be the one population that can never be handed back: permanently frozen by
+// the mechanism built to stop rows freezing.
+func TestASessionlessRowCanStillBeHandedBack(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+	t0 := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+
+	if _, err := api.MergeDeviceState(ctx, "sp-nosess", t0, nil, DeviceIdentity{}); err != nil {
+		t.Fatalf("seed merge: %v", err)
+	}
+	asserted, err := api.MergeDeviceState(ctx, "sp-nosess", t0.Add(time.Minute), conn(0, t0.Add(time.Minute)), DeviceIdentity{})
+	if err != nil {
+		t.Fatalf("connect merge: %v", err)
+	}
+	if asserted.PresenceSource != PresenceSourceAsserted || asserted.SessionId != 0 {
+		t.Fatalf("precondition: expected an asserted row holding session 0, got %+v", asserted)
+	}
+
+	demoted, err := api.MergeDeviceState(ctx, "sp-nosess", t0.Add(2*time.Minute), demote(0, t0.Add(2*time.Minute)), DeviceIdentity{})
+	if err != nil {
+		t.Fatalf("demotion merge: %v", err)
+	}
+	if demoted.PresenceSource != PresenceSourceInferred {
+		t.Fatalf("a session-less row could not be handed back: %+v", demoted)
+	}
+
+	// And an INFERRED row is still refused, on the STAMP rather than the session — which is
+	// what bounds the blast radius of admitting a zero session at all.
+	if _, err := api.MergeDeviceState(ctx, "sp-plain", t0, nil, DeviceIdentity{}); err != nil {
+		t.Fatalf("plain seed: %v", err)
+	}
+	plain, err := api.MergeDeviceState(ctx, "sp-plain", t0.Add(time.Minute), demote(0, t0.Add(time.Minute)), DeviceIdentity{})
+	if err != nil {
+		t.Fatalf("plain demotion merge: %v", err)
+	}
+	if plain.PresenceTime.Valid {
+		t.Fatalf("a demotion moved a row no source has ever spoken for: %+v", plain)
+	}
+}

@@ -666,9 +666,12 @@ func (suite *EventResolverTestSuite) TestStateChangeDemotionShape() {
 	assert.Equal(suite.T(), "DEMOTED", out.(*dmodel.ResolvedStateChangePayload).State)
 	assert.Equal(suite.T(), uint64(42), out.(*dmodel.ResolvedStateChangePayload).SessionId)
 
-	// A demotion that names no session can never match a stored one.
-	_, err = rez.ResolveStateChangeEventPayload(context.Background(), dev, nil, sc("", ""))
-	assert.Error(suite.T(), err)
+	// A demotion naming NO session is admitted, and must be: a row asserted by a producer
+	// that sent no session id holds zero, so zero matches zero. Refusing it would make
+	// exactly those rows the one population that can never be handed back to inferred.
+	out, err = rez.ResolveStateChangeEventPayload(context.Background(), dev, nil, sc("", ""))
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), uint64(0), out.(*dmodel.ResolvedStateChangePayload).SessionId)
 
 	// A compare-and-set precondition on a demotion is incoherent: the demotion is already
 	// matched against the stored session.
