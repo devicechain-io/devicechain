@@ -21,22 +21,27 @@ func (e *Engine) applyCorrelation(ev Event, r Rule) {
 	if r.Count <= 0 || ev.Member == "" {
 		return
 	}
+	cutoff := e.windowCutoff(ev.Time, r.Window)
+	records := e.foldsIn(ev, cutoff)
 	members := e.corr[ev.Key]
 	if members == nil {
-		if !ev.Match {
-			return // no cohort and a non-matching sighting opens none — nothing to evict or resolve
+		if !records {
+			// No cohort yet, and nothing this sighting may open one with: a non-matching sighting opens
+			// none (nothing to evict or resolve), and neither does a late one — its own window has
+			// already passed the frontier, so a member recorded from it would be evicted unread.
+			return
 		}
 		members = map[string]int64{}
 		e.corr[ev.Key] = members
 	}
-	cutoff := ev.Time.Add(-r.Window).UnixNano()
+	cutoffNanos := cutoff.UnixNano()
 	for m, ts := range members {
-		if ts <= cutoff {
+		if ts <= cutoffNanos {
 			delete(members, m)
 		}
 	}
 	prev := len(members)
-	if ev.Match {
+	if records {
 		// Keep the member's MOST RECENT sighting: a bounded-late out-of-order refresh must not
 		// regress the timestamp, or the member evicts early and a later event re-crosses the
 		// threshold — a spurious second fire for a cohort that was continuously present. Test

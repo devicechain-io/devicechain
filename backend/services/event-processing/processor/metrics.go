@@ -54,6 +54,7 @@ type detectMetrics struct {
 	rulesActive       prometheus.Gauge
 	fanoutEventsTotal prometheus.Counter
 	fanoutEvalErrors  prometheus.Counter
+	lateSamplesTotal  prometheus.Counter
 	derivedPublished  prometheus.Counter
 	derivedRejected   *prometheus.CounterVec
 
@@ -115,6 +116,7 @@ func newDetectMetrics(ms *core.Microservice) *detectMetrics {
 		rulesActive:       ms.NewGauge("detect_rules_active", "Rules loaded into the DETECT engine.", nil),
 		fanoutEventsTotal: ms.NewCounter("detect_fanout_events_total", "Per-rule core events produced by the resolved-event fan-out.", nil),
 		fanoutEvalErrors:  ms.NewCounter("detect_fanout_eval_errors_total", "Leaf-predicate evaluation errors during fan-out (the sample is skipped for that rule, not fed as a non-match).", nil),
+		lateSamplesTotal:  ms.NewCounter("detect_late_samples_total", "Samples that arrived after their own trailing window had passed the watermark and so were not folded into a sliding-window rule (Repeating, SlidingAgg, Correlation). A store-and-forward device uploading buffered readings is the usual cause; a sustained non-zero rate means those rules are evaluating less than the device sent.", nil),
 		derivedPublished:  ms.NewCounter("detect_derived_events_published_total", "Derived signal events published (ADR-037).", nil),
 		derivedRejected:   ms.NewCounterVec("detect_derived_events_rejected_total", "Detections dropped before publish, by reason (bounded enum).", []string{"reason"}),
 
@@ -271,6 +273,14 @@ func (m *detectMetrics) RecordFanout(events, evalErrors int) {
 	if evalErrors > 0 {
 		m.fanoutEvalErrors.Add(float64(evalErrors))
 	}
+}
+
+// recordLateSamples records samples the engine declined as late (core.DrainLateSamples).
+func (m *detectMetrics) recordLateSamples(n uint64) {
+	if m == nil || n == 0 {
+		return
+	}
+	m.lateSamplesTotal.Add(float64(n))
 }
 
 // RecordDerivedPublished records one published derived event (runtime.Metrics).

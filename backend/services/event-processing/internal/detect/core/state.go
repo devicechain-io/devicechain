@@ -186,16 +186,21 @@ func (s *slidingState) value(op AggOp) float64 {
 // stops satisfying — rather than staying raised until the next match. For a match-every rule (the
 // common case) every sample folds in, so this is byte-identical to always-insert.
 func (e *Engine) applySlidingAgg(ev Event, r Rule) {
+	cutoff := e.windowCutoff(ev.Time, r.Window)
+	folds := e.foldsIn(ev, cutoff)
 	st := e.slides[ev.Key]
 	if st == nil {
-		if !ev.Match {
-			return // no window and a non-matching sample opens none — nothing to evict or resolve
+		if !folds {
+			// No window yet, and nothing this sample may open one with: a non-matching sample opens
+			// none (nothing to evict or resolve), and neither does a late one — its own window has
+			// already passed the frontier, so an entry made from it would be evicted unread.
+			return
 		}
 		st = &slidingState{}
 		e.slides[ev.Key] = st
 	}
-	st.evict(ev.Time.Add(-r.Window))
-	if ev.Match {
+	st.evict(cutoff)
+	if folds {
 		st.insert(sample{t: ev.Time, v: ev.Value})
 	}
 	// Evaluate the level ONCE, on the fully-updated trailing window (evicted + this sample folded

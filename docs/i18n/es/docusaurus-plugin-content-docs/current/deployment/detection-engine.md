@@ -110,7 +110,7 @@ una alarma y además llama a un webhook, poner la alarma primero significa que u
 no puede costarle la alarma.
 :::
 
-## Tiempos: qué significa «cuándo»
+## Tiempos: qué significa «cuándo» {#timing-what-when-means}
 
 El motor trabaja sobre el **tiempo del evento** —la marca de tiempo de la lectura— y no sobre el
 momento en que llegó el mensaje. De ahí se derivan dos ajustes.
@@ -128,14 +128,27 @@ pasado se tratan como retraso, no se recortan.
 **Qué ocurre pasada la tolerancia** depende del tipo de regla, y conviene saberlo antes de
 dimensionar el ajuste:
 
-- **Los agregados de ventana fija y las reglas de sesión/hueco descartan la lectura**, en silencio.
-  Su ventana se cerró, y reabrirla significaría volver a emitir un resultado ya publicado. No se
-  cuenta ni se registra nada.
-- **Todos los demás tipos la siguen evaluando** — umbral, duración, repetición, ventana de conteo,
-  tasa y agregados deslizantes. La lectura se aplica contra una frontera que ya avanzó, lo que puede
-  desvirtuar una duración o el borde de una ventana, pero no se descarta.
+- **Las reglas con ventana descartan la lectura**: los agregados de ventana fija, las reglas de
+  sesión/hueco y los tipos deslizantes — repetición, agregados deslizantes y correlación. Una
+  ventana es una afirmación sobre un intervalo de tiempo, y una lectura de fuera del intervalo que
+  la regla cubre en ese momento no es evidencia sobre ese intervalo. Contarla permitiría que «tres
+  lecturas por encima de 80 en diez segundos» se disparara con lecturas separadas por una hora.
+- **Las reglas sin ventana la siguen evaluando** — umbral, duración, ventana de conteo y tasa. Cada
+  una compara una lectura con la anterior o con un límite fijo, así que no hay intervalo del que una
+  lectura tardía pueda quedar fuera.
 
 En ambos casos la lectura se **almacena y grafica con normalidad**; esto afecta solo a la detección.
+
+Dentro de la tolerancia no cambia nada: una lectura fuera de orden que aún cae dentro de la ventana
+se incorpora con normalidad, que es para lo que existe la tolerancia. Como consecuencia la ventana
+puede estirarse hasta la tolerancia — eso es lo que significa tolerar la llegada fuera de orden —
+pero no más.
+
+Los tipos deslizantes **cuentan lo que descartan**. `detect_late_samples_total` sube cada vez que
+una lectura llega después de que haya pasado la ventana a la que pertenecía, de modo que una flota
+cuyas reglas con ventana se han quedado calladas tiene algo que mirar en lugar de silencio; una
+subida acumulada es la causa habitual. Los agregados de ventana fija y las reglas de sesión
+descartan en silencio y no aparecen ahí.
 
 Una propiedad hace que la tolerancia sea menos palanca de lo que parece: **la frontera es compartida
 por toda la instancia**, no se lleva por dispositivo. Así que los dispositivos activos de una flota

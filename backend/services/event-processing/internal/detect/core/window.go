@@ -189,6 +189,55 @@ func (h *closeHeap) purgeSeriesKey(key SeriesKey) {
 	heap.Init(h)
 }
 
+// windowCutoff is the trailing-window boundary the three SLIDING kinds (Repeating, SlidingAgg,
+// Correlation) evict by: one window behind the LATER of this event's own time and the engine's
+// frontier.
+//
+// 🔴 Taking it from the arriving event ALONE is what a store-and-forward upload breaks. Samples
+// carry their own instants, so a device that buffered an hour of readings presents events well
+// behind the frontier; a cutoff derived from one of those rewinds by however far behind it is, so
+// NOTHING ages out and the window keeps every live entry alongside the buffered one. A "3 matches
+// in 10 seconds" rule then fires on events spanning an hour. Clamping to the frontier is what
+// makes eviction measure the window that is actually open rather than one the sample re-opened.
+//
+// It is replay-safe for the same reason applyAggregate's pane-close test is: the frontier only
+// moves forward (watermark.observe) and it is snapshotted and restored with the rest of the
+// engine, so every replay re-derives the identical cutoff.
+//
+// For an in-order event ev.Time is at or ahead of the frontier, so this is exactly
+// ev.Time-window and the common path is byte-identical to deriving it from the event alone.
+func (e *Engine) windowCutoff(t time.Time, window time.Duration) time.Time {
+	if e.wm.now.After(t) {
+		t = e.wm.now
+	}
+	return t.Add(-window)
+}
+
+// foldsIn reports whether this sample may be folded into the window that cutoff opens, and
+// counts it as late when it may not.
+//
+// Two ways to fold nothing, and they are different events. A NON-MATCHING sample folds nothing by
+// design — it still ages the window, which is how a filtering rule observes its falling edge
+// (ADR-057 review D2/D5) — and is not late. A sample at or before the cutoff arrived after its own
+// trailing window had already passed the frontier; folding it in would count evidence the open
+// window does not cover, which is the false rising edge the clamp exists to stop. Only the second
+// is counted, because only the second is a sample the engine received and did not use.
+//
+// This is the sliding kinds' form of the drop applyAggregate and applySession already make (a pane
+// or session whose close is behind the frontier refuses the event), and of the stale falling edge
+// resolve already refuses. Bounded out-of-orderness is still honoured in full: a sample inside the
+// lateness budget is inside the frontier's window and folds in normally.
+func (e *Engine) foldsIn(ev Event, cutoff time.Time) bool {
+	if !ev.Match {
+		return false
+	}
+	if !ev.Time.After(cutoff) {
+		e.lateSamples++
+		return false
+	}
+	return true
+}
+
 // applyRepeating handles a Repeating rule: keep a sliding buffer of matching-event times
 // within Window, and fire on the rising edge where the trailing count reaches Count.
 //
@@ -200,7 +249,7 @@ func (h *closeHeap) purgeSeriesKey(key SeriesKey) {
 // this is byte-identical to always-append. A fully silent series still stays raised until it
 // reports again (the window kinds are event-driven; see the package silence note).
 func (e *Engine) applyRepeating(ev Event, r Rule) {
-	cutoff := ev.Time.Add(-r.Window)
+	cutoff := e.windowCutoff(ev.Time, r.Window)
 	buf := e.sliding[ev.Key]
 	kept := make([]time.Time, 0, len(buf)+1)
 	for _, ts := range buf {
@@ -209,7 +258,7 @@ func (e *Engine) applyRepeating(ev Event, r Rule) {
 		}
 	}
 	prev := len(kept)
-	if ev.Match {
+	if e.foldsIn(ev, cutoff) {
 		kept = append(kept, ev.Time)
 	}
 	if len(kept) == 0 {

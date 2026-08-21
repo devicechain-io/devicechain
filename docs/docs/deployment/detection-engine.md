@@ -112,14 +112,25 @@ forward. Timestamps in the past are treated as lateness, not clamped.
 **What happens past the tolerance** depends on the rule kind, and it is worth knowing before you
 size the setting:
 
-- **Tumbling-window aggregates and session/gap rules discard the reading**, silently. Their window
-  has closed, and re-opening it would mean re-emitting a result already published. Nothing is
-  counted or logged.
-- **Every other kind still evaluates it** — threshold, duration, repeating, count-window,
-  rate and sliding aggregates. The reading is applied against a frontier that has already moved on,
-  which can skew a duration or a window boundary, but it is not dropped.
+- **Rules with a window discard the reading**: tumbling-window aggregates, session/gap rules, and
+  the sliding kinds — repeating, sliding aggregates and correlation. A window is a claim about a
+  span of time, and a reading from outside the span the rule currently covers is not evidence about
+  that span. Counting it would let "three readings above 80 within ten seconds" fire on readings an
+  hour apart.
+- **Rules without a window still evaluate it** — threshold, duration, count-window and rate. Each
+  compares a reading against the one before it or against a fixed bound, so there is no span for a
+  late reading to fall outside of.
 
 Either way the reading is **stored and charted normally**; this is a detection-only effect.
+
+Inside the tolerance nothing changes: an out-of-order reading that still falls within the window is
+folded in as normal, which is what the tolerance is for. The window can stretch by up to the
+tolerance as a result — that is what tolerating out-of-order arrival means — but no further.
+
+The sliding kinds **count what they discard**. `detect_late_samples_total` rises every time a
+reading arrives after the window it belonged to has passed, so a fleet whose windowed rules have
+gone quiet has something to look at rather than silence; a store-and-forward upload is the usual
+cause. Tumbling-window and session rules discard silently and do not appear in it.
 
 One property makes the tolerance less of a lever than it looks: **the frontier is shared across the
 whole instance**, not tracked per device. So a fleet's busy devices carry it to roughly "now"

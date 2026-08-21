@@ -242,6 +242,12 @@ type Engine struct {
 	// as the first transition — the fail-safe (never re-raise a stale offline alarm).
 	presenceState map[SeriesKey]presence.Prior
 	out           []Detection
+	// lateSamples counts samples the sliding kinds declined to fold in because they arrived
+	// after their own trailing window had passed the frontier (foldsIn). It is TELEMETRY, not
+	// state: nothing reads it to decide anything, it is deliberately absent from the snapshot,
+	// and a replay legitimately re-counts the samples it re-processes. It exists so a
+	// store-and-forward fleet whose windowed rules quietly stop firing has something to look at.
+	lateSamples uint64
 }
 
 // expectedState is the dead-man arming record for one rostered device under one Absence rule
@@ -763,6 +769,16 @@ func (e *Engine) Drain() []Detection {
 	out := e.out
 	e.out = nil
 	return out
+}
+
+// DrainLateSamples returns and clears the count of samples the sliding kinds declined as late
+// (foldsIn). Drain-and-reset like Drain, so the caller adds whatever it gets to a counter
+// without tracking a delta. It is off the correctness path entirely: no decision reads it and
+// it is not snapshotted, so calling it, or never calling it, changes nothing the engine does.
+func (e *Engine) DrainLateSamples() uint64 {
+	n := e.lateSamples
+	e.lateSamples = 0
+	return n
 }
 
 // LastSeq is the highest event sequence whose effect is captured in the state. The
