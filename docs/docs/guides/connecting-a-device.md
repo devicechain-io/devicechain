@@ -39,8 +39,8 @@ dead-lettered rather than silently accepted.
 
 **One entry is one reading, taken at one instant.** An entry may carry its own `occurredTime`, and
 that is the instant the reading is stored, charted, evaluated and returned at — so a device that
-buffers readings while offline can upload the whole run as one message and keep the history it
-actually recorded. An entry that carries no `occurredTime` takes the envelope's. `occurredTime` is
+buffers readings while offline can upload a buffered run — up to the per-message ceiling below —
+and keep the history it actually recorded. An entry that carries no `occurredTime` takes the envelope's. `occurredTime` is
 RFC 3339 (`2026-08-09T12:00:00.125Z`) wherever it appears; a value that is not is **rejected** with
 the offending entry named, never quietly replaced.
 
@@ -50,9 +50,45 @@ Like every other timestamp refusal this is terminal and takes the **whole messag
 every sibling reading in the same batch — so it is worth ruling out in firmware rather than
 discovering in a dead-letter queue.
 
+### How much one message may carry
+
+**A message on this page's transports carries at most 1000 readings.** The ceiling belongs to the
+JSON device event described above — MQTT and HTTP. The two transports this page's introduction
+points constrained and brownfield fleets at do **not** share it: [LwM2M](../concepts/lwm2m.md)
+bounds a single Notify at 256 samples instead, and [Sparkplug B](../concepts/sparkplug.md) applies
+no per-message ceiling at all (see [what an operator must
+know](../deployment/edge-services.md#sparkplug-what-an-operator-must-know)).
+
+A reading is one stored datum — for measurements that
+is one *metric key*, so an entry with twelve metrics is twelve readings; for locations and alerts it
+is one entry. Counting keys rather than entries is deliberate: a single entry can hold thousands of
+metrics, and it is the readings, not the entries, that become stored rows, state updates and rule
+evaluations.
+
+That fan-out is what the ceiling exists for. The per-tenant ingest limiter meters *messages*, and
+charges the same for a message of one reading as for a message of forty thousand — so without this,
+one message is an unbounded cost the whole instance shares. A device with a deeper backlog uploads
+it as several messages.
+
+Over the ceiling a message is **refused whole**, never trimmed to fit: a batch quietly cut short
+would be answered `202` and the missing readings would be undetectable from either end. Nothing is
+stored, and nothing is lost — the message is routed intact to the failed-decode stream.
+
+How you find out depends on the transport, and the difference matters:
+
+- **HTTP** answers `400`, naming the count and the ceiling.
+- **MQTT** does not tell the device anything. The broker acknowledges a publish when it durably
+  captures it, which is before the message is decoded, so a `PUBACK` is not a promise that the
+  message was accepted — a refusal that happens afterwards is visible only to the operator.
+
+Operators see every refusal on the `total_msg_too_many_readings` counter, and the ceiling is an
+operator setting (`maxReadingsPerMessage`) for an instance whose fleet genuinely needs a different
+one. Lowering it does not rewrite history, but it does apply to anything still queued: messages
+already captured and not yet decoded are refused on the new value.
+
 :::caution A deeply buffered batch is stored in full, but detection may not see all of it
-The sentence above is about *storage*, and there it holds without qualification: every reading
-lands and charts at its own instant. Detection is different. The engine tracks a single frontier
+"One entry is one reading, taken at one instant" is about *storage*, and there it holds without
+qualification: every reading lands and charts at its own instant. Detection is different. The engine tracks a single frontier
 across the whole instance and advances it from each message's own time, so **a device that was
 offline for a while and then uploads its whole run at once can have its older readings arrive
 behind that frontier** — and the two window-shaped rule kinds, tumbling-window aggregates and

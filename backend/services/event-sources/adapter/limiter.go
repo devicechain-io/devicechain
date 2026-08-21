@@ -19,6 +19,13 @@ import (
 // pathological case — a slow trickle of enormous packs — that the message-rate gate alone
 // cannot see (it counts messages, not samples). It is a platform constant, never per-tenant:
 // a per-tenant sample ceiling is the deferred dedicated-dimension follow-up (ADR-023).
+//
+// 🔑 IT IS A MEAN, NOT A MAXIMUM, and reading it as one invites the wrong comparison. A
+// caller's HARD per-message cap is a separate number and a larger one — LwM2M's
+// decode.MaxSamplesPerNotify is 256, the JSON transports' MaxReadingsPerMessage is 1000 —
+// and the two are related by construction rather than by coincidence: that cap is what a
+// caller passes as sampleBurstFloor below, so a single compliant message never sheds on the
+// burst edge. Both count the same unit, which is what makes them comparable at all.
 const DefaultSamplesPerMessage = 25
 
 // IngestLimiter is the shared, two-stage, per-tenant admission gate for a device-facing

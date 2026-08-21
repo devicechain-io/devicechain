@@ -90,7 +90,7 @@ func TestFleetpulseTrackStaysInsideTheCoordinateContract(t *testing.T) {
 		if err != nil {
 			t.Errorf("read body: %v", err)
 		}
-		if _, _, err := processor.NewJsonDecoder(nil).Decode(raw); err != nil {
+		if _, _, err := processor.NewJsonDecoder(nil, 0).Decode(raw); err != nil {
 			mu.Lock()
 			rejected++
 			if rejected <= 3 {
@@ -310,7 +310,7 @@ func TestCanonicalHeadingStaysInsideTheStoredRange(t *testing.T) {
 			`{"device":"d1","eventType":"Location","payload":{"entries":[`+
 				`{"latitude":"33.749","longitude":"-84.388","heading":%q}]}}`,
 			formatFixValue(got))
-		if _, _, err := processor.NewJsonDecoder(nil).Decode([]byte(body)); err != nil {
+		if _, _, err := processor.NewJsonDecoder(nil, 0).Decode([]byte(body)); err != nil {
 			t.Fatalf("canonicalHeading(%v) = %v, which the real decoder refuses: %v", deg, got, err)
 		}
 	}
@@ -338,7 +338,7 @@ func runFleetpulseTick(t *testing.T, count int) []emittedEvent {
 		if err != nil {
 			t.Errorf("read body: %v", err)
 		}
-		if _, _, derr := processor.NewJsonDecoder(nil).Decode(raw); derr != nil {
+		if _, _, derr := processor.NewJsonDecoder(nil, 0).Decode(raw); derr != nil {
 			t.Errorf("the real decoder refused a tick's event: %v\n%s", derr, raw)
 		}
 		var envelope struct {

@@ -185,7 +185,7 @@ func TestEmittedLocationDecodesThroughTheRealDecoder(t *testing.T) {
 	}
 	body := ing.sole(t)
 
-	event, payload, err := processor.NewJsonDecoder(nil).Decode(body)
+	event, payload, err := processor.NewJsonDecoder(nil, 0).Decode(body)
 	if err != nil {
 		t.Fatalf("the REAL decoder rejected the emitter's own bytes: %v\n%s", err, body)
 	}
@@ -258,7 +258,7 @@ func TestAnUnreportedOptionalIsAbsentFromTheJson(t *testing.T) {
 	// the decoder REQUIRES latitude and longitude, so an emitter that had gone one field
 	// too far in omitting things would satisfy every absence check above and produce a
 	// body the platform refuses.
-	if _, _, err := processor.NewJsonDecoder(nil).Decode(body); err != nil {
+	if _, _, err := processor.NewJsonDecoder(nil, 0).Decode(body); err != nil {
 		t.Fatalf("a fix reporting only latitude/longitude was refused by the real decoder: "+
 			"%v — the optionals are optional, so omitting them must still decode\n%s", err, body)
 	}
@@ -392,7 +392,7 @@ func TestMeasurementEnvelopeSurvivedTheSharedPostHelper(t *testing.T) {
 			envelope.OccurredTime, envelope.Payload.Entries[0].OccurredTime)
 	}
 	// And the measurement path still decodes, for the same reason the location one must.
-	if _, _, err := processor.NewJsonDecoder(nil).Decode(body); err != nil {
+	if _, _, err := processor.NewJsonDecoder(nil, 0).Decode(body); err != nil {
 		t.Fatalf("the real decoder rejected an emitted Measurement: %v\n%s", err, body)
 	}
 }

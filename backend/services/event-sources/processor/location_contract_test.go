@@ -32,7 +32,7 @@ import (
 // decodeLocation drives the real decoder, exactly as a transport does.
 func decodeLocation(t *testing.T, body string) (*model.UnresolvedLocationsPayload, error) {
 	t.Helper()
-	_, payload, err := NewJsonDecoder(map[string]string{}).Decode([]byte(body))
+	_, payload, err := NewJsonDecoder(map[string]string{}, 0).Decode([]byte(body))
 	if err != nil {
 		return nil, err
 	}
@@ -341,7 +341,7 @@ func TestLocationRangeValidation(t *testing.T) {
 // DecodeSuccess. Both asserted success for a body that stored nothing. Fixing only
 // the instance that was investigated would have left the worse one in place.
 func TestMeasurementAndAlertDecodeAlsoFailClosed(t *testing.T) {
-	jd := NewJsonDecoder(map[string]string{})
+	jd := NewJsonDecoder(map[string]string{}, 0)
 	for _, tc := range []struct {
 		name string
 		body string
@@ -406,7 +406,7 @@ func TestMeasurementAndAlertDecodeAlsoFailClosed(t *testing.T) {
 // The counterweight: the canonical nested forms still decode untouched. Rejecting
 // an empty entries list is only safe while well-formed input keeps passing.
 func TestTheCanonicalMeasurementAndAlertBodiesStillDecode(t *testing.T) {
-	jd := NewJsonDecoder(map[string]string{})
+	jd := NewJsonDecoder(map[string]string{}, 0)
 	for _, body := range []string{
 		`{"device":"d1","eventType":"Measurement","payload":{"entries":[{"measurements":{"temp":"21.5"}}]}}`,
 		`{"device":"d1","eventType":"Alert","payload":{"entries":[{"type":"a","level":1,"message":"m","source":"s"}]}}`,

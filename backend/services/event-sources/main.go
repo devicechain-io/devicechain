@@ -116,6 +116,12 @@ var (
 	// FailedDecodeCounter, kept separate because a fleet with wrong clocks is a
 	// different operational fact from a broken payload shape.
 	InvalidEventTimeCounter *prometheus.CounterVec
+	// TooManyReadingsCounter counts inbound messages refused for carrying more readings
+	// than the per-message ceiling admits. Also a subset of FailedDecodeCounter, and
+	// separate for the same reason: this one names a fleet whose BATCH SIZE needs
+	// lowering, which is a configuration conversation, not a bug report. It is the
+	// only signal that a device is losing nothing but delivering nothing either.
+	TooManyReadingsCounter *prometheus.CounterVec
 )
 
 func main() {
@@ -178,6 +184,12 @@ func initializeMetrics() {
 	InvalidEventTimeCounter = Microservice.NewCounterVec(
 		"total_msg_invalid_event_time",
 		"Count of inbound messages refused because a timestamp on them is not an RFC3339 instant",
+		[]string{"source"})
+	TooManyReadingsCounter = Microservice.NewCounterVec(
+		"total_msg_too_many_readings",
+		"Count of inbound messages refused for carrying more readings than the per-message ceiling admits",
+		// SOURCE only, never tenant (ADR-023 G.3) — the tenant on an undecodable
+		// message is an unverified string off the wire.
 		[]string{"source"})
 	TenantGoneCounter = Microservice.NewCounterVec(
 		"total_msg_tenant_deleted",
@@ -281,7 +293,7 @@ func buildRateLimiter() {
 func createDecoder(source config.EventSource) (processor.Decoder, error) {
 	switch source.Decoder.Type {
 	case processor.DECODER_TYPE_JSON:
-		return processor.NewJsonDecoder(source.Decoder.Configuration), nil
+		return processor.NewJsonDecoder(source.Decoder.Configuration, Configuration.MaxReadingsPerMessage), nil
 	default:
 		return nil, fmt.Errorf("unkown decoder type: %s", source.Type)
 	}
@@ -519,6 +531,18 @@ func onEventDecodeFailed(source string, tenant string, raw []byte, err error) er
 	// perfectly healthy. Labelled by SOURCE only, never by tenant (ADR-023 G.3).
 	if errors.Is(err, processor.ErrInvalidEventTime) {
 		InvalidEventTimeCounter.WithLabelValues(source).Inc()
+	}
+	// An oversized message is counted apart for the same reason, and it is the one
+	// refusal an operator MUST be able to see: the device is behaving correctly and
+	// still getting nothing through, so without a counter the symptom is a fleet that
+	// reports fine and stores nothing.
+	//
+	// 🔴 ON MQTT THE DEVICE IS NOT TOLD. The broker PUBACKs from the capture stream
+	// before any of this code runs, so a message refused here was already acknowledged;
+	// only this counter and the failed-decode subject show it. HTTP does answer 400.
+	// That asymmetry is why the counter is not optional.
+	if errors.Is(err, processor.ErrTooManyReadings) {
+		TooManyReadingsCounter.WithLabelValues(source).Inc()
 	}
 
 	// A message that could not be decoded is still routed to the failed-decode

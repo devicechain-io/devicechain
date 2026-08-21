@@ -699,6 +699,31 @@ functionalAreas:
       maxEventFutureSkewSeconds: 300
   event-sources:
     config: {}
+    # Per-message READING ceiling for the JSON transports — HTTP, external MQTT and
+    # the platform broker's capture stream (ADR-023). A reading is one stored datum:
+    # a metric KEY for measurements, an entry for locations and alerts. Counting keys
+    # is deliberate — one entry carries an unbounded map, so an entry-based ceiling
+    # would admit 30 000 readings in a single "one entry" message.
+    #
+    # It bounds ONE MESSAGE'S COST, which no rate ceiling can: the per-tenant limiter
+    # meters MESSAGES (one token per POST however large), and a rate bucket's first
+    # message always passes at full burst. Every reading becomes a stored row, a
+    # projection write and an evaluation on the single DETECT goroutine every tenant
+    # shares. Default 1000; a message over it is refused WHOLE, never truncated — a
+    # batch cut short would be acked as success and the loss undetectable from either
+    # end. A non-positive value falls back to the default, never to unlimited.
+    #
+    # Refusals are counted on total_msg_too_many_readings. WATCH THAT COUNTER: on the
+    # MQTT path the broker PUBACKs at capture, before decode, so the device is never
+    # told — and LOWERING this value applies to messages already captured and not yet
+    # decoded, which are then refused on the new number.
+    #
+    # This is NOT the same number as the limiter's samples-per-message factor (25),
+    # which is an assumed MEAN used to scale a message ceiling into a sample ceiling.
+    # A mean of 25 under a maximum of 1000 is one coherent shape.
+    #   config:
+    #     maxReadingsPerMessage: 1000
+    #
     # ADR-063 preferential shedding. Set an operator floor to shed the lowest tiers
     # first under contention (gold is never shed). 0 (the default) = off.
     #   config:

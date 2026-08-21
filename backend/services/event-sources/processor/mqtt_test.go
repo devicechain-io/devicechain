@@ -40,7 +40,7 @@ func newTestMqttSource(t *testing.T, allow RateGate) (*MqttEventSource, *int) {
 	t.Helper()
 	receivedCount := 0
 	es, err := NewMqttEventSource("mqtt-test", map[string]string{"host": "h", "port": "1883", "topic": GatewayTopic("inst-1")},
-		nil, "", "", NewJsonDecoder(map[string]string{}),
+		nil, "", "", NewJsonDecoder(map[string]string{}, 0),
 		func(string, []byte) { receivedCount++ },
 		func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil },
 		func(string, string, []byte, error) error { return nil },

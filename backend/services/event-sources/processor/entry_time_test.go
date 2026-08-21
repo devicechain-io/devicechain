@@ -24,7 +24,7 @@ import (
 // transport dead-letters and settles), so there is no retry loop and no misfiling as a
 // downstream API failure.
 func TestAMalformedEntryTimeIsRejectedAtTheDoor(t *testing.T) {
-	decoder := NewJsonDecoder(nil)
+	decoder := NewJsonDecoder(nil, 0)
 	for _, tc := range []struct {
 		name string
 		body string
@@ -112,7 +112,7 @@ func TestAMalformedEntryTimeIsRejectedAtTheDoor(t *testing.T) {
 // what tells the resolver to fall back to the envelope, so defaulting it here would answer
 // a question the device never answered.
 func TestAWellFormedEntryTimeSurvivesAndAbsenceStaysAbsent(t *testing.T) {
-	decoder := NewJsonDecoder(nil)
+	decoder := NewJsonDecoder(nil, 0)
 	_, payload, err := decoder.Decode([]byte(
 		`{"device":"d1","eventType":"Measurement","payload":{"entries":[
 			{"measurements":{"t":"1"},"occurredTime":"2026-08-09T12:00:00.123456789Z"},

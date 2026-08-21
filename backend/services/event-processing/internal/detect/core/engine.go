@@ -589,7 +589,9 @@ func (e *Engine) LiveKeyCounts() map[string]int {
 // rather than with the key set, and this counts exactly those:
 //
 //   - sliding  (Repeating)   — one time.Time per matching event still inside the window
-//   - slides   (SlidingAgg)  — slidingState.buf, one sample (time + value) per event in the window
+//   - slides   (SlidingAgg)  — slidingState.count(), one sample (time + value) per event in
+//     the window. NOT len(buf): the window is buf AND the late overlay, and a store-and-forward
+//     burst is precisely when the overlay is open and the number is being watched.
 //   - corr     (Correlation) — one entry per retained distinct member under an anchor
 //
 // Every other MAP folds its events into a fixed-size accumulator or latch, so its retention is
@@ -624,7 +626,7 @@ func (e *Engine) RetainedSampleCounts() map[string]int {
 		counts[k.Rule] += len(times)
 	}
 	for k, st := range e.slides {
-		counts[k.Rule] += len(st.buf)
+		counts[k.Rule] += st.count()
 	}
 	for k, members := range e.corr {
 		counts[k.Rule] += len(members)
