@@ -240,7 +240,7 @@ func (m *Manager) RefreshOAuth(ctx context.Context, refreshToken, requestedScope
 		} else if cerr != nil {
 			return nil, errServer(cerr.Error())
 		}
-		if berr := checkRefreshClientBinding(boundClient, requestClientID, client, found); berr != nil {
+		if berr := checkRefreshClientBinding(boundClient, requestClientID, claims.Scope, client, found); berr != nil {
 			return nil, berr
 		}
 	}
@@ -283,7 +283,22 @@ func (m *Manager) RefreshOAuth(ctx context.Context, refreshToken, requestedScope
 // token cannot be used without the secret. A PUBLIC client's token stays lenient (it
 // has no secret to enforce, and requiring client_id would break existing public
 // clients that refresh with the token alone).
-func checkRefreshClientBinding(boundClientID, requestClientID string, client *iam.OAuthClient, found bool) *oauthError {
+//
+// 🔴 IT ALSO RE-CHECKS THE BOUND SCOPE AGAINST THE REGISTRATION, AND THAT IS THE HALF
+// THAT WAS MISSING. scopesRegistered ran only at /authorize, so narrowing a client's
+// registered scopes had no effect on any session already holding a refresh token: the
+// scope rode the signed token forever and rotation renewed its TTL each time. The
+// asymmetry made it worse than a plain gap — revoking the ROLE that grants an authority
+// took effect on the very next refresh, because mintScopedGrant re-resolves roles, so
+// an operator watching one lever work would reasonably assume the other did too. It did
+// not, and the only kill switches that actually worked were disabling the client or the
+// identity.
+//
+// It is invalid_grant rather than invalid_scope on purpose. A refresh request need not
+// name a scope at all, so the fault is not in what was asked for — the grant this token
+// represents has been partially revoked, which is the same category as the disabled and
+// deleted cases immediately below, and the same remedy: re-authorize.
+func checkRefreshClientBinding(boundClientID, requestClientID, boundScope string, client *iam.OAuthClient, found bool) *oauthError {
 	if boundClientID == "" {
 		return nil
 	}
@@ -298,6 +313,9 @@ func checkRefreshClientBinding(boundClientID, requestClientID string, client *ia
 	}
 	if client.IsConfidential() && requestClientID != boundClientID {
 		return errInvalidGrant("refresh token was issued to another client")
+	}
+	if !scopesRegistered(client.Scopes, boundScope) {
+		return errInvalidGrant("the client this refresh token was issued to is no longer registered for its scope")
 	}
 	return nil
 }

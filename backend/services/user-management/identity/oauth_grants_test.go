@@ -58,42 +58,54 @@ func TestVerifyClientAuth(t *testing.T) {
 // client's refresh token requires the request to be that same authenticated client;
 // public/unbound tokens stay lenient; a deleted client's tokens are rejected.
 func TestCheckRefreshClientBinding(t *testing.T) {
-	confidential := &iam.OAuthClient{Enabled: true, SecretHash: "$2a$hash"}
-	public := &iam.OAuthClient{Enabled: true}
+	confidential := &iam.OAuthClient{Enabled: true, SecretHash: "$2a$hash", Scopes: []string{auth.ScopeReadOnly}}
+	public := &iam.OAuthClient{Enabled: true, Scopes: []string{auth.ScopeReadOnly}}
 
 	// Unbound token (no client_id claim): always allowed, no lookup consulted.
-	if e := checkRefreshClientBinding("", "", nil, false); e != nil {
+	if e := checkRefreshClientBinding("", "", auth.ScopeReadOnly, nil, false); e != nil {
 		t.Errorf("unbound: got %v, want nil", e)
 	}
 	// Confidential bound token: allowed only when the authenticated client matches.
-	if e := checkRefreshClientBinding("grafana", "grafana", confidential, true); e != nil {
+	if e := checkRefreshClientBinding("grafana", "grafana", auth.ScopeReadOnly, confidential, true); e != nil {
 		t.Errorf("confidential + matching client: got %v, want nil", e)
 	}
 	// THE EXPLOIT: a stolen refresh token presented with no client credentials.
-	if e := checkRefreshClientBinding("grafana", "", confidential, true); e == nil || e.Code != "invalid_grant" {
+	if e := checkRefreshClientBinding("grafana", "", auth.ScopeReadOnly, confidential, true); e == nil || e.Code != "invalid_grant" {
 		t.Errorf("confidential + no authenticated client: got %v, want invalid_grant", e)
 	}
 	// Cross-client: another confidential client cannot refresh this token.
-	if e := checkRefreshClientBinding("grafana", "other", confidential, true); e == nil || e.Code != "invalid_grant" {
+	if e := checkRefreshClientBinding("grafana", "other", auth.ScopeReadOnly, confidential, true); e == nil || e.Code != "invalid_grant" {
 		t.Errorf("confidential + wrong client: got %v, want invalid_grant", e)
 	}
 	// Public bound token: lenient — refreshable with the token alone (no secret exists).
-	if e := checkRefreshClientBinding("mcp", "", public, true); e != nil {
+	if e := checkRefreshClientBinding("mcp", "", auth.ScopeReadOnly, public, true); e != nil {
 		t.Errorf("public bound + no client: got %v, want nil (lenient)", e)
 	}
 	// A deleted client's tokens are rejected (deletion kills sessions).
-	if e := checkRefreshClientBinding("gone", "gone", nil, false); e == nil || e.Code != "invalid_grant" {
+	if e := checkRefreshClientBinding("gone", "gone", auth.ScopeReadOnly, nil, false); e == nil || e.Code != "invalid_grant" {
 		t.Errorf("deleted client: got %v, want invalid_grant", e)
 	}
 	// A disabled client's tokens are rejected too — disable is a uniform kill switch,
 	// including a public client refreshing with the token alone.
-	disabledPublic := &iam.OAuthClient{Enabled: false}
-	if e := checkRefreshClientBinding("mcp", "", disabledPublic, true); e == nil || e.Code != "invalid_grant" {
+	disabledPublic := &iam.OAuthClient{Enabled: false, Scopes: []string{auth.ScopeReadOnly}}
+	if e := checkRefreshClientBinding("mcp", "", auth.ScopeReadOnly, disabledPublic, true); e == nil || e.Code != "invalid_grant" {
 		t.Errorf("disabled public client: got %v, want invalid_grant", e)
 	}
-	disabledConfidential := &iam.OAuthClient{Enabled: false, SecretHash: "$2a$hash"}
-	if e := checkRefreshClientBinding("grafana", "grafana", disabledConfidential, true); e == nil || e.Code != "invalid_grant" {
+	disabledConfidential := &iam.OAuthClient{Enabled: false, SecretHash: "$2a$hash", Scopes: []string{auth.ScopeReadOnly}}
+	if e := checkRefreshClientBinding("grafana", "grafana", auth.ScopeReadOnly, disabledConfidential, true); e == nil || e.Code != "invalid_grant" {
 		t.Errorf("disabled confidential client: got %v, want invalid_grant", e)
+	}
+	// A scope the client is no longer registered for is refused — de-registering a
+	// scope has to end the sessions holding it, or the only working kill switches are
+	// disabling the client and deleting it.
+	narrowed := &iam.OAuthClient{Enabled: true, Scopes: []string{auth.ScopeReadOnly}}
+	if e := checkRefreshClientBinding("mcp", "", auth.ScopeReadOnly+" "+auth.ScopeLocation, narrowed, true); e == nil || e.Code != "invalid_grant" {
+		t.Errorf("de-registered scope: got %v, want invalid_grant", e)
+	}
+	// The counterweight: a still-registered multi-scope grant refreshes normally.
+	both := &iam.OAuthClient{Enabled: true, Scopes: []string{auth.ScopeReadOnly, auth.ScopeLocation}}
+	if e := checkRefreshClientBinding("mcp", "", auth.ScopeReadOnly+" "+auth.ScopeLocation, both, true); e != nil {
+		t.Errorf("registered multi-scope: got %v, want nil", e)
 	}
 }
 
@@ -331,10 +343,10 @@ func TestEffectiveAuthorities(t *testing.T) {
 		t.Errorf("superuser effective = %v, want [*]", su)
 	}
 	// A member holding only device:write still gets the viewer reads unioned in, so
-	// capping to the viewer baseline yields exactly the viewer baseline. (The
-	// `read-only` scope's own allowance is a superset of this list — see
-	// readOnlyScopeAllowance; what is asserted here is effectiveAuthorities, not the
-	// scope.)
+	// capping to the viewer baseline yields exactly the viewer baseline. What is
+	// asserted here is effectiveAuthorities, not a scope's ceiling — the `read-only`
+	// ceiling is exactly EQUAL to this list, which
+	// TestReadOnlyCeilingMatchesTheViewerBaselineExactly pins separately.
 	member := effectiveAuthorities([]string{"device:write"}, false)
 	capped := auth.IntersectAuthorities(member, viewerAuthorities)
 	if len(capped) != len(viewerAuthorities) {

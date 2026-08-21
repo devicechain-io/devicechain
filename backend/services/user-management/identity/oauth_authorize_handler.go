@@ -203,7 +203,27 @@ type authorizeConsentData struct {
 	IdentityToken string
 	Memberships   []MembershipInfo
 	Superuser     bool
-	Scopes        []string
+	// Scopes carries a sentence per requested scope, not the raw token. See
+	// auth.ScopeDescription: asking a person to approve the word "location" is asking
+	// them to approve a category rather than a consequence.
+	Scopes []scopeConsent
+}
+
+// scopeConsent is one line of the consent screen: the scope's token, for the reader who
+// knows what it means, and the sentence for the reader who does not.
+type scopeConsent struct {
+	Name        string
+	Description string
+}
+
+// consentScopes renders each requested scope for display.
+func consentScopes(scope string) []scopeConsent {
+	members := auth.ParseScope(scope)
+	out := make([]scopeConsent, 0, len(members))
+	for _, s := range members {
+		out = append(out, scopeConsent{Name: s, Description: auth.ScopeDescription(s)})
+	}
+	return out
 }
 
 // authorizePageHeaders sets the security headers every authorize page needs. The
@@ -239,7 +259,7 @@ func renderAuthorizeConsent(w http.ResponseWriter, p AuthorizeParams, client *ia
 		IdentityToken: ident.IdentityToken,
 		Memberships:   ident.Memberships,
 		Superuser:     ident.Superuser,
-		Scopes:        auth.ParseScope(p.Scope),
+		Scopes:        consentScopes(p.Scope),
 	})
 }
 
@@ -299,7 +319,7 @@ var authorizeConsentTmpl = template.Must(template.New("consent").Parse(hiddenPar
 {{template "hidden" .Params}}
 <input type="hidden" name="step" value="consent">
 <input type="hidden" name="identity_token" value="{{.IdentityToken}}">
-<div class="scopes"><strong>This will grant:</strong><ul>{{range .Scopes}}<li>{{.}}</li>{{end}}</ul></div>
+<div class="scopes"><strong>This will grant:</strong><ul>{{range .Scopes}}<li>{{.Description}}</li>{{end}}</ul></div>
 <label>Tenant</label>
 {{if .Memberships}}
 <select name="tenant" required>{{range .Memberships}}<option value="{{.Tenant}}">{{.Tenant}}</option>{{end}}</select>

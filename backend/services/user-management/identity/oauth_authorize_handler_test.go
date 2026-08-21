@@ -4,6 +4,7 @@
 package identity
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-user-management/iam"
 )
 
@@ -275,5 +277,61 @@ func TestBuildRedirect(t *testing.T) {
 	u, _ = url.Parse(got)
 	if u.Query().Get("x") != "1" || u.Query().Get("code") != "c" {
 		t.Errorf("existing query not preserved: %s", got)
+	}
+}
+
+// 🔴 THE CONSENT SCREEN IS THE WHOLE ARGUMENT FOR A SEPARATE `location` SCOPE, and until
+// this test it was the one part of that argument nothing checked. The only existing
+// assertion looked for the substring "read-only" on a single-scope request, which says
+// nothing about whether a two-scope request renders both — the exact claim the design
+// rests on.
+func TestConsentScreenNamesEveryScopeBeingDelegated(t *testing.T) {
+	scopes := consentScopes(auth.ScopeReadOnly + " " + auth.ScopeLocation)
+	if len(scopes) != 2 {
+		t.Fatalf("consentScopes rendered %d entries for a two-scope request: %+v", len(scopes), scopes)
+	}
+
+	var buf bytes.Buffer
+	if err := authorizeConsentTmpl.Execute(&buf, authorizeConsentData{
+		Params:      AuthorizeParams{Scope: auth.ScopeReadOnly + " " + auth.ScopeLocation},
+		ClientName:  "An AI assistant",
+		Memberships: []MembershipInfo{{Tenant: "acme"}},
+		Scopes:      scopes,
+	}); err != nil {
+		t.Fatalf("render consent: %v", err)
+	}
+	page := buf.String()
+
+	// Position must be named as a consequence, not as a category. A person approving
+	// "location" is not being told what they are handing over.
+	if !strings.Contains(page, "where your devices have been") {
+		t.Errorf("the consent screen does not say what the location scope delegates:\n%s", page)
+	}
+	if !strings.Contains(page, "Read your devices") {
+		t.Errorf("the consent screen does not describe the read-only scope:\n%s", page)
+	}
+	// And the counterweight: a request for read-only ALONE must not mention position,
+	// or the split buys nothing.
+	buf.Reset()
+	if err := authorizeConsentTmpl.Execute(&buf, authorizeConsentData{
+		Params:      AuthorizeParams{Scope: auth.ScopeReadOnly},
+		ClientName:  "An AI assistant",
+		Memberships: []MembershipInfo{{Tenant: "acme"}},
+		Scopes:      consentScopes(auth.ScopeReadOnly),
+	}); err != nil {
+		t.Fatalf("render consent: %v", err)
+	}
+	if strings.Contains(buf.String(), "where your devices have been") {
+		t.Error("a read-only-alone request offered position on the consent screen")
+	}
+}
+
+// An undescribed scope must still render, as its own token. ScopeDescription is total
+// so that adding a scope and forgetting a sentence degrades to the old behaviour rather
+// than producing a blank bullet a person would approve without reading anything.
+func TestAnUndescribedScopeStillRenders(t *testing.T) {
+	got := auth.ScopeDescription("some-future-scope")
+	if got != "some-future-scope" {
+		t.Errorf("ScopeDescription(unknown) = %q, want the token itself", got)
 	}
 }

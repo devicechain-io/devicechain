@@ -305,11 +305,22 @@ func TestLocationIsReachableOnlyThroughItsOwnScope(t *testing.T) {
 // already drops "*" from an allowance, so this is defence in depth on the table
 // itself: a write authority here would let an OAuth session mutate the tenant, and
 // the scopes are named for reading.
+// 🔴 IT ITERATES THE TABLE, NOT SupportedScopes, AND THE DIFFERENCE IS THE WHOLE TEST.
+// An earlier version walked SupportedScopes, so a ceiling whose key was absent from that
+// list was invisible to every test in every package — an entry naming device:write,
+// user:write and "*" could be added to scopeAllowances and all three packages stayed
+// green. It is not reachable today, because ValidateAuthorizeRequest rejects an
+// unadvertised scope at the front door and IntersectAuthorities drops "*" from an
+// allowance. But scopeAllowance() never consults IsSupportedScope, so that gate lives at
+// exactly one endpoint, and any future mint path that does not route through /authorize
+// would make this table the authority. A table that is the authority has to be the thing
+// the test reads.
 func TestScopeAllowancesAreReadOnly(t *testing.T) {
-	for _, scope := range SupportedScopes {
+	for scope := range scopeAllowances {
 		allow, ok := ScopeAllowance(scope)
 		if !ok {
-			t.Errorf("supported scope %q has no allowance", scope)
+			t.Errorf("scope %q has a ceiling in scopeAllowances but is not in SupportedScopes, so "+
+				"ScopeAllowance refuses it — the two lists must agree", scope)
 			continue
 		}
 		if len(allow) == 0 {

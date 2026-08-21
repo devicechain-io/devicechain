@@ -98,11 +98,42 @@ var scopeAllowances = map[string][]string{
 // The returned slice is a copy: the table is a package global and a caller that
 // unioned into it in place would rewrite the ceiling for every later grant.
 func ScopeAllowance(scope string) ([]string, bool) {
+	// 🔴 ADVERTISED FIRST, THEN DEFINED. A ceiling is only reachable through a scope the
+	// AS actually grants, so an entry in the table that SupportedScopes does not list is
+	// refused here rather than honoured — the two lists have to agree, and this is the
+	// cheaper place to force it than at each mint path. Today ValidateAuthorizeRequest
+	// already rejects an unadvertised scope, but it is one endpoint; this holds for any
+	// caller, including one added later that never touches /authorize.
+	if !IsSupportedScope(scope) {
+		return nil, false
+	}
 	allow, ok := scopeAllowances[scope]
 	if !ok {
 		return nil, false
 	}
 	return append([]string(nil), allow...), true
+}
+
+// scopeDescriptions is what a RESOURCE OWNER is actually asked to approve, per scope.
+//
+// 🔴 THE CONSENT SCREEN IS THE ENTIRE ARGUMENT FOR SPLITTING `location` OUT, so it has
+// to say something a person can weigh. Rendering the raw token asks somebody to approve
+// the word "location", which is a category, not a consequence — and the reason this
+// scope exists at all is that a device's position history can be a record of where a
+// PERSON has been. A scope with no description here renders as its bare token, which is
+// the old behaviour rather than a crash, so ScopeDescription is total.
+var scopeDescriptions = map[string]string{
+	ScopeReadOnly: "Read your devices, their current state, their telemetry, their alarms and the commands sent to them.",
+	ScopeLocation: "Read where your devices have been — their reported position history, not just where they are now.",
+}
+
+// ScopeDescription returns the sentence to show a resource owner for one scope,
+// falling back to the scope token itself so an undescribed scope is still rendered.
+func ScopeDescription(scope string) string {
+	if d, ok := scopeDescriptions[scope]; ok {
+		return d
+	}
+	return scope
 }
 
 // ParseScope splits a space-delimited OAuth scope string into its members,

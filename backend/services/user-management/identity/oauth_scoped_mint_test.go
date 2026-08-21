@@ -66,14 +66,22 @@ func newMintTestEnv(t *testing.T) *mintTestEnv {
 	require.NoError(t, rdb.RegisterTokenGrammar(db))
 	require.NoError(t, db.AutoMigrate(
 		&iam.TenantTier{}, &iam.Tenant{}, &iam.Role{}, &iam.Identity{}, &iam.Membership{},
+		&iam.OAuthClient{}, &rdb.AuditEvent{},
 	))
-	store := iam.NewStore(&rdb.RdbManager{Database: db})
+	rdbm := &rdb.RdbManager{Database: db}
+	store := iam.NewStore(rdbm)
 
 	key, err := auth.GenerateKeyPair()
 	require.NoError(t, err)
 	kv := &stubRefreshKV{}
 	m := &Manager{
-		iam:       store,
+		iam: store,
+		// 🔴 The audit writer is only reached by the REFRESH path, never by
+		// mintScopedGrant — so a harness built for mint alone leaves it nil and the
+		// first real RefreshOAuth call nil-panics inside recordAuth. That is the
+		// composition-versus-path gap in miniature: the collaborator a test never
+		// touches is exactly the one it cannot tell you about.
+		db:        rdbm,
 		issuer:    auth.NewIssuer(key, "https://as.example.com", time.Minute, time.Hour),
 		validator: auth.NewValidator(&key.PublicKey),
 		refreshKV: kv,

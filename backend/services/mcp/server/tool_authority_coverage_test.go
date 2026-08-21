@@ -117,7 +117,14 @@ func TestEveryRegisteredToolDeclaresItsAuthority(t *testing.T) {
 		t.Fatal("the catalog is empty, so this test is measuring nothing")
 	}
 	for _, name := range names {
-		if _, ok := toolAuthorities[name]; !ok {
+		// 🔴 NON-EMPTY, NOT MERELY PRESENT. A bare presence check is satisfied by
+		// `"list_dashboards": {}` and by `"list_dashboards": nil`, and the reachability
+		// test below then iterates zero authorities and passes — so a tool that is
+		// refused for everyone reads as covered. The empty entry is the dangerous one
+		// because it takes no wrong belief to write: it is the natural way to say "this
+		// tool needs no special authority", which is never true of a tool that reaches
+		// a gated resolver.
+		if a, ok := toolAuthorities[name]; !ok || len(a) == 0 {
 			t.Errorf("tool %q is registered but names no required authority. Find the "+
 				"auth.Authorize call on the resolver its query hits and add it to "+
 				"toolAuthorities — a tool whose authority no scope admits refuses every "+
