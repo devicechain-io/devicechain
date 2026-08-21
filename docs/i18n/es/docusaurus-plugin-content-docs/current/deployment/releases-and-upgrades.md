@@ -390,7 +390,7 @@ una cuenta que podía leer el historial de posiciones en la `v0.11.0` no puede e
 | Operación | Qué cambió |
 | --- | --- |
 | `createCommand` | Devuelve `CreateCommandResult!` en lugar de `Command!`. El comando está ahora bajo un campo `command`, junto a un campo `rejection` que explica un rechazo. |
-| `updateDeviceType` | Su argumento `request` es ahora un `DeviceTypeUpdateRequest!` obligatorio. Los campos no reconocidos dentro de él se rechazan en lugar de ignorarse. |
+| `updateDeviceType` | Su argumento `request` es ahora un `DeviceTypeUpdateRequest!` obligatorio, y con él cambió la semántica: esto es una **actualización parcial**. Un campo omitido ahora CONSERVA su valor almacenado en lugar de borrarlo, y un null explícito lo limpia. Así que un cliente que limpiaba un campo dejándolo fuera ahora tiene que enviarle null — y, en el otro sentido, renombrar un tipo ya no desvincula el perfil a través del cual sus dispositivos resuelven sus capacidades. `token` también ha desaparecido de la entrada, así que una actualización ya no puede mover el token de un tipo. Los campos no reconocidos dentro de la solicitud se rechazan en lugar de ignorarse. |
 | `assertedActiveDeviceStates` | Sustituida por `assertedDeviceStates`, que toma `activeOnly` y pagina mediante `afterId` y `pageSize`. |
 | `deviceCredentials`, `deviceCredentialsById`, `deviceCredentialsByToken` | Ahora requieren `device:write`. Para un tipo de credencial el identificador legible *es* el token portador, así que `device:read` — que tiene todo miembro habilitado — bastaba para abrir una sesión en el broker como cualquier dispositivo del inquilino. |
 | `locationEvents` | Ahora requiere `location:read`, como arriba. |
