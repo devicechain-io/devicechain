@@ -409,6 +409,18 @@ silencio. El único síntoma es que las superficies de mapa se quedan vacías. E
 o vuelva a establecer la declaración después de cualquier actualización hecha desde un
 cliente antiguo.
 
+**Las reglas de detección con ventana ya no cuentan lecturas acumuladas de fuera de su
+ventana.** Las reglas de repetición, de agregado deslizante y de correlación incorporaban una
+lectura de cualquier punto del pasado, lo que permitía que una regla que dice «tres lecturas
+en diez segundos» se disparara con lecturas separadas por una hora — el detonante habitual
+era un dispositivo subiendo su búfer acumulado. Ahora esas reglas descartan una lectura que
+llega después de que haya pasado la ventana a la que pertenecía, igual que ya hacían los
+agregados de ventana fija y las reglas de sesión. Espere **menos** alarmas de esos tipos de
+regla en cualquier flota que suba por lotes, y consulte `detect_late_samples_total` para ver
+cuánto se está descartando. Las lecturas se almacenan y grafican exactamente igual que antes;
+esto afecta solo a la detección. Véase [ejecutar el motor de
+detección](./detection-engine.md#timing-what-when-means).
+
 **Cancelar un comando registra `CANCELLED`.** Antes registraba `EXPIRED`, que compartía con
 un comando que simplemente agotó su tiempo. Si se bifurca sobre `EXPIRED` para detectar su
 propia cancelación, ya no estará ahí.

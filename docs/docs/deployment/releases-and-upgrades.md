@@ -394,6 +394,17 @@ reason — renaming it, editing its description — silently un-declares positio
 device on it. The only symptom is that map surfaces go quiet. Send the field, or set the
 declaration again after any update from an older client.
 
+**Windowed detection rules no longer count buffered readings from outside their window.**
+Repeating, sliding-aggregate and correlation rules used to fold in a reading from any point
+in the past, which let a rule reading "three readings within ten seconds" fire on readings an
+hour apart — a store-and-forward device uploading its buffer was the usual trigger. Those
+rules now discard a reading that arrives after the window it belonged to has passed, as
+tumbling-window and session rules already did. Expect **fewer** alarms from those rule kinds
+on any fleet that uploads in batches, and check `detect_late_samples_total` to see how much
+is being discarded. Readings are stored and charted exactly as before; this affects
+detection only. See [running the detection
+engine](./detection-engine.md#timing-what-when-means).
+
 **Cancelling a command records `CANCELLED`.** It used to record `EXPIRED`, which it shared
 with a command that simply ran out its time. If you branch on `EXPIRED` to detect your own
 cancellation, it will no longer be there.
