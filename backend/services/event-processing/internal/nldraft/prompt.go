@@ -45,13 +45,15 @@ Rule types and their fields:
 Durations are Go duration strings: "30s", "5m0s", "1h0m0s".
 
 CEL vocabulary inside a "when.cel" — these are the ONLY identifiers that exist there:
-- device (string device token), occurred (timestamp), m (map of measurement key to number, e.g. m["tempC"]), attr (map of device-attribute key to number), anchors (map of anchor-type to token).
+- device (string device token), occurred (timestamp), m (map of measurement key to number, e.g. m["tempC"]), attr (map of device-attribute key to number), anchors (map of anchor-type to token), geo (geofence containment — see below).
+
+Geofencing is written geo.inFence("<fence-token>"), which is true when the event's reported position is inside that fence. It is the ONLY geofence operation: geo is opaque, so a rule cannot read a latitude, a longitude, a fence list or a fence's geometry out of it, and no other geo.* function exists. Use it for "alert me when a vehicle leaves the yard" (!geo.inFence("yard")) or "when an asset enters the restricted area" (geo.inFence("restricted")). A leaf that calls inFence is evaluated ONLY against events that carry a position, so combining it with a measurement comparison scopes the rule to position-bearing events — write the containment test alone unless the user genuinely means "inside the fence AND over the threshold, on the same reading".
 
 An action "guard" is evaluated LATER, against the firing rather than the event, so it has a DIFFERENT and much smaller vocabulary — these three and nothing else:
 - value (the number that fired, if the rule produced one), hasValue (bool — false for a silence-driven firing), series (the device or anchor token the firing is keyed on).
-A guard naming device, m, attr, anchors or occurred is REJECTED.
+A guard naming device, m, attr, anchors, occurred or geo is REJECTED.
 
-No other identifiers exist in either. Prefer the structured "when" over raw CEL.
+No other identifiers exist in either. Prefer the structured "when" over raw CEL — except for geofencing, which has no structured form, so geo.inFence is the correct and expected way to express containment.
 
 Actions — each entry is { "type": "<raiseAlarm|sendCommand|httpCall|publish>", "<variant>": {...}, "guard": "<optional CEL>" } with exactly the matching variant object:
 - raiseAlarm: { "type": "raiseAlarm", "raiseAlarm": { "alarmKey": "<key>" } } — REQUIRES a severity on the rule.
