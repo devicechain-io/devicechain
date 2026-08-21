@@ -185,8 +185,9 @@ type PresenceDemotionResult struct {
 	// Demoted is how many demotion events were published.
 	Demoted int32
 	// Skipped is Scanned − Demoted: rows this page could not demote. See
-	// DemoteAssertedPresence for the three conditions, each of which is logged with
-	// the device it concerns.
+	// DemoteAssertedPresence for the two conditions, each of which is logged with
+	// the device it concerns. A row holding no SESSION is deliberately NOT one of
+	// them — zero is what releases a row a session-less producer asserted.
 	Skipped int32
 	// LastId is the id of the last row SCANNED (not the last demoted), which is the
 	// cursor for the next page. Zero when the page was empty. Resuming from the last

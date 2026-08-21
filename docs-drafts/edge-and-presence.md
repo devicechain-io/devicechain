@@ -57,9 +57,11 @@ carry the whole design: `PresenceSource` (`INFERRED` or `ASSERTED`), `SessionId`
 There is still exactly **one writer**: `MergeDeviceState`
 (`backend/services/device-state/model/api.go:158-316`), driven for *every* resolved event, plus the
 inactivity sweep. It is a row-locked read-modify-write because five decode workers can race on one
-device. The demotion door does not break that — `Api.DemoteAssertedPresence`
-(`device-state/model/emit.go:230`) reads the rows and **emits** demotion events, which reach the row
-through the same resolve-and-merge path as every other presence claim.
+device. The demotion door does not break that, and it is worth being precise about why:
+`DemoteAssertedPresence` (`backend/services/device-state/model/emit.go:230`) never touches
+`device_states` at all. It READS the rows a source still has asserted and **emits** a demotion event
+per row, and each one reaches the projection through the same resolve-and-merge path as every other
+presence claim. The operator door is a producer, not a second writer.
 
 **`PresenceSource` promotes on first assertion and comes back only by DEMOTION.** A device
 becomes `ASSERTED` the first time an authoritative transport speaks for it. The one path back to

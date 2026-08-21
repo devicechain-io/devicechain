@@ -403,7 +403,7 @@ func TestTheWalkEmptiesItselfAndDoesNotReDemoteAnInferredRow(t *testing.T) {
 // TestTheWalkAdvancesPastARowItCannotDemote is the other half of the cursor rule: LastId
 // is the last row SCANNED, not the last one kept. Resuming from the last row DEMOTED
 // would re-read every skipped row on the next page, and a permanently-skippable row —
-// which all three skip conditions are — would make the walk never terminate.
+// which both skip conditions are — would make the walk never terminate.
 func TestTheWalkAdvancesPastARowItCannotDemote(t *testing.T) {
 	api, _, ctx := newDemotionApi(t)
 	seedAssertedSource(t, api, ctx, "mqtt1", 3)
@@ -491,8 +491,8 @@ func TestARowThatCannotBeReleasedIsSkippedAndCounted(t *testing.T) {
 		})
 	}
 
-	// The counterweight: an ordinary row is NOT skipped, so the three cases above are
-	// not satisfied by a walker that skips everything.
+	// The counterweight: an ordinary row is NOT skipped, so the cases above are not
+	// satisfied by a walker that skips everything.
 	api, w, ctx := newDemotionApi(t)
 	seedAssertedSource(t, api, ctx, "mqtt1", 1)
 	result, err := api.DemoteAssertedPresence(ctx, "mqtt1", nil, 0, 10, "ops", "repair")
