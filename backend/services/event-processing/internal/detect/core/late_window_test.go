@@ -205,3 +205,67 @@ func TestDrainLateSamplesResets(t *testing.T) {
 		t.Errorf("second drain must reset to 0, got %d", n)
 	}
 }
+
+// The early return when a late sample finds NO window is load-bearing, and not for the reason it
+// reads as. It looks like an optimisation — there is nothing to evict, so why build state — but a
+// series can genuinely be RAISED with its window already gone, and in that state the fall-through
+// reaches resolve and clears the alarm on the strength of a buffered sample.
+//
+// Reaching it takes the global frontier: another series drags logical time far forward, which lets
+// a late sample for THIS series evict its whole window. That pass empties the buffer and deletes
+// the entry, while resolve refuses to fire because the sample predates the raise. What is left is
+// raised-with-no-window — and the next late sample, stamped AFTER the raise, would resolve it.
+//
+// Both nil-guard mutants survived the first mutation run, which is why this test exists: they were
+// predicted equivalent and are not.
+func TestLateSampleDoesNotResolveASeriesWhoseWindowIsGone(t *testing.T) {
+	t.Run("slidingagg", func(t *testing.T) {
+		e := NewEngine([]Rule{{ID: "r", Kind: SlidingAgg, Window: 10 * time.Second, Agg: AggMax, Op: GT, Thresh: 100}}, 5*time.Second)
+		a := SeriesKey{Rule: "r", Series: "devA"}
+		b := SeriesKey{Rule: "r", Series: "devB"}
+		e.ProcessResolved(1, at(100), []Event{{Seq: 1, Key: a, Time: at(100), Value: 500, HasValue: true, Match: true}})
+		if d := e.Drain(); len(d) != 1 || d[0].Edge == EdgeResolved {
+			t.Fatalf("setup: expected one raise for devA, got %+v", d)
+		}
+		// A different series carries the shared frontier to 295.
+		e.ProcessResolved(2, at(300), []Event{{Seq: 2, Key: b, Time: at(300), Value: 1, HasValue: true, Match: true}})
+		e.Drain()
+		// Late, and stamped BEFORE the raise: evicts devA's whole window, resolve refused as stale.
+		e.ProcessResolved(3, at(99), []Event{{Seq: 3, Key: a, Time: at(99), Value: 1, HasValue: true, Match: true}})
+		if d := e.Drain(); len(d) != 0 {
+			t.Fatalf("setup: a sample predating the raise must not resolve it, got %+v", d)
+		}
+		if _, raised := e.raised[a]; !raised || e.slides[a] != nil {
+			t.Fatalf("setup did not reach raised-with-no-window: raised=%v window=%v", raised, e.slides[a] != nil)
+		}
+		// Late, and stamped AFTER the raise. Nothing may come of it.
+		e.ProcessResolved(4, at(105), []Event{{Seq: 4, Key: a, Time: at(105), Value: 1, HasValue: true, Match: true}})
+		if d := e.Drain(); len(d) != 0 {
+			t.Errorf("a buffered sample cleared a live alarm for a series with no open window: %+v", d)
+		}
+	})
+
+	t.Run("correlation", func(t *testing.T) {
+		e := NewEngine([]Rule{{ID: "r", Kind: Correlation, Window: 10 * time.Second, Count: 2, MemberCap: 100}}, 5*time.Second)
+		area := SeriesKey{Rule: "r", Series: "area"}
+		other := SeriesKey{Rule: "r", Series: "other"}
+		e.ProcessResolved(1, at(100), []Event{{Seq: 1, Key: area, Member: "devA", Time: at(100), Match: true}})
+		e.ProcessResolved(2, at(101), []Event{{Seq: 2, Key: area, Member: "devB", Time: at(101), Match: true}})
+		if d := e.Drain(); len(d) != 1 || d[0].Edge == EdgeResolved {
+			t.Fatalf("setup: expected one raise for the anchor, got %+v", d)
+		}
+		e.ProcessResolved(3, at(300), []Event{{Seq: 3, Key: other, Member: "devZ", Time: at(300), Match: true}})
+		e.Drain()
+		e.ProcessResolved(4, at(99), []Event{{Seq: 4, Key: area, Member: "devC", Time: at(99), Match: true}})
+		if d := e.Drain(); len(d) != 0 {
+			t.Fatalf("setup: a sighting predating the raise must not resolve it, got %+v", d)
+		}
+		if _, raised := e.raised[area]; !raised || e.corr[area] != nil {
+			t.Fatalf("setup did not reach raised-with-no-cohort: raised=%v cohort=%v", raised, e.corr[area] != nil)
+		}
+		e.ProcessResolved(5, at(105), []Event{{Seq: 5, Key: area, Member: "devD", Time: at(105), Match: true}})
+		if d := e.Drain(); len(d) != 0 {
+			t.Errorf("a buffered sighting cleared a live alarm for an anchor with no open cohort: %+v", d)
+		}
+	})
+}
