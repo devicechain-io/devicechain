@@ -5,8 +5,10 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
@@ -68,6 +70,64 @@ func TestGetDeviceState(t *testing.T) {
 	}
 	if len(out.States) != 1 || !out.States[0].Active || out.States[0].InactivityTimeout != 600 {
 		t.Errorf("unexpected states: %+v", out.States)
+	}
+}
+
+// TestGetDeviceState_SelectsPresenceSource pins the SELECTION SET, not just the
+// struct. A Go field the query never asks for decodes to "" on every device, which
+// no other test here can see: toolsAgainst serves one canned body regardless of what
+// was asked, so an assertion on the decoded value passes either way. Hence a handler
+// that reads the request and refuses it.
+func TestGetDeviceState_SelectsPresenceSource(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decoding request body: %v", err)
+			return
+		}
+		if !strings.Contains(req.Query, "presenceSource") {
+			// Fail the CALL as well as the test, so the assertions below cannot
+			// pass on a response the server was never asked to produce.
+			t.Errorf("get_device_state query does not select presenceSource:\n%s", req.Query)
+			_, _ = w.Write([]byte(`{"errors":[{"message":"presenceSource was not selected"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"deviceStatesByDeviceToken":[` +
+			`{"deviceToken":"asserted","active":false,"inactivityTimeout":600,"presenceSource":"ASSERTED"},` +
+			`{"deviceToken":"inferred","active":false,"inactivityTimeout":600,"presenceSource":"INFERRED"}` +
+			`]}}`))
+	}))
+	defer ts.Close()
+
+	tools := NewTools(testClient(ts.URL))
+	_, out, err := tools.GetDeviceState(context.Background(), authedReq("tok"),
+		GetDeviceStateInput{DeviceTokens: []string{"asserted", "inferred"}})
+	if err != nil {
+		t.Fatalf("GetDeviceState: %v", err)
+	}
+	if len(out.States) != 2 {
+		t.Fatalf("expected 2 states, got %+v", out.States)
+	}
+	// Both devices are inactive; only the presence source separates "known down"
+	// from "not heard from", so the two must not decode to the same value.
+	if out.States[0].PresenceSource != "ASSERTED" || out.States[1].PresenceSource != "INFERRED" {
+		t.Errorf("presence sources not carried through: %+v", out.States)
+	}
+}
+
+// TestDeviceStateSummary_PresenceSourceAlwaysEmitted pins the ABSENCE of omitempty.
+// An agent reading a state with no presenceSource key would have to guess, and the
+// safe guess and the true one differ: dropping the key makes "the platform served no
+// source" indistinguishable from a source that was never asked for.
+func TestDeviceStateSummary_PresenceSourceAlwaysEmitted(t *testing.T) {
+	raw, err := json.Marshal(DeviceStateSummary{DeviceToken: "d1"})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"presenceSource":""`) {
+		t.Errorf("presenceSource must be emitted even when empty; got %s", raw)
 	}
 }
 
