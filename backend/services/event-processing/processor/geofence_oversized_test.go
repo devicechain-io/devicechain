@@ -84,18 +84,27 @@ func maxVertexFence(cx, cy, r float64) string { return maxVertexFenceAt(9, cx, c
 // writer is handed the real broker ceiling and the facts accumulate as the fence set grows past it.
 func ceilingFenceSet(t *testing.T, omitted prometheus.Counter) (*dmmodel.Api, *fenceFactWriter) {
 	t.Helper()
+	api, _, pointers := ceilingFenceSetAt(t, 9, omitted)
+	return api, pointers
+}
+
+// ceilingFenceSetSubjects is ceilingFenceSet keeping BOTH subjects apart, for the tests that
+// are about which one a fact went to.
+func ceilingFenceSetSubjects(t *testing.T, omitted prometheus.Counter) (*dmmodel.Api, *fenceFactWriter, *fenceFactWriter) {
+	t.Helper()
 	return ceilingFenceSetAt(t, 9, omitted)
 }
 
 // ceilingFenceSetAt is ceilingFenceSet at a chosen coordinate precision — the knob that moves
 // the fence set's SIZE without moving its fence count or its vertex count.
-func ceilingFenceSetAt(t *testing.T, prec int, omitted prometheus.Counter) (*dmmodel.Api, *fenceFactWriter) {
+func ceilingFenceSetAt(t *testing.T, prec int, omitted prometheus.Counter) (*dmmodel.Api, *fenceFactWriter, *fenceFactWriter) {
 	t.Helper()
 	api := newFenceDmApi(t)
 	dmCtx := dccore.WithTenant(context.Background(), "acme")
 	facts := &fenceFactWriter{}
-	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(facts,
-		dcconfig.DefaultStreamMaxMsgSize, omitted)
+	pointers := &fenceFactWriter{}
+	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(facts, pointers,
+		dcconfig.DefaultStreamMaxMsgSize, omitted, nil)
 
 	// "yard" is a circle of radius 1 around the origin, so 0.5,0.5 is inside it (0.707 < 1).
 	// The rest are disjoint circles parked far away, each also at the vertex ceiling.
@@ -110,11 +119,11 @@ func ceilingFenceSetAt(t *testing.T, prec int, omitted prometheus.Counter) (*dmm
 			t.Fatalf("create far-%03d: %v", i, err)
 		}
 	}
-	if len(facts.payloads) != dmmodel.MaxGeoFencesPerTenant {
-		t.Fatalf("fixture: %d facts published, want %d (one per mint)",
-			len(facts.payloads), dmmodel.MaxGeoFencesPerTenant)
+	if got := len(facts.payloads) + len(pointers.payloads); got != dmmodel.MaxGeoFencesPerTenant {
+		t.Fatalf("fixture: %d facts published across both subjects, want %d (one per mint)",
+			got, dmmodel.MaxGeoFencesPerTenant)
 	}
-	return api, facts
+	return api, facts, pointers
 }
 
 // lastFact decodes the most recent published fact.
@@ -126,6 +135,35 @@ func lastFact(t *testing.T, facts *fenceFactWriter) ([]byte, *dmmodel.GeoFenceSe
 		t.Fatalf("decode the last fence-set fact: %v", err)
 	}
 	return raw, ev
+}
+
+// latestFact returns the newest fact across BOTH subjects.
+//
+// 🔴 IT EXISTS BECAUSE "THE LAST FACT" IS NO LONGER "THE LAST FACT ON ONE WRITER". Once the
+// pointer form moved to its own subject, a fence set that crosses the ceiling partway through
+// being built leaves the two writers interleaved — at twenty decimal places exactly half the
+// mints land on each — so the last payload on the ordinary writer names an EARLIER version
+// whose set was smaller. A test reading that version gets fewer fences and a smaller response
+// than it meant to, and would report the read as broken when the fixture was.
+func latestFact(t *testing.T, writers ...*fenceFactWriter) ([]byte, *dmmodel.GeoFenceSetMintedEvent) {
+	t.Helper()
+	var bestRaw []byte
+	var best *dmmodel.GeoFenceSetMintedEvent
+	for _, w := range writers {
+		for _, raw := range w.payloads {
+			ev, err := dmmodel.UnmarshalGeoFenceSetMintedEvent(raw)
+			if err != nil {
+				t.Fatalf("decode a fence-set fact: %v", err)
+			}
+			if best == nil || ev.Version > best.Version {
+				best, bestRaw = ev, raw
+			}
+		}
+	}
+	if best == nil {
+		t.Fatal("no fence-set fact was published on any subject")
+	}
+	return bestRaw, best
 }
 
 // refusingFenceSource fails the test if anything asks it to resolve a fence set. It is how the
@@ -293,8 +331,8 @@ func TestKnownEmptyFenceSetIsNeverTreatedAsAPointerFact(t *testing.T) {
 	api := newFenceDmApi(t)
 	dmCtx := dccore.WithTenant(ctx, "acme")
 	facts := &fenceFactWriter{}
-	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(facts,
-		dcconfig.DefaultStreamMaxMsgSize, nil)
+	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(facts, &fenceFactWriter{},
+		dcconfig.DefaultStreamMaxMsgSize, nil, nil)
 
 	if _, err := api.CreateGeoFence(dmCtx, &dmmodel.GeoFenceCreateRequest{
 		Token: "yard", Geometry: fenceBox(0, 0, 1, 1)}); err != nil {

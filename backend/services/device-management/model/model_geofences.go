@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/geo"
@@ -179,6 +182,24 @@ const (
 	// fence always fits" true, which is what lets a paging reader be total: with it, a
 	// page of one is always readable.
 	//
+	// 🔴 IT BOUNDS THE STORED FORM, NOT THE REQUEST TEXT, AND THAT DISTINCTION IS THE WHOLE
+	// POINT OF THE FUNCTION THAT ENFORCES IT. What every downstream seam carries — the
+	// snapshot, the fact, the GraphQL response — is what PostgreSQL hands back out of a jsonb
+	// column, and jsonb is not a byte store. It parses each number into `numeric` and reprints
+	// it with numeric_out, which never uses exponent notation, so the request text and the
+	// stored text are different lengths and the difference is unbounded. Measured on
+	// PostgreSQL 16:
+	//
+	//	"1e308"     5 bytes in ->     309 out
+	//	"1e131071"  8 bytes in -> 131,072 out   (16,384x)
+	//	"1e-300"    6 bytes in ->     302 out   AND IT IS INSIDE [-180, 180]
+	//
+	// That last row is why range-checking a coordinate is not a size check: 1e-300 is a
+	// perfectly in-range longitude. So the bound is applied to the CANONICAL document — the
+	// one validateGeoFenceGeometry rebuilds from the parsed values, in the same
+	// non-exponent form numeric_out will print — plus jsonb's separator spacing. See
+	// jsonbRenderedLen.
+	//
 	// 🔴 IT IS DELIBERATELY GENEROUS, AND TIGHTENING IT WOULD NOT BUY WHAT IT LOOKS LIKE
 	// IT WOULD BUY. Its job is NOT to make a whole fence set fit in one message or one
 	// response — that is arithmetically unavailable. A bound tight enough for 100 fences
@@ -191,24 +212,43 @@ const (
 	//
 	// What this bound is for is narrower and still necessary: keeping a SINGLE page
 	// satisfiable. A reader that halves its page size on a refusal terminates only if one
-	// fence fits on its own — and without this, one does not have to. A single 512-position
-	// fence carrying extra ordinates was accepted and stored at 1.44 MB, over the cap by
-	// itself, and no page size can carry it.
+	// fence fits on its own — and without this, one does not have to.
 	//
 	// 32 KiB is chosen from measurement: a fence at the vertex ceiling written at nine
 	// decimal places (about a millimetre at the equator, more precision than any real
-	// editor emits) stores at ~13.9 KB, so this is ~2.4× the largest realistic authored
-	// fence while refusing the pathological documents by two orders of magnitude.
+	// editor emits) stores at ~15 KB, so this is ~2.2x the largest realistic authored
+	// fence while refusing the pathological documents by orders of magnitude.
 	//
 	// THE ROOT CAUSE, and the reason all of this machinery is expected to be temporary: a
 	// coordinate is JSON TEXT of unbounded length, so a fence's byte size is not a function
-	// of its position count at all. Storing coordinates as int32 degrees × 10^7 — 8 bytes
+	// of its position count at all. Storing coordinates as int32 degrees x 10^7 — 8 bytes
 	// per position, the convention OSM and Android already use — puts a ceiling fence at
 	// ~4.1 KB and the whole ceiling set at ~411 KB, which fits in one message and one
 	// response. That is a storage-format, wire and cross-service-codec change scheduled for
 	// v0.13.0, not a release-blocker fix; when it lands, the pointer fact and the paged read
 	// can both be deleted rather than maintained.
 	MaxGeoFenceGeometryBytes = 32 << 10
+
+	// MaxGeoFencePositionOrdinates bounds how many numbers one position may carry.
+	//
+	// 🔴 IT IS EXACTLY TWO BECAUSE THE KIND IS EXACTLY 2D, and until it existed the check
+	// was `len(pos) < 2` — a MINIMUM, which admitted a position of arbitrary width. 512
+	// positions of 7 "1e308" ordinates is 30 KB of request text and 1.1 MB of stored jsonb,
+	// accepted, over the response cap on its own. Nothing reads a third ordinate: the 2.5D
+	// and voxel kinds are named, reserved and refused, and the console's own reader already
+	// requires exactly two (it returns null for anything else rather than open an editor
+	// that would drop the rest on save). A maximum, not a minimum, is what makes a position
+	// count a size bound again.
+	MaxGeoFencePositionOrdinates = 2
+
+	// maxGeoFenceRequestBytes is a cheap intake guard on the AUTHORED text, refusing an
+	// absurd request body before anything parses it. It is not the real bound —
+	// MaxGeoFenceGeometryBytes is, and it is applied to the canonical form — because the
+	// two quantities are not proportional in either direction: canonicalisation SHRINKS a
+	// document padded with whitespace and GROWS one written in exponent notation. This
+	// number therefore only has to be comfortably above any legitimate request, which at
+	// the vertex ceiling is ~14 KB.
+	maxGeoFenceRequestBytes = 256 << 10
 )
 
 // GeoFenceSetVersion is one immutable, tenant-wide version of the WHOLE fence set,
@@ -328,27 +368,115 @@ type geoJSONGeometry struct {
 	Coordinates json.RawMessage `json:"coordinates"`
 }
 
-// validateGeoFenceGeometry parses and validates an authored geometry document,
-// returning the decoded envelope. Everything it enforces is authoring-time validation
-// of the FENCE — none of it ever runs against a device's reported position, which is
-// stored whatever it says (the same discipline LocationDeclaration records).
-func validateGeoFenceGeometry(raw string) (*GeoFenceGeometry, error) {
-	if raw == "" {
-		return nil, fmt.Errorf("a geofence geometry is required")
+// jsonbRenderedLen reports how many bytes PostgreSQL will hand back for a canonical
+// (whitespace-free) JSON document stored in a jsonb column.
+//
+// 🔴 IT EXISTS SO THE BOUND MEASURES WHAT DOWNSTREAM ACTUALLY CARRIES. jsonb does not
+// round-trip bytes: it reprints the document, emitting ", " after every structural comma
+// and ": " after every structural key colon. Measured against PostgreSQL 16, for a
+// whitespace-free input the rendered length is exactly len(doc) + one byte per structural
+// comma + one byte per structural colon — verified on five shapes including a real fence
+// envelope (93 -> 106, 145 -> 158).
+//
+// Separators INSIDE string literals get no space, which is why this tracks quoting rather
+// than counting bytes with strings.Count. The canonical documents this package builds
+// contain no comma or colon inside any string, so the difference is unobservable today —
+// but a scanner that is right for the wrong reason is one schema change away from being
+// wrong, and the whole finding this guards against was a length measured on the wrong text.
+func jsonbRenderedLen(doc []byte) int {
+	n := len(doc)
+	inString, escaped := false, false
+	for _, c := range doc {
+		switch {
+		case escaped:
+			escaped = false
+		case c == '\\' && inString:
+			escaped = true
+		case c == '"':
+			inString = !inString
+		case !inString && (c == ',' || c == ':'):
+			n++
+		}
 	}
-	// 🔴 THE BYTE BOUND IS CHECKED FIRST, BEFORE ANY PARSE. It is an O(1) read of a
-	// length, where json.Valid and the ring scan below both walk the document; putting it
-	// last would mean an oversized payload still paid for every parse that was going to
-	// refuse it. Same ordering argument as the vertex budget inside validatePolygon2D,
-	// and the same reason: the cheap refusal goes in front of the expensive one.
-	if len(raw) > MaxGeoFenceGeometryBytes {
-		return nil, fmt.Errorf("geofence geometry is %d bytes; the limit is %d (a fence set is "+
-			"carried whole over seams with byte budgets, and a position count cannot bound bytes "+
-			"— extra ordinates and long coordinates are both unbounded otherwise)",
-			len(raw), MaxGeoFenceGeometryBytes)
+	return n
+}
+
+// geoFenceEnvelopeKeys / geoJSONGeometryKeys are the ONLY keys each object may carry.
+//
+// 🔴 AN UNPARSED KEY IS A STORAGE-AMPLIFICATION VECTOR, not a harmless extension point.
+// json.Unmarshal into a struct silently ignores anything it does not know, so a document
+// could carry any key at all — and one holding ten "1e131071" tokens is 1,256 bytes of
+// request text and 1.3 MB of stored jsonb, a 1,045x amplification, accepted. Filling the
+// intake guard with such tokens is hundreds of megabytes in a single row, re-marshalled
+// into a new snapshot on every subsequent fence edit. A geometry document is a CONTRACT
+// with exactly two readers (this validator and the DETECT compiler); accepting keys
+// neither of them reads never bought anything.
+var (
+	geoFenceEnvelopeKeys = map[string]bool{"kind": true, "geometry": true}
+	geoJSONGeometryKeys  = map[string]bool{"type": true, "coordinates": true}
+)
+
+// rejectUnknownKeys refuses any key outside the allowed set, naming the offender.
+func rejectUnknownKeys(obj map[string]json.RawMessage, allowed map[string]bool, what string) error {
+	for k := range obj {
+		if !allowed[k] {
+			return fmt.Errorf("%s carries unknown key %q; only %s are accepted (an unread key is "+
+				"stored, snapshotted and published like any other, so it is storage that nothing "+
+				"can ever use)", what, k, allowedKeyList(allowed))
+		}
+	}
+	return nil
+}
+
+// allowedKeyList renders an allowed-key set for an error message, in a stable order so the
+// message does not change between runs.
+func allowedKeyList(allowed map[string]bool) string {
+	keys := make([]string, 0, len(allowed))
+	for k := range allowed {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
+}
+
+// canonicalGeoFenceGeometry / canonicalGeoJSONPolygon are the shapes the canonical document
+// is re-emitted through. Marshalling a struct rather than pasting strings together is what
+// keeps the output well-formed and escaped without this file owning an encoder.
+type canonicalGeoFenceGeometry struct {
+	Kind     string          `json:"kind"`
+	Geometry json.RawMessage `json:"geometry"`
+}
+
+type canonicalGeoJSONPolygon struct {
+	Type        string          `json:"type"`
+	Coordinates json.RawMessage `json:"coordinates"`
+}
+
+// validateGeoFenceGeometry parses and validates an authored geometry document, returning
+// the decoded envelope and the CANONICAL document to store. Everything it enforces is
+// authoring-time validation of the FENCE — none of it ever runs against a device's reported
+// position, which is stored whatever it says (the same discipline LocationDeclaration
+// records).
+//
+// 🔴 IT RETURNS A DOCUMENT TO STORE, AND CALLERS MUST STORE THAT ONE. Validating one text
+// and persisting another is how a size check stops meaning anything: the authored form can
+// carry exponent notation, insignificant whitespace and key orderings that the stored form
+// does not, so a bound applied to the request is a statement about a document nobody keeps.
+// Canonicalising closes the gap by making "what was validated" and "what is stored" the
+// same bytes — every coordinate re-emitted from its parsed float64 in the same
+// non-exponent form PostgreSQL's numeric_out will print.
+func validateGeoFenceGeometry(raw string) (*GeoFenceGeometry, string, error) {
+	if raw == "" {
+		return nil, "", fmt.Errorf("a geofence geometry is required")
+	}
+	// The intake guard, first, because it is an O(1) read of a length where everything
+	// below walks the document. It is NOT the size bound — see maxGeoFenceRequestBytes.
+	if len(raw) > maxGeoFenceRequestBytes {
+		return nil, "", fmt.Errorf("geofence geometry request is %d bytes; the intake limit is %d",
+			len(raw), maxGeoFenceRequestBytes)
 	}
 	if !json.Valid([]byte(raw)) {
-		return nil, fmt.Errorf("geofence geometry is not valid JSON")
+		return nil, "", fmt.Errorf("geofence geometry is not valid JSON")
 	}
 	// Reject an array/scalar/null before decoding into the envelope. `null` unmarshals
 	// into a struct as a silent no-op, so it would otherwise arrive as an envelope with
@@ -356,53 +484,80 @@ func validateGeoFenceGeometry(raw string) (*GeoFenceGeometry, error) {
 	// a malformed document.
 	var probe map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &probe); err != nil || probe == nil {
-		return nil, fmt.Errorf("geofence geometry must be a JSON object")
+		return nil, "", fmt.Errorf("geofence geometry must be a JSON object")
+	}
+	if err := rejectUnknownKeys(probe, geoFenceEnvelopeKeys, "geofence geometry"); err != nil {
+		return nil, "", err
 	}
 
 	geom := &GeoFenceGeometry{}
 	if err := json.Unmarshal([]byte(raw), geom); err != nil {
-		return nil, fmt.Errorf("unable to parse geofence geometry: %w", err)
+		return nil, "", fmt.Errorf("unable to parse geofence geometry: %w", err)
 	}
+	var canonicalGeometry json.RawMessage
 	switch geom.Kind {
 	case GeoFenceKindPolygon2D:
-		if err := validatePolygon2D(geom.Geometry); err != nil {
-			return nil, err
+		c, err := canonicalizePolygon2D(geom.Geometry)
+		if err != nil {
+			return nil, "", err
 		}
+		canonicalGeometry = c
 	case "":
-		return nil, fmt.Errorf("geofence geometry must declare a kind (%q)", GeoFenceKindPolygon2D)
+		return nil, "", fmt.Errorf("geofence geometry must declare a kind (%q)", GeoFenceKindPolygon2D)
 	case GeoFenceKindPolygon25D, GeoFenceKindVoxel3D:
 		// Named, reserved, and NOT accepted. Storing one would mean a rule could name a
 		// fence whose containment nothing can evaluate — worse than refusing it, because
 		// the rule would silently never fire.
-		return nil, fmt.Errorf("geofence geometry kind %q is reserved but not yet supported; use %q",
+		return nil, "", fmt.Errorf("geofence geometry kind %q is reserved but not yet supported; use %q",
 			geom.Kind, GeoFenceKindPolygon2D)
 	default:
-		return nil, fmt.Errorf("unsupported geofence geometry kind %q (supported: %q)",
+		return nil, "", fmt.Errorf("unsupported geofence geometry kind %q (supported: %q)",
 			geom.Kind, GeoFenceKindPolygon2D)
 	}
-	return geom, nil
+
+	canonical, err := json.Marshal(&canonicalGeoFenceGeometry{Kind: geom.Kind, Geometry: canonicalGeometry})
+	if err != nil {
+		return nil, "", fmt.Errorf("unable to canonicalize geofence geometry: %w", err)
+	}
+	// The real bound, applied to the STORED size of the CANONICAL document.
+	if stored := jsonbRenderedLen(canonical); stored > MaxGeoFenceGeometryBytes {
+		return nil, "", fmt.Errorf("geofence geometry stores as %d bytes; the limit is %d (a fence set "+
+			"is carried whole over seams with byte budgets, and neither a position count nor the "+
+			"request's own length bounds what a database stores — an exponent-notation coordinate "+
+			"expands when it is written)", stored, MaxGeoFenceGeometryBytes)
+	}
+	geom.Geometry = canonicalGeometry
+	return geom, string(canonical), nil
 }
 
-// validatePolygon2D enforces the GeoJSON Polygon contract and the vertex bound. The
-// coordinate ranges are the platform-wide contract ResolvedLocationEntry states: WGS84 /
-// EPSG:4326 decimal degrees, longitude in [-180, 180], latitude in [-90, 90].
-func validatePolygon2D(raw json.RawMessage) error {
+// canonicalizePolygon2D enforces the GeoJSON Polygon contract and the vertex bound, and
+// returns the CANONICAL geometry object to store. The coordinate ranges are the
+// platform-wide contract ResolvedLocationEntry states: WGS84 / EPSG:4326 decimal degrees,
+// longitude in [-180, 180], latitude in [-90, 90].
+func canonicalizePolygon2D(raw json.RawMessage) (json.RawMessage, error) {
 	if len(raw) == 0 {
-		return fmt.Errorf("geofence geometry is missing its GeoJSON geometry object")
+		return nil, fmt.Errorf("geofence geometry is missing its GeoJSON geometry object")
+	}
+	var geomProbe map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &geomProbe); err != nil || geomProbe == nil {
+		return nil, fmt.Errorf("the GeoJSON geometry must be a JSON object")
+	}
+	if err := rejectUnknownKeys(geomProbe, geoJSONGeometryKeys, "the GeoJSON geometry object"); err != nil {
+		return nil, err
 	}
 	var g geoJSONGeometry
 	if err := json.Unmarshal(raw, &g); err != nil {
-		return fmt.Errorf("unable to parse the GeoJSON geometry object: %w", err)
+		return nil, fmt.Errorf("unable to parse the GeoJSON geometry object: %w", err)
 	}
 	if g.Type != "Polygon" {
-		return fmt.Errorf("geometry kind %s requires a GeoJSON Polygon, got %q", GeoFenceKindPolygon2D, g.Type)
+		return nil, fmt.Errorf("geometry kind %s requires a GeoJSON Polygon, got %q", GeoFenceKindPolygon2D, g.Type)
 	}
 	var rings [][][]float64
 	if err := json.Unmarshal(g.Coordinates, &rings); err != nil {
-		return fmt.Errorf("unable to parse Polygon coordinates: %w", err)
+		return nil, fmt.Errorf("unable to parse Polygon coordinates: %w", err)
 	}
 	if len(rings) == 0 {
-		return fmt.Errorf("a Polygon requires at least an exterior ring")
+		return nil, fmt.Errorf("a Polygon requires at least an exterior ring")
 	}
 
 	// 🔴 THE BUDGET IS ENFORCED FIRST, BEFORE ANYTHING QUADRATIC RUNS, and that
@@ -423,7 +578,7 @@ func validatePolygon2D(raw json.RawMessage) error {
 		total += len(ring)
 	}
 	if total > MaxGeoFenceVertices {
-		return fmt.Errorf("geofence has %d positions across its rings; the limit is %d (containment is "+
+		return nil, fmt.Errorf("geofence has %d positions across its rings; the limit is %d (containment is "+
 			"O(vertices) per location event and the publish-time cost gate cannot see this number)",
 			total, MaxGeoFenceVertices)
 	}
@@ -432,23 +587,28 @@ func validatePolygon2D(raw json.RawMessage) error {
 		// Four positions is the GeoJSON minimum for a closed linear ring: a triangle
 		// plus the repeated closing position.
 		if len(ring) < 4 {
-			return fmt.Errorf("polygon ring %d has %d positions; a closed ring needs at least 4", i, len(ring))
+			return nil, fmt.Errorf("polygon ring %d has %d positions; a closed ring needs at least 4", i, len(ring))
 		}
 		for j, pos := range ring {
-			if len(pos) < 2 {
-				return fmt.Errorf("polygon ring %d position %d needs at least [longitude, latitude]", i, j)
+			// EXACTLY two ordinates, not "at least". See MaxGeoFencePositionOrdinates: the
+			// minimum this used to be is what let a position be arbitrarily wide, and a wide
+			// position is unbounded storage that nothing ever reads.
+			if len(pos) != MaxGeoFencePositionOrdinates {
+				return nil, fmt.Errorf("polygon ring %d position %d has %d ordinates; a %s position is "+
+					"exactly [longitude, latitude] (%d)", i, j, len(pos), GeoFenceKindPolygon2D,
+					MaxGeoFencePositionOrdinates)
 			}
 			lon, lat := pos[0], pos[1]
 			if math.IsNaN(lon) || math.IsInf(lon, 0) || lon < -180 || lon > 180 {
-				return fmt.Errorf("polygon ring %d position %d longitude %v is outside [-180, 180]", i, j, lon)
+				return nil, fmt.Errorf("polygon ring %d position %d longitude %v is outside [-180, 180]", i, j, lon)
 			}
 			if math.IsNaN(lat) || math.IsInf(lat, 0) || lat < -90 || lat > 90 {
-				return fmt.Errorf("polygon ring %d position %d latitude %v is outside [-90, 90]", i, j, lat)
+				return nil, fmt.Errorf("polygon ring %d position %d latitude %v is outside [-90, 90]", i, j, lat)
 			}
 		}
 		first, last := ring[0], ring[len(ring)-1]
 		if first[0] != last[0] || first[1] != last[1] {
-			return fmt.Errorf("polygon ring %d is not closed: first position %v != last %v", i, first, last)
+			return nil, fmt.Errorf("polygon ring %d is not closed: first position %v != last %v", i, first, last)
 		}
 		// Everything above is STRUCTURE — the ring is well-formed JSON describing
 		// positions in range. This asks the separate question of whether the shape
@@ -465,8 +625,49 @@ func validatePolygon2D(raw json.RawMessage) error {
 		// mistake made at draw time, and the fence sat in the registry looking
 		// healthy while answering nothing.
 		if err := geo.ValidateClosedRing(ring); err != nil {
-			return fmt.Errorf("polygon ring %d: %w", i, err)
+			return nil, fmt.Errorf("polygon ring %d: %w", i, err)
 		}
 	}
-	return nil
+	return json.Marshal(&canonicalGeoJSONPolygon{
+		Type:        "Polygon",
+		Coordinates: canonicalRingsJSON(rings),
+	})
+}
+
+// canonicalRingsJSON re-emits parsed rings as JSON, every ordinate in NON-EXPONENT decimal
+// form.
+//
+// 🔴 IT DOES NOT USE json.Marshal ON THE FLOATS, AND THAT IS THE POINT. encoding/json
+// formats a float with 'g'-like rules, so 1e-300 marshals back as "1e-300" — five bytes
+// here and 302 in the jsonb column, which is precisely the gap that made the previous byte
+// bound measure the wrong document. FormatFloat with 'f' and precision -1 emits the
+// shortest decimal that round-trips exactly, in the same notation numeric_out uses, so the
+// length measured here is the length PostgreSQL will store. No value is rounded: an author's
+// coordinate survives this unchanged, and one written so small that its decimal expansion is
+// enormous is refused by the size bound rather than silently truncated.
+func canonicalRingsJSON(rings [][][]float64) json.RawMessage {
+	var b strings.Builder
+	b.WriteByte('[')
+	for i, ring := range rings {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteByte('[')
+		for j, pos := range ring {
+			if j > 0 {
+				b.WriteByte(',')
+			}
+			b.WriteByte('[')
+			for k, ord := range pos {
+				if k > 0 {
+					b.WriteByte(',')
+				}
+				b.WriteString(strconv.FormatFloat(ord, 'f', -1, 64))
+			}
+			b.WriteByte(']')
+		}
+		b.WriteByte(']')
+	}
+	b.WriteByte(']')
+	return json.RawMessage(b.String())
 }

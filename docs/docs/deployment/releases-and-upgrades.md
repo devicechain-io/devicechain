@@ -388,6 +388,7 @@ lets someone authorize an assistant to watch a fleet while withholding where it 
 | `deviceCredentials`, `deviceCredentialsById`, `deviceCredentialsByToken` | Now require `device:write`. For one credential type the readable identifier *is* the bearer token, so `device:read` — which every enabled member holds — was enough to open a broker session as any device in the tenant. |
 | `locationEvents` | Now requires `location:read`, as above. |
 | Any `...ById(ids: [])` query | An empty id list now returns nothing. It used to return the whole table, unpaginated. |
+| `geoFenceSetSnapshot`, `currentGeoFenceSet` | Their `fences` field is now paginated: it takes a required `pagination` argument and returns `results` alongside a `pagination` record, instead of a plain list. Read pages until `pageEnd` reaches `totalRecords`. A fence set at the documented limits is larger than a single response can carry, so the list form could not be returned at all for the tenants most likely to ask for it. |
 
 #### Changes with no signature change
 
@@ -410,6 +411,25 @@ on any fleet that uploads in batches, and check `detect_late_samples_total` to s
 is being discarded. Readings are stored and charted exactly as before; this affects
 detection only. See [running the detection
 engine](./detection-engine.md#timing-what-when-means).
+
+**Geofence geometry is validated more strictly, and stored as written rather than as sent.**
+Three changes, all at the point a fence is created or updated:
+
+- A position must be exactly `[longitude, latitude]`. A third or later ordinate used to be
+  accepted and ignored.
+- The geometry document may carry only the keys the platform reads — `kind` and `geometry`
+  at the top level, `type` and `coordinates` inside it. Any other key used to be stored and
+  never looked at.
+- Coordinates are rewritten into plain decimal notation before being stored. A coordinate
+  sent as `1e-300` comes back as its full decimal expansion. No value is rounded and no
+  fence changes shape, but a document read back is not byte-identical to the one sent.
+
+A fence is also now refused if its stored form exceeds 32 KiB. That is roughly twice the
+size of a fence using every vertex the platform allows, so ordinary geometry is unaffected;
+what it refuses is a document whose size comes from notation rather than from shape. The
+console has always written positions in the accepted form, so fences drawn in the console
+are unaffected. Existing stored fences are **not** rewritten and keep working — but one that
+breaks a rule above will be refused the next time it is saved.
 
 **Cancelling a command records `CANCELLED`.** It used to record `EXPIRED`, which it shared
 with a command that simply ran out its time. If you branch on `EXPIRED` to detect your own

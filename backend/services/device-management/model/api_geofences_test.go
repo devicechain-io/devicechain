@@ -494,7 +494,7 @@ func TestPositionBudgetIsEnforcedBeforeTheCrossingScan(t *testing.T) {
 	}
 	coords = append(coords, -84.0, 33.0)
 
-	_, err := validateGeoFenceGeometry(polygonGeometry(coords...))
+	_, _, err := validateGeoFenceGeometry(polygonGeometry(coords...))
 	if err == nil {
 		t.Fatal("an over-limit, self-intersecting ring was accepted")
 	}
@@ -626,7 +626,7 @@ func TestValidateGeoFenceGeometry(t *testing.T) {
 		{"only two distinct corners", polygonGeometry(-84.0, 33.0, -84.1, 33.1, -84.0, 33.0, -84.0, 33.0), false},
 	}
 	for _, tc := range cases {
-		_, err := validateGeoFenceGeometry(tc.doc)
+		_, _, err := validateGeoFenceGeometry(tc.doc)
 		if tc.valid && err != nil {
 			t.Errorf("%s: rejected a valid geometry: %v", tc.name, err)
 		}
@@ -650,7 +650,7 @@ func TestReservedGeometryKindsAreRefusedAsReserved(t *testing.T) {
 		return `{"kind":"` + kind + `","geometry":{"type":"Polygon","coordinates":[` + closed + `]}}`
 	}
 	for _, kind := range []string{GeoFenceKindPolygon25D, GeoFenceKindVoxel3D} {
-		_, err := validateGeoFenceGeometry(doc(kind))
+		_, _, err := validateGeoFenceGeometry(doc(kind))
 		if err == nil {
 			t.Errorf("%s: a reserved kind was accepted; a rule could then name a fence whose "+
 				"containment nothing can evaluate", kind)
@@ -662,7 +662,7 @@ func TestReservedGeometryKindsAreRefusedAsReserved(t *testing.T) {
 		}
 	}
 	// The counterweight: a genuinely unknown kind is NOT described as reserved.
-	_, err := validateGeoFenceGeometry(doc("HEXAGON"))
+	_, _, err := validateGeoFenceGeometry(doc("HEXAGON"))
 	if err == nil {
 		t.Fatal("an unknown kind was accepted")
 	}

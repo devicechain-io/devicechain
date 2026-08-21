@@ -161,6 +161,10 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// event's containment predicate resolves from memory and the loop never blocks on a read back
 	// into device-management. The startup reconcile (FenceSets, below) is the other half — the
 	// stream carries only changes from now on, so without it a restart would be blind.
+	fencePointerReader, err := nmgr.NewReader(streams.GeoFenceSetPointer)
+	if err != nil {
+		return err
+	}
 	fenceReader, err := nmgr.NewReader(streams.GeoFenceSet)
 	if err != nil {
 		return err
@@ -225,6 +229,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// directly: a set too large for a single broker message arrives as a POINTER — its version
 	// and nothing else — and is resolved from the archive at exactly that version.
 	ResolvedEventsProcessor.FenceSetReader = fenceReader
+	ResolvedEventsProcessor.FenceSetPointerReader = fencePointerReader
 	ResolvedEventsProcessor.FenceSets = CurrentFenceSets
 	ResolvedEventsProcessor.VersionedFenceSets = FenceSets
 	if err := ResolvedEventsProcessor.Initialize(context.Background()); err != nil {

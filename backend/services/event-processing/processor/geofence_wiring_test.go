@@ -289,7 +289,7 @@ func TestFenceEditReachesTheDetectEngineEndToEnd(t *testing.T) {
 	api := newFenceDmApi(t)
 	dmCtx := dccore.WithTenant(ctx, "acme")
 	factWriter := &fenceFactWriter{}
-	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(factWriter, 0, nil)
+	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(factWriter, &fenceFactWriter{}, 0, nil, nil)
 
 	w := &captureWriter{}
 	rp := newFenceProcessor(t, fenceRuleReg(t, "acme", "p@1", "yard"), w, nil)
@@ -346,7 +346,7 @@ func TestFenceEditsAreFiledByVersionNotReplaced(t *testing.T) {
 	api := newFenceDmApi(t)
 	dmCtx := dccore.WithTenant(ctx, "acme")
 	factWriter := &fenceFactWriter{}
-	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(factWriter, 0, nil)
+	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(factWriter, &fenceFactWriter{}, 0, nil, nil)
 
 	if _, err := api.CreateGeoFence(dmCtx, &dmmodel.GeoFenceCreateRequest{
 		Token: "yard", Geometry: fenceBox(0, 0, 1, 1)}); err != nil {
@@ -492,7 +492,7 @@ func TestRestartedProcessorStillEvaluatesAFenceRule(t *testing.T) {
 	api := newFenceDmApi(t)
 	dmCtx := dccore.WithTenant(ctx, "acme")
 	factWriter := &fenceFactWriter{}
-	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(factWriter, 0, nil)
+	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(factWriter, &fenceFactWriter{}, 0, nil, nil)
 	if _, err := api.CreateGeoFence(dmCtx, &dmmodel.GeoFenceCreateRequest{
 		Token: "yard", Geometry: fenceBox(0, 0, 1, 1)}); err != nil {
 		t.Fatalf("create: %v", err)

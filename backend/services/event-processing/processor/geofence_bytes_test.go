@@ -33,72 +33,10 @@ import (
 // counted in FENCES look like a solution to a problem measured in BYTES. These tests move that
 // variable on purpose.
 
-// ── 1. the authoring bound ───────────────────────────────────────────────────────────────────
-
-// A geometry document over the byte bound is refused at authoring, and the refusal names both
-// numbers so an author can act on it.
-//
-// This is what makes "one fence always fits" true, which is in turn what lets the reader's
-// halving retry terminate: below a page of one there is nothing left to halve.
-func TestAnOversizedGeometryDocumentIsRefusedAtAuthoring(t *testing.T) {
-	api := newFenceDmApi(t)
-	dmCtx := dccore.WithTenant(context.Background(), "acme")
-
-	// Positions carrying 700 extra ordinates each. Every rule the vertex budget enforces is
-	// satisfied — 512 positions, all in range, ring closed — and the document is 1.4 MB.
-	extra := strings.Repeat(",0.5", 700)
-	var b strings.Builder
-	b.WriteString(`{"kind":"POLYGON_2D","geometry":{"type":"Polygon","coordinates":[[`)
-	for i := 0; i < dmmodel.MaxGeoFenceVertices-1; i++ {
-		if i > 0 {
-			b.WriteString(",")
-		}
-		fmt.Fprintf(&b, "[%d.5,%d.5%s]", i%90, i%80, extra)
-	}
-	fmt.Fprintf(&b, ",[0.5,0.5%s]]]}}", extra)
-	doc := b.String()
-
-	if len(doc) <= dmmodel.MaxGeoFenceGeometryBytes {
-		t.Fatalf("fixture is %d bytes, under the %d-byte bound — it tests nothing",
-			len(doc), dmmodel.MaxGeoFenceGeometryBytes)
-	}
-	_, err := api.CreateGeoFence(dmCtx, &dmmodel.GeoFenceCreateRequest{Token: "huge", Geometry: doc})
-	if err == nil {
-		t.Fatalf("a %d-byte geometry was accepted; no page size can make that fence readable "+
-			"across a %d-byte response cap", len(doc), svcclient.MaxResponseBytes)
-	}
-	msg := err.Error()
-	for _, want := range []string{fmt.Sprint(len(doc)), fmt.Sprint(dmmodel.MaxGeoFenceGeometryBytes)} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("the refusal does not name %q, so an author cannot tell how far over they "+
-				"are: %s", want, msg)
-		}
-	}
-	t.Logf("refused: %d bytes against a %d-byte bound", len(doc), dmmodel.MaxGeoFenceGeometryBytes)
-}
-
-// The counterweight: a fence at the VERTEX ceiling, written at more precision than any real
-// editor emits, is still comfortably accepted. A bound that refused legitimate authoring would
-// be a worse defect than the one it fixes, and "the oversized one is refused" cannot say which
-// of the two this is.
-func TestAFenceAtTheVertexCeilingIsStillAccepted(t *testing.T) {
-	api := newFenceDmApi(t)
-	dmCtx := dccore.WithTenant(context.Background(), "acme")
-
-	doc := maxVertexFenceAt(9, 0, 0, 1)
-	if _, err := api.CreateGeoFence(dmCtx, &dmmodel.GeoFenceCreateRequest{
-		Token: "yard", Geometry: doc}); err != nil {
-		t.Fatalf("a %d-byte fence at the vertex ceiling was refused: %v", len(doc), err)
-	}
-	headroom := float64(dmmodel.MaxGeoFenceGeometryBytes) / float64(len(doc))
-	if headroom < 2 {
-		t.Errorf("the byte bound leaves only %.1fx headroom over a ceiling fence (%d bytes of "+
-			"%d); that is too close to refuse authoring nobody would call unreasonable",
-			headroom, len(doc), dmmodel.MaxGeoFenceGeometryBytes)
-	}
-	t.Logf("accepted: %d bytes, %.1fx headroom under the %d-byte bound",
-		len(doc), headroom, dmmodel.MaxGeoFenceGeometryBytes)
-}
+// The authoring-side bound and canonicalisation are tested where they live, in
+// device-management's model package (geofence_canonical_test.go). What is tested HERE is the
+// READ side: that a fence set at the documented limits, at high coordinate precision, and one
+// containing a row written before the bound existed, all still resolve whole.
 
 // ── 2. the same fence set, four times the bytes ──────────────────────────────────────────────
 
@@ -108,8 +46,10 @@ func TestAFenceAtTheVertexCeilingIsStillAccepted(t *testing.T) {
 // is the axis nothing else in this package moves. The read must come back complete, and no
 // single response may cross the cap.
 func TestHighPrecisionFenceSetStillResolvesWhole(t *testing.T) {
-	api, facts := ceilingFenceSetAt(t, 20, nil)
-	_, ev := lastFact(t, facts)
+	api, facts, pointers := ceilingFenceSetAt(t, 20, nil)
+	// The LATEST version across both subjects — see latestFact. At this precision the set
+	// crosses the broker ceiling partway through being built, so the two writers interleave.
+	_, ev := latestFact(t, facts, pointers)
 
 	src := &schemaFenceSource{t: t, api: api}
 	set, err := src.FenceSetAt(context.Background(), "acme", ev.Version)
@@ -160,9 +100,9 @@ func TestHighPrecisionFenceSetStillResolvesWhole(t *testing.T) {
 func TestAStoredFenceOverTheByteBoundIsStillReadable(t *testing.T) {
 	api := newFenceDmApi(t)
 	ctx := dccore.WithTenant(context.Background(), "acme")
-	facts := &fenceFactWriter{}
-	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(facts,
-		dcconfig.DefaultStreamMaxMsgSize, nil)
+	facts, pointers := &fenceFactWriter{}, &fenceFactWriter{}
+	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(facts, pointers,
+		dcconfig.DefaultStreamMaxMsgSize, nil, nil)
 
 	// Thirty legitimately-authored fences at the vertex ceiling. They are what makes the
 	// oversized row's page cross the cap rather than the row doing it alone: a fence that no
@@ -201,7 +141,7 @@ func TestAStoredFenceOverTheByteBoundIsStillReadable(t *testing.T) {
 		Token: "zzz-last", Geometry: fenceBox(50, 50, 51, 51)}); err != nil {
 		t.Fatalf("create zzz-last: %v", err)
 	}
-	_, ev := lastFact(t, facts)
+	_, ev := latestFact(t, facts, pointers)
 	wantFences := ordinary + 3
 
 	src := &schemaFenceSource{t: t, api: api}

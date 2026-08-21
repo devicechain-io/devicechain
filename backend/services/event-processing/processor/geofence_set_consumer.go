@@ -193,8 +193,14 @@ func (rp *ResolvedEventsProcessor) runFenceReconcile(tenants []string) {
 // device-management's row, not a row of ours.
 func (rp *ResolvedEventsProcessor) runFenceSetConsumer() {
 	defer rp.readerWG.Done()
+	rp.drainFenceSetStream(rp.FenceSetReader)
+}
+
+// drainFenceSetStream is the read/ack loop both fence-set consumers run. Sharing it is what
+// keeps the ordinary and pointer subjects from drifting into two different fact handlers.
+func (rp *ResolvedEventsProcessor) drainFenceSetStream(reader messaging.MessageReader) {
 	for {
-		msg, err := rp.FenceSetReader.ReadMessage(rp.procCtx)
+		msg, err := reader.ReadMessage(rp.procCtx)
 		if errors.Is(err, io.EOF) {
 			return
 		}
@@ -211,6 +217,28 @@ func (rp *ResolvedEventsProcessor) runFenceSetConsumer() {
 			return // shutdown mid-send: leave unacked; it redelivers next start
 		}
 	}
+}
+
+// runFenceSetPointerConsumer drains the geofence-set-POINTER stream: fence-set facts whose
+// fences were too large to ride in one broker message, so the fact names a version and carries
+// nothing else.
+//
+// It is a separate consumer over a separate subject rather than a branch inside the ordinary
+// one, and the separation is not about this service — it is about the one running beside it
+// during an upgrade. A build of this service from before the pointer form existed decodes such
+// a fact as a fence set of ZERO fences (json.Unmarshal ignores the field that says otherwise)
+// and installs it, so containment answers "outside" for a device that is inside, silently,
+// because an empty set is a legitimate state. Publishing to a subject that build never
+// subscribed to is what keeps its behaviour identical to what it was before: no fact arrives,
+// the version stays missing, and containment reports a COUNTED eval error the reconcile sweep
+// repairs.
+//
+// Its body is the ordinary consumer's, because past the subject the two are the same fact and
+// handleFenceSetFact already branches on FencesOmitted — a fact's meaning must not depend on
+// which subject carried it, or the pair could disagree.
+func (rp *ResolvedEventsProcessor) runFenceSetPointerConsumer() {
+	defer rp.readerWG.Done()
+	rp.drainFenceSetStream(rp.FenceSetPointerReader)
 }
 
 // handleFenceSetFact compiles one fence-set fact, installs it on the single-writer loop, and acks.
@@ -312,14 +340,19 @@ func (rp *ResolvedEventsProcessor) resolveOmittedFenceSet(msg messaging.Message,
 // errNoFenceSetArchive reports that no archive seam is wired, so a pointer fact's fences are
 // unreachable.
 //
-// 🔴 IT IS AN ERROR AND NOT A BRANCH OF ITS OWN, DELIBERATELY. Written as a separate early
-// return with its own log line and its own metric increment, it was UNREACHABLE in production:
-// it needs fenceView non-nil and VersionedFenceSets nil, but fenceView is built only when the
-// seam exists and buildFenceSetSeam returns both halves of one client or two nils. A dead
-// branch carrying the only report of the state it describes is worse than no branch — it reads
-// as coverage. Folded in here it is genuinely reachable (any caller assembling a processor by
-// hand can produce it), it goes through the same counted, logged path as every other failure to
-// resolve, and the nil check still stands between this code and a nil-interface call.
+// 🔴 IT IS AN ERROR AND NOT A BRANCH OF ITS OWN, DELIBERATELY — BUT BE PRECISE ABOUT WHAT
+// THAT FIXED. Written as a separate early return with its own log line and its own metric
+// increment, this state was UNREACHABLE in production: it needs fenceView non-nil and
+// VersionedFenceSets nil, but fenceView is built only when the seam exists and
+// buildFenceSetSeam returns both halves of one client or two nils. That has NOT changed — it
+// is still unreachable in production, and reachable only by assembling a processor field by
+// field, which is to say from a test.
+//
+// What folding it in fixed is the dead BRANCH: a distinct log line and a distinct metric
+// increment for a state nothing could produce read as coverage of that state while measuring
+// nothing. Routed through the ordinary failure path it is exercised by every test of that
+// path, the nil check still stands between this code and a nil-interface call, and there is
+// one report of "the archive did not answer" rather than two, only one of which could fire.
 var errNoFenceSetArchive = errors.New("no fence-set archive seam is configured; a fact that arrived without its fences cannot be resolved")
 
 // errFenceSetArchiveEmpty reports an archive read that succeeded and returned nothing. The
