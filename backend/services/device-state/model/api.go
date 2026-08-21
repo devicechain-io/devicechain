@@ -128,11 +128,13 @@ func newDeviceState(deviceToken string, occurredAt time.Time, pt *PresenceTransi
 
 // MergeDeviceState updates (or creates) the live state projection for a device in
 // response to a resolved event. It is the write path of the projection. A non-nil
-// pt is an authoritative presence transition (ADR-067): it promotes the device to
-// ASSERTED and drives Active under the monotonic (SessionId, OccurredTime) guard. A
-// nil pt is a plain data event: for an INFERRED device it is an implicit heartbeat
-// (unchanged); for an ASSERTED device it advances activity but NEVER flips Active —
-// a stray data event can't resurrect a device the platform knows is dead.
+// pt is an authoritative presence claim (ADR-067) and can move the row in either
+// direction: a CONNECTED/DISCONNECTED claim promotes the device to ASSERTED and drives
+// Active under the monotonic (SessionId, OccurredTime) guard, while a DEMOTED claim
+// returns it to INFERRED without touching Active at all. A nil pt is a plain data
+// event: for an INFERRED device it is an implicit heartbeat (unchanged); for an
+// ASSERTED device it advances activity but NEVER flips Active — a stray data event
+// can't resurrect a device the platform knows is dead.
 func (api *Api) MergeDeviceState(ctx context.Context, deviceToken string, occurredAt time.Time, pt *PresenceTransition, id DeviceIdentity) (*DeviceState, error) {
 	// The 5 decode workers can process two events for the same device
 	// concurrently. Read-modify-write the row inside a transaction that takes a
@@ -173,13 +175,20 @@ func (api *Api) MergeDeviceState(ctx context.Context, deviceToken string, occurr
 			// device advances the marker (rejecting a later stale intermediate-session edge) but
 			// does NOT move LastDisconnectTime or re-fire the DETECT offline edge — the S3
 			// same-state-higher-session non-event. The identical predicate keys the DETECT engine.
-			// wasInferred is the FIRST-authoritative-word promotion: the device's presence was
-			// only inferred so far (data-silence sweep), so this StateChange establishes the
+			// neverAsserted is the FIRST-authoritative-word promotion: no source has ever
+			// spoken authoritatively about this device, so this StateChange establishes the
 			// authoritative baseline and must record its edge even without a state flip — an
-			// authoritative death time supersedes a synthetic swept one (captured before we
-			// stamp ASSERTED just below).
-			wasInferred := found.PresenceSource != PresenceSourceAsserted
-			found.PresenceSource = PresenceSourceAsserted
+			// authoritative death time supersedes a synthetic swept one.
+			//
+			// It reads PresenceTime rather than PresenceSource, and the difference is
+			// load-bearing once a demotion exists: a DEMOTED row is INFERRED again but KEEPS
+			// the ordering stamp of the transition that demoted it. Spelled the old way, every
+			// transition arriving after a demotion would look like a first authoritative word,
+			// and a late higher-session DISCONNECT would overwrite a real LastDisconnectTime.
+			// The two fields are written together on every promotion (below, and in
+			// newDeviceState), so on a row that has never been demoted the two spellings are
+			// the same predicate.
+			neverAsserted := !found.PresenceTime.Valid
 			d := presence.Decide(
 				presence.Prior{
 					SessionId: found.SessionId,
@@ -195,26 +204,48 @@ func (api *Api) MergeDeviceState(ctx context.Context, deviceToken string, occurr
 				},
 			)
 			if d.Ordered {
-				found.SessionId = pt.SessionId
-				found.PresenceTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
-				found.Active = pt.Claim == presence.ClaimConnected // idempotent when the state did not flip
-				if pt.Claim == presence.ClaimConnected {
-					// A higher session is a genuine reconnect even when Active was already true
-					// (a new epoch is a new physical connection), so refresh LastConnectTime on a
-					// flip OR a new session OR the first authoritative word; a same-session
-					// duplicate connect leaves it frozen. (A producer that never varies its session
-					// id cannot signal a reconnect-over-missed-disconnect this way; both current
-					// producers — Sparkplug SP4a, LwM2M L1 — mint a fresh epoch per connect.)
-					if d.Flipped || d.NewSession || wasInferred {
-						found.LastConnectTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
-						found.InactivityAlarmTime = sql.NullTime{}
+				if d.Demoted {
+					// The source has released custody of this device: it is no longer willing to
+					// speak for the device's connectivity, and it is asserting NOTHING about
+					// whether the device is up or down. So the row returns to INFERRED — which
+					// hands it back to the inactivity sweep and to the implicit-heartbeat path,
+					// the two mechanisms that can repair it without any further word from the
+					// source — and the ordering stamp advances so a late echo from the released
+					// session cannot re-assert it.
+					//
+					// SessionId, Active, LastConnectTime, LastDisconnectTime, LastActivityTime
+					// and InactivityAlarmTime are deliberately untouched. A demotion is a
+					// statement about who has custody, never about what the device is doing;
+					// rewriting Active here would fabricate a connectivity edge out of an
+					// administrative one, and DETECT — which keys off the same predicate —
+					// would raise an offline alarm for every demoted device. SessionId stays so
+					// the released session remains named: it is what acceptsDemotion matched,
+					// and it is what a re-assertion must beat.
+					found.PresenceSource = PresenceSourceInferred
+					found.PresenceTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
+				} else {
+					found.PresenceSource = PresenceSourceAsserted
+					found.SessionId = pt.SessionId
+					found.PresenceTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
+					found.Active = pt.Claim == presence.ClaimConnected // idempotent when the state did not flip
+					if pt.Claim == presence.ClaimConnected {
+						// A higher session is a genuine reconnect even when Active was already true
+						// (a new epoch is a new physical connection), so refresh LastConnectTime on a
+						// flip OR a new session OR the first authoritative word; a same-session
+						// duplicate connect leaves it frozen. (A producer that never varies its session
+						// id cannot signal a reconnect-over-missed-disconnect this way; both current
+						// producers — Sparkplug SP4a, LwM2M L1 — mint a fresh epoch per connect.)
+						if d.Flipped || d.NewSession || neverAsserted {
+							found.LastConnectTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
+							found.InactivityAlarmTime = sql.NullTime{}
+						}
+					} else if d.Flipped || neverAsserted {
+						// A true CONNECTED→dead flip, or the first authoritative word over an
+						// inferred-dead device, records the disconnect time. A higher-session
+						// DISCONNECT over an ALREADY-ASSERTED-dead device is a late echo —
+						// first-known-dead wins (the S3a history table retains the later row for audit).
+						found.LastDisconnectTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
 					}
-				} else if d.Flipped || wasInferred {
-					// A true CONNECTED→dead flip, or the first authoritative word over an
-					// inferred-dead device, records the disconnect time. A higher-session
-					// DISCONNECT over an ALREADY-ASSERTED-dead device is a late echo —
-					// first-known-dead wins (the S3a history table retains the later row for audit).
-					found.LastDisconnectTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
 				}
 			}
 			// A CONNECTED is also activity; a DISCONNECTED is the opposite of activity,
@@ -228,12 +259,19 @@ func (api *Api) MergeDeviceState(ctx context.Context, deviceToken string, occurr
 		// Plain data event. An ASSERTED device takes Active ONLY from a StateChange, so
 		// a data event must not flip it (it still advances activity below); an INFERRED
 		// device treats every event as an implicit heartbeat (unchanged behavior).
-		if found.PresenceSource != PresenceSourceAsserted && !found.Active {
+		// A data event older than the activity already recorded is evidence about the
+		// past, not the present. The activity advance has always been guarded that way;
+		// the resurrect was not, so a redelivered or store-and-forward event from before
+		// the silence could bring a swept device back to life and then immediately be
+		// swept again. Both effects read the SAME freshness test — a stale event is stale
+		// for every purpose, not just for the timestamp.
+		fresh := !found.LastActivityTime.Valid || occurredAt.After(found.LastActivityTime.Time)
+		if fresh && found.PresenceSource != PresenceSourceAsserted && !found.Active {
 			found.Active = true
 			found.LastConnectTime = sql.NullTime{Time: occurredAt, Valid: true}
 			found.InactivityAlarmTime = sql.NullTime{}
 		}
-		if !found.LastActivityTime.Valid || occurredAt.After(found.LastActivityTime.Time) {
+		if fresh {
 			found.LastActivityTime = sql.NullTime{Time: occurredAt, Valid: true}
 		}
 		return tx.Save(found).Error

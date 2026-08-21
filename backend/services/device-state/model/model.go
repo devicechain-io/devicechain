@@ -62,11 +62,23 @@ type DeviceState struct {
 	// sweep, unchanged; ASSERTED takes Active ONLY from a StateChange — a data event
 	// advances LastActivityTime but never flips Active, and the sweep skips it (its
 	// offline is a DEATH/LWT, not a data-silence timeout).
+	//
+	// The value moves in BOTH directions. A source that is releasing custody — because
+	// its presence tap is being disabled, or because an operator said so — sends a
+	// DEMOTED claim, which returns the row to INFERRED so the two repair mechanisms the
+	// asserted path suppresses (the sweep, the implicit heartbeat) can reach it again.
+	// Without that, a row frozen at whatever it last held stays frozen for as long as
+	// nothing asserts about it, which is indefinitely.
 	PresenceSource string `gorm:"type:varchar(16);not null;default:INFERRED"`
 	// SessionId + PresenceTime are the last-applied presence transition's ordering key
 	// (ADR-067 decision 4): a StateChange is applied only when it is not older than
 	// this by (SessionId, PresenceTime), DISCONNECTED winning an equal stamp. Zero /
-	// NULL until the first StateChange; unused for INFERRED devices.
+	// NULL until the first presence claim of any kind.
+	//
+	// They are NOT "unused for INFERRED devices": a demoted row is INFERRED and still
+	// carries the stamp of the demotion, which is precisely what stops a late echo from
+	// the released session re-asserting it. Read PresenceTime.Valid, never
+	// PresenceSource, to ask whether any source has ever spoken for this device.
 	SessionId    uint64 `gorm:"not null;default:0"`
 	PresenceTime sql.NullTime
 }
