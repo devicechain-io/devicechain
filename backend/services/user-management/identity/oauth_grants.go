@@ -356,9 +356,8 @@ func (m *Manager) mintScopedGrant(ctx context.Context, email, tenant, accessScop
 	// would carry, viewer baseline included) to each token's scope allowance.
 	// Intersect caps even the superuser "*" to the allowance, so an OAuth session
 	// can never exceed its scope.
-	effective := effectiveAuthorities(authorities, su)
-	accessCapped := auth.IntersectAuthorities(effective, accessAllow)
-	refreshCapped := auth.IntersectAuthorities(effective, refreshAllow)
+	accessCapped := capToScope(authorities, su, accessAllow)
+	refreshCapped := capToScope(authorities, su, refreshAllow)
 
 	m.mu.RLock()
 	issuer := m.issuer
@@ -394,6 +393,40 @@ func effectiveAuthorities(authorities []string, sudo bool) []string {
 	return unionStrings(authorities, viewerAuthorities)
 }
 
+// readOnlyScopeAllowance is the CEILING the `read-only` OAuth scope imposes: the
+// viewer baseline plus location:read.
+//
+// 🔴 It is deliberately NOT viewerAuthorities, and that difference is the point. A
+// scope allowance and a role baseline are different kinds of thing:
+//
+//   - viewerAuthorities is a GRANT. Every enabled tenant member receives it on top of
+//     their assigned roles, so an entry there is a capability nobody had to choose.
+//     That is exactly why location:read is absent from it — see the long note above
+//     that var — and TestLocationReadIsNotInTheViewerBaseline pins the absence.
+//   - This list is a CAP. IntersectAuthorities emits only what the subject ACTUALLY
+//     HOLDS, so widening it grants nobody anything: a member never given location:read
+//     through a role still mints a read-only token without it. What it changes is the
+//     other case — a member who WAS granted it (and a superuser, whose "*" is capped
+//     here too) no longer has it silently stripped at the token endpoint.
+//
+// Fusing the two made the position surface unreachable rather than role-gated:
+// `read-only` is the only scope, its allowance WAS the viewer baseline, and so the
+// baseline's deliberate absence became a refusal for every OAuth caller including a
+// tenant superuser — MCP's query_locations could not succeed for anyone. A scope
+// names a SURFACE (read-only observability, position included); a role decides the
+// CAPABILITY. Listing a read authority here says "a read-only token may carry this if
+// its holder has it", never "its holder has it".
+var readOnlyScopeAllowance = unionStrings(viewerAuthorities, []string{string(auth.LocationRead)})
+
+// capToScope is the whole scope cap in one place: a grant's effective authorities
+// (the set a console token would carry, viewer baseline included, or the superuser's
+// "*") intersected with a scope allowance. IntersectAuthorities caps "*" too, so the
+// result never exceeds allow and never exceeds what the subject holds — the allowance
+// is a ceiling, the roles are the grant, and a token carries the smaller of the two.
+func capToScope(authorities []string, sudo bool, allow []string) []string {
+	return auth.IntersectAuthorities(effectiveAuthorities(authorities, sudo), allow)
+}
+
 // scopeAllowance returns the authorities a (space-delimited) scope set permits: the
 // union of each member scope's allowance. An unknown scope is an error (fail-closed
 // — a token is never minted for a scope with no defined allowance).
@@ -402,7 +435,7 @@ func scopeAllowance(scope string) ([]string, error) {
 	for _, s := range auth.ParseScope(scope) {
 		switch s {
 		case auth.ScopeReadOnly:
-			out = unionStrings(out, viewerAuthorities)
+			out = unionStrings(out, readOnlyScopeAllowance)
 		default:
 			return nil, fmt.Errorf("unknown scope %q", s)
 		}

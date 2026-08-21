@@ -20,10 +20,19 @@ import (
 // tool this one forwards the CALLER'S OWN access token (callerToken → gql.Query)
 // and the MCP server holds no credential of its own, so the locationEvents resolver
 // runs under the caller's claims and applies its own gate. Position is gated on
-// `location:read` — an authority deliberately absent from the read-only viewer
-// baseline and distinct from the `event:read` that the measurement tools need — so
-// an agent acting for a user who was never granted it gets the resolver's refusal
-// surfaced as a failed tool call, without this file knowing the authority's name.
+// `location:read` — an authority a ROLE must grant (it is deliberately absent from
+// the viewer baseline every enabled member receives) and distinct from the
+// `event:read` that the measurement tools need — so an agent acting for a user who
+// was never granted it gets the resolver's refusal surfaced as a failed tool call,
+// without this file knowing the authority's name.
+//
+// 🔴 Absent from the BASELINE is not absent from the SCOPE, and conflating the two
+// once made this tool refusable-only: the `read-only` OAuth scope's allowance was
+// literally viewerAuthorities, so the token endpoint stripped location:read from
+// every caller — a tenant superuser included — and no grant could reach this tool.
+// The scope now has its own allowance that admits location:read as a ceiling
+// (user-management/identity: readOnlyScopeAllowance); the role still decides who
+// actually holds it.
 // That is the whole point: adding a check here would be a second copy of the policy,
 // free to drift from the one that actually protects the data.
 

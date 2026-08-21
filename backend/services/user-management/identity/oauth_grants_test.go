@@ -4,6 +4,8 @@
 package identity
 
 import (
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -118,20 +120,116 @@ func TestVerifyPKCE(t *testing.T) {
 	}
 }
 
-// read-only maps to the viewer baseline; unknown/empty scopes fail closed.
+// read-only maps to its own allowance (the viewer baseline plus location:read);
+// unknown/empty scopes fail closed.
 func TestScopeAllowance(t *testing.T) {
 	allow, err := scopeAllowance(auth.ScopeReadOnly)
 	if err != nil {
 		t.Fatalf("read-only scope: %v", err)
 	}
-	if len(allow) != len(viewerAuthorities) {
-		t.Errorf("read-only allowance = %v, want viewer baseline %v", allow, viewerAuthorities)
+	if len(allow) != len(readOnlyScopeAllowance) {
+		t.Errorf("read-only allowance = %v, want %v", allow, readOnlyScopeAllowance)
+	}
+	for _, want := range readOnlyScopeAllowance {
+		if !slices.Contains(allow, want) {
+			t.Errorf("read-only allowance %v is missing %q", allow, want)
+		}
 	}
 	if _, err := scopeAllowance("write"); err == nil {
 		t.Errorf("unknown scope should error")
 	}
 	if _, err := scopeAllowance(""); err == nil {
 		t.Errorf("empty scope should error")
+	}
+}
+
+// The `read-only` scope's allowance is a CEILING, not a baseline. It admits
+// location:read — which the viewer baseline deliberately does not — and it must stay
+// a superset of that baseline (a scope dropping one of the viewer's reads would
+// silently shrink every OAuth session) while itself staying read-only.
+func TestReadOnlyScopeAllowanceIsTheBaselinePlusLocation(t *testing.T) {
+	if !slices.Contains(readOnlyScopeAllowance, string(auth.LocationRead)) {
+		t.Errorf("the read-only scope allowance %v omits %q; MCP's query_locations is then "+
+			"refusable-only, because the token endpoint strips the authority from every "+
+			"caller including a superuser", readOnlyScopeAllowance, auth.LocationRead)
+	}
+	for _, a := range viewerAuthorities {
+		if !slices.Contains(readOnlyScopeAllowance, a) {
+			t.Errorf("the read-only scope allowance %v omits the viewer read %q, so a "+
+				"read-only token would carry less than the console gives every member",
+				readOnlyScopeAllowance, a)
+		}
+	}
+	// Widening a ceiling is only safe while the ceiling stays read-only. This is the
+	// property TestViewerAuthoritiesAreReadOnly asserts of the baseline, and it has to
+	// be asserted here separately now that the two are no longer the same list.
+	for _, a := range readOnlyScopeAllowance {
+		if a == string(auth.AuthorityAll) {
+			t.Errorf("the read-only scope allowance contains %q; a scope must never name "+
+				"the super-authority", a)
+			continue
+		}
+		if !strings.HasSuffix(a, ":read") {
+			t.Errorf("the read-only scope allowance contains %q, which is not a read "+
+				"authority — the scope names a read-only surface", a)
+		}
+	}
+}
+
+// A superuser's "*" is capped to the scope allowance rather than expanded, so while
+// the allowance was the viewer baseline a tenant superuser minted a read-only token
+// WITHOUT location:read and MCP's query_locations could not succeed for anybody. It
+// does now.
+func TestReadOnlyTokenForASuperuserCarriesLocationRead(t *testing.T) {
+	allow, err := scopeAllowance(auth.ScopeReadOnly)
+	if err != nil {
+		t.Fatalf("read-only scope: %v", err)
+	}
+	capped := capToScope(nil, true, allow)
+	if !slices.Contains(capped, string(auth.LocationRead)) {
+		t.Errorf("a superuser's read-only token carries %v, without %q", capped, auth.LocationRead)
+	}
+	// The cap still holds in the direction that matters: "*" is never emitted.
+	if slices.Contains(capped, string(auth.AuthorityAll)) {
+		t.Errorf("a superuser's read-only token leaked %q: %v", auth.AuthorityAll, capped)
+	}
+}
+
+// 🔴 The counterweight, and the more important half of the pair. Widening the CEILING
+// must grant nobody anything: IntersectAuthorities emits only what the subject
+// actually holds, so a member whose roles never granted location:read still mints a
+// read-only token without it. If this test fails, the change widened the viewer
+// BASELINE — which every enabled member receives whatever their roles — instead of
+// the scope allowance, and the separation location:read exists to create is gone.
+func TestReadOnlyTokenOmitsLocationReadWhenNoRoleGrantsIt(t *testing.T) {
+	allow, err := scopeAllowance(auth.ScopeReadOnly)
+	if err != nil {
+		t.Fatalf("read-only scope: %v", err)
+	}
+	// A member with a role, just not a location-granting one.
+	capped := capToScope([]string{string(auth.DeviceWrite)}, false, allow)
+	if slices.Contains(capped, string(auth.LocationRead)) {
+		t.Errorf("a member holding only %q minted a read-only token carrying %q: %v — the "+
+			"scope allowance is a ceiling and must grant nothing on its own",
+			auth.DeviceWrite, auth.LocationRead, capped)
+	}
+	// The precondition that keeps that absence from being vacuous: the cap really is
+	// producing a populated token, so the missing authority is a restriction rather
+	// than an empty result.
+	if !slices.Contains(capped, string(auth.EventRead)) {
+		t.Fatalf("precondition: a member's read-only token = %v, which does not even carry "+
+			"%q, so its lack of location:read proves nothing", capped, auth.EventRead)
+	}
+	// A member with no roles at all — the viewer baseline and nothing else — likewise.
+	if bare := capToScope(nil, false, allow); slices.Contains(bare, string(auth.LocationRead)) {
+		t.Errorf("a member with no roles minted a read-only token carrying %q: %v — that "+
+			"would mean the viewer baseline itself now grants it", auth.LocationRead, bare)
+	}
+	// And the case the widening exists for: a role that DOES grant it survives the cap.
+	granted := capToScope([]string{string(auth.LocationRead)}, false, allow)
+	if !slices.Contains(granted, string(auth.LocationRead)) {
+		t.Errorf("a member whose role grants %q minted a read-only token without it: %v",
+			auth.LocationRead, granted)
 	}
 }
 
@@ -159,7 +257,10 @@ func TestEffectiveAuthorities(t *testing.T) {
 		t.Errorf("superuser effective = %v, want [*]", su)
 	}
 	// A member holding only device:write still gets the viewer reads unioned in, so
-	// capping to read-only yields the viewer baseline.
+	// capping to the viewer baseline yields exactly the viewer baseline. (The
+	// `read-only` scope's own allowance is a superset of this list — see
+	// readOnlyScopeAllowance; what is asserted here is effectiveAuthorities, not the
+	// scope.)
 	member := effectiveAuthorities([]string{"device:write"}, false)
 	capped := auth.IntersectAuthorities(member, viewerAuthorities)
 	if len(capped) != len(viewerAuthorities) {

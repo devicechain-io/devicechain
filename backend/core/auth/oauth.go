@@ -17,8 +17,19 @@ import (
 // the token endpoint; these identifiers are the shared vocabulary the metadata
 // document advertises and the authorize/token endpoints validate against.
 const (
-	// ScopeReadOnly grants the read-only observability surface — the same capability
-	// set as the console's viewer baseline (device/event/state/command/alarm reads).
+	// ScopeReadOnly names the read-only observability surface: device/event/state/
+	// command/alarm reads, plus a device's position.
+	//
+	// 🔴 It is NOT the same set as the console's viewer baseline, and must not be
+	// re-fused with it. The baseline is what every enabled member is GRANTED without
+	// choosing it; this scope is the CEILING a token minted through it may reach.
+	// location:read sits in the ceiling and deliberately not in the baseline — so a
+	// read-only token carries position only for a subject a role actually granted it
+	// to (IntersectAuthorities emits nothing the subject does not hold), while a
+	// subject who was granted it is no longer stripped of it at the token endpoint.
+	// The allowance itself lives with the authorization server
+	// (user-management/identity: readOnlyScopeAllowance).
+	//
 	// It is the only scope in the v1.0 read-only MCP cut; write scopes are a
 	// post-v1.0 fast-follow gated on elevation + human-in-the-loop confirmation.
 	ScopeReadOnly = "read-only"
