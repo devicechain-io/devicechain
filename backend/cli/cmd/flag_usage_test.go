@@ -93,6 +93,7 @@ func TestFlagUsageCarriesNoBackquotes(t *testing.T) {
 		"dcctl destroy",
 		"dcctl ha verify",
 		"dcctl ha verify-db",
+		"dcctl presence demote",
 		"dcctl secrets escrow verify",
 		"dcctl sim create",
 	}
