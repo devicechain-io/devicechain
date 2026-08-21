@@ -163,6 +163,12 @@ query {
 }
 ```
 
+Enabling dev tools also serves a **GraphiQL explorer** at `/graphiql` on each service — through
+the ingress that is `/api/<area>/graphiql`, and on a port-forward straight at the pod it is
+`/graphiql`. Before `v0.12.0` the page loaded and then failed every query it sent, because it
+was pointed at a path no service serves; it now posts to the endpoint it was reached through,
+so it works on all three routes (ingress, port-forward, and the console's dev proxy).
+
 ## Conventions
 
 - Entities are addressed by a human-readable **token** in addition to an internal id.

@@ -372,23 +372,52 @@ require the `location:read` permission rather than `event:read`. This permission
 the read-only baseline a viewer receives, so an account that could read position history on
 `v0.11.0` cannot on `v0.12.0`. Grant it explicitly to the roles that need it.
 
+The same permission now also gates **previewing a rule that tests geofence containment**.
+A preview of that kind returns, per device, when it entered and left a region — a read of
+position however it was asked for — so `previewRule` requires `location:read` in addition
+to the `device:read` every preview takes. A rule author who could preview every draft on
+`v0.11.0` is refused on containment drafts until that permission is granted. Previews that
+test no containment are unaffected.
+
 If you have registered an OAuth client for AI access, it needs the same attention: reading
 positions now requires a separate `location` scope alongside `read-only`, so add it to the
 client's registered scopes and re-authorize. Until you do, that client's `query_locations`
 tool is refused while its other read tools keep working. The split is deliberate — it is what
-lets someone authorize an assistant to watch a fleet while withholding where it has been.
+lets someone authorize an assistant to watch a fleet while withholding where it has been. See
+[AI Access (MCP)](../concepts/mcp.md).
 
 **4. Check for these GraphQL operations** in anything you have written against the API:
 
 | Operation | What changed |
 | --- | --- |
 | `createCommand` | Returns `CreateCommandResult!` instead of `Command!`. The command is now under a `command` field, alongside a `rejection` field that explains a refusal. |
-| `updateDeviceType` | Its `request` argument is now a required `DeviceTypeUpdateRequest!`, and the semantic changed with it: this is a **partial update**. An omitted field now KEEPS its stored value instead of erasing it, and an explicit null clears it. So a client that cleared a field by leaving it out must now send null for it — and, in the other direction, renaming a type no longer detaches the profile its devices resolve capabilities through. `token` is also gone from the input, so an update can no longer move a type's token. Unrecognised fields in the request are rejected rather than ignored. |
+| `updateDeviceType` | Its `request` argument is now a required `DeviceTypeUpdateRequest!`, and the semantic changed with it: this is a **partial update**. An omitted field now KEEPS its stored value instead of erasing it, and an explicit null clears it. So a client that cleared a field by leaving it out must now send null for it — and, in the other direction, renaming a type no longer detaches the profile its devices resolve capabilities through. A client written against the old whole-record behaviour — one that reads the type, then sends every field back — still works and still writes what it sends. `token` is also gone from the input, so an update can no longer move a type's token. Unrecognised fields in the request are rejected rather than ignored. |
 | `assertedActiveDeviceStates` | Replaced by `assertedDeviceStates`, which takes `activeOnly` and pages through `afterId` and `pageSize`. |
 | `deviceCredentials`, `deviceCredentialsById`, `deviceCredentialsByToken` | Now require `device:write`. For one credential type the readable identifier *is* the bearer token, so `device:read` — which every enabled member holds — was enough to open a broker session as any device in the tenant. |
 | `locationEvents` | Now requires `location:read`, as above. |
 | Any `...ById(ids: [])` query | An empty id list now returns nothing. It used to return the whole table, unpaginated. |
 | `geoFenceSetSnapshot`, `currentGeoFenceSet` | Their `fences` field is now paginated: it takes a required `pagination` argument and returns `results` alongside a `pagination` record, instead of a plain list. Read pages until `pageEnd` reaches `totalRecords`. A fence set at the documented limits is larger than a single response can carry, so the list form could not be returned at all for the tenants most likely to ask for it. |
+
+**5. Stop zero-padding entity ids.** An `id` argument is now parsed as a decimal number
+and nothing else. It used to be parsed with the base inferred from the literal, so a
+zero-padded `"017"` — exactly what a client that formats ids to a fixed width sends — was
+read as **octal** and resolved to row 15: the wrong entity, returned successfully with no
+error to notice. `"0x2"`, `"0b101"` and `"1_0"` were accepted the same way. All four forms
+are now refused outright. Send `"17"`.
+
+**6. Expect every service pod to roll, once.** The instance configuration document the
+services are handed now has the coordinate for any functional area this deployment did not
+enable removed from it. On a deployment without `ai-inference` — which is every profile
+except `full` — that changes the document's bytes and therefore the checksum annotation
+that rolls pods, so the `helm upgrade` restarts every service rather than only the ones
+whose image moved. It is a normal rolling update and needs nothing from you; it is here so
+that a full roll does not read as a symptom.
+
+The reason for removing the coordinate is that a hostname for a service nobody deployed
+was worse than no hostname: the rule authoring surface built its natural-language
+"Describe" door against it, failed to resolve the name, and reported that the tenant had
+not consented to external AI routing — blaming a tenant setting for a service the operator
+never installed. It now says the feature is not enabled on this deployment, which is true.
 
 #### Changes with no signature change
 
@@ -464,6 +493,73 @@ needs a new `state:demote` permission that no role holds by default. A new gauge
 nothing reported before, because a quiet fleet and a tap that never started look identical from
 outside. See [returning a device to inferred presence](./edge-services.md#demoting-a-device).
 
+**A redelivered reading no longer duplicates its rows.** A measurement event's identity is
+derived from a digest of its own content, and that identity is what makes a redelivery
+harmless. For a reading carrying more than one metric over a JSON transport, the digest was
+computed over an order the platform invented rather than one the device sent, so the same
+reading resolved to a different identity roughly four times in five. When the platform
+redelivered such a message — which it does routinely, on an unacknowledged publish or a
+transient write failure — the duplicate was not recognised: the measurement rows were
+written a second time and the hourly rollups counted them twice. Single-metric readings, and
+readings arriving over Sparkplug or LwM2M, were never affected. The fix is forward-only:
+duplicates already written before the upgrade stay where they are, and their rollups stay
+inflated. If you have charts that looked too high on multi-metric devices, this is why, and
+they will read correctly from the upgrade onwards.
+
+**Every paged list now returns rows in a declared order.** Of the platform's 37 list
+endpoints, 31 named no order at all, which leaves a paged read free to hand the same row out
+on two pages and never show another one — a real defect that had already been reported twice
+as a screen reshuffling under an operator. Each list now sorts on a total, unambiguous key.
+If you have code that depended on the incidental order a particular query happened to return,
+it will now see a stable one instead, which may not be the same one. One order was chosen
+deliberately rather than mechanically: device credentials are listed with the most runway
+left first, because an unbounded read of them feeds credential reuse, and ordering by id
+would have handed back the credential closest to expiry.
+
+**A command answered in plain text now records its answer.** A device replying to a command
+with something that is not JSON — `acknowledged`, a bare status word — used to fail the write
+with a database type error and leave the command in `SENT`, retrying the same doomed write
+once a minute for the life of the row. The command then timed out against a device that had
+answered it correctly. Such a response is now stored, losslessly, as a JSON string. Values an
+**API caller** supplies are unchanged: those must still be valid JSON, because a caller
+sending malformed JSON is a caller who should be told so.
+
+**Commands to Sparkplug devices now fail immediately instead of being lost.** The platform
+has no command path to a Sparkplug device — those nodes live on your own MQTT infrastructure
+and nothing bridges the two — and the check that was supposed to refuse such a command was
+comparing against a value no device ever carries, so it matched nothing and every one of
+those commands was accepted and then quietly went nowhere. They are now recorded `FAILED`
+straight away with that as the reason, and counted under
+`command_delivery_undeliverable_total`. Expect commands that used to sit until their TTL and
+record `TIMEOUT` to appear as prompt failures instead. See [Commands](../concepts/commands.md).
+
+**A command the platform lost track of is re-armed rather than blamed on the device.** A
+command could reach `SENT` and then be reached by nothing — the pod that published it dies
+before recording the outcome — and `SENT` had no exit except the TTL, which recorded
+`TIMEOUT` against a device that was never sent anything. A background pass now finds those
+and re-arms them to `PARKED`, so they are delivered on the device's next wake.
+`command_delivery_stranded_recovered_total` carries a `{disposition}` label saying where each
+one landed. **This applies to LwM2M devices only** — on plain MQTT a command that appears to
+have gone nowhere cannot be told apart from one that arrived and whose answer was lost, so the
+behaviour there is unchanged and `command_delivery_stranded_skipped_total{reason="transport"}`
+will show a steady rate that is not a fault. See [when the platform loses track of a
+command](../concepts/commands.md#stranded-commands).
+
+**A rule action the platform cannot ever deliver is dropped instead of retried.** When a
+REACT action is refused for a reason no retry can change — a `sendCommand` aimed at a device
+that no longer exists, or at a command outside that device's published vocabulary — it used
+to be retried to the redelivery limit and then counted as poison, which put an authoring
+mistake on the same shelf as an infrastructure failure. It is now dropped on the first such
+refusal and counted under `react_actions_permanently_rejected_total`, labelled by action
+type. A standing rate on that counter means a rule is aimed at something its devices cannot
+accept; the poison counter it used to inflate now means what it says.
+
+**A truncated cross-service response is counted.** Services read each other's responses up to
+a fixed 1 MiB cap, and a response over that was silently cut short. It is now counted by
+`devicechain_svcclient_responses_truncated_total`, labelled by peer. The reading should be
+flat at zero; a non-zero one means some service is acting on a partial answer, which is worth
+knowing about before the symptom reaches a screen.
+
 #### Input that used to be accepted and now is not
 
 - A notification policy carrying `deviceTypeToken`. Scoping a policy to a device type is
@@ -472,6 +568,57 @@ outside. See [returning a device to inferred presence](./edge-services.md#demoti
   lowercase severity used to write, read back unchanged, and never match an alarm.
 - An `occurredTime` of `0001-01-01T00:00:00Z`. It is a valid timestamp, and the platform
   reserves it to mean no time was reported.
+- An enqueue that would push a tenant past its **held-command ceiling**. Commands withheld
+  for an absent device accumulate with no natural brake — a sleeping fleet's backlog can sit
+  for days — and nothing bounded that before. The limit resolves from the tenant's own
+  override, else its tier's, else a platform default of 10,000, and there is no value at any
+  level meaning unlimited. The refusal carries the code `HELD_CEILING_EXCEEDED` and is the
+  only temporary one the enqueue gate produces: it frees as those devices return. A client
+  that treats every rejection as permanent should special-case it. See [how much backlog a
+  tenant may hold](../concepts/commands.md#held-command-ceiling).
+- An enqueue that would push a tenant past the part of that ceiling **reserved for
+  delivery**. A share of the limit — 20% by default — is kept for the platform's own command
+  delivery, so a single fleet write cannot consume all of it and leave every automated
+  `sendCommand` for that tenant refused until the backlog drains. Everything issuing commands
+  on your behalf is bounded by the remainder: the console, the SDKs, `dcctl` and your own
+  integrations alike. The practical consequence is that a large batch that would have been
+  admitted whole may now be partly refused; where the batch was allowed to fan out
+  partially, its record says which devices did not fit. See [part of the ceiling is reserved for
+  delivery](../concepts/commands.md#delivery-machinery-reserve).
+
+#### Bootstrap and the CLI
+
+These reach an instance through `dcctl bootstrap` and the infrastructure apply rather than
+through `helm upgrade`, so none of them lands during the upgrade above. They are here because
+each is a change in what goes wrong.
+
+**A broker configuration change now restarts the broker.** `nats-server` cannot hot-reload its
+authorization-callout block or its JetStream limits, and its refusal is wholesale — it abandons
+the entire reload, including every unrelated change in the same apply. What that looked like
+from outside was the worst kind of nothing: the apply reported success, the ConfigMap showed
+the new values, and the running broker was still on the configuration it booted with, with the
+only evidence one line inside the broker's own log. Services then failed to authenticate
+against a ConfigMap that proved their credentials were right. The broker's StatefulSet now
+carries a hash of its rendered configuration in its pod template, so the server always comes up
+on the file it was given. The cost is that broker configuration changes now roll those pods,
+where previously only a chart or image bump did: budget roughly 50–70 seconds per pod, which on
+a single-server broker is a brief full outage and on three is a rolling restart.
+
+**The third-party chart versions are pinned.** `ingress-nginx` and `cert-manager` were
+installed at whatever their repository last published, which meant the chart repository was a
+dependency of *planning* as well as of applying: when its release-asset host returned 503,
+the plan failed with an error naming neither the chart nor the network, and it cost two
+failed bootstraps before the cause was found. They are pinned to `4.15.1` and `v1.21.1`
+respectively — the versions the drilled cluster runs. If you had been relying on picking up a
+newer one automatically, you now upgrade it deliberately.
+
+**A `dcctl` you built yourself now has a usable default image tag.** `make -C backend/cli
+build` produced a binary whose default image tag came from the repository's `VERSION` file —
+a value no release ever sets and no image was ever pushed under. Every workload landed in
+`ImagePullBackOff`, several minutes into a bootstrap that had reported healthy progress the
+whole way. A locally built `dcctl` now defaults to `dev`, which the unpublished-version guard
+recognises and refuses early with a message you can read, rather than late with one you
+cannot. A released `dcctl` was never affected: its tag comes from the release itself.
 
 #### Configuration
 
@@ -485,6 +632,15 @@ warning naming the new location. The old value is not applied — set it under
 `device-management` if you had changed it from the default of 300 seconds.
 
 Nothing was removed from the chart's values, so a `v0.11.0` values file applies unchanged.
+
+**A service that refuses its own configuration now exits non-zero.** It used to log
+"refusing to start" and then terminate with status 0, so the pod reported `Completed` —
+exactly what an orderly shutdown reports, and indistinguishable from one at a glance. Those
+pods will now `CrashLoopBackOff` instead. Nothing has changed about which configurations are
+refused; what changed is that the refusal is now visible in `kubectl get pods`, in a restart
+count, and to anything that alerts on either. A service that fails to shut down cleanly is
+reported the same way, for the same reason. If you have an alert that treats a `Completed`
+service pod as benign, this is the release where the underlying failure starts reaching you.
 
 ### The one-time durable-ingest cutover
 
