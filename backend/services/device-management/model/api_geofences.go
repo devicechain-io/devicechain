@@ -71,17 +71,21 @@ func (api *Api) CreateGeoFence(ctx context.Context, request *GeoFenceCreateReque
 		return nil, err
 	}
 
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
 	created := &GeoFence{
 		TokenReference: rdb.TokenReference{Token: request.Token},
 		NamedEntity: rdb.NamedEntity{
 			Name:        rdb.NullStrOf(request.Name),
 			Description: rdb.NullStrOf(request.Description),
 		},
-		MetadataEntity: rdb.MetadataEntity{Metadata: rdb.MetadataStrOf(request.Metadata)},
+		MetadataEntity: rdb.MetadataEntity{Metadata: metadataJSON},
 		Geometry:       datatypes.JSON(request.Geometry),
 	}
 	var minted *GeoFenceSetVersion
-	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		// The fences-per-tenant bound (see MaxGeoFencesPerTenant) is checked inside the
 		// transaction so it reads the same state the insert lands in. It is still a
 		// count-then-insert, so two simultaneous creates at the limit can both pass —
@@ -143,7 +147,11 @@ func (api *Api) UpdateGeoFence(ctx context.Context, token string,
 	updated := matches[0]
 	updated.Name = rdb.NullStrOf(request.Name)
 	updated.Description = rdb.NullStrOf(request.Description)
-	updated.Metadata = rdb.MetadataStrOf(request.Metadata)
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	updated.Metadata = metadataJSON
 	updated.Geometry = datatypes.JSON(request.Geometry)
 
 	var minted *GeoFenceSetVersion

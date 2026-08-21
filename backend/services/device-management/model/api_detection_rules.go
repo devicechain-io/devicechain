@@ -105,13 +105,17 @@ func (api *Api) CreateDetectionRule(ctx context.Context,
 	}
 
 	scopeToken, scopeVersion := normalizedRuleScope(request.EntityGroupToken, request.EntityGroupVersion)
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
 	created := &DetectionRule{
 		TokenReference: rdb.TokenReference{Token: request.Token},
 		NamedEntity: rdb.NamedEntity{
 			Name:        rdb.NullStrOf(request.Name),
 			Description: rdb.NullStrOf(request.Description),
 		},
-		MetadataEntity:     rdb.MetadataEntity{Metadata: rdb.MetadataStrOf(request.Metadata)},
+		MetadataEntity:     rdb.MetadataEntity{Metadata: metadataJSON},
 		DeviceProfile:      matches[0],
 		Definition:         datatypes.JSON(request.Definition),
 		AuthoringGraph:     authoringGraphJSON(request.AuthoringGraph),
@@ -157,7 +161,11 @@ func (api *Api) UpdateDetectionRule(ctx context.Context, token string,
 	updated.Token = request.Token
 	updated.Name = rdb.NullStrOf(request.Name)
 	updated.Description = rdb.NullStrOf(request.Description)
-	updated.Metadata = rdb.MetadataStrOf(request.Metadata)
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	updated.Metadata = metadataJSON
 	updated.Definition = datatypes.JSON(request.Definition)
 	// Re-set the sidecar from the request (nil clears it): an edit is a full replace, no
 	// partial-update semantics (pre-GA decisive cutover). A form-authored edit of a

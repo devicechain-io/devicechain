@@ -23,15 +23,24 @@ func (api *Api) CreateNotificationPolicy(ctx context.Context,
 		return nil, err
 	}
 
+	// Converted out here, beside the validation it duplicates, rather than inside the
+	// transaction. validateJSONObject above is strictly stronger — it requires an OBJECT,
+	// not merely valid JSON — so this can never be the thing that fails; opening a
+	// transaction to discover that would be work for an outcome already decided.
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+
 	var created *NotificationPolicy
-	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		policy := &NotificationPolicy{
 			TokenReference: rdb.TokenReference{Token: request.Token},
 			NamedEntity: rdb.NamedEntity{
 				Name:        rdb.NullStrOf(request.Name),
 				Description: rdb.NullStrOf(request.Description),
 			},
-			MetadataEntity:       rdb.MetadataEntity{Metadata: rdb.MetadataStrOf(request.Metadata)},
+			MetadataEntity:       rdb.MetadataEntity{Metadata: metadataJSON},
 			DeviceTypeToken:      rdb.NullStrOf(request.DeviceTypeToken),
 			ThrottleSeconds:      nullInt64OfInt32(request.ThrottleSeconds),
 			EscalateAfterSeconds: nullInt64OfInt32(request.EscalateAfterSeconds),
@@ -87,7 +96,11 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 		policy.Token = request.Token
 		policy.Name = rdb.NullStrOf(request.Name)
 		policy.Description = rdb.NullStrOf(request.Description)
-		policy.Metadata = rdb.MetadataStrOf(request.Metadata)
+		metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+		if err != nil {
+			return err
+		}
+		policy.Metadata = metadataJSON
 		policy.DeviceTypeToken = rdb.NullStrOf(request.DeviceTypeToken)
 		policy.ThrottleSeconds = nullInt64OfInt32(request.ThrottleSeconds)
 		policy.EscalateAfterSeconds = nullInt64OfInt32(request.EscalateAfterSeconds)
@@ -149,6 +162,10 @@ func (api *Api) buildRules(tx *gorm.DB, policyId uint,
 			}
 			return nil, err
 		}
+		recipientsJSON, err := rdb.JSONInputOf("recipients", rr.Recipients)
+		if err != nil {
+			return nil, err
+		}
 		rules = append(rules, &NotificationRule{
 			PolicyId:  policyId,
 			Severity:  rr.Severity,
@@ -157,7 +174,7 @@ func (api *Api) buildRules(tx *gorm.DB, policyId uint,
 			// without a reload (reads preload it); the Create call Omits the
 			// association so this pointer never re-saves the channel row.
 			Channel:    channel,
-			Recipients: rdb.MetadataStrOf(rr.Recipients),
+			Recipients: recipientsJSON,
 		})
 	}
 	return rules, nil

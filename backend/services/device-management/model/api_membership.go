@@ -150,9 +150,16 @@ func (api *Api) CreateEntityRelationships(ctx context.Context,
 			if err != nil {
 				return fmt.Errorf("target: %w", err)
 			}
+			// Named, for the same reason "source:"/"target:" above are: the batch is
+			// all-or-nothing, so a refusal that does not say which edge is a refusal the
+			// caller cannot act on.
+			metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+			if err != nil {
+				return fmt.Errorf("relationship %q: %w", request.Token, err)
+			}
 			edge := &EntityRelationship{
 				TokenReference:     rdb.TokenReference{Token: request.Token},
-				MetadataEntity:     rdb.MetadataEntity{Metadata: rdb.MetadataStrOf(request.Metadata)},
+				MetadataEntity:     rdb.MetadataEntity{Metadata: metadataJSON},
 				SourceType:         request.SourceType,
 				SourceId:           sourceId,
 				TargetType:         request.TargetType,

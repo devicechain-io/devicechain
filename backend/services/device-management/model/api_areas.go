@@ -12,6 +12,10 @@ import (
 
 // Create a new area type.
 func (api *Api) CreateAreaType(ctx context.Context, request *AreaTypeCreateRequest) (*AreaType, error) {
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
 	created := &AreaType{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -28,7 +32,7 @@ func (api *Api) CreateAreaType(ctx context.Context, request *AreaTypeCreateReque
 			BorderColor:     rdb.NullStrOf(request.BorderColor),
 		},
 		MetadataEntity: rdb.MetadataEntity{
-			Metadata: rdb.MetadataStrOf(request.Metadata),
+			Metadata: metadataJSON,
 		},
 	}
 	result := api.RDB.DB(ctx).Create(created)
@@ -58,7 +62,11 @@ func (api *Api) UpdateAreaType(ctx context.Context, token string,
 	found.BackgroundColor = rdb.NullStrOf(request.BackgroundColor)
 	found.ForegroundColor = rdb.NullStrOf(request.ForegroundColor)
 	found.BorderColor = rdb.NullStrOf(request.BorderColor)
-	found.Metadata = rdb.MetadataStrOf(request.Metadata)
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	found.Metadata = metadataJSON
 
 	result := api.RDB.DB(ctx).Save(found)
 	if result.Error != nil {
@@ -108,6 +116,10 @@ func (api *Api) CreateArea(ctx context.Context, request *AreaCreateRequest) (*Ar
 		return nil, gorm.ErrRecordNotFound
 	}
 
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
 	created := &Area{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -117,7 +129,7 @@ func (api *Api) CreateArea(ctx context.Context, request *AreaCreateRequest) (*Ar
 			Description: rdb.NullStrOf(request.Description),
 		},
 		MetadataEntity: rdb.MetadataEntity{
-			Metadata: rdb.MetadataStrOf(request.Metadata),
+			Metadata: metadataJSON,
 		},
 		AreaType: atmatches[0],
 	}
@@ -143,7 +155,11 @@ func (api *Api) UpdateArea(ctx context.Context, token string, request *AreaCreat
 	updated.Token = request.Token
 	updated.Name = rdb.NullStrOf(request.Name)
 	updated.Description = rdb.NullStrOf(request.Description)
-	updated.Metadata = rdb.MetadataStrOf(request.Metadata)
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	updated.Metadata = metadataJSON
 
 	// Update area type if changed.
 	if request.AreaTypeToken != updated.AreaType.Token {

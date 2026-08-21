@@ -62,6 +62,14 @@ func (api *Api) CreateCommandDefinition(ctx context.Context,
 		return nil, err
 	}
 
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	parameterSchemaJSON, err := rdb.JSONInputOf("parameterSchema", request.ParameterSchema)
+	if err != nil {
+		return nil, err
+	}
 	created := &CommandDefinition{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -71,11 +79,11 @@ func (api *Api) CreateCommandDefinition(ctx context.Context,
 			Description: rdb.NullStrOf(request.Description),
 		},
 		MetadataEntity: rdb.MetadataEntity{
-			Metadata: rdb.MetadataStrOf(request.Metadata),
+			Metadata: metadataJSON,
 		},
 		DeviceProfile:   matches[0],
 		CommandKey:      request.CommandKey,
-		ParameterSchema: rdb.MetadataStrOf(request.ParameterSchema),
+		ParameterSchema: parameterSchemaJSON,
 	}
 	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
@@ -128,9 +136,17 @@ func (api *Api) UpdateCommandDefinition(ctx context.Context, token string,
 	updated.Token = request.Token
 	updated.Name = rdb.NullStrOf(request.Name)
 	updated.Description = rdb.NullStrOf(request.Description)
-	updated.Metadata = rdb.MetadataStrOf(request.Metadata)
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	updated.Metadata = metadataJSON
 	updated.CommandKey = request.CommandKey
-	updated.ParameterSchema = rdb.MetadataStrOf(request.ParameterSchema)
+	parameterSchemaJSON, err := rdb.JSONInputOf("parameterSchema", request.ParameterSchema)
+	if err != nil {
+		return nil, err
+	}
+	updated.ParameterSchema = parameterSchemaJSON
 
 	// Update device profile if changed.
 	if updated.DeviceProfile == nil || request.DeviceProfileToken != updated.DeviceProfile.Token {

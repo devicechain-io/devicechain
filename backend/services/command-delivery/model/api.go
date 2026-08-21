@@ -283,9 +283,12 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 		return existing, nil
 	}
 
-	// Reject a malformed JSON payload rather than silently persisting NULL (the
-	// metadata helper swallows the parse error), which would deliver a command
-	// stripped of its arguments. Same for the metadata blob.
+	// Reject a malformed JSON payload here, with a code, rather than letting it reach the
+	// column helper — which would deliver a command stripped of its arguments. Same for the
+	// metadata blob. This guard predates rdb.JSONInputOf returning an error and is no longer
+	// the only thing standing between a bad payload and the column, but it is still the
+	// layer that names WHICH rejection it is, and it runs before the remote verification
+	// below rather than after it.
 	if request.Payload != nil && !json.Valid([]byte(*request.Payload)) {
 		return nil, rejected(RejectPayloadNotJSON, "command payload is not valid JSON")
 	}
@@ -351,16 +354,31 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 		}
 	}
 
+	// 🔴 CODED, NOT BARE, EVEN THOUGH THE GUARD ABOVE MAKES THESE UNREACHABLE TODAY. Every
+	// client-fault refusal in this service carries a RejectionCode so rejectionCodeOf and
+	// recordBatchOutcome can classify it and the documented rejection table stays true. A
+	// bare error here would be a trap rather than a bug: the day somebody reads the two
+	// checks as duplication and deletes the earlier one, malformed payloads would start
+	// producing uncoded errors, PAYLOAD_NOT_JSON would quietly vanish from the metrics, and
+	// nothing would fail. Agreeing with the layer above costs one line each.
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, rejected(RejectMetadataNotJSON, "command metadata is not valid JSON")
+	}
+	payloadJSON, err := rdb.JSONInputOf("payload", request.Payload)
+	if err != nil {
+		return nil, rejected(RejectPayloadNotJSON, "command payload is not valid JSON")
+	}
 	created := &Command{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
 		},
 		MetadataEntity: rdb.MetadataEntity{
-			Metadata: rdb.MetadataStrOf(request.Metadata),
+			Metadata: metadataJSON,
 		},
 		DeviceToken: request.DeviceToken,
 		Name:        request.Name,
-		Payload:     rdb.MetadataStrOf(request.Payload),
+		Payload:     payloadJSON,
 		Status:      CommandQueued.String(),
 		QueuedTime:  time.Now(),
 		ExpiresAt:   expiresAt,

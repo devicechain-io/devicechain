@@ -12,6 +12,10 @@ import (
 
 // Create a new asset type.
 func (api *Api) CreateAssetType(ctx context.Context, request *AssetTypeCreateRequest) (*AssetType, error) {
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
 	created := &AssetType{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -28,7 +32,7 @@ func (api *Api) CreateAssetType(ctx context.Context, request *AssetTypeCreateReq
 			BorderColor:     rdb.NullStrOf(request.BorderColor),
 		},
 		MetadataEntity: rdb.MetadataEntity{
-			Metadata: rdb.MetadataStrOf(request.Metadata),
+			Metadata: metadataJSON,
 		},
 	}
 	result := api.RDB.DB(ctx).Create(created)
@@ -58,7 +62,11 @@ func (api *Api) UpdateAssetType(ctx context.Context, token string,
 	found.BackgroundColor = rdb.NullStrOf(request.BackgroundColor)
 	found.ForegroundColor = rdb.NullStrOf(request.ForegroundColor)
 	found.BorderColor = rdb.NullStrOf(request.BorderColor)
-	found.Metadata = rdb.MetadataStrOf(request.Metadata)
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	found.Metadata = metadataJSON
 
 	result := api.RDB.DB(ctx).Save(found)
 	if result.Error != nil {
@@ -108,6 +116,10 @@ func (api *Api) CreateAsset(ctx context.Context, request *AssetCreateRequest) (*
 		return nil, gorm.ErrRecordNotFound
 	}
 
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
 	created := &Asset{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -117,7 +129,7 @@ func (api *Api) CreateAsset(ctx context.Context, request *AssetCreateRequest) (*
 			Description: rdb.NullStrOf(request.Description),
 		},
 		MetadataEntity: rdb.MetadataEntity{
-			Metadata: rdb.MetadataStrOf(request.Metadata),
+			Metadata: metadataJSON,
 		},
 		AssetType: matches[0],
 	}
@@ -143,7 +155,11 @@ func (api *Api) UpdateAsset(ctx context.Context, token string, request *AssetCre
 	updated.Token = request.Token
 	updated.Name = rdb.NullStrOf(request.Name)
 	updated.Description = rdb.NullStrOf(request.Description)
-	updated.Metadata = rdb.MetadataStrOf(request.Metadata)
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	updated.Metadata = metadataJSON
 
 	// Update asset type if changed.
 	if request.AssetTypeToken != updated.AssetType.Token {
