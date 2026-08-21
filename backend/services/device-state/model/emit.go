@@ -204,14 +204,16 @@ type PresenceDemotionResult struct {
 // tokens is THREE-STATE and the three states are not interchangeable — see
 // AssertedStatesForDemotion, which owns that rule.
 //
-// A ROW IS SKIPPED, NOT DEMOTED, IN THREE CASES, and all three are conditions under
-// which the emitted event could not have applied anyway. Skipping them is what turns
-// a silent permanent no-op into a number the operator can see:
+// A ROW IS SKIPPED, NOT DEMOTED, IN TWO CASES, both conditions under which the
+// emitted event could not have applied anyway. Skipping them is what turns a silent
+// permanent no-op into a number the operator can see:
 //
-//   - The row holds no session (SessionId == 0). A demotion names the session it
-//     releases and the resolver refuses one that names none, so the event would
-//     dead-letter. Nothing has ever been asserted about this row's session, so there
-//     is no custody to release.
+// 🔴 A ZERO SESSION IS NOT ONE OF THEM, AND MUST NOT BECOME ONE. A row asserted by a
+// producer that sent no session id holds zero, and a demotion applies against the
+// session on file — so zero releases zero. Skipping such rows would make them the one
+// population this door can never reach: permanently frozen, by the mechanism built to
+// unfreeze them, and reported as "skipped" rather than as broken.
+//
 //   - The row holds no presence time. presence.acceptsDemotion requires a prior time
 //     for the demotion's stamp to be newer than; without one the claim is dropped by
 //     the ordering guard, indistinguishably from a stale echo.
@@ -275,13 +277,15 @@ func (api *Api) DemoteAssertedPresence(ctx context.Context, source string, token
 	return result, nil
 }
 
-// demotionSkipReason names why a row cannot be demoted, or "" when it can. The three
-// conditions are documented on DemoteAssertedPresence; they live in one function so
-// the count, the log line and the reasoning cannot drift apart.
+// demotionSkipReason names why a row cannot be demoted, or "" when it can. The two
+// conditions are documented on DemoteAssertedPresence; they live in one function so the
+// count, the log line and the reasoning cannot drift apart.
+//
+// The first is a FAIL-SAFE rather than a live case: every write path stamps
+// PresenceSource and PresenceTime together, so an asserted row without a presence time
+// is a shape this code does not produce. It is kept because the cost of being wrong
+// about that is an event the ordering guard drops in silence.
 func demotionSkipReason(row *DeviceState, now time.Time) string {
-	if row.SessionId == 0 {
-		return "the row holds no session, so there is no custody to release"
-	}
 	if !row.PresenceTime.Valid {
 		return "the row holds no presence time, so the ordering guard has nothing to judge the demotion against"
 	}

@@ -191,12 +191,13 @@ type PresenceDemotionResult {
     # presence by this page.
     demoted: Int!
     # `scanned` minus `demoted`: rows this page could not release. A row is skipped when
-    # it holds no session (there is no custody to release), when it holds no presence
-    # time (the ordering guard has nothing to judge a demotion against), or when its
-    # presence time is not in the past (a demotion stamped now would be refused as stale
-    # by a producer whose clock leads the platform's). All three are states in which an
-    # emitted demotion could not have applied; each is logged with the device it
-    # concerns. A page that skips everything is a signal, not a failure.
+    # it holds no presence time (the ordering guard has nothing to judge a demotion
+    # against), or when its presence time is not in the past (a demotion stamped now
+    # would be refused as stale by a producer whose clock leads the platform's). Both are
+    # states in which an emitted demotion could not have applied; each is logged with the
+    # device it concerns. A row holding no SESSION is deliberately NOT skipped — a
+    # producer may send no session id, so such a row holds zero and zero is what releases
+    # it. A page that skips everything is a signal, not a failure.
     skipped: Int!
     # The id of the last row SCANNED — the cursor to pass as the next call's `afterId`.
     # Null when the page was empty. It is the last row scanned rather than the last one

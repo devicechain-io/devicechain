@@ -407,10 +407,14 @@ func TestTheWalkEmptiesItselfAndDoesNotReDemoteAnInferredRow(t *testing.T) {
 func TestTheWalkAdvancesPastARowItCannotDemote(t *testing.T) {
 	api, _, ctx := newDemotionApi(t)
 	seedAssertedSource(t, api, ctx, "mqtt1", 3)
-	// Make the LAST row of the page unskippable-past if the cursor tracked kept rows:
-	// strip its session, which is the resolver's own refusal condition.
+	// Make the LAST row of the page one this pass cannot release, so the cursor is forced
+	// to prove it tracks the last row SCANNED. A presence time in the future is the live
+	// skip condition — a producer whose clock leads the platform's refuses every demotion
+	// we can mint until ours catches up, which is precisely the row that would be re-read
+	// forever by a cursor tracking kept rows.
 	if err := api.RDB.DB(ctx).Model(&DeviceState{}).
-		Where("device_token = ?", "mqtt1-dev-002").Update("session_id", 0).Error; err != nil {
+		Where("device_token = ?", "mqtt1-dev-002").
+		Update("presence_time", demotionFixedNow.Add(time.Hour)).Error; err != nil {
 		t.Fatalf("seeding the skippable row: %v", err)
 	}
 
@@ -441,25 +445,19 @@ func TestTheWalkAdvancesPastARowItCannotDemote(t *testing.T) {
 	}
 }
 
-// TestARowThatCannotBeReleasedIsSkippedAndCounted covers all three conditions under which
-// an emitted demotion could not have applied.
+// TestARowThatCannotBeReleasedIsSkippedAndCounted covers both conditions under which an
+// emitted demotion could not have applied.
 //
-// 🔑 EACH IS A SILENT PERMANENT NO-OP IF EMITTED. A session-less demotion is refused by
-// the resolver and dead-letters; a demotion against a row with no presence time is dropped
-// by the ordering guard, indistinguishable from a stale echo; a demotion whose stamp is
-// not after the row's is refused by acceptsDemotion's strict After. Counting them is what
-// turns "demoted: 40" over a fleet of 60 into a question the operator can ask.
+// 🔑 EACH IS A SILENT PERMANENT NO-OP IF EMITTED. A demotion against a row with no
+// presence time is dropped by the ordering guard, indistinguishable from a stale echo; a
+// demotion whose stamp is not after the row's is refused by acceptsDemotion's strict
+// After. Counting them is what turns "demoted: 40" over a fleet of 60 into a question the
+// operator can ask.
 func TestARowThatCannotBeReleasedIsSkippedAndCounted(t *testing.T) {
 	for _, c := range []struct {
 		name   string
 		mutate func(t *testing.T, api *Api, ctx context.Context)
 	}{
-		{"no session — the resolver refuses a demotion that names none", func(t *testing.T, api *Api, ctx context.Context) {
-			if err := api.RDB.DB(ctx).Model(&DeviceState{}).
-				Where("device_token = ?", "mqtt1-dev-000").Update("session_id", 0).Error; err != nil {
-				t.Fatal(err)
-			}
-		}},
 		{"no presence time — the ordering guard has nothing to judge it against", func(t *testing.T, api *Api, ctx context.Context) {
 			if err := api.RDB.DB(ctx).Model(&DeviceState{}).
 				Where("device_token = ?", "mqtt1-dev-000").Update("presence_time", nil).Error; err != nil {
@@ -637,5 +635,37 @@ func TestAnEmitWithNoTenantIsRefused(t *testing.T) {
 	}
 	if len(w.msgs) != 0 {
 		t.Fatal("a message was published with no tenant in context")
+	}
+}
+
+// TestASessionlessRowIsDemotedRatherThanSkipped guards a rule that was written into this
+// door and had to be taken back out. A demotion applies against the session the row already
+// holds — and a producer may legitimately send no session id, so an asserted row can hold
+// ZERO, which is exactly what releases it.
+//
+// 🔴 SKIPPING SUCH ROWS IS THE FAILURE THIS WHOLE DOOR EXISTS TO FIX, WEARING ITS UNIFORM.
+// They would become the one population the operator can never reach: permanently frozen,
+// and reported as "skipped" rather than as broken, so the count would look like the system
+// working. It fails in the direction that reads as success, which is why it gets its own
+// test rather than living in the skip table's counterweight.
+func TestASessionlessRowIsDemotedRatherThanSkipped(t *testing.T) {
+	api, w, ctx := newDemotionApi(t)
+	seedAssertedSource(t, api, ctx, "mqtt1", 1)
+	if err := api.RDB.DB(ctx).Model(&DeviceState{}).
+		Where("device_token = ?", "mqtt1-dev-000").Update("session_id", 0).Error; err != nil {
+		t.Fatalf("seeding the session-less row: %v", err)
+	}
+
+	result, err := api.DemoteAssertedPresence(ctx, "mqtt1", nil, 0, 10, "ops", "repair")
+	if err != nil {
+		t.Fatalf("demote: %v", err)
+	}
+	if result.Scanned != 1 || result.Demoted != 1 || result.Skipped != 0 {
+		t.Fatalf("scanned/demoted/skipped = %d/%d/%d, want 1/1/0 — a session-less row is "+
+			"releasable, and skipping it strands the row forever",
+			result.Scanned, result.Demoted, result.Skipped)
+	}
+	if len(w.msgs) != 1 {
+		t.Fatalf("%d event(s) published, want 1", len(w.msgs))
 	}
 }
