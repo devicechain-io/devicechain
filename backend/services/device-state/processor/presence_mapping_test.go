@@ -4,12 +4,19 @@
 package processor
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmproto "github.com/devicechain-io/dc-device-management/proto"
+	"github.com/devicechain-io/dc-device-state/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/presence"
+	"gorm.io/gorm"
 )
 
 // TestAnUnmappableStateChangeIsAnErrorNotAHeartbeat is the reason this mapper returns an
@@ -85,4 +92,60 @@ func TestTheMapperCarriesEveryClaimAndStillPassesDataThrough(t *testing.T) {
 	if err != nil || pt != nil {
 		t.Fatalf("a plain data event must map to (nil, nil), got (%+v, %v)", pt, err)
 	}
+}
+
+// TestAnUnmappableStateChangeNeverReachesTheProjection drives the real message handler,
+// which is where the mapper's error either does its job or does nothing at all.
+//
+// 🔑 TESTING THE MAPPER IS NOT TESTING THE DISPOSITION. presenceTransitionFor returning an
+// error is worth exactly what its caller does with it, and the caller's failure mode is
+// silent: on error the transition is nil, and a nil transition is not "nothing to do" — it
+// is "plain data event", which the projection folds as an implicit heartbeat. So a caller
+// that ignored the error would CREATE an active row for a device on the strength of an
+// event nobody could read, and every assertion about the mapper would still pass.
+func TestAnUnmappableStateChangeNeverReachesTheProjection(t *testing.T) {
+	sp := newLocationProcessor(t)
+	ctx := core.WithTenant(context.Background(), "tenant1")
+	t0 := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+
+	sp.mergeOne(context.Background(), stateChangeMessage(t, "ghost-01", t0, "RETIRED", 100))
+
+	api := sp.Api.(*model.Api)
+	var ds model.DeviceState
+	err := api.RDB.DB(ctx).Where("device_token = ?", "ghost-01").First(&ds).Error
+	if err == nil {
+		t.Fatalf("an unreadable presence claim created a projection row: %+v", ds)
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("reading the projection: %v", err)
+	}
+
+	// The counterweight: a state the vocabulary DOES name reaches the projection through
+	// the same path, so the assertion above is not satisfied by a handler that drops
+	// every state change.
+	sp.mergeOne(context.Background(), stateChangeMessage(t, "real-01", t0, "CONNECTED", 100))
+	real := loadState(t, sp, ctx, "real-01")
+	if real.PresenceSource != model.PresenceSourceAsserted || !real.Active {
+		t.Fatalf("a mappable state change did not reach the projection: %+v", real)
+	}
+}
+
+// stateChangeMessage marshals a resolved state-change onto the wire exactly as
+// device-management publishes it, so the handler unmarshals real bytes.
+func stateChangeMessage(t *testing.T, deviceToken string, occurredAt time.Time,
+	state string, session uint64) messaging.Message {
+	t.Helper()
+	event := &dmmodel.ResolvedEvent{
+		Source:            mqttTestSource,
+		SourceDeviceToken: deviceToken,
+		EventType:         esmodel.StateChange,
+		OccurredTime:      occurredAt,
+		ProcessedTime:     occurredAt.Add(250 * time.Millisecond),
+		Payload:           &dmmodel.ResolvedStateChangePayload{State: state, SessionId: session},
+	}
+	encoded, err := dmproto.MarshalResolvedEvent(event)
+	if err != nil {
+		t.Fatalf("marshal resolved event: %v", err)
+	}
+	return messaging.Message{Subject: locationTestSubject, Value: encoded}
 }
