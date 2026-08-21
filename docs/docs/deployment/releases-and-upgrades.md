@@ -377,7 +377,7 @@ the read-only baseline a viewer receives, so an account that could read position
 | Operation | What changed |
 | --- | --- |
 | `createCommand` | Returns `CreateCommandResult!` instead of `Command!`. The command is now under a `command` field, alongside a `rejection` field that explains a refusal. |
-| `updateDeviceType` | Its `request` argument is now a required `DeviceTypeUpdateRequest!`. Unrecognised fields in it are rejected rather than ignored. |
+| `updateDeviceType` | Its `request` argument is now a required `DeviceTypeUpdateRequest!`, and the semantic changed with it: this is a **partial update**. An omitted field now KEEPS its stored value instead of erasing it, and an explicit null clears it. So a client that cleared a field by leaving it out must now send null for it — and, in the other direction, renaming a type no longer detaches the profile its devices resolve capabilities through. `token` is also gone from the input, so an update can no longer move a type's token. Unrecognised fields in the request are rejected rather than ignored. |
 | `assertedActiveDeviceStates` | Replaced by `assertedDeviceStates`, which takes `activeOnly` and pages through `afterId` and `pageSize`. |
 | `deviceCredentials`, `deviceCredentialsById`, `deviceCredentialsByToken` | Now require `device:write`. For one credential type the readable identifier *is* the bearer token, so `device:read` — which every enabled member holds — was enough to open a broker session as any device in the tenant. |
 | `locationEvents` | Now requires `location:read`, as above. |

@@ -176,47 +176,138 @@ query {
 
 ### Una actualización reemplaza el registro completo {#an-update-replaces-the-whole-record}
 
-Las mutaciones `update*` toman **la misma entrada que su hermana `create*`**, y significan lo que
-eso implica: cada campo que envías se escribe, y **cada campo que omites se borra**. No hay
-semántica de parcheo. La mutación devuelve la entidad y tiene éxito, así que un campo que no querías
-limpiar desaparece sin nada que lo indique.
+**El reemplazo completo es el comportamiento por defecto, y es un valor por defecto, no una
+garantía** — varios campos se comportan de otra manera, y uno de ellos se comporta exactamente al
+revés. Las excepciones están enumeradas [más abajo](#where-the-default-does-not-hold); lee esa tabla
+antes de automatizar nada.
+
+Donde rige el comportamiento por defecto, una `update*` toma **la misma entrada que su hermana
+`create*`** — o, en el plano de administración, un `*UpdateRequest` propio que omite el token y por
+lo demás significa lo mismo — y significa lo que eso implica: cada campo que envías se escribe, y
+**cada campo que omites se borra**. La mutación devuelve la entidad y tiene éxito, así que un campo
+que no querías limpiar desaparece sin nada que lo indique.
 
 ```graphql
 # Renombrar un dispositivo así TAMBIÉN borra su externalId y sus metadatos.
+# La entrada exige deviceTypeToken, así que un reemplazo completo tiene que reenviar
+# el tipo ACTUAL del dispositivo; nombrar otro distinto lo recategoriza.
 mutation {
-  updateDevice(token: "sensor-001", request: { token: "sensor-001", name: "Sonda de cámara fría" }) {
-    token
-  }
+  updateDevice(token: "sensor-001", request: {
+    token: "sensor-001",
+    deviceTypeToken: "cold-store-probe",
+    name: "Sonda de cámara fría"
+  }) { token }
 }
 ```
 
 Lee la entidad primero, cambia lo que quieras cambiar y envíala entera de vuelta:
 
 ```graphql
-query { devicesByToken(tokens: ["sensor-001"]) { token name externalId metadata } }
+query {
+  devicesByToken(tokens: ["sensor-001"]) {
+    token name externalId metadata
+    deviceType { token }
+  }
+}
 ```
 
 Dos consecuencias que conviene prever. Como la escritura cubre todos los campos, **dos personas que
-editan una misma entidad se sobrescriben mutuamente en todo el registro**, no solo donde coinciden.
-Y como la entrada de actualización es la de creación, lleva el **token** — en la mayoría de las
-entidades el resolutor localiza la fila por el token de la solicitud, así que no es un canal de
-renombrado, pero donde el token de una entidad es realmente fijo el servidor lo dice en lugar de
-moverlo (una geocerca es el ejemplo trabajado).
+editan una misma entidad se sobrescriben mutuamente en todo el registro**, no solo donde coinciden
+— salvo en `updateDashboard`, `updateConnector` y `updateAiProvider`, que toman un
+`expectedUpdatedAt` opcional y rechazan la escritura si la marca de tiempo almacenada se ha movido
+desde que leíste. Y como la entrada de actualización es la de creación, lleva el **token** — en la
+mayoría de las entidades el resolutor localiza la fila por el token de la solicitud, así que no es
+un canal de renombrado, y donde el token de una entidad es realmente fijo el servidor lo rechaza en
+lugar de moverlo (una geocerca siempre; un perfil de dispositivo en cuanto está publicado o
+adoptado por un tipo de dispositivo).
 
-Tres excepciones deliberadas, que lo son porque omitir significa algo concreto en lugar de nada:
+### Dónde no rige el comportamiento por defecto {#where-the-default-does-not-hold}
 
-| Dónde | Un campo omitido significa |
+Todas las excepciones de la API que sirve esta versión. Cualquier cosa que no esté aquí borra un
+campo omitido.
+
+| Campo | Qué pasa al omitirlo |
 | --- | --- |
-| El `secret` de un canal de notificación | **Sin cambios.** Nunca necesitas reenviarlo; un valor no nulo lo reemplaza, una cadena vacía lo borra |
-| Las [anulaciones de gobernanza](../concepts/governance.md) de un inquilino | **Heredar el valor por defecto de la plataforma** — nunca «ilimitado» |
-| El `activeVersion` de un perfil de dispositivo | Aquí no es escribible en absoluto; solo se mueve al publicar y al revertir |
+| Todos los campos de `updateDeviceType` | **Se conserva.** La mutación entera es una actualización parcial — ver [más abajo](#updatedevicetype-is-a-partial-update) |
+| `secret` en `updateNotificationChannel`, `updateConnector`, `updateAiProvider` | **Se conserva** — y una cadena vacía lo *borra*. Lo inverso de `updateDeviceType`; ver la advertencia de abajo |
+| `config` en `updateTenantTier` | **Se conserva.** Limpiar la configuración de un nivel re-tarifica a todos sus inquilinos, así que no se llega ahí por omisión — envía `{}` para limpiarla |
+| `selector` en `updateEntityGroup` | **Se conserva.** Un selector omitido *o vacío* deja en su sitio el que ya estaba compilado |
+| `firstName` / `lastName` en `updateProfile` | **Se conserva.** Es la única `update*` con argumentos sueltos en vez de un `request`; una cadena vacía sí lo limpia |
+| `credentialType` en `updateProvisioningProfile` | **Se restablece a `ACCESS_TOKEN`** — ni se conserva ni se limpia |
+| `activeVersion` de un perfil de dispositivo o de un grupo de entidades | Nada: aquí no es escribible en absoluto, y solo se mueve al publicar y al revertir |
+| `memberType` / `membershipMode` en `updateEntityGroup` | Nada al omitirlos, pero *enviar un valor distinto* se rechaza — ambos son inmutables |
+| Las [anulaciones de gobernanza](../concepts/governance.md) de un inquilino en `updateTenant` | Se borran — y borrarlas aquí significa **heredar el valor por defecto de la plataforma**, nunca «ilimitado» |
+
+:::danger Una cadena vacía no es una forma segura de decir «no toques esto»
+Para los tres campos `secret` de solo escritura, **null conserva y `""` borra** — exactamente lo
+inverso de `updateDeviceType`, donde null limpia. No puedes leer un secreto de vuelta, así que no
+hay nada que reenviar; la respuesta de la API es que omitirlo lo conserva.
+
+Esto importa porque el consejo de arriba — lee la entidad y envíala entera de vuelta — te empuja a
+rellenar todos los campos. Hacerlo con un secreto que no querías tocar, enviando `secret: ""`,
+borra la credencial almacenada y la mutación devuelve éxito. Un conector sin credencial empieza a
+fallar la autenticación en cada envío saliente. **Deja el campo fuera.**
+:::
 
 :::note
-Este es el contrato actual, no el previsto. Las actualizaciones parciales — donde un campo omitido
-se deja intacto — están planificadas para antes de la 1.0, y se aplicarán de forma uniforme en todas
-las áreas en lugar de servicio por servicio. Hasta entonces, trata cada `update*` como un reemplazo
-completo salvo que la tabla anterior diga otra cosa.
+Las actualizaciones parciales están llegando área por área, no todas a la vez. `updateDeviceType` es
+la primera mutación convertida; el resto siguen siendo reemplazos completos, y la intención es
+convertirlas antes de la 1.0.
 :::
+
+### `updateDeviceType` es una actualización parcial {#updatedevicetype-is-a-partial-update}
+
+`updateDeviceType` no toma la entrada de creación. Toma su propio `DeviceTypeUpdateRequest`, en el
+que cada campo es opcional en tres sentidos, no en dos:
+
+| Qué envías para un campo | Qué le pasa al valor almacenado |
+| --- | --- |
+| Nada — el campo está ausente | Se deja intacto |
+| Un `null` explícito | Se limpia |
+| Un valor | Se asigna ese valor |
+
+Así que un renombrado es solo un renombrado:
+
+```graphql
+# Cambia el nombre. La descripción, el icono, los colores, el fabricante, el modelo,
+# los metadatos y el perfil adoptado quedan exactamente como estaban.
+mutation {
+  updateDeviceType(token: "cold-store-probe", request: { name: "Sonda de cámara fría" }) {
+    token
+    name
+  }
+}
+```
+
+`profileToken` es el campo donde más importa. Un tipo de dispositivo referencia como mucho un
+[perfil de dispositivo](../concepts/domain-model.md), y cada dispositivo de ese tipo resuelve sus
+comandos, sus métricas y su declaración de posición a través de ese perfil. Con la antigua forma de
+reemplazo completo, omitir `profileToken` al renombrar un tipo **desvinculaba el perfil** — lo que
+dejaba de declarar silenciosamente la posición de todos los dispositivos construidos sobre ese
+tipo, con éxito, devolviendo el tipo renombrado y sin nada que lo indicara. Ahora omitirlo conserva
+el perfil actual. Desvincularlo es algo que tienes que decir:
+
+```graphql
+mutation {
+  updateDeviceType(token: "cold-store-probe", request: { profileToken: null }) {
+    token
+    profile { token }
+  }
+}
+```
+
+Un `profileToken` vacío o solo con espacios también lo desvincula. Uno desconocido se rechaza y toda
+la actualización se anula antes de escribir nada.
+
+Dos consecuencias más de que la entrada sea su propio tipo y no la de creación:
+
+- **No hay campo `token`**, así que una actualización no puede mover el token de un tipo de
+  dispositivo — no es que se niegue, es que no puede expresarlo. El token ya es el argumento de la
+  propia mutación, y llevarlo otra vez en la carga útil solo creaba una segunda fuente discrepante
+  para la misma identidad.
+- **`metadata` se sigue reemplazando por completo** cuando lo envías, y se limpia con null. En el
+  esquema es una cadena JSON opaca, no un mapa, así que no hay ninguna fusión por clave que elegir
+  — la API nunca ha podido direccionar una clave individual.
 
 ## Validación de entrada
 

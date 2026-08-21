@@ -171,47 +171,135 @@ query {
 
 ### An update replaces the whole record {#an-update-replaces-the-whole-record}
 
-`update*` mutations take the **same input as their `create*` sibling**, and they mean what that
-implies: every field you send is written, and **every field you leave out is erased**. There is no
-patch semantic. The mutation returns the entity and succeeds, so a field you did not mean to clear
-is gone with nothing to indicate it.
+**A full replace is the default, and it is a default rather than a guarantee** — several fields
+behave differently, and one of them behaves in exactly the opposite way. The exceptions are
+enumerated [below](#where-the-default-does-not-hold); read that table before you automate anything.
+
+Where the default holds, an `update*` takes the **same input as its `create*` sibling** — or, on
+the admin plane, a dedicated `*UpdateRequest` that drops the token and otherwise means the same
+thing — and it means what that implies: every field you send is written, and **every field you
+leave out is erased**. The mutation returns the entity and succeeds, so a field you did not mean to
+clear is gone with nothing to indicate it.
 
 ```graphql
 # Renaming a device this way ALSO clears its externalId and its metadata.
+# deviceTypeToken is required by the input, so a full replace has to re-send the
+# device's CURRENT type; naming a different one re-types the device.
 mutation {
-  updateDevice(token: "sensor-001", request: { token: "sensor-001", name: "Cold store probe" }) {
-    token
-  }
+  updateDevice(token: "sensor-001", request: {
+    token: "sensor-001",
+    deviceTypeToken: "cold-store-probe",
+    name: "Cold store probe"
+  }) { token }
 }
 ```
 
 Read the entity first, change what you mean to change, and send the whole thing back:
 
 ```graphql
-query { devicesByToken(tokens: ["sensor-001"]) { token name externalId metadata } }
+query {
+  devicesByToken(tokens: ["sensor-001"]) {
+    token name externalId metadata
+    deviceType { token }
+  }
+}
 ```
 
 Two consequences worth planning around. Because the write covers every field, **two people editing
-one entity overwrite each other across all of it**, not only where they overlap. And because the
-update input is the create input, it carries the **token** — for most entities the resolver locates
-the row by the request's token, so it is not a rename channel, but where an entity's token is
-genuinely fixed the server says so rather than moving it (a geofence is the worked example).
+one entity overwrite each other across all of it**, not only where they overlap — except on
+`updateDashboard`, `updateConnector` and `updateAiProvider`, which take an optional
+`expectedUpdatedAt` and refuse the write when the stored timestamp has moved since you read it. And
+because the update input is the create input, it carries the **token** — for most entities the
+resolver locates the row by the request's token, so it is not a rename channel, and where an
+entity's token is genuinely fixed the server refuses rather than moving it (a geofence always; a
+device profile once it is published or adopted by a device type).
 
-Three deliberate exceptions, which are exceptions because omission means something specific rather
-than nothing:
+### Where the default does not hold {#where-the-default-does-not-hold}
 
-| Where | An omitted field means |
+Every exception in the API this release serves. Anything not named here erases an omitted field.
+
+| Field | What omitting it does |
 | --- | --- |
-| A notification channel's `secret` | **Unchanged.** You never need to re-send it; a non-null value replaces it, an empty string clears it |
-| A tenant's [governance overrides](../concepts/governance.md) | **Inherit the platform default** — never "unlimited" |
-| A device profile's `activeVersion` | Not writable here at all; it moves only by publish and rollback |
+| Every field of `updateDeviceType` | **Kept.** The whole mutation is a partial update — see [below](#updatedevicetype-is-a-partial-update) |
+| `secret` on `updateNotificationChannel`, `updateConnector`, `updateAiProvider` | **Kept** — and an empty string *clears* it. The inverse of `updateDeviceType`; see the warning below |
+| `config` on `updateTenantTier` | **Kept.** Clearing a tier's settings re-prices every tenant at it, so it is not reachable by omission — send `{}` to clear |
+| `selector` on `updateEntityGroup` | **Kept.** An omitted *or empty* selector leaves the compiled one in place |
+| `firstName` / `lastName` on `updateProfile` | **Kept.** The one `update*` taking bare arguments rather than a `request`; an empty string still clears |
+| `credentialType` on `updateProvisioningProfile` | **Reset to `ACCESS_TOKEN`** — neither kept nor cleared |
+| `activeVersion` on a device profile or an entity group | Nothing: it is not writable here at all, and moves only by publish and rollback |
+| `memberType` / `membershipMode` on `updateEntityGroup` | Nothing on omission, but *sending a different value* is refused — both are immutable |
+| A tenant's [governance overrides](../concepts/governance.md) on `updateTenant` | Erased — and erased here means **inherit the platform default**, never "unlimited" |
+
+:::danger An empty string is not a safe way to say "leave this alone"
+For the three write-only `secret` fields, **null preserves and `""` deletes** — the exact inverse
+of `updateDeviceType`, where null clears. You cannot read a secret back, so there is nothing to
+re-send; the API's answer is that omitting it keeps it.
+
+This matters because the advice above — read the entity, send the whole thing back — pushes you
+toward filling in every field. Doing that for a secret you did not mean to touch, by sending
+`secret: ""`, deletes the stored credential and the mutation returns success. A connector whose
+credential is gone starts failing authentication on every outbound dispatch. **Leave the field
+out.**
+:::
 
 :::note
-This is the current contract, not the intended one. Partial updates — where an omitted field is
-left alone — are planned before 1.0, and will apply uniformly across every area rather than
-per-service. Until then, treat every `update*` as a full replace unless the table above says
-otherwise.
+Partial updates are arriving one area at a time rather than all at once. `updateDeviceType` is the
+first mutation converted; the rest are still full replaces, and the intent is to convert them
+before 1.0.
 :::
+
+### `updateDeviceType` is a partial update {#updatedevicetype-is-a-partial-update}
+
+`updateDeviceType` does not take the create input. It takes its own `DeviceTypeUpdateRequest`, in
+which every field is optional in three senses rather than two:
+
+| What you send for a field | What happens to the stored value |
+| --- | --- |
+| Nothing — the field is absent | Left alone |
+| An explicit `null` | Cleared |
+| A value | Set to that value |
+
+So a rename is only a rename:
+
+```graphql
+# Changes the name. Description, icon, colours, manufacturer, model, metadata and
+# the adopted profile are all left exactly as they were.
+mutation {
+  updateDeviceType(token: "cold-store-probe", request: { name: "Cold store probe" }) {
+    token
+    name
+  }
+}
+```
+
+`profileToken` is the field this matters most for. A device type references at most one [device
+profile](../concepts/domain-model.md), and every device of that type resolves its commands, its
+metrics and its position declaration through that profile. Under the old full-replace shape,
+omitting `profileToken` while renaming a type **detached the profile** — which silently
+un-declared position for every device built on the type, successfully, with the renamed type
+returned and nothing to indicate it. Omitting it now keeps the current profile. Detaching one is
+something you have to say:
+
+```graphql
+mutation {
+  updateDeviceType(token: "cold-store-probe", request: { profileToken: null }) {
+    token
+    profile { token }
+  }
+}
+```
+
+An empty or whitespace-only `profileToken` detaches it too. An unknown one is rejected and the whole
+update is refused before anything is written.
+
+Two further consequences of the input being its own type rather than the create input:
+
+- **There is no `token` field**, so an update cannot move a device type's token — not "refuses to",
+  but cannot express it. The token is already the mutation's own argument, and carrying it again in
+  the payload only created a second, disagreeing source for the same identity.
+- **`metadata` is still replaced wholesale** when you send it, and cleared on null. It is an opaque
+  JSON string in the schema rather than a map, so there is no per-key merge to choose between — the
+  API has never been able to address an individual key.
 
 ## Input validation
 
