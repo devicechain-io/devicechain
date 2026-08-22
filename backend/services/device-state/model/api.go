@@ -623,42 +623,89 @@ func (api *Api) DeviceStates(ctx context.Context, criteria DeviceStateSearchCrit
 
 // SweepInactive is the core of the background inactivity monitor. The caller
 // passes a system context so the scan spans all tenants; each row keeps its own
-// tenant_id on Save. It marks every active device whose last activity is older
-// than its inactivity timeout as inactive and returns how many were flipped.
+// tenant_id. It marks every active device whose last activity is older than its
+// inactivity timeout as inactive and returns how many were flipped.
+//
+// 🔴 THIS IS ONE STATEMENT ON PURPOSE, AND THE REASON IS NOT ONLY SPEED. It used to
+// be a cross-tenant Find() of every active row into a Go slice, followed by one
+// round-trip UPDATE per candidate — so a fleet-sized sweep materialised the fleet in
+// memory and issued a query per device. The stale-ONLINE repair is exactly what hands
+// it a whole fleet at once, so the worst input arrives precisely when the instance is
+// least able to absorb it.
+//
+// 🔑 Collapsing it also DELETES a race rather than guarding it. The old loop carried a
+// `last_activity_time = <snapshot>` precondition on each UPDATE so a MergeDeviceState
+// landing between the scan and the write could not be clobbered. That precondition
+// existed only because the read and the write were separate statements; here they are
+// the same statement, so there is no snapshot that can go stale.
+//
+// 🔴 There is NO index on (active, presence_source, last_activity_time) — device_states
+// carries only the (tenant_id, device_token) unique index — so this is still a
+// sequential scan. It is one scan inside the database instead of a full table read into
+// this process, which is the part that was unbounded. Adding the index is a migration
+// and is deliberately NOT part of this change.
 func (api *Api) SweepInactive(ctx context.Context, now time.Time) (int64, error) {
+	db := api.RDB.DB(ctx)
+	frag, args, err := inactivitySQL(db.Dialector.Name(), now)
+	if err != nil {
+		return 0, err
+	}
 	// Only INFERRED devices are swept: an ASSERTED device's offline is an
 	// authoritative DEATH/LWT, never a data-silence timeout (ADR-067 decision 6), so
-	// the sweep must not flip it. The predicate is applied at the scan so an asserted
-	// device is never even considered.
-	active := make([]DeviceState, 0)
-	result := api.RDB.DB(ctx).Where("active = ? AND presence_source <> ?", true, PresenceSourceAsserted).Find(&active)
-	if result.Error != nil {
-		return 0, result.Error
+	// the sweep must not flip it. The predicate is applied in the statement so an
+	// asserted device is never even considered.
+	res := db.Model(&DeviceState{}).
+		Where("active = ? AND presence_source <> ?", true, PresenceSourceAsserted).
+		Where(frag, args...).
+		Updates(map[string]any{
+			"active":                false,
+			"last_disconnect_time":  sql.NullTime{Time: now, Valid: true},
+			"inactivity_alarm_time": sql.NullTime{Time: now, Valid: true},
+		})
+	if res.Error != nil {
+		return 0, res.Error
 	}
+	return res.RowsAffected, nil
+}
 
-	var flipped int64
-	for i := range active {
-		row := active[i]
-		if !isInactive(row.LastActivityTime, row.InactivityTimeout, now) {
-			continue
-		}
-		// Flip with a conditional update keyed to the snapshot's activity time, not
-		// a full-row Save of the stale snapshot: if a MergeDeviceState landed new
-		// activity since the scan, last_activity_time no longer matches and the row
-		// is left active (no flip), so the sweep can't clobber a just-active device.
-		res := api.RDB.DB(ctx).Model(&DeviceState{}).
-			Where("id = ? AND active = ? AND last_activity_time = ?", row.ID, true, row.LastActivityTime).
-			Updates(map[string]any{
-				"active":                false,
-				"last_disconnect_time":  sql.NullTime{Time: now, Valid: true},
-				"inactivity_alarm_time": sql.NullTime{Time: now, Valid: true},
-			})
-		if res.Error != nil {
-			return flipped, res.Error
-		}
-		flipped += res.RowsAffected
+// inactivitySQL is the SQL twin of isInactive: it returns the fragment and args
+// selecting rows whose last activity is older than their own inactivity timeout at
+// now. The two are pinned together by TestSweepAgreesWithIsInactive, which runs one
+// case table through both — a rule with two implementations is only safe while
+// something fails when they disagree.
+//
+// 🔴 THE DIALECTS ARE NOT INTERCHANGEABLE AND THE OBVIOUS SQLITE FORM IS WRONG.
+// Measured on the pinned driver (glebarez/modernc), a timestamp column holds TEXT like
+// "2026-06-24T12:00:00Z", and the julianday() form —
+// (julianday(now) - julianday(last)) * 86400.0 > timeout — reports a device inactive
+// at EXACTLY its timeout, because the float product lands a hair above the integer.
+// It is correct everywhere except the boundary, which is the one place a sweep
+// decides. unixepoch() compares whole seconds as integers and gets the boundary right.
+// datetime() also measured correct, but it compares TEXT against a differently
+// formatted TEXT literal and only works through affinity rules subtle enough that a
+// future reader could not check it by inspection; unixepoch()'s mechanism is legible.
+//
+// Postgres multiplies an integer by INTERVAL '1 second', which is exact integer
+// interval arithmetic — no float, no EXTRACT() version differences.
+//
+// Both forms are strict, and they are the same comparison written from opposite sides:
+// `last < now - timeout` is `now - last > timeout`.
+func inactivitySQL(dialect string, now time.Time) (string, []any, error) {
+	// A device with no recorded activity is never flipped — the same refusal
+	// isInactive makes on an invalid sql.NullTime.
+	switch dialect {
+	case "postgres":
+		return "last_activity_time IS NOT NULL AND last_activity_time < " +
+				"?::timestamptz - (CASE WHEN inactivity_timeout > 0 THEN inactivity_timeout ELSE ? END) * INTERVAL '1 second'",
+			[]any{now, config.DefaultInactivityTimeout}, nil
+	case "sqlite":
+		return "last_activity_time IS NOT NULL AND " +
+				"(unixepoch(?) - unixepoch(last_activity_time)) > (CASE WHEN inactivity_timeout > 0 THEN inactivity_timeout ELSE ? END)",
+			[]any{now, config.DefaultInactivityTimeout}, nil
 	}
-	return flipped, nil
+	// Fail closed. A dialect nobody wrote a predicate for would otherwise fall through
+	// to a sweep with no time bound at all, which flips the entire fleet offline.
+	return "", nil, fmt.Errorf("inactivity sweep has no predicate for dialect %q", dialect)
 }
 
 // isInactive reports whether a device whose last activity was at last (with the
