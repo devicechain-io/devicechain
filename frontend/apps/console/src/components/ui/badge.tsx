@@ -16,16 +16,19 @@ const badgeVariants = cva(
         secondary:
           "border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80",
         destructive:
-          "border-transparent bg-destructive text-destructive-foreground hover:bg-destructive/80",
+          "border-transparent bg-destructive-fill text-destructive-foreground hover:bg-destructive-fill/80",
         success:
-          "border-transparent bg-success text-success-foreground hover:bg-success/80",
+          "border-transparent bg-success-fill text-success-foreground hover:bg-success-fill/80",
         // `warning` is for a state that is UNRESOLVED rather than bad: pending,
         // provisioning, degraded — or a device we simply have not heard from, which
         // is neither online nor known to be down. It reads as its own thing beside
         // `success` and `destructive` rather than borrowing either one's meaning.
-        // Painted from the --warning tokens, which are defined in both themes.
+        // Painted from the --warning-FILL token, not --warning: a badge writes white
+        // on this surface, so it needs the dark fill in both themes. --warning is the
+        // ink used for text on the page background and is far too light to sit under
+        // white. See the token block in index.css.
         warning:
-          "border-transparent bg-warning text-warning-foreground hover:bg-warning/80",
+          "border-transparent bg-warning-fill text-warning-foreground hover:bg-warning-fill/80",
         outline: "text-foreground",
       },
     },

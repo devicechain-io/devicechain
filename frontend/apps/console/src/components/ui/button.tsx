@@ -15,7 +15,9 @@ const buttonVariants = cva(
       variant: {
         default: "bg-primary text-primary-foreground hover:bg-primary/90 active:bg-primary/75",
         destructive:
-          "bg-destructive text-destructive-foreground hover:bg-destructive/90 active:bg-destructive/75",
+          // A filled surface carrying white text, so it takes the FILL token rather than
+          // the ink one — see the token block in index.css.
+          "bg-destructive-fill text-destructive-foreground hover:bg-destructive-fill/90 active:bg-destructive-fill/75",
         outline:
           "border border-input bg-background hover:bg-accent hover:text-accent-foreground active:bg-accent/80",
         secondary:
