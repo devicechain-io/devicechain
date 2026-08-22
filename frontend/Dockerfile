@@ -18,7 +18,24 @@
 # written, which is worse for security than a floating tag.
 
 # --- build stage: produce frontend/dist ------------------------------------
-FROM node:26-alpine@sha256:aadf416b2cdce311a8811ba3f0608a61b77dbf997500e2eafe781b51f6a0b019 AS build
+# 🔴 --platform=$BUILDPLATFORM IS LOAD-BEARING, AND ITS ABSENCE COST A RELEASE.
+# What this stage emits is `vite build` output — HTML, JS and CSS — which is the
+# same bytes for every target architecture. Without this pin, buildx runs the whole
+# stage ONCE PER TARGET, so `npm ci` and `npm run build` were executed a second time
+# under arm64 QEMU emulation to produce a byte-identical dist.
+#
+# It is not merely wasted: emulating a JIT is where it breaks. On 2026-08-22 the
+# v0.12.0 release hung because arm64 `npm ci` took `qemu: uncaught target signal 4
+# (Illegal instruction) - core dumped` 45s in — and buildx did not propagate the
+# child's SIGILL, so the step neither failed nor progressed. With no timeout on the
+# job it would have sat for the 6-hour default looking exactly like slow work. The
+# same commit had built cleanly 11 hours earlier, so it is an intermittent emulation
+# fault, not a regression — which is precisely why removing the emulation is the fix
+# rather than a retry.
+#
+# Only the serve stage below is genuinely per-architecture: it carries an nginx
+# binary. This stage carries none, so it belongs on the builder.
+FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:aadf416b2cdce311a8811ba3f0608a61b77dbf997500e2eafe781b51f6a0b019 AS build
 WORKDIR /app
 
 # Install deps against the lockfile first so the layer caches across source-only

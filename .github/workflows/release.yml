@@ -268,6 +268,14 @@ jobs:
   frontend:
     needs: guard
     runs-on: ubuntu-latest
+    # A HANG HERE USED TO COST SIX HOURS. When arm64 `npm ci` died under QEMU on
+    # 2026-08-22, buildx swallowed the child's SIGILL and the step simply stopped
+    # producing output -- it never failed, so the job ran on the 360-minute default
+    # while looking indistinguishable from slow work. The Dockerfile fix removes that
+    # emulation, but the shape is what this bounds: any future stall fails in minutes
+    # and can be re-run, rather than holding a release for most of a day. Eight runs
+    # before the fix took 3m10s-3m43s, and the cross-build is faster still.
+    timeout-minutes: 20
     permissions:
       packages: write # docker buildx push to ghcr
     steps:
