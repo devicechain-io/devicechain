@@ -645,6 +645,23 @@ warning naming the new location. The old value is not applied — set it under
 
 Nothing was removed from the chart's values, so a `v0.11.0` values file applies unchanged.
 
+:::caution Drain devices during this one upgrade, or accept a possible detection-engine reset
+The bound moved, so for the length of this rollout **neither side is holding it**. On
+`v0.11.0` only the detection engine bounded a device-reported time; on `v0.12.0` only event
+resolution does. The two services roll as independent deployments, so there is a window where
+a `v0.11.0` event-processing has already been replaced while a `v0.11.0` device-management is
+still publishing — and an event crossing in that window is checked by neither.
+
+What it costs if one arrives with a wildly future timestamp: detection tracks a single time
+frontier across the whole instance, so that one event advances it and every tenant's pending
+timers fire at once. Recovering means resetting the engine's snapshot.
+
+**This is a one-upgrade boundary, not a standing weakness** — once both services are on
+`v0.12.0` they agree permanently, and an instance you destroy and recreate is never exposed.
+If you are upgrading in place with devices sending, stop device traffic for the rollout, or
+be prepared to reset the detection snapshot afterwards.
+:::
+
 **A service that refuses its own configuration now exits non-zero.** It used to log
 "refusing to start" and then terminate with status 0, so the pod reported `Completed` —
 exactly what an orderly shutdown reports, and indistinguishable from one at a glance. Those
