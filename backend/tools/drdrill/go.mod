@@ -10,7 +10,7 @@ require (
 	gorm.io/gorm v1.31.2
 )
 
-require golang.org/x/crypto v0.54.0 // indirect
+require golang.org/x/crypto v0.55.0 // indirect
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
@@ -38,7 +38,7 @@ require (
 	github.com/rs/zerolog v1.35.1 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.40.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af // indirect
 	gorm.io/datatypes v1.2.7 // indirect
