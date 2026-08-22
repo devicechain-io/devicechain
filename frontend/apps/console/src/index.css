@@ -52,15 +52,33 @@
     --accent-foreground: 240 5.9% 10%;
 
     --destructive: 0 72.2% 50.6%;
+    --destructive-fill: 0 72.2% 50.6%;
     --destructive-foreground: 0 0% 100%;
 
-    /* Semantic status tokens — used by status badges, chips, and category dots.
-     * `success` = green (online/active/claimed/ready).
-     * `warning` = yellow (pending/provisioning/degraded). */
-    --success: 142 71% 35%;
+    /* Semantic status tokens. `success` = green (online/active/claimed/ready),
+     * `warning` = yellow (pending/provisioning/degraded), `destructive` = red.
+     *
+     * 🔴 EACH STATUS IS TWO COLOURS, AND IT HAS TO BE. `--x` is the INK — the colour
+     * of text, dots and borders drawn ON the page background. `--x-fill` is the SOLID
+     * SURFACE a badge or a filled button paints, with `--x-foreground` (white) written
+     * on top. The two pull in opposite directions: ink must contrast with the
+     * background, fill must contrast with the white sitting on it. In dark mode that is
+     * a genuine contradiction, not a preference — success ink needs lightness >= 34.9%
+     * to clear 4.5:1 on the dark card, and success fill needs <= 30.9% for white text
+     * to clear 4.5:1 on it. No single value is both, which is why one token failed in
+     * one role or the other in every theme.
+     *
+     * In LIGHT mode ink and fill coincide — both are measured against white — so the
+     * twins carry the same value here. That is a coincidence of this palette, not a
+     * rule; do not collapse them.
+     *
+     * Every pairing is asserted by contrast.test.ts. */
+    --success: 142 71% 29%;
+    --success-fill: 142 71% 29%;
     --success-foreground: 0 0% 100%;
 
-    --warning: 38 92% 45%;
+    --warning: 38 92% 31%;
+    --warning-fill: 38 92% 31%;
     --warning-foreground: 0 0% 100%;
 
     --border: 240 5.9% 90%;
@@ -107,16 +125,19 @@
     --accent: 210 20% 16%;
     --accent-foreground: 210 16% 96%;
 
-    --destructive: 0 72.2% 50.6%;
-    --destructive-foreground: 0 0% 100%;
+    /* 🔴 ONLY THE INK MOVES IN DARK MODE. The three `--x-fill` surfaces are
+     * deliberately NOT redefined here: a badge paints white on them, and white needs
+     * the same dark surface whichever theme the page is in. Lightening a fill to
+     * "match dark mode" is exactly what broke them — these tokens used to be raised
+     * for legibility as text, which is right for ink and made white-on-fill
+     * unreadable (it measured 1.99:1).
+     *
+     * The ink lightens instead, because it is read against a dark ground. */
+    --destructive: 0 72.2% 65%;
 
-    /* Brighter semantic tokens for dark mode — match the brightness profile
-     * of `destructive` in dark mode. */
     --success: 142 71% 45%;
-    --success-foreground: 0 0% 100%;
 
     --warning: 38 92% 55%;
-    --warning-foreground: 0 0% 100%;
 
     --border: 210 20% 17%;
     --input: 210 22% 26%;
@@ -184,10 +205,13 @@
   --color-accent: hsl(var(--accent));
   --color-accent-foreground: hsl(var(--accent-foreground));
   --color-destructive: hsl(var(--destructive));
+  --color-destructive-fill: hsl(var(--destructive-fill));
   --color-destructive-foreground: hsl(var(--destructive-foreground));
   --color-success: hsl(var(--success));
+  --color-success-fill: hsl(var(--success-fill));
   --color-success-foreground: hsl(var(--success-foreground));
   --color-warning: hsl(var(--warning));
+  --color-warning-fill: hsl(var(--warning-fill));
   --color-warning-foreground: hsl(var(--warning-foreground));
   --color-border: hsl(var(--border));
   --color-input: hsl(var(--input));

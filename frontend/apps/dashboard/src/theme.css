@@ -41,7 +41,11 @@
   --card-foreground: 210 16% 96%;
   --muted: 210 20% 16%;
   --muted-foreground: 210 12% 66%;
-  --destructive: 0 72.2% 50.6%;
+  /* Lighter than the light-theme red on purpose: this token is INK, read against
+   * the dark ground above it. At the light theme's 50.6% it measures 3.98:1 here
+   * and fails AA. The console's token block explains the ink/fill split in full;
+   * this app paints no filled status surfaces, so it carries only the ink. */
+  --destructive: 0 72.2% 65%;
   --border: 210 20% 17%;
   --chart-1: 220 70% 50%;
   --chart-2: 160 60% 45%;
