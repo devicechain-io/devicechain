@@ -5,8 +5,8 @@ SPDX-License-Identifier: Apache-2.0
 
 # DeviceChain SDK for Unity
 
-The Unity client plugin for the DeviceChain platform — the digital-twin enabler (ADR-035
-sim-subsystem **slice 4**). It is a thin Unity layer over the AOT/IL2CPP-safe
+The Unity client plugin for the DeviceChain platform — the digital-twin enabler. It is a thin
+Unity layer over the AOT/IL2CPP-safe
 [C# SDK](../../csharp): it supplies the Unity-appropriate **transports** behind the SDK's transport
 seam (slice 4.1) and a platform-selecting bootstrap, so a scene can authenticate, query, subscribe to
 live telemetry, and emit device-plane telemetry — as an **untrusted external client**, never the
