@@ -686,6 +686,26 @@ predeterminado de 300 segundos.
 No se eliminó nada de los valores del chart, así que un archivo de valores `v0.11.0` se
 aplica sin cambios.
 
+:::caution Detenga el tráfico de dispositivos durante esta única actualización, o asuma un posible reinicio del motor de detección
+El límite se movió, así que mientras dura este despliegue **ninguna de las dos partes lo está
+aplicando**. En `v0.11.0` solo el motor de detección limitaba una hora informada por el
+dispositivo; en `v0.12.0` solo lo hace la resolución de eventos. Los dos servicios se
+despliegan como Deployments independientes, así que existe una ventana en la que un
+`event-processing` de `v0.11.0` ya ha sido sustituido mientras un `device-management` de
+`v0.11.0` sigue publicando, y un evento que cruce en esa ventana no lo comprueba ninguno.
+
+Lo que cuesta si llega uno con una marca de tiempo desmesuradamente futura: la detección
+mantiene una única frontera temporal para toda la instancia, así que ese único evento la
+adelanta y todos los temporizadores pendientes de todos los inquilinos se disparan a la vez.
+Recuperarse implica reiniciar la instantánea del motor.
+
+**Es un límite de una sola actualización, no una debilidad permanente**: una vez que ambos
+servicios están en `v0.12.0` concuerdan de forma definitiva, y una instancia que se destruye
+y se recrea nunca queda expuesta. Si va a actualizar en caliente con dispositivos enviando
+datos, detenga el tráfico de dispositivos durante el despliegue, o prepárese para reiniciar
+la instantánea de detección después.
+:::
+
 **Un servicio que rechaza su propia configuración sale ahora con un estado distinto de cero.**
 Antes registraba «refusing to start» y terminaba con estado 0, así que el pod informaba
 `Completed` — exactamente lo que informa un apagado ordenado, e indistinguible de uno a simple
