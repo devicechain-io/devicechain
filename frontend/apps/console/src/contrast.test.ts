@@ -43,12 +43,16 @@ const SOURCES: Record<string, string> = {
 type Hsl = readonly [number, number, number];
 type Theme = Record<string, Hsl>;
 
-/** Strip comments FIRST. A selector name inside a comment is not a selector, and
- *  reading the block after one silently parses the wrong rule — which it did:
- *  theme.css documents `.dark` in its header comment, and an earlier version of
- *  this parser read the light block twice and reported dark numbers it had never
- *  looked at. `parses the dark block, not a comment that mentions it` below is
- *  what stops that coming back. */
+/** Strip comments FIRST, because a selector name inside a comment is not a
+ *  selector. theme.css documents `.dark` in its header prose, and a parser that
+ *  matched the bare name there read the light block twice and reported dark
+ *  numbers it had never looked at.
+ *
+ *  🔑 `block()` below would survive losing this on its own — it requires a `{`
+ *  after the selector, and prose does not have one. What it would NOT survive is a
+ *  comment containing an EXAMPLE rule, which is entirely ordinary in a token file
+ *  this heavily annotated. That is the case `ignores a selector inside a commented
+ *  example` plants, and removing this line turns it red. */
 function stripComments(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, '');
 }
@@ -202,8 +206,18 @@ describe('the check itself', () => {
     expect(contrast([0, 0, 46.3], [0, 0, 100])).toBeCloseTo(4.54, 1);
   });
 
-  it('ignores a selector that only appears inside a comment', () => {
-    const css = '/* :root is light; .dark is dark */\n:root { --a: 0 0% 0%; }\n.dark { --a: 0 0% 100%; }';
+  it('ignores a selector inside a commented example', () => {
+    // The comment carries a COMPLETE rule, braces and all — the shape that actually
+    // defeats the parser. Prose mentioning `.dark` never had a `{` after it, so a
+    // test built from prose passed with the comment handling removed and proved
+    // nothing.
+    const css = [
+      '/* Tokens live on :root. To theme, add a rule like',
+      ' * .dark { --a: 0 0% 50%; }',
+      ' * and redefine only what moves. */',
+      ':root { --a: 0 0% 0%; }',
+      '.dark { --a: 0 0% 100%; }',
+    ].join('\n');
     const { light, dark } = themes(css);
     expect(light.a).toEqual([0, 0, 0]);
     expect(dark.a).toEqual([0, 0, 100]);
