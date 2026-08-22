@@ -7,8 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 
 ## [0.1.0] — unreleased
 
-Initial Unity plugin scaffolding (ADR-035 sim-subsystem slice 4.2), built on the C# SDK's transport
-seam (slice 4.1).
+Initial Unity plugin scaffolding, built on the C# SDK's transport seam.
 
 - `DeviceChainRuntime.CreateClient` — platform-selecting bootstrap (UnityWebRequest HTTP everywhere;
   `ClientWebSocketFactory` off-WebGL, `WebGlWebSocketFactory` on WebGL).
