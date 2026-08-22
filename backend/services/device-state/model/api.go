@@ -690,9 +690,21 @@ func (api *Api) SweepInactive(ctx context.Context, now time.Time) (int64, error)
 //
 // Both forms are strict, and they are the same comparison written from opposite sides:
 // `last < now - timeout` is `now - last > timeout`.
+//
+// 🔴 NOTHING IN CI EXECUTES THE POSTGRES STRING — the unit tests run on SQLite and
+// hack/migration-diff.sh compares schema only, no rows. It was therefore verified by
+// hand against a real PostgreSQL 16: correct at +599s, at EXACTLY the timeout, at
+// +601s and at +2h, with the zero/negative fallback flipping the right rows, and with
+// a deliberately wrong interval as the negative control so the run could fail. Redo
+// that by hand if this string changes; a green suite says nothing about it.
 func inactivitySQL(dialect string, now time.Time) (string, []any, error) {
-	// A device with no recorded activity is never flipped — the same refusal
-	// isInactive makes on an invalid sql.NullTime.
+	// `last_activity_time IS NOT NULL` is REDUNDANT and kept on purpose. SQL's
+	// three-valued logic already drops a NULL row — the comparison yields NULL, not
+	// true — and that was confirmed on both engines, so no test can kill this clause
+	// and none should be written that appears to. It is here because isInactive makes
+	// the same refusal explicitly (`if !last.Valid`), and because a later edit that
+	// wraps either side in COALESCE would silently start sweeping devices that have
+	// never reported at all.
 	switch dialect {
 	case "postgres":
 		return "last_activity_time IS NOT NULL AND last_activity_time < " +
