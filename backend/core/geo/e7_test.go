@@ -214,6 +214,14 @@ func TestDecodeRefusesMalformedBlobs(t *testing.T) {
 		{"header only", good[:2]},
 		{"wrong version", badVersion},
 		{"zero rings", noRings},
+		// 🔴 THE CASE ABOVE DOES NOT REACH THE ZERO-RINGS CHECK, which a mutation run
+		// showed by deleting that check and watching every test still pass. `noRings`
+		// is a full-size blob whose header claims none, so the TRAILING-BYTES guard
+		// refuses it first and the ring-count guard is never consulted. Only a blob
+		// that is exactly a header — nothing after it to be trailing — isolates it,
+		// and without this a geometry with no rings decoded successfully into an empty
+		// slice. Two guards that refuse the same fixture are one guard plus a passenger.
+		{"zero rings, nothing after the header", []byte{1, 0, 0}},
 		{"declared count overruns the buffer", overrun},
 		{"truncated mid-position", good[:len(good)-3]},
 		{"trailing bytes", append(append([]byte(nil), good...), 0x00)},
