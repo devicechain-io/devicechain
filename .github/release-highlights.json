@@ -20,14 +20,12 @@
     "`breaking` drives an automatic warning on the website and in the docs. Set it true when an",
     "upgrade is not a plain `helm upgrade`, and say so in the first highlight."
   ],
-  "version": "v0.12.0",
-  "breaking": true,
+  "version": "v0.12.1",
+  "breaking": false,
   "highlights": [
-    "This upgrade is not a plain helm upgrade \u2014 read the upgrade notes first. Devices must move to the per-device command-response topic, two configuration keys moved between areas, and a reading is now stored at its own sample time rather than the moment it arrived.",
-    "Geofences: a detection rule can ask whether a device is inside a named fence, answered against the fences that were live when the event happened, so a replay agrees with the original.",
-    "Fleet commands: send one command to a device group, watch it land device by device, and cancel it mid-flight.",
-    "A command to an absent device is now held until the device returns instead of being published into the void.",
-    "A presence source that stops reporting hands its devices back instead of leaving them frozen offline.",
-    "Buffered uploads keep their own timestamps, so a device that stores and forwards no longer lands an hour of history at a single instant."
+    "A patch release: a plain helm upgrade from v0.12.0, with no schema change and no contract change.",
+    "Status colours in the web console now meet WCAG AA contrast in both light and dark themes \u2014 the pending and online badges were previously unreadable, and error text failed in dark mode.",
+    "The inactivity monitor no longer reads every device in every tenant into memory on each pass. It now sweeps in a single statement, which matters most on large fleets and immediately after a presence source hands its devices back.",
+    "Dependency and base-image updates across the Go modules, the web console and the release workflow."
   ]
 }
