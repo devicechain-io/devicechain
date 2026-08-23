@@ -173,6 +173,33 @@ jobs:
         working-directory: ${{ matrix.module }}
         run: go vet ./...
 
+      # The workspace sum must already contain every hash this module's build
+      # needs. It is checked HERE, right after the build, because the build is
+      # what reveals the gap: a `go` command in workspace mode silently APPENDS
+      # missing hashes to go.work.sum rather than failing, so an incomplete file
+      # looks fine everywhere until something refuses to run on a dirty tree.
+      #
+      # 🔴 THAT SOMETHING IS THE RELEASE. goreleaser aborts with "git is in a
+      # dirty state" before it publishes anything, and the release job builds a
+      # verification binary before it gets there — so an incomplete go.work.sum
+      # is invisible on every PR and then kills the release. It did exactly that
+      # on v0.12.1-rc.1, after a Dependabot bump regenerated the per-module
+      # go.sum files it can reach and left the workspace sum, which it cannot,
+      # nine hashes short.
+      #
+      # Per module rather than once, deliberately: each module needs its own
+      # subset of hashes, and this way the failure names the module that wants
+      # the missing one. Fix by running `go build ./...` in the named module and
+      # committing the resulting go.work.sum.
+      - name: workspace sum is complete
+        run: |
+          if ! git diff --quiet -- go.work.sum; then
+            echo "::error::Building ${{ matrix.module }} appended hashes to go.work.sum, so the committed file is incomplete. Run 'go build ./...' in that module and commit go.work.sum."
+            git --no-pager diff -- go.work.sum
+            exit 1
+          fi
+          echo "go.work.sum already covers $(basename ${{ matrix.module }})"
+
       # Build-tagged tests are invisible to every step above: `go build`, `go vet` and
       # `go test` all skip a file whose tags are not set, so a tagged suite compiles
       # against nothing and rots silently — its first sign of trouble is the day someone
