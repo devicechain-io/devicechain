@@ -23,11 +23,14 @@ Si está en cualquiera de las versiones anteriores, lea la sección correspondie
 de hacer nada más.
 :::
 
-:::caution Actualizar a la v0.12.0 requiere algunos cambios previos
+:::caution Cruzar la v0.12.0 requiere algunos cambios previos
 La `v0.12.0` se actualiza en el sitio, pero cambia el tema en el que un dispositivo responde
 a un comando, mueve un permiso y cambia varias cosas cuya forma se mantuvo igual. Un
 `helm upgrade` informará éxito en cualquier caso. Lea
 [v0.12.0: una actualización que cambia contratos](#v0120-upgrade) antes de empezar.
+
+Esto se aplica a **cualquier** actualización que cruce la `v0.12.0`, no solo a la que se
+detiene ahí: pasar de la `v0.11.0` directamente a un parche posterior no omite esos cambios.
 :::
 
 ## Modelo de versionado
@@ -715,6 +718,27 @@ en un contador de reinicios y para cualquier cosa que alerte sobre ellos. Un ser
 consigue apagarse limpiamente se informa igual, por el mismo motivo. Si tiene una alerta que
 trata un pod de servicio en `Completed` como benigno, esta es la versión en la que el fallo
 subyacente empieza a llegarle.
+
+### v0.12.1: un parche, nada que hacer {#v0121-upgrade}
+
+La `v0.12.1` es un `helm upgrade` sencillo desde la `v0.12.0`. No añade ninguna migración, por
+lo que la base de datos queda intacta, y no cambia ninguna API, tema, permiso ni clave de
+configuración: todo lo que describe la sección de la v0.12.0 anterior sigue siendo exactamente
+lo que usted está ejecutando.
+
+Vale la pena conocer dos correcciones:
+
+- **Los colores de estado de la consola web** ahora cumplen el contraste WCAG AA en los temas
+  claro y oscuro. Las insignias `pending` y `online` fallaban en ambos temas, y el texto de
+  error fallaba en el tema oscuro. Lo que los colores *significan* no ha cambiado, pero las
+  insignias rellenas son visiblemente más oscuras, porque esa es la única forma de que las
+  letras blancas sobre ellas resulten legibles.
+- **El monitor de inactividad** ya no lee en memoria todos los dispositivos de todos los
+  inquilinos en cada pasada, ni emite una ida y vuelta a la base de datos por cada dispositivo
+  que marca; decide y escribe en una sola sentencia. Los dispositivos pasan a inactivos según
+  exactamente el mismo calendario que antes —esto es un cambio de coste, no de comportamiento—
+  y se nota sobre todo en flotas grandes y en los momentos justo después de que una fuente de
+  presencia devuelva sus dispositivos.
 
 ### La transición única a la ingesta duradera
 

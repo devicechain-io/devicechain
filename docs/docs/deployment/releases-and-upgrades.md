@@ -22,11 +22,14 @@ If you are on either earlier version, read the matching section below before you
 anything else.
 :::
 
-:::caution Upgrading to v0.12.0 needs a few changes first
+:::caution Crossing v0.12.0 needs a few changes first
 `v0.12.0` upgrades in place, but it changes the topic a device answers a command on, moves
 one permission, and changes several things whose shape stayed the same. A `helm upgrade`
 will report success either way. Read
 [v0.12.0 — an upgrade that changes contracts](#v0120-upgrade) before you start.
+
+This applies to **any** upgrade that crosses `v0.12.0`, not only one that stops there — going
+from `v0.11.0` straight to a later patch does not skip those changes.
 :::
 
 ## Versioning model
@@ -670,6 +673,24 @@ refused; what changed is that the refusal is now visible in `kubectl get pods`, 
 count, and to anything that alerts on either. A service that fails to shut down cleanly is
 reported the same way, for the same reason. If you have an alert that treats a `Completed`
 service pod as benign, this is the release where the underlying failure starts reaching you.
+
+### v0.12.1 — a patch, nothing to do {#v0121-upgrade}
+
+`v0.12.1` is a plain `helm upgrade` from `v0.12.0`. It adds no migration, so the database is
+untouched, and it changes no API, topic, permission or configuration key — everything the
+v0.12.0 section above describes is still exactly what you are running.
+
+Two fixes are worth knowing about:
+
+- **Status colours in the web console** now meet WCAG AA contrast in both light and dark
+  themes. The `pending` and `online` badges failed in both themes, and error text failed in
+  dark mode. What the colours *mean* has not changed — but the filled badges are visibly
+  darker, because that is the only way white lettering on them becomes readable.
+- **The inactivity monitor** no longer reads every device in every tenant into memory on each
+  pass, and no longer issues a database round trip per device it flips; it decides and writes
+  in one statement. Devices go inactive on exactly the same schedule as before — this is a
+  cost change, not a behaviour change — and it matters most on large fleets, and in the
+  moments right after a presence source hands its devices back.
 
 ### The one-time durable-ingest cutover
 
