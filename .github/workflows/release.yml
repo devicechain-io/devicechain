@@ -425,6 +425,43 @@ jobs:
           cache: true
           cache-dependency-path: "**/go.sum"
 
+      # goreleaser derives the changelog range by walking back from the tag's
+      # PARENT to the nearest tag, and that rule silently truncates the notes
+      # whenever a release candidate had to be re-cut.
+      #
+      # 🔴 IT ALREADY DID. v0.12.1 published a changelog of ONE commit — the fix
+      # that made the release possible — omitting the two fixes the release
+      # existed for. v0.12.1-rc.1 failed and was re-cut as rc.2 after one more
+      # commit, which left rc.1 sitting on the stable tag's parent, so that is
+      # what goreleaser measured from. v0.12.0's notes were complete only by
+      # luck: its single rc sat on the SAME commit as the stable tag, so the
+      # walk skipped past it to the previous cycle.
+      #
+      # A reader wants "what changed since the last release I could have been
+      # running", which is the previous STABLE tag, and never depends on how
+      # many candidates it took to get here. Computed explicitly below.
+      #
+      # Same-commit tags are excluded: re-running a candidate that a stable tag
+      # later pinned to the same commit would otherwise measure zero commits.
+      # An empty result is left unset so goreleaser keeps its own fallback,
+      # which is what the very first release needs.
+      - name: Changelog spans from the previous STABLE release
+        run: |
+          cur="$(git rev-list -n1 "${GITHUB_REF_NAME}")"
+          prev=""
+          while read -r t; do
+            [ -z "$t" ] && continue
+            [ "$(git rev-list -n1 "$t")" = "$cur" ] && continue
+            prev="$t"; break
+          done <<< "$(git tag --list 'v*' --merged "${GITHUB_REF_NAME}" --sort=-v:refname \
+                      | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$')"
+          if [ -n "$prev" ]; then
+            echo "GORELEASER_PREVIOUS_TAG=$prev" >> "$GITHUB_ENV"
+            echo "Changelog: $prev..${GITHUB_REF_NAME} ($(git rev-list --count "$prev..${GITHUB_REF_NAME}") commits)"
+          else
+            echo "No earlier stable tag; leaving goreleaser to pick its own range."
+          fi
+
       # Build ONE target first, with the same ldflags the release will use, so the
       # verification below can gate publication. Verifying after `release` would
       # only tell us the broken release is already public.
