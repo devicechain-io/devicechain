@@ -1,9 +1,19 @@
-// Floor at 1.26.5 (ADR-060): the embedded Bento connector library
-// (warpstreamlabs/bento v1.19, landed in outbound-connectors in slice C4b) declares
-// `go 1.26.5`, which propagates the language version to that module and therefore to
-// the workspace. The workspace `go` directive must be >= every module's, so it sits at
-// 1.26.5.
-go 1.26.5
+// Floor at 1.26.6 (ADR-060): the embedded Bento connector library
+// (warpstreamlabs/bento, landed in outbound-connectors in slice C4b) declares the
+// language version, which propagates to that module and therefore to the workspace. The
+// workspace `go` directive must be >= every module's, so it tracks whatever Bento
+// declares — v1.20 said 1.26.5, v1.21 says 1.26.6.
+//
+// 🔴 THIS LINE MOVES WITH A DEPENDENCY BUMP, AND NOTHING BUMPS IT FOR YOU. Dependabot
+// raises the go directive of the MODULE it touches and never looks at the workspace, so
+// a Bento bump lands with outbound-connectors at 1.26.6 and this at 1.26.5 — and the
+// workspace then refuses to load AT ALL. Every Go module's CI job fails, including
+// modules the bump never touched, with an error naming outbound-connectors. The blast
+// radius makes it read as a broad breakage; it is one line, here.
+//
+// No version is named in the comment above deliberately: a number frozen in prose drifts
+// away from the tree, and this one already had — it said v1.19 while the tree ran v1.20.
+go 1.26.6
 
 // 🔑 THE TOOLCHAIN IS PINNED SEPARATELY FROM THE LANGUAGE FLOOR, AND THEY MOVE FOR
 // DIFFERENT REASONS. The `go` line above is a floor set by what our modules declare and
