@@ -493,36 +493,69 @@ func TestAPeerThatDoesNotServeTheManifestDoorsIsReportedAsVersionSkew(t *testing
 	}
 }
 
-// Version skew reaching the GEOMETRY door is COUNTED, so a rollback shows up on a dashboard
-// rather than only in a log line.
+// Version skew is COUNTED on EVERY door it can surface on, so a rollback shows up on a
+// dashboard rather than only in a log line.
 //
-// 🔴 THIS TEST DELIBERATELY DOES NOT ASSERT THE COUNTER ON THE MANIFEST DOORS, AND THAT IS A
-// STATEMENT ABOUT THE PRODUCTION CODE, NOT ABOUT THE TEST. recordFenceArchiveSkew is called
-// from assemble, which a manifest-door failure never reaches — fetchManifest classifies the
-// error and returns it straight to the caller. So on the reconcile and startup roads, which ask
-// a manifest door FIRST, the skew is reported correctly and counted nowhere. Asserting zero
-// there would pin that shut; asserting one there would fail. It is recorded in the migration
-// report instead, for a decision that belongs with the production code rather than here.
-func TestVersionSkewReachingTheGeometryDoorIsCounted(t *testing.T) {
+// 🔴 THE MANIFEST-DOOR CASES ARE THE POINT OF THIS TEST, AND THEY ARE WHERE THE COUNTER USED TO
+// BE UNREACHABLE. Skew was recorded in assemble, which a manifest-door failure never reaches —
+// fetchManifest classifies the error and returns it straight to FenceSetAt/CurrentFenceSet. So
+// the reconcile and startup roads, which ask a MANIFEST door first, are exactly the roads a
+// rolled-back device-management is met on, and exactly the ones on which the condition was
+// reported in a log and counted nowhere. An alert had already been written against the counter.
+//
+// The fix was to count where the error is RAISED rather than where it is handled, which is why
+// all three doors can be asserted from one table now: there is a single place an unknown-field
+// error becomes errArchiveSkew.
+func TestVersionSkewIsCountedOnEveryDoor(t *testing.T) {
 	yard := fenceBox(0, 0, 1, 1)
-	c, _ := scriptedClient(t, func(_ int, query string, _ map[string]any) (string, error) {
-		if query == geoFenceGeometryQuery {
-			return "", errors.New(`graphql: Cannot query field "geoFenceGeometry" on type "Query"`)
-		}
-		return manifestData(t, "currentGeoFenceSetManifest", 4,
-			dmmodel.GeoFenceManifestEntry{Token: "yard", Hash: docHash(yard)}), nil
-	})
+	for _, tc := range []struct {
+		name    string
+		missing string
+		// call is the entry point that actually reaches the door under test. It differs per
+		// case and that is the point: the version-addressed door is reached only by FenceSetAt,
+		// so driving all three through CurrentFenceSet would leave one case asserting nothing.
+		call func(c runtime.FenceSetSource, cur runtime.CurrentFenceSetSource) error
+	}{
+		{"version manifest door", "geoFenceSetManifest", func(c runtime.FenceSetSource, _ runtime.CurrentFenceSetSource) error {
+			_, err := c.FenceSetAt(context.Background(), "acme", 4)
+			return err
+		}},
+		{"current manifest door", "currentGeoFenceSetManifest", func(_ runtime.FenceSetSource, cur runtime.CurrentFenceSetSource) error {
+			_, err := cur.CurrentFenceSet(context.Background(), "acme")
+			return err
+		}},
+		{"geometry door", "geoFenceGeometry", func(_ runtime.FenceSetSource, cur runtime.CurrentFenceSetSource) error {
+			_, err := cur.CurrentFenceSet(context.Background(), "acme")
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := scriptedClient(t, func(_ int, query string, _ map[string]any) (string, error) {
+				if strings.Contains(query, tc.missing) {
+					return "", fmt.Errorf(`graphql: Cannot query field %q on type "Query"`, tc.missing)
+				}
+				name := "currentGeoFenceSetManifest"
+				if strings.Contains(query, "geoFenceSetManifest(") {
+					name = "geoFenceSetManifest"
+				}
+				return manifestData(t, name, 4,
+					dmmodel.GeoFenceManifestEntry{Token: "yard", Hash: docHash(yard)}), nil
+			})
 
-	if _, err := c.CurrentFenceSet(context.Background(), "acme"); !errors.Is(err, errArchiveSkew) {
-		t.Fatalf("got %v, want errArchiveSkew", err)
-	}
-	if got := testutil.ToFloat64(c.metrics.fenceArchiveSkew); got != 1 {
-		t.Errorf("the skew was counted %v times, want 1", got)
-	}
-	// It is NOT counted as an unresolvable entry: that counter means "the archive did not hold
-	// this body", which is per-fence and repairable, where this is a whole-deployment condition.
-	if got := testutil.ToFloat64(c.metrics.fenceGeometryUnresolved); got != 0 {
-		t.Errorf("version skew was counted as %v unresolved entries", got)
+			if err := tc.call(c, c); !errors.Is(err, errArchiveSkew) {
+				t.Fatalf("got %v, want errArchiveSkew", err)
+			}
+			if got := testutil.ToFloat64(c.metrics.fenceArchiveSkew); got != 1 {
+				t.Errorf("the skew was counted %v times, want 1 — an alert is written against "+
+					"this counter, so a road that does not move it is an alert that cannot fire", got)
+			}
+			// It is NOT counted as an unresolvable entry: that counter means "the archive did
+			// not hold this body", which is per-fence and repairable, where this is a
+			// whole-deployment condition.
+			if got := testutil.ToFloat64(c.metrics.fenceGeometryUnresolved); got != 0 {
+				t.Errorf("version skew was counted as %v unresolved entries", got)
+			}
+		})
 	}
 }
 

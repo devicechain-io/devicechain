@@ -151,13 +151,13 @@ func (c *fenceSetClient) fetchManifest(ctx context.Context, tenant string, versi
 	if version > 0 {
 		var out geoFenceSetManifestResponse
 		if err := c.exec(ctx, tenant, geoFenceSetManifestQuery, map[string]any{"version": version}, &out); err != nil {
-			return nil, classifyArchiveError(err)
+			return nil, c.classifyArchiveError(err)
 		}
 		fences, got = out.GeoFenceSetManifest.Fences, out.GeoFenceSetManifest.Version
 	} else {
 		var out currentGeoFenceSetManifestResponse
 		if err := c.exec(ctx, tenant, currentGeoFenceSetManifestQuery, nil, &out); err != nil {
-			return nil, classifyArchiveError(err)
+			return nil, c.classifyArchiveError(err)
 		}
 		fences, got = out.CurrentGeoFenceSetManifest.Fences, out.CurrentGeoFenceSetManifest.Version
 	}
@@ -183,10 +183,22 @@ func (c *fenceSetClient) fetchManifest(ctx context.Context, tenant string, versi
 	return manifest, nil
 }
 
-// classifyArchiveError turns a peer error into errArchiveSkew when that is what it is, and
-// otherwise passes it through unchanged.
-func classifyArchiveError(err error) error {
+// classifyArchiveError turns a peer error into errArchiveSkew when that is what it is, COUNTS
+// it, and otherwise passes it through unchanged.
+//
+// 🔴 THE COUNTING HAPPENS WHERE THE ERROR IS RAISED, AND THE FIRST VERSION OF THIS DID IT
+// WHERE THE ERROR WAS HANDLED — WHICH MADE THE COUNTER UNREACHABLE ON THE ROAD IT EXISTS FOR.
+// Skew was recorded in assemble, but a manifest-door failure is classified here and returned
+// straight to FenceSetAt/CurrentFenceSet, which never reach assemble. Those two are precisely
+// the reconcile and startup roads — the ones that ask a MANIFEST door first — so the case the
+// metric was built for, a device-management rolled back behind this service, was reported in
+// the log and counted nowhere. An alert had already been written against it.
+//
+// Recording at the raise site is what makes that structurally impossible to reintroduce: there
+// is one place an unknown-field error becomes errArchiveSkew, and it is this one.
+func (c *fenceSetClient) classifyArchiveError(err error) error {
 	if isArchiveSkew(err) {
+		c.metrics.recordFenceArchiveSkew()
 		return fmt.Errorf("%w: %v", errArchiveSkew, err)
 	}
 	return err
@@ -255,7 +267,7 @@ func (g *geometryFetch) chunk(ctx context.Context, hashes []string, into map[str
 	err := g.client.exec(ctx, g.tenant, geoFenceGeometryQuery, map[string]any{"hashes": hashes}, &out)
 	if err != nil {
 		if !errors.Is(err, svcclient.ErrResponseTooLarge) {
-			return classifyArchiveError(err)
+			return g.client.classifyArchiveError(err)
 		}
 		if len(hashes) == 1 {
 			return fmt.Errorf("geofence geometry %s is too large for one response on its own: %w",
@@ -279,6 +291,11 @@ func (g *geometryFetch) chunk(ctx context.Context, hashes []string, into map[str
 		}
 		raw := json.RawMessage(doc.Geometry)
 		if got := dmmodel.GeoFenceGeometryHash([]byte(doc.Geometry)); got != doc.Hash {
+			// Counted here rather than where this error is handled, for the reason
+			// classifyArchiveError records: a counter incremented at the handling site is
+			// only as reachable as that site, and this one must fire wherever a body is
+			// verified.
+			g.client.metrics.recordFenceGeometryHashMismatch()
 			return fmt.Errorf("%w: asked for geometry %s and the document served under it hashes to %s",
 				errGeometryHashMismatch, doc.Hash, got)
 		}
@@ -343,12 +360,9 @@ func (c *fenceSetClient) assemble(ctx context.Context, tenant string, manifest *
 	fetch := &geometryFetch{client: c, tenant: tenant}
 	documents, err := fetch.documents(ctx, missing)
 	if err != nil {
-		if errors.Is(err, errGeometryHashMismatch) {
-			c.metrics.recordFenceGeometryHashMismatch()
-		}
-		if errors.Is(err, errArchiveSkew) {
-			c.metrics.recordFenceArchiveSkew()
-		}
+		// Not counted here: both classes that have their own counter — version skew and a
+		// hash mismatch — are recorded at the point they are RAISED, so they are counted on
+		// every road rather than only on the ones that funnel through this function.
 		return nil, err
 	}
 
