@@ -367,22 +367,23 @@ func (api *Api) CurrentGeoFenceSetSnapshot(ctx context.Context) (*GeoFenceSetSna
 	return snapshot, nil
 }
 
-// parseStoredGeoFenceSetSnapshot decodes a stored snapshot, normalizing a missing fence
-// list to a non-nil empty slice so a version minted by the deletion of the last fence
-// never nil-derefs downstream.
+// parseStoredGeoFenceSetSnapshot decodes a stored snapshot into the STORED form —
+// content references, no geometry. Every caller that needs evaluable fences goes on
+// through hydrateGeoFenceSetSnapshot; see storedGeoFenceSetSnapshot for why the two
+// forms are separate types.
 //
-// It yields the STORED form — content references, no geometry. Every caller that needs
-// evaluable fences goes on through hydrateGeoFenceSetSnapshot; see
-// storedGeoFenceSetSnapshot for why the two forms are separate types.
+// It does NOT normalize a missing fence list to a non-nil empty slice, and the omission
+// is deliberate rather than an oversight. hydrateGeoFenceSetSnapshot allocates the
+// hydrated slice unconditionally, so the non-nil guarantee every caller depends on has
+// exactly one owner. Normalizing here as well was dead the moment hydration existed —
+// removing it left every test green, which is precisely what says nothing was relying
+// on it.
 func parseStoredGeoFenceSetSnapshot(raw datatypes.JSON) (*storedGeoFenceSetSnapshot, error) {
 	snapshot := &storedGeoFenceSetSnapshot{}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, snapshot); err != nil {
 			return nil, fmt.Errorf("unable to parse geofence set snapshot: %w", err)
 		}
-	}
-	if snapshot.Fences == nil {
-		snapshot.Fences = []storedGeoFenceRef{}
 	}
 	return snapshot, nil
 }
@@ -407,6 +408,10 @@ func parseStoredGeoFenceSetSnapshot(raw datatypes.JSON) (*storedGeoFenceSetSnaps
 // conflict there means the other transaction stored the identical bytes, since the
 // address IS the content, so there is nothing to reconcile and nothing to fail.
 func archiveGeoFenceGeometries(tx *gorm.DB, documents map[string][]byte) error {
+	// A round trip skipped, not a correctness guard: gorm renders an empty slice as
+	// `hash in (NULL)`, which matches nothing (verified against the pinned driver), so
+	// removing this changes only whether the statement is issued. Stated because no test
+	// can distinguish the two — nobody should write one that only appears to.
 	if len(documents) == 0 {
 		return nil
 	}
@@ -457,9 +462,16 @@ func hydrateGeoFenceSetSnapshot(tx *gorm.DB, stored *storedGeoFenceSetSnapshot) 
 		Version: stored.Version,
 		Fences:  make([]GeoFenceSnapshotRef, 0, len(stored.Fences)),
 	}
+	// As in archiveGeoFenceGeometries, this skips a round trip rather than guarding
+	// correctness — an empty IN matches nothing. The allocation above is what actually
+	// makes the returned fence list non-nil, on every path.
 	if len(stored.Fences) == 0 {
 		return hydrated, nil
 	}
+	// Deduplicated because a fence set may name the same geometry from several fences,
+	// which is the common case after a bulk import. Correctness does not depend on it —
+	// a repeated value in an IN clause selects the same rows — so this is a narrower
+	// read, not a different answer.
 	hashes := make([]string, 0, len(stored.Fences))
 	seen := make(map[string]struct{}, len(stored.Fences))
 	for _, ref := range stored.Fences {

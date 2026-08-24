@@ -367,3 +367,85 @@ func TestArchiveCollapsesRepeatsWithinOneMint(t *testing.T) {
 		t.Fatalf("want 2 distinct rows, got %d", n)
 	}
 }
+
+// TestGeoFenceGeometryHashIsFullWidthSHA256 pins the ADDRESS ITSELF, against values
+// computed outside this program.
+//
+// 🔴 IT EXISTS BECAUSE EVERY OTHER TEST HERE SURVIVES A TRUNCATED HASH. Mutating the
+// address down to a single byte left the whole suite green: four distinct geometries
+// landed in four of 256 buckets and did not happen to collide, so "the archive holds one
+// row per distinct document" kept passing — by luck, and differently on a different
+// fixture. A collision is not a near-miss, either: two documents sharing an address means
+// the second is discarded as already-present, and a fence hydrates to somebody else's
+// geometry.
+//
+// The expected values are hex SHA-256 digests computed independently, so this pins the
+// algorithm and the full width together. Re-deriving them with crypto/sha256 here would
+// only assert that the function equals itself.
+func TestGeoFenceGeometryHashIsFullWidthSHA256(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+		{"devicechain", "3c09a653c469e1d12354bd00108eb98ddf2fcb8880ccf661101fa94363d81ea5"},
+		{`{"kind":"POLYGON_2D"}`, "979715c2dd0cd445071f1215427f995bd7bd3f100d52eedb0ef78875e4eac50f"},
+	} {
+		got := GeoFenceGeometryHash([]byte(tc.in))
+		if got != tc.want {
+			t.Fatalf("hash(%q):\n got %s\nwant %s", tc.in, got, tc.want)
+		}
+		if len(got) != 64 {
+			t.Fatalf("hash(%q) is %d characters, want 64", tc.in, len(got))
+		}
+	}
+}
+
+// TestDistinctGeometryGetsDistinctAddresses is the property a truncated or otherwise
+// lossy address breaks, asserted on documents that differ in ONE DIGIT.
+//
+// Deliberately not a birthday-paradox sweep: the point is that a minimal difference
+// survives into the address, which a sweep over random fixtures would establish only
+// probabilistically — and a probabilistic archive test is one that passes until it does
+// not.
+func TestDistinctGeometryGetsDistinctAddresses(t *testing.T) {
+	api := newGeoFenceTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	first := polygonGeometry(0.0001, 0, 1, 0, 1, 1, 0.0001, 0)
+	second := polygonGeometry(0.0002, 0, 1, 0, 1, 1, 0.0002, 0)
+	if first == second {
+		t.Fatalf("broken fixture: the two geometries are identical")
+	}
+	for i, geometry := range []string{first, second} {
+		if _, err := api.CreateGeoFence(ctx, &GeoFenceCreateRequest{
+			Token: fmt.Sprintf("yard-%d", i), Geometry: geometry}); err != nil {
+			t.Fatalf("create %d: %v", i, err)
+		}
+	}
+
+	blobs := archivedBlobs(t, api, ctx)
+	if len(blobs) != 2 {
+		t.Fatalf("two geometries differing in one digit must archive separately; got %d rows", len(blobs))
+	}
+	if blobs[0].Hash == blobs[1].Hash {
+		t.Fatalf("distinct documents share an address: %s", blobs[0].Hash)
+	}
+
+	// And each fence must hydrate to its OWN geometry — the failure a collision produces
+	// is not a missing fence, it is a fence carrying somebody else's shape.
+	snapshot, err := api.CurrentGeoFenceSetSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("current snapshot: %v", err)
+	}
+	if len(snapshot.Fences) != 2 {
+		t.Fatalf("want 2 fences, got %d", len(snapshot.Fences))
+	}
+	byToken := map[string]string{}
+	for _, fence := range snapshot.Fences {
+		byToken[fence.Token] = fmt.Sprint(decodePolygonRing(t, string(fence.Geometry)))
+	}
+	if byToken["yard-0"] == byToken["yard-1"] {
+		t.Fatalf("both fences hydrated to the same geometry: %s", byToken["yard-0"])
+	}
+	if want := fmt.Sprint(decodePolygonRing(t, first)); byToken["yard-0"] != want {
+		t.Fatalf("yard-0 hydrated to the wrong geometry:\n got %s\nwant %s", byToken["yard-0"], want)
+	}
+}
