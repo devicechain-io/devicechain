@@ -74,6 +74,25 @@ type CurrentFenceSetSource interface {
 	CurrentFenceSet(ctx context.Context, tenant string) (*geofence.FenceSet, error)
 }
 
+// FenceManifestResolver assembles an evaluable fence set from a manifest the caller ALREADY
+// HOLDS — the fence-set fact, which names a version's fences and the content address of each
+// one's geometry without carrying the geometry itself.
+//
+// It is a third interface rather than a method on either source above because it answers a
+// different question from both. The two sources answer "go and find out what version N is",
+// which costs a read of the archive; this one answers "here is what version N is, make it
+// evaluable", which costs only the geometry the holder does not already have. That difference
+// is the entire economy of manifest delivery: an edit to one fence of a hundred announces a
+// hundred names and transfers ONE body, and routing the fact through a source would throw that
+// away by re-reading the manifest that just arrived.
+//
+// Its implementation shares a compiled-geometry cache with the sources, which is what makes the
+// two roads reinforce rather than duplicate each other — a body fetched for a fact is already
+// held when the next reconcile sweep asks for the same version.
+type FenceManifestResolver interface {
+	ResolveManifest(ctx context.Context, tenant string, manifest *dmmodel.GeoFenceSetManifest) (*geofence.FenceSet, error)
+}
+
 // FenceSetView is the loop-owned in-memory projection of tenants' frozen geofence sets, keyed on
 // (tenant, fence-set version) — the read side a location event's containment predicate resolves
 // against. It is the geofence sibling of DeviceAttributeView and shares its concurrency contract:

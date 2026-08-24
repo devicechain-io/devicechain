@@ -219,28 +219,6 @@ func (rp *ResolvedEventsProcessor) drainFenceSetStream(reader messaging.MessageR
 	}
 }
 
-// runFenceSetPointerConsumer drains the geofence-set-POINTER stream: fence-set facts whose
-// fences were too large to ride in one broker message, so the fact names a version and carries
-// nothing else.
-//
-// It is a separate consumer over a separate subject rather than a branch inside the ordinary
-// one, and the separation is not about this service — it is about the one running beside it
-// during an upgrade. A build of this service from before the pointer form existed decodes such
-// a fact as a fence set of ZERO fences (json.Unmarshal ignores the field that says otherwise)
-// and installs it, so containment answers "outside" for a device that is inside, silently,
-// because an empty set is a legitimate state. Publishing to a subject that build never
-// subscribed to is what keeps its behaviour identical to what it was before: no fact arrives,
-// the version stays missing, and containment reports a COUNTED eval error the reconcile sweep
-// repairs.
-//
-// Its body is the ordinary consumer's, because past the subject the two are the same fact and
-// handleFenceSetFact already branches on FencesOmitted — a fact's meaning must not depend on
-// which subject carried it, or the pair could disagree.
-func (rp *ResolvedEventsProcessor) runFenceSetPointerConsumer() {
-	defer rp.readerWG.Done()
-	rp.drainFenceSetStream(rp.FenceSetPointerReader)
-}
-
 // handleFenceSetFact compiles one fence-set fact, installs it on the single-writer loop, and acks.
 //
 // It takes no "signal" flag, unlike the roster/entity-deleted handlers, because there is no
@@ -252,89 +230,58 @@ func (rp *ResolvedEventsProcessor) runFenceSetPointerConsumer() {
 // It returns false ONLY on a shutdown mid-send (the fact is left unacked to redeliver); a poison or
 // malformed fact is dropped-and-acked and returns true.
 func (rp *ResolvedEventsProcessor) handleFenceSetFact(msg messaging.Message) bool {
-	tenant, ev, ok := decodeFenceSetFact(rp, msg)
+	tenant, manifest, ok := decodeFenceSetFact(rp, msg)
 	if !ok {
-		// Unparseable/poison: redelivery cannot fix it. Ack so it stops redelivering forever.
-		rp.ackFact(msg, "geofence-set")
+		rp.ackFact(msg, "geofence-set-manifest")
 		return true
 	}
-	// A non-positive version is unusable: 0 is the reserved "the tenant had never created a
-	// fence" stamp, which the view answers from knowledge without consulting the map, so a fact
-	// claiming to BE version 0 could only overwrite that with something a producer invented.
-	// Nothing legitimate mints one — mintGeoFenceSetVersion starts at 1 — so this is a forged or
-	// buggy-producer fact, dropped-and-acked rather than filed.
-	if ev.Version <= 0 {
-		log.Warn().Int32("version", ev.Version).Str("subject", msg.Subject).
-			Msg("Dropping malformed geofence-set fact (non-positive fence-set version).")
-		rp.ackFact(msg, "geofence-set")
+	if manifest.Version <= 0 {
+		log.Warn().Int32("version", manifest.Version).Str("subject", msg.Subject).
+			Msg("Dropping malformed geofence-set manifest (non-positive fence-set version).")
+		rp.ackFact(msg, "geofence-set-manifest")
 		return true
 	}
-	// A POINTER fact carries no fences and must be resolved from the archive. It is
-	// checked BEFORE ev.Fences is read, because after decoding the two are identical:
-	// a pointer fact and a genuinely-empty set both hold an empty list, and only this
-	// flag separates "go and fetch it" from "this tenant has no fences", which is a
-	// real and meaningful state (a tenant that deleted its last fence). Reading the
-	// list first would install a hundred fences as none, and containment would then
-	// answer "outside" forever — a healthy-looking rule that never fires.
-	if ev.FencesOmitted {
-		return rp.resolveOmittedFenceSet(msg, tenant, ev.Version)
-	}
-	fences := make([]geofence.SnapshotFence, 0, len(ev.Fences))
-	for _, f := range ev.Fences {
-		fences = append(fences, geofence.SnapshotFence{Token: f.Token, Geometry: f.Geometry})
-	}
-	// Compiled on the CONSUMER goroutine, not on the loop: compiling a hundred fences of a few
-	// hundred vertices each is real work, and the loop is the one goroutine every tenant's event
-	// processing shares. What crosses to the loop is the finished, immutable set. A fence whose
-	// geometry will not compile is retained with its error rather than dropped, so one bad fence
-	// cannot disable containment for the rest of the tenant's set.
-	if !rp.signalFenceSet(tenant, geofence.NewFenceSet(ev.Version, fences)) {
-		return false // shutdown mid-send: leave unacked; it redelivers next start
-	}
-	rp.ackFact(msg, "geofence-set")
-	return true
-}
-
-// resolveOmittedFenceSet resolves a POINTER fact — one whose fence set was too large for a single
-// broker message — by reading that version out of device-management's frozen archive, then
-// installing it on the single-writer loop exactly as an ordinary fact's set is installed.
-//
-// 🔴 IT READS THE VERSION THE FACT NAMES, NEVER THE CURRENT ONE. Those differ the moment a second
-// fence edit lands while this one is being resolved, and installing "current" under a fact that
-// announced version 7 would leave the view holding 8 with 7 still missing — every event stamped 7
-// would report unresolvable, which is the exact fault the pointer fact exists to prevent. The
-// version-addressed read is also the only deterministic one: version 7's snapshot is frozen and
-// cannot become something else between the fact and the fetch.
-//
-// The blocking read is legal HERE and would not be one line further in. This runs on the fact
-// consumer's own goroutine, which already does the fence compile for the same reason; the
-// single-writer loop — where every tenant's event processing is serialized — is on the far side of
-// signalFenceSet and never waits on this.
-//
-// A failed read is logged and ACKED rather than left to redeliver. Redelivery would re-run the same
-// read against the same unavailable peer on the broker's schedule, while the five-minute reconcile
-// sweep already exists to repair precisely a version the view never received and will retry with
-// backoff-shaped cadence forever. Acking also keeps a persistently unreadable version from parking
-// the stream behind it. The residual — up to one sweep interval of eval errors for that tenant — is
-// the same trade the sweep's other callers make, and it is reported, not silent.
-func (rp *ResolvedEventsProcessor) resolveOmittedFenceSet(msg messaging.Message, tenant string, version int32) bool {
-	if rp.fenceView == nil {
-		rp.ackFact(msg, "geofence-set")
-		return true
-	}
-	set, err := rp.fetchOmittedFenceSet(tenant, version)
+	set, err := rp.resolveFenceManifest(tenant, manifest)
 	if err != nil {
-		rp.metrics.recordFenceSetPointerUnresolved()
-		log.Error().Err(err).Str("tenant", tenant).Int32("version", version).
-			Msg("Unable to resolve a geofence-set fact that arrived without its fences; containment for this tenant reports unresolvable at this version until the next reconcile sweep.")
-		rp.ackFact(msg, "geofence-set")
+		log.Error().Err(err).Str("tenant", tenant).Int32("version", manifest.Version).
+			Msg("Unable to resolve the geometry a geofence-set manifest names; installing nothing. Containment for this tenant reports unresolvable at this version until the next reconcile sweep repairs it.")
+		rp.ackFact(msg, "geofence-set-manifest")
 		return true
 	}
 	if !rp.signalFenceSet(tenant, set) {
 		return false // shutdown mid-send: leave unacked; it redelivers next start
 	}
-	rp.ackFact(msg, "geofence-set")
+	rp.ackFact(msg, "geofence-set-manifest")
 	return true
+}
+
+// resolveFenceManifest turns a manifest into an evaluable fence set, fetching whatever geometry
+// the compiled-geometry cache does not already hold.
+//
+// 🔴 THE BLOCKING FETCH IS LEGAL HERE AND WOULD NOT BE ONE LINE FURTHER IN. This runs on the
+// fact consumer's own goroutine, which already did the fence COMPILE for the same reason; the
+// single-writer loop, where every tenant's event processing is serialized, is on the far side of
+// signalFenceSet and never waits on this. What is new is that the goroutine now sometimes makes
+// a network call rather than only burning CPU — bounded by the fetch's own request budget, and
+// paid only for geometry that actually changed.
+//
+// A failed resolve is logged and the fact is ACKED rather than left to redeliver, matching what
+// the pointer-fact path did before it: redelivery would re-run the same read against the same
+// unavailable peer on the broker's schedule, while the five-minute reconcile sweep already
+// exists to repair a version the view never received and retries forever. Acking also keeps a
+// persistently unreadable version from parking the stream behind it.
+func (rp *ResolvedEventsProcessor) resolveFenceManifest(tenant string, manifest *dmmodel.GeoFenceSetManifest) (*geofence.FenceSet, error) {
+	if rp.FenceManifests == nil {
+		return nil, errNoFenceSetArchive
+	}
+	set, err := rp.FenceManifests.ResolveManifest(rp.procCtx, tenant, manifest)
+	if err != nil {
+		return nil, err
+	}
+	if set == nil {
+		return nil, errFenceSetArchiveEmpty
+	}
+	return set, nil
 }
 
 // errNoFenceSetArchive reports that no archive seam is wired, so a pointer fact's fences are
@@ -361,38 +308,22 @@ var errNoFenceSetArchive = errors.New("no fence-set archive seam is configured; 
 // consequence is identical and the alternative is installing nil as a fence set.
 var errFenceSetArchiveEmpty = errors.New("the fence-set archive returned no set and no error")
 
-// fetchOmittedFenceSet reads one version out of the archive, turning every way the read can
-// fail to produce a usable set into an error the caller reports once.
-func (rp *ResolvedEventsProcessor) fetchOmittedFenceSet(tenant string, version int32) (*geofence.FenceSet, error) {
-	if rp.VersionedFenceSets == nil {
-		return nil, errNoFenceSetArchive
-	}
-	set, err := rp.VersionedFenceSets.FenceSetAt(rp.procCtx, tenant, version)
-	if err != nil {
-		return nil, err
-	}
-	if set == nil {
-		return nil, errFenceSetArchiveEmpty
-	}
-	return set, nil
-}
-
 // decodeFenceSetFact unmarshals one geofence-set fact into its owning tenant (from the per-tenant
 // subject) and payload, with the same drop-not-fatal contract as decodeRosterFact. The tenant
 // travels on the subject, never the payload — which is what makes one tenant's fences unreachable
 // through another tenant's projection entry however the payload is shaped.
-func decodeFenceSetFact(rp *ResolvedEventsProcessor, msg messaging.Message) (string, *dmmodel.GeoFenceSetMintedEvent, bool) {
+func decodeFenceSetFact(rp *ResolvedEventsProcessor, msg messaging.Message) (string, *dmmodel.GeoFenceSetManifest, bool) {
 	_, tenant, ok := messaging.TenantContextFromSubject(rp.procCtx, msg.Subject)
 	if !ok {
 		log.Warn().Str("correlation", msg.CorrelationID()).
 			Msgf("Dropping geofence-set fact with no parseable tenant in subject %q", msg.Subject)
 		return "", nil, false
 	}
-	ev, err := dmmodel.UnmarshalGeoFenceSetMintedEvent(msg.Value)
+	manifest, err := dmmodel.UnmarshalGeoFenceSetManifest(msg.Value)
 	if err != nil {
 		log.Warn().Err(err).Str("correlation", msg.CorrelationID()).
 			Msgf("Dropping geofence-set fact that could not be parsed from subject %q", msg.Subject)
 		return "", nil, false
 	}
-	return tenant, ev, true
+	return tenant, manifest, true
 }

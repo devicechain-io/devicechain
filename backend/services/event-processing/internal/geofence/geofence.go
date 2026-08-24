@@ -201,36 +201,26 @@ func EmptyFenceSet(version int32) *FenceSet {
 	return &FenceSet{version: version, byToken: map[string]*Fence{}}
 }
 
-// compileFence decodes one snapshot fence's envelope and compiles its geometry through the
-// kind dispatch.
+// compileFence compiles one snapshot fence's INLINED geometry envelope and names the result with
+// the fence's token.
+//
+// The decode and the kind dispatch live in CompileGeometry, which the content-addressed delivery
+// path also runs. Sharing them is the point: an inlined snapshot and a fetched geometry body are
+// the same document travelling by different roads, and two copies of this decode would be two
+// places for the kind vocabulary — or the refusal of an unevaluable kind — to drift apart, with
+// the divergence visible only on whichever road a given tenant's fence set happened to take.
+//
+// The token is attached HERE rather than inside CompileGeometry because a document is shared by
+// every fence that resolves to its hash, so its failure is not a fact about any one token; this
+// wrapper is the point at which the shared fact becomes a per-fence one.
 func compileFence(sf SnapshotFence) *Fence {
-	f := &Fence{token: sf.Token}
-	if len(sf.Geometry) == 0 {
-		f.err = fmt.Errorf("geofence %q has no geometry", sf.Token)
-		return f
-	}
-	env := geometryEnvelope{}
-	if err := json.Unmarshal(sf.Geometry, &env); err != nil {
-		f.err = fmt.Errorf("geofence %q has an unreadable geometry envelope: %w", sf.Token, err)
-		return f
-	}
-	f.kind = env.Kind
-	compile, ok := containment[env.Kind]
-	if !ok {
-		// A kind with no evaluator is an ERROR, never a false: answering "not inside" for a
-		// shape nothing can evaluate is the one outcome indistinguishable from a correct
-		// negative. device-management refuses to store such a fence, so reaching this means the
-		// two sides disagree about the kind vocabulary — which is exactly what must be loud.
-		f.err = fmt.Errorf("geofence %q has geometry kind %q, which this engine cannot evaluate", sf.Token, env.Kind)
-		return f
-	}
-	geom, err := compile(env.Geometry)
+	c, err := CompileGeometry(sf.Geometry)
 	if err != nil {
-		f.err = fmt.Errorf("geofence %q (%s) could not be compiled: %w", sf.Token, env.Kind, err)
-		return f
+		// The kind is retained even on failure — Fence.Kind() answers for a broken fence too, and
+		// "your POLYGON_2D fence is malformed" is a better sentence than "your fence is malformed".
+		return &Fence{token: sf.Token, kind: c.Kind(), err: fmt.Errorf("geofence %q: %w", sf.Token, err)}
 	}
-	f.geom = geom
-	return f
+	return NewCompiledFence(sf.Token, c)
 }
 
 // Contains answers whether the position is inside the fence the token names, dispatching on the

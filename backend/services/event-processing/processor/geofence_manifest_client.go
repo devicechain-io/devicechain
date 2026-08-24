@@ -11,7 +11,9 @@ import (
 	"strings"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	"github.com/devicechain-io/dc-microservice/svcclient"
+	"github.com/rs/zerolog/log"
 )
 
 // geometryChunkSize is how many content addresses one geoFenceGeometry request asks for.
@@ -289,3 +291,99 @@ func (g *geometryFetch) chunk(ctx context.Context, hashes []string, into map[str
 // requested under. It is its own error so the caller can COUNT it separately: it is never
 // transient and never benign, unlike every other way a fetch can fail.
 var errGeometryHashMismatch = errors.New("geofence geometry does not match its content address")
+
+// assemble turns a manifest into an evaluable fence set, resolving each entry's geometry
+// through the compiled-geometry cache and fetching in one batch whatever the cache does not
+// already hold.
+//
+// 🔴 THE FAILURE TAXONOMY IS THE WHOLE DESIGN, AND THE TWO HALVES MUST NOT BE COLLAPSED.
+//
+//   - A failure that is ABOUT THE READ — transport, budget, version skew, or a document that
+//     did not match its content address — returns an error and installs NOTHING. The version
+//     simply does not arrive, which is what a failed archive read has always meant here, and
+//     the reconcile sweep retries it. None of those causes is per-fence: if the archive is
+//     unreachable for one body it is unreachable for all of them, and pretending otherwise
+//     would spend a retention slot on a set that is uniformly useless.
+//   - A body the archive does not HOLD is per-fence, and that fence is installed CARRYING ITS
+//     ERROR. This is the case that only exists because geometry stopped travelling with the
+//     fact, and it is the one that must never be expressed as a missing fence: an absent fence
+//     reads downstream as "no such fence", which is a rule naming something that does not
+//     exist — indistinguishable from a healthy rule that never fires. An errored fence reports
+//     that it could not be evaluated and lands on the eval-error counter. Same hole, opposite
+//     visibility, and only one of them is discoverable.
+//
+// The cache is consulted twice on purpose: once advisorily, to size the batch to what is
+// actually missing, and then again per fence through Get, which is the only door that verifies,
+// single-flights and refreshes recency. Held may be wrong by the time Get runs — an entry can
+// be evicted, or arrive — and both directions cost at most a redundant fetch.
+func (c *fenceSetClient) assemble(ctx context.Context, tenant string, manifest *dmmodel.GeoFenceSetManifest) (*geofence.FenceSet, error) {
+	if len(manifest.Fences) == 0 {
+		return geofence.EmptyFenceSet(manifest.Version), nil
+	}
+
+	unique := make([]string, 0, len(manifest.Fences))
+	seen := make(map[string]struct{}, len(manifest.Fences))
+	for _, entry := range manifest.Fences {
+		if _, dup := seen[entry.Hash]; dup {
+			continue
+		}
+		seen[entry.Hash] = struct{}{}
+		unique = append(unique, entry.Hash)
+	}
+
+	held := c.cache.Held(tenant, unique)
+	missing := make([]string, 0, len(unique))
+	for _, hash := range unique {
+		if !held[hash] {
+			missing = append(missing, hash)
+		}
+	}
+	before := c.cache.Stats()
+
+	fetch := &geometryFetch{client: c, tenant: tenant}
+	documents, err := fetch.documents(ctx, missing)
+	if err != nil {
+		if errors.Is(err, errGeometryHashMismatch) {
+			c.metrics.recordFenceGeometryHashMismatch()
+		}
+		if errors.Is(err, errArchiveSkew) {
+			c.metrics.recordFenceArchiveSkew()
+		}
+		return nil, err
+	}
+
+	fences := make([]*geofence.Fence, 0, len(manifest.Fences))
+	unresolved := 0
+	for _, entry := range manifest.Fences {
+		compiled, err := c.cache.Get(ctx, tenant, entry.Hash, func(context.Context) ([]byte, error) {
+			document, ok := documents[entry.Hash]
+			if !ok {
+				// Not a transport failure: the archive answered and did not hold this
+				// address. Returning an error here is what keeps the cache free of
+				// negatives — nothing is retained for a document that never arrived.
+				return nil, fmt.Errorf("device-management holds no geometry under %s", entry.Hash)
+			}
+			return document, nil
+		})
+		if err != nil {
+			unresolved++
+			fences = append(fences, geofence.NewErrorFence(entry.Token, fmt.Errorf(
+				"geofence %q names geometry %s, which could not be resolved: %w",
+				entry.Token, entry.Hash, err)))
+			continue
+		}
+		fences = append(fences, geofence.NewCompiledFence(entry.Token, compiled))
+	}
+
+	after := c.cache.Stats()
+	c.metrics.recordFenceGeometryCache(
+		int(after.Hits-before.Hits), int(after.Misses-before.Misses),
+		int(after.Evictions-before.Evictions), int64(after.Vertices))
+	c.metrics.recordFenceGeometryUnresolved(unresolved)
+	if unresolved > 0 {
+		log.Warn().Str("tenant", tenant).Int32("version", manifest.Version).
+			Int("unresolved", unresolved).Int("fences", len(manifest.Fences)).
+			Msg("Installing a geofence set whose geometry could not be fully resolved. The affected fences report an evaluation error rather than answering, so a rule naming one is counted rather than silently reading as outside. The next reconcile sweep retries them.")
+	}
+	return geofence.NewFenceSetFromFences(manifest.Version, fences), nil
+}
