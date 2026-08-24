@@ -1,6 +1,6 @@
 module github.com/devicechain-io/dc-migrationdiff
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/devicechain-io/dc-ai-inference v0.0.0-00010101000000-000000000000

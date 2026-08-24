@@ -43,4 +43,3 @@
 # happened to fetch.
 # ---------------------------------------------------------------------------
 
-backend/cli GO-2026-5932 # x/crypto/openpgp, reached via helm.sh/helm/v3/pkg/action's package-init chain (bootstrap/helm.go). Advisory is "unmaintained, unsafe by design" with Fixed in: N/A — there is no patched x/crypto to move to, and helm v3.21.3 is the latest v3. Reachability is init-only: dcctl never performs an OpenPGP operation, it links the code because helm registers provenance verification at init. Removed when helm drops the dependency (helm v4 is the likely route) or dcctl stops embedding helm's action package.
