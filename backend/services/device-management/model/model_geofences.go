@@ -4,6 +4,8 @@
 package model
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -314,6 +316,74 @@ type GeoFenceSetSnapshot struct {
 type GeoFenceSnapshotRef struct {
 	Token    string          `json:"token"`
 	Geometry json.RawMessage `json:"geometry"`
+}
+
+// GeoFenceGeometryBlob is one geometry document in the content-addressed archive: the
+// SHA-256 of a canonical geometry envelope, and the envelope itself. It is immutable by
+// construction — the address IS the content — and it is written once per distinct
+// document no matter how many fence-set versions go on to name it.
+//
+// 🔴 IT IS NOT A SECOND HOME FOR GeoFence.Geometry. That column is the CURRENT authored
+// geometry of a fence: mutable, and what the console and the authoring API read. This is
+// the frozen archive of what fence sets were made of, which outlives any edit. Collapsing
+// the two would mean either losing history on every edit or making the authoring read a
+// join, and the distinction is the same one GeoFenceSetVersion already draws against
+// GeoFence.
+type GeoFenceGeometryBlob struct {
+	gorm.Model
+	rdb.TenantScoped
+
+	// Hash is the lowercase hex SHA-256 of Document, as produced by
+	// GeoFenceGeometryHash. The (tenant_id, hash) unique index is declared by the
+	// migration, not by a tag here, for the reason GeoFenceSetVersion.Version records:
+	// tenant_id lives in the embedded rdb.TenantScoped and cannot carry a priority-1 tag,
+	// so a uniqueIndex tag on this field alone would build the index over HASH ONLY —
+	// making a document globally unique across tenants, so the second tenant to store the
+	// same geometry would fail. See migration_geofence_geometry_blobs.go.
+	Hash string `gorm:"not null;size:64"`
+
+	// Document is the canonical geometry envelope (kind + GeoJSON geometry), verbatim.
+	Document datatypes.JSON `gorm:"not null"`
+}
+
+// GeoFenceGeometryHash is the content address of a canonical geometry document.
+//
+// 🔴 HASH WHAT THE DATABASE HANDS BACK, NEVER WHAT THE AUTHOR WROTE. jsonb is not a byte
+// store: it parses each number and reprints it with numeric_out, so the request text and
+// the stored text are different lengths and the difference is unbounded (see
+// MaxGeoFenceGeometryBytes for the measurements). Canonicalising before storing is what
+// makes the stored form stable and predictable, but it does not make it EQUAL to the
+// request text — separator spacing alone differs. The mint path hashes the geometry it
+// just read out of geo_fences, and stores the blob from those same bytes, so an address
+// and the document it names can never disagree. Hashing authored text instead would
+// compute an address nothing is stored at, and the miss would look like a lost fence.
+func GeoFenceGeometryHash(document []byte) string {
+	sum := sha256.Sum256(document)
+	return hex.EncodeToString(sum[:])
+}
+
+// storedGeoFenceSetSnapshot is the ON-DISK shape of GeoFenceSetVersion.Snapshot: fences
+// as CONTENT REFERENCES, never as inlined geometry.
+//
+// 🔴 IT IS A SEPARATE TYPE FROM GeoFenceSetSnapshot ON PURPOSE, AND THE SEPARATION IS
+// WHAT KEEPS THE TWO FORMS FROM BLEEDING INTO EACH OTHER. GeoFenceSetSnapshot is the
+// HYDRATED form every caller sees — the GraphQL doors, the fence-set fact, the replay
+// preview — and it carries geometry because that is what containment is evaluated
+// against. This is what is written to the column, and it carries hashes because that is
+// what makes a version's stored size a function of its fence count alone. One struct
+// with both fields would be marshalled by whichever caller reached it first, and a
+// snapshot written with geometry inline is indistinguishable from a correct one until
+// the archive it should have referenced is needed and is not there.
+type storedGeoFenceSetSnapshot struct {
+	Version int32               `json:"version"`
+	Fences  []storedGeoFenceRef `json:"fences"`
+}
+
+// storedGeoFenceRef is one fence as of a version, on disk: the token a rule names it by
+// and the content address of the geometry it was frozen with.
+type storedGeoFenceRef struct {
+	Token string `json:"token"`
+	Hash  string `json:"hash"`
 }
 
 // Data required to create or update a geofence. Geometry is the GeoFenceGeometry JSON

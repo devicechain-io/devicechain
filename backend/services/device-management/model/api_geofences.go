@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -14,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // validateGeoFenceToken enforces that a geofence token is present and
@@ -225,10 +227,18 @@ func (api *Api) emitMintedGeoFenceSet(ctx context.Context, minted *GeoFenceSetVe
 	if api.GeoFenceSetPublisher == nil || minted == nil {
 		return
 	}
-	snapshot, err := parseGeoFenceSetSnapshot(minted.Snapshot)
+	stored, err := parseStoredGeoFenceSetSnapshot(minted.Snapshot)
 	if err != nil {
 		log.Error().Err(err).Int32("version", minted.Version).
 			Msg("Unable to decode a just-minted geofence set snapshot; publishing no fence-set fact")
+		return
+	}
+	// Hydration reads the archive the mint transaction just wrote, and it runs
+	// post-commit, so the documents it needs are durable before this can observe them.
+	snapshot, err := hydrateGeoFenceSetSnapshot(api.RDB.DB(ctx), stored)
+	if err != nil {
+		log.Error().Err(err).Int32("version", minted.Version).
+			Msg("Unable to hydrate a just-minted geofence set snapshot; publishing no fence-set fact")
 		return
 	}
 	api.emitGeoFenceSet(ctx, &GeoFenceSetMintedEvent{
@@ -312,7 +322,11 @@ func (api *Api) GeoFenceSetSnapshotAt(ctx context.Context, version int32) (*GeoF
 	if len(found) == 0 {
 		return nil, gorm.ErrRecordNotFound
 	}
-	return parseGeoFenceSetSnapshot(found[0].Snapshot)
+	stored, err := parseStoredGeoFenceSetSnapshot(found[0].Snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return hydrateGeoFenceSetSnapshot(api.RDB.DB(ctx), stored)
 }
 
 // CurrentGeoFenceSetSnapshot returns the frozen fence set of the tenant's CURRENT
@@ -338,7 +352,11 @@ func (api *Api) CurrentGeoFenceSetSnapshot(ctx context.Context) (*GeoFenceSetSna
 	if len(found) == 0 {
 		return &GeoFenceSetSnapshot{Version: 0, Fences: []GeoFenceSnapshotRef{}}, nil
 	}
-	snapshot, err := parseGeoFenceSetSnapshot(found[0].Snapshot)
+	stored, err := parseStoredGeoFenceSetSnapshot(found[0].Snapshot)
+	if err != nil {
+		return nil, err
+	}
+	snapshot, err := hydrateGeoFenceSetSnapshot(api.RDB.DB(ctx), stored)
 	if err != nil {
 		return nil, err
 	}
@@ -349,20 +367,138 @@ func (api *Api) CurrentGeoFenceSetSnapshot(ctx context.Context) (*GeoFenceSetSna
 	return snapshot, nil
 }
 
-// parseGeoFenceSetSnapshot decodes a stored snapshot, normalizing a missing fence list
-// to a non-nil empty slice so a version minted by the deletion of the last fence never
-// nil-derefs downstream.
-func parseGeoFenceSetSnapshot(raw datatypes.JSON) (*GeoFenceSetSnapshot, error) {
-	snapshot := &GeoFenceSetSnapshot{}
+// parseStoredGeoFenceSetSnapshot decodes a stored snapshot into the STORED form —
+// content references, no geometry. Every caller that needs evaluable fences goes on
+// through hydrateGeoFenceSetSnapshot; see storedGeoFenceSetSnapshot for why the two
+// forms are separate types.
+//
+// It does NOT normalize a missing fence list to a non-nil empty slice, and the omission
+// is deliberate rather than an oversight. hydrateGeoFenceSetSnapshot allocates the
+// hydrated slice unconditionally, so the non-nil guarantee every caller depends on has
+// exactly one owner. Normalizing here as well was dead the moment hydration existed —
+// removing it left every test green, which is precisely what says nothing was relying
+// on it.
+func parseStoredGeoFenceSetSnapshot(raw datatypes.JSON) (*storedGeoFenceSetSnapshot, error) {
+	snapshot := &storedGeoFenceSetSnapshot{}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, snapshot); err != nil {
 			return nil, fmt.Errorf("unable to parse geofence set snapshot: %w", err)
 		}
 	}
-	if snapshot.Fences == nil {
-		snapshot.Fences = []GeoFenceSnapshotRef{}
-	}
 	return snapshot, nil
+}
+
+// archiveGeoFenceGeometries stores a mint's canonical geometry documents under their
+// content addresses, writing only the ones the tenant does not already hold. The map is
+// keyed by hash, so documents repeated within one fence set are already collapsed by the
+// time it arrives.
+//
+// 🔴 THE ABSENCE CHECK IS AN EXPLICIT READ, NOT A CONFLICT CLAUSE, AND THE DIFFERENCE IS
+// NOT STYLE. The (tenant_id, hash) unique index is declared by the migration and CANNOT
+// be declared on the live model — tenant_id lives in the embedded rdb.TenantScoped, which
+// cannot carry a priority-1 tag (the same constraint GeoFenceSetVersion.Version records).
+// So the unit tests, which AutoMigrate the live models onto sqlite, build this table with
+// NO unique index at all: an implementation that leaned on ON CONFLICT DO NOTHING would
+// deduplicate correctly in production and silently duplicate every document under every
+// test, which is the exact shape of a gate that cannot see what it is gating. Reading
+// first makes the behaviour the same on both engines and testable on either.
+//
+// The index still earns its place as the CONSTRAINT — two concurrent mints can both find
+// a hash absent — which is why the insert keeps DO NOTHING as its race backstop. A
+// conflict there means the other transaction stored the identical bytes, since the
+// address IS the content, so there is nothing to reconcile and nothing to fail.
+func archiveGeoFenceGeometries(tx *gorm.DB, documents map[string][]byte) error {
+	// A round trip skipped, not a correctness guard: gorm renders an empty slice as
+	// `hash in (NULL)`, which matches nothing (verified against the pinned driver), so
+	// removing this changes only whether the statement is issued. Stated because no test
+	// can distinguish the two — nobody should write one that only appears to.
+	if len(documents) == 0 {
+		return nil
+	}
+	hashes := make([]string, 0, len(documents))
+	for hash := range documents {
+		hashes = append(hashes, hash)
+	}
+	existing := make([]GeoFenceGeometryBlob, 0, len(hashes))
+	if err := tx.Select("hash").Where("hash in ?", hashes).Find(&existing).Error; err != nil {
+		return err
+	}
+	for i := range existing {
+		delete(documents, existing[i].Hash)
+	}
+	if len(documents) == 0 {
+		return nil
+	}
+	// Sorted so a mint's inserts are ordered by content address rather than by map
+	// iteration, which keeps two runs over the same fence set from deadlocking against
+	// each other on the unique index in opposite orders.
+	missing := make([]string, 0, len(documents))
+	for hash := range documents {
+		missing = append(missing, hash)
+	}
+	sort.Strings(missing)
+	blobs := make([]GeoFenceGeometryBlob, 0, len(missing))
+	for _, hash := range missing {
+		blobs = append(blobs, GeoFenceGeometryBlob{Hash: hash, Document: datatypes.JSON(documents[hash])})
+	}
+	return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&blobs).Error
+}
+
+// hydrateGeoFenceSetSnapshot resolves a stored snapshot's content references into the
+// evaluable fence set every caller outside this file works with.
+//
+// The archive read is ONE statement for the whole set, not one per fence: a version names
+// at most MaxGeoFencesPerTenant fences, and distinct geometries are usually far fewer
+// still because an edit changes one fence and leaves the rest addressing exactly the rows
+// they already did.
+//
+// 🔴 A REFERENCE THE ARCHIVE CANNOT ANSWER IS AN ERROR, NEVER A DROPPED FENCE. Returning
+// a short fence set would be indistinguishable downstream from a tenant who really has
+// that many fences — containment would answer "outside" for a device that is inside, and
+// report a healthy rule that never fires. This is the same reason the fence-set fact
+// carries FencesOmitted as a field rather than as an empty list.
+func hydrateGeoFenceSetSnapshot(tx *gorm.DB, stored *storedGeoFenceSetSnapshot) (*GeoFenceSetSnapshot, error) {
+	hydrated := &GeoFenceSetSnapshot{
+		Version: stored.Version,
+		Fences:  make([]GeoFenceSnapshotRef, 0, len(stored.Fences)),
+	}
+	// As in archiveGeoFenceGeometries, this skips a round trip rather than guarding
+	// correctness — an empty IN matches nothing. The allocation above is what actually
+	// makes the returned fence list non-nil, on every path.
+	if len(stored.Fences) == 0 {
+		return hydrated, nil
+	}
+	// Deduplicated because a fence set may name the same geometry from several fences,
+	// which is the common case after a bulk import. Correctness does not depend on it —
+	// a repeated value in an IN clause selects the same rows — so this is a narrower
+	// read, not a different answer.
+	hashes := make([]string, 0, len(stored.Fences))
+	seen := make(map[string]struct{}, len(stored.Fences))
+	for _, ref := range stored.Fences {
+		if _, dup := seen[ref.Hash]; dup {
+			continue
+		}
+		seen[ref.Hash] = struct{}{}
+		hashes = append(hashes, ref.Hash)
+	}
+	blobs := make([]GeoFenceGeometryBlob, 0, len(hashes))
+	if err := tx.Where("hash in ?", hashes).Find(&blobs).Error; err != nil {
+		return nil, err
+	}
+	documents := make(map[string]json.RawMessage, len(blobs))
+	for i := range blobs {
+		documents[blobs[i].Hash] = json.RawMessage(blobs[i].Document)
+	}
+	for _, ref := range stored.Fences {
+		document, ok := documents[ref.Hash]
+		if !ok {
+			return nil, fmt.Errorf(
+				"geofence set version %d names geometry %s for fence %q, which is not in the archive",
+				stored.Version, ref.Hash, ref.Token)
+		}
+		hydrated.Fences = append(hydrated.Fences, GeoFenceSnapshotRef{Token: ref.Token, Geometry: document})
+	}
+	return hydrated, nil
 }
 
 // deviceTypeIdsForTenant returns every device type id of the tenant in context — the
@@ -397,14 +533,27 @@ func (api *Api) mintGeoFenceSetVersion(tx *gorm.DB, now time.Time) (*GeoFenceSet
 	if err := tx.Order("token asc").Find(&fences).Error; err != nil {
 		return nil, err
 	}
-	refs := make([]GeoFenceSnapshotRef, 0, len(fences))
+	// The snapshot records CONTENT ADDRESSES, and the documents they name are archived
+	// here in the same transaction as the version row that references them. Order
+	// matters and it is not stylistic: a version whose snapshot names a document the
+	// archive does not hold is a version that cannot be hydrated, and hydration failure
+	// is loud but unrecoverable. Writing the blobs first means the only way to observe a
+	// dangling reference is a transaction that did not commit at all.
+	refs := make([]storedGeoFenceRef, 0, len(fences))
+	documents := make(map[string][]byte, len(fences))
 	for i := range fences {
-		refs = append(refs, GeoFenceSnapshotRef{
-			Token:    fences[i].Token,
-			Geometry: json.RawMessage(fences[i].Geometry),
-		})
+		// Hash what was READ, and archive those same bytes — never the authored text.
+		// See GeoFenceGeometryHash for why the two differ and why the difference is
+		// unbounded.
+		document := []byte(fences[i].Geometry)
+		hash := GeoFenceGeometryHash(document)
+		refs = append(refs, storedGeoFenceRef{Token: fences[i].Token, Hash: hash})
+		documents[hash] = document
 	}
-	encoded, err := json.Marshal(&GeoFenceSetSnapshot{Version: next, Fences: refs})
+	if err := archiveGeoFenceGeometries(tx, documents); err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(&storedGeoFenceSetSnapshot{Version: next, Fences: refs})
 	if err != nil {
 		return nil, err
 	}

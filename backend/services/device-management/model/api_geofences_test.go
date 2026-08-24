@@ -29,7 +29,7 @@ func newGeoFenceTestApi(t *testing.T) *Api {
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
-	if err := db.AutoMigrate(&GeoFence{}, &GeoFenceSetVersion{}, &DeviceType{}, &DeviceProfile{}); err != nil {
+	if err := db.AutoMigrate(&GeoFence{}, &GeoFenceSetVersion{}, &GeoFenceGeometryBlob{}, &DeviceType{}, &DeviceProfile{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return NewApi(&rdb.RdbManager{Database: db})
