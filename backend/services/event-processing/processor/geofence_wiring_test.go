@@ -52,7 +52,7 @@ func newFenceDmApi(t *testing.T) *dmmodel.Api {
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
-	if err := db.AutoMigrate(&dmmodel.GeoFence{}, &dmmodel.GeoFenceSetVersion{}); err != nil {
+	if err := db.AutoMigrate(&dmmodel.GeoFence{}, &dmmodel.GeoFenceSetVersion{}, &dmmodel.GeoFenceGeometryBlob{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return dmmodel.NewApi(&rdb.RdbManager{Database: db})
