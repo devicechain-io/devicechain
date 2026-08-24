@@ -12,230 +12,107 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// factHeadroom is the slack left between a fence-set fact's marshalled payload and the
-// broker's per-message ceiling.
-//
-// The ceiling the deployment configures (infrastructure.nats.streamMaxMsgSize) is compared
-// by the broker against a message the broker measures, which is not only the bytes handed
-// to WriteMessages: the subject and any headers the writer attaches ride along, and NATS
-// applies its own max_payload to the same message. Sizing against the raw payload alone
-// would put the switch-over point a few hundred bytes on the wrong side of the wall — and
-// the failure mode of being slightly wrong is the one this whole file exists to remove (a
-// refused publish, logged and swallowed). 4 KiB is far more than any envelope this stream
-// carries and costs nothing: it moves the pointer-fact threshold by 0.4% of a 1 MiB
-// ceiling.
-const factHeadroom = 4 << 10
-
-// brokerMaxPayload reports the broker's negotiated max_payload, or 0 when it is not known.
-//
-// 🔴 IT IS A FUNCTION, READ AT PUBLISH TIME, AND THAT IS NOT STYLE. max_payload is
-// CONNECTION-DERIVED state: nats.Connect returns a usable conn before it has connected
-// (RetryOnFailedConnect is on so a service starting ahead of the broker does not crashloop),
-// and nats.go answers the zero value for every connection-derived field until the status is
-// CONNECTED. Sampling it at wiring time — which is inside the NATS manager's own initialize —
-// would therefore read 0 on exactly the startup ordering the platform is built for, and 0
-// here means "unknown", which disables the clamp. This is the third time that trap has been
-// documented in this codebase; reading it live is the fix that holds.
-type brokerMaxPayload func() int64
-
 // GeoFenceSetWriter is the concrete, NATS-backed implementation of
-// model.GeoFenceSetPublisher (ADR-078): it marshals a newly-minted fence set and publishes
-// it to the geofence-set subject. Like the roster, detection-rules, device-attribute and
-// entity-deleted writers it lives in the processor layer (which owns the messaging writer)
-// and is injected into the shared *Api at wiring time, keeping the model free of a
-// messaging dependency.
+// model.GeoFenceSetPublisher (ADR-078): it marshals a newly-minted fence set's MANIFEST and
+// publishes it to the geofence-set-manifest subject. Like the roster, detection-rules,
+// device-attribute and entity-deleted writers it lives in the processor layer (which owns the
+// messaging writer) and is injected into the shared *Api at wiring time, keeping the model
+// free of a messaging dependency.
 //
-// Publishing is best-effort: the tenant-scoped writer derives the subject from the tenant
-// in the caller's context (the fence write runs under the request's tenant), so no tenant
-// plumbing is needed here — and so a fence set can never be published onto another
-// tenant's subject by a bug in this file. A marshal or publish failure is logged and
+// Publishing is best-effort: the tenant-scoped writer derives the subject from the tenant in
+// the caller's context (the fence write runs under the request's tenant), so no tenant
+// plumbing is needed here — and so a fence set can never be published onto another tenant's
+// subject by a bug in this file. A marshal or publish failure is logged, counted and
 // swallowed; it must never fail or roll back the authoring action, which is the source of
 // truth.
 //
-// 🔴 "BEST-EFFORT" USED TO INCLUDE A CASE THAT WAS NOT AN ACCIDENT AND WAS NOT RARE. A
-// tenant at the documented authoring ceiling — model.MaxGeoFencesPerTenant fences of
-// model.MaxGeoFenceVertices positions each — marshals to more than the 1 MiB per-message
-// ceiling, so every one of its fence edits produced a publish the broker refused, a log
-// line nobody was reading, and a mutation that returned 200. Downstream, containment
-// reported a counted eval error for that tenant on every location event, indefinitely.
-// That is not a wire hiccup; it is a documented configuration failing by construction.
+// 🔴 THIS FILE USED TO BE MOSTLY SIZE MACHINERY, AND UNDERSTANDING WHAT DELETED IT MATTERS
+// MORE THAN THE CODE THAT REMAINS. The fact it published carried the whole frozen fence set,
+// so a tenant at the documented authoring ceiling — model.MaxGeoFencesPerTenant fences of
+// model.MaxGeoFenceVertices positions — marshalled to more than the broker's per-message
+// limit, and every one of that tenant's fence edits produced a publish the broker refused, a
+// log line nobody was reading, and a mutation that returned 200. Downstream, containment
+// reported a counted eval error for that tenant on every location event, indefinitely. The
+// answer at the time was to publish a POINTER fact instead when the payload was too big,
+// which needed a headroom subtraction, a floor under it, and a live read of the broker's own
+// max_payload because the chart can only set half the wall.
 //
-// And it is not a corner of that configuration either. The set is over the ceiling at
-// every coordinate precision anyone would use — ~980 KB of stored GeoJSON at five decimal
-// places, which is already about a metre — so "at the ceiling" here means the ordinary
-// case for a tenant who filled the limits, not an abusive one. See
-// model.MaxGeoFenceGeometryBytes for the measurements and for why no per-fence bound can
-// make the aggregate fit while coordinates are text.
+// None of that is reachable any more, because the fact no longer carries geometry. A manifest
+// is a version, a timestamp, and a token plus a 64-character content address per fence: at
+// the fence ceiling it measures model.MaxGeoFenceSetManifestBytes(), a forty-eighth of a
+// 1 MiB message, and it stays inside that ceiling at roughly 4,876 fences. There is no fence
+// set whose SIZE can prevent its announcement, so there is no second form for the writer to
+// choose between and nothing for it to measure.
 //
-// maxPayload is what closes it. Over the ceiling the writer publishes the POINTER form of
-// the fact (model.GeoFenceSetMintedEvent.FencesOmitted) — version and mintedAt, no fences —
-// which the consumer resolves through the frozen archive the same way a replay of last
-// week's events already does.
-//
-// 🔴 THE POINTER FORM GOES TO ITS OWN SUBJECT, AND THAT IS AN UPGRADE-SAFETY DECISION, NOT
-// A ROUTING ONE. The flag that distinguishes it is a FIELD, and a field is invisible to a
-// decoder that predates it — json.Unmarshal ignores unknown keys, so an event-processing
-// build from before this change decodes a pointer fact as a fence set of ZERO fences and
-// installs it, answering "outside" for a device that is inside with nothing logged and
-// nothing counted. The two services roll as independent Deployments, so that window opens
-// on every upgrade and on any rollback of one of them. Sending pointers where an old
-// consumer is not listening makes its behaviour exactly what it was before this existed:
-// no fact, version missing, a COUNTED eval error, repaired by the reconcile sweep.
-//
-// Be precise about what that makes total, because it is not the publish path. A publish can
-// still fail — WriteMessages returning an error is still logged and swallowed here, and
-// emitMintedGeoFenceSet still returns silently when a just-minted snapshot will not decode —
-// and those remain best-effort by design, because the authoring action has already committed
-// and must not be rolled back by a wire problem. What is now total is COVERAGE OF THE SIZE
-// CEILING: there is no longer a fence set whose size alone means no fact can be sent. The
-// remaining holes are transport faults, which are transient and which the reconcile sweep
-// repairs; the size hole was permanent and the sweep could not repair it.
+// 🔴 WHAT SURVIVES IS THE COUNTER, AND IT IS NOT VESTIGIAL. "No fence set can be too large"
+// is a statement about fence sets, not about deployments: infrastructure.nats.streamMaxMsgSize
+// is chart configuration, values.schema.json states no minimum, and an operator who sets it
+// to 2048 gets a broker that refuses every manifest. Under the old design that configuration
+// degraded correctly (everything became a pointer fact). Under this one it stops fence
+// announcements entirely, and the only thing standing between that and silence is a refused
+// publish being COUNTED rather than merely logged. A floor on the config would refuse the
+// deployment instead, which is a harsher answer to a degradation than a degradation deserves.
 type GeoFenceSetWriter struct {
 	writer messaging.MessageWriter
-	// pointerWriter publishes the POINTER form, on the separate geofence-set-pointer
-	// subject. Nil disables the pointer form entirely: an oversized set then falls back to
-	// the pre-existing behaviour of a publish the broker refuses, which is loud and
-	// recoverable, rather than to a whole fact on the ordinary subject that an old consumer
-	// would install as empty.
-	pointerWriter messaging.MessageWriter
-	// maxPayload is the CONFIGURED per-stream ceiling (infrastructure.nats.streamMaxMsgSize)
-	// as given, before headroom. Non-positive means no ceiling was stated. The value actually
-	// applied is effectiveCeiling, which also consults the broker.
+	// failures counts manifests this writer could not put on the wire, for any reason —
+	// a marshal error, a broker refusal, a transport fault. Nil-safe.
 	//
-	// 🔴 THE HEADROOM SUBTRACTION AND ITS FLOOR LIVE IN effectiveCeiling, NOT HERE, AND THE
-	// FLOOR IS LOAD-BEARING. A configured ceiling at or below factHeadroom subtracts to zero
-	// or less, and zero is the "no ceiling stated" value — so an operator setting
-	// streamMaxMsgSize to 2048 would have turned the whole protection off and silently
-	// restored the pre-fix defect. "Nothing was stated" and "what was stated is tiny" must not
-	// share an encoding: the first means do not check, the second means nothing fits.
-	maxPayload int
-	// omitted counts fence-set facts published in the pointer form. Nil-safe.
-	omitted prometheus.Counter
-	// maxPayload reports the broker's negotiated max_payload, live. Nil or zero means
-	// unknown, and the configured stream ceiling is used alone.
-	//
-	// 🔴 IT EXISTS BECAUSE THE CONFIGURED CEILING IS ONLY HALF THE WALL, AND THE OTHER HALF
-	// HAS NO CHART KNOB. JetStream's per-stream MaxMsgSize and the server's account-wide
-	// max_payload are enforced independently, and values.yaml invites an operator to "raise
-	// them (and the broker max_payload / PV) for a high-throughput deploy" — an instruction
-	// with two halves, only one of which this chart can apply. Raising streamMaxMsgSize to
-	// 4 MiB and leaving max_payload at its 1 MiB default makes this writer publish a 2 MiB
-	// fact at a connection that refuses it: logged, swallowed, containment dead. That is the
-	// original defect, reached from a documented configuration change in the opposite
-	// direction from the one the floor guards.
-	//
-	// Clamping to the smaller of the two is fail-closed in the right direction: the cost of
-	// clamping too eagerly is a pointer fact that did not need to be one, which still
-	// resolves correctly and costs one archive read; the cost of not clamping is a tenant
-	// whose geofencing stops.
-	maxPayloadFn brokerMaxPayload
+	// It is deliberately NOT a size metric. The interesting question an operator has is
+	// "are fence edits reaching the engine?", and every way the answer can be no belongs
+	// on one counter; splitting it by cause would leave the causes nobody enumerated
+	// uncounted, which is how the original defect stayed invisible.
+	failures prometheus.Counter
 }
 
-// NewGeoFenceSetWriter builds a fence-set publisher over the given writer.
+// NewGeoFenceSetWriter builds a fence-set manifest publisher over the given writer.
 //
-// pointerWriter is the geofence-set-pointer subject's writer; maxMsgSize is the broker's
-// configured per-message ceiling (infrastructure.nats.streamMaxMsgSize), where a
-// non-positive value means no ceiling was stated and disables the size check. omitted counts
-// pointer facts and may be nil.
+// maxMsgSize is the broker's configured per-message ceiling
+// (infrastructure.nats.streamMaxMsgSize), where a non-positive value means no ceiling was
+// stated. It is used for ONE thing — warning, at startup, that the deployment has configured
+// a ceiling too small for a full manifest — and is deliberately not retained: there is no
+// runtime decision left for it to inform.
 //
-// 🔴 A STATED CEILING SMALLER THAN factHeadroom FAILS CLOSED, NOT OPEN. ApplyDefaults coerces
-// only a non-positive streamMaxMsgSize, and values.schema.json sets no minimum, so a chart
-// override of 2048 is an accepted configuration. Subtracting the headroom from it and then
-// treating the result as "no ceiling" would publish every oversized fact straight at a broker
-// that refuses it — the exact defect this writer exists to remove, reachable by a value
-// nobody would think of as dangerous. The floor of 1 makes that configuration send POINTERS
-// instead, which is the correct reading of it: under a ceiling that small, nothing fits.
-func NewGeoFenceSetWriter(writer, pointerWriter messaging.MessageWriter, maxMsgSize int32,
-	omitted prometheus.Counter, maxPayloadFn brokerMaxPayload) *GeoFenceSetWriter {
-	return &GeoFenceSetWriter{
-		writer:        writer,
-		pointerWriter: pointerWriter,
-		maxPayload:    int(maxMsgSize),
-		omitted:       omitted,
-		maxPayloadFn:  maxPayloadFn,
+// 🔴 THE WARNING CONSULTS THE CONFIGURED CEILING ALONE, AND CANNOT CONSULT THE BROKER'S. The
+// server's account-wide max_payload is a second, independent wall that this chart cannot set,
+// but it is CONNECTION-DERIVED state: nats.Connect returns a usable conn before it has
+// connected (RetryOnFailedConnect is on so a service starting ahead of the broker does not
+// crashloop), and nats.go answers the zero value for every connection-derived field until the
+// status is CONNECTED. This constructor runs inside the NATS manager's own initialize, so
+// reading max_payload here would read 0 on exactly the startup ordering the platform is built
+// for. That trap has been documented three times in this codebase; the honest response is to
+// warn on what is knowable now and let the counter above report what is not.
+func NewGeoFenceSetWriter(writer messaging.MessageWriter, maxMsgSize int32,
+	failures prometheus.Counter) *GeoFenceSetWriter {
+	if worst := model.MaxGeoFenceSetManifestBytes(); maxMsgSize > 0 && int(maxMsgSize) < worst {
+		log.Warn().Int32("streamMaxMsgSize", maxMsgSize).Int("worstCaseManifestBytes", worst).
+			Msg("The configured per-message ceiling is smaller than a full geofence-set manifest. A tenant near the fence limit will have its fence edits refused by the broker, and its containment will lag until a reconcile sweep. Raise infrastructure.nats.streamMaxMsgSize.")
 	}
+	return &GeoFenceSetWriter{writer: writer, failures: failures}
 }
 
-// effectiveCeiling resolves the largest fact this writer will send whole: the SMALLER of the
-// configured per-stream ceiling and the broker's live max_payload, less the envelope headroom,
-// floored at 1. Zero means no ceiling was stated at all and the check is off.
-func (w *GeoFenceSetWriter) effectiveCeiling() int {
-	limit := w.maxPayload
-	if w.maxPayloadFn != nil {
-		if live := w.maxPayloadFn(); live > 0 && (limit <= 0 || int(live) < limit) {
-			limit = int(live)
-		}
-	}
-	if limit <= 0 {
-		return 0 // nothing stated; behave as it did before any of this existed
-	}
-	limit -= factHeadroom
-	if limit < 1 {
-		limit = 1
-	}
-	return limit
-}
-
-// PublishGeoFenceSet marshals and publishes one fence-set fact. It never returns an error
-// (the interface is fire-and-forget); failures are logged.
-//
-// A set whose marshalled fact exceeds the broker's ceiling is published as a POINTER fact
-// instead of being dropped. Note the ORDER: the full fact is marshalled first and its real
-// size measured, rather than the fence count or vertex total being used as a proxy. The
-// thing the broker refuses is bytes, and the geometry documents are author-written JSON of
-// no predictable size, so anything short of marshalling is a guess that is wrong in both
-// directions.
-func (w *GeoFenceSetWriter) PublishGeoFenceSet(ctx context.Context, event *model.GeoFenceSetMintedEvent) {
-	bytes, err := model.MarshalGeoFenceSetMintedEvent(event)
+// PublishGeoFenceSetManifest marshals and publishes one fence-set manifest. It never returns
+// an error (the interface is fire-and-forget); failures are logged and counted.
+func (w *GeoFenceSetWriter) PublishGeoFenceSetManifest(ctx context.Context, manifest *model.GeoFenceSetManifest) {
+	encoded, err := model.MarshalGeoFenceSetManifest(manifest)
 	if err != nil {
-		log.Error().Err(err).Int32("version", event.Version).
-			Msg("Unable to marshal geofence set event")
+		log.Error().Err(err).Int32("version", manifest.Version).
+			Msg("Unable to marshal geofence set manifest; publishing nothing. Containment for this tenant holds its previous fence set until a reconcile sweep.")
+		w.countFailure()
 		return
 	}
-	pointerFact := false
-	ceiling := w.effectiveCeiling()
-	if ceiling > 0 && len(bytes) > ceiling {
-		if w.pointerWriter == nil {
-			// No pointer subject wired, so there is nowhere safe to send this. Publishing
-			// the whole fact anyway would hand the broker a message it refuses; publishing
-			// the pointer on the ORDINARY subject would hand an old consumer an empty
-			// fence set. Both are worse than the loud failure below, which the reconcile
-			// sweep already repairs.
-			log.Error().Int32("version", event.Version).Int("bytes", len(bytes)).
-				Msg("Geofence set is too large for one broker message and no pointer subject is wired; publishing nothing. Containment for this tenant reports unresolvable at this version until the next reconcile sweep.")
-			return
-		}
-		pointer := &model.GeoFenceSetMintedEvent{
-			Version:       event.Version,
-			Fences:        []model.GeoFenceSnapshotRef{},
-			MintedAt:      event.MintedAt,
-			FencesOmitted: true,
-		}
-		bytes, err = model.MarshalGeoFenceSetMintedEvent(pointer)
-		if err != nil {
-			log.Error().Err(err).Int32("version", event.Version).
-				Msg("Unable to marshal geofence set pointer event")
-			return
-		}
-		pointerFact = true
-		log.Warn().Int32("version", event.Version).Int("fences", len(event.Fences)).
-			Int("maxPayloadBytes", ceiling).
-			Msg("Geofence set is too large for one broker message; publishing a pointer fact instead. Consumers resolve its fences from the frozen archive, which costs one cross-service read per fence edit for this tenant.")
+	if err := w.writer.WriteMessages(ctx, messaging.Message{Value: encoded}); err != nil {
+		log.Error().Err(err).Int32("version", manifest.Version).Int("bytes", len(encoded)).
+			Int("fences", len(manifest.Fences)).
+			Msg("Unable to publish geofence set manifest. Containment for this tenant holds its previous fence set until a reconcile sweep repairs it.")
+		w.countFailure()
 	}
-	// The pointer form goes to its own subject; the whole fact keeps the original one.
-	out := w.writer
-	if pointerFact {
-		out = w.pointerWriter
-	}
-	if err := out.WriteMessages(ctx, messaging.Message{Value: bytes}); err != nil {
-		log.Error().Err(err).Int32("version", event.Version).Bool("pointer", pointerFact).
-			Msg("Unable to publish geofence set event")
-		return
-	}
-	// Counted AFTER the write, not before it. The metric's help string says these facts were
-	// PUBLISHED, and an increment taken ahead of a failing write would make that sentence
-	// false in exactly the situation an operator is reading the number to understand.
-	if pointerFact && w.omitted != nil {
-		w.omitted.Inc()
+}
+
+// countFailure increments the failure counter when one is wired. Counted only on the paths
+// that actually failed, never optimistically ahead of a write, so the number means what its
+// help string says it means.
+func (w *GeoFenceSetWriter) countFailure() {
+	if w.failures != nil {
+		w.failures.Inc()
 	}
 }

@@ -65,9 +65,10 @@ type Api struct {
 	// (at-most-once), like the other fact publishers.
 	DeviceAttributePublisher DeviceAttributePublisher
 
-	// GeoFenceSetPublisher emits the frozen fence set of each newly-minted fence-set
-	// version (ADR-078) so event-processing's live containment projection tracks fence
-	// edits without reading back into this service on the hot path. Injected at wiring
+	// GeoFenceSetPublisher emits the MANIFEST of each newly-minted fence-set version
+	// (ADR-078) — which fences it holds and the content address of each one's geometry —
+	// so event-processing's live containment projection tracks fence edits without
+	// re-reading the whole set on every edit. Injected at wiring
 	// time (the concrete publisher owns a NATS writer) and may be nil — in tests, or
 	// before wiring — disabling emission. Emission is post-commit and best-effort
 	// (at-most-once), like the other fact publishers.
@@ -172,14 +173,20 @@ func (api *Api) emitDeviceAttribute(ctx context.Context, event *DeviceAttributeE
 	}
 }
 
-// emitGeoFenceSet publishes a fence-set fact when a publisher is wired, and is a no-op
+// emitGeoFenceSet publishes a fence-set manifest when a publisher is wired, and is a no-op
 // otherwise (ADR-078). Like the other emit helpers it is best-effort and must be called
 // AFTER the minting transaction has committed: the geofence create/update/delete paths
 // emit only once their transaction returns nil, so the fact never announces a fence set
 // that was rolled back.
-func (api *Api) emitGeoFenceSet(ctx context.Context, event *GeoFenceSetMintedEvent) {
+//
+// Post-commit matters more than it used to. A manifest names geometry the consumer will go
+// and FETCH, so the archive rows the mint wrote have to be durable before anyone can act on
+// the announcement — emitting inside the transaction would publish addresses that resolve to
+// nothing for as long as the commit takes, and the consumer would record every one of them
+// as an unresolvable fence.
+func (api *Api) emitGeoFenceSet(ctx context.Context, manifest *GeoFenceSetManifest) {
 	if api.GeoFenceSetPublisher != nil {
-		api.GeoFenceSetPublisher.PublishGeoFenceSet(ctx, event)
+		api.GeoFenceSetPublisher.PublishGeoFenceSetManifest(ctx, manifest)
 	}
 }
 

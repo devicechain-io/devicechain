@@ -210,14 +210,21 @@ func (api *Api) DeleteGeoFence(ctx context.Context, token string) (bool, error) 
 }
 
 // emitMintedGeoFenceSet decodes a just-committed fence-set version's frozen snapshot and
-// publishes it as a fact (ADR-078). It is the ONE place the three authoring paths funnel
-// through, so a fourth mutation cannot mint a version and forget to announce it.
+// publishes its MANIFEST as a fact (ADR-078). It is the ONE place the three authoring paths
+// funnel through, so a fourth mutation cannot mint a version and forget to announce it.
 //
 // It reads the fences back out of the SNAPSHOT COLUMN rather than re-querying the live
 // fences, and that is the whole point: the snapshot is what a replay will later resolve
 // this version to, so the fact and the archive are the same bytes by construction. Re-
 // reading the live table would look identical in every test and would silently publish a
 // LATER fence set under this version's number the moment two edits interleave.
+//
+// 🔴 IT NO LONGER HYDRATES, AND THE DELETED READ IS THE POINT OF THE WHOLE CHANGE. The
+// stored snapshot ALREADY names geometry by content address; hydration existed only to
+// expand those addresses into documents for a fact that had to carry them. A manifest
+// carries the addresses, so announcing a fence edit now costs one row read instead of one
+// row read plus an archive read of every geometry in the set — and the announcement's size
+// stops depending on what the fences contain.
 //
 // A nil version (nothing was minted) or an undecodable snapshot publishes nothing: the
 // projection then simply does not hold this version, which its own miss path reports as a
@@ -233,19 +240,131 @@ func (api *Api) emitMintedGeoFenceSet(ctx context.Context, minted *GeoFenceSetVe
 			Msg("Unable to decode a just-minted geofence set snapshot; publishing no fence-set fact")
 		return
 	}
-	// Hydration reads the archive the mint transaction just wrote, and it runs
-	// post-commit, so the documents it needs are durable before this can observe them.
-	snapshot, err := hydrateGeoFenceSetSnapshot(api.RDB.DB(ctx), stored)
-	if err != nil {
-		log.Error().Err(err).Int32("version", minted.Version).
-			Msg("Unable to hydrate a just-minted geofence set snapshot; publishing no fence-set fact")
-		return
+	api.emitGeoFenceSet(ctx, manifestFromStored(minted.Version, minted.MintedAt, stored))
+}
+
+// manifestFromStored projects a stored snapshot onto the manifest every seam hands out. The
+// version and timestamp come from the ROW rather than from the document, because the row's
+// columns are what any ordering or lookup selected on; the two are written together and
+// agree, but only one of them is the thing that was queried.
+//
+// The fence slice is allocated unconditionally, so a manifest's Fences is never nil on any
+// path — the same single-owner guarantee hydrateGeoFenceSetSnapshot provides for the
+// hydrated form, and the reason parseStoredGeoFenceSetSnapshot does not normalize it.
+func manifestFromStored(version int32, mintedAt time.Time, stored *storedGeoFenceSetSnapshot) *GeoFenceSetManifest {
+	manifest := &GeoFenceSetManifest{
+		Version:  version,
+		MintedAt: mintedAt,
+		Fences:   make([]GeoFenceManifestEntry, 0, len(stored.Fences)),
 	}
-	api.emitGeoFenceSet(ctx, &GeoFenceSetMintedEvent{
-		Version:  minted.Version,
-		Fences:   snapshot.Fences,
-		MintedAt: minted.MintedAt,
-	})
+	for _, ref := range stored.Fences {
+		manifest.Fences = append(manifest.Fences, GeoFenceManifestEntry{Token: ref.Token, Hash: ref.Hash})
+	}
+	return manifest
+}
+
+// GeoFenceSetManifestAt returns the manifest of one fence-set version: which fences it held
+// and the content address of each one's geometry.
+//
+// It is the read half of manifest delivery — how a holder of a version number learns what to
+// resolve, whether it missed the fact, is replaying last week, or is starting cold. Unlike
+// GeoFenceSetSnapshotAt it does NOT touch the geometry archive, so its cost and its response
+// size are functions of the fence count alone.
+//
+// Version 0 (no fence set ever existed) yields an empty manifest rather than an error; an
+// unknown non-zero version is gorm.ErrRecordNotFound, for the same reason
+// GeoFenceSetSnapshotAt gives — a stamp naming a version that is not on record means the
+// history was truncated, and answering "empty" would read as "no fences" rather than
+// "cannot know".
+func (api *Api) GeoFenceSetManifestAt(ctx context.Context, version int32) (*GeoFenceSetManifest, error) {
+	if version <= 0 {
+		return &GeoFenceSetManifest{Version: 0, Fences: []GeoFenceManifestEntry{}}, nil
+	}
+	found := make([]GeoFenceSetVersion, 0, 1)
+	if err := api.RDB.DB(ctx).Where("version = ?", version).Limit(1).Find(&found).Error; err != nil {
+		return nil, err
+	}
+	if len(found) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	stored, err := parseStoredGeoFenceSetSnapshot(found[0].Snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return manifestFromStored(found[0].Version, found[0].MintedAt, stored), nil
+}
+
+// CurrentGeoFenceSetManifest returns the manifest of the tenant's CURRENT fence-set version
+// — the version a location event resolved right now would be stamped with, together with the
+// fences that version froze.
+//
+// It exists for event-processing's startup reconcile and its periodic sweep, which have to
+// re-seed a live containment cache that survives no restart. As with
+// CurrentGeoFenceSetSnapshot, reading the version and then the manifest separately would be
+// two statements about a moving target: a fence edit landing between them yields a fence set
+// filed under a number that is not the one the caller was told is current. One read of one
+// row cannot disagree with itself.
+//
+// A tenant that has never had a fence yields version 0 with an empty fence list, matching the
+// stamp such a tenant's events carry.
+func (api *Api) CurrentGeoFenceSetManifest(ctx context.Context) (*GeoFenceSetManifest, error) {
+	found := make([]GeoFenceSetVersion, 0, 1)
+	if err := api.RDB.DB(ctx).Order("version desc").Limit(1).Find(&found).Error; err != nil {
+		return nil, err
+	}
+	if len(found) == 0 {
+		return &GeoFenceSetManifest{Version: 0, Fences: []GeoFenceManifestEntry{}}, nil
+	}
+	stored, err := parseStoredGeoFenceSetSnapshot(found[0].Snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return manifestFromStored(found[0].Version, found[0].MintedAt, stored), nil
+}
+
+// GeoFenceGeometryDocuments returns the archived geometry documents stored under the given
+// content addresses — the other half of manifest delivery, and the door a holder of a
+// manifest resolves its entries through.
+//
+// 🔴 AN ADDRESS THE TENANT DOES NOT HOLD IS ABSENT FROM THE RESULT, NOT AN ERROR, AND THAT
+// IS THE OPPOSITE OF WHAT hydrateGeoFenceSetSnapshot DOES WITH THE SAME MISS. The difference
+// is who asked. A dangling reference INSIDE a stored snapshot is corruption — this service
+// wrote both halves and one of them is missing — so hydration refuses rather than hand back
+// a short fence set. Here the hashes are caller-supplied, so "which of these do you hold?"
+// is an ordinary question and the set of answers is the answer. Incompleteness is the
+// CALLER's to interpret, and the caller that matters interprets it per fence: a manifest
+// entry whose body did not come back becomes a fence carrying an error, never a fence that
+// silently is not there.
+//
+// The result is ordered by hash so a caller comparing two responses, or a test comparing a
+// response to a fixture, is not comparing against whatever order the storage engine chose.
+func (api *Api) GeoFenceGeometryDocuments(ctx context.Context, hashes []string) ([]GeoFenceGeometryDocument, error) {
+	if len(hashes) > MaxGeoFenceGeometryHashesPerRequest {
+		return nil, fmt.Errorf("cannot read %d geofence geometry documents in one request; the limit is %d",
+			len(hashes), MaxGeoFenceGeometryHashesPerRequest)
+	}
+	documents := make([]GeoFenceGeometryDocument, 0, len(hashes))
+	// As in archiveGeoFenceGeometries, this skips a round trip rather than guarding
+	// correctness — gorm renders an empty slice as `hash in (NULL)`, which matches nothing.
+	// It is stated because nobody can see that from the call site, and because the sibling
+	// primary-key form behaves OPPOSITELY on the same input (see rdb.FindByIds).
+	if len(hashes) == 0 {
+		return documents, nil
+	}
+	blobs := make([]GeoFenceGeometryBlob, 0, len(hashes))
+	if err := api.RDB.DB(ctx).Where("hash in ?", hashes).Order("hash").Find(&blobs).Error; err != nil {
+		return nil, err
+	}
+	for i := range blobs {
+		documents = append(documents, GeoFenceGeometryDocument{
+			Hash: blobs[i].Hash,
+			// Handed on verbatim. The address is the SHA-256 of exactly these bytes, and
+			// the caller re-derives it to check what it received, so anything that re-
+			// encodes the document here breaks every caller's verification at once.
+			Document: json.RawMessage(blobs[i].Document),
+		})
+	}
+	return documents, nil
 }
 
 // Get geofences by id.

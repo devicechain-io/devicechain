@@ -212,24 +212,53 @@ const (
 	// has; the aggregate is handled by PAGING, and always will be while coordinates are
 	// text.
 	//
-	// What this bound is for is narrower and still necessary: keeping a SINGLE page
-	// satisfiable. A reader that halves its page size on a refusal terminates only if one
-	// fence fits on its own — and without this, one does not have to.
+	// What this bound is for is narrower and still necessary: keeping a SINGLE unit of
+	// delivery satisfiable. Whatever carries fences — a page of a snapshot read, a batch of
+	// geometry documents — terminates on a shrinking retry only if ONE fence fits on its
+	// own, and without this, one does not have to.
 	//
 	// 32 KiB is chosen from measurement: a fence at the vertex ceiling written at nine
 	// decimal places (about a millimetre at the equator, more precision than any real
 	// editor emits) stores at ~15 KB, so this is ~2.2x the largest realistic authored
 	// fence while refusing the pathological documents by orders of magnitude.
 	//
-	// THE ROOT CAUSE, and the reason all of this machinery is expected to be temporary: a
-	// coordinate is JSON TEXT of unbounded length, so a fence's byte size is not a function
-	// of its position count at all. Storing coordinates as int32 degrees x 10^7 — 8 bytes
-	// per position, the convention OSM and Android already use — puts a ceiling fence at
-	// ~4.1 KB and the whole ceiling set at ~411 KB, which fits in one message and one
-	// response. That is a storage-format, wire and cross-service-codec change scheduled for
-	// v0.13.0, not a release-blocker fix; when it lands, the pointer fact and the paged read
-	// can both be deleted rather than maintained.
+	// 🔴 THE AGGREGATE PROBLEM THIS COMMENT USED TO DESCRIBE HAS BEEN SOLVED, AND NOT BY THE
+	// FIX IT PREDICTED. It said the root cause was coordinates being JSON text of unbounded
+	// length, and that packing them as int32 degrees x 10^7 would shrink the whole ceiling
+	// set into one message and let the pointer fact and the paged read be deleted. That is
+	// arithmetic about a CONSTANT FACTOR against a product constraint, and it does not hold
+	// once the caps move: at a 1024-vertex cap the packed set is over the ceiling again, and
+	// raising the caps was the reason to pack. What actually deleted them is changing the
+	// UNIT OF DELIVERY from the set to the fence — the fact carries a GeoFenceSetManifest of
+	// {token, hash} pairs and the bodies travel separately — which makes the announcement's
+	// size independent of what any fence contains, permanently and at any cap. This bound
+	// survives that change unaltered, because "one fence must fit one message" is the single
+	// size rule per-fence delivery still needs.
 	MaxGeoFenceGeometryBytes = 32 << 10
+
+	// MaxGeoFenceGeometryHashesPerRequest bounds how many geometry documents one
+	// GeoFenceGeometryDocuments call may ask for. Over the limit is an ERROR, never a
+	// partial answer: a caller that asked for 40 addresses and silently got 24 cannot tell
+	// that from a tenant holding only 24 of them, and this door's whole contract is that
+	// absence means absence.
+	//
+	// 🔴 IT IS ARITHMETIC, NOT A ROUND NUMBER, AND THE ARITHMETIC IS THE ONLY REASON A
+	// COUNT CAN DEFEND A BYTE CAP AT ALL. A limit counted in documents is a guess about
+	// bytes unless each document has a known byte ceiling — which is exactly what
+	// MaxGeoFenceGeometryBytes provides, applied to the jsonb-rendered form the archive
+	// actually returns. 24 x 32 KiB is 786,432 bytes against svcclient.MaxResponseBytes
+	// (1 MiB), leaving room for the hashes, the field names and the GraphQL envelope's
+	// string escaping. TestGeometryBatchFitsOneResponse measures a worst-case response
+	// rather than trusting that estimate, because two numbers in this tree disagree about
+	// what escaping costs and a comment cannot settle it.
+	//
+	// It does not have to defend against documents already stored ABOVE that ceiling —
+	// rows predating the bound exist — so a client is still expected to split its request
+	// on a too-large response. Splitting is trivial here in a way it was not for the paged
+	// read this replaces: a request names a SET OF ADDRESSES, so half of it is still a
+	// well-formed request, where a (pageNumber, pageSize) offset could not be re-expressed
+	// at a different size and forced the whole walk to restart.
+	MaxGeoFenceGeometryHashesPerRequest = 24
 
 	// MaxGeoFencePositionOrdinates bounds how many numbers one position may carry.
 	//
@@ -296,13 +325,15 @@ type GeoFenceSetVersion struct {
 }
 
 // GeoFenceSetSnapshot is the serialized fence set frozen into a
-// GeoFenceSetVersion.Snapshot. Like ProfileSnapshot it is never SQL-built, so the encoding
-// need only be self-consistent — but unlike ProfileSnapshot it is no longer Go-internal:
-// it is READ BACK on two seams, the geoFenceSetSnapshot / currentGeoFenceSet GraphQL doors
-// and the fence-set fact (GeoFenceSetMintedEvent), because event-processing's containment
-// projection is a live cache and this service is the archive it re-seeds from. Both seams
-// hand out this document's CONTENT (token + geometry), never its bytes, so the encoding
-// itself is still an implementation detail.
+// GeoFenceSetVersion.Snapshot, HYDRATED — every fence carrying its geometry document. Like
+// ProfileSnapshot it is never SQL-built, so the encoding need only be self-consistent, and
+// it is not what any row holds: a stored snapshot names geometry by content address (see
+// storedGeoFenceSetSnapshot), and hydrateGeoFenceSetSnapshot resolves those addresses
+// through the archive to produce this.
+//
+// It is read back on the geoFenceSetSnapshot / currentGeoFenceSet GraphQL doors, which serve
+// the whole fence set in one document. The fence-set FACT no longer takes this shape — it
+// carries a GeoFenceSetManifest, whose size is a function of the fence count alone.
 type GeoFenceSetSnapshot struct {
 	Version int32                 `json:"version"`
 	Fences  []GeoFenceSnapshotRef `json:"fences"`
@@ -316,6 +347,69 @@ type GeoFenceSetSnapshot struct {
 type GeoFenceSnapshotRef struct {
 	Token    string          `json:"token"`
 	Geometry json.RawMessage `json:"geometry"`
+}
+
+// GeoFenceSetManifest names WHICH fences a fence-set version holds and the CONTENT ADDRESS
+// of each one's geometry. It carries no geometry itself, which is the entire point: its
+// size is a function of the fence COUNT and of nothing an author can write.
+//
+// 🔴 THE SIZE PROPERTY IS WHY AN ENTIRE APPARATUS OF BROKER-CEILING MACHINERY IS GONE, so
+// state it as arithmetic rather than as a reassurance. A token is bounded by core.MaxTokenLen
+// (128) under a grammar containing no character JSON has to escape, and a hash is exactly 64
+// hex characters, so one entry serializes to at most 214 bytes plus its separator. At
+// MaxGeoFencesPerTenant fences, with a worst-case version and timestamp, a whole manifest is
+// at most 21,577 bytes — a forty-eighth of the 1 MiB per-message ceiling, and still inside it
+// at roughly 4,876 fences. TestManifestFitsOneBrokerMessage computes that from the constants
+// rather than repeating the number, so raising either bound re-derives the claim instead of
+// quietly falsifying this comment.
+//
+// It is ONE type serving two seams — the fence-set fact and the geoFenceSetManifest /
+// currentGeoFenceSetManifest doors — deliberately, and the reasoning is the opposite of the
+// one that keeps GeoFenceSetSnapshot and storedGeoFenceSetSnapshot apart. Those two are
+// separate because they describe the same fence set at DIFFERENT levels of resolution, so a
+// caller could marshal the wrong one and produce a document that looks correct until the
+// archive it should have referenced is needed. A manifest is the same information on both
+// seams; splitting it would create exactly the drift the split is supposed to prevent.
+type GeoFenceSetManifest struct {
+	// Version is the fence-set version this manifest describes. It is what a resolved
+	// location event is stamped with, and the key a consumer files the set under.
+	Version int32 `json:"version"`
+	// Fences names each fence and the content address of its geometry, ordered by token
+	// (the mint path orders them, so a manifest is a function of the fence set alone).
+	Fences []GeoFenceManifestEntry `json:"fences"`
+	// MintedAt is when the change that minted this version committed. It is carried for
+	// operator diagnosis — how old is the set this engine is holding? — and containment
+	// never reads it.
+	MintedAt time.Time `json:"mintedAt"`
+}
+
+// GeoFenceManifestEntry is one fence inside a manifest: the token a rule names it by, and
+// the content address under which its geometry is stored.
+//
+// 🔴 AN ENTRY WHOSE HASH THE HOLDER CANNOT RESOLVE MUST BECOME A FENCE CARRYING AN ERROR,
+// NEVER A FENCE THAT IS ABSENT. Absence is already meaningful — a rule naming a fence the
+// set does not contain is a distinct, reported condition — so a body that failed to arrive,
+// dropped silently, reads downstream as "this fence does not exist here" and containment
+// answers "outside" for a device that is inside. That is the one failure mode splitting the
+// geometry out of the fact introduces, and it is the consumer's job to close.
+type GeoFenceManifestEntry struct {
+	Token string `json:"token"`
+	Hash  string `json:"hash"`
+}
+
+// GeoFenceGeometryDocument is one archived geometry document and the content address it is
+// filed under — what the geoFenceGeometry door answers with, and what a holder of a manifest
+// resolves its entries through.
+//
+// Document is a json.RawMessage and must stay one, END TO END, from the archive row to the
+// consumer that re-hashes it. The address is the SHA-256 of these exact bytes, so a single
+// convenience Unmarshal/Marshal anywhere along that path re-orders keys that PostgreSQL's
+// jsonb ordering (length, then bytewise) does not lay out the way a Go struct does — and
+// every hash then mismatches, permanently, for every fence. Unit tests run on SQLite, whose
+// JSON columns round-trip bytes verbatim and therefore cannot see it.
+type GeoFenceGeometryDocument struct {
+	Hash     string          `json:"hash"`
+	Document json.RawMessage `json:"document"`
 }
 
 // GeoFenceGeometryBlob is one geometry document in the content-addressed archive: the

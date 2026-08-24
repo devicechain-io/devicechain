@@ -56,15 +56,33 @@ spec:
           annotations:
             summary: "DETECT leaf-predicate evaluation errors"
             description: "Rule leaf predicates are erroring during fan-out. The sample is SKIPPED, not treated as a non-match, so firings may be silently missed. This counter is unlabelled and nothing logs the rule id — use the canvas preview on each suspect rule to attribute the error."
-        - alert: DetectFenceSetPointerUnresolved
-          expr: sum(rate(devicechain_eventprocessing_detect_fence_set_pointer_unresolved_total{namespace="{{ $ns }}"}[5m])) > 0
+        - alert: DetectFenceGeometryUnresolved
+          expr: sum(rate(devicechain_eventprocessing_detect_fence_geometry_unresolved_total{namespace="{{ $ns }}"}[5m])) > 0
           for: 10m
           labels:
             severity: warning
             devicechain_instance: {{ $ns }}
           annotations:
-            summary: "A geofence set is too large for the broker AND cannot be read back"
-            description: "A fence set outgrew the per-message ceiling, so its fact carried only a version and the fences must be fetched from device-management — and that fetch is failing. Containment for the affected tenant reports unresolvable at that version until a reconcile sweep succeeds, which shows up as DetectFanoutEvalErrors. Check device-management's health and the service-token seam; the tenant is named in event-processing's error log, never in this counter."
+            summary: "Geofence geometry cannot be read back from device-management"
+            description: "A geofence set names fences whose geometry this service could not fetch from device-management's archive. Those fences are installed carrying their error, so containment reports unresolvable for them rather than answering — which also shows up as DetectFanoutEvalErrors. It repairs on the next reconcile sweep if the cause was transient; sustained means the archive read is failing. Check device-management's health and the service-token seam. The tenant and fence are named in event-processing's error log, never in this counter."
+        - alert: DetectFenceGeometryHashMismatch
+          expr: sum(rate(devicechain_eventprocessing_detect_fence_geometry_hash_mismatch_total{namespace="{{ $ns }}"}[5m])) > 0
+          for: 5m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "Geofence geometry did not match the content address it was served under"
+            description: "A geometry document did not hash to the address it was requested under. This is never transient and never benign: an address IS the SHA-256 of the document stored under it, so either device-management served the wrong row, something re-encoded the document in transit, or the archive is corrupt. The affected fences are refused rather than compiled, which is why containment degrades instead of answering wrongly. Investigate before restarting anything — a restart hides the symptom and changes nothing."
+        - alert: DetectFenceArchiveSkew
+          expr: sum(rate(devicechain_eventprocessing_detect_fence_archive_skew_total{namespace="{{ $ns }}"}[5m])) > 0
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "device-management does not serve the geofence manifest doors"
+            description: "event-processing asked device-management for a fence-set manifest and was told the query does not exist, which means the two are running builds from either side of the manifest-delivery change. Expected briefly while an upgrade rolls, since the two services are independent Deployments and neither waits for the other. Sustained means device-management is behind — most likely rolled back on its own — and fence edits are not reaching the detection engine until it rolls forward."
         - alert: ReactPoisonDropping
           expr: sum(rate(devicechain_eventprocessing_react_events_poison_dropped_total{namespace="{{ $ns }}"}[5m])) > 0
           for: 10m
