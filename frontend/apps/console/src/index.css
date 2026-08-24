@@ -82,7 +82,18 @@
     --warning-foreground: 0 0% 100%;
 
     --border: 240 5.9% 90%;
-    --input: 240 5.9% 90%;
+    /* --input is the boundary of a CONTROL, and it is deliberately darker than
+     * --border. WCAG 1.4.11 asks 3:1 of the visual information that identifies a
+     * user interface component, and an input's border is the only thing that says
+     * "you can type here" — there is no fill or label change to carry that job.
+     * At shadcn's default (the same 90% as --border) it measured 1.27:1.
+     *
+     * 🔴 --border is NOT held to this and that is a decision, not an oversight: it
+     * draws cards, separators and table rules, which decorate a surface the eye has
+     * already separated. It is the boundary of a REGION, not of a control. Keep the
+     * two tokens distinct — collapsing them back to one value is what made every
+     * form field in the console fail. */
+    --input: 240 5.9% 59%;
 
     --chart-1: 220 70% 50%;
     --chart-2: 160 60% 45%;
@@ -140,7 +151,11 @@
     --warning: 38 92% 55%;
 
     --border: 210 20% 17%;
-    --input: 210 22% 26%;
+    /* Measured against --card (210 24% 11%), NOT --background — the card is the
+     * lighter of the two grounds a field is drawn on, so it is the one that decides
+     * whether the border clears 3:1. Sizing this against the darker page background
+     * would pass the test and still leave the fields on every card too faint. */
+    --input: 210 22% 42%;
 
     --chart-1: 220 70% 50%;
     --chart-2: 160 60% 45%;

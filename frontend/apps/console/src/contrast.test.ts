@@ -134,20 +134,30 @@ const TEXT_PAIRS: ReadonlyArray<readonly [string, string]> = [
   ['warning', 'card'],
 ];
 
-/** A filled badge is a graphic, not text: WCAG non-text contrast is 3:1. */
+/** A filled badge is a graphic, not text: WCAG non-text contrast is 3:1. So is a
+ *  control's boundary — 1.4.11 covers "visual information required to identify user
+ *  interface components", and for a bordered field the border IS that information. */
 const GRAPHIC_PAIRS: ReadonlyArray<readonly [string, string]> = [
   ['destructive-fill', 'background'],
   ['success-fill', 'background'],
   ['warning-fill', 'background'],
+  // `--input` on BOTH grounds a field is drawn against. The card is the harder one
+  // in dark mode (it is lighter than the page), so checking only `background` would
+  // pass while every field on every card stayed too faint.
+  ['input', 'background'],
+  ['input', 'card'],
 ];
 
-// 🔴 DELIBERATELY NOT GATED: `--border` and `--input` against `--background`
-// measure 1.27–1.87:1 in both apps and both themes, against the 3:1 that WCAG
-// 1.4.11 asks of a control boundary. They are shadcn's own defaults rather than
-// a value this repo chose, and the rule is genuinely arguable for a border that
-// only decorates a surface the eye already separates. They are left OUT rather
-// than gated at a target they happen to meet, because a threshold reverse-engineered
-// from the current value is not a check. Raising them is its own decision.
+// 🔴 `--border` IS DELIBERATELY NOT GATED, AND THE OMISSION IS THE DECISION — not a
+// gap left for someone to close. It measures 1.27:1 light and 1.20:1 against a dark
+// card, well under the same 3:1. It is excluded because of WHAT IT DRAWS: cards,
+// separators and table rules — the boundary of a REGION on a surface the eye has
+// already separated, not the affordance that identifies a control. `--input` is held
+// to the threshold precisely because nothing else says "you can type here".
+//
+// That line is what makes both halves checkable. Gating `--border` at a number
+// reverse-engineered from its current value would not be a check, and quietly letting
+// `--input` sit at shadcn's default was how every form field in both apps failed.
 
 describe.each(Object.entries(SOURCES))('%s', (_path, css) => {
   const { light, dark } = themes(css);
@@ -179,13 +189,21 @@ describe.each(Object.entries(SOURCES))('%s', (_path, css) => {
       expect(failures).toEqual([]);
     });
 
-    it(`${theme}: filled status surfaces clear 3:1 against the page`, () => {
+    it(`${theme}: filled surfaces and control boundaries clear 3:1`, () => {
       const failures: string[] = [];
+      // 🔴 COUNT WHAT WAS ACTUALLY MEASURED. The `continue` below skips a pair whose
+      // token this stylesheet does not define — which is legitimate (the two apps do
+      // not carry the same tokens) and is also how this assertion could go green
+      // having compared nothing at all. The text loop already guarded that; this one
+      // did not, and it silently checked zero pairs for any renamed token.
+      let checked = 0;
       for (const [fill, ground] of GRAPHIC_PAIRS) {
         if (!T[fill] || !T[ground]) continue;
+        checked++;
         const ratio = contrast(T[fill], T[ground]);
         if (ratio < 3) failures.push(`--${fill} on --${ground}: ${ratio.toFixed(2)}:1`);
       }
+      expect(checked).toBeGreaterThan(0);
       expect(failures).toEqual([]);
     });
   }
