@@ -32,12 +32,25 @@ func storedSnapshotBytes(t *testing.T, api *Api, ctx context.Context, version in
 	return string(found[0].Snapshot)
 }
 
-// archivedBlobs lists every geometry blob the tenant in ctx holds.
+// archivedBlobs lists every geometry blob the tenant in ctx holds, asserting on the way
+// past that each row's address really names its own bytes.
+//
+// 🔴 THE ASSERTION IS HERE, IN THE READER, BECAUSE COUNTING ROWS IS NOT CHECKING THEM.
+// A mutation that stored the FIRST document under every address survived a suite whose
+// archive tests all measured len(blobs): the row count was right, and every row held the
+// wrong geometry. Putting the content invariant where every test already looks means a
+// test has to opt OUT of checking it rather than remember to opt in.
 func archivedBlobs(t *testing.T, api *Api, ctx context.Context) []GeoFenceGeometryBlob {
 	t.Helper()
 	blobs := make([]GeoFenceGeometryBlob, 0)
 	if err := api.RDB.DB(ctx).Find(&blobs).Error; err != nil {
 		t.Fatalf("read blobs: %v", err)
+	}
+	for i := range blobs {
+		if got := GeoFenceGeometryHash([]byte(blobs[i].Document)); got != blobs[i].Hash {
+			t.Fatalf("archived row %d does not hash to its own address:\n stored %s\nrehashed %s\ndocument %s",
+				i, blobs[i].Hash, got, blobs[i].Document)
+		}
 	}
 	return blobs
 }
