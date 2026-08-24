@@ -460,7 +460,13 @@ function TextInput({
         fontSize: 14,
         padding: '8px 10px',
         borderRadius: 6,
-        border: '1px solid hsl(var(--border))',
+        // --input, not --border. WCAG 1.4.11 asks 3:1 of the visual information
+        // that identifies a control, and this field's border is the only thing
+        // carrying that — there is no fill or label change to fall back on. The
+        // three controls in this file use --input; the Card above uses --border,
+        // which draws a REGION and is held to no such threshold. Both tokens are
+        // defined in theme.css, which explains the split.
+        border: '1px solid hsl(var(--input))',
         background: 'hsl(var(--background))',
         color: 'hsl(var(--foreground))',
       }}
@@ -491,7 +497,7 @@ function TextArea({
         fontFamily: 'monospace',
         padding: '8px 10px',
         borderRadius: 6,
-        border: '1px solid hsl(var(--border))',
+        border: '1px solid hsl(var(--input))',
         background: 'hsl(var(--background))',
         color: 'hsl(var(--foreground))',
         resize: 'vertical',
@@ -526,7 +532,7 @@ function HeaderButton({
         fontSize: 14,
         padding: '6px 14px',
         borderRadius: 6,
-        border: '1px solid hsl(var(--border))',
+        border: '1px solid hsl(var(--input))',
         cursor: disabled ? 'default' : 'pointer',
         opacity: disabled ? 0.5 : 1,
         color: primary ? 'hsl(var(--primary-foreground))' : 'hsl(var(--foreground))',

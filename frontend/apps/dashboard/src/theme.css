@@ -27,6 +27,15 @@
   --muted-foreground: 240 3.8% 46.1%;
   --destructive: 0 72.2% 50.6%;
   --border: 240 5.9% 90%;
+  /* --input is the boundary of a CONTROL and is deliberately darker than --border,
+   * which draws regions. This app paints exactly one control — the login field —
+   * and it had been borrowing --border, so its boundary measured 1.27:1 against the
+   * 3:1 WCAG 1.4.11 asks. The console's token block carries the full reasoning.
+   *
+   * 🔴 The two stylesheets are NOT symmetric: this one had no --input at all, so
+   * this is a token being ADDED, not adjusted. Anything drawn here that a user
+   * operates points at this; anything that merely divides points at --border. */
+  --input: 240 5.9% 59%;
   --chart-1: 220 70% 50%;
   --chart-2: 160 60% 45%;
   --chart-3: 30 80% 55%;
@@ -47,6 +56,8 @@
    * this app paints no filled status surfaces, so it carries only the ink. */
   --destructive: 0 72.2% 65%;
   --border: 210 20% 17%;
+  /* Sized against --card, the lighter of the two grounds a control sits on. */
+  --input: 210 22% 42%;
   --chart-1: 220 70% 50%;
   --chart-2: 160 60% 45%;
   --chart-3: 30 80% 55%;
