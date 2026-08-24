@@ -39,7 +39,7 @@ func geoFenceTestCtx(t *testing.T) context.Context {
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
-	if err := db.AutoMigrate(&model.GeoFence{}, &model.GeoFenceSetVersion{}); err != nil {
+	if err := db.AutoMigrate(&model.GeoFence{}, &model.GeoFenceSetVersion{}, &model.GeoFenceGeometryBlob{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	ctx := core.WithTenant(context.Background(), "acme")

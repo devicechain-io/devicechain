@@ -27,5 +27,6 @@ var (
 		NewProfileLocationDeclarationSchema(),
 		NewGeoFencesSchema(),
 		NewListOrderIndexesSchema(),
+		NewGeoFenceGeometryBlobsSchema(),
 	}
 )

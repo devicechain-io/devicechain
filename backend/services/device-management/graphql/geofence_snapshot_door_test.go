@@ -37,7 +37,7 @@ func twoTenantFenceCtx(t *testing.T) (acme, globex context.Context) {
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
-	if err := db.AutoMigrate(&model.GeoFence{}, &model.GeoFenceSetVersion{}); err != nil {
+	if err := db.AutoMigrate(&model.GeoFence{}, &model.GeoFenceSetVersion{}, &model.GeoFenceGeometryBlob{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	api := model.NewApi(&rdb.RdbManager{Database: db})
