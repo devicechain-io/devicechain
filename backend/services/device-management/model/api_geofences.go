@@ -272,12 +272,15 @@ func manifestFromStored(version int32, mintedAt time.Time, stored *storedGeoFenc
 // size are functions of the fence count alone.
 //
 // Version 0 (no fence set ever existed) yields an empty manifest rather than an error; an
-// unknown non-zero version is gorm.ErrRecordNotFound, for the same reason
-// GeoFenceSetSnapshotAt gives — a stamp naming a version that is not on record means the
-// history was truncated, and answering "empty" would read as "no fences" rather than
-// "cannot know".
+// unknown POSITIVE version is gorm.ErrRecordNotFound, for the same reason GeoFenceSetSnapshotAt
+// gives — a stamp naming a version that is not on record means the history was truncated, and
+// answering "empty" would read as "no fences" rather than "cannot know". A NEGATIVE version is
+// refused outright rather than folded into version 0's answer.
 func (api *Api) GeoFenceSetManifestAt(ctx context.Context, version int32) (*GeoFenceSetManifest, error) {
-	if version <= 0 {
+	if version < 0 {
+		return nil, errNegativeFenceSetVersion(version)
+	}
+	if version == 0 {
 		return &GeoFenceSetManifest{Version: 0, Fences: []GeoFenceManifestEntry{}}, nil
 	}
 	found := make([]GeoFenceSetVersion, 0, 1)
@@ -421,6 +424,21 @@ func (api *Api) CurrentFenceSetVersion(ctx context.Context) (int32, error) {
 	return found[0].Version, nil
 }
 
+// errNegativeFenceSetVersion refuses a version below zero.
+//
+// 🔴 IT EXISTS BECAUSE BOTH DOORS USED TO FOLD IT INTO THE KNOWN-EMPTY ANSWER, which is a
+// fall-through answering a NUMBER under the wrong cause. Version 0 means something precise —
+// the tenant had never created a fence when the event was resolved, which is knowledge — and
+// -5 means the caller is confused or something upstream mangled a stamp. Returning knowledge
+// for a question that could not be asked in good faith hides the mangling, and it hides it
+// behind the one answer that reads as legitimate. Versions mint from 1, so nothing reachable
+// through a real stamp lands here; that is the argument for it being cheap, not for it being
+// unnecessary.
+func errNegativeFenceSetVersion(version int32) error {
+	return fmt.Errorf("fence-set version %d is negative; versions are minted from 1 and 0 means "+
+		"the tenant had no fence set at all", version)
+}
+
 // GeoFenceSetSnapshotAt returns the frozen fence set of one fence-set version — the
 // fences that were live when an event stamped with that version was resolved. This is
 // what a replay or a rule preview evaluates against, instead of re-reading the live
@@ -431,7 +449,10 @@ func (api *Api) CurrentFenceSetVersion(ctx context.Context) (int32, error) {
 // version that is not on record means the history was truncated and answering "empty"
 // would look like "no fences" rather than "cannot know".
 func (api *Api) GeoFenceSetSnapshotAt(ctx context.Context, version int32) (*GeoFenceSetSnapshot, error) {
-	if version <= 0 {
+	if version < 0 {
+		return nil, errNegativeFenceSetVersion(version)
+	}
+	if version == 0 {
 		return &GeoFenceSetSnapshot{Version: 0, Fences: []GeoFenceSnapshotRef{}}, nil
 	}
 	found := make([]GeoFenceSetVersion, 0, 1)

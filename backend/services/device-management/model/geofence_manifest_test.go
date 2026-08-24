@@ -9,6 +9,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"gorm.io/gorm"
@@ -45,12 +46,21 @@ func manifestFences(t *testing.T, api *Api, ctx context.Context) []GeoFenceManif
 	return manifest.Fences
 }
 
-// A manifest names every fence of its version and carries no geometry, and its size is a
-// function of the fence count alone — the property the whole delivery change exists for.
+// A manifest's size is a function of its fence COUNT and of nothing the fences contain — the
+// property that lets the fence-set fact travel without a size ceiling.
 //
-// The second half is the one with teeth. Asserting "no geometry" on a struct that has no
-// geometry field would be vacuous, so this measures the MARSHALLED manifest across two fence
-// sets whose fences differ enormously in size, and requires the two to measure the same.
+// 🔴 IT COMPARES THE FENCE LIST UNDER A PINNED HEADER, AND THE FIRST VERSION OF THIS TEST WAS
+// FLAKY FOR NOT DOING SO. Marshalling two whole manifests minted at different instants compares
+// their timestamps too, and RFC3339Nano TRIMS TRAILING FRACTIONAL ZEROS — so two legitimate
+// mint times render at different byte lengths, about 1.3% of the time on the machine that
+// caught it. The failure was worse than its frequency: it accused the fence list of depending
+// on geometry, which was never true, so a red run would have sent someone looking in exactly
+// the wrong place. The version digit count varies the same way and would have started failing
+// at version 10.
+//
+// Pinning the header is not weakening the assertion, it is aiming it. The claim under test is
+// about what the FENCES cost; the header is four fixed fields whose size has nothing to do with
+// how many fences there are or what they contain.
 func TestManifestSizeIsAFunctionOfFenceCountAlone(t *testing.T) {
 	api := newGeoFenceTestApi(t)
 	ctx := core.WithTenant(context.Background(), "acme")
@@ -59,25 +69,19 @@ func TestManifestSizeIsAFunctionOfFenceCountAlone(t *testing.T) {
 		Token: "tiny", Geometry: boxGeometry(0, 0, 1, 1)}); err != nil {
 		t.Fatalf("create tiny: %v", err)
 	}
-	small, err := MarshalGeoFenceSetManifest(mustManifest(t, api, ctx))
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	small := marshalUnderPinnedHeader(t, mustManifest(t, api, ctx))
 
-	// Same fence count, vastly more geometry: a 400-position polygon in place of a box.
+	// Same fence count, same token, vastly more geometry: a 400-position polygon for a box.
 	if _, err := api.UpdateGeoFence(ctx, "tiny", &GeoFenceCreateRequest{
 		Token: "tiny", Geometry: manyPointGeometry(400)}); err != nil {
 		t.Fatalf("update tiny: %v", err)
 	}
-	large, err := MarshalGeoFenceSetManifest(mustManifest(t, api, ctx))
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	large := marshalUnderPinnedHeader(t, mustManifest(t, api, ctx))
 
 	if len(small) != len(large) {
 		t.Fatalf("a manifest changed size when its fence's GEOMETRY grew: %d -> %d bytes.\n"+
-			"That is the one thing manifest delivery exists to prevent — it means something in the\n"+
-			"manifest still depends on what a fence contains.\nsmall: %s\nlarge: %s",
+			"That is the one thing manifest delivery exists to prevent — it means something in\n"+
+			"the manifest still depends on what a fence contains.\nsmall: %s\nlarge: %s",
 			len(small), len(large), small, large)
 	}
 
@@ -92,6 +96,22 @@ func TestManifestSizeIsAFunctionOfFenceCountAlone(t *testing.T) {
 		t.Fatalf("the enlarged geometry resolved to %d bytes; the update did not take effect, "+
 			"so the size comparison above compared a fence set to itself", len(doc))
 	}
+}
+
+// marshalUnderPinnedHeader marshals a manifest with its version and mint time replaced by fixed
+// values, so a size comparison sees only what the FENCES cost. See the test above for the flake
+// that made this necessary.
+func marshalUnderPinnedHeader(t *testing.T, manifest *GeoFenceSetManifest) []byte {
+	t.Helper()
+	encoded, err := MarshalGeoFenceSetManifest(&GeoFenceSetManifest{
+		Version:  7,
+		MintedAt: time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC),
+		Fences:   manifest.Fences,
+	})
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	return encoded
 }
 
 // An address the tenant does not hold is ABSENT from the answer rather than an error — the
@@ -126,14 +146,20 @@ func TestUnknownGeometryAddressIsAbsentNotAnError(t *testing.T) {
 func TestNoAddressesAsksForNothing(t *testing.T) {
 	api := newGeoFenceTestApi(t)
 	ctx := core.WithTenant(context.Background(), "acme")
-	for _, token := range []string{"a", "b", "c"} {
+	// Distinct geometry per fence, so the archive genuinely holds three rows. The first
+	// version of this keyed the box off len(token) for three one-character tokens, which
+	// made all three fences IDENTICAL and the archive one row deep — the conclusion survived
+	// but the fixture was not building what it appeared to.
+	for i, token := range []string{"a", "b", "c"} {
+		x := float64(i * 10)
 		if _, err := api.CreateGeoFence(ctx, &GeoFenceCreateRequest{
-			Token: token, Geometry: boxGeometry(float64(len(token)), 0, float64(len(token))+1, 1)}); err != nil {
+			Token: token, Geometry: boxGeometry(x, 0, x+1, 1)}); err != nil {
 			t.Fatalf("create %s: %v", token, err)
 		}
 	}
-	if held := archivedBlobs(t, api, ctx); len(held) == 0 {
-		t.Fatal("the archive is empty, so an empty answer below would prove nothing")
+	if held := archivedBlobs(t, api, ctx); len(held) != 3 {
+		t.Fatalf("the archive holds %d documents; the fixture must seed three DISTINCT "+
+			"geometries or the empty answer below proves less than it appears to", len(held))
 	}
 
 	found, err := api.GeoFenceGeometryDocuments(ctx, []string{})
@@ -226,7 +252,44 @@ func TestManifestAtUnknownVersion(t *testing.T) {
 	}
 
 	if _, err := api.GeoFenceSetManifestAt(ctx, 99); err != gorm.ErrRecordNotFound {
-		t.Fatalf("an unknown non-zero version must be ErrRecordNotFound; got %v", err)
+		t.Fatalf("an unknown positive version must be ErrRecordNotFound; got %v", err)
+	}
+}
+
+// A NEGATIVE version is refused by both doors rather than answered with version 0's
+// known-empty set.
+//
+// 🔴 THE TWO ANSWERS ARE NOT INTERCHANGEABLE AND BOTH DOORS ONCE GAVE THE WRONG ONE. Version 0
+// says the tenant had no fence set at all, which is knowledge a caller acts on; a negative
+// version says a stamp was mangled or a caller is confused. Folding the second into the first
+// reports the mangling as a legitimate fact, and it does so through the one answer that looks
+// healthy. Nothing reachable through a real stamp gets here — versions mint from 1 — which is
+// why the guard is cheap, not why it is unnecessary.
+//
+// Both doors are asserted together because they are siblings over the same rows: a guard on one
+// of the two is the shape of defect this repo keeps rediscovering.
+func TestANegativeVersionIsRefusedByBothDoors(t *testing.T) {
+	api := newGeoFenceTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	if _, err := api.GeoFenceSetManifestAt(ctx, -5); err == nil {
+		t.Fatal("geoFenceSetManifest answered a negative version")
+	}
+	if _, err := api.GeoFenceSetSnapshotAt(ctx, -5); err == nil {
+		t.Fatal("geoFenceSetSnapshot answered a negative version")
+	}
+
+	// The control: version 0 still answers, so the refusals above are about the sign and not
+	// about the doors refusing everything below 1.
+	zero, err := api.GeoFenceSetManifestAt(ctx, 0)
+	if err != nil {
+		t.Fatalf("version 0 must still be the known-empty answer: %v", err)
+	}
+	if zero.Version != 0 || len(zero.Fences) != 0 {
+		t.Fatalf("version 0 answered %+v", zero)
+	}
+	if _, err := api.GeoFenceSetSnapshotAt(ctx, 0); err != nil {
+		t.Fatalf("version 0 must still be the known-empty answer on the snapshot door: %v", err)
 	}
 }
 

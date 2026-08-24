@@ -1600,9 +1600,10 @@ type Query {
     # of each one's geometry. Unlike geoFenceSetSnapshot this reads no geometry at all, so
     # it is a fixed cost per fence and needs no pagination.
     #
-    # An unknown non-zero version is an error, for the same reason geoFenceSetSnapshot
-    # gives: a stamp naming a version that is not on record means the history was truncated,
-    # and answering "empty" would read as "no fences" rather than "cannot know".
+    # An unknown POSITIVE version is an error, for the same reason geoFenceSetSnapshot gives:
+    # a stamp naming a version that is not on record means the history was truncated, and
+    # answering "empty" would read as "no fences" rather than "cannot know". A negative
+    # version is refused outright rather than sharing version 0's known-empty answer.
     geoFenceSetManifest(version: Int!): GeoFenceSetManifest!
     # The manifest of the tenant's CURRENT version — the version and its fences read from
     # one row, so the two cannot disagree across a concurrent fence edit. Reading the

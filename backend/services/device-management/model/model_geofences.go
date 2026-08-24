@@ -353,15 +353,17 @@ type GeoFenceSnapshotRef struct {
 // of each one's geometry. It carries no geometry itself, which is the entire point: its
 // size is a function of the fence COUNT and of nothing an author can write.
 //
-// 🔴 THE SIZE PROPERTY IS WHY AN ENTIRE APPARATUS OF BROKER-CEILING MACHINERY IS GONE, so
-// state it as arithmetic rather than as a reassurance. A token is bounded by core.MaxTokenLen
-// (128) under a grammar containing no character JSON has to escape, and a hash is exactly 64
-// hex characters, so one entry serializes to at most 214 bytes plus its separator. At
-// MaxGeoFencesPerTenant fences, with a worst-case version and timestamp, a whole manifest is
-// at most 21,577 bytes — a forty-eighth of the 1 MiB per-message ceiling, and still inside it
-// at roughly 4,876 fences. TestManifestFitsOneBrokerMessage computes that from the constants
-// rather than repeating the number, so raising either bound re-derives the claim instead of
-// quietly falsifying this comment.
+// 🔴 THE SIZE PROPERTY IS WHY AN ENTIRE APPARATUS OF BROKER-CEILING MACHINERY IS GONE, so it
+// is MEASURED rather than asserted. A token is bounded by core.MaxTokenLen under a grammar
+// containing no character JSON has to escape, and a hash is exactly 64 hex characters, so an
+// entry has a fixed worst case and a whole manifest has one too — roughly a forty-eighth of the
+// default 1 MiB per-message ceiling at MaxGeoFencesPerTenant fences, still inside it at several
+// thousand.
+//
+// 🔑 NO BYTE COUNT IS QUOTED HERE ON PURPOSE. MaxGeoFenceSetManifestBytes() builds the worst
+// case and measures it, and that function is the authority; an earlier draft of this comment
+// named a figure derived by hand and was wrong by six bytes within a day of being written. A
+// number in prose cannot be re-derived when a constant moves, which is exactly when it matters.
 //
 // It is ONE type serving two seams — the fence-set fact and the geoFenceSetManifest /
 // currentGeoFenceSetManifest doors — deliberately, and the reasoning is the opposite of the

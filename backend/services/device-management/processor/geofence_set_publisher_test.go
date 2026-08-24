@@ -71,7 +71,19 @@ func manifestOf(version int32, n int) *model.GeoFenceSetManifest {
 // safe while saying almost nothing — so the lower edge asserts the worst case is genuinely
 // worst, i.e. that this is measuring a full manifest rather than an accidentally empty one.
 func TestManifestFitsOneBrokerMessage(t *testing.T) {
+	// The broker's default per-message ceiling (infrastructure.nats.streamMaxMsgSize). It is
+	// deployment configuration rather than a Go constant, so it is named here as the default
+	// this reasoning was done against — a deployment that lowers it is what the publisher's
+	// startup warning and its failure counter exist for.
 	const defaultCeiling = 1 << 20
+
+	// The floor is DERIVED, not chosen. One entry cannot encode to less than its token and its
+	// hash, so a full manifest cannot encode to less than this — which is what makes the floor
+	// an assertion that the worst case is genuinely being BUILT rather than a number that
+	// happened to be below the answer. An earlier version of this test used a literal 20000 and
+	// a comment claiming it was computed from the constants; it was not.
+	minimumEntry := core.MaxTokenLen + 64
+	floor := model.MaxGeoFencesPerTenant * minimumEntry
 
 	worst := model.MaxGeoFenceSetManifestBytes()
 	if worst >= defaultCeiling/8 {
@@ -79,10 +91,10 @@ func TestManifestFitsOneBrokerMessage(t *testing.T) {
 			"ceiling; the reasoning that deleted the pointer fact and the size clamp assumed a margin "+
 			"of roughly 48x and no longer holds", worst, defaultCeiling)
 	}
-	if worst < 20000 {
-		t.Fatalf("a worst-case manifest measured only %d bytes, which is below what "+
-			"%d entries of a %d-character token and a 64-character hash can possibly encode to; "+
-			"the worst case is not being built", worst, model.MaxGeoFencesPerTenant, core.MaxTokenLen)
+	if worst < floor {
+		t.Fatalf("a worst-case manifest measured only %d bytes, which is below the %d that "+
+			"%d entries of a %d-character token and a 64-character hash must encode to at minimum; "+
+			"the worst case is not being built", worst, floor, model.MaxGeoFencesPerTenant, core.MaxTokenLen)
 	}
 
 	// The value is stable across calls. It is rebuilt and re-measured on every call rather

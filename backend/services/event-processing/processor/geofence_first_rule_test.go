@@ -59,7 +59,7 @@ func TestPublishingTheFirstFenceRuleSeedsTheProjection(t *testing.T) {
 	}
 
 	// The engine starts with NO rules at all — the state a tenant is in before it authors one.
-	src := &schemaFenceSource{t: t, api: api}
+	src := newSchemaFenceSource(t, api)
 	w := &captureWriter{}
 	rp := newFenceProcessor(t, runtime.NewRuleRegistry(nil), w, src)
 	if err := rp.startFenceView(ctx); err != nil {
@@ -118,7 +118,7 @@ func TestARuleFactSeedsTheProjectionForItsTenant(t *testing.T) {
 	}
 
 	rp := newFenceProcessor(t, runtime.NewRuleRegistry(nil), &captureWriter{},
-		&schemaFenceSource{t: t, api: api})
+		newSchemaFenceSource(t, api))
 	rp.ruleUpdates = make(chan ruleUpdate, 4)
 	if err := rp.startFenceView(ctx); err != nil {
 		t.Fatalf("startFenceView: %v", err)
@@ -172,7 +172,7 @@ func TestPublishingANonFenceRuleSeedsNothing(t *testing.T) {
 	}
 
 	rp := newFenceProcessor(t, runtime.NewRuleRegistry(nil), &captureWriter{},
-		&schemaFenceSource{t: t, api: api})
+		newSchemaFenceSource(t, api))
 	if err := rp.startFenceView(ctx); err != nil {
 		t.Fatalf("startFenceView: %v", err)
 	}

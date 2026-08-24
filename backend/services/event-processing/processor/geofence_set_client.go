@@ -38,6 +38,22 @@ type fenceSetClient struct {
 	url     string
 	cache   *geofence.GeometryCache
 	metrics *fenceGeometryMetrics
+
+	// transport, when non-nil, carries one query INSTEAD of the service-token HTTP call. It is
+	// the substitutable half of the fenceSetExec seam documented below.
+	//
+	// 🔴 IT IS A FIELD RATHER THAN A METHOD SO THE SEAM IS ACTUALLY A SEAM. Everything worth
+	// testing about this client sits BETWEEN the query strings and the decoded result — the
+	// manifest read, the chunking arithmetic, the split-on-refusal, the content verification,
+	// the per-fence error fence — and none of it is reachable if the only way to reach
+	// device-management is a hard-coded method call. With this, a test drives all of it against
+	// device-management's REAL parsed schema and REAL resolvers in-process, faking the HTTP hop
+	// and nothing else, so a field-name drift between the two services fails a test instead of
+	// silently decoding to an empty fence set in production.
+	//
+	// Nil in every production path: NewFenceSetClient never sets it, so main's client resolves
+	// through c.client exactly as before.
+	transport fenceSetExec
 }
 
 // NewFenceSetClient builds the fence-set fetch seam over a service-token client and
@@ -73,8 +89,13 @@ func NewFenceSetClient(ms *core.Microservice, client *svcclient.Client, url stri
 // terminal for the read.
 type fenceSetExec func(ctx context.Context, tenant, query string, vars map[string]any, out any) error
 
-// exec is the production transport: a service-token GraphQL call over HTTP.
+// exec runs one query through whatever transport this client was built over — the substituted
+// one when there is one, and otherwise the production path: a service-token GraphQL call over
+// HTTP.
 func (c *fenceSetClient) exec(ctx context.Context, tenant, query string, vars map[string]any, out any) error {
+	if c.transport != nil {
+		return c.transport(ctx, tenant, query, vars, out)
+	}
 	return c.client.Query(ctx, c.url, tenant, query, vars, out)
 }
 

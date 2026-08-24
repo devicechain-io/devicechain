@@ -56,6 +56,15 @@ spec:
           annotations:
             summary: "DETECT leaf-predicate evaluation errors"
             description: "Rule leaf predicates are erroring during fan-out. The sample is SKIPPED, not treated as a non-match, so firings may be silently missed. This counter is unlabelled and nothing logs the rule id — use the canvas preview on each suspect rule to attribute the error."
+        - alert: GeoFenceSetPublishFailing
+          expr: sum(rate(devicechain_devicemanagement_geofence_set_publish_failures_total{namespace="{{ $ns }}"}[5m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "Geofence edits are not being announced to the detection engine"
+            description: "device-management could not publish a geofence-set manifest — a marshal error, a broker refusal, or a transport fault. The fence edit itself succeeded and is durable; what failed is telling event-processing about it, so containment holds the previous fence set until the five-minute reconcile sweep repairs it. A sustained rate means every fence edit is taking minutes to take effect. If this started after a broker configuration change, check that infrastructure.nats.streamMaxMsgSize is not set below what a manifest needs — the service logs a warning naming both sizes at startup."
         - alert: DetectFenceGeometryUnresolved
           expr: sum(rate(devicechain_eventprocessing_detect_fence_geometry_unresolved_total{namespace="{{ $ns }}"}[5m])) > 0
           for: 10m

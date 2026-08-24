@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,21 +29,24 @@ import (
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/glebarez/sqlite"
+	graphqlgo "github.com/graph-gophers/graphql-go"
 	"gorm.io/gorm"
 )
 
 // These tests drive the geofence wiring through the REAL seams on both sides of the service
-// boundary: device-management's own Api mints the fence-set version and its own NATS publisher
-// marshals the fact; this service's own consumer decodes it, its own projection holds it, and its
-// own fan-out evaluates a compiled containment rule against it. The only things faked are the
-// transports themselves (a capture writer standing in for the broker, an in-process schema
-// execution standing in for the HTTP hop) — never a step that this slice is claiming to have built.
+// boundary: device-management's own Api mints the fence-set version, archives each fence's
+// geometry by content address and its own NATS publisher marshals the MANIFEST fact; this
+// service's own consumer decodes it, its own client resolves the geometry the manifest names,
+// its own projection holds the result, and its own fan-out evaluates a compiled containment
+// rule against it. The only things faked are the transports themselves (a capture writer
+// standing in for the broker, an in-process schema execution standing in for the HTTP hop) —
+// never a step that this slice is claiming to have built.
 
 // ── device-management side ───────────────────────────────────────────────────────────────────
 
 // newFenceDmApi builds a real, sqlite-backed device-management Api holding just the geofence
 // tables. Everything the tests assert about fence sets — version minting, snapshot freezing,
-// tenant scoping — is that Api's real behaviour, not a stub's.
+// geometry archiving, tenant scoping — is that Api's real behaviour, not a stub's.
 func newFenceDmApi(t *testing.T) *dmmodel.Api {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -77,7 +81,7 @@ func fenceBox(lonMin, latMin, lonMax, latMax float64) string {
 }
 
 // fenceFactWriter captures the bytes device-management's real publisher would have written to the
-// geofence-set subject, so a test can hand them to this service's real consumer unchanged.
+// geofence-set-manifest subject, so a test can hand them to this service's real consumer unchanged.
 type fenceFactWriter struct {
 	payloads [][]byte
 }
@@ -93,39 +97,98 @@ func (w *fenceFactWriter) WriteToDevice(ctx context.Context, _ string, msgs ...m
 }
 func (w *fenceFactWriter) HandleResponse(error) {}
 
-// fenceFactMsg wraps a captured fact payload as a consumed message on the tenant's geofence-set
-// subject — the subject shape the consumer parses the tenant out of.
+// fenceFactMsg wraps a captured fact payload as a consumed message on the tenant's
+// geofence-set-manifest subject — the subject shape the consumer parses the tenant out of.
 func fenceFactMsg(tenant string, payload []byte, ack messaging.Acknowledger) messaging.Message {
-	return messaging.NewConsumedMessage("dc."+tenant+"."+streams.GeoFenceSet, payload, 0, nil, ack)
+	return messaging.NewConsumedMessage("dc."+tenant+"."+streams.GeoFenceSetManifest, payload, 0, nil, ack)
+}
+
+// lastFact decodes the most recently published fence-set manifest.
+func lastFact(t *testing.T, facts *fenceFactWriter) ([]byte, *dmmodel.GeoFenceSetManifest) {
+	t.Helper()
+	if len(facts.payloads) == 0 {
+		t.Fatal("no fence-set manifest was published at all")
+	}
+	raw := facts.payloads[len(facts.payloads)-1]
+	manifest, err := dmmodel.UnmarshalGeoFenceSetManifest(raw)
+	if err != nil {
+		t.Fatalf("decode the last fence-set manifest: %v", err)
+	}
+	return raw, manifest
 }
 
 // ── the fetch path, over device-management's REAL GraphQL schema ─────────────────────────────
 
-// schemaFenceSource resolves frozen fence sets by EXECUTING this service's own queries against
-// device-management's real parsed schema and resolvers, then decoding the response through this
-// service's own response types.
+// dmSchema parses device-management's schema ONCE for the whole test binary.
 //
-// It stands in for the service-token HTTP hop and for nothing else: the query strings, the schema,
-// the resolvers, the authority gate, the tenant scoping, the JSON field mapping and the geometry
-// compile are all the production ones. That is deliberate — every one of those is a place the two
-// services can disagree without anything failing to build, and a hand-written fixture response
-// would measure the fixture instead.
+// It is memoized rather than parsed per request because manifest delivery makes many more
+// requests than the paged read it replaces — one manifest read plus a geometry request per
+// chunk — and re-parsing a schema of this size on each one turns a fixture into the slowest
+// thing in the package. A parsed *graphql.Schema is immutable and safe for concurrent Exec,
+// which matters here: the reconcile sweep drives this from its own goroutine.
+var dmSchema = sync.OnceValue(func() *graphqlgo.Schema {
+	return gqlcore.MustParseSchema(dmgraphql.SchemaContent, &dmgraphql.SchemaResolver{})
+})
+
+// schemaFenceSource resolves fence sets by handing this service's REAL fence-set client a
+// transport that EXECUTES its queries against device-management's real parsed schema and
+// resolvers, in-process.
+//
+// 🔴 IT STANDS IN FOR THE SERVICE-TOKEN HTTP HOP AND FOR NOTHING ELSE, WHICH IS THE WHOLE
+// VALUE OF THIS FIXTURE. The query strings, the schema, the resolvers, the authority gate, the
+// tenant scoping, the JSON field mapping, the chunking arithmetic, the split-on-refusal, the
+// content-address verification, the compiled-geometry cache and the per-fence error fence are
+// all the PRODUCTION ones — nothing here reimplements a step the tests are claiming to cover.
+// Every one of those is a place the two services can disagree without anything failing to
+// build, and a hand-written fixture response would measure the fixture instead.
+//
+// It also enforces the READ CAP, because the cap is half of what is under test: the production
+// transport is svcclient, which refuses a response over MaxResponseBytes and says so as
+// ErrResponseTooLarge, and that error is the signal a geometry batch SPLITS on. A test
+// transport that happily returned 1.5 MB would let a client that cannot survive the cap pass
+// every test in this package. Standing in for the HTTP hop means standing in for its limits
+// too, not just its shape.
 type schemaFenceSource struct {
-	t   *testing.T
-	api *dmmodel.Api
+	t      *testing.T
+	api    *dmmodel.Api
+	client *fenceSetClient
+
+	// mu guards everything below. Unlike the other fence fixtures this one is driven from the
+	// reconcile sweep's goroutine while the test goroutine reads its counters.
+	mu sync.Mutex
 	// versionsAsked records every version resolved through the source, so a test can prove the
 	// preview really went to the archive rather than answering from a set it already had.
 	versionsAsked []int32
-	// pagesServed / bytesServed record how many GraphQL responses the source produced and how
-	// large the largest one was, so a test about the response-size cap can show it actually paged
+	// queries records the query string of every request served, so a test can prove WHICH doors
+	// were used — a manifest read that silently fell back to the retired whole-snapshot door
+	// would otherwise produce a correct answer through the wrong mechanism.
+	queries []string
+	// hashRequests records the address list of each geometry request, in order. It is what makes
+	// the chunking and the split-on-refusal observable: a test asserting only on the assembled
+	// set cannot tell one request of 100 from five of 24, and the difference is the design.
+	hashRequests [][]string
+	// responses / largestBytes record how many GraphQL responses the source produced and how
+	// large the largest one was, so a test about the response-size cap can show what it measured
 	// rather than trusting that a big fence set was big.
-	pagesServed  int
+	responses    int
 	bytesServed  int
 	largestBytes int
 	// refusals counts responses this source refused for exceeding the read cap, so a test can
-	// prove the halving retry was actually provoked rather than assuming a large fixture
-	// reached it.
+	// prove a split was actually provoked rather than assuming a large fixture reached it.
 	refusals int
+}
+
+// newSchemaFenceSource builds the fixture over one device-management Api, with its own cold
+// compiled-geometry cache. Cold per source is deliberate: a cache shared between tests would
+// make "how many bodies did this fetch transfer" depend on what ran before it.
+func newSchemaFenceSource(t *testing.T, api *dmmodel.Api) *schemaFenceSource {
+	t.Helper()
+	s := &schemaFenceSource{t: t, api: api}
+	s.client = &fenceSetClient{
+		transport: s.exec,
+		cache:     geofence.NewGeometryCache(geofence.DefaultMaxCachedVertices),
+	}
+	return s
 }
 
 // dmContext builds the request context device-management's GraphQL layer expects: the Api, the
@@ -137,50 +200,137 @@ func (s *schemaFenceSource) dmContext(tenant string) context.Context {
 	return auth.WithClaims(ctx, &auth.Claims{Tenant: tenant, Authorities: []string{string(auth.DeviceRead)}})
 }
 
-// exec runs one query against device-management's schema and unmarshals its data into out. It
-// satisfies fenceSetExec, which is what lets the two methods below run the PRODUCTION paging
-// loops — the page walk, the stitching and the completeness check are the shipped code here, not
-// a test reimplementation of it, so a defect in the loop fails these tests.
+// wireVariables round-trips a query's variables through JSON before they reach the schema.
 //
-// It also records every page it serves, so a test can prove a set really was read in more than
-// one round trip rather than assuming the cap it is about was ever approached.
+// 🔴 IT IS NOT A CONVENIENCE — IT IS THE HTTP HOP THIS FIXTURE STANDS IN FOR. The production
+// client hands svcclient a map of Go values, svcclient MARSHALS it, and device-management's HTTP
+// handler unmarshals it into map[string]any before the schema ever sees it — so what the schema
+// receives is always JSON's vocabulary: []any, float64, string. Passing the Go values straight
+// through skips that translation and lets the fixture accept shapes the real server never
+// receives (and, as it happens, cannot decode: graphql-go refuses a []string for a [String!]!
+// variable). Skipping the step under test is precisely what a fixture must not do.
+func wireVariables(t *testing.T, vars map[string]any) map[string]any {
+	t.Helper()
+	if len(vars) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(vars)
+	if err != nil {
+		t.Fatalf("marshal query variables: %v", err)
+	}
+	wire := map[string]any{}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("unmarshal query variables: %v", err)
+	}
+	return wire
+}
+
+// exec runs one query against device-management's schema and unmarshals its data into out. It
+// satisfies fenceSetExec, which is what lets the client above run its PRODUCTION reads.
 func (s *schemaFenceSource) exec(_ context.Context, tenant, query string, vars map[string]any, out any) error {
-	s.t.Helper()
-	s.pagesServed++
-	schema := gqlcore.MustParseSchema(dmgraphql.SchemaContent, &dmgraphql.SchemaResolver{})
-	resp := schema.Exec(s.dmContext(tenant), query, "", vars)
+	resp := dmSchema().Exec(s.dmContext(tenant), query, "", wireVariables(s.t, vars))
+
+	s.mu.Lock()
+	s.responses++
+	s.queries = append(s.queries, query)
+	if hashes, ok := vars["hashes"].([]string); ok {
+		s.hashRequests = append(s.hashRequests, append([]string(nil), hashes...))
+	}
+	if len(resp.Errors) == 0 {
+		s.bytesServed += len(resp.Data)
+		if len(resp.Data) > s.largestBytes {
+			s.largestBytes = len(resp.Data)
+		}
+		if len(resp.Data) > svcclient.MaxResponseBytes {
+			s.refusals++
+		}
+	}
+	s.mu.Unlock()
+
 	if len(resp.Errors) > 0 {
 		return resp.Errors[0]
 	}
-	s.bytesServed += len(resp.Data)
-	if len(resp.Data) > s.largestBytes {
-		s.largestBytes = len(resp.Data)
-	}
-	// 🔴 IT ENFORCES THE READ CAP, because the cap is half of what is under test. The
-	// production transport is svcclient, which refuses a response over MaxResponseBytes and
-	// says so as ErrResponseTooLarge; a test transport that happily returned 1.5 MB would let
-	// a paging loop that cannot survive the cap pass every test in this package. Standing in
-	// for the HTTP hop means standing in for its limits too, not just its shape.
 	if len(resp.Data) > svcclient.MaxResponseBytes {
-		s.refusals++
 		return fmt.Errorf("%w: %d bytes", svcclient.ErrResponseTooLarge, len(resp.Data))
 	}
 	return json.Unmarshal(resp.Data, out)
 }
 
 func (s *schemaFenceSource) FenceSetAt(ctx context.Context, tenant string, version int32) (*geofence.FenceSet, error) {
+	s.mu.Lock()
 	s.versionsAsked = append(s.versionsAsked, version)
-	return fetchSnapshotAt(ctx, s.exec, tenant, version)
+	s.mu.Unlock()
+	return s.client.FenceSetAt(ctx, tenant, version)
 }
 
 func (s *schemaFenceSource) CurrentFenceSet(ctx context.Context, tenant string) (*geofence.FenceSet, error) {
-	return fetchCurrentSnapshot(ctx, s.exec, tenant)
+	return s.client.CurrentFenceSet(ctx, tenant)
+}
+
+func (s *schemaFenceSource) ResolveManifest(ctx context.Context, tenant string,
+	manifest *dmmodel.GeoFenceSetManifest) (*geofence.FenceSet, error) {
+	return s.client.ResolveManifest(ctx, tenant, manifest)
+}
+
+// fenceReadStats is one consistent snapshot of what a source served, so a test reads all of it
+// under one lock rather than racing the sweep goroutine field by field.
+type fenceReadStats struct {
+	responses    int
+	bytesServed  int
+	largestBytes int
+	refusals     int
+	// geometryRequests is how many of the responses were geometry batches, and chunkSizes their
+	// address counts in order.
+	geometryRequests int
+	chunkSizes       []int
+	// manifestReads is how many of the responses were manifest doors.
+	manifestReads int
+}
+
+func (s *schemaFenceSource) stats() fenceReadStats {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st := fenceReadStats{
+		responses:        s.responses,
+		bytesServed:      s.bytesServed,
+		largestBytes:     s.largestBytes,
+		refusals:         s.refusals,
+		geometryRequests: len(s.hashRequests),
+	}
+	for _, req := range s.hashRequests {
+		st.chunkSizes = append(st.chunkSizes, len(req))
+	}
+	for _, q := range s.queries {
+		if q == geoFenceSetManifestQuery || q == currentGeoFenceSetManifestQuery {
+			st.manifestReads++
+		}
+	}
+	return st
+}
+
+// versionsRead reports the versions resolved through FenceSetAt, in order.
+func (s *schemaFenceSource) versionsRead() []int32 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]int32(nil), s.versionsAsked...)
 }
 
 var (
 	_ runtime.FenceSetSource        = (*schemaFenceSource)(nil)
 	_ runtime.CurrentFenceSetSource = (*schemaFenceSource)(nil)
+	_ runtime.FenceManifestResolver = (*schemaFenceSource)(nil)
 )
+
+// wireFenceArchive points all three archive seams at one source.
+//
+// It mirrors main's buildFenceSetSeam, which returns three interfaces over ONE client: the
+// version-addressed source, the current-set source and the manifest resolver are three
+// questions asked of the same thing, sharing one compiled-geometry cache. A fixture that wired
+// three different objects would let a test pass while the seams disagreed about what a
+// resolution costs.
+func wireFenceArchive(rp *ResolvedEventsProcessor, src *schemaFenceSource) {
+	rp.FenceSets, rp.VersionedFenceSets, rp.FenceManifests = src, src, src
+}
 
 // ── event-processing side ────────────────────────────────────────────────────────────────────
 
@@ -277,23 +427,27 @@ func drainFenceUpdates(rp *ResolvedEventsProcessor) int {
 // ── 1. the live feed, end to end ─────────────────────────────────────────────────────────────
 
 // A fence authored in device-management is evaluable by the DETECT engine, with nothing between
-// the two but the fact.
+// the two but the fact and the geometry the fact names.
 //
-// The chain is entirely real: Api.CreateGeoFence mints the version and freezes the set →
-// GeoFenceSetWriter marshals the fact → the consumer decodes and compiles it → the loop installs it
-// → a resolved location event stamped with that version fires the rule and publishes a derived
-// event. Before the fact arrives the same event fires NOTHING, which is the control: it proves the
-// firing afterwards came from the fact and not from a projection that was already populated.
+// The chain is entirely real: Api.CreateGeoFence mints the version, freezes the set as content
+// references and archives the geometry → GeoFenceSetWriter marshals the MANIFEST fact → the
+// consumer decodes it, resolves each entry's body through the archive and compiles it → the loop
+// installs it → a resolved location event stamped with that version fires the rule and publishes a
+// derived event. Before the fact arrives the same event fires NOTHING, which is the control: it
+// proves the firing afterwards came from the fact and not from a projection that was already
+// populated.
 func TestFenceEditReachesTheDetectEngineEndToEnd(t *testing.T) {
 	ctx := context.Background()
 	api := newFenceDmApi(t)
 	dmCtx := dccore.WithTenant(ctx, "acme")
 	factWriter := &fenceFactWriter{}
-	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(factWriter, &fenceFactWriter{}, 0, nil, nil)
+	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(factWriter, 0, nil)
 
+	src := newSchemaFenceSource(t, api)
 	w := &captureWriter{}
 	rp := newFenceProcessor(t, fenceRuleReg(t, "acme", "p@1", "yard"), w, nil)
 	rp.fenceView = runtime.NewFenceSetView()
+	wireFenceArchive(rp, src)
 
 	// CONTROL: with the projection empty, an event stamped version 1 cannot be evaluated at all.
 	rp.handle(locatedMsg(t, 1, "acme", "d1", "p@1", 1, 0.5, 0.5, &fakeAck{}))
@@ -311,6 +465,17 @@ func TestFenceEditReachesTheDetectEngineEndToEnd(t *testing.T) {
 	if len(factWriter.payloads) != 1 {
 		t.Fatalf("device-management published %d fence-set facts, want 1 — the live feed is not "+
 			"connected at the producing end", len(factWriter.payloads))
+	}
+	// The fact NAMES the geometry rather than carrying it. Asserting that here rather than only
+	// in the size tests keeps the ordinary case honest: a publisher that quietly inlined geometry
+	// again would satisfy every behavioural assertion below and reintroduce the whole failure
+	// class the manifest exists to delete.
+	_, manifest := lastFact(t, factWriter)
+	if len(manifest.Fences) != 1 || manifest.Fences[0].Token != "yard" {
+		t.Fatalf("the fact names fences %+v, want one entry for \"yard\"", manifest.Fences)
+	}
+	if manifest.Fences[0].Hash == "" {
+		t.Fatal("the manifest entry carries no content address, so nothing can resolve its geometry")
 	}
 
 	// Consume the fact exactly as the running consumer does, then let the loop install it.
@@ -346,7 +511,7 @@ func TestFenceEditsAreFiledByVersionNotReplaced(t *testing.T) {
 	api := newFenceDmApi(t)
 	dmCtx := dccore.WithTenant(ctx, "acme")
 	factWriter := &fenceFactWriter{}
-	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(factWriter, &fenceFactWriter{}, 0, nil, nil)
+	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(factWriter, 0, nil)
 
 	if _, err := api.CreateGeoFence(dmCtx, &dmmodel.GeoFenceCreateRequest{
 		Token: "yard", Geometry: fenceBox(0, 0, 1, 1)}); err != nil {
@@ -364,6 +529,7 @@ func TestFenceEditsAreFiledByVersionNotReplaced(t *testing.T) {
 	w := &captureWriter{}
 	rp := newFenceProcessor(t, fenceRuleReg(t, "acme", "p@1", "yard"), w, nil)
 	rp.fenceView = runtime.NewFenceSetView()
+	wireFenceArchive(rp, newSchemaFenceSource(t, api))
 	for _, payload := range factWriter.payloads {
 		if !rp.handleFenceSetFact(fenceFactMsg("acme", payload, &fakeAck{})) {
 			t.Fatal("handleFenceSetFact reported shutdown")
@@ -395,12 +561,19 @@ func TestFenceEditsAreFiledByVersionNotReplaced(t *testing.T) {
 // A fact claiming to BE version 0 is dropped and acked, never filed. 0 is the reserved "this
 // tenant had never created a fence" stamp, which the projection answers as a known-EMPTY set
 // without consulting its map; filing a producer-invented set under it would overwrite knowledge
-// with a claim. The control is the well-formed fact in the same test, which IS filed.
+// with a claim. The control is the real, well-formed fact in the same test, which IS filed.
 func TestFenceSetFactWithANonPositiveVersionIsDropped(t *testing.T) {
+	api := newFenceDmApi(t)
+	dmCtx := dccore.WithTenant(context.Background(), "acme")
+	factWriter := &fenceFactWriter{}
+	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(factWriter, 0, nil)
+
+	src := newSchemaFenceSource(t, api)
 	rp := newFenceProcessor(t, fenceRuleReg(t, "acme", "p@1", "yard"), &captureWriter{}, nil)
 	rp.fenceView = runtime.NewFenceSetView()
+	wireFenceArchive(rp, src)
 
-	bad, err := dmmodel.MarshalGeoFenceSetMintedEvent(&dmmodel.GeoFenceSetMintedEvent{Version: 0})
+	bad, err := dmmodel.MarshalGeoFenceSetManifest(&dmmodel.GeoFenceSetManifest{Version: 0})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -414,13 +587,19 @@ func TestFenceSetFactWithANonPositiveVersionIsDropped(t *testing.T) {
 	if ack.acks != 1 {
 		t.Errorf("a poison fact must be acked so it stops redelivering; acks=%d", ack.acks)
 	}
-
-	// Control: a well-formed fact from the same path IS filed.
-	good, err := dmmodel.MarshalGeoFenceSetMintedEvent(&dmmodel.GeoFenceSetMintedEvent{
-		Version: 1, Fences: []dmmodel.GeoFenceSnapshotRef{{Token: "yard", Geometry: []byte(fenceBox(0, 0, 1, 1))}}})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
+	// The drop happens BEFORE any archive read. A version that was never minted has nothing to
+	// resolve, and asking after it would turn a poison fact into a cross-service round trip.
+	if got := src.stats().responses; got != 0 {
+		t.Errorf("a version-0 fact cost %d archive responses, want 0", got)
 	}
+
+	// CONTROL: a real fact, minted by the real authoring path, IS filed. Without it "nothing was
+	// installed" would pass just as well against a handler that installs nothing ever.
+	if _, err := api.CreateGeoFence(dmCtx, &dmmodel.GeoFenceCreateRequest{
+		Token: "yard", Geometry: fenceBox(0, 0, 1, 1)}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	good, _ := lastFact(t, factWriter)
 	if !rp.handleFenceSetFact(fenceFactMsg("acme", good, &fakeAck{})) {
 		t.Fatal("handleFenceSetFact reported shutdown")
 	}
@@ -447,7 +626,7 @@ func TestStartFenceViewSeedsFromTheArchive(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	src := &schemaFenceSource{t: t, api: api}
+	src := newSchemaFenceSource(t, api)
 	w := &captureWriter{}
 	rp := newFenceProcessor(t, fenceRuleReg(t, "acme", "p@1", "yard"), w, src)
 	if err := rp.startFenceView(ctx); err != nil {
@@ -492,17 +671,18 @@ func TestRestartedProcessorStillEvaluatesAFenceRule(t *testing.T) {
 	api := newFenceDmApi(t)
 	dmCtx := dccore.WithTenant(ctx, "acme")
 	factWriter := &fenceFactWriter{}
-	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(factWriter, &fenceFactWriter{}, 0, nil, nil)
+	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(factWriter, 0, nil)
 	if _, err := api.CreateGeoFence(dmCtx, &dmmodel.GeoFenceCreateRequest{
 		Token: "yard", Geometry: fenceBox(0, 0, 1, 1)}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
 	// Incarnation 1: learns the fence from the live fact and fires.
-	src := &schemaFenceSource{t: t, api: api}
+	src := newSchemaFenceSource(t, api)
 	w1 := &captureWriter{}
 	first := newFenceProcessor(t, fenceRuleReg(t, "acme", "p@1", "yard"), w1, src)
 	first.fenceView = runtime.NewFenceSetView()
+	wireFenceArchive(first, src)
 	if !first.handleFenceSetFact(fenceFactMsg("acme", factWriter.payloads[0], &fakeAck{})) {
 		t.Fatal("handleFenceSetFact reported shutdown")
 	}
@@ -631,7 +811,7 @@ func TestPreviewResolvesAVersionTheProjectionDoesNotHold(t *testing.T) {
 		t.Fatalf("update: %v", err)
 	}
 
-	src := &schemaFenceSource{t: t, api: api}
+	src := newSchemaFenceSource(t, api)
 	reg := fenceRuleReg(t, "acme", "p@1", "yard")
 
 	// The live projection holds only the CURRENT version, as the reconcile would have left it.
