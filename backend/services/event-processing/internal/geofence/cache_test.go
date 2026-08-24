@@ -50,8 +50,14 @@ func refusing(reason string) GeometryFetch {
 	return func(context.Context) ([]byte, error) { return nil, errors.New(reason) }
 }
 
-// retained reports whether an address is held for a tenant, without disturbing anything but the
-// entry's recency — it probes with a fetch that cannot succeed, so only a hit can answer.
+// retained reports whether an address is held for a tenant.
+//
+// 🔴 IT IS NOT SIDE-EFFECT-FREE, AND AN EARLIER COMMENT HERE SAID IT WAS. It goes through Get, so
+// a hit moves Hits and refreshes recency and a miss moves Misses AND Fills before the refusing
+// fetch errors. That matters for where it may be used: a probe placed BEFORE a Stats assertion
+// skews the very counters being asserted. TestStatsTrackTheContents survives only because its
+// probe comes after its stats checks, which is a property of that test rather than of this
+// helper — so probe last, or assert stats first — it probes with a fetch that cannot succeed, so only a hit can answer.
 func retained(t *testing.T, c *GeometryCache, tenant, hash string) bool {
 	t.Helper()
 	_, err := c.Get(context.Background(), tenant, hash, refusing("probe"))

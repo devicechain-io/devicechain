@@ -297,7 +297,14 @@ func TestPrebuildIsSafeAndAnswerPreserving(t *testing.T) {
 // one-sided bound reads as safe and is not, since "the build got much bigger" is as much a change
 // worth seeing as "it stopped happening". The measured figures on the pinned golang/geo are 432,728
 // bytes for a 511-vertex loop's index, 62,824 for a 64-vertex one, and 192 for a repeat call that
-// builds nothing — so every bound below sits at least 8x away from the value it separates.
+// builds nothing.
+//
+// 🔑 THE MARGINS ARE NOT UNIFORM, AND AN EARLIER DRAFT OF THIS COMMENT CLAIMED THEY WERE. It said
+// every bound sits "at least 8x" from the value it separates, which its own figures contradict:
+// 432,728 over minIndexBuildBytes is 4.2x and 62,824 over minHoleIndexBytes is 7.7x. The floors
+// are what they are because both are still more than 40x above the 192-byte no-build figure,
+// which is the separation that actually matters — a bound stated loosely is worse than one stated
+// as it is, because the next person tightens against the wrong number.
 const (
 	minIndexBuildBytes = 100 << 10
 	maxIndexBuildBytes = 8 << 20
@@ -418,10 +425,15 @@ func circleRingRadius(n int, radius float64) [][2]float64 {
 // ErrUnknownFence, so this test cannot be satisfied by making every miss error.
 func TestUnresolvedFenceReadsAsAnErrorNeverAsAbsentOrOutside(t *testing.T) {
 	unavailable := errors.New("the geometry body could not be fetched")
-	fs := &FenceSet{version: 9, byToken: map[string]*Fence{
-		"gate": NewErrorFence("gate", unavailable),
-		"yard": NewCompiledFence("yard", mustCompile(t, polygonDocument(square(0, 0, 1, 1)))),
-	}}
+	// Assembled through the PRODUCTION constructor, not a map literal. The retention assertions
+	// below claim that an unresolved fence survives into the set — and a literal performs that
+	// retention itself, so against a literal those lines could only fail if a one-line accessor
+	// started filtering. Going through NewFenceSetFromFences puts the claim where it belongs:
+	// the assembly door is what could drop an error fence, and now it is what is under test.
+	fs := NewFenceSetFromFences(9, []*Fence{
+		NewErrorFence("gate", unavailable),
+		NewCompiledFence("yard", mustCompile(t, polygonDocument(square(0, 0, 1, 1)))),
+	})
 
 	in, err := fs.Contains("gate", at(0.5, 0.5))
 	if err == nil {

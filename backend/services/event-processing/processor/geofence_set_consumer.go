@@ -193,14 +193,20 @@ func (rp *ResolvedEventsProcessor) runFenceReconcile(tenants []string) {
 // device-management's row, not a row of ours.
 func (rp *ResolvedEventsProcessor) runFenceSetConsumer() {
 	defer rp.readerWG.Done()
-	rp.drainFenceSetStream(rp.FenceSetReader)
+	rp.drainFenceSetStream()
 }
 
-// drainFenceSetStream is the read/ack loop both fence-set consumers run. Sharing it is what
-// keeps the ordinary and pointer subjects from drifting into two different fact handlers.
-func (rp *ResolvedEventsProcessor) drainFenceSetStream(reader messaging.MessageReader) {
+// drainFenceSetStream is the read/ack loop of the fence-set manifest consumer.
+//
+// It took a reader as a parameter when there were TWO fence-set subjects to drain — the ordinary
+// fact and the pointer form — and sharing one loop is what kept them from drifting into two
+// different fact handlers. Manifest delivery deleted the second subject, and with it the reason:
+// the parameter had exactly one argument left, and it read from that parameter while reporting
+// its errors on rp.FenceSetReader, so the two could disagree with nothing to notice. Folded back
+// onto the field it was always given.
+func (rp *ResolvedEventsProcessor) drainFenceSetStream() {
 	for {
-		msg, err := reader.ReadMessage(rp.procCtx)
+		msg, err := rp.FenceSetReader.ReadMessage(rp.procCtx)
 		if errors.Is(err, io.EOF) {
 			return
 		}

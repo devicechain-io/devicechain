@@ -331,8 +331,11 @@ var errGeometryHashMismatch = errors.New("geofence geometry does not match its c
 //
 // The cache is consulted twice on purpose: once advisorily, to size the batch to what is
 // actually missing, and then again per fence through Get, which is the only door that verifies,
-// single-flights and refreshes recency. Held may be wrong by the time Get runs — an entry can
-// be evicted, or arrive — and both directions cost at most a redundant fetch.
+// single-flights and refreshes recency. Held may be wrong by the time Get runs in BOTH
+// directions, and neither may be allowed to become an answer: an entry that arrived after the
+// plan costs a document fetched and not needed, and an entry EVICTED after the plan is refetched
+// on its own rather than reported as absent. The second is the one that bites — see the fetch
+// closure below.
 func (c *fenceSetClient) assemble(ctx context.Context, tenant string, manifest *dmmodel.GeoFenceSetManifest) (*geofence.FenceSet, error) {
 	if len(manifest.Fences) == 0 {
 		return geofence.EmptyFenceSet(manifest.Version), nil
@@ -369,15 +372,32 @@ func (c *fenceSetClient) assemble(ctx context.Context, tenant string, manifest *
 	fences := make([]*geofence.Fence, 0, len(manifest.Fences))
 	unresolved := 0
 	for _, entry := range manifest.Fences {
-		compiled, err := c.cache.Get(ctx, tenant, entry.Hash, func(context.Context) ([]byte, error) {
-			document, ok := documents[entry.Hash]
-			if !ok {
-				// Not a transport failure: the archive answered and did not hold this
-				// address. Returning an error here is what keeps the cache free of
-				// negatives — nothing is retained for a document that never arrived.
-				return nil, fmt.Errorf("device-management holds no geometry under %s", entry.Hash)
+		compiled, err := c.cache.Get(ctx, tenant, entry.Hash, func(ctx context.Context) ([]byte, error) {
+			if document, ok := documents[entry.Hash]; ok {
+				return document, nil
 			}
-			return document, nil
+			// 🔴 REACHING HERE MEANS THE PLAN WAS STALE, NOT THAT THE ARCHIVE IS MISSING A
+			// BODY, AND CONFLATING THE TWO INSTALLS A FENCE THAT REPORTS A LIE. Held is
+			// advisory: it said this address was cached, so it was left out of the batch, and
+			// by the time Get asked it had been evicted. That is not hypothetical — this
+			// function's OWN admits can evict entries it planned as held, so a tenant whose
+			// working set exceeds the cache bound would otherwise manufacture unresolvable
+			// fences on every rebuild, and the reconcile sweep would hit the same wall forever.
+			//
+			// Fetching the one address through the SAME geometryFetch keeps the request budget
+			// shared, so even a pathological run terminates. Absence is reported only after
+			// asking the archive directly for it.
+			late, err := fetch.documents(ctx, []string{entry.Hash})
+			if err != nil {
+				return nil, err
+			}
+			if document, ok := late[entry.Hash]; ok {
+				return document, nil
+			}
+			// The archive answered and did not hold this address. Returning an error is what
+			// keeps the cache free of negatives — nothing is retained for a document that
+			// never arrived.
+			return nil, fmt.Errorf("device-management holds no geometry under %s", entry.Hash)
 		})
 		if err != nil {
 			unresolved++

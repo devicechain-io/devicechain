@@ -912,3 +912,85 @@ func TestAnUnparseableManifestFactIsDroppedAndAcked(t *testing.T) {
 		t.Errorf("%d fence sets were installed from an unparseable fact", n)
 	}
 }
+
+// 🔴 AN ENTRY EVICTED BETWEEN THE PLAN AND THE FETCH IS REFETCHED, NEVER REPORTED AS ABSENT.
+//
+// assemble sizes its batch from GeometryCache.Held, which is advisory — it deliberately does not
+// take the lock for the whole assembly. So an address reported as held can be gone by the time
+// Get asks for it, and the first version of this code answered that with "device-management
+// holds no geometry under X": a fence installed carrying an error that is factually FALSE, and
+// counted as unresolved, for a body the archive holds perfectly well.
+//
+// It is not a rare race. assemble's own admits evict, so a tenant whose fence set does not fit
+// the cache bound evicts entries THIS CALL planned as held — every rebuild manufactures
+// unresolvable fences, and the reconcile sweep hits the same wall forever rather than repairing
+// anything.
+//
+// The fixture forces exactly that: a cache bounded well below the set, primed with the first
+// fence, so resolving the rest evicts it before its turn comes.
+func TestAnEntryEvictedAfterThePlanIsRefetchedNotReportedAbsent(t *testing.T) {
+	rings := []string{fenceBox(0, 0, 1, 1), fenceBox(10, 10, 11, 11), fenceBox(20, 20, 21, 21)}
+	entries := make([]dmmodel.GeoFenceManifestEntry, 0, len(rings))
+	docs := make([]geometryDoc, 0, len(rings))
+	for i, r := range rings {
+		entries = append(entries, dmmodel.GeoFenceManifestEntry{
+			Token: fmt.Sprintf("fence-%d", i), Hash: docHash(r)})
+		docs = append(docs, held(r))
+	}
+
+	c, x := scriptedClient(t, func(_ int, query string, vars map[string]any) (string, error) {
+		if query == geoFenceGeometryQuery {
+			asked := map[string]bool{}
+			for _, h := range vars["hashes"].([]string) {
+				asked[h] = true
+			}
+			want := make([]geometryDoc, 0, len(docs))
+			for _, d := range docs {
+				if asked[d.Hash] {
+					want = append(want, d)
+				}
+			}
+			return geometryData(t, want...), nil
+		}
+		return manifestData(t, "currentGeoFenceSetManifest", 3, entries...), nil
+	})
+	// A bound that cannot hold the whole set: each box is 4 compiled vertices, so two fit and
+	// the third evicts the least recently used — which is the one the plan called held.
+	c.cache = geofence.NewGeometryCache(8)
+
+	// Prime the cache with the first fence, so Held reports it and it is left out of the batch.
+	if _, err := c.cache.Get(context.Background(), "acme", docHash(rings[0]),
+		func(context.Context) ([]byte, error) { return []byte(rings[0]), nil }); err != nil {
+		t.Fatalf("prime the cache: %v", err)
+	}
+
+	set, err := c.CurrentFenceSet(context.Background(), "acme")
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	for i := range rings {
+		token := fmt.Sprintf("fence-%d", i)
+		fence := set.Fence(token)
+		if fence == nil {
+			t.Fatalf("%s is absent from the set entirely", token)
+		}
+		if _, err := set.Contains(token, geofence.Position{Lat: 0.5, Lon: 0.5}); err != nil &&
+			errors.Is(err, geofence.ErrUnknownFence) {
+			t.Fatalf("%s resolved to an unknown fence", token)
+		}
+	}
+	// The real assertion: nothing was reported unresolvable. Before the fix, fence-0 was —
+	// evicted by the admits of fences 1 and 2, then declared absent without being asked for.
+	if got := testutil.ToFloat64(c.metrics.fenceGeometryUnresolved); got != 0 {
+		t.Fatalf("%v manifest entries were reported unresolvable, but the archive holds every "+
+			"one of them; an entry evicted after the plan must be refetched, not declared absent", got)
+	}
+	// The control: the cache really is too small to hold the set, so eviction genuinely
+	// happened and the assertion above is not passing because nothing was ever evicted.
+	if evicted := c.cache.Stats().Evictions; evicted == 0 {
+		t.Fatal("nothing was evicted, so this test did not exercise the stale-plan path at all")
+	}
+	if x.calls == 0 {
+		t.Fatal("no geometry was fetched")
+	}
+}

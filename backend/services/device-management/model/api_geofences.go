@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -283,18 +284,11 @@ func (api *Api) GeoFenceSetManifestAt(ctx context.Context, version int32) (*GeoF
 	if version == 0 {
 		return &GeoFenceSetManifest{Version: 0, Fences: []GeoFenceManifestEntry{}}, nil
 	}
-	found := make([]GeoFenceSetVersion, 0, 1)
-	if err := api.RDB.DB(ctx).Where("version = ?", version).Limit(1).Find(&found).Error; err != nil {
-		return nil, err
-	}
-	if len(found) == 0 {
-		return nil, gorm.ErrRecordNotFound
-	}
-	stored, err := parseStoredGeoFenceSetSnapshot(found[0].Snapshot)
+	row, stored, err := api.fenceSetVersionRow(ctx, version)
 	if err != nil {
 		return nil, err
 	}
-	return manifestFromStored(found[0].Version, found[0].MintedAt, stored), nil
+	return manifestFromStored(row.Version, row.MintedAt, stored), nil
 }
 
 // CurrentGeoFenceSetManifest returns the manifest of the tenant's CURRENT fence-set version
@@ -311,18 +305,16 @@ func (api *Api) GeoFenceSetManifestAt(ctx context.Context, version int32) (*GeoF
 // A tenant that has never had a fence yields version 0 with an empty fence list, matching the
 // stamp such a tenant's events carry.
 func (api *Api) CurrentGeoFenceSetManifest(ctx context.Context) (*GeoFenceSetManifest, error) {
-	found := make([]GeoFenceSetVersion, 0, 1)
-	if err := api.RDB.DB(ctx).Order("version desc").Limit(1).Find(&found).Error; err != nil {
-		return nil, err
-	}
-	if len(found) == 0 {
+	row, stored, err := api.fenceSetVersionRow(ctx, 0)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		// A tenant that has never had a fence. Not an error here, unlike the version-addressed
+		// door: "you have no fence set" is a true answer to "what is your current one".
 		return &GeoFenceSetManifest{Version: 0, Fences: []GeoFenceManifestEntry{}}, nil
 	}
-	stored, err := parseStoredGeoFenceSetSnapshot(found[0].Snapshot)
 	if err != nil {
 		return nil, err
 	}
-	return manifestFromStored(found[0].Version, found[0].MintedAt, stored), nil
+	return manifestFromStored(row.Version, row.MintedAt, stored), nil
 }
 
 // GeoFenceGeometryDocuments returns the archived geometry documents stored under the given
@@ -424,6 +416,41 @@ func (api *Api) CurrentFenceSetVersion(ctx context.Context) (int32, error) {
 	return found[0].Version, nil
 }
 
+// fenceSetVersionRow reads ONE fence-set version row and decodes its stored snapshot — the
+// shared prologue of all four version-addressed reads (the two manifest doors and the two
+// snapshot doors).
+//
+// 🔴 IT EXISTS BECAUSE THE SUBTLETY BELOW WAS WRITTEN OUT FOUR TIMES. Each of those doors has to
+// take its version and timestamp from the ROW rather than from the snapshot DOCUMENT: the two
+// are written together and agree, but only the columns are what an ordering or a lookup selected
+// on, and a future divergence would surface as a fence set filed under a number nobody queried.
+// Four copies of that reasoning is four places for a later fix — a predicate, an index hint, a
+// soft-delete clause — to land in one of.
+//
+// version above zero selects that exact version; zero selects the tenant's CURRENT one. A
+// negative version is refused by the callers before they get here, because the two forms answer
+// it differently and neither answer belongs in a shared helper.
+func (api *Api) fenceSetVersionRow(ctx context.Context, version int32) (*GeoFenceSetVersion, *storedGeoFenceSetSnapshot, error) {
+	found := make([]GeoFenceSetVersion, 0, 1)
+	query := api.RDB.DB(ctx)
+	if version > 0 {
+		query = query.Where("version = ?", version)
+	} else {
+		query = query.Order("version desc")
+	}
+	if err := query.Limit(1).Find(&found).Error; err != nil {
+		return nil, nil, err
+	}
+	if len(found) == 0 {
+		return nil, nil, gorm.ErrRecordNotFound
+	}
+	stored, err := parseStoredGeoFenceSetSnapshot(found[0].Snapshot)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &found[0], stored, nil
+}
+
 // errNegativeFenceSetVersion refuses a version below zero.
 //
 // 🔴 IT EXISTS BECAUSE BOTH DOORS USED TO FOLD IT INTO THE KNOWN-EMPTY ANSWER, which is a
@@ -455,14 +482,7 @@ func (api *Api) GeoFenceSetSnapshotAt(ctx context.Context, version int32) (*GeoF
 	if version == 0 {
 		return &GeoFenceSetSnapshot{Version: 0, Fences: []GeoFenceSnapshotRef{}}, nil
 	}
-	found := make([]GeoFenceSetVersion, 0, 1)
-	if err := api.RDB.DB(ctx).Where("version = ?", version).Limit(1).Find(&found).Error; err != nil {
-		return nil, err
-	}
-	if len(found) == 0 {
-		return nil, gorm.ErrRecordNotFound
-	}
-	stored, err := parseStoredGeoFenceSetSnapshot(found[0].Snapshot)
+	_, stored, err := api.fenceSetVersionRow(ctx, version)
 	if err != nil {
 		return nil, err
 	}
@@ -485,14 +505,10 @@ func (api *Api) GeoFenceSetSnapshotAt(ctx context.Context, version int32) (*GeoF
 // the stamp such a tenant's events carry (see CurrentFenceSetVersion for why 0 is
 // knowledge rather than absence).
 func (api *Api) CurrentGeoFenceSetSnapshot(ctx context.Context) (*GeoFenceSetSnapshot, error) {
-	found := make([]GeoFenceSetVersion, 0, 1)
-	if err := api.RDB.DB(ctx).Order("version desc").Limit(1).Find(&found).Error; err != nil {
-		return nil, err
-	}
-	if len(found) == 0 {
+	row, stored, err := api.fenceSetVersionRow(ctx, 0)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return &GeoFenceSetSnapshot{Version: 0, Fences: []GeoFenceSnapshotRef{}}, nil
 	}
-	stored, err := parseStoredGeoFenceSetSnapshot(found[0].Snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -503,7 +519,7 @@ func (api *Api) CurrentGeoFenceSetSnapshot(ctx context.Context) (*GeoFenceSetSna
 	// The row's own Version is authoritative over the number embedded in the snapshot
 	// document: they are written together and agree, but only one of them is the column
 	// the ordering above selected on.
-	snapshot.Version = found[0].Version
+	snapshot.Version = row.Version
 	return snapshot, nil
 }
 
