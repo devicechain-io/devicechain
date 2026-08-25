@@ -63,6 +63,46 @@ const ShedPriorityConfigKey = "shedPriority"
 // 1–100 band scale, where 101 names no band at all.
 const HeldCommandCeilingConfigKey = "heldCommandCeiling"
 
+// The three geofence config keys (ADR-023 governance, packaged per ADR-065). Registered
+// OUTSIDE the dimension loop below like the two scalars above, and for the same reason: a
+// position count has no burst and no per-second unit.
+//
+// 🔴 THEY ARE THE FIRST TIER KEYS WITH A SEMANTIC MAXIMUM, and that is a deliberate break
+// with every key beside them. validatePositiveBurst stops at MaxInt32 because the value
+// crosses a GraphQL Int; validateHeldCommandCeiling's own comment argues AGAINST an upper
+// bound, because a held backlog is tenant-local durable storage and a tier granting a huge
+// one spends only that tenant's disk. A geofence set is different in kind: it is compiled and
+// retained in event-processing, a process every tenant SHARES, and its manifest crosses a
+// broker with a per-message ceiling. An operator who types an extra zero here does not
+// overprovision one tenant, they degrade the instance. The maxima live in core/governance
+// beside the defaults they bound, so the two doors that enforce them cannot disagree about
+// the number.
+//
+// The NAMES are derived from core/governance too, rather than spelled here. Each of these
+// strings is the same name in three places — the tier config key, the per-tenant override
+// field, and the field device-management selects off tenantGovernance — and that sameness is
+// the legibility of the whole cascade, not a coincidence. Deriving them is the pattern
+// AllDimensions() already establishes for the rate and burst keys.
+//
+// THREE keys rather than one, because a tenant's geofence footprint has three independent
+// costs: a per-fence compile, a per-set wire size, and a per-tenant share of a shared cache.
+// No one number bounds all three — see the constants in core/governance for the measurement
+// each was read off.
+const (
+	// GeoFenceVertexCeilingConfigKey bounds ONE fence's total position count across every
+	// ring. It bounds a COMPILE, which is O(V²).
+	GeoFenceVertexCeilingConfigKey = governance.GeoFenceVertexCeilingField
+	// GeoFenceCeilingConfigKey bounds how many fences the tenant may hold. It bounds a WIRE
+	// size: the fence-set manifest carries one {token, hash} pair per fence and must fit a
+	// single broker message.
+	GeoFenceCeilingConfigKey = governance.GeoFenceCeilingField
+	// GeoFenceVertexBudgetConfigKey bounds the total position count across the tenant's
+	// WHOLE current fence set. It bounds FOOTPRINT in the shared DETECT geometry cache —
+	// the cost neither of the other two can express, since a ceiling on one fence bounds a
+	// compile and a ceiling on the count bounds a manifest.
+	GeoFenceVertexBudgetConfigKey = governance.GeoFenceVertexBudgetField
+)
+
 // tierConfigKeys is the registry, keyed by config-blob key name.
 var tierConfigKeys = buildTierConfigKeys()
 
@@ -79,6 +119,9 @@ func buildTierConfigKeys() map[string]tierConfigKey {
 	}
 	keys[ShedPriorityConfigKey] = tierConfigKey{validate: validateShedPriority}
 	keys[HeldCommandCeilingConfigKey] = tierConfigKey{validate: validateHeldCommandCeiling}
+	keys[GeoFenceVertexCeilingConfigKey] = tierConfigKey{validate: validateGeoFenceVertexCeiling}
+	keys[GeoFenceCeilingConfigKey] = tierConfigKey{validate: validateGeoFenceCeiling}
+	keys[GeoFenceVertexBudgetConfigKey] = tierConfigKey{validate: validateGeoFenceVertexBudget}
 	return keys
 }
 
@@ -247,6 +290,57 @@ func validateShedPriority(v any) error {
 // quietly reinterpreted.
 func validateHeldCommandCeiling(v any) error { return validatePositiveBurst(v) }
 
+// validateBoundedCount accepts a positive whole number no larger than max — the burst rule
+// plus a semantic upper bound.
+//
+// It DELEGATES to validatePositiveBurst rather than restating it, so the two cannot drift on
+// what counts as a number, what counts as whole, and where the representational MaxInt32 wall
+// is. What it adds is the part validatePositiveBurst deliberately does not have, and the
+// error says why the bound exists rather than only what it is: an operator who has just been
+// refused needs to know whether to type a smaller number or to raise a platform constant.
+func validateBoundedCount(v any, max int, unit, because string) error {
+	if err := validatePositiveBurst(v); err != nil {
+		return err
+	}
+	f, _ := toFloat(v) // validatePositiveBurst already proved this coerces
+	if int(f) > max {
+		return fmt.Errorf("must be at most %d %s (got %v); %s", max, unit, v, because)
+	}
+	return nil
+}
+
+// validateGeoFenceVertexCeiling accepts a positive whole number of positions up to
+// governance.MaxGeoFenceVertexCeiling.
+//
+// The maximum is the one this codebase is most likely to be asked to raise, so the error
+// names the cost rather than the rule: compiling a fence is quadratic in its position count,
+// and the binding consumer is event-processing filling its geometry cache after an eviction,
+// where the compile stalls that tenant's containment.
+func validateGeoFenceVertexCeiling(v any) error {
+	return validateBoundedCount(v, governance.MaxGeoFenceVertexCeiling, "positions per fence",
+		"compiling one fence is quadratic in its position count, and above this the compile stalls "+
+			"containment for the tenant every time event-processing refills its geometry cache")
+}
+
+// validateGeoFenceCeiling accepts a positive whole number of fences up to
+// governance.MaxGeoFenceCeiling.
+func validateGeoFenceCeiling(v any) error {
+	return validateBoundedCount(v, governance.MaxGeoFenceCeiling, "fences",
+		"a fence-set manifest carries one entry per fence and must fit inside one broker message")
+}
+
+// validateGeoFenceVertexBudget accepts a positive whole number of positions up to
+// governance.MaxTenantGeometryVertices.
+//
+// This is the maximum whose error most needs to explain itself, because the resource it
+// protects belongs to everyone: above it, one tenant may hold more than half the shared DETECT
+// geometry cache and its refills can evict every other tenant's geometry.
+func validateGeoFenceVertexBudget(v any) error {
+	return validateBoundedCount(v, governance.MaxTenantGeometryVertices, "positions across the tenant's fence set",
+		"the DETECT geometry cache is shared by every tenant on the instance, and above this one "+
+			"tenant's fence set can evict every other tenant's geometry")
+}
+
 // HeldCommandCeiling returns the tier's default bound on a tenant's HELD-command
 // backlog, or nil if the tier declares none (inherit the enforcing service's platform
 // default — which is a real ceiling, never unlimited). Nil for a nil tier, like
@@ -256,6 +350,31 @@ func validateHeldCommandCeiling(v any) error { return validatePositiveBurst(v) }
 // ceiling of zero, which would refuse every command to an absent device.
 func (t *TenantTier) HeldCommandCeiling() *int {
 	return t.positiveInt(HeldCommandCeilingConfigKey, validateHeldCommandCeiling)
+}
+
+// GeoFenceVertexCeiling returns the tier's default bound on ONE fence's position count, or nil
+// if the tier declares none (inherit the platform default). Nil for a nil tier, like every
+// accessor beside it, so a caller need not special-case an unloaded association.
+//
+// Read defensively through the same validator the write path uses, which here CLAMPS NOTHING
+// and returns nil instead: an out-of-band DB write parking a value above the maximum inherits
+// the platform default rather than becoming a cap larger than the platform will honour. The
+// read-side clamp lives one layer out, in governance.resolveGeoFenceCap, where the wire value
+// arrives; this one refuses.
+func (t *TenantTier) GeoFenceVertexCeiling() *int {
+	return t.positiveInt(GeoFenceVertexCeilingConfigKey, validateGeoFenceVertexCeiling)
+}
+
+// GeoFenceCeiling returns the tier's default bound on how many fences a tenant may hold, or
+// nil to inherit.
+func (t *TenantTier) GeoFenceCeiling() *int {
+	return t.positiveInt(GeoFenceCeilingConfigKey, validateGeoFenceCeiling)
+}
+
+// GeoFenceVertexBudget returns the tier's default bound on the position count across a
+// tenant's whole fence set, or nil to inherit.
+func (t *TenantTier) GeoFenceVertexBudget() *int {
+	return t.positiveInt(GeoFenceVertexBudgetConfigKey, validateGeoFenceVertexBudget)
 }
 
 // ShedPriority returns the tier's ADR-063 shed-priority default (1–100), or nil if

@@ -118,6 +118,37 @@ func (r *AdminTenantResolver) HeldCommandCeiling() *int32 {
 	return &v
 }
 
+// The three per-tenant geofence cap overrides, as the RAW nullable columns — null when the
+// tenant inherits its tier's key. Load-bearing for the same reason as ShedPriority and
+// HeldCommandCeiling above: updateTenant is a full REPLACE of the mutable fields (applyTo
+// writes every override, nil clearing it), so a console that could not read the current value
+// back would null it on any unrelated edit. Here that would silently RAISE a cap an operator
+// had deliberately tightened, which is the one direction this whole feature exists to prevent.
+
+// GeoFenceVertexCeiling resolves the per-tenant per-fence position ceiling override.
+func (r *AdminTenantResolver) GeoFenceVertexCeiling() *int32 {
+	return rawInt32(r.M.GeoFenceVertexCeiling)
+}
+
+// GeoFenceCeiling resolves the per-tenant fence-count override.
+func (r *AdminTenantResolver) GeoFenceCeiling() *int32 { return rawInt32(r.M.GeoFenceCeiling) }
+
+// GeoFenceVertexBudget resolves the per-tenant whole-fence-set position budget override.
+func (r *AdminTenantResolver) GeoFenceVertexBudget() *int32 {
+	return rawInt32(r.M.GeoFenceVertexBudget)
+}
+
+// rawInt32 adapts a nullable model int to the wire's nullable Int, preserving nil (inherit)
+// rather than coercing it to zero — which the cascade reads as "not a cap" and the console
+// would render as a configured bound of none.
+func rawInt32(v *int) *int32 {
+	if v == nil {
+		return nil
+	}
+	i := int32(*v)
+	return &i
+}
+
 // Config resolves the AdminTenant.config field: the freeform config map as a
 // JSON object string, or null when unset.
 func (r *AdminTenantResolver) Config() (*string, error) { return marshalConfig(r.M.Config) }
@@ -265,6 +296,9 @@ type adminTenantCreateInput struct {
 	AiInferenceBurst             *int32
 	ShedPriority                 *int32
 	HeldCommandCeiling           *int32
+	GeoFenceVertexCeiling        *int32
+	GeoFenceCeiling              *int32
+	GeoFenceVertexBudget         *int32
 }
 
 // adminTenantUpdateInput mirrors AdminTenantUpdateRequest.
@@ -281,6 +315,9 @@ type adminTenantUpdateInput struct {
 	AiInferenceBurst             *int32
 	ShedPriority                 *int32
 	HeldCommandCeiling           *int32
+	GeoFenceVertexCeiling        *int32
+	GeoFenceCeiling              *int32
+	GeoFenceVertexBudget         *int32
 }
 
 // intPtr adapts an optional GraphQL Int (*int32) to the model's *int, preserving
@@ -316,6 +353,9 @@ func (r *AdminResolver) CreateTenant(ctx context.Context, args struct {
 			AiInferenceBurst:             intPtr(args.Request.AiInferenceBurst),
 			ShedPriority:                 intPtr(args.Request.ShedPriority),
 			HeldCommandCeiling:           intPtr(args.Request.HeldCommandCeiling),
+			GeoFenceVertexCeiling:        intPtr(args.Request.GeoFenceVertexCeiling),
+			GeoFenceCeiling:              intPtr(args.Request.GeoFenceCeiling),
+			GeoFenceVertexBudget:         intPtr(args.Request.GeoFenceVertexBudget),
 		},
 		AiExternalEnabled: args.Request.AiExternalEnabled,
 	})
@@ -345,6 +385,9 @@ func (r *AdminResolver) UpdateTenant(ctx context.Context, args struct {
 			AiInferenceBurst:             intPtr(args.Request.AiInferenceBurst),
 			ShedPriority:                 intPtr(args.Request.ShedPriority),
 			HeldCommandCeiling:           intPtr(args.Request.HeldCommandCeiling),
+			GeoFenceVertexCeiling:        intPtr(args.Request.GeoFenceVertexCeiling),
+			GeoFenceCeiling:              intPtr(args.Request.GeoFenceCeiling),
+			GeoFenceVertexBudget:         intPtr(args.Request.GeoFenceVertexBudget),
 		},
 		AiExternalEnabled: args.Request.AiExternalEnabled,
 	})

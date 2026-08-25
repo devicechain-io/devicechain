@@ -84,6 +84,22 @@ export function TenantForm({
   // survival rather than throughput, which is why it reads as a band rather than a
   // rate. Blank inherits the tier's band, then the platform fail-safe.
   const [shedPriority, setShedPriority] = useState(tenant?.shedPriority?.toString() ?? '');
+  // The three geofence caps. Each bounds a different cost and each inherits independently, so
+  // they are three fields rather than one: how many points one fence may have, how many fences
+  // the tenant may keep, and how many points its fences may add up to across the whole set.
+  //
+  // The third is the one that is not about this tenant alone — the platform holds every
+  // tenant's fences in one place to test them against incoming positions, so a tenant's total
+  // is a claim on shared room. That is why it has a firm platform maximum an operator cannot
+  // raise per tenant, and why the server refuses a larger number rather than quietly reducing
+  // it. Blank inherits the tier's cap, then the platform default — never unlimited.
+  const [fenceVertexCeiling, setFenceVertexCeiling] = useState(
+    tenant?.geoFenceVertexCeiling?.toString() ?? '',
+  );
+  const [fenceCeiling, setFenceCeiling] = useState(tenant?.geoFenceCeiling?.toString() ?? '');
+  const [fenceVertexBudget, setFenceVertexBudget] = useState(
+    tenant?.geoFenceVertexBudget?.toString() ?? '',
+  );
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const { data: tiers, error: tiersError } = useQuery(() => listTenantTiers(), []);
@@ -110,6 +126,9 @@ export function TenantForm({
         aiInferenceBurst: optNum(aiBurst),
         heldCommandCeiling: optNum(heldCeiling),
         shedPriority: optNum(shedPriority),
+        geoFenceVertexCeiling: optNum(fenceVertexCeiling),
+        geoFenceCeiling: optNum(fenceCeiling),
+        geoFenceVertexBudget: optNum(fenceVertexBudget),
       };
       if (editing) {
         await updateTenant(tenant.token, { name: name.trim() || null, tierToken, config: cfg, ...gov });
@@ -301,6 +320,53 @@ export function TenantForm({
           value={shedPriority}
           placeholder={t('defaultPlaceholder')}
           onChange={(e) => setShedPriority(e.target.value)}
+        />
+      </FormField>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <FormField
+          label={t('fenceVertexCeilingLabel')}
+          htmlFor="t-fence-vertex-ceiling"
+          description={t('fenceVertexCeilingDescription')}
+        >
+          <Input
+            id="t-fence-vertex-ceiling"
+            type="number"
+            min="1"
+            step="1"
+            value={fenceVertexCeiling}
+            placeholder={t('defaultPlaceholder')}
+            onChange={(e) => setFenceVertexCeiling(e.target.value)}
+          />
+        </FormField>
+        <FormField
+          label={t('fenceCeilingLabel')}
+          htmlFor="t-fence-ceiling"
+          description={t('fenceCeilingDescription')}
+        >
+          <Input
+            id="t-fence-ceiling"
+            type="number"
+            min="1"
+            step="1"
+            value={fenceCeiling}
+            placeholder={t('defaultPlaceholder')}
+            onChange={(e) => setFenceCeiling(e.target.value)}
+          />
+        </FormField>
+      </div>
+      <FormField
+        label={t('fenceVertexBudgetLabel')}
+        htmlFor="t-fence-vertex-budget"
+        description={t('fenceVertexBudgetDescription')}
+      >
+        <Input
+          id="t-fence-vertex-budget"
+          type="number"
+          min="1"
+          step="1"
+          value={fenceVertexBudget}
+          placeholder={t('defaultPlaceholder')}
+          onChange={(e) => setFenceVertexBudget(e.target.value)}
         />
       </FormField>
     </>

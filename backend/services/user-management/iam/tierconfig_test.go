@@ -25,11 +25,12 @@ func TestTierConfigKeysCoverEveryDimension(t *testing.T) {
 		require.NoError(t, ValidateTierConfig(map[string]any{d.BurstField: float64(10)}),
 			"burst key for dimension %q must be registered", d.Name)
 	}
-	// Two keys per dimension (rate + burst), plus the standalone non-dimension keys
-	// (ADR-063 shedPriority and the HELD-command ceiling). This +2 is the guard that a
-	// standalone key is neither dropped nor accidentally duplicated per dimension, and
-	// bumping it is meant to be a conscious act: a key that lands without it fails here.
-	require.Len(t, TierConfigKeys(), len(dims)*2+2)
+	// Two keys per dimension (rate + burst), plus the standalone non-dimension keys: the
+	// shed priority, the HELD-command ceiling, and the three geofence caps. This +5 is the
+	// guard that a standalone key is neither dropped nor accidentally duplicated per
+	// dimension, and bumping it is meant to be a conscious act: a key that lands without it
+	// fails here.
+	require.Len(t, TierConfigKeys(), len(dims)*2+5)
 }
 
 // TestTierConfigKeysMatchTheKnownDimensions is the half the test above cannot do.
@@ -55,6 +56,15 @@ func TestTierConfigKeysMatchTheKnownDimensions(t *testing.T) {
 		// counted above on purpose; the redundancy is what makes adding a key deliberate
 		// rather than something a +1 quietly absorbs.
 		"heldCommandCeiling",
+		// The three geofence caps — standalone for the same reason (a position count has
+		// no burst and no per-second unit), and the first tier keys carrying a semantic
+		// MAXIMUM as well as a floor. Written as literals here even though the code
+		// derives them from core/governance's field constants: this test's whole job is to
+		// name the vocabulary independently, so borrowing the constants would make it pass
+		// by construction like the one above.
+		"geoFenceVertexCeiling",
+		"geoFenceCeiling",
+		"geoFenceVertexBudget",
 	}, TierConfigKeys())
 }
 

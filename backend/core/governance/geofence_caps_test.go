@@ -98,14 +98,21 @@ func TestTheGeoFenceDefaultsSitInsideTheirMaxima(t *testing.T) {
 // decodes to nil, which reads as "inherit the platform default" and ignores every cap an
 // operator set.
 func TestGeoFenceCapsQueryAndResponseAgree(t *testing.T) {
-	for _, field := range []string{"tenantGovernance", "geoFenceVertexCeiling", "geoFenceCeiling", "geoFenceVertexBudget"} {
+	for _, field := range []string{
+		"tenantGovernance", GeoFenceVertexCeilingField, GeoFenceCeilingField, GeoFenceVertexBudgetField,
+	} {
 		if !strings.Contains(geoFenceCapsQuery, field) {
 			t.Fatalf("the query does not select %s: %q", field, geoFenceCapsQuery)
 		}
 	}
 
+	// 🔴 THE BODY IS BUILT FROM THE CONSTANTS, NOT WRITTEN OUT. Struct tags cannot reference a
+	// constant, so the tags below are the one place these names are spelled twice; a body
+	// written as a literal would agree with a drifted tag and this test would pass while every
+	// operator override decoded to nil — which reads as "inherit" and is invisible.
 	var out geoFenceCapsResponse
-	body := `{"tenantGovernance":{"geoFenceVertexCeiling":700,"geoFenceCeiling":250,"geoFenceVertexBudget":90000}}`
+	body := fmt.Sprintf(`{"tenantGovernance":{%q:700,%q:250,%q:90000}}`,
+		GeoFenceVertexCeilingField, GeoFenceCeilingField, GeoFenceVertexBudgetField)
 	if err := json.Unmarshal([]byte(body), &out); err != nil {
 		t.Fatalf("decoding a well-formed response failed: %v", err)
 	}
@@ -118,9 +125,9 @@ func TestGeoFenceCapsQueryAndResponseAgree(t *testing.T) {
 		got  *int32
 		want int32
 	}{
-		{"geoFenceVertexCeiling", g.GeoFenceVertexCeiling, 700},
-		{"geoFenceCeiling", g.GeoFenceCeiling, 250},
-		{"geoFenceVertexBudget", g.GeoFenceVertexBudget, 90000},
+		{GeoFenceVertexCeilingField, g.GeoFenceVertexCeiling, 700},
+		{GeoFenceCeilingField, g.GeoFenceCeiling, 250},
+		{GeoFenceVertexBudgetField, g.GeoFenceVertexBudget, 90000},
 	} {
 		if c.got == nil {
 			t.Fatalf("%s decoded to nil from a response that carries it — the json tag does not match the wire field", c.name)
@@ -133,7 +140,8 @@ func TestGeoFenceCapsQueryAndResponseAgree(t *testing.T) {
 	// A null is the ordinary "neither the tenant nor its tier declares one" case and must
 	// decode to nil rather than to zero, which the fold would then read as "not a cap".
 	var null geoFenceCapsResponse
-	nullBody := `{"tenantGovernance":{"geoFenceVertexCeiling":null,"geoFenceCeiling":null,"geoFenceVertexBudget":null}}`
+	nullBody := fmt.Sprintf(`{"tenantGovernance":{%q:null,%q:null,%q:null}}`,
+		GeoFenceVertexCeilingField, GeoFenceCeilingField, GeoFenceVertexBudgetField)
 	if err := json.Unmarshal([]byte(nullBody), &null); err != nil {
 		t.Fatalf("decoding a null response failed: %v", err)
 	}

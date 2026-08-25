@@ -295,16 +295,41 @@ func (r *GeoFenceCapsResolver) fresh(tenant string) (GeoFenceCaps, bool) {
 	return e.caps, true
 }
 
-// geoFenceCapsQuery reads the three fields this resolver needs. Named rather than inlined for
-// the reason spelled out on heldCommandCeilingQuery: svcclient.Client is concrete, so nothing
-// about the fetch is otherwise reachable from a unit test, and a typo here would make every
-// resolve on the instance error.
-const geoFenceCapsQuery = `query { tenantGovernance { geoFenceVertexCeiling geoFenceCeiling geoFenceVertexBudget } }`
+// The three geofence caps' WIRE FIELD NAMES, declared here and nowhere else.
+//
+// Each of these strings is the same name in three places: the field user-management serves off
+// tenantGovernance, the tier config key an operator sets, and the per-tenant override field an
+// admin sends. They are the same name because an operator setting `geoFenceCeiling` on a tier
+// and reading `geoFenceCeiling` back off a tenant is the whole legibility of the cascade — so
+// they are declared ONCE, here, and user-management derives its tier keys from them rather than
+// re-typing them. That is the pattern AllDimensions() already establishes for RateField and
+// BurstField, for the same reason: the enforcing service's query and the authority's key must
+// be the same string by construction, not by two people spelling it the same way.
+const (
+	GeoFenceVertexCeilingField = "geoFenceVertexCeiling"
+	GeoFenceCeilingField       = "geoFenceCeiling"
+	GeoFenceVertexBudgetField  = "geoFenceVertexBudget"
+)
+
+// geoFenceCapsQuery reads the three fields this resolver needs, BUILT from the constants above
+// rather than written out — so a renamed field cannot leave the query selecting the old name.
+//
+// Named rather than inlined at the call for the reason spelled out on heldCommandCeilingQuery:
+// svcclient.Client is concrete, so nothing about the fetch is otherwise reachable from a unit
+// test, and a typo here would make every resolve on the instance error — which for a resolver
+// that BLOCKS means fence authoring stops, not that a default is quietly served.
+const geoFenceCapsQuery = "query { tenantGovernance { " +
+	GeoFenceVertexCeilingField + " " + GeoFenceCeilingField + " " + GeoFenceVertexBudgetField + " } }"
 
 // geoFenceCapsResponse is the wire shape of that query's data object. Named for the same
 // reason as the query: a wrong json tag decodes to nil, which reads as "inherit the platform
 // default" and would quietly ignore every cap an operator has set — the one failure this whole
 // feature is built to prevent, arriving through a struct tag.
+//
+// 🔴 THE json TAGS MUST BE LITERALS — Go struct tags cannot reference a constant — so they are
+// the one place the three names are written twice. TestGeoFenceCapsQueryAndResponseAgree builds
+// its wire body FROM the constants and decodes through this type, which is what makes a tag that
+// has drifted away from its constant fail rather than silently decode to nil.
 type geoFenceCapsResponse struct {
 	TenantGovernance struct {
 		GeoFenceVertexCeiling *int32 `json:"geoFenceVertexCeiling"`

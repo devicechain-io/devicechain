@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"gorm.io/gorm"
@@ -172,6 +173,15 @@ type GovernanceOverrides struct {
 	// the tier's heldCommandCeiling, then the enforcing service's own default. It never
 	// means unlimited, and nothing downstream can read it that way.
 	HeldCommandCeiling *int
+	// The three per-tenant geofence caps (ADR-023 governance, ADR-065 tier). Ceilings like
+	// the rate fields (how much), standalone scalars like HeldCommandCeiling (no burst, no
+	// per-second unit) — and unlike either, they carry a platform MAXIMUM as well as a floor,
+	// because what they bound is spent in a process every tenant shares. nil means "inherit"
+	// — the tier's key, then the platform default — and never unlimited. Each cascades
+	// independently; there is no all-or-nothing group.
+	GeoFenceVertexCeiling *int
+	GeoFenceCeiling       *int
+	GeoFenceVertexBudget  *int
 }
 
 // validate rejects a non-positive override on any governance dimension. A nil field
@@ -215,6 +225,25 @@ func (g GovernanceOverrides) validate() error {
 	if err := validateBurstOverride("heldCommandCeiling", g.HeldCommandCeiling); err != nil {
 		return err
 	}
+	// 🔴 THE GEOFENCE CAPS GO THROUGH A BOUNDED CHECK, NOT validateBurstOverride, AND THIS IS
+	// THE DOOR THAT WOULD OTHERWISE BE LEFT OPEN. iam.ValidateTierConfig enforces these maxima
+	// on a TIER write, but it is called only from the two tier mutations — a per-tenant
+	// override never passes through it, and reaches the database through this function alone.
+	// Bounding them here is what makes the maximum a property of the platform rather than of
+	// one of the two ways to set a cap.
+	for _, c := range []struct {
+		field string
+		value *int
+		max   int
+	}{
+		{iam.GeoFenceVertexCeilingConfigKey, g.GeoFenceVertexCeiling, governance.MaxGeoFenceVertexCeiling},
+		{iam.GeoFenceCeilingConfigKey, g.GeoFenceCeiling, governance.MaxGeoFenceCeiling},
+		{iam.GeoFenceVertexBudgetConfigKey, g.GeoFenceVertexBudget, governance.MaxTenantGeometryVertices},
+	} {
+		if err := validateBoundedOverride(c.field, c.value, c.max); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -231,6 +260,9 @@ func (g GovernanceOverrides) applyTo(t *iam.Tenant) {
 	t.AiInferenceBurst = g.AiInferenceBurst
 	t.ShedPriority = g.ShedPriority
 	t.HeldCommandCeiling = g.HeldCommandCeiling
+	t.GeoFenceVertexCeiling = g.GeoFenceVertexCeiling
+	t.GeoFenceCeiling = g.GeoFenceCeiling
+	t.GeoFenceVertexBudget = g.GeoFenceVertexBudget
 }
 
 // TenantInput is the data to create a tenant.
@@ -288,6 +320,26 @@ func validateBurstOverride(field string, v *int) error {
 func validateShedPriorityOverride(field string, v *int) error {
 	if v != nil && (*v < 1 || *v > 100) {
 		return fmt.Errorf("%s override must be between 1 and 100 (got %d); omit it to inherit the platform default", field, *v)
+	}
+	return nil
+}
+
+// validateBoundedOverride is validateBurstOverride plus a platform MAXIMUM: positive, and no
+// larger than max. nil is inherit.
+//
+// It exists because the geofence caps are the first per-tenant overrides that bound a SHARED
+// resource — a compiled fence set lives in one DETECT process serving every tenant — so unlike
+// every ceiling beside it, an over-large value here is not a tenant overprovisioned but an
+// instance degraded. The number comes from core/governance, the same constant the tier door
+// reads, so the two doors cannot disagree about where the wall is.
+func validateBoundedOverride(field string, v *int, max int) error {
+	if err := validateBurstOverride(field, v); err != nil {
+		return err
+	}
+	if v != nil && *v > max {
+		return fmt.Errorf("%s override must be at most %d (got %d); it bounds a resource shared by "+
+			"every tenant on the instance, so raising it past the platform maximum is not a "+
+			"per-tenant decision", field, max, *v)
 	}
 	return nil
 }
