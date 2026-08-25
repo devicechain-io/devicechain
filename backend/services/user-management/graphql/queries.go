@@ -185,9 +185,9 @@ func (r *TenantGovernanceResolver) HeldCommandCeiling() *int32 {
 // The provenance is dropped here like the rates: a service enforcing a cap has no business
 // knowing which level won. That belongs to the admin plane.
 
-// GeoFenceVertexCeiling resolves how many positions ONE of this tenant's fences may carry.
-func (r *TenantGovernanceResolver) GeoFenceVertexCeiling() *int32 {
-	return int32OrNil(r.t.EffectiveGeoFenceVertexCeiling())
+// GeoFencePositionCeiling resolves how many positions ONE of this tenant's fences may carry.
+func (r *TenantGovernanceResolver) GeoFencePositionCeiling() *int32 {
+	return int32OrNil(r.t.EffectiveGeoFencePositionCeiling())
 }
 
 // GeoFenceCeiling resolves how many fences this tenant may hold.
@@ -195,9 +195,9 @@ func (r *TenantGovernanceResolver) GeoFenceCeiling() *int32 {
 	return int32OrNil(r.t.EffectiveGeoFenceCeiling())
 }
 
-// GeoFenceVertexBudget resolves how many positions this tenant's whole fence set may carry.
-func (r *TenantGovernanceResolver) GeoFenceVertexBudget() *int32 {
-	return int32OrNil(r.t.EffectiveGeoFenceVertexBudget())
+// GeoFencePositionBudget resolves how many positions this tenant's whole fence set may carry.
+func (r *TenantGovernanceResolver) GeoFencePositionBudget() *int32 {
+	return int32OrNil(r.t.EffectiveGeoFencePositionBudget())
 }
 
 // int32OrNil adapts an (Effective*, SettingSource) pair to the wire's nullable Int, dropping

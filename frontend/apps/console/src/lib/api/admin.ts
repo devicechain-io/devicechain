@@ -136,9 +136,9 @@ const TENANTS = graphql(`
       # updateTenant, and this comment is the reason that gate exists.
       heldCommandCeiling
       shedPriority
-      geoFenceVertexCeiling
+      geoFencePositionCeiling
       geoFenceCeiling
-      geoFenceVertexBudget
+      geoFencePositionBudget
       # What the tenant is ACTUALLY metered at, with the provenance that makes it
       # readable as tier + delta (ADR-065 decision 7). Resolved server-side by the
       # same cascade the data plane reads its ceilings through — deliberately not
@@ -704,9 +704,9 @@ const CREATE_TENANT = graphql(`
       aiInferenceBurst
       heldCommandCeiling
       shedPriority
-      geoFenceVertexCeiling
+      geoFencePositionCeiling
       geoFenceCeiling
-      geoFenceVertexBudget
+      geoFencePositionBudget
       createdAt
       updatedAt
     }
@@ -766,9 +766,9 @@ const UPDATE_TENANT = graphql(`
       aiInferenceBurst
       heldCommandCeiling
       shedPriority
-      geoFenceVertexCeiling
+      geoFencePositionCeiling
       geoFenceCeiling
-      geoFenceVertexBudget
+      geoFencePositionBudget
       createdAt
       updatedAt
     }
@@ -806,9 +806,9 @@ const SET_TENANT_ENABLED = graphql(`
       aiInferenceBurst
       heldCommandCeiling
       shedPriority
-      geoFenceVertexCeiling
+      geoFencePositionCeiling
       geoFenceCeiling
-      geoFenceVertexBudget
+      geoFencePositionBudget
       createdAt
       updatedAt
     }

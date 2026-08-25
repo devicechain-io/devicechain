@@ -51,9 +51,9 @@ func TestTheGeoFenceCapsAreServedUnderTheirTierKeyNames(t *testing.T) {
 		byName[f.Name] = f.Type.Name
 	}
 	for _, key := range []string{
-		iam.GeoFenceVertexCeilingConfigKey,
+		iam.GeoFencePositionCeilingConfigKey,
 		iam.GeoFenceCeilingConfigKey,
-		iam.GeoFenceVertexBudgetConfigKey,
+		iam.GeoFencePositionBudgetConfigKey,
 	} {
 		kind, ok := byName[key]
 		require.Truef(t, ok, "TenantGovernance does not serve %q; device-management blocks on this "+
@@ -75,17 +75,17 @@ func TestTheGeoFenceCapsAreServedUnderTheirTierKeyNames(t *testing.T) {
 func TestTheGeoFenceCapResolversDoNotCrossTheirValues(t *testing.T) {
 	vertexCeiling, fenceCeiling, budget := 700, 250, 90000
 	r := &TenantGovernanceResolver{t: &iam.Tenant{
-		GeoFenceVertexCeiling: &vertexCeiling,
-		GeoFenceCeiling:       &fenceCeiling,
-		GeoFenceVertexBudget:  &budget,
+		GeoFencePositionCeiling: &vertexCeiling,
+		GeoFenceCeiling:         &fenceCeiling,
+		GeoFencePositionBudget:  &budget,
 	}}
 
-	require.NotNil(t, r.GeoFenceVertexCeiling())
-	require.EqualValues(t, 700, *r.GeoFenceVertexCeiling(), "geoFenceVertexCeiling resolved another cap")
+	require.NotNil(t, r.GeoFencePositionCeiling())
+	require.EqualValues(t, 700, *r.GeoFencePositionCeiling(), "geoFencePositionCeiling resolved another cap")
 	require.NotNil(t, r.GeoFenceCeiling())
 	require.EqualValues(t, 250, *r.GeoFenceCeiling(), "geoFenceCeiling resolved another cap")
-	require.NotNil(t, r.GeoFenceVertexBudget())
-	require.EqualValues(t, 90000, *r.GeoFenceVertexBudget(), "geoFenceVertexBudget resolved another cap")
+	require.NotNil(t, r.GeoFencePositionBudget())
+	require.EqualValues(t, 90000, *r.GeoFencePositionBudget(), "geoFencePositionBudget resolved another cap")
 }
 
 // TestAnUnconfiguredTenantResolvesEveryCapToNull is the counterweight to the test above, and it
@@ -96,9 +96,9 @@ func TestTheGeoFenceCapResolversDoNotCrossTheirValues(t *testing.T) {
 // operator had genuinely misconfigured, and those must stay distinguishable.
 func TestAnUnconfiguredTenantResolvesEveryCapToNull(t *testing.T) {
 	r := &TenantGovernanceResolver{t: &iam.Tenant{}}
-	require.Nil(t, r.GeoFenceVertexCeiling(), "an unconfigured tenant must resolve to null (inherit), not 0")
+	require.Nil(t, r.GeoFencePositionCeiling(), "an unconfigured tenant must resolve to null (inherit), not 0")
 	require.Nil(t, r.GeoFenceCeiling(), "an unconfigured tenant must resolve to null (inherit), not 0")
-	require.Nil(t, r.GeoFenceVertexBudget(), "an unconfigured tenant must resolve to null (inherit), not 0")
+	require.Nil(t, r.GeoFencePositionBudget(), "an unconfigured tenant must resolve to null (inherit), not 0")
 }
 
 // TestTheGeoFenceCapResolversWalkTheFullCascade. The resolvers call Effective*, not the raw
@@ -107,23 +107,23 @@ func TestAnUnconfiguredTenantResolvesEveryCapToNull(t *testing.T) {
 // that had not set a personal override — which is most of them.
 func TestTheGeoFenceCapResolversWalkTheFullCascade(t *testing.T) {
 	tiered := &iam.Tenant{Tier: &iam.TenantTier{Config: map[string]any{
-		iam.GeoFenceVertexCeilingConfigKey: 640,
-		iam.GeoFenceCeilingConfigKey:       320,
-		iam.GeoFenceVertexBudgetConfigKey:  80000,
+		iam.GeoFencePositionCeilingConfigKey: 640,
+		iam.GeoFenceCeilingConfigKey:         320,
+		iam.GeoFencePositionBudgetConfigKey:  80000,
 	}}}
 	r := &TenantGovernanceResolver{t: tiered}
-	require.NotNil(t, r.GeoFenceVertexCeiling())
-	require.EqualValues(t, 640, *r.GeoFenceVertexCeiling(), "the resolver read the column instead of the cascade")
+	require.NotNil(t, r.GeoFencePositionCeiling())
+	require.EqualValues(t, 640, *r.GeoFencePositionCeiling(), "the resolver read the column instead of the cascade")
 	require.NotNil(t, r.GeoFenceCeiling())
 	require.EqualValues(t, 320, *r.GeoFenceCeiling(), "the resolver read the column instead of the cascade")
-	require.NotNil(t, r.GeoFenceVertexBudget())
-	require.EqualValues(t, 80000, *r.GeoFenceVertexBudget(), "the resolver read the column instead of the cascade")
+	require.NotNil(t, r.GeoFencePositionBudget())
+	require.EqualValues(t, 80000, *r.GeoFencePositionBudget(), "the resolver read the column instead of the cascade")
 
 	// And an override beats the tier, end to end through the resolver — the half that proves
 	// the cascade is being walked rather than the tier being read directly.
 	override := 128
-	tiered.GeoFenceVertexCeiling = &override
-	require.EqualValues(t, 128, *r.GeoFenceVertexCeiling(), "a per-tenant override must beat the tier")
+	tiered.GeoFencePositionCeiling = &override
+	require.EqualValues(t, 128, *r.GeoFencePositionCeiling(), "a per-tenant override must beat the tier")
 	require.EqualValues(t, 320, *r.GeoFenceCeiling(), "overriding one cap must not disturb another")
 }
 
@@ -134,11 +134,11 @@ func TestTheGeoFenceCapResolversWalkTheFullCascade(t *testing.T) {
 func TestTheServedCapsNeverExceedThePlatformMaximum(t *testing.T) {
 	over := func(n int) *int { v := n + 1; return &v }
 	r := &TenantGovernanceResolver{t: &iam.Tenant{
-		GeoFenceVertexCeiling: over(governance.MaxGeoFenceVertexCeiling),
-		GeoFenceCeiling:       over(governance.MaxGeoFenceCeiling),
-		GeoFenceVertexBudget:  over(governance.MaxTenantGeometryVertices),
+		GeoFencePositionCeiling: over(governance.MaxGeoFencePositionCeiling),
+		GeoFenceCeiling:         over(governance.MaxGeoFenceCeiling),
+		GeoFencePositionBudget:  over(governance.MaxTenantGeometryPositions),
 	}}
-	require.Nil(t, r.GeoFenceVertexCeiling(), "an out-of-band over-large ceiling must serve as inherit")
+	require.Nil(t, r.GeoFencePositionCeiling(), "an out-of-band over-large ceiling must serve as inherit")
 	require.Nil(t, r.GeoFenceCeiling(), "an out-of-band over-large fence count must serve as inherit")
-	require.Nil(t, r.GeoFenceVertexBudget(), "an out-of-band over-large budget must serve as inherit")
+	require.Nil(t, r.GeoFencePositionBudget(), "an out-of-band over-large budget must serve as inherit")
 }

@@ -170,18 +170,18 @@ type TenantGovernance {
     # when a tenant creates or edits a fence. Null ⇒ the reader substitutes the platform
     # default, which is a real bound; there is no value meaning unlimited, at any level.
     #
-    # geoFenceVertexCeiling bounds ONE fence's position count across every ring, because
+    # geoFencePositionCeiling bounds ONE fence's position count across every ring, because
     # compiling a fence is quadratic in that number.
-    geoFenceVertexCeiling: Int
+    geoFencePositionCeiling: Int
     # geoFenceCeiling bounds how many fences the tenant may hold, because the fence-set
     # manifest carries one entry per fence and must fit inside one broker message.
     geoFenceCeiling: Int
-    # geoFenceVertexBudget bounds the position count across the tenant's WHOLE current fence
+    # geoFencePositionBudget bounds the position count across the tenant's WHOLE current fence
     # set — the cost neither of the others reaches, since one bounds a compile and the other a
     # message. It is the tenant's share of a geometry cache that lives in a single DETECT
     # process serving every tenant on the instance, which is why it alone among these caps
     # bounds a resource the tenant does not own.
-    geoFenceVertexBudget: Int
+    geoFencePositionBudget: Int
     # Where this tenant sits in the ADR-077 deletion lifecycle: "active" or "purging".
     # Read by the data-plane services that must stop acting on behalf of a tenant an
     # operator has deleted — device connect-auth, ingest auto-registration, command

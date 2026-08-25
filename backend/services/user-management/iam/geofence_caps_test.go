@@ -26,12 +26,12 @@ var geoFenceCapKeys = []struct {
 	eff      func(*Tenant) (*int, SettingSource)
 }{
 	{
-		name: "geoFenceVertexCeiling", key: GeoFenceVertexCeilingConfigKey,
-		max:      governance.MaxGeoFenceVertexCeiling,
-		tierRead: (*TenantTier).GeoFenceVertexCeiling,
-		column:   func(t *Tenant) **int { return &t.GeoFenceVertexCeiling },
-		usable:   UsableGeoFenceVertexCeiling,
-		eff:      (*Tenant).EffectiveGeoFenceVertexCeiling,
+		name: "geoFencePositionCeiling", key: GeoFencePositionCeilingConfigKey,
+		max:      governance.MaxGeoFencePositionCeiling,
+		tierRead: (*TenantTier).GeoFencePositionCeiling,
+		column:   func(t *Tenant) **int { return &t.GeoFencePositionCeiling },
+		usable:   UsableGeoFencePositionCeiling,
+		eff:      (*Tenant).EffectiveGeoFencePositionCeiling,
 	},
 	{
 		name: "geoFenceCeiling", key: GeoFenceCeilingConfigKey,
@@ -42,12 +42,12 @@ var geoFenceCapKeys = []struct {
 		eff:      (*Tenant).EffectiveGeoFenceCeiling,
 	},
 	{
-		name: "geoFenceVertexBudget", key: GeoFenceVertexBudgetConfigKey,
-		max:      governance.MaxTenantGeometryVertices,
-		tierRead: (*TenantTier).GeoFenceVertexBudget,
-		column:   func(t *Tenant) **int { return &t.GeoFenceVertexBudget },
-		usable:   UsableGeoFenceVertexBudget,
-		eff:      (*Tenant).EffectiveGeoFenceVertexBudget,
+		name: "geoFencePositionBudget", key: GeoFencePositionBudgetConfigKey,
+		max:      governance.MaxTenantGeometryPositions,
+		tierRead: (*TenantTier).GeoFencePositionBudget,
+		column:   func(t *Tenant) **int { return &t.GeoFencePositionBudget },
+		usable:   UsableGeoFencePositionBudget,
+		eff:      (*Tenant).EffectiveGeoFencePositionBudget,
 	},
 }
 

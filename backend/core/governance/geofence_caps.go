@@ -29,18 +29,18 @@ import (
 // BOTH doors — the tier write and the per-tenant override — because the override door is not
 // reached by ValidateTierConfig.
 const (
-	// DefaultGeoFenceVertexCeiling is the platform default bound on ONE fence's total
+	// DefaultGeoFencePositionCeiling is the platform default bound on ONE fence's total
 	// position count across every ring. It is what a tenant gets when neither it nor its
-	// tier declares a geoFenceVertexCeiling.
+	// tier declares a geoFencePositionCeiling.
 	//
 	// 512 sits about two orders of magnitude above real geofences — a site boundary, a yard,
 	// a loading zone are tens of positions, a simplified administrative boundary is low
 	// hundreds — and it is the number device-management shipped as a hard constant before
 	// these caps became tier-driven, so a tenant that declares nothing is metered exactly
 	// where it was.
-	DefaultGeoFenceVertexCeiling = 512
+	DefaultGeoFencePositionCeiling = 512
 
-	// MaxGeoFenceVertexCeiling is the largest per-fence position count any tier may grant.
+	// MaxGeoFencePositionCeiling is the largest per-fence position count any tier may grant.
 	//
 	// 🔴 READ OFF THE CACHE-FILL STALL, NOT OFF AUTHORING LATENCY, and those are different
 	// consumers with different tolerances. Compiling one fence is O(V²) — core/geo's
@@ -62,7 +62,7 @@ const (
 	// proportionate, and one several times larger is not. 1024 costs 63.5ms and fits; 2048
 	// costs 206ms and does not. Re-measure before moving this — the table above replaced an
 	// older one that had drifted from the code it described.
-	MaxGeoFenceVertexCeiling = 1024
+	MaxGeoFencePositionCeiling = 1024
 
 	// DefaultGeoFenceCeiling is the platform default bound on how many fences one tenant may
 	// hold — again the number device-management shipped as a hard constant, so a tenant that
@@ -87,7 +87,7 @@ const (
 	// default install the day a tier granted the maximum.
 	MaxGeoFenceCeiling = 4000
 
-	// DefaultTenantGeometryVertices is the platform default bound on the total position count
+	// DefaultTenantGeometryPositions is the platform default bound on the total position count
 	// across a tenant's WHOLE CURRENT fence set — the third cost, and the one the other two
 	// cannot express. A ceiling on one fence bounds a compile; a ceiling on the count bounds a
 	// manifest; neither bounds what the tenant's set costs to HOLD.
@@ -103,9 +103,9 @@ const (
 	// not reconciled in this codebase (a compiled ring drops its repeated closing position).
 	// Positions ≥ compiled vertices, so a budget spent in positions is CONSERVATIVE against a
 	// cache spent in compiled ones. Counting the other way would be a silent overdraft.
-	DefaultTenantGeometryVertices = 50_000
+	DefaultTenantGeometryPositions = 50_000
 
-	// MaxTenantGeometryVertices is the largest whole-fence-set budget any tier may grant.
+	// MaxTenantGeometryPositions is the largest whole-fence-set budget any tier may grant.
 	//
 	// The property at stake is not "several tenants fit" — that one belongs to the default —
 	// but the weaker and more structural one: NO SINGLE TENANT MAY HOLD MORE THAN HALF THE
@@ -117,21 +117,43 @@ const (
 	// (see DefaultMaxCachedVertices) rather than the other way round, which makes the relation
 	// unrepresentable-to-drift instead of merely asserted. Raising a tenant's real capacity
 	// past this means raising the cache, not this constant alone.
-	MaxTenantGeometryVertices = 125_000
+	MaxTenantGeometryPositions = 125_000
+)
+
+// Why each maximum exists, in one sentence an operator who has just been refused can act on.
+//
+// They live HERE, beside the numbers, because a refusal has to travel to two different doors —
+// the tier write and the per-tenant override — and those doors are in different packages, take
+// different Go types, and are written by different edits. Sharing only the NUMBER would leave
+// them free to explain it differently, which is what happened: the override door told an
+// operator that every one of these caps "bounds a resource shared by every tenant on the
+// instance", and that is true of the budget alone. The fence count bounds a broker message.
+//
+// Each names the COST, not the rule. "Must be at most 4000" tells an operator what to type; it
+// does not tell them whether typing something smaller is the right answer or whether the
+// platform constant is the thing that should move.
+const (
+	GeoFencePositionCeilingBecause = "compiling one fence is quadratic in its position count, and " +
+		"above this the compile stalls containment for the tenant every time event-processing " +
+		"refills its geometry cache"
+	GeoFenceCeilingBecause = "a fence-set manifest carries one entry per fence and must fit inside " +
+		"one broker message"
+	GeoFencePositionBudgetBecause = "the DETECT geometry cache is shared by every tenant on the " +
+		"instance, and above this one tenant's fence set can evict every other tenant's geometry"
 )
 
 // GeoFenceCaps is a tenant's effective geofence caps, all three resolved down the ADR-065
 // cascade (tenant override → tier → platform default) and folded onto the platform defaults, so
 // every field is a live bound. There is no value at any level meaning unlimited.
 type GeoFenceCaps struct {
-	// VertexCeiling bounds ONE fence's total position count across every ring.
-	VertexCeiling int
+	// PositionCeiling bounds ONE fence's total position count across every ring.
+	PositionCeiling int
 	// FenceCeiling bounds how many fences the tenant may hold.
 	FenceCeiling int
-	// VertexBudget bounds the total position count across the tenant's whole current fence
+	// PositionBudget bounds the total position count across the tenant's whole current fence
 	// set — the distinct geometry it holds, deduped by content address exactly as the archive
 	// and the cache dedupe it.
-	VertexBudget int
+	PositionBudget int
 }
 
 // DefaultGeoFenceCaps returns the platform defaults — what a tenant whose tier declares
@@ -145,9 +167,9 @@ type GeoFenceCaps struct {
 // is in question at all.
 func DefaultGeoFenceCaps() GeoFenceCaps {
 	return GeoFenceCaps{
-		VertexCeiling: DefaultGeoFenceVertexCeiling,
-		FenceCeiling:  DefaultGeoFenceCeiling,
-		VertexBudget:  DefaultTenantGeometryVertices,
+		PositionCeiling: DefaultGeoFencePositionCeiling,
+		FenceCeiling:    DefaultGeoFenceCeiling,
+		PositionBudget:  DefaultTenantGeometryPositions,
 	}
 }
 
@@ -306,9 +328,9 @@ func (r *GeoFenceCapsResolver) fresh(tenant string) (GeoFenceCaps, bool) {
 // BurstField, for the same reason: the enforcing service's query and the authority's key must
 // be the same string by construction, not by two people spelling it the same way.
 const (
-	GeoFenceVertexCeilingField = "geoFenceVertexCeiling"
-	GeoFenceCeilingField       = "geoFenceCeiling"
-	GeoFenceVertexBudgetField  = "geoFenceVertexBudget"
+	GeoFencePositionCeilingField = "geoFencePositionCeiling"
+	GeoFenceCeilingField         = "geoFenceCeiling"
+	GeoFencePositionBudgetField  = "geoFencePositionBudget"
 )
 
 // geoFenceCapsQuery reads the three fields this resolver needs, BUILT from the constants above
@@ -319,7 +341,7 @@ const (
 // test, and a typo here would make every resolve on the instance error — which for a resolver
 // that BLOCKS means fence authoring stops, not that a default is quietly served.
 const geoFenceCapsQuery = "query { tenantGovernance { " +
-	GeoFenceVertexCeilingField + " " + GeoFenceCeilingField + " " + GeoFenceVertexBudgetField + " } }"
+	GeoFencePositionCeilingField + " " + GeoFenceCeilingField + " " + GeoFencePositionBudgetField + " } }"
 
 // geoFenceCapsResponse is the wire shape of that query's data object. Named for the same
 // reason as the query: a wrong json tag decodes to nil, which reads as "inherit the platform
@@ -332,9 +354,9 @@ const geoFenceCapsQuery = "query { tenantGovernance { " +
 // has drifted away from its constant fail rather than silently decode to nil.
 type geoFenceCapsResponse struct {
 	TenantGovernance struct {
-		GeoFenceVertexCeiling *int32 `json:"geoFenceVertexCeiling"`
-		GeoFenceCeiling       *int32 `json:"geoFenceCeiling"`
-		GeoFenceVertexBudget  *int32 `json:"geoFenceVertexBudget"`
+		GeoFencePositionCeiling *int32 `json:"geoFencePositionCeiling"`
+		GeoFenceCeiling         *int32 `json:"geoFenceCeiling"`
+		GeoFencePositionBudget  *int32 `json:"geoFencePositionBudget"`
 	} `json:"tenantGovernance"`
 }
 
@@ -349,9 +371,9 @@ func fetchGeoFenceCaps(ctx context.Context, client *svcclient.Client, umURL, ten
 	}
 	g := out.TenantGovernance
 	return GeoFenceCaps{
-		VertexCeiling: resolveGeoFenceCap(g.GeoFenceVertexCeiling, DefaultGeoFenceVertexCeiling, MaxGeoFenceVertexCeiling),
-		FenceCeiling:  resolveGeoFenceCap(g.GeoFenceCeiling, DefaultGeoFenceCeiling, MaxGeoFenceCeiling),
-		VertexBudget:  resolveGeoFenceCap(g.GeoFenceVertexBudget, DefaultTenantGeometryVertices, MaxTenantGeometryVertices),
+		PositionCeiling: resolveGeoFenceCap(g.GeoFencePositionCeiling, DefaultGeoFencePositionCeiling, MaxGeoFencePositionCeiling),
+		FenceCeiling:    resolveGeoFenceCap(g.GeoFenceCeiling, DefaultGeoFenceCeiling, MaxGeoFenceCeiling),
+		PositionBudget:  resolveGeoFenceCap(g.GeoFencePositionBudget, DefaultTenantGeometryPositions, MaxTenantGeometryPositions),
 	}, nil
 }
 
@@ -360,13 +382,25 @@ func fetchGeoFenceCaps(ctx context.Context, client *svcclient.Client, umURL, ten
 // CLAMPED to max rather than honoured. Split out pure so the rule is unit-testable without a
 // live user-management.
 //
-// The clamp is the half that is easy to leave out, and leaving it out would make the write-side
-// maxima the only thing standing between an operator's typo and the shared DETECT process. They
-// are enforced at both write doors, so a value above max can only arrive here by a direct
-// out-of-band database write — which is exactly the case a read-side defence is for, and
-// exactly how the tier accessors in user-management already read their own columns. Clamping
-// rather than erroring keeps the polarity right: the tenant is metered at the largest bound the
-// platform will honour, never at none.
+// 🔴 THE CLAMP DOES NOT DEFEND AGAINST AN OUT-OF-BAND DATABASE WRITE, AND AN EARLIER VERSION OF
+// THIS COMMENT SAID IT DID. That threat is already handled a level up and cannot reach here: an
+// over-large value in a tenant column fails UsableGeoFence*, an over-large one in a tier's config
+// blob fails the tier accessor's defensive read, and BOTH resolve to nil — inherit — so
+// user-management serves null rather than a number the platform would not honour.
+// TestTheServedCapsNeverExceedThePlatformMaximum pins exactly that. A clamp guarding a value that
+// cannot arrive is not a defence, it is a comment.
+//
+// What it does defend against is VERSION SKEW. These maxima are compiled into both services, and
+// during a rolling upgrade user-management runs ahead of device-management for as long as the
+// rollout takes. A user-management that has learned a larger maximum will happily serve a cap
+// this older reader was never built to honour, and the reader has no way to know the difference
+// — the value is well-formed and the cascade that produced it was correct. Clamping to what THIS
+// binary was built to allow is the only answer available to it.
+//
+// Clamping rather than erroring keeps the polarity right: the tenant is metered at the largest
+// bound this binary will honour, never at none. That is the opposite choice from the write doors,
+// which reject — deliberately, because a door has a human in front of it to be told, and a wire
+// fold does not.
 func resolveGeoFenceCap(v *int32, def, max int) int {
 	if v == nil || *v <= 0 {
 		return def

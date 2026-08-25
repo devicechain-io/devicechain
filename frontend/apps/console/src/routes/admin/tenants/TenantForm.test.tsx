@@ -81,9 +81,9 @@ function tenant(overrides: Partial<AdminTenant> = {}): AdminTenant {
     aiInferenceBurst: 30,
     heldCommandCeiling: 2500,
     shedPriority: 77,
-    geoFenceVertexCeiling: 640,
+    geoFencePositionCeiling: 640,
     geoFenceCeiling: 320,
-    geoFenceVertexBudget: 44000,
+    geoFencePositionBudget: 44000,
     effectiveSettings: [],
     createdAt: '2026-08-01T00:00:00Z',
     updatedAt: '2026-08-01T00:00:00Z',
@@ -116,9 +116,9 @@ const PRESERVED: Record<keyof AdminTenantUpdateRequest, unknown> = {
   // `Record<keyof AdminTenantUpdateRequest, unknown>` annotation stopped compiling the day
   // the schema gained them — which is the whole reason this file derives its key set rather
   // than listing one.
-  geoFenceVertexCeiling: 640,
+  geoFencePositionCeiling: 640,
   geoFenceCeiling: 320,
-  geoFenceVertexBudget: 44000,
+  geoFencePositionBudget: 44000,
 };
 
 // A tenant with no overrides at all must send an explicit null for each, never a value
@@ -138,9 +138,9 @@ const CLEARED: Record<keyof AdminTenantUpdateRequest, unknown> = {
   aiInferenceBurst: null,
   heldCommandCeiling: null,
   shedPriority: null,
-  geoFenceVertexCeiling: null,
+  geoFencePositionCeiling: null,
   geoFenceCeiling: null,
-  geoFenceVertexBudget: null,
+  geoFencePositionBudget: null,
 };
 
 /** The mutation requests actually sent — the tier picker's query is not one. */
@@ -215,9 +215,9 @@ describe('editing a tenant', () => {
         aiInferenceBurst: null,
         heldCommandCeiling: null,
         shedPriority: null,
-        geoFenceVertexCeiling: null,
+        geoFencePositionCeiling: null,
         geoFenceCeiling: null,
-        geoFenceVertexBudget: null,
+        geoFencePositionBudget: null,
       }),
     );
     fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Acme Industrial' } });
@@ -251,9 +251,9 @@ describe('editing a tenant', () => {
   // is the shape in which one control writes another's state, and a test that only checked
   // the field it typed would pass while the other two were quietly overwritten.
   it.each([
-    ['Points per geofence', 'geoFenceVertexCeiling', 900, { geoFenceCeiling: 320, geoFenceVertexBudget: 44000 }],
-    ['Geofence count', 'geoFenceCeiling', 150, { geoFenceVertexCeiling: 640, geoFenceVertexBudget: 44000 }],
-    ['Geofence point budget', 'geoFenceVertexBudget', 30000, { geoFenceVertexCeiling: 640, geoFenceCeiling: 320 }],
+    ['Points per geofence', 'geoFencePositionCeiling', 900, { geoFenceCeiling: 320, geoFencePositionBudget: 44000 }],
+    ['Geofence count', 'geoFenceCeiling', 150, { geoFencePositionCeiling: 640, geoFencePositionBudget: 44000 }],
+    ['Geofence point budget', 'geoFencePositionBudget', 30000, { geoFencePositionCeiling: 640, geoFenceCeiling: 320 }],
   ])('sends the %s the operator typed, and leaves the other caps alone', async (label, field, typed, others) => {
     renderEdit(tenant());
     fireEvent.mouseDown(await screen.findByRole('tab', { name: 'Settings' }));

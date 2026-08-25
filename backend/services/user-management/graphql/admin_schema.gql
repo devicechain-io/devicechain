@@ -157,13 +157,13 @@ type AdminTenant {
     # a full replace of these fields); nulling one here would RAISE a cap an operator had
     # deliberately tightened.
     #
-    # Each bounds a different cost: geoFenceVertexCeiling one fence's position count (a
+    # Each bounds a different cost: geoFencePositionCeiling one fence's position count (a
     # quadratic compile), geoFenceCeiling the tenant's fence count (a manifest that must fit one
-    # broker message), and geoFenceVertexBudget the position count across the whole fence set
+    # broker message), and geoFencePositionBudget the position count across the whole fence set
     # (footprint in a DETECT geometry cache shared by every tenant on the instance).
-    geoFenceVertexCeiling: Int
+    geoFencePositionCeiling: Int
     geoFenceCeiling: Int
-    geoFenceVertexBudget: Int
+    geoFencePositionBudget: Int
     # What this tenant is ACTUALLY metered at for every governance dimension, and
     # WHY (ADR-065 decision 7): the cascade above resolved down to one value per
     # dimension, carrying the level that produced it and the levels it beat.
@@ -304,13 +304,13 @@ input AdminTenantCreateRequest {
     # they bound is spent in a DETECT process every tenant on the instance shares, so raising
     # one past the platform bound is not a per-tenant decision.
     #
-    # geoFenceVertexCeiling — positions in one fence (bounds a quadratic compile).
+    # geoFencePositionCeiling — positions in one fence (bounds a quadratic compile).
     # geoFenceCeiling — fences the tenant may hold (bounds the fence-set manifest's wire size).
-    # geoFenceVertexBudget — positions across the tenant's whole fence set (bounds its share of
+    # geoFencePositionBudget — positions across the tenant's whole fence set (bounds its share of
     # the shared geometry cache).
-    geoFenceVertexCeiling: Int
+    geoFencePositionCeiling: Int
     geoFenceCeiling: Int
-    geoFenceVertexBudget: Int
+    geoFencePositionBudget: Int
 }
 
 # Data to update a tenant (its token is fixed). A null ingest* / outbound* override
@@ -344,9 +344,9 @@ input AdminTenantUpdateRequest {
     # Per-tenant geofence cap overrides. Null clears one, reverting to the tier's key then the
     # platform default — never to unlimited. A value above the platform maximum is rejected,
     # not clamped: these bound a DETECT process every tenant shares.
-    geoFenceVertexCeiling: Int
+    geoFencePositionCeiling: Int
     geoFenceCeiling: Int
-    geoFenceVertexBudget: Int
+    geoFencePositionBudget: Int
 }
 
 # Data required to create a global identity. Each system role must name an

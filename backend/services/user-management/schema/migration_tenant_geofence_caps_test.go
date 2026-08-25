@@ -23,10 +23,10 @@ type geoFenceCapsTenantRow struct {
 	Token string
 	Name  string
 	// A tenant's tier is NOT NULL (ADR-065), so every insert here has to name one.
-	TierID                uint
-	GeoFenceVertexCeiling *int
-	GeoFenceCeiling       *int
-	GeoFenceVertexBudget  *int
+	TierID                  uint
+	GeoFencePositionCeiling *int
+	GeoFenceCeiling         *int
+	GeoFencePositionBudget  *int
 }
 
 func (geoFenceCapsTenantRow) TableName() string { return "iam_tenants" }
@@ -43,7 +43,7 @@ func (geoFenceCapsTenantRow) TableName() string { return "iam_tenants" }
 func TestTheGeoFenceCapsMigrationAddsAllThreeColumnsToTheTenantTable(t *testing.T) {
 	db := newMigratedDB(t)
 
-	for _, col := range []string{"geo_fence_vertex_ceiling", "geo_fence_ceiling", "geo_fence_vertex_budget"} {
+	for _, col := range []string{"geo_fence_position_ceiling", "geo_fence_ceiling", "geo_fence_position_budget"} {
 		require.Truef(t, db.Migrator().HasColumn(&geoFenceCapsTenantRow{}, col),
 			"%s must exist on iam_tenants after the chain runs", col)
 	}
@@ -52,19 +52,19 @@ func TestTheGeoFenceCapsMigrationAddsAllThreeColumnsToTheTenantTable(t *testing.
 	vertexCeiling, fenceCeiling, budget := 700, 250, 90000
 	require.NoError(t, db.Create(&geoFenceCapsTenantRow{
 		Token: "capped", Name: "Capped", TierID: tierID,
-		GeoFenceVertexCeiling: &vertexCeiling,
-		GeoFenceCeiling:       &fenceCeiling,
-		GeoFenceVertexBudget:  &budget,
+		GeoFencePositionCeiling: &vertexCeiling,
+		GeoFenceCeiling:         &fenceCeiling,
+		GeoFencePositionBudget:  &budget,
 	}).Error)
 
 	var back geoFenceCapsTenantRow
 	require.NoError(t, db.First(&back, "token = ?", "capped").Error)
-	require.NotNil(t, back.GeoFenceVertexCeiling)
-	require.Equal(t, 700, *back.GeoFenceVertexCeiling, "geo_fence_vertex_ceiling read back another column's value")
+	require.NotNil(t, back.GeoFencePositionCeiling)
+	require.Equal(t, 700, *back.GeoFencePositionCeiling, "geo_fence_position_ceiling read back another column's value")
 	require.NotNil(t, back.GeoFenceCeiling)
 	require.Equal(t, 250, *back.GeoFenceCeiling, "geo_fence_ceiling read back another column's value")
-	require.NotNil(t, back.GeoFenceVertexBudget)
-	require.Equal(t, 90000, *back.GeoFenceVertexBudget, "geo_fence_vertex_budget read back another column's value")
+	require.NotNil(t, back.GeoFencePositionBudget)
+	require.Equal(t, 90000, *back.GeoFencePositionBudget, "geo_fence_position_budget read back another column's value")
 
 	// A tenant that declares none reads back NULL — inherit — not zero. The distinction is the
 	// whole cascade: zero would be a cap of "no fence permitted", which is the one reading of
@@ -74,9 +74,9 @@ func TestTheGeoFenceCapsMigrationAddsAllThreeColumnsToTheTenantTable(t *testing.
 	}).Error)
 	var inherits geoFenceCapsTenantRow
 	require.NoError(t, db.First(&inherits, "token = ?", "inherits-caps").Error)
-	require.Nil(t, inherits.GeoFenceVertexCeiling, "an unset vertex ceiling must read back NULL (inherit), not 0")
+	require.Nil(t, inherits.GeoFencePositionCeiling, "an unset vertex ceiling must read back NULL (inherit), not 0")
 	require.Nil(t, inherits.GeoFenceCeiling, "an unset fence ceiling must read back NULL (inherit), not 0")
-	require.Nil(t, inherits.GeoFenceVertexBudget, "an unset vertex budget must read back NULL (inherit), not 0")
+	require.Nil(t, inherits.GeoFencePositionBudget, "an unset vertex budget must read back NULL (inherit), not 0")
 
 	// A tenant may declare SOME of the three. Each column inherits independently — there is no
 	// all-or-nothing group — so a partial row must leave the others null rather than defaulting
@@ -88,8 +88,8 @@ func TestTheGeoFenceCapsMigrationAddsAllThreeColumnsToTheTenantTable(t *testing.
 	require.NoError(t, db.First(&partial, "token = ?", "partial-caps").Error)
 	require.NotNil(t, partial.GeoFenceCeiling)
 	require.Equal(t, 250, *partial.GeoFenceCeiling)
-	require.Nil(t, partial.GeoFenceVertexCeiling, "setting one cap must not populate the others")
-	require.Nil(t, partial.GeoFenceVertexBudget, "setting one cap must not populate the others")
+	require.Nil(t, partial.GeoFencePositionCeiling, "setting one cap must not populate the others")
+	require.Nil(t, partial.GeoFencePositionBudget, "setting one cap must not populate the others")
 }
 
 // TestTheGeoFenceCapsMigrationDoesNotCreateAStrayTable is the control, and it is the one that
@@ -116,7 +116,7 @@ func TestTheGeoFenceCapsMigrationIsReRunnable(t *testing.T) {
 	db := newMigratedDB(t)
 	require.NoError(t, NewTenantGeoFenceCapsMigration().Migrate(db),
 		"re-running the geofence-caps migration must be a no-op, not a duplicate-column error")
-	for _, col := range []string{"geo_fence_vertex_ceiling", "geo_fence_ceiling", "geo_fence_vertex_budget"} {
+	for _, col := range []string{"geo_fence_position_ceiling", "geo_fence_ceiling", "geo_fence_position_budget"} {
 		require.True(t, db.Migrator().HasColumn(&geoFenceCapsTenantRow{}, col))
 	}
 }
@@ -134,7 +134,7 @@ func TestTheGeoFenceCapsMigrationRollbackDropsOnlyItsOwnColumns(t *testing.T) {
 	db := newMigratedDB(t)
 	require.NoError(t, NewTenantGeoFenceCapsMigration().Rollback(db))
 
-	for _, dropped := range []string{"geo_fence_vertex_ceiling", "geo_fence_ceiling", "geo_fence_vertex_budget"} {
+	for _, dropped := range []string{"geo_fence_position_ceiling", "geo_fence_ceiling", "geo_fence_position_budget"} {
 		require.Falsef(t, db.Migrator().HasColumn(&geoFenceCapsTenantRow{}, dropped),
 			"the rollback must drop %q, which this migration added", dropped)
 	}

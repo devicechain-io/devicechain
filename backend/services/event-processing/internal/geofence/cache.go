@@ -59,11 +59,24 @@ import (
 // simultaneously" — was a claim about two numbers that no longer moved together, in a file that
 // could not see one of them. Writing it as an expression makes the relation hold by construction:
 //
-//   - governance.DefaultTenantGeometryVertices is one tenant's DEFAULT whole-fence-set budget, and
+//   - governance.DefaultTenantGeometryPositions is one tenant's DEFAULT whole-fence-set budget, and
 //     it is a FIFTH of this bound, so five tenants at their default budget are resident at once;
-//   - governance.MaxTenantGeometryVertices is the largest budget any tier may grant, and it is a
+//   - governance.MaxTenantGeometryPositions is the largest budget any tier may grant, and it is a
 //     HALF of this bound, so no single tenant — at any tier an operator can configure — may hold
 //     more than half the cache and evict every other tenant's geometry on one refill.
+//
+// 🔴 THOSE TWO SENTENCES CROSS A UNIT BOUNDARY, AND IT IS SAFE IN EXACTLY ONE DIRECTION. This
+// bound counts COMPILED vertices; the governance budgets count authored POSITIONS, which is what
+// device-management can check when a fence is written and is a different number by design — a
+// compiled ring drops its repeated closing position, and model_geofences.go says the two are
+// deliberately not reconciled. So the equation below is not a unit identity.
+//
+// It is sound because the inequality runs the right way: positions >= compiled vertices, always,
+// for every fence. A tenant granted P positions therefore occupies AT MOST P vertices here, so
+// "a fifth" and "a half" are UPPER bounds on real occupancy and both claims hold a fortiori —
+// five default-budget tenants fit with room left over, and one maximum-budget tenant occupies at
+// most half. Denominating the budget the other way round would be the unsafe direction: a cap in
+// compiled vertices could not bound what an authored fence set costs to hold.
 //
 // The two consts below assert exactly that, at COMPILE TIME rather than in a test: each is a
 // uint conversion of a difference that must not be negative, so the two together say the bound
@@ -72,7 +85,7 @@ import (
 // The bound exists to make a pathological tenant cost bounded memory rather than to be tight —
 // evicting a hot entry costs one refetch and one recompile, which is cheap; a process that grows
 // without limit is not.
-const DefaultMaxCachedVertices = governance.DefaultTenantGeometryVertices * defaultBudgetTenancyFactor
+const DefaultMaxCachedVertices = governance.DefaultTenantGeometryPositions * defaultBudgetTenancyFactor
 
 // defaultBudgetTenancyFactor is how many tenants at their DEFAULT fence-set budget the cache holds
 // at once. It is the one number in this relation that is a judgement rather than a derivation, so
@@ -85,8 +98,8 @@ const defaultBudgetTenancyFactor = 5
 // compile when the two sides are EQUAL. That is the "no tenant holds more than half the cache"
 // invariant, enforced by the compiler in the file that owns the number — which is what this
 // codebase reaches for whenever a comment would otherwise assert an invariant nothing checks.
-const _ = uint(DefaultMaxCachedVertices - governance.MaxTenantGeometryVertices*2)
-const _ = uint(governance.MaxTenantGeometryVertices*2 - DefaultMaxCachedVertices)
+const _ = uint(DefaultMaxCachedVertices - governance.MaxTenantGeometryPositions*2)
+const _ = uint(governance.MaxTenantGeometryPositions*2 - DefaultMaxCachedVertices)
 
 // ErrGeometryHashMismatch is returned when a fetched geometry document does not hash to the content
 // address it was fetched for. It is a REFUSAL, never a fallback: the document is discarded and

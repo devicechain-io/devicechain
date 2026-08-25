@@ -67,9 +67,9 @@ func TestTheGeoFenceDefaultsSitInsideTheirMaxima(t *testing.T) {
 		name     string
 		def, max int
 	}{
-		{"vertex ceiling", DefaultGeoFenceVertexCeiling, MaxGeoFenceVertexCeiling},
+		{"vertex ceiling", DefaultGeoFencePositionCeiling, MaxGeoFencePositionCeiling},
 		{"fence ceiling", DefaultGeoFenceCeiling, MaxGeoFenceCeiling},
-		{"vertex budget", DefaultTenantGeometryVertices, MaxTenantGeometryVertices},
+		{"vertex budget", DefaultTenantGeometryPositions, MaxTenantGeometryPositions},
 	} {
 		if c.def <= 0 {
 			t.Errorf("%s: the default is %d — a cap of zero admits no fence at all", c.name, c.def)
@@ -84,10 +84,10 @@ func TestTheGeoFenceDefaultsSitInsideTheirMaxima(t *testing.T) {
 	// such deployment at the wrong bound. Six interchangeable ints is exactly the shape that
 	// swap goes unnoticed in.
 	d := DefaultGeoFenceCaps()
-	if d.VertexCeiling != DefaultGeoFenceVertexCeiling || d.FenceCeiling != DefaultGeoFenceCeiling ||
-		d.VertexBudget != DefaultTenantGeometryVertices {
+	if d.PositionCeiling != DefaultGeoFencePositionCeiling || d.FenceCeiling != DefaultGeoFenceCeiling ||
+		d.PositionBudget != DefaultTenantGeometryPositions {
 		t.Errorf("DefaultGeoFenceCaps() = %+v, want {%d %d %d}", d,
-			DefaultGeoFenceVertexCeiling, DefaultGeoFenceCeiling, DefaultTenantGeometryVertices)
+			DefaultGeoFencePositionCeiling, DefaultGeoFenceCeiling, DefaultTenantGeometryPositions)
 	}
 }
 
@@ -99,7 +99,7 @@ func TestTheGeoFenceDefaultsSitInsideTheirMaxima(t *testing.T) {
 // operator set.
 func TestGeoFenceCapsQueryAndResponseAgree(t *testing.T) {
 	for _, field := range []string{
-		"tenantGovernance", GeoFenceVertexCeilingField, GeoFenceCeilingField, GeoFenceVertexBudgetField,
+		"tenantGovernance", GeoFencePositionCeilingField, GeoFenceCeilingField, GeoFencePositionBudgetField,
 	} {
 		if !strings.Contains(geoFenceCapsQuery, field) {
 			t.Fatalf("the query does not select %s: %q", field, geoFenceCapsQuery)
@@ -112,7 +112,7 @@ func TestGeoFenceCapsQueryAndResponseAgree(t *testing.T) {
 	// operator override decoded to nil — which reads as "inherit" and is invisible.
 	var out geoFenceCapsResponse
 	body := fmt.Sprintf(`{"tenantGovernance":{%q:700,%q:250,%q:90000}}`,
-		GeoFenceVertexCeilingField, GeoFenceCeilingField, GeoFenceVertexBudgetField)
+		GeoFencePositionCeilingField, GeoFenceCeilingField, GeoFencePositionBudgetField)
 	if err := json.Unmarshal([]byte(body), &out); err != nil {
 		t.Fatalf("decoding a well-formed response failed: %v", err)
 	}
@@ -125,9 +125,9 @@ func TestGeoFenceCapsQueryAndResponseAgree(t *testing.T) {
 		got  *int32
 		want int32
 	}{
-		{GeoFenceVertexCeilingField, g.GeoFenceVertexCeiling, 700},
+		{GeoFencePositionCeilingField, g.GeoFencePositionCeiling, 700},
 		{GeoFenceCeilingField, g.GeoFenceCeiling, 250},
-		{GeoFenceVertexBudgetField, g.GeoFenceVertexBudget, 90000},
+		{GeoFencePositionBudgetField, g.GeoFencePositionBudget, 90000},
 	} {
 		if c.got == nil {
 			t.Fatalf("%s decoded to nil from a response that carries it — the json tag does not match the wire field", c.name)
@@ -141,12 +141,12 @@ func TestGeoFenceCapsQueryAndResponseAgree(t *testing.T) {
 	// decode to nil rather than to zero, which the fold would then read as "not a cap".
 	var null geoFenceCapsResponse
 	nullBody := fmt.Sprintf(`{"tenantGovernance":{%q:null,%q:null,%q:null}}`,
-		GeoFenceVertexCeilingField, GeoFenceCeilingField, GeoFenceVertexBudgetField)
+		GeoFencePositionCeilingField, GeoFenceCeilingField, GeoFencePositionBudgetField)
 	if err := json.Unmarshal([]byte(nullBody), &null); err != nil {
 		t.Fatalf("decoding a null response failed: %v", err)
 	}
 	n := null.TenantGovernance
-	if n.GeoFenceVertexCeiling != nil || n.GeoFenceCeiling != nil || n.GeoFenceVertexBudget != nil {
+	if n.GeoFencePositionCeiling != nil || n.GeoFenceCeiling != nil || n.GeoFencePositionBudget != nil {
 		t.Fatal("a null cap must decode to nil (inherit), not to a value")
 	}
 }
@@ -183,7 +183,7 @@ func (f *capsFetcher) set(caps GeoFenceCaps, err error) {
 }
 
 func testCaps(v int) GeoFenceCaps {
-	return GeoFenceCaps{VertexCeiling: v, FenceCeiling: v, VertexBudget: v}
+	return GeoFenceCaps{PositionCeiling: v, FenceCeiling: v, PositionBudget: v}
 }
 
 // TestResolveBlocksThenServesFromCache pins the property that separates this resolver from
@@ -199,7 +199,7 @@ func TestResolveBlocksThenServesFromCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first resolve: %v", err)
 	}
-	if got.VertexCeiling != 700 {
+	if got.PositionCeiling != 700 {
 		t.Errorf("the first resolve returned %+v — it served a default instead of blocking on the fetch", got)
 	}
 	if n := f.calls.Load(); n != 1 {
@@ -267,7 +267,7 @@ func TestAStaleEntryIsServedWhenARefreshFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a stale entry with a failing refresh returned an error: %v", err)
 	}
-	if got.VertexCeiling != 700 {
+	if got.PositionCeiling != 700 {
 		t.Errorf("the stale resolve returned %+v, want the last-known caps", got)
 	}
 	if n := f.calls.Load(); n != 2 {
@@ -316,7 +316,7 @@ func TestConcurrentFirstResolvesCollapseToOneFetch(t *testing.T) {
 		if errs[i] != nil {
 			t.Errorf("caller %d: %v", i, errs[i])
 		}
-		if got[i].VertexCeiling != 700 {
+		if got[i].PositionCeiling != 700 {
 			t.Errorf("caller %d got %+v, want the fetched caps — a waiter must get the RESULT, not a default", i, got[i])
 		}
 	}
@@ -365,7 +365,7 @@ func TestACancelledCallerDoesNotAbortTheSharedFetch(t *testing.T) {
 	if res.err != nil {
 		t.Fatalf("the remaining caller got %v after its neighbour cancelled — the fetch rode the caller's context", res.err)
 	}
-	if res.caps.VertexCeiling != 700 {
+	if res.caps.PositionCeiling != 700 {
 		t.Errorf("the remaining caller got %+v, want the fetched caps", res.caps)
 	}
 }
@@ -433,14 +433,14 @@ func TestTheFenceCeilingMaximumIsStatedInBytesSomewhereReal(t *testing.T) {
 // comment asserting an invariant that nothing enforces.
 func TestTheTenantGeometryBudgetIsHalfAShareOfSomething(t *testing.T) {
 	// max = cache/2 and def = cache/5  ⇒  max/def = 5/2.
-	if got, want := 2*MaxTenantGeometryVertices, 5*DefaultTenantGeometryVertices; got != want {
+	if got, want := 2*MaxTenantGeometryPositions, 5*DefaultTenantGeometryPositions; got != want {
 		t.Errorf("2×max = %d and 5×default = %d: the constants no longer say that the default is a "+
 			"fifth of the geometry cache and the maximum is half of it. Re-derive both, and "+
 			"event-processing's DefaultMaxCachedVertices with them", got, want)
 	}
-	if fmt.Sprint(2*MaxTenantGeometryVertices) != "250000" {
+	if fmt.Sprint(2*MaxTenantGeometryPositions) != "250000" {
 		t.Errorf("the implied geometry cache is %d vertices, not the 250,000 event-processing is built "+
-			"around — DefaultMaxCachedVertices derives from MaxTenantGeometryVertices, so this "+
-			"is a change to the cache", 2*MaxTenantGeometryVertices)
+			"around — DefaultMaxCachedVertices derives from MaxTenantGeometryPositions, so this "+
+			"is a change to the cache", 2*MaxTenantGeometryPositions)
 	}
 }

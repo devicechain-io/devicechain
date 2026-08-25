@@ -30,9 +30,9 @@ type tenantGeoFenceCapsSnapshot struct {
 	// explicitly chosen to hold NO geofence at all — every fence create refused — which is the
 	// opposite of the inherit these columns exist to express. They are equally not
 	// "unlimited": no value at any level means that.
-	GeoFenceVertexCeiling *int
-	GeoFenceCeiling       *int
-	GeoFenceVertexBudget  *int
+	GeoFencePositionCeiling *int
+	GeoFenceCeiling         *int
+	GeoFencePositionBudget  *int
 }
 
 func (tenantGeoFenceCapsSnapshot) TableName() string { return "iam_tenants" }
@@ -40,10 +40,10 @@ func (tenantGeoFenceCapsSnapshot) TableName() string { return "iam_tenants" }
 // NewTenantGeoFenceCapsMigration adds the three per-tenant geofence caps (ADR-023 governance,
 // packaged per the ADR-065 tier), each bounding a cost the other two cannot express:
 //
-//   - geo_fence_vertex_ceiling — one fence's position count, which bounds an O(V²) compile;
+//   - geo_fence_position_ceiling — one fence's position count, which bounds an O(V²) compile;
 //   - geo_fence_ceiling — how many fences the tenant holds, which bounds the fence-set
 //     manifest that must fit one broker message;
-//   - geo_fence_vertex_budget — the position count across the tenant's WHOLE current fence
+//   - geo_fence_position_budget — the position count across the tenant's WHOLE current fence
 //     set, which bounds what that set costs to hold in event-processing's geometry cache — a
 //     process every tenant on the instance shares.
 //
@@ -62,7 +62,7 @@ func NewTenantGeoFenceCapsMigration() *gormigrate.Migration {
 		},
 		Rollback: func(tx *gorm.DB) error {
 			for _, col := range []string{
-				"geo_fence_vertex_ceiling", "geo_fence_ceiling", "geo_fence_vertex_budget",
+				"geo_fence_position_ceiling", "geo_fence_ceiling", "geo_fence_position_budget",
 			} {
 				if err := tx.Migrator().DropColumn(&tenantGeoFenceCapsSnapshot{}, col); err != nil {
 					return err

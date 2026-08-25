@@ -62,9 +62,9 @@ func TestTierConfigKeysMatchTheKnownDimensions(t *testing.T) {
 		// derives them from core/governance's field constants: this test's whole job is to
 		// name the vocabulary independently, so borrowing the constants would make it pass
 		// by construction like the one above.
-		"geoFenceVertexCeiling",
+		"geoFencePositionCeiling",
 		"geoFenceCeiling",
-		"geoFenceVertexBudget",
+		"geoFencePositionBudget",
 	}, TierConfigKeys())
 }
 

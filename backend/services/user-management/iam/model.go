@@ -389,9 +389,9 @@ type Tenant struct {
 
 	// Per-tenant geofence caps (ADR-023 governance, ADR-065 tier). THREE of them, because a
 	// tenant's geofence footprint has three independent costs and no one number bounds all
-	// three: GeoFenceVertexCeiling bounds ONE fence's position count, which is what a
+	// three: GeoFencePositionCeiling bounds ONE fence's position count, which is what a
 	// quadratic compile is paid on; GeoFenceCeiling bounds how many fences the tenant holds,
-	// which is what the fence-set manifest's wire size is paid on; and GeoFenceVertexBudget
+	// which is what the fence-set manifest's wire size is paid on; and GeoFencePositionBudget
 	// bounds the position count across the tenant's WHOLE current fence set, which is what
 	// footprint in event-processing's geometry cache is paid on.
 	//
@@ -403,9 +403,9 @@ type Tenant struct {
 	//
 	// Each is nullable and cascades INDEPENDENTLY: nil means "inherit" — the tenant's tier
 	// decides, and failing that the platform default. None of them ever means unlimited.
-	GeoFenceVertexCeiling *int
-	GeoFenceCeiling       *int
-	GeoFenceVertexBudget  *int
+	GeoFencePositionCeiling *int
+	GeoFenceCeiling         *int
+	GeoFencePositionBudget  *int
 }
 
 func (Tenant) TableName() string { return "iam_tenants" }

@@ -93,12 +93,12 @@ export function TenantForm({
   // is a claim on shared room. That is why it has a firm platform maximum an operator cannot
   // raise per tenant, and why the server refuses a larger number rather than quietly reducing
   // it. Blank inherits the tier's cap, then the platform default — never unlimited.
-  const [fenceVertexCeiling, setFenceVertexCeiling] = useState(
-    tenant?.geoFenceVertexCeiling?.toString() ?? '',
+  const [fencePositionCeiling, setFencePositionCeiling] = useState(
+    tenant?.geoFencePositionCeiling?.toString() ?? '',
   );
   const [fenceCeiling, setFenceCeiling] = useState(tenant?.geoFenceCeiling?.toString() ?? '');
-  const [fenceVertexBudget, setFenceVertexBudget] = useState(
-    tenant?.geoFenceVertexBudget?.toString() ?? '',
+  const [fencePositionBudget, setFencePositionBudget] = useState(
+    tenant?.geoFencePositionBudget?.toString() ?? '',
   );
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -126,9 +126,9 @@ export function TenantForm({
         aiInferenceBurst: optNum(aiBurst),
         heldCommandCeiling: optNum(heldCeiling),
         shedPriority: optNum(shedPriority),
-        geoFenceVertexCeiling: optNum(fenceVertexCeiling),
+        geoFencePositionCeiling: optNum(fencePositionCeiling),
         geoFenceCeiling: optNum(fenceCeiling),
-        geoFenceVertexBudget: optNum(fenceVertexBudget),
+        geoFencePositionBudget: optNum(fencePositionBudget),
       };
       if (editing) {
         await updateTenant(tenant.token, { name: name.trim() || null, tierToken, config: cfg, ...gov });
@@ -324,18 +324,18 @@ export function TenantForm({
       </FormField>
       <div className="grid gap-4 sm:grid-cols-2">
         <FormField
-          label={t('fenceVertexCeilingLabel')}
-          htmlFor="t-fence-vertex-ceiling"
-          description={t('fenceVertexCeilingDescription')}
+          label={t('fencePositionCeilingLabel')}
+          htmlFor="t-fence-position-ceiling"
+          description={t('fencePositionCeilingDescription')}
         >
           <Input
-            id="t-fence-vertex-ceiling"
+            id="t-fence-position-ceiling"
             type="number"
             min="1"
             step="1"
-            value={fenceVertexCeiling}
+            value={fencePositionCeiling}
             placeholder={t('defaultPlaceholder')}
-            onChange={(e) => setFenceVertexCeiling(e.target.value)}
+            onChange={(e) => setFencePositionCeiling(e.target.value)}
           />
         </FormField>
         <FormField
@@ -355,18 +355,18 @@ export function TenantForm({
         </FormField>
       </div>
       <FormField
-        label={t('fenceVertexBudgetLabel')}
-        htmlFor="t-fence-vertex-budget"
-        description={t('fenceVertexBudgetDescription')}
+        label={t('fencePositionBudgetLabel')}
+        htmlFor="t-fence-position-budget"
+        description={t('fencePositionBudgetDescription')}
       >
         <Input
-          id="t-fence-vertex-budget"
+          id="t-fence-position-budget"
           type="number"
           min="1"
           step="1"
-          value={fenceVertexBudget}
+          value={fencePositionBudget}
           placeholder={t('defaultPlaceholder')}
-          onChange={(e) => setFenceVertexBudget(e.target.value)}
+          onChange={(e) => setFencePositionBudget(e.target.value)}
         />
       </FormField>
     </>

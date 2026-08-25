@@ -213,24 +213,24 @@ func (t *Tenant) EffectiveHeldCommandCeiling() (*int, SettingSource) {
 // reject it — falls through to the tier rather than being honoured, and a tenant cannot be
 // escalated past the platform bound by editing a row.
 
-// UsableGeoFenceVertexCeiling reports whether a per-tenant per-fence position ceiling override
-// is a live bound, by the same rule a tier's geoFenceVertexCeiling is held to.
-func UsableGeoFenceVertexCeiling(v int) bool { return validateGeoFenceVertexCeiling(v) == nil }
+// UsableGeoFencePositionCeiling reports whether a per-tenant per-fence position ceiling override
+// is a live bound, by the same rule a tier's geoFencePositionCeiling is held to.
+func UsableGeoFencePositionCeiling(v int) bool { return validateGeoFencePositionCeiling(v) == nil }
 
 // UsableGeoFenceCeiling reports whether a per-tenant fence-count override is a live bound.
 func UsableGeoFenceCeiling(v int) bool { return validateGeoFenceCeiling(v) == nil }
 
-// UsableGeoFenceVertexBudget reports whether a per-tenant whole-fence-set budget override is a
+// UsableGeoFencePositionBudget reports whether a per-tenant whole-fence-set budget override is a
 // live bound.
-func UsableGeoFenceVertexBudget(v int) bool { return validateGeoFenceVertexBudget(v) == nil }
+func UsableGeoFencePositionBudget(v int) bool { return validateGeoFencePositionBudget(v) == nil }
 
-// OverrideGeoFenceVertexCeiling returns the tenant's own per-fence position ceiling override, or
+// OverrideGeoFencePositionCeiling returns the tenant's own per-fence position ceiling override, or
 // nil when it declares none (or declares an unusable one).
-func (t *Tenant) OverrideGeoFenceVertexCeiling() *int {
-	if t.GeoFenceVertexCeiling == nil || !UsableGeoFenceVertexCeiling(*t.GeoFenceVertexCeiling) {
+func (t *Tenant) OverrideGeoFencePositionCeiling() *int {
+	if t.GeoFencePositionCeiling == nil || !UsableGeoFencePositionCeiling(*t.GeoFencePositionCeiling) {
 		return nil
 	}
-	return t.GeoFenceVertexCeiling
+	return t.GeoFencePositionCeiling
 }
 
 // OverrideGeoFenceCeiling returns the tenant's own fence-count override, or nil to inherit.
@@ -241,24 +241,24 @@ func (t *Tenant) OverrideGeoFenceCeiling() *int {
 	return t.GeoFenceCeiling
 }
 
-// OverrideGeoFenceVertexBudget returns the tenant's own whole-fence-set budget override, or nil
+// OverrideGeoFencePositionBudget returns the tenant's own whole-fence-set budget override, or nil
 // to inherit.
-func (t *Tenant) OverrideGeoFenceVertexBudget() *int {
-	if t.GeoFenceVertexBudget == nil || !UsableGeoFenceVertexBudget(*t.GeoFenceVertexBudget) {
+func (t *Tenant) OverrideGeoFencePositionBudget() *int {
+	if t.GeoFencePositionBudget == nil || !UsableGeoFencePositionBudget(*t.GeoFencePositionBudget) {
 		return nil
 	}
-	return t.GeoFenceVertexBudget
+	return t.GeoFencePositionBudget
 }
 
-// EffectiveGeoFenceVertexCeiling resolves how many positions ONE of this tenant's fences may
+// EffectiveGeoFencePositionCeiling resolves how many positions ONE of this tenant's fences may
 // carry, down the same cascade every ceiling uses — tenant override → tier → nil
 // (SourcePlatformDefault). A nil value means device-management substitutes the platform default,
 // which is itself a real bound: null is "inherit", NEVER "unlimited".
-func (t *Tenant) EffectiveGeoFenceVertexCeiling() (*int, SettingSource) {
-	if v := t.OverrideGeoFenceVertexCeiling(); v != nil {
+func (t *Tenant) EffectiveGeoFencePositionCeiling() (*int, SettingSource) {
+	if v := t.OverrideGeoFencePositionCeiling(); v != nil {
 		return v, SourceOverride
 	}
-	if v := t.Tier.GeoFenceVertexCeiling(); v != nil {
+	if v := t.Tier.GeoFencePositionCeiling(); v != nil {
 		return v, SourceTier
 	}
 	return nil, SourcePlatformDefault
@@ -275,15 +275,15 @@ func (t *Tenant) EffectiveGeoFenceCeiling() (*int, SettingSource) {
 	return nil, SourcePlatformDefault
 }
 
-// EffectiveGeoFenceVertexBudget resolves how many positions this tenant's whole fence set may
+// EffectiveGeoFencePositionBudget resolves how many positions this tenant's whole fence set may
 // carry, down the same cascade. Unlike the two beside it this one bounds a SHARED resource —
 // event-processing's geometry cache serves every tenant in one process — which is why its
 // platform maximum is the tightest of the three relative to its default.
-func (t *Tenant) EffectiveGeoFenceVertexBudget() (*int, SettingSource) {
-	if v := t.OverrideGeoFenceVertexBudget(); v != nil {
+func (t *Tenant) EffectiveGeoFencePositionBudget() (*int, SettingSource) {
+	if v := t.OverrideGeoFencePositionBudget(); v != nil {
 		return v, SourceOverride
 	}
-	if v := t.Tier.GeoFenceVertexBudget(); v != nil {
+	if v := t.Tier.GeoFencePositionBudget(); v != nil {
 		return v, SourceTier
 	}
 	return nil, SourcePlatformDefault

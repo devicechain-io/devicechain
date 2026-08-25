@@ -35,9 +35,9 @@ func TestBothCapDoorsAgree(t *testing.T) {
 		set  func(*GovernanceOverrides, *int)
 	}{
 		{
-			name: "geoFenceVertexCeiling", key: iam.GeoFenceVertexCeilingConfigKey,
-			max: governance.MaxGeoFenceVertexCeiling,
-			set: func(g *GovernanceOverrides, v *int) { g.GeoFenceVertexCeiling = v },
+			name: "geoFencePositionCeiling", key: iam.GeoFencePositionCeilingConfigKey,
+			max: governance.MaxGeoFencePositionCeiling,
+			set: func(g *GovernanceOverrides, v *int) { g.GeoFencePositionCeiling = v },
 		},
 		{
 			name: "geoFenceCeiling", key: iam.GeoFenceCeilingConfigKey,
@@ -45,9 +45,9 @@ func TestBothCapDoorsAgree(t *testing.T) {
 			set: func(g *GovernanceOverrides, v *int) { g.GeoFenceCeiling = v },
 		},
 		{
-			name: "geoFenceVertexBudget", key: iam.GeoFenceVertexBudgetConfigKey,
-			max: governance.MaxTenantGeometryVertices,
-			set: func(g *GovernanceOverrides, v *int) { g.GeoFenceVertexBudget = v },
+			name: "geoFencePositionBudget", key: iam.GeoFencePositionBudgetConfigKey,
+			max: governance.MaxTenantGeometryPositions,
+			set: func(g *GovernanceOverrides, v *int) { g.GeoFencePositionBudget = v },
 		},
 	}
 
@@ -86,13 +86,13 @@ func TestBothCapDoorsAgree(t *testing.T) {
 // The read side does clamp (governance.resolveGeoFenceCap), and that asymmetry is deliberate: a
 // door is where a human is present to be told, and a wire fold is not.
 func TestTheCapOverrideDoorRejectsRatherThanClamps(t *testing.T) {
-	over := governance.MaxTenantGeometryVertices + 1
-	g := GovernanceOverrides{GeoFenceVertexBudget: &over}
+	over := governance.MaxTenantGeometryPositions + 1
+	g := GovernanceOverrides{GeoFencePositionBudget: &over}
 	err := g.validate()
 	require.Error(t, err, "an over-large budget override must be refused")
-	require.Contains(t, err.Error(), "geoFenceVertexBudget", "the error must name the field the caller sent")
-	require.NotNil(t, g.GeoFenceVertexBudget)
-	require.Equal(t, over, *g.GeoFenceVertexBudget,
+	require.Contains(t, err.Error(), "geoFencePositionBudget", "the error must name the field the caller sent")
+	require.NotNil(t, g.GeoFencePositionBudget)
+	require.Equal(t, over, *g.GeoFencePositionBudget,
 		"validate() must not mutate the caller's value — refusing and clamping are different answers")
 }
 
@@ -102,27 +102,27 @@ func TestTheCapOverrideDoorRejectsRatherThanClamps(t *testing.T) {
 func TestTheCapOverridesReachTheTenantRow(t *testing.T) {
 	vertexCeiling, fenceCeiling, budget := 700, 250, 90000
 	g := GovernanceOverrides{
-		GeoFenceVertexCeiling: &vertexCeiling,
-		GeoFenceCeiling:       &fenceCeiling,
-		GeoFenceVertexBudget:  &budget,
+		GeoFencePositionCeiling: &vertexCeiling,
+		GeoFenceCeiling:         &fenceCeiling,
+		GeoFencePositionBudget:  &budget,
 	}
 	var tenant iam.Tenant
 	g.applyTo(&tenant)
 
-	require.NotNil(t, tenant.GeoFenceVertexCeiling)
-	require.Equal(t, 700, *tenant.GeoFenceVertexCeiling, "geoFenceVertexCeiling landed on the wrong column")
+	require.NotNil(t, tenant.GeoFencePositionCeiling)
+	require.Equal(t, 700, *tenant.GeoFencePositionCeiling, "geoFencePositionCeiling landed on the wrong column")
 	require.NotNil(t, tenant.GeoFenceCeiling)
 	require.Equal(t, 250, *tenant.GeoFenceCeiling, "geoFenceCeiling landed on the wrong column")
-	require.NotNil(t, tenant.GeoFenceVertexBudget)
-	require.Equal(t, 90000, *tenant.GeoFenceVertexBudget, "geoFenceVertexBudget landed on the wrong column")
+	require.NotNil(t, tenant.GeoFencePositionBudget)
+	require.Equal(t, 90000, *tenant.GeoFencePositionBudget, "geoFencePositionBudget landed on the wrong column")
 
 	// The counterweight: applyTo is a full REPLACE, so nil must CLEAR rather than be skipped.
 	// A struct-update that skipped nils would make "revert this tenant to its tier" impossible.
-	tenant.GeoFenceVertexCeiling, tenant.GeoFenceCeiling, tenant.GeoFenceVertexBudget = &vertexCeiling, &fenceCeiling, &budget
+	tenant.GeoFencePositionCeiling, tenant.GeoFenceCeiling, tenant.GeoFencePositionBudget = &vertexCeiling, &fenceCeiling, &budget
 	GovernanceOverrides{}.applyTo(&tenant)
-	require.Nil(t, tenant.GeoFenceVertexCeiling, "an omitted override must clear the column, not leave the old cap")
+	require.Nil(t, tenant.GeoFencePositionCeiling, "an omitted override must clear the column, not leave the old cap")
 	require.Nil(t, tenant.GeoFenceCeiling, "an omitted override must clear the column, not leave the old cap")
-	require.Nil(t, tenant.GeoFenceVertexBudget, "an omitted override must clear the column, not leave the old cap")
+	require.Nil(t, tenant.GeoFencePositionBudget, "an omitted override must clear the column, not leave the old cap")
 }
 
 // TestTheServiceRefusesAnOverLargeCapEndToEnd is the test that proves the DOOR is closed, not
@@ -142,24 +142,24 @@ func TestTheServiceRefusesAnOverLargeCapEndToEnd(t *testing.T) {
 	seedTiers(t, s)
 	ctx := context.Background()
 
-	over := governance.MaxTenantGeometryVertices + 1
+	over := governance.MaxTenantGeometryPositions + 1
 	_, err := s.CreateTenant(ctx, TenantInput{
 		Token: "greedy", TierToken: iam.TierGoldToken,
-		GovernanceOverrides: GovernanceOverrides{GeoFenceVertexBudget: &over},
+		GovernanceOverrides: GovernanceOverrides{GeoFencePositionBudget: &over},
 	})
 	require.Error(t, err, "createTenant admitted a budget above the platform maximum")
-	require.Contains(t, err.Error(), iam.GeoFenceVertexBudgetConfigKey)
+	require.Contains(t, err.Error(), iam.GeoFencePositionBudgetConfigKey)
 
 	// The counterweight: a legal cap creates fine, so the refusal above is the maximum doing
 	// its job rather than the whole path being broken.
-	ok := governance.MaxTenantGeometryVertices
+	ok := governance.MaxTenantGeometryPositions
 	created, err := s.CreateTenant(ctx, TenantInput{
 		Token: "bounded", TierToken: iam.TierGoldToken,
-		GovernanceOverrides: GovernanceOverrides{GeoFenceVertexBudget: &ok},
+		GovernanceOverrides: GovernanceOverrides{GeoFencePositionBudget: &ok},
 	})
 	require.NoError(t, err, "createTenant refused a budget AT the platform maximum")
-	require.NotNil(t, created.GeoFenceVertexBudget)
-	require.Equal(t, ok, *created.GeoFenceVertexBudget)
+	require.NotNil(t, created.GeoFencePositionBudget)
+	require.Equal(t, ok, *created.GeoFencePositionBudget)
 
 	// And the update door, which is the one that matters more: it is a full replace, so it is
 	// the mutation an operator reaches for repeatedly.
@@ -174,9 +174,9 @@ func TestTheServiceRefusesAnOverLargeCapEndToEnd(t *testing.T) {
 	// rather than being left half-updated with its other caps cleared by the full replace.
 	after, err := s.iam.TenantByToken(ctx, "bounded")
 	require.NoError(t, err)
-	require.NotNil(t, after.GeoFenceVertexBudget,
+	require.NotNil(t, after.GeoFencePositionBudget,
 		"a refused update cleared the tenant's existing budget — validation must run before the write")
-	require.Equal(t, ok, *after.GeoFenceVertexBudget)
+	require.Equal(t, ok, *after.GeoFencePositionBudget)
 }
 
 func intp(v int) *int { return &v }
