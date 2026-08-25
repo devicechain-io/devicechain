@@ -100,7 +100,9 @@ type CacheEvictor interface {
 	// group is skipped, or a torn-down one still pays, until the flag's TTL).
 	EvictScopedGroupsExist(ctx context.Context)
 	// EvictFenceSetVersion drops whatever cached the tenant's fence-set version (ADR-078),
-	// called post-commit on every geofence create/update/delete. The version rides in the
+	// called post-commit by a geofence mutation that MINTED one — an edit leaving the fence
+	// set as it was mints nothing and evicts nothing, because the cached version is still
+	// exactly right. The version rides in the
 	// cached ProfileScope — the resolve path's existing per-device-type lookup — rather
 	// than in a cache of its own, so "the tenant's" here means every device type of the
 	// tenant. A missed eviction keeps stamping the previous version until the TTL, which
@@ -225,8 +227,11 @@ func (api *Api) evictScopedGroupsExist(ctx context.Context) {
 }
 
 // evictFenceSetVersion drops the caches holding the tenant's fence-set version when an
-// evictor is wired (ADR-078). No-op otherwise. Called post-commit from every geofence
-// mutation, so the next resolved location event stamps the version just minted.
+// evictor is wired (ADR-078). No-op otherwise. Called post-commit from a geofence mutation
+// that minted a version, so the next resolved location event stamps it. A mutation that
+// changed no fence geometry mints nothing and does not call this: the cached version still
+// names the set the fences are in, so evicting would cost a tenant-wide ProfileScope miss
+// to arrive at the same answer.
 func (api *Api) evictFenceSetVersion(ctx context.Context) {
 	if api.CacheEvictor != nil {
 		api.CacheEvictor.EvictFenceSetVersion(ctx)

@@ -55,7 +55,7 @@ Three answers you may need to predict, all decided one way and applied uniformly
 
 ## Fences change, and history has to survive it {#fences-change}
 
-Every geofence change — create, edit, delete, even renaming one — **freezes the whole fence set into a new version**. Each version stores the geometry of every fence as it stood at that moment, so the shapes are preserved even after the fences themselves are edited or deleted.
+A change to the fence **set** — a fence created, a boundary edited, a fence deleted — **freezes the whole fence set into a new version**. Each version stores the geometry of every fence as it stood at that moment, so the shapes are preserved even after the fences themselves are edited or deleted. Renaming a fence, or editing its description or metadata, does not — a name changes how no event is judged, so a new version would freeze exactly the shapes the previous one already holds. That is why your version count can sit still after a save that plainly changed something.
 
 Every location event is stamped with the fence-set version in force when it arrived. This is what makes replaying a rule over past events meaningful: last week's events are judged against last week's fences. Without it, a preview would answer from today's shapes and be quietly fictional — confident, plausible, and about a world that never existed.
 
@@ -108,7 +108,7 @@ Evaluation errors are surfaced per rule on the authoring preview and on the dete
 
 ### What the engine keeps in memory {#fence-set-retention}
 
-The live engine holds the **four most recent fence-set versions** per tenant — the current one plus three superseded. That is sized for events still in flight, which are seconds to minutes old, so reaching the bound takes **four fence edits while an event is between the ingest path and the engine**. An event stamped with a version that has been evicted reports the same counted evaluation error as an unknown fence.
+The live engine holds the **four most recent fence-set versions** per tenant — the current one plus three superseded. That is sized for events still in flight, which are seconds to minutes old, so reaching the bound takes **four changes to the fence set while an event is between the ingest path and the engine**. An event stamped with a version that has been evicted reports the same counted evaluation error as an unknown fence.
 
 Nothing is lost from history when that happens: every version's snapshot is stored durably, and the preview and replay paths read from there rather than from the live cache. It is only live evaluation that is bounded, and it recovers on its own — the next events carry the current version.
 

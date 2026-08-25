@@ -1,0 +1,315 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for the database-storage alerting rules (ADR-020 A2).
+#
+# WHY THESE EXIST RATHER THAN JUST `promtool check rules`
+#
+# `check rules` PARSES. It never evaluates an expression against a single sample,
+# so a comparison pointing the wrong way — `> 0.25` where `< 0.25` was meant —
+# renders, lints, parses, and reports a perfectly healthy platform right up to the
+# moment the database stops. A fullness rule is unusually easy to invert, because
+# the series is FREE bytes and the prose is a FULL percentage: every threshold in
+# the group reads as the complement of the number it is compared against.
+#
+# The cases below are states, not syntax. Three of them are negative controls and
+# they carry as much weight as the firing ones:
+#
+#   - the claim-name regex must not sweep up the OTHER PVCs that live in the same
+#     infrastructure namespace (the object store's and the broker's), because a
+#     rule that fires on those is a database alert that pages about neither
+#     database and gets switched off;
+#   - the namespace selector must not attribute another namespace's volume to this
+#     instance;
+#   - and the alerts must CLEAR when the volume is grown. That one is the reason
+#     these rules are written on a FRACTION rather than on bytes used: the
+#     underlying quantity is monotonic, so a bytes-used threshold would latch true
+#     forever and could never be answered by fixing the problem.
+#
+# 🔴 THE SERIES ARE THE SPEC. kubelet_volume_stats_available_bytes and
+# kubelet_volume_stats_capacity_bytes are exported by the KUBELET (its /metrics
+# endpoint, from the volume stats it already collects for eviction), labelled with
+# `namespace` and `persistentvolumeclaim`. Nothing this chart installs produces
+# them, which is why an instance on an external or managed database has no such
+# series and these rules stay silent there.
+#
+# The claim names are CloudNativePG's: it names each instance's PGDATA claim after
+# its pod (`dc-rdb-1`) and appends `-wal` for a separate WAL volume. `dc-rdb` and
+# `dc-tsdb` are the Cluster object names set in deploy/opentofu/main.tf. Verified
+# against a running cluster with `kubectl get pvc -n dc-system`.
+#
+# Run via hack/check-prometheus-rules.sh, which renders the chart first: these
+# assert against the SHIPPED rules, not against a copy of them.
+
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # -------------------------------------------------------------------------
+  # A healthy pair of stores. Nothing fires — including on the tsdb claim, which
+  # is the larger of the two and would be the easy false positive if the rules
+  # compared bytes rather than a fraction.
+  # -------------------------------------------------------------------------
+  - name: database volumes with room to spare raise nothing
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dc-system", persistentvolumeclaim="dc-rdb-1"}'
+        values: "12000000000+0x180"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-rdb-1"}'
+        values: "21474836480+0x180"
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dc-system", persistentvolumeclaim="dc-tsdb-1"}'
+        values: "60000000000+0x180"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-tsdb-1"}'
+        values: "107374182400+0x180"
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: DatabaseVolumeFillingUp
+        exp_alerts: []
+      - eval_time: 150m
+        alertname: DatabaseVolumeAlmostFull
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # 20% free. The band this group exists for: the append-only tables have been
+  # accumulating for months, there is still room to act, and nobody should be
+  # woken up. The warning fires and the critical stays quiet.
+  #
+  # 🔴 The eval times are BOTH sides of the 1h `for`. At 45m the condition has
+  # been true from the first sample and the alert must still be pending — that
+  # is what stops a `for` of 1h being silently rewritten to 0.
+  # -------------------------------------------------------------------------
+  - name: a database volume past three quarters warns without paging
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dc-system", persistentvolumeclaim="dc-rdb-1"}'
+        values: "4294967296+0x180"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-rdb-1"}'
+        values: "21474836480+0x180"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: DatabaseVolumeFillingUp
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: DatabaseVolumeFillingUp
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              namespace: dc-system
+              persistentvolumeclaim: dc-rdb-1
+            exp_annotations:
+              description: >-
+                dc-rdb-1 is over 75% full. Database storage on this platform does not come back on
+                its own: several tables are append-only by design and nothing prunes them — the audit journal, device
+                profile versions, entity group versions, dashboard versions, connector versions,
+                geofence set versions and the geofence geometry archive. Each is kept for a reason: a stored event names the profile or fence-set version it was resolved
+                against, and a dashboard or connector version is what a rollback returns to.
+                Retention settings do not apply to any of them —
+                those prune the time-series store, which is the dc-tsdb claims. Act while there is
+                still room to work in: grow the volume, and find out what is producing versions. On
+                the relational primary (dc-rdb), by tenant:
+
+                  SELECT tenant_id, count(*) FROM "device-management".geo_fence_set_versions GROUP BY tenant_id ORDER BY 2 DESC LIMIT 10;
+
+                Substitute any other history table for the one named — audit_events in any schema,
+                device_profile_versions or entity_group_versions in that one, dashboard_versions
+                or connector_versions in theirs. It counts rows and names no other column, so it
+                works on all of them; they do NOT share a payload column, and a query naming one
+                would fail on most. Size per table is on the append_only_table_bytes series,
+                which every service exports for its own tables. One
+                tenant re-authoring in a loop is the usual answer. On a dc-tsdb claim, check the
+                data-lifecycle retention settings instead; on a -wal claim, the WAL archiving
+                alerts are where the cause is.
+              summary: "A database volume is over 75% full"
+      - eval_time: 90m
+        alertname: DatabaseVolumeAlmostFull
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # 10% free, on a WAL volume. Two things are asserted at once and both matter:
+  #
+  #   - the critical fires, at 15m rather than an hour;
+  #   - the `-wal` claim IS matched. It is a separate PVC that CloudNativePG only
+  #     creates when wal_storage is set, and it is the one that fills FIRST when
+  #     archiving stalls. A regex that only matched `dc-rdb-<n>` would leave the
+  #     fastest-filling volume on the cluster unwatched.
+  #
+  # The warning fires here too. That overlap is deliberate — the critical band is
+  # a subset of the warning band, so a volume that falls quickly is never in a gap
+  # between one alert clearing and the next becoming eligible.
+  # -------------------------------------------------------------------------
+  - name: a nearly-full WAL volume pages, and the warning does not disappear underneath it
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dc-system", persistentvolumeclaim="dc-rdb-1-wal"}'
+        values: "2000000000+0x180"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-rdb-1-wal"}'
+        values: "21474836480+0x180"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DatabaseVolumeAlmostFull
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: DatabaseVolumeAlmostFull
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              namespace: dc-system
+              persistentvolumeclaim: dc-rdb-1-wal
+            exp_annotations:
+              description: >-
+                dc-rdb-1-wal is over 85% full. A PostgreSQL volume that fills does not slow down, it
+                stops the database — and every replica is consuming the same writes at the same
+                rate, so there is no failover out of this and no second instance still serving. Grow
+                it now: CloudNativePG expands a Cluster's volumes in place where the storage class
+                supports expansion, by raising spec.storage.size (or spec.walStorage.size for a -wal
+                claim). Reclaiming space is mostly not an alternative, because the tables that grow
+                are append-only and stored events point at their rows. To see which tenant is behind
+                it, on the relational primary (dc-rdb):
+
+                  SELECT tenant_id, count(*) FROM "device-management".geo_fence_set_versions GROUP BY tenant_id ORDER BY 2 DESC LIMIT 10;
+
+                If this is a -wal claim, treat it as a stalled archiver first — unshipped WAL is
+                retained until it ships, and the WAL archiving alerts say why it is not shipping.
+              summary: "A database volume is almost full"
+      - eval_time: 90m
+        alertname: DatabaseVolumeFillingUp
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              namespace: dc-system
+              persistentvolumeclaim: dc-rdb-1-wal
+            exp_annotations:
+              description: >-
+                dc-rdb-1-wal is over 75% full. Database storage on this platform does not come back
+                on its own: several tables are append-only by design and nothing prunes them — the audit journal, device
+                profile versions, entity group versions, dashboard versions, connector versions,
+                geofence set versions and the geofence geometry archive. Each is kept for a reason: a stored event names the profile or fence-set version it was resolved
+                against, and a dashboard or connector version is what a rollback returns to.
+                Retention settings do not apply to any of them — those prune the time-series store, which is the dc-tsdb claims. Act while
+                there is still room to work in: grow the volume, and find out what is producing
+                versions. On the relational primary (dc-rdb), by tenant:
+
+                  SELECT tenant_id, count(*) FROM "device-management".geo_fence_set_versions GROUP BY tenant_id ORDER BY 2 DESC LIMIT 10;
+
+                Substitute any other history table for the one named — audit_events in any schema,
+                device_profile_versions or entity_group_versions in that one, dashboard_versions
+                or connector_versions in theirs. It counts rows and names no other column, so it
+                works on all of them; they do NOT share a payload column, and a query naming one
+                would fail on most. Size per table is on the append_only_table_bytes series,
+                which every service exports for its own tables. One
+                tenant re-authoring in a loop is the usual answer. On a dc-tsdb claim, check the
+                data-lifecycle retention settings instead; on a -wal claim, the WAL archiving
+                alerts are where the cause is.
+              summary: "A database volume is over 75% full"
+
+  # -------------------------------------------------------------------------
+  # 🔴 THE ALERT MUST BE ABLE TO CLEAR, and this is the case the whole threshold
+  # design turns on.
+  #
+  # What these rules watch is MONOTONIC: the append-only version tables never
+  # shrink, so "bytes used" only ever climbs. A rule written on that quantity
+  # ("used > 15 GiB") becomes true once and is true forever afterwards, no matter
+  # what the operator does — including doing the right thing. It cannot be
+  # answered, only silenced, and a silenced alert reads as coverage while being
+  # none.
+  #
+  # A free FRACTION resolves. Here the Cluster's spec.storage.size is raised and
+  # the volume expands in place: capacity goes up, the newly added space is free,
+  # and both alerts go away without a single row being deleted.
+  # -------------------------------------------------------------------------
+  - name: growing the volume clears both alerts
+    interval: 1m
+    input_series:
+      # 2 GiB free of 20 GiB for two hours, then expanded to 200 GiB.
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dc-system", persistentvolumeclaim="dc-tsdb-1"}'
+        values: "2000000000+0x120 182000000000+0x120"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-tsdb-1"}'
+        values: "21474836480+0x120 214748364800+0x120"
+    alert_rule_test:
+      # Before: both firing.
+      - eval_time: 100m
+        alertname: DatabaseVolumeAlmostFull
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              namespace: dc-system
+              persistentvolumeclaim: dc-tsdb-1
+            exp_annotations:
+              description: >-
+                dc-tsdb-1 is over 85% full. A PostgreSQL volume that fills does not slow down, it
+                stops the database — and every replica is consuming the same writes at the same
+                rate, so there is no failover out of this and no second instance still serving. Grow
+                it now: CloudNativePG expands a Cluster's volumes in place where the storage class
+                supports expansion, by raising spec.storage.size (or spec.walStorage.size for a -wal
+                claim). Reclaiming space is mostly not an alternative, because the tables that grow
+                are append-only and stored events point at their rows. To see which tenant is behind
+                it, on the relational primary (dc-rdb):
+
+                  SELECT tenant_id, count(*) FROM "device-management".geo_fence_set_versions GROUP BY tenant_id ORDER BY 2 DESC LIMIT 10;
+
+                If this is a -wal claim, treat it as a stalled archiver first — unshipped WAL is
+                retained until it ships, and the WAL archiving alerts say why it is not shipping.
+              summary: "A database volume is almost full"
+      # After: neither. No rows were deleted; the volume was grown.
+      - eval_time: 200m
+        alertname: DatabaseVolumeAlmostFull
+        exp_alerts: []
+      - eval_time: 200m
+        alertname: DatabaseVolumeFillingUp
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # NEGATIVE CONTROL ON THE CLAIM REGEX. The infrastructure namespace holds other
+  # PVCs — the object store's (`dc-object-store-data`) and the broker's JetStream
+  # volume (`dc-nats-js-dc-nats-0`) — and both are at 1% free here.
+  #
+  # Neither is a database volume. The object store has its own rule next door, at
+  # its own severity and with its own runbook; the broker's has neither and that
+  # gap is real, but answering it with a rule that calls a NATS volume a database
+  # would produce a page whose entire text is wrong.
+  # -------------------------------------------------------------------------
+  - name: the object store and broker claims in the same namespace are not database volumes
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dc-system", persistentvolumeclaim="dc-object-store-data"}'
+        values: "200000000+0x180"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-object-store-data"}'
+        values: "21474836480+0x180"
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dc-system", persistentvolumeclaim="dc-nats-js-dc-nats-0"}'
+        values: "20000000+0x180"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-nats-js-dc-nats-0"}'
+        values: "2147483648+0x180"
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: DatabaseVolumeFillingUp
+        exp_alerts: []
+      - eval_time: 150m
+        alertname: DatabaseVolumeAlmostFull
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # NEGATIVE CONTROL ON THE NAMESPACE SELECTOR. Someone else's `dc-rdb-1`, in
+  # another namespace, must not be labelled with this instance and paged on by it.
+  # The object-store rule next door was written without a namespace selector at
+  # first; this is the same defect, pre-empted.
+  # -------------------------------------------------------------------------
+  - name: another namespace's database volume is not this instance's problem
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{namespace="somebody-else", persistentvolumeclaim="dc-rdb-1"}'
+        values: "100000000+0x180"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="somebody-else", persistentvolumeclaim="dc-rdb-1"}'
+        values: "21474836480+0x180"
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: DatabaseVolumeFillingUp
+        exp_alerts: []
+      - eval_time: 150m
+        alertname: DatabaseVolumeAlmostFull
+        exp_alerts: []

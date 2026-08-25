@@ -122,8 +122,8 @@ function transport(
 }
 
 const NONE_RECORDED =
-  'No fence set has been recorded yet. One is frozen every time a geofence is created, ' +
-  'changed or deleted.';
+  'No fence set has been recorded yet. One is frozen whenever a fence is created, its ' +
+  'boundary changed, or it is deleted.';
 
 describe('FenceHistoryPanel', () => {
   it('shows the frozen ring, with the current shape as a ghost beside it', async () => {

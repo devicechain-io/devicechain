@@ -55,7 +55,7 @@ Tres respuestas que puede necesitar predecir, todas decididas de una manera y ap
 
 ## Las geocercas cambian, y el historial debe sobrevivirlo {#fences-change}
 
-Todo cambio en una geocerca — crear, editar, eliminar, incluso renombrar una — **congela el conjunto entero de geocercas en una nueva versión**. Cada versión almacena la geometría de cada geocerca tal como estaba en ese momento, de modo que las formas se conservan incluso después de que las geocercas mismas se editen o eliminen.
+Un cambio en el **conjunto** de geocercas — una geocerca creada, un contorno editado, una geocerca eliminada — **congela el conjunto entero de geocercas en una nueva versión**. Cada versión almacena la geometría de cada geocerca tal como estaba en ese momento, de modo que las formas se conservan incluso después de que las geocercas mismas se editen o eliminen. Renombrar una geocerca, o editar su descripción o sus metadatos, no lo hace — un nombre no cambia cómo se juzga ningún evento, así que una versión nueva congelaría exactamente las mismas formas que ya tiene la anterior. Por eso su número de versión puede no moverse tras guardar algo que claramente cambió.
 
 Cada evento de ubicación queda sellado con la versión del conjunto de geocercas vigente cuando llegó. Esto es lo que hace significativo reproducir una regla sobre eventos pasados: los eventos de la semana pasada se juzgan contra las geocercas de la semana pasada. Sin ello, una vista previa respondería a partir de las formas de hoy y sería silenciosamente ficticia — segura de sí, plausible, y sobre un mundo que nunca existió.
 
@@ -108,7 +108,7 @@ Los errores de evaluación se exponen por regla en la previsualización de autor
 
 ### Qué mantiene el motor en memoria {#fence-set-retention}
 
-El motor en vivo mantiene las **cuatro versiones más recientes** del conjunto de geocercas por inquilino — la actual más tres sustituidas. Está dimensionado para eventos aún en vuelo, que tienen segundos o minutos, así que alcanzar el límite exige **cuatro ediciones de geocerca mientras un evento va desde la ingesta hasta el motor**. Un evento sellado con una versión ya desalojada reporta el mismo error de evaluación contado que una geocerca desconocida.
+El motor en vivo mantiene las **cuatro versiones más recientes** del conjunto de geocercas por inquilino — la actual más tres sustituidas. Está dimensionado para eventos aún en vuelo, que tienen segundos o minutos, así que alcanzar el límite exige **cuatro cambios en el conjunto de geocercas mientras un evento va desde la ingesta hasta el motor**. Un evento sellado con una versión ya desalojada reporta el mismo error de evaluación contado que una geocerca desconocida.
 
 No se pierde nada del historial cuando ocurre: la instantánea de cada versión se almacena de forma duradera, y las rutas de previsualización y reproducción leen de ahí en lugar de la caché en vivo. Solo la evaluación en vivo está acotada, y se recupera sola — los eventos siguientes llevan la versión actual.
 

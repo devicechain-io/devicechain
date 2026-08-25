@@ -109,9 +109,13 @@ func (capi *CachedApi) EvictScopedGroupsExist(ctx context.Context) {
 	_ = capi.caches.ScopedGroupsExist.Delete(ctx, tenant)
 }
 
-// EvictFenceSetVersion satisfies model.CacheEvictor (ADR-078): a geofence create,
-// update or delete minted a new tenant fence-set version, and that version is carried
-// in the cached ProfileScope, so every device type of the tenant holds a stale copy.
+// EvictFenceSetVersion satisfies model.CacheEvictor (ADR-078): a geofence mutation minted
+// a new tenant fence-set version, and that version is carried in the cached ProfileScope,
+// so every device type of the tenant holds a stale copy.
+//
+// It fires only when a version was actually minted — an edit that leaves the fence set as
+// it was mints nothing and reaches neither this nor the fan-out below, because the cached
+// version is still exactly right. See announceMintedGeoFenceSet, the one caller.
 //
 // 🔴 THIS FANS OUT ACROSS THE TENANT'S DEVICE TYPES BECAUSE THE VERSION IS TENANT-WIDE
 // WHILE ITS CACHE KEY IS PER-TYPE. That mismatch is the deliberate cost of reusing the

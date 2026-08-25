@@ -158,10 +158,16 @@ func TestGeoFenceSetSnapshotDoorRefusesAVersionTheTenantDoesNotHave(t *testing.T
 	// FIXTURE, not the subject — this test is about the snapshot door's tenant scoping — so it
 	// carries whatever authoring currently takes (location:read included, since minting or
 	// moving a fence shapes a question about where a device is).
+	//
+	// 🔴 THE GEOMETRY MUST DIFFER FROM WHAT THE FIXTURE SEEDED. This update once resubmitted
+	// authTestGeometry — the fence's existing shape — and read as advancing a version only
+	// because every update minted one. A resubmit of identical geometry changes the fence set
+	// not at all and now mints nothing, so writing it that way leaves version 2 nonexistent
+	// and fails this test's own control.
 	if _, err := r.UpdateGeoFence(withAuthorities(acme, auth.DeviceRead, auth.DeviceWrite, auth.LocationRead), struct {
 		Token   string
 		Request model.GeoFenceCreateRequest
-	}{Token: "acme-yard", Request: model.GeoFenceCreateRequest{Token: "acme-yard", Geometry: authTestGeometry}}); err != nil {
+	}{Token: "acme-yard", Request: model.GeoFenceCreateRequest{Token: "acme-yard", Geometry: distinctTestGeometry}}); err != nil {
 		t.Fatalf("advance acme: %v", err)
 	}
 
