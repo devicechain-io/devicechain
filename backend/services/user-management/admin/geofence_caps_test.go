@@ -4,6 +4,7 @@
 package admin
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -123,3 +124,59 @@ func TestTheCapOverridesReachTheTenantRow(t *testing.T) {
 	require.Nil(t, tenant.GeoFenceCeiling, "an omitted override must clear the column, not leave the old cap")
 	require.Nil(t, tenant.GeoFenceVertexBudget, "an omitted override must clear the column, not leave the old cap")
 }
+
+// TestTheServiceRefusesAnOverLargeCapEndToEnd is the test that proves the DOOR is closed, not
+// merely that a helper would close it.
+//
+// GovernanceOverrides is EMBEDDED in TenantInput and TenantMutableInput, and neither declares a
+// validate() of its own — so `in.validate()` in CreateTenant and UpdateTenant is the promoted
+// GovernanceOverrides.validate(). That is load-bearing and invisible: the day someone adds a
+// `func (in TenantInput) validate() error` to check, say, the token, it SHADOWS the promoted
+// method, every governance check silently stops running, and TestBothCapDoorsAgree above keeps
+// passing because it calls the shadowed method directly.
+//
+// So this drives the real service, through the real store, and asserts the refusal comes out of
+// the mutation an operator actually calls.
+func TestTheServiceRefusesAnOverLargeCapEndToEnd(t *testing.T) {
+	s := newTestService(t)
+	seedTiers(t, s)
+	ctx := context.Background()
+
+	over := governance.MaxTenantGeometryVertices + 1
+	_, err := s.CreateTenant(ctx, TenantInput{
+		Token: "greedy", TierToken: iam.TierGoldToken,
+		GovernanceOverrides: GovernanceOverrides{GeoFenceVertexBudget: &over},
+	})
+	require.Error(t, err, "createTenant admitted a budget above the platform maximum")
+	require.Contains(t, err.Error(), iam.GeoFenceVertexBudgetConfigKey)
+
+	// The counterweight: a legal cap creates fine, so the refusal above is the maximum doing
+	// its job rather than the whole path being broken.
+	ok := governance.MaxTenantGeometryVertices
+	created, err := s.CreateTenant(ctx, TenantInput{
+		Token: "bounded", TierToken: iam.TierGoldToken,
+		GovernanceOverrides: GovernanceOverrides{GeoFenceVertexBudget: &ok},
+	})
+	require.NoError(t, err, "createTenant refused a budget AT the platform maximum")
+	require.NotNil(t, created.GeoFenceVertexBudget)
+	require.Equal(t, ok, *created.GeoFenceVertexBudget)
+
+	// And the update door, which is the one that matters more: it is a full replace, so it is
+	// the mutation an operator reaches for repeatedly.
+	_, err = s.UpdateTenant(ctx, "bounded", TenantMutableInput{
+		TierToken:           iam.TierGoldToken,
+		GovernanceOverrides: GovernanceOverrides{GeoFenceCeiling: intp(governance.MaxGeoFenceCeiling + 1)},
+	})
+	require.Error(t, err, "updateTenant admitted a fence count above the platform maximum")
+	require.Contains(t, err.Error(), iam.GeoFenceCeilingConfigKey)
+
+	// A refused update must not have written anything — the tenant keeps the budget it had,
+	// rather than being left half-updated with its other caps cleared by the full replace.
+	after, err := s.iam.TenantByToken(ctx, "bounded")
+	require.NoError(t, err)
+	require.NotNil(t, after.GeoFenceVertexBudget,
+		"a refused update cleared the tenant's existing budget — validation must run before the write")
+	require.Equal(t, ok, *after.GeoFenceVertexBudget)
+}
+
+func intp(v int) *int { return &v }
