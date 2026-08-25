@@ -535,6 +535,39 @@ type GeoFenceSnapshotEntry {
     geometry: String!
 }
 
+# The MANIFEST of one fence-set version: which fences it holds, and the content address of
+# each one's geometry. It carries no geometry, which is what makes its size a function of the
+# fence COUNT alone — so unlike geoFenceSetSnapshot it needs no pagination, at any fence count.
+#
+# This is how a holder of a version number learns what to resolve: an engine that missed the
+# announcement, one starting cold, or a preview replaying last week. The geometry itself comes
+# from geoFenceGeometry, keyed by the addresses named here.
+type GeoFenceSetManifest {
+    # The version this manifest describes. 0 means the tenant had never created a fence when
+    # the event was resolved — an empty fence set as knowledge, not as absence.
+    version: Int!
+    # When the change that minted this version committed. Carried for diagnosis — how old is
+    # the set an engine is holding? — and never read by containment.
+    mintedAt: String
+    # The fences of this version, ordered by token.
+    fences: [GeoFenceManifestEntry!]!
+}
+
+# One fence inside a manifest: the token a rule names it by, and the content address under
+# which its geometry is stored.
+type GeoFenceManifestEntry {
+    token: String!
+    hash: String!
+}
+
+# One archived geometry document and the content address it is filed under. The address is
+# the SHA-256 of exactly these bytes, so a caller can — and should — re-derive it to verify
+# what it received rather than trusting the association.
+type GeoFenceGeometry {
+    hash: String!
+    geometry: String!
+}
+
 # A raised alarm (ADR-041) — the operational alarm object. Raised when a DETECT rule's
 # condition fires (ADR-057, via the contributor-set integrator), keyed by (originator,
 # alarmKey): there is at most one live alarm per key, so re-crossings dedup into the
@@ -1563,6 +1596,32 @@ type Query {
     # and a fence edit between them yields two pages of two different sets stitched
     # together under one version number.
     currentGeoFenceSet: GeoFenceSetSnapshot!
+    # The manifest of one fence-set version: which fences it held and the content address
+    # of each one's geometry. Unlike geoFenceSetSnapshot this reads no geometry at all, so
+    # it is a fixed cost per fence and needs no pagination.
+    #
+    # An unknown POSITIVE version is an error, for the same reason geoFenceSetSnapshot gives:
+    # a stamp naming a version that is not on record means the history was truncated, and
+    # answering "empty" would read as "no fences" rather than "cannot know". A negative
+    # version is refused outright rather than sharing version 0's known-empty answer.
+    geoFenceSetManifest(version: Int!): GeoFenceSetManifest!
+    # The manifest of the tenant's CURRENT version — the version and its fences read from
+    # one row, so the two cannot disagree across a concurrent fence edit. Reading the
+    # version and the manifest as two queries would be two questions about a moving target.
+    currentGeoFenceSetManifest: GeoFenceSetManifest!
+    # The archived geometry documents stored under the given content addresses.
+    #
+    # An address this tenant does not hold is ABSENT from the result rather than an error:
+    # the question is "which of these do you have?", and the set of answers is the answer.
+    # Incompleteness is the caller's to interpret — a caller resolving a manifest must turn
+    # a missing body into a fence that reports an ERROR, never one that is silently absent,
+    # because an absent fence reads downstream as "this fence does not exist" and makes
+    # containment answer "outside" for a device that is inside.
+    #
+    # Asking for more addresses than the per-request limit is an error rather than a partial
+    # answer: a caller that asked for forty and silently received twenty-four could not tell
+    # that from a tenant holding only twenty-four of them.
+    geoFenceGeometry(hashes: [String!]!): [GeoFenceGeometry!]!
     # Find raised alarms by unique id.
     alarmsById(ids: [ID!]!): [Alarm!]!
     # Find raised alarms by unique token.

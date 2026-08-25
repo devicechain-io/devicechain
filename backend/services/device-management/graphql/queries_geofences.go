@@ -131,3 +131,84 @@ func (r *SchemaResolver) CurrentGeoFenceSet(ctx context.Context) (*GeoFenceSetSn
 	}
 	return &GeoFenceSetSnapshotResolver{M: *found, S: r, C: ctx}, nil
 }
+
+// GeoFenceSetManifest exposes the MANIFEST of one fence-set version — which fences it held
+// and the content address of each one's geometry, without reading any geometry at all.
+//
+// It is the read half of manifest delivery, and it is what makes a fence-set version
+// resolvable at a cost that does not depend on what the fences contain: an engine that
+// missed the announcement, one starting cold, or a preview replaying last week learns WHAT
+// to resolve here and fetches only the bodies it does not already hold through
+// geoFenceGeometry.
+//
+// Tenancy and authority are exactly as for geoFenceSetSnapshot: there is no parameter
+// through which a caller could name a tenant, the rows are tenant-scoped, and the scope
+// callback refuses a tenant-scoped query with no tenant at all — so another tenant's
+// manifest is not a request that can be expressed. device:read, matching every other
+// geofence read.
+func (r *SchemaResolver) GeoFenceSetManifest(ctx context.Context, args struct {
+	Version int32
+}) (*GeoFenceSetManifestResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+	found, err := r.GetApi(ctx).GeoFenceSetManifestAt(ctx, args.Version)
+	if err != nil {
+		return nil, err
+	}
+	return &GeoFenceSetManifestResolver{M: *found, S: r, C: ctx}, nil
+}
+
+// CurrentGeoFenceSetManifest exposes the manifest of the tenant's CURRENT version — the
+// version and its fences read from one row, so the two cannot disagree.
+//
+// It is what event-processing's startup reconcile and five-minute sweep seed from, so a
+// restarted engine is not blind to a tenant's fences until the next fence edit. Tenancy and
+// authority are as above.
+func (r *SchemaResolver) CurrentGeoFenceSetManifest(ctx context.Context) (*GeoFenceSetManifestResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+	found, err := r.GetApi(ctx).CurrentGeoFenceSetManifest(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &GeoFenceSetManifestResolver{M: *found, S: r, C: ctx}, nil
+}
+
+// GeoFenceGeometry exposes archived geometry documents by content address — the other half
+// of manifest delivery.
+//
+// 🔴 AN ADDRESS THE TENANT DOES NOT HOLD IS SIMPLY ABSENT FROM THE RESULT. That is a
+// deliberate contract and it is why this door is safe to expose: the hashes are
+// caller-supplied, so "which of these do you hold?" is an ordinary question whose answer is
+// a set. It is also why the CALLER carries a duty this door cannot discharge for it — a
+// caller resolving a manifest must turn a missing body into a fence that reports an error,
+// never one that is silently absent, because an absent fence reads downstream as "this fence
+// does not exist here" and containment then answers "outside" for a device that is inside.
+//
+// Tenancy is the same mechanism as the manifest doors: the archive rows are tenant-scoped
+// and no parameter names a tenant, so a hash belonging to another tenant is not on record
+// here and reads exactly like a hash that never existed.
+//
+// The request length is capped, and over-cap is an ERROR rather than a truncated answer —
+// following validateCommandEnqueueBatch, the other door in this schema that bounds a list.
+// A caller that asked for forty addresses and silently received twenty-four could not
+// distinguish that from a tenant holding only twenty-four of them, which is exactly the
+// confusion the absence contract above depends on not existing.
+func (r *SchemaResolver) GeoFenceGeometry(ctx context.Context, args struct {
+	Hashes []string
+}) ([]*GeoFenceGeometryResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+	found, err := r.GetApi(ctx).GeoFenceGeometryDocuments(ctx, args.Hashes)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*GeoFenceGeometryResolver, 0, len(found))
+	for i := range found {
+		result = append(result, &GeoFenceGeometryResolver{M: found[i], S: r, C: ctx})
+	}
+	return result, nil
+}

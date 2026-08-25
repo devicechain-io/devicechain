@@ -167,6 +167,65 @@ func (p *polygon2D) contains(pos Position) (bool, error) {
 	return true, nil
 }
 
+// loops is every compiled ring of the polygon: the exterior first, then each hole.
+//
+// 🔴 IT EXISTS SO THAT "TOUCH EVERY RING" IS A SINGLE ENUMERATION RATHER THAN A SHAPE REPEATED AT
+// EACH CALL SITE, AND — the reason it is worth a method — so that the enumeration is TESTABLE where
+// its users are not. Whether s2 actually built a loop's index is not readable from outside the
+// library: there is no freshness flag, the answers are identical either way, and the only other
+// signal is timing. So a prebuildIndex that quietly skipped the holes would leave no evidence
+// anywhere. With the walk factored out, the claim that survives testing changes from "the index was
+// built" (unobservable) to "the pre-build was handed every ring" (a list, compared by identity),
+// and a forgotten hole fails a test instead of leaving a latent lazy build inside a shared value.
+// vertexCount gets the same protection for free.
+func (p *polygon2D) loops() []*s2.Loop {
+	all := make([]*s2.Loop, 0, 1+len(p.holes))
+	if p.exterior != nil {
+		all = append(all, p.exterior)
+	}
+	for _, hole := range p.holes {
+		if hole != nil {
+			all = append(all, hole)
+		}
+	}
+	return all
+}
+
+// vertexCount is the polygon's cost, summed over every ring. It counts COMPILED vertices, which is
+// one fewer per ring than the authored position count — loopFromRing drops each ring's repeated
+// closing position — so a fence at device-management's 512-position authoring ceiling measures 511
+// here. The two numbers are deliberately not reconciled: this one is what containment iterates and
+// what the compiled loops occupy, and inflating it to match an authoring bound would price a cache
+// in a unit nothing in this package spends.
+func (p *polygon2D) vertexCount() int {
+	n := 0
+	for _, loop := range p.loops() {
+		n += loop.NumVertices()
+	}
+	return n
+}
+
+// prebuildIndex forces s2's lazy shape-index build on every loop, so that a shared compiled
+// polygon is fully built before any reader sees it. See Compiled.Prebuild for why that has to
+// happen off the evaluation loop.
+//
+// 🔴 THE PROBE POINT IS THE LOOP'S OWN FIRST VERTEX, AND IT HAS TO BE. s2.Loop.ContainsPoint
+// short-circuits on the loop's bounding rectangle before it ever touches the index, so a probe
+// from anywhere outside the bound — the origin, say — returns false immediately and builds
+// nothing, leaving a "pre-built" geometry that is not. A vertex of the loop is inside its own
+// bound by construction, which is the only probe that cannot be wrong for some fence somewhere.
+//
+// Every ring is probed, not just the exterior: `contains` short-circuits out of the hole scan
+// whenever a point falls outside the exterior, so one whole-geometry query would leave every hole's
+// index unbuilt for exactly the reader that first lands inside the fence.
+func (p *polygon2D) prebuildIndex() {
+	for _, loop := range p.loops() {
+		if loop.NumVertices() > 0 {
+			loop.ContainsPoint(loop.Vertex(0))
+		}
+	}
+}
+
 // inLoop is the boundary-INCLUSIVE point-in-loop test: s2's exact interior predicate, widened by
 // an explicit on-the-ring test so the answer does not depend on which edge the point sits on.
 // The boundary pass runs only when the interior test says no, so the common inside/well-outside

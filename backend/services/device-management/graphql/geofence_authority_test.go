@@ -47,8 +47,10 @@ func geoFenceTestCtx(t *testing.T) context.Context {
 }
 
 // callGeoFenceReads invokes every geofence read door and hands each (name, error) pair
-// to check. Keeping them in one table matters: they are four doors onto the same
-// material, and a gate applied to three of the four is exactly the defect this catches.
+// to check. Keeping them in one table matters: they are many doors onto the same material,
+// and a gate applied to all but one is exactly the defect this catches. A new read door
+// belongs HERE rather than in a test of its own — a parallel test covers the door somebody
+// remembered to write it for, and this table covers the class.
 func callGeoFenceReads(t *testing.T, ctx context.Context, check func(name string, err error)) {
 	t.Helper()
 	r := &SchemaResolver{}
@@ -81,6 +83,26 @@ func callGeoFenceReads(t *testing.T, ctx context.Context, check func(name string
 
 	_, err = r.CurrentGeoFenceSet(ctx)
 	check("currentGeoFenceSet", err)
+
+	// The MANIFEST doors carry the same material one level indirect: a manifest names a
+	// tenant's fences, and geoFenceGeometry turns those names into the geometry itself. An
+	// ungated pair is the same map of the tenant's operations, reached in two steps.
+	//
+	// geoFenceSetManifest is asked for version 0 for the same reason geoFenceSetSnapshot is:
+	// it is the one version that resolves without a row, so an authorized caller gets a real
+	// result and the "device:read is admitted" half of the table is not passing because the
+	// query errored for an unrelated reason.
+	_, err = r.GeoFenceSetManifest(ctx, struct{ Version int32 }{Version: 0})
+	check("geoFenceSetManifest", err)
+
+	_, err = r.CurrentGeoFenceSetManifest(ctx)
+	check("currentGeoFenceSetManifest", err)
+
+	// An address nobody holds, so an authorized caller gets an empty answer rather than an
+	// error — again keeping the admitted half of the table meaningful.
+	_, err = r.GeoFenceGeometry(ctx, struct{ Hashes []string }{
+		Hashes: []string{model.GeoFenceGeometryHash([]byte("authority probe"))}})
+	check("geoFenceGeometry", err)
 }
 
 // callGeoFenceWrites invokes every geofence write door.

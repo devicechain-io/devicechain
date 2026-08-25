@@ -151,6 +151,77 @@ func (r *GeoFenceSnapshotEntryResolver) Token() string { return r.M.Token }
 func (r *GeoFenceSnapshotEntryResolver) Geometry() string { return string(r.M.Geometry) }
 
 // --------------------------------------
+// Geofence set manifest resolvers
+// --------------------------------------
+
+// GeoFenceSetManifestResolver resolves one fence-set version's manifest: which fences it
+// held and the content address of each one's geometry.
+//
+// It has no paginated field, and that absence is the whole point of the type. Its sibling
+// GeoFenceSetSnapshotResolver pages its fences because a fence set at the documented
+// authoring ceiling does not fit in one cross-service response — the fences carry geometry,
+// which is author-written text of no predictable size. A manifest entry is a bounded token
+// and a fixed-width hash, so a whole manifest at the fence ceiling is a small fraction of
+// one response and cannot grow with what the fences contain. Adding pagination here would
+// impose the convention without the constraint that earned it.
+type GeoFenceSetManifestResolver struct {
+	M model.GeoFenceSetManifest
+	S *SchemaResolver
+	C context.Context
+}
+
+// Version is the fence-set version this manifest describes.
+func (r *GeoFenceSetManifestResolver) Version() int32 { return r.M.Version }
+
+// MintedAt is when the change that minted this version committed.
+func (r *GeoFenceSetManifestResolver) MintedAt() *string { return util.FormatTime(r.M.MintedAt) }
+
+// Fences are this version's fences, ordered by token — the order the mint path writes them
+// in, so a manifest is a function of the fence set alone and two reads of one version cannot
+// differ.
+func (r *GeoFenceSetManifestResolver) Fences() []*GeoFenceManifestEntryResolver {
+	resolvers := make([]*GeoFenceManifestEntryResolver, 0, len(r.M.Fences))
+	for _, current := range r.M.Fences {
+		resolvers = append(resolvers, &GeoFenceManifestEntryResolver{M: current, S: r.S, C: r.C})
+	}
+	return resolvers
+}
+
+// GeoFenceManifestEntryResolver resolves one manifest entry.
+type GeoFenceManifestEntryResolver struct {
+	M model.GeoFenceManifestEntry
+	S *SchemaResolver
+	C context.Context
+}
+
+// Token is the stable per-tenant token a rule names this fence by.
+func (r *GeoFenceManifestEntryResolver) Token() string { return r.M.Token }
+
+// Hash is the content address of this fence's geometry at this version — what geoFenceGeometry
+// resolves into the document itself.
+func (r *GeoFenceManifestEntryResolver) Hash() string { return r.M.Hash }
+
+// GeoFenceGeometryResolver resolves one archived geometry document and the address it is
+// filed under.
+type GeoFenceGeometryResolver struct {
+	M model.GeoFenceGeometryDocument
+	S *SchemaResolver
+	C context.Context
+}
+
+// Hash is the content address this document is stored under.
+func (r *GeoFenceGeometryResolver) Hash() string { return r.M.Hash }
+
+// Geometry is the archived geometry envelope as its raw JSON text.
+//
+// 🔴 IT IS THE STORED BYTES, UNTOUCHED, AND NOTHING ON THIS PATH MAY RE-ENCODE THEM. The
+// hash above is the SHA-256 of exactly this text and callers re-derive it to verify what they
+// received, so a decode-and-re-encode anywhere between the archive row and here — however
+// equivalent the JSON — would change key order or spacing and make every verification fail at
+// once. The conversion below is a view of the same bytes, not a re-serialization.
+func (r *GeoFenceGeometryResolver) Geometry() string { return string(r.M.Document) }
+
+// --------------------------------------
 // Geofence search results resolver
 // --------------------------------------
 

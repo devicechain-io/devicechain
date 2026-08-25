@@ -10,6 +10,7 @@ import (
 
 	"github.com/devicechain-io/dc-event-processing/config"
 	"github.com/devicechain-io/dc-event-processing/graphql"
+	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	"github.com/devicechain-io/dc-event-processing/internal/nldraft"
 	"github.com/devicechain-io/dc-event-processing/internal/react"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
@@ -48,7 +49,8 @@ var (
 	ProfileActiveStore   *model.ProfileActiveStore
 	DeviceAttributeStore *model.DeviceAttributeStore
 	RuleRegistry         *runtime.RuleRegistry
-	// FenceSets / CurrentFenceSets are the two halves of the ADR-078 fence-set fetch seam onto
+	// FenceSets / CurrentFenceSets / FenceManifests are the three halves of the ADR-078 fence-set
+	// seam onto
 	// device-management's frozen snapshot archive: the version-addressed one the replay preview
 	// resolves historical fence sets through, and the current-set one the DETECT startup reconcile
 	// seeds its live projection from. Both are nil when the seam is unconfigured (no service secret
@@ -56,6 +58,7 @@ var (
 	// preview loudly — see buildFenceSetSeam.
 	FenceSets               runtime.FenceSetSource
 	CurrentFenceSets        runtime.CurrentFenceSetSource
+	FenceManifests          runtime.FenceManifestResolver
 	ResolvedEventsReader    messaging.MessageReader
 	ResolvedEventsProcessor *processor.ResolvedEventsProcessor
 	// ReactDispatcher is the REACT stage's derived-event consumer (ADR-051 slice 5b/5c). Since the
@@ -156,16 +159,14 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	if err != nil {
 		return err
 	}
-	// Geofence fact reader (ADR-078): the FROZEN fence set of each newly-minted fence-set version.
-	// Its consumer compiles the set off-loop and hands it to the single-writer loop, so a location
-	// event's containment predicate resolves from memory and the loop never blocks on a read back
+	// Geofence fact reader (ADR-078): the MANIFEST of each newly-minted fence-set version —
+	// which fences it holds and the content address of each one's geometry. Its consumer
+	// resolves the geometry off-loop, fetching only what the compiled-geometry cache does not
+	// already hold, and hands the assembled set to the single-writer loop; a location event's
+	// containment predicate then resolves from memory and the loop never blocks on a read back
 	// into device-management. The startup reconcile (FenceSets, below) is the other half — the
 	// stream carries only changes from now on, so without it a restart would be blind.
-	fencePointerReader, err := nmgr.NewReader(streams.GeoFenceSetPointer)
-	if err != nil {
-		return err
-	}
-	fenceReader, err := nmgr.NewReader(streams.GeoFenceSet)
+	fenceReader, err := nmgr.NewReader(streams.GeoFenceSetManifest)
 	if err != nil {
 		return err
 	}
@@ -225,13 +226,14 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// unconfigured, which leaves the projection disabled — every containment call then reports an
 	// unresolvable fence set (counted) rather than the invisible lie of "outside".
 	//
-	// The version-addressed half goes in too, for the one fact the consumer cannot install
-	// directly: a set too large for a single broker message arrives as a POINTER — its version
-	// and nothing else — and is resolved from the archive at exactly that version.
+	// All three halves of the archive seam go in, and they share one compiled-geometry cache:
+	// the current-set source the reconcile sweep seeds from, the version-addressed source a
+	// replay preview resolves through, and the manifest resolver the fact consumer hands each
+	// announcement to. Geometry fetched by any one of them is already held by the others.
 	ResolvedEventsProcessor.FenceSetReader = fenceReader
-	ResolvedEventsProcessor.FenceSetPointerReader = fencePointerReader
 	ResolvedEventsProcessor.FenceSets = CurrentFenceSets
 	ResolvedEventsProcessor.VersionedFenceSets = FenceSets
+	ResolvedEventsProcessor.FenceManifests = FenceManifests
 	if err := ResolvedEventsProcessor.Initialize(context.Background()); err != nil {
 		return err
 	}
@@ -352,20 +354,24 @@ func buildEgressLimiter() *core.TenantRateLimiter {
 // geofence preview. That is the fail-closed direction: with no seam every containment call reports
 // an unresolvable fence set and is COUNTED, where a projection quietly seeded with nothing would
 // answer "outside" and read as a healthy rule that never fires.
-func buildFenceSetSeam() (runtime.FenceSetSource, runtime.CurrentFenceSetSource) {
+func buildFenceSetSeam() (runtime.FenceSetSource, runtime.CurrentFenceSetSource, runtime.FenceManifestResolver) {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	if infra.ServiceAuth.Secret == "" {
 		log.Warn().Msg("Service secret not configured — geofence evaluation is UNAVAILABLE (ADR-078): containment reports unresolvable rather than 'outside'.")
-		return nil, nil
+		return nil, nil, nil
 	}
 	if infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 {
 		log.Warn().Msg("device-management endpoint not configured (infrastructure.deviceManagement) — geofence evaluation is UNAVAILABLE (ADR-078).")
-		return nil, nil
+		return nil, nil, nil
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-processing", []string{string(auth.DeviceRead)})
 	url := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
 	log.Info().Str("deviceManagement", url).Msg("Geofence fence-set fetch ENABLED (ADR-078): the startup reconcile and the replay preview resolve frozen fence sets from device-management.")
-	return processor.NewFenceSetClient(client, url)
+	// One cache, shared by all three seams the client satisfies. Its bound is counted in
+	// VERTICES rather than entries, because a three-vertex box and a five-hundred-vertex
+	// polygon are one entry each and differ by ~500x in what they cost to hold.
+	return processor.NewFenceSetClient(Microservice, client, url,
+		geofence.NewGeometryCache(geofence.DefaultMaxCachedVertices))
 }
 
 // buildDrafter constructs the ADR-056 NL→rule drafting orchestrator (slice 1). It wires the
@@ -433,7 +439,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// Build the ADR-078 fence-set fetch seam BEFORE the NATS manager: createNatsComponents wires
 	// the current-set half into the processor, whose startup reconcile seeds the containment
 	// projection from it, so it must exist by then.
-	FenceSets, CurrentFenceSets = buildFenceSetSeam()
+	FenceSets, CurrentFenceSets, FenceManifests = buildFenceSetSeam()
 
 	// Create and initialize nats manager (builds the readers + checkpoint processor). The
 	// DETECT rule set is rebuilt from the durable rule projection inside createNatsComponents

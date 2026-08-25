@@ -208,18 +208,6 @@ type ResolvedEventsProcessor struct {
 	// read back into device-management. Nil disables live fence updates (the scaffold/test path).
 	FenceSetReader messaging.MessageReader
 
-	// FenceSetPointerReader is the durable consumer of the geofence-set-POINTER stream: the
-	// same fact for the sets that were too large to carry, on a subject of its own.
-	//
-	// 🔴 IT IS A SECOND READER BECAUSE THE SEPARATION IS THE UPGRADE-SAFETY MECHANISM. The
-	// pointer form is marked by a FIELD, and a field means nothing to a decoder that predates
-	// it — an older build of this service reads a pointer fact as a fence set of zero fences
-	// and installs it, which answers "outside" for a device that is inside and reports
-	// nothing, because an empty set is a legitimate state. Keeping pointers on a subject such
-	// a build never subscribed to makes its behaviour identical to what it was before they
-	// existed. Nil disables the pointer feed (the scaffold/test path).
-	FenceSetPointerReader messaging.MessageReader
-
 	// FenceSets is the OFF-LOOP seam onto device-management's frozen fence-set archive, used to
 	// re-seed fenceView at startup (CurrentFenceSet) — a live cache survives no restart, and the
 	// fact stream carries only changes from now on, so without this a restarted engine would be
@@ -246,6 +234,20 @@ type ResolvedEventsProcessor struct {
 	// goroutine, which is already where the fence compile happens. Nil means a pointer fact cannot
 	// be resolved, which is reported loudly and counted rather than installed as an empty set.
 	VersionedFenceSets runtime.FenceSetSource
+
+	// FenceManifests assembles a fence set from a manifest that ARRIVED — the fence-set fact's
+	// road into the projection, as opposed to the two archive reads above which go and find a
+	// version out for themselves.
+	//
+	// It is a third seam rather than a use of VersionedFenceSets because the fact already
+	// carries what that read would go and fetch. Routing the fact through the version-addressed
+	// source would re-read a manifest this service is holding, and would do it on every fence
+	// edit — throwing away the property that makes manifest delivery cheap, which is that an
+	// edit to one fence of a hundred transfers one geometry document and nothing else.
+	//
+	// All three share one compiled-geometry cache, so the roads reinforce each other: geometry
+	// fetched for a fact is already held when the next reconcile sweep asks about that version.
+	FenceManifests runtime.FenceManifestResolver
 
 	// armer arms dead-man absence timers for never-seen devices, cross-referencing the roster +
 	// active-version read-models (ADR-051 slice 4c-2b-2b). It is built in ExecuteStart once the
@@ -716,19 +718,12 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 		go rp.runAttributeConsumer()
 	}
 	// The geofence-set consumer keeps the containment projection live (ADR-078): a fence edit mints
-	// a version and announces its frozen set, which this consumer compiles off-loop and hands to the
-	// loop. It stops on procCancel and is joined by readerWG.
+	// a version and announces its MANIFEST, which this consumer resolves off-loop — fetching only
+	// the geometry it does not already hold — and hands to the loop. It stops on procCancel and is
+	// joined by readerWG.
 	if rp.FenceSetReader != nil {
 		rp.readerWG.Add(1)
 		go rp.runFenceSetConsumer()
-	}
-	// The pointer stream carries the same fact for sets too large to send whole, and is
-	// drained by a consumer of its own. Both feed one projection, and that is safe for the
-	// reason the fact's own design note gives: a fence-set VERSION is immutable, so there is
-	// no order in which two of these can arrive that makes either wrong.
-	if rp.FenceSetPointerReader != nil {
-		rp.readerWG.Add(1)
-		go rp.runFenceSetPointerConsumer()
 	}
 	return nil
 }

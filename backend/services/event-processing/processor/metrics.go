@@ -80,21 +80,6 @@ type detectMetrics struct {
 	// false edge under the stable contributor id. Bounded cardinality (no labels).
 	supersededFrontierDropped prometheus.Counter
 
-	// fenceSetPointerUnresolved counts geofence-set facts that arrived WITHOUT their fences —
-	// device-management publishes the version alone when the frozen set is too large for one
-	// broker message — and that this service then could not resolve from the archive. Bounded
-	// cardinality (no labels; the tenant is in the accompanying error log).
-	//
-	// It is separate from the fan-out eval-error counter on purpose, and the two are alerted on
-	// TOGETHER rather than instead of each other — the chart ships DetectFanoutEvalErrors on that
-	// one and DetectFenceSetPointerUnresolved on this one. A rising eval-error rate is the
-	// SYMPTOM every geofence fault shares and cannot say which fault it is, so it is the alert
-	// that tells an operator something is wrong; this series names one specific cause, and is
-	// what turns "rules are erroring somewhere" into "a tenant's fence set outgrew the wire and
-	// the archive read is failing too". A non-zero value here means that tenant's containment is
-	// dead until the next reconcile sweep at best.
-	fenceSetPointerUnresolved prometheus.Counter
-
 	// Slice-6c per-tenant state-budget gauges (ADR-023 amendment). Bounded cardinality — NO
 	// per-tenant labels (the G.3 DoS lesson): liveKeys/retainedSamples are AGGREGATE totals across
 	// all tenants, and the three "over budget" gauges are COUNTS of tenants breaching each ceiling,
@@ -140,7 +125,6 @@ func newDetectMetrics(ms *core.Microservice) *detectMetrics {
 
 		staleAbsenceDropped:       ms.NewCounter("detect_stale_absence_dropped_total", "Absence detections dropped at publish because the device left the rule's scope (deleted/re-typed/version superseded).", nil),
 		supersededFrontierDropped: ms.NewCounter("detect_superseded_frontier_dropped_total", "Non-absence frontier-triggered detections (Duration/Session/Aggregate) dropped at publish because their profile version is superseded (ADR-057 D6).", nil),
-		fenceSetPointerUnresolved: ms.NewCounter("detect_fence_set_pointer_unresolved_total", "Geofence-set facts that arrived carrying only their version (the frozen set was too large for one broker message) and could not then be read from device-management's archive. Each one leaves a tenant's containment reporting unresolvable at that version until the next reconcile sweep.", nil),
 
 		liveKeys:                 ms.NewGauge("detect_live_keys", "Total live keyed window/timer state entries across all tenants (the per-tenant state-budget aggregate).", nil),
 		tenantsOverRuleBudget:    ms.NewGauge("detect_tenants_over_rule_budget", "Tenants currently exceeding the per-tenant rule-count budget (ADR-023).", nil),
@@ -176,15 +160,6 @@ func (m *detectMetrics) recordStaleAbsenceDropped() {
 		return
 	}
 	m.staleAbsenceDropped.Inc()
-}
-
-// recordFenceSetPointerUnresolved records one fences-omitted geofence-set fact whose fences could
-// not be read back from device-management's frozen archive. Nil-safe.
-func (m *detectMetrics) recordFenceSetPointerUnresolved() {
-	if m == nil {
-		return
-	}
-	m.fenceSetPointerUnresolved.Inc()
 }
 
 // recordSupersededFrontierDropped records one non-absence frontier detection dropped at publish
@@ -370,4 +345,138 @@ func (m *detectMetrics) recordCheckpoint(appliedSeq uint64, seconds float64, byt
 	m.checkpointSeconds.Set(seconds)
 	m.snapshotBytes.Set(float64(bytes))
 	m.watermarkLagSeconds.Set(lagSeconds)
+}
+
+// fenceGeometryMetrics reports on the geofence ARCHIVE seam: resolving a fence-set manifest
+// into evaluable geometry, and the compiled-geometry cache that makes that cheap.
+//
+// It is a type of its own rather than more fields on detectMetrics, because every one of these
+// is recorded by the fence-set client and none of them by the detection loop. Folding them into
+// the loop's metrics would have meant handing the client a reference to the loop's internals to
+// record a number the loop knows nothing about — and it is the loop's metrics that get read
+// when someone asks "is DETECT keeping up", a question none of these answers.
+type fenceGeometryMetrics struct {
+	// fenceGeometryUnresolved counts MANIFEST ENTRIES whose geometry this service could not
+	// obtain — the archive answered without it, or the read failed. Bounded cardinality (no
+	// labels; the tenant and fence are in the accompanying error log).
+	//
+	// 🔴 IT IS THE PRICE OF SPLITTING GEOMETRY OUT OF THE FACT, AND IT IS THE ONLY THING THAT
+	// MAKES THAT SPLIT SAFE TO SEE. When the fact carried the whole fence set, a set either
+	// arrived or did not. Now a version's fences arrive as names and their bodies are fetched,
+	// so a set can be assembled with a hole in it — and a hole is the one failure containment
+	// cannot report for itself, because a fence that is simply MISSING reads as "no such
+	// fence" rather than as an error. The engine closes that by installing such a fence with
+	// its error attached, which turns the hole into a counted eval error; this counter is what
+	// says WHICH cause, and it is the difference between "some rule is erroring" and "these
+	// fences have no geometry".
+	//
+	// Non-zero means containment for the affected fences is reporting unresolvable rather than
+	// answering, and it repairs on the next reconcile sweep if the cause was transient.
+	fenceGeometryUnresolved prometheus.Counter
+
+	// fenceGeometryHashMismatch counts geometry documents that did NOT hash to the content
+	// address they were requested under. Bounded cardinality (no labels).
+	//
+	// 🔴 THIS SHOULD ALWAYS BE ZERO, AND A NON-ZERO VALUE IS NEVER BENIGN. An address IS the
+	// SHA-256 of the document stored under it, so a mismatch means one of: device-management
+	// served the wrong row, something re-encoded the document in transit (a jsonb reprint or a
+	// convenience unmarshal/marshal would do it, and would make EVERY fence mismatch at once),
+	// or the archive is corrupt. All three are bugs, none is a transient fault, and the
+	// verification that produces this number is the only check standing between a wrong body
+	// and a confidently wrong containment answer that no sweep would ever repair — a verified
+	// cache entry outlives every version.
+	fenceGeometryHashMismatch prometheus.Counter
+
+	// fenceArchiveSkew counts archive reads that failed because device-management does not
+	// serve the manifest doors — i.e. it is running a build from before manifest delivery.
+	// Bounded cardinality (no labels).
+	//
+	// It exists because the two services roll as independent Deployments and this arc cut over
+	// both at once, so an ordering window on upgrade, or a rollback of device-management
+	// alone, leaves this service asking for doors that are not there. That is a version-skew
+	// condition and it repairs itself when the peer rolls forward — but its symptom is
+	// identical to "the archive is unreachable", and an operator who cannot tell those apart
+	// will go looking at the network. Naming it is worth the few lines.
+	fenceArchiveSkew prometheus.Counter
+
+	// fenceGeometryCacheHits / fenceGeometryCacheMisses count lookups of the compiled-geometry
+	// cache, keyed by (tenant, content address). Bounded cardinality (no labels).
+	//
+	// The ratio is the whole economic case for manifest delivery: a fence set's geometry is
+	// re-fetched and re-compiled only for addresses that actually CHANGED, so editing one
+	// fence of a hundred should show one miss and ninety-nine hits. A hit rate that collapses
+	// means the cache is thrashing — see fenceGeometryCacheEvictions — and every fence edit is
+	// paying the full cross-service read the design exists to avoid.
+	fenceGeometryCacheHits   prometheus.Counter
+	fenceGeometryCacheMisses prometheus.Counter
+
+	// fenceGeometryCacheEvictions counts entries dropped to stay inside the cache's bound.
+	// Bounded cardinality (no labels).
+	fenceGeometryCacheEvictions prometheus.Counter
+
+	// fenceGeometryCacheVertices reports how much of the cache's bound is in use.
+	//
+	// 🔴 THE BOUND IS COUNTED IN VERTICES, NOT ENTRIES, AND THE GAUGE MATCHES IT ON PURPOSE. A
+	// three-vertex box and a five-hundred-vertex polygon are the same number of entries and
+	// differ ~500x in what they cost to hold, so an entry count would be a bound whose meaning
+	// changed with the mix — full at three tenants or thirty, depending on what they drew.
+	fenceGeometryCacheVertices prometheus.Gauge
+}
+
+// newFenceGeometryMetrics registers the archive-seam metrics under the service's namespace.
+func newFenceGeometryMetrics(ms *core.Microservice) *fenceGeometryMetrics {
+	return &fenceGeometryMetrics{
+		fenceGeometryUnresolved:     ms.NewCounter("detect_fence_geometry_unresolved_total", "Geofence manifest entries whose geometry could not be obtained from device-management's archive. Each one leaves that fence reporting unresolvable rather than answering, repaired by the next reconcile sweep if the cause was transient.", nil),
+		fenceGeometryHashMismatch:   ms.NewCounter("detect_fence_geometry_hash_mismatch_total", "Geofence geometry documents that did not hash to the content address they were requested under. Always a bug, never transient: the peer served the wrong row, something re-encoded the document in transit, or the archive is corrupt.", nil),
+		fenceArchiveSkew:            ms.NewCounter("detect_fence_archive_skew_total", "Geofence archive reads that failed because device-management does not serve the manifest doors — it is running a build from before manifest delivery. Repairs itself when that service rolls forward.", nil),
+		fenceGeometryCacheHits:      ms.NewCounter("detect_fence_geometry_cache_hits_total", "Compiled-geometry cache lookups served from cache, avoiding both a cross-service read and a recompile.", nil),
+		fenceGeometryCacheMisses:    ms.NewCounter("detect_fence_geometry_cache_misses_total", "Compiled-geometry cache lookups that had to fetch and compile the document.", nil),
+		fenceGeometryCacheEvictions: ms.NewCounter("detect_fence_geometry_cache_evictions_total", "Compiled-geometry cache entries dropped to stay inside the cache's vertex bound.", nil),
+		fenceGeometryCacheVertices:  ms.NewGauge("detect_fence_geometry_cache_vertices", "Total vertices held in the compiled-geometry cache — the quantity its bound is counted in.", nil),
+	}
+}
+
+// recordFenceGeometryUnresolved records n manifest entries whose geometry could not be
+// obtained. Nil-safe.
+func (m *fenceGeometryMetrics) recordFenceGeometryUnresolved(n int) {
+	if m == nil || n <= 0 {
+		return
+	}
+	m.fenceGeometryUnresolved.Add(float64(n))
+}
+
+// recordFenceGeometryHashMismatch records one document that did not hash to the address it was
+// requested under. Nil-safe.
+func (m *fenceGeometryMetrics) recordFenceGeometryHashMismatch() {
+	if m == nil {
+		return
+	}
+	m.fenceGeometryHashMismatch.Inc()
+}
+
+// recordFenceArchiveSkew records one archive read refused because the peer does not serve the
+// manifest doors. Nil-safe.
+func (m *fenceGeometryMetrics) recordFenceArchiveSkew() {
+	if m == nil {
+		return
+	}
+	m.fenceArchiveSkew.Inc()
+}
+
+// recordFenceGeometryCache records the outcome of a batch of cache lookups and the resulting
+// occupancy. Nil-safe.
+func (m *fenceGeometryMetrics) recordFenceGeometryCache(hits, misses, evictions int, vertices int64) {
+	if m == nil {
+		return
+	}
+	if hits > 0 {
+		m.fenceGeometryCacheHits.Add(float64(hits))
+	}
+	if misses > 0 {
+		m.fenceGeometryCacheMisses.Add(float64(misses))
+	}
+	if evictions > 0 {
+		m.fenceGeometryCacheEvictions.Add(float64(evictions))
+	}
+	m.fenceGeometryCacheVertices.Set(float64(vertices))
 }

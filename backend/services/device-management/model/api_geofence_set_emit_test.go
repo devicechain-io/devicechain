@@ -19,11 +19,11 @@ import (
 // authoring action that MINTS a version also ANNOUNCES it — the property the live geofence
 // projection in event-processing is entirely built on (ADR-078).
 type captureFenceSets struct {
-	events []*GeoFenceSetMintedEvent
+	events []*GeoFenceSetManifest
 }
 
-func (c *captureFenceSets) PublishGeoFenceSet(_ context.Context, e *GeoFenceSetMintedEvent) {
-	c.events = append(c.events, e)
+func (c *captureFenceSets) PublishGeoFenceSetManifest(_ context.Context, m *GeoFenceSetManifest) {
+	c.events = append(c.events, m)
 }
 
 func newFenceSetEmitTestApi(t *testing.T) *Api {
@@ -81,7 +81,7 @@ func TestGeoFenceMutationsEmitTheFrozenFenceSet(t *testing.T) {
 		assert.Equal(t, int32(1), ev.Version)
 		if assert.Len(t, ev.Fences, 1) {
 			assert.Equal(t, "yard", ev.Fences[0].Token)
-			assert.JSONEq(t, boxGeometry(0, 0, 1, 1), string(ev.Fences[0].Geometry))
+			assert.JSONEq(t, boxGeometry(0, 0, 1, 1), resolveManifestGeometry(t, api, ctx, ev.Fences[0].Hash))
 		}
 		assert.False(t, ev.MintedAt.IsZero(), "the fact carries the mint time")
 	}
@@ -93,8 +93,8 @@ func TestGeoFenceMutationsEmitTheFrozenFenceSet(t *testing.T) {
 		ev := cap.events[1]
 		assert.Equal(t, int32(2), ev.Version)
 		if assert.Len(t, ev.Fences, 1) {
-			assert.JSONEq(t, boxGeometry(10, 10, 11, 11), string(ev.Fences[0].Geometry),
-				"the fact must carry the geometry the version froze, not the pre-edit one")
+			assert.JSONEq(t, boxGeometry(10, 10, 11, 11), resolveManifestGeometry(t, api, ctx, ev.Fences[0].Hash),
+				"the manifest must name the geometry the version froze, not the pre-edit one")
 		}
 	}
 
@@ -116,8 +116,30 @@ func TestGeoFenceMutationsEmitTheFrozenFenceSet(t *testing.T) {
 	assert.Len(t, cap.events, 3, "a no-op delete mints no version and must emit no fact")
 }
 
-// The fact survives the wire: what the consumer decodes is what the producer froze. This is
-// the seam between two SERVICES, so a codec asymmetry here would show up as an empty or
+// resolveManifestGeometry reads back the geometry a manifest entry NAMES, through the same
+// door a consumer would use.
+//
+// 🔴 THE TEST GOES THROUGH THE ARCHIVE RATHER THAN RE-HASHING THE AUTHORED TEXT, AND THAT IS
+// THE ONLY WAY THE ASSERTION MEANS ANYTHING. Recomputing GeoFenceGeometryHash over the string
+// the test wrote would compare the producer against itself twice over: the stored document is
+// the CANONICAL form, not the authored one, so such a check would either be tautological or
+// fail for a reason that has nothing to do with the property under test. Resolving the address
+// asserts the thing that actually has to hold — that a manifest entry leads to the geometry
+// its version froze — and it exercises both halves of manifest delivery in one step.
+func resolveManifestGeometry(t *testing.T, api *Api, ctx context.Context, hash string) string {
+	t.Helper()
+	found, err := api.GeoFenceGeometryDocuments(ctx, []string{hash})
+	if err != nil {
+		t.Fatalf("resolve geometry %s: %v", hash, err)
+	}
+	if len(found) != 1 {
+		t.Fatalf("manifest names geometry %s, which the archive answered with %d documents", hash, len(found))
+	}
+	return string(found[0].Document)
+}
+
+// The manifest survives the wire: what the consumer decodes is what the producer froze. This
+// is the seam between two SERVICES, so a codec asymmetry here would show up as an empty or
 // mis-versioned fence set at the far end with nothing failing in between.
 func TestGeoFenceSetFactRoundTrips(t *testing.T) {
 	api := newFenceSetEmitTestApi(t)
@@ -129,21 +151,25 @@ func TestGeoFenceSetFactRoundTrips(t *testing.T) {
 		Token: "yard", Geometry: boxGeometry(0, 0, 1, 1)}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	encoded, err := MarshalGeoFenceSetMintedEvent(cap.events[0])
+	encoded, err := MarshalGeoFenceSetManifest(cap.events[0])
 	assert.NoError(t, err)
 
-	decoded, err := UnmarshalGeoFenceSetMintedEvent(encoded)
+	decoded, err := UnmarshalGeoFenceSetManifest(encoded)
 	assert.NoError(t, err)
 	assert.Equal(t, int32(1), decoded.Version)
+	assert.False(t, decoded.MintedAt.IsZero(), "the mint time survives the wire")
 	if assert.Len(t, decoded.Fences, 1) {
 		assert.Equal(t, "yard", decoded.Fences[0].Token)
-		assert.JSONEq(t, boxGeometry(0, 0, 1, 1), string(decoded.Fences[0].Geometry))
+		assert.Equal(t, cap.events[0].Fences[0].Hash, decoded.Fences[0].Hash)
+		// The address that came off the wire still resolves — the point of carrying it.
+		assert.JSONEq(t, boxGeometry(0, 0, 1, 1),
+			resolveManifestGeometry(t, api, ctx, decoded.Fences[0].Hash))
 	}
 
-	// A fact with no fence list decodes to an EMPTY set, never a nil one: the version minted
-	// by deleting a tenant's last fence is knowledge that there are no fences, and the
+	// A manifest with no fence list decodes to an EMPTY set, never a nil one: the version
+	// minted by deleting a tenant's last fence is knowledge that there are no fences, and the
 	// consumer's whole miss/known-empty distinction depends on the two staying apart.
-	empty, err := UnmarshalGeoFenceSetMintedEvent([]byte(`{"version":3}`))
+	empty, err := UnmarshalGeoFenceSetManifest([]byte(`{"version":3}`))
 	assert.NoError(t, err)
 	assert.NotNil(t, empty.Fences)
 	assert.Empty(t, empty.Fences)

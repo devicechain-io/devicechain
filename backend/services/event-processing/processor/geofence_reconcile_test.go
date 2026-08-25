@@ -121,7 +121,7 @@ func editedYard(t *testing.T) (*dmmodel.Api, *fenceFactWriter) {
 	api := newFenceDmApi(t)
 	dmCtx := dccore.WithTenant(context.Background(), "acme")
 	facts := &fenceFactWriter{}
-	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(facts, &fenceFactWriter{}, 0, nil, nil)
+	api.GeoFenceSetPublisher = dmprocessor.NewGeoFenceSetWriter(facts, 0, nil)
 
 	if _, err := api.CreateGeoFence(dmCtx, &dmmodel.GeoFenceCreateRequest{
 		Token: "yard", Geometry: fenceBox(0, 0, 1, 1)}); err != nil {
@@ -150,7 +150,7 @@ func TestALostFenceSetPublishIsRepairedBySweepingTheArchive(t *testing.T) {
 	ctx := context.Background()
 	api, _ := editedYard(t)
 
-	src := &schemaFenceSource{t: t, api: api}
+	src := newSchemaFenceSource(t, api)
 	w := &captureWriter{}
 	rp := newFenceProcessor(t, fenceRuleReg(t, "acme", "p@1", "yard"), w, src)
 	if err := rp.startFenceView(ctx); err != nil {
@@ -204,7 +204,7 @@ func TestALostFenceSetPublishIsRepairedBySweepingTheArchive(t *testing.T) {
 func TestTheTickerSweepsTheGeofenceProjection(t *testing.T) {
 	api, _ := editedYard(t)
 	src := &countingFenceSource{
-		inner: &schemaFenceSource{t: t, api: api},
+		inner: newSchemaFenceSource(t, api),
 		swept: make(chan string, 4),
 	}
 	rp, cancel := newLoopRig(t, fenceRuleReg(t, "acme", "p@1", "yard"), src, 5*time.Millisecond)
@@ -237,7 +237,7 @@ func TestTheTickerSweepsTheGeofenceProjection(t *testing.T) {
 func TestTheTickerDoesNotSweepInsideTheInterval(t *testing.T) {
 	api, _ := editedYard(t)
 	src := &countingFenceSource{
-		inner: &schemaFenceSource{t: t, api: api},
+		inner: newSchemaFenceSource(t, api),
 		swept: make(chan string, 4),
 	}
 	rp, cancel := newLoopRig(t, fenceRuleReg(t, "acme", "p@1", "yard"), src, 5*time.Millisecond)
@@ -282,7 +282,7 @@ func TestTheSweepReadsOnlyFenceRuleTenants(t *testing.T) {
 	reg := fenceRuleReg(t, "acme", "p@1", "yard")
 	reg.Upsert(runtime.ScopedRule{Tenant: "globex", ProfileVersionToken: "p@1", Compiled: plain})
 
-	src := &countingFenceSource{inner: &schemaFenceSource{t: t, api: api}}
+	src := &countingFenceSource{inner: newSchemaFenceSource(t, api)}
 	rp := newFenceProcessor(t, reg, &captureWriter{}, src)
 	rp.fenceView = runtime.NewFenceSetView()
 
@@ -300,7 +300,7 @@ func TestTheSweepReadsOnlyFenceRuleTenants(t *testing.T) {
 func TestASecondSweepIsSkippedWhileOneIsInFlight(t *testing.T) {
 	api, _ := editedYard(t)
 	src := &countingFenceSource{
-		inner: &schemaFenceSource{t: t, api: api},
+		inner: newSchemaFenceSource(t, api),
 		swept: make(chan string, 4),
 		hold:  make(chan struct{}),
 	}
