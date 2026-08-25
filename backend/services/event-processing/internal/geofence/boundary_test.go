@@ -155,8 +155,18 @@ func TestAnIndexedHoleStillExcludesItsInterior(t *testing.T) {
 }
 
 // TestTheEdgeIndexIsBuiltOnlyAboveTheThreshold pins what indexedBoundaryMinVertices actually does.
-// Without it the constant could drift to any value — or to zero, indexing every ring — and every
-// other test in the package would still pass, because both paths answer identically by design.
+// Without it the constant could drift — to zero, indexing every ring — and every other test in the
+// package would still pass, because both paths answer identically by design.
+//
+// 🔴 TWO OF THE THREE CASES ARE WRITTEN IN TERMS OF THE CONSTANT UNDER TEST, SO THEY CANNOT CATCH
+// IT MOVING — they follow it. That is deliberate and it is not sufficient: what they pin is that
+// the comparison is INCLUSIVE at the threshold (>= and not >), which is a property of the code and
+// not of the number. Catching the NUMBER needs cases written as literals, and it needs one on each
+// side: mutating the constant UPWARD was killed only by the fixture guards in the two tests above,
+// which report that they would prove nothing rather than that the threshold moved. The literal
+// cases are the low and high anchors, and 64 is the smallest ring any test in this package needs
+// indexed — so a raise past it has to be a deliberate edit here, not a silent loss of coverage
+// somewhere else.
 //
 // The threshold is INCLUSIVE, and the count it is compared against is the COMPILED vertex count —
 // one fewer than the authored position count, since loopFromRing drops each ring's repeated closing
@@ -171,6 +181,7 @@ func TestTheEdgeIndexIsBuiltOnlyAboveTheThreshold(t *testing.T) {
 		{indexedBoundaryMinVertices - 1, false},
 		{indexedBoundaryMinVertices, true},
 		{4, false},
+		{64, true},
 	} {
 		compiled := mustCompile(t, polygonDocument(circleRing(tc.vertices)))
 		p, ok := compiled.geom.(*polygon2D)
