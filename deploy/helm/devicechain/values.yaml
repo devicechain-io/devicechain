@@ -403,7 +403,15 @@ metrics:
   databaseBackups: true
 
   # The namespace the CloudNativePG Clusters run in, i.e. where
-  # cnpg_pg_stat_archiver_* and barman_cloud_cloudnative_pg_io_* are exported.
+  # cnpg_pg_stat_archiver_* and barman_cloud_cloudnative_pg_io_* are exported, and
+  # where the kubelet reports the databases' own PersistentVolumeClaims.
+  #
+  # It gates the database VOLUME rules
+  # (templates/prometheusrule-database-storage.yaml) as well as scoping the backup
+  # and control-plane ones. Those volume rules are deliberately NOT behind
+  # databaseBackups: several tables are append-only and never pruned, so a database
+  # volume fills whether or not anything is being backed up, and a full one stops
+  # PostgreSQL outright.
   #
   # It is NOT instance.id. The databases are infrastructure and live alongside the
   # broker, so an alert scoped to the instance's own namespace would select

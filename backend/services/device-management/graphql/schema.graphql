@@ -444,7 +444,8 @@ type DetectionRuleSearchResults {
 # when the position was reported. Instead, the tenant's active fence-set version is
 # stamped onto each resolved LOCATION event at resolve time (see currentFenceSetVersion),
 # so the fence set an event is evaluated against is frozen into the event itself. A fence
-# edit mints a new version; it is not a rule migration, and rules need not be republished.
+# edit that moves a boundary mints a new version; it is not a rule migration, and rules
+# need not be republished. Renaming a fence mints nothing — the frozen shapes are the same.
 type GeoFence implements Model & TokenReference & NamedEntity & MetadataEntity {
     id: ID!
     createdAt: String
@@ -1576,9 +1577,12 @@ type Query {
     # List geofences that meet criteria.
     geoFences(criteria: GeoFenceSearchCriteria!): GeoFenceSearchResults!
     # The tenant's active fence-set version — the number stamped onto resolved location
-    # events, naming the frozen snapshot of the fences live at that moment. Any fence
-    # change (create, edit, delete) mints the next one. 0 means the tenant has never had a
-    # fence, which is distinct from a minted version whose fence set happens to be empty.
+    # events, naming the frozen snapshot of the fences live at that moment. A change to the
+    # fence SET mints the next one — a fence created, a boundary edited, a fence deleted.
+    # Renaming a fence, or editing its description or metadata, does not: none of them appear
+    # in the frozen snapshot, so a new version would name shapes identical to the current one.
+    # 0 means the tenant has never had a fence, which is distinct from a minted version whose
+    # fence set happens to be empty.
     currentFenceSetVersion: Int!
     # The FROZEN fence set of one fence-set version — the fences that were live when an
     # event stamped with that version was resolved. This is how a consumer resolves a

@@ -25,12 +25,24 @@ type ProcessorMetrics struct {
 	inflight  prometheus.Gauge
 }
 
+// MetricsSubsystem is the Prometheus subsystem every metric this service exports sits
+// under: the functional area with its hyphens removed, since a hyphen is not legal in a
+// metric name.
+//
+// It exists so the rule is stated ONCE. It was written inline at each of the constructors
+// below and, once a component outside this package needed it, was copied there too — at
+// which point changing it here would silently move every metric except that one, while
+// dashboards and alerts go on matching the literal old prefix.
+func (ms *Microservice) MetricsSubsystem() string {
+	return strings.ReplaceAll(ms.FunctionalArea, "-", "")
+}
+
 // NewProcessorMetrics builds the instrumentation for a named processing loop
 // (e.g. "resolve", "persist", "state"). The metric names are prefixed with name
 // and namespaced/subsystemed by the service, so two services' loops do not
 // collide.
 func (ms *Microservice) NewProcessorMetrics(name string) *ProcessorMetrics {
-	sub := strings.ReplaceAll(ms.FunctionalArea, "-", "")
+	sub := ms.MetricsSubsystem()
 	return &ProcessorMetrics{
 		processed: promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: METRICS_NAMESPACE, Subsystem: sub,

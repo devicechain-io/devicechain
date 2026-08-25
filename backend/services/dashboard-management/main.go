@@ -12,6 +12,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
@@ -77,6 +78,14 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 
 	// Wrap api around rdb manager.
 	Api = model.NewApi(RdbManager)
+
+	// Report the size of this schema's append-only history tables (ADR-023): a dashboard version history only
+	// grows, and so does the audit journal the collector adds for every schema. Nothing
+	// prunes either, so the storage floor rises with use and nothing else says how fast.
+	// Registered directly rather than through Microservice.NewGauge because a failed read
+	// must produce NO series rather than a zero. See rdb.StorageGrowthCollector.
+	prometheus.MustRegister(rdb.NewStorageGrowthCollector(Microservice, RdbManager.Database,
+		&model.DashboardVersion{}))
 
 	// Map of providers that will be injected into graphql http context.
 	// Dashboard-management is CRUD-only: no NATS, no subscriptions.

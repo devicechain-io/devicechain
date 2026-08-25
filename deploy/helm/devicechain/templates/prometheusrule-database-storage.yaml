@@ -1,0 +1,176 @@
+{{/*
+Alerting rules for the DATABASE VOLUMES themselves — the PersistentVolumeClaims
+the CloudNativePG Clusters are stored on (ADR-020 A2, ADR-026, ADR-045, ADR-078).
+
+WHY THESE EXIST
+
+Storage here only goes one way. Several of this platform's tables are APPEND-ONLY
+by design and nothing prunes them, ever:
+
+  - audit_events, which core migrates into EVERY service's schema and which takes a
+    row per entity mutation by construction — plausibly the fastest-growing of the lot
+  - device_profile_versions and entity_group_versions (ADR-045, ADR-061)
+  - dashboard_versions (ADR-039)
+  - connector_versions (ADR-060)
+  - geo_fence_set_versions and geo_fence_geometry_blobs (ADR-078)
+
+They are immutable because other data POINTS AT them: a resolved event carries the
+version number it was resolved against, so a version that is deleted turns stored
+history into a dangling reference. Their migrations say so explicitly ("these rows
+are never deleted, soft or otherwise"), and the unique indexes are the plain rather
+than the partial live-rows form precisely because there is no tombstone to make room
+for. That is the right design and it is not being argued with here — it just means
+the relational store has no retention policy, no ceiling, and no natural place to
+stop growing. A tenant re-authoring a fence set in a loop writes a row per edit,
+forever.
+
+The data-lifecycle reconciler (ADR-026) is NOT the answer to this: it prunes the
+TIME-SERIES store's hypertables and never touches these tables, so on a healthy
+install with retention working perfectly the relational volume still climbs.
+
+And a PostgreSQL data volume that fills does not degrade, it STOPS the database —
+and every replica is filling at the same rate off the same writes, so there is no
+failover out of it. Until this file there was nothing between "growing quietly for
+six months" and "the platform is down"; the chart alerted on the object store's
+PVC and on no database volume at all.
+
+🔴 WHY A FRACTION AND NOT A SIZE, and this is the whole design constraint. The
+underlying quantity is MONOTONIC. Any rule of the shape "used bytes > N" latches:
+it becomes true once and then stays true no matter what the operator does, because
+the thing it measures cannot go down. An alert that cannot resolve is an alert that
+gets silenced, and a silenced alert is worse than none — it looks like coverage.
+Free FRACTION resolves through both of the two things that actually fix this: grow
+the volume and capacity rises; delete or archive data and available rises.
+
+(No divide-by-zero guard is needed. A capacity of 0 makes the ratio +Inf or NaN,
+and both compare false against a threshold, so the rules stay silent rather than
+firing on a broken scrape.)
+
+🔴 NOT IN prometheusrule-database-backup.yaml, ALTHOUGH THAT FILE ALREADY CARRIES A
+PVC FULLNESS RULE. That file is gated on metrics.databaseBackups, so an install
+with backups switched off renders none of it — and a database volume filling is
+exactly as fatal there, arguably more so. Folding these in would have made the
+alert disappear on the installs least able to recover from the outage. They are
+also about different volumes: BackupDestinationAlmostFull watches the backup
+DESTINATION, this watches the databases' own storage. The two are the two ends of
+the cascade that file's header describes.
+
+🔴 A RULE WITH NO SERIES DOES NOT FIRE AND DOES NOT COMPLAIN. kubelet_volume_stats_*
+comes from the KUBELET, not from anything this chart or CloudNativePG installs, and
+an instance pointed at an external or managed PostgreSQL has no PVC in this cluster
+at all. These rules then select an empty vector and stay quiet — which is correct
+(there is no volume here to fill) but means they are NOT the storage signal for a
+managed database. That case is the provider's own capacity alerting, and nothing in
+this chart substitutes for it.
+
+🔴 THE PVC NAMES ARE A CONTRACT WITH deploy/opentofu. `dc-rdb` and `dc-tsdb` are the
+Cluster object names set in deploy/opentofu/main.tf (modules "cnpg_rdb" and
+"cnpg_tsdb"); CloudNativePG names each instance's PGDATA claim after its pod, and
+appends `-wal` for the separate WAL volume that appears when *_wal_storage is set.
+So the claims are dc-rdb-1, dc-tsdb-1, dc-rdb-1-wal, … — verified against a running
+cluster with `kubectl get pvc -n dc-system`. Renaming a Cluster without changing the
+regex below leaves these rules selecting nothing, silently; that is the one failure
+mode they cannot self-detect, and it is the same one the backup rules carry.
+
+The WAL claims are matched deliberately rather than incidentally. A full WAL volume
+stops PostgreSQL just as hard, and the usual reason it fills is a stalled archiver —
+so when one of these fires on a `-wal` claim, the backup rules next door are where
+the cause is.
+
+Unit-tested against synthetic series in
+hack/testdata/prometheus-rules-storage-tests.yaml, including the negative controls
+that the object store's and the broker's claims in the same namespace are NOT
+matched, and that the alerts CLEAR when the volume is grown. `helm lint` and
+`promtool check rules` would both pass an inverted comparison here.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts .Values.metrics.databaseNamespace }}
+{{- $ns := .Values.instance.id }}
+{{- $dbns := .Values.metrics.databaseNamespace }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: database-storage
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.database-storage
+      rules:
+        # 75% full. The threshold that exists to be acted on rather than paged on.
+        #
+        # 1h, and it is long on purpose: growth here is measured in weeks, so an
+        # hour costs nothing, and it rules out the one thing that transiently eats
+        # this volume and then gives it back — a large sort, VACUUM FULL or an
+        # index build spilling temp files onto the data directory.
+        - alert: DatabaseVolumeFillingUp
+          expr: |
+            (
+              kubelet_volume_stats_available_bytes{namespace="{{ $dbns }}", persistentvolumeclaim=~"dc-(rdb|tsdb)-.*"}
+              /
+              kubelet_volume_stats_capacity_bytes{namespace="{{ $dbns }}", persistentvolumeclaim=~"dc-(rdb|tsdb)-.*"}
+            ) < 0.25
+          for: 1h
+          labels:
+            severity: warning
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "A database volume is over 75% full"
+            description: >-
+              {{ "{{ $labels.persistentvolumeclaim }}" }} is over 75% full. Database storage on this
+              platform does not come back on its own: several tables are append-only by design and nothing prunes them — the audit journal, device
+              profile versions, entity group versions, dashboard versions, connector versions,
+              geofence set versions and the geofence geometry archive.
+              Each is kept for a reason: a stored event names the profile or fence-set version it
+              was resolved against, and a dashboard or connector version is what a rollback
+              returns to. Retention settings do not apply to any of them — those prune the
+              time-series store, which is the dc-tsdb claims.
+              Act while there is still room to work in: grow the volume, and find out what is
+              producing versions. On the relational primary (dc-rdb), by tenant:
+
+                SELECT tenant_id, count(*) FROM "device-management".geo_fence_set_versions GROUP BY tenant_id ORDER BY 2 DESC LIMIT 10;
+
+              Substitute any other history table for the one named — audit_events in any schema,
+              device_profile_versions or entity_group_versions in that one, dashboard_versions
+              or connector_versions in theirs. It counts rows and names no other column, so it
+              works on all of them; they do NOT share a payload column, and a query naming one
+              would fail on most. Size per table is on the append_only_table_bytes series, which
+              every service exports for its own tables. One
+              tenant re-authoring in a loop is the usual answer. On a dc-tsdb claim, check the
+              data-lifecycle retention settings instead; on a -wal claim, the WAL archiving alerts
+              are where the cause is.
+        # 85% full, matching the threshold the backup destination rule uses. Past
+        # here the remaining headroom is smaller than the room needed to fix it:
+        # VACUUM FULL, a reindex and a base backup all want temporary space on the
+        # volume that has none.
+        #
+        # 15m rather than an hour. At this point the question is no longer "is this
+        # real", it is how many hours are left.
+        - alert: DatabaseVolumeAlmostFull
+          expr: |
+            (
+              kubelet_volume_stats_available_bytes{namespace="{{ $dbns }}", persistentvolumeclaim=~"dc-(rdb|tsdb)-.*"}
+              /
+              kubelet_volume_stats_capacity_bytes{namespace="{{ $dbns }}", persistentvolumeclaim=~"dc-(rdb|tsdb)-.*"}
+            ) < 0.15
+          for: 15m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "A database volume is almost full"
+            description: >-
+              {{ "{{ $labels.persistentvolumeclaim }}" }} is over 85% full. A PostgreSQL volume that
+              fills does not slow down, it stops the database — and every replica is consuming the
+              same writes at the same rate, so there is no failover out of this and no second
+              instance still serving. Grow it now: CloudNativePG expands a Cluster's volumes in
+              place where the storage class supports expansion, by raising spec.storage.size (or
+              spec.walStorage.size for a -wal claim). Reclaiming space is mostly not an
+              alternative, because the tables that grow are append-only and stored events point at
+              their rows. To see which tenant is behind it, on the relational primary (dc-rdb):
+
+                SELECT tenant_id, count(*) FROM "device-management".geo_fence_set_versions GROUP BY tenant_id ORDER BY 2 DESC LIMIT 10;
+
+              If this is a -wal claim, treat it as a stalled archiver first — unshipped WAL is
+              retained until it ships, and the WAL archiving alerts say why it is not shipping.
+{{- end }}

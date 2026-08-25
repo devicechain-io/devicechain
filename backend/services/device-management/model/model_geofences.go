@@ -283,8 +283,12 @@ const (
 )
 
 // GeoFenceSetVersion is one immutable, tenant-wide version of the WHOLE fence set,
-// minted whenever any fence changes — created, edited, or deleted. Its Version is what
-// a resolved LOCATION event is stamped with.
+// minted whenever the fence SET changes — a fence created, a boundary edited, a fence
+// deleted. Its Version is what a resolved LOCATION event is stamped with.
+//
+// An edit that moves no boundary mints nothing. Name, description and metadata are absent
+// from the snapshot below, so freezing a version for one of them would record shapes
+// identical to the version before it; see mintGeoFenceSetVersion.
 //
 // Why the whole set and not per-fence versions: an event is evaluated against every
 // fence a rule might name, so what has to be frozen is the SET. Per-fence versions

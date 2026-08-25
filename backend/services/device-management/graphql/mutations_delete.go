@@ -152,9 +152,10 @@ func (r *SchemaResolver) DeleteDetectionRule(ctx context.Context, args struct{ T
 	return r.GetApi(ctx).DeleteDetectionRule(ctx, args.Token)
 }
 
-// Delete a single geofence. The delete mints a new fence-set version like any other
-// fence change — a removed fence changes what containment answers, so events resolved
-// after it must not keep naming a snapshot that still contains it.
+// Delete a single geofence. The delete always mints a new fence-set version — a removed
+// fence changes what containment answers, so events resolved after it must not keep naming
+// a snapshot that still contains it. (Unlike an update, a delete cannot leave the fence set
+// as it was, so it never takes the skip mintGeoFenceSetVersion offers.)
 //
 // 🔑 DELIBERATELY device:write ALONE, unlike create and update (see requireFenceAuthoring),
 // and the asymmetry is reasoned rather than an omission. That pair carries location:read

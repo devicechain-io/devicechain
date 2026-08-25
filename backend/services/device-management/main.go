@@ -22,6 +22,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
 
@@ -164,7 +165,8 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	Api.DeviceAttributePublisher = processor.NewDeviceAttributeWriter(attrpub)
 
 	// Add the geofence-set writer and inject a publisher into the shared Api (ADR-078): a
-	// fence create/edit/delete mints a new fence-set version, and this fact carries that
+	// change to the fence SET — created, geometry edited, deleted — mints a new fence-set
+	// version, and this fact carries that
 	// version's FROZEN fence set to event-processing's live containment projection — so a
 	// location event's inFence resolves from memory and never blocks the DETECT loop on a
 	// read back into this service.
@@ -273,6 +275,19 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// not leave ingest re-creating the removed entity's anchors (ADR-044 F2). The
 	// GraphQL deletes run on the plain *Api, so the evictor is wired onto it.
 	Api.CacheEvictor = CachedApi
+
+	// Report the size of this schema's append-only history tables (ADR-023). Every one of
+	// them only grows — nothing prunes a version history short of purging the whole tenant —
+	// so the instance's storage floor rises with authoring activity and nothing today says
+	// how fast. This is the measurement that has to exist before any ceiling on it can be
+	// chosen honestly; it enforces nothing. The audit journal is added by the collector
+	// itself, since core owns that table in every schema.
+	//
+	// Registered directly rather than through Microservice.NewGauge because a failed read
+	// must produce NO series rather than a zero. See rdb.StorageGrowthCollector.
+	prometheus.MustRegister(rdb.NewStorageGrowthCollector(Microservice, RdbManager.Database,
+		&model.GeoFenceSetVersion{}, &model.GeoFenceGeometryBlob{},
+		&model.DeviceProfileVersion{}, &model.EntityGroupVersion{}))
 
 	// Wire the detection-rule validator (ADR-044 sync gate) so profile publish compiles
 	// its draft rules against event-processing and fails closed on an uncompilable one.

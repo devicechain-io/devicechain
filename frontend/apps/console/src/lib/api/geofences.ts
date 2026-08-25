@@ -174,11 +174,17 @@ export async function deleteGeoFence(token: string): Promise<boolean> {
 
 // ── The frozen archive ──────────────────────────────────────────────────────
 //
-// Every mutation mints a fence-set version and freezes the geometry of every
-// fence into it. A Location event carries the version it was stamped with, so a
-// rule replayed against last week's events is evaluated against last week's
-// fences — which is what makes a preview correct rather than a fiction. These
-// two queries are how the console shows that archive.
+// A mutation that changes the fence SET — a fence created, a boundary edited, a
+// fence deleted — mints a fence-set version and freezes the geometry of every
+// fence into it. Renaming a fence, or editing its description or metadata, mints
+// NOTHING: none of them are in the frozen snapshot, so the new version would name
+// shapes identical to the current one. Expect the version to sit still after such
+// a save; it is not a lost write.
+//
+// A Location event carries the version it was stamped with, so a rule replayed
+// against last week's events is evaluated against last week's fences — which is
+// what makes a preview correct rather than a fiction. These two queries are how
+// the console shows that archive.
 
 const CURRENT_FENCE_SET_VERSION = graphql(`
   query CurrentFenceSetVersion {

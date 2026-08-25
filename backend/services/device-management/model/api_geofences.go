@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -118,16 +119,23 @@ func (api *Api) CreateGeoFence(ctx context.Context, request *GeoFenceCreateReque
 	if err != nil {
 		return nil, err
 	}
-	api.evictFenceSetVersion(ctx)
-	api.emitMintedGeoFenceSet(ctx, minted)
+	api.announceMintedGeoFenceSet(ctx, minted)
 	return created, nil
 }
 
-// UpdateGeoFence replaces a geofence and mints a new fence-set version. It mints even
-// when only the name changed: "did this edit change what a rule computes" is a question
-// this layer cannot answer cheaply or safely, and the failure modes are asymmetric — a
-// spare version costs one row, while a missed one silently keeps events pointing at a
-// snapshot that no longer describes the fences.
+// UpdateGeoFence replaces a geofence, and mints a new fence-set version only when the
+// replacement changed the fence SET — that is, its geometry. An edit touching only the
+// name, the description or the metadata mints nothing, publishes nothing, evicts nothing.
+//
+// This reverses a decision previously recorded here, and it is worth saying why rather
+// than quietly dropping the old sentence. That decision held the failure modes asymmetric
+// — a spare version costs one row, a MISSED one leaves events pointing at a snapshot that
+// no longer describes the fences — and concluded the question could not be answered here
+// cheaply or safely. Both halves have since been shown wrong. The question is answered
+// exactly by comparing the stored reference list, which makes a missed mint unreachable
+// rather than merely unlikely; and a spare version costs a slot in the engine's bounded
+// per-tenant retention plus a tenant-wide cache eviction, not one row. See
+// mintGeoFenceSetVersion.
 //
 // A fence's TOKEN is immutable, and this is where that is enforced — see
 // errGeoFenceTokenImmutable.
@@ -174,8 +182,7 @@ func (api *Api) UpdateGeoFence(ctx context.Context, token string,
 	if err != nil {
 		return nil, err
 	}
-	api.evictFenceSetVersion(ctx)
-	api.emitMintedGeoFenceSet(ctx, minted)
+	api.announceMintedGeoFenceSet(ctx, minted)
 	return updated, nil
 }
 
@@ -203,16 +210,41 @@ func (api *Api) DeleteGeoFence(ctx context.Context, token string) (bool, error) 
 	if err != nil {
 		return false, err
 	}
-	if deleted {
-		api.evictFenceSetVersion(ctx)
-		api.emitMintedGeoFenceSet(ctx, minted)
-	}
+	api.announceMintedGeoFenceSet(ctx, minted)
 	return deleted, nil
 }
 
+// announceMintedGeoFenceSet runs the post-commit consequences of a mint — or none of them,
+// when nothing was minted. It is the ONE place the three authoring paths funnel through, so
+// a fourth mutation cannot mint a version and forget half of what a mint owes.
+//
+// 🔴 IT EXISTS BECAUSE "half" WAS THE REAL RISK. emitMintedGeoFenceSet already declined a
+// nil version on its own, so a per-call-site guard was redundant for the announcement and
+// load-bearing only for the EVICTION — which is precisely the half a new mutation would
+// forget, and precisely the half no contract stated. Writing the rule once removes the
+// asymmetry rather than documenting it.
+//
+// The ordering is evict THEN publish, and it now has somewhere to be stated. Evicting first
+// means the tenant's next resolve cannot read a cached version older than the set the
+// engine is about to be told about; the reverse order leaves a window where the engine
+// holds the new fences while this service is still stamping the old number at them.
+//
+// Post-commit on purpose, outside the mutation's transaction: both actions advertise a
+// version, and advertising one that then rolled back is the failure neither is allowed to
+// have. The cost is that a crash here loses them, which is what the reconcile sweep exists
+// to repair.
+func (api *Api) announceMintedGeoFenceSet(ctx context.Context, minted *GeoFenceSetVersion) {
+	if minted == nil {
+		return
+	}
+	api.evictFenceSetVersion(ctx)
+	api.emitMintedGeoFenceSet(ctx, minted)
+}
+
 // emitMintedGeoFenceSet decodes a just-committed fence-set version's frozen snapshot and
-// publishes its MANIFEST as a fact (ADR-078). It is the ONE place the three authoring paths
-// funnel through, so a fourth mutation cannot mint a version and forget to announce it.
+// publishes its MANIFEST as a fact (ADR-078). announceMintedGeoFenceSet above is the single
+// funnel every authoring path reaches it through; this function keeps its own nil check as
+// defence rather than as the contract.
 //
 // It reads the fences back out of the SNAPSHOT COLUMN rather than re-querying the live
 // fences, and that is the whole point: the snapshot is what a replay will later resolve
@@ -600,6 +632,35 @@ func archiveGeoFenceGeometries(tx *gorm.DB, documents map[string][]byte) error {
 	return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&blobs).Error
 }
 
+// sameGeoFenceRefs reports whether two stored reference lists describe the same fences
+// frozen at the same geometry. It is what decides that a mutation changed nothing any
+// stamp resolves to; see mintGeoFenceSetVersion for why that is an exact question.
+//
+// slices.Equal rather than reflect.DeepEqual, and the difference is not stylistic.
+// parseStoredGeoFenceSetSnapshot deliberately declines to normalize a missing fence list
+// into an empty slice, so a nil list and an empty one describe the same fence set while
+// DeepEqual calls them different. slices.Equal compares lengths first, so it calls them
+// the same. The divergence is currently unreachable anyway — every stored snapshot is
+// marshalled from a non-nil slice and round-trips as "fences":[] — but that is a property
+// of the marshalling, asserted nowhere, and one `omitempty` away from being false.
+//
+// It compares the PAIRING rather than the multiset of hashes, which is the natural way to
+// write it and needs no argument to justify. Worth recording that the multiset form would
+// be equivalent TODAY, and why the equivalence is not something to lean on: every authoring
+// action changes exactly one fence, so for a mutation to preserve the multiset of hashes the
+// changed fence's new hash would have to equal its old one — i.e. nothing changed. That is a
+// property of the AUTHORING API, not of the comparison, and it would stop holding the day a
+// bulk edit lands. A mutation-tested multiset variant of this function survives the whole
+// suite for exactly that reason; it is an equivalent mutant, not a coverage hole.
+//
+// Both sides are built by ordering on token, so comparing by position is total. A
+// collation difference between the two writes could only reorder them, which reads as
+// UNEQUAL and mints — the safe direction. The unsafe direction cannot be reached:
+// element-wise equality of two ordered lists implies the sets are equal.
+func sameGeoFenceRefs(a, b []storedGeoFenceRef) bool {
+	return slices.Equal(a, b)
+}
+
 // hydrateGeoFenceSetSnapshot resolves a stored snapshot's content references into the
 // evaluable fence set every caller outside this file works with.
 //
@@ -672,10 +733,66 @@ func (api *Api) deviceTypeIdsForTenant(ctx context.Context) ([]uint, error) {
 // within the same transaction — calling it before would snapshot the pre-change set
 // under the post-change version number, which is the one arrangement that looks correct
 // in every test that only checks the number went up.
+//
+// 🔴 IT RETURNS (nil, nil) WHEN THE FENCE SET DID NOT CHANGE, and every caller must evict
+// and publish only when it hands back a version. A mutation leaving the (token, geometry)
+// reference list exactly what the current version already froze — renaming a fence,
+// editing its description or its metadata — mints nothing, because a version exists to
+// make a STAMP resolve to the right shapes and such an edit changes no shape any stamp
+// resolves to.
+//
+// 🔴 THIS IS AN EXACT COMPARISON OF THE STORED REFERENCE LIST, NEVER A GUESS ABOUT WHETHER
+// AN EDIT MATTERED, and the distinction is the entire licence for skipping. This function
+// used to mint unconditionally on the grounds that "did this edit change what a rule
+// computes" could not be answered cheaply or safely here. It can be answered exactly: the
+// snapshot IS what rules compute against, and name, description and metadata appear in
+// neither the snapshot nor the manifest built from it. The old reasoning was sound about a
+// heuristic and this is not one — an equal list is the SAME list, not a list judged
+// similar enough.
+//
+// The cost of a spare version was also under-priced, as "one row". It is not:
+//   - it consumes one of the four fence-set versions the engine retains per tenant
+//     (runtime.MaxRetainedFenceSetVersions), so four renames in a row evict a version
+//     still in use by in-flight events and force a blocking archive fetch; and
+//   - it drives evictFenceSetVersion, which is a tenant-wide ProfileScope cache eviction
+//     costing the resolve hot path a miss per device type.
+//
+// Both were paid, repeatedly, for edits that changed nothing.
+//
+// 🔴 WHY THIS STOPS AT FENCES. Three sibling histories in this codebase publish versions
+// the same way — device profiles, entity groups, and (in their own services) dashboards and
+// connectors — and none of them guards against a no-op publish either. Do NOT carry this
+// reasoning next door. All three differences cut the same way: those are an explicit Publish
+// the user asked for rather than a side effect of editing something else; their version rows
+// carry a LABEL, a description and a publisher, so two versions with identical content are
+// genuinely different artifacts and "unchanged" is not even well defined; and their mutations
+// return a non-nullable version, so there is nothing for a skip to hand back. The right
+// answer there is a refusal carrying a reason, in the resolver, not this. For profiles it
+// would also be actively harmful — api_profile_versions.go records that a dropped emit is
+// recovered BY A LATER PUBLISH, so a content skip would delete a repair path that is still
+// load-bearing there.
+//
+// 🔴 SKIPPING ALSO CLOSES AN ACCIDENTAL REPAIR CHANNEL, and that is worth stating because
+// nothing else in the file records it. The evict and the publish run OUTSIDE the mint's
+// transaction, so a process that dies between commit and publish leaves the engine on the
+// previous fence set. Previously any later no-op edit re-published the current set and
+// repaired that by accident. It no longer does, so the designed paths — JetStream
+// redelivery, the startup reconcile, and the five-minute sweep — are now the ONLY repair
+// for a lost fact, and the ProfileScope TTL the only one for a lost eviction. All three
+// exist and are bounded; none of them used to be load-bearing alone.
+//
+// 🔴 VERSION NUMBERS STAY DENSE. Skipping mints NOTHING; it never allocates a number and
+// discards it. The console's fence history panel walks versions from the latest down to 1
+// one at a time, so a scheme that burned numbers would leave holes it reads as truncated
+// history.
 func (api *Api) mintGeoFenceSetVersion(tx *gorm.DB, now time.Time) (*GeoFenceSetVersion, error) {
+	// The version number and the snapshot to compare against come out of ONE row read,
+	// inside tx. Reaching for fenceSetVersionRow instead would read through
+	// api.RDB.DB(ctx) — OUTSIDE this transaction — comparing against a row a concurrent
+	// mint can move independently of the number computed from it.
 	latest := make([]GeoFenceSetVersion, 0, 1)
 	if err := tx.Model(&GeoFenceSetVersion{}).
-		Select("version").Order("version desc").Limit(1).Find(&latest).Error; err != nil {
+		Select("version", "snapshot").Order("version desc").Limit(1).Find(&latest).Error; err != nil {
 		return nil, err
 	}
 	next := int32(1)
@@ -706,6 +823,36 @@ func (api *Api) mintGeoFenceSetVersion(tx *gorm.DB, now time.Time) (*GeoFenceSet
 		refs = append(refs, storedGeoFenceRef{Token: fences[i].Token, Hash: hash})
 		documents[hash] = document
 	}
+	// A tenant with no version yet always mints: there is nothing to be equal to, and the
+	// console reads a fence that exists as implying a version of at least 1.
+	if len(latest) == 1 {
+		current, err := parseStoredGeoFenceSetSnapshot(latest[0].Snapshot)
+		switch {
+		case err != nil:
+			// 🔴 AN UNDECODABLE CURRENT SNAPSHOT MINTS; IT NEVER REFUSES. Returning this
+			// error would let one corrupt row block every fence mutation the tenant makes,
+			// permanently, with no route out through the API.
+			//
+			// 🔴 BUT IT REPAIRS THE HEAD ONLY, AND CALLING IT "SELF-REPAIR" WITHOUT THAT
+			// BOUND WOULD BE A LIE. Nothing is written over: this appends N+1 and leaves
+			// the undecodable row at N exactly where it was. Authoring recovers, and so
+			// does everything reading the CURRENT set — but the history walk still errors
+			// at N, a replay preview reaching N still errors, and an event already stamped
+			// N is unevaluatable for as long as it can be replayed. Those need the row
+			// repaired by hand; there is no path here that reaches them.
+			log.Error().Err(err).Int32("version", latest[0].Version).
+				Msg("Unable to decode the current geofence set snapshot; minting a new version " +
+					"rather than comparing against it")
+		case sameGeoFenceRefs(current.Fences, refs):
+			return nil, nil
+		}
+	}
+
+	// Nothing is archived on the skip path above, and nothing needs to be: an equal
+	// reference list names identical hashes, and every one of those was archived by the
+	// transaction that first wrote a version naming it. There is no missing blob for a
+	// repeat write to heal — the only deletion that reaches this table is the whole-tenant
+	// purge, which takes the versions with it.
 	if err := archiveGeoFenceGeometries(tx, documents); err != nil {
 		return nil, err
 	}

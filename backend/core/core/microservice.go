@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -487,7 +486,7 @@ func (ms *Microservice) LoadMicroserviceConfiguration() error {
 func (ms *Microservice) NewCounter(name string, help string, labels []string) prometheus.Counter {
 	return promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: METRICS_NAMESPACE,
-		Subsystem: strings.ReplaceAll(ms.FunctionalArea, "-", ""),
+		Subsystem: ms.MetricsSubsystem(),
 		Name:      name,
 		Help:      help,
 	})
@@ -497,7 +496,7 @@ func (ms *Microservice) NewCounter(name string, help string, labels []string) pr
 func (ms *Microservice) NewCounterVec(name string, help string, labels []string) *prometheus.CounterVec {
 	return promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: METRICS_NAMESPACE,
-		Subsystem: strings.ReplaceAll(ms.FunctionalArea, "-", ""),
+		Subsystem: ms.MetricsSubsystem(),
 		Name:      name,
 		Help:      help,
 	}, labels)
@@ -507,7 +506,7 @@ func (ms *Microservice) NewCounterVec(name string, help string, labels []string)
 func (ms *Microservice) NewGauge(name string, help string, labels []string) prometheus.Gauge {
 	return promauto.NewGauge(prometheus.GaugeOpts{
 		Namespace: METRICS_NAMESPACE,
-		Subsystem: strings.ReplaceAll(ms.FunctionalArea, "-", ""),
+		Subsystem: ms.MetricsSubsystem(),
 		Name:      name,
 		Help:      help,
 	})
@@ -517,7 +516,7 @@ func (ms *Microservice) NewGauge(name string, help string, labels []string) prom
 func (ms *Microservice) NewGaugeVec(name string, help string, labels []string) *prometheus.GaugeVec {
 	return promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: METRICS_NAMESPACE,
-		Subsystem: strings.ReplaceAll(ms.FunctionalArea, "-", ""),
+		Subsystem: ms.MetricsSubsystem(),
 		Name:      name,
 		Help:      help,
 	}, labels)

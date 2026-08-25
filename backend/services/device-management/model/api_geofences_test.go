@@ -174,10 +174,15 @@ func TestGeoFenceRoundTrip(t *testing.T) {
 	}
 }
 
-// 🔴 EVERY fence change mints a new fence-set version — create, edit AND delete — and
-// one tenant's changes never move another tenant's version. This is the property the
-// whole stamp rests on: a change that did not mint would leave events pointing at a
-// snapshot that no longer describes the fences.
+// 🔴 EVERY change to the fence SET mints a new fence-set version — create, geometry edit
+// AND delete — and one tenant's changes never move another tenant's version. This is the
+// property the whole stamp rests on: a changed set that did not mint would leave events
+// pointing at a snapshot that no longer describes the fences.
+//
+// The converse is not asserted here but is the other half of the rule, and it lives in
+// geofence_mint_skip_test.go: an edit that leaves the set as it was mints nothing. Note
+// every update below moves the geometry, which is what keeps this test about minting
+// rather than about the skip.
 func TestGeoFenceChangeMintsNewFenceSetVersion(t *testing.T) {
 	api := newGeoFenceTestApi(t)
 	acme := core.WithTenant(context.Background(), "acme")

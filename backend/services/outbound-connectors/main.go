@@ -22,6 +22,7 @@ import (
 	"github.com/devicechain-io/dc-outbound-connectors/model"
 	"github.com/devicechain-io/dc-outbound-connectors/processor"
 	"github.com/devicechain-io/dc-outbound-connectors/schema"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
 
@@ -209,6 +210,14 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// into the executor (publish resolves a ConnectorRef to its latest published version), and the
 	// GraphQL providers below reuse the same instance.
 	Api = model.NewApi(RdbManager, SecretStore)
+
+	// Report the size of this schema's append-only history tables (ADR-023): a connector version history only
+	// grows, and so does the audit journal the collector adds for every schema. Nothing
+	// prunes either, so the storage floor rises with use and nothing else says how fast.
+	// Registered directly rather than through Microservice.NewGauge because a failed read
+	// must produce NO series rather than a zero. See rdb.StorageGrowthCollector.
+	prometheus.MustRegister(rdb.NewStorageGrowthCollector(Microservice, RdbManager.Database,
+		&model.ConnectorVersion{}))
 
 	// Create and initialize the nats manager (which invokes createNatsComponents to build the
 	// consumer). The secret store must already exist so the executor's resolver can bind it.
