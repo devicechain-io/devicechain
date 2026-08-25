@@ -360,7 +360,7 @@ func TestPrebuildForcesTheIndexOnEveryRing(t *testing.T) {
 	if len(p.holes) != 1 {
 		t.Fatalf("the fixture compiled to %d holes, want 1", len(p.holes))
 	}
-	p.exterior.ContainsPoint(p.exterior.Vertex(0)) // build the exterior's index by hand
+	p.exterior.loop.ContainsPoint(p.exterior.loop.Vertex(0)) // build the exterior's index by hand
 	holeBytes := allocsDuring(func() { holed.Prebuild() })
 	if holeBytes < minHoleIndexBytes || holeBytes > maxHoleIndexBytes {
 		t.Errorf("with the exterior already built, Prebuild allocated %d bytes, want between %d and %d — "+
