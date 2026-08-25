@@ -119,50 +119,76 @@ type GeoFenceGeometry struct {
 	Geometry json.RawMessage `json:"geometry"`
 }
 
-// Bounds enforced at AUTHORING time. The first two exist for one reason:
+// Bounds enforced at AUTHORING time. The first two look like one bound split in half and
+// they are not: each holds a different cost, for a different consumer, and only the first
+// of them is about a rule's evaluation at all. Read them before moving either.
 //
-// 🔴 THE PUBLISH-TIME CEL COST GATE CANNOT SEE EITHER OF THESE NUMBERS. It estimates an
-// expression's cost STATICALLY, from the expression tree. A containment call's real cost
-// is data-dependent — how many vertices the named fence has, and how many fences are in
-// scope — and neither is in the tree. A static estimator therefore prices `inFence(…)`
-// as one call whether it tests a 4-vertex yard or a 40,000-vertex coastline. The cost
-// has to be bounded where the data is written, which is here.
+// 🔴 THE PUBLISH-TIME CEL COST GATE CANNOT SEE THE FIRST OF THEM. It estimates an
+// expression's cost STATICALLY, from the expression tree, while a containment call's real
+// cost is data-dependent — how large the named fence is. A static estimator therefore
+// prices `inFence(…)` as one call whether it tests a 4-vertex yard or a 40,000-vertex
+// coastline. The cost has to be bounded where the data is written, which is here.
 //
-// The third bounds a different quantity for a different consumer; see it for why counting
-// positions does not bound bytes.
+// The third bounds a different quantity again; see it for why counting positions does not
+// bound bytes.
 const (
 	// MaxGeoFenceVertices bounds a single fence's total position count across every
 	// ring (the closing position of each ring counts; it is cheaper to be conservative
 	// than to explain the exception).
 	//
-	// Containment is O(vertices) per fence per LOCATION event, run in-process by the
-	// DETECT engine. 512 sits about two orders of magnitude above real geofences — a
-	// site boundary, a yard, a loading zone are tens of vertices, and a simplified
-	// administrative boundary is low hundreds — while keeping the worst case
-	// computable rather than unbounded.
+	// 512 sits about two orders of magnitude above real geofences — a site boundary, a
+	// yard, a loading zone are tens of vertices, and a simplified administrative
+	// boundary is low hundreds — while keeping the two costs that ARE superlinear in it
+	// computable rather than unbounded:
+	//
+	//   - COMPILE is O(vertices²), in the self-intersection scan core/geo's
+	//     LoopSelfIntersects performs because s2.Loop.Validate does not detect crossings.
+	//     That function's own comment names THIS ceiling to justify its quadratic —
+	//     ~131k orientation tests at 512, paid once per fence per fence-set version and
+	//     never per event — so raising this constant is what makes it worth re-pricing.
+	//   - MEMORY is O(vertices) per retained fence, and it is the unit the DETECT
+	//     engine's geometry cache spends: event-processing's DefaultMaxCachedVertices is
+	//     denominated in exactly this quantity.
+	//
+	// 🔴 PER-EVENT CONTAINMENT IS NOT ONE OF THEM, AND THIS COMMENT USED TO SAY IT WAS.
+	// It read "containment is O(vertices) per fence per LOCATION event", which stopped
+	// being true on both halves of the evaluator. s2's interior predicate goes through a
+	// shape index above 32 vertices, and the boundary test — which really did scan every
+	// edge, for every OUTSIDE answer, to decide a ~6mm tolerance — now takes a
+	// bounding-rectangle reject and then an edge index of its own. Measured at this
+	// ceiling: 23.7µs per call before, 348ns far / 1.9µs in-bound after. The per-event
+	// argument for 512 has been retired; the two above are what actually holds it.
 	MaxGeoFenceVertices = 512
 
-	// MaxGeoFencesPerTenant bounds the other multiplicand. Worst case per location
-	// event is MaxGeoFenceVertices × MaxGeoFencesPerTenant = 51,200 edge tests, which
-	// is a fraction of a millisecond in Go — the same order as the resolve path's
-	// existing per-event work rather than something that dominates it. A bounding-box
-	// prefilter makes the realistic cost one fence, but a prefilter is an optimization
-	// and this is a bound, so the number is justified without assuming it.
+	// MaxGeoFencesPerTenant bounds how many fences one tenant may hold.
 	//
-	// 🔴 IT DOES NOT BOUND THE FENCE SET'S SIZE, AND THE PRODUCT OF THESE TWO NUMBERS IS
-	// NOT ONE EITHER. Both seams that carry a whole fence set have a 1 MiB budget — the
-	// broker's per-message ceiling and the cross-service response cap — and the set is
-	// over BOTH at these limits, at every coordinate precision anyone would use.
-	// Measured, 100 × 512 as stored GeoJSON text: 672 KB at 2 decimal places, 980 KB at
-	// 5, 1.18 MB at 7, 1.39 MB at 9. Five decimal places is about 1.1 m, which is below
-	// useful geofencing precision, and the whole-set GraphQL response at 5 dp measures
-	// 1,105,765 bytes against a 1,048,576-byte cap. So the set has been over the wire's
-	// budget at its own documented limits the whole time.
+	// 🔴 IT DOES NOT BOUND PER-EVENT COMPUTE, AND THIS COMMENT USED TO CLAIM IT DID —
+	// "worst case per location event is MaxGeoFenceVertices × MaxGeoFencesPerTenant =
+	// 51,200 edge tests". That multiplication prices an evaluator nobody wrote. A rule
+	// calls inFence(token); the binding reaches ONE named fence through a map keyed by
+	// token, and nothing in the DETECT engine iterates a fence set per event — the set is
+	// walked only where it is constructed. The fence COUNT therefore never enters
+	// per-event cost at any set size, which also disposes of the escape hatch the old
+	// text offered: the bounding-box prefilter it declined to assume would have had
+	// nothing to prefilter, because no fence but the named one is ever visited.
 	//
-	// That is why the delivery paths PAGE and why an oversized set is announced by a
-	// pointer fact rather than carried. Neither is tidiness: no bound on a single fence
-	// can make 100 of them fit in one message while MaxGeoFenceVertices stays at 512, so
-	// the aggregate has to be split. See MaxGeoFenceGeometryBytes.
+	// What it bounds is FOOTPRINT, and the footprint is in a process every tenant SHARES.
+	// A whole fence set is compiled and retained per tenant, so this constant times
+	// MaxGeoFenceVertices is one tenant's worst-case draw on event-processing's geometry
+	// cache — ~51,100 compiled vertices (a compiled ring drops its repeated closing
+	// position) against a DefaultMaxCachedVertices budget of 250,000 that is explicitly
+	// sized to sit above it. Unlike a per-tenant storage ceiling, an over-large value here
+	// is spent on everyone, and neither number can move without the other and the cache
+	// being re-derived together.
+	//
+	// 🔴 DELIVERY NO LONGER CONSTRAINS IT. The paragraph that stood here showed that a set
+	// at these limits is over both 1 MiB seams at every useful coordinate precision, and
+	// concluded that this is why the delivery paths PAGE and why an oversized set is
+	// announced by a pointer fact. The arithmetic was right; both mechanisms are gone. The
+	// unit of delivery is now the FENCE rather than the set — the fact carries a manifest
+	// of {token, hash} pairs and the bodies travel separately — so what is announced has a
+	// size independent of what any fence contains. See MaxGeoFenceGeometryBytes, the one
+	// size rule per-fence delivery still needs.
 	MaxGeoFencesPerTenant = 100
 
 	// MaxGeoFenceGeometryBytes bounds a single fence's stored geometry DOCUMENT.
