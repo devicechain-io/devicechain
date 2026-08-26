@@ -698,12 +698,14 @@ Two fixes are worth knowing about:
 
 It does change the database, additively: it creates one table for geofence shapes, adds three
 nullable columns to the tenant record, and rewrites stored geofence history into the new form
-once, in place. Nothing is dropped and nothing has to be recreated. That last step is the one
-worth knowing about if you already use geofencing — before it existed, an upgraded instance
-still held every fence, but the detection engine could no longer resolve the shapes they pointed
-at, so geofence rules stopped matching until somebody edited a fence. The upgrade now repairs
-that history as it runs. It is safe to re-run and does nothing on an instance that has already
-had it.
+once, in place. Nothing is dropped and nothing has to be recreated.
+
+That last step is the one worth knowing about if you already use geofencing. From `v0.13.0` a
+fence's shape is stored once and referred to by its content rather than copied into every
+version of your fence set, and the upgrade rewrites the fence history you already have so it
+refers to shapes the same way. Your fences and their history come through unchanged; what
+changes is how they are stored. The step is safe to re-run and does nothing on an instance that
+has already had it.
 
 What changes is that the two geofence limits that used to be fixed for everyone — 512 positions
 in one fence, 100 fences per tenant — are now **settings on your plan**, joined by a third:
