@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"strings"
 	"testing"
 
@@ -425,22 +424,11 @@ func TestGeoFenceVertexBound(t *testing.T) {
 	// authoring gate started refusing those. A fixture describing a shape it does
 	// not build is the quiet kind of wrong: this test was measuring the vertex
 	// BOUND, so any ring of the right length passed for it.
-	ring := func(n int) string {
-		coords := make([]float64, 0, n*2)
-		lonOf := func(theta float64) float64 { return -84.0 + 0.01*math.Cos(theta) }
-		latOf := func(theta float64) float64 { return 33.0 + 0.01*math.Sin(theta) }
-		for i := 0; i < n-1; i++ {
-			theta := 2 * math.Pi * float64(i) / float64(n-1)
-			coords = append(coords, lonOf(theta), latOf(theta))
-		}
-		coords = append(coords, lonOf(0), latOf(0)) // close on the first position
-		return polygonGeometry(coords...)
-	}
 
 	// AT the limit: accepted. This is what stops the rejections below from being
 	// satisfied by a validator that says no to everything.
 	if _, err := api.CreateGeoFence(ctx, &GeoFenceCreateRequest{
-		Token: "at-limit", Geometry: ring(governance.DefaultGeoFencePositionCeiling),
+		Token: "at-limit", Geometry: ringOf(governance.DefaultGeoFencePositionCeiling, 0.01),
 	}); err != nil {
 		t.Fatalf("a fence at exactly the %d-position limit was rejected: %v",
 			governance.DefaultGeoFencePositionCeiling, err)
@@ -454,7 +442,7 @@ func TestGeoFenceVertexBound(t *testing.T) {
 
 	// ONE over the limit: refused on create.
 	if _, err := api.CreateGeoFence(ctx, &GeoFenceCreateRequest{
-		Token: "over-limit", Geometry: ring(governance.DefaultGeoFencePositionCeiling + 1),
+		Token: "over-limit", Geometry: ringOf(governance.DefaultGeoFencePositionCeiling+1, 0.01),
 	}); err == nil {
 		t.Errorf("a fence with %d positions was accepted; the limit is %d",
 			governance.DefaultGeoFencePositionCeiling+1, governance.DefaultGeoFencePositionCeiling)
@@ -462,7 +450,7 @@ func TestGeoFenceVertexBound(t *testing.T) {
 	// And refused on update, so the bound cannot be walked around by editing a legal
 	// fence into an illegal one.
 	if _, err := api.UpdateGeoFence(ctx, "ordinary", &GeoFenceCreateRequest{
-		Token: "ordinary", Geometry: ring(governance.DefaultGeoFencePositionCeiling + 1),
+		Token: "ordinary", Geometry: ringOf(governance.DefaultGeoFencePositionCeiling+1, 0.01),
 	}); err == nil {
 		t.Errorf("an update to %d positions was accepted; the limit is %d",
 			governance.DefaultGeoFencePositionCeiling+1, governance.DefaultGeoFencePositionCeiling)

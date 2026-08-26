@@ -66,6 +66,15 @@ func validateGeoFenceToken(token string) error {
 // geoFenceCeiling for the moment both exist. A tenant exactly at its fence ceiling has to
 // have the ceiling raised to rename anything, which is a refusal with a route out rather
 // than an operation that destroys a fence.
+//
+// 🔴 AND THE RECIPE DOES NOT WORK AT ALL FOR A FENCE GRANDFATHERED OVER THE PER-FENCE
+// CEILING, IN EITHER ORDER. A create has no stored baseline to be measured against, so
+// CreateGeoFence checks the incoming count against geoFencePositionCeiling unconditionally —
+// the growth comparison that lets an oversized fence be EDITED has nothing to compare to when
+// the fence is new. So a fence larger than its tenant's current ceiling can be edited and
+// deleted but never re-created under any token. The failure is benign in order (the create
+// refuses before anything is deleted, so nothing is lost), but the recipe above is narrower
+// than it reads: renaming such a fence needs the ceiling raised, not a different order.
 func errGeoFenceTokenImmutable(token string, requested string) error {
 	if requested == token {
 		return nil
@@ -135,10 +144,12 @@ func geoFenceCapsNotNeeded() geoFenceCapsAttempt {
 // only at the point where a cap is about to refuse something; see geoFenceCapsAttempt.
 func (a geoFenceCapsAttempt) require(what string) (governance.GeoFenceCaps, error) {
 	if a.err != nil {
-		return governance.GeoFenceCaps{}, fmt.Errorf("cannot check %s: this tenant's geofence caps "+
-			"could not be resolved from user-management, and there is no safe number to assume "+
-			"(a tier may set a cap below the platform default, so guessing would raise it): %w",
-			what, a.err)
+		// The wrap says only what is true of BOTH errors this can carry. It used to add "could
+		// not be resolved from user-management… guessing would raise it", which is the resolve
+		// path's story and is false of errGeoFenceCapsNotNeeded — where nothing was tried and
+		// nothing was unreachable. Each error states its own cause; this adds the context the
+		// caller has and the error does not, which is WHICH CHECK could not be made.
+		return governance.GeoFenceCaps{}, fmt.Errorf("cannot check %s: %w", what, a.err)
 	}
 	return a.caps, nil
 }
@@ -164,6 +175,17 @@ func (api *Api) geoFenceCaps(ctx context.Context) geoFenceCapsAttempt {
 		return geoFenceCapsAttempt{err: fmt.Errorf("no tenant in context")}
 	}
 	caps, err := api.GeoFenceCapsResolver.Resolve(ctx, tenant)
+	if err != nil {
+		// The operator-facing reason lives HERE, on the only path where it is true, rather
+		// than in require()'s wrap — which also carries errGeoFenceCapsNotNeeded, for which
+		// "could not be resolved" would be a lie. It stays in an ERROR rather than moving to
+		// a comment beside it because the audience is different: an operator who has just
+		// been refused never reads this file, and needs to know that the refusal is an
+		// outage rather than their cap, and why guessing was not an option.
+		err = fmt.Errorf("this tenant's geofence caps could not be resolved from user-management, "+
+			"and there is no safe number to assume (a tier may set a cap below the platform "+
+			"default, so guessing would raise it): %w", err)
+	}
 	return geoFenceCapsAttempt{caps: caps, err: err}
 }
 
@@ -188,7 +210,7 @@ func (api *Api) CreateGeoFence(ctx context.Context, request *GeoFenceCreateReque
 	// The CANONICAL document is what gets stored, never request.Geometry. Storing the
 	// authored text would put a document in the column that the size bound was never
 	// applied to — see validateGeoFenceGeometry.
-	_, canonicalGeometry, err := validateGeoFenceGeometry(request.Geometry)
+	canonicalGeometry, incoming, err := validateGeoFenceGeometry(request.Geometry)
 	if err != nil {
 		return nil, err
 	}
@@ -202,13 +224,6 @@ func (api *Api) CreateGeoFence(ctx context.Context, request *GeoFenceCreateReque
 	// here also serves the fence-count check inside the transaction and the budget check
 	// inside the mint, so a create costs one round trip, not three.
 	capsAttempt := api.geoFenceCaps(ctx)
-	incoming, err := geoFencePositionsIn([]byte(canonicalGeometry))
-	if err != nil {
-		// The document was canonicalized two statements ago, so this cannot fire; it is
-		// here because a count that silently answered 0 would exempt the fence from both
-		// the ceiling and the budget.
-		return nil, err
-	}
 	caps, err := capsAttempt.require("this geofence's position count")
 	if err != nil {
 		return nil, err
@@ -236,12 +251,19 @@ func (api *Api) CreateGeoFence(ctx context.Context, request *GeoFenceCreateReque
 	var minted *GeoFenceSetVersion
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		// The fence-count bound is checked inside the transaction so it reads the same
-		// state the insert lands in. It is still a count-then-insert, so two simultaneous
-		// creates at the limit can both pass — deliberately not serialized with a lock,
-		// because what the bound protects is the SIZE OF THE ANNOUNCEMENT (a fence-set
+		// state the insert lands in. It is a count-then-insert with no lock, and what that
+		// costs is smaller than it looks: two concurrent creates both mint a fence-set
+		// version in this same transaction, and the per-tenant unique index on
+		// (tenant_id, version) makes the loser's WHOLE transaction abort. So the pair
+		// cannot both land, and the count cannot be beaten by racing it.
+		//
+		// A lock is still not warranted, because that serialization is incidental rather
+		// than promised — it comes from the mint, not from this check — and the bound could
+		// tolerate being beaten anyway: what it protects is the SIZE OF THE ANNOUNCEMENT (a
 		// manifest carries one entry per fence and must fit one broker message), and one
-		// extra entry for the moment between two concurrent authoring calls is 215 bytes
-		// against a ceiling with six figures of headroom.
+		// extra entry is 215 bytes against a ceiling with six figures of headroom. Recorded
+		// this way round because the comment here used to assert the race as a tolerated
+		// outcome, which stopped being reachable when the mint moved inside the transaction.
 		//
 		// 🔴 IT IS ONLY REACHED ON A CREATE, which is why this is the one check that never
 		// needs a "would this make it worse" comparison: an update leaves the count exactly
@@ -310,7 +332,7 @@ func (api *Api) UpdateGeoFence(ctx context.Context, token string,
 		return nil, gorm.ErrRecordNotFound
 	}
 
-	_, canonicalGeometry, err := validateGeoFenceGeometry(request.Geometry)
+	canonicalGeometry, incoming, err := validateGeoFenceGeometry(request.Geometry)
 	if err != nil {
 		return nil, err
 	}
@@ -323,45 +345,15 @@ func (api *Api) UpdateGeoFence(ctx context.Context, token string,
 	// un-deduplicates it (see the budget check in mintGeoFenceSetVersion). So there is no
 	// test available here that proves this edit needs no cap.
 	//
-	// What that costs, stated: on a pod that has never resolved this tenant, an update
-	// during a user-management outage blocks for the fetch timeout and then SUCCEEDS if it
-	// is not growth. It is a stall, not a refusal — the resolve's error is carried, not
-	// returned — and once the tenant is in the resolver's cache a stale entry is served
-	// without blocking at all.
+	// 🔴 WHAT THAT COSTS, STATED — AND IT IS WORSE THAN "THE FIRST ONE STALLS". During a
+	// user-management outage an update blocks for the fetch timeout and then SUCCEEDS if it
+	// is not growth: a stall, not a refusal, since the resolve's error is carried rather
+	// than returned. But the stall REPEATS. A failed refresh does not restamp the cache
+	// entry's fetchedAt, so once the entry is older than the resolver's TTL every later
+	// mutation finds it stale, re-enters the fetch, and pays the timeout again — for the
+	// whole incident, not once. Only an entry still INSIDE the TTL is served without
+	// blocking. An operator sizing an outage's blast radius needs the repeating version.
 	capsAttempt := api.geoFenceCaps(ctx)
-	incoming, err := geoFencePositionsIn([]byte(canonicalGeometry))
-	if err != nil {
-		return nil, err
-	}
-	// 🔴 AN UNCOUNTABLE STORED DOCUMENT IS TREATED AS ZERO, WHICH MAKES THIS EDIT LOOK
-	// LIKE GROWTH AND DEMANDS THE CAP. Unreachable — every write to this column is
-	// canonicalized by validateGeoFenceGeometry first — but the polarity is a choice, and
-	// it is the opposite of the one mintGeoFenceSetVersion makes for an undecodable
-	// SNAPSHOT. The difference is whether refusing leaves a route out. There, refusing
-	// would block every mutation the tenant can make, permanently, with no way to repair
-	// the row through the API. Here, the fence can be DELETED — which needs no cap at all
-	// — and recreated, so failing closed costs one extra step rather than trapping anyone.
-	stored := 0
-	if n, err := geoFencePositionsIn([]byte(matches[0].Geometry)); err == nil {
-		stored = n
-	} else {
-		log.Warn().Err(err).Str("token", token).
-			Msg("Unable to count the positions in a stored geofence geometry; metering this edit as if the fence were new. Delete and recreate the fence if its geometry is over the tenant's ceiling.")
-	}
-	if incoming > stored {
-		caps, err := capsAttempt.require("this geofence's position count")
-		if err != nil {
-			return nil, err
-		}
-		if incoming > caps.PositionCeiling {
-			return nil, api.refuseGeoFenceCap(governance.GeoFencePositionCeilingField,
-				fmt.Errorf("geofence would have %d positions across its rings, up from %d; this tenant's "+
-					"%s is %d (%s). An edit that does not increase the position count is always allowed",
-					incoming, stored, governance.GeoFencePositionCeilingField, caps.PositionCeiling,
-					governance.GeoFencePositionCeilingBecause))
-		}
-	}
-
 	updated := matches[0]
 	updated.Name = rdb.NullStrOf(request.Name)
 	updated.Description = rdb.NullStrOf(request.Description)
@@ -374,6 +366,64 @@ func (api *Api) UpdateGeoFence(ctx context.Context, token string,
 
 	var minted *GeoFenceSetVersion
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// 🔴 THE GRANDFATHERING BASELINE IS RE-READ HERE, UNDER A ROW LOCK, AND READING IT
+		// OUTSIDE THE TRANSACTION WAS A REAL HOLE. The rule is "an edit may not INCREASE a
+		// fence's position count past the tenant's ceiling", which is a comparison against
+		// what is stored — so it has to be the state this write commits over, not a copy
+		// read before the transaction opened. Two concurrent updates to one fence defeated
+		// the outside read: a fence grandfathered at 1024 against a ceiling since lowered to
+		// 512, one call shrinking it to 8 and another replacing it with a different 1024,
+		// both loading 1024 first. The second sees 1024 > 1024 as false, skips the check
+		// entirely, then blocks on the row lock and applies on top of the shrink — 8 becomes
+		// 1024 with no ceiling check, an outcome neither serial order allows.
+		//
+		// The lock is what makes the re-read sufficient: under READ COMMITTED a plain
+		// re-read inside the transaction could still be overtaken between the read and the
+		// Save. It costs one row lock on an authoring path, which is the cheapest place in
+		// this service to spend one.
+		//
+		// The budget check in the mint needs none of this — it reads oldSum inside tx and
+		// the per-tenant unique index on (tenant, version) forces a concurrent mint to
+		// conflict and roll back. The per-fence ceiling had no such serialization.
+		locked := make([]GeoFence, 0, 1)
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("token = ?", token).Limit(1).Find(&locked).Error; err != nil {
+			return err
+		}
+		if len(locked) == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		// 🔴 AN UNCOUNTABLE STORED DOCUMENT IS TREATED AS ZERO, WHICH MAKES THIS EDIT LOOK
+		// LIKE GROWTH AND DEMANDS THE CAP. Unreachable — every write to this column is
+		// canonicalized by validateGeoFenceGeometry first — but the polarity is a choice, and
+		// it is the opposite of the one mintGeoFenceSetVersion makes for an undecodable
+		// SNAPSHOT. The difference is whether refusing leaves a route out. There, refusing
+		// would block every mutation the tenant can make, permanently, with no way to repair
+		// the row through the API. Here the route out is this same call: an edit that does not
+		// increase the count is always allowed, so REPLACING the corrupt document with a
+		// smaller one succeeds. Deleting is a route out too but a worse one to advertise — for
+		// a tenant over its budget, delete-then-recreate forfeits the headroom and the fence
+		// cannot be put back (see errGeoFenceTokenImmutable).
+		stored := 0
+		if n, err := geoFencePositionsIn([]byte(locked[0].Geometry)); err == nil {
+			stored = n
+		} else {
+			log.Warn().Err(err).Str("token", token).
+				Msg("Unable to count the positions in a stored geofence geometry; metering this edit as if the fence were new. An edit that does not increase the position count is still accepted, so replacing it with a smaller geometry will succeed.")
+		}
+		if incoming > stored {
+			caps, err := capsAttempt.require("this geofence's position count")
+			if err != nil {
+				return err
+			}
+			if incoming > caps.PositionCeiling {
+				return api.refuseGeoFenceCap(governance.GeoFencePositionCeilingField,
+					fmt.Errorf("geofence would have %d positions across its rings, up from %d; this tenant's "+
+						"%s is %d (%s). An edit that does not increase the position count is always allowed",
+						incoming, stored, governance.GeoFencePositionCeilingField, caps.PositionCeiling,
+						governance.GeoFencePositionCeilingBecause))
+			}
+		}
 		if err := tx.Save(updated).Error; err != nil {
 			return err
 		}
@@ -1092,6 +1142,13 @@ func (api *Api) mintGeoFenceSetVersion(tx *gorm.DB, now time.Time,
 	for hash, document := range documents {
 		n, err := geoFencePositionsIn(document)
 		if err != nil {
+			// 🔴 THE DAY A SECOND GEOMETRY KIND IS ACCEPTED, THIS BRANCH BECOMES A SILENT
+			// EXEMPTION. geoFencePositionsIn errors on a kind it cannot count — correctly,
+			// since a zero would read as "this fence is free" — but the handling below turns
+			// that into a permanent per-mint stand-aside, so a tenant holding one fence of a
+			// newly-supported kind would lose whole-set metering entirely, with only a log
+			// line and no failing test. Whoever accepts the next kind owes it a position
+			// count here BEFORE the validator accepts it, not after.
 			// 🔴 FAIL OPEN, DO NOT RETURN. This document belongs to a fence that is NOT
 			// being edited — `documents` is the whole post-mutation set — so returning the
 			// error here would let one uncorrelated corrupt row block every later mutation,
@@ -1142,6 +1199,11 @@ func (api *Api) mintGeoFenceSetVersion(tx *gorm.DB, now time.Time,
 		}
 	}
 
+	// Nothing is archived on the skip path above, and nothing needs to be: an equal
+	// reference list names identical hashes, and every one of those was archived by the
+	// transaction that first wrote a version naming it. There is no missing blob for a
+	// repeat write to heal — the only deletion that reaches this table is the whole-tenant
+	// purge, which takes the versions with it.
 	if err := archiveGeoFenceGeometries(tx, documents); err != nil {
 		return nil, err
 	}

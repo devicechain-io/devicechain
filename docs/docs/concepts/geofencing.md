@@ -45,7 +45,9 @@ These are **defaults**, not fixed platform limits. Each is part of your plan, an
 They are checked when a fence is saved, because a rule's authoring cost gate cannot see a number that lives on a fence rather than in a rule. The fence count does not affect how long any single containment test takes: a rule names one fence and the engine reaches that fence directly.
 
 :::note Changing a fence is only refused when it makes things worse
-If your tenant is already over one of these limits — because a plan changed, or the fences predate the limit — you keep every fence you have. Saving is refused only when the change would make the number **larger** than it already is. Shrinking a fence, editing its name or description, and **deleting** a fence always work.
+If your tenant is already over one of these limits — because a plan changed, or the fences predate the limit — you keep every fence you have. Saving is refused only when the change would make the number **larger** than it already is. Editing a fence's name or description, and **deleting** a fence, always work.
+
+Making a fence *smaller* almost always works too, with one exception worth knowing: because the whole-set total counts distinct shapes, editing one of several identically-drawn fences separates it from the others and can raise your total even though that fence got smaller. The refusal says so when it happens.
 
 Two consequences worth knowing. Because the whole-set total counts distinct shapes, making one of several identically-drawn fences different can raise your total even though that fence got smaller — the refusal says so when it happens. And because deleting lowers the stored total, an over-limit tenant that deletes a fence cannot recreate it: to move a fence to a new token, **create the new one first, then delete the old**.
 :::

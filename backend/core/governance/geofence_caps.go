@@ -225,12 +225,14 @@ func DefaultGeoFenceCaps() GeoFenceCaps {
 // abusive tenant's cap would have it defeated by any device-management restart, permanently. So
 // the first resolve for a tenant blocks on the fetch and can FAIL.
 //
-// 🔴 The enforcement slice will additionally GRANDFATHER a tenant already over a cap — refusing
-// only a change that makes things worse — and that rule is load-bearing from its first day
-// rather than polish: the default budget is 50,000 positions while the constants still live in
-// device-management permit 100 × 512 = 51,200, so a tenant legally at today's ceilings is over
-// the shipped default the moment enforcement lands. It does not exist yet; do not read the
-// paragraph above as describing it.
+// 🔴 device-management GRANDFATHERS a tenant already over a cap, refusing only a change that
+// makes things worse, and that rule was load-bearing from its first day rather than polish.
+// The reason is instructive: this paragraph used to warn that the default budget (then a round
+// 50,000) sat BELOW what the other two defaults permit (100 × 512 = 51,200), so a tenant legally
+// at the ceilings would be over the budget the moment enforcement landed. That was true, and the
+// fix was not grandfathering but arithmetic — DefaultTenantGeometryPositions is now the PRODUCT
+// of the other two, so no tenant metered at the defaults can be over them. Grandfathering
+// remains, for the case it is actually for: an operator LOWERING a tier under a tenant.
 //
 // The degradation is staged rather than binary, because the two failures are not equally bad:
 //

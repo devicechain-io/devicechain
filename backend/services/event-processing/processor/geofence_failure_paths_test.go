@@ -1013,59 +1013,67 @@ func TestAnEntryEvictedAfterThePlanIsRefetchedNotReportedAbsent(t *testing.T) {
 	}
 }
 
-// 🔴 THE REQUEST BUDGET MUST SIT ABOVE THE LARGEST *LEGITIMATE* FETCH, AND THIS IS THE ONLY
-// THING THAT SAYS SO. TestTheGeometryReadStopsAtItsRequestBudget cannot: its fixture is DERIVED
-// from maxGeometryRequests, so lowering the budget merely shrinks the fixture and it goes on
-// passing. Proven, not assumed — a mutant setting the budget to an eighth of its value survived
-// that test untouched, which is exactly the shape of the defect this slice fixed. A case written
-// in terms of a constant follows the constant and cannot catch it moving.
+// 🔴 THE REQUEST BUDGET IS A BAND, AND BOTH EDGES ARE LOAD-BEARING. Too low and the stop fires
+// on a legitimate fetch, which is an outage for whichever tenant an operator packaged
+// generously. Too high and it never fires on the runaway it exists for — present, funded, inert.
+// Only asserting both catches both, and each edge has already been got wrong once:
 //
-// So this asserts a RELATION between two constants that live in different modules, with a
-// literal cross-check on each side:
+//   - the LOWER edge was a literal 512 justified by a fence ceiling of 100, which survived that
+//     ceiling becoming a tier setting because the only test of it derives its FIXTURE from the
+//     budget. Shrink the budget, the fixture shrinks with it, and it passes. A mutant setting the
+//     budget to an eighth survived that test untouched.
+//   - the UPPER edge was lost by raising the budget to 3N on a mis-priced worst case (see
+//     maxGeometryRequests). 12,000 sits above the pathological 11,833 too, so a runaway archive
+//     would have spent every request and completed.
 //
-//	a fetch of every fence a tier may grant, with every chunk refused and split to leaves,
-//	costs chunks*(2*chunkSize-1) requests, and that must fit the budget.
-//
-// A runaway stop below what an operator may legitimately package is not a stop; it is an
-// outage for whichever tenant they were generous to, reported as a geometry read that errors.
+// So this asserts a RELATION between constants in different modules, with literal arithmetic on
+// each side rather than a fixture that follows either one.
 func TestTheRequestBudgetSitsAboveTheLargestLegitimateFetch(t *testing.T) {
-	// The worst LEGITIMATE fetch: one distinct geometry per fence, at the most fences any
-	// tier may grant. Nothing about a real tenant exceeds this.
 	documents := governance.MaxGeoFenceCeiling
-	chunks := (documents + geometryChunkSize - 1) / geometryChunkSize
-	// Consumer one, the SPLIT. Each chunk, refused and split all the way down, costs every
-	// leaf plus every refused interior node of a binary split: 2*size-1.
-	split := chunks * (2*geometryChunkSize - 1)
-	// 🔴 CONSUMER TWO, THE LATE FETCH, AND LEAVING IT OUT IS WHAT MADE A 2x BUDGET LOOK
-	// SUFFICIENT. rebuild's cache-fill callback re-fetches, one address at a time and through
-	// this same budget, any address its plan held as cached that was evicted before Get asked
-	// for it. In the pathological case — a tenant whose working set exceeds the cache bound —
-	// that is one more request per document. A budget priced for the split alone had 1.9%
-	// headroom and no room at all for this.
-	worst := split + documents
 
-	if worst > maxGeometryRequests {
+	// One fully-split chunk costs every leaf plus every refused interior node: 2*size-1. The
+	// trailing partial chunk costs less than a full one, so this is computed rather than
+	// approximated as chunks*(2c-1) — that overcounts, and a margin this test nominates as
+	// load-bearing must be the true one.
+	splitCost := func(n int) int {
+		full, rem := n/geometryChunkSize, n%geometryChunkSize
+		cost := full * (2*geometryChunkSize - 1)
+		if rem > 0 {
+			cost += 2*rem - 1
+		}
+		return cost
+	}
+
+	// 🔴 THE LOWER EDGE. The worst LEGITIMATE fetch: the archive holds every body its own
+	// manifest names. An address is either planned as missing (and split-fetched) or planned as
+	// held (and late-fetched at one request if it was evicted meanwhile) — never both — so the
+	// total is split(M) + (N-M), which is maximised when nothing is held.
+	legitimate := 0
+	for held := 0; held <= documents; held++ {
+		if cost := splitCost(documents-held) + held; cost > legitimate {
+			legitimate = cost
+		}
+	}
+	if legitimate > maxGeometryRequests {
 		t.Fatalf("a legitimate fetch of %d geometry documents costs up to %d requests against a "+
 			"budget of %d. A tenant whose tier grants the maximum fence count would have its "+
 			"geometry read ABORTED by the runaway stop — a stop that fires on correct work is an "+
-			"outage, not a defence. The budget derives from governance.MaxGeoFenceCeiling for "+
-			"exactly this reason; check that it still does",
-			documents, worst, maxGeometryRequests)
+			"outage, not a defence", documents, legitimate, maxGeometryRequests)
 	}
 
-	// 🔴 THE COUNTERWEIGHT, AND IT IS THE HALF THAT ACTUALLY BITES. Without it a budget of
-	// MaxInt would satisfy the check above while being no stop at all. The budget must stay
-	// within a small multiple of the worst legitimate fetch, so that a peer making expensive
-	// progress is still cut off in bounded time.
-	const slack = 4
-	if maxGeometryRequests > slack*worst {
-		t.Fatalf("the budget is %d against a worst legitimate fetch of %d — more than %dx. A stop "+
-			"that far above anything reachable lets a peer making expensive progress spin for a "+
-			"long time before it fires", maxGeometryRequests, worst, slack)
+	// 🔴 THE UPPER EDGE, AND IT IS THE HALF THAT ACTUALLY BITES. The pathological run: the
+	// archive answers every batch and holds nothing, so every address is split-fetched AND then
+	// late-fetched one at a time. This is the runaway the stop exists for, so the budget must be
+	// BELOW it. Without this, an arbitrarily large budget passes the check above while stopping
+	// nothing.
+	pathological := splitCost(documents) + documents
+	if maxGeometryRequests >= pathological {
+		t.Fatalf("the budget is %d and a runaway archive — answering every batch while holding no "+
+			"bodies — spends %d. The stop would never fire on the exact case it exists for: the "+
+			"read completes, having paid every request, and returns a fence set of error fences",
+			maxGeometryRequests, pathological)
 	}
 
-	t.Logf("worst legitimate fetch of %d documents: %d requests splitting %d chunks + %d late "+
-		"re-fetches = %d, against a budget of %d (%.1f%% headroom)", documents, split, chunks,
-		documents, worst, maxGeometryRequests,
-		100*float64(maxGeometryRequests-worst)/float64(maxGeometryRequests))
+	t.Logf("budget %d sits between a legitimate worst of %d (+%d) and a runaway worst of %d",
+		maxGeometryRequests, legitimate, maxGeometryRequests-legitimate, pathological)
 }

@@ -631,6 +631,17 @@ type canonicalGeoJSONPolygon struct {
 	Coordinates json.RawMessage `json:"coordinates"`
 }
 
+// 🔴 IT RETURNS THE POSITION COUNT, AND THAT IS WHAT MAKES "COUNTED ONCE" TRUE RATHER THAN
+// INTENDED. canonicalizePolygon2D already counts positions to enforce the platform maximum, so
+// a caller needing the tenant's own ceiling checked used to re-parse the canonical bytes to
+// recover the same number — a second parse per authoring call, and an error branch whose own
+// comment conceded it could not fire. Handing the count out instead makes a wrong count
+// unrepresentable rather than guarded: there is one call to geoFencePositions on this path, and
+// its result is what every cap is spent against.
+//
+// The parsed *GeoFenceGeometry it used to return first was discarded at every one of its call
+// sites, so the count costs no arity.
+//
 // validateGeoFenceGeometry parses and validates an authored geometry document, returning
 // the decoded envelope and the CANONICAL document to store. Everything it enforces is
 // authoring-time validation of the FENCE — none of it ever runs against a device's reported
@@ -644,18 +655,18 @@ type canonicalGeoJSONPolygon struct {
 // Canonicalising closes the gap by making "what was validated" and "what is stored" the
 // same bytes — every coordinate re-emitted from its parsed float64 in the same
 // non-exponent form PostgreSQL's numeric_out will print.
-func validateGeoFenceGeometry(raw string) (*GeoFenceGeometry, string, error) {
+func validateGeoFenceGeometry(raw string) (string, int, error) {
 	if raw == "" {
-		return nil, "", fmt.Errorf("a geofence geometry is required")
+		return "", 0, fmt.Errorf("a geofence geometry is required")
 	}
 	// The intake guard, first, because it is an O(1) read of a length where everything
 	// below walks the document. It is NOT the size bound — see maxGeoFenceRequestBytes.
 	if len(raw) > maxGeoFenceRequestBytes {
-		return nil, "", fmt.Errorf("geofence geometry request is %d bytes; the intake limit is %d",
+		return "", 0, fmt.Errorf("geofence geometry request is %d bytes; the intake limit is %d",
 			len(raw), maxGeoFenceRequestBytes)
 	}
 	if !json.Valid([]byte(raw)) {
-		return nil, "", fmt.Errorf("geofence geometry is not valid JSON")
+		return "", 0, fmt.Errorf("geofence geometry is not valid JSON")
 	}
 	// Reject an array/scalar/null before decoding into the envelope. `null` unmarshals
 	// into a struct as a silent no-op, so it would otherwise arrive as an envelope with
@@ -663,50 +674,50 @@ func validateGeoFenceGeometry(raw string) (*GeoFenceGeometry, string, error) {
 	// a malformed document.
 	var probe map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &probe); err != nil || probe == nil {
-		return nil, "", fmt.Errorf("geofence geometry must be a JSON object")
+		return "", 0, fmt.Errorf("geofence geometry must be a JSON object")
 	}
 	if err := rejectUnknownKeys(probe, geoFenceEnvelopeKeys, "geofence geometry"); err != nil {
-		return nil, "", err
+		return "", 0, err
 	}
 
 	geom := &GeoFenceGeometry{}
 	if err := json.Unmarshal([]byte(raw), geom); err != nil {
-		return nil, "", fmt.Errorf("unable to parse geofence geometry: %w", err)
+		return "", 0, fmt.Errorf("unable to parse geofence geometry: %w", err)
 	}
 	var canonicalGeometry json.RawMessage
+	positions := 0
 	switch geom.Kind {
 	case GeoFenceKindPolygon2D:
-		c, err := canonicalizePolygon2D(geom.Geometry)
+		c, n, err := canonicalizePolygon2D(geom.Geometry)
 		if err != nil {
-			return nil, "", err
+			return "", 0, err
 		}
-		canonicalGeometry = c
+		canonicalGeometry, positions = c, n
 	case "":
-		return nil, "", fmt.Errorf("geofence geometry must declare a kind (%q)", GeoFenceKindPolygon2D)
+		return "", 0, fmt.Errorf("geofence geometry must declare a kind (%q)", GeoFenceKindPolygon2D)
 	case GeoFenceKindPolygon25D, GeoFenceKindVoxel3D:
 		// Named, reserved, and NOT accepted. Storing one would mean a rule could name a
 		// fence whose containment nothing can evaluate — worse than refusing it, because
 		// the rule would silently never fire.
-		return nil, "", fmt.Errorf("geofence geometry kind %q is reserved but not yet supported; use %q",
+		return "", 0, fmt.Errorf("geofence geometry kind %q is reserved but not yet supported; use %q",
 			geom.Kind, GeoFenceKindPolygon2D)
 	default:
-		return nil, "", fmt.Errorf("unsupported geofence geometry kind %q (supported: %q)",
+		return "", 0, fmt.Errorf("unsupported geofence geometry kind %q (supported: %q)",
 			geom.Kind, GeoFenceKindPolygon2D)
 	}
 
 	canonical, err := json.Marshal(&canonicalGeoFenceGeometry{Kind: geom.Kind, Geometry: canonicalGeometry})
 	if err != nil {
-		return nil, "", fmt.Errorf("unable to canonicalize geofence geometry: %w", err)
+		return "", 0, fmt.Errorf("unable to canonicalize geofence geometry: %w", err)
 	}
 	// The real bound, applied to the STORED size of the CANONICAL document.
 	if stored := jsonbRenderedLen(canonical); stored > MaxGeoFenceGeometryBytes {
-		return nil, "", fmt.Errorf("geofence geometry stores as %d bytes; the limit is %d (a fence set "+
+		return "", 0, fmt.Errorf("geofence geometry stores as %d bytes; the limit is %d (a fence set "+
 			"is carried whole over seams with byte budgets, and neither a position count nor the "+
 			"request's own length bounds what a database stores — an exponent-notation coordinate "+
 			"expands when it is written)", stored, MaxGeoFenceGeometryBytes)
 	}
-	geom.Geometry = canonicalGeometry
-	return geom, string(canonical), nil
+	return string(canonical), positions, nil
 }
 
 // geoFencePositions counts the positions in a parsed polygon's rings — every ring's every
@@ -774,30 +785,30 @@ func geoFencePositionsIn(document []byte) (int, error) {
 // returns the CANONICAL geometry object to store. The coordinate ranges are the
 // platform-wide contract ResolvedLocationEntry states: WGS84 / EPSG:4326 decimal degrees,
 // longitude in [-180, 180], latitude in [-90, 90].
-func canonicalizePolygon2D(raw json.RawMessage) (json.RawMessage, error) {
+func canonicalizePolygon2D(raw json.RawMessage) (json.RawMessage, int, error) {
 	if len(raw) == 0 {
-		return nil, fmt.Errorf("geofence geometry is missing its GeoJSON geometry object")
+		return nil, 0, fmt.Errorf("geofence geometry is missing its GeoJSON geometry object")
 	}
 	var geomProbe map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &geomProbe); err != nil || geomProbe == nil {
-		return nil, fmt.Errorf("the GeoJSON geometry must be a JSON object")
+		return nil, 0, fmt.Errorf("the GeoJSON geometry must be a JSON object")
 	}
 	if err := rejectUnknownKeys(geomProbe, geoJSONGeometryKeys, "the GeoJSON geometry object"); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var g geoJSONGeometry
 	if err := json.Unmarshal(raw, &g); err != nil {
-		return nil, fmt.Errorf("unable to parse the GeoJSON geometry object: %w", err)
+		return nil, 0, fmt.Errorf("unable to parse the GeoJSON geometry object: %w", err)
 	}
 	if g.Type != "Polygon" {
-		return nil, fmt.Errorf("geometry kind %s requires a GeoJSON Polygon, got %q", GeoFenceKindPolygon2D, g.Type)
+		return nil, 0, fmt.Errorf("geometry kind %s requires a GeoJSON Polygon, got %q", GeoFenceKindPolygon2D, g.Type)
 	}
 	var rings [][][]float64
 	if err := json.Unmarshal(g.Coordinates, &rings); err != nil {
-		return nil, fmt.Errorf("unable to parse Polygon coordinates: %w", err)
+		return nil, 0, fmt.Errorf("unable to parse Polygon coordinates: %w", err)
 	}
 	if len(rings) == 0 {
-		return nil, fmt.Errorf("a Polygon requires at least an exterior ring")
+		return nil, 0, fmt.Errorf("a Polygon requires at least an exterior ring")
 	}
 
 	// 🔴 THE POSITION COUNT IS ENFORCED FIRST, BEFORE ANYTHING QUADRATIC RUNS, and that
@@ -830,7 +841,7 @@ func canonicalizePolygon2D(raw json.RawMessage) (json.RawMessage, error) {
 	// already buy, not a new one this ordering opens.
 	total := geoFencePositions(rings)
 	if total > governance.MaxGeoFencePositionCeiling {
-		return nil, fmt.Errorf("geofence has %d positions across its rings; no tenant may exceed %d "+
+		return nil, 0, fmt.Errorf("geofence has %d positions across its rings; no tenant may exceed %d "+
 			"(compiling one fence is quadratic in its position count, so this is the largest ring "+
 			"any tier may grant; a tenant's own ceiling may be lower)",
 			total, governance.MaxGeoFencePositionCeiling)
@@ -840,28 +851,28 @@ func canonicalizePolygon2D(raw json.RawMessage) (json.RawMessage, error) {
 		// Four positions is the GeoJSON minimum for a closed linear ring: a triangle
 		// plus the repeated closing position.
 		if len(ring) < 4 {
-			return nil, fmt.Errorf("polygon ring %d has %d positions; a closed ring needs at least 4", i, len(ring))
+			return nil, 0, fmt.Errorf("polygon ring %d has %d positions; a closed ring needs at least 4", i, len(ring))
 		}
 		for j, pos := range ring {
 			// EXACTLY two ordinates, not "at least". See MaxGeoFencePositionOrdinates: the
 			// minimum this used to be is what let a position be arbitrarily wide, and a wide
 			// position is unbounded storage that nothing ever reads.
 			if len(pos) != MaxGeoFencePositionOrdinates {
-				return nil, fmt.Errorf("polygon ring %d position %d has %d ordinates; a %s position is "+
+				return nil, 0, fmt.Errorf("polygon ring %d position %d has %d ordinates; a %s position is "+
 					"exactly [longitude, latitude] (%d)", i, j, len(pos), GeoFenceKindPolygon2D,
 					MaxGeoFencePositionOrdinates)
 			}
 			lon, lat := pos[0], pos[1]
 			if math.IsNaN(lon) || math.IsInf(lon, 0) || lon < -180 || lon > 180 {
-				return nil, fmt.Errorf("polygon ring %d position %d longitude %v is outside [-180, 180]", i, j, lon)
+				return nil, 0, fmt.Errorf("polygon ring %d position %d longitude %v is outside [-180, 180]", i, j, lon)
 			}
 			if math.IsNaN(lat) || math.IsInf(lat, 0) || lat < -90 || lat > 90 {
-				return nil, fmt.Errorf("polygon ring %d position %d latitude %v is outside [-90, 90]", i, j, lat)
+				return nil, 0, fmt.Errorf("polygon ring %d position %d latitude %v is outside [-90, 90]", i, j, lat)
 			}
 		}
 		first, last := ring[0], ring[len(ring)-1]
 		if first[0] != last[0] || first[1] != last[1] {
-			return nil, fmt.Errorf("polygon ring %d is not closed: first position %v != last %v", i, first, last)
+			return nil, 0, fmt.Errorf("polygon ring %d is not closed: first position %v != last %v", i, first, last)
 		}
 		// Everything above is STRUCTURE — the ring is well-formed JSON describing
 		// positions in range. This asks the separate question of whether the shape
@@ -878,13 +889,14 @@ func canonicalizePolygon2D(raw json.RawMessage) (json.RawMessage, error) {
 		// mistake made at draw time, and the fence sat in the registry looking
 		// healthy while answering nothing.
 		if err := geo.ValidateClosedRing(ring); err != nil {
-			return nil, fmt.Errorf("polygon ring %d: %w", i, err)
+			return nil, 0, fmt.Errorf("polygon ring %d: %w", i, err)
 		}
 	}
-	return json.Marshal(&canonicalGeoJSONPolygon{
+	encoded, err := json.Marshal(&canonicalGeoJSONPolygon{
 		Type:        "Polygon",
 		Coordinates: canonicalRingsJSON(rings),
 	})
+	return encoded, total, err
 }
 
 // canonicalRingsJSON re-emits parsed rings as JSON, every ordinate in NON-EXPONENT decimal

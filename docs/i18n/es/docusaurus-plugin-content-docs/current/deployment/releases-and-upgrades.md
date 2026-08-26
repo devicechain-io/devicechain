@@ -759,18 +759,23 @@ Dos cosas que conviene saber antes de actualizar:
   encima. El total cuenta formas **distintas**, así que dos geocercas dibujadas de forma
   idéntica cuestan una.
 - **Un cambio solo se rechaza cuando hace un número mayor.** Si más adelante un operador baja
-  uno de sus límites por debajo de lo que ya tiene, conserva todas sus geocercas. Reducir una
-  geocerca, editar su nombre o su descripción, y eliminar una geocerca siguen funcionando: la
-  comprobación es sobre el crecimiento, no sobre el tamaño. Esto es lo que evita que un cambio
-  de plan deje varadas geocercas que eran válidas cuando se dibujaron.
+  uno de sus límites por debajo de lo que ya tiene, conserva todas sus geocercas. Editar el
+  nombre o la descripción de una geocerca, y eliminar una geocerca, siempre siguen funcionando:
+  la comprobación es sobre el crecimiento, no sobre el tamaño. Esto es lo que evita que un
+  cambio de plan deje varadas geocercas que eran válidas cuando se dibujaron. Hacer una geocerca
+  más pequeña casi siempre funciona también; la excepción es que el total del conjunto cuenta
+  formas *distintas*, así que editar una de varias geocercas dibujadas igual la separa del resto
+  y puede subir el total aunque esa geocerca se haya encogido.
 
 Una consecuencia que hay que prever: como eliminar una geocerca baja el total almacenado, un
 inquilino que esté por encima de un límite y elimine una geocerca no podrá volver a crearla.
 Para mover una geocerca a otro token, **cree primero la nueva y elimine después la antigua**, lo
 que requiere un hueco libre de geocerca durante el momento en que ambas existen.
 
-Los operadores que empaqueten planes deben saber que estos tienen topes reales, porque dos de los
-tres se gastan en recursos que comparten todos los inquilinos de la instancia. Los rechazos
+Los operadores que empaqueten planes deben saber que estos tienen topes reales, porque no todos se
+gastan solo en el inquilino: el total del conjunto es una porción de una caché de geometría de la
+que tiran todos los inquilinos de la instancia, y el número de geocercas acota un anuncio que tiene
+que caber en un solo mensaje del broker. Los rechazos
 nombran tanto el número como el ajuste que hay que subir, y una métrica
 `geofence_cap_refusals_total` los cuenta según qué límite rechazó.
 

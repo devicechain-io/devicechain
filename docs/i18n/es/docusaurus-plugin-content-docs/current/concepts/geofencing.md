@@ -45,7 +45,9 @@ Estos son **valores predeterminados**, no límites fijos de la plataforma. Cada 
 Se comprueban al guardar una geocerca, porque la puerta de costo de la autoría de reglas no puede ver un número que vive en una geocerca en lugar de en una regla. El número de geocercas no afecta a lo que tarda ninguna comprobación de contención individual: una regla nombra una geocerca y el motor llega a esa geocerca directamente.
 
 :::note Cambiar una geocerca solo se rechaza cuando empeora las cosas
-Si su inquilino ya supera uno de estos límites — porque cambió un plan, o porque las geocercas son anteriores al límite — conserva todas las geocercas que tiene. Guardar solo se rechaza cuando el cambio haría el número **mayor** de lo que ya es. Reducir una geocerca, editar su nombre o su descripción, y **eliminar** una geocerca siempre funcionan.
+Si su inquilino ya supera uno de estos límites — porque cambió un plan, o porque las geocercas son anteriores al límite — conserva todas las geocercas que tiene. Guardar solo se rechaza cuando el cambio haría el número **mayor** de lo que ya es. Editar el nombre o la descripción de una geocerca, y **eliminar** una geocerca, siempre funcionan.
+
+Hacer una geocerca *más pequeña* casi siempre funciona también, con una excepción que conviene conocer: como el total del conjunto cuenta formas distintas, editar una de varias geocercas dibujadas igual la separa de las demás y puede subir su total aunque esa geocerca se haya hecho más pequeña. El rechazo lo indica cuando ocurre.
 
 Dos consecuencias que conviene conocer. Como el total del conjunto cuenta formas distintas, hacer diferente una de varias geocercas dibujadas igual puede subir su total aunque esa geocerca se haya hecho más pequeña — el rechazo lo indica cuando ocurre. Y como eliminar baja el total almacenado, un inquilino por encima del límite que elimine una geocerca no podrá volver a crearla: para mover una geocerca a un token nuevo, **cree primero la nueva y elimine después la antigua**.
 :::

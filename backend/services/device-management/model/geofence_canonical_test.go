@@ -133,7 +133,7 @@ func TestUnknownKeysAreRefused(t *testing.T) {
 func TestATinyInRangeCoordinateCountsAtItsStoredSize(t *testing.T) {
 	doc := `{"kind":"POLYGON_2D","geometry":{"type":"Polygon","coordinates":[[[1e-300,0],[1,0],[1,1],[1e-300,0]]]}}`
 
-	_, canonical, err := validateGeoFenceGeometry(doc)
+	canonical, _, err := validateGeoFenceGeometry(doc)
 	if err != nil {
 		t.Fatalf("an in-range coordinate was refused: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestACeilingFenceIsStillAcceptedWithHeadroom(t *testing.T) {
 	measure := func(t *testing.T, positions int) float64 {
 		t.Helper()
 		doc := ceilingRingOf(positions, 9)
-		_, canonical, err := validateGeoFenceGeometry(doc)
+		canonical, _, err := validateGeoFenceGeometry(doc)
 		if err != nil {
 			t.Fatalf("a %d-byte fence at %d positions was refused: %v", len(doc), positions, err)
 		}
@@ -321,11 +321,11 @@ func TestACeilingFenceIsStillAcceptedWithHeadroom(t *testing.T) {
 func TestCanonicalGeometryIsStableAndPreservesCoordinates(t *testing.T) {
 	doc := `{"geometry":{"coordinates":[[[-122.419416,37.774929],[-122.4,37.7],[-122.5,37.8],[-122.419416,37.774929]]],"type":"Polygon"},"kind":"POLYGON_2D"}`
 
-	_, canonical, err := validateGeoFenceGeometry(doc)
+	canonical, _, err := validateGeoFenceGeometry(doc)
 	if err != nil {
 		t.Fatalf("validate: %v", err)
 	}
-	_, again, err := validateGeoFenceGeometry(canonical)
+	again, _, err := validateGeoFenceGeometry(canonical)
 	if err != nil {
 		t.Fatalf("the canonical document does not re-validate: %v", err)
 	}
@@ -376,7 +376,7 @@ func TestCreateStoresTheCanonicalGeometry(t *testing.T) {
 	api := newGeoFenceTestApi(t)
 	ctx := core.WithTenant(context.Background(), "acme")
 
-	_, canonical, err := validateGeoFenceGeometry(nonCanonicalRequest)
+	canonical, _, err := validateGeoFenceGeometry(nonCanonicalRequest)
 	if err != nil {
 		t.Fatalf("fixture does not validate: %v", err)
 	}
@@ -413,7 +413,7 @@ func TestUpdateStoresTheCanonicalGeometry(t *testing.T) {
 		Token: "yard", Geometry: polygonGeometry(0, 0, 1, 0, 1, 1, 0, 0)}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	_, canonical, err := validateGeoFenceGeometry(nonCanonicalRequest)
+	canonical, _, err := validateGeoFenceGeometry(nonCanonicalRequest)
 	if err != nil {
 		t.Fatalf("fixture does not validate: %v", err)
 	}
@@ -437,7 +437,7 @@ func TestTheFrozenSnapshotCarriesTheCanonicalGeometry(t *testing.T) {
 	api := newGeoFenceTestApi(t)
 	ctx := core.WithTenant(context.Background(), "acme")
 
-	_, canonical, err := validateGeoFenceGeometry(nonCanonicalRequest)
+	canonical, _, err := validateGeoFenceGeometry(nonCanonicalRequest)
 	if err != nil {
 		t.Fatalf("fixture does not validate: %v", err)
 	}

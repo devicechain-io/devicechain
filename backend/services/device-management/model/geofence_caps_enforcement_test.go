@@ -105,15 +105,11 @@ func ringOf(n int, radius float64) string {
 // function the enforcement uses — so a fixture cannot disagree with the thing it is testing.
 func positionsOf(t *testing.T, geometry string) int {
 	t.Helper()
-	_, canonical, err := validateGeoFenceGeometry(geometry)
+	_, positions, err := validateGeoFenceGeometry(geometry)
 	if err != nil {
 		t.Fatalf("fixture geometry is invalid: %v", err)
 	}
-	n, err := geoFencePositionsIn([]byte(canonical))
-	if err != nil {
-		t.Fatalf("fixture geometry has no position count: %v", err)
-	}
-	return n
+	return positions
 }
 
 // generousCaps is every cap at the platform maximum — a tenant nothing refuses, so a test
@@ -133,7 +129,7 @@ func generousCaps() governance.GeoFenceCaps {
 func TestTheTenantPositionCeilingRefusesAnOversizedCreate(t *testing.T) {
 	caps := generousCaps()
 	caps.PositionCeiling = 64
-	api, _, refusals := cappedApi(t, caps)
+	api, resolver, refusals := cappedApi(t, caps)
 	ctx := core.WithTenant(context.Background(), "acme")
 
 	// The counterweight FIRST: at the ceiling is accepted, so what follows is not a validator
@@ -158,6 +154,24 @@ func TestTheTenantPositionCeilingRefusesAnOversizedCreate(t *testing.T) {
 	}
 	if got := refusals.count(governance.GeoFencePositionCeilingField); got != 1 {
 		t.Errorf("the position-ceiling refusal counter is %d, want 1", got)
+	}
+
+	// 🔴 THE CAPS WERE RESOLVED FOR THE RIGHT TENANT, WHICH NOTHING ELSE HERE CHECKS. Every
+	// other assertion in this file would pass just as well if the resolver were asked about
+	// some other tenant and happened to answer the same numbers — and on a multi-tenant
+	// instance metering one tenant against another's plan is the failure that would matter
+	// most and look least like a bug.
+	resolver.mu.Lock()
+	asked := append([]string(nil), resolver.tenants...)
+	resolver.mu.Unlock()
+	for _, tenant := range asked {
+		if tenant != "acme" {
+			t.Errorf("the caps were resolved for tenant %q; every resolve on this path must name "+
+				"the tenant in context (%q)", tenant, "acme")
+		}
+	}
+	if len(asked) == 0 {
+		t.Error("no resolve happened at all, so the tenant assertion above proves nothing")
 	}
 }
 
@@ -453,8 +467,20 @@ func TestAnUnresolvableCapRefusesGrowthAndNothingElse(t *testing.T) {
 	}); err == nil {
 		t.Error("a create was accepted while the tenant's caps could not be resolved; a tier may " +
 			"sit below the platform default, so there is no safe number to assume")
-	} else if !strings.Contains(err.Error(), "could not be resolved") {
-		t.Errorf("the refusal does not say the caps were unresolvable: %v", err)
+	} else {
+		// 🔴 IT MUST NOT READ AS A CAP REFUSAL. An operator seeing this during an outage has
+		// to be able to tell "we could not check your limit" from "you hit your limit" —
+		// the second sends them to raise a tier that was never the problem.
+		if !strings.Contains(err.Error(), "cannot check") {
+			t.Errorf("the refusal does not say a CHECK could not be made: %v", err)
+		}
+		if !strings.Contains(err.Error(), "could not be resolved") {
+			t.Errorf("the refusal does not name the cause an operator can act on: %v", err)
+		}
+		if strings.Contains(err.Error(), governance.GeoFencePositionCeilingBecause) {
+			t.Errorf("the refusal quotes a cap's rationale, so it reads as a cap refusal "+
+				"rather than an outage: %v", err)
+		}
 	}
 
 	// A metadata-only edit, resubmitting identical geometry: allowed.
@@ -653,9 +679,14 @@ func TestAnUncountableStoredDocumentStandsTheBudgetAsideRatherThanFailing(t *tes
 		}
 	}
 
-	// Corrupt the ARCHIVED document behind one fence, by content address — the exact bytes
-	// the mint reads back and tries to count. Written straight to the column, since nothing
-	// in the API can produce this state.
+	// Corrupt the fence's LIVE geometry column — the bytes the mint reads back, hashes, and
+	// tries to count when it rebuilds the document set. Written straight to the column, since
+	// nothing in the API can produce this state (every write is canonicalized first).
+	//
+	// Not the archive row: the mint builds `documents` from the geo_fences rows it reads, so
+	// corrupting the archive would leave the count intact and test nothing. An earlier version
+	// of this comment claimed the archive, which would have sent a reader looking at the wrong
+	// table for the mechanism under test.
 	var blobs []GeoFenceGeometryBlob
 	if err := api.RDB.DB(ctx).Find(&blobs).Error; err != nil {
 		t.Fatalf("read archive: %v", err)

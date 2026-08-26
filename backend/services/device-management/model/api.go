@@ -30,10 +30,16 @@ import (
 // hand exactly that tenant a LARGER cap than the operator granted it. There is no safe
 // number to invent, so the error travels and the caller decides.
 //
-// 🔴 AND THE CALLERS DECIDE DIFFERENTLY, WHICH IS THE POINT. Refusing to GROW a fence set
-// on an unresolvable cap is right; refusing to SHRINK or DELETE one needs no cap at all and
-// must not be blocked by it. See Api.geoFenceCaps, which resolves once per mutation before
-// the transaction opens and hands back an attempt rather than a number.
+// 🔴 AND THE CALLERS DECIDE DIFFERENTLY, WHICH IS THE POINT. Refusing to GROW a fence set on
+// an unresolvable cap is right; a DELETE needs no cap at all and must not be blocked by it.
+// See Api.geoFenceCaps, which resolves once per mutation before the transaction opens and
+// hands back an attempt rather than a number.
+//
+// 🔴 A SHRINK IS NOT IN THAT SECOND GROUP, AND THIS SENTENCE HAS NOW PUT IT THERE FOUR TIMES
+// ACROSS THIS ARC — INCLUDING ONCE IN THE COMMIT THAT CORRECTED IT ELSEWHERE. Shrinking one
+// of several identically-drawn fences UN-DEDUPLICATES them, which raises the whole-set total,
+// so a shrink can legitimately need a number and is blocked when none can be had. Only the
+// delete path is exempt, and it is exempt structurally (geoFenceCapsNotNeeded), not by rule.
 // 🔴 AN IMPLEMENTATION OWES THREE LIVE, POSITIVE NUMBERS ON THE SUCCESS PATH. Every field of
 // the returned GeoFenceCaps is used as a bound directly, with no folding and no clamp here —
 // governance.GeoFenceCaps already promises that ("there is no value at any level meaning

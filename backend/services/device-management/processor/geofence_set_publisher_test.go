@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	dcconfig "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -81,11 +82,15 @@ func manifestOf(version int32, n int) *model.GeoFenceSetManifest {
 // on a default deployment. Re-asserting an eighth would have failed a correct rewiring and
 // invited someone to "fix" it by looping the default again.
 func TestManifestFitsOneBrokerMessage(t *testing.T) {
-	// The broker's default per-message ceiling (infrastructure.nats.streamMaxMsgSize). It is
-	// deployment configuration rather than a Go constant, so it is named here as the default
-	// this reasoning was done against — a deployment that lowers it is what the publisher's
-	// startup warning and its failure counter exist for.
-	const defaultCeiling = 1 << 20
+	// The broker's default per-message ceiling. The DEPLOYED value is configuration
+	// (infrastructure.nats.streamMaxMsgSize) and a deployment that lowers it is what the
+	// publisher's startup warning and its failure counter exist for — but the DEFAULT is a Go
+	// constant, and this now reads it rather than restating it.
+	//
+	// 🔴 IT WAS A LITERAL 1<<20 UNDER A COMMENT SAYING "deployment configuration rather than a
+	// Go constant", which is the shape that lets a number drift: a false sentence justifying a
+	// copy. dcconfig.DefaultStreamMaxMsgSize is where it lives.
+	defaultCeiling := int(dcconfig.DefaultStreamMaxMsgSize)
 
 	// The floor is DERIVED, not chosen. One entry cannot encode to less than its token and its
 	// hash, so a full manifest cannot encode to less than this — which is what makes the floor

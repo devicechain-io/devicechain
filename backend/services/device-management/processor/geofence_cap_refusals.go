@@ -22,16 +22,20 @@ type GeoFenceCapRefusalCounter struct {
 	refusals *prometheus.CounterVec
 }
 
-// NewGeoFenceCapRefusalCounter wraps the counter vector. A nil vector makes every count a
-// no-op, so a test or a partly-wired service never has to guard the call.
+// NewGeoFenceCapRefusalCounter wraps the counter vector.
+//
+// It does NOT tolerate a nil vector, and the tolerance it used to advertise is why. "A nil
+// vector makes every count a no-op, so a partly-wired service never has to guard the call"
+// described no caller: main.go always passes a real vector, and the one reachable absence —
+// leaving Api.GeoFenceCapRefusals unset, which every unit test does — is already handled at
+// the single call site in refuseGeoFenceCap. A guard for a caller that does not exist is a
+// comment wearing an if-statement, and this one was worse than most: it invited a future
+// caller to depend on nil-vector semantics instead of simply not wiring the counter.
 func NewGeoFenceCapRefusalCounter(refusals *prometheus.CounterVec) *GeoFenceCapRefusalCounter {
 	return &GeoFenceCapRefusalCounter{refusals: refusals}
 }
 
 // CountGeoFenceCapRefusal records one authoring call refused by the named cap.
 func (c *GeoFenceCapRefusalCounter) CountGeoFenceCapRefusal(cap string) {
-	if c == nil || c.refusals == nil {
-		return
-	}
 	c.refusals.WithLabelValues(cap).Inc()
 }

@@ -46,37 +46,43 @@ const geometryChunkSize = dmmodel.MaxGeoFenceGeometryHashesPerRequest
 // runaway stop that fires on legitimate work is not a stop; it is an outage for whichever
 // tenant an operator packaged generously, surfacing as a geometry read that errors.
 //
-// 🔴 THE MULTIPLIER IS 3 BECAUSE THERE ARE TWO CONSUMERS, AND SIZING IT FOR ONE LEFT 1.9%
-// HEADROOM. Written out, with N = governance.MaxGeoFenceCeiling and c = geometryChunkSize:
+// 🔴 THE TWO CONSUMERS OF THIS BUDGET DO NOT ADD UP THE WAY THEY LOOK, AND GETTING THAT WRONG
+// ONCE ALREADY MOVED THIS CONSTANT IN THE WRONG DIRECTION. With N = governance.MaxGeoFenceCeiling
+// and c = geometryChunkSize:
 //
-//   - the SPLIT. A chunk refused and subdivided to leaves costs 2c-1 requests, so the whole
-//     set costs ceil(N/c) * (2c-1), which is strictly below 2N and approaches it from below.
-//     At today's constants that is 7,849 — under a 2N budget of 8,000 by 151 requests.
-//   - the LATE FETCH. rebuild's cache-fill callback re-fetches, one address at a time and
-//     through THIS SAME budget, any address its plan held as cached that was evicted before
-//     Get asked for it — deliberately, so a tenant whose working set exceeds the cache bound
-//     does not manufacture unresolvable fences forever. In the pathological case that is up
-//     to N more requests, and 2N cannot pay for it.
+//   - the SPLIT, over the M addresses `assemble` could not plan as cached. A chunk refused and
+//     subdivided to leaves costs 2c-1 requests, so this is
+//     floor(M/c)*(2c-1) + (2*(M mod c) - 1). At M = N that is 7,833.
+//   - the LATE FETCH, one request at a time through THIS SAME budget, for an address whose
+//     `Get` missed and which is not in `documents`.
 //
-// So 2N is the bound for the split ALONE, which is what made the margin look like slack when
-// it was really an unpriced second consumer. 3N covers both: the exact worst case is
-// 3N - ceil(N/c), so the budget clears it by ceil(N/c) — 167 requests today, 1.3%.
+// They are NOT simply additive, because an address reaches the late fetch for one of two
+// reasons and only one of them can also have been split-fetched:
 //
-// 🔴 THAT MARGIN IS THIN ON PURPOSE, AND WIDENING IT WOULD COST THE PROPERTY THAT MAKES IT
-// SAFE. Because the budget sits just above an EXACT bound, any change to geometryChunkSize, or
-// a third consumer of the budget, fails the test rather than quietly eating the cushion — which
-// is precisely how the 512 this replaced survived a 40x change in the fence ceiling. A budget
-// several times the worst case would absorb such a change in silence, and would also let a peer
-// making expensive progress spin for correspondingly longer before the stop fires.
+//   - it was planned as HELD, so it was never in the batch, and was evicted before Get asked.
+//     Those addresses partition with the split — an address is in `missing` or in `held`, never
+//     both — so split(M) + (N-M) is maximised at M = N and is just split(N) = 7,833.
+//   - it WAS in the batch and the archive answered without holding it. Only this case stacks on
+//     top of the split, and it is not a legitimate fetch: it means the archive is missing bodies
+//     its own manifest names. All N of them is the ceiling: 7,833 + 4,000 = 11,833.
 //
-// The relation is asserted rather than described: see
-// TestTheRequestBudgetSitsAboveTheLargestLegitimateFetch, which models both consumers and
-// carries a counterweight so an arbitrarily large budget fails too — a stop far above anything
-// reachable lets a peer making expensive progress spin for a long time before it fires.
+// 🔴 SO THE BUDGET IS A BAND, AND BOTH EDGES ARE LOAD-BEARING. It must sit ABOVE the legitimate
+// worst — a stop that fires on correct work is an outage for whichever tenant an operator
+// packaged generously — and BELOW the pathological one, or it never fires in the case it exists
+// for. 2N = 8,000 clears 7,833 by 167 and stops the 11,833 run at 8,000.
+//
+// 🔴 3N WAS TRIED AND IS WRONG, WHICH IS WHY THIS PARAGRAPH IS LONGER THAN THE CONSTANT. It was
+// reached by pricing the late fetch as if every address paid it ON TOP OF the split, missing
+// that the held ones were never in the split. The resulting 12,000 sits above BOTH numbers, so a
+// runaway archive spends 11,833 requests and completes — the stop is present, funded, and inert.
+// A budget too large does not fail safe here; it fails silently.
+//
+// TestTheRequestBudgetSitsAboveTheLargestLegitimateFetch asserts both edges, so neither a raised
+// fence ceiling nor a changed chunk size can move one without failing.
 //
 // It ERRORS rather than returning what it has: a short geometry set is indistinguishable
 // downstream from a tenant who really has that many fences.
-const maxGeometryRequests = governance.MaxGeoFenceCeiling * 3
+const maxGeometryRequests = governance.MaxGeoFenceCeiling * 2
 
 // geoFenceSetManifestQuery reads one version's manifest. It carries NO tenant argument: the
 // tenant travels as the service-token client's tenant header, and device-management's rows are

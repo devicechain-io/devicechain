@@ -22,8 +22,11 @@ import (
 // entire apparatus of broker-ceiling machinery — the pointer fact, the headroom subtraction,
 // the live max_payload clamp — so it must be re-derived from the constants it depends on
 // (governance.MaxGeoFenceCeiling, core.MaxTokenLen, the 64-character hash) every time it is
-// asked. Written as a literal it would keep answering 21,577 on the day somebody raised the
-// fence cap, and the machinery that would have caught the resulting oversized fact is gone.
+// asked. Written as a literal it would keep answering yesterday's number on the day somebody
+// raised the fence cap, and the machinery that would have caught the resulting oversized fact
+// is gone. That is not hypothetical: the figure this sentence used to quote was 21,577, from
+// when the loop ran to a hard-coded 100 fences, and it survived unchanged into a tree where the
+// real answer was forty times larger.
 //
 // 🔴 IT LOOPS THE PLATFORM MAXIMUM, NOT THE PLATFORM DEFAULT, AND FOR ONE MINT THOSE ARE 40x
 // APART. The fence count is a TIER setting: the default is 100 and the largest any tier may
@@ -33,7 +36,14 @@ import (
 // — so looping the default would measure a ~21.6 KB worst case for a deployment whose real
 // worst case is ~860 KB, and would keep the warning silent on exactly the deployments that
 // need it. Nothing ties the two constants together at compile time; this comment and
-// TestTheManifestWorstCaseIsMeasuredAtThePlatformMaximum are what hold it.
+// TestManifestFitsOneBrokerMessage (processor/geofence_set_publisher_test.go) are what hold it
+// — its derived floor is the leg that fails if this ever loops the default again.
+//
+// 🔴 THAT NAME WAS FICTIONAL UNTIL IT WAS CHECKED. This comment cited a
+// TestTheManifestWorstCaseIsMeasuredAtThePlatformMaximum that has never existed in this tree —
+// written in the same change that deleted an identical fiction from core/geo's e7_test.go, and
+// caught only by grepping every name a comment cites. A back-pointer nobody follows is worse
+// than none: it advertises protection that is not there.
 //
 // The token is spelled with a character the grammar admits and JSON never escapes, which is
 // the worst case rather than a convenient one: core.ValidateToken permits only letters,
