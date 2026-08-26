@@ -748,12 +748,14 @@ configuración.
 Sí cambia la base de datos, de forma aditiva: crea una tabla para las formas de las geocercas,
 añade tres columnas anulables al registro del inquilino y reescribe una sola vez, en su sitio, el
 historial de geocercas almacenado para adaptarlo al nuevo formato. No se elimina nada y no hay
-que recrear nada. Ese último paso es el que conviene conocer si ya utiliza geocercas: antes de
-que existiera, una instancia actualizada conservaba todas sus geocercas, pero el motor de
-detección ya no podía resolver las formas a las que apuntaban, así que las reglas de geocercas
-dejaban de coincidir hasta que alguien editaba una geocerca. La actualización ahora repara ese
-historial mientras se ejecuta. Se puede volver a ejecutar sin riesgo y no hace nada en una
-instancia que ya la haya aplicado.
+que recrear nada.
+
+Ese último paso es el que conviene conocer si ya utiliza geocercas. A partir de `v0.13.0` la
+forma de una geocerca se almacena una sola vez y se referencia por su contenido, en lugar de
+copiarse en cada versión de su conjunto de geocercas, y la actualización reescribe el historial
+que ya tiene para que lo referencie del mismo modo. Sus geocercas y su historial se conservan sin
+cambios; lo que cambia es cómo se almacenan. El paso se puede volver a ejecutar sin riesgo y no
+hace nada en una instancia que ya lo haya aplicado.
 
 Lo que cambia es que los dos límites de geocercas que antes eran fijos para todos — 512
 posiciones en una geocerca, 100 geocercas por inquilino — ahora son **ajustes de su plan**, junto
