@@ -40,17 +40,43 @@ const geometryChunkSize = dmmodel.MaxGeoFenceGeometryHashesPerRequest
 // It is a RUNAWAY STOP, not a second size limit, so it is sized well above anything reachable.
 //
 // 🔴 IT IS DERIVED FROM THE PLATFORM MAXIMUM FENCE COUNT, AND IT USED TO BE A LITERAL 512
-// JUSTIFIED BY A FENCE CEILING OF 100. That ceiling is now a tier setting: the worst
-// LEGITIMATE fetch is one distinct document per fence, and if every chunk is refused all the
-// way down it degenerates to one request per document — governance.MaxGeoFenceCeiling of them,
-// which is 4000 and would have blown straight through a 512-request stop. A runaway stop that
-// fires on a legitimate fetch is not a stop, it is an outage for whichever tenant an operator
-// packaged generously. Doubling leaves room for the chunks refused on the way down, which are
-// bounded by the split depth rather than by the document count.
+// JUSTIFIED BY A FENCE CEILING OF 100. That ceiling is now a tier setting, so the worst
+// LEGITIMATE fetch is one distinct document per fence at governance.MaxGeoFenceCeiling
+// fences — 4,000 of them, which would have blown straight through a 512-request stop. A
+// runaway stop that fires on legitimate work is not a stop; it is an outage for whichever
+// tenant an operator packaged generously, surfacing as a geometry read that errors.
+//
+// 🔴 THE MULTIPLIER IS 3 BECAUSE THERE ARE TWO CONSUMERS, AND SIZING IT FOR ONE LEFT 1.9%
+// HEADROOM. Written out, with N = governance.MaxGeoFenceCeiling and c = geometryChunkSize:
+//
+//   - the SPLIT. A chunk refused and subdivided to leaves costs 2c-1 requests, so the whole
+//     set costs ceil(N/c) * (2c-1), which is strictly below 2N and approaches it from below.
+//     At today's constants that is 7,849 — under a 2N budget of 8,000 by 151 requests.
+//   - the LATE FETCH. rebuild's cache-fill callback re-fetches, one address at a time and
+//     through THIS SAME budget, any address its plan held as cached that was evicted before
+//     Get asked for it — deliberately, so a tenant whose working set exceeds the cache bound
+//     does not manufacture unresolvable fences forever. In the pathological case that is up
+//     to N more requests, and 2N cannot pay for it.
+//
+// So 2N is the bound for the split ALONE, which is what made the margin look like slack when
+// it was really an unpriced second consumer. 3N covers both: the exact worst case is
+// 3N - ceil(N/c), so the budget clears it by ceil(N/c) — 167 requests today, 1.3%.
+//
+// 🔴 THAT MARGIN IS THIN ON PURPOSE, AND WIDENING IT WOULD COST THE PROPERTY THAT MAKES IT
+// SAFE. Because the budget sits just above an EXACT bound, any change to geometryChunkSize, or
+// a third consumer of the budget, fails the test rather than quietly eating the cushion — which
+// is precisely how the 512 this replaced survived a 40x change in the fence ceiling. A budget
+// several times the worst case would absorb such a change in silence, and would also let a peer
+// making expensive progress spin for correspondingly longer before the stop fires.
+//
+// The relation is asserted rather than described: see
+// TestTheRequestBudgetSitsAboveTheLargestLegitimateFetch, which models both consumers and
+// carries a counterweight so an arbitrarily large budget fails too — a stop far above anything
+// reachable lets a peer making expensive progress spin for a long time before it fires.
 //
 // It ERRORS rather than returning what it has: a short geometry set is indistinguishable
 // downstream from a tenant who really has that many fences.
-const maxGeometryRequests = governance.MaxGeoFenceCeiling * 2
+const maxGeometryRequests = governance.MaxGeoFenceCeiling * 3
 
 // geoFenceSetManifestQuery reads one version's manifest. It carries NO tenant argument: the
 // tenant travels as the service-token client's tenant header, and device-management's rows are

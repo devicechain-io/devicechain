@@ -14,6 +14,7 @@ import (
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
+	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -1010,4 +1011,61 @@ func TestAnEntryEvictedAfterThePlanIsRefetchedNotReportedAbsent(t *testing.T) {
 	if x.calls == 0 {
 		t.Fatal("no geometry was fetched")
 	}
+}
+
+// 🔴 THE REQUEST BUDGET MUST SIT ABOVE THE LARGEST *LEGITIMATE* FETCH, AND THIS IS THE ONLY
+// THING THAT SAYS SO. TestTheGeometryReadStopsAtItsRequestBudget cannot: its fixture is DERIVED
+// from maxGeometryRequests, so lowering the budget merely shrinks the fixture and it goes on
+// passing. Proven, not assumed — a mutant setting the budget to an eighth of its value survived
+// that test untouched, which is exactly the shape of the defect this slice fixed. A case written
+// in terms of a constant follows the constant and cannot catch it moving.
+//
+// So this asserts a RELATION between two constants that live in different modules, with a
+// literal cross-check on each side:
+//
+//	a fetch of every fence a tier may grant, with every chunk refused and split to leaves,
+//	costs chunks*(2*chunkSize-1) requests, and that must fit the budget.
+//
+// A runaway stop below what an operator may legitimately package is not a stop; it is an
+// outage for whichever tenant they were generous to, reported as a geometry read that errors.
+func TestTheRequestBudgetSitsAboveTheLargestLegitimateFetch(t *testing.T) {
+	// The worst LEGITIMATE fetch: one distinct geometry per fence, at the most fences any
+	// tier may grant. Nothing about a real tenant exceeds this.
+	documents := governance.MaxGeoFenceCeiling
+	chunks := (documents + geometryChunkSize - 1) / geometryChunkSize
+	// Consumer one, the SPLIT. Each chunk, refused and split all the way down, costs every
+	// leaf plus every refused interior node of a binary split: 2*size-1.
+	split := chunks * (2*geometryChunkSize - 1)
+	// 🔴 CONSUMER TWO, THE LATE FETCH, AND LEAVING IT OUT IS WHAT MADE A 2x BUDGET LOOK
+	// SUFFICIENT. rebuild's cache-fill callback re-fetches, one address at a time and through
+	// this same budget, any address its plan held as cached that was evicted before Get asked
+	// for it. In the pathological case — a tenant whose working set exceeds the cache bound —
+	// that is one more request per document. A budget priced for the split alone had 1.9%
+	// headroom and no room at all for this.
+	worst := split + documents
+
+	if worst > maxGeometryRequests {
+		t.Fatalf("a legitimate fetch of %d geometry documents costs up to %d requests against a "+
+			"budget of %d. A tenant whose tier grants the maximum fence count would have its "+
+			"geometry read ABORTED by the runaway stop — a stop that fires on correct work is an "+
+			"outage, not a defence. The budget derives from governance.MaxGeoFenceCeiling for "+
+			"exactly this reason; check that it still does",
+			documents, worst, maxGeometryRequests)
+	}
+
+	// 🔴 THE COUNTERWEIGHT, AND IT IS THE HALF THAT ACTUALLY BITES. Without it a budget of
+	// MaxInt would satisfy the check above while being no stop at all. The budget must stay
+	// within a small multiple of the worst legitimate fetch, so that a peer making expensive
+	// progress is still cut off in bounded time.
+	const slack = 4
+	if maxGeometryRequests > slack*worst {
+		t.Fatalf("the budget is %d against a worst legitimate fetch of %d — more than %dx. A stop "+
+			"that far above anything reachable lets a peer making expensive progress spin for a "+
+			"long time before it fires", maxGeometryRequests, worst, slack)
+	}
+
+	t.Logf("worst legitimate fetch of %d documents: %d requests splitting %d chunks + %d late "+
+		"re-fetches = %d, against a budget of %d (%.1f%% headroom)", documents, split, chunks,
+		documents, worst, maxGeometryRequests,
+		100*float64(maxGeometryRequests-worst)/float64(maxGeometryRequests))
 }
