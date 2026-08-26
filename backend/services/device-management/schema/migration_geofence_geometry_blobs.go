@@ -79,12 +79,19 @@ type geoFenceGeometryBlob struct {
 // is absent and adds only missing columns, and CREATE UNIQUE INDEX is emitted with IF
 // NOT EXISTS. Nothing here depends on a statement before it.
 //
-// # No backfill, and none is possible to want
+// # The backfill this migration said was unnecessary — see NewGeoFenceSnapshotBackfill
 //
-// Pre-GA, an existing instance is recreated rather than migrated (see migrations.go), so
-// there are no historical snapshots to rewrite. Deliberately worth stating because
-// migration-diff compares pg_dump --schema-only and CANNOT see rows: a migration that
-// backfills nothing and one that backfills wrongly look identical to it.
+// 🔴 THIS SECTION USED TO SAY NO BACKFILL WAS POSSIBLE TO WANT, because pre-GA an existing
+// instance is recreated rather than migrated. That reasoning is true of a BASELINE and false
+// of an APPENDED migration, which is what this one is: v0.11.0 and v0.12.0 were each reached
+// with `helm upgrade` and the published upgrade guide promises it. So there ARE historical
+// snapshots, they inline their geometry, and decoding one into the reference form yields an
+// EMPTY hash that no document can be archived under — which kills geofence evaluation on an
+// upgraded instance until somebody edits a fence. NewGeoFenceSnapshotBackfill rewrites them.
+//
+// Worth stating twice over because migration-diff compares pg_dump --schema-only and CANNOT
+// see rows: a migration that backfills nothing and one that backfills wrongly look identical
+// to it, and so did this table with every historical snapshot still pointing nowhere.
 //
 // # Tenant purge
 //

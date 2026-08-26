@@ -742,8 +742,18 @@ Vale la pena conocer dos correcciones:
 
 ### v0.13.0 — los límites de geocercas pasan a formar parte de su plan {#v0130-upgrade}
 
-`v0.13.0` es un `helm upgrade` normal. No añade **ninguna migración**, así que la base de datos
-queda intacta, y no cambia ningún tema, permiso ni clave de configuración.
+`v0.13.0` es un `helm upgrade` normal, y no cambia ningún tema, permiso ni clave de
+configuración.
+
+Sí cambia la base de datos, de forma aditiva: crea una tabla para las formas de las geocercas,
+añade tres columnas anulables al registro del inquilino y reescribe una sola vez, en su sitio, el
+historial de geocercas almacenado para adaptarlo al nuevo formato. No se elimina nada y no hay
+que recrear nada. Ese último paso es el que conviene conocer si ya utiliza geocercas: antes de
+que existiera, una instancia actualizada conservaba todas sus geocercas, pero el motor de
+detección ya no podía resolver las formas a las que apuntaban, así que las reglas de geocercas
+dejaban de coincidir hasta que alguien editaba una geocerca. La actualización ahora repara ese
+historial mientras se ejecuta. Se puede volver a ejecutar sin riesgo y no hace nada en una
+instancia que ya la haya aplicado.
 
 Lo que cambia es que los dos límites de geocercas que antes eran fijos para todos — 512
 posiciones en una geocerca, 100 geocercas por inquilino — ahora son **ajustes de su plan**, junto
