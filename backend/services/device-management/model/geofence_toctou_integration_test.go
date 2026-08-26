@@ -53,6 +53,26 @@ func itEnv(key, fallback string) string {
 // looked like a code defect and was a harness defect.
 func newPostgresGeoFenceApi(t *testing.T) *Api {
 	t.Helper()
+	mgr := newPostgresRdbManager(t)
+
+	// Start from empty every run. The instance id is fixed, so a server that has run this
+	// before still holds its rows, and a fence token collides on the second run — which would
+	// fail as though the code had regressed.
+	sys := mgr.Database.WithContext(core.WithSystemContext(context.Background()))
+	for _, table := range []string{"geo_fence_set_versions", "geo_fence_geometry_blobs", "geo_fences"} {
+		if err := sys.Exec(fmt.Sprintf(`TRUNCATE TABLE "device-management".%q CASCADE`, table)).Error; err != nil {
+			t.Fatalf("truncate %s before the run: %v", table, err)
+		}
+	}
+	return NewApi(mgr)
+}
+
+// newPostgresRdbManager runs the migration chain and hands back the manager, TRUNCATING
+// NOTHING. Split out of newPostgresGeoFenceApi for the backfill tests, which have to seed rows
+// and then run the chain OVER them — the one thing a helper that empties the tables first
+// cannot be used for.
+func newPostgresRdbManager(t *testing.T) *rdb.RdbManager {
+	t.Helper()
 	port, err := strconv.Atoi(itEnv("DC_IT_PGPORT", "5432"))
 	if err != nil {
 		t.Fatalf("DC_IT_PGPORT must be numeric: %v", err)
@@ -82,17 +102,7 @@ func newPostgresGeoFenceApi(t *testing.T) *Api {
 			_ = sqldb.Close()
 		}
 	})
-
-	// Start from empty every run. The instance id is fixed, so a server that has run this
-	// before still holds its rows, and a fence token collides on the second run — which would
-	// fail as though the code had regressed.
-	sys := mgr.Database.WithContext(core.WithSystemContext(context.Background()))
-	for _, table := range []string{"geo_fence_set_versions", "geo_fence_geometry_blobs", "geo_fences"} {
-		if err := sys.Exec(fmt.Sprintf(`TRUNCATE TABLE "device-management".%q CASCADE`, table)).Error; err != nil {
-			t.Fatalf("truncate %s before the run: %v", table, err)
-		}
-	}
-	return NewApi(mgr)
+	return mgr
 }
 
 // waitForBlockedBackend polls until at least one backend in this database is waiting on a lock.
