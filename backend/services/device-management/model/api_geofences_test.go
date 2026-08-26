@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -439,9 +440,10 @@ func TestGeoFenceVertexBound(t *testing.T) {
 	// AT the limit: accepted. This is what stops the rejections below from being
 	// satisfied by a validator that says no to everything.
 	if _, err := api.CreateGeoFence(ctx, &GeoFenceCreateRequest{
-		Token: "at-limit", Geometry: ring(MaxGeoFenceVertices),
+		Token: "at-limit", Geometry: ring(governance.DefaultGeoFencePositionCeiling),
 	}); err != nil {
-		t.Fatalf("a fence at exactly the %d-position limit was rejected: %v", MaxGeoFenceVertices, err)
+		t.Fatalf("a fence at exactly the %d-position limit was rejected: %v",
+			governance.DefaultGeoFencePositionCeiling, err)
 	}
 	// A small, ordinary fence: also accepted.
 	if _, err := api.CreateGeoFence(ctx, &GeoFenceCreateRequest{
@@ -452,18 +454,18 @@ func TestGeoFenceVertexBound(t *testing.T) {
 
 	// ONE over the limit: refused on create.
 	if _, err := api.CreateGeoFence(ctx, &GeoFenceCreateRequest{
-		Token: "over-limit", Geometry: ring(MaxGeoFenceVertices + 1),
+		Token: "over-limit", Geometry: ring(governance.DefaultGeoFencePositionCeiling + 1),
 	}); err == nil {
 		t.Errorf("a fence with %d positions was accepted; the limit is %d",
-			MaxGeoFenceVertices+1, MaxGeoFenceVertices)
+			governance.DefaultGeoFencePositionCeiling+1, governance.DefaultGeoFencePositionCeiling)
 	}
 	// And refused on update, so the bound cannot be walked around by editing a legal
 	// fence into an illegal one.
 	if _, err := api.UpdateGeoFence(ctx, "ordinary", &GeoFenceCreateRequest{
-		Token: "ordinary", Geometry: ring(MaxGeoFenceVertices + 1),
+		Token: "ordinary", Geometry: ring(governance.DefaultGeoFencePositionCeiling + 1),
 	}); err == nil {
 		t.Errorf("an update to %d positions was accepted; the limit is %d",
-			MaxGeoFenceVertices+1, MaxGeoFenceVertices)
+			governance.DefaultGeoFencePositionCeiling+1, governance.DefaultGeoFencePositionCeiling)
 	}
 	// The over-limit update must not have landed.
 	after, err := api.GeoFencesByToken(ctx, []string{"ordinary"})
@@ -492,7 +494,7 @@ func TestGeoFenceVertexBound(t *testing.T) {
 // check runs first names itself in the failure.
 func TestPositionBudgetIsEnforcedBeforeTheCrossingScan(t *testing.T) {
 	// A zigzag whose closing edge crosses it — self-intersecting AND over-limit.
-	n := MaxGeoFenceVertices + 10
+	n := governance.MaxGeoFencePositionCeiling + 10
 	coords := make([]float64, 0, n*2)
 	for i := 0; i < n-1; i++ {
 		coords = append(coords, -84.0+float64(i)*1e-5, 33.0+float64(i%2)*1e-3)
@@ -503,8 +505,8 @@ func TestPositionBudgetIsEnforcedBeforeTheCrossingScan(t *testing.T) {
 	if err == nil {
 		t.Fatal("an over-limit, self-intersecting ring was accepted")
 	}
-	if !strings.Contains(err.Error(), "the limit is") {
-		t.Errorf("the crossing scan ran before the position budget: %v", err)
+	if !strings.Contains(err.Error(), "no tenant may exceed") {
+		t.Errorf("the crossing scan ran before the position count: %v", err)
 	}
 	if strings.Contains(err.Error(), "self-intersecting") {
 		t.Errorf("refused by the quadratic scan rather than the cheap count: %v", err)
@@ -516,17 +518,18 @@ func TestGeoFencesPerTenantBound(t *testing.T) {
 	acme := core.WithTenant(context.Background(), "acme")
 	other := core.WithTenant(context.Background(), "globex")
 
-	for i := 0; i < MaxGeoFencesPerTenant; i++ {
+	for i := 0; i < governance.DefaultGeoFenceCeiling; i++ {
 		if _, err := api.CreateGeoFence(acme, &GeoFenceCreateRequest{
 			Token: fmt.Sprintf("fence-%d", i), Geometry: yardGeometry,
 		}); err != nil {
-			t.Fatalf("fence %d of %d rejected below the limit: %v", i+1, MaxGeoFencesPerTenant, err)
+			t.Fatalf("fence %d of %d rejected below the limit: %v", i+1, governance.DefaultGeoFenceCeiling, err)
 		}
 	}
 	if _, err := api.CreateGeoFence(acme, &GeoFenceCreateRequest{
 		Token: "one-too-many", Geometry: yardGeometry,
 	}); err == nil {
-		t.Errorf("fence %d was accepted; the limit is %d", MaxGeoFencesPerTenant+1, MaxGeoFencesPerTenant)
+		t.Errorf("fence %d was accepted; the limit is %d",
+			governance.DefaultGeoFenceCeiling+1, governance.DefaultGeoFenceCeiling)
 	}
 	// The bound is per tenant, not global.
 	if _, err := api.CreateGeoFence(other, &GeoFenceCreateRequest{

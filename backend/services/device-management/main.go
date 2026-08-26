@@ -236,6 +236,50 @@ func wireDetectionRuleValidator() {
 	log.Info().Str("eventProcessing", url).Msg("Device profile publish will validate detection rules against event-processing (ADR-051 slice 4b).")
 }
 
+// wireGeoFenceCapsResolver injects the PER-TENANT geofence caps onto the shared Api: an
+// operator's override, resolving to the tenant's tier, resolving to the platform default
+// (ADR-023 governance, packaged per ADR-065). Three caps travel together because a fence
+// set has three independent costs — one fence's compile, the manifest's size on the wire,
+// and the whole set's footprint in a geometry cache every tenant shares.
+//
+// 🔑 A NIL RESOLVER IS SAFE, NOT DISABLED, AND THAT IS WHY THE WARNING BELOW SAYS WHICH
+// NUMBERS ARE IN FORCE RATHER THAN THAT SOMETHING IS OFF. Api.geoFenceCaps answers the
+// platform defaults when nothing is wired, which are exactly the numbers this service
+// enforced as hard constants before the caps became tier-driven — so an instance with no
+// user-management coordinate meters every tenant the way the previous release did, rather
+// than not at all. The direction a governance limit must fail.
+//
+// Guarded on the same two coordinates as wireDetectionRuleValidator, and for the same
+// reason: a config document predating this feature carries no usable user-management block,
+// and building http://:0/graphql would make every fence mutation pay a doomed round trip.
+//
+// 🔴 THE SCOPE IS tenant:read, NOT device:read. wireDetectionRuleValidator builds a client
+// with device:read because it talks to EVENT-PROCESSING; this one reads user-management's
+// tenantGovernance, which is the same door command-delivery reads its held-command ceiling
+// through and gates on the same scope.
+func wireGeoFenceCapsResolver() {
+	caps := governance.DefaultGeoFenceCaps()
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.ServiceAuth.Secret == "" {
+		log.Warn().Int("geoFencePositionCeiling", caps.PositionCeiling).
+			Int("geoFenceCeiling", caps.FenceCeiling).Int("geoFencePositionBudget", caps.PositionBudget).
+			Msg("Service secret not configured — per-tenant geofence caps are disabled; metering every tenant at the platform defaults.")
+		return
+	}
+	if infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+		log.Warn().Int("geoFencePositionCeiling", caps.PositionCeiling).
+			Int("geoFenceCeiling", caps.FenceCeiling).Int("geoFencePositionBudget", caps.PositionBudget).
+			Msg("user-management endpoint not configured (infrastructure.userManagement) — per-tenant geofence caps are disabled; metering every tenant at the platform defaults.")
+		return
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "device-management",
+		[]string{string(auth.TenantRead)})
+	url := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+	Api.GeoFenceCapsResolver = governance.NewGeoFenceCapsResolver(client, url)
+	log.Info().Str("userManagement", url).
+		Msg("Per-tenant geofence caps enabled (override, else tier, else the platform default).")
+}
+
 // Called after microservice has been initialized.
 func afterMicroserviceInitialized(ctx context.Context) error {
 	// Parse configuration.
@@ -292,6 +336,16 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// Wire the detection-rule validator (ADR-044 sync gate) so profile publish compiles
 	// its draft rules against event-processing and fails closed on an uncompilable one.
 	wireDetectionRuleValidator()
+
+	// Wire the per-tenant geofence caps and the counter that reports their refusals. The
+	// counter is set unconditionally, unlike the resolver: with no resolver the platform
+	// defaults are still enforced, so refusals still happen and still need reporting.
+	wireGeoFenceCapsResolver()
+	Api.GeoFenceCapRefusals = processor.NewGeoFenceCapRefusalCounter(
+		Microservice.NewCounterVec(
+			"geofence_cap_refusals_total",
+			"Geofence authoring calls refused by a tenant's governance cap, labelled by which cap refused (ADR-023). A sustained non-zero rate on `cap=\"geoFencePositionCeiling\"` or `cap=\"geoFenceCeiling\"` means a tenant is authoring against a packaging limit; on `cap=\"geoFencePositionBudget\"` it means a tenant's whole fence set is at its share of the shared detection geometry cache. Raise the tenant's tier, or its per-tenant override, to clear it. Deliberately NOT labelled by tenant — that would be unbounded cardinality on a multi-tenant instance; the API error names the tenant's own numbers.",
+			[]string{"cap"}))
 
 	// Map of providers that will be injected into graphql http context. The NATS
 	// manager backs the live alarm subscription resolver (SubscribeLive, ADR-037); it

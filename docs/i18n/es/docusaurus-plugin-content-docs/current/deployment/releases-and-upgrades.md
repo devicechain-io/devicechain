@@ -740,6 +740,40 @@ Vale la pena conocer dos correcciones:
   y se nota sobre todo en flotas grandes y en los momentos justo después de que una fuente de
   presencia devuelva sus dispositivos.
 
+### v0.13.0 — los límites de geocercas pasan a formar parte de su plan {#v0130-upgrade}
+
+`v0.13.0` es un `helm upgrade` normal. No añade **ninguna migración**, así que la base de datos
+queda intacta, y no cambia ningún tema, permiso ni clave de configuración.
+
+Lo que cambia es que los dos límites de geocercas que antes eran fijos para todos — 512
+posiciones en una geocerca, 100 geocercas por inquilino — ahora son **ajustes de su plan**, junto
+a un tercero: un límite sobre el total de posiciones de todo su conjunto de geocercas. Los tres
+conservan sus valores anteriores de forma predeterminada, así que **un inquilino al que nunca se
+le hayan cambiado queda medido exactamente donde estaba** y no tiene que hacer nada.
+
+Dos cosas que conviene saber antes de actualizar:
+
+- **El límite del conjunto completo es nuevo, y su valor predeterminado es el que los otros dos
+  ya implicaban**: 51.200 posiciones, que son 100 geocercas de 512. Así que un inquilino que use
+  geocercas exactamente hasta los límites documentados queda *en* el nuevo límite, nunca por
+  encima. El total cuenta formas **distintas**, así que dos geocercas dibujadas de forma
+  idéntica cuestan una.
+- **Un cambio solo se rechaza cuando hace un número mayor.** Si más adelante un operador baja
+  uno de sus límites por debajo de lo que ya tiene, conserva todas sus geocercas. Reducir una
+  geocerca, editar su nombre o su descripción, y eliminar una geocerca siguen funcionando: la
+  comprobación es sobre el crecimiento, no sobre el tamaño. Esto es lo que evita que un cambio
+  de plan deje varadas geocercas que eran válidas cuando se dibujaron.
+
+Una consecuencia que hay que prever: como eliminar una geocerca baja el total almacenado, un
+inquilino que esté por encima de un límite y elimine una geocerca no podrá volver a crearla.
+Para mover una geocerca a otro token, **cree primero la nueva y elimine después la antigua**, lo
+que requiere un hueco libre de geocerca durante el momento en que ambas existen.
+
+Los operadores que empaqueten planes deben saber que estos tienen topes reales, porque dos de los
+tres se gastan en recursos que comparten todos los inquilinos de la instancia. Los rechazos
+nombran tanto el número como el ajuste que hay que subir, y una métrica
+`geofence_cap_refusals_total` los cuenta según qué límite rechazó.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

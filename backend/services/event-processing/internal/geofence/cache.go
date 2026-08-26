@@ -53,8 +53,12 @@ import (
 // does buy is the property an entry count cannot: cost is monotone in it, and containment work is
 // O(vertices) too, so one number bounds both the memory and the per-event work.
 //
-// 250,000 is sized from the authoring caps it has to sit above, and it is DERIVED FROM THEM rather
-// than chosen beside them. Those caps are now per-tenant governance settings on the ADR-065 cascade,
+// It is sized from the authoring caps it has to sit above, and it is DERIVED FROM THEM rather
+// than chosen beside them — deliberately with no figure written here, because a number in prose
+// stops being re-derivable the moment a cap moves, and one already has: the default fence-set
+// budget became the product of the other two defaults (a tenant must be able to reach every
+// default it is metered at), which moved this bound from 250,000 to 256,000 without a line in
+// this file changing. Those caps are now per-tenant governance settings on the ADR-065 cascade,
 // so the sentence this comment used to make — "this holds several tenants at that absolute ceiling
 // simultaneously" — was a claim about two numbers that no longer moved together, in a file that
 // could not see one of them. Writing it as an expression makes the relation hold by construction:

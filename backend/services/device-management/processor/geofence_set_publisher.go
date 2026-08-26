@@ -28,8 +28,8 @@ import (
 //
 // 🔴 THIS FILE USED TO BE MOSTLY SIZE MACHINERY, AND UNDERSTANDING WHAT DELETED IT MATTERS
 // MORE THAN THE CODE THAT REMAINS. The fact it published carried the whole frozen fence set,
-// so a tenant at the documented authoring ceiling — model.MaxGeoFencesPerTenant fences of
-// model.MaxGeoFenceVertices positions — marshalled to more than the broker's per-message
+// so a tenant at the documented authoring ceiling — a full fence set of maximum-size fences —
+// marshalled to more than the broker's per-message
 // limit, and every one of that tenant's fence edits produced a publish the broker refused, a
 // log line nobody was reading, and a mutation that returned 200. Downstream, containment
 // reported a counted eval error for that tenant on every location event, indefinitely. The

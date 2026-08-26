@@ -14,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	dcconfig "github.com/devicechain-io/dc-microservice/config"
 	dccore "github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"gorm.io/datatypes"
@@ -22,7 +23,8 @@ import (
 // 🔴 THE FINDING THIS FILE EXISTS FOR: THE FENCE SET'S SIZE IS NOT A FUNCTION OF ITS FENCE
 // COUNT OR ITS VERTEX COUNT.
 //
-// device-management admits MaxGeoFencesPerTenant fences of MaxGeoFenceVertices positions, and
+// device-management admits a default tenant geoFenceCeiling fences of geoFencePositionCeiling
+// positions each, and
 // it is tempting to read "100 × 512" as a size. It is not one. validatePolygon2D checks that a
 // position has ordinates in the WGS84 ranges — not how long a coordinate's decimal expansion
 // is. So the same 100 × 512 set that measures ~670 KB at two decimal places measures ~1.4 MB at
@@ -59,9 +61,9 @@ func TestHighPrecisionFenceSetStillResolvesWhole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a high-precision fence set would not resolve: %v", err)
 	}
-	if set.Len() != dmmodel.MaxGeoFencesPerTenant {
+	if set.Len() != governance.DefaultGeoFenceCeiling {
 		t.Fatalf("the high-precision set resolved to %d fences, want %d",
-			set.Len(), dmmodel.MaxGeoFencesPerTenant)
+			set.Len(), governance.DefaultGeoFenceCeiling)
 	}
 
 	st := src.stats()

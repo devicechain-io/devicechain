@@ -12,6 +12,7 @@ import (
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
+	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/rs/zerolog/log"
 )
@@ -36,11 +37,20 @@ const geometryChunkSize = dmmodel.MaxGeoFenceGeometryHashesPerRequest
 // every chunk and every split retry, so a peer that keeps refusing cannot spin this goroutine
 // forever.
 //
-// It is a RUNAWAY STOP, not a second size limit, so it is sized well above anything reachable:
-// the worst legitimate fetch is MaxGeoFencesPerTenant distinct documents at a chunk size of
-// one, i.e. 100 requests, plus the few spent on chunks refused on the way down. 512 leaves
-// that room several times over, and it ERRORS rather than returning what it has.
-const maxGeometryRequests = 512
+// It is a RUNAWAY STOP, not a second size limit, so it is sized well above anything reachable.
+//
+// 🔴 IT IS DERIVED FROM THE PLATFORM MAXIMUM FENCE COUNT, AND IT USED TO BE A LITERAL 512
+// JUSTIFIED BY A FENCE CEILING OF 100. That ceiling is now a tier setting: the worst
+// LEGITIMATE fetch is one distinct document per fence, and if every chunk is refused all the
+// way down it degenerates to one request per document — governance.MaxGeoFenceCeiling of them,
+// which is 4000 and would have blown straight through a 512-request stop. A runaway stop that
+// fires on a legitimate fetch is not a stop, it is an outage for whichever tenant an operator
+// packaged generously. Doubling leaves room for the chunks refused on the way down, which are
+// bounded by the split depth rather than by the document count.
+//
+// It ERRORS rather than returning what it has: a short geometry set is indistinguishable
+// downstream from a tenant who really has that many fences.
+const maxGeometryRequests = governance.MaxGeoFenceCeiling * 2
 
 // geoFenceSetManifestQuery reads one version's manifest. It carries NO tenant argument: the
 // tenant travels as the service-token client's tenant header, and device-management's rows are

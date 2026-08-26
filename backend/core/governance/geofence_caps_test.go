@@ -438,9 +438,67 @@ func TestTheTenantGeometryBudgetIsHalfAShareOfSomething(t *testing.T) {
 			"fifth of the geometry cache and the maximum is half of it. Re-derive both, and "+
 			"event-processing's DefaultMaxCachedVertices with them", got, want)
 	}
-	if 2*MaxTenantGeometryPositions != 250_000 {
-		t.Errorf("the implied geometry cache is %d vertices, not the 250,000 event-processing is built "+
-			"around — DefaultMaxCachedVertices derives from MaxTenantGeometryPositions, so this "+
+	// A deliberate speed bump: the cache size written out, so a change to either constant
+	// that moves it has to be acknowledged here rather than absorbed silently. It moved once
+	// already — from 250,000 when the default budget was a round 50,000, to 256,000 when the
+	// default became the product of the other two defaults. That change was correct and this
+	// line is what made it visible.
+	if 2*MaxTenantGeometryPositions != 256_000 {
+		t.Errorf("the implied geometry cache is %d vertices, not the 256,000 event-processing is built "+
+			"around — DefaultMaxCachedVertices derives from DefaultTenantGeometryPositions, so this "+
 			"is a change to the cache", 2*MaxTenantGeometryPositions)
+	}
+}
+
+// 🔴 A TENANT METERED AT EVERY DEFAULT MUST BE ABLE TO REACH EVERY DEFAULT, AND FOR ONE
+// RELEASE IT COULD NOT. The three defaults are independent numbers describing one fence set,
+// so they can contradict each other: with a budget of 50,000, a tenant holding the default
+// 100 fences at the default 512 positions needed 51,200 and was refused at fence 98 — by a
+// cap it had never been told about, having stayed inside both caps it had. Nothing failed
+// until enforcement landed, and then three unrelated fixtures in event-processing stopped
+// dead at once.
+//
+// The budget is now the PRODUCT of the other two, so this holds by construction. The test
+// stays because "by construction" is a property of today's expression: someone rounding the
+// budget to a nicer number would reintroduce exactly the same defect, and this is the only
+// thing that would say so.
+func TestATenantAtEveryDefaultCanReachEveryDefault(t *testing.T) {
+	full := DefaultGeoFenceCeiling * DefaultGeoFencePositionCeiling
+	if DefaultTenantGeometryPositions < full {
+		t.Errorf("a tenant at the default fence ceiling (%d) and the default position ceiling (%d) "+
+			"needs %d positions, but the default budget is %d — such a tenant is refused partway "+
+			"through authoring the set both other defaults say it may hold",
+			DefaultGeoFenceCeiling, DefaultGeoFencePositionCeiling, full, DefaultTenantGeometryPositions)
+	}
+
+	// The counterweight: it must not be loose either. A budget far above the product would be
+	// a bound that never binds for a default tenant, which is a different way of not meaning
+	// anything — and would break the "five default sets fit the cache" arithmetic above.
+	if DefaultTenantGeometryPositions > full {
+		t.Errorf("the default budget is %d, above the %d a full default fence set needs; the budget "+
+			"is meant to be exactly what the other two defaults imply, and the cache is sized as a "+
+			"multiple of it", DefaultTenantGeometryPositions, full)
+	}
+}
+
+// The maximum caps must be consistent the same way, and they are NOT required to be — this
+// asserts the opposite of the test above, on purpose.
+//
+// 🔴 A TENANT AT THE MAXIMUM FENCE COUNT AND THE MAXIMUM POSITION CEILING IS FAR OVER THE
+// MAXIMUM BUDGET (4,000 x 1,024 = 4,096,000 against 128,000), AND THAT IS CORRECT. The three
+// maxima bound three different resources and an operator does not get to max all three at
+// once: the budget is a share of a cache every tenant on the instance draws from, so it is the
+// binding constraint, and the other two maxima say what shape a tenant may spend that budget
+// in — 4,000 small fences, or 125 large ones, not both. Writing this down because the
+// symmetry with the defaults is inviting and following it would multiply the shared cache by
+// thirty-two.
+func TestTheMaximumCapsAreDeliberatelyNotMutuallyReachable(t *testing.T) {
+	if MaxGeoFenceCeiling*MaxGeoFencePositionCeiling <= MaxTenantGeometryPositions {
+		t.Errorf("the maximum fence count (%d) times the maximum position ceiling (%d) is %d, which "+
+			"the maximum budget (%d) now covers. Either the budget was raised by a factor nobody "+
+			"priced against the shared geometry cache, or the other two maxima were lowered — check "+
+			"which, because the budget being the binding constraint is what keeps one tenant from "+
+			"evicting every other", MaxGeoFenceCeiling, MaxGeoFencePositionCeiling,
+			MaxGeoFenceCeiling*MaxGeoFencePositionCeiling, MaxTenantGeometryPositions)
 	}
 }

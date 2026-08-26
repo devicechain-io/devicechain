@@ -5,6 +5,7 @@ package geo
 
 import (
 	"encoding/binary"
+	"github.com/devicechain-io/dc-microservice/governance"
 	"math"
 	"testing"
 )
@@ -49,36 +50,64 @@ func TestPackedSizeIsAFunctionOfPositionCountAlone(t *testing.T) {
 	}
 }
 
-// TestCeilingFenceSetFitsOneMessage is the whole reason for the change: at the registry's
-// documented ceiling the fence set has to fit inside the 1 MiB budget both delivery seams
-// have, so the pointer fact and the paged read can be deleted rather than maintained.
+// TestCeilingFenceSetFitsOneMessage measures whether a whole fence set at the platform's
+// ceilings fits inside the 1 MiB budget both delivery seams have, packed rather than as text.
 //
-// 🔴 The numbers here are MaxGeoFenceVertices and MaxGeoFencesPerTenant from
-// device-management, restated rather than imported: core must not depend on a service. If
-// that service raises either limit, this test keeps passing while the claim it encodes
-// stops being true — so the constants there carry a pointer back to this test.
-func TestCeilingFenceSetFitsOneMessage(t *testing.T) {
+// 🔴 IT NO LONGER JUSTIFIES ANYTHING, AND SAYING SO IS THE POINT OF THIS PARAGRAPH. It was
+// written as the argument for a packed encoding: fit the whole set in one message and the
+// pointer fact and the paged read could be deleted. Both ARE deleted, and not by this — the
+// unit of delivery changed from the SET to the FENCE, so the announcement carries {token, hash}
+// pairs and the geometry bodies travel separately under a per-fence byte bound. A fence set's
+// total size stopped being anything a delivery seam has to survive. Nothing outside this
+// package calls the E7 encoder today.
+//
+// 🔴 AND ITS PREVIOUS COMMENT DESCRIBED A ROT-PROTECTION THAT DID NOT EXIST. It restated 512
+// and 100 as literals and said "the constants there carry a pointer back to this test" —
+// grepped, in both directions, zero hits, and none before either. Those constants have since
+// become TIER SETTINGS, which is exactly the change the fictional pointer was there to catch,
+// and it caught nothing. The numbers are now read from core/governance, which is where they
+// really live and which core may depend on.
+//
+// 🔴 SO THE ASSERTION IS INVERTED FROM WHAT THIS TEST USED TO MAKE, AND THE INVERSION IS THE
+// FINDING. Written against a hard-coded 512 x 100 it showed a packed set fitting one message,
+// and read as "the encoding solved the aggregate problem". Re-derived against the ceilings a
+// tier may actually grant, the packed set is over FORTY times the budget. It was never a
+// solution to the aggregate; it was a constant factor against a product constraint, and the
+// caps moving is what makes that visible. What this now pins is the reason the unit of
+// delivery is the FENCE: at the platform maxima no encoding makes a whole set fit one message,
+// so a design proposing to send one would be refused here rather than in production.
+//
+// The ceilings used are the platform MAXIMA, not the defaults: what one message must survive
+// is what the most generous tier may grant, not what an unconfigured tenant gets.
+func TestNoEncodingMakesAWholeFenceSetFitOneMessage(t *testing.T) {
+	const budget = 1 << 20
 	const (
-		vertices = 512
-		fences   = 100
-		budget   = 1 << 20
+		vertices = governance.MaxGeoFencePositionCeiling
+		fences   = governance.MaxGeoFenceCeiling
 	)
 	blob, err := EncodeRings([][][]float64{circle(vertices, -122.42, 37.77, 0.01)})
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	// What actually travels is the base64 text inside the JSON envelope.
+	// What would actually travel is the base64 text inside the JSON envelope.
 	perFence := Base64Size(len(blob))
-	if got := perFence * fences; got >= budget {
-		t.Fatalf("ceiling set is %d bytes of coordinates against a %d budget", got, budget)
+	packed := perFence * fences
+	if packed < budget {
+		t.Fatalf("a whole fence set at the platform maxima packs into %d bytes, inside the %d-byte "+
+			"budget. That would make whole-set delivery viable again — which the per-fence design "+
+			"is built on the impossibility of. Re-check the caps and the delivery shape together",
+			packed, budget)
 	}
-	// And the negative control: the same set in the TEXT encoding this replaces does not
-	// fit, which is the defect. Seven decimal places is 12 bytes an ordinate plus
-	// punctuation — about 27 bytes a position.
-	if textual := vertices * 27 * fences; textual < budget {
-		t.Fatalf("the text encoding fit in %d bytes, so this test is not measuring the "+
-			"problem the format was written to solve", budget)
+	// The TEXT encoding, which is what geometry documents really are, is worse still. Seven
+	// decimal places is 12 bytes an ordinate plus punctuation — about 27 bytes a position.
+	textual := vertices * 27 * fences
+	if textual < packed {
+		t.Fatalf("the text encoding (%d bytes) came out smaller than the packed one (%d); the "+
+			"encoder is not doing what this package exists for", textual, packed)
 	}
+	t.Logf("a whole fence set at the platform maxima (%d fences x %d positions): %d bytes packed, "+
+		"~%d as text, against a %d-byte message budget — %.0fx and %.0fx over",
+		fences, vertices, packed, textual, budget, float64(packed)/budget, float64(textual)/budget)
 }
 
 // TestRoundTripIsExactOnTheGrid pins that the loss is confined to QuantizeE7. Once a

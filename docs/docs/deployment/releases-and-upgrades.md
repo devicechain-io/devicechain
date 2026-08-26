@@ -692,6 +692,38 @@ Two fixes are worth knowing about:
   cost change, not a behaviour change — and it matters most on large fleets, and in the
   moments right after a presence source hands its devices back.
 
+### v0.13.0 — geofence limits become part of your plan {#v0130-upgrade}
+
+`v0.13.0` is a plain `helm upgrade`. It adds **no migration**, so the database is untouched, and
+it changes no topic, permission or configuration key.
+
+What changes is that the two geofence limits that used to be fixed for everyone — 512 positions
+in one fence, 100 fences per tenant — are now **settings on your plan**, joined by a third:
+a limit on the total positions across your whole fence set. All three keep their previous
+values by default, so **a tenant that has never had them changed is metered exactly where it
+was** and needs to do nothing.
+
+Two things are worth knowing before you upgrade:
+
+- **The whole-set limit is new, and its default is what the other two already implied**:
+  51,200 positions, which is 100 fences of 512. So a tenant using geofencing exactly to the
+  documented limits is *at* the new limit, never over it. The total counts **distinct** shapes,
+  so two fences drawn identically cost one.
+- **A change is refused only when it makes a number larger.** If an operator later lowers one
+  of your limits below what you already hold, you keep every fence. Shrinking a fence, editing
+  its name or description, and deleting a fence all keep working — the check is on growth, not
+  on size. This is what keeps a plan change from stranding fences that were legal when drawn.
+
+One consequence to plan around: because deleting a fence lowers the stored total, a tenant that
+is over a limit and deletes a fence cannot recreate it. To move a fence to a different token,
+**create the new one first and delete the old one after** — which needs one spare fence slot for
+the moment both exist.
+
+Operators packaging tiers should know these have real ceilings, because two of the three are
+spent on resources every tenant on the instance shares. The refusals name both the number and
+the setting to raise, and a `geofence_cap_refusals_total` metric counts them by which limit
+refused.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

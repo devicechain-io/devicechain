@@ -30,7 +30,25 @@ Si ningún nivel tiene una fuente de teselas —un operador definió el valor po
 
 Los contornos se almacenan como GeoJSON, con las posiciones en orden `[longitude, latitude]` y los anillos cerrados de forma explícita (la primera posición repetida como última). La consola se encarga de eso por usted; una integración que autora a través de GraphQL suministra el documento directamente.
 
-Se aplican dos límites por conjunto de geocercas: como máximo **512 posiciones** en el conjunto de los anillos de una geocerca, contando la posición de cierre de cada anillo, y como máximo **100 geocercas** por inquilino. Cada uno acota un costo distinto. El tamaño de una geocerca es lo que cuesta compilarla y mantenerla compilada, y la puerta de costo de la autoría de reglas no puede ver un número que vive en una geocerca en lugar de en una regla, así que el límite de posiciones se aplica donde se guarda la geocerca. El número de geocercas acota cuánta geometría compilada ocupa un inquilino en el motor de detección compartido; no afecta a lo que tarda ninguna comprobación de contención individual, porque una regla nombra una geocerca y el motor llega a esa geocerca directamente.
+Se aplican tres límites, y cada uno acota un costo distinto:
+
+| Límite | Predeterminado | Qué acota |
+| --- | --- | --- |
+| Posiciones en una geocerca | 512 | Lo que cuesta compilar esa geocerca y mantenerla compilada |
+| Geocercas por inquilino | 100 | El tamaño del anuncio de un cambio en el conjunto de geocercas |
+| Posiciones en todo su conjunto de geocercas | 51.200 | Cuánta geometría del motor de detección compartido ocupan sus geocercas |
+
+El conteo de posiciones incluye la posición de cierre de cada anillo. El total del conjunto cuenta formas **distintas**: dos geocercas dibujadas de forma idéntica cuestan una forma, no dos.
+
+Estos son **valores predeterminados**, no límites fijos de la plataforma. Cada uno forma parte de su plan, y un operador puede subirlos o bajarlos para su inquilino. Los valores predeterminados son coherentes entre sí — 100 geocercas de 512 posiciones son exactamente 51.200 — así que un inquilino al que nunca se le hayan cambiado puede alcanzar los tres.
+
+Se comprueban al guardar una geocerca, porque la puerta de costo de la autoría de reglas no puede ver un número que vive en una geocerca en lugar de en una regla. El número de geocercas no afecta a lo que tarda ninguna comprobación de contención individual: una regla nombra una geocerca y el motor llega a esa geocerca directamente.
+
+:::note Cambiar una geocerca solo se rechaza cuando empeora las cosas
+Si su inquilino ya supera uno de estos límites — porque cambió un plan, o porque las geocercas son anteriores al límite — conserva todas las geocercas que tiene. Guardar solo se rechaza cuando el cambio haría el número **mayor** de lo que ya es. Reducir una geocerca, editar su nombre o su descripción, y **eliminar** una geocerca siempre funcionan.
+
+Dos consecuencias que conviene conocer. Como el total del conjunto cuenta formas distintas, hacer diferente una de varias geocercas dibujadas igual puede subir su total aunque esa geocerca se haya hecho más pequeña — el rechazo lo indica cuando ocurre. Y como eliminar baja el total almacenado, un inquilino por encima del límite que elimine una geocerca no podrá volver a crearla: para mover una geocerca a un token nuevo, **cree primero la nueva y elimine después la antigua**.
+:::
 
 Un contorno debe además **delimitar un área**. Un anillo cuyas aristas se cruzan — un «moño» — no tiene un interior bien definido, así que una pregunta de contención sobre él no tiene respuesta honesta. Los anillos así se rechazan al guardar, mediante la misma comprobación que el motor de detección aplica cuando compila una regla. Eso importa más de lo que parece: antes de que la comprobación se ejecutara en el momento de la autoría, una geocerca así se guardaba sin problemas, quedaba en el registro con aspecto saludable, y fallaba solo más tarde, cuando por fin una regla la nombraba.
 
@@ -51,7 +69,7 @@ Tres respuestas que puede necesitar predecir, todas decididas de una manera y ap
 
 - **El borde está dentro.** Una posición que cae exactamente sobre la arista de una geocerca está contenida. Si se dejara a la biblioteca de geometría subyacente, el borde se repartiría entre regiones adyacentes — así que dos geocercas que comparten una arista reclamarían cada una una parte y ninguna reclamaría el resto. Una prueba explícita de «sobre la arista» lo evita, con una tolerancia de unos 6 mm sobre el terreno.
 - **El borde de un agujero también está dentro**, por la misma regla. Posición estrictamente dentro de un agujero → fuera de la geocerca. Posición sobre el anillo del agujero → dentro de la geocerca. Así, dos geocercas adyacentes, o una geocerca y su propio agujero, nunca discrepan sobre un punto que comparten.
-- **El sentido del anillo da igual.** Las versiones en sentido horario y antihorario del mismo anillo dan la misma respuesta; el sentido se normaliza en lugar de darse por bueno, así que una integración que autora GeoJSON sobre la API no tiene que acertarlo. (La única forma que esto no puede rescatar es una «geocerca» tan grande que envuelve casi todo el globo, donde «la región más pequeña» es ambigua — pero el límite de 512 posiciones y la exigencia de delimitar un área dejan eso muy lejos de lo que parece una geocerca real.)
+- **El sentido del anillo da igual.** Las versiones en sentido horario y antihorario del mismo anillo dan la misma respuesta; el sentido se normaliza en lugar de darse por bueno, así que una integración que autora GeoJSON sobre la API no tiene que acertarlo. (La única forma que esto no puede rescatar es una «geocerca» tan grande que envuelve casi todo el globo, donde «la región más pequeña» es ambigua — pero el límite de posiciones y la exigencia de delimitar un área dejan eso muy lejos de lo que parece una geocerca real.)
 
 ## Las geocercas cambian, y el historial debe sobrevivirlo {#fences-change}
 

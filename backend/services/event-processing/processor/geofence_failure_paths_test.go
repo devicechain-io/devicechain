@@ -344,17 +344,34 @@ func TestAGeometryFetchDoesNotSplitOnAnUnrelatedError(t *testing.T) {
 // that refuses even a size-1 request terminates the fetch on the FIRST leaf with "too large on
 // its own" — a different, already-tested error — after five requests, and a test written that
 // way would report the budget as working while never approaching it. What the budget defends
-// against is a peer that makes progress expensively: each 24-address chunk costs 47 requests
-// (24 leaves plus 23 refused interior nodes), so 300 addresses runs past 512.
+// against is a peer that makes progress expensively: a chunk that is refused and split all the
+// way down costs 2*geometryChunkSize-1 requests (every leaf, plus every refused interior node).
+//
+// 🔴 THE FIXTURE SIZE IS DERIVED FROM THE BUDGET, AND IT USED TO BE A LITERAL 300 AGAINST A
+// LITERAL 512. Both moved: maxGeometryRequests is now derived from governance.MaxGeoFenceCeiling,
+// because the fence count became a tier setting and a runaway stop below what an operator may
+// legitimately grant is an outage rather than a stop. A hardcoded fixture would have gone on
+// passing until the budget rose past it and then reported the stop as broken — which is exactly
+// what it did, in this test, on the commit that raised it.
 //
 // The budget is a runaway stop, not a second size limit, so it sits well above anything a
 // legitimate fetch reaches — which is why provoking it also needs a manifest larger than any
 // tenant can author. That is exactly the input it defends against: the manifest is
 // caller-supplied, and nothing on this side bounds what a fact may claim.
 func TestTheGeometryReadStopsAtItsRequestBudget(t *testing.T) {
-	entries := make([]dmmodel.GeoFenceManifestEntry, 0, 300)
+	// Every leaf plus every refused interior node of one fully-split chunk.
+	const requestsPerRefusedChunk = 2*geometryChunkSize - 1
+	// Two chunks past the budget, so the stop has to fire rather than the fetch merely ending.
+	chunks := maxGeometryRequests/requestsPerRefusedChunk + 2
+	n := chunks * geometryChunkSize
+	if chunks*requestsPerRefusedChunk <= maxGeometryRequests {
+		t.Fatalf("the fixture spends only %d requests against a budget of %d; it cannot reach the "+
+			"stop it exists to test", chunks*requestsPerRefusedChunk, maxGeometryRequests)
+	}
+
+	entries := make([]dmmodel.GeoFenceManifestEntry, 0, n)
 	byHash := map[string]string{}
-	for i := 0; i < 300; i++ {
+	for i := 0; i < n; i++ {
 		doc := fenceBox(float64(i), 0, float64(i)+1, 1)
 		byHash[docHash(doc)] = doc
 		entries = append(entries, dmmodel.GeoFenceManifestEntry{

@@ -32,10 +32,21 @@ export interface Vertex {
 export const POLYGON_2D = 'POLYGON_2D';
 
 /**
- * Mirrors device-management's MaxGeoFenceVertices. It MIRRORS the server and
- * decides nothing: the server re-checks and its answer is the one that counts.
- * Kept here only so the editor can stop the operator before a save that would
- * fail, and so the vertex counter can show a budget.
+ * Mirrors the platform DEFAULT per-fence position limit. It MIRRORS the server
+ * and decides nothing: the server re-checks and its answer is the one that
+ * counts. Kept here only so the editor can stop the operator before a save that
+ * would fail, and so the position counter can show a budget.
+ *
+ * 🔴 IT IS THE DEFAULT, NOT A FIXED PLATFORM LIMIT, AND THE TWO STOPPED BEING
+ * THE SAME THING. This limit is part of a tenant's plan now — an operator can
+ * raise it (up to a platform maximum) or lower it. So the number here is right
+ * for a tenant whose plan has never been changed, and can be wrong in either
+ * direction for one whose has. That is tolerable precisely because this file
+ * decides nothing: too low, and the editor warns about a save the server would
+ * have accepted; too high, and the server refuses with a message naming the
+ * tenant's own number and the setting to raise. Showing the tenant's real
+ * limits needs a live read of their governance settings, which is its own
+ * slice — do not fake it by guessing here.
  *
  * 🔴 The server counts POSITIONS ACROSS ALL RINGS, and the closing position of
  * each ring counts. An editor that counted the vertices an operator clicked
@@ -43,7 +54,10 @@ export const POLYGON_2D = 'POLYGON_2D';
  */
 export const MAX_FENCE_POSITIONS = 512;
 
-/** Mirrors device-management's MaxGeoFencesPerTenant. Mirrors, decides nothing. */
+/**
+ * Mirrors the platform DEFAULT fences-per-tenant limit. Mirrors, decides
+ * nothing, and is a default rather than a fixed limit — see MAX_FENCE_POSITIONS.
+ */
 export const MAX_FENCES_PER_TENANT = 100;
 
 /**

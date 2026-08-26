@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/governance"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 )
 
 // 🔴 THIS FILE EXISTS BECAUSE A LENGTH WAS MEASURED ON THE WRONG DOCUMENT.
@@ -158,7 +160,7 @@ func TestATinyInRangeCoordinateCountsAtItsStoredSize(t *testing.T) {
 // len(request) check could not see.
 func TestAGeometryOverTheStoredBoundIsRefused(t *testing.T) {
 	// 4 positions per ring, at the position ceiling: 128 rings.
-	const rings = MaxGeoFenceVertices / 4
+	const rings = governance.DefaultGeoFencePositionCeiling / 4
 	parts := make([]string, 0, rings)
 	for i := 0; i < rings; i++ {
 		parts = append(parts, `[[1e-300,0],[1,0],[1,1],[1e-300,0]]`)
@@ -186,33 +188,70 @@ func TestAGeometryOverTheStoredBoundIsRefused(t *testing.T) {
 }
 
 // 🔴 THE CLOSING ARGUMENT: WITH THE OTHER RULES IN PLACE, ORDINARY GEOMETRY CANNOT COME NEAR
-// THE BOUND. Unknown keys are refused, a position is exactly two ordinates, and a coordinate
-// that survives the WGS84 range checks is a float64 whose shortest round-trip decimal is short
-// — so a valid fence's canonical size is bounded by roughly MaxGeoFenceVertices x 2 x ~24
-// bytes. This asserts that arithmetic against the real bound, because it is the reason "one
-// fence always fits" is now TRUE rather than merely asserted: the reader's halving retry
-// terminates at a page of one, and this is what makes that page carryable.
+// THE BOUND — AT THE DEFAULT POSITION CEILING. Unknown keys are refused, a position is exactly
+// two ordinates, and a coordinate that survives the WGS84 range checks is a float64 whose
+// shortest round-trip decimal is short — so a valid fence's canonical size is bounded by
+// roughly the position ceiling x 2 x ~24 bytes. This asserts that arithmetic against the real
+// bound, because it is the reason "one fence always fits" is TRUE rather than merely asserted:
+// the reader's halving retry terminates at a page of one, and this is what makes that page
+// carryable.
+//
+// 🔴 AT THE PLATFORM MAXIMUM CEILING THE TWO BOUNDS FIGHT, AND THIS TEST SAYS SO RATHER THAN
+// ASSERTING SOMETHING FALSE. The position ceiling is a tier setting now, so a tenant may be
+// granted governance.MaxGeoFencePositionCeiling — at which the full-float64 worst case is over
+// MaxGeoFenceGeometryBytes and the BYTE bound refuses first. That is a tension, not a defect:
+// the byte bound refuses with a message naming both numbers, and everything downstream that
+// depends on "one fence fits one message" depends only on MaxGeoFenceGeometryBytes being far
+// below svcclient.MaxResponseBytes, which is untouched. What it costs is stated in the second
+// half below and measured in TestACeilingFenceIsStillAcceptedWithHeadroom: at nine decimal
+// places — already finer than any real editor emits — a maximum-ceiling fence still fits, with
+// about 11% to spare rather than the 2x a default-ceiling fence has.
+//
+// Raising MaxGeoFenceGeometryBytes to restore that headroom was considered and declined: it
+// would have to halve MaxGeoFenceGeometryHashesPerRequest to stay inside the same response
+// cap, which spends a real cost on every tenant's geometry fetch to buy room in a corner
+// occupied by nobody — a maximum-ceiling tenant authoring at more than millimetre precision.
 //
 // The bound remains as a backstop for the shapes above, which reach it through decimal
 // expansion rather than through position count.
 func TestValidGeometryCannotApproachTheStoredBound(t *testing.T) {
 	// The widest a normal coordinate gets: full float64 precision inside the range.
 	const worstCoordinateBytes = 24
-	worst := MaxGeoFenceVertices * MaxGeoFencePositionOrdinates * (worstCoordinateBytes + 1)
-	if worst >= MaxGeoFenceGeometryBytes {
-		t.Fatalf("a fence at the position ceiling could reach %d bytes against a %d-byte bound; "+
-			"a single fence is no longer guaranteed to fit and the paged reader cannot terminate",
-			worst, MaxGeoFenceGeometryBytes)
+	perPosition := MaxGeoFencePositionOrdinates * (worstCoordinateBytes + 1)
+
+	atDefault := governance.DefaultGeoFencePositionCeiling * perPosition
+	if atDefault >= MaxGeoFenceGeometryBytes {
+		t.Fatalf("a fence at the DEFAULT position ceiling could reach %d bytes against a %d-byte "+
+			"bound; a tenant that has declared nothing would be refused by a limit it was never "+
+			"told about", atDefault, MaxGeoFenceGeometryBytes)
 	}
-	t.Logf("worst-case valid fence ~%d bytes against a %d-byte bound (%.1fx headroom)",
-		worst, MaxGeoFenceGeometryBytes, float64(MaxGeoFenceGeometryBytes)/float64(worst))
+	t.Logf("default ceiling (%d positions): worst-case valid fence ~%d bytes against a %d-byte "+
+		"bound (%.1fx headroom)", governance.DefaultGeoFencePositionCeiling, atDefault,
+		MaxGeoFenceGeometryBytes, float64(MaxGeoFenceGeometryBytes)/float64(atDefault))
+
+	// The property that actually carries the paged reader, and the one that must hold at
+	// EVERY ceiling: one stored fence is far inside the cross-service response cap, so a
+	// halving retry terminates at a page of one.
+	if MaxGeoFenceGeometryBytes >= svcclient.MaxResponseBytes {
+		t.Fatalf("one fence may store at %d bytes against a %d-byte response cap; a page of one "+
+			"is no longer guaranteed to be carryable and the halving retry cannot terminate",
+			MaxGeoFenceGeometryBytes, svcclient.MaxResponseBytes)
+	}
+
+	// And the tension, stated as a measurement rather than left for someone to discover:
+	// above this many positions, full-precision geometry meets the byte bound first.
+	t.Logf("the byte bound binds before the position bound above ~%d full-precision positions; "+
+		"the platform maximum ceiling is %d", MaxGeoFenceGeometryBytes/perPosition,
+		governance.MaxGeoFencePositionCeiling)
 }
 
 // ── the counterweight: legitimate authoring is untouched ─────────────────────────────────────
 
-// ceilingRing builds a valid closed ring at the vertex ceiling and a chosen precision.
-func ceilingRing(prec int) string {
-	n := MaxGeoFenceVertices - 1
+// ceilingRingOf builds a valid closed ring of exactly `positions` positions at a chosen
+// precision. Separate from ceilingRing because the position ceiling is a tier setting now, so
+// "the ceiling" is two different numbers depending on which question is being asked.
+func ceilingRingOf(positions int, prec int) string {
+	n := positions - 1
 	pos := fmt.Sprintf("[%%.%df,%%.%df]", prec, prec)
 	var b strings.Builder
 	b.WriteString(`{"kind":"POLYGON_2D","geometry":{"type":"Polygon","coordinates":[[`)
@@ -227,25 +266,49 @@ func ceilingRing(prec int) string {
 	return b.String()
 }
 
-// A fence at the vertex ceiling, at more precision than any real editor emits, is still
-// accepted with room to spare. A bound that refused legitimate authoring would be a worse
-// defect than the one it fixes, and "the pathological one is refused" cannot say which of the
-// two this is.
+// A fence at the position ceiling, at more precision than any real editor emits, is still
+// accepted. A bound that refused legitimate authoring would be a worse defect than the one it
+// fixes, and "the pathological one is refused" cannot say which of the two this is.
+//
+// 🔴 IT MEASURES AT BOTH CEILINGS, AND DEMANDS DIFFERENT THINGS OF THEM. The position ceiling
+// is a tier setting: the DEFAULT is what a tenant that declares nothing gets, and it must have
+// real headroom, because nobody chose it and nobody was warned. The platform MAXIMUM is what
+// an operator can knowingly grant, and there the requirement is only that a fence at that
+// ceiling is still ACCEPTED at millimetre precision — the headroom is thin by arithmetic, and
+// TestValidGeometryCannotApproachTheStoredBound records why that is the accepted trade.
+//
+// Testing only the default would leave the maximum untested and the whole ceiling range
+// looking uniformly safe; testing only the maximum would let the default's headroom rot away.
 func TestACeilingFenceIsStillAcceptedWithHeadroom(t *testing.T) {
-	doc := ceilingRing(9)
-	_, canonical, err := validateGeoFenceGeometry(doc)
-	if err != nil {
-		t.Fatalf("a %d-byte fence at the vertex ceiling was refused: %v", len(doc), err)
+	measure := func(t *testing.T, positions int) float64 {
+		t.Helper()
+		doc := ceilingRingOf(positions, 9)
+		_, canonical, err := validateGeoFenceGeometry(doc)
+		if err != nil {
+			t.Fatalf("a %d-byte fence at %d positions was refused: %v", len(doc), positions, err)
+		}
+		stored := jsonbRenderedLen([]byte(canonical))
+		headroom := float64(MaxGeoFenceGeometryBytes) / float64(stored)
+		t.Logf("%d positions at 9 dp: request %d, canonical %d, stored %d, %.2fx headroom",
+			positions, len(doc), len(canonical), stored, headroom)
+		return headroom
 	}
-	stored := jsonbRenderedLen([]byte(canonical))
-	headroom := float64(MaxGeoFenceGeometryBytes) / float64(stored)
-	if headroom < 2 {
-		t.Errorf("the bound leaves only %.1fx headroom over a ceiling fence (%d stored of %d); "+
+
+	// The default ceiling: real headroom, because no operator opted into this number.
+	if h := measure(t, governance.DefaultGeoFencePositionCeiling); h < 2 {
+		t.Errorf("the bound leaves only %.2fx headroom over a DEFAULT-ceiling fence (limit %d); "+
 			"that is too close to refuse authoring nobody would call unreasonable",
-			headroom, stored, MaxGeoFenceGeometryBytes)
+			h, MaxGeoFenceGeometryBytes)
 	}
-	t.Logf("ceiling fence at 9 dp: request %d, canonical %d, stored %d, %.1fx headroom",
-		len(doc), len(canonical), stored, headroom)
+
+	// The platform maximum: accepted at all is the requirement. A tier granting this has
+	// opted in; being refused by the byte bound at a precision finer than a millimetre is a
+	// stated trade rather than a surprise.
+	if h := measure(t, governance.MaxGeoFencePositionCeiling); h < 1 {
+		t.Errorf("a fence at the PLATFORM MAXIMUM ceiling is refused by the %d-byte bound at nine "+
+			"decimal places (%.2fx); a ceiling no tenant can actually author to is not a ceiling",
+			MaxGeoFenceGeometryBytes, h)
+	}
 }
 
 // ── canonicalisation itself ──────────────────────────────────────────────────────────────────
