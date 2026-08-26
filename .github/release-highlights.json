@@ -20,12 +20,14 @@
     "`breaking` drives an automatic warning on the website and in the docs. Set it true when an",
     "upgrade is not a plain `helm upgrade`, and say so in the first highlight."
   ],
-  "version": "v0.12.1",
+  "version": "v0.13.0",
   "breaking": false,
   "highlights": [
-    "A patch release: a plain helm upgrade from v0.12.0, with no schema change and no contract change.",
-    "Status colours in the web console now meet WCAG AA contrast in both light and dark themes \u2014 the pending and online badges were previously unreadable, and error text failed in dark mode.",
-    "The inactivity monitor no longer reads every device in every tenant into memory on each pass. It now sweeps in a single statement, which matters most on large fleets and immediately after a presence source hands its devices back.",
-    "Dependency and base-image updates across the Go modules, the web console and the release workflow."
+    "A plain helm upgrade from v0.12.x: no migration, and no API, topic, permission or configuration change.",
+    "Geofence limits are now part of a tenant's plan. The limit on positions in one fence and the limit on fences per tenant are tier settings rather than fixed numbers, joined by a new limit on the total positions across a tenant's whole fence set. All three keep their previous values by default, so a tenant nobody has changed is metered exactly where it was.",
+    "A change is refused only when it makes one of those numbers larger. Lowering a tenant's limits never strands the fences it already holds, and renaming or deleting a fence keeps working regardless.",
+    "Large fence sets now hold together on the wire. A fence's shape is stored once and addressed by its content, and the detection engine is handed a list of references rather than every shape inline — so a fence set no longer has to fit in one broker message, and editing one fence no longer rewrites the rest.",
+    "Geofencing does less work per event: deciding that a device is outside a fence is now roughly seventy times cheaper, and an edit that changes only a fence's name no longer republishes the whole set to the engine.",
+    "Dependency and base-image updates across the Go modules and the web console, plus a contrast fix for control borders in the console."
   ]
 }
