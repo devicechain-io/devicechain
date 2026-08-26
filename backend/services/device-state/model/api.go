@@ -639,11 +639,35 @@ func (api *Api) DeviceStates(ctx context.Context, criteria DeviceStateSearchCrit
 // existed only because the read and the write were separate statements; here they are
 // the same statement, so there is no snapshot that can go stale.
 //
-// 🔴 There is NO index on (active, presence_source, last_activity_time) — device_states
-// carries only the (tenant_id, device_token) unique index — so this is still a
-// sequential scan. It is one scan inside the database instead of a full table read into
-// this process, which is the part that was unbounded. Adding the index is a migration
-// and is deliberately NOT part of this change.
+// 🔴 THIS IS A SEQUENTIAL SCAN AND AN INDEX CANNOT FIX IT. device_states carries only
+// the (tenant_id, device_token) unique index, and an earlier version of this comment said
+// adding one on (active, presence_source, last_activity_time) was "a migration, deliberately
+// not part of this change" — which reads as "the fix is known, someone just has to do it".
+// It is not. That index was built and MEASURED, and it makes the sweep WORSE.
+//
+// 500,000 rows, 92% active, 5% ASSERTED, 6,497 genuinely stale (PostgreSQL 16):
+//
+//	no index                                        103 ms   51,336 buffers   Seq Scan
+//	(active, presence_source, last_activity_time)   123 ms   77,418 buffers   Seq Scan
+//	partial on last_activity_time                   110 ms   58,004 buffers   Seq Scan
+//
+// The planner ignored both indexes and the UPDATE paid to maintain them — +51% buffers for
+// the composite, to read none of it.
+//
+// The reason is structural, not a statistics accident: the time predicate compares
+// last_activity_time against a PER-ROW deadline (inactivity_timeout, or the default when it
+// is 0), so the bound differs for every row and no index on last_activity_time can seek it.
+// Indexing the deadline itself is not available either — PostgreSQL refuses
+// `last_activity_time + inactivity_timeout * INTERVAL '1 second'` in an index expression with
+// "functions in index expression must be marked IMMUTABLE", because timestamptz + interval is
+// STABLE (it depends on the session time zone for the day and month components).
+//
+// What WOULD make this sargable is storing the deadline as a column maintained on write and
+// indexing that partially. That is a schema change plus a write-path change with its own
+// correctness question — every path that touches last_activity_time or inactivity_timeout has
+// to recompute it — so it is a slice, not an index. It is worth doing when the sweep's cost
+// is shown to matter; at 500k devices it is 100 ms, and the unbounded full-table read into
+// this process that collapsing the loop deleted was the part that actually hurt.
 func (api *Api) SweepInactive(ctx context.Context, now time.Time) (int64, error) {
 	db := api.RDB.DB(ctx)
 	frag, args, err := inactivitySQL(db.Dialector.Name(), now)
