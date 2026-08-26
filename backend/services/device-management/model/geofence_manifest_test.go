@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	dcconfig "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/governance"
 	"gorm.io/gorm"
 )
 
@@ -402,4 +404,82 @@ func manyPointGeometry(n int) string {
 		panic(err)
 	}
 	return string(raw)
+}
+
+// The counterweight to TestManifestSizeIsAFunctionOfFenceCountAlone: the manifest has no size
+// ceiling to worry about precisely BECAUSE the thing it replaced does, and this is what says so.
+//
+// 🔴 THE ASSERTION THIS REPLACES WAS WRONG IN A WAY WORTH RECORDING, because the mistake is one
+// this arc made twice. core/geo's E7 encoder test — deleted along with the encoder in this same
+// change, which is why this lives here now — claimed no encoding could make a whole fence set fit
+// one message, and computed its worst case as MaxGeoFenceCeiling * MaxGeoFencePositionCeiling —
+// 4000 * 1024 = 4,096,000 positions. No tenant can reach that. MaxTenantGeometryPositions caps a
+// whole authored set at 128,000, which is 32x smaller, and it is ENFORCED: the resolver clamps a
+// tier's budget to it and every growing write is metered against the result. The three platform
+// maxima bound three DIFFERENT resources and are deliberately not mutually reachable, so
+// multiplying two of them together describes a state the caps exist to prevent. Written down in
+// one place and contradicted in another, by the same hand, in the same week.
+//
+// 🔴 AND THE CLAIM ITSELF IS FALSE AS IT WAS STATED. At the reachable maximum a whole set does
+// not always exceed a message — with integer ordinates it packs into well under one. What is
+// true, and what per-fence delivery actually rests on, is that a set's wire size is UNBOUNDED
+// RELATIVE TO A MESSAGE: the same 128,000 positions cost anywhere from a few hundred KB to tens
+// of MB depending only on how their numbers were typed, because the canonical form renders
+// float64 in 'f' notation with no exponent (a legal in-range 5e-324 ordinate is 326 characters;
+// see TestATinyInRangeCoordinateCountsAtItsStoredSize, and MaxGeoFenceGeometryBytes is applied to
+// that rendered form for exactly this reason). A delivery shape cannot be chosen against a
+// quantity whose legal range straddles the budget, which is why geometry travels by address.
+//
+// Both edges are MEASURED through the real canonicalizer rather than computed from a bytes-per-
+// position figure, because a figure is what went stale last time.
+func TestWholeSetGeometryHasNoSizeCeiling(t *testing.T) {
+	budget := int(dcconfig.DefaultStreamMaxMsgSize)
+	positions := governance.MaxTenantGeometryPositions
+
+	// One position's canonical cost, at each end of what validation admits. Measured as the
+	// DELTA between a ring with the position and one without, so ring punctuation is not
+	// counted into the per-position figure.
+	cost := func(lon, lat float64) int {
+		three := [][][]float64{{{0, 0}, {1, 0}, {1, 1}, {0, 0}}}
+		four := [][][]float64{{{0, 0}, {1, 0}, {1, 1}, {lon, lat}, {0, 0}}}
+		return len(canonicalRingsJSON(four)) - len(canonicalRingsJSON(three))
+	}
+	tightest := cost(0, 0)
+	widest := cost(math.SmallestNonzeroFloat64, math.SmallestNonzeroFloat64)
+
+	if tightest <= 0 || widest <= tightest {
+		t.Fatalf("the per-position costs came out tightest=%d widest=%d; the measurement is not "+
+			"measuring what it claims and neither bound below means anything", tightest, widest)
+	}
+
+	best := tightest * positions
+	// The worst case is bounded twice over — by the set-wide position budget and, independently,
+	// by the per-fence stored-document cap applied across the largest fence count any tier may
+	// grant. The real ceiling is whichever binds first.
+	worst := widest * positions
+	if byDocument := governance.MaxGeoFenceCeiling * MaxGeoFenceGeometryBytes; byDocument < worst {
+		worst = byDocument
+	}
+
+	// The lower edge. If this ever fails, whole-set delivery has become viable and the per-fence
+	// design is carrying complexity it no longer needs — which is a finding, not a broken test.
+	if best >= budget {
+		t.Fatalf("even the TIGHTEST whole set at the maximum (%d positions x %d bytes = %d) exceeds "+
+			"the %d-byte message budget. That makes the size argument unconditional, where this test "+
+			"asserts it is conditional; re-derive the caps and the delivery shape together",
+			positions, tightest, best, budget)
+	}
+	// The upper edge — the one per-fence delivery exists for.
+	if worst <= budget {
+		t.Fatalf("the WORST whole set at the maximum is %d bytes, inside the %d-byte message budget; "+
+			"a fence set could then travel whole and geometry would not need to be addressed "+
+			"separately", worst, budget)
+	}
+
+	t.Logf("a whole set at the reachable maximum of %d positions: %d bytes at the tightest "+
+		"rendering (%d B/position, %.0f%% of budget) to %d at the widest (%d B/position, %.0fx "+
+		"budget), against a %d-byte message. The budget sits INSIDE the legal range, which is the "+
+		"whole argument for per-fence delivery",
+		positions, best, tightest, 100*float64(best)/float64(budget), worst, widest,
+		float64(worst)/float64(budget), budget)
 }

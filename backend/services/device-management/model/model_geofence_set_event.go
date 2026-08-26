@@ -41,7 +41,8 @@ import (
 //
 // 🔴 THAT NAME WAS FICTIONAL UNTIL IT WAS CHECKED. This comment cited a
 // TestTheManifestWorstCaseIsMeasuredAtThePlatformMaximum that has never existed in this tree —
-// written in the same change that deleted an identical fiction from core/geo's e7_test.go, and
+// written in the same change that deleted an identical fiction from core/geo's E7 encoder tests
+// (that encoder and its tests have since been removed entirely), and
 // caught only by grepping every name a comment cites. A back-pointer nobody follows is worse
 // than none: it advertises protection that is not there.
 //
