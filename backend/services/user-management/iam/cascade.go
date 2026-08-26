@@ -198,3 +198,94 @@ func (t *Tenant) EffectiveHeldCommandCeiling() (*int, SettingSource) {
 	}
 	return nil, SourcePlatformDefault
 }
+
+// The three geofence caps (ADR-023 governance, ADR-065 tier), each with the Usable / Override /
+// Effective trio every scalar in this file carries.
+//
+// 🔴 THEY CASCADE INDEPENDENTLY, AND THAT IS A DECISION, NOT AN ACCIDENT OF THE SHAPE. A tenant
+// that overrides only its fence count inherits its tier's vertex ceiling and its tier's budget;
+// there is no all-or-nothing group. Treating them as a group would mean an operator raising one
+// cap silently reset the other two to the platform default — the same full-replace hazard the
+// admin overrides guard against by being individually readable.
+//
+// Each Usable* rule is the tier validator, which includes that key's MAXIMUM. So an override
+// above the maximum — reachable only by a direct out-of-band DB write, since both write doors
+// reject it — falls through to the tier rather than being honoured, and a tenant cannot be
+// escalated past the platform bound by editing a row.
+
+// UsableGeoFencePositionCeiling reports whether a per-tenant per-fence position ceiling override
+// is a live bound, by the same rule a tier's geoFencePositionCeiling is held to.
+func UsableGeoFencePositionCeiling(v int) bool { return validateGeoFencePositionCeiling(v) == nil }
+
+// UsableGeoFenceCeiling reports whether a per-tenant fence-count override is a live bound.
+func UsableGeoFenceCeiling(v int) bool { return validateGeoFenceCeiling(v) == nil }
+
+// UsableGeoFencePositionBudget reports whether a per-tenant whole-fence-set budget override is a
+// live bound.
+func UsableGeoFencePositionBudget(v int) bool { return validateGeoFencePositionBudget(v) == nil }
+
+// OverrideGeoFencePositionCeiling returns the tenant's own per-fence position ceiling override, or
+// nil when it declares none (or declares an unusable one).
+func (t *Tenant) OverrideGeoFencePositionCeiling() *int {
+	if t.GeoFencePositionCeiling == nil || !UsableGeoFencePositionCeiling(*t.GeoFencePositionCeiling) {
+		return nil
+	}
+	return t.GeoFencePositionCeiling
+}
+
+// OverrideGeoFenceCeiling returns the tenant's own fence-count override, or nil to inherit.
+func (t *Tenant) OverrideGeoFenceCeiling() *int {
+	if t.GeoFenceCeiling == nil || !UsableGeoFenceCeiling(*t.GeoFenceCeiling) {
+		return nil
+	}
+	return t.GeoFenceCeiling
+}
+
+// OverrideGeoFencePositionBudget returns the tenant's own whole-fence-set budget override, or nil
+// to inherit.
+func (t *Tenant) OverrideGeoFencePositionBudget() *int {
+	if t.GeoFencePositionBudget == nil || !UsableGeoFencePositionBudget(*t.GeoFencePositionBudget) {
+		return nil
+	}
+	return t.GeoFencePositionBudget
+}
+
+// EffectiveGeoFencePositionCeiling resolves how many positions ONE of this tenant's fences may
+// carry, down the same cascade every ceiling uses — tenant override → tier → nil
+// (SourcePlatformDefault). A nil value means device-management substitutes the platform default,
+// which is itself a real bound: null is "inherit", NEVER "unlimited".
+func (t *Tenant) EffectiveGeoFencePositionCeiling() (*int, SettingSource) {
+	if v := t.OverrideGeoFencePositionCeiling(); v != nil {
+		return v, SourceOverride
+	}
+	if v := t.Tier.GeoFencePositionCeiling(); v != nil {
+		return v, SourceTier
+	}
+	return nil, SourcePlatformDefault
+}
+
+// EffectiveGeoFenceCeiling resolves how many fences this tenant may hold, down the same cascade.
+func (t *Tenant) EffectiveGeoFenceCeiling() (*int, SettingSource) {
+	if v := t.OverrideGeoFenceCeiling(); v != nil {
+		return v, SourceOverride
+	}
+	if v := t.Tier.GeoFenceCeiling(); v != nil {
+		return v, SourceTier
+	}
+	return nil, SourcePlatformDefault
+}
+
+// EffectiveGeoFencePositionBudget resolves how many positions this tenant's whole fence set may
+// carry, down the same cascade. Unlike the two beside it this one bounds a SHARED resource —
+// event-processing's geometry cache serves every tenant in one process — which is why its
+// maximum is the only one of the three DERIVED (from the cache) rather than measured off a cost
+// curve or a wire size. See core/governance for the derivation; this file should not retell it.
+func (t *Tenant) EffectiveGeoFencePositionBudget() (*int, SettingSource) {
+	if v := t.OverrideGeoFencePositionBudget(); v != nil {
+		return v, SourceOverride
+	}
+	if v := t.Tier.GeoFencePositionBudget(); v != nil {
+		return v, SourceTier
+	}
+	return nil, SourcePlatformDefault
+}

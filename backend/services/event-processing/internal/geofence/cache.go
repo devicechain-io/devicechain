@@ -14,6 +14,8 @@ import (
 	"sync"
 
 	"golang.org/x/sync/singleflight"
+
+	"github.com/devicechain-io/dc-microservice/governance"
 )
 
 // 🔴🔴 THIS FILE IS THE ONE PLACE IN THE CONTAINMENT LAYER THAT IS NOT LOOP-OWNED, AND THE LOCAL
@@ -51,13 +53,60 @@ import (
 // does buy is the property an entry count cannot: cost is monotone in it, and containment work is
 // O(vertices) too, so one number bounds both the memory and the per-event work.
 //
-// 250,000 is sized from the authoring ceilings it has to sit above. A tenant can author 100 fences
-// of 511 compiled vertices, ~51,100 vertices for one whole fence set; this holds several tenants at
-// that absolute ceiling simultaneously, or tens of thousands of the ten-to-forty-vertex fences real
-// sites are drawn with. The bound exists to make a pathological tenant cost bounded memory rather
-// than to be tight — evicting a hot entry costs one refetch and one recompile, which is cheap; a
-// process that grows without limit is not.
-const DefaultMaxCachedVertices = 250_000
+// 250,000 is sized from the authoring caps it has to sit above, and it is DERIVED FROM THEM rather
+// than chosen beside them. Those caps are now per-tenant governance settings on the ADR-065 cascade,
+// so the sentence this comment used to make — "this holds several tenants at that absolute ceiling
+// simultaneously" — was a claim about two numbers that no longer moved together, in a file that
+// could not see one of them. Writing it as an expression makes the relation hold by construction:
+//
+//   - governance.DefaultTenantGeometryPositions is one tenant's DEFAULT whole-fence-set budget, and
+//     it is a FIFTH of this bound, so five tenants at their default budget are resident at once;
+//   - governance.MaxTenantGeometryPositions is the largest budget any tier may grant, and it is a
+//     HALF of this bound, so no tenant's CURRENT AUTHORED SET can exceed half the cache.
+//
+// 🔴 THE SECOND IS A BOUND ON WHAT A TENANT MAY ADD, NOT ON WHAT IT HOLDS, and this comment used
+// to claim the stronger thing. Entries here are keyed (tenant, hash) and outlive every fence-set
+// version that names them; evictLocked walks ONE GLOBAL LRU and the only targeted removal is
+// PurgeTenant. So a tenant that replaces its fence set holds old and new at once — up to twice
+// its budget — until LRU drains the old, and a churning tenant can still evict its neighbours.
+// Total memory stays finite because maxVertices is enforced globally; per-tenant occupancy is
+// not bounded here and wants version-aware pruning, which is its own slice.
+//
+// 🔴 THOSE TWO SENTENCES CROSS A UNIT BOUNDARY, AND IT IS SAFE IN EXACTLY ONE DIRECTION. This
+// bound counts COMPILED vertices; the governance budgets count authored POSITIONS, which is what
+// device-management can check when a fence is written and is a different number by design — a
+// compiled ring drops its repeated closing position, and polygon2d.go's vertexCount says the two
+// are "deliberately not reconciled". So the equation below is not a unit identity.
+//
+// It is sound because the inequality runs the right way: positions >= compiled vertices, always,
+// for every fence. A tenant granted P positions therefore occupies AT MOST P vertices here, so
+// "a fifth" and "a half" are UPPER bounds on real occupancy and both claims hold a fortiori —
+// five default-budget tenants fit with room left over, and one maximum-budget tenant occupies at
+// most half. Denominating the budget the other way round would be the unsafe direction: a cap in
+// compiled vertices could not bound what an authored fence set costs to hold.
+//
+// The two consts below assert exactly that, at COMPILE TIME rather than in a test: each is a
+// uint conversion of a difference that must not be negative, so the two together say the bound
+// equals both derivations, and any edit that breaks either fails the build in this file.
+//
+// The bound exists to make a pathological tenant cost bounded memory rather than to be tight —
+// evicting a hot entry costs one refetch and one recompile, which is cheap; a process that grows
+// without limit is not.
+const DefaultMaxCachedVertices = governance.DefaultTenantGeometryPositions * defaultBudgetTenancyFactor
+
+// defaultBudgetTenancyFactor is how many tenants at their DEFAULT fence-set budget the cache holds
+// at once. It is the one number in this relation that is a judgement rather than a derivation, so
+// it is named: five is enough that a small instance's whole tenant population is typically
+// resident, and small enough that the bound stays a bound.
+const defaultBudgetTenancyFactor = 5
+
+// 🔴 THE TWO ASSERTIONS BELOW ARE NOT DEAD CODE. A const of type uint cannot hold a negative value,
+// so each fails to compile when its difference goes negative, and the PAIR of them can only both
+// compile when the two sides are EQUAL. That is the "no tenant holds more than half the cache"
+// invariant, enforced by the compiler in the file that owns the number — which is what this
+// codebase reaches for whenever a comment would otherwise assert an invariant nothing checks.
+const _ = uint(DefaultMaxCachedVertices - governance.MaxTenantGeometryPositions*2)
+const _ = uint(governance.MaxTenantGeometryPositions*2 - DefaultMaxCachedVertices)
 
 // ErrGeometryHashMismatch is returned when a fetched geometry document does not hash to the content
 // address it was fetched for. It is a REFUSAL, never a fallback: the document is discarded and

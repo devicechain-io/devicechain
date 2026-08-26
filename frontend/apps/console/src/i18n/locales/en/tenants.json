@@ -110,5 +110,12 @@
   "deletionsAllClean_one": "1 system, all clean",
   "deletionsAllClean_other": "{{count}} systems, all clean",
   "deletionsSomeHolding_one": "1 system still holding data",
-  "deletionsSomeHolding_other": "{{count}} systems still holding data"
+  "deletionsSomeHolding_other": "{{count}} systems still holding data",
+  "fenceCeilingDescription": "How many geofences this tenant may keep. Each one is announced to the platform when the set changes, and the announcement has to fit a single message, which is what limits it. Leave blank to inherit the tier's cap, then the platform default.",
+  "fenceCeilingLabel": "Geofence count",
+  "fencePositionBudgetDescription": "How many points this tenant's geofences may add up to across the whole set. This one is a claim on room the platform shares between every tenant — it keeps all of their fences ready to test incoming positions against — so the platform's own limit on it is lower relative to the default than the others. Leave blank to inherit the tier's cap, then the platform default.",
+  "fencePositionBudgetLabel": "Geofence point budget",
+  "fencePositionCeilingDescription": "How many points a single geofence may have. Checking a fence for self-crossings costs time that grows with the square of its point count, so a very detailed outline is slow to accept and slow to reload. Leave blank to inherit the tier's cap, then the platform default.",
+  "fencePositionCeilingLabel": "Points per geofence",
+  "fenceCapMaximumHint": "Each of these three has a platform maximum as well; a larger number is refused rather than quietly reduced."
 }

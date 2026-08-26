@@ -84,6 +84,22 @@ export function TenantForm({
   // survival rather than throughput, which is why it reads as a band rather than a
   // rate. Blank inherits the tier's band, then the platform fail-safe.
   const [shedPriority, setShedPriority] = useState(tenant?.shedPriority?.toString() ?? '');
+  // The three geofence caps. Each bounds a different cost and each inherits independently, so
+  // they are three fields rather than one: how many points one fence may have, how many fences
+  // the tenant may keep, and how many points its fences may add up to across the whole set.
+  //
+  // The third is the one that is not about this tenant alone — the platform holds every
+  // tenant's fences in one place to test them against incoming positions, so a tenant's total
+  // is a claim on shared room. That is why it has a firm platform maximum an operator cannot
+  // raise per tenant, and why the server refuses a larger number rather than quietly reducing
+  // it. Blank inherits the tier's cap, then the platform default — never unlimited.
+  const [fencePositionCeiling, setFencePositionCeiling] = useState(
+    tenant?.geoFencePositionCeiling?.toString() ?? '',
+  );
+  const [fenceCeiling, setFenceCeiling] = useState(tenant?.geoFenceCeiling?.toString() ?? '');
+  const [fencePositionBudget, setFencePositionBudget] = useState(
+    tenant?.geoFencePositionBudget?.toString() ?? '',
+  );
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const { data: tiers, error: tiersError } = useQuery(() => listTenantTiers(), []);
@@ -110,6 +126,9 @@ export function TenantForm({
         aiInferenceBurst: optNum(aiBurst),
         heldCommandCeiling: optNum(heldCeiling),
         shedPriority: optNum(shedPriority),
+        geoFencePositionCeiling: optNum(fencePositionCeiling),
+        geoFenceCeiling: optNum(fenceCeiling),
+        geoFencePositionBudget: optNum(fencePositionBudget),
       };
       if (editing) {
         await updateTenant(tenant.token, { name: name.trim() || null, tierToken, config: cfg, ...gov });
@@ -301,6 +320,57 @@ export function TenantForm({
           value={shedPriority}
           placeholder={t('defaultPlaceholder')}
           onChange={(e) => setShedPriority(e.target.value)}
+        />
+      </FormField>
+      {/* Said once, above all three, rather than in each description. It used to be said in the
+          budget's description alone, which told an operator that only that one had a firm maximum
+          — so a refusal on either of the others contradicted the copy that had just described it. */}
+      <p className="text-sm text-muted-foreground">{t('fenceCapMaximumHint')}</p>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <FormField
+          label={t('fencePositionCeilingLabel')}
+          htmlFor="t-fence-position-ceiling"
+          description={t('fencePositionCeilingDescription')}
+        >
+          <Input
+            id="t-fence-position-ceiling"
+            type="number"
+            min="1"
+            step="1"
+            value={fencePositionCeiling}
+            placeholder={t('defaultPlaceholder')}
+            onChange={(e) => setFencePositionCeiling(e.target.value)}
+          />
+        </FormField>
+        <FormField
+          label={t('fenceCeilingLabel')}
+          htmlFor="t-fence-ceiling"
+          description={t('fenceCeilingDescription')}
+        >
+          <Input
+            id="t-fence-ceiling"
+            type="number"
+            min="1"
+            step="1"
+            value={fenceCeiling}
+            placeholder={t('defaultPlaceholder')}
+            onChange={(e) => setFenceCeiling(e.target.value)}
+          />
+        </FormField>
+      </div>
+      <FormField
+        label={t('fencePositionBudgetLabel')}
+        htmlFor="t-fence-position-budget"
+        description={t('fencePositionBudgetDescription')}
+      >
+        <Input
+          id="t-fence-position-budget"
+          type="number"
+          min="1"
+          step="1"
+          value={fencePositionBudget}
+          placeholder={t('defaultPlaceholder')}
+          onChange={(e) => setFencePositionBudget(e.target.value)}
         />
       </FormField>
     </>

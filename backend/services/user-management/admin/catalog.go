@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"gorm.io/gorm"
@@ -172,6 +173,17 @@ type GovernanceOverrides struct {
 	// the tier's heldCommandCeiling, then the enforcing service's own default. It never
 	// means unlimited, and nothing downstream can read it that way.
 	HeldCommandCeiling *int
+	// The three per-tenant geofence caps (ADR-023 governance, ADR-065 tier). Ceilings like
+	// the rate fields (how much), standalone scalars like HeldCommandCeiling (no burst, no
+	// per-second unit) — and unlike either, each carries a platform MAXIMUM as well as a floor.
+	// The three maxima bound three DIFFERENT costs — a quadratic compile, a broker message, and
+	// a shared cache — and core/governance states which is which beside each constant; do not
+	// collapse them into one reason here, as this comment once did. nil means "inherit" — the
+	// tier's key, then the platform default — and never unlimited. Each cascades independently;
+	// there is no all-or-nothing group.
+	GeoFencePositionCeiling *int
+	GeoFenceCeiling         *int
+	GeoFencePositionBudget  *int
 }
 
 // validate rejects a non-positive override on any governance dimension. A nil field
@@ -215,6 +227,29 @@ func (g GovernanceOverrides) validate() error {
 	if err := validateBurstOverride("heldCommandCeiling", g.HeldCommandCeiling); err != nil {
 		return err
 	}
+	// 🔴 THE GEOFENCE CAPS GO THROUGH A BOUNDED CHECK, NOT validateBurstOverride, AND THIS IS
+	// THE DOOR THAT WOULD OTHERWISE BE LEFT OPEN. iam.ValidateTierConfig enforces these maxima
+	// on a TIER write, but it is called only from the two tier mutations — a per-tenant
+	// override never passes through it, and reaches the database through this function alone.
+	// Bounding them here is what makes the maximum a property of the platform rather than of
+	// one of the two ways to set a cap.
+	for _, c := range []struct {
+		field   string
+		value   *int
+		max     int
+		because string
+	}{
+		{iam.GeoFencePositionCeilingConfigKey, g.GeoFencePositionCeiling,
+			governance.MaxGeoFencePositionCeiling, governance.GeoFencePositionCeilingBecause},
+		{iam.GeoFenceCeilingConfigKey, g.GeoFenceCeiling,
+			governance.MaxGeoFenceCeiling, governance.GeoFenceCeilingBecause},
+		{iam.GeoFencePositionBudgetConfigKey, g.GeoFencePositionBudget,
+			governance.MaxTenantGeometryPositions, governance.GeoFencePositionBudgetBecause},
+	} {
+		if err := validateBoundedOverride(c.field, c.value, c.max, c.because); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -231,6 +266,9 @@ func (g GovernanceOverrides) applyTo(t *iam.Tenant) {
 	t.AiInferenceBurst = g.AiInferenceBurst
 	t.ShedPriority = g.ShedPriority
 	t.HeldCommandCeiling = g.HeldCommandCeiling
+	t.GeoFencePositionCeiling = g.GeoFencePositionCeiling
+	t.GeoFenceCeiling = g.GeoFenceCeiling
+	t.GeoFencePositionBudget = g.GeoFencePositionBudget
 }
 
 // TenantInput is the data to create a tenant.
@@ -288,6 +326,29 @@ func validateBurstOverride(field string, v *int) error {
 func validateShedPriorityOverride(field string, v *int) error {
 	if v != nil && (*v < 1 || *v > 100) {
 		return fmt.Errorf("%s override must be between 1 and 100 (got %d); omit it to inherit the platform default", field, *v)
+	}
+	return nil
+}
+
+// validateBoundedOverride is validateBurstOverride plus a platform MAXIMUM: positive, and no
+// larger than max. nil is inherit.
+//
+// It exists because the geofence caps are the first per-tenant overrides whose over-large value
+// is not a tenant overprovisioned but an instance degraded. Both the NUMBER and the REASON come
+// from core/governance — the same two constants iam's tier validator reads — so the two doors
+// cannot disagree about where the wall is or about why it is there.
+//
+// 🔴 THE REASON IS A PARAMETER BECAUSE THE THREE CAPS DO NOT SHARE ONE. This function used to
+// state a single rationale for all of them — "it bounds a resource shared by every tenant on the
+// instance" — which is true of the whole-fence-set budget and false of the fence count, whose
+// maximum is a broker message size. An error that explains a limit with the wrong cost sends an
+// operator to change the wrong thing.
+func validateBoundedOverride(field string, v *int, max int, because string) error {
+	if err := validateBurstOverride(field, v); err != nil {
+		return err
+	}
+	if v != nil && *v > max {
+		return fmt.Errorf("%s override must be at most %d (got %d); %s", field, max, *v, because)
 	}
 	return nil
 }

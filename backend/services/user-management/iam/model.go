@@ -386,6 +386,26 @@ type Tenant struct {
 	// fleet that stays offline an unbounded one is tenant-triggered, operator-invisible
 	// growth in durable storage.
 	HeldCommandCeiling *int
+
+	// Per-tenant geofence caps (ADR-023 governance, ADR-065 tier). THREE of them, because a
+	// tenant's geofence footprint has three independent costs and no one number bounds all
+	// three: GeoFencePositionCeiling bounds ONE fence's position count, which is what a
+	// quadratic compile is paid on; GeoFenceCeiling bounds how many fences the tenant holds,
+	// which is what the fence-set manifest's wire size is paid on; and GeoFencePositionBudget
+	// bounds the position count across the tenant's WHOLE current fence set, which is what
+	// footprint in event-processing's geometry cache is paid on.
+	//
+	// 🔴 THE THIRD IS THE ONE THAT SPENDS SOMEBODY ELSE'S RESOURCE. A held-command backlog or
+	// a stored fence is the tenant's own durable storage; a compiled fence set lives in a
+	// DETECT process shared by every tenant on the instance, so an over-large budget is not a
+	// tenant overprovisioned but an instance degraded. That is why these keys, alone among the
+	// tier settings, carry semantic MAXIMA (governance.Max*) enforced at both write doors.
+	//
+	// Each is nullable and cascades INDEPENDENTLY: nil means "inherit" — the tenant's tier
+	// decides, and failing that the platform default. None of them ever means unlimited.
+	GeoFencePositionCeiling *int
+	GeoFenceCeiling         *int
+	GeoFencePositionBudget  *int
 }
 
 func (Tenant) TableName() string { return "iam_tenants" }

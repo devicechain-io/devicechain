@@ -170,6 +170,44 @@ func (r *TenantGovernanceResolver) HeldCommandCeiling() *int32 {
 	return &i
 }
 
+// The three geofence caps, each resolved down the same cascade — override, else tier, else
+// null. Null means "no cap resolved from the tenant or its tier"; the reader
+// (device-management) substitutes the platform default, which is itself a real bound. Null is
+// inherit, never unlimited.
+//
+// 🔴 NOTHING READS THESE YET, AND THE ENFORCING READER WILL BLOCK ON THEM. device-management
+// still uses its own hard constants; when it moves onto these fields it will resolve them
+// SYNCHRONOUSLY, unlike every ceiling beside them. The others are read on hot paths that fail
+// open to a configured default and refresh out of band; these are enforced at authoring, where a
+// fail-open window produces DURABLE rows. So a slow answer here will be a slow fence mutation
+// rather than a silently unbounded one — a tradeoff made on the reader's side, and worth knowing
+// about on this one.
+//
+// The provenance is dropped here like the rates: a service enforcing a cap has no business
+// knowing which level won. That belongs to the admin plane.
+
+// GeoFencePositionCeiling resolves how many positions ONE of this tenant's fences may carry.
+func (r *TenantGovernanceResolver) GeoFencePositionCeiling() *int32 {
+	return int32OrNil(r.t.EffectiveGeoFencePositionCeiling())
+}
+
+// GeoFenceCeiling resolves how many fences this tenant may hold.
+func (r *TenantGovernanceResolver) GeoFenceCeiling() *int32 {
+	return int32OrNil(r.t.EffectiveGeoFenceCeiling())
+}
+
+// GeoFencePositionBudget resolves how many positions this tenant's whole fence set may carry.
+func (r *TenantGovernanceResolver) GeoFencePositionBudget() *int32 {
+	return int32OrNil(r.t.EffectiveGeoFencePositionBudget())
+}
+
+// int32OrNil adapts an (Effective*, SettingSource) pair to the wire's nullable Int, dropping
+// the provenance. Written once rather than three more times: the four-line tail it replaces is
+// exactly the shape that gets a nil check subtly wrong on the next copy, and a wrong one here
+// returns a zero cap — which device-management's fold reads as "not a cap" and quietly
+// replaces with the platform default.
+func int32OrNil(v *int, _ iam.SettingSource) *int32 { return rawInt32(v) }
+
 // PurgeState resolves where the tenant sits in the ADR-077 deletion lifecycle, as the
 // raw state string ("active" | "purging").
 //

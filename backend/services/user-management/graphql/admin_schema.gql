@@ -151,6 +151,19 @@ type AdminTenant {
     # console can round-trip it on an unrelated edit rather than nulling it (updateTenant
     # is a full replace of these fields).
     heldCommandCeiling: Int
+    # Per-tenant geofence cap overrides. Null means the tenant inherits its tier's key, then
+    # the platform default — never unlimited. Readable here, like every override above, so the
+    # console can round-trip them on an unrelated edit rather than nulling them (updateTenant is
+    # a full replace of these fields); nulling one here would RAISE a cap an operator had
+    # deliberately tightened.
+    #
+    # Each bounds a different cost: geoFencePositionCeiling one fence's position count (a
+    # quadratic compile), geoFenceCeiling the tenant's fence count (a manifest that must fit one
+    # broker message), and geoFencePositionBudget the position count across the whole fence set
+    # (footprint in a DETECT geometry cache shared by every tenant on the instance).
+    geoFencePositionCeiling: Int
+    geoFenceCeiling: Int
+    geoFencePositionBudget: Int
     # What this tenant is ACTUALLY metered at for every governance dimension, and
     # WHY (ADR-065 decision 7): the cascade above resolved down to one value per
     # dimension, carrying the level that produced it and the levels it beat.
@@ -283,8 +296,22 @@ input AdminTenantCreateRequest {
     # deliberately withheld because the device is known absent). A CEILING — how much —
     # unlike shedPriority above, which is a point on a band scale: any positive whole
     # number is meaningful here. Null inherits the tenant's tier heldCommandCeiling,
-    # then the enforcing service's own default. No value means unlimited.
+    # then the enforcing service's own default. No value means unlimited — at any level.
     heldCommandCeiling: Int
+    # Per-tenant geofence cap overrides (ADR-023 governance, ADR-065 tier). Null inherits the
+    # tenant's tier key, then the platform default. Unlike every ceiling above, each of these
+    # also has a platform MAXIMUM and a value past it is REJECTED rather than clamped. The three
+    # maxima bound three DIFFERENT costs — a quadratic per-fence compile, the fence-set
+    # manifest's broker message, and a DETECT geometry cache shared by every tenant — so raising
+    # one past the platform bound is not a per-tenant decision.
+    #
+    # geoFencePositionCeiling — positions in one fence (bounds a quadratic compile).
+    # geoFenceCeiling — fences the tenant may hold (bounds the fence-set manifest's wire size).
+    # geoFencePositionBudget — positions across the tenant's whole fence set (bounds its share of
+    # the shared geometry cache).
+    geoFencePositionCeiling: Int
+    geoFenceCeiling: Int
+    geoFencePositionBudget: Int
 }
 
 # Data to update a tenant (its token is fixed). A null ingest* / outbound* override
@@ -315,6 +342,13 @@ input AdminTenantUpdateRequest {
     # Per-tenant HELD-command ceiling. Null clears it, reverting to the tier's
     # heldCommandCeiling then the enforcing service's default — never to unlimited.
     heldCommandCeiling: Int
+    # Per-tenant geofence cap overrides. Null clears one, reverting to the tier's key then the
+    # platform default — never to unlimited. A value above the platform maximum is rejected, not
+    # clamped; the three maxima bound three different costs (a per-fence compile, a broker
+    # message, a shared geometry cache).
+    geoFencePositionCeiling: Int
+    geoFenceCeiling: Int
+    geoFencePositionBudget: Int
 }
 
 # Data required to create a global identity. Each system role must name an
