@@ -278,7 +278,8 @@ func (t *Tenant) EffectiveGeoFenceCeiling() (*int, SettingSource) {
 // EffectiveGeoFencePositionBudget resolves how many positions this tenant's whole fence set may
 // carry, down the same cascade. Unlike the two beside it this one bounds a SHARED resource —
 // event-processing's geometry cache serves every tenant in one process — which is why its
-// platform maximum is the tightest of the three relative to its default.
+// maximum is the only one of the three DERIVED (from the cache) rather than measured off a cost
+// curve or a wire size. See core/governance for the derivation; this file should not retell it.
 func (t *Tenant) EffectiveGeoFencePositionBudget() (*int, SettingSource) {
 	if v := t.OverrideGeoFencePositionBudget(); v != nil {
 		return v, SourceOverride

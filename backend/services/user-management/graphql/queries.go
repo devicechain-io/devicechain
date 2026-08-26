@@ -175,12 +175,13 @@ func (r *TenantGovernanceResolver) HeldCommandCeiling() *int32 {
 // (device-management) substitutes the platform default, which is itself a real bound. Null is
 // inherit, never unlimited.
 //
-// 🔴 UNLIKE EVERY CEILING BESIDE THEM, DEVICE-MANAGEMENT BLOCKS ON THIS READ. The other
-// per-tenant settings are resolved on hot paths that fail open to a configured default and
-// refresh out of band; these are enforced at authoring, where a fail-open window produces
-// DURABLE rows that then become grandfathered. So a slow answer here is a slow fence
-// mutation, not a silently unbounded one — a tradeoff made deliberately on the reader's side,
-// and worth knowing about on this one.
+// 🔴 NOTHING READS THESE YET, AND THE ENFORCING READER WILL BLOCK ON THEM. device-management
+// still uses its own hard constants; when it moves onto these fields it will resolve them
+// SYNCHRONOUSLY, unlike every ceiling beside them. The others are read on hot paths that fail
+// open to a configured default and refresh out of band; these are enforced at authoring, where a
+// fail-open window produces DURABLE rows. So a slow answer here will be a slow fence mutation
+// rather than a silently unbounded one — a tradeoff made on the reader's side, and worth knowing
+// about on this one.
 //
 // The provenance is dropped here like the rates: a service enforcing a cap has no business
 // knowing which level won. That belongs to the admin plane.
@@ -205,13 +206,7 @@ func (r *TenantGovernanceResolver) GeoFencePositionBudget() *int32 {
 // exactly the shape that gets a nil check subtly wrong on the next copy, and a wrong one here
 // returns a zero cap — which device-management's fold reads as "not a cap" and quietly
 // replaces with the platform default.
-func int32OrNil(v *int, _ iam.SettingSource) *int32 {
-	if v == nil {
-		return nil
-	}
-	i := int32(*v)
-	return &i
-}
+func int32OrNil(v *int, _ iam.SettingSource) *int32 { return rawInt32(v) }
 
 // PurgeState resolves where the tenant sits in the ADR-077 deletion lifecycle, as the
 // raw state string ("active" | "purging").

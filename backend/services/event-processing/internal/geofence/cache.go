@@ -62,14 +62,21 @@ import (
 //   - governance.DefaultTenantGeometryPositions is one tenant's DEFAULT whole-fence-set budget, and
 //     it is a FIFTH of this bound, so five tenants at their default budget are resident at once;
 //   - governance.MaxTenantGeometryPositions is the largest budget any tier may grant, and it is a
-//     HALF of this bound, so no single tenant — at any tier an operator can configure — may hold
-//     more than half the cache and evict every other tenant's geometry on one refill.
+//     HALF of this bound, so no tenant's CURRENT AUTHORED SET can exceed half the cache.
+//
+// 🔴 THE SECOND IS A BOUND ON WHAT A TENANT MAY ADD, NOT ON WHAT IT HOLDS, and this comment used
+// to claim the stronger thing. Entries here are keyed (tenant, hash) and outlive every fence-set
+// version that names them; evictLocked walks ONE GLOBAL LRU and the only targeted removal is
+// PurgeTenant. So a tenant that replaces its fence set holds old and new at once — up to twice
+// its budget — until LRU drains the old, and a churning tenant can still evict its neighbours.
+// Total memory stays finite because maxVertices is enforced globally; per-tenant occupancy is
+// not bounded here and wants version-aware pruning, which is its own slice.
 //
 // 🔴 THOSE TWO SENTENCES CROSS A UNIT BOUNDARY, AND IT IS SAFE IN EXACTLY ONE DIRECTION. This
 // bound counts COMPILED vertices; the governance budgets count authored POSITIONS, which is what
 // device-management can check when a fence is written and is a different number by design — a
-// compiled ring drops its repeated closing position, and model_geofences.go says the two are
-// deliberately not reconciled. So the equation below is not a unit identity.
+// compiled ring drops its repeated closing position, and polygon2d.go's vertexCount says the two
+// are "deliberately not reconciled". So the equation below is not a unit identity.
 //
 // It is sound because the inequality runs the right way: positions >= compiled vertices, always,
 // for every fence. A tenant granted P positions therefore occupies AT MOST P vertices here, so

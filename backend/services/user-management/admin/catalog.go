@@ -175,10 +175,12 @@ type GovernanceOverrides struct {
 	HeldCommandCeiling *int
 	// The three per-tenant geofence caps (ADR-023 governance, ADR-065 tier). Ceilings like
 	// the rate fields (how much), standalone scalars like HeldCommandCeiling (no burst, no
-	// per-second unit) — and unlike either, they carry a platform MAXIMUM as well as a floor,
-	// because what they bound is spent in a process every tenant shares. nil means "inherit"
-	// — the tier's key, then the platform default — and never unlimited. Each cascades
-	// independently; there is no all-or-nothing group.
+	// per-second unit) — and unlike either, each carries a platform MAXIMUM as well as a floor.
+	// The three maxima bound three DIFFERENT costs — a quadratic compile, a broker message, and
+	// a shared cache — and core/governance states which is which beside each constant; do not
+	// collapse them into one reason here, as this comment once did. nil means "inherit" — the
+	// tier's key, then the platform default — and never unlimited. Each cascades independently;
+	// there is no all-or-nothing group.
 	GeoFencePositionCeiling *int
 	GeoFenceCeiling         *int
 	GeoFencePositionBudget  *int

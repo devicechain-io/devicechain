@@ -438,7 +438,7 @@ func TestTheTenantGeometryBudgetIsHalfAShareOfSomething(t *testing.T) {
 			"fifth of the geometry cache and the maximum is half of it. Re-derive both, and "+
 			"event-processing's DefaultMaxCachedVertices with them", got, want)
 	}
-	if fmt.Sprint(2*MaxTenantGeometryPositions) != "250000" {
+	if 2*MaxTenantGeometryPositions != 250_000 {
 		t.Errorf("the implied geometry cache is %d vertices, not the 250,000 event-processing is built "+
 			"around — DefaultMaxCachedVertices derives from MaxTenantGeometryPositions, so this "+
 			"is a change to the cache", 2*MaxTenantGeometryPositions)

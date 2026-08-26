@@ -111,10 +111,11 @@
   "deletionsAllClean_other": "{{count}} sistemas, todo limpio",
   "deletionsSomeHolding_one": "1 sistema aún retiene datos",
   "deletionsSomeHolding_other": "{{count}} sistemas aún retienen datos",
-  "fenceCeilingDescription": "Cuántas geocercas puede conservar este inquilino. Cada una se anuncia a la plataforma cuando el conjunto cambia, y ese anuncio debe caber en un solo mensaje, lo que le impone un máximo firme. Déjalo en blanco para heredar el límite del nivel y, en su defecto, el valor predeterminado de la plataforma.",
+  "fenceCeilingDescription": "Cuántas geocercas puede conservar este inquilino. Cada una se anuncia a la plataforma cuando el conjunto cambia, y ese anuncio debe caber en un solo mensaje, que es lo que la limita. Déjalo en blanco para heredar el límite del nivel y, en su defecto, el valor predeterminado de la plataforma.",
   "fenceCeilingLabel": "Número de geocercas",
-  "fencePositionBudgetDescription": "Cuántos puntos pueden sumar en total las geocercas de este inquilino. A diferencia de los dos anteriores, este es un reclamo sobre espacio que la plataforma comparte entre todos los inquilinos —mantiene las geocercas de todos listas para comprobar las posiciones entrantes—, por lo que su máximo es firme y un número mayor se rechaza en vez de reducirse en silencio. Déjalo en blanco para heredar el límite del nivel y, en su defecto, el valor predeterminado de la plataforma.",
+  "fencePositionBudgetDescription": "Cuántos puntos pueden sumar en total las geocercas de este inquilino. Este es un reclamo sobre espacio que la plataforma comparte entre todos los inquilinos —mantiene las geocercas de todos listas para comprobar las posiciones entrantes—, así que el límite propio de la plataforma es más bajo respecto al valor predeterminado que en los otros. Déjalo en blanco para heredar el límite del nivel y, en su defecto, el valor predeterminado de la plataforma.",
   "fencePositionBudgetLabel": "Presupuesto de puntos de geocercas",
   "fencePositionCeilingDescription": "Cuántos puntos puede tener una sola geocerca. Comprobar si una geocerca se cruza a sí misma cuesta un tiempo que crece con el cuadrado del número de puntos, así que un contorno muy detallado es lento de aceptar y lento de recargar. Déjalo en blanco para heredar el límite del nivel y, en su defecto, el valor predeterminado de la plataforma.",
-  "fencePositionCeilingLabel": "Puntos por geocerca"
+  "fencePositionCeilingLabel": "Puntos por geocerca",
+  "fenceCapMaximumHint": "Cada uno de estos tres tiene además un máximo de plataforma; un número mayor se rechaza en vez de reducirse en silencio."
 }

@@ -91,9 +91,16 @@ func TestTheCapOverrideDoorRejectsRatherThanClamps(t *testing.T) {
 	err := g.validate()
 	require.Error(t, err, "an over-large budget override must be refused")
 	require.Contains(t, err.Error(), "geoFencePositionBudget", "the error must name the field the caller sent")
+	// 🔴 THE COMPARISON IS AGAINST A FRESH EXPRESSION, NOT AGAINST `over`, AND THAT IS THE WHOLE
+	// ASSERTION. `g.GeoFencePositionBudget` POINTS AT `over`, so `require.Equal(over, *g.…)`
+	// compares the variable with itself: a validate() that clamped through the pointer would
+	// change both sides and the check would pass. It was written that way, and a reviewer proved
+	// it — a validateBoundedOverride that clamps AND still returns the error passed the entire
+	// admin package. A guard aliased to the thing it guards is decoration.
 	require.NotNil(t, g.GeoFencePositionBudget)
-	require.Equal(t, over, *g.GeoFencePositionBudget,
-		"validate() must not mutate the caller's value — refusing and clamping are different answers")
+	require.Equal(t, governance.MaxTenantGeometryPositions+1, *g.GeoFencePositionBudget,
+		"validate() mutated the caller's value — refusing and clamping are different answers, and "+
+			"only one of them leaves the operator's number and the enforced number the same")
 }
 
 // TestTheCapOverridesReachTheTenantRow pins applyTo. Every field it forgets is one an operator

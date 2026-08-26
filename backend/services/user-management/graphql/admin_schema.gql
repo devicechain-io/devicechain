@@ -296,12 +296,13 @@ input AdminTenantCreateRequest {
     # deliberately withheld because the device is known absent). A CEILING — how much —
     # unlike shedPriority above, which is a point on a band scale: any positive whole
     # number is meaningful here. Null inherits the tenant's tier heldCommandCeiling,
-    # then the enforcing service's own default. No value means unlimited.
+    # then the enforcing service's own default. No value means unlimited — at any level.
     heldCommandCeiling: Int
     # Per-tenant geofence cap overrides (ADR-023 governance, ADR-065 tier). Null inherits the
     # tenant's tier key, then the platform default. Unlike every ceiling above, each of these
-    # also has a platform MAXIMUM and a value past it is REJECTED rather than clamped: what
-    # they bound is spent in a DETECT process every tenant on the instance shares, so raising
+    # also has a platform MAXIMUM and a value past it is REJECTED rather than clamped. The three
+    # maxima bound three DIFFERENT costs — a quadratic per-fence compile, the fence-set
+    # manifest's broker message, and a DETECT geometry cache shared by every tenant — so raising
     # one past the platform bound is not a per-tenant decision.
     #
     # geoFencePositionCeiling — positions in one fence (bounds a quadratic compile).
@@ -342,8 +343,9 @@ input AdminTenantUpdateRequest {
     # heldCommandCeiling then the enforcing service's default — never to unlimited.
     heldCommandCeiling: Int
     # Per-tenant geofence cap overrides. Null clears one, reverting to the tier's key then the
-    # platform default — never to unlimited. A value above the platform maximum is rejected,
-    # not clamped: these bound a DETECT process every tenant shares.
+    # platform default — never to unlimited. A value above the platform maximum is rejected, not
+    # clamped; the three maxima bound three different costs (a per-fence compile, a broker
+    # message, a shared geometry cache).
     geoFencePositionCeiling: Int
     geoFenceCeiling: Int
     geoFencePositionBudget: Int

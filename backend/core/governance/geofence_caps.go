@@ -72,11 +72,18 @@ const (
 	// MaxGeoFenceCeiling is the largest fence count any tier may grant.
 	//
 	// It is a WIRE bound, and it is the only one of the three that is. A fence-set manifest
-	// carries one {token, hash} pair per fence and must fit a single broker message;
-	// device-management's MaxGeoFenceSetManifestBytes() builds that worst case and measures
-	// it rather than asserting a number, and it must loop THIS constant rather than the
-	// default, because the default is what a tenant gets and this is what the platform must
-	// survive.
+	// carries one {token, hash} pair per fence and must fit a single broker message, and
+	// device-management's MaxGeoFenceSetManifestBytes() builds that worst case and measures it
+	// rather than asserting a number.
+	//
+	// 🔴 THAT FUNCTION DOES NOT YET LOOP THIS CONSTANT — IT LOOPS THE DEFAULT, AND THIS IS AN
+	// OBLIGATION ON THE ENFORCEMENT SLICE, NOT A DESCRIPTION OF THE TREE. Today it loops
+	// MaxGeoFencesPerTenant = 100, so the startup warning it feeds measures a ~21.6 KB worst
+	// case while a tier granted this maximum implies ~860 KB — a 40× understatement of the thing
+	// the warning exists to catch. Nothing fails when that rewiring is forgotten, because
+	// nothing ties the two constants together; TestTheFenceCeilingMaximumIsStatedInBytesSomewhereReal
+	// re-derives the arithmetic HERE, which is real but weaker (it restates the entry shape
+	// rather than marshalling one). The rewiring is tracked in the arc handoff.
 	//
 	// Measured 2026-08-25 at 215 bytes per entry (a 128-character token, a 64-character hash,
 	// and JSON's punctuation): the break-even against the chart's default 1 MiB
@@ -94,10 +101,12 @@ const (
 	//
 	// It is the tenant's share of event-processing's geometry cache, which is the shared
 	// resource this whole key exists for: 250,000 compiled vertices across every retained
-	// entry, for every tenant the process serves. 50,000 is a fifth of it, so five tenants at
-	// their full default budget are resident simultaneously — the property the cache's own
-	// comment used to claim ("holds several tenants at that absolute ceiling") and that
-	// nothing enforced. The alias in event-processing's cache makes it hold by construction.
+	// entry, for every tenant the process serves. 50,000 is a fifth of it, so five tenants'
+	// full default AUTHORED SETS fit at once — the property the cache's own comment used to
+	// claim ("holds several tenants at that absolute ceiling") and that nothing enforced. The
+	// alias in event-processing's cache makes the ARITHMETIC hold by construction; see
+	// MaxTenantGeometryPositions for what that does and does not buy, because retained
+	// occupancy is a larger number than the authored set.
 	//
 	// 🔴 IT IS DENOMINATED IN POSITIONS, NOT COMPILED VERTICES, and the two are deliberately
 	// not reconciled in this codebase (a compiled ring drops its repeated closing position).
@@ -107,11 +116,21 @@ const (
 
 	// MaxTenantGeometryPositions is the largest whole-fence-set budget any tier may grant.
 	//
-	// The property at stake is not "several tenants fit" — that one belongs to the default —
-	// but the weaker and more structural one: NO SINGLE TENANT MAY HOLD MORE THAN HALF THE
-	// SHARED CACHE. Above half, one tenant's fill can evict every other tenant's geometry, and
-	// the cache stops being a shared resource and becomes that tenant's, with everyone else
-	// paying a refetch and an O(V²) recompile on every event.
+	// 🔴 IT BOUNDS WHAT A TENANT MAY *ADD*, NOT WHAT IT *HOLDS*, AND AN EARLIER VERSION OF THIS
+	// COMMENT CLAIMED THE STRONGER THING. It said no single tenant may hold more than half the
+	// shared cache. That does not follow, and reading the cache says why: entries are keyed
+	// (tenant, hash), an entry "outlives every fence-set version that names it", and nothing
+	// prunes a superseded version — eviction walks ONE GLOBAL LRU and the only targeted removal
+	// is PurgeTenant, which is tenant deletion. So a tenant at this budget that replaces its
+	// fence set holds the old geometry and the new one at once, up to twice this number, until
+	// LRU pressure drains the old.
+	//
+	// What the half IS: a bound on a tenant's CURRENT AUTHORED SET, which is what authoring can
+	// actually check. At steady state — once churn settles and the superseded entries age out —
+	// two tenants at this maximum coexist. Bounding retained OCCUPANCY needs version-aware
+	// pruning or per-tenant accounting, which is a slice of its own; until then the global
+	// maxVertices ceiling is what keeps total memory finite, and a churning tenant can still
+	// evict its neighbours.
 	//
 	// So this is the cache bound halved, and event-processing derives the cache bound FROM it
 	// (see DefaultMaxCachedVertices) rather than the other way round, which makes the relation
@@ -183,16 +202,23 @@ func DefaultGeoFenceCaps() GeoFenceCaps {
 //
 // Neither property holds here. These caps are enforced at AUTHORING — a low-rate GraphQL
 // mutation, already inside a database transaction — and what a fail-open window produces is
-// DURABLE: rows that mint a fence-set version, evaluate in DETECT, and are then protected by
-// this feature's own grandfathering rule, which refuses to make anything worse. An operator
-// lowering an abusive tenant's cap would have it defeated by any device-management restart,
-// permanently. So the first resolve for a tenant blocks on the fetch and can FAIL.
+// DURABLE: rows that mint a fence-set version and evaluate in DETECT. An operator lowering an
+// abusive tenant's cap would have it defeated by any device-management restart, permanently. So
+// the first resolve for a tenant blocks on the fetch and can FAIL.
+//
+// 🔴 The enforcement slice will additionally GRANDFATHER a tenant already over a cap — refusing
+// only a change that makes things worse — and that rule is load-bearing from its first day
+// rather than polish: the default budget is 50,000 positions while the constants still live in
+// device-management permit 100 × 512 = 51,200, so a tenant legally at today's ceilings is over
+// the shipped default the moment enforcement lands. It does not exist yet; do not read the
+// paragraph above as describing it.
 //
 // The degradation is staged rather than binary, because the two failures are not equally bad:
 //
-//   - a STALE entry is served when a refresh fails. It is a real cap the operator set, this
-//     process was told it, and the alternative — refusing — takes fence authoring down
-//     platform-wide on a blip, including the deletes a tenant uses to get back under a cap.
+//   - a STALE entry is served when a refresh fails. It is a real cap the operator set and this
+//     process was told it, so serving it is bounded and converges on the TTL; refusing instead
+//     would take fence authoring down platform-wide on a blip, for no gain over a value the
+//     operator most recently chose.
 //   - a COLD miss returns an error. There is nothing to serve, and DefaultGeoFenceCaps() is
 //     not an answer: a tier may sit below the defaults, so serving them would raise the cap of
 //     exactly the tenant whose tier could not be read.

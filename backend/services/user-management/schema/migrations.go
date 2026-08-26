@@ -55,9 +55,10 @@ var (
 		NewTenantHeldCommandCeilingMigration(),
 		// The three per-tenant geofence caps: how many positions one fence may carry, how
 		// many fences the tenant may hold, and how many positions its whole fence set may
-		// carry. The third is the one that bounds a SHARED resource — a compiled fence set
-		// lives in a DETECT process serving every tenant — which is why it exists at all
-		// and why it, alone among the governance overrides, has a platform maximum.
+		// carry. All three carry a platform maximum — the first governance overrides that do —
+		// and the third is the one that bounds a resource the tenant does not own, a compiled
+		// fence set in a DETECT process serving every tenant. The costs are stated once, in
+		// core/governance; this comment deliberately does not retell them.
 		NewTenantGeoFenceCapsMigration(),
 	}
 )

@@ -322,6 +322,10 @@ export function TenantForm({
           onChange={(e) => setShedPriority(e.target.value)}
         />
       </FormField>
+      {/* Said once, above all three, rather than in each description. It used to be said in the
+          budget's description alone, which told an operator that only that one had a firm maximum
+          — so a refusal on either of the others contradicted the copy that had just described it. */}
+      <p className="text-sm text-muted-foreground">{t('fenceCapMaximumHint')}</p>
       <div className="grid gap-4 sm:grid-cols-2">
         <FormField
           label={t('fencePositionCeilingLabel')}
