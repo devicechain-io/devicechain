@@ -382,6 +382,20 @@ func (api *Api) UpdateGeoFence(ctx context.Context, token string,
 		// Save. It costs one row lock on an authoring path, which is the cheapest place in
 		// this service to spend one.
 		//
+		// 🔴 NO TEST COVERS THIS, AND THAT IS A PROPERTY OF THE TEST STACK RATHER THAN AN
+		// OVERSIGHT — SO DO NOT READ A GREEN SUITE AS EVIDENCE FOR IT. The unit tests run on
+		// sqlite, which has neither the row locking nor the concurrency this defends against,
+		// and the live models cannot declare the per-tenant unique index the argument above
+		// leans on (see archiveGeoFenceGeometries). In a SEQUENTIAL test the pre-transaction
+		// read and this one return the same bytes, so the fix has no observable behaviour to
+		// assert. A mutation putting the read back outside the transaction IS killed, but
+		// incidentally — sqlite refuses a non-transaction read while the transaction is open,
+		// which is a fact about the plumbing and not about the race. Believing that kill would
+		// be exactly the mistake of measuring the logic around a thing instead of the thing.
+		//
+		// What would actually cover it is two concurrent updates against real PostgreSQL, in
+		// the integration rig rather than here.
+		//
 		// The budget check in the mint needs none of this — it reads oldSum inside tx and
 		// the per-tenant unique index on (tenant, version) forces a concurrent mint to
 		// conflict and roll back. The per-fence ceiling had no such serialization.
