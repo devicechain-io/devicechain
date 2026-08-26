@@ -76,10 +76,17 @@ import (
 // a no-op. CREATE INDEX CONCURRENTLY is deliberately NOT used, and not merely for lack of
 // precedent in this tree: a CONCURRENTLY build that fails leaves the index behind marked
 // INVALID, and the replay's `IF NOT EXISTS` then sees a same-named relation and skips it
-// forever — a planner-ignored index, permanently recorded as applied. A plain build takes
-// a table-level lock against writes for the duration, which pre-GA (an instance is
-// recreated, not migrated) is a cost measured in the seconds a fresh install spends on
-// empty tables.
+// forever — a planner-ignored index, permanently recorded as applied. That reason stands on
+// its own and is the whole of it.
+//
+// 🔴 IT USED TO CARRY A SECOND REASON THAT WAS WRONG: that a plain build's table-level write
+// lock costs only the seconds a fresh install spends on empty tables, because pre-GA an
+// instance is recreated rather than migrated. That is true of a BASELINE. This is an APPENDED
+// migration, so it runs on live databases with rows in them — it did, on every instance
+// upgraded to v0.12.0 — and the lock is held against a populated table for the length of the
+// build. The trade is still the right one, but it is a real cost during an upgrade rather than
+// no cost at all, and pricing it as free is how the next appended migration talks itself into
+// something worse.
 //
 // # Naming
 //
