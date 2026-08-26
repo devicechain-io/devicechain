@@ -23,7 +23,7 @@
   "version": "v0.13.0",
   "breaking": false,
   "highlights": [
-    "A plain helm upgrade from v0.12.x: no migration, and no API, topic, permission or configuration change.",
+    "A plain helm upgrade from v0.12.x, changing no API, topic, permission or configuration key. The schema change is additive, and the upgrade rewrites stored geofence history into its new form as it runs — without that step an upgraded instance keeps every fence but stops matching geofence rules against them.",
     "Geofence limits are now part of a tenant's plan. The limit on positions in one fence and the limit on fences per tenant are tier settings rather than fixed numbers, joined by a new limit on the total positions across a tenant's whole fence set. All three keep their previous values by default, so a tenant nobody has changed is metered exactly where it was.",
     "A change is refused only when it makes one of those numbers larger. Lowering a tenant's limits never strands the fences it already holds, and renaming or deleting a fence keeps working regardless.",
     "Large fence sets now hold together on the wire. A fence's shape is stored once and addressed by its content, and the detection engine is handed a list of references rather than every shape inline — so a fence set no longer has to fit in one broker message, and editing one fence no longer rewrites the rest.",
