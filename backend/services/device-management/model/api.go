@@ -8,8 +8,61 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/entity"
+	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
+
+// GeoFenceCapsResolver reads a tenant's three RESOLVED geofence caps — the per-tenant
+// override, else the tenant's tier, else the platform default, folded into three live
+// numbers by whoever implements this (ADR-023 governance, ADR-065 packaging).
+//
+// It is a narrow READ seam, mirroring how command-delivery consumes
+// governance.HeldCommandCeilingResolver: this package depends on the QUESTION, never on the
+// machinery that answers it — a service-token client, a cache, user-management's governance
+// query — so every cap can be exercised here with a two-line stub.
+//
+// 🔴 IT RETURNS AN ERROR, AND IT IS THE ONLY GOVERNANCE SEAM IN THIS CODEBASE THAT DOES.
+// The others resolve on a hot path where the platform default is itself a real bound, so
+// they answer from a cold cache and refresh out of band. These caps are enforced at
+// AUTHORING, and what a fail-open window produces here is DURABLE — rows that mint a
+// fence-set version and are compiled by the detection engine. A tier may also declare caps
+// BELOW the platform defaults, so answering an unresolvable tenant with the defaults would
+// hand exactly that tenant a LARGER cap than the operator granted it. There is no safe
+// number to invent, so the error travels and the caller decides.
+//
+// 🔴 AND THE CALLERS DECIDE DIFFERENTLY, WHICH IS THE POINT. Refusing to GROW a fence set on
+// an unresolvable cap is right; a DELETE needs no cap at all and must not be blocked by it.
+// See Api.geoFenceCaps, which resolves once per mutation before the transaction opens and
+// hands back an attempt rather than a number.
+//
+// 🔴 A SHRINK IS NOT IN THAT SECOND GROUP, AND THIS SENTENCE HAS NOW PUT IT THERE FOUR TIMES
+// ACROSS THIS ARC — INCLUDING ONCE IN THE COMMIT THAT CORRECTED IT ELSEWHERE. Shrinking one
+// of several identically-drawn fences UN-DEDUPLICATES them, which raises the whole-set total,
+// so a shrink can legitimately need a number and is blocked when none can be had. Only the
+// delete path is exempt, and it is exempt structurally (geoFenceCapsNotNeeded), not by rule.
+// 🔴 AN IMPLEMENTATION OWES THREE LIVE, POSITIVE NUMBERS ON THE SUCCESS PATH. Every field of
+// the returned GeoFenceCaps is used as a bound directly, with no folding and no clamp here —
+// governance.GeoFenceCaps already promises that ("there is no value at any level meaning
+// unlimited", and its fetch folds each field onto the platform default). A zero would refuse
+// everything, which is at least the safe direction, but it is stated as an obligation on the
+// implementation rather than defended against here: a clamp guarding a value that cannot
+// arrive is a comment wearing an if-statement, and this codebase has shipped several.
+type GeoFenceCapsResolver interface {
+	Resolve(ctx context.Context, tenant string) (governance.GeoFenceCaps, error)
+}
+
+// GeoFenceCapRefusalCounter counts authoring calls refused by a geofence cap, so an
+// operator can see a tenant hitting its packaging ceiling without reading logs.
+//
+// 🔴 THE LABEL IS THE CAP, NEVER THE TENANT. A per-tenant label on a Prometheus metric is
+// unbounded cardinality on a multi-tenant instance — a denial of service on the monitoring
+// stack delivered by the monitoring stack. Which of the three caps refused is a
+// three-valued label and answers the question an operator actually has: whether to raise a
+// tier's ceiling, its fence count, or its budget. Which TENANT is a question for the API
+// error, which names the number and the reason at the point of refusal.
+type GeoFenceCapRefusalCounter interface {
+	CountGeoFenceCapRefusal(cap string)
+}
 
 type Api struct {
 	RDB *rdb.RdbManager
@@ -73,6 +126,20 @@ type Api struct {
 	// before wiring — disabling emission. Emission is post-commit and best-effort
 	// (at-most-once), like the other fact publishers.
 	GeoFenceSetPublisher GeoFenceSetPublisher
+
+	// GeoFenceCapsResolver, when set, supplies the tenant's three geofence caps.
+	//
+	// 🔴 NIL MEANS THE PLATFORM DEFAULTS, NOT "UNBOUNDED", AND NOT "SKIP THE CHECKS". A
+	// unit test, or a deployment whose service secret or user-management coordinate is
+	// unset, still meters every tenant at governance.DefaultGeoFenceCaps() — which is
+	// exactly the numbers this service enforced as hard constants before the caps became
+	// tier-driven, so an unconfigured instance behaves as the previous release did rather
+	// than as an ungoverned one. main.go warns at startup when it leaves this nil.
+	GeoFenceCapsResolver GeoFenceCapsResolver
+
+	// GeoFenceCapRefusals, when set, counts refusals by which cap refused. Nil disables
+	// counting only; it never changes a verdict.
+	GeoFenceCapRefusals GeoFenceCapRefusalCounter
 }
 
 // CacheEvictor drops the hot-path caches (ADR-022 B2) that a mutation makes stale.

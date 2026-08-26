@@ -444,7 +444,7 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 // are history and count for nothing.
 //
 // It is a count-then-insert, deliberately NOT serialized with a lock, following the
-// same reasoning as device-management's MaxGeoFencesPerTenant: two simultaneous
+// same reasoning as device-management's geofence-count ceiling: two simultaneous
 // enqueues at the limit can both pass, leaving the tenant one over. That is
 // tolerated. The ceiling exists to keep an offline fleet's backlog — and the
 // unbounded read the delivery sweep performs over it — from growing without end;

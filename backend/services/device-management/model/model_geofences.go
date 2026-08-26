@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/geo"
+	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -119,82 +120,41 @@ type GeoFenceGeometry struct {
 	Geometry json.RawMessage `json:"geometry"`
 }
 
-// Bounds enforced at AUTHORING time. The first two look like one bound split in half and
-// they are not: each holds a different cost, for a different consumer, and only the first
-// of them is about a rule's evaluation at all. Read them before moving either.
+// Bounds enforced at AUTHORING time — the ones that are PLATFORM properties, the same for
+// every tenant on the instance. They are NOT the whole set, and the ones that are missing
+// used to live here.
 //
-// 🔴 THE PUBLISH-TIME CEL COST GATE CANNOT SEE THE FIRST OF THEM. It estimates an
-// expression's cost STATICALLY, from the expression tree, while a containment call's real
-// cost is data-dependent — how large the named fence is. A static estimator therefore
-// prices `inFence(…)` as one call whether it tests a 4-vertex yard or a 40,000-vertex
-// coastline. The cost has to be bounded where the data is written, which is here.
+// 🔴 THREE OF A FENCE SET'S BOUNDS ARE TIER SETTINGS AND CANNOT BE CONSTANTS AT ALL: how
+// many positions one fence may carry, how many fences a tenant may hold, and how many
+// positions its whole current set may total. An operator packages those per tenant
+// (core/governance's GeoFencePositionCeiling, GeoFenceCeiling, GeoFencePositionBudget), so
+// they are resolved per call rather than compiled in — see Api.geoFenceCaps and the three
+// checks it feeds. Two constants named MaxGeoFenceVertices and MaxGeoFencesPerTenant stood
+// here until the caps became tier-driven; they are deleted rather than kept as defaults,
+// because a constant that reads like a bound while nothing enforces it is the more
+// expensive of the two mistakes.
 //
-// The third bounds a different quantity again; see it for why counting positions does not
-// bound bytes.
+// 🔴 A TIER-DRIVEN CAP HAS A PLATFORM MAXIMUM, AND THE TWO ARE DIFFERENT NUMBERS DOING
+// DIFFERENT JOBS. The tenant's cap is what THAT TENANT is metered at; the platform maximum
+// is the largest any tier may grant, and therefore what the INSTANCE must survive. So any
+// bound in this package that protects the instance — a worst-case size, a guard on a
+// superlinear scan — must be derived from governance's MAXIMUM, never from its default,
+// which understates the worst case by whatever the tiers are allowed to add. The default is
+// the right number for exactly one question: what a tenant that declares nothing gets.
+//
+// 🔴 THE PUBLISH-TIME CEL COST GATE CANNOT SEE THE PER-FENCE POSITION CEILING. It estimates
+// an expression's cost STATICALLY, from the expression tree, while a containment call's real
+// cost is data-dependent — how large the named fence is. A static estimator therefore prices
+// `inFence(…)` as one call whether it tests a 4-vertex yard or a 40,000-vertex coastline.
+// The cost has to be bounded where the data is written, which is at authoring.
+//
+// MaxGeoFenceGeometryBytes below bounds a different quantity again; see it for why counting
+// positions does not bound bytes.
 const (
-	// MaxGeoFenceVertices bounds a single fence's total position count across every
-	// ring (the closing position of each ring counts; it is cheaper to be conservative
-	// than to explain the exception).
-	//
-	// 512 sits about two orders of magnitude above real geofences — a site boundary, a
-	// yard, a loading zone are tens of vertices, and a simplified administrative
-	// boundary is low hundreds — while keeping the two costs that ARE superlinear in it
-	// computable rather than unbounded:
-	//
-	//   - COMPILE is O(vertices²), in the self-intersection scan core/geo's
-	//     LoopSelfIntersects performs because s2.Loop.Validate does not detect crossings.
-	//     That function's own comment names THIS ceiling to justify its quadratic —
-	//     ~131k orientation tests at 512, paid once per fence per fence-set version and
-	//     never per event — so raising this constant is what makes it worth re-pricing.
-	//   - MEMORY is O(vertices) per retained fence, and it is the unit the DETECT
-	//     engine's geometry cache spends: event-processing's DefaultMaxCachedVertices is
-	//     denominated in exactly this quantity.
-	//
-	// 🔴 PER-EVENT CONTAINMENT IS NOT ONE OF THEM, AND THIS COMMENT USED TO SAY IT WAS.
-	// It read "containment is O(vertices) per fence per LOCATION event", which stopped
-	// being true on both halves of the evaluator. s2's interior predicate goes through a
-	// shape index above 32 vertices, and the boundary test — which really did scan every
-	// edge, for every OUTSIDE answer, to decide a ~6mm tolerance — now takes a
-	// bounding-rectangle reject and then an edge index of its own. Measured at this
-	// ceiling: 23.7µs per call before, 348ns far / 1.9µs in-bound after. The per-event
-	// argument for 512 has been retired; the two above are what actually holds it.
-	MaxGeoFenceVertices = 512
-
-	// MaxGeoFencesPerTenant bounds how many fences one tenant may hold.
-	//
-	// 🔴 IT DOES NOT BOUND PER-EVENT COMPUTE, AND THIS COMMENT USED TO CLAIM IT DID —
-	// "worst case per location event is MaxGeoFenceVertices × MaxGeoFencesPerTenant =
-	// 51,200 edge tests". That multiplication prices an evaluator nobody wrote. A rule
-	// calls inFence(token); the binding reaches ONE named fence through a map keyed by
-	// token, and nothing in the DETECT engine iterates a fence set per event — the set is
-	// walked only where it is constructed. The fence COUNT therefore never enters
-	// per-event cost at any set size, which also disposes of the escape hatch the old
-	// text offered: the bounding-box prefilter it declined to assume would have had
-	// nothing to prefilter, because no fence but the named one is ever visited.
-	//
-	// What it bounds is FOOTPRINT, and the footprint is in a process every tenant SHARES.
-	// A whole fence set is compiled and retained per tenant, so this constant times
-	// MaxGeoFenceVertices is one tenant's worst-case draw on event-processing's geometry
-	// cache — ~51,100 compiled vertices (a compiled ring drops its repeated closing
-	// position) against a DefaultMaxCachedVertices budget of 250,000 that is explicitly
-	// sized to sit above it. Unlike a per-tenant storage ceiling, an over-large value here
-	// is spent on everyone, and neither number can move without the other and the cache
-	// being re-derived together.
-	//
-	// 🔴 DELIVERY NO LONGER CONSTRAINS IT. The paragraph that stood here showed that a set
-	// at these limits is over both 1 MiB seams at every useful coordinate precision, and
-	// concluded that this is why the delivery paths PAGE and why an oversized set is
-	// announced by a pointer fact. The arithmetic was right; both mechanisms are gone. The
-	// unit of delivery is now the FENCE rather than the set — the fact carries a manifest
-	// of {token, hash} pairs and the bodies travel separately — so what is announced has a
-	// size independent of what any fence contains. See MaxGeoFenceGeometryBytes, the one
-	// size rule per-fence delivery still needs.
-	MaxGeoFencesPerTenant = 100
-
 	// MaxGeoFenceGeometryBytes bounds a single fence's stored geometry DOCUMENT.
 	//
 	// 🔴 IT IS IN BYTES, AND THAT IS THE ENTIRE POINT: COUNTING POSITIONS DOES NOT BOUND
-	// SIZE. MaxGeoFenceVertices bounds how many positions a fence has, which is what
+	// SIZE. The tenant's geoFencePositionCeiling bounds how many positions a fence has, which is what
 	// containment's O(vertices) cost depends on. It says nothing about how many bytes
 	// those positions occupy, because validatePolygon2D checks only that a position has
 	// at least two ordinates in the WGS84 ranges — a position may carry EXTRA ordinates
@@ -230,13 +190,13 @@ const (
 	//
 	// 🔴 IT IS DELIBERATELY GENEROUS, AND TIGHTENING IT WOULD NOT BUY WHAT IT LOOKS LIKE
 	// IT WOULD BUY. Its job is NOT to make a whole fence set fit in one message or one
-	// response — that is arithmetically unavailable. A bound tight enough for 100 fences
-	// to fit in 1 MiB would have to be about 10 KB per fence, which is BELOW a
-	// 512-position fence at five decimal places, i.e. below useful precision at the
-	// vertex ceiling this package already promises. Keeping MaxGeoFenceVertices,
-	// MaxGeoFencesPerTenant and a single-response read all three is not a choice anyone
-	// has; the aggregate is handled by PAGING, and always will be while coordinates are
-	// text.
+	// response — that is arithmetically unavailable. A bound tight enough for a default
+	// tenant's 100 fences to fit in 1 MiB would have to be about 10 KB per fence, which is
+	// BELOW a 512-position fence at five decimal places, i.e. below useful precision at the
+	// default position ceiling. Keeping the position ceiling, the fence ceiling and a
+	// single-response read all three is not a choice anyone has, and it got further out of
+	// reach when both ceilings became tier settings an operator can raise; the aggregate is
+	// handled by PAGING, and always will be while coordinates are text.
 	//
 	// What this bound is for is narrower and still necessary: keeping a SINGLE unit of
 	// delivery satisfiable. Whatever carries fences — a page of a snapshot read, a batch of
@@ -387,8 +347,9 @@ type GeoFenceSnapshotRef struct {
 // is MEASURED rather than asserted. A token is bounded by core.MaxTokenLen under a grammar
 // containing no character JSON has to escape, and a hash is exactly 64 hex characters, so an
 // entry has a fixed worst case and a whole manifest has one too — roughly a forty-eighth of the
-// default 1 MiB per-message ceiling at MaxGeoFencesPerTenant fences, still inside it at several
-// thousand.
+// default 1 MiB per-message ceiling at the DEFAULT fence ceiling of 100, and about 82% of it at
+// governance.MaxGeoFenceCeiling, the most any tier may grant. That second figure is the one the
+// startup warning is measured against, because it is what the instance must survive.
 //
 // 🔑 NO BYTE COUNT IS QUOTED HERE ON PURPOSE. MaxGeoFenceSetManifestBytes() builds the worst
 // case and measures it, and that function is the authority; an earlier draft of this comment
@@ -503,6 +464,28 @@ func GeoFenceGeometryHash(document []byte) string {
 type storedGeoFenceSetSnapshot struct {
 	Version int32               `json:"version"`
 	Fences  []storedGeoFenceRef `json:"fences"`
+	// PositionSum is the total position count of this version's DISTINCT geometry — the
+	// same sum the tenant's geoFencePositionBudget is spent against, frozen here so the
+	// NEXT mint can ask "is this edit worse than what is already stored" without reading
+	// and parsing every document of the previous version.
+	//
+	// 🔴 IT IS A POINTER SO THAT ABSENT AND ZERO ARE DIFFERENT ANSWERS. Zero is a real
+	// sum — a tenant whose last mint left no fences — while absent means the version was
+	// written before this field existed, or by a pod mid-rolling-update that has not
+	// restarted onto it yet. Those need opposite handling: a zero is compared, an absent
+	// makes the budget check FAIL OPEN for exactly one mint, which then writes the field
+	// and heals the tenant permanently. Folding both into a plain int would silently
+	// charge every pre-existing tenant as if their whole set were new geometry, and refuse
+	// the next edit of anyone over budget.
+	//
+	// 🔴 IT IS IN THE SNAPSHOT AND NOT IN A COLUMN ON THE ARCHIVE, WHICH WAS THE OTHER
+	// DESIGN AND IS THE WORSE ONE. GeoFenceGeometryBlob is immutable and content-addressed:
+	// a geometry change writes a NEW row at a NEW hash, so a per-blob count column added by
+	// a migration has no later write to heal a row an older pod inserted during the rolling
+	// update that deployed it — and SQL SUM() skips NULLs without a word, so the budget
+	// would under-count, fail open, and stay wrong for the life of the instance. A snapshot
+	// field is rewritten in full by every mint, so the same skew heals on the next edit.
+	PositionSum *int `json:"positionSum,omitempty"`
 }
 
 // storedGeoFenceRef is one fence as of a version, on disk: the token a rule names it by
@@ -648,6 +631,17 @@ type canonicalGeoJSONPolygon struct {
 	Coordinates json.RawMessage `json:"coordinates"`
 }
 
+// 🔴 IT RETURNS THE POSITION COUNT, AND THAT IS WHAT MAKES "COUNTED ONCE" TRUE RATHER THAN
+// INTENDED. canonicalizePolygon2D already counts positions to enforce the platform maximum, so
+// a caller needing the tenant's own ceiling checked used to re-parse the canonical bytes to
+// recover the same number — a second parse per authoring call, and an error branch whose own
+// comment conceded it could not fire. Handing the count out instead makes a wrong count
+// unrepresentable rather than guarded: there is one call to geoFencePositions on this path, and
+// its result is what every cap is spent against.
+//
+// The parsed *GeoFenceGeometry it used to return first was discarded at every one of its call
+// sites, so the count costs no arity.
+//
 // validateGeoFenceGeometry parses and validates an authored geometry document, returning
 // the decoded envelope and the CANONICAL document to store. Everything it enforces is
 // authoring-time validation of the FENCE — none of it ever runs against a device's reported
@@ -661,18 +655,18 @@ type canonicalGeoJSONPolygon struct {
 // Canonicalising closes the gap by making "what was validated" and "what is stored" the
 // same bytes — every coordinate re-emitted from its parsed float64 in the same
 // non-exponent form PostgreSQL's numeric_out will print.
-func validateGeoFenceGeometry(raw string) (*GeoFenceGeometry, string, error) {
+func validateGeoFenceGeometry(raw string) (string, int, error) {
 	if raw == "" {
-		return nil, "", fmt.Errorf("a geofence geometry is required")
+		return "", 0, fmt.Errorf("a geofence geometry is required")
 	}
 	// The intake guard, first, because it is an O(1) read of a length where everything
 	// below walks the document. It is NOT the size bound — see maxGeoFenceRequestBytes.
 	if len(raw) > maxGeoFenceRequestBytes {
-		return nil, "", fmt.Errorf("geofence geometry request is %d bytes; the intake limit is %d",
+		return "", 0, fmt.Errorf("geofence geometry request is %d bytes; the intake limit is %d",
 			len(raw), maxGeoFenceRequestBytes)
 	}
 	if !json.Valid([]byte(raw)) {
-		return nil, "", fmt.Errorf("geofence geometry is not valid JSON")
+		return "", 0, fmt.Errorf("geofence geometry is not valid JSON")
 	}
 	// Reject an array/scalar/null before decoding into the envelope. `null` unmarshals
 	// into a struct as a silent no-op, so it would otherwise arrive as an envelope with
@@ -680,87 +674,148 @@ func validateGeoFenceGeometry(raw string) (*GeoFenceGeometry, string, error) {
 	// a malformed document.
 	var probe map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &probe); err != nil || probe == nil {
-		return nil, "", fmt.Errorf("geofence geometry must be a JSON object")
+		return "", 0, fmt.Errorf("geofence geometry must be a JSON object")
 	}
 	if err := rejectUnknownKeys(probe, geoFenceEnvelopeKeys, "geofence geometry"); err != nil {
-		return nil, "", err
+		return "", 0, err
 	}
 
 	geom := &GeoFenceGeometry{}
 	if err := json.Unmarshal([]byte(raw), geom); err != nil {
-		return nil, "", fmt.Errorf("unable to parse geofence geometry: %w", err)
+		return "", 0, fmt.Errorf("unable to parse geofence geometry: %w", err)
 	}
 	var canonicalGeometry json.RawMessage
+	positions := 0
 	switch geom.Kind {
 	case GeoFenceKindPolygon2D:
-		c, err := canonicalizePolygon2D(geom.Geometry)
+		c, n, err := canonicalizePolygon2D(geom.Geometry)
 		if err != nil {
-			return nil, "", err
+			return "", 0, err
 		}
-		canonicalGeometry = c
+		canonicalGeometry, positions = c, n
 	case "":
-		return nil, "", fmt.Errorf("geofence geometry must declare a kind (%q)", GeoFenceKindPolygon2D)
+		return "", 0, fmt.Errorf("geofence geometry must declare a kind (%q)", GeoFenceKindPolygon2D)
 	case GeoFenceKindPolygon25D, GeoFenceKindVoxel3D:
 		// Named, reserved, and NOT accepted. Storing one would mean a rule could name a
 		// fence whose containment nothing can evaluate — worse than refusing it, because
 		// the rule would silently never fire.
-		return nil, "", fmt.Errorf("geofence geometry kind %q is reserved but not yet supported; use %q",
+		return "", 0, fmt.Errorf("geofence geometry kind %q is reserved but not yet supported; use %q",
 			geom.Kind, GeoFenceKindPolygon2D)
 	default:
-		return nil, "", fmt.Errorf("unsupported geofence geometry kind %q (supported: %q)",
+		return "", 0, fmt.Errorf("unsupported geofence geometry kind %q (supported: %q)",
 			geom.Kind, GeoFenceKindPolygon2D)
 	}
 
 	canonical, err := json.Marshal(&canonicalGeoFenceGeometry{Kind: geom.Kind, Geometry: canonicalGeometry})
 	if err != nil {
-		return nil, "", fmt.Errorf("unable to canonicalize geofence geometry: %w", err)
+		return "", 0, fmt.Errorf("unable to canonicalize geofence geometry: %w", err)
 	}
 	// The real bound, applied to the STORED size of the CANONICAL document.
 	if stored := jsonbRenderedLen(canonical); stored > MaxGeoFenceGeometryBytes {
-		return nil, "", fmt.Errorf("geofence geometry stores as %d bytes; the limit is %d (a fence set "+
+		return "", 0, fmt.Errorf("geofence geometry stores as %d bytes; the limit is %d (a fence set "+
 			"is carried whole over seams with byte budgets, and neither a position count nor the "+
 			"request's own length bounds what a database stores — an exponent-notation coordinate "+
 			"expands when it is written)", stored, MaxGeoFenceGeometryBytes)
 	}
-	geom.Geometry = canonicalGeometry
-	return geom, string(canonical), nil
+	return string(canonical), positions, nil
 }
 
-// canonicalizePolygon2D enforces the GeoJSON Polygon contract and the vertex bound, and
-// returns the CANONICAL geometry object to store. The coordinate ranges are the
-// platform-wide contract ResolvedLocationEntry states: WGS84 / EPSG:4326 decimal degrees,
-// longitude in [-180, 180], latitude in [-90, 90].
-func canonicalizePolygon2D(raw json.RawMessage) (json.RawMessage, error) {
-	if len(raw) == 0 {
-		return nil, fmt.Errorf("geofence geometry is missing its GeoJSON geometry object")
+// geoFencePositions counts the positions in a parsed polygon's rings — every ring's every
+// position, including the repeated closing one.
+//
+// 🔴 IT IS THE ONE DEFINITION OF "HOW MANY POSITIONS IS THIS FENCE", AND THAT MATTERS
+// BECAUSE THREE SEPARATE BOUNDS SPEND IT. The platform maximum guards the quadratic scan
+// below; the tenant's geoFencePositionCeiling meters one fence; the tenant's
+// geoFencePositionBudget sums the whole set. Two of those compare an INCOMING count against
+// a STORED one — "is this edit worse than what is already there" — so a second counter that
+// disagreed by one position would make a rename of a grandfathered fence look like growth
+// and refuse it. There is no version of that bug that a test of either counter alone finds.
+//
+// The closing position counts. It is cheaper to be conservative than to explain the
+// exception, and it keeps this number ≥ the COMPILED vertex count event-processing's cache
+// spends (a compiled ring drops the repeat), which is the direction a budget must err in.
+func geoFencePositions(rings [][][]float64) int {
+	total := 0
+	for _, ring := range rings {
+		total += len(ring)
 	}
-	var geomProbe map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &geomProbe); err != nil || geomProbe == nil {
-		return nil, fmt.Errorf("the GeoJSON geometry must be a JSON object")
+	return total
+}
+
+// geoFencePositionsIn counts the positions in a STORED canonical geometry document — the
+// bytes in a fence's Geometry column, and the bytes archived under a content address.
+//
+// It re-parses rather than carrying a count alongside the document, and that is the whole
+// design of the budget. A count stored beside the bytes is a second fact that can be wrong:
+// the archive is IMMUTABLE and content-addressed, so a row written by a pod that did not yet
+// know about the count keeps its NULL forever, and SUM() skips NULLs without a word. Parsing
+// is O(positions) over a document already bounded at MaxGeoFenceGeometryBytes, paid at most
+// once per distinct geometry per mint, which is nothing beside the transaction around it.
+//
+// An error means the stored document is not what this package writes — unreachable through
+// any authoring path, since every write is canonicalized first. Callers decide the polarity;
+// see the budget check in mintGeoFenceSetVersion and the ceiling check in UpdateGeoFence,
+// which choose differently and each say why.
+func geoFencePositionsIn(document []byte) (int, error) {
+	var geom GeoFenceGeometry
+	if err := json.Unmarshal(document, &geom); err != nil {
+		return 0, fmt.Errorf("unable to parse a stored geofence geometry document: %w", err)
 	}
-	if err := rejectUnknownKeys(geomProbe, geoJSONGeometryKeys, "the GeoJSON geometry object"); err != nil {
-		return nil, err
+	// Only Polygon2D has positions to count, and it is the only kind that can be stored:
+	// validateGeoFenceGeometry refuses the reserved kinds outright. A kind this function
+	// does not know is an error rather than a zero, because a zero would read as "this
+	// fence costs nothing" and silently exempt a whole geometry family from the budget the
+	// day one is accepted.
+	if geom.Kind != GeoFenceKindPolygon2D {
+		return 0, fmt.Errorf("stored geofence geometry has kind %q, which has no position count", geom.Kind)
 	}
 	var g geoJSONGeometry
-	if err := json.Unmarshal(raw, &g); err != nil {
-		return nil, fmt.Errorf("unable to parse the GeoJSON geometry object: %w", err)
-	}
-	if g.Type != "Polygon" {
-		return nil, fmt.Errorf("geometry kind %s requires a GeoJSON Polygon, got %q", GeoFenceKindPolygon2D, g.Type)
+	if err := json.Unmarshal(geom.Geometry, &g); err != nil {
+		return 0, fmt.Errorf("unable to parse a stored GeoJSON geometry object: %w", err)
 	}
 	var rings [][][]float64
 	if err := json.Unmarshal(g.Coordinates, &rings); err != nil {
-		return nil, fmt.Errorf("unable to parse Polygon coordinates: %w", err)
+		return 0, fmt.Errorf("unable to parse stored Polygon coordinates: %w", err)
+	}
+	return geoFencePositions(rings), nil
+}
+
+// canonicalizePolygon2D enforces the GeoJSON Polygon contract and the platform position
+// maximum (the tenant's own ceiling is checked by Api, which can resolve it), and
+// returns the CANONICAL geometry object to store. The coordinate ranges are the
+// platform-wide contract ResolvedLocationEntry states: WGS84 / EPSG:4326 decimal degrees,
+// longitude in [-180, 180], latitude in [-90, 90].
+func canonicalizePolygon2D(raw json.RawMessage) (json.RawMessage, int, error) {
+	if len(raw) == 0 {
+		return nil, 0, fmt.Errorf("geofence geometry is missing its GeoJSON geometry object")
+	}
+	var geomProbe map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &geomProbe); err != nil || geomProbe == nil {
+		return nil, 0, fmt.Errorf("the GeoJSON geometry must be a JSON object")
+	}
+	if err := rejectUnknownKeys(geomProbe, geoJSONGeometryKeys, "the GeoJSON geometry object"); err != nil {
+		return nil, 0, err
+	}
+	var g geoJSONGeometry
+	if err := json.Unmarshal(raw, &g); err != nil {
+		return nil, 0, fmt.Errorf("unable to parse the GeoJSON geometry object: %w", err)
+	}
+	if g.Type != "Polygon" {
+		return nil, 0, fmt.Errorf("geometry kind %s requires a GeoJSON Polygon, got %q", GeoFenceKindPolygon2D, g.Type)
+	}
+	var rings [][][]float64
+	if err := json.Unmarshal(g.Coordinates, &rings); err != nil {
+		return nil, 0, fmt.Errorf("unable to parse Polygon coordinates: %w", err)
 	}
 	if len(rings) == 0 {
-		return nil, fmt.Errorf("a Polygon requires at least an exterior ring")
+		return nil, 0, fmt.Errorf("a Polygon requires at least an exterior ring")
 	}
 
-	// 🔴 THE BUDGET IS ENFORCED FIRST, BEFORE ANYTHING QUADRATIC RUNS, and that
+	// 🔴 THE POSITION COUNT IS ENFORCED FIRST, BEFORE ANYTHING QUADRATIC RUNS, and that
 	// ordering is the whole point of this block being separate from the loop below.
 	//
 	// ValidateClosedRing does an O(V²) crossing scan. Counting positions is O(V).
-	// With the scan ahead of the budget, a single authenticated create carrying an
+	// With the scan ahead of the count, a single authenticated create carrying an
 	// oversized ring burns CPU proportional to the square of whatever fits in the
 	// request body — measured on this predicate: 512 positions 11.6ms, 4k 0.72s,
 	// 16k 11.5s, 32k 48.7s, and the 4 MiB GraphQL body limit admits ~170k, i.e.
@@ -769,42 +824,55 @@ func canonicalizePolygon2D(raw json.RawMessage) (json.RawMessage, error) {
 	//
 	// An earlier version of this function had the two the other way round while
 	// carrying a comment claiming this exact virtue.
-	total := 0
-	for _, ring := range rings {
-		total += len(ring)
-	}
-	if total > MaxGeoFenceVertices {
-		return nil, fmt.Errorf("geofence has %d positions across its rings; the limit is %d (containment is "+
-			"O(vertices) per location event and the publish-time cost gate cannot see this number)",
-			total, MaxGeoFenceVertices)
+	//
+	// 🔴 IT REFUSES AT THE PLATFORM MAXIMUM, NOT AT THE TENANT'S CEILING, AND THE
+	// DIFFERENCE IS DELIBERATE. The tenant's ceiling is a tier setting resolved from
+	// user-management, which means a network call; putting one in front of this scan
+	// would make an unauthenticated-cheap DoS guard depend on another service being
+	// reachable, and would pay a round trip on every geometry parse — including the
+	// parses that are about to be refused for being malformed. What this guard owes is
+	// that the quadratic scan can never run on a ring larger than the largest ring any
+	// tier may grant, and MaxGeoFencePositionCeiling is exactly that number.
+	//
+	// The consequence, stated rather than discovered: a request between the tenant's
+	// ceiling and the platform maximum DOES pay the scan before Api refuses it. That is
+	// bounded by the maximum — 1024 positions, which is the same scan a tenant granted
+	// the maximum pays on every legitimate create — so the cost is one a tier can
+	// already buy, not a new one this ordering opens.
+	total := geoFencePositions(rings)
+	if total > governance.MaxGeoFencePositionCeiling {
+		return nil, 0, fmt.Errorf("geofence has %d positions across its rings; no tenant may exceed %d "+
+			"(compiling one fence is quadratic in its position count, so this is the largest ring "+
+			"any tier may grant; a tenant's own ceiling may be lower)",
+			total, governance.MaxGeoFencePositionCeiling)
 	}
 
 	for i, ring := range rings {
 		// Four positions is the GeoJSON minimum for a closed linear ring: a triangle
 		// plus the repeated closing position.
 		if len(ring) < 4 {
-			return nil, fmt.Errorf("polygon ring %d has %d positions; a closed ring needs at least 4", i, len(ring))
+			return nil, 0, fmt.Errorf("polygon ring %d has %d positions; a closed ring needs at least 4", i, len(ring))
 		}
 		for j, pos := range ring {
 			// EXACTLY two ordinates, not "at least". See MaxGeoFencePositionOrdinates: the
 			// minimum this used to be is what let a position be arbitrarily wide, and a wide
 			// position is unbounded storage that nothing ever reads.
 			if len(pos) != MaxGeoFencePositionOrdinates {
-				return nil, fmt.Errorf("polygon ring %d position %d has %d ordinates; a %s position is "+
+				return nil, 0, fmt.Errorf("polygon ring %d position %d has %d ordinates; a %s position is "+
 					"exactly [longitude, latitude] (%d)", i, j, len(pos), GeoFenceKindPolygon2D,
 					MaxGeoFencePositionOrdinates)
 			}
 			lon, lat := pos[0], pos[1]
 			if math.IsNaN(lon) || math.IsInf(lon, 0) || lon < -180 || lon > 180 {
-				return nil, fmt.Errorf("polygon ring %d position %d longitude %v is outside [-180, 180]", i, j, lon)
+				return nil, 0, fmt.Errorf("polygon ring %d position %d longitude %v is outside [-180, 180]", i, j, lon)
 			}
 			if math.IsNaN(lat) || math.IsInf(lat, 0) || lat < -90 || lat > 90 {
-				return nil, fmt.Errorf("polygon ring %d position %d latitude %v is outside [-90, 90]", i, j, lat)
+				return nil, 0, fmt.Errorf("polygon ring %d position %d latitude %v is outside [-90, 90]", i, j, lat)
 			}
 		}
 		first, last := ring[0], ring[len(ring)-1]
 		if first[0] != last[0] || first[1] != last[1] {
-			return nil, fmt.Errorf("polygon ring %d is not closed: first position %v != last %v", i, first, last)
+			return nil, 0, fmt.Errorf("polygon ring %d is not closed: first position %v != last %v", i, first, last)
 		}
 		// Everything above is STRUCTURE — the ring is well-formed JSON describing
 		// positions in range. This asks the separate question of whether the shape
@@ -821,13 +889,14 @@ func canonicalizePolygon2D(raw json.RawMessage) (json.RawMessage, error) {
 		// mistake made at draw time, and the fence sat in the registry looking
 		// healthy while answering nothing.
 		if err := geo.ValidateClosedRing(ring); err != nil {
-			return nil, fmt.Errorf("polygon ring %d: %w", i, err)
+			return nil, 0, fmt.Errorf("polygon ring %d: %w", i, err)
 		}
 	}
-	return json.Marshal(&canonicalGeoJSONPolygon{
+	encoded, err := json.Marshal(&canonicalGeoJSONPolygon{
 		Type:        "Polygon",
 		Coordinates: canonicalRingsJSON(rings),
 	})
+	return encoded, total, err
 }
 
 // canonicalRingsJSON re-emits parsed rings as JSON, every ordinate in NON-EXPONENT decimal

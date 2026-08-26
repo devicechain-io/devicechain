@@ -76,14 +76,14 @@ const (
 	// device-management's MaxGeoFenceSetManifestBytes() builds that worst case and measures it
 	// rather than asserting a number.
 	//
-	// 🔴 THAT FUNCTION DOES NOT YET LOOP THIS CONSTANT — IT LOOPS THE DEFAULT, AND THIS IS AN
-	// OBLIGATION ON THE ENFORCEMENT SLICE, NOT A DESCRIPTION OF THE TREE. Today it loops
-	// MaxGeoFencesPerTenant = 100, so the startup warning it feeds measures a ~21.6 KB worst
-	// case while a tier granted this maximum implies ~860 KB — a 40× understatement of the thing
-	// the warning exists to catch. Nothing fails when that rewiring is forgotten, because
-	// nothing ties the two constants together; TestTheFenceCeilingMaximumIsStatedInBytesSomewhereReal
-	// re-derives the arithmetic HERE, which is real but weaker (it restates the entry shape
-	// rather than marshalling one). The rewiring is tracked in the arc handoff.
+	// 🔴 THAT FUNCTION LOOPS THIS CONSTANT, NOT THE DEFAULT, AND THE DIFFERENCE IS 40×. It
+	// looped a hard-coded fence count of 100 until enforcement landed, which measured a
+	// ~21.6 KB worst case for an instance whose real worst case — a tier granted this maximum —
+	// is ~860 KB, understating by 40× the exact thing the startup warning exists to catch.
+	// Nothing ties the two constants together at compile time, so this stays a comment plus a
+	// test on each side: TestTheFenceCeilingMaximumIsStatedInBytesSomewhereReal re-derives the
+	// arithmetic HERE (real but weaker — it restates the entry shape rather than marshalling
+	// one), and device-management measures a real marshalled manifest against it.
 	//
 	// Measured 2026-08-25 at 215 bytes per entry (a 128-character token, a 64-character hash,
 	// and JSON's punctuation): the break-even against the chart's default 1 MiB
@@ -99,20 +99,31 @@ const (
 	// cannot express. A ceiling on one fence bounds a compile; a ceiling on the count bounds a
 	// manifest; neither bounds what the tenant's set costs to HOLD.
 	//
+	// 🔴 IT IS THE PRODUCT OF THE OTHER TWO DEFAULTS, AND IT IS DERIVED RATHER THAN CHOSEN
+	// BECAUSE A ROUND NUMBER HERE MAKES THE OTHER TWO DEFAULTS UNREACHABLE. It was written as
+	// 50,000 and that was wrong: a tenant metered at every default may hold 100 fences of 512
+	// positions, which is 51,200 — so a tenant authoring exactly to the two limits it WAS told
+	// about was refused, at fence 98, by a third limit it was not. Enforcement found it
+	// immediately; three fixtures in event-processing that build a documented-ceiling fence set
+	// stopped dead. A default nobody can reach is not a default, and the fix is to make the
+	// three consistent BY CONSTRUCTION rather than to pick a rounder number that happens to
+	// agree today.
+	//
 	// It is the tenant's share of event-processing's geometry cache, which is the shared
-	// resource this whole key exists for: 250,000 compiled vertices across every retained
-	// entry, for every tenant the process serves. 50,000 is a fifth of it, so five tenants'
-	// full default AUTHORED SETS fit at once — the property the cache's own comment used to
-	// claim ("holds several tenants at that absolute ceiling") and that nothing enforced. The
-	// alias in event-processing's cache makes the ARITHMETIC hold by construction; see
-	// MaxTenantGeometryPositions for what that does and does not buy, because retained
-	// occupancy is a larger number than the authored set.
+	// resource this whole key exists for. The cache is sized at five of these — see
+	// DefaultMaxCachedVertices, which derives itself from this constant — so five tenants'
+	// full default AUTHORED SETS fit at once, which is the property the cache's own comment
+	// used to claim ("holds several tenants at that absolute ceiling") and that nothing
+	// enforced. See MaxTenantGeometryPositions for what that does and does not buy, because
+	// retained occupancy is a larger number than the authored set.
 	//
 	// 🔴 IT IS DENOMINATED IN POSITIONS, NOT COMPILED VERTICES, and the two are deliberately
 	// not reconciled in this codebase (a compiled ring drops its repeated closing position).
 	// Positions ≥ compiled vertices, so a budget spent in positions is CONSERVATIVE against a
-	// cache spent in compiled ones. Counting the other way would be a silent overdraft.
-	DefaultTenantGeometryPositions = 50_000
+	// cache spent in compiled ones. Counting the other way would be a silent overdraft — and
+	// it is also why this product is an OVER-estimate of what a full default set really costs
+	// the cache, which is the safe direction for a budget to be wrong in.
+	DefaultTenantGeometryPositions = DefaultGeoFenceCeiling * DefaultGeoFencePositionCeiling
 
 	// MaxTenantGeometryPositions is the largest whole-fence-set budget any tier may grant.
 	//
@@ -132,11 +143,19 @@ const (
 	// maxVertices ceiling is what keeps total memory finite, and a churning tenant can still
 	// evict its neighbours.
 	//
-	// So this is the cache bound halved, and event-processing derives the cache bound FROM it
-	// (see DefaultMaxCachedVertices) rather than the other way round, which makes the relation
-	// unrepresentable-to-drift instead of merely asserted. Raising a tenant's real capacity
-	// past this means raising the cache, not this constant alone.
-	MaxTenantGeometryPositions = 125_000
+	// So this is the cache bound halved: the cache is five default budgets (5 x 51,200 =
+	// 256,000) and half of that is 128,000. event-processing derives the cache FROM
+	// DefaultTenantGeometryPositions (see DefaultMaxCachedVertices) rather than the other way
+	// round, and asserts this halving at COMPILE TIME in both directions, so the relation
+	// cannot drift on either side. Raising a tenant's real capacity past this means raising the
+	// cache, not this constant alone.
+	//
+	// 🔴 IT IS A LITERAL AND THE HALVING IS ONLY IN PROSE HERE, ON PURPOSE. Deriving it as
+	// `DefaultTenantGeometryPositions * 5 / 2` would put the tenancy factor in two packages and
+	// make event-processing's compile-time assertion tautological — both sides computed from
+	// the same expression, guarding nothing. The factor lives in ONE place (the cache) and this
+	// number is what that assertion checks it against.
+	MaxTenantGeometryPositions = 128_000
 )
 
 // Why each maximum exists, in one sentence an operator who has just been refused can act on.
@@ -206,12 +225,14 @@ func DefaultGeoFenceCaps() GeoFenceCaps {
 // abusive tenant's cap would have it defeated by any device-management restart, permanently. So
 // the first resolve for a tenant blocks on the fetch and can FAIL.
 //
-// 🔴 The enforcement slice will additionally GRANDFATHER a tenant already over a cap — refusing
-// only a change that makes things worse — and that rule is load-bearing from its first day
-// rather than polish: the default budget is 50,000 positions while the constants still live in
-// device-management permit 100 × 512 = 51,200, so a tenant legally at today's ceilings is over
-// the shipped default the moment enforcement lands. It does not exist yet; do not read the
-// paragraph above as describing it.
+// 🔴 device-management GRANDFATHERS a tenant already over a cap, refusing only a change that
+// makes things worse, and that rule was load-bearing from its first day rather than polish.
+// The reason is instructive: this paragraph used to warn that the default budget (then a round
+// 50,000) sat BELOW what the other two defaults permit (100 × 512 = 51,200), so a tenant legally
+// at the ceilings would be over the budget the moment enforcement landed. That was true, and the
+// fix was not grandfathering but arithmetic — DefaultTenantGeometryPositions is now the PRODUCT
+// of the other two, so no tenant metered at the defaults can be over them. Grandfathering
+// remains, for the case it is actually for: an operator LOWERING a tier under a tenant.
 //
 // The degradation is staged rather than binary, because the two failures are not equally bad:
 //
@@ -224,8 +245,18 @@ func DefaultGeoFenceCaps() GeoFenceCaps {
 //     exactly the tenant whose tier could not be read.
 //
 // What the caller does with that error is the caller's decision, and it is not the same at
-// every site: refusing to GROW a fence set on an unresolvable cap is right, while refusing to
-// SHRINK or DELETE one needs no cap at all and must not be blocked by this.
+// every site: refusing to GROW a fence set on an unresolvable cap is right, while a DELETE
+// needs no cap at all and must not be blocked by this. device-management makes that structural
+// rather than conditional — its delete path passes an attempt that cannot answer, so a delete
+// never depends on this resolver being able to reach anything.
+//
+// 🔴 A SHRINK IS NOT IN THAT SECOND GROUP, AND AN EARLIER VERSION OF THIS SENTENCE PUT IT
+// THERE. It said a shrink "needs no cap at all", which is true of the PER-FENCE ceiling and
+// false of the whole-set BUDGET: that budget sums DISTINCT geometry, so shrinking one of
+// several identically-drawn fences un-deduplicates it and RAISES the tenant's total. The fence
+// got smaller and the footprint grew. So a shrink can legitimately need a number, and the
+// enforcing service asks for one only when the total actually went up — which is a comparison
+// it can make, not a guess this package can make for it.
 //
 // Safe for concurrent use.
 type GeoFenceCapsResolver struct {

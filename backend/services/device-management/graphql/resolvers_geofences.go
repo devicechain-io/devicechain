@@ -85,8 +85,9 @@ func (r *GeoFenceSetSnapshotResolver) Version() int32 { return r.M.Version }
 // 🔴 IT IS PAGINATED FOR THE WIRE, NOT FOR THE DATABASE. The whole snapshot is one already-
 // decoded document in memory by the time this runs — there is no query here to bound. What
 // the page bounds is the RESPONSE, because the cross-service client that reads this door
-// caps a response at 1 MiB and a fence set at the documented authoring ceiling
-// (model.MaxGeoFencesPerTenant × model.MaxGeoFenceVertices) is larger than that. Before the
+// caps a response at 1 MiB and a fence set at the documented authoring ceilings (the tenant's
+// geoFenceCeiling fences of geoFencePositionCeiling positions each) is larger than that — at
+// the DEFAULT caps, let alone at the maxima a tier may grant. Before the
 // page existed, the tenants who had used geofencing as documented were the ones whose reads
 // failed, and the only symptom was a counted containment eval error.
 //

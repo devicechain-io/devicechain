@@ -16,12 +16,14 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	dcconfig "github.com/devicechain-io/dc-microservice/config"
 	dccore "github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 )
 
 // These tests are about ONE tenant: the one that used geofencing exactly as documented.
-// device-management admits MaxGeoFencesPerTenant fences of MaxGeoFenceVertices positions each,
-// and a set at those limits is over a megabyte — larger than the broker's per-message ceiling
+// device-management admits a full DEFAULT fence set — geoFenceCeiling fences of
+// geoFencePositionCeiling positions each, the numbers a tenant that has declared nothing gets
+// — and a set at those limits is over a megabyte, larger than the broker's per-message ceiling
 // and larger than the cross-service client's response cap, both of which are 1 MiB for
 // unrelated reasons. The symptom of hitting either was a counted containment eval error on
 // every location event, forever.
@@ -36,9 +38,17 @@ import (
 //
 // So the fixtures still build a fence set AT the documented ceiling and still assert on its real
 // byte size. A test whose fence set fits in 1 MiB would exercise none of this.
+//
+// 🔴 THE CEILINGS ARE THE DEFAULTS, NOT THE PLATFORM MAXIMA, AND THAT IS THE RIGHT CHOICE HERE
+// RATHER THAN AN OVERSIGHT. They became tier settings when enforcement landed, so there are two
+// numbers to pick from. These fixtures drive device-management's real Api with no caps resolver
+// wired, which meters at the platform defaults — so the defaults are what the fence sets below
+// are actually authored against, and using the maxima would build sets the Api refuses. What
+// the maxima bound is a different question (what one BROKER MESSAGE must survive), asserted in
+// device-management's own TestManifestFitsOneBrokerMessage.
 
-// maxVertexRing builds a valid closed GeoJSON polygon ring of exactly
-// dmmodel.MaxGeoFenceVertices positions — a circle sampled at that resolution, so the ring is
+// maxVertexRing builds a valid closed GeoJSON polygon ring at exactly the DEFAULT per-fence
+// position ceiling — a circle sampled at that resolution, so the ring is
 // simple (non-self-intersecting) and passes device-management's real authoring validation rather
 // than a relaxed test path.
 //
@@ -47,7 +57,7 @@ import (
 // real author's editor produces, and sizing the fixture down would move the fence set back under
 // the very cap it exists to cross.
 func maxVertexRing(prec int, cx, cy, r float64) string {
-	n := dmmodel.MaxGeoFenceVertices - 1 // the closing position repeats the first
+	n := governance.DefaultGeoFencePositionCeiling - 1 // the closing position repeats the first
 	pos := fmt.Sprintf("[%%.%df,%%.%df]", prec, prec)
 	var b strings.Builder
 	b.WriteString("[[")
@@ -80,7 +90,7 @@ func maxVertexFenceAt(prec int, cx, cy, r float64) string {
 func maxVertexFence(cx, cy, r float64) string { return maxVertexFenceAt(9, cx, cy, r) }
 
 // ceilingFenceSet seeds a tenant with the largest fence set device-management admits:
-// MaxGeoFencesPerTenant fences of MaxGeoFenceVertices positions each, every one authored through
+// a DEFAULT tenant's full fence set — geoFenceCeiling fences of geoFencePositionCeiling positions each, every one authored through
 // the real CreateGeoFence (so the real vertex bound, the real count bound, the real version mint,
 // the real snapshot freeze and the real geometry archiving all run). One of them is token "yard"
 // and contains the probe point the rules in these tests test, so the set is not merely large but
@@ -105,16 +115,16 @@ func ceilingFenceSetAt(t *testing.T, prec int) (*dmmodel.Api, *fenceFactWriter) 
 		Token: "yard", Geometry: maxVertexFenceAt(prec, 0, 0, 1)}); err != nil {
 		t.Fatalf("create yard: %v", err)
 	}
-	for i := 1; i < dmmodel.MaxGeoFencesPerTenant; i++ {
+	for i := 1; i < governance.DefaultGeoFenceCeiling; i++ {
 		if _, err := api.CreateGeoFence(dmCtx, &dmmodel.GeoFenceCreateRequest{
 			Token:    fmt.Sprintf("far-%03d", i),
 			Geometry: maxVertexFenceAt(prec, float64(100+i%70), float64(i%80)-40, 0.25)}); err != nil {
 			t.Fatalf("create far-%03d: %v", i, err)
 		}
 	}
-	if got := len(facts.payloads); got != dmmodel.MaxGeoFencesPerTenant {
+	if got := len(facts.payloads); got != governance.DefaultGeoFenceCeiling {
 		t.Fatalf("fixture: %d facts published, want %d (one per mint)",
-			got, dmmodel.MaxGeoFencesPerTenant)
+			got, governance.DefaultGeoFenceCeiling)
 	}
 	return api, facts
 }
@@ -183,9 +193,9 @@ func TestAFenceSetLargerThanOneResponseIsAnnouncedByATinyFactAndResolvesWhole(t 
 			"refuses it and the version never reaches the engine at all",
 			len(raw), dcconfig.DefaultStreamMaxMsgSize)
 	}
-	if len(manifest.Fences) != dmmodel.MaxGeoFencesPerTenant {
+	if len(manifest.Fences) != governance.DefaultGeoFenceCeiling {
 		t.Fatalf("the manifest names %d fences, want %d — a short manifest is indistinguishable "+
-			"downstream from a tenant with fewer fences", len(manifest.Fences), dmmodel.MaxGeoFencesPerTenant)
+			"downstream from a tenant with fewer fences", len(manifest.Fences), governance.DefaultGeoFenceCeiling)
 	}
 	t.Logf("fence set at the documented ceiling: %d fences, %d bytes of geometry, announced by a "+
 		"%d-byte manifest fact", len(manifest.Fences), stored, len(raw))
@@ -393,9 +403,9 @@ func TestTheGeometryBatchReadReassemblesASetLargerThanOneResponse(t *testing.T) 
 	if set.Version() != manifest.Version {
 		t.Errorf("the read produced version %d, want %d", set.Version(), manifest.Version)
 	}
-	if n := set.Len(); n != dmmodel.MaxGeoFencesPerTenant {
+	if n := set.Len(); n != governance.DefaultGeoFenceCeiling {
 		t.Fatalf("the read produced %d fences, want %d — a truncated fence set is "+
-			"indistinguishable downstream from a small one", n, dmmodel.MaxGeoFencesPerTenant)
+			"indistinguishable downstream from a small one", n, governance.DefaultGeoFenceCeiling)
 	}
 
 	st := src.stats()
@@ -467,9 +477,9 @@ func TestEditingOneFenceOfManyTransfersOnlyTheChangedBody(t *testing.T) {
 	for _, n := range cold.chunkSizes {
 		asked += n
 	}
-	if asked != dmmodel.MaxGeoFencesPerTenant {
+	if asked != governance.DefaultGeoFenceCeiling {
 		t.Fatalf("control: the cold resolve asked for %d addresses, want %d — if it did not fetch "+
-			"the whole set, the comparison below means nothing", asked, dmmodel.MaxGeoFencesPerTenant)
+			"the whole set, the comparison below means nothing", asked, governance.DefaultGeoFenceCeiling)
 	}
 
 	// Edit ONE fence. The mint re-freezes all hundred, so the new manifest names a hundred
@@ -479,8 +489,8 @@ func TestEditingOneFenceOfManyTransfersOnlyTheChangedBody(t *testing.T) {
 		t.Fatalf("update yard: %v", err)
 	}
 	_, second := lastFact(t, facts)
-	if len(second.Fences) != dmmodel.MaxGeoFencesPerTenant {
-		t.Fatalf("the edit's manifest names %d fences, want %d", len(second.Fences), dmmodel.MaxGeoFencesPerTenant)
+	if len(second.Fences) != governance.DefaultGeoFenceCeiling {
+		t.Fatalf("the edit's manifest names %d fences, want %d", len(second.Fences), governance.DefaultGeoFenceCeiling)
 	}
 
 	set, err := src.ResolveManifest(ctx, "acme", second)
@@ -500,8 +510,8 @@ func TestEditingOneFenceOfManyTransfersOnlyTheChangedBody(t *testing.T) {
 
 	// And the edited set is still WHOLE and still right — an economy that dropped the ninety-nine
 	// cached fences would be cheaper still and useless.
-	if n := set.Len(); n != dmmodel.MaxGeoFencesPerTenant {
-		t.Fatalf("the edited set holds %d fences, want %d", n, dmmodel.MaxGeoFencesPerTenant)
+	if n := set.Len(); n != governance.DefaultGeoFenceCeiling {
+		t.Fatalf("the edited set holds %d fences, want %d", n, governance.DefaultGeoFenceCeiling)
 	}
 	// The yard was enlarged from radius 1 to radius 2, so a point outside the old circle and
 	// inside the new one is the discriminator: it proves the ONE body that was fetched is the

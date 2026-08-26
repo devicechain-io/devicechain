@@ -14,6 +14,7 @@ import (
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
+	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -344,17 +345,34 @@ func TestAGeometryFetchDoesNotSplitOnAnUnrelatedError(t *testing.T) {
 // that refuses even a size-1 request terminates the fetch on the FIRST leaf with "too large on
 // its own" — a different, already-tested error — after five requests, and a test written that
 // way would report the budget as working while never approaching it. What the budget defends
-// against is a peer that makes progress expensively: each 24-address chunk costs 47 requests
-// (24 leaves plus 23 refused interior nodes), so 300 addresses runs past 512.
+// against is a peer that makes progress expensively: a chunk that is refused and split all the
+// way down costs 2*geometryChunkSize-1 requests (every leaf, plus every refused interior node).
+//
+// 🔴 THE FIXTURE SIZE IS DERIVED FROM THE BUDGET, AND IT USED TO BE A LITERAL 300 AGAINST A
+// LITERAL 512. Both moved: maxGeometryRequests is now derived from governance.MaxGeoFenceCeiling,
+// because the fence count became a tier setting and a runaway stop below what an operator may
+// legitimately grant is an outage rather than a stop. A hardcoded fixture would have gone on
+// passing until the budget rose past it and then reported the stop as broken — which is exactly
+// what it did, in this test, on the commit that raised it.
 //
 // The budget is a runaway stop, not a second size limit, so it sits well above anything a
 // legitimate fetch reaches — which is why provoking it also needs a manifest larger than any
 // tenant can author. That is exactly the input it defends against: the manifest is
 // caller-supplied, and nothing on this side bounds what a fact may claim.
 func TestTheGeometryReadStopsAtItsRequestBudget(t *testing.T) {
-	entries := make([]dmmodel.GeoFenceManifestEntry, 0, 300)
+	// Every leaf plus every refused interior node of one fully-split chunk.
+	const requestsPerRefusedChunk = 2*geometryChunkSize - 1
+	// Two chunks past the budget, so the stop has to fire rather than the fetch merely ending.
+	chunks := maxGeometryRequests/requestsPerRefusedChunk + 2
+	n := chunks * geometryChunkSize
+	if chunks*requestsPerRefusedChunk <= maxGeometryRequests {
+		t.Fatalf("the fixture spends only %d requests against a budget of %d; it cannot reach the "+
+			"stop it exists to test", chunks*requestsPerRefusedChunk, maxGeometryRequests)
+	}
+
+	entries := make([]dmmodel.GeoFenceManifestEntry, 0, n)
 	byHash := map[string]string{}
-	for i := 0; i < 300; i++ {
+	for i := 0; i < n; i++ {
 		doc := fenceBox(float64(i), 0, float64(i)+1, 1)
 		byHash[docHash(doc)] = doc
 		entries = append(entries, dmmodel.GeoFenceManifestEntry{
@@ -993,4 +1011,69 @@ func TestAnEntryEvictedAfterThePlanIsRefetchedNotReportedAbsent(t *testing.T) {
 	if x.calls == 0 {
 		t.Fatal("no geometry was fetched")
 	}
+}
+
+// 🔴 THE REQUEST BUDGET IS A BAND, AND BOTH EDGES ARE LOAD-BEARING. Too low and the stop fires
+// on a legitimate fetch, which is an outage for whichever tenant an operator packaged
+// generously. Too high and it never fires on the runaway it exists for — present, funded, inert.
+// Only asserting both catches both, and each edge has already been got wrong once:
+//
+//   - the LOWER edge was a literal 512 justified by a fence ceiling of 100, which survived that
+//     ceiling becoming a tier setting because the only test of it derives its FIXTURE from the
+//     budget. Shrink the budget, the fixture shrinks with it, and it passes. A mutant setting the
+//     budget to an eighth survived that test untouched.
+//   - the UPPER edge was lost by raising the budget to 3N on a mis-priced worst case (see
+//     maxGeometryRequests). 12,000 sits above the pathological 11,833 too, so a runaway archive
+//     would have spent every request and completed.
+//
+// So this asserts a RELATION between constants in different modules, with literal arithmetic on
+// each side rather than a fixture that follows either one.
+func TestTheRequestBudgetSitsAboveTheLargestLegitimateFetch(t *testing.T) {
+	documents := governance.MaxGeoFenceCeiling
+
+	// One fully-split chunk costs every leaf plus every refused interior node: 2*size-1. The
+	// trailing partial chunk costs less than a full one, so this is computed rather than
+	// approximated as chunks*(2c-1) — that overcounts, and a margin this test nominates as
+	// load-bearing must be the true one.
+	splitCost := func(n int) int {
+		full, rem := n/geometryChunkSize, n%geometryChunkSize
+		cost := full * (2*geometryChunkSize - 1)
+		if rem > 0 {
+			cost += 2*rem - 1
+		}
+		return cost
+	}
+
+	// 🔴 THE LOWER EDGE. The worst LEGITIMATE fetch: the archive holds every body its own
+	// manifest names. An address is either planned as missing (and split-fetched) or planned as
+	// held (and late-fetched at one request if it was evicted meanwhile) — never both — so the
+	// total is split(M) + (N-M), which is maximised when nothing is held.
+	legitimate := 0
+	for held := 0; held <= documents; held++ {
+		if cost := splitCost(documents-held) + held; cost > legitimate {
+			legitimate = cost
+		}
+	}
+	if legitimate > maxGeometryRequests {
+		t.Fatalf("a legitimate fetch of %d geometry documents costs up to %d requests against a "+
+			"budget of %d. A tenant whose tier grants the maximum fence count would have its "+
+			"geometry read ABORTED by the runaway stop — a stop that fires on correct work is an "+
+			"outage, not a defence", documents, legitimate, maxGeometryRequests)
+	}
+
+	// 🔴 THE UPPER EDGE, AND IT IS THE HALF THAT ACTUALLY BITES. The pathological run: the
+	// archive answers every batch and holds nothing, so every address is split-fetched AND then
+	// late-fetched one at a time. This is the runaway the stop exists for, so the budget must be
+	// BELOW it. Without this, an arbitrarily large budget passes the check above while stopping
+	// nothing.
+	pathological := splitCost(documents) + documents
+	if maxGeometryRequests >= pathological {
+		t.Fatalf("the budget is %d and a runaway archive — answering every batch while holding no "+
+			"bodies — spends %d. The stop would never fire on the exact case it exists for: the "+
+			"read completes, having paid every request, and returns a fence set of error fences",
+			maxGeometryRequests, pathological)
+	}
+
+	t.Logf("budget %d sits between a legitimate worst of %d (+%d) and a runaway worst of %d",
+		maxGeometryRequests, legitimate, maxGeometryRequests-legitimate, pathological)
 }

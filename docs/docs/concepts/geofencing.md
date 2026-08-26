@@ -30,7 +30,27 @@ If no tier has a tile source — an operator set the instance default to `{}` an
 
 Boundaries are stored as GeoJSON, with positions in `[longitude, latitude]` order and rings closed explicitly (the first position repeated as the last). The console handles that for you; an integration authoring over GraphQL supplies the document directly.
 
-Two limits apply per fence set: at most **512 positions** across all of a fence's rings, counting each ring's closing position, and at most **100 fences** per tenant. They hold two different costs. A fence's size is what compiling it and holding it compiled costs, and the rule-authoring cost gate cannot see a number that lives on a fence rather than in a rule — so the position limit is applied where the fence is saved. The fence count bounds how much compiled geometry one tenant occupies in the shared detection engine; it does not affect how long any single containment test takes, because a rule names one fence and the engine reaches that fence directly.
+Three limits apply, and each holds a different cost:
+
+| Limit | Default | What it bounds |
+| --- | --- | --- |
+| Positions in one fence | 512 | What compiling that fence, and holding it compiled, costs |
+| Fences per tenant | 100 | How large the announcement of a fence-set change is |
+| Positions across your whole fence set | 51,200 | How much of the shared detection engine's geometry your fences occupy |
+
+The position count includes each ring's closing position. The whole-set total counts **distinct** shapes: two fences drawn identically cost one shape, not two.
+
+These are **defaults**, not fixed platform limits. Each is part of your plan, and an operator can raise or lower any of them for your tenant. The defaults are consistent with each other — 100 fences of 512 positions is exactly 51,200 — so a tenant that has never had them changed can reach all three.
+
+They are checked when a fence is saved, because a rule's authoring cost gate cannot see a number that lives on a fence rather than in a rule. The fence count does not affect how long any single containment test takes: a rule names one fence and the engine reaches that fence directly.
+
+:::note Changing a fence is only refused when it makes things worse
+If your tenant is already over one of these limits — because a plan changed, or the fences predate the limit — you keep every fence you have. Saving is refused only when the change would make the number **larger** than it already is. Editing a fence's name or description, and **deleting** a fence, always work.
+
+Making a fence *smaller* almost always works too, with one exception worth knowing: because the whole-set total counts distinct shapes, editing one of several identically-drawn fences separates it from the others and can raise your total even though that fence got smaller. The refusal says so when it happens.
+
+Two consequences worth knowing. Because the whole-set total counts distinct shapes, making one of several identically-drawn fences different can raise your total even though that fence got smaller — the refusal says so when it happens. And because deleting lowers the stored total, an over-limit tenant that deletes a fence cannot recreate it: to move a fence to a new token, **create the new one first, then delete the old**.
+:::
 
 A boundary must also **bound an area**. A ring whose edges cross — a bow-tie — has no well-defined interior, so a containment question about it has no honest answer. Rings like that are refused when you save, by the same check the detection engine applies when it compiles a rule. That matters more than it sounds: before the check ran at authoring time, such a fence saved cleanly, sat in the registry looking healthy, and failed only later when a rule finally named it.
 
@@ -51,7 +71,7 @@ Three answers you may need to predict, all decided one way and applied uniformly
 
 - **The boundary is inside.** A position sitting exactly on a fence's edge is contained. Left to the underlying geometry library, the boundary would be split between adjacent regions — so two fences sharing an edge would each claim part of it and neither would claim the rest. An explicit on-edge test avoids that, with a tolerance of about 6 mm on the ground.
 - **A hole's edge is inside too**, by the same rule. Position strictly inside a hole → outside the fence. Position on the hole's ring → inside the fence. So two adjacent fences, or a fence and its own hole, never disagree about a point they share.
-- **Ring direction does not matter.** Clockwise and counter-clockwise spellings of the same ring give the same answer; the winding is normalised rather than trusted, so an integration authoring GeoJSON over the API does not have to get it right. (The one shape this cannot rescue is a "fence" so large it wraps most of the globe, where "the smaller region" is ambiguous — but the 512-position limit and the requirement to bound an area put that well outside anything a real fence looks like.)
+- **Ring direction does not matter.** Clockwise and counter-clockwise spellings of the same ring give the same answer; the winding is normalised rather than trusted, so an integration authoring GeoJSON over the API does not have to get it right. (The one shape this cannot rescue is a "fence" so large it wraps most of the globe, where "the smaller region" is ambiguous — but the position limit and the requirement to bound an area put that well outside anything a real fence looks like.)
 
 ## Fences change, and history has to survive it {#fences-change}
 

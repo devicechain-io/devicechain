@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	dcconfig "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -70,12 +72,25 @@ func manifestOf(version int32, n int) *model.GeoFenceSetManifest {
 // manifest quietly grew a hundredfold, and a bound that only fails in one direction reads as
 // safe while saying almost nothing — so the lower edge asserts the worst case is genuinely
 // worst, i.e. that this is measuring a full manifest rather than an accidentally empty one.
+//
+// 🔴 THE UPPER EDGE MOVED WHEN THE FENCE CAP BECAME A TIER SETTING, AND THE OLD ONE WOULD HAVE
+// BEEN THE WRONG GATE TO KEEP. It demanded a worst case under an EIGHTH of the ceiling, which
+// was the ~48x margin a hard-coded 100 fences bought. The number a manifest must now be built
+// at is governance.MaxGeoFenceCeiling — what the instance must survive, not what an
+// unconfigured tenant gets — and that constant was chosen deliberately as 82% of the default
+// ceiling rather than at break-even, precisely so the publisher's startup warning stays silent
+// on a default deployment. Re-asserting an eighth would have failed a correct rewiring and
+// invited someone to "fix" it by looping the default again.
 func TestManifestFitsOneBrokerMessage(t *testing.T) {
-	// The broker's default per-message ceiling (infrastructure.nats.streamMaxMsgSize). It is
-	// deployment configuration rather than a Go constant, so it is named here as the default
-	// this reasoning was done against — a deployment that lowers it is what the publisher's
-	// startup warning and its failure counter exist for.
-	const defaultCeiling = 1 << 20
+	// The broker's default per-message ceiling. The DEPLOYED value is configuration
+	// (infrastructure.nats.streamMaxMsgSize) and a deployment that lowers it is what the
+	// publisher's startup warning and its failure counter exist for — but the DEFAULT is a Go
+	// constant, and this now reads it rather than restating it.
+	//
+	// 🔴 IT WAS A LITERAL 1<<20 UNDER A COMMENT SAYING "deployment configuration rather than a
+	// Go constant", which is the shape that lets a number drift: a false sentence justifying a
+	// copy. dcconfig.DefaultStreamMaxMsgSize is where it lives.
+	defaultCeiling := int(dcconfig.DefaultStreamMaxMsgSize)
 
 	// The floor is DERIVED, not chosen. One entry cannot encode to less than its token and its
 	// hash, so a full manifest cannot encode to less than this — which is what makes the floor
@@ -83,19 +98,35 @@ func TestManifestFitsOneBrokerMessage(t *testing.T) {
 	// happened to be below the answer. An earlier version of this test used a literal 20000 and
 	// a comment claiming it was computed from the constants; it was not.
 	minimumEntry := core.MaxTokenLen + 64
-	floor := model.MaxGeoFencesPerTenant * minimumEntry
+	floor := governance.MaxGeoFenceCeiling * minimumEntry
+
+	// The headroom MaxGeoFenceCeiling was chosen to leave: room for one more per-entry field
+	// of ~46 bytes before a default deployment starts warning. Asserted as a share rather than
+	// as a byte count, so it survives a token-length change.
+	const wantHeadroom = 0.15
 
 	worst := model.MaxGeoFenceSetManifestBytes()
-	if worst >= defaultCeiling/8 {
-		t.Fatalf("a worst-case manifest is %d bytes, within an eighth of the %d-byte per-message "+
-			"ceiling; the reasoning that deleted the pointer fact and the size clamp assumed a margin "+
-			"of roughly 48x and no longer holds", worst, defaultCeiling)
+	if worst >= defaultCeiling {
+		t.Fatalf("a worst-case manifest is %d bytes, OVER the %d-byte per-message ceiling; every "+
+			"fence edit by a tenant at the platform maximum fence count would be refused by the "+
+			"broker, which is the failure the pointer fact used to absorb", worst, defaultCeiling)
+	}
+	if headroom := 1 - float64(worst)/float64(defaultCeiling); headroom < wantHeadroom {
+		t.Fatalf("a worst-case manifest is %d bytes, leaving only %.1f%% of the %d-byte ceiling; "+
+			"governance.MaxGeoFenceCeiling was set below break-even to keep at least %.0f%% so the "+
+			"publisher's startup warning stays silent on a default deployment",
+			worst, headroom*100, defaultCeiling, wantHeadroom*100)
 	}
 	if worst < floor {
 		t.Fatalf("a worst-case manifest measured only %d bytes, which is below the %d that "+
 			"%d entries of a %d-character token and a 64-character hash must encode to at minimum; "+
-			"the worst case is not being built", worst, floor, model.MaxGeoFencesPerTenant, core.MaxTokenLen)
+			"the worst case is not being built (looping the DEFAULT fence count instead of the "+
+			"platform maximum is how that happens, and it understates by 40x)",
+			worst, floor, governance.MaxGeoFenceCeiling, core.MaxTokenLen)
 	}
+	t.Logf("worst-case manifest at the platform maximum of %d fences: %d bytes, %.1f%% of the "+
+		"%d-byte default ceiling", governance.MaxGeoFenceCeiling, worst,
+		100*float64(worst)/float64(defaultCeiling), defaultCeiling)
 
 	// The value is stable across calls. It is rebuilt and re-measured on every call rather
 	// than cached, so a non-deterministic worst case — a map iteration leaking into the

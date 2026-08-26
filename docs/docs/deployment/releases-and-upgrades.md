@@ -692,6 +692,43 @@ Two fixes are worth knowing about:
   cost change, not a behaviour change — and it matters most on large fleets, and in the
   moments right after a presence source hands its devices back.
 
+### v0.13.0 — geofence limits become part of your plan {#v0130-upgrade}
+
+`v0.13.0` is a plain `helm upgrade`. It adds **no migration**, so the database is untouched, and
+it changes no topic, permission or configuration key.
+
+What changes is that the two geofence limits that used to be fixed for everyone — 512 positions
+in one fence, 100 fences per tenant — are now **settings on your plan**, joined by a third:
+a limit on the total positions across your whole fence set. All three keep their previous
+values by default, so **a tenant that has never had them changed is metered exactly where it
+was** and needs to do nothing.
+
+Two things are worth knowing before you upgrade:
+
+- **The whole-set limit is new, and its default is what the other two already implied**:
+  51,200 positions, which is 100 fences of 512. So a tenant using geofencing exactly to the
+  documented limits is *at* the new limit, never over it. The total counts **distinct** shapes,
+  so two fences drawn identically cost one.
+- **A change is refused only when it makes a number larger.** If an operator later lowers one
+  of your limits below what you already hold, you keep every fence. Editing a fence's name or
+  description, and deleting a fence, always keep working — the check is on growth, not on size.
+  This is what keeps a plan change from stranding fences that were legal when drawn. Making a
+  fence smaller almost always works too; the exception is that the whole-set total counts
+  *distinct* shapes, so editing one of several identically-drawn fences separates it from the
+  rest and can raise the total even though that fence shrank.
+
+One consequence to plan around: because deleting a fence lowers the stored total, a tenant that
+is over a limit and deletes a fence cannot recreate it. To move a fence to a different token,
+**create the new one first and delete the old one after** — which needs one spare fence slot for
+the moment both exist.
+
+Operators packaging tiers should know these have real ceilings, because they are not all spent
+on the tenant alone: the whole-set total is a share of a geometry cache every tenant on the
+instance draws from, and the fence count bounds an announcement that has to fit one broker
+message. The refusals name both the number and
+the setting to raise, and a `geofence_cap_refusals_total` metric counts them by which limit
+refused.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

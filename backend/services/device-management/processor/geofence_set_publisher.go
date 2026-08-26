@@ -28,8 +28,8 @@ import (
 //
 // 🔴 THIS FILE USED TO BE MOSTLY SIZE MACHINERY, AND UNDERSTANDING WHAT DELETED IT MATTERS
 // MORE THAN THE CODE THAT REMAINS. The fact it published carried the whole frozen fence set,
-// so a tenant at the documented authoring ceiling — model.MaxGeoFencesPerTenant fences of
-// model.MaxGeoFenceVertices positions — marshalled to more than the broker's per-message
+// so a tenant at the documented authoring ceiling — a full fence set of maximum-size fences —
+// marshalled to more than the broker's per-message
 // limit, and every one of that tenant's fence edits produced a publish the broker refused, a
 // log line nobody was reading, and a mutation that returned 200. Downstream, containment
 // reported a counted eval error for that tenant on every location event, indefinitely. The
@@ -38,11 +38,18 @@ import (
 // max_payload because the chart can only set half the wall.
 //
 // None of that is reachable any more, because the fact no longer carries geometry. A manifest
-// is a version, a timestamp, and a token plus a 64-character content address per fence: at
-// the fence ceiling it measures model.MaxGeoFenceSetManifestBytes(), a forty-eighth of a
-// 1 MiB message, and it stays inside that ceiling at roughly 4,876 fences. There is no fence
-// set whose SIZE can prevent its announcement, so there is no second form for the writer to
-// choose between and nothing for it to measure.
+// is a version, a timestamp, and a token plus a 64-character content address per fence: at the
+// PLATFORM MAXIMUM fence count it measures model.MaxGeoFenceSetManifestBytes(), and it stays
+// inside a 1 MiB message up to roughly 4,876 fences. There is no fence set whose SIZE can
+// prevent its announcement, so there is no second form for the writer to choose between and
+// nothing for it to measure.
+//
+// 🔴 NO FRACTION IS QUOTED HERE ANY MORE, AND THE ONE THAT WAS IS WHY. This said "a
+// forty-eighth of a 1 MiB message", which was true while the worst case was built from a
+// hard-coded 100 fences. The fence count is a tier setting now and that function loops the
+// platform MAXIMUM, so the real figure is about 82% — the warning below has a margin measured
+// in a fifth of a message, not in dozens of them. MaxGeoFenceSetManifestBytes() is the
+// authority; a fraction in prose here could only go stale again.
 //
 // 🔴 WHAT SURVIVES IS THE COUNTER, AND IT IS NOT VESTIGIAL. "No fence set can be too large"
 // is a statement about fence sets, not about deployments: infrastructure.nats.streamMaxMsgSize

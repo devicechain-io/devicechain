@@ -12,6 +12,7 @@ import (
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
+	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/rs/zerolog/log"
 )
@@ -36,11 +37,52 @@ const geometryChunkSize = dmmodel.MaxGeoFenceGeometryHashesPerRequest
 // every chunk and every split retry, so a peer that keeps refusing cannot spin this goroutine
 // forever.
 //
-// It is a RUNAWAY STOP, not a second size limit, so it is sized well above anything reachable:
-// the worst legitimate fetch is MaxGeoFencesPerTenant distinct documents at a chunk size of
-// one, i.e. 100 requests, plus the few spent on chunks refused on the way down. 512 leaves
-// that room several times over, and it ERRORS rather than returning what it has.
-const maxGeometryRequests = 512
+// It is a RUNAWAY STOP, not a second size limit, so it is sized well above anything reachable.
+//
+// 🔴 IT IS DERIVED FROM THE PLATFORM MAXIMUM FENCE COUNT, AND IT USED TO BE A LITERAL 512
+// JUSTIFIED BY A FENCE CEILING OF 100. That ceiling is now a tier setting, so the worst
+// LEGITIMATE fetch is one distinct document per fence at governance.MaxGeoFenceCeiling
+// fences — 4,000 of them, which would have blown straight through a 512-request stop. A
+// runaway stop that fires on legitimate work is not a stop; it is an outage for whichever
+// tenant an operator packaged generously, surfacing as a geometry read that errors.
+//
+// 🔴 THE TWO CONSUMERS OF THIS BUDGET DO NOT ADD UP THE WAY THEY LOOK, AND GETTING THAT WRONG
+// ONCE ALREADY MOVED THIS CONSTANT IN THE WRONG DIRECTION. With N = governance.MaxGeoFenceCeiling
+// and c = geometryChunkSize:
+//
+//   - the SPLIT, over the M addresses `assemble` could not plan as cached. A chunk refused and
+//     subdivided to leaves costs 2c-1 requests, so this is
+//     floor(M/c)*(2c-1) + (2*(M mod c) - 1). At M = N that is 7,833.
+//   - the LATE FETCH, one request at a time through THIS SAME budget, for an address whose
+//     `Get` missed and which is not in `documents`.
+//
+// They are NOT simply additive, because an address reaches the late fetch for one of two
+// reasons and only one of them can also have been split-fetched:
+//
+//   - it was planned as HELD, so it was never in the batch, and was evicted before Get asked.
+//     Those addresses partition with the split — an address is in `missing` or in `held`, never
+//     both — so split(M) + (N-M) is maximised at M = N and is just split(N) = 7,833.
+//   - it WAS in the batch and the archive answered without holding it. Only this case stacks on
+//     top of the split, and it is not a legitimate fetch: it means the archive is missing bodies
+//     its own manifest names. All N of them is the ceiling: 7,833 + 4,000 = 11,833.
+//
+// 🔴 SO THE BUDGET IS A BAND, AND BOTH EDGES ARE LOAD-BEARING. It must sit ABOVE the legitimate
+// worst — a stop that fires on correct work is an outage for whichever tenant an operator
+// packaged generously — and BELOW the pathological one, or it never fires in the case it exists
+// for. 2N = 8,000 clears 7,833 by 167 and stops the 11,833 run at 8,000.
+//
+// 🔴 3N WAS TRIED AND IS WRONG, WHICH IS WHY THIS PARAGRAPH IS LONGER THAN THE CONSTANT. It was
+// reached by pricing the late fetch as if every address paid it ON TOP OF the split, missing
+// that the held ones were never in the split. The resulting 12,000 sits above BOTH numbers, so a
+// runaway archive spends 11,833 requests and completes — the stop is present, funded, and inert.
+// A budget too large does not fail safe here; it fails silently.
+//
+// TestTheRequestBudgetSitsAboveTheLargestLegitimateFetch asserts both edges, so neither a raised
+// fence ceiling nor a changed chunk size can move one without failing.
+//
+// It ERRORS rather than returning what it has: a short geometry set is indistinguishable
+// downstream from a tenant who really has that many fences.
+const maxGeometryRequests = governance.MaxGeoFenceCeiling * 2
 
 // geoFenceSetManifestQuery reads one version's manifest. It carries NO tenant argument: the
 // tenant travels as the service-token client's tenant header, and device-management's rows are

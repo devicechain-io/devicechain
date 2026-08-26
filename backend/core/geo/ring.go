@@ -149,7 +149,9 @@ func RingSelfIntersects(ring [][]float64) (int, int, bool) {
 // answers containment CONFIDENTLY and arbitrarily. That is the worst available
 // failure, because nothing about the answer looks wrong.
 //
-// O(V²), with V bounded at 512 by the authoring vertex limit — ~131k orientation
+// O(V²), with V bounded at governance.MaxGeoFencePositionCeiling by the authoring position
+// limit — the platform MAXIMUM, since the per-tenant ceiling is a tier setting an operator can
+// raise up to it. At the DEFAULT ceiling of 512 that is ~131k orientation
 // tests worst case, paid once per fence per fence-set version at authoring or
 // compile time and never per event. That is what makes the quadratic acceptable
 // rather than a hazard.
