@@ -60,3 +60,15 @@ crash.*.log
 dc-migrationdiff
 dc-drdrill
 dc-apiprobe
+
+# Maintainer scratch space. Untracked by convention since it was created; this makes that
+# explicit, because convention alone does not stop `git add -A`. It did not: one `git add -A
+# backend scratchpad` swept 428 files of working notes, mutation harnesses and drill output
+# into a public PR, where CI caught it only because the shellcheck job lints "every tracked
+# script" and suddenly had eighty more.
+#
+# Nothing here has ever been tracked, so ignoring it orphans nothing. Note that CLAUDE.md and
+# the arc handoffs cite paths under this directory (scratchpad/HANDOFF-*.md, build specs) —
+# those references are to files on a maintainer's disk, not to repo content, and that is the
+# arrangement being made explicit rather than changed.
+scratchpad/
