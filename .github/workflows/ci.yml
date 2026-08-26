@@ -524,6 +524,42 @@ jobs:
   # ---------------------------------------------------------------------------
   # License header check (backend only, per CLAUDE.md).
   # ---------------------------------------------------------------------------
+  # The integration-tagged suites, RUN rather than merely compiled.
+  #
+  # 🔴 UNTIL THIS JOB EXISTED, CI ONLY EVER VETTED THEM. The `go` job runs
+  # `go vet -tags "integration interop" ./...`, which type-checks a tagged test and never
+  # executes it — so device-management's geofence TOCTOU test, event-management's hypertable
+  # and compression tests, core/rdb's guest-connection tests and migrationdiff's purge drill
+  # could all have been failing for months with no red mark anywhere. They exist precisely
+  # because sqlite cannot answer the questions they ask: row locking under real concurrency,
+  # chunks, columnar compression, a real catalog, a real second database.
+  #
+  # The container, the module discovery and the per-module verdicts all live in the script, so
+  # a maintainer runs exactly what CI runs — and a module that GAINS an integration test is
+  # covered the day it does, with no list here to fall out of step with go.work.
+  integration:
+    name: integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      # The guard before the gate, the way the other hack/ checks do it. A `-run` filter that
+      # matches nothing exits 0 with "no tests to run", which is indistinguishable from a pass
+      # in every summary — and that is not hypothetical: the first draft of the runner covered
+      # 8 of the 13 tagged tests and reported success. This proves the runner can tell an empty
+      # run from a real one BEFORE its green result is used as evidence of anything.
+      - name: integration runner self-test
+        run: hack/integration-tests.sh --self-test
+
+      - name: integration tests against a real PostgreSQL
+        run: hack/integration-tests.sh
+
   license:
     runs-on: ubuntu-latest
     steps:
@@ -1313,6 +1349,7 @@ jobs:
       - subscriptions
       - data-access
       - migrations
+      - integration
       - license
       - actions
       - docs
