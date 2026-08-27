@@ -35,6 +35,18 @@
 // DATA precisely so that a missing entity is an absent row somebody can count
 // rather than absent code nobody can see. `apiprobe coverage` prints it.
 //
+// 🔴 AND UNTIL `readsweep` IT PROVED NOTHING ABOUT ANYTHING DERIVED FROM A WRITE.
+// Every read-back in the table is "fetch the row I just wrote, by its token" — 24
+// queries against a served surface of about 124. So the claim was always the
+// narrower one: EVERY ROW YOU WROTE READS BACK UNCHANGED, not "the instance still
+// works". #838 sat in that gap. The geometry archive shipped with no backfill, an
+// upgraded instance stopped matching geofence rules, and the fence ROW was
+// untouched — so the round trip was spotless and the drill passed with the defect
+// live in its database. Seeding another entity would not have helped: a round trip
+// of one's own writes cannot see a derived artifact go stale. readsweep.go is the
+// other half, and it derives its list from the served schema rather than a table,
+// because the hand-written half is the half that was complete and still missed it.
+//
 // It says nothing about the device plane. Telemetry, presence, command delivery
 // and detection all belong to the load harness, which already has oracles for
 // them; duplicating those here would produce a second, weaker set.
@@ -48,12 +60,12 @@
 // way a rig can tell the difference is if "the row is gone" exits differently
 // from "the API would not answer".
 //
-// That distinction is the whole reason exitMissing, exitMismatch and exitShape
-// are three codes and not one. They correspond to three genuinely different
-// upgrade defects — data dropped, data rewritten, and a field removed from the
-// schema — and an upgrade rig that cannot tell them apart would report the third
-// as the first and send somebody hunting through migrations for a resolver
-// change.
+// That distinction is the whole reason exitMissing, exitMismatch, exitShape and
+// exitUnreadable are four codes and not one. They correspond to four genuinely
+// different upgrade defects — data dropped, data rewritten, a field removed from
+// the schema, and a stored shape the new release can no longer make sense of —
+// and an upgrade rig that cannot tell them apart would report the third as the
+// first and send somebody hunting through migrations for a resolver change.
 package main
 
 import (
@@ -101,6 +113,15 @@ const (
 	// reporting that as missing data would send a reader into the migrations
 	// looking for something that was never there.
 	exitShape = 5
+
+	// exitUnreadable means a door the platform SERVES returned an error after the
+	// upgrade. Distinct from every code above: the row is present and unchanged (verify
+	// says so), the query is valid against the served schema (the sweep built it FROM
+	// that schema), and a client still cannot read it. That combination points at a
+	// stored shape the new release can no longer make sense of — a snapshot naming rows
+	// that were never migrated, a document decoded into a struct that moved — which is
+	// the one class an upgrade introduces and a fresh install cannot.
+	exitUnreadable = 6
 )
 
 const usage = `apiprobe — write one of every creatable entity, then prove it reads back unchanged.
@@ -116,6 +137,15 @@ const usage = `apiprobe — write one of every creatable entity, then prove it r
   apiprobe verify   --receipt <path> [flags]
         Read every entity on the receipt back through the same API and compare
         it field by field.
+
+  apiprobe readsweep --receipt <path> --schemas <dir> [flags]
+        Call every door the DEPLOYED release's schemas serve that this tool can
+        supply arguments for, and require that none ERRORS. Wider and shallower
+        than verify: verify proves the rows you wrote are unchanged, this proves
+        nothing the platform serves about them has become unreadable. The list is
+        derived from the served SDL, so a door a later release adds is swept
+        without anyone remembering it; a door that is skipped is named, with the
+        reason.
 
   apiprobe tamper   --receipt <path> --mode delete|modify [flags]
         THE NEGATIVE CONTROL. Break one seeded entity on purpose — delete it, or
@@ -151,6 +181,7 @@ func printExitCodes() {
 	fmt.Printf("APIPROBE_EXIT_MISMATCH=%d\n", exitMismatch)
 	fmt.Printf("APIPROBE_EXIT_REFUSED=%d\n", exitRefused)
 	fmt.Printf("APIPROBE_EXIT_SHAPE=%d\n", exitShape)
+	fmt.Printf("APIPROBE_EXIT_UNREADABLE=%d\n", exitUnreadable)
 }
 
 func main() {
@@ -168,6 +199,8 @@ func main() {
 		err = runSeed(ctx, os.Args[2:])
 	case "verify":
 		err = runVerify(ctx, os.Args[2:])
+	case "readsweep":
+		err = runReadSweep(ctx, os.Args[2:])
 	case "tamper":
 		err = runTamper(ctx, os.Args[2:])
 	case "coverage":

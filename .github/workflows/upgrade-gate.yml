@@ -278,10 +278,24 @@ jobs:
       - name: THE DRILL -- every seeded row must read back unchanged
         run: hack/upgrade-rig.sh verify
 
-      # The check on the check. A verify whose ability to FAIL has not been shown
+      # The wider, shallower question, and the one verify structurally cannot ask.
+      # verify round-trips the 24 rows it wrote; this calls every door the served
+      # schemas expose -- about a hundred -- and requires that none ERRORS. A
+      # derived artifact going stale (a frozen snapshot pointing at rows a
+      # migration never rewrote) leaves every written row perfectly intact, which
+      # is how the geofence archive's missing backfill passed this drill once
+      # already.
+      - name: THE READ SWEEP -- every served door must still answer
+        run: hack/upgrade-rig.sh readsweep
+
+      # The check on the checks. A verify whose ability to FAIL has not been shown
       # in this session has certified nothing -- it would report the same green
-      # against an instance that had lost everything.
-      - name: Negative controls -- break a row two ways, require verify to notice
+      # against an instance that had lost everything. The sweep's control carries
+      # the extra claim: it damages a stored snapshot, requires the sweep to fail
+      # with the exact UNREADABLE code, and requires verify to still PASS over the
+      # same damage. Without that second half the two checks might be seeing the
+      # same thing.
+      - name: Negative controls -- break the instance three ways, require the right check to notice
         run: hack/upgrade-rig.sh control
 
       # 🔴 EXPECTED RED, AND NOT A FLAKE. The documented upgrade is a
