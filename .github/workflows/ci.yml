@@ -694,6 +694,17 @@ jobs:
       - name: the required gate depends on every job
         run: hack/check-ci-gate-complete.sh
 
+      # The upgrade gate runs on a PR only when the PR touches something that can
+      # change what an existing instance holds. A path filter that stops matching
+      # fails in the worst direction available: nothing errors, the gate simply does
+      # not appear, and "the upgrade drill did not object" is indistinguishable from
+      # "the upgrade drill passed". Same self-test-first rule as the guard above.
+      - name: upgrade-gate path filter guard self-test
+        run: hack/check-upgrade-gate-paths.sh --self-test
+
+      - name: every migration triggers the upgrade drill
+        run: hack/check-upgrade-gate-paths.sh
+
   # ---------------------------------------------------------------------------
   # Published documentation hygiene.
   # ---------------------------------------------------------------------------

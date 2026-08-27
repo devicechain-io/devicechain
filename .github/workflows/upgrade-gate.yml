@@ -43,6 +43,46 @@
 name: upgrade-gate
 
 on:
+  # 🔴 THE TRIGGER THAT DID NOT EXIST, AND ITS ABSENCE IS WHY #838 REACHED A RELEASE.
+  #
+  # This gate used to run at a release cut and on demand, and nowhere else. So six
+  # merged PRs carrying a stored-shape change had ZERO drill runs between them, and
+  # the gate's first opportunity to see the defect was the commit that had already
+  # fixed it by hand. A gate that runs once per release, on the release, is a gate
+  # an arc cannot fail.
+  #
+  # It is PATH-FILTERED rather than run on everything, and the filter was priced
+  # rather than guessed: over the last 60 merged commits these paths fire on 25 of
+  # them, and the drill costs about eight minutes on a runner (seed 191s, upgrade
+  # including the image build 283s, verify and the read sweep under five seconds
+  # each). The hour in the rig's own header is a COLD LOCAL run and does not apply.
+  #
+  # What the list has to cover is anything that can change what an existing instance
+  # holds or how it is read:
+  #   - migrations and baselines, the direct cause;
+  #   - a served schema, because verify's read-backs select named fields;
+  #   - `model_*.go`, because a stored shape can move with no migration at all —
+  #     that is 3 of the 25 and it buys the class #838 belonged to;
+  #   - the drill itself, so a change to the instrument is measured by the instrument;
+  #   - the chart, because the documented upgrade IS a `helm upgrade` and a chart
+  #     change is what broke that procedure in v0.11.0.
+  #
+  # 🔴 A path filter that silently stops matching is the same shape of defect this
+  # gate exists to catch, so it does not go unchecked: hack/check-upgrade-gate-paths.sh
+  # asserts that every migration and baseline file in the tree is matched by the list
+  # below, and runs in ordinary CI.
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/**/migration*.go'
+      - 'backend/**/baseline*.go'
+      - 'backend/services/*/graphql/**'
+      - 'backend/services/*/model/model_*.go'
+      - 'backend/tools/apiprobe/**'
+      - 'hack/upgrade-rig.sh'
+      - 'deploy/helm/**'
+      - '.github/workflows/upgrade-gate.yml'
+
   # Manual runs default to --build: the skew-free test of the checked-out tree,
   # which is what a developer wants and what a release must NOT settle for.
   workflow_dispatch:
@@ -86,10 +126,16 @@ permissions:
 
 concurrency:
   group: upgrade-gate-${{ github.ref }}
-  # A MEASUREMENT run, not PR CI. A second dispatch queues behind the first rather
-  # than cancelling a mid-flight bring-up and throwing away the only evidence the
-  # release's upgrade claim has.
-  cancel-in-progress: false
+  # On a dispatch or a release this is a MEASUREMENT run: a second one queues behind
+  # the first rather than cancelling a mid-flight bring-up and throwing away the only
+  # evidence the release's upgrade claim has.
+  #
+  # On a PULL REQUEST the opposite is right, and the difference is not a preference.
+  # A drill against a commit that has already been superseded is not evidence about
+  # anything anyone is going to merge, and leaving it running only delays the run
+  # that IS about the head commit — on a gate that takes eight minutes and holds a
+  # whole kind cluster while it does.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   drill:
