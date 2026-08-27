@@ -359,3 +359,77 @@ func referencedTokens(req any) []namedValue {
 	}
 	return out
 }
+
+// timestampFieldsThatRoundTrip names selected fields that LOOK like a timestamp and are
+// nonetheless safe to compare across an upgrade, with the reason each one is.
+//
+// 🔴 WHY THIS EXISTS. A server-generated timestamp CANNOT be compared between a create
+// response and a read-back, and the reason is not that the field is derived — it is
+// stored, and it does not change. What differs is PRECISION: the response carries an
+// in-memory time.Time and PostgreSQL stores timestamptz to microseconds, so the value
+// handed back was never persisted at the precision it was printed with. Measured on a
+// live drill, on publishedAt:
+//
+//	written: 2026-08-27T17:06:22.615501294Z
+//	read:    2026-08-27T17:06:22.615501Z
+//
+// That reports a healthy instance as MISMATCH — "a migration rewrote data", the most
+// alarming code this drill has — on every single run. A check that cries wolf on the
+// exact signal it exists to raise is worse than one that is merely narrow.
+//
+// The three entries below are safe for ONE reason and it is the same reason: nothing in
+// the seed sets them and the platform defaults none, so they come back null on both
+// sides and the comparison is null == null. That is a property of what the table SEEDS,
+// not of the fields, which is exactly why it has to be written down: the day an entry
+// starts setting one, the reason stops being true and this list is where somebody
+// looks.
+var timestampFieldsThatRoundTrip = map[string]string{
+	"expiresAt": "null on both sides: no entry sets an expiry on a credential or a " +
+		"provisioning profile, and the platform defaults none.",
+	"cancelledAt": "null on both sides: nothing cancels a drill batch. The entry's own " +
+		"comment says so beside the selection.",
+}
+
+var timestampLooking = regexp.MustCompile(`(?:At|Time)$`)
+
+// Every timestamp-looking field in any selection must be accounted for. A new one added
+// without a reason fails here in microseconds rather than ten minutes into a drill.
+func TestEverySelectedTimestampIsAccountedFor(t *testing.T) {
+	ident := regexp.MustCompile(`[A-Za-z][A-Za-z0-9]*`)
+	seen := map[string]bool{}
+	checked := 0
+
+	for _, e := range allEntities() {
+		for _, word := range ident.FindAllString(e.Fields, -1) {
+			checked++
+			if !timestampLooking.MatchString(word) {
+				continue
+			}
+			seen[word] = true
+			if _, ok := timestampFieldsThatRoundTrip[word]; !ok {
+				t.Errorf("entity %q selects %q, which looks like a timestamp. A server-generated "+
+					"one cannot be compared: the create response carries nanoseconds and the row "+
+					"stores microseconds, so verify reports MISMATCH on a healthy instance. Either "+
+					"drop it from the selection, or add it to timestampFieldsThatRoundTrip with "+
+					"the reason it is safe.", e.Name, word)
+			}
+		}
+	}
+
+	// 🔴 A vacuous pass here would look identical to a thorough one: if the selections
+	// could not be read, nothing is timestamp-looking and every entity trivially passes.
+	if checked < 100 {
+		t.Fatalf("only %d field names were examined across %d entities; the test is broken, "+
+			"not the table", checked, len(allEntities()))
+	}
+
+	// THE COUNTERWEIGHT. An entry for a field nothing selects any more is a standing
+	// permission nobody is watching — and it would keep this list looking maintained
+	// while covering nothing.
+	for field := range timestampFieldsThatRoundTrip {
+		if !seen[field] {
+			t.Errorf("timestampFieldsThatRoundTrip names %q, which no selection uses; "+
+				"delete it while the reason is still known", field)
+		}
+	}
+}

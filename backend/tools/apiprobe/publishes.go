@@ -84,12 +84,30 @@ func (p publishOp) entity() entity {
 	}
 }
 
-// publishVersionFields are the five fields every version type has, all stored.
+// publishVersionFields are the fields every version type has and that are safe to
+// compare across an upgrade.
 //
-// `publishedAt` and `publishedBy` are stored columns, not derived: the row's creation
-// time and the identity that wrote it. They are worth comparing precisely because a
-// migration that rebuilt a version table would be most likely to lose them.
-const publishVersionFields = "version label description publishedAt publishedBy"
+// 🔴 publishedAt IS DELIBERATELY NOT AMONG THEM, and the reason is worth writing down
+// because it is not "the field is derived". It is stored, and it does not change. What
+// differs is PRECISION: the publish response carries the in-memory time.Time, and
+// PostgreSQL stores timestamptz to microseconds, so the value handed back by the
+// mutation was never persisted at the precision it was printed with. Measured, on the
+// drill that caught it:
+//
+//	written: 2026-08-27T17:06:22.615501294Z   (nanoseconds, from the create response)
+//	read:    2026-08-27T17:06:22.615501Z      (microseconds, from the row)
+//
+// Comparing those reports a healthy instance as MISMATCH — the failure code this drill
+// exists to raise — on every single run. Same test as activeVersion on the profile:
+// not "is it derived?" but "does anything OTHER than data loss change it between seed
+// and verify?", and here the answer is persistence itself.
+//
+// (It is also a small, real observation about the API: a client that caches a publish
+// response holds a publishedAt that will never equal a subsequent read of the same row.)
+//
+// publishedBy stays. It is a string, it round-trips exactly, and a migration that
+// rebuilt a version table would be most likely to lose it.
+const publishVersionFields = "version label description publishedBy"
 
 // publishes is the publish coverage claim, the same way entities is the create one.
 // TestThePublishTableCoversEveryPublishMutation counts it against the schemas.
