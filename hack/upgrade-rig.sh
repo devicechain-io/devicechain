@@ -795,17 +795,32 @@ which says nothing about the sweep in either direction."
 # reason not to write a name down here.
 rdb_database() {
   local pod="$1" table="$2" all d hits=() n
+  local dbs=()
   all="$(kubectl --context "$kube_context" -n dc-system exec -i "$pod" -- \
     psql -U postgres -d postgres -Atqc \
     "SELECT datname FROM pg_database WHERE datistemplate = false AND datname <> 'postgres'")" ||
     fail "could not list databases on $pod"
-  while read -r d; do
+
+  # 🔴 mapfile, NOT `while read … <<<"$all"`, AND THE DIFFERENCE IS A LIVE FINDING.
+  # `kubectl exec -i` forwards STDIN, and inside a while-read loop the stdin it
+  # forwards is the loop's own input — so the first iteration swallowed the rest of
+  # the database list and the loop ended after one. On the first cluster run of this
+  # control that meant only `devicechain` was ever examined, `upgrig` (where the
+  # platform actually lives) was never reached, and the rig reported that NO database
+  # held the table. mapfile consumes the here-string itself, so the loop body has no
+  # stdin to eat.
+  #
+  # 🔑 It failed LOUDLY, which is the only reason it took minutes rather than a
+  # release: the refusal below asks "which database holds this table" and answers
+  # zero, instead of a heuristic quietly picking the one database it managed to see.
+  mapfile -t dbs <<<"$all"
+  for d in "${dbs[@]}"; do
     [[ -n "$d" ]] || continue
     n="$(kubectl --context "$kube_context" -n dc-system exec -i "$pod" -- \
       psql -U postgres -d "$d" -Atqc \
       "SELECT count(*) FROM information_schema.tables WHERE table_name = '$table'")" || continue
     [[ "$n" == "0" ]] || hits+=("$d")
-  done <<<"$all"
+  done
 
   if [[ ${#hits[@]} -eq 0 ]]; then
     fail "no database on $pod holds a table named $table.
