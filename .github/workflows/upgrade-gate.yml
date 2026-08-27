@@ -51,37 +51,22 @@ on:
   # fixed it by hand. A gate that runs once per release, on the release, is a gate
   # an arc cannot fail.
   #
-  # It is PATH-FILTERED rather than run on everything, and the filter was priced
-  # rather than guessed: over the last 60 merged commits these paths fire on 25 of
-  # them, and the drill costs about eight minutes on a runner (seed 191s, upgrade
-  # including the image build 283s, verify and the read sweep under five seconds
-  # each). The hour in the rig's own header is a COLD LOCAL run and does not apply.
+  # 🔴 AND IT RUNS ON EVERY PULL REQUEST, WITH NO `paths:` FILTER, WHICH LOOKS LIKE
+  # THE OPPOSITE OF WHAT IT IS. The drill is only worth having as a REQUIRED check —
+  # a red gate nobody is obliged to look at is discipline wearing a gate's clothes,
+  # and this repository merged a red `main` inside the arc that built this file. But a
+  # required check that never reports leaves every unrelated pull request pending
+  # forever, and a path filter is precisely a way of not reporting. So the filter
+  # moved INSIDE the run: the `scope` job below asks hack/check-upgrade-gate-paths.sh
+  # whether anything in this PR can change what an existing instance holds, and the
+  # expensive job runs only if it can.
   #
-  # What the list has to cover is anything that can change what an existing instance
-  # holds or how it is read:
-  #   - migrations and baselines, the direct cause;
-  #   - a served schema, because verify's read-backs select named fields;
-  #   - `model_*.go`, because a stored shape can move with no migration at all —
-  #     that is 3 of the 25 and it buys the class #838 belonged to;
-  #   - the drill itself, so a change to the instrument is measured by the instrument;
-  #   - the chart, because the documented upgrade IS a `helm upgrade` and a chart
-  #     change is what broke that procedure in v0.11.0.
-  #
-  # 🔴 A path filter that silently stops matching is the same shape of defect this
-  # gate exists to catch, so it does not go unchecked: hack/check-upgrade-gate-paths.sh
-  # asserts that every migration and baseline file in the tree is matched by the list
-  # below, and runs in ordinary CI.
+  # That leaves ONE list, in the script, read both by the decision and by the
+  # completeness check that guards it. The `paths:` block that used to live here was
+  # a second copy waiting to happen, and reintroducing one is now itself a CI failure
+  # — see claim 2 in that script, which fails if this trigger grows a filter again.
   pull_request:
     branches: [main]
-    paths:
-      - 'backend/**/migration*.go'
-      - 'backend/**/baseline*.go'
-      - 'backend/services/*/graphql/**'
-      - 'backend/services/*/model/model_*.go'
-      - 'backend/tools/apiprobe/**'
-      - 'hack/upgrade-rig.sh'
-      - 'deploy/helm/**'
-      - '.github/workflows/upgrade-gate.yml'
 
   # Manual runs default to --build: the skew-free test of the checked-out tree,
   # which is what a developer wants and what a release must NOT settle for.
@@ -138,7 +123,89 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Is the expensive job warranted?
+  # ---------------------------------------------------------------------------
+  # Cheap by construction: a checkout and a python regex match, about fifteen seconds,
+  # so that the eight-minute job below is entered only when something in the pull
+  # request can change what an existing instance holds or how it is read.
+  #
+  # 🔴 EVERY UNCERTAINTY HERE RESOLVES TO `run=true`, and the asymmetry is the whole
+  # design. Running the drill when it was not needed costs eight minutes. NOT running
+  # it when it was needed produces a green pull request that was never drilled — which
+  # is the outcome this gate exists to prevent, and is indistinguishable from a drill
+  # that passed. The script fails closed on an empty file list; the step below fails
+  # closed on an API error.
+  scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Granted here rather than at the top of the file, because a job-level block
+    # REPLACES the workflow-level one: this is the only job that reads the API, and
+    # `drill` — the job that builds images and runs a cluster — keeps the narrower
+    # set it already had.
+    #
+    # The API is asked which files the pull request changed because that is the same
+    # set GitHub's own `paths:` filter would have consulted. A merge-base diff would
+    # be a second, subtly different answer to a question this workflow used to ask
+    # GitHub directly: no fetch depth to get wrong, and no way to disagree with the
+    # mechanism being replaced.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Can anything in this pull request change what an instance holds?
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+
+          # Not a pull request -- a dispatch, or a release calling this workflow --
+          # so there is no file list to narrow by and the drill is the whole point of
+          # the run. Tested on the PAYLOAD rather than on github.event_name, because
+          # under workflow_call that name is the CALLER's event: release.yml invoking
+          # this file on a tag push reports `push`, and a future caller reached from a
+          # pull request would report `pull_request` while carrying a PR number that
+          # has nothing to do with this workflow's own trigger.
+          if [ "$EVENT" != "pull_request" ] || [ -z "${PR:-}" ]; then
+            echo "Not a pull request (event: $EVENT); the drill runs unconditionally."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The same set GitHub's own path filter would have used. A failure here is
+          # NOT "nothing changed": it is "we do not know what changed", and the two
+          # must not produce the same answer.
+          if ! gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR}/files" \
+                 --jq '.[].filename' > changed.txt; then
+            echo "::warning::could not list this pull request's files; running the drill rather than guessing"
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # 🔴 THE API CAPS THIS LIST AT 3000 FILES, and truncation is silent: a
+          # short list reads exactly like a complete one, and a dropped migration
+          # would produce `run=false` on the pull request that most needed drilling.
+          # No pull request here is anywhere near that, which is why the guard is
+          # three lines rather than a pagination strategy -- but "surely not" is the
+          # reasoning that produces the failures this gate exists for.
+          if [ "$(wc -l < changed.txt)" -ge 3000 ]; then
+            echo "::warning::this pull request touches 3000+ files, which is where the API truncates its file list; running the drill rather than deciding from a list that may be incomplete"
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          hack/check-upgrade-gate-paths.sh --match-changed < changed.txt >> "$GITHUB_OUTPUT"
+
   drill:
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
     runs-on: ubuntu-latest
     # Two budgets, because the two paths are not the same job. The PULL path does
     # no image build at all -- it is a bring-up, a rollout and two probe runs, and
@@ -433,3 +500,75 @@ jobs:
             kubectl --context "$ctx" -n "$ns" logs "$pod" --all-containers --tail=80 --previous 2>/dev/null || true
             echo "::endgroup::"
           done
+
+  # ---------------------------------------------------------------------------
+  # THE REPORTED RESULT. This is the check to require, not `drill`.
+  # ---------------------------------------------------------------------------
+  # `drill` is conditional, so on a pull request that changes no stored shape it does
+  # not run. GitHub does map a skipped job onto a passing required check — but that is
+  # an implicit rule about what a missing result means, and this repository has a
+  # standing position against those: `ci-complete` in ci.yml refuses to read `skipped`
+  # as success at all, precisely so that "did not run" can never be mistaken for
+  # "passed". Requiring `drill` directly would depend on the opposite reading of the
+  # same word, in the same repository, one file apart.
+  #
+  # So the reasoning is written down instead. This job always runs, always reports, and
+  # says in its own log WHY it is green: either the drill ran and passed, or the
+  # decision was made, recorded, and was that there is nothing here to drill.
+  #
+  # 🔴 IT ALSO CATCHES THE CONTRADICTION, which nothing else would. `scope` saying the
+  # drill was needed while `drill` reports `skipped` is not a pass and not a normal
+  # failure — it means the `if:` and the output disagree, i.e. the mechanism that
+  # decides whether this gate runs is broken. That would otherwise present as a green
+  # pull request, which is the exact failure this whole gate is built around.
+  upgrade-gate:
+    name: upgrade-gate
+    if: always()
+    needs: [scope, drill]
+    runs-on: ubuntu-latest
+    steps:
+      # Results arrive through the environment rather than interpolated into the
+      # script, so nothing from the workflow context is ever executed as shell.
+      - name: Report
+        env:
+          SCOPE: ${{ needs.scope.result }}
+          DRILL: ${{ needs.drill.result }}
+          WANTED: ${{ needs.scope.outputs.run }}
+        run: |
+          set -euo pipefail
+          echo "scope=$SCOPE wanted=${WANTED:-<none>} drill=$DRILL"
+
+          if [ "$SCOPE" != "success" ]; then
+            echo "::error::the scope job did not succeed ($SCOPE), so it is not known"
+            echo "whether this pull request needed the upgrade drill. Refusing to pass."
+            exit 1
+          fi
+
+          case "$WANTED" in
+            false)
+              if [ "$DRILL" != "skipped" ]; then
+                echo "::error::scope decided the drill was not needed, but the drill"
+                echo "reports '$DRILL' rather than 'skipped'. The job condition and the"
+                echo "scope output disagree, which means the mechanism deciding whether"
+                echo "this gate runs is broken. Refusing to pass."
+                exit 1
+              fi
+              echo "Nothing in this pull request can change what an existing instance holds."
+              echo "The drill was not needed. See the scope job's log for the file list."
+              ;;
+            true)
+              if [ "$DRILL" != "success" ]; then
+                echo "::error::the upgrade drill did not pass ($DRILL). This pull request"
+                echo "changes something that can alter what an existing instance holds, and"
+                echo "the drill is the only check that reads real rows back across a real"
+                echo "upgrade. See the drill job's summary and diagnostics."
+                exit 1
+              fi
+              echo "The upgrade drill ran and passed."
+              ;;
+            *)
+              echo "::error::scope produced no usable decision (run='${WANTED:-<none>}')."
+              echo "Refusing to pass on an answer that was never given."
+              exit 1
+              ;;
+          esac

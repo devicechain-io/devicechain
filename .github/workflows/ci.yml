@@ -695,11 +695,18 @@ jobs:
         run: hack/check-ci-gate-complete.sh
 
       # The upgrade gate runs on a PR only when the PR touches something that can
-      # change what an existing instance holds. A path filter that stops matching
-      # fails in the worst direction available: nothing errors, the gate simply does
-      # not appear, and "the upgrade drill did not object" is indistinguishable from
-      # "the upgrade drill passed". Same self-test-first rule as the guard above.
-      - name: upgrade-gate path filter guard self-test
+      # change what an existing instance holds, and hack/check-upgrade-gate-paths.sh
+      # owns that rule outright: the workflow fires on every PR and asks the script,
+      # so the drill can be a REQUIRED check without leaving unrelated PRs pending.
+      #
+      # A rule that stops matching fails in the worst direction available: nothing
+      # errors, the drill simply does not appear, and "the upgrade drill did not
+      # object" is indistinguishable from "the upgrade drill passed". This checks the
+      # two claims that can be checked from the tree — every migration and baseline
+      # file is matched, and the workflow has not grown a `paths:` filter that would
+      # AND with the script invisibly. Same self-test-first rule as the guard above,
+      # and its self-test covers the decision itself, which nothing here can.
+      - name: upgrade-gate rule guard self-test
         run: hack/check-upgrade-gate-paths.sh --self-test
 
       - name: every migration triggers the upgrade drill
