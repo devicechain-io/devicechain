@@ -13,12 +13,20 @@ import (
 	"gorm.io/gorm"
 )
 
-// A published version snapshot is Go-internal JSON: the same types write and read
-// it. Resolution (metric ingest, alarm evaluation, command vocabulary) depends on
-// every field a consumer reads surviving the round-trip, so pin it — a marshaler
-// asymmetry here would silently corrupt what devices resolve. buildProfileSnapshot
-// marshals exactly this ProfileSnapshot, so testing json.Marshal → parse covers the
-// production encoding without a database.
+// Resolution (metric ingest, alarm evaluation, command vocabulary) depends on every
+// field a consumer reads surviving the round-trip, so pin it — a marshaler asymmetry
+// here would silently corrupt what devices resolve. buildProfileSnapshot marshals
+// exactly this ProfileSnapshot, so testing json.Marshal → parse covers the production
+// encoding without a database.
+//
+// 🔴 WHAT THIS TEST CANNOT SEE, because it is symmetric by construction: it marshals and
+// unmarshals with the SAME types in the SAME binary. Rename a field and both halves
+// rename together and this still passes — while every snapshot already in the database
+// keeps the old key and silently loses the value. A published version is frozen and never
+// rewritten, so the types that read a stored snapshot are NOT the ones that wrote it,
+// whatever the symmetry here suggests. TestProfileSnapshotStoredKeysArePinned covers that
+// half, and the split is deliberate: this one pins that the encoding is FAITHFUL, that one
+// pins that it is STABLE.
 func TestProfileSnapshotRoundTrip(t *testing.T) {
 	enum := datatypes.JSON([]byte(`["LOW","HIGH"]`))
 	schema := datatypes.JSON([]byte(`[{"key":"level","type":"INT"}]`))

@@ -48,9 +48,31 @@ type DeviceProfileVersion struct {
 // ProfileSnapshot is the serialized capability set frozen into a
 // DeviceProfileVersion.Snapshot: the profile's definition lists captured
 // together. It is Go-internal (marshaled and unmarshaled only here, never SQL-built
-// nor exposed over GraphQL), so the definition structs are stored whole and the
-// encoding need only be self-consistent — a value round-trips because the same Go
-// types read it back that wrote it.
+// nor exposed over GraphQL), so the definition structs are stored whole.
+//
+// 🔴 THAT DOES NOT MAKE THE ENCODING A PRIVATE MATTER, WHICH THIS COMMENT USED TO CLAIM.
+// It said the encoding "need only be self-consistent — a value round-trips because the
+// same Go types read it back that wrote it". True inside one binary; false for every row
+// that outlives one, and every row here does. A version is frozen at publish and NEVER
+// rewritten, so a snapshot written by v0.11.0 is read years later by whatever is deployed
+// then — by THAT release's structs, not the ones that wrote it. This is a DURABLE WIRE
+// FORMAT that happens to be spelled in live models.
+//
+// Two consequences, and neither announces itself:
+//
+//   - Adding a field to one of the definition structs means every already-published
+//     version decodes it as the zero value. Sometimes that is the right reading (a nil
+//     Location means "declares no position", which is exactly what a pre-ADR-078 snapshot
+//     meant); sometimes it is silently wrong. It is a decision to make, not to default to.
+//   - These structs carry NO json tags, so the stored key IS the Go identifier. Renaming a
+//     field — the most ordinary refactor there is, verified by the compiler at every use —
+//     drops it from every stored snapshot without a word.
+//
+// TestProfileSnapshotStoredKeysArePinned pins the stored key set so both of those stop
+// being silent. TestProfileSnapshotRoundTrip does NOT cover this and structurally cannot:
+// it marshals and unmarshals with the same types in the same binary, so a rename renames
+// both halves together and it passes unchanged. That was checked by making the change and
+// watching it pass.
 type ProfileSnapshot struct {
 	Metrics  []*MetricDefinition  `json:"metrics"`
 	Commands []*CommandDefinition `json:"commands"`

@@ -315,11 +315,20 @@ type GeoFenceSetVersion struct {
 }
 
 // GeoFenceSetSnapshot is the serialized fence set frozen into a
-// GeoFenceSetVersion.Snapshot, HYDRATED — every fence carrying its geometry document. Like
-// ProfileSnapshot it is never SQL-built, so the encoding need only be self-consistent, and
-// it is not what any row holds: a stored snapshot names geometry by content address (see
+// GeoFenceSetVersion.Snapshot, HYDRATED — every fence carrying its geometry document. It is
+// not what any row holds: a stored snapshot names geometry by content address (see
 // storedGeoFenceSetSnapshot), and hydrateGeoFenceSetSnapshot resolves those addresses
 // through the archive to produce this.
+//
+// 🔴 THIS COMMENT USED TO CITE ProfileSnapshot FOR "never SQL-built, so the encoding need
+// only be self-consistent". Half of that was a non-sequitur worth removing rather than
+// repeating: nothing writing a document with SQL says anything about whether the release
+// that reads it back is the release that wrote it. For THIS type self-consistency really is
+// enough — it is derived on every read and never stored — but it is enough because the type
+// is TRANSIENT, not because it is Go-internal, and the two were being conflated. On the
+// durable side the conflation had teeth: it is why the content-addressed archive shipped
+// with no backfill for the snapshots already in the database. See ProfileSnapshot, which
+// carries the same warning against the same mistake.
 //
 // It is read back on the geoFenceSetSnapshot / currentGeoFenceSet GraphQL doors, which serve
 // the whole fence set in one document. The fence-set FACT no longer takes this shape — it
