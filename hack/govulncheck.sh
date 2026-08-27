@@ -115,6 +115,60 @@ evaluate() {
   return "$rc"
 }
 
+# ---------------------------------------------------------------------------
+# install_govulncheck: fetch the pinned tool, with retries.
+# ---------------------------------------------------------------------------
+# `go install <tool>@<version>` is a network fetch through proxy.golang.org plus a
+# verification against sum.golang.org, and this line runs TWENTY-ONE TIMES per CI
+# run — once per module in the go matrix, on twenty-one separate runners, each with
+# a cold tool cache. So a Go-infrastructure blip that would be a rounding error
+# against a single fetch gets twenty-one chances to land, and when it lands it reds
+# `main` over nothing anybody changed. On 2026-08-27 sum.golang.org returned
+# INTERNAL_ERROR intermittently and did exactly that three times in one day, each
+# time costing a person the work of establishing that the tree was fine.
+#
+# The gate next door already retries for the same reason: the operand image build in
+# ci.yml wraps itself in this same three-attempt loop with this same backoff.
+#
+# 🔴 WHAT THIS DOES NOT BUY. The ko install in ci.yml states the limit better than
+# this comment could — "TWO INDEPENDENT SOURCES, BECAUSE RETRYING ONE HOST IS NOT
+# RESILIENCE", written after a release host went from truncating bodies to hard 503s
+# inside twenty minutes. There is no second Go checksum database to fall back to, so
+# a genuine sumdb outage still fails here, and should. Retrying covers the case that
+# actually happened — some of the twenty-one fetches succeeding while others did not
+# — and deliberately does not pretend to cover more.
+#
+# Exhausting the attempts is a HARD failure, never a shrug. An unscanned module must
+# not report "no vulnerabilities found", which is the same rule GUARD 1 in scan()
+# enforces for the scan itself.
+install_govulncheck() {
+  local attempt
+  for attempt in 1 2 3; do
+    if go_install_govulncheck; then
+      return 0
+    fi
+    [ "$attempt" -eq 3 ] && break
+    echo "::warning::govulncheck install attempt ${attempt}/3 failed (usually a transient proxy.golang.org or sum.golang.org error); retrying..." >&2
+    retry_backoff "$attempt"
+  done
+  echo "::error::could not install govulncheck@${GOVULNCHECK_VERSION} after 3 attempts."
+  echo "    Nothing was scanned, so this is NOT 'no vulnerabilities found'."
+  echo "    If proxy.golang.org or sum.golang.org is having an incident, re-run once"
+  echo "    it clears — do not reach for GOFLAGS=-mod=mod or GONOSUMDB to get past it."
+  return 1
+}
+
+# These two exist ONLY so the self-test can substitute them. install_govulncheck's
+# whole behaviour is "how many times, and does a later success count", and neither
+# is observable while the loop body is a real network fetch and a real 45s of sleeps.
+go_install_govulncheck() {
+  go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+}
+
+retry_backoff() {
+  sleep $(($1 * 15))
+}
+
 scan() {
   local module="$1"
   local repo_root allowfile json
@@ -126,7 +180,7 @@ scan() {
 
   command -v jq >/dev/null || { echo "::error::jq is required"; return 1; }
 
-  go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+  install_govulncheck || return 1
   local bin
   bin="$(go env GOPATH)/bin/govulncheck"
 
@@ -211,6 +265,46 @@ EOF
     echo "  FAIL: an exception with no written justification was accepted" >&2; exit 1
   fi
   echo "  ok: an exception with no justification is rejected"
+
+  echo "==> Self-test: the install retry must retry, must give up, and must stop"
+  echo "    retrying once it succeeds"
+  retry_backoff() { :; }  # the loop's timing is not what is under test
+  attempts="$tmp/attempts"
+
+  # 7. An installer that never succeeds must FAIL, and must have tried three times.
+  #    Asserting the count as well as the result is the point: a loop that returned
+  #    non-zero after ONE attempt would pass a result-only check while being exactly
+  #    the no-retry behaviour this change exists to remove.
+  : > "$attempts"
+  go_install_govulncheck() { echo x >> "$attempts"; return 1; }
+  if install_govulncheck >/dev/null 2>&1; then
+    echo "  FAIL: an install that never succeeded was accepted" >&2; exit 1
+  fi
+  n="$(wc -l < "$attempts")"
+  [ "$n" -eq 3 ] || { echo "  FAIL: gave up after $n attempt(s), expected 3" >&2; exit 1; }
+  echo "  ok: an install that never succeeds fails, after 3 attempts"
+
+  # 8. THE COUNTERWEIGHT, and the only case that shows the retry is load-bearing:
+  #    two failures then a success must PASS. Without this, a loop that ignored its
+  #    own success and always failed would satisfy case 7 perfectly.
+  : > "$attempts"
+  go_install_govulncheck() {
+    echo x >> "$attempts"
+    [ "$(wc -l < "$attempts")" -ge 3 ]
+  }
+  if ! install_govulncheck >/dev/null 2>&1; then
+    echo "  FAIL: an install that succeeded on the third attempt was rejected" >&2; exit 1
+  fi
+  echo "  ok: an install that succeeds on a later attempt passes"
+
+  # 9. A first-attempt success must not retry. A loop that always ran three times
+  #    would pass 7 and 8 and triple every green CI run's install cost.
+  : > "$attempts"
+  go_install_govulncheck() { echo x >> "$attempts"; return 0; }
+  install_govulncheck >/dev/null 2>&1 || { echo "  FAIL: a working install was rejected" >&2; exit 1; }
+  n="$(wc -l < "$attempts")"
+  [ "$n" -eq 1 ] || { echo "  FAIL: a first-attempt success still ran $n attempts" >&2; exit 1; }
+  echo "  ok: a first-attempt success installs once"
 
   echo "==> Self-test passed"
   exit 0
