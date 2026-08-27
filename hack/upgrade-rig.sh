@@ -32,10 +32,13 @@
 #                                 exactly as docs/deployment/releases-and-upgrades
 #                                 says to run it
 #   hack/upgrade-rig.sh verify    every seeded row must read back UNCHANGED
-#   hack/upgrade-rig.sh control   THE NEGATIVE CONTROLS: break a row two different
-#                                 ways and require verify to notice each, with the
-#                                 exact exit code for that kind of damage
-#   hack/upgrade-rig.sh all       up + upgrade + verify + control
+#   hack/upgrade-rig.sh readsweep every door the served schemas expose must still
+#                                 ANSWER — the wider, shallower question, and the
+#                                 one a round trip of one's own writes cannot ask
+#   hack/upgrade-rig.sh control   THE NEGATIVE CONTROLS: break the instance three
+#                                 different ways and require the right check to
+#                                 notice each, with the exact exit code for it
+#   hack/upgrade-rig.sh all       up + upgrade + verify + readsweep + control
 #   hack/upgrade-rig.sh down      delete the cluster and the rig's state
 #
 # `all` is the one worth running. `verify` on its own reports a pass from a check
@@ -88,6 +91,11 @@
 #     because there was never an old row to carry forward.
 #   - Event history is not covered. This drill is about the control plane; the
 #     event store's survival across a restore is the DR drill's subject.
+#   - The read sweep asks whether a door ANSWERS, not whether it answers the same.
+#     Values are verify's subject, and verify has a receipt from before the upgrade
+#     to compare against; the sweep has nothing to compare against and does not
+#     pretend otherwise. A door that returns a plausible WRONG answer is outside
+#     both, and that residue is real.
 #
 # Requires: kind, kubectl, docker, helm, ko, git, curl, `tofu` OR `terraform` on
 # PATH, and a Go toolchain (the rig builds dcctl, apiprobe and every service image
@@ -105,6 +113,11 @@ baseline_tag="${DC_BASELINE_TAG:-v0.11.0}"
 # NOT configurable: kind takes the cluster name from the top-level `name:` in the
 # config file in preference to --name, so a variable here would name the context
 # one thing and the cluster another. Change both or neither.
+# The application database name, discovered from the server by rdb_database and used
+# by psql_rdb. Declared here rather than made local so the control can resolve it
+# once; it is empty until a phase that reaches Postgres sets it.
+rdb_db=""
+
 cluster="devicechain-upgrade"
 kube_context="kind-$cluster"
 kind_config="$repo_root/deploy/local/kind-cluster-upgrade.yaml"
@@ -224,7 +237,7 @@ need_all() {
   # Every tool, checked BEFORE anything is provisioned. A missing binary
   # discovered twenty minutes into a bring-up is the posture this script rejects
   # everywhere else.
-  for t in kind kubectl docker helm git curl go; do need "$t"; done
+  for t in kind kubectl docker helm git curl go jq; do need "$t"; done
   ko_required && need ko
   command -v tofu >/dev/null 2>&1 || command -v terraform >/dev/null 2>&1 ||
     fail "one of tofu or terraform is required but neither is on PATH"
@@ -335,7 +348,7 @@ load_exit_codes() {
   # "exit  means the schema moved" is a rig quietly telling an operator nothing at
   # the exact moment they most need it to be precise.
   local code var
-  for code in MISSING MISMATCH SHAPE SETUP; do
+  for code in MISSING MISMATCH SHAPE SETUP UNREADABLE; do
     var="APIPROBE_EXIT_$code"
     [[ -n "${!var:-}" ]] ||
       fail "apiprobe reported no $code exit code; this rig names it and cannot run without it"
@@ -712,6 +725,123 @@ apply error names the object the cluster refused."
 }
 
 # ---------------------------------------------------------------------------
+# reaching Postgres — for ONE control, and deliberately for no phase
+# ---------------------------------------------------------------------------
+#
+# Every other thing this rig does goes through the platform's own API, on purpose:
+# what an operator gets is what a client can read, and a drill that reads around
+# the API measures something nobody uses. The exception is the READ-SWEEP CONTROL,
+# and it has to be an exception.
+#
+# 🔴 THE DAMAGE THAT CONTROL NEEDS CANNOT BE DONE THROUGH THE API. It is the exact
+# state a v0.12.x instance was left in by the release that shipped the geometry
+# archive without its backfill: fence-set snapshots that name their geometry by a
+# content address, holding NO address. No mutation produces that — the platform
+# only ever writes the current shape — and no fixture reproduces it, because the
+# whole point is that it is what the PREVIOUS release wrote. So the control writes
+# it directly, and the sweep is then asked to notice.
+#
+# `-U postgres` over the pod's own socket: peer authentication inside the
+# container, so this needs no credential out of the instance Secret. The DR drill
+# reaches its stores the same way for its WAL switch.
+
+# pg_pod resolves the relational Postgres pod through the `dc-postgresql` SERVICE,
+# not through a pod label. Ported from dr-rig.sh, where the reasoning is recorded
+# at length: the label this would otherwise select on was authored by the OpenTofu
+# module for the old single-node StatefulSet, and the CloudNativePG topology
+# carries `cnpg.io/*` labels instead — so a label lookup breaks on a topology
+# change that is invisible from here, while the service name is what both
+# topologies agree on.
+#
+# `|| fail` inside the command substitution is load-bearing for the same reason it
+# is there: bash suppresses errexit for the dynamic extent of `$(...)`, so a jq
+# failure yields an EMPTY STRING, which the refusal below would otherwise report as
+# "no ready pod" — a parse failure wearing the costume of an absent object.
+pg_pod() {
+  local slices pod
+  slices="$(kubectl --context "$kube_context" -n dc-system get endpointslices \
+    -l "kubernetes.io/service-name=dc-postgresql" -o json)" ||
+    fail "could not list endpointslices for the dc-postgresql service"
+  # `.conditions.ready != false` rather than `== true`: the EndpointSlice API says
+  # a nil `ready` must be read as ready.
+  pod="$(printf '%s' "$slices" |
+    jq -r 'first(.items[].endpoints[]
+             | select(.conditions.ready != false)
+             | .targetRef.name // empty)')" ||
+    fail "could not parse the endpointslices for dc-postgresql (jq failed)"
+  if [[ -z "$pod" || "$pod" == "null" ]]; then
+    fail "no READY pod backs dc-postgresql in dc-system; the control cannot be armed,
+which says nothing about the sweep in either direction."
+  fi
+  printf '%s' "$pod"
+}
+
+# rdb_database finds the database HOLDING A NAMED TABLE, and refuses anything but
+# exactly one.
+#
+# 🔴 THE OBVIOUS VERSION IS WRONG, AND IT WAS WRITTEN FIRST: "the first non-template
+# database that is not `postgres`". On the very first real instance this ran against,
+# that picked `devicechain` — an empty database that merely sorts before `upgrig`,
+# which is where the platform actually lives. The whole control would then have armed
+# nothing, in a database with no tables at all, and reported that the sweep had failed
+# to notice.
+#
+# So it asks the question whose answer cannot be a coincidence: which database contains
+# this table. Zero and two are both refusals, because both mean the assumption behind
+# the query is wrong and neither can be resolved by picking one.
+#
+# ⚠️ The database is NOT named after the product. It is named after the INSTANCE, so it
+# moves with $instance and with whatever a future chart decides — which is the second
+# reason not to write a name down here.
+rdb_database() {
+  local pod="$1" table="$2" all d hits=() n
+  all="$(kubectl --context "$kube_context" -n dc-system exec -i "$pod" -- \
+    psql -U postgres -d postgres -Atqc \
+    "SELECT datname FROM pg_database WHERE datistemplate = false AND datname <> 'postgres'")" ||
+    fail "could not list databases on $pod"
+  while read -r d; do
+    [[ -n "$d" ]] || continue
+    n="$(kubectl --context "$kube_context" -n dc-system exec -i "$pod" -- \
+      psql -U postgres -d "$d" -Atqc \
+      "SELECT count(*) FROM information_schema.tables WHERE table_name = '$table'")" || continue
+    [[ "$n" == "0" ]] || hits+=("$d")
+  done <<<"$all"
+
+  if [[ ${#hits[@]} -eq 0 ]]; then
+    fail "no database on $pod holds a table named $table.
+Databases seen: $(printf '%s' "$all" | tr '\n' ' '). The control cannot be armed, which
+says nothing about the sweep in either direction."
+  fi
+  if [[ ${#hits[@]} -gt 1 ]]; then
+    fail "${#hits[@]} databases on $pod hold a table named $table (${hits[*]}).
+Picking one would be a guess, and a guess that arms a control in the wrong database
+reports a finding about the sweep that is really a fact about this script."
+  fi
+  printf '%s' "${hits[0]}"
+}
+
+# psql_rdb runs one statement against the platform database and REFUSES a silent
+# no-op.
+#
+# 🔴 `UPDATE ... WHERE <no row matches>` exits 0 and prints `UPDATE 0`. A control
+# armed that way damages nothing, the sweep then passes, and the run reports that
+# the control did not hold — a conclusion about the sweep drawn from a fact about
+# the WHERE clause. So the caller states how many rows it expects to touch, and a
+# different number stops the rig where the mistake is.
+psql_rdb() {
+  local pod="$1" want="$2" sql="$3" out
+  out="$(kubectl --context "$kube_context" -n dc-system exec -i "$pod" -- \
+    psql -U postgres -d "$rdb_db" -Atqc "$sql")" ||
+    fail "psql failed on $pod: $sql"
+  if [[ -n "$want" && "$out" != "$want" ]]; then
+    fail "the control's own SQL did not do what it claimed: expected '$want', got '$out'.
+Nothing is proved in either direction — this is the rig failing to set up its own
+control, not a finding about the platform."
+  fi
+  printf '%s' "$out"
+}
+
+# ---------------------------------------------------------------------------
 # verify — the positive result
 # ---------------------------------------------------------------------------
 
@@ -767,6 +897,70 @@ Read apiprobe's output above, and note that the code says which KIND of defect:
 }
 
 # ---------------------------------------------------------------------------
+# readsweep — the half a round trip cannot reach
+# ---------------------------------------------------------------------------
+#
+# verify asks 24 questions, and every one of them is "fetch the row I just wrote,
+# by its token". Against the served schemas that is 24 of about 124 query fields.
+# So its guarantee is the narrow one — EVERY ROW YOU WROTE READS BACK UNCHANGED —
+# and everything the platform DERIVES from a write sits outside it.
+#
+# 🔴 THAT IS NOT A HYPOTHETICAL GAP; THIS DRILL HAS ALREADY PASSED THROUGH IT. The
+# release that shipped content-addressed fence geometry shipped no backfill for the
+# snapshots already stored, so an upgraded instance stopped matching geofence rules.
+# The drill seeded a fence (it has, since v0.12.1), the seed minted a fence-set
+# version, the upgrade left that version pointing at nothing — and the fence ROW was
+# untouched, so verify read it back perfectly and the run was green. Adding another
+# entity to the table would not have changed that. A round trip of one's own writes
+# cannot see a derived artifact go stale.
+#
+# So this phase asks the OTHER question: does everything the platform serves about
+# these rows still answer at all? Not whether values are unchanged — verify owns
+# that, and it owns it better, having a receipt from before the upgrade to compare
+# against. Just that no door ERRORS. It is a low bar that a snapshot hydrating
+# through rows nobody migrated cannot clear.
+#
+# The doors are derived from the SERVED SDL rather than listed, because the listed
+# half is the half that was complete and still missed this.
+
+run_readsweep() {
+  local rc=0
+  "$apiprobe" readsweep --receipt "$receipt" --schemas "$repo_root/backend/services" \
+    --server "$api_server" --scheme "$api_scheme" || rc=$?
+  return "$rc"
+}
+
+cmd_readsweep() {
+  need_all
+  [[ -s "$receipt" ]] || fail "$receipt is missing or empty; run 'up' then 'upgrade' first"
+  build_apiprobe
+  load_exit_codes
+
+  say "THE READ SWEEP — does everything the platform SERVES about those rows still answer?"
+  # --schemas points at the WORKING TREE, which after 'upgrade' is what is deployed.
+  # Pointing it at the baseline tree would sweep the doors the OLD release served,
+  # which is the wrong question and would report every door the release ADDED as a
+  # finding.
+  local rc=0
+  run_readsweep || rc=$?
+
+  if [[ $rc -eq $APIPROBE_EXIT_SETUP ]]; then
+    fail "THE READ SWEEP COULD NOT RUN, and this says NOTHING either way (apiprobe exit
+$rc = SETUP). No door was shown to answer and none was shown to fail."
+  fi
+  if [[ $rc -ne 0 ]]; then
+    fail "doors the platform SERVES stopped answering after the upgrade (apiprobe exit $rc).
+Note what this is NOT: verify has already passed, so the rows are present and
+unchanged, and the sweep builds its documents FROM the served schema, so they are
+valid. Present rows, a valid query, and an error is the signature of a STORED SHAPE
+the new release can no longer make sense of — a snapshot naming rows that were never
+migrated, a document decoded into a struct that moved. Start at the migrations the
+release adds, and at what they do NOT rewrite."
+  fi
+  say "READ SWEEP PASSED — every door the deployed schemas serve still answers"
+}
+
+# ---------------------------------------------------------------------------
 # control — the check on the check
 # ---------------------------------------------------------------------------
 
@@ -811,7 +1005,95 @@ cmd_control() {
   # Neither control is reversible, which is why they run after the positive pass
   # and why `all` never revisits verify afterwards.
 
-  say "CONTROL 1 — deleting a seeded row, so verify has something to MISS"
+  # 🔴 THE READ-SWEEP CONTROL RUNS FIRST, AND THAT ORDER IS AS LOAD-BEARING AS THE
+  # ONE BELOW — for a different reason, so it does not fold into that paragraph.
+  #
+  # Its claim is a PAIR: the sweep fails AND verify still passes. That pair is the
+  # whole point, because it is the difference between "the sweep works" and "the
+  # sweep sees something verify cannot". The two controls below damage rows verify
+  # reads, permanently, so after either of them verify can never pass again and the
+  # second half of this claim becomes unmeasurable.
+  say "CONTROL 1 — un-addressing a stored fence-set snapshot, so the SWEEP has something to fail on"
+  local pod schema damaged tenant
+  pod="$(pg_pod)"
+  rdb_db="$(rdb_database "$pod" geo_fence_set_versions)"
+  note "relational store: pod $pod, database $rdb_db"
+
+  # The schema comes from the catalog, not from this file. Areas own their schemas
+  # and a rename would otherwise be invisible here until the UPDATE matched nothing
+  # — which exits 0, damages nothing, and would be reported as a control that did
+  # not hold.
+  # 🔴 QUOTED, and it has to be. An area's schema is named after the AREA — literally
+  # `device-management`, with a hyphen — which is not a bare SQL identifier: unquoted,
+  # `device-management.geo_fence_set_versions` parses as a subtraction and the control
+  # dies on a syntax error that reads like a broken rig rather than a quoting bug.
+  # `quote_ident` is the server's own answer to that, so the escaping is Postgres's
+  # rather than this script's guess at it.
+  schema="$(psql_rdb "$pod" "" \
+    "SELECT quote_ident(table_schema) FROM information_schema.tables WHERE table_name = 'geo_fence_set_versions' LIMIT 1")"
+  [[ -n "$schema" ]] || fail "no schema holds geo_fence_set_versions; the fence-set history this control
+needs was never created, so nothing is proved in either direction."
+
+  tenant="$(jq -r '.tenant' <"$receipt")"
+  [[ -n "$tenant" && "$tenant" != "null" ]] || fail "the receipt names no tenant; the control cannot be scoped"
+
+  # 🔑 THIS IS THE ONLY DAMAGE IN THIS RIG DONE BEHIND THE API, and it is what the
+  # release that shipped the geometry archive left behind: every fence in the stored
+  # snapshot named by a content address, with the address removed. A pre-archive
+  # snapshot has no `hash` key at all, and Go's decoder reads an absent key as the
+  # EMPTY STRING rather than complaining — so the snapshot resolves every fence to a
+  # blob that cannot exist. Removing the key reproduces that exactly; inventing a
+  # wrong hash would not, because a wrong hash is a value somebody wrote and an
+  # absent one is a release that never wrote it.
+  #
+  # Scoped to the probe tenant, and counted: a bare UPDATE that matches nothing exits
+  # 0 and prints UPDATE 0.
+  damaged="$(psql_rdb "$pod" "" "
+    WITH stripped AS (
+      UPDATE $schema.geo_fence_set_versions v
+         SET snapshot = jsonb_set(v.snapshot::jsonb, '{fences}',
+               (SELECT COALESCE(jsonb_agg(f - 'hash'), '[]'::jsonb)
+                  FROM jsonb_array_elements(v.snapshot::jsonb->'fences') f))
+       WHERE v.tenant_id = '$tenant'
+         AND v.snapshot::jsonb->'fences' <> '[]'::jsonb
+      RETURNING 1)
+    SELECT count(*) FROM stripped")"
+  [[ "${damaged:-0}" -gt 0 ]] || fail "the read-sweep control could not be ARMED: no fence-set version for
+tenant '$tenant' carried any fence to un-address. The seed writes a geofence and a
+fence-set version is minted from it, so an empty result means the seed skipped the
+fence (the baseline could not express it) — in which case this control measures
+nothing and must not be read as though it had."
+  note "un-addressed the fences in $damaged fence-set version(s) for tenant $tenant"
+
+  local rc=0
+  run_readsweep || rc=$?
+  if [[ $rc -eq 0 ]]; then
+    fail "THE READ-SWEEP CONTROL DID NOT HOLD. A stored fence-set snapshot was left naming
+its geometry by an address it does not carry — the exact state an un-backfilled
+upgrade produces — and the sweep reported every door answering. Its PASS above
+proves nothing, and neither would any future one."
+  fi
+  if [[ $rc -ne $APIPROBE_EXIT_UNREADABLE ]]; then
+    fail "THE READ-SWEEP CONTROL IS INCONCLUSIVE. The sweep failed with exit $rc where
+$APIPROBE_EXIT_UNREADABLE (UNREADABLE) was required. A failure for the wrong reason is not a control:
+SETUP would hold just as well against a sweep that never reached the ingress."
+  fi
+  say "READ-SWEEP CONTROL HELD (sweep exited $rc, exactly as required)"
+
+  # 🔑 AND THE SECOND HALF, WHICH IS THE ONE WORTH THE PHASE. verify must still pass
+  # over the very same damage. If it fails here the pair collapses: the two checks
+  # would be seeing the same thing, this sweep would be a slower spelling of verify,
+  # and the gap it was built to close would still be open.
+  rc=0
+  run_verify || rc=$?
+  [[ $rc -eq 0 ]] ||
+    fail "verify FAILED (exit $rc) over damage that only touched a derived artifact. Either
+the damage reached a row verify reads — in which case this control is not measuring
+what it claims — or verify is broken. Neither conclusion is about the read sweep."
+  say "AND VERIFY STILL PASSES over the same damage — which is the claim: the sweep sees
+what a round trip of one's own writes structurally cannot."
+
+  say "CONTROL 2 — deleting a seeded row, so verify has something to MISS"
   # `tamper` proves the damage landed before this script draws any conclusion from
   # it: a delete that was silently refused leaves the row where it was, and a
   # verify that then passes would be reported as a control that did not hold when
@@ -824,7 +1106,7 @@ in either direction: this is the rig failing to set up its own control, not a
 finding about the platform."
   expect_verify_to_fail "$APIPROBE_EXIT_MISSING" "DELETED-ROW"
 
-  say "CONTROL 2 — rewriting a field, so verify has something to MISMATCH"
+  say "CONTROL 3 — rewriting a field, so verify has something to MISMATCH"
   # Not redundant with the first. A verify that reported every row missing would
   # pass control 1 while being completely broken; only a control that demands a
   # DIFFERENT code can tell "the probe reads rows and compares them" apart from
@@ -1201,6 +1483,7 @@ case "${1:-all}" in
 up) cmd_up ;;
 upgrade) cmd_upgrade ;;
 verify) cmd_verify ;;
+readsweep) cmd_readsweep ;;
 control) cmd_control ;;
 operator) cmd_operator ;;
 selftest) selftest ;;
@@ -1209,10 +1492,14 @@ all)
   cmd_up
   cmd_upgrade
   cmd_verify
+  cmd_readsweep
   cmd_control
   say "DATA SURVIVED: rows written through the API on $baseline_tag were read back
-unchanged after the documented upgrade, and the probe was then shown to FAIL —
-with the right code — against both a deleted row and a rewritten field. This is
+unchanged after the documented upgrade, every door the served schemas expose still
+answered, and each check was then shown to FAIL — with the right code — against
+damage of its own kind: an un-addressed stored snapshot for the sweep, a deleted
+row and a rewritten field for verify. The snapshot control is the one that says
+these are two checks and not one, because verify PASSED over that damage. This is
 the evidence the release's upgrade claim rests on.
 
 WHAT IS STILL NOT COVERED, so this is not read as more than it is: nothing was
@@ -1227,5 +1514,5 @@ them; and event history belongs to the DR drill, not this one."
   cmd_operator
   say "UPGRADE DRILL COMPLETE — data survived AND the operator is in step."
   ;;
-*) fail "unknown command ${1}; try up | upgrade | verify | control | operator | all | selftest | down" ;;
+*) fail "unknown command ${1}; try up | upgrade | verify | readsweep | control | operator | all | selftest | down" ;;
 esac

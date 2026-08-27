@@ -467,8 +467,27 @@ func runReadSweep(ctx context.Context, argv []string) error {
 		}
 	}
 	if len(failures) > 0 {
-		return failWith(exitUnreadable, "%d of %d served doors ERRORED after the upgrade; the rows are still there and "+
-			"a client can no longer read them:\n    %s", len(failures), len(calls), strings.Join(failures, "\n    "))
+		// ⚠️ THE MESSAGE DOES NOT ASSERT A CAUSE, AND AN EARLIER ONE DID. It said "the
+		// rows are still there and a client can no longer read them", which is the
+		// conclusion the UPGRADE RIG is entitled to — it has just watched verify pass over
+		// the same rows — and which this tool, run on its own against any instance, is not.
+		// The first hand run of it named two doors this way that were simply absent from an
+		// older deployment than the schema tree it had been given.
+		//
+		// So it reports the FACT and orders the hypotheses. The rig's own phase draws the
+		// sharper conclusion, because there it is earned.
+		return failWith(exitUnreadable, "%d of %d served doors ERRORED:\n    %s\n\n"+
+			"In order of likelihood:\n"+
+			"  1. --schemas does not describe what is DEPLOYED. A door reported as unknown to the\n"+
+			"     server is this, every time — point --schemas at the deployed release's tree.\n"+
+			"  2. The door needs an authority this principal does not hold. The probe runs as an\n"+
+			"     ordinary tenant administrator on purpose; a system-tier door belongs in\n"+
+			"     sweepExemptions, with the reason.\n"+
+			"  3. A STORED SHAPE the deployed release can no longer make sense of. This is the one\n"+
+			"     worth stopping a release for, and it is what the upgrade drill runs this to find —\n"+
+			"     but only the drill can tell it apart from 1 and 2, because only the drill has just\n"+
+			"     watched the same rows read back unchanged.",
+			len(failures), len(calls), strings.Join(failures, "\n    "))
 	}
 	fmt.Printf("READ SWEEP CLEAN — all %d planned doors answered\n", len(calls))
 	return nil
@@ -510,4 +529,24 @@ var sweepExemptions = map[string]string{
 		"to send; it needs a commandKey from the device's own vocabulary, which is a choice, not a token",
 	"device-management.validateCommandEnqueueBatch": "the batch form of validateCommandEnqueue, and " +
 		"exempt for the same reason",
+
+	// The two below are exempt because their argument is a GUESS, and a guess that
+	// misses does not fail quietly — `geoFenceSetSnapshot(version:)` on an unknown
+	// version is an error BY DESIGN, so the sweep would report the platform working
+	// exactly as specified as an upgrade defect. Nothing is lost: currentGeoFenceSet
+	// and currentGeoFenceSetManifest reach the SAME hydration path (the one the
+	// geometry archive broke) with no version to guess at.
+	"device-management.geoFenceSetSnapshot": "takes a fence-set VERSION, and an unknown one is an " +
+		"error by design; currentGeoFenceSet reaches the same hydration with nothing to guess",
+	"device-management.geoFenceSetManifest": "takes a fence-set VERSION, for the reason " +
+		"geoFenceSetSnapshot is exempt; currentGeoFenceSetManifest covers the same path",
+
+	// 🔴 A PERMISSION REFUSAL IS NOT A FINDING, and this door produces one every time.
+	// Its schema says so in as many words: it requires `command:claim`, which is
+	// system-tier, so it is reachable only by a service or identity token and never by
+	// the tenant user this probe deliberately runs as. The refusal is the platform
+	// working. Left un-exempt it would fail every drill for a reason that has nothing
+	// to do with an upgrade — the cried wolf that teaches everyone to read past a red.
+	"command-delivery.drainableCommands": "requires the system-tier command:claim authority, which the " +
+		"tenant administrator this probe runs as deliberately does not hold; the refusal is correct behaviour",
 }
