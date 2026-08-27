@@ -508,6 +508,69 @@ var entities = []entity{
 		},
 	},
 	{
+		// Depends on: nothing, and it comes FIRST of this block deliberately — the facet
+		// it declares and the attribute below are what the dynamic group's selector reads,
+		// and a group created before them would be evaluated against a vocabulary that
+		// does not exist yet.
+		//
+		// 🔴 READ BACK BY CRITERIA THAT CANNOT PIN IT. FacetKeySearchCriteria carries
+		// memberType and no key, and the platform declares SYSTEM facets alongside the
+		// tenant's — so the read matches on `key` rather than taking results[0], which
+		// would compare this row against whichever one the server ordered first.
+		Name:      "facet-key",
+		Area:      "device-management",
+		Mutation:  "setFacetKey",
+		Input:     "FacetKeySetRequest",
+		Read:      "facetKeys",
+		ReadInput: "FacetKeySearchCriteria!",
+		ReadVars:  map[string]any{"pageNumber": 1, "pageSize": 200, "memberType": "device"},
+		MatchBy:   "key",
+		Fields:    "memberType key valueType source",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"memberType": "device",
+				"key":        probeFacetKey,
+				"valueType":  probeValueType,
+				"values":     []any{probeFacetValue},
+				"label":      "apiprobe facet",
+			}}
+		},
+		TokenFrom: func(s *state) string { return "device/" + probeFacetKey },
+	},
+	{
+		// Depends on: device, facet-key. Gives the seeded device the value the dynamic
+		// group's selector matches, which is what materialises a membership row.
+		//
+		// These criteria DO pin the row — entityType, entity, scope and attrKeys are the
+		// natural key — so no MatchBy is needed, and more than one row coming back is
+		// reported as a SHAPE change rather than quietly resolved.
+		Name:      "entity-attribute",
+		Area:      "device-management",
+		Mutation:  "setEntityAttribute",
+		Input:     "EntityAttributeSetRequest!",
+		Read:      "entityAttributes",
+		ReadInput: "EntityAttributeSearchCriteria!",
+		ReadVars: map[string]any{
+			"pageNumber": 1, "pageSize": 10,
+			"entityType": "device", "entity": "apiprobe-device",
+			"scope": probeAttrScope, "attrKeys": []any{probeFacetKey},
+		},
+		Fields: "entityType scope attrKey valueType value",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"entityType": "device",
+				"entity":     s.tokens["device"],
+				"scope":      probeAttrScope,
+				"attrKey":    probeFacetKey,
+				"valueType":  probeValueType,
+				"value":      probeFacetValue,
+			}}
+		},
+		TokenFrom: func(s *state) string {
+			return "device/" + s.tokens["device"] + "/" + probeAttrScope + "/" + probeFacetKey
+		},
+	},
+	{
 		// 🔴 A SECOND GROUP, AND THE TABLE NEEDS BOTH. static and dynamic are two
 		// different membership mechanisms, not two settings: a static group's members
 		// are explicit and it is never versioned, while a dynamic one freezes a
@@ -544,66 +607,6 @@ var entities = []entity{
 				"borderColor":     "#475467",
 				"metadata":        meta("entity-group-dynamic"),
 			}}
-		},
-	},
-	{
-		// Depends on: nothing. Declares the facet the dynamic group's selector reads.
-		//
-		// 🔴 READ BACK BY CRITERIA THAT CANNOT PIN IT. FacetKeySearchCriteria carries
-		// memberType and no key, and the platform declares SYSTEM facets alongside the
-		// tenant's — so the read matches on `key` rather than taking results[0], which
-		// would compare this row against whichever one the server ordered first.
-		Name:      "facet-key",
-		Area:      "device-management",
-		Mutation:  "setFacetKey",
-		Input:     "FacetKeySetRequest",
-		Read:      "facetKeys",
-		ReadInput: "FacetKeySearchCriteria!",
-		ReadVars:  map[string]any{"pageNumber": 1, "pageSize": 200, "memberType": "device"},
-		MatchBy:   "key",
-		Fields:    "memberType key valueType source",
-		Vars: func(s *state) map[string]any {
-			return map[string]any{"req": map[string]any{
-				"memberType": "device",
-				"key":        probeFacetKey,
-				"valueType":  "string",
-				"values":     []any{probeFacetValue},
-				"label":      "apiprobe facet",
-			}}
-		},
-		TokenFrom: func(s *state) string { return "device/" + probeFacetKey },
-	},
-	{
-		// Depends on: device, facet-key. Gives the seeded device the value the dynamic
-		// group's selector matches, which is what materialises a membership row.
-		//
-		// These criteria DO pin the row — entityType, entity, scope and attrKeys are the
-		// natural key — so no MatchBy is needed, and more than one row coming back is
-		// reported as a SHAPE change rather than quietly resolved.
-		Name:      "entity-attribute",
-		Area:      "device-management",
-		Mutation:  "setEntityAttribute",
-		Input:     "EntityAttributeSetRequest!",
-		Read:      "entityAttributes",
-		ReadInput: "EntityAttributeSearchCriteria!",
-		ReadVars: map[string]any{
-			"pageNumber": 1, "pageSize": 10,
-			"entityType": "device", "entity": "apiprobe-device",
-			"scope": probeAttrScope, "attrKeys": []any{probeFacetKey},
-		},
-		Fields: "entityType scope attrKey valueType value",
-		Vars: func(s *state) map[string]any {
-			return map[string]any{"req": map[string]any{
-				"entityType": "device",
-				"entity":     s.tokens["device"],
-				"scope":      probeAttrScope,
-				"attrKey":    probeFacetKey,
-				"valueType":  "string",
-				"value":      probeFacetValue,
-			}}
-		},
-		TokenFrom: func(s *state) string {
-			return "device/" + s.tokens["device"] + "/" + probeAttrScope + "/" + probeFacetKey
 		},
 	},
 	{
@@ -995,7 +998,22 @@ func probeEdge(s *state, name string) map[string]any {
 const (
 	probeFacetKey   = "apiprobe-climate"
 	probeFacetValue = "arid"
-	probeAttrScope  = "config"
+
+	// 🔴 SHARED IS NOT A CHOICE, IT IS THE ONLY SCOPE A SELECTOR CAN SEE. The facet
+	// lowering pins facets to one EntityAttribute scope and that scope is SHARED
+	// (internal/selector/lower.go: "FacetScope pins which EntityAttribute scope defines
+	// facets. v1 = SHARED"), and api_group_scoping.go refuses anything else outright.
+	// CLIENT or SERVER would be perfectly VALID and would match nothing — a group that
+	// publishes cleanly, resolves zero members, and is indistinguishable from a working
+	// one until somebody counts them.
+	probeAttrScope = "SHARED"
+
+	// 🔑 THE TWO VOCABULARIES ARE CASED DIFFERENTLY, and the API enforces both behind a
+	// plain `String!` where no schema validator can see them: member types are lowercase
+	// (device, asset, area, customer) and value types are UPPERCASE (STRING, LONG,
+	// DOUBLE, BOOLEAN, JSON). Measured the hard way — "string" was refused on a live
+	// instance after the documents had validated perfectly.
+	probeValueType = "STRING"
 )
 
 var probeSelector = `attr["` + probeFacetKey + `"] == "` + probeFacetValue + `"`
