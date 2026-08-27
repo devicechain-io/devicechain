@@ -124,6 +124,18 @@ var publishes = []publishOp{
 		Fields:   publishVersionFields,
 	},
 	{
+		// selector and memberType are FROZEN at publish — the whole point of the version
+		// — so they are compared, not just the envelope around them. This publishes the
+		// DYNAMIC group; the static one beside it is never versioned, which is why the
+		// table needs both and why covering only one of them covered neither path.
+		Name:     "entity-group-version",
+		Area:     "device-management",
+		Mutation: "publishEntityGroup",
+		Read:     "entityGroupVersions",
+		Of:       "entity-group-dynamic",
+		Fields:   publishVersionFields + " selector memberType",
+	},
+	{
 		Name:     "dashboard-version",
 		Area:     "dashboard-management",
 		Mutation: "publishDashboard",
@@ -144,28 +156,65 @@ var publishes = []publishOp{
 }
 
 // publishesNotCovered names publish mutations this tool deliberately does NOT exercise,
-// with the reason — so that "3 of 4" is a number with an explanation attached rather
-// than a gap somebody has to notice.
+// with the reason — so that a short table is a number with an explanation attached
+// rather than a gap somebody has to notice.
 //
 // 🔴 THE SUM IS WHAT IS CHECKED, not either half: len(publishes) + len(this) must equal
 // the count read out of the schemas. A publish added to the platform then breaks the
 // arithmetic instead of quietly enlarging the denominator, and an entry here that stops
-// being true is caught by TestNothingIsBothCoveredAndExcluded. Same shape as the
+// being true is caught by the two counterweights in publishes_test.go. Same shape as the
 // govulncheck allowlist, and for the same reason: an exception nobody is watching is a
 // gap with paperwork.
-var publishesNotCovered = map[string]string{
-	"publishEntityGroup": "the seeded entity group is STATIC. Measured on a live instance, " +
-		"not inferred from a comment: the platform answers `only a dynamic entity group can be " +
-		"published (group \"apiprobe-entity-group\" is \"static\")` and apiprobe exits REFUSED, " +
-		"which is the right code — a verdict about the API. Covering it needs a " +
-		"DYNAMIC group, whose selector is lowerable CEL over a facet (attr[\"k\"] == \"v\"), " +
-		"which in turn needs setFacetKey to declare the facet and setEntityAttribute to give a " +
-		"device a value to match. That is a chain of three writes through mutation verbs this " +
-		"table has no shape for yet, and it closes entity_group_versions, entity_group_facet_refs, " +
-		"entity_group_memberships, facet_keys and entity_attributes together. Its own slice.",
+//
+// It is EMPTY, and it was not. publishEntityGroup lived here for exactly as long as the
+// table seeded only a STATIC group — the platform refuses to publish one, in its own
+// words: `only a dynamic entity group can be published`. The table now seeds both, so
+// the exclusion was deleted rather than left to look maintained.
+var publishesNotCovered = map[string]string{}
+
+// afterPublish is the third phase: entities that cannot be created until something has
+// been published, because they reference a published VERSION NUMBER.
+var afterPublish = []entity{
+	{
+		// Depends on: device-profile, entity-group-dynamic, entity-group-version.
+		//
+		// A detection rule SCOPED to a group is what writes detection_rule_scope_refs,
+		// and the scope is (groupToken, groupVersion) — a version that does not exist
+		// until the group is published, which is the whole reason this phase exists.
+		//
+		// Authored DISABLED for the same reason the unscoped rule is: the probe asserts
+		// that the rule document and its scope survive, not that the engine runs. Version
+		// 1 is not a guess — it is the first publish of a group this tool created.
+		Name:     "detection-rule-scoped",
+		Area:     "device-management",
+		Mutation: "createDetectionRule",
+		Input:    "DetectionRuleCreateRequest!",
+		Read:     "detectionRulesByToken",
+		Fields: "token name description definition enabled metadata " +
+			"entityGroupToken entityGroupVersion deviceProfile{token}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"token":              s.tok("detection-rule-scoped"),
+				"deviceProfileToken": s.tok("device-profile"),
+				"name":               "Overheating, in one group",
+				"description":        "Scoped to a published group version; asserts the scope, not the engine.",
+				"definition":         `{"type":"threshold","metric":"` + probeMetricKey + `","op":">","value":40}`,
+				"enabled":            false,
+				"entityGroupToken":   s.tok("entity-group-dynamic"),
+				"entityGroupVersion": 1,
+				"metadata":           meta("detection-rule-scoped"),
+			}}
+		},
+	},
 }
 
 // allEntities is every seedable thing: creates first, then publishes.
+//
+// THREE PHASES, and the third exists because two were not enough. A detection rule
+// SCOPED to an entity group carries that group's published VERSION NUMBER, which does
+// not exist until the group is published — so it can be neither a create (phase one runs
+// before every publish) nor a publish. Rather than reorder the whole table around one
+// entry, the sequence gained an explicit tail, named for what it is.
 //
 // 🔴 ORDER IS LOAD-BEARING, and more so here than in the table alone. A publish freezes
 // whatever its parent holds AT THAT MOMENT, so it has to run after every entity that
@@ -173,10 +222,10 @@ var publishesNotCovered = map[string]string{
 // definitions are all created after the profile itself, and a profile published before
 // them would freeze an empty snapshot and still look like a successful publish.
 func allEntities() []entity {
-	out := make([]entity, 0, len(entities)+len(publishes))
+	out := make([]entity, 0, len(entities)+len(publishes)+len(afterPublish))
 	out = append(out, entities...)
 	for _, p := range publishes {
 		out = append(out, p.entity())
 	}
-	return out
+	return append(out, afterPublish...)
 }

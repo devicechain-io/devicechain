@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // entity is one creatable thing: how to make it, and how to read it back.
@@ -58,6 +59,39 @@ type entity struct {
 	// publishes.go: the mutation takes scalar arguments instead of an input object,
 	// and the read-back is a list keyed by the PARENT's token.
 	Publish bool
+
+	// ReadInput is the GraphQL type of the read query's CRITERIA variable, for the
+	// entities addressed by a natural key rather than by a token — an entity
+	// attribute is (entityType, entity, scope, attrKey); a facet key is
+	// (memberType, key). Set it and ReadVars together; the read then renders as
+	// `read(criteria:$c){results{…}}` and unwraps the results envelope.
+	ReadInput string
+
+	// ReadVars is the criteria value. A plain map, not a builder over state, because
+	// verify runs in a DIFFERENT PROCESS from seed and has only the receipt: it never
+	// holds a state to build from. That is affordable only because every value the
+	// seed writes is a deterministic literal, which is the same property the receipt
+	// already depends on.
+	ReadVars map[string]any
+
+	// ReadArg overrides the argument name of a Single read. Empty means "token";
+	// deviceClaim is keyed by `deviceToken`.
+	ReadArg string
+
+	// MatchBy names the field that identifies THIS row inside a results list whose
+	// criteria cannot narrow to one.
+	//
+	// 🔴 Without it the read takes results[0], and for facetKeys that is whichever row
+	// the server happened to order first — the criteria carry no key, and the platform
+	// declares SYSTEM facets alongside the tenant's. Comparing the seeded row against a
+	// system row reports MISMATCH on a healthy instance, which is the loudest wrong
+	// answer this tool can give.
+	MatchBy string
+
+	// TokenFrom supplies the receipt token for an entity whose created object carries
+	// none — a published version, or a natural-keyed row. The token is then only a
+	// receipt KEY, not something the read is addressed by.
+	TokenFrom func(*state) string
 
 	// Bulk marks a create that returns a LIST of created objects rather than one.
 	// Every element is recorded separately, so a bulk create of N devices is N
@@ -122,14 +156,29 @@ func (e entity) createDoc() string {
 
 // readDoc renders the read-back query, in whichever of the two shapes the schema
 // actually serves.
+// readArg is the argument name a Single read is keyed by.
+func (e entity) readArg() string {
+	if e.ReadArg != "" {
+		return e.ReadArg
+	}
+	return "token"
+}
+
 func (e entity) readDoc() string {
+	if e.ReadInput != "" {
+		// Criteria-addressed, and the results envelope is unwrapped by readObject.
+		// pagination is deliberately NOT selected: it is a property of the QUERY, not
+		// of the row, and selecting it would put a count into a comparison that exists
+		// to detect a changed row.
+		return "query($c:" + e.ReadInput + "){" + e.Read + "(criteria:$c){results{" + e.Fields + "}}}"
+	}
 	if e.Publish {
 		// Keyed by the PARENT token like a Single read, but returns a LIST like the
 		// default one — the third shape the schemas actually serve.
 		return "query($token:String!){" + e.Read + "(token:$token){" + e.Fields + "}}"
 	}
 	if e.Single {
-		return "query($token:String!){" + e.Read + "(token:$token){" + e.Fields + "}}"
+		return "query($token:String!){" + e.Read + "(" + e.readArg() + ":$token){" + e.Fields + "}}"
 	}
 	return "query($token:String!){" + e.Read + "(tokens:[$token]){" + e.Fields + "}}"
 }
@@ -457,6 +506,135 @@ var entities = []entity{
 				"metadata":        meta("entity-group"),
 			}}
 		},
+	},
+	{
+		// 🔴 A SECOND GROUP, AND THE TABLE NEEDS BOTH. static and dynamic are two
+		// different membership mechanisms, not two settings: a static group's members
+		// are explicit and it is never versioned, while a dynamic one freezes a
+		// lowerable-CEL selector at publish and materialises its members from it. The
+		// entry above covers the first; covering only one of them covered neither path,
+		// and the dynamic side is what writes entity_group_versions,
+		// entity_group_facet_refs and entity_group_memberships.
+		//
+		// The selector is the platform's own lowerable shape, `attr["k"] == "v"`, and it
+		// names the facet the facet-key entry declares and the value the entity-attribute
+		// entry sets on the seeded device — which is what makes the membership real
+		// rather than an empty match.
+		//
+		// activeVersion is NOT selected: this group IS published, which moves it.
+		Name:     "entity-group-dynamic",
+		Area:     "device-management",
+		Mutation: "createEntityGroup",
+		Input:    "EntityGroupCreateRequest!",
+		Read:     "entityGroupsByToken",
+		Fields: "token name description imageUrl icon backgroundColor foregroundColor borderColor " +
+			"metadata memberType membershipMode selector",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"token":           s.tok("entity-group-dynamic"),
+				"memberType":      "device",
+				"membershipMode":  "dynamic",
+				"selector":        probeSelector,
+				"name":            "apiprobe dynamic group",
+				"description":     "A dynamic device group; membership is evaluated from the frozen selector.",
+				"imageUrl":        "https://example.invalid/dynamic-group.png",
+				"icon":            "filter",
+				"backgroundColor": "#101828",
+				"foregroundColor": "#ffffff",
+				"borderColor":     "#475467",
+				"metadata":        meta("entity-group-dynamic"),
+			}}
+		},
+	},
+	{
+		// Depends on: nothing. Declares the facet the dynamic group's selector reads.
+		//
+		// 🔴 READ BACK BY CRITERIA THAT CANNOT PIN IT. FacetKeySearchCriteria carries
+		// memberType and no key, and the platform declares SYSTEM facets alongside the
+		// tenant's — so the read matches on `key` rather than taking results[0], which
+		// would compare this row against whichever one the server ordered first.
+		Name:      "facet-key",
+		Area:      "device-management",
+		Mutation:  "setFacetKey",
+		Input:     "FacetKeySetRequest",
+		Read:      "facetKeys",
+		ReadInput: "FacetKeySearchCriteria!",
+		ReadVars:  map[string]any{"pageNumber": 1, "pageSize": 200, "memberType": "device"},
+		MatchBy:   "key",
+		Fields:    "memberType key valueType source",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"memberType": "device",
+				"key":        probeFacetKey,
+				"valueType":  "string",
+				"values":     []any{probeFacetValue},
+				"label":      "apiprobe facet",
+			}}
+		},
+		TokenFrom: func(s *state) string { return "device/" + probeFacetKey },
+	},
+	{
+		// Depends on: device, facet-key. Gives the seeded device the value the dynamic
+		// group's selector matches, which is what materialises a membership row.
+		//
+		// These criteria DO pin the row — entityType, entity, scope and attrKeys are the
+		// natural key — so no MatchBy is needed, and more than one row coming back is
+		// reported as a SHAPE change rather than quietly resolved.
+		Name:      "entity-attribute",
+		Area:      "device-management",
+		Mutation:  "setEntityAttribute",
+		Input:     "EntityAttributeSetRequest!",
+		Read:      "entityAttributes",
+		ReadInput: "EntityAttributeSearchCriteria!",
+		ReadVars: map[string]any{
+			"pageNumber": 1, "pageSize": 10,
+			"entityType": "device", "entity": "apiprobe-device",
+			"scope": probeAttrScope, "attrKeys": []any{probeFacetKey},
+		},
+		Fields: "entityType scope attrKey valueType value",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"entityType": "device",
+				"entity":     s.tokens["device"],
+				"scope":      probeAttrScope,
+				"attrKey":    probeFacetKey,
+				"valueType":  "string",
+				"value":      probeFacetValue,
+			}}
+		},
+		TokenFrom: func(s *state) string {
+			return "device/" + s.tokens["device"] + "/" + probeAttrScope + "/" + probeFacetKey
+		},
+	},
+	{
+		// Depends on: device. An OPEN claim — initiated and never redeemed, because
+		// redeeming it (claimDevice) creates a relationship and closes the claim, and the
+		// row this covers is the claim itself.
+		//
+		// Read back through deviceClaim(deviceToken:), a nullable SINGLE keyed by an
+		// argument that is not called `token` — the one place ReadArg is needed.
+		//
+		// expiresAt and claimedTime are not selected: both are server-generated
+		// timestamps, and a timestamp cannot be compared across a create response and a
+		// read-back (see timestampFieldsThatRoundTrip).
+		Name:     "device-claim",
+		Area:     "device-management",
+		Mutation: "initiateDeviceClaim",
+		Input:    "DeviceClaimInitiateRequest!",
+		Read:     "deviceClaim",
+		Single:   true,
+		ReadArg:  "deviceToken",
+		Fields:   "status device{token}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"deviceToken": s.tokens["device"],
+				// Write-only: the secret is what a device presents to REDEEM the claim,
+				// and DeviceClaim does not return it, so there is nothing to exclude from
+				// the selection by hand.
+				"claimSecret": "apiprobe-claim-secret",
+			}}
+		},
+		TokenFrom: func(s *state) string { return s.tokens["device"] },
 	},
 	{
 		Name:     "asset-type",
@@ -809,6 +987,51 @@ func probeEdge(s *state, name string) map[string]any {
 // create mutations in the served schemas rather than trusting this number. When
 // a new create mutation lands, that test fails HERE — which is the notice that
 // the table needs a row, not just that the constant needs a bump.
+// probeFacetKey / probeFacetValue / probeAttrScope / probeSelector are one fact spelled
+// once. The dynamic group's selector, the facet key it reads and the attribute value that
+// makes a device match are the SAME strings by construction — written separately they
+// would drift, and the symptom would be a group that publishes cleanly and matches
+// nothing, which is indistinguishable from a working one until somebody counts members.
+const (
+	probeFacetKey   = "apiprobe-climate"
+	probeFacetValue = "arid"
+	probeAttrScope  = "config"
+)
+
+var probeSelector = `attr["` + probeFacetKey + `"] == "` + probeFacetValue + `"`
+
+// coveredCreates counts the DISTINCT create mutations the table reaches.
+//
+// 🔴 NOT len(entities), WHICH IT USED TO BE. The table now holds more than one row for
+// a mutation on purpose — a static and a dynamic entity group are two membership
+// mechanisms, not two settings — and rows for tenant writes that are not creates at all
+// (setFacetKey, setEntityAttribute, initiateDeviceClaim). Counting rows against the
+// create denominator printed "30 of 26", which is not a coverage claim, it is arithmetic
+// that has stopped meaning anything.
+func coveredCreates() int {
+	seen := map[string]bool{}
+	for _, e := range entities {
+		if strings.HasPrefix(e.Mutation, "create") {
+			seen[e.Mutation] = true
+		}
+	}
+	return len(seen)
+}
+
+// otherWrites counts the tenant writes that are NOT creates and NOT publishes — the ones
+// the create denominator never counted. Reported separately rather than folded in,
+// because "26 of 26 create mutations" was true and much narrower than it sounded for as
+// long as these sat outside it with nothing saying so.
+func otherWrites() int {
+	seen := map[string]bool{}
+	for _, e := range allEntities() {
+		if !strings.HasPrefix(e.Mutation, "create") && !e.Publish {
+			seen[e.Mutation] = true
+		}
+	}
+	return len(seen)
+}
+
 const tenantCreateMutations = 26
 
 // tenantPublishMutations is the same claim for publishes, measured the same way by
@@ -832,18 +1055,19 @@ func printCoverage(base *baseline) {
 	sort.Strings(areas)
 
 	fmt.Printf("apiprobe covers %d of the platform's %d tenant-plane create mutations,\n"+
-		"and %d of its %d publish mutations.\n\n",
-		len(entities), tenantCreateMutations, len(publishes), tenantPublishMutations)
+		"%d of its %d publish mutations, and %d other tenant write(s).\n\n",
+		coveredCreates(), tenantCreateMutations, len(publishes), tenantPublishMutations,
+		otherWrites())
 	for _, a := range areas {
 		fmt.Printf("  %s\n", a)
 		for _, n := range byArea[a] {
 			fmt.Printf("      %s\n", n)
 		}
 	}
-	if len(entities) < tenantCreateMutations {
+	if coveredCreates() < tenantCreateMutations {
 		fmt.Printf("\n⚠️  %d create mutations are NOT covered. A green verify says the entities\n"+
 			"    listed above survived — it says nothing about the rest of the API.\n",
-			tenantCreateMutations-len(entities))
+			tenantCreateMutations-coveredCreates())
 	} else {
 		// Covering every create mutation is still not covering every FIELD: the
 		// comparison only sees what each row SELECTS. Say so, rather than letting

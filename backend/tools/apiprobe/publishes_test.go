@@ -121,9 +121,8 @@ func TestPublishNamesDoNotCollideWithEntityNames(t *testing.T) {
 		}
 		seen[e.Name] = e.Mutation
 	}
-	if len(seen) != len(entities)+len(publishes) {
-		t.Errorf("allEntities() yielded %d distinct names for %d+%d rows",
-			len(seen), len(entities), len(publishes))
+	if want := len(entities) + len(publishes) + len(afterPublish); len(seen) != want {
+		t.Errorf("allEntities() yielded %d distinct names for %d rows", len(seen), want)
 	}
 }
 

@@ -128,30 +128,63 @@ func reconcileTableCoverage(
 // tableSweepExemptions names tenant-scoped tables the seed is NOT expected to reach,
 // keyed by `schema.table`, with the reason it is acceptable.
 //
-// 🔴 IT IS EMPTY ON PURPOSE, AND THIS COMMENT IS THE REASON RATHER THAN AN APOLOGY.
-// The entries belong to whatever a live instance actually reports, and every plausible
-// way to pre-populate it is a guess: from the roadmap notes (a measurement taken on a
-// v0.11.0 baseline, which cannot express geofences, dashboards, connectors or command
-// batches, so it counted their tables empty for a reason that no longer applies), or
-// from reading the seed and reasoning about what it must miss (which is precisely the
-// "what did somebody remember" this file exists to replace). An exemption asserts that
-// a table SHOULD be empty. Writing one from memory and having CI agree with it teaches
-// nothing, because CI would agree with a wrong one just as readily.
+// 🔴 EVERY ENTRY WAS MEASURED, NOT REASONED. The list was shipped EMPTY on purpose and
+// the first live drill produced it — because an exemption asserts that a table SHOULD be
+// empty, and CI would agree with a wrong one just as readily as a right one. Each reason
+// below names the code that writes the table, found by following the writer rather than
+// by reading the seed and guessing what it misses.
 //
-// So the first live run is the measurement, and it is safe to take that way round: the
-// Stale bucket means a wrong exemption fails just as loudly as a missing one, in the
-// opposite direction. There is no way to be quietly wrong here.
+// It is safe to grant these because the Stale bucket makes a wrong exemption fail just as
+// loudly as a missing one, in the opposite direction. There is no way to be quietly wrong.
 //
-// Each entry must say WHY the table is legitimately empty. The two kinds expected:
-//
-//   - device-plane tables — state, presence, telemetry projections, alarms. The load
-//     harness drives those with real oracles; a second, weaker set of assertions here
-//     would be worse than none.
-//   - tables written only by a flow the seed deliberately does not exercise.
-//
-// An entry whose reason is "the seed does not write it" and nothing more is not an
-// exemption, it is the finding restated. Extend the seed instead.
-var tableSweepExemptions = map[string]string{}
+// 🔑 A reason amounting to "the seed does not write it" is the finding restated, not an
+// exemption, and TestEveryExemptionExplainsItself rejects it. The question each answers
+// is: why is it CORRECT for this table to be empty after a tenant has been fully seeded?
+var tableSweepExemptions = map[string]string{
+	// ---- the device plane, which the load harness owns ------------------------
+	//
+	// These hold what DEVICES produce, not what a tenant creates. The load-test harness
+	// drives them hard with real oracles; a second, weaker set of assertions here would
+	// be worse than none, and the drill deliberately sends no telemetry.
+	"device-state.device_states": "the live last-known-state projection, written from device traffic. " +
+		"The drill sends no telemetry by design, and the load harness owns this with real oracles.",
+	"device-state.latest_locations": "the latest-location projection, written from device traffic. " +
+		"Same owner and same reason as device_states.",
+	"device-state.latest_measurements": "the latest-measurement projection, written from device traffic. " +
+		"Same owner and same reason as device_states.",
+	"event-processing.device_attributes": "the DETECT engine's device-attribute projection, fed from the " +
+		"event pipeline rather than from the tenant API. A tenant's own attributes live in " +
+		"device-management.entity_attributes, which IS seeded.",
+	"event-processing.device_attribute_deletions": "the tombstone side of the same projection, and it " +
+		"cannot hold a row before the projection it deletes from does.",
+	"device-management.alarms": "alarm objects are RAISED by the REACT pipeline when a rule fires. " +
+		"Nothing fires in a drill that sends no telemetry, and creating one by hand would assert " +
+		"the row rather than the engine that produces it.",
+	"event-processing.rule_stats": "written only by RuleStatStore.RecordFire, i.e. when a rule actually " +
+		"FIRES. No telemetry, no fire, no row.",
+
+	// ---- rules the drill deliberately does not run ----------------------------
+	"event-processing.detect_rules": "projected from a DetectionRulesPublishedEvent, and the publish gate " +
+		"submits only a profile's ENABLED draft rules. Both seeded detection rules are authored " +
+		"DISABLED on purpose: the probe asserts that the rule document and its scope survive an " +
+		"upgrade, not that the engine runs. Enabling one to fill this table would change what the " +
+		"drill claims, so it is a decision rather than an omission.",
+
+	// ---- per-area journals, correctly empty ----------------------------------
+	//
+	// 🔑 Confirmed rather than assumed: device-management.audit_events is NOT among the
+	// uncovered tables, which is what shows the mechanism is per-area rather than broken.
+	"device-state.audit_events": "the audit journal is written by the core mutation callbacks in the " +
+		"area that handled the write, and device-state serves no tenant create/update/delete at all " +
+		"(its only mutation is demoteAssertedPresence). An empty journal there is the correct state.",
+	"event-processing.audit_events": "same mechanism: event-processing's tenant-plane mutations are " +
+		"draftDetectionRuleFromText and a stream subscription, neither of which is an entity write.",
+
+	// ---- runtime state of a delivery mechanism -------------------------------
+	"notification-management.notification_states": "escalation state for a notification the policy has " +
+		"actually dispatched. It follows an ALARM, which follows a rule firing, which the drill does " +
+		"not do — so it is downstream of two things that are exempt above for their own reasons.",
+}
 
 func runTableSweep(ctx context.Context, argv []string) error {
 	fs := flagSetFor("tablesweep")

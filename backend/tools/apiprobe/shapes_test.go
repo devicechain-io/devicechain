@@ -107,7 +107,7 @@ func TestAnEnvelopeMissingItsKeyIsAShapeProblem(t *testing.T) {
 
 func TestAnEmptyListReadsAsMissing(t *testing.T) {
 	e := entity{Name: "device", Read: "devicesByToken"}
-	_, err := readObject(e, map[string]json.RawMessage{"devicesByToken": raw(`[]`)}, "apiprobe-device")
+	_, err := readObject(e, map[string]json.RawMessage{"devicesByToken": raw(`[]`)}, "apiprobe-device", nil)
 	assertCode(t, err, exitMissing)
 	// The token is what an operator greps the database for.
 	if !strings.Contains(err.Error(), "apiprobe-device") {
@@ -120,7 +120,7 @@ func TestAnEmptyListReadsAsMissing(t *testing.T) {
 // negative control and no positive one.
 func TestAPopulatedListReadsBack(t *testing.T) {
 	e := entity{Name: "device", Read: "devicesByToken"}
-	got, err := readObject(e, map[string]json.RawMessage{"devicesByToken": raw(`[{"token":"t"}]`)}, "t")
+	got, err := readObject(e, map[string]json.RawMessage{"devicesByToken": raw(`[{"token":"t"}]`)}, "t", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -134,13 +134,13 @@ func TestAPopulatedListReadsBack(t *testing.T) {
 // assumed the list form was universal.
 func TestANullSingleReadReadsAsMissing(t *testing.T) {
 	e := entity{Name: "dashboard", Read: "dashboard", Single: true}
-	_, err := readObject(e, map[string]json.RawMessage{"dashboard": raw(`null`)}, "apiprobe-dashboard")
+	_, err := readObject(e, map[string]json.RawMessage{"dashboard": raw(`null`)}, "apiprobe-dashboard", nil)
 	assertCode(t, err, exitMissing)
 }
 
 func TestAPresentSingleReadReadsBack(t *testing.T) {
 	e := entity{Name: "dashboard", Read: "dashboard", Single: true}
-	got, err := readObject(e, map[string]json.RawMessage{"dashboard": raw(`{"token":"d"}`)}, "d")
+	got, err := readObject(e, map[string]json.RawMessage{"dashboard": raw(`{"token":"d"}`)}, "d", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -152,13 +152,13 @@ func TestAPresentSingleReadReadsBack(t *testing.T) {
 // A list that became an object is the SCHEMA moving, not the data going missing.
 func TestAListThatIsNoLongerAListIsAShapeProblem(t *testing.T) {
 	e := entity{Name: "device", Read: "devicesByToken"}
-	_, err := readObject(e, map[string]json.RawMessage{"devicesByToken": raw(`{"token":"t"}`)}, "t")
+	_, err := readObject(e, map[string]json.RawMessage{"devicesByToken": raw(`{"token":"t"}`)}, "t", nil)
 	assertCode(t, err, exitShape)
 }
 
 func TestAnAbsentReadKeyIsAShapeProblem(t *testing.T) {
 	e := entity{Name: "device", Read: "devicesByToken"}
-	_, err := readObject(e, map[string]json.RawMessage{"somethingElse": raw(`[]`)}, "t")
+	_, err := readObject(e, map[string]json.RawMessage{"somethingElse": raw(`[]`)}, "t", nil)
 	assertCode(t, err, exitShape)
 }
 

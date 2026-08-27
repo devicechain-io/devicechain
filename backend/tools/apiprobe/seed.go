@@ -99,6 +99,13 @@ func runSeed(ctx context.Context, argv []string) error {
 				return failWith(exitShape, "create %s returned a non-object: %w", e.Name, err)
 			}
 			token := str(fields["token"])
+			if e.TokenFrom != nil {
+				// The created object carries no token of its own — a natural-keyed row,
+				// addressed by (entityType, entity, scope, attrKey) or (memberType, key).
+				// The receipt still needs a KEY, and it is only that: the read-back is
+				// addressed by the table's criteria, never by this string.
+				token = e.TokenFrom(st)
+			}
 			if e.Publish {
 				// A published version has no token of its own — it is addressed by
 				// (parent token, version number) — so the receipt records the PARENT's,

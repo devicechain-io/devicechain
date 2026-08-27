@@ -129,6 +129,23 @@ func (b *baseline) supports(e entity) (bool, string) {
 	// the two checks below do not apply to it in the shape they are written. It is
 	// matched on the pair that DOES decide whether a baseline can express one: the
 	// publish mutation keyed by token, and the versions query keyed by token.
+	// A criteria-addressed read has no token argument and its input is the CRITERIA
+	// type, not the create's, so the two checks below match the wrong things for it.
+	if e.ReadInput != "" {
+		if !strings.Contains(stripped, e.Mutation+"("+e.arg()+":") {
+			return false, "the baseline does not declare " + e.Mutation + "(" + e.arg() + ":…)"
+		}
+		if !strings.Contains(stripped, e.Read+"(criteria:") {
+			return false, "the baseline does not declare " + e.Read + "(criteria:…)"
+		}
+		if !strings.Contains(b.raw[e.Area], "input "+inputTypeName(e.ReadInput)+" {") {
+			return false, "the baseline does not declare input " + inputTypeName(e.ReadInput)
+		}
+		if input := inputTypeName(e.Input); !strings.Contains(b.raw[e.Area], "input "+input+" {") {
+			return false, "the baseline does not declare input " + input
+		}
+		return true, ""
+	}
 	if e.Publish {
 		if !strings.Contains(stripped, e.Mutation+"(token:") {
 			return false, "the baseline does not declare " + e.Mutation + "(token:…)"
@@ -146,7 +163,7 @@ func (b *baseline) supports(e entity) (bool, string) {
 	// with the wrong document.
 	readArg := "tokens:"
 	if e.Single {
-		readArg = "token:"
+		readArg = e.readArg() + ":"
 	}
 	if !strings.Contains(stripped, e.Read+"("+readArg) {
 		return false, "the baseline does not declare " + e.Read + "(" + strings.TrimSuffix(readArg, ":") + ":…)"

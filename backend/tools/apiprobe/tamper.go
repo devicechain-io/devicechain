@@ -256,7 +256,11 @@ func confirmArmed(ctx context.Context, c *connection, session querier, e entity,
 		return failWith(exitSetup, "reading %s %q back to confirm the control is armed: %w", t.Entity, r.Token, err)
 	}
 
-	found, readErr := readObject(e, envelope, r.Token)
+	// r.Object is passed for the same reason verify passes it: an entity whose read
+	// returns a list the criteria cannot narrow is identified by what was WRITTEN. No
+	// control targets one today, and wiring it now means one cannot be added that
+	// silently confirms itself against somebody else's row.
+	found, readErr := readObject(e, envelope, r.Token, r.Object)
 
 	if t.Mode == tamperDelete {
 		if readErr == nil {
