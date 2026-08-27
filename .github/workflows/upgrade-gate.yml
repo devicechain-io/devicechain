@@ -401,6 +401,23 @@ jobs:
       - name: THE READ SWEEP -- every served door must still answer
         run: hack/upgrade-rig.sh readsweep
 
+      # Is "one of every entity" true? apiprobe's coverage table is a CLAIM, and
+      # nothing has ever counted it against the database it claims to cover -- a
+      # tenant-scoped table no entity writes to is invisible from the API side,
+      # because no query returns "the rows you did not create".
+      #
+      # It seeds a SECOND tenant against the UPGRADED instance, with no baseline
+      # constraint, and sweeps that one. The drill's own seed runs against the
+      # baseline, so a table belonging to an entity that release cannot create is
+      # legitimately empty -- for a reason that changes every release. A coverage
+      # result that means something different each release is not a coverage result.
+      #
+      # It runs AFTER the read sweep so its failure cannot be mistaken for one:
+      # verify and the sweep have already passed, which is what makes this a finding
+      # about the drill's reach rather than about the instance's data.
+      - name: THE TABLE SWEEP -- one of every entity, counted rather than claimed
+        run: hack/upgrade-rig.sh tablesweep
+
       # The check on the checks. A verify whose ability to FAIL has not been shown
       # in this session has certified nothing -- it would report the same green
       # against an instance that had lost everything. The sweep's control carries
