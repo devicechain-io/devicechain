@@ -178,13 +178,19 @@ var afterPublish = []entity{
 	{
 		// Depends on: device-profile, entity-group-dynamic, entity-group-version.
 		//
-		// A detection rule SCOPED to a group is what writes detection_rule_scope_refs,
-		// and the scope is (groupToken, groupVersion) — a version that does not exist
-		// until the group is published, which is the whole reason this phase exists.
+		// A rule's scope is (groupToken, groupVersion), and that version does not exist
+		// until the group is published — which is the whole reason this phase exists.
 		//
-		// Authored DISABLED for the same reason the unscoped rule is: the probe asserts
-		// that the rule document and its scope survive, not that the engine runs. Version
-		// 1 is not a guess — it is the first publish of a group this tool created.
+		// 🔴 IT DOES NOT WRITE detection_rule_scope_refs, and an earlier version of this
+		// comment claimed it did. Those rows come from scopedRulesInSnapshot(), which
+		// SKIPS disabled rules, at profile publish — and this rule is authored DISABLED
+		// for the same reason the unscoped one is: the probe asserts that the rule
+		// document and its SCOPE survive an upgrade, not that the engine runs. What this
+		// entry covers is the round trip of entityGroupToken/entityGroupVersion, which is
+		// a real claim and the only one it makes. The scope-ref table is exempt, with the
+		// whole chain written out in tablesweep.go.
+		//
+		// Version 1 is not a guess — it is the first publish of a group this tool created.
 		Name:     "detection-rule-scoped",
 		Area:     "device-management",
 		Mutation: "createDetectionRule",

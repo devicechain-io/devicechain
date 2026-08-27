@@ -152,18 +152,46 @@ var tableSweepExemptions = map[string]string{
 		"Same owner and same reason as device_states.",
 	"device-state.latest_measurements": "the latest-measurement projection, written from device traffic. " +
 		"Same owner and same reason as device_states.",
-	"event-processing.device_attributes": "the DETECT engine's device-attribute projection, fed from the " +
-		"event pipeline rather than from the tenant API. A tenant's own attributes live in " +
-		"device-management.entity_attributes, which IS seeded.",
-	"event-processing.device_attribute_deletions": "the tombstone side of the same projection, and it " +
-		"cannot hold a row before the projection it deletes from does.",
+	// 🔑 event-processing.device_attributes IS NOT HERE, AND IT WAS. The exemption said it
+	// is "fed from the event pipeline rather than from the tenant API", and that was simply
+	// wrong: setEntityAttribute in device-management PROJECTS into it, so seeding a tenant
+	// attribute covers it. The Stale bucket caught the mistake on the next run, which is
+	// the entire argument for having that bucket — a wrong exemption failed exactly as
+	// loudly as a missing one.
+	"event-processing.device_attribute_deletions": "the tombstone side of the attribute projection. " +
+		"It records a REMOVAL, and the seed sets an attribute and never unsets it — an entry here " +
+		"would mean the drill had deleted data it just wrote.",
 	"device-management.alarms": "alarm objects are RAISED by the REACT pipeline when a rule fires. " +
 		"Nothing fires in a drill that sends no telemetry, and creating one by hand would assert " +
 		"the row rather than the engine that produces it.",
 	"event-processing.rule_stats": "written only by RuleStatStore.RecordFire, i.e. when a rule actually " +
 		"FIRES. No telemetry, no fire, no row.",
 
-	// ---- rules the drill deliberately does not run ----------------------------
+	// ---- everything downstream of a rule that RUNS ---------------------------
+	//
+	// 🔴 ONE REASON, FOUR TABLES, and it is worth stating once rather than four times.
+	// Both seeded detection rules are authored DISABLED, deliberately: the probe asserts
+	// that a rule document and its scope survive an upgrade, not that the engine runs.
+	// Everything below follows from that, through a chain that is not obvious and was
+	// measured rather than assumed —
+	//
+	//   scopedRulesInSnapshot() skips `!r.Enabled`, so a disabled rule contributes no
+	//   DetectionRuleScopeRef; syncProfileScopeRefsAndEnroll() is what ENROLLS a group,
+	//   and it is called at profile publish with exactly that set; and group membership
+	//   is materialised LAZILY by that enrollment, not by publishing the group.
+	//
+	// Measured proof of the last step: the dynamic group IS published on every run —
+	// entity_group_versions is covered — and its memberships are still empty. Publishing
+	// a group freezes its selector; it does not resolve it.
+	"device-management.detection_rule_scope_refs": "written only for a profile's ENABLED group-scoped " +
+		"rules, at profile publish. Both seeded rules are disabled by design (see above), so the " +
+		"desired scope-ref set is correctly empty.",
+	"device-management.entity_group_facet_refs": "written when a group is ENROLLED, which happens via a " +
+		"profile's enabled scoped rules. No enabled scoped rule, no enrollment, no facet refs — even " +
+		"though the group is published and its selector does name a facet.",
+	"device-management.entity_group_memberships": "materialised lazily by the same enrollment, not by " +
+		"publishing the group. Measured: the group publishes successfully on every run and this stays " +
+		"empty, which is what shows membership follows enrollment rather than publication.",
 	"event-processing.detect_rules": "projected from a DetectionRulesPublishedEvent, and the publish gate " +
 		"submits only a profile's ENABLED draft rules. Both seeded detection rules are authored " +
 		"DISABLED on purpose: the probe asserts that the rule document and its scope survive an " +
