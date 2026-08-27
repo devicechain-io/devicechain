@@ -106,9 +106,49 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# The release this drill upgrades FROM. Overridable so the same rig serves the
-# next release without being edited — which is the point of it being a rig.
-baseline_tag="${DC_BASELINE_TAG:-v0.11.0}"
+# The release this drill upgrades FROM.
+#
+# 🔴 DERIVED, NOT WRITTEN DOWN, AND THE LITERAL IT REPLACES HAD ALREADY GONE STALE.
+# This read `v0.11.0` — three releases back — because a default that has to be bumped
+# by hand once per release is a default nobody bumps. The consequence is not loud: the
+# seed measures the coverage table against the baseline's OWN served schemas and skips
+# what that release could not express, so a local run drilled v0.11.0 → HEAD and
+# silently left out every entity introduced since. v0.11.0 serves no `createGeoFence`
+# at all, so a developer running this by hand covered no geofence — which is the exact
+# subsystem the drill most recently failed to protect.
+#
+# It only ever misled LOCAL runs: upgrade-gate.yml derives its own baseline and never
+# reads this. That is worse rather than better. It means the wrong value was in front
+# of the person iterating on the rig and correct in the pipeline nobody watches, so
+# nothing about a green CI run could ever contradict it.
+#
+# The rule is the one the workflow already uses, and stating it in both places is
+# deliberate: they answer for different targets (the workflow knows the tag being
+# released; this knows only the working tree) and a shared helper would have to be
+# handed the difference anyway.
+#
+# `[-]` rather than `-- '-'`: the second spelling is a portability trap — GNU grep
+# reads it as a pattern, at least one drop-in replacement reads it as no pattern and
+# exits usage-error, which pipefail then turns into a failure nobody attributes to a
+# grep argument. Same note as the workflow's.
+newest_stable_tag() {
+  git -C "$repo_root" tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -v '[-]' | sort -V | tail -1
+}
+
+# ⚠️ NOT resolved at assignment. `need_all` has not run yet, and a shallow or
+# tag-less clone would otherwise make this empty at load time — turning every
+# later use into a confusing blank rather than a refusal that says what is wrong.
+baseline_tag="${DC_BASELINE_TAG:-}"
+
+# resolve_baseline_tag fills in the derived default the first time a phase needs it,
+# and REFUSES rather than guessing when the repository cannot answer.
+resolve_baseline_tag() {
+  [[ -z "$baseline_tag" ]] || return 0
+  baseline_tag="$(newest_stable_tag)"
+  [[ -n "$baseline_tag" ]] || fail "no stable vX.Y.Z tag is visible, so there is no release to
+upgrade FROM. A shallow clone is the usual cause; pass DC_BASELINE_TAG explicitly to
+drill a specific hop."
+}
 
 # NOT configurable: kind takes the cluster name from the top-level `name:` in the
 # config file in preference to --name, so a variable here would name the context
@@ -234,6 +274,12 @@ need() { command -v "$1" >/dev/null 2>&1 || fail "$1 is required but not on PATH
 ko_required() { [[ "$upgrade_images" == build ]]; }
 
 need_all() {
+  # The baseline is resolved here rather than at load time, and `down` is the reason:
+  # it is the one command that needs no baseline and the one you most want to work on
+  # a repository that cannot answer. Resolving in the dispatch would make a shallow
+  # clone unable to clean up after itself.
+  resolve_baseline_tag
+
   # Every tool, checked BEFORE anything is provisioned. A missing binary
   # discovered twenty minutes into a bring-up is the posture this script rejects
   # everywhere else.
@@ -1291,6 +1337,13 @@ is why this blocks the release rather than being noted in it."
 # nothing on its own — a check hard-wired to fail would look identical. Proving it
 # reports AGREEMENT when the tags agree is what makes the red mean something.
 selftest() {
+  # Needed before expect_mode's self-upgrade case, which asks validate_upgrade_mode to
+  # refuse `upgrade_tag == baseline_tag`. An unresolved baseline makes that case pass an
+  # EMPTY tag, which is refused by the previous check instead — and expect_mode asserts
+  # the REASON, so it would report the wrong-reason failure rather than silently drifting.
+  # That is the guard working; resolving here is what lets the case measure what it names.
+  resolve_baseline_tag
+
   local rc baseline_tag_for_chart_test=""
   # The newest stable tag whose chart is NOT HEAD's — the refusal case, chosen from
   # the repository rather than written down, so it does not name a tag that will one
@@ -1310,6 +1363,52 @@ selftest() {
       fail "SELF-TEST FAILED ($label): operator_in_step '$image' '$want' returned $rc, wanted $expected"
     note "$label"
   }
+
+  # ---- the derived baseline ------------------------------------------------
+  # A derived default replaced a literal that had gone three releases stale, so the
+  # derivation is checked rather than trusted. All three cases matter and the third
+  # most: a resolver that ignored DC_BASELINE_TAG would pass the first two while
+  # silently drilling the wrong hop for anyone who asked for a specific one.
+  say "the derived baseline"
+  local derived above
+  derived="$(newest_stable_tag)"
+  [[ -n "$derived" ]] ||
+    fail "SELF-TEST FAILED: newest_stable_tag found nothing. A shallow clone is the usual
+cause; this rig needs tag history and refuses rather than defaulting, because a guessed
+baseline drills a hop no release note ever claimed."
+
+  # 🔴 ASSERTS A PROPERTY — "no stable tag sorts above it" — RATHER THAN RECOMPUTING THE
+  # SAME PIPELINE AND COMPARING. The obvious version was written first and is worth
+  # naming: it built the expected value with the very expression under test, so the test
+  # moved with any edit to that expression instead of objecting to it. A fixture derived
+  # from the thing it is checking cannot catch that thing moving.
+  above="$(git -C "$repo_root" tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -v '[-]' |
+    while read -r t; do [[ "$t" == "$derived" ]] || [[ "$(printf '%s\n%s\n' "$t" "$derived" | sort -V | tail -1)" == "$derived" ]] || echo "$t"; done)"
+  [[ -z "$above" ]] ||
+    fail "SELF-TEST FAILED: newest_stable_tag returned '$derived', but these stable tags sort
+above it: $(printf '%s' "$above" | tr '\n' ' ')"
+  note "no stable tag sorts above the derived baseline ($derived)"
+
+  # 🔴 A PRERELEASE IS NOT A RELEASE ANYONE IS RUNNING, and this repository currently
+  # carries one that sorts ABOVE the derived answer (v0.13.0-rc.1 vs v0.13.0) — so the
+  # case has something real to measure rather than passing by absence.
+  [[ "$derived" != *-* ]] ||
+    fail "SELF-TEST FAILED: the derived baseline '$derived' is a PRERELEASE. The drill must
+upgrade from a release an operator is actually on."
+  git -C "$repo_root" tag -l 'v[0-9]*.[0-9]*.[0-9]*-*' | grep -q . ||
+    fail "SELF-TEST FAILED: this repository carries no prerelease tags, so the case above
+passed by ABSENCE. It would hold just as well against a filter that had stopped working."
+  note "a prerelease is not chosen, and there was one to reject"
+
+  # An explicit request wins. Checked by asking the resolver, not by reading the
+  # assignment: those are two encodings of one rule and only one of them runs.
+  local saved="$baseline_tag"
+  baseline_tag="v0.0.9-explicit"
+  resolve_baseline_tag
+  [[ "$baseline_tag" == "v0.0.9-explicit" ]] ||
+    fail "SELF-TEST FAILED: resolve_baseline_tag overwrote an explicit DC_BASELINE_TAG with '$baseline_tag'"
+  baseline_tag="$saved"
+  note "an explicit DC_BASELINE_TAG is left alone"
 
   say "operator_in_step"
   expect_step "ghcr.io/devicechain-io/operator:v0.12.0" "v0.12.0" 0 "a matching published tag is IN STEP"
