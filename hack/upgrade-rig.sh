@@ -32,13 +32,15 @@
 #                                 exactly as docs/deployment/releases-and-upgrades
 #                                 says to run it
 #   hack/upgrade-rig.sh verify    every seeded row must read back UNCHANGED
+#   hack/upgrade-rig.sh tablesweep  every tenant-scoped table must hold a seeded row,
+#                                   or say why it is legitimately empty
 #   hack/upgrade-rig.sh readsweep every door the served schemas expose must still
 #                                 ANSWER — the wider, shallower question, and the
 #                                 one a round trip of one's own writes cannot ask
 #   hack/upgrade-rig.sh control   THE NEGATIVE CONTROLS: break the instance three
 #                                 different ways and require the right check to
 #                                 notice each, with the exact exit code for it
-#   hack/upgrade-rig.sh all       up + upgrade + verify + readsweep + control
+#   hack/upgrade-rig.sh all       up + upgrade + verify + readsweep + tablesweep + control
 #   hack/upgrade-rig.sh down      delete the cluster and the rig's state
 #
 # `all` is the one worth running. `verify` on its own reports a pass from a check
@@ -158,6 +160,17 @@ drill a specific hop."
 # once; it is empty until a phase that reaches Postgres sets it.
 rdb_db=""
 
+# The CNPG Cluster holding the relational store, and the tenant the coverage sweep
+# writes under. A SECOND tenant, because the drill's own seed is baseline-constrained
+# and this measurement must not be — see cmd_tablesweep.
+rdb_cluster="${DC_RDB_CLUSTER:-dc-rdb}"
+sweep_tenant="${DC_SWEEP_TENANT:-apiprobe-coverage}"
+
+# Port-forward state. pf_pid is checked by stop_forward, which is called on every exit
+# path out of cmd_tablesweep rather than from a trap: this script already installs an
+# EXIT trap for the values file, and a second one would silently replace the first.
+pf_pid=""
+
 cluster="devicechain-upgrade"
 kube_context="kind-$cluster"
 kind_config="$repo_root/deploy/local/kind-cluster-upgrade.yaml"
@@ -220,6 +233,8 @@ baseline_dcctl="$baseline_src/backend/cli/build/dcctl"
 target_dcctl="$repo_root/backend/cli/build/dcctl"
 apiprobe="$work/bin/apiprobe"
 receipt="$work/receipt.json"
+sweep_receipt="$work/receipt-coverage.json"
+pf_log="$work/port-forward.log"
 values_file="$work/values.yaml"
 # What the upgrade moved TO — registry on line 1, tag on line 2. Written by
 # `upgrade` and read by `operator`, so the operator check measures against the
@@ -394,7 +409,7 @@ load_exit_codes() {
   # "exit  means the schema moved" is a rig quietly telling an operator nothing at
   # the exact moment they most need it to be precise.
   local code var
-  for code in MISSING MISMATCH SHAPE SETUP UNREADABLE; do
+  for code in MISSING MISMATCH SHAPE SETUP UNREADABLE COVERAGE; do
     var="APIPROBE_EXIT_$code"
     [[ -n "${!var:-}" ]] ||
       fail "apiprobe reported no $code exit code; this rig names it and cannot run without it"
@@ -1022,6 +1037,152 @@ release adds, and at what they do NOT rewrite."
 }
 
 # ---------------------------------------------------------------------------
+# tablesweep — is "one of every entity" actually TRUE?
+# ---------------------------------------------------------------------------
+# apiprobe's entities.go is a coverage CLAIM, written as data so a missing entity is an
+# absent row somebody can count. Nobody has ever counted it. A tenant-scoped table that
+# no entity writes to is invisible from the API side by construction — there is no query
+# that returns "the rows you did not create" — so the claim has been asserted for as long
+# as the tool has existed and checked exactly never.
+#
+# 🔴 IT NEEDS ITS OWN TENANT, AND THE REASON IS ALREADY WRITTEN IN THIS FILE'S OWN
+# SUMMARY: "entities $baseline_tag could not express were skipped by name and nothing
+# here speaks for them". The drill's seed runs against the BASELINE, so a table belonging
+# to an entity that release cannot create is legitimately empty — for a reason that
+# changes every time the baseline moves. A coverage result that means something different
+# each release is not a coverage result.
+#
+# So this seeds a SECOND tenant against the UPGRADED instance, with no --baseline-schemas
+# and therefore no skips, and sweeps that one. The measurement is then about the release
+# under test and nothing else. It closes the gap the summary names, and it buys a second
+# finding on the way: that the upgraded release can still CREATE one of every entity,
+# which no other phase asks.
+#
+# It runs after readsweep, so a failure here can never be confused for one: verify and
+# the sweep have already passed, which means the finding is about this tool's reach and
+# not about the instance's data.
+
+# pg_credentials prints "<user> <secret>" for the relational store.
+#
+# The Secret's NAME is read from the live Cluster rather than assumed to be CNPG's
+# generated `<cluster>-app`. dcctl's own db-verify does the same, for the same reason:
+# the name is a function of the chart's bootstrap block, and a constant here would work
+# until the day the chart set one explicitly, then connect as nobody.
+pg_credentials() {
+  local secret user
+  secret="$(kubectl --context "$kube_context" -n dc-system \
+    get cluster.postgresql.cnpg.io "$rdb_cluster" \
+    -o jsonpath='{.spec.bootstrap.initdb.secret.name}' 2>/dev/null)" || true
+  [[ -n "$secret" ]] || fail "the $rdb_cluster Cluster names no bootstrap credentials Secret.
+Nothing can connect, which says nothing about coverage in either direction."
+
+  user="$(kubectl --context "$kube_context" -n dc-system get secret "$secret" \
+    -o jsonpath='{.data.username}' 2>/dev/null | base64 -d)" || true
+  [[ -n "$user" ]] || fail "Secret $secret carries no username"
+  printf '%s %s' "$user" "$secret"
+}
+
+# pf_port_from reads the local port out of kubectl's own output.
+#
+# Its own function purely so the self-test can exercise it: a regex that stops matching
+# does not error, it returns nothing — and pg_forward would then spend thirty seconds
+# waiting and report "could not open a port-forward" about a port-forward that was open
+# the whole time. That is a broken instrument reporting a finding, which is the failure
+# this whole drill exists to make impossible.
+pf_port_from() {
+  sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9]\{1,\}\).*/\1/p' "$1" | head -1
+}
+
+# pg_forward opens a port-forward to the relational store and prints the local port.
+#
+# A RANDOM local port (`:5432`), not a fixed one: a fixed port collides with whatever a
+# developer already has forwarded, and the collision surfaces as an authentication
+# failure against somebody else's database — a wrong answer, not an error.
+pg_forward() {
+  local port="" i
+  : > "$pf_log"
+  kubectl --context "$kube_context" -n dc-system \
+    port-forward "svc/dc-postgresql" ":5432" > "$pf_log" 2>&1 &
+  pf_pid=$!
+
+  for ((i = 0; i < 60; i++)); do
+    port="$(pf_port_from "$pf_log")"
+    [[ -n "$port" ]] && break
+    # If kubectl has already died there is nothing to wait for, and waiting the full
+    # thirty seconds would report a timeout for what was an immediate refusal.
+    kill -0 "$pf_pid" 2>/dev/null || break
+    sleep 0.5
+  done
+
+  if [[ -z "$port" ]]; then
+    stop_forward
+    fail "could not open a port-forward to dc-postgresql in dc-system. kubectl said:
+$(sed 's/^/    /' "$pf_log" | head -10)"
+  fi
+  printf '%s' "$port"
+}
+
+stop_forward() {
+  [[ -n "${pf_pid:-}" ]] || return 0
+  kill "$pf_pid" 2>/dev/null || true
+  wait "$pf_pid" 2>/dev/null || true
+  pf_pid=""
+}
+
+cmd_tablesweep() {
+  need_all
+  build_apiprobe
+  load_exit_codes
+
+  say "THE TABLE SWEEP — is \"one of every entity\" actually true?"
+
+  # No --baseline-schemas: this seed is against the UPGRADED release, so nothing is
+  # skipped and the coverage measured is the release's own.
+  "$apiprobe" seed --instance "$instance" --receipt "$sweep_receipt" \
+    --tenant "$sweep_tenant" \
+    --server "$api_server" --scheme "$api_scheme" ||
+    fail "the UPGRADED release could not create one of every entity (apiprobe exit $?).
+This is a finding about the release, not about the upgrade: verify and the read sweep
+have already passed, so the rows carried across and every door still answers. What
+failed is a CREATE, on an instance that is running the code under test."
+
+  local pod user secret port rc=0
+  pod="$(pg_pod)"
+  rdb_db="$(rdb_database "$pod" devices)"
+  read -r user secret <<<"$(pg_credentials)"
+
+  port="$(pg_forward)"
+  # 🔴 The password goes in PGPASSWORD, never in the DSN. A password on a command line
+  # is readable by any local process through /proc for as long as the command runs, and
+  # is one `set -x` away from a CI step log with a ninety-day retention. apiprobe
+  # REFUSES a DSN carrying one rather than trusting this comment.
+  PGPASSWORD="$(kubectl --context "$kube_context" -n dc-system get secret "$secret" \
+    -o jsonpath='{.data.password}' | base64 -d)" \
+    "$apiprobe" tablesweep \
+    --dsn "postgres://${user}@127.0.0.1:${port}/${rdb_db}?sslmode=disable" \
+    --tenant "$sweep_tenant" || rc=$?
+  stop_forward
+
+  if [[ $rc -eq $APIPROBE_EXIT_SETUP ]]; then
+    fail "THE TABLE SWEEP COULD NOT RUN, and this says NOTHING either way (apiprobe exit
+$rc = SETUP). No table was shown to be covered and none was shown to be missed."
+  fi
+  if [[ $rc -eq $APIPROBE_EXIT_COVERAGE ]]; then
+    fail "the seed does not reach every tenant-scoped table the platform has (apiprobe
+exit $rc = COVERAGE). Note what this is NOT: it is not a defect in the release. verify
+and the read sweep have already passed on this instance. It is this DRILL measuring
+less than it claims — a table no seeded entity writes to is a table the upgrade drill
+cannot see change. apiprobe's output names each one and both ways to close it."
+  fi
+  if [[ $rc -ne 0 ]]; then
+    fail "the table sweep exited $rc, which this rig has no meaning for. That is a bug
+in apiprobe or in this script, not a finding about the instance — treat it as
+INCONCLUSIVE and fix the tool before reading anything into it."
+  fi
+  say "TABLE SWEEP PASSED — every tenant-scoped table holds a seeded row, or says why not"
+}
+
+# ---------------------------------------------------------------------------
 # control — the check on the check
 # ---------------------------------------------------------------------------
 
@@ -1355,6 +1516,27 @@ selftest() {
     baseline_tag_for_chart_test="$t"
   done < <(git -C "$repo_root" tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -v '[-]' | sort -V)
 
+  # --- the port-forward's port parse ------------------------------------------
+  # Real kubectl output, including the IPv6 line it also prints, so the anchor is
+  # exercised rather than assumed.
+  local pf_fixture; pf_fixture="$(mktemp)"
+  printf 'Forwarding from 127.0.0.1:34567 -> 5432\nForwarding from [::1]:34567 -> 5432\n' > "$pf_fixture"
+  [[ "$(pf_port_from "$pf_fixture")" == "34567" ]] ||
+    fail "SELF-TEST FAILED: the port-forward port was not read out of kubectl's output"
+  note "the local port is read out of kubectl's own output"
+
+  # THE COUNTERWEIGHT. A parse that printed something for any input would satisfy the
+  # case above and make the thirty-second wait unreachable — pg_forward would take a
+  # kubectl that failed instantly as a successful forward on a garbage port.
+  printf 'error: unable to forward port because pod is not running. Current status=Pending\n' > "$pf_fixture"
+  [[ -z "$(pf_port_from "$pf_fixture")" ]] ||
+    fail "SELF-TEST FAILED: a kubectl ERROR was read as a port number"
+  : > "$pf_fixture"
+  [[ -z "$(pf_port_from "$pf_fixture")" ]] ||
+    fail "SELF-TEST FAILED: an empty log yielded a port"
+  rm -f "$pf_fixture"
+  note "a kubectl error, and an empty log, yield no port"
+
   expect_step() {
     local image="$1" want="$2" expected="$3" label="$4"
     rc=0
@@ -1598,6 +1780,7 @@ up) cmd_up ;;
 upgrade) cmd_upgrade ;;
 verify) cmd_verify ;;
 readsweep) cmd_readsweep ;;
+tablesweep) cmd_tablesweep ;;
 control) cmd_control ;;
 operator) cmd_operator ;;
 selftest) selftest ;;
@@ -1607,6 +1790,7 @@ all)
   cmd_upgrade
   cmd_verify
   cmd_readsweep
+  cmd_tablesweep
   cmd_control
   say "DATA SURVIVED: rows written through the API on $baseline_tag were read back
 unchanged after the documented upgrade, every door the served schemas expose still
@@ -1618,8 +1802,11 @@ the evidence the release's upgrade claim rests on.
 
 WHAT IS STILL NOT COVERED, so this is not read as more than it is: nothing was
 upgraded under load, so no zero-downtime claim is supported; entities
-$baseline_tag could not express were skipped by name and nothing here speaks for
-them; and event history belongs to the DR drill, not this one."
+$baseline_tag could not express were skipped by name, and only the table sweep speaks
+for them — it re-seeds a second tenant against the UPGRADED release, so it says the
+release can still create one of every entity and that the seed reaches every
+tenant-scoped table, but it says nothing about those entities SURVIVING an upgrade;
+and event history belongs to the DR drill, not this one."
 
   # LAST, and deliberately after the summary above. This phase is expected to fail
   # until the operator gap is closed, and a known red must never stand between the
@@ -1628,5 +1815,5 @@ them; and event history belongs to the DR drill, not this one."
   cmd_operator
   say "UPGRADE DRILL COMPLETE — data survived AND the operator is in step."
   ;;
-*) fail "unknown command ${1}; try up | upgrade | verify | readsweep | control | operator | all | selftest | down" ;;
+*) fail "unknown command ${1}; try up | upgrade | verify | readsweep | tablesweep | control | operator | all | selftest | down" ;;
 esac

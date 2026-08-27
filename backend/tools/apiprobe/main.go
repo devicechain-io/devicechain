@@ -122,6 +122,16 @@ const (
 	// that were never migrated, a document decoded into a struct that moved — which is
 	// the one class an upgrade introduces and a fresh install cannot.
 	exitUnreadable = 6
+
+	// exitCoverage means THIS TOOL's coverage claim is false: a tenant-scoped table the
+	// platform has holds no row for the seeded tenant, or an exemption says a table
+	// should be empty and it is not. Distinct from every code above because it is a
+	// verdict about the INSTRUMENT, not about the instance — the drill is measuring
+	// less than it says it does, and the fix is in entities.go rather than in a
+	// migration. Reporting it as a data finding would send somebody hunting for a
+	// defect that is not there; reporting it as exitSetup would file it as
+	// inconclusive, which is exactly what it is not.
+	exitCoverage = 7
 )
 
 const usage = `apiprobe — write one of every creatable entity, then prove it reads back unchanged.
@@ -146,6 +156,15 @@ const usage = `apiprobe — write one of every creatable entity, then prove it r
         derived from the served SDL, so a door a later release adds is swept
         without anyone remembering it; a door that is skipped is named, with the
         reason.
+
+  apiprobe tablesweep --dsn <conn> [--tenant <token>]
+        Ask the DATABASE whether "one of every entity" is true: every tenant-scoped
+        table must hold a row for the seeded tenant, or carry a written exemption.
+        The set of tables is derived from the PostgreSQL catalog by core/tenantpurge,
+        not listed here, so an area added later is swept without anyone remembering
+        it. This is the only subcommand that does not go through the API — no query
+        returns "the rows you did not create", so the claim is unobservable from the
+        client side.
 
   apiprobe tamper   --receipt <path> --mode delete|modify [flags]
         THE NEGATIVE CONTROL. Break one seeded entity on purpose — delete it, or
@@ -182,6 +201,7 @@ func printExitCodes() {
 	fmt.Printf("APIPROBE_EXIT_REFUSED=%d\n", exitRefused)
 	fmt.Printf("APIPROBE_EXIT_SHAPE=%d\n", exitShape)
 	fmt.Printf("APIPROBE_EXIT_UNREADABLE=%d\n", exitUnreadable)
+	fmt.Printf("APIPROBE_EXIT_COVERAGE=%d\n", exitCoverage)
 }
 
 func main() {
@@ -201,6 +221,8 @@ func main() {
 		err = runVerify(ctx, os.Args[2:])
 	case "readsweep":
 		err = runReadSweep(ctx, os.Args[2:])
+	case "tablesweep":
+		err = runTableSweep(ctx, os.Args[2:])
 	case "tamper":
 		err = runTamper(ctx, os.Args[2:])
 	case "coverage":

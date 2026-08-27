@@ -135,7 +135,7 @@ func TestEveryEntityDocumentValidatesAgainstItsServedSchema(t *testing.T) {
 	st := newState("apiprobe")
 	byArea := map[string]*graphql.Schema{}
 
-	for _, e := range entities {
+	for _, e := range allEntities() {
 		schema, ok := byArea[e.Area]
 		if !ok {
 			schema = servedSchema(t, e.Area, tenantPlane)
@@ -146,7 +146,15 @@ func TestEveryEntityDocumentValidatesAgainstItsServedSchema(t *testing.T) {
 			t.Errorf("entity %q: the create does not validate against %s: %v\n  document: %s",
 				e.Name, e.Area, errs, e.createDoc())
 		}
-		if errs := schema.ValidateWithVariables(e.readDoc(), map[string]any{"token": st.tok(e.Name)}); len(errs) > 0 {
+		// The read variables have to be built the way VERIFY builds them, not the way
+		// this test finds convenient: a criteria-addressed read takes its whole variable
+		// from the table, and validating it with a token would test a document nothing
+		// sends.
+		readVars := map[string]any{"token": st.tok(e.Name)}
+		if e.ReadInput != "" {
+			readVars = map[string]any{"c": e.ReadVars}
+		}
+		if errs := schema.ValidateWithVariables(e.readDoc(), readVars); len(errs) > 0 {
 			t.Errorf("entity %q: the read-back does not validate against %s: %v\n  document: %s",
 				e.Name, e.Area, errs, e.readDoc())
 		}

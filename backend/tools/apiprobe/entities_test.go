@@ -112,17 +112,78 @@ func TestCoverageDenominatorMatchesTheSchemas(t *testing.T) {
 // `apiprobe coverage` prints. A row short of the denominator is a real gap and
 // says so; a row PAST it means the table counts something twice.
 func TestTheTableCoversEveryCreateMutation(t *testing.T) {
-	if len(entities) != tenantCreateMutations {
-		t.Errorf("the table has %d entries for %d create mutations", len(entities), tenantCreateMutations)
+	declared := declaredCreateMutations(t)
+	if len(declared) == 0 {
+		t.Fatal("no create mutations were found in the schemas; the probe is broken, not the table")
 	}
-	seen := map[string]bool{}
+
+	covered := map[string]bool{}
 	for _, e := range entities {
-		if seen[e.Mutation] {
-			// Two rows on one mutation would inflate the count while leaving
-			// something else uncovered — the arithmetic still reaching 26.
-			t.Errorf("two entities create via %q", e.Mutation)
+		covered[e.Mutation] = true
+	}
+	for name := range declared {
+		if !covered[name] {
+			t.Errorf("%s has no row in the table, so nothing this drill does would notice it break", name)
 		}
-		seen[e.Mutation] = true
+	}
+
+	// 🔴 THE OTHER DIRECTION, which is what the count used to give for free. The check
+	// used to be len(entities) == the denominator, which caught a row for a mutation
+	// that does not exist as arithmetic. It cannot any more: the table now carries MORE
+	// than one row for a mutation on purpose (a static AND a dynamic entity group are
+	// two membership mechanisms, not two settings) and rows for tenant writes that are
+	// not creates at all. So the claim is checked by NAME instead, in both directions,
+	// which is strictly stronger than the count ever was — a typo'd mutation was
+	// previously invisible as long as the total still came out right.
+	for _, e := range entities {
+		if !strings.HasPrefix(e.Mutation, "create") {
+			continue
+		}
+		if !declared[e.Mutation] {
+			t.Errorf("entity %q creates via %q, which no served schema declares", e.Name, e.Mutation)
+		}
+	}
+}
+
+// declaredCreateMutations is the set of create-mutation NAMES the served schemas declare.
+func declaredCreateMutations(t *testing.T) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	for _, s := range servedSchemas(t) {
+		body, err := os.ReadFile(s)
+		if err != nil {
+			t.Fatalf("read %s: %v", s, err)
+		}
+		for _, m := range createMutation.FindAll(body, -1) {
+			out[strings.TrimRight(strings.TrimSpace(string(m)), "( \t")] = true
+		}
+	}
+	return out
+}
+
+// Every non-create tenant write in the table must also name something real. These are
+// the mutations the create denominator never counted — setFacetKey, setEntityAttribute,
+// initiateDeviceClaim — and "26 of 26 create mutations" was true and much narrower than
+// it sounded while they sat outside it entirely.
+func TestEveryNonCreateWriteNamesAMutationTheSchemasDeclare(t *testing.T) {
+	any := regexp.MustCompile(`(?m)^[\t ]+([a-z][A-Za-z0-9]*)\s*\(`)
+	declared := map[string]bool{}
+	for _, s := range servedSchemas(t) {
+		body, err := os.ReadFile(s)
+		if err != nil {
+			t.Fatalf("read %s: %v", s, err)
+		}
+		for _, m := range any.FindAllSubmatch(body, -1) {
+			declared[string(m[1])] = true
+		}
+	}
+	if len(declared) < 50 {
+		t.Fatalf("only %d mutation/query names were found; the probe is broken, not the table", len(declared))
+	}
+	for _, e := range allEntities() {
+		if !declared[e.Mutation] {
+			t.Errorf("entity %q writes via %q, which no served schema declares", e.Name, e.Mutation)
+		}
 	}
 }
 
@@ -151,8 +212,20 @@ func TestEveryEntityIsComplete(t *testing.T) {
 		// seed reads the token off the created object to address the read-back.
 		// An entity that never selects one would fail on a cluster, at the end
 		// of a drill, for a reason visible here in milliseconds.
-		if !strings.Contains(e.Fields, "token") {
-			t.Errorf("entity %q does not select a token; verify would have nothing to look it up by", e.Name)
+		//
+		// Unless it supplies one: a natural-keyed row (an entity attribute is
+		// (entityType, entity, scope, attrKey); a facet key is (memberType, key)) has no
+		// token to select, and its receipt key comes from TokenFrom instead. The
+		// requirement is that ONE of the two holds — never neither, which would leave
+		// the receipt keyed by an empty string and verify looking up nothing.
+		if !strings.Contains(e.Fields, "token") && e.TokenFrom == nil {
+			t.Errorf("entity %q selects no token and supplies no TokenFrom; its receipt row "+
+				"would be keyed by an empty string", e.Name)
+		}
+		// A criteria-addressed read needs both halves. The type without the value sends
+		// a null variable the server rejects; the value without the type is never used.
+		if (e.ReadInput == "") != (e.ReadVars == nil) {
+			t.Errorf("entity %q sets one of ReadInput/ReadVars without the other", e.Name)
 		}
 		// A result envelope is only unwrappable if the refusal beside it is
 		// asked for too — otherwise a declined create reports as an absent
@@ -232,8 +305,10 @@ func returnTypeOf(schema, field string) (string, bool) {
 func TestTheAreaListCoversEveryEntityExactlyOnce(t *testing.T) {
 	got := probeAreas()
 
+	// allEntities, so a publish in an area no create touches is not silently
+	// dropped from what the rig deploys.
 	want := map[string]bool{}
-	for _, e := range entities {
+	for _, e := range allEntities() {
 		want[e.Area] = true
 	}
 	if len(got) != len(want) {
@@ -246,7 +321,7 @@ func TestTheAreaListCoversEveryEntityExactlyOnce(t *testing.T) {
 		}
 		seen[a] = true
 		if !want[a] {
-			t.Errorf("%q is listed but no entity writes to it", a)
+			t.Errorf("%q is listed but nothing writes to it", a)
 		}
 	}
 	for a := range want {
@@ -356,4 +431,78 @@ func referencedTokens(req any) []namedValue {
 		}
 	}
 	return out
+}
+
+// timestampFieldsThatRoundTrip names selected fields that LOOK like a timestamp and are
+// nonetheless safe to compare across an upgrade, with the reason each one is.
+//
+// 🔴 WHY THIS EXISTS. A server-generated timestamp CANNOT be compared between a create
+// response and a read-back, and the reason is not that the field is derived — it is
+// stored, and it does not change. What differs is PRECISION: the response carries an
+// in-memory time.Time and PostgreSQL stores timestamptz to microseconds, so the value
+// handed back was never persisted at the precision it was printed with. Measured on a
+// live drill, on publishedAt:
+//
+//	written: 2026-08-27T17:06:22.615501294Z
+//	read:    2026-08-27T17:06:22.615501Z
+//
+// That reports a healthy instance as MISMATCH — "a migration rewrote data", the most
+// alarming code this drill has — on every single run. A check that cries wolf on the
+// exact signal it exists to raise is worse than one that is merely narrow.
+//
+// The three entries below are safe for ONE reason and it is the same reason: nothing in
+// the seed sets them and the platform defaults none, so they come back null on both
+// sides and the comparison is null == null. That is a property of what the table SEEDS,
+// not of the fields, which is exactly why it has to be written down: the day an entry
+// starts setting one, the reason stops being true and this list is where somebody
+// looks.
+var timestampFieldsThatRoundTrip = map[string]string{
+	"expiresAt": "null on both sides: no entry sets an expiry on a credential or a " +
+		"provisioning profile, and the platform defaults none.",
+	"cancelledAt": "null on both sides: nothing cancels a drill batch. The entry's own " +
+		"comment says so beside the selection.",
+}
+
+var timestampLooking = regexp.MustCompile(`(?:At|Time)$`)
+
+// Every timestamp-looking field in any selection must be accounted for. A new one added
+// without a reason fails here in microseconds rather than ten minutes into a drill.
+func TestEverySelectedTimestampIsAccountedFor(t *testing.T) {
+	ident := regexp.MustCompile(`[A-Za-z][A-Za-z0-9]*`)
+	seen := map[string]bool{}
+	checked := 0
+
+	for _, e := range allEntities() {
+		for _, word := range ident.FindAllString(e.Fields, -1) {
+			checked++
+			if !timestampLooking.MatchString(word) {
+				continue
+			}
+			seen[word] = true
+			if _, ok := timestampFieldsThatRoundTrip[word]; !ok {
+				t.Errorf("entity %q selects %q, which looks like a timestamp. A server-generated "+
+					"one cannot be compared: the create response carries nanoseconds and the row "+
+					"stores microseconds, so verify reports MISMATCH on a healthy instance. Either "+
+					"drop it from the selection, or add it to timestampFieldsThatRoundTrip with "+
+					"the reason it is safe.", e.Name, word)
+			}
+		}
+	}
+
+	// 🔴 A vacuous pass here would look identical to a thorough one: if the selections
+	// could not be read, nothing is timestamp-looking and every entity trivially passes.
+	if checked < 100 {
+		t.Fatalf("only %d field names were examined across %d entities; the test is broken, "+
+			"not the table", checked, len(allEntities()))
+	}
+
+	// THE COUNTERWEIGHT. An entry for a field nothing selects any more is a standing
+	// permission nobody is watching — and it would keep this list looking maintained
+	// while covering nothing.
+	for field := range timestampFieldsThatRoundTrip {
+		if !seen[field] {
+			t.Errorf("timestampFieldsThatRoundTrip names %q, which no selection uses; "+
+				"delete it while the reason is still known", field)
+		}
+	}
 }

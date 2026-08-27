@@ -38,7 +38,7 @@ func runVerify(ctx context.Context, argv []string) error {
 	// table has since grown: an entity the receipt does not carry was not seeded
 	// by the build that wrote it, and is not this run's business.
 	byName := map[string]entity{}
-	for _, e := range entities {
+	for _, e := range allEntities() {
 		byName[e.Name] = e
 	}
 
@@ -55,8 +55,16 @@ func runVerify(ctx context.Context, argv []string) error {
 			return err
 		}
 
+		// The criteria-addressed reads take their whole variable from the table; the
+		// token-addressed ones take it from the receipt. Both are deterministic, which
+		// is what lets verify run in a different process from seed with only a receipt.
+		readVars := map[string]any{"token": r.Token}
+		if e.ReadInput != "" {
+			readVars = map[string]any{"c": e.ReadVars}
+		}
+
 		var envelope map[string]json.RawMessage
-		if err := session.Query(ctx, c.areaURL(e.Area), e.readDoc(), map[string]any{"token": r.Token}, &envelope); err != nil {
+		if err := session.Query(ctx, c.areaURL(e.Area), e.readDoc(), readVars, &envelope); err != nil {
 			// The server rejected the QUERY. The row may be perfectly intact; a
 			// field this tool selects no longer exists on the type. Reporting
 			// that as missing data sends a reader into the migrations hunting for
@@ -64,7 +72,7 @@ func runVerify(ctx context.Context, argv []string) error {
 			return failWith(exitShape, "read %s %q back: %w", r.Name, r.Token, err)
 		}
 
-		found, err := readObject(e, envelope, r.Token)
+		found, err := readObject(e, envelope, r.Token, r.Object)
 		if err != nil {
 			return err
 		}
@@ -112,9 +120,16 @@ func coverageSummary(rec Receipt, checked int) string {
 		fmt.Fprintf(&b, "⚠️  %d entities were never seeded and so are not covered by this pass: %s\n",
 			len(rec.Skipped), strings.Join(rec.Skipped, ", "))
 	}
-	if len(entities) < tenantCreateMutations {
+	if coveredCreates() < tenantCreateMutations {
 		fmt.Fprintf(&b, "⚠️  apiprobe covers %d of %d create mutations; run `apiprobe coverage` for the list.\n",
-			len(entities), tenantCreateMutations)
+			coveredCreates(), tenantCreateMutations)
+	}
+	// Stated separately from the creates, because they are separate claims and the
+	// gap that mattered was a full create table beside an empty publish one.
+	if len(publishes) < tenantPublishMutations {
+		fmt.Fprintf(&b, "⚠️  apiprobe covers %d of %d publish mutations, so a version this pass did not "+
+			"write is a frozen snapshot nothing here speaks for.\n",
+			len(publishes), tenantPublishMutations)
 	}
 	return b.String()
 }
@@ -129,12 +144,33 @@ func coverageSummary(rec Receipt, checked int) string {
 // longer matching the schema, and that is exitShape: the row may be perfectly
 // intact, and reporting it as data loss sends a reader into the migrations
 // hunting for something that was never wrong.
-func readObject(e entity, envelope map[string]json.RawMessage, token string) (json.RawMessage, error) {
+func readObject(e entity, envelope map[string]json.RawMessage, token string, written json.RawMessage) (json.RawMessage, error) {
 	raw, ok := envelope[e.Read]
 	if !ok {
 		return nil, failWith(exitShape, "read %s returned no %q key; the query's shape has changed", e.Name, e.Read)
 	}
 
+	// A criteria-addressed read arrives inside a search-results envelope. Unwrapping it
+	// here rather than in the caller keeps every "what does ABSENCE mean" decision in
+	// one function, which is the only reason exitMissing is reliable.
+	if e.ReadInput != "" {
+		var results struct {
+			Results []json.RawMessage `json:"results"`
+		}
+		if err := json.Unmarshal(raw, &results); err != nil {
+			return nil, failWith(exitShape, "read %s returned no results envelope under %q: %w",
+				e.Name, e.Read, err)
+		}
+		if len(results.Results) == 0 {
+			return nil, failWith(exitMissing, "%s %q is GONE: the API created it, and the same criteria now match nothing",
+				e.Name, token)
+		}
+		return pickMatch(e, results.Results, token, written)
+	}
+
+	// A Publish read decodes as a LIST, like the default: xVersions returns
+	// [XVersion!]! newest-first, so found[0] is the version just published. It is only
+	// the QUERY that resembles a Single read, not the response.
 	if e.Single {
 		if isJSONNull(raw) {
 			return nil, failWith(exitMissing, "%s %q is GONE: the API created it, and %s now returns null for that token",
@@ -181,4 +217,50 @@ func sameSelection(r Recorded, e entity) error {
 			"object and a fresh read cannot be compared. This is a receipt from another build of "+
 			"apiprobe, not a platform that changed.\n   seeded with: %s\n   reads back:  %s",
 		r.Name, r.Fields, e.Fields)
+}
+
+// pickMatch chooses THIS row out of a results list.
+//
+// 🔴 results[0] IS NOT GOOD ENOUGH WHEREVER THE CRITERIA CANNOT NARROW TO ONE, and
+// facetKeys is exactly that: its criteria carry no key, and the platform declares SYSTEM
+// facets alongside the tenant's. Taking the first row would compare the seeded row
+// against a system row and report MISMATCH — "a migration rewrote data" — on a perfectly
+// healthy instance. So an entity whose criteria cannot pin a row names the field that
+// identifies it, and the match is made on the value that was WRITTEN rather than on a
+// value invented here.
+func pickMatch(e entity, results []json.RawMessage, token string, written json.RawMessage) (json.RawMessage, error) {
+	if e.MatchBy == "" {
+		// The criteria pinned the row. More than one back means the criteria stopped
+		// being a natural key, which is a schema change, not missing data.
+		if len(results) > 1 {
+			return nil, failWith(exitShape,
+				"read %s returned %d rows for criteria that should identify exactly one; the read is no longer a natural key",
+				e.Name, len(results))
+		}
+		return results[0], nil
+	}
+
+	var writtenFields map[string]json.RawMessage
+	if err := json.Unmarshal(written, &writtenFields); err != nil {
+		return nil, failWith(exitShape, "%s: the recorded object is not an object: %w", e.Name, err)
+	}
+	want, ok := writtenFields[e.MatchBy]
+	if !ok {
+		return nil, failWith(exitShape,
+			"%s: the recorded object has no %q to match on, so the right row cannot be picked out of %d",
+			e.Name, e.MatchBy, len(results))
+	}
+
+	for _, candidate := range results {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(candidate, &fields); err != nil {
+			continue
+		}
+		if string(fields[e.MatchBy]) == string(want) {
+			return candidate, nil
+		}
+	}
+	return nil, failWith(exitMissing,
+		"%s %q is GONE: %d row(s) came back and none has %s=%s",
+		e.Name, token, len(results), e.MatchBy, string(want))
 }
