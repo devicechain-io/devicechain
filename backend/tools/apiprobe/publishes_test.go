@@ -48,9 +48,12 @@ func TestThePublishDenominatorMatchesTheSchemas(t *testing.T) {
 // what the table claims. A row short is a real gap; a row past means something is
 // counted twice while something else is uncovered and the arithmetic still agrees.
 func TestThePublishTableCoversEveryPublishMutation(t *testing.T) {
-	if len(publishes) != tenantPublishMutations {
-		t.Errorf("the publish table has %d entries for %d publish mutations",
-			len(publishes), tenantPublishMutations)
+	// THE SUM, not either half. A publish added to the platform breaks the arithmetic
+	// rather than quietly enlarging the denominator, and dropping a row without writing
+	// down why fails here instead of shrinking the claim in silence.
+	if len(publishes)+len(publishesNotCovered) != tenantPublishMutations {
+		t.Errorf("the publish table has %d entries and %d written exclusions, for %d publish mutations",
+			len(publishes), len(publishesNotCovered), tenantPublishMutations)
 	}
 	seen := map[string]bool{}
 	for _, p := range publishes {
@@ -142,6 +145,57 @@ func TestEachPublishReadsBackTheThingItPublished(t *testing.T) {
 		}
 		if !strings.Contains(e.createDoc(), p.Mutation+"(token:$token") {
 			t.Errorf("publish %q publishes through an unexpected document: %s", p.Name, e.createDoc())
+		}
+	}
+}
+
+// An exclusion has to name something real, say why in enough words to be reviewable,
+// and not silently duplicate a row that IS covered — which would let the sum add up
+// while something else went uncovered.
+func TestEveryExclusionIsReviewable(t *testing.T) {
+	covered := map[string]bool{}
+	for _, p := range publishes {
+		covered[p.Mutation] = true
+	}
+	for mutation, reason := range publishesNotCovered {
+		if covered[mutation] {
+			t.Errorf("%s is both covered and excluded; the arithmetic adds up while something "+
+				"else is uncovered", mutation)
+		}
+		if !strings.HasPrefix(mutation, "publish") {
+			t.Errorf("%q is not a publish mutation", mutation)
+		}
+		// "not supported" is the finding restated. An exclusion has to say what would
+		// be needed to lift it, because the person who reads it next is deciding
+		// whether it is still true.
+		if len(reason) < 80 {
+			t.Errorf("%s: the reason is %d characters, too short to say why it is correct "+
+				"and what would lift it", mutation, len(reason))
+		}
+	}
+}
+
+// THE COUNTERWEIGHT the sum alone does not give: an exclusion must name a mutation the
+// SCHEMAS actually declare. One naming a mutation that has since been removed keeps the
+// arithmetic balanced forever while covering nothing.
+func TestEveryExclusionNamesAMutationTheSchemasDeclare(t *testing.T) {
+	declared := map[string]bool{}
+	for _, s := range servedSchemas(t) {
+		body, err := os.ReadFile(s)
+		if err != nil {
+			t.Fatalf("read %s: %v", s, err)
+		}
+		for _, m := range publishMutation.FindAll(body, -1) {
+			declared[strings.TrimRight(strings.TrimSpace(string(m)), "( \t")] = true
+		}
+	}
+	if len(declared) == 0 {
+		t.Fatal("no publish mutations were found in the schemas; the probe is broken, not the table")
+	}
+	for mutation := range publishesNotCovered {
+		if !declared[mutation] {
+			t.Errorf("%s is excluded but no served schema declares it; the exclusion is stale "+
+				"and is holding the denominator up on its own", mutation)
 		}
 	}
 }

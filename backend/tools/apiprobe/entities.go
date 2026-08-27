@@ -181,7 +181,16 @@ var entities = []entity{
 		Read:     "deviceProfilesByToken",
 		// deviceTypeCount is deliberately NOT selected: it counts the types that
 		// adopt this profile, so the very next entry would change it.
-		Fields: "token name description category metadata activeVersion",
+		//
+		// 🔴 NOR IS activeVersion, AND IT USED TO BE. It is a stored column, which is
+		// why it looked safe — but the seed now PUBLISHES this profile (publishes.go),
+		// and publishing moves it from null to 1. Comparing the create response against
+		// a read-back taken after that reports a healthy instance as MISMATCH, which is
+		// the same trap deviceTypeCount is excluded for: not "is it derived?" but "does
+		// anything OTHER than data loss change it between seed and verify?".
+		// Nothing is lost by dropping it — device-profile-version asserts the published
+		// version directly, which is the stronger claim.
+		Fields: "token name description category metadata",
 		Vars: func(s *state) map[string]any {
 			return map[string]any{"req": map[string]any{
 				"token":       s.tok("device-profile"),

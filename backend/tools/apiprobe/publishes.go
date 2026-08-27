@@ -106,16 +106,6 @@ var publishes = []publishOp{
 		Fields:   publishVersionFields,
 	},
 	{
-		// selector and memberType are FROZEN at publish — the whole point of the
-		// version — so they are compared, not just the envelope around them.
-		Name:     "entity-group-version",
-		Area:     "device-management",
-		Mutation: "publishEntityGroup",
-		Read:     "entityGroupVersions",
-		Of:       "entity-group",
-		Fields:   publishVersionFields + " selector memberType",
-	},
-	{
 		Name:     "dashboard-version",
 		Area:     "dashboard-management",
 		Mutation: "publishDashboard",
@@ -133,6 +123,28 @@ var publishes = []publishOp{
 		Of:       "connector",
 		Fields:   publishVersionFields + " type",
 	},
+}
+
+// publishesNotCovered names publish mutations this tool deliberately does NOT exercise,
+// with the reason — so that "3 of 4" is a number with an explanation attached rather
+// than a gap somebody has to notice.
+//
+// 🔴 THE SUM IS WHAT IS CHECKED, not either half: len(publishes) + len(this) must equal
+// the count read out of the schemas. A publish added to the platform then breaks the
+// arithmetic instead of quietly enlarging the denominator, and an entry here that stops
+// being true is caught by TestNothingIsBothCoveredAndExcluded. Same shape as the
+// govulncheck allowlist, and for the same reason: an exception nobody is watching is a
+// gap with paperwork.
+var publishesNotCovered = map[string]string{
+	"publishEntityGroup": "the seeded entity group is STATIC. Measured on a live instance, " +
+		"not inferred from a comment: the platform answers `only a dynamic entity group can be " +
+		"published (group \"apiprobe-entity-group\" is \"static\")` and apiprobe exits REFUSED, " +
+		"which is the right code — a verdict about the API. Covering it needs a " +
+		"DYNAMIC group, whose selector is lowerable CEL over a facet (attr[\"k\"] == \"v\"), " +
+		"which in turn needs setFacetKey to declare the facet and setEntityAttribute to give a " +
+		"device a value to match. That is a chain of three writes through mutation verbs this " +
+		"table has no shape for yet, and it closes entity_group_versions, entity_group_facet_refs, " +
+		"entity_group_memberships, facet_keys and entity_attributes together. Its own slice.",
 }
 
 // allEntities is every seedable thing: creates first, then publishes.
