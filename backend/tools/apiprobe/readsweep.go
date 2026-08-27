@@ -106,7 +106,7 @@ func planReadSweep(area string, schema *ast.Schema, tokens map[string]string) ([
 	// Which query field belongs to which seeded entity, from the coverage table, so the
 	// mapping cannot drift from the entities the seed actually wrote.
 	readOf := map[string]string{}
-	for _, e := range entities {
+	for _, e := range allEntities() {
 		if tok, ok := tokens[e.Name]; ok && tok != "" {
 			readOf[e.Read] = tok
 		}

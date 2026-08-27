@@ -49,7 +49,7 @@ func runSeed(ctx context.Context, argv []string) error {
 		Written:  time.Now().UTC(),
 	}
 
-	for _, e := range entities {
+	for _, e := range allEntities() {
 		write, why, err := plan(e, base)
 		if err != nil {
 			return err
@@ -70,8 +70,13 @@ func runSeed(ctx context.Context, argv []string) error {
 			e = adapted
 		}
 
+		// Bound rather than called inline: a publish records the token it SENT, and
+		// building the variables twice would leave the receipt free to disagree with
+		// what the mutation acted on.
+		vars := e.Vars(st)
+
 		var envelope map[string]json.RawMessage
-		if err := session.Query(ctx, c.areaURL(e.Area), e.createDoc(), e.Vars(st), &envelope); err != nil {
+		if err := session.Query(ctx, c.areaURL(e.Area), e.createDoc(), vars, &envelope); err != nil {
 			// exitRefused, not exitSetup: the API answered and said no. That is a
 			// verdict about the platform — a validation rule that tightened, a
 			// field that was renamed — and it must not be filed under "the
@@ -94,6 +99,14 @@ func runSeed(ctx context.Context, argv []string) error {
 				return failWith(exitShape, "create %s returned a non-object: %w", e.Name, err)
 			}
 			token := str(fields["token"])
+			if e.Publish {
+				// A published version has no token of its own — it is addressed by
+				// (parent token, version number) — so the receipt records the PARENT's,
+				// which is also exactly what its read-back query is keyed by. Taken from
+				// the variables that were SENT rather than invented here, so the value
+				// recorded is the one the mutation actually acted on.
+				token = str(vars["token"])
+			}
 			if token == "" {
 				// Every entity in the table is token-addressed, because that is
 				// how verify finds it again. One that came back without a token

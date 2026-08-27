@@ -232,8 +232,10 @@ func returnTypeOf(schema, field string) (string, bool) {
 func TestTheAreaListCoversEveryEntityExactlyOnce(t *testing.T) {
 	got := probeAreas()
 
+	// allEntities, so a publish in an area no create touches is not silently
+	// dropped from what the rig deploys.
 	want := map[string]bool{}
-	for _, e := range entities {
+	for _, e := range allEntities() {
 		want[e.Area] = true
 	}
 	if len(got) != len(want) {
@@ -246,7 +248,7 @@ func TestTheAreaListCoversEveryEntityExactlyOnce(t *testing.T) {
 		}
 		seen[a] = true
 		if !want[a] {
-			t.Errorf("%q is listed but no entity writes to it", a)
+			t.Errorf("%q is listed but nothing writes to it", a)
 		}
 	}
 	for a := range want {

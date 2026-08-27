@@ -125,6 +125,19 @@ func (b *baseline) supports(e entity) (bool, string) {
 	if !ok {
 		return false, "the baseline serves no " + e.Area + " schema"
 	}
+	// A publish takes scalar arguments and returns a version with no input type, so
+	// the two checks below do not apply to it in the shape they are written. It is
+	// matched on the pair that DOES decide whether a baseline can express one: the
+	// publish mutation keyed by token, and the versions query keyed by token.
+	if e.Publish {
+		if !strings.Contains(stripped, e.Mutation+"(token:") {
+			return false, "the baseline does not declare " + e.Mutation + "(token:…)"
+		}
+		if !strings.Contains(stripped, e.Read+"(token:") {
+			return false, "the baseline does not declare " + e.Read + "(token:…)"
+		}
+		return true, ""
+	}
 	if !strings.Contains(stripped, e.Mutation+"("+e.arg()+":") {
 		return false, "the baseline does not declare " + e.Mutation + "(" + e.arg() + ":…)"
 	}

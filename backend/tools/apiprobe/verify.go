@@ -38,7 +38,7 @@ func runVerify(ctx context.Context, argv []string) error {
 	// table has since grown: an entity the receipt does not carry was not seeded
 	// by the build that wrote it, and is not this run's business.
 	byName := map[string]entity{}
-	for _, e := range entities {
+	for _, e := range allEntities() {
 		byName[e.Name] = e
 	}
 
@@ -116,6 +116,13 @@ func coverageSummary(rec Receipt, checked int) string {
 		fmt.Fprintf(&b, "⚠️  apiprobe covers %d of %d create mutations; run `apiprobe coverage` for the list.\n",
 			len(entities), tenantCreateMutations)
 	}
+	// Stated separately from the creates, because they are separate claims and the
+	// gap that mattered was a full create table beside an empty publish one.
+	if len(publishes) < tenantPublishMutations {
+		fmt.Fprintf(&b, "⚠️  apiprobe covers %d of %d publish mutations, so a version this pass did not "+
+			"write is a frozen snapshot nothing here speaks for.\n",
+			len(publishes), tenantPublishMutations)
+	}
 	return b.String()
 }
 
@@ -135,6 +142,9 @@ func readObject(e entity, envelope map[string]json.RawMessage, token string) (js
 		return nil, failWith(exitShape, "read %s returned no %q key; the query's shape has changed", e.Name, e.Read)
 	}
 
+	// A Publish read decodes as a LIST, like the default: xVersions returns
+	// [XVersion!]! newest-first, so found[0] is the version just published. It is only
+	// the QUERY that resembles a Single read, not the response.
 	if e.Single {
 		if isJSONNull(raw) {
 			return nil, failWith(exitMissing, "%s %q is GONE: the API created it, and %s now returns null for that token",

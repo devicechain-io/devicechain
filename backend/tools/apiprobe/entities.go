@@ -54,6 +54,11 @@ type entity struct {
 	// changed KIND into a silent pass instead of a SHAPE finding.
 	Single bool
 
+	// Publish marks a version-producing publish op rather than a create. See
+	// publishes.go: the mutation takes scalar arguments instead of an input object,
+	// and the read-back is a list keyed by the PARENT's token.
+	Publish bool
+
 	// Bulk marks a create that returns a LIST of created objects rather than one.
 	// Every element is recorded separately, so a bulk create of N devices is N
 	// receipt rows and N read-backs — not one row standing in for N.
@@ -100,6 +105,14 @@ func (e entity) arg() string {
 // Fields rather than written out, which is what keeps the two selections
 // identical; see the note on Fields.
 func (e entity) createDoc() string {
+	if e.Publish {
+		// Uniform across all four publishes, so it is rendered rather than spelled
+		// out per op — see publishes.go. `description` is deliberately not sent: it
+		// defaults to the parent's, and sending one would make the comparison assert
+		// this tool's own literal rather than what publishing preserved.
+		return "mutation($token:String!,$label:String){" + e.Mutation +
+			"(token:$token,label:$label){" + e.Fields + "}}"
+	}
 	selection := e.Fields
 	if e.Wrap != "" {
 		selection = e.Wrap + "{" + e.Fields + "} " + e.Reject
@@ -110,6 +123,11 @@ func (e entity) createDoc() string {
 // readDoc renders the read-back query, in whichever of the two shapes the schema
 // actually serves.
 func (e entity) readDoc() string {
+	if e.Publish {
+		// Keyed by the PARENT token like a Single read, but returns a LIST like the
+		// default one — the third shape the schemas actually serve.
+		return "query($token:String!){" + e.Read + "(token:$token){" + e.Fields + "}}"
+	}
 	if e.Single {
 		return "query($token:String!){" + e.Read + "(token:$token){" + e.Fields + "}}"
 	}
@@ -784,12 +802,18 @@ func probeEdge(s *state, name string) map[string]any {
 // the table needs a row, not just that the constant needs a bump.
 const tenantCreateMutations = 26
 
+// tenantPublishMutations is the same claim for publishes, measured the same way by
+// TestThePublishDenominatorMatchesTheSchemas. Separate from the count above because
+// they are separate claims: a table can cover every create and no publish, which is
+// exactly the state this constant was added to end.
+const tenantPublishMutations = 4
+
 // printCoverage prints the tool's coverage CLAIM. Given a baseline it also
 // prints what a seed against that release would SKIP — so the drill's real
 // coverage can be read before an hour of cluster time is spent discovering it.
 func printCoverage(base *baseline) {
 	byArea := map[string][]string{}
-	for _, e := range entities {
+	for _, e := range allEntities() {
 		byArea[e.Area] = append(byArea[e.Area], e.Name)
 	}
 	areas := make([]string, 0, len(byArea))
@@ -798,8 +822,9 @@ func printCoverage(base *baseline) {
 	}
 	sort.Strings(areas)
 
-	fmt.Printf("apiprobe covers %d of the platform's %d tenant-plane create mutations.\n\n",
-		len(entities), tenantCreateMutations)
+	fmt.Printf("apiprobe covers %d of the platform's %d tenant-plane create mutations,\n"+
+		"and %d of its %d publish mutations.\n\n",
+		len(entities), tenantCreateMutations, len(publishes), tenantPublishMutations)
 	for _, a := range areas {
 		fmt.Printf("  %s\n", a)
 		for _, n := range byArea[a] {
@@ -869,7 +894,10 @@ func printAreas() {
 func probeAreas() []string {
 	seen := map[string]bool{}
 	areas := make([]string, 0, len(entities))
-	for _, e := range entities {
+	// allEntities, not entities: a publish in an area no create touches would
+	// otherwise leave the rig deploying an area short, and the seed would fail
+	// against an endpoint that was never brought up.
+	for _, e := range allEntities() {
 		if !seen[e.Area] {
 			seen[e.Area] = true
 			areas = append(areas, e.Area)

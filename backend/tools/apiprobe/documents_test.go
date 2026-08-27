@@ -135,7 +135,7 @@ func TestEveryEntityDocumentValidatesAgainstItsServedSchema(t *testing.T) {
 	st := newState("apiprobe")
 	byArea := map[string]*graphql.Schema{}
 
-	for _, e := range entities {
+	for _, e := range allEntities() {
 		schema, ok := byArea[e.Area]
 		if !ok {
 			schema = servedSchema(t, e.Area, tenantPlane)
