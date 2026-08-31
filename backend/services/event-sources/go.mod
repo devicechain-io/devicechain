@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/devicechain-io/dc-microservice v0.0.1
 	github.com/eclipse/paho.mqtt.golang v1.5.1
-	github.com/nats-io/nats-server/v2 v2.14.5
+	github.com/nats-io/nats-server/v2 v2.14.6
 	github.com/nats-io/nats.go v1.53.1
 	github.com/nats-io/nkeys v0.4.16
 	github.com/prometheus/client_golang v1.24.1
