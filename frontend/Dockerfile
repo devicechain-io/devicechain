@@ -65,7 +65,7 @@ RUN npm run build
 # Both SPAs ship in one image: the console at the web root, the dashboard app under
 # /dash (its own SPA-fallback tree). The shared ingress routes everything non-/api
 # here, so /dash needs no separate ingress rule.
-FROM nginxinc/nginx-unprivileged:1.31-alpine@sha256:a6c3ec0c0d249d68b0682df854d4a9e222b90fb607dc3fcf2f1d2fcbc85d347e
+FROM nginxinc/nginx-unprivileged:1.31-alpine@sha256:d9083fe47768377ef55dedafd67d4da7c2f2bc2bece7554954f29359deb0dce9
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/apps/console/dist /usr/share/nginx/html
 COPY --from=build /app/apps/dashboard/dist /usr/share/nginx/html/dash
