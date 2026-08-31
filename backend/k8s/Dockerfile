@@ -21,7 +21,7 @@
 # toolchain the WORKFLOW installed, so bumping go.work alone turns the check green while
 # this image keeps compiling the operator against the standard library the advisories are
 # about. A green scan would then be reporting on a binary nobody ships.
-FROM golang:1.26@sha256:26326682769ca980f8f1d3b1f52be2dd1c1d25270e3de3fe0c97d6bb65df3556 AS builder
+FROM golang:1.27@sha256:4013ae0f9e7994f8535c58c811f8f863fbed38b72e0d51e6592156f758d66146 AS builder
 
 WORKDIR /workspace
 # Copy the Go Modules manifests
