@@ -18,6 +18,8 @@
 #   npm registry metadata    frontend/packages/*/package.json          -> NO ADR refs
 #   Helm listing prose       deploy/helm/*/{Chart.yaml,README.md}      -> NO ADR refs
 #   NuGet registry metadata  sdks/**/*.csproj <Description>/<PackageTags> -> NO ADR refs
+#   NuGet package readme     the file a csproj names as its <PackageReadmeFile>,
+#                            scanned whole -> NO ADR refs
 #   Published GraphQL SDL    the schemas served at /schema/  -> NO ADR refs, CHECKED ELSEWHERE
 #   Source and maintainer    everything else, incl. docusaurus.config.ts -> ADR refs fine
 #
@@ -145,6 +147,46 @@ scan_nuget_metadata() {
   [ -d "$base" ] || return 0
   while IFS= read -r -d '' f; do
     grep -nE "<(Description|PackageTags)>[^<]*${PATTERN}" "$f" 2>/dev/null | sed "s|^|${f}:|" || true
+    scan_nuget_readme "$f"
+  done < <(find "$base" -type f -name '*.csproj' -print0)
+}
+
+# A <PackageReadmeFile> is the LARGEST published surface a csproj has: nuget.org
+# renders it as the package page's body, above the fold, where the <Description>
+# is one line in the sidebar. It reaches the same stranger under the same rule.
+#
+# Scanned WHOLE, unlike the csproj that names it. A csproj is mostly source and
+# only two of its elements are registry-rendered; a readme is registry-rendered
+# prose from the first line to the last. That includes its HTML comments, which
+# a renderer drops — the stricter line is deliberate, because "which parts of my
+# readme does the reader see" is not a question worth being clever about.
+#
+# 🔴 This resolves the property LITERALLY, against the csproj's own directory. A
+# project that packs some other file under this name (`<None ... PackagePath>`)
+# would send it looking for something that is not there — so a missing file is
+# reported by check_nuget_readmes_exist below, never passed over as clean.
+scan_nuget_readme() {
+  local csproj="$1" readme path
+  readme="$(sed -n 's|.*<PackageReadmeFile>[[:space:]]*\([^<]*[^<[:space:]]\)[[:space:]]*</PackageReadmeFile>.*|\1|p' "$csproj" | head -1)"
+  [ -n "$readme" ] || return 0
+  path="$(dirname "$csproj")/$readme"
+  [ -f "$path" ] || return 0   # reported as its own failure, not as an ADR hit
+  grep -nE "$PATTERN" "$path" 2>/dev/null | sed "s|^|${path}:|" || true
+}
+
+# The counterweight to scanning a path taken from a file: if the path is wrong,
+# the scan above reads exactly like a clean one. Nothing else in CI opens this
+# property — the csharp job restores, builds and tests but never packs — so a
+# dangling PackageReadmeFile would otherwise survive until a release run tried
+# to publish and failed there.
+check_nuget_readmes_exist() {
+  local base="${1:-sdks}" f readme path
+  [ -d "$base" ] || return 0
+  while IFS= read -r -d '' f; do
+    readme="$(sed -n 's|.*<PackageReadmeFile>[[:space:]]*\([^<]*[^<[:space:]]\)[[:space:]]*</PackageReadmeFile>.*|\1|p' "$f" | head -1)"
+    [ -n "$readme" ] || continue
+    path="$(dirname "$f")/$readme"
+    [ -f "$path" ] || echo "${f}: <PackageReadmeFile> names '${readme}', but ${path} does not exist"
   done < <(find "$base" -type f -name '*.csproj' -print0)
 }
 
@@ -289,8 +331,84 @@ if [ "${1:-}" = "--self-test" ]; then
   fi
   echo "  ok: an ADR reference in a csproj comment is left alone"
 
+  # The package readme. Both directions, then the case that makes the other two
+  # mean anything: a property pointing at a file that is not there must FAIL, not
+  # read as clean. Without that third case the first two would still pass with the
+  # resolution logic broken, because "no file" and "clean file" produce the same
+  # empty output.
+  printf '<Project><PropertyGroup><PackageReadmeFile>PACKAGE.md</PackageReadmeFile></PropertyGroup></Project>\n' \
+    > "$tmp/sdks/example/Example.csproj"
+  printf 'The DeviceChain .NET client SDK.\n' > "$tmp/sdks/example/PACKAGE.md"
+  if [ -n "$(scan_nuget_metadata "$tmp/sdks")" ]; then
+    echo "  FAIL: the guard reports a match in a clean package readme" >&2
+    exit 1
+  fi
+  echo "  ok: clean package readme produces no match"
+
+  printf 'The SDK speaks the documented wire seams (ADR-035).\n' > "$tmp/sdks/example/PACKAGE.md"
+  if [ -z "$(scan_nuget_metadata "$tmp/sdks")" ]; then
+    echo "  FAIL: the guard did not follow <PackageReadmeFile> to the readme — that file" >&2
+    echo "        is the BODY of the package page on nuget.org, the largest surface here" >&2
+    exit 1
+  fi
+  echo "  ok: planted reference in a package readme detected"
+
+  # An HTML comment is dropped by the renderer, and is scanned anyway. Pinning it
+  # so the stricter-than-necessary line is a decision someone can find, rather
+  # than something a later "fix" quietly relaxes.
+  printf -- '<!-- Internal note (ADR-035). -->\n\nThe DeviceChain .NET client SDK.\n' \
+    > "$tmp/sdks/example/PACKAGE.md"
+  if [ -z "$(scan_nuget_metadata "$tmp/sdks")" ]; then
+    echo "  FAIL: the guard skipped an HTML comment in a package readme — a readme is" >&2
+    echo "        scanned whole, deliberately, unlike the csproj that names it" >&2
+    exit 1
+  fi
+  echo "  ok: a package readme is scanned whole, comments included"
+
+  if [ -n "$(check_nuget_readmes_exist "$tmp/sdks")" ]; then
+    echo "  FAIL: the existence check fired on a readme that is present" >&2
+    exit 1
+  fi
+  echo "  ok: a readme that exists is not reported as dangling"
+
+  rm -f "$tmp/sdks/example/PACKAGE.md"
+  if [ -n "$(scan_nuget_metadata "$tmp/sdks")" ]; then
+    echo "  FAIL: the ADR scan reported a hit for a readme that does not exist" >&2
+    exit 1
+  fi
+  if [ -z "$(check_nuget_readmes_exist "$tmp/sdks")" ]; then
+    echo "  FAIL: a <PackageReadmeFile> naming a missing file was not reported. The ADR" >&2
+    echo "        scan over it is empty, which is indistinguishable from clean — this is" >&2
+    echo "        the check that keeps the two apart" >&2
+    exit 1
+  fi
+  echo "  ok: a <PackageReadmeFile> naming a missing file is reported"
+
   echo "==> Self-test passed"
   exit 0
+fi
+
+# Checked BEFORE the ADR sweep, and reported separately: a dangling readme path
+# is not an ADR reference, and folding it into that block would explain it with
+# advice about citations that has nothing to do with the problem.
+dangling="$(check_nuget_readmes_exist)"
+if [ -n "$dangling" ]; then
+  cat >&2 <<EOF
+
+==> A csproj names a package readme that is not there
+
+$dangling
+
+nuget.org renders this file as the package page. \`dotnet pack\` fails on a
+missing one (NU5039), so this would surface at RELEASE time — and until then the
+ADR sweep over that file reads as clean, because there is nothing to read.
+
+Point <PackageReadmeFile> at a file that exists, relative to the csproj. If the
+project packs it under a different name via <None ... PackagePath>, drop the
+rename: this guard resolves the property literally, on purpose.
+
+EOF
+  exit 1
 fi
 
 hits="$(scan "${TARGETS[@]}")"
@@ -320,7 +438,8 @@ This guard covers only the surfaces a stranger is SERVED by another host:
 ${TARGETS[*]}, docs-drafts (body), frontend/packages/*/package.json
 (description/keywords), deploy/helm/*/{Chart.yaml,README.md} — the prose
 Artifact Hub renders as a chart's listing — and sdks/**/*.csproj
-<Description>/<PackageTags>, which nuget.org renders the same way. Chart
+<Description>/<PackageTags> plus the whole of any file a csproj names as its
+<PackageReadmeFile>, all of which nuget.org renders the same way. Chart
 values/templates, and csproj comments, are source and are NOT covered.
 
 One further served surface, the published GraphQL schemas, is covered by
