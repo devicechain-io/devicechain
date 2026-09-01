@@ -800,6 +800,19 @@ jobs:
       - name: Build publishable packages
         run: npm run build:packages
 
+      # 🔴 THE GATE THAT READS WHAT WOULD ACTUALLY BE UPLOADED. Everything else in this
+      # job compiles the packages as workspace SOURCE; this packs them and checks the
+      # tarball — the `files` allowlist, the `exports` targets, `publishConfig`, the
+      # exact-pinned internal peer ranges, no bundler dialect in the portable entries,
+      # and every entry loading under bare Node ESM out of a node_modules built only
+      # from what the manifest declares.
+      #
+      # It runs on every pull request, and not only on a tag, because the release job's
+      # copy of it is the LAST thing between a defect and an immutable npm version. A
+      # gate whose first execution is the release is a gate nobody has seen work.
+      - name: Verify the packed artifacts
+        run: npm run verify:packages
+
       - name: Codegen drift check
         run: |
           # Regenerate and fail if the committed output in the console's src/gql
