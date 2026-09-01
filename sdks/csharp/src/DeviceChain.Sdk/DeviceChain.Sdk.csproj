@@ -36,6 +36,15 @@
          given; the convention buys nothing that is worth that. -->
     <PackageReadmeFile>PACKAGE.md</PackageReadmeFile>
 
+    <!-- The brand avatar, not the wordmark lockup. Measured, not eyeballed: this
+         file is fully opaque (alpha 255 everywhere, on #0b1620), so it renders the
+         same against nuget.org's light and dark themes and against Visual Studio's.
+         branding/logos/devicechain_700x700-style lockups are transparent-cornered
+         with dark text, which disappears on a dark background — and their wordmark
+         is illegible at the ~32px NuGet uses in search results, where this mark
+         still reads. -->
+    <PackageIcon>avatar-400.png</PackageIcon>
+
     <!-- The VERSION IS THE RELEASE TAG, exactly as it is for the images and the
          Helm chart: release.yml derives it from the pushed tag and passes
          -p:Version=, with the tag's leading 'v' stripped as the chart already
@@ -75,6 +84,17 @@
   <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0'">
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Packed from the repository's single brand-asset directory rather than a copy
+         beside this csproj: one file, so the icon cannot drift away from the logo it
+         is derived from. A wrong path cannot ship silently — measured: `dotnet pack`
+         fails with NU5019 when this Include misses (and NU5046 when <PackageIcon>
+         names something the package does not contain) — and CI packs, so it fails
+         there rather than at release. -->
+    <None Include="$(MSBuildThisFileDirectory)../../../../branding/logos/avatar-400.png"
+          Pack="true" PackagePath="/" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- The nuget.org-facing readme, packed at the package root under its own name.
