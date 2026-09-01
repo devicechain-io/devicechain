@@ -201,12 +201,12 @@ armazón de tu aplicación. Los valores de DeviceChain se publican como
 | **Resolución de TypeScript** | Las declaraciones emitidas usan especificadores sin extensión, que resuelven bajo `moduleResolution: "bundler"` y **no** bajo `node16`/`nodenext`. |
 
 Esas son las combinaciones soportadas, y la línea entre «soportado» y «probablemente
-funcione» está trazada a propósito. Cada release se demuestra de extremo a extremo contra
-un navegador real en tres aplicaciones fuera del repositorio — Vite, webpack, y la receta
-de copiar el worker de más arriba — cada una de las cuales renderiza el mapa y se
-comprueba por las teselas que realmente pidió y los marcadores que realmente colocó,
-porque «se renderizó» es exactamente la afirmación que el modo de fallo de este widget
-supera.
+funcione» está trazada a propósito. Se ejercitan contra un navegador real en tres
+aplicaciones construidas fuera de este repositorio a partir de los tarballs empaquetados
+— una sobre Vite, una sobre webpack, y una sobre la receta de copiar el worker de más
+arriba — cada una de las cuales renderiza el mapa y se comprueba por las teselas que
+realmente pidió y los marcadores que realmente colocó, porque «se renderizó» es
+exactamente la afirmación que el modo de fallo de este widget supera.
 
 Nada de eso ejercita Next.js ni React Server Components, ni consumidores de CommonJS, ni
 la resolución `node16`/`nodenext`. Están sin probar más que sabidos-rotos, y esta página

@@ -194,11 +194,11 @@ values ship as `@devicechain/brand`; nothing requires them.
 | **TypeScript resolution** | The emitted declarations use extensionless specifiers, which resolve under `moduleResolution: "bundler"` and **not** under `node16`/`nodenext`. |
 
 Those are the supported combinations, and the line between "supported" and "probably
-fine" is drawn on purpose. Each release is proved end to end against a real browser in
-three out-of-tree applications — Vite, webpack, and the copy-the-worker recipe above —
-each of which renders the map and is checked on the tiles it actually fetched and the
-markers it actually placed, because "it rendered" is exactly the assertion this widget's
-failure mode passes.
+fine" is drawn on purpose. They are exercised against a real browser in three
+applications built outside this repository from the packed tarballs — one on Vite, one
+on webpack, and one on the copy-the-worker recipe above — each of which renders the map
+and is checked on the tiles it actually fetched and the markers it actually placed,
+because "it rendered" is exactly the assertion this widget's failure mode passes.
 
 Nothing there exercises Next.js or React Server Components, CommonJS consumers, or
 `node16`/`nodenext` resolution. Those are untested rather than known-broken, and this
