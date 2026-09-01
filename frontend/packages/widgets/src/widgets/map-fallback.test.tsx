@@ -19,7 +19,8 @@
 
 /// <reference types="node" />
 import type { LocationSample, WidgetInstance } from '@devicechain/dashboards';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render as rtlRender, screen, waitFor } from '@testing-library/react';
+import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // The renderer is unobtainable in this file. `vi.mock` with a factory that throws is
@@ -30,9 +31,23 @@ vi.mock('maplibre-gl', () => {
 });
 
 import type { LocationStreamState } from '../hooks';
+import { MapRuntimeProvider, type MapRuntime } from '../map-runtime-context';
 import { MapWidget } from './map';
 
 afterEach(cleanup);
+
+// The host IS wired here — that is the point. This file drives the case where the host did
+// everything right and the RENDERER still could not be fetched, which is a different
+// failure from an unwired host (covered in map.test.tsx) and has a different answer: the
+// plain panel, showing the positions, rather than a notice asking for configuration.
+const TEST_RUNTIME: MapRuntime = {
+  workerUrl: 'blob:devicechain-test/maplibre-worker-a3f1.mjs',
+  loadStyles: () => Promise.resolve(),
+};
+
+function render(ui: ReactElement) {
+  return rtlRender(<MapRuntimeProvider runtime={TEST_RUNTIME}>{ui}</MapRuntimeProvider>);
+}
 
 const widget = (options: Record<string, unknown> = {}): WidgetInstance => ({
   id: 'w',

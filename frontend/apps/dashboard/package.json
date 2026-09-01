@@ -15,6 +15,7 @@
     "@devicechain/client": "*",
     "@devicechain/dashboards": "*",
     "@devicechain/widgets": "*",
+    "maplibre-gl": "^6.6.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-rnd": "^10.5.2"

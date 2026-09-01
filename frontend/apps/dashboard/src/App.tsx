@@ -28,6 +28,7 @@ import {
 } from '@devicechain/dashboards';
 import {
   DashboardRenderer,
+  MapRuntimeProvider,
   TenantBasemapProvider,
   useResolvedBindings,
   useSlotCandidates,
@@ -37,6 +38,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Basemap } from '@devicechain/client';
 
 import { errorMessage, loadDashboard, type Loaded } from './load';
+import { MAP_RUNTIME } from './map-runtime';
 import { LOGIN, type Membership, SELECT_TENANT, TENANT_BASEMAP } from './queries';
 
 export default function App() {
@@ -335,15 +337,22 @@ function View({
       </header>
 
       <main style={{ flex: '1 1 auto', minHeight: 0 }}>
+        {/* 🔴 The map runtime is BUNDLER WIRING, not configuration, and this app is the
+            reference external embedder — so what it does here is what a third-party host
+            must do. Without it a map widget renders a notice instead of a map, which is
+            deliberate: the alternative is MapLibre deriving a worker URL that 404s and
+            drawing nothing, on a surface where nobody would know to look. */}
         <TenantBasemapProvider basemap={basemap}>
-          <DashboardRenderer
-            definition={definition}
-            hub={hub}
-            actions={hub}
-            bindings={bindings}
-            select={select}
-            candidates={candidates}
-          />
+          <MapRuntimeProvider runtime={MAP_RUNTIME}>
+            <DashboardRenderer
+              definition={definition}
+              hub={hub}
+              actions={hub}
+              bindings={bindings}
+              select={select}
+              candidates={candidates}
+            />
+          </MapRuntimeProvider>
         </TenantBasemapProvider>
       </main>
     </div>

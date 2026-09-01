@@ -30,6 +30,14 @@ export { pickSample, optBoolean, type WidgetProps, type WidgetComponent } from '
 // The tenant basemap seam. A host installs the provider; map widgets read it.
 export { TenantBasemapProvider, useTenantBasemap } from './basemap-context';
 
+// The map RUNTIME seam — the MapLibre pieces only the host's bundler can emit.
+//
+// 🔴 Unlike the basemap provider above, this one is REQUIRED by any host that renders a
+// map widget: without it the widget shows a notice instead of a map. That is deliberate.
+// The alternative to a host-supplied worker URL is MapLibre's own runtime derivation,
+// which no bundler can follow, and which fails as a map that renders nothing at all.
+export { MapRuntimeProvider, useMapRuntime, type MapRuntime } from './map-runtime-context';
+
 // The typed schema for each widget's options bag: what the renderer reads, at what type,
 // with what legal values. WidgetOptions<T> types code that BUILDS options;
 // validateWidgetOptions reports where a stored bag disagrees with the renderer.
