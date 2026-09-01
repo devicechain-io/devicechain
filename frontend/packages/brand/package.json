@@ -1,8 +1,23 @@
 {
   "name": "@devicechain/brand",
-  "version": "0.0.1",
+  "version": "0.0.0-dev",
   "description": "Canonical DeviceChain brand tokens, plus the generated per-consumer stylesheets.",
+  "keywords": [
+    "devicechain",
+    "design-tokens",
+    "css",
+    "theme"
+  ],
   "license": "Apache-2.0",
+  "homepage": "https://devicechain.io",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devicechain-io/devicechain.git",
+    "directory": "frontend/packages/brand"
+  },
+  "bugs": {
+    "url": "https://github.com/devicechain-io/devicechain/issues"
+  },
   "type": "module",
   "sideEffects": [
     "./css/*.css"
@@ -19,7 +34,8 @@
     "tokens.json",
     "tokens.generated.json",
     "tools",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "generate": "node tools/generate.mjs",

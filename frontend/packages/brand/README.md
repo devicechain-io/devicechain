@@ -12,6 +12,26 @@ consumer actually needs.
 `tokens.generated.json` is generated from it and carries a do-not-hand-edit
 header.
 
+## Using it
+
+```bash
+npm install @devicechain/brand
+```
+
+```css
+/* whichever vocabulary your app speaks — see the table below */
+@import '@devicechain/brand/css/shadcn.css';
+```
+
+```ts
+import tokens from '@devicechain/brand/tokens';
+```
+
+There is no build step and no JavaScript to run: the stylesheets and the
+generated token JSON are shipped as-is.
+
+## Working on it
+
 ```bash
 npm run generate -w @devicechain/brand         # regenerate after editing tokens.json
 npm run check:generated -w @devicechain/brand  # fail if the committed output is stale
