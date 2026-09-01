@@ -495,6 +495,23 @@ jobs:
           VERSION: ${{ needs.guard.outputs.version }}
         run: node scripts/set-package-versions.mjs "$VERSION"
 
+      # 🔴 THE LAST THING BETWEEN A DEFECT AND AN IMMUTABLE VERSION. It reads the same
+      # tarballs `npm publish` is about to upload — packed from the STAMPED manifests,
+      # so this is the only place the release version and the internal peer ranges are
+      # checked on the artifact rather than on the object the stamper just wrote.
+      #
+      # `npm pack` runs no lifecycle script in these packages (none declares `prepare`
+      # or `prepack`) and never installs, so it is safe on this side of the stamp — see
+      # the 🔴 above, which nothing here may violate.
+      #
+      # The same gate runs on every pull request against the committed placeholder, so
+      # a failure here is a release-only defect: the stamp, or something the tag
+      # changed. ci.yml is where the shape of the packages is settled.
+      - name: Verify the packed artifacts
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: node scripts/verify-packages.mjs --version "$VERSION"
+
       - name: Publish to npmjs.com
         env:
           VERSION: ${{ needs.guard.outputs.version }}

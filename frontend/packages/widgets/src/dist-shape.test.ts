@@ -35,6 +35,15 @@
 //
 // `npm test` in this package runs `build-packages.mjs` first, so `dist` is this
 // package's current source rather than whatever was last left there.
+//
+// 🔴 THIS IS NOT THE ONLY ARTIFACT GATE, AND THE OVERLAP IS DELIBERATE.
+// frontend/scripts/verify-packages.mjs runs the same dialect scan over the PACKED
+// TARBALL, across all four publishable packages, and then loads each entry under bare
+// Node ESM — so it also sees what `files` left out, which this file cannot. What lives
+// HERE and nowhere else is everything specific to this package's own shape: the lazy
+// boundary around the Natural Earth geometry, the chunk it lives in, and the fact that
+// the portable entry never reaches the /vite one. Deleting either file loses real
+// coverage.
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
