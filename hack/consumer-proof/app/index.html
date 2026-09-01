@@ -1,0 +1,28 @@
+<!doctype html>
+<!--
+  Copyright The DeviceChain Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  Shared by both arms. It carries NO script tag: how an entry module is attached to a
+  page is the one thing that is genuinely bundler configuration, so each arm injects
+  its own (Vite via transformIndexHtml, webpack via HtmlWebpackPlugin). Everything the
+  application DOES lives in app.tsx, which is byte-identical across the arms.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>DeviceChain consumer proof</title>
+    <style>
+      /* A flat, known background, so "the map drew something" is a pixel question with
+         an unambiguous answer rather than a judgement call. */
+      html,
+      body {
+        margin: 0;
+        background: #ffffff;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

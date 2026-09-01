@@ -77,13 +77,47 @@ import { viteMapRuntime } from '@devicechain/widgets/vite';
 </MapRuntimeProvider>;
 ```
 
-On any other bundler, build the runtime yourself. All it needs is a URL your app
-actually serves — reached through your bundler's asset-URL idiom, or by copying
-`maplibre-gl/dist/maplibre-gl-worker.mjs` into your static output:
+On any other bundler you supply the URL yourself. There is one requirement, and
+it is the whole of the difficulty: MapLibre loads that URL as a **module worker**,
+so whatever you serve there must be a module with no unresolved imports left in
+it. `maplibre-gl/dist/maplibre-gl-worker.mjs` is not one on its own — its first
+line imports a sibling, `maplibre-gl-shared.mjs`.
+
+**So do not point at a lone copy of the worker file**, and in particular do not
+reach for `new URL('maplibre-gl/dist/maplibre-gl-worker.mjs', import.meta.url)`.
+It looks right and it is not: webpack copies the file as an asset, the sibling is
+never emitted, and the worker dies on its own first line — with a 200 on the
+worker URL, a canvas on screen, markers placed, the build exited 0 and nothing in
+the console. The map just has no map in it.
+
+Two recipes that work. On webpack, give the worker its own entry, so webpack
+bundles its imports into it:
+
+```js
+entry: {
+  main: './src/index.tsx',
+  'maplibre-worker': 'maplibre-gl/dist/maplibre-gl-worker.mjs',
+},
+output: {
+  filename: (data) =>
+    data.chunk.name === 'maplibre-worker' ? 'maplibre-worker.js' : '[name].[contenthash].js',
+},
+```
+
+…and point at the filename you chose:
 
 ```tsx
+const runtime = { workerUrl: '/maplibre-worker.js' };
+```
+
+Or, on any bundler at all, copy the two files yourself:
+
+```tsx
+// BOTH, under their own names, into one served directory:
+//   maplibre-gl/dist/maplibre-gl-worker.mjs  ->  public/vendor/
+//   maplibre-gl/dist/maplibre-gl-shared.mjs  ->  public/vendor/
 const runtime = {
-  workerUrl: '/assets/maplibre-gl-worker.mjs',
+  workerUrl: '/vendor/maplibre-gl-worker.mjs',
   loadStyles: () => import('maplibre-gl/dist/maplibre-gl.css'),
 };
 ```

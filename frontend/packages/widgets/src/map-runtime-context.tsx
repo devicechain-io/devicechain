@@ -74,16 +74,32 @@ const MapRuntimeContext = createContext<MapRuntime | null>(null);
  * <MapRuntimeProvider runtime={viteMapRuntime}>{children}</MapRuntimeProvider>
  * ```
  *
- * On any other bundler, build one with that bundler's worker-entry idiom — webpack, for
- * instance, resolves `new URL('…', import.meta.url)` when the specifier is a literal:
+ * On any other bundler you supply the URL yourself, and there is ONE REQUIREMENT that
+ * decides whether it works: MapLibre loads the URL as a MODULE worker, so whatever it
+ * serves must be a module with no unresolved imports left in it.
+ * `maplibre-gl/dist/maplibre-gl-worker.mjs` does not satisfy that on its own — its first
+ * line is `import … from './maplibre-gl-shared.mjs'`.
  *
- * ```tsx
- * const workerUrl = new URL(
- *   'maplibre-gl/dist/maplibre-gl-worker.mjs',
- *   import.meta.url,
- * ).toString();
+ * 🔴 SO DO NOT POINT AT A VERBATIM COPY OF THE WORKER FILE, and in particular do not
+ * reach for `new URL('maplibre-gl/dist/maplibre-gl-worker.mjs', import.meta.url)`. That
+ * looks exactly right and is wrong: webpack treats the target as an ASSET and copies it,
+ * the sibling is never emitted, and the worker dies on its own first line. Measured
+ * against webpack 5, from a packed tarball: the worker URL answered 200, both maps drew
+ * canvases, all markers appeared, tiles loaded, THE BUILD EXITED 0 AND THE CONSOLE WAS
+ * EMPTY — and the bundled basemap rendered ocean with no land on it.
  *
- * <MapRuntimeProvider runtime={{ workerUrl }}>{children}</MapRuntimeProvider>
+ * Two recipes that were measured working, in `hack/consumer-proof`:
+ *
+ * ```js
+ * // webpack — make the worker a second ENTRY, so its imports are bundled into it.
+ * entry: { main: './src/index.tsx', 'maplibre-worker': 'maplibre-gl/dist/maplibre-gl-worker.mjs' }
+ * // …then: <MapRuntimeProvider runtime={{ workerUrl: '/maplibre-worker.js' }}>
+ * ```
+ *
+ * ```js
+ * // any bundler, or none — copy the worker AND ITS SIBLING, under their own names,
+ * // into one served directory: maplibre-gl-worker.mjs + maplibre-gl-shared.mjs
+ * // …then: <MapRuntimeProvider runtime={{ workerUrl: '/vendor/maplibre-gl-worker.mjs' }}>
  * ```
  *
  * 🔴 Hold the runtime in a MODULE CONSTANT, as above, rather than building it inline in
