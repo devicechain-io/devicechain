@@ -108,7 +108,8 @@ const result = await esbuild.build({
   outbase: srcDir,
   bundle: true,
   // 🔴 NOT A TUNING KNOB. widgets/src/widgets/map-geometry.ts dynamically imports
-  // ~157 KB of Natural Earth geometry precisely so a viewer looking at a provider's
+  // ~156 kB of Natural Earth geometry (44 kB on the wire) precisely so a viewer
+  // looking at a provider's
   // tiles does not also download a world map. esbuild without `splitting` INLINES
   // dynamic imports of internal modules — folding that payload into the main chunk,
   // and (now that the apps consume `dist`) into their entry graphs too. Every guard
@@ -119,6 +120,9 @@ const result = await esbuild.build({
   format: 'esm',
   platform: 'browser',
   target: 'es2020',
+  // Shipped, with sources inlined, so a consumer debugging a stack trace lands in
+  // readable code rather than in a bundle. It roughly triples the tarball (widgets:
+  // 207 kB packed) and gives away nothing — the sources are Apache-2.0 and public.
   sourcemap: true,
   metafile: true,
   chunkNames: 'chunks/[name]-[hash]',

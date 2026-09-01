@@ -13,11 +13,11 @@
 //
 // Two invariants live here because the BUILD is where they can be broken silently:
 //
-//   1. The lazy boundary around ~152 KiB of Natural Earth geometry. esbuild without
-//      `splitting: true` INLINES dynamic imports of internal modules, folding that
-//      payload into the main chunk. Nothing about behaviour changes, every source
-//      scan stays green, and every consumer of this package — including our own two
-//      apps — starts downloading a world map they will never be shown.
+//   1. The lazy boundary around ~156 kB of Natural Earth geometry (44 kB gzipped).
+//      esbuild without `splitting: true` INLINES dynamic imports of internal modules,
+//      folding that payload into the main chunk. Nothing about behaviour changes, every
+//      source scan stays green, and every consumer of this package — including our own
+//      two apps — starts downloading a world map they will never be shown.
 //
 //   2. The bundler-dialect carve-out. `?worker&url` is legal in exactly one module,
 //      `vite.ts`, reached only by name. If it ever appears in the main entry, a
@@ -102,7 +102,7 @@ describe('the built package', () => {
     expect(
       read('index.js').includes(GEOMETRY_PAYLOAD),
       'the world geometry was inlined into the entry chunk — `splitting` is off, and every ' +
-        'consumer now downloads ~152 KiB of map data whether or not they open a map',
+        'consumer now downloads ~156 kB of map data whether or not they open a map',
     ).toBe(false);
   });
 
