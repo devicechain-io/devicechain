@@ -918,6 +918,49 @@ jobs:
           dotnet publish tests/DeviceChain.Sdk.AotHost -c Release -r linux-x64
           ./tests/DeviceChain.Sdk.AotHost/bin/Release/net8.0/linux-x64/publish/DeviceChain.Sdk.AotHost
 
+      # Pack the package that will actually be published. Nothing else in CI does:
+      # restore/build/test never open the packaging properties, so a <PackageIcon> or
+      # <PackageReadmeFile> pointing at a file that is not there stays invisible until
+      # a release run tries to publish and dies there (NU5019/NU5046). A version is
+      # passed because the checked-in default is a deliberate placeholder, which also
+      # makes this the only exercise of the release's own -p:Version= path.
+      #
+      # 🔴 A GREEN PACK IS NOT A GOOD PACKAGE, so the artifact is opened and read.
+      # Measured, not assumed: NuGet reports a package with NO README as an
+      # informational "missing a readme" line, packs it happily, and exits 0 — even
+      # under -warnaserror, which does not promote it. Every listing field behaves the
+      # same way. Deleting <PackageProjectUrl>, or dropping a Pack="true", produces a
+      # package that builds clean and quietly lists worse. The assertions below are
+      # what actually hold the listing together; -warnaserror is kept for the genuine
+      # NU-warnings it does catch, and is not doing this job.
+      - name: Pack the NuGet package
+        run: |
+          dotnet pack src/DeviceChain.Sdk -c Release --no-build \
+            -p:Version=0.0.0-ci -warnaserror -o "$RUNNER_TEMP/nupkg"
+
+          nupkg="$(ls "$RUNNER_TEMP/nupkg"/*.nupkg)"
+
+          # The files a listing is made of must be IN the archive, not merely named.
+          for want in avatar-400.png PACKAGE.md; do
+            unzip -l "$nupkg" | grep -q " $want\$" \
+              || { echo "::error::$want is missing from the packed nupkg"; exit 1; }
+          done
+
+          # ...and the nuspec must still carry the fields nuget.org renders from.
+          nuspec="$(unzip -p "$nupkg" DeviceChain.Sdk.nuspec)"
+          for el in icon readme projectUrl description tags copyright; do
+            grep -q "<$el>" <<<"$nuspec" \
+              || { echo "::error::the packed nuspec has no <$el>"; exit 1; }
+          done
+          # <repository> carries the url as an ATTRIBUTE, and packs with a commit but
+          # no url when RepositoryUrl is unset -- so the element being present proves
+          # nothing. Match the attribute.
+          grep -q '<repository[^>]*url="http' <<<"$nuspec" \
+            || { echo "::error::the packed nuspec has no repository url"; exit 1; }
+
+          echo "packed and verified:"
+          ls -1 "$RUNNER_TEMP/nupkg"
+
   # ---------------------------------------------------------------------------
   # Unity package (sdks/unity) tier-1 verification: compile the Runtime + Sample C# against real
   # UnityEngine reference assemblies (UnityEngine.Modules, reference-only) in BOTH platform branches
