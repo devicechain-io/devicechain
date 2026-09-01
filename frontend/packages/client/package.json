@@ -1,15 +1,44 @@
 {
   "name": "@devicechain/client",
-  "version": "0.0.1",
+  "version": "0.0.0-dev",
   "description": "DeviceChain client SDK — two-tier auth, typed GraphQL operations, and graphql-ws subscriptions over the client wire.",
+  "keywords": [
+    "devicechain",
+    "iot",
+    "graphql",
+    "sdk",
+    "typescript"
+  ],
   "license": "Apache-2.0",
+  "homepage": "https://devicechain.io",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devicechain-io/devicechain.git",
+    "directory": "frontend/packages/client"
+  },
+  "bugs": {
+    "url": "https://github.com/devicechain-io/devicechain/issues"
+  },
   "type": "module",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
+    "build": "node ../../scripts/build-package.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

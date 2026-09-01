@@ -10,10 +10,14 @@
   "scripts": {
     "dev": "npm run dev -w @devicechain/console",
     "dev:dash": "npm run dev -w @devicechain/dashboard",
-    "build": "npm run build --workspaces --if-present",
+    "build:packages": "node scripts/build-packages.mjs",
+    "build": "npm run build -w @devicechain/console -w @devicechain/dashboard",
     "codegen": "npm run codegen -w @devicechain/console",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12"
   }
 }
