@@ -778,6 +778,15 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      # 🔴 BEFORE `npm ci`, deliberately: these tests need no dependencies, and what
+      # they cover is the RELEASE plumbing — the ordered package list, the version
+      # stamper and the publisher helpers — which nothing else in CI executes at all.
+      # Its one chance to be wrong is a tag, where the packages it publishes are
+      # immutable, so it should fail in the first seconds of this job rather than
+      # behind a two-minute install.
+      - name: Release package plumbing tests
+        run: npm run test:scripts
+
       - name: Install dependencies
         run: npm ci
 

@@ -14,6 +14,10 @@
 #   - chart:  packages the Helm chart at the tag version and pushes it as an OCI
 #             artifact to ghcr.io/devicechain-io/charts.
 #   - cli:    goreleaser cross-compiles dcctl and creates the GitHub Release.
+#   - npm-packages / nuget:
+#             publish the four @devicechain/* npm packages and the C# SDK, after
+#             the correctness gates — these are the only IMMUTABLE artifacts a
+#             release produces, so they go last.
 #
 # Auth is the built-in GITHUB_TOKEN -- no PAT. New ghcr packages come out PUBLIC:
 # measured on v0.9.0-rc.1, which pushed three package names for the first time
@@ -44,6 +48,9 @@ on:
 #   guard             — reads the tag                       -> contents: read
 #   images/chart/     — ko / helm / docker push to ghcr      -> packages: write
 #     frontend
+#   npm-packages      — npm trusted publishing (OIDC)        -> id-token: write
+#   nuget             — pushes with a stored API key, not a
+#                       GitHub credential                    -> contents: read
 #   cli               — goreleaser creates the Release       -> contents: write
 #   edge-agent        — gh release upload                    -> contents: write
 #   publish-manifest  — gh release VIEW; the website push
@@ -397,6 +404,218 @@ jobs:
     with:
       build: false
       version: ${{ needs.guard.outputs.version }}
+
+  # ---------------------------------------------------------------------------
+  # Publish the four @devicechain/* packages to npmjs.com.
+  #
+  # 🔴 AUTH IS OIDC — there is no NPM_TOKEN in this repo and there must not be one.
+  # npm's 2FA-bypass granular access tokens lost account/org/package management on
+  # 2026-07-31 and lose DIRECT PUBLISHING around January 2027, reduced to reading
+  # private packages and staging for human approval. Trusted publishing is therefore
+  # not the nicer option, it is the only durable automated one. The CLI mints its own
+  # short-lived credential from the `id-token: write` grant below; provenance comes
+  # with it automatically, so `--provenance` is NOT passed (npm's docs are explicit
+  # that the flag is unnecessary on GitHub Actions).
+  #
+  # 🔴 WHAT MAKES THIS JOB TRUSTED IS A SETTING ON npmjs.com, PER PACKAGE, and it names
+  # THIS FILE. Each of the four packages has a trusted publisher configured with the
+  # repository and the workflow FILENAME (`release.yml`, filename only, no path) and no
+  # environment. Renaming this workflow, or moving these steps into a reusable workflow
+  # that runs under a different filename, silently revokes publishing rights for all
+  # four — and the symptom is a 404/403 from `npm publish`, not anything that mentions
+  # the rename.
+  #
+  # 🔴 THE FIRST VERSION OF EACH PACKAGE CANNOT COME FROM HERE. A trusted publisher can
+  # only be configured on a package that already EXISTS, and npm cannot stage a
+  # brand-new package either. So version one of each is a manual, interactive, 2FA'd
+  # `npm publish` from a maintainer's machine; this job takes over from version two.
+  # scripts/publish-packages.mjs detects the not-yet-bootstrapped case and says so,
+  # rather than leaving a bare registry error to be decoded.
+  #
+  # Gated on BOTH correctness gates, like `cli`, and for a stronger reason than `cli`
+  # has: a GitHub Release can be deleted and recut, and an image tag can be moved, but
+  # an npm version is IMMUTABLE. Unpublishing is possible for 72 hours and burns the
+  # number permanently. So this runs after everything in the release that can still
+  # say "no".
+  npm-packages:
+    needs: [guard, loadtest-gate, upgrade-gate]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing (OIDC) — see above
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          # Matches ci.yml's frontend job and the frontend Dockerfile build stage.
+          # Node 26 bundles an npm far above the 11.5.1 floor trusted publishing needs;
+          # the publisher script asserts that floor rather than trusting this line.
+          node-version: 26
+          # npm's own guidance for release builds: never publish from a cache. The
+          # dependency tree a release is built against should come from the lockfile,
+          # not from whatever a previous run happened to leave behind.
+          package-manager-cache: false
+          #
+          # 🔴 `registry-url:` IS DELIBERATELY ABSENT, AND npm's OWN DOCUMENTED EXAMPLE
+          # INCLUDES IT. Setting it makes this action write
+          #     //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
+          # into an .npmrc. With no NODE_AUTH_TOKEN — which is the whole point of
+          # trusted publishing — that expands to empty, and the npm CLI reads the line
+          # as "auth is already configured", never attempts the OIDC exchange, and fails
+          # with ENEEDAUTH or a bare E404 that says nothing about the cause.
+          # (actions/setup-node#1551, npm/documentation#1960.) The default registry is
+          # registry.npmjs.org already, so the input buys nothing here.
+          #
+          # Not left to a comment: scripts/publish-packages.mjs asserts, before it
+          # publishes anything, that the resolved npm config carries no _authToken and
+          # that the OIDC request URL is actually present.
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Built BEFORE the version stamp, deliberately. The build reads `exports` and
+      # writes `dist`; it does not care what the version says, and doing it first keeps
+      # the window between "manifests rewritten" and "packages published" as short as
+      # possible — see the 🔴 on the stamp step.
+      - name: Build the publishable packages
+        run: npm run build:packages
+
+      # 🔴 NOTHING MAY RUN `npm ci` OR `npm install` AFTER THIS STEP. The stamp rewrites
+      # every package.json to the tag; package-lock.json still says 0.0.0-dev, so an
+      # install here would either fail or quietly rewrite the tree the release is about
+      # to publish. The script asserts its own result — including that the internal
+      # @devicechain/* peer ranges moved with the version, which is the half that makes
+      # the packages installable at all.
+      - name: Stamp the release version into the manifests
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: node scripts/set-package-versions.mjs "$VERSION"
+
+      - name: Publish to npmjs.com
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+          IS_PRERELEASE: ${{ needs.guard.outputs.is_prerelease }}
+        run: |
+          # `latest` moves ONLY on a stable release, mirroring the image and chart tags.
+          # A prerelease goes to `next`, so `npm install @devicechain/widgets` keeps
+          # resolving to the last stable one — an rc exists precisely to be discarded.
+          tag=latest
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            tag=next
+          fi
+          node scripts/publish-packages.mjs --version "$VERSION" --tag "$tag"
+
+  # ---------------------------------------------------------------------------
+  # Publish the C# SDK to nuget.org.
+  #
+  # 🔴 THE AUTH ASYMMETRY IS REAL AND IS NOT PAPERED OVER: NuGet has no OIDC equivalent
+  # to npm's trusted publishing, so this leg uses a STORED API KEY. That key expires,
+  # the same trap WEBSITE_PUBLISH_TOKEN carries. When this job starts failing with a
+  # 401/403, check the key's expiry on nuget.org before anything else.
+  #
+  # The version comes from the tag with its leading `v` STRIPPED, matching the chart.
+  # NuGet rejects `v0.13.0` outright, so passing it unstripped fails loudly rather than
+  # publishing something odd. The committed <Version>0.0.0-dev is not "the current
+  # version" — it is what a pack that forgot to pass one produces.
+  #
+  # ci.yml's `csharp` job already packs this project and reads the artifact back
+  # (icon, readme, repository url, description, tags), so a packaging-metadata defect
+  # fails on the pull request rather than here. This job is the push.
+  #
+  # Gated on both correctness gates for the same reason as npm-packages: a NuGet
+  # version is immutable too — unlisting hides a package from search, it does not free
+  # the number.
+  nuget:
+    needs: [guard, loadtest-gate, upgrade-gate]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdks/csharp
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Pack
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          version="${VERSION#v}"
+          dotnet pack src/DeviceChain.Sdk -c Release -p:Version="$version" -warnaserror \
+            -o "$RUNNER_TEMP/nupkg"
+
+          # Assert the artifacts exist and carry the version, rather than trusting that
+          # a green pack produced the right file. -warnaserror does NOT promote the
+          # informational lines NuGet emits for missing package metadata, so "packed"
+          # and "packed well" are different claims; ci.yml checks the second one.
+          # Both files are named, and the exact names were MEASURED by packing this
+          # project rather than assumed: <IncludeSymbols> produces
+          # DeviceChain.Sdk.<version>.nupkg and .snupkg, side by side. The push below
+          # names only the .nupkg — `dotnet nuget push` documents `--no-symbols` as
+          # "doesn't push symbols (even if present)", i.e. a symbols package sitting
+          # next to the .nupkg goes up unless you opt out — so a .snupkg that failed to
+          # pack would otherwise vanish without a word.
+          for ext in nupkg snupkg; do
+            f="$RUNNER_TEMP/nupkg/DeviceChain.Sdk.$version.$ext"
+            [ -f "$f" ] || { echo "::error::pack did not produce $(basename "$f")"; exit 1; }
+            echo "packed $(basename "$f")"
+          done
+
+      - name: Push to nuget.org
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if [ -z "$NUGET_API_KEY" ]; then
+            echo "::error::NUGET_API_KEY is not set — the SDK cannot be published."
+            exit 1
+          fi
+          version="${VERSION#v}"
+          # --skip-duplicate demotes a 409 Conflict to a warning, so re-running this job
+          # after a later step failed does not die on the version it already pushed.
+          # There is no way to withdraw and retry a version, so a re-run has to be
+          # survivable. What actually decides whether the package is published is the
+          # step below, not this command's exit status.
+          dotnet nuget push "$RUNNER_TEMP/nupkg/DeviceChain.Sdk.$version.nupkg" \
+            --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+
+      # 🔴 ASSERT THE REGISTRY, not the exit status of the push. `--skip-duplicate` above
+      # exits 0 for a version that was never accepted in the first place as readily as
+      # for one that was, so the push's own status cannot distinguish "published" from
+      # "quietly skipped".
+      #
+      # A TIMEOUT HERE MEANS "RE-RUN THIS JOB", NOT "THE RELEASE IS BROKEN". nuget.org
+      # runs an asynchronous validation pipeline (virus scan, signature checks) before a
+      # package appears on the flat container, and a brand-new package id can sit in it
+      # for several minutes. The bound is generous and then hard, because a poll that
+      # gave up quietly would make "never appeared" and "appeared late" the same result.
+      - name: Confirm nuget.org serves it
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          version="${VERSION#v}"
+          url=https://api.nuget.org/v3-flatcontainer/devicechain.sdk/index.json
+          for i in $(seq 1 45); do
+            if curl -fsS "$url" | jq -e --arg v "$version" 'any(.versions[]; . == $v)' >/dev/null 2>&1; then
+              echo "nuget.org lists DeviceChain.Sdk $version."
+              exit 0
+            fi
+            echo "attempt $i: $version not listed yet"
+            sleep 20
+          done
+          echo "::error::DeviceChain.Sdk $version did not appear on nuget.org within 15 minutes."
+          echo "::error::The push was accepted; this is nuget.org's validation pipeline. Re-run this job."
+          exit 1
 
   # ---------------------------------------------------------------------------
   # Cross-compile dcctl and create the GitHub Release (goreleaser).

@@ -10,12 +10,9 @@
 // means "edit widgets/src, run the console's tests" would otherwise be green over
 // yesterday's artifact.
 //
-// 🔴 THE ORDER IS EXPLICIT, and that is the whole point of this file. Alphabetical
-// order happens to equal dependency order today — brand, client, dashboards, widgets
-// — which is exactly why `npm run build --workspaces` looks like it works. It works
-// by coincidence, and the coincidence breaks silently the first time a package is
-// added or renamed: a package built before its dependency reads that dependency's
-// `dist` from the PREVIOUS run, or finds none at all.
+// The order it builds in, and the check that the tree still matches that order, are
+// scripts/packages.mjs — shared with the release publisher, which needs the same list
+// and would drift from a second copy of it.
 //
 // Pass --force to rebuild regardless of the freshness check below.
 
@@ -23,15 +20,12 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PackageError, resolvePackages } from './packages.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const frontend = path.dirname(here);
 const packagesDir = path.join(frontend, 'packages');
 const force = process.argv.includes('--force');
-
-// Dependency order, written out. `brand` first because it emits stylesheets the apps
-// import; then the SDK, the runtime that uses it, and the widgets that use both.
-const ORDER = ['brand', 'client', 'dashboards', 'widgets'];
 
 function fail(message) {
   console.error(`\n==> build:packages: ${message}\n`);
@@ -117,41 +111,19 @@ function isFresh(name, pkgDir, pkg, manifest) {
 // ---------------------------------------------------------------------------
 // Build.
 // ---------------------------------------------------------------------------
-const packageDirs = readdirSync(packagesDir, { withFileTypes: true })
-  .filter((entry) => entry.isDirectory())
-  .map((entry) => path.join(packagesDir, entry.name))
-  .filter((dir) => existsSync(path.join(dir, 'package.json')));
-
-// Checked BEFORE anything is built, and in three separate directions, because each is
-// a different way this file goes quietly wrong.
-//
-//  - Nothing found at all: the scan is not reaching packages/, and every check that
-//    walks this list — including the `files` allowlist check at the bottom — is then
-//    vacuous rather than passing.
-//  - Named but absent: a package was renamed or removed and ORDER still names it.
-//  - Present but unordered: a package was ADDED without being given a position. It
-//    would simply never be built, and the app importing it would fail at resolution
-//    with nothing pointing back here.
-const found = new Set(packageDirs.map((dir) => path.basename(dir)));
-const missing = ORDER.filter((name) => !found.has(name));
-const unordered = [...found].filter((name) => !ORDER.includes(name));
-if (packageDirs.length === 0) {
-  fail(`no packages found under ${path.relative(frontend, packagesDir)} — the scan is not reaching them`);
-}
-if (missing.length > 0) {
-  fail(`the build order names packages that are not there: ${missing.join(', ')}`);
-}
-if (unordered.length > 0) {
-  fail(
-    `these packages are not in the build order and so are never built: ${unordered.join(', ')}.\n` +
-      'Add each one to ORDER at the position its dependencies require.',
-  );
+// The scan, and the three-way drift check that keeps it honest, live in
+// scripts/packages.mjs — see the reach control there for why an empty result has to
+// be a failure rather than a quiet pass.
+let packages;
+try {
+  packages = resolvePackages(packagesDir);
+} catch (err) {
+  if (!(err instanceof PackageError)) throw err;
+  fail(err.message);
 }
 
 let builtAny = false;
-for (const name of ORDER) {
-  const pkgDir = path.join(packagesDir, name);
-
+for (const { name, dir: pkgDir, pkg } of packages) {
   if (name === 'brand') {
     // 🔴 `brand` is the odd one out, and it is worth naming rather than smoothing
     // over: its build is a VERIFIER (`generate.mjs --check`), not a compiler. Its
@@ -163,7 +135,6 @@ for (const name of ORDER) {
     continue;
   }
 
-  const pkg = JSON.parse(readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
   const manifest = inputManifest(pkgDir);
   if (!force && isFresh(name, pkgDir, pkg, manifest)) continue;
 
@@ -186,8 +157,7 @@ for (const name of ORDER) {
 // it is checked rather than something exempted from the rule.
 // ---------------------------------------------------------------------------
 const problems = [];
-for (const dir of packageDirs) {
-  const pkg = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8'));
+for (const { dir, pkg } of packages) {
   const rel = path.relative(frontend, dir);
   if (!Array.isArray(pkg.files) || pkg.files.length === 0) {
     problems.push(`${rel}: no "files" allowlist — the tarball would ship the whole directory, tests included`);
