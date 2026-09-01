@@ -11,7 +11,7 @@ require (
 	github.com/golang/geo v0.0.0-20260713102120-857a528af641
 	github.com/google/cel-go v0.30.0
 	github.com/graph-gophers/graphql-go v1.10.2
-	github.com/nats-io/nats-server/v2 v2.14.5
+	github.com/nats-io/nats-server/v2 v2.14.6
 	github.com/nats-io/nats.go v1.53.1
 	github.com/prometheus/client_golang v1.24.1
 	github.com/rs/zerolog v1.35.1

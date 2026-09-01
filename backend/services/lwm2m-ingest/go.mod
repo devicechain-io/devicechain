@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/devicechain-io/dc-microservice v0.0.1
-	github.com/pion/dtls/v3 v3.1.5
+	github.com/pion/dtls/v3 v3.1.6
 	github.com/plgd-dev/go-coap/v3 v3.5.4
 	github.com/prometheus/client_golang v1.24.1
 	github.com/rs/zerolog v1.35.1
