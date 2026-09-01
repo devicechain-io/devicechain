@@ -32,12 +32,11 @@
 // 🔴 ABSENT IS NOT ZERO. A marker describes only what its device reported; an
 // unreported heading is not due north. See describePosition.
 
-/// <reference path="../css-modules.d.ts" />
-
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { renderableBasemap, resolveBasemap } from '@devicechain/client';
 
 import { useTenantBasemap } from '../basemap-context';
+import { useMapRuntime, type MapRuntime } from '../map-runtime-context';
 import { WidgetFrame } from '../frame';
 import type { LocationStreamState } from '../hooks';
 import { css } from '../theme';
@@ -61,39 +60,45 @@ import type { Map as MapLibreMap, Marker as MapLibreMarker } from 'maplibre-gl';
 // who never opens a board with a map must not download a map renderer. The dynamic
 // import is what puts it in its own chunk; a top-level `import 'maplibre-gl'` anywhere
 // in this package would fold it into the main bundle for every viewer, and nothing
-// about the widget's behaviour would change to reveal it. The stylesheet rides the same
-// dynamic boundary for the same reason.
+// about the widget's behaviour would change to reveal it.
+//
+// MapLibre's STYLESHEET is no longer imported here at all — it is the host's, along with
+// the worker URL, for the reason set out below and in map-runtime-context. A host that
+// imports it eagerly gives up this lazy boundary for the CSS only, which is a few KB and
+// its own call to make.
 //
 // Loaded once and memoized: several map widgets on one board share the fetch.
 let mapLibrePromise: Promise<typeof import('maplibre-gl')> | undefined;
 
-function loadMapLibre(): Promise<typeof import('maplibre-gl')> {
+// 🔴 THE WORKER HAS TO BE ASKED FOR BY NAME, and getting this wrong produces a map
+// that builds, type-checks, passes every test and then renders nothing. MapLibre
+// otherwise derives the worker's URL at runtime from its own module URL, which is a
+// string no bundler can follow — nothing emits the file, the browser 404s it, and
+// `new Worker()` does not throw on a 404: the failure arrives later as an async error
+// event, so the map simply sits there having loaded no tiles.
+//
+// 🔴 THE URL COMES FROM THE HOST, and this package no longer computes it. Emitting a
+// worker entry is a bundler-specific act — Vite spells it `?worker&url`, webpack and
+// Rollup spell it differently — so a library that writes one dialect works under that
+// bundler and silently renders a blank map under every other. See map-runtime-context
+// for the full argument; the short version is that the specifier is externalized, so
+// no build anywhere reports the breakage.
+//
+// Memoized for the whole module, and FIRST CALLER WINS: several map widgets on one
+// board share the fetch, and `setWorkerUrl` is global state in MapLibre, so a second
+// caller with a different URL could not be honoured even if we tried. In practice
+// there is one provider at the top of the tree and therefore one URL.
+function loadMapLibre(runtime: MapRuntime): Promise<typeof import('maplibre-gl')> {
   if (!mapLibrePromise) {
-    mapLibrePromise = Promise.all([
-      import('maplibre-gl'),
-      // 🔴 THE WORKER HAS TO BE ASKED FOR BY NAME, and getting this wrong produces a
-      // map that builds, type-checks, passes every test and then renders nothing.
-      //
-      // MapLibre parses tiles and geometry off the main thread. Left to itself it
-      // derives the worker's URL AT RUNTIME from its own module URL — `new
-      // URL('./maplibre-gl-worker.mjs', import.meta.url)` — which is a string a
-      // bundler cannot see, so nothing emits the file and the browser resolves
-      // `/assets/maplibre-gl-worker.mjs` to a 404. `new Worker()` does not throw on
-      // one: the failure arrives later as an async error event, so the map simply
-      // sits there having loaded no tiles.
-      //
-      // `?worker&url` is what makes Vite treat it as a worker ENTRY — bundling the
-      // `./maplibre-gl-shared.mjs` it imports into it, which is why the plain `?url`
-      // form (a verbatim copy, its sibling import dangling) is not enough — and hand
-      // back the emitted, hashed URL. It rides the same dynamic boundary as the
-      // library and the stylesheet, so a viewer who opens no map still downloads none
-      // of it.
-      import('maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'),
-      import('maplibre-gl/dist/maplibre-gl.css'),
-    ]).then(([mod, worker]) => {
-      mod.setWorkerUrl(worker.default);
-      return mod;
-    });
+    // The stylesheet rides the SAME dynamic boundary as the renderer, which is why the
+    // host passes a loader rather than importing it at module scope: it is 70 KB raw,
+    // 10 KB gzipped, and a viewer who opens no map must download none of it.
+    mapLibrePromise = Promise.all([import('maplibre-gl'), runtime.loadStyles()]).then(
+      ([mod]) => {
+        mod.setWorkerUrl(runtime.workerUrl);
+        return mod;
+      },
+    );
   }
   return mapLibrePromise;
 }
@@ -106,6 +111,10 @@ const SINGLE_DEVICE_ZOOM = 14;
 export function MapWidget({ widget, data }: WidgetProps<LocationStreamState>) {
   const title = optString(widget.options, 'title');
   const positions = placeable(data.locations);
+
+  // The host's bundler-produced MapLibre runtime. Read unconditionally, with the other
+  // hooks, because a hook cannot live behind one of the early returns below.
+  const runtime = useMapRuntime();
 
   // Precedence is per-widget override → tenant → no basemap (ADR-079 §9). The
   // per-widget options are kept, not replaced: they are how someone tries a provider
@@ -140,6 +149,26 @@ export function MapWidget({ widget, data }: WidgetProps<LocationStreamState>) {
     );
   }
 
+  // 🔴 AND THE HOST'S OWN WIRING IS CHECKED SECOND, for the same reason the refusal is
+  // checked first: it is a fact about the environment rather than about the data, so it
+  // outranks every "nothing to show" branch below. Checking it later would hide it behind
+  // "No devices selected" on exactly the board a developer is using to find it.
+  //
+  // There is no fallback to take. The only alternative to a host-supplied worker URL is
+  // MapLibre's runtime derivation, which is the silent blank map this seam exists to
+  // prevent — so an unwired host is told, in the widget, what it has to install.
+  if (!runtime) {
+    return (
+      <WidgetFrame title={title}>
+        <MapNotice
+          glyph="🧩"
+          heading="Map runtime not configured"
+          detail="This host must install MapRuntimeProvider with its bundler's MapLibre worker URL."
+        />
+      </WidgetFrame>
+    );
+  }
+
   if (data.loading && positions.length === 0) {
     return (
       <WidgetFrame title={title}>
@@ -167,7 +196,7 @@ export function MapWidget({ widget, data }: WidgetProps<LocationStreamState>) {
 
   return (
     <WidgetFrame title={title} bodyStyle={{ padding: 0 }}>
-      <LiveMap basemap={basemap} positions={positions} />
+      <LiveMap basemap={basemap} positions={positions} runtime={runtime} />
     </WidgetFrame>
   );
 }
@@ -247,12 +276,17 @@ type MapStatus = 'loading' | 'ready' | 'unavailable';
 // teardown — is the same code on both paths, which is the point. When the two were
 // different components, "unconfigured" was a second rendering path that could drift
 // away from the real one without any test noticing.
+// `runtime` is a required prop rather than a context read, so that LiveMap cannot be
+// constructed without one. The null case is handled once, in MapWidget, and this
+// component never has to reason about it.
 function LiveMap({
   basemap,
   positions,
+  runtime,
 }: {
   basemap: { tileUrl: string; attribution: string | null } | null;
   positions: PlaceableLocation[];
+  runtime: MapRuntime;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -273,7 +307,7 @@ function LiveMap({
     // not look at. Resolved alongside the renderer so the Map is still constructed
     // once, with its final style — nothing re-styles after mount.
     Promise.all([
-      loadMapLibre(),
+      loadMapLibre(runtime),
       tileUrl ? rasterStyleFor(tileUrl, attribution ?? undefined) : loadLandStyle(),
     ])
       .then(([maplibre, style]) => {
@@ -303,7 +337,12 @@ function LiveMap({
       mapRef.current?.remove();
       mapRef.current = null;
     };
-  }, [tileUrl, attribution]);
+    // 🔴 Keyed on runtime.workerUrl, NOT on `runtime`. A host that builds the runtime
+    // inline in JSX hands a new object every render; depending on the object would tear
+    // the map down and rebuild it each time, which looks like flicker and loses view
+    // state. The URL is the only part of it this effect's outcome depends on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tileUrl, attribution, runtime.workerUrl]);
 
   // Sync the markers to the current positions. Rebuilt wholesale rather than diffed:
   // a poll delivers a whole snapshot, the marker count is a dashboard's worth of
@@ -313,7 +352,7 @@ function LiveMap({
     if (status !== 'ready' || !map) return;
 
     let live = true;
-    loadMapLibre().then((maplibre) => {
+    loadMapLibre(runtime).then((maplibre) => {
       if (!live || mapRef.current !== map) return;
       for (const marker of markersRef.current) marker.remove();
       markersRef.current = positions.map((position) => {
@@ -348,7 +387,8 @@ function LiveMap({
     // rebuilding every marker 4 times a minute for an unchanged fleet would make the
     // markers flicker.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, positionsKey(positions)]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, positionsKey(positions), runtime.workerUrl]);
 
   if (status === 'unavailable') {
     return (

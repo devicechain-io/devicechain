@@ -149,3 +149,50 @@ describe('the MapLibre lazy boundary', () => {
     expect(MAPLIBRE.test("import x from 'maplibre-gl-draw';")).toBe(false);
   });
 });
+
+// ---- The console as a HOST of @devicechain/widgets ---------------------------
+//
+// 🔴 A SECOND MAPLIBRE OBLIGATION, and it is not the one above. The tests above are about
+// what this app must not FOLD INTO ITS MAIN BUNDLE. This one is about what it must SUPPLY.
+//
+// `@devicechain/widgets` is published to npm, so it cannot write a bundler's dialect: a
+// library containing `?worker&url` works under a consumer's Vite and renders a silent blank
+// map under webpack or Rollup, and because the specifier is externalized, no build anywhere
+// reports it. The widget therefore takes its MapLibre worker URL from the host — and this
+// app is a host.
+//
+// Why a test rather than trust: deleting the provider breaks no build, fails no typecheck,
+// and fails no behavioural test here, because nothing in the console renders a map widget
+// under jsdom (FenceMap drives real MapLibre and cannot). It changes exactly one thing —
+// every map widget on every board becomes a "Map runtime not configured" notice — and the
+// first person to find out is an operator.
+describe('the console supplies the map runtime that @devicechain/widgets requires', () => {
+  it('installs MapRuntimeProvider exactly once, high in the tree', () => {
+    const installers = FILES.filter(([, source]) => /<MapRuntimeProvider\b/.test(source));
+
+    // Named rather than counted, for the same reason as every other absence claim in this
+    // file: a rotted glob agrees with an empty list. Naming it also states the invariant —
+    // ONE install site, so no render site can be forgotten. The console renders widgets on
+    // the dashboard workspace, the canvas editor and the synthetic preview; wrapping those
+    // individually is the version of this that half-works.
+    expect(installers.map(([path]) => path)).toEqual(['./auth/TenantProvider.tsx']);
+  });
+
+  it('builds that runtime from a worker entry its own bundler emits', () => {
+    const runtime = FILES.find(([path]) => path === './map-runtime.ts');
+    expect(runtime, 'the module supplying the console map runtime has moved or gone').toBeTruthy();
+
+    const [, source] = runtime as [string, string];
+    expect(source).toMatch(/maplibre-gl\/dist\/maplibre-gl-worker\.mjs\?worker&url/);
+    // The stylesheet stays behind a function so MapLibre's 10 KB (gzipped) of CSS rides the
+    // renderer's lazy chunk rather than this app's main stylesheet — which every console
+    // user downloads, including the majority who never open a board with a map.
+    expect(source).toMatch(/loadStyles:\s*\(\)\s*=>\s*import\(/);
+  });
+
+  it('the scan reaches both files these claims are about', () => {
+    const paths = FILES.map(([path]) => path);
+    expect(paths).toContain('./auth/TenantProvider.tsx');
+    expect(paths).toContain('./map-runtime.ts');
+  });
+});

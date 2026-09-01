@@ -36,7 +36,7 @@ import {
   type Vertex,
 } from './geometry';
 
-/// <reference path="../../../../../packages/widgets/src/css-modules.d.ts" />
+/// <reference path="../../css-modules.d.ts" />
 
 let mapLibrePromise: Promise<typeof import('maplibre-gl')> | undefined;
 
@@ -44,11 +44,15 @@ function loadMapLibre(): Promise<typeof import('maplibre-gl')> {
   if (!mapLibrePromise) {
     mapLibrePromise = Promise.all([
       import('maplibre-gl'),
-      // Same worker bootstrap the dashboard map widget carries, and for the same
-      // reason: MapLibre derives its worker URL at runtime from its own module URL,
-      // which no bundler can see, so without this the file is never emitted and the
-      // map renders nothing while every gate stays green. The long-form explanation
-      // lives next to the widget's copy (packages/widgets/src/widgets/map.tsx).
+      // MapLibre derives its worker URL at runtime from its own module URL, which no
+      // bundler can see, so without this the file is never emitted and the map renders
+      // nothing while every gate stays green.
+      //
+      // 🔴 Writing Vite's dialect here is CORRECT, and is no longer duplicated. This is
+      // an application, so it knows its own bundler; `@devicechain/widgets` is a library
+      // and must not, which is why the dashboard map widget now takes this URL from the
+      // host through MapRuntimeProvider (see packages/widgets/src/map-runtime-context.tsx)
+      // and this app supplies it there too, from its own copy of maplibre-gl.
       import('maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'),
       import('maplibre-gl/dist/maplibre-gl.css'),
     ]).then(([mod, worker]) => {

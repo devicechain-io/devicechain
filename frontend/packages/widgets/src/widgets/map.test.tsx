@@ -8,7 +8,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { LocationSample, WidgetInstance } from '@devicechain/dashboards';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render as rtlRender, screen, waitFor } from '@testing-library/react';
+import type { ReactElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // jsdom has no WebGL, so MapLibre is stubbed — as ECharts is in the chart tests. The
@@ -75,12 +76,41 @@ vi.mock('maplibre-gl', () => {
 
 import type { LocationStreamState } from '../hooks';
 import { TenantBasemapProvider } from '../basemap-context';
+import { MapRuntimeProvider, type MapRuntime } from '../map-runtime-context';
 import { MapWidget } from './map';
 import { BUNDLED_BASEMAP_ATTRIBUTION, landStyleFrom, rasterStyleFor } from './map-geometry';
 
 afterEach(cleanup);
 
 const TILE_URL = 'https://tiles.example.invalid/{z}/{x}/{y}.png';
+
+// The runtime a HOST supplies. `@devicechain/widgets` no longer computes a worker URL for
+// itself — emitting a worker entry is a bundler-specific act, so a library that writes one
+// dialect renders a blank map under every other bundler, and because the specifier is
+// externalized no build reports it.
+//
+// 🔴 A DISTINCTIVE URL, not a plausible one. It is asserted by identity below, so a loader
+// that quietly substituted some default of its own would have to reproduce this exact
+// string to pass — which is the whole difference between "setWorkerUrl was called" and
+// "setWorkerUrl was called with what the host gave it".
+const TEST_WORKER_URL = 'blob:devicechain-test/maplibre-worker-a3f1.mjs';
+
+const TEST_RUNTIME: MapRuntime = {
+  workerUrl: TEST_WORKER_URL,
+  loadStyles: () => Promise.resolve(),
+};
+
+/**
+ * Render through a host that HAS installed the map runtime.
+ *
+ * Every test below uses this, because a wired host is the only configuration in which a map
+ * is drawn at all. The UNWIRED case is a real state with its own behaviour and gets its own
+ * test, which calls `rtlRender` directly — deliberately, so that adding the provider here
+ * can never silently erase the coverage of doing without it.
+ */
+function render(ui: ReactElement) {
+  return rtlRender(<MapRuntimeProvider runtime={TEST_RUNTIME}>{ui}</MapRuntimeProvider>);
+}
 
 const widget = (options: Record<string, unknown> = {}): WidgetInstance => ({
   id: 'w',
@@ -355,10 +385,16 @@ describe('the projection is the same on both styles', () => {
 // error event. The result is a map that builds, type-checks, passes every other
 // test in this file, and then renders nothing.
 //
-// The loader defeats that by importing the worker through Vite's `?worker&url`
-// entry and handing the emitted URL to `setWorkerUrl`. This is the assertion that
-// the loader still does it — deliberately BEFORE anything is drawn, because the
+// The loader defeats that by handing MapLibre a URL its HOST emitted. This is the
+// assertion that it still does — deliberately BEFORE anything is drawn, because the
 // fake map draws happily either way and would never notice.
+//
+// 🔴 THE URL USED TO COME FROM THIS PACKAGE, through Vite's `?worker&url` entry, and
+// moving it to the host is what makes @devicechain/widgets publishable. A library that
+// writes one bundler's dialect works under that bundler and renders a silent blank map
+// under every other — and the specifier is externalized, so NO BUILD REPORTS IT. That
+// makes this test, and the dialect gate at the bottom of this file, the only detectors
+// of the whole class.
 describe('the MapLibre worker', () => {
   // 🔴 `workerUrls` is deliberately NOT cleared in the beforeEach above, unlike
   // `maps` and `markers`. The loader memoizes its import for the whole module, so
@@ -375,10 +411,64 @@ describe('the MapLibre worker', () => {
     // Exactly one call for two maps: the memoized loader is what stops several map
     // widgets on one board racing to rewrite a global config.
     expect(m.workerUrls).toHaveLength(1);
-    // And it is a real reference, not the empty string MapLibre falls back to when
-    // it cannot work one out for itself — which is precisely the broken state.
-    expect(m.workerUrls[0]).toBeTruthy();
+    // 🔴 And it is THE HOST'S url, by identity — not merely truthy. "Truthy" was the
+    // right assertion when the package emitted the URL itself and the only failure was
+    // MapLibre's empty-string fallback. Now the claim is that the value CAME FROM THE
+    // PROVIDER, and only an equality check can distinguish that from a loader that
+    // reintroduced a default of its own and would break every non-Vite consumer.
+    expect(m.workerUrls[0]).toBe(TEST_WORKER_URL);
     expect(typeof m.workerUrls[0]).toBe('string');
+  });
+});
+
+// 🔴 THE UNWIRED HOST — the state this seam exists to make VISIBLE.
+//
+// Before the map runtime moved to the host, a bundler that could not follow MapLibre's
+// runtime worker derivation produced a map that mounted, sized itself, and painted
+// nothing: no error, no console warning, no failing test. The whole point of requiring
+// the host to supply the URL is that its ABSENCE is now a state we can render.
+//
+// These tests use rtlRender rather than the wrapped `render` above, because installing
+// the provider is exactly what is under test.
+describe('MapWidget — a host that installed no map runtime', () => {
+  it('says so, instead of drawing a map that cannot work', () => {
+    rtlRender(<MapWidget widget={widget({ tileUrl: TILE_URL })} data={twoDevices()} />);
+
+    expect(screen.getByText('Map runtime not configured')).toBeTruthy();
+    expect(screen.getByText(/MapRuntimeProvider/)).toBeTruthy();
+  });
+
+  it('constructs no map at all — the failure is refused, not attempted', async () => {
+    rtlRender(<MapWidget widget={widget({ tileUrl: TILE_URL })} data={twoDevices()} />);
+
+    // 🔴 The load is asynchronous, so "no map yet" is true for a moment even on the
+    // working path. Give the microtask queue the same chance to produce one that the
+    // passing tests rely on, so this asserts a refusal rather than a race won.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(m.maps).toHaveLength(0);
+    expect(m.markers).toHaveLength(0);
+  });
+
+  it('outranks every empty state, so a developer sees the cause and not a symptom', () => {
+    // No devices bound at all. Without the ordering rule in MapWidget this would report
+    // "No devices selected" — true, useless, and it hides the fact that this host would
+    // not have drawn a map even with a fleet reporting.
+    rtlRender(<MapWidget widget={widget()} data={state({ deviceTokens: [] })} />);
+
+    expect(screen.getByText('Map runtime not configured')).toBeTruthy();
+    expect(screen.queryByText('No devices selected')).toBeNull();
+  });
+
+  it('does NOT outrank the refusal — permission is still the more specific fact', () => {
+    // Both are true for this render. The refusal wins because it is a fact about the
+    // CALLER: telling an unauthorized viewer to go install a provider would be both
+    // wrong and an invitation to try.
+    rtlRender(<MapWidget widget={widget({ tileUrl: TILE_URL })} data={state({ forbidden: true })} />);
+
+    expect(screen.getByText('Location not permitted')).toBeTruthy();
+    expect(screen.queryByText('Map runtime not configured')).toBeNull();
   });
 });
 

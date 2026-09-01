@@ -11,7 +11,9 @@ import {
 } from '@/lib/api/user-management';
 import { useCachedResource } from '@/lib/hooks/use-cached-resource';
 import { applyBranding } from '@/lib/branding';
-import { TenantBasemapProvider } from '@devicechain/widgets';
+import { MapRuntimeProvider, TenantBasemapProvider } from '@devicechain/widgets';
+
+import { MAP_RUNTIME } from '../map-runtime';
 
 // The current tenant the console is acting within. Resolved from the access
 // token server-side (getCurrentTenant), then cached per-tenant (stale-while-
@@ -98,14 +100,23 @@ export function TenantProvider({ children }: { children: ReactNode }) {
     return () => applyBranding(null);
   }, [branding]);
 
-  // 🔴 The basemap provider is installed HERE, once, rather than at each place the
+  // 🔴 BOTH map providers are installed HERE, once, rather than at each place the
   // console renders widgets — the dashboard workspace, the canvas editor, the
   // synthetic preview. Wrapping render sites individually is the version of this that
   // silently half-works: a new surface renders a map widget, nobody wraps it, and the
   // map is blank on that page only. There is no render site to forget from here.
+  //
+  // They are NOT the same kind of thing, which is why they nest rather than merge. The
+  // basemap is tenant CONFIGURATION and is legitimately absent — no provider means no
+  // tenant basemap, a state the widget handles. The map runtime is BUNDLER WIRING and is
+  // never legitimately absent: a widget without it shows a notice instead of a map,
+  // because the alternative is MapLibre deriving a worker URL that 404s and rendering
+  // nothing at all.
   return (
     <TenantContext.Provider value={{ tenant: info, setTenant: (t) => setCached(toInfo(t)) }}>
-      <TenantBasemapProvider basemap={info?.basemap ?? null}>{children}</TenantBasemapProvider>
+      <TenantBasemapProvider basemap={info?.basemap ?? null}>
+        <MapRuntimeProvider runtime={MAP_RUNTIME}>{children}</MapRuntimeProvider>
+      </TenantBasemapProvider>
     </TenantContext.Provider>
   );
 }
