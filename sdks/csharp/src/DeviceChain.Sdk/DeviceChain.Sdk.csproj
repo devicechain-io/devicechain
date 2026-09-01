@@ -13,6 +13,61 @@
     <Description>DeviceChain .NET client SDK — auth, GraphQL, live subscriptions, MQTT device-plane telemetry and commands. AOT/IL2CPP-safe, for .NET and Unity.</Description>
     <Authors>The DeviceChain Authors</Authors>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <Copyright>Copyright The DeviceChain Authors</Copyright>
+    <PackageProjectUrl>https://devicechain.io</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/devicechain-io/devicechain</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <!-- Renders on nuget.org, same rule as Description: no ADR citations. -->
+    <PackageTags>iot;iiot;devicechain;mqtt;graphql;telemetry;unity;device-management</PackageTags>
+
+    <!-- 🔴 PACKAGE.md, not the repository README. ../../README.md is written for
+         someone reading this repo and cites ADRs freely; a PackageReadmeFile is
+         rendered as the package's body on nuget.org, which puts it under the same
+         "no ADR references in published prose" rule as Description/PackageTags.
+         Keeping them as two files is what lets each one be right for its reader.
+         hack/check-docs-adr-refs.sh follows this property to whatever file it
+         names, so pointing it back at ../../README.md fails the docs CI job.
+
+         The property names the file by its REAL name rather than packing it as
+         README.md, which is the more common .NET convention. Deliberate: the
+         guard resolves this property literally, so a rename-on-pack would send
+         it looking for a file that does not exist, find nothing, and report
+         clean — a guard that cannot fire. NuGet renders whatever name it is
+         given; the convention buys nothing that is worth that. -->
+    <PackageReadmeFile>PACKAGE.md</PackageReadmeFile>
+
+    <!-- The VERSION IS THE RELEASE TAG, exactly as it is for the images and the
+         Helm chart: release.yml derives it from the pushed tag and passes
+         -p:Version=, with the tag's leading 'v' stripped as the chart already
+         does (NuGet rejects 'v0.13.0' outright, so that one cannot ship wrong
+         — it just costs a release run). Nothing here is bumped by hand, and no
+         release number is
+         committed to a file — the repo has deliberately never had one (the root
+         VERSION file is 0.0.1 and is not what any release reads).
+
+         This default is therefore not "the current version", it is what a pack
+         that FORGOT to pass one produces, and it is chosen to be unmistakable.
+         The .NET SDK's own default is 1.0.0 — a number that reads as a shipped
+         1.0 release. nuget.org versions are IMMUTABLE and cannot be reused after
+         a delete, so an accidental push of that default would permanently burn
+         this package's 1.0.0 on a dev build. 0.0.0-dev burns nothing anyone
+         wants. Verified by packing: with no -p:Version the SDK really did emit
+         DeviceChain.Sdk.1.0.0.nupkg. -->
+    <Version>0.0.0-dev</Version>
+
+    <!-- Ship debuggable symbols alongside the package. A client SDK is code its
+         consumers step INTO when a call misbehaves against their own server, and
+         without this that stack stops at the assembly boundary. snupkg is the
+         format nuget.org's symbol server accepts, so the publish pushes two files.
+
+         EmbedUntrackedSources earns its place here specifically: the JSON
+         serializers are SOURCE-GENERATED, so they exist in no commit and a
+         debugger cannot fetch them from GitHub the way it fetches the rest.
+         Embedding puts them in the symbols instead of leaving the one part of
+         the library a consumer is most likely to be debugging as a blank. -->
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
   </PropertyGroup>
 
   <!-- Flag AOT-incompatible patterns at build on the net8.0 target (the analyzer that
@@ -20,6 +75,14 @@
   <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0'">
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The nuget.org-facing readme, packed at the package root under its own name.
+         Named PACKAGE.md, not README.md, so that a glance at this directory cannot
+         confuse it with the repository README one level up — they are written for
+         different readers and only one of them may cite ADRs. -->
+    <None Include="PACKAGE.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- System.Text.Json is in-box on net8.0; referenced explicitly so the netstandard2.1
