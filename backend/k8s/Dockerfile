@@ -16,11 +16,21 @@
 # directory and rolls both the tag and the digest forward weekly — without that,
 # a digest pin would freeze the base at whatever was current when it was written,
 # which is worse for security than a floating tag.
-# 🔴 THIS PIN IS WHAT BUILDS THE SHIPPED BINARY, AND go.work's toolchain IS NOT.
-# The two move together or the fix is only half applied: govulncheck in CI reads the
-# toolchain the WORKFLOW installed, so bumping go.work alone turns the check green while
-# this image keeps compiling the operator against the standard library the advisories are
-# about. A green scan would then be reporting on a binary nobody ships.
+# 🔴 THIS PIN BUILDS NOTHING THAT SHIPS, INCLUDING THE OPERATOR'S GO TOOLCHAIN.
+# It reads like the security-relevant pin and is not one, which is worth stating
+# twice because the consequence is a wrong conclusion during advisory triage.
+#
+# ko does not use this Dockerfile. It compiles the operator with whatever
+# toolchain the WORKFLOW installed, and layers that binary onto `.ko.yaml`'s
+# base. The workflow that publishes is release.yml's `images` job, and its
+# `setup-go` reads `go-version-file: go.work`.
+# So go.work IS the toolchain the shipped operator is built with, and
+# govulncheck in CI, which reads that same toolchain, is reporting on the binary
+# we actually publish. Bumping go.work is the whole fix, not half of one.
+#
+# Keep this pin rolling anyway: `make docker-build` in this module is a real
+# local path, and Dependabot's `docker` ecosystem covers this directory. It is
+# hygiene for a developer convenience, not a supply-chain control.
 FROM golang:1.27@sha256:4013ae0f9e7994f8535c58c811f8f863fbed38b72e0d51e6592156f758d66146 AS builder
 
 WORKDIR /workspace
