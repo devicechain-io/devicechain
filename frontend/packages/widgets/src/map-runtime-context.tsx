@@ -38,25 +38,24 @@ import { createContext, useContext, type ReactNode } from 'react';
  * (`maplibre-gl/dist/maplibre-gl-worker.mjs`). It is handed to MapLibre's `setWorkerUrl`
  * before the first `Map` is constructed.
  *
- * `loadStyles` imports MapLibre's stylesheet (`maplibre-gl/dist/maplibre-gl.css`), which is
- * the host's for the same reason: a bare CSS import inside a published library is a second
- * bundler-dialect assumption.
+ * `loadStyles` is OPTIONAL, and imports MapLibre's stylesheet
+ * (`maplibre-gl/dist/maplibre-gl.css`). Omit it and import the stylesheet yourself, the way
+ * every map library asks you to — that is the ordinary path and nothing here second-guesses
+ * it. Supplying it buys one thing: the CSS rides the renderer's lazy chunk instead of your
+ * main stylesheet, which is worth **83 KB raw / 10.7 KB gzipped** to a viewer who never
+ * opens a board with a map on it.
  *
- * 🔴 IT IS A FUNCTION, NOT AN EAGER IMPORT AT THE HOST, AND THAT IS NOT STYLE. The
- * stylesheet is **70 KB raw / 10 KB gzipped** (measured, not estimated — an earlier draft
- * of this file called it "a few KB" and was wrong by an order of magnitude). A host that
- * imports it at module scope puts all of it in the main stylesheet for every viewer,
- * including the console user who never opens a board with a map — which is precisely the
- * lazy boundary the widget's own dynamic `import('maplibre-gl')` exists to hold. Passing a
- * loader keeps the CSS on the same lazy chunk it was on before this seam existed.
+ * 🔴 The size is measured against maplibre-gl 6.6.0, the version this package peers on. An
+ * earlier draft said 70 KB "measured, not estimated" — measured, but against a stale
+ * `node_modules` carrying 6.2.0. Measuring the right thing in the wrong tree reads exactly
+ * like measuring, which is why the version is named here.
  *
- * 🔴 REQUIRED, not optional. An optional loader is one a host forgets, and the failure is
- * a map with unstyled controls and misplaced attribution — visible, annoying, and easy to
- * misread as a widget bug rather than missing wiring.
+ * 🔴 It is a FUNCTION rather than a boolean or a URL because the host's bundler owns its
+ * CSS pipeline: only the host can say "load this, lazily, your way".
  */
 export type MapRuntime = {
   workerUrl: string;
-  loadStyles: () => Promise<unknown>;
+  loadStyles?: () => Promise<unknown>;
 };
 
 const MapRuntimeContext = createContext<MapRuntime | null>(null);
@@ -67,17 +66,24 @@ const MapRuntimeContext = createContext<MapRuntime | null>(null);
  * Install it ONCE, high in the tree, next to TenantBasemapProvider — the console from its
  * TenantProvider, the /dash viewer from the one place it mounts a DashboardRenderer.
  *
- * A host wires it with its own bundler's worker-entry dialect. Under Vite:
+ * 🔑 ON VITE, DO NOT WRITE ANY OF THIS — import the ready-made runtime:
  *
  * ```tsx
- * import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
+ * import { viteMapRuntime } from '@devicechain/widgets/vite';
  *
- * const MAP_RUNTIME = {
- *   workerUrl,
- *   loadStyles: () => import('maplibre-gl/dist/maplibre-gl.css'),
- * };
+ * <MapRuntimeProvider runtime={viteMapRuntime}>{children}</MapRuntimeProvider>
+ * ```
  *
- * <MapRuntimeProvider runtime={MAP_RUNTIME}>{children}</MapRuntimeProvider>
+ * On any other bundler, build one with that bundler's worker-entry idiom — webpack, for
+ * instance, resolves `new URL('…', import.meta.url)` when the specifier is a literal:
+ *
+ * ```tsx
+ * const workerUrl = new URL(
+ *   'maplibre-gl/dist/maplibre-gl-worker.mjs',
+ *   import.meta.url,
+ * ).toString();
+ *
+ * <MapRuntimeProvider runtime={{ workerUrl }}>{children}</MapRuntimeProvider>
  * ```
  *
  * 🔴 Hold the runtime in a MODULE CONSTANT, as above, rather than building it inline in

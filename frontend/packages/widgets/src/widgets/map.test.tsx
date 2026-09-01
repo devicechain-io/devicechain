@@ -393,8 +393,8 @@ describe('the projection is the same on both styles', () => {
 // moving it to the host is what makes @devicechain/widgets publishable. A library that
 // writes one bundler's dialect works under that bundler and renders a silent blank map
 // under every other — and the specifier is externalized, so NO BUILD REPORTS IT. That
-// makes this test, and the dialect gate at the bottom of this file, the only detectors
-// of the whole class.
+// makes this test, and the dialect gate in bundler-dialect.test.ts, the only detectors of
+// the whole class.
 describe('the MapLibre worker', () => {
   // 🔴 `workerUrls` is deliberately NOT cleared in the beforeEach above, unlike
   // `maps` and `markers`. The loader memoizes its import for the whole module, so
@@ -438,17 +438,35 @@ describe('MapWidget — a host that installed no map runtime', () => {
     expect(screen.getByText(/MapRuntimeProvider/)).toBeTruthy();
   });
 
+  // 🔴 THIS PAIR MUST BE READ TOGETHER, and the second one is what makes the first mean
+  // anything. "No map was constructed" is only evidence of a REFUSAL if a map WOULD have
+  // been constructed by the same point in time — otherwise it is a race won, not a
+  // behaviour observed. An earlier version flushed two microtasks; the working path needs
+  // four, so it would have passed even if the refusal had regressed completely.
+  //
+  // So: both tests use the identical wait, and the wired one asserts a map DOES appear
+  // under it. If the load ever gets slower than the wait, the control fails and tells us —
+  // rather than the refusal test silently becoming decoration.
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
   it('constructs no map at all — the failure is refused, not attempted', async () => {
     rtlRender(<MapWidget widget={widget({ tileUrl: TILE_URL })} data={twoDevices()} />);
 
-    // 🔴 The load is asynchronous, so "no map yet" is true for a moment even on the
-    // working path. Give the microtask queue the same chance to produce one that the
-    // passing tests rely on, so this asserts a refusal rather than a race won.
-    await Promise.resolve();
-    await Promise.resolve();
+    await settle();
 
     expect(m.maps).toHaveLength(0);
     expect(m.markers).toHaveLength(0);
+  });
+
+  it('...and the same wait IS long enough for a wired host to build one', async () => {
+    render(<MapWidget widget={widget({ tileUrl: TILE_URL })} data={twoDevices()} />);
+
+    await settle();
+
+    expect(
+      m.maps.length,
+      'the refusal test above proves nothing if a wired host would not have built a map by now',
+    ).toBeGreaterThan(0);
   });
 
   it('outranks every empty state, so a developer sees the cause and not a symptom', () => {

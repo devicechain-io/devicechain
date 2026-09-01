@@ -103,7 +103,14 @@ describe('the MapLibre lazy boundary', () => {
   // packages/widgets/src/widgets/map.test.tsx.) A source check is weaker than running
   // it — it proves the call is written, not that it works — but the alternative here
   // was no check at all on the surface an operator actually draws fences with.
-  it('every module that loads MapLibre also points its worker at an emitted URL', () => {
+  //
+  // 🔴 WHERE THE URL COMES FROM CHANGED, AND THE RULE DID NOT. It used to be that each
+  // loader imported the `?worker&url` entry itself. Now the app has exactly one runtime
+  // (src/map-runtime.ts, from @devicechain/widgets/vite) and every loader reads it, so what
+  // this asserts is that a loader still POINTS the worker somewhere deliberate — not that
+  // it writes the incantation. Asserting the old shape here would now force the duplication
+  // back in.
+  it('every module that loads MapLibre also points its worker at the app’s one runtime', () => {
     const loaders = FILES.filter(([, source]) => /import\(\s*['"]maplibre-gl['"]\s*\)/.test(source));
     // An absence claim over an empty list again: name the loaders, so a rotted glob
     // or a moved file reports a failure rather than a clean sweep of nothing.
@@ -112,10 +119,10 @@ describe('the MapLibre lazy boundary', () => {
     ]);
 
     for (const [path, source] of loaders) {
-      expect(source, `${path} does not import the worker entry`).toMatch(
-        /import\(\s*['"]maplibre-gl\/dist\/maplibre-gl-worker\.mjs\?worker&url['"]\s*\)/,
-      );
       expect(source, `${path} never calls setWorkerUrl`).toMatch(/setWorkerUrl\(/);
+      expect(source, `${path} does not source its worker URL from MAP_RUNTIME`).toMatch(
+        /MAP_RUNTIME\.workerUrl/,
+      );
     }
   });
 
@@ -178,21 +185,59 @@ describe('the console supplies the map runtime that @devicechain/widgets require
     expect(installers.map(([path]) => path)).toEqual(['./auth/TenantProvider.tsx']);
   });
 
-  it('builds that runtime from a worker entry its own bundler emits', () => {
+  it('takes the runtime from the package rather than hand-rolling it', () => {
     const runtime = FILES.find(([path]) => path === './map-runtime.ts');
     expect(runtime, 'the module supplying the console map runtime has moved or gone').toBeTruthy();
 
     const [, source] = runtime as [string, string];
-    expect(source).toMatch(/maplibre-gl\/dist\/maplibre-gl-worker\.mjs\?worker&url/);
-    // The stylesheet stays behind a function so MapLibre's 10 KB (gzipped) of CSS rides the
-    // renderer's lazy chunk rather than this app's main stylesheet — which every console
-    // user downloads, including the majority who never open a board with a map.
-    expect(source).toMatch(/loadStyles:\s*\(\)\s*=>\s*import\(/);
+    expect(source).toMatch(/from '@devicechain\/widgets\/vite'/);
   });
 
-  it('the scan reaches both files these claims are about', () => {
-    const paths = FILES.map(([path]) => path);
-    expect(paths).toContain('./auth/TenantProvider.tsx');
-    expect(paths).toContain('./map-runtime.ts');
+  // 🔴 ONE WORKER URL PER APP, AND THIS IS THE ASSERTION THAT KEEPS IT THAT WAY.
+  //
+  // The fence editor drives its own MapLibre instance and needs the same bootstrap, so for
+  // a while this app wrote `?worker&url` twice — once for the widget host, once inside
+  // FenceMap. Two copies of a bundler incantation in one app is one copy too many: when
+  // they drift, one surface goes blank and the other keeps working, which is the hardest
+  // version of this bug to find. FenceMap now reads the app's single runtime.
+  //
+  // This also replaces a redundant "the scan reached these files" test. Its assertions were
+  // implied by the presence claims above — anything that failed it failed those first — so
+  // it could never be the check that fired. This one can.
+  // 🔴 ANCHORED TO IMPORT SYNTAX, and the first draft was not — it matched raw text, so it
+  // flagged src/map-runtime.ts for a COMMENT explaining this very rule. That is the same
+  // comment-blindness that broke the package-side gate, reproduced inside the guard written
+  // to replace it. Requiring the match to begin a line with `import`/`export` excludes `//`
+  // lines and JSDoc ` * ` lines, which is where prose about a dialect actually lives.
+  //
+  // Stated limit: a dialect specifier in a mid-line dynamic `import()` would slip past. That
+  // is accepted here because this is an APP-side guard and the authoritative, parser-based
+  // check on what SHIPS lives in packages/widgets/src/bundler-dialect.test.ts.
+  const DIALECT_IMPORT =
+    /^\s*(?:import|export)\s[^;]*?['"][^'"]*\?(?:worker|url|raw|inline)\b[^'"]*['"]/m;
+
+  it('writes no bundler dialect of its own — the package’s /vite entry is the only source', () => {
+    const offenders = FILES.filter(([, source]) => DIALECT_IMPORT.test(source)).map(([path]) => path);
+    expect(offenders).toEqual([]);
+  });
+
+  it('...and that pattern fires on a real one while ignoring prose about it', () => {
+    expect(DIALECT_IMPORT.test("import w from 'maplibre-gl/dist/x.mjs?worker&url';")).toBe(true);
+    expect(DIALECT_IMPORT.test("import u from './icon.svg?url';")).toBe(true);
+    // The two shapes that made the first draft fail on its own documentation.
+    expect(DIALECT_IMPORT.test("// import w from 'maplibre-gl/dist/x.mjs?worker&url';")).toBe(false);
+    expect(DIALECT_IMPORT.test(" * import w from 'maplibre-gl/dist/x.mjs?worker&url';")).toBe(false);
+    expect(DIALECT_IMPORT.test("// it used to carry the `?worker&url` import")).toBe(false);
+    // ...and an ordinary import must not fire it.
+    expect(DIALECT_IMPORT.test("import { a } from '@devicechain/widgets/vite';")).toBe(false);
+  });
+
+  it('the fence editor shares that one runtime instead of importing a worker entry again', () => {
+    const fence = FILES.find(([path]) => path === './routes/geofences/FenceMap.tsx');
+    expect(fence, 'the fence editor has moved or gone').toBeTruthy();
+
+    const [, source] = fence as [string, string];
+    expect(source).toMatch(/MAP_RUNTIME/);
+    expect(source).toMatch(/setWorkerUrl\(/);
   });
 });

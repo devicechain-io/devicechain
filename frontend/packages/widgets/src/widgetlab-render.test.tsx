@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 
 import type { AlarmRow, CommandRow, MeasurementSample, WidgetInstance } from '@devicechain/dashboards';
 import { parseDashboardDefinition } from '@devicechain/dashboards';
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, render as rtlRender } from '@testing-library/react';
+import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // jsdom has no canvas, so the ECharts wrapper is stubbed — as in widgets.test.tsx.
@@ -35,6 +36,7 @@ import {
   WIDGET_CHANNEL,
   WIDGET_REGISTRY,
 } from './registry';
+import { MapRuntimeProvider } from './map-runtime-context';
 
 afterEach(cleanup);
 
@@ -87,7 +89,12 @@ function board(token: string) {
 // So the list is only the reachable ones, and the real work is done by the POSITIVE
 // assertions below: a widget that renders its value, its rows, its series. Absence of
 // a known failure string is a weak claim; presence of the expected output is not.
-const EMPTY_STATES = ['No image URL', 'No command configured'];
+// 🔴 'Map runtime not configured' is listed because it is REACHABLE and must never appear
+// on a board that is supposed to be configured. It is the state a map widget falls to when
+// the host has not supplied MapLibre's worker URL — so this entry is what makes the harness
+// wiring above load-bearing rather than decorative: remove the provider and this fails,
+// instead of the board quietly rendering a notice nobody asserted against.
+const EMPTY_STATES = ['No image URL', 'No command configured', 'Map runtime not configured'];
 
 const sample = (name: string, value: number): MeasurementSample => ({
   id: `${name}-1`,
@@ -196,6 +203,22 @@ const commandData: CommandStreamState = {
   loading: false,
   error: null,
 };
+
+// 🔴 THE HOST WIRING IS PART OF THE HARNESS NOW, and leaving it out was a real coverage
+// loss rather than a cosmetic one. wl-gallery contains a map widget; @devicechain/widgets
+// takes its MapLibre worker URL from the host, so a bare render makes that widget short-
+// circuit to "Map runtime not configured" and never touch its location data. Every
+// assertion below would still have passed, because the notice is not in EMPTY_STATES and
+// the positive assertions do not name the map — the board would simply have stopped being
+// tested, quietly, which is precisely what this file exists to prevent.
+//
+// The notice IS in EMPTY_STATES below as well, so if this wiring is ever removed the board
+// fails loudly instead of going dark again.
+const TEST_MAP_RUNTIME = { workerUrl: 'blob:widgetlab/maplibre-worker.mjs' };
+
+function render(ui: ReactElement) {
+  return rtlRender(<MapRuntimeProvider runtime={TEST_MAP_RUNTIME}>{ui}</MapRuntimeProvider>);
+}
 
 // renderWidget runs one widget through the registry its channel binds it to.
 function renderWidget(widget: WidgetInstance) {

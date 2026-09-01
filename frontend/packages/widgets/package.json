@@ -1,13 +1,15 @@
 {
   "name": "@devicechain/widgets",
   "version": "0.0.1",
-  "description": "DeviceChain presentational dashboard widgets across five channels \u2014 telemetry (time-series chart + gauge over Apache ECharts, latest card, table, label, image), alarm (table, count), control (command button), selection (entity selector), and location (map over MapLibre GL, lazily loaded, tile source supplied by the host app) \u2014 plus the renderer that lays them out. Themed via CSS custom properties, no Tailwind leakage.",
+  "description": "DeviceChain presentational dashboard widgets across five channels — telemetry (time-series chart + gauge over Apache ECharts, latest card, table, label, image), alarm (table, count), control (command button), selection (entity selector), and location (map over MapLibre GL, lazily loaded, tile source supplied by the host app) — plus the renderer that lays them out. Themed via CSS custom properties, no Tailwind leakage.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./vite": "./src/vite.ts",
+    "./package.json": "./package.json"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -28,6 +30,7 @@
     "@types/node": "^26.4.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
+    "esbuild": "^0.25.12",
     "jsdom": "^30.0.1",
     "maplibre-gl": "^6.6.0",
     "react": "^19.2.8",

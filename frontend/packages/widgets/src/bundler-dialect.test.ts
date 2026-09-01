@@ -1,212 +1,219 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// 🔴 THE GATE: no published package may write a BUNDLER-SPECIFIC module specifier.
+// @vitest-environment node
 //
-// These packages are published to npm, and a consumer builds them with whatever bundler
-// they already use. A specifier like `foo?worker&url` or a bare `foo.css` is not ESM — it
-// is one bundler's dialect. Vite understands both; webpack, Rollup and esbuild do not, or
-// understand them differently.
-//
-// 🔴 AND THE BUILD CANNOT TELL YOU. This was measured, not assumed: with `maplibre-gl`
-// listed as an external — which it is, and must be — esbuild and tsup both build cleanly
-// and copy `import("maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url")` into the output
-// VERBATIM, because a specifier matching an external prefix is never resolved at all. So
-// the artifact ships, every gate is green, the package works under a consumer's Vite, and
-// renders a silent blank map under anything else. A green pipeline over a broken artifact
-// is strictly worse than a red one, and this file is one of the two things standing
-// between us and it (the other is the runtime assertion in widgets/map.test.tsx).
-//
-// ⚠️ THIS IS FAST FEEDBACK, NOT THE AUTHORITATIVE CHECK. A source scan is a proxy: a
-// computed specifier (`'…worker.mjs' + '?worker&url'`) evades any literal pattern, and so
-// does a file outside the globs below. The authoritative instrument observes the ARTIFACT
-// — scanning `dist/` after the build and importing the built entry under bare Node ESM —
-// and arrives with the build itself. Keep both: this one names the offending line, which
-// a dist scan cannot.
+// 🔴 The node environment is REQUIRED, not a preference. This package's default is jsdom,
+// whose `TextEncoder` does not produce a real `Uint8Array`; esbuild checks that invariant at
+// import time and refuses to load, so the whole suite fails to collect rather than failing an
+// assertion. Nothing here touches the DOM, so node is also the honest environment for it.
 
-/// <reference types="node" />
-import { readdirSync, readFileSync } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
+// 🔴 THE GATE: the PORTABLE entry of every published package writes no bundler-specific
+// module specifier, and the one Vite-only entry writes exactly the two it is allowed.
+//
+// These packages are published to npm and a consumer builds them with whatever bundler they
+// already use. A specifier like `foo?worker&url` or a bare `foo.css` is not ESM — it is one
+// bundler's dialect. Vite understands both; webpack, Rollup and esbuild do not, or do
+// differently.
+//
+// 🔴 AND NO BUILD CAN TELL YOU. Measured, not assumed: with `maplibre-gl` external — which
+// it is, and must be — esbuild and tsup both build cleanly and copy
+// `import("maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url")` into the output VERBATIM,
+// because a specifier matching an external prefix is never resolved at all. The artifact
+// ships, every gate is green, the package works under a consumer's Vite, and renders a
+// silent blank map under anything else. A green pipeline over a broken artifact is strictly
+// worse than a red one, so this gate had to be built on purpose.
+//
+// 🔴 WHY esbuild's METAFILE AND NOT A SOURCE SCAN. The first version of this file was a
+// hand-written lexer that stripped comments and matched import syntax. Review broke it three
+// ways in one sitting, each a single line: a regex literal containing `//` swallowed the
+// rest of the line, a quote inside a regex character class flipped string state and hid a
+// following import, and a template-literal dynamic import matched no pattern at all
+// (`import(`…?worker&url`)`) while Vite resolves it perfectly well. All three are the same
+// root cause — a lexer that is not a parser — and patching them individually would only
+// have moved the boundary.
+//
+// So the gate asks the bundler. esbuild parses the real module graph and its metafile
+// reports every import specifier it saw, static and dynamic, external and internal. Comments
+// are gone because the parser removed them; template literals, regex literals and every
+// other lexical trick are moot because nothing here is reading characters. It also scopes
+// the claim correctly: only what is REACHABLE FROM THE ENTRY can ship, so an unreachable
+// scratch file is rightly not a finding.
+
+import * as esbuild from 'esbuild';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
 const PACKAGES = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const SCANNED = ['client', 'dashboards', 'widgets'];
-
-function sourceFiles(dir: string): string[] {
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  return entries.flatMap((entry) => {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) return sourceFiles(full);
-    return /\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) ? [full] : [];
-  });
-}
-
-/**
- * Strip comments, respecting string and template literals.
- *
- * 🔴 THIS IS LOAD-BEARING, NOT TIDINESS. Several files in these packages EXPLAIN this very
- * rule, and map-runtime-context.tsx carries a worked example of the host wiring inside a
- * JSDoc block — a literal `import … from '…?worker&url';`. A scan over raw text would
- * report its own documentation as a violation, and the natural fix for that (loosen the
- * pattern until the docs pass) is how a gate stops being able to fire.
- *
- * 🔴 It respects quotes because a naive `//`-to-end-of-line strip mangles any line holding
- * a URL — `'https://tiles.example.com/{z}/{x}/{y}.png'` appears in this package — and a
- * mangled line is a line this scan can no longer see an import on.
- */
-export function stripComments(source: string): string {
-  let out = '';
-  let i = 0;
-  while (i < source.length) {
-    const c = source[i];
-    const next = source[i + 1];
-    if (c === '/' && next === '/') {
-      while (i < source.length && source[i] !== '\n') i++;
-      continue;
-    }
-    if (c === '/' && next === '*') {
-      i += 2;
-      while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) i++;
-      i += 2;
-      continue;
-    }
-    if (c === '"' || c === "'" || c === '`') {
-      const quote = c;
-      out += c;
-      i++;
-      while (i < source.length) {
-        if (source[i] === '\\') {
-          out += source.slice(i, i + 2);
-          i += 2;
-          continue;
-        }
-        out += source[i];
-        if (source[i] === quote) {
-          i++;
-          break;
-        }
-        i++;
-      }
-      continue;
-    }
-    out += c;
-    i++;
-  }
-  return out;
-}
-
-/**
- * Every module specifier the file imports, static or dynamic.
- *
- * Deliberately syntax-anchored rather than a bare search for `?` or `.css`: the thing under
- * test is what gets RESOLVED, and only an import position resolves.
- */
-export function importSpecifiers(source: string): string[] {
-  const code = stripComments(source);
-  const found: string[] = [];
-  const patterns = [
-    /(?:^|[\s;}])(?:import|export)\s[^;]*?from\s*['"]([^'"]+)['"]/gm, // import x from '…' / export … from '…'
-    /(?:^|[\s;}])import\s*['"]([^'"]+)['"]/gm, // bare side-effect import
-    /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/gm, // dynamic import('…')
-  ];
-  for (const pattern of patterns) {
-    for (const match of code.matchAll(pattern)) found.push(match[1]);
-  }
-  return found;
-}
 
 /** A specifier no bundler-agnostic consumer can be expected to resolve. */
 export function isBundlerDialect(specifier: string): boolean {
   // A query suffix (`?worker&url`, `?url`, `?raw`, `?inline`) is a bundler instruction.
   if (specifier.includes('?')) return true;
-  // Importing a stylesheet is a bundler instruction too — Node ESM cannot load one, and
-  // webpack needs a loader configured for it.
+  // So is importing a stylesheet: Node ESM cannot load one and webpack needs a loader.
   if (/\.(css|scss|sass|less|styl)$/.test(specifier)) return true;
   return false;
 }
 
-describe('published packages write no bundler-specific module specifiers', () => {
-  const files = SCANNED.flatMap((pkg) => sourceFiles(join(PACKAGES, pkg, 'src')));
+type Graph = { specifiers: string[]; inputs: string[] };
 
-  it('has no dialect specifier in any source file', () => {
-    const offenders = files.flatMap((file) =>
-      importSpecifiers(readFileSync(file, 'utf8'))
-        .filter(isBundlerDialect)
-        .map((specifier) => `${relative(PACKAGES, file)}: ${specifier}`),
-    );
+/**
+ * Every import specifier reachable from `entry`, as the bundler itself saw them.
+ *
+ * `packages: 'external'` mirrors the publish configuration — anything not authored in the
+ * package is left unresolved, which is exactly the condition under which a dialect
+ * specifier passes through untouched and unreported.
+ */
+async function graphFrom(entry: string): Promise<Graph> {
+  let result;
+  try {
+    result = await esbuild.build({
+      entryPoints: [entry],
+      bundle: true,
+      write: false,
+      metafile: true,
+      format: 'esm',
+      platform: 'browser',
+      jsx: 'automatic',
+      logLevel: 'silent',
+      packages: 'external',
+    });
+  } catch (err) {
+    // A RELATIVE dialect import (`import './x.css'`) is not passed through — esbuild tries
+    // to resolve it and fails for want of a loader. That is still a detection, so surface
+    // the real message rather than letting it read as harness breakage.
+    throw new Error(`esbuild could not build ${entry}:\n${(err as Error).message}`);
+  }
 
-    expect(
-      offenders,
-      'a bundler-specific specifier ships in the tarball verbatim and breaks every consumer not using that bundler — with no build error anywhere',
-    ).toEqual([]);
-  });
+  const specifiers = new Set<string>();
+  for (const input of Object.values(result.metafile.inputs)) {
+    for (const imp of input.imports ?? []) specifiers.add(imp.path);
+  }
+  return { specifiers: [...specifiers].sort(), inputs: Object.keys(result.metafile.inputs) };
+}
 
-  // 🔴 THE REACH CONTROL. The assertion above is an ABSENCE claim, and an absence claim is
-  // worth nothing until the thing making it is shown to have looked. A rotted path, a
-  // renamed directory, or an over-eager comment stripper each produce "no offenders"
-  // forever. So: prove the scan reached all three packages, reached the specific file that
-  // used to hold the violation, and can still see a real import there after stripping.
-  it('the scan actually reaches the sources, in every package', () => {
-    expect(files.length).toBeGreaterThan(40);
-    for (const pkg of SCANNED) {
-      const inPackage = files.filter((f) => f.startsWith(join(PACKAGES, pkg) + '/'));
-      expect(inPackage.length, `scanned nothing in packages/${pkg}`).toBeGreaterThan(3);
+const PORTABLE_ENTRIES = [
+  ['client', join(PACKAGES, 'client', 'src', 'index.ts')],
+  ['dashboards', join(PACKAGES, 'dashboards', 'src', 'index.ts')],
+  ['widgets', join(PACKAGES, 'widgets', 'src', 'index.ts')],
+] as const;
+
+const VITE_ENTRY = join(PACKAGES, 'widgets', 'src', 'vite.ts');
+
+describe('the portable entry of every published package is bundler-agnostic', () => {
+  for (const [name, entry] of PORTABLE_ENTRIES) {
+    it(`@devicechain/${name} reaches no bundler-dialect specifier`, async () => {
+      const { specifiers } = await graphFrom(entry);
+
+      expect(
+        specifiers.filter(isBundlerDialect),
+        `a bundler-specific specifier ships in the tarball verbatim and breaks every consumer not using that bundler — with no build error anywhere`,
+      ).toEqual([]);
+    });
+  }
+
+  // 🔴 REACH CONTROL. Every assertion above is an ABSENCE claim, and an absence claim over
+  // an empty graph agrees with everything. A wrong entry path, a build that silently
+  // produced nothing, or a metafile shape change would each report "no dialect" forever.
+  it('the builds actually walked the real module graphs', async () => {
+    for (const [name, entry] of PORTABLE_ENTRIES) {
+      const { specifiers, inputs } = await graphFrom(entry);
+      expect(inputs.length, `${name}: nothing was compiled`).toBeGreaterThan(3);
+      expect(specifiers.length, `${name}: no imports seen at all`).toBeGreaterThan(3);
     }
 
-    const mapWidget = files.find((f) => f.endsWith(join('widgets', 'src', 'widgets', 'map.tsx')));
-    expect(mapWidget, 'map.tsx — the file that carried the dialect — was not scanned').toBeTruthy();
+    // And specifically that the widget graph reaches the library whose worker started all
+    // of this — through a dynamic import, still, so the lazy boundary is intact.
+    const widgets = await graphFrom(PACKAGES + '/widgets/src/index.ts');
+    expect(widgets.specifiers).toContain('maplibre-gl');
+    expect(widgets.inputs.some((i) => i.endsWith('src/widgets/map.tsx'))).toBe(true);
+  });
+});
 
-    // Comment-stripping must not have eaten the code: the real dynamic import is still
-    // visible in what the scan actually examines.
-    const specifiers = importSpecifiers(readFileSync(mapWidget as string, 'utf8'));
-    expect(specifiers).toContain('maplibre-gl');
+describe('the Vite entry is the single, bounded exception', () => {
+  // 🔴 THE CARVE-OUT, ASSERTED RATHER THAN PROMISED. `@devicechain/widgets/vite` exists so a
+  // Vite host writes one import instead of learning MapLibre's worker problem. It is allowed
+  // the dialect — but by an exact list, so "one convenience entry" cannot drift into "the
+  // package writes Vite everywhere".
+  it('writes exactly the two dialect specifiers it is allowed, and no others', async () => {
+    const { specifiers } = await graphFrom(VITE_ENTRY);
+
+    expect(specifiers.filter(isBundlerDialect)).toEqual([
+      'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url',
+      'maplibre-gl/dist/maplibre-gl.css',
+    ]);
   });
 
-  // 🔴 THE POSITIVE CONTROL. The reach control proves the scan opened the files; this
-  // proves the pattern would have SAID something if it found the thing. Both are needed:
-  // a scan that reads every file with a regex that matches nothing passes the first.
-  it('the pattern fires on every dialect it is meant to catch', () => {
-    const fires = (source: string) => importSpecifiers(source).some(isBundlerDialect);
+  // 🔴 AND IT MUST NOT BE REACHABLE FROM THE PORTABLE ENTRY. This is the assertion that
+  // makes the carve-out safe: a webpack consumer importing '@devicechain/widgets' must never
+  // be handed this module. Only an explicit '@devicechain/widgets/vite' import gets it.
+  it('is not reachable from the portable entry', async () => {
+    const { inputs } = await graphFrom(join(PACKAGES, 'widgets', 'src', 'index.ts'));
+    expect(inputs.filter((i) => i.endsWith('src/vite.ts'))).toEqual([]);
+  });
+});
 
-    expect(fires("import w from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';")).toBe(true);
-    expect(fires("import('maplibre-gl/dist/maplibre-gl.css');")).toBe(true);
-    expect(fires("import 'maplibre-gl/dist/maplibre-gl.css';")).toBe(true);
-    expect(fires("import icon from './icon.svg?url';")).toBe(true);
-    expect(fires("import text from './notice.md?raw';")).toBe(true);
-    expect(fires("import styles from './x.css?inline';")).toBe(true);
-    expect(fires("export { a } from './x?worker';")).toBe(true);
+// 🔴 POSITIVE CONTROL. The reach control proves the builds looked; this proves the checker
+// SPEAKS UP when the thing is there. Both are needed — a gate that reads every file with a
+// predicate that never fires passes the first.
+//
+// It plants the specifiers in a synthetic entry rather than in the tree, so the control
+// exercises the real pipeline without a file anyone could forget to delete.
+describe('the gate reports a dialect specifier when one is present', () => {
+  async function specifiersOf(contents: string): Promise<string[]> {
+    const result = await esbuild.build({
+      stdin: { contents, resolveDir: PACKAGES, loader: 'ts', sourcefile: 'control.ts' },
+      bundle: true,
+      write: false,
+      metafile: true,
+      format: 'esm',
+      platform: 'browser',
+      logLevel: 'silent',
+      packages: 'external',
+    });
+    const out = new Set<string>();
+    for (const input of Object.values(result.metafile.inputs))
+      for (const imp of input.imports ?? []) out.add(imp.path);
+    return [...out];
+  }
 
-    // ...and stays quiet on the ordinary imports these packages are full of, so it cannot
-    // be satisfied by a pattern that simply matches everything.
-    expect(fires("import * as echarts from 'echarts/core';")).toBe(false);
-    expect(fires("import { Map } from 'maplibre-gl';")).toBe(false);
-    expect(fires("import type { Foo } from '@devicechain/client';")).toBe(false);
-    expect(fires("import('./natural-earth-data');")).toBe(false);
+  const fires = async (source: string) => (await specifiersOf(source)).some(isBundlerDialect);
+
+  it('catches the ordinary written forms', async () => {
+    expect(await fires("import w from 'maplibre-gl/dist/x.mjs?worker&url'; console.log(w);")).toBe(true);
+    expect(await fires("import 'maplibre-gl/dist/maplibre-gl.css';")).toBe(true);
+    expect(await fires("await import('maplibre-gl/dist/maplibre-gl.css');")).toBe(true);
+    expect(await fires("import u from 'some-pkg/icon.svg?url'; console.log(u);")).toBe(true);
   });
 
-  // 🔴 And the stripper itself, because it is the one component whose FAILURE MODE IS
-  // SILENCE: strip too much and every file looks clean.
-  it('comment stripping removes documentation without removing code', () => {
-    const documented = [
-      "// Vite spells it `?worker&url`, webpack does not.",
-      '/**',
-      " * import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';",
-      ' */',
-      "import { real } from './real-module';",
-    ].join('\n');
+  // 🔴 THE THREE EVASIONS THAT DEFEATED THE HAND-WRITTEN LEXER. Each is pinned here so the
+  // gate can never regress to a shape that misses them.
+  it('catches a template-literal dynamic import (E3 — matched no lexer pattern)', async () => {
+    expect(await fires('await import(`maplibre-gl/dist/x.mjs?worker&url`);')).toBe(true);
+  });
 
-    expect(importSpecifiers(documented)).toEqual(['./real-module']);
+  it('catches an import following a regex literal containing slashes (E1)', async () => {
+    const src = "const r = /\\/\\//g; import w from 'maplibre-gl/dist/x.mjs?worker&url'; console.log(r, w);";
+    expect(await fires(src)).toBe(true);
+  });
 
-    // A `//` inside a string literal is not a comment. If it were treated as one, the rest
-    // of that line — potentially including an import — would vanish from the scan.
-    const withUrl = "const tiles = 'https://tiles.example.com/{z}/{x}/{y}.png';\nimport('./after');";
-    expect(importSpecifiers(withUrl)).toEqual(['./after']);
+  it('catches an import following a regex literal containing a quote (E2)', async () => {
+    const src =
+      "const r = /['\"]/u; const s = 'https://h.example'; import w from 'maplibre-gl/dist/x.mjs?worker&url'; console.log(r, s, w);";
+    expect(await fires(src)).toBe(true);
+  });
+
+  // ...and stays quiet on the ordinary imports these packages are full of, so the predicate
+  // cannot be satisfied by one that simply matches everything.
+  it('stays quiet on ordinary specifiers, including ones merely MENTIONED in a comment', async () => {
+    expect(await fires("import * as e from 'echarts/core'; console.log(e);")).toBe(false);
+    expect(await fires("import type { Map } from 'maplibre-gl'; export type M = Map;")).toBe(false);
+    // The documentation case that broke the previous implementation: a worked example of the
+    // dialect, in a comment, must not be reported. The parser never sees it.
+    expect(
+      await fires("// import x from 'maplibre-gl/dist/y.mjs?worker&url';\nimport 'react';"),
+    ).toBe(false);
   });
 });

@@ -23,6 +23,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { useTranslation } from 'react-i18next';
 import { loadLandStyle, rasterStyleFor } from '@devicechain/widgets';
 import type { Map as MapLibreMap, MapMouseEvent } from 'maplibre-gl';
+
+import { MAP_RUNTIME } from '@/map-runtime';
 import {
   DRAG_THRESHOLD_PX,
   boundsOf,
@@ -36,27 +38,26 @@ import {
   type Vertex,
 } from './geometry';
 
-/// <reference path="../../css-modules.d.ts" />
-
 let mapLibrePromise: Promise<typeof import('maplibre-gl')> | undefined;
 
+// The fence editor drives its OWN MapLibre instance — a fence is drawn, not rendered from a
+// dashboard definition — so it needs the same bootstrap the map widget needs: MapLibre
+// derives its worker URL at runtime from its own module URL, which no bundler can follow,
+// so without `setWorkerUrl` the file is never emitted and the map renders nothing while
+// every gate stays green.
+//
+// 🔴 IT TAKES THE URL FROM THE APP'S ONE RUNTIME rather than importing the worker entry
+// again. Two copies of a bundler incantation in one app is one copy too many, and when they
+// drift the symptom is a blank map on one surface only — the hardest version of this bug to
+// find. `?worker&url` is written once, in @devicechain/widgets/vite, and reaches here
+// through src/map-runtime.ts.
 function loadMapLibre(): Promise<typeof import('maplibre-gl')> {
   if (!mapLibrePromise) {
     mapLibrePromise = Promise.all([
       import('maplibre-gl'),
-      // MapLibre derives its worker URL at runtime from its own module URL, which no
-      // bundler can see, so without this the file is never emitted and the map renders
-      // nothing while every gate stays green.
-      //
-      // 🔴 Writing Vite's dialect here is CORRECT, and is no longer duplicated. This is
-      // an application, so it knows its own bundler; `@devicechain/widgets` is a library
-      // and must not, which is why the dashboard map widget now takes this URL from the
-      // host through MapRuntimeProvider (see packages/widgets/src/map-runtime-context.tsx)
-      // and this app supplies it there too, from its own copy of maplibre-gl.
-      import('maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'),
-      import('maplibre-gl/dist/maplibre-gl.css'),
-    ]).then(([mod, worker]) => {
-      mod.setWorkerUrl(worker.default);
+      MAP_RUNTIME.loadStyles?.() ?? Promise.resolve(),
+    ]).then(([mod]) => {
+      mod.setWorkerUrl(MAP_RUNTIME.workerUrl);
       return mod;
     });
   }

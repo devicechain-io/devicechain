@@ -63,9 +63,11 @@ import type { Map as MapLibreMap, Marker as MapLibreMarker } from 'maplibre-gl';
 // about the widget's behaviour would change to reveal it.
 //
 // MapLibre's STYLESHEET is no longer imported here at all — it is the host's, along with
-// the worker URL, for the reason set out below and in map-runtime-context. A host that
-// imports it eagerly gives up this lazy boundary for the CSS only, which is a few KB and
-// its own call to make.
+// the worker URL, for the reason set out below and in map-runtime-context. A host may hand
+// back a loader for it (`MapRuntime.loadStyles`) to keep it on this same lazy chunk, or
+// import it eagerly and pay 83 KB (10.7 KB gzipped) in its main stylesheet. That is the
+// host's call, and both are reasonable; what a LIBRARY cannot do is decide it for them in
+// one bundler's dialect.
 //
 // Loaded once and memoized: several map widgets on one board share the fetch.
 let mapLibrePromise: Promise<typeof import('maplibre-gl')> | undefined;
@@ -90,15 +92,26 @@ let mapLibrePromise: Promise<typeof import('maplibre-gl')> | undefined;
 // there is one provider at the top of the tree and therefore one URL.
 function loadMapLibre(runtime: MapRuntime): Promise<typeof import('maplibre-gl')> {
   if (!mapLibrePromise) {
-    // The stylesheet rides the SAME dynamic boundary as the renderer, which is why the
-    // host passes a loader rather than importing it at module scope: it is 70 KB raw,
-    // 10 KB gzipped, and a viewer who opens no map must download none of it.
-    mapLibrePromise = Promise.all([import('maplibre-gl'), runtime.loadStyles()]).then(
-      ([mod]) => {
-        mod.setWorkerUrl(runtime.workerUrl);
-        return mod;
-      },
-    );
+    // The stylesheet rides the SAME dynamic boundary as the renderer, which is why a host
+    // may pass a loader rather than importing it at module scope: it is 83 KB raw, 10.7 KB
+    // gzipped (maplibre-gl 6.6.0), and a viewer who opens no map should download none of
+    // it. Optional — a host that imports the stylesheet itself is doing the ordinary thing.
+    //
+    // 🔴 `Promise.resolve().then(...)` IS NOT CEREMONY. `loadStyles()` is host code, and a
+    // host CAN throw synchronously — `loadStyles: () => require('…css')` on a bundler with
+    // no CSS loader is the realistic form. Called while building the argument array, that
+    // throw escapes loadMapLibre entirely, propagates through the caller's own
+    // `Promise.all` argument evaluation, and lands in React's commit phase where the
+    // effect's `.catch` cannot see it: React 19 unmounts the tree, so one misconfigured
+    // host loader takes down the whole dashboard instead of degrading to the plain panel.
+    // Deferring the call puts it inside the promise chain, where the existing catch works.
+    mapLibrePromise = Promise.all([
+      import('maplibre-gl'),
+      Promise.resolve().then(() => runtime.loadStyles?.()),
+    ]).then(([mod]) => {
+      mod.setWorkerUrl(runtime.workerUrl);
+      return mod;
+    });
   }
   return mapLibrePromise;
 }
@@ -338,10 +351,16 @@ function LiveMap({
       mapRef.current = null;
     };
     // 🔴 Keyed on runtime.workerUrl, NOT on `runtime`. A host that builds the runtime
-    // inline in JSX hands a new object every render; depending on the object would tear
-    // the map down and rebuild it each time, which looks like flicker and loses view
-    // state. The URL is the only part of it this effect's outcome depends on.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // inline in JSX hands a new object every render; depending on the object would tear the
+    // map down and rebuild it each time, which looks like flicker and loses view state. The
+    // URL is the only part of it this effect's outcome depends on.
+    //
+    // `runtime.loadStyles` is used inside and is deliberately not a dependency: loadMapLibre
+    // memoizes at module scope, first caller wins, so only the first runtime's loader is
+    // ever invoked and a later one could not take effect however this array were written.
+    // That is the documented contract, not an oversight — and no eslint config in this repo
+    // lints packages/*, so a disable comment here would suppress nothing and merely look
+    // like the question had been settled by a linter.
   }, [tileUrl, attribution, runtime.workerUrl]);
 
   // Sync the markers to the current positions. Rebuilt wholesale rather than diffed:
@@ -386,9 +405,7 @@ function LiveMap({
     // Positions are compared by VALUE: a poll hands back a fresh array every tick, and
     // rebuilding every marker 4 times a minute for an unchanged fleet would make the
     // markers flicker.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, positionsKey(positions), runtime.workerUrl]);
+  }, [status, positionsKey(positions)]);
 
   if (status === 'unavailable') {
     return (
