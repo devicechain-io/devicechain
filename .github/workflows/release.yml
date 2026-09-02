@@ -49,8 +49,7 @@ on:
 #   images/chart/     — ko / helm / docker push to ghcr      -> packages: write
 #     frontend
 #   npm-packages      — npm trusted publishing (OIDC)        -> id-token: write
-#   nuget             — pushes with a stored API key, not a
-#                       GitHub credential                    -> contents: read
+#   nuget             — nuget.org trusted publishing (OIDC)  -> id-token: write
 #   cli               — goreleaser creates the Release       -> contents: write
 #   edge-agent        — gh release upload                    -> contents: write
 #   publish-manifest  — gh release VIEW; the website push
@@ -529,10 +528,31 @@ jobs:
   # ---------------------------------------------------------------------------
   # Publish the C# SDK to nuget.org.
   #
-  # 🔴 THE AUTH ASYMMETRY IS REAL AND IS NOT PAPERED OVER: NuGet has no OIDC equivalent
-  # to npm's trusted publishing, so this leg uses a STORED API KEY. That key expires,
-  # the same trap WEBSITE_PUBLISH_TOKEN carries. When this job starts failing with a
-  # 401/403, check the key's expiry on nuget.org before anything else.
+  # 🔴 THERE IS NO AUTH ASYMMETRY ANY MORE, AND THE NOTE THAT SAID SO WAS WRONG WITHIN A
+  # DAY OF BEING WRITTEN. This job first shipped with a stored NUGET_API_KEY on the stated
+  # premise that "NuGet has no OIDC equivalent to npm's trusted publishing". NuGet shipped
+  # exactly that, and then closed the other door: new API keys are capped at 30 DAYS from
+  # 2026-08-17, and every key created before then expires 2026-11-01. A stored key is
+  # therefore not the lesser option here, it is an unusable one — any release cadence
+  # slower than a month would meet an expired credential at every single tag.
+  #
+  # So both publishing legs of this release are keyless OIDC now, for the same reason and
+  # in the same shape. nuget.org validates a short-lived GitHub token against a policy and
+  # returns an API key good for about an hour.
+  #
+  # 🔴 WHAT MAKES THIS JOB TRUSTED IS A SETTING ON nuget.org, AND IT NAMES THIS FILE —
+  # exactly like the npm leg above. The policy is owner `devicechain`, repository
+  # `devicechain-io/devicechain`, workflow file `release.yml` (filename only), no
+  # environment. Renaming this workflow, or moving these steps into a reusable workflow
+  # running under a different filename, silently revokes publishing; the symptom is a
+  # failed token exchange, not anything that mentions the rename.
+  #
+  # 🔴 AND UNLIKE npm, THIS LEG NEEDS NO MANUAL BOOTSTRAP. A trusted publishing policy
+  # carries a SCOPE that can permit publishing NEW packages, matched by a glob
+  # (`DeviceChain.*`), so the first ever version of DeviceChain.Sdk can come from here.
+  # npm cannot do that — a trusted publisher can only be configured on a package that
+  # already exists — which is why the four @devicechain/* packages needed a manual first
+  # publish and this one does not.
   #
   # The version comes from the tag with its leading `v` STRIPPED, matching the chart.
   # NuGet rejects `v0.13.0` outright, so passing it unstripped fails loudly rather than
@@ -554,6 +574,7 @@ jobs:
         working-directory: sdks/csharp
     permissions:
       contents: read
+      id-token: write # nuget.org trusted publishing (OIDC) — see above
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -586,13 +607,34 @@ jobs:
             echo "packed $(basename "$f")"
           done
 
+      # 🔴 REQUESTED IMMEDIATELY BEFORE THE PUSH, DELIBERATELY. The key nuget.org returns
+      # is valid for about an hour and each OIDC token buys exactly one key, so moving
+      # this step earlier — beside the pack, say — would trade a working release for one
+      # that expires behind a slow gate. It is the last thing before the push.
+      #
+      # `user` is the nuget.org USERNAME, not an email address. nuget.org's own docs call
+      # that out, and the failure for getting it wrong is an authentication error that
+      # says nothing about which field was wrong.
+      - name: NuGet login (OIDC → short-lived key)
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+        id: nuget-login
+        with:
+          user: devicechain
+
       - name: Push to nuget.org
         env:
           VERSION: ${{ needs.guard.outputs.version }}
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
         run: |
+          # Asserted rather than assumed. A login step that silently produced nothing
+          # would otherwise reach `dotnet nuget push` as an empty --api-key, and that
+          # arrives as a bare 401 — which reads like a revoked credential rather than a
+          # missing one, and sends the reader to the wrong page on nuget.org.
           if [ -z "$NUGET_API_KEY" ]; then
-            echo "::error::NUGET_API_KEY is not set — the SDK cannot be published."
+            echo "::error::the OIDC token exchange returned no API key. Check that the trusted"
+            echo "::error::publishing policy on nuget.org names repository devicechain-io/devicechain,"
+            echo "::error::workflow file release.yml, user devicechain, and a scope permitting NEW"
+            echo "::error::packages matching DeviceChain.* — and that this job kept id-token: write."
             exit 1
           fi
           version="${VERSION#v}"
