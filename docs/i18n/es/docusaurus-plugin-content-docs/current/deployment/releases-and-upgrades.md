@@ -791,6 +791,64 @@ que caber en un solo mensaje del broker. Los rechazos
 nombran tanto el número como el ajuste que hay que subir, y una métrica
 `geofence_cap_refusals_total` los cuenta según qué límite rechazó.
 
+### v0.14.0 — los paquetes contra los que compila {#v0140-upgrade}
+
+`v0.14.0` es un `helm upgrade` normal desde `v0.13.x`. No añade ninguna migración, así que la base
+de datos queda intacta, y no cambia ninguna API, tema, permiso ni clave de configuración. **Si
+solo ejecuta la plataforma, no hay nada que hacer.**
+
+Lo que cambió está a su alrededor: los artefactos contra los que compila y la CLI con la que la
+ejecuta.
+
+**El runtime web está publicado.** `@devicechain/client`, `@devicechain/dashboards`,
+`@devicechain/widgets` y `@devicechain/brand` están en npm, así que embeber un panel o un widget en
+su propia aplicación es una instalación y ya no una compilación contra nuestro árbol de fuentes.
+Los cuatro se publican juntos en una misma versión y están fijados entre sí. Ver
+[Paquetes de npm](../reference/npm-packages.md) para la línea de instalación y la política de
+dist-tags.
+
+**Si estaba compilando nuestros widgets desde el árbol de fuentes, hay un cambio que le
+corresponde hacer.** `maplibre-gl` ahora es una dependencia peer de `@devicechain/widgets`: su
+aplicación proporciona la biblioteca, la URL de su worker y su hoja de estilos, en lugar de que el
+paquete de widgets las decida por usted. Eso es lo que hace que el paquete funcione bajo un
+empaquetador que no controlamos — pero significa que un widget de mapa sin cableado del anfitrión
+por encima ahora muestra un aviso explícito en lugar de un lienzo en blanco, que es el síntoma que
+debe esperar si actualiza sin hacerlo. El cableado es corto y está descrito en
+[Renderizar un mapa](../reference/npm-packages.md#map-host-wiring). En el servidor no cambia nada.
+
+**El SDK cliente para .NET y Unity está publicado** en nuget.org como `DeviceChain.Sdk`.
+
+**`dcctl` ya puede decirle qué ha arrancado, y apagarlo todo.**
+
+```bash
+# cada instancia, el clúster en el que vive y si ese clúster sigue existiendo
+dcctl instances list
+
+# destruirlas todas
+dcctl destroy --all
+```
+
+🔴 **Esto cierra un defecto sobre el que conviene actuar, no solo conocerlo.** Hasta ahora nada
+registraba en qué clúster se había arrancado una instancia: se derivaba del nombre de la instancia
+al crearla y se volvía a derivar al destruirla. Esa derivación es incorrecta para cualquier
+instancia arrancada con `--kube-context`, y el fallo era silencioso en la peor dirección: `dcctl
+destroy` pedía al proveedor que borrara un clúster que no existía, lo cual tiene éxito sin decir
+nada, eliminaba el estado local e informaba de que la instancia había sido destruida mientras su
+clúster real seguía funcionando. **Si alguna vez arrancó con `--kube-context` y después destruyó
+esa instancia, es probable que su clúster siga en pie.** `dcctl instances list` no puede
+mostrárselas — la destrucción eliminó el registro local, que es justamente el problema — así que
+pregunte directamente al proveedor (para el proveedor local, `kind get clusters`) y borre lo que
+reconozca.
+
+A partir de esta versión el clúster se anota al arrancar y se relee al destruir, y la línea final
+dice cuál de tres cosas ocurrió: se borró el clúster registrado, el clúster ya no estaba y solo se
+limpió el estado local, o el registro no era fiable y no se tocó nada. Ninguna de ellas es la
+frase antigua impresa sobre un clúster que sigue funcionando.
+
+Las instancias creadas antes de esta versión no tienen ese registro y aparecen como `no record —
+destroy will guess the cluster`. La destrucción sigue funcionando sobre ellas recurriendo a la
+derivación antigua, así que la advertencia anterior sigue aplicando a ellas y solo a ellas.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

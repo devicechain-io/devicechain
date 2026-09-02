@@ -79,7 +79,7 @@ Ver [Paneles](../concepts/dashboards.md) para qué es una definición, cómo los
 manifiestos de vinculación permiten que una definición sirva a muchos dispositivos, y
 cómo los usa el visor independiente `/dash`.
 
-## Renderizar un mapa: una pieza obligatoria de cableado del anfitrión
+## Renderizar un mapa: una pieza obligatoria de cableado del anfitrión {#map-host-wiring}
 
 El widget de mapa necesita una cosa de ti, y omitirla falla en silencio.
 

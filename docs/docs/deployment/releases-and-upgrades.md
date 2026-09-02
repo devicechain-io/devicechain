@@ -739,6 +739,61 @@ message. The refusals name both the number and
 the setting to raise, and a `geofence_cap_refusals_total` metric counts them by which limit
 refused.
 
+### v0.14.0 — the packages you build against {#v0140-upgrade}
+
+`v0.14.0` is a plain `helm upgrade` from `v0.13.x`. It adds no migration, so the database is
+untouched, and it changes no API, topic, permission or configuration key. **If you only run the
+platform, there is nothing to do.**
+
+What changed is around it — the artifacts you build against, and the CLI you run it with.
+
+**The web runtime is published.** `@devicechain/client`, `@devicechain/dashboards`,
+`@devicechain/widgets` and `@devicechain/brand` are on npm, so embedding a dashboard or a widget
+in your own application is an install rather than a build against our source tree. The four are
+released together at one version and pinned to each other. See
+[npm Packages](../reference/npm-packages.md) for the install line and the dist-tag policy.
+
+**If you were building our widgets from the source tree, one change is yours to make.**
+`maplibre-gl` is now a peer dependency of `@devicechain/widgets`: your application supplies the
+library, its worker URL and its stylesheet, instead of the widget package deciding those for
+you. That is what makes the package work under a bundler we do not control — but it means a map
+widget with no host wiring above it now renders an explicit notice rather than a blank canvas,
+which is the symptom to expect if you upgrade without doing it. The wiring is short and is
+written out at [Rendering a map](../reference/npm-packages.md#map-host-wiring). Nothing changes
+on the server.
+
+**The .NET and Unity client SDK is published** to nuget.org as `DeviceChain.Sdk`.
+
+**`dcctl` can tell you what it has bootstrapped, and shut all of it down.**
+
+```bash
+# every instance, the cluster it lives in, and whether that cluster is still there
+dcctl instances list
+
+# tear down all of them
+dcctl destroy --all
+```
+
+🔴 **This closes a defect worth acting on, not just knowing about.** Until now nothing recorded
+which cluster an instance had been bootstrapped into — it was derived from the instance name at
+create time and derived again at destroy time. That derivation is wrong for any instance
+bootstrapped with `--kube-context`, and the failure was silent in the worst direction: `dcctl
+destroy` asked the provider to delete a cluster that did not exist, which succeeds quietly,
+removed the local state, and reported the instance destroyed while its actual cluster kept
+running. **If you have ever bootstrapped with `--kube-context` and destroyed that instance
+afterwards, its cluster is probably still up.** `dcctl instances list` cannot show you these —
+the destroy removed the local record, which is precisely the problem — so ask the provider
+directly (for the local provider, `kind get clusters`) and delete what you recognise.
+
+From this release the cluster is written down at bootstrap and read back at destroy, and the
+closing line says which of three things happened: the recorded cluster was deleted, the cluster
+was already gone and only local state was cleared, or the record could not be trusted and
+nothing was touched. None of them is the old sentence printed over a cluster still running.
+
+Instances created before this release have no such record and list as `no record — destroy will
+guess the cluster`. Destroy still works on them, falling back to the old derivation, so the
+caveat above continues to apply to them and only to them.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives
