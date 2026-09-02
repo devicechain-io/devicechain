@@ -446,6 +446,59 @@ extract_baseline() {
   git -C "$repo_root" archive --format=tar "$baseline_tag" | tar -x -C "$baseline_src"
   [[ -f "$baseline_src/backend/cli/Makefile" ]] ||
     fail "the extracted $baseline_tag tree has no backend/cli; this rig cannot build its dcctl"
+  repoint_baseline_chart_source
+}
+
+# repoint_baseline_chart_source rewrites the CloudNativePG chart source in the
+# EXTRACTED BASELINE to the OCI registry, because every release up to and including
+# v0.13.0 fetches it over http from a domain that no longer resolves.
+#
+# 🔴 WHY THIS IS NOT CHEATING, AND WHERE THE LINE IS. The drill exists to ask "does
+# an existing instance's DATA survive this release?". It cannot ask that if the
+# baseline will not install at all -- and on 2026-09-02 it would not: upstream
+# pointed cloudnative-pg.github.io/charts at a 301 to cloudnative-pg.io, then that
+# domain began answering SERVFAIL, resolver-dependent and intermittent. The release
+# run for v0.14.0-rc.1 died here, in `tofu apply` on the BASELINE, with a DNS
+# timeout -- nothing to do with the release under test. Patching the chart SOURCE
+# leaves every byte of the baseline's schema, models, API and chart untouched, so
+# the question the drill asks is unchanged; refusing to patch it just means the
+# drill reports an upstream outage as a failure of this release.
+#
+# 🔑 It is honest here for a reason particular to this rig: the baseline is already
+# BUILT FROM SOURCE by build_baseline_dcctl, not downloaded as the released binary.
+# Byte-identity with the shipped artifact was never a property of this drill, so
+# this changes the kind of edit, not the kind of thing being tested. (Contrast
+# `build: false` on the RELEASE path, which is load-bearing precisely because there
+# the images must be the published ones.)
+#
+# Self-limiting by construction: it rewrites only the dead URL, so a baseline of
+# v0.14.0 or later -- which already uses OCI -- matches nothing and is left alone.
+# That is why finding no occurrences is reported and NOT a failure.
+repoint_baseline_chart_source() {
+  local dead="https://cloudnative-pg.github.io/charts"
+  local live="oci://ghcr.io/cloudnative-pg/charts"
+  local -a hits
+  mapfile -t hits < <(grep -rl -- "$dead" "$baseline_src" 2>/dev/null || true)
+
+  if [[ ${#hits[@]} -eq 0 ]]; then
+    note "$baseline_tag does not reference the retired chart host; nothing to repoint"
+    return
+  fi
+
+  say "repointing $baseline_tag's CNPG chart source to $live (${#hits[@]} file(s))"
+  local f
+  for f in "${hits[@]}"; do
+    sed -i "s|$dead|$live|g" "$f"
+    note "  ${f#"$baseline_src"/}"
+  done
+
+  # 🔴 A sed that matched nothing exits 0. Re-read the tree and prove the string is
+  # gone, or the drill proceeds to fail exactly as it did before with a rig that
+  # claims it fixed something.
+  local remaining
+  remaining="$(grep -rl -- "$dead" "$baseline_src" 2>/dev/null | wc -l)"
+  [[ "$remaining" -eq 0 ]] ||
+    fail "repointing left $remaining file(s) still naming $dead; the drill would fail on an upstream outage rather than on this release"
 }
 
 build_baseline_dcctl() {
