@@ -51,9 +51,9 @@ of the SDK; there is no independent package versioning to reason about.
 Every version published by the release workflow carries [npm
 provenance](https://docs.npmjs.com/generating-provenance-statements) — a signed,
 publicly verifiable statement of which repository, workflow, and commit built it, which
-npmjs.com surfaces on the package page. The `0.14.0-0` bootstrap versions were published
-by hand to create the packages and predate that; from the next release onward, every
-version has it.
+npmjs.com surfaces on the package page. Every version from `0.14.0` onward carries it.
+The `0.14.0-0` bootstrap versions are the exception: they were published by hand to
+create the packages in the first place, and predate the workflow that signs them.
 
 ## Render a board
 

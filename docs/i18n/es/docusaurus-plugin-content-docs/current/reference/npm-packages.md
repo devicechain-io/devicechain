@@ -53,9 +53,9 @@ del SDK; no hay versionado independiente por paquete que haya que razonar.
 Toda versión publicada por el workflow de release lleva [procedencia (provenance) de
 npm](https://docs.npmjs.com/generating-provenance-statements) — una declaración firmada
 y verificable públicamente de qué repositorio, workflow y commit la construyeron, que
-npmjs.com muestra en la página del paquete. Las versiones `0.14.0-0` de arranque se
-publicaron a mano para crear los paquetes y son anteriores a eso; de la próxima release
-en adelante, todas la llevan.
+npmjs.com muestra en la página del paquete. Todas las versiones desde `0.14.0` en
+adelante la llevan. Las versiones `0.14.0-0` de arranque son la excepción: se publicaron
+a mano para crear los paquetes y son anteriores al workflow que las firma.
 
 ## Renderizar un panel
 
