@@ -215,6 +215,18 @@ variable "node_loss_toleration_seconds" {
 }
 
 locals {
+  # Both CNPG charts come from here, named once so the two releases below cannot
+  # drift onto different hosts.
+  #
+  # 🔴 THE CANONICAL HOST, NOT THE github.io ONE. cloudnative-pg.github.io/charts
+  # answers 301 to this address, and helm follows redirects -- but a redirect is
+  # upstream's kindness, withdrawable without notice, and on 2026-09-02 it stopped
+  # working from GitHub's runners while still working from a developer machine.
+  # This is the bootstrap path: when this address cannot be reached, dcctl cannot
+  # install Postgres at all, so it must not depend on a hop somebody else owns.
+  # hack/check-cnpg-chart-schema.sh pulls the same charts from the same host.
+  cnpg_chart_repository = "https://cloudnative-pg.io/charts"
+
   # 🔴 THE OPERATOR ONLY. The plugin stays at one replica no matter the posture,
   # and that is a correctness constraint rather than a cost decision -- the
   # reasoning is at the plugin release below, where it is actionable.
@@ -304,7 +316,7 @@ resource "helm_release" "cnpg" {
   name             = "cnpg"
   namespace        = var.namespace
   create_namespace = true
-  repository       = "https://cloudnative-pg.github.io/charts"
+  repository       = local.cnpg_chart_repository
   chart            = "cloudnative-pg"
   version          = var.operator_chart_version
 
@@ -374,7 +386,7 @@ resource "helm_release" "barman_plugin" {
 
   name       = "plugin-barman-cloud"
   namespace  = var.namespace
-  repository = "https://cloudnative-pg.github.io/charts"
+  repository = local.cnpg_chart_repository
   chart      = "plugin-barman-cloud"
   version    = var.plugin_chart_version
 

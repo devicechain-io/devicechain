@@ -88,15 +88,32 @@ trap 'rm -rf "$work"' EXIT
 # 🔴 A HARD FAILURE, never a skip. A check that quietly passes when it could not
 # fetch its schemas is worse than no check: it reports success for every run on a
 # machine with no network, including CI the day a repository URL changes.
-helm repo add cnpg https://cloudnative-pg.github.io/charts >/dev/null 2>&1 || true
-helm repo update cnpg >/dev/null 2>&1 ||
-  fail "could not refresh the cloudnative-pg Helm repository; this check cannot run without the CRD schemas and will not pretend otherwise"
+#
+# 🔴 THE CANONICAL HOST, NOT THE github.io ONE. cloudnative-pg.github.io/charts now
+# answers 301 to cloudnative-pg.io/charts, and following that redirect is somebody
+# else's kindness rather than a contract. On 2026-09-02 it stopped being kind on
+# GitHub's own runners: this step went green at 14:48 and then failed three times in
+# a row from 14:50, on the same helm (v4.2.4, floated in by setup-helm) and the same
+# commit content, while the identical command succeeded from a developer machine.
+# Pointing at the host the redirect targets removes the hop entirely.
+CNPG_CHART_REPO="${CNPG_CHART_REPO:-https://cloudnative-pg.io/charts}"
+
+# 🔴 KEEP HELM'S OWN ERROR. This used to be `>/dev/null 2>&1 || true` on the add and
+# `>/dev/null 2>&1` on the update, which cost three CI runs to diagnose: the visible
+# failure said "could not refresh the repository" no matter what actually went wrong,
+# and the add's `|| true` meant an add that failed outright reported itself later as a
+# refresh problem. A guard that hides the one sentence naming its own cause makes every
+# distinct failure look like the same one.
+add_err="$(helm repo add cnpg "$CNPG_CHART_REPO" --force-update 2>&1)" ||
+  fail "could not add the cloudnative-pg Helm repository ($CNPG_CHART_REPO); this check cannot run without the CRD schemas and will not pretend otherwise. helm said: $add_err"
+upd_err="$(helm repo update cnpg 2>&1)" ||
+  fail "could not refresh the cloudnative-pg Helm repository ($CNPG_CHART_REPO); this check cannot run without the CRD schemas and will not pretend otherwise. helm said: $upd_err"
 
 for spec in "cloudnative-pg:$operator_version" "plugin-barman-cloud:$plugin_version"; do
   name="${spec%%:*}"
   version="${spec##*:}"
-  helm pull "cnpg/$name" --version "$version" --untar --untardir "$work" >/dev/null 2>&1 ||
-    fail "could not pull cnpg/$name $version"
+  pull_err="$(helm pull "cnpg/$name" --version "$version" --untar --untardir "$work" 2>&1)" ||
+    fail "could not pull cnpg/$name $version from $CNPG_CHART_REPO. helm said: $pull_err"
 done
 
 # Both charts render their CRDs as templates gated on `crds.create`, so the raw
