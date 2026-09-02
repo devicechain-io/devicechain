@@ -215,6 +215,36 @@ variable "node_loss_toleration_seconds" {
 }
 
 locals {
+  # Both CNPG charts come from here, named once so the two releases below cannot
+  # drift onto different registries.
+  #
+  # 🔴 OCI, NOT AN HTTP CHART REPOSITORY, AND THE REASON WAS MEASURED THE HARD WAY.
+  # Upstream pointed cloudnative-pg.github.io/charts at a 301 to cloudnative-pg.io,
+  # and on 2026-09-02 that domain began answering SERVFAIL -- resolver-dependent and
+  # intermittent, not a clean NXDOMAIN -- which took BOTH http forms down at once,
+  # the github.io one because helm follows the redirect into the hole. This is the
+  # BOOTSTRAP PATH: when the chart source cannot be reached, dcctl cannot install
+  # Postgres at all, and the failure arrives as a DNS timeout deep in a helm_release
+  # rather than as anything naming a chart host.
+  #
+  # The same charts are published as OCI artifacts on ghcr.io -- the registry this
+  # project already depends on for its own images -- with no index.yaml and no
+  # chart-repo domain in the path. That deletes a class of outage instead of moving
+  # to another host that can have the same one. (Addressed by version TAG, not by
+  # digest: `version` resolves to an OCI tag, which upstream could re-push.)
+  # hack/check-cnpg-chart-schema.sh pulls these exact charts from this exact place,
+  # so the gate and the install cannot disagree about where a chart comes from.
+  #
+  # 🔴🔴 A WRONG OCI PATH HERE IS INVISIBLE TO `tofu plan` AND `tofu validate`. The
+  # helm provider (2.17.0) does not contact the registry at plan time, so a release
+  # naming a chart that does not exist PLANS CLEAN and fails only at apply. Verified
+  # by planting `chart = "does-not-exist"`: plan succeeded, apply failed with a 403.
+  # ⇒ the only evidence that this block is right is a real apply. It was proved that
+  # way -- provider 2.17.0 joins `chart` onto an oci:// `repository`
+  # (registry.IsOCI ⇒ path.Join), giving oci://ghcr.io/cloudnative-pg/charts/<name>,
+  # and the operator installed with its 11 postgresql.cnpg.io CRDs.
+  cnpg_chart_repository = "oci://ghcr.io/cloudnative-pg/charts"
+
   # 🔴 THE OPERATOR ONLY. The plugin stays at one replica no matter the posture,
   # and that is a correctness constraint rather than a cost decision -- the
   # reasoning is at the plugin release below, where it is actionable.
@@ -304,7 +334,7 @@ resource "helm_release" "cnpg" {
   name             = "cnpg"
   namespace        = var.namespace
   create_namespace = true
-  repository       = "https://cloudnative-pg.github.io/charts"
+  repository       = local.cnpg_chart_repository
   chart            = "cloudnative-pg"
   version          = var.operator_chart_version
 
@@ -374,7 +404,7 @@ resource "helm_release" "barman_plugin" {
 
   name       = "plugin-barman-cloud"
   namespace  = var.namespace
-  repository = "https://cloudnative-pg.github.io/charts"
+  repository = local.cnpg_chart_repository
   chart      = "plugin-barman-cloud"
   version    = var.plugin_chart_version
 

@@ -88,15 +88,36 @@ trap 'rm -rf "$work"' EXIT
 # 🔴 A HARD FAILURE, never a skip. A check that quietly passes when it could not
 # fetch its schemas is worse than no check: it reports success for every run on a
 # machine with no network, including CI the day a repository URL changes.
-helm repo add cnpg https://cloudnative-pg.github.io/charts >/dev/null 2>&1 || true
-helm repo update cnpg >/dev/null 2>&1 ||
-  fail "could not refresh the cloudnative-pg Helm repository; this check cannot run without the CRD schemas and will not pretend otherwise"
+#
+# 🔴 OCI, NOT THE HTTP CHART REPOSITORY, AND THE REASON IS MEASURED. Upstream pointed
+# cloudnative-pg.github.io/charts at a 301 to cloudnative-pg.io/charts, and on
+# 2026-09-02 that domain began answering SERVFAIL -- a delegation/DNSSEC-shaped
+# failure, resolver-dependent and intermittent: 8.8.8.8 and 1.1.1.1 both SERVFAILed,
+# and one of them had served the records correctly minutes earlier. That took BOTH
+# http forms down at once, the github.io one because helm follows the redirect into
+# the hole, while cloudnative-pg.github.io itself kept resolving fine.
+#
+# 🔑 It read as a flake for three CI runs because a developer machine had a cached
+# answer and passed happily -- and because `dig +short` prints NOTHING for SERVFAIL,
+# which is easy to read as "the domain has no records" when it actually means "the
+# question could not be answered". Ask for the status line, not the short form.
+#
+# The same charts are published as OCI artifacts on ghcr.io -- the registry this
+# project already depends on for its own images -- addressed by digest and needing no
+# index.yaml and no chart-repo host. That removes a whole class of outage rather than
+# moving to a different host that can have the same one. (Addressed by version TAG,
+# not by digest -- helm resolves `--version 0.29.0` to a tag, which is re-pushable.)
+CNPG_CHART_REGISTRY="${CNPG_CHART_REGISTRY:-oci://ghcr.io/cloudnative-pg/charts}"
 
 for spec in "cloudnative-pg:$operator_version" "plugin-barman-cloud:$plugin_version"; do
   name="${spec%%:*}"
   version="${spec##*:}"
-  helm pull "cnpg/$name" --version "$version" --untar --untardir "$work" >/dev/null 2>&1 ||
-    fail "could not pull cnpg/$name $version"
+  # 🔴 KEEP HELM'S OWN ERROR. This used to be `>/dev/null 2>&1`, and the generic
+  # message that replaced it cost three CI runs to diagnose: every distinct failure
+  # -- a moved URL, a dead domain, a missing version -- printed the same sentence.
+  # The run that first carried helm's stderr named the true cause in one line.
+  pull_err="$(helm pull "$CNPG_CHART_REGISTRY/$name" --version "$version" --untar --untardir "$work" 2>&1)" ||
+    fail "could not pull $name $version from $CNPG_CHART_REGISTRY; this check cannot run without the CRD schemas and will not pretend otherwise. helm said: $pull_err"
 done
 
 # Both charts render their CRDs as templates gated on `crds.create`, so the raw

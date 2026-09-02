@@ -77,7 +77,7 @@ See [Dashboards](../concepts/dashboards.md) for what a definition is, how slots 
 binding manifests let one definition serve many devices, and how the standalone `/dash`
 viewer uses them.
 
-## Rendering a map: one required piece of host wiring
+## Rendering a map: one required piece of host wiring {#map-host-wiring}
 
 The map widget needs one thing from you, and skipping it fails quietly.
 
