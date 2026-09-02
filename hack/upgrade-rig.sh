@@ -477,8 +477,23 @@ extract_baseline() {
 repoint_baseline_chart_source() {
   local dead="https://cloudnative-pg.github.io/charts"
   local live="oci://ghcr.io/cloudnative-pg/charts"
+
+  # 🔴 SCOPED TO deploy/, WHICH IS THE ONLY PART THAT RUNS. dcctl embeds the
+  # OpenTofu root from there; the baseline's hack/ scripts are never executed by
+  # this drill, so rewriting them would change nothing and claim something.
+  #
+  # It also stops the function editing ITSELF. A whole-tree scan matches
+  # hack/upgrade-rig.sh, because the retired URL appears in this very function as a
+  # string literal -- so on a v0.14.0+ baseline, where there is genuinely nothing to
+  # do, it reported "1 file repointed" and rewrote `dead` to equal `live` in the
+  # extracted copy. Harmless (that copy never runs) but it is a false report, and a
+  # false report is what this rig exists not to produce.
+  local scope="$baseline_src/deploy"
+  [[ -d "$scope" ]] ||
+    fail "the extracted $baseline_tag tree has no deploy/; dcctl embeds its OpenTofu from there"
+
   local -a hits
-  mapfile -t hits < <(grep -rl -- "$dead" "$baseline_src" 2>/dev/null || true)
+  mapfile -t hits < <(grep -rl -- "$dead" "$scope" 2>/dev/null || true)
 
   if [[ ${#hits[@]} -eq 0 ]]; then
     note "$baseline_tag does not reference the retired chart host; nothing to repoint"
@@ -495,10 +510,19 @@ repoint_baseline_chart_source() {
   # 🔴 A sed that matched nothing exits 0. Re-read the tree and prove the string is
   # gone, or the drill proceeds to fail exactly as it did before with a rig that
   # claims it fixed something.
-  local remaining
-  remaining="$(grep -rl -- "$dead" "$baseline_src" 2>/dev/null | wc -l)"
-  [[ "$remaining" -eq 0 ]] ||
-    fail "repointing left $remaining file(s) still naming $dead; the drill would fail on an upstream outage rather than on this release"
+  #
+  # 🔴🔴 THE CHECK ITSELF MUST NOT BE THE THING THAT KILLS THE RIG. `grep -rq` exits
+  # 1 when it finds NOTHING, which here is the SUCCESS case -- so under
+  # `set -euo pipefail` a bare `grep` (or `grep | wc -l`, where pipefail propagates
+  # the same 1) aborts the run at the exact moment the repointing worked. That is
+  # not hypothetical: it is what this function did on its first CI run, exiting 1 one
+  # second after correctly rewriting both files. The status is consumed by the `if`
+  # so a "not found" result reaches the code that wants it rather than `set -e`.
+  if grep -rq -- "$dead" "$scope" 2>/dev/null; then
+    local -a left
+    mapfile -t left < <(grep -rl -- "$dead" "$scope" 2>/dev/null || true)
+    fail "repointing left ${#left[@]} file(s) still naming $dead (${left[*]}); the drill would fail on an upstream outage rather than on this release"
+  fi
 }
 
 build_baseline_dcctl() {
