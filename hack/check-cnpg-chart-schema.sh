@@ -89,31 +89,29 @@ trap 'rm -rf "$work"' EXIT
 # fetch its schemas is worse than no check: it reports success for every run on a
 # machine with no network, including CI the day a repository URL changes.
 #
-# 🔴 THE CANONICAL HOST, NOT THE github.io ONE. cloudnative-pg.github.io/charts now
-# answers 301 to cloudnative-pg.io/charts, and following that redirect is somebody
-# else's kindness rather than a contract. On 2026-09-02 it stopped being kind on
-# GitHub's own runners: this step went green at 14:48 and then failed three times in
-# a row from 14:50, on the same helm (v4.2.4, floated in by setup-helm) and the same
-# commit content, while the identical command succeeded from a developer machine.
-# Pointing at the host the redirect targets removes the hop entirely.
-CNPG_CHART_REPO="${CNPG_CHART_REPO:-https://cloudnative-pg.io/charts}"
-
-# 🔴 KEEP HELM'S OWN ERROR. This used to be `>/dev/null 2>&1 || true` on the add and
-# `>/dev/null 2>&1` on the update, which cost three CI runs to diagnose: the visible
-# failure said "could not refresh the repository" no matter what actually went wrong,
-# and the add's `|| true` meant an add that failed outright reported itself later as a
-# refresh problem. A guard that hides the one sentence naming its own cause makes every
-# distinct failure look like the same one.
-add_err="$(helm repo add cnpg "$CNPG_CHART_REPO" --force-update 2>&1)" ||
-  fail "could not add the cloudnative-pg Helm repository ($CNPG_CHART_REPO); this check cannot run without the CRD schemas and will not pretend otherwise. helm said: $add_err"
-upd_err="$(helm repo update cnpg 2>&1)" ||
-  fail "could not refresh the cloudnative-pg Helm repository ($CNPG_CHART_REPO); this check cannot run without the CRD schemas and will not pretend otherwise. helm said: $upd_err"
+# 🔴 OCI, NOT THE HTTP CHART REPOSITORY, AND THE REASON IS MEASURED. Upstream pointed
+# cloudnative-pg.github.io/charts at a 301 to cloudnative-pg.io/charts, and on
+# 2026-09-02 that domain stopped resolving ENTIRELY -- no A, no NS, no SOA from
+# 8.8.8.8 or 1.1.1.1, while cloudnative-pg.github.io still resolved fine. So BOTH
+# HTTP forms were dead at once: the github.io one because helm follows the redirect
+# into the hole. It looked like a flake for three runs because a developer machine
+# had the old answer cached and passed happily.
+#
+# The same charts are published as OCI artifacts on ghcr.io -- the registry this
+# project already depends on for its own images -- addressed by digest and needing no
+# index.yaml and no chart-repo host. That removes a whole class of outage rather than
+# moving to a different host that can have the same one.
+CNPG_CHART_REGISTRY="${CNPG_CHART_REGISTRY:-oci://ghcr.io/cloudnative-pg/charts}"
 
 for spec in "cloudnative-pg:$operator_version" "plugin-barman-cloud:$plugin_version"; do
   name="${spec%%:*}"
   version="${spec##*:}"
-  pull_err="$(helm pull "cnpg/$name" --version "$version" --untar --untardir "$work" 2>&1)" ||
-    fail "could not pull cnpg/$name $version from $CNPG_CHART_REPO. helm said: $pull_err"
+  # 🔴 KEEP HELM'S OWN ERROR. This used to be `>/dev/null 2>&1`, and the generic
+  # message that replaced it cost three CI runs to diagnose: every distinct failure
+  # -- a moved URL, a dead domain, a missing version -- printed the same sentence.
+  # The run that first carried helm's stderr named the true cause in one line.
+  pull_err="$(helm pull "$CNPG_CHART_REGISTRY/$name" --version "$version" --untar --untardir "$work" 2>&1)" ||
+    fail "could not pull $name $version from $CNPG_CHART_REGISTRY; this check cannot run without the CRD schemas and will not pretend otherwise. helm said: $pull_err"
 done
 
 # Both charts render their CRDs as templates gated on `crds.create`, so the raw

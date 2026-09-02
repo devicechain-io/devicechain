@@ -216,16 +216,24 @@ variable "node_loss_toleration_seconds" {
 
 locals {
   # Both CNPG charts come from here, named once so the two releases below cannot
-  # drift onto different hosts.
+  # drift onto different registries.
   #
-  # 🔴 THE CANONICAL HOST, NOT THE github.io ONE. cloudnative-pg.github.io/charts
-  # answers 301 to this address, and helm follows redirects -- but a redirect is
-  # upstream's kindness, withdrawable without notice, and on 2026-09-02 it stopped
-  # working from GitHub's runners while still working from a developer machine.
-  # This is the bootstrap path: when this address cannot be reached, dcctl cannot
-  # install Postgres at all, so it must not depend on a hop somebody else owns.
-  # hack/check-cnpg-chart-schema.sh pulls the same charts from the same host.
-  cnpg_chart_repository = "https://cloudnative-pg.io/charts"
+  # 🔴 OCI, NOT AN HTTP CHART REPOSITORY, AND THE REASON WAS MEASURED THE HARD WAY.
+  # Upstream pointed cloudnative-pg.github.io/charts at a 301 to cloudnative-pg.io,
+  # and on 2026-09-02 that domain stopped resolving ENTIRELY -- no A, no NS, no SOA
+  # from either 8.8.8.8 or 1.1.1.1 -- which took BOTH http forms down at once, the
+  # github.io one because helm follows the redirect into the hole. This is the
+  # BOOTSTRAP PATH: when the chart source cannot be reached, dcctl cannot install
+  # Postgres at all, and the failure arrives as a DNS timeout deep in a helm_release
+  # rather than as anything naming a chart host.
+  #
+  # The same charts are published as OCI artifacts on ghcr.io -- the registry this
+  # project already depends on for its own images -- addressed by digest, with no
+  # index.yaml and no chart-repo domain in the path. That deletes a class of outage
+  # instead of moving to another host that can have the same one.
+  # hack/check-cnpg-chart-schema.sh pulls these exact charts from this exact place,
+  # so the gate and the install cannot disagree about where a chart comes from.
+  cnpg_chart_repository = "oci://ghcr.io/cloudnative-pg/charts"
 
   # 🔴 THE OPERATOR ONLY. The plugin stays at one replica no matter the posture,
   # and that is a correctness constraint rather than a cost decision -- the
