@@ -397,8 +397,27 @@ jobs:
   # than an unvalidated upgrade claim becoming an official release.
   upgrade-gate:
     needs: [guard, images, frontend]
+    # 🔴 `pull-requests: read` IS NOT DEAD WEIGHT ON THE RELEASE PATH -- REMOVING IT
+    # BREAKS THE WHOLE RELEASE, and not in a way anything here would survive to
+    # report. A called workflow can never hold MORE permission than its caller
+    # grants, and the permission is checked when the run is CREATED, against every
+    # nested job's declaration -- not against the jobs that will actually execute.
+    # upgrade-gate.yml's `scope` job path-filters pull requests and so declares
+    # `pull-requests: read`; on a tag it does nothing useful, but its declaration is
+    # still validated. Granting only `contents: read` here made v0.14.0-rc.1 fail as
+    # `startup_failure` with ZERO jobs, no logs, and no annotation reachable from the
+    # API -- the message ("nested job 'scope' is requesting 'pull-requests: read',
+    # but is only allowed 'pull-requests: none'") exists only in the run's web UI.
+    #
+    # 🔑 Nothing we run can catch this class. actionlint passes, the YAML is valid,
+    # the needs graph resolves, and every input the caller passes is declared; the
+    # subset rule spans two files and is enforced only by GitHub at dispatch. Since
+    # release.yml runs on tags alone, a tag is currently the first thing that ever
+    # evaluates it. Treat any edit to a reusable workflow's job permissions as an
+    # edit to THIS block too.
     permissions:
       contents: read
+      pull-requests: read
     uses: ./.github/workflows/upgrade-gate.yml
     with:
       build: false
