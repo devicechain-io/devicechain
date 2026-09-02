@@ -1544,16 +1544,57 @@ func TestDestroyOnAMissingStateDirectoryIsNotAnError(t *testing.T) {
 // ~/.devicechain/escrow IS its state root. Both guards must hold — the write is
 // refused rather than landing somewhere destroy would eat, and destroying that
 // instance still spares every OTHER instance's artifact living there.
-func TestAnInstanceNamedEscrowDoesNotDisarmEitherGuard(t *testing.T) {
+// 🔴 THIS TEST'S POSITION CHANGED, DELIBERATELY. It used to assert that an instance named
+// "escrow" was TOLERATED: its escrow could not use the default path, but the name itself
+// was allowed and the teardown was careful around it. That was defensible while the
+// collision cost only an awkward escrow path.
+//
+// It costs more now. `~/.devicechain/escrow` is the shared escrow directory AND would be
+// that instance's state directory — the same path, and they cannot both be it. So the
+// instance's record would land among the escrow artifacts, where destroy deliberately
+// spares everything and ListInstances deliberately does not look: the instance would be
+// invisible to `dcctl instances list`, skipped by `dcctl destroy --all`, and its record
+// would outlive it to be inherited by the next instance of that name. A name that can
+// never work cleanly is better refused at the door than handled everywhere, so
+// instanceRoot now rejects it and this test asserts the refusal.
+//
+// The second half is unchanged and still earns its place: it is about
+// removeStatePreservingEscrow's own care, which is reachable regardless of the name.
+func TestAnInstanceNamedEscrowIsRefused(t *testing.T) {
 	fakeHome(t)
-	root, err := instanceRoot("escrow")
-	if err != nil {
-		t.Fatal(err)
+	if err := ValidateInstanceName("escrow"); err == nil {
+		t.Error("an instance named \"escrow\" was accepted, but its state directory IS the shared escrow directory")
 	}
-
+	if err := WriteInstanceRecord(InstanceRecord{Instance: "escrow", Provider: "local"}); err == nil {
+		t.Error("a record was written for an instance named \"escrow\" — it would land among the escrow artifacts")
+	}
+	// instanceRoot itself must stay lenient: its callers read an error from it as "no
+	// home directory", and resolveEscrowPath in particular returns the path as ACCEPTABLE
+	// on one — so validating in there silently disarms the containment check below.
+	if _, err := instanceRoot("escrow"); err != nil {
+		t.Errorf("instanceRoot must not validate; resolveEscrowPath depends on it not doing so: %v", err)
+	}
 	if _, err := resolveEscrowPath("escrow", ""); err == nil {
 		t.Error("the default path for an instance named \"escrow\" was accepted, but it " +
 			"is inside that instance's own state directory")
+	}
+
+	// Names that are merely awkward must still be allowed — a validator that rejects
+	// everything would "pass" every check above and break every real instance.
+	for _, ok := range []string{"devicechain", "harig", "dc-prod.2", "a_b"} {
+		if err := ValidateInstanceName(ok); err != nil {
+			t.Errorf("ValidateInstanceName(%q) refused a legitimate name: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", ".", "..", "a/b", "../etc", "a b"} {
+		if err := ValidateInstanceName(bad); err == nil {
+			t.Errorf("ValidateInstanceName(%q) was accepted", bad)
+		}
+	}
+
+	root, err := instanceRoot("escrow")
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	// Another instance's artifact, sitting in the shared escrow directory that this

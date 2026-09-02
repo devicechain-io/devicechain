@@ -59,6 +59,11 @@ const (
 	// shared box gives an attacker unlimited offline guesses at that passphrase.
 	escrowFileMode = 0o600
 	escrowDirMode  = 0o700
+
+	// escrowDirName is the SIBLING of the per-instance directories under
+	// ~/.devicechain, not one of them. Named here because ListInstances has to skip it:
+	// enumerating it as an instance would invent one that no destroy can act on.
+	escrowDirName = "escrow"
 )
 
 // EscrowFlags is the raw operator input, before any of it has been reconciled.
@@ -207,7 +212,7 @@ func DefaultEscrowPath(instance string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".devicechain", "escrow", instance+"-rootkey"+EscrowFileExt), nil
+	return filepath.Join(home, ".devicechain", escrowDirName, instance+"-rootkey"+EscrowFileExt), nil
 }
 
 // ResolveEscrowPlan reconciles the flags into a plan, reading and opening a restore
@@ -332,7 +337,7 @@ func mustDefaultEscrowPath(instance string) string {
 	if p, err := DefaultEscrowPath(instance); err == nil {
 		return p
 	}
-	return filepath.Join(".devicechain", "escrow", instance+"-rootkey"+EscrowFileExt)
+	return filepath.Join(".devicechain", escrowDirName, instance+"-rootkey"+EscrowFileExt)
 }
 
 // pathIsWithin reports whether path is dir or lives beneath it. Both are cleaned

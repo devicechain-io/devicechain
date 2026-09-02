@@ -211,7 +211,11 @@ dcctl bootstrap local --host localhost --no-tls
 
 # …then open the printed console URL and log in with the seeded credentials.
 
-# Tear it all back down (use --keep-cluster to uninstall only the instance)
+# See what is on this machine, and which cluster each instance lives in
+dcctl instances list
+
+# Tear it all back down (use --keep-cluster to uninstall only the instance,
+# or --all to destroy every instance on this machine)
 dcctl destroy
 ```
 
