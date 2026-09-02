@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dcctl/bootstrap"
+	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
 
@@ -378,16 +380,52 @@ var bootstrapCmd = &cobra.Command{
 			EnableAreas:          enableAreas,
 		}
 
+		// 🔴 CHECKED WHERE A NEW NAME ENTERS, and only here. `destroy` deliberately does
+		// NOT validate: whatever is already on disk must stay destroyable, including
+		// anything created before this check existed.
+		if err := bootstrap.ValidateInstanceName(opts.Instance); err != nil {
+			return err
+		}
+
 		ctx := cmd.Context()
-		// EnsureCluster resolves the kube-context we should target.
-		kubeContext, err := provider.EnsureCluster(ctx, opts)
+		// EnsureCluster resolves WHICH CLUSTER we should target, not merely how to reach
+		// it — see bootstrap.ClusterBinding.
+		binding, err := provider.EnsureCluster(ctx, opts)
 		if err != nil {
 			return err
 		}
 
+		// 🔴 RECORDED HERE, AND HERE IS THE ONLY PLACE IT CAN BE. This is the one moment
+		// the instance name and the cluster it was resolved to are both in hand; every
+		// later command used to re-derive the second from the first, and that derivation
+		// is wrong for any instance bootstrapped with --kube-context. Writing it BEFORE
+		// the pipeline is deliberate: a bootstrap that dies at step 4 has still created a
+		// cluster, and an instance that cannot be destroyed because its record was never
+		// written would be the same orphan this record exists to prevent.
+		//
+		// A failure to record is a WARNING, not a stop. The cluster is already up; making
+		// a bookkeeping error abort a bring-up would trade a recoverable annoyance
+		// (destroy falls back to the guess, loudly) for a broken install.
+		if !opts.DryRun {
+			rec := bootstrap.InstanceRecord{
+				Instance:     opts.Instance,
+				Provider:     provider.Name(),
+				Cluster:      binding.Cluster,
+				KubeContext:  binding.KubeContext,
+				Managed:      binding.Managed,
+				CreatedAt:    time.Now().UTC(),
+				DcctlVersion: Version,
+			}
+			if err := bootstrap.WriteInstanceRecord(rec); err != nil {
+				fmt.Println(color.YellowString(
+					"warning: could not record which cluster this instance lives in (%v).\n"+
+						"  `dcctl instances list` will show it as unrecorded and `dcctl destroy` will guess.", err))
+			}
+		}
+
 		st := &bootstrap.State{
 			Instance:             opts.Instance,
-			KubeContext:          kubeContext,
+			KubeContext:          binding.KubeContext,
 			Profile:              opts.Profile,
 			DryRun:               opts.DryRun,
 			AssumeYes:            opts.AssumeYes,

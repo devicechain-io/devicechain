@@ -65,7 +65,7 @@ credential, which is why this is a separate verb rather than advice to do that.)
 }
 
 func init() {
-	upgradeCmd.Flags().StringVar(&upgradeKubeContext, "kube-context", "", "kube-context to target (default: auto-detect kind-<instance>)")
+	upgradeCmd.Flags().StringVar(&upgradeKubeContext, "kube-context", "", "kube-context to target (default: the cluster recorded at bootstrap)")
 	upgradeCmd.Flags().StringVar(&upgradeRegistry, "registry", "", "image registry to pull the operator from (default: "+bootstrap.DefaultImageRegistry+")")
 	upgradeCmd.Flags().StringVar(&upgradeVersion, "version", "", "release version to upgrade the operator to (default: this dcctl's pinned version)")
 	upgradeCmd.Flags().BoolVar(&upgradeDryRun, "dry-run", false, "print what would happen without changing anything")

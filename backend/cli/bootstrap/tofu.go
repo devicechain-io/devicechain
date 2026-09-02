@@ -480,6 +480,16 @@ func findTofu() (string, error) {
 // without creating it — used by destroy to remove all persisted state for an
 // instance (tofu tfstate and friends).
 func instanceRoot(instance string) (string, error) {
+	// 🔴 NOT VALIDATED HERE, AND THAT IS A CORRECTION. Putting ValidateInstanceName in
+	// this funnel looked right and quietly DISARMED a guard: resolveEscrowPath treats an
+	// error from this function as "no home directory — not this check's problem" and
+	// returns the path as acceptable, so a rejected name skipped the containment check
+	// that stops an escrow artifact being written where destroy will delete it. Two
+	// callers encode that same assumption about what an error here means.
+	//
+	// So the name is validated where a NEW one enters (cmd/bootstrap.go) and again in
+	// WriteInstanceRecord, and never on the cleanup paths — because whatever is already
+	// on disk has to remain destroyable, including anything created before this existed.
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err

@@ -328,6 +328,12 @@ On a re-run it also reconciles the escrow:
 escrow artifact, which lives outside that directory by design, and which destroy names
 on its way out.
 
+One case removes less: an instance bootstrapped into a cluster you created yourself
+(with `--kube-context`) has that cluster **left running**. The instance is uninstalled
+from it and its local state — including the escrow's siblings — is cleared, but the
+cluster is not dcctl's to delete. It says so, and names the cluster, on the way out.
+`dcctl instances list` shows which instances are in that state.
+
 Keep it for as long as you keep any backup of that instance's databases. It is the
 only thing that can still read them. Delete it when those backups are gone, and not
 before.
