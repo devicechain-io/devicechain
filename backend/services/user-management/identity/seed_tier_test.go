@@ -113,3 +113,84 @@ func TestLocationReadIsNotInTheViewerBaseline(t *testing.T) {
 			auth.LocationRead)
 	}
 }
+
+// The viewer baseline is EXACTLY this list, and every change to it is a decision
+// somebody made on purpose.
+//
+// 🔴 THIS IS THE ONLY TEST THAT CAN CATCH AN ADDITION, which is why it is worth the
+// maintenance it costs. The other three constrain the list without bounding it:
+// TestViewerAuthoritiesAreReadOnly accepts anything ending in ":read";
+// TestViewerAuthoritiesAreAllTenantTier accepts any tenant-tier authority; and
+// TestLocationReadIsNotInTheViewerBaseline names one specific absence. So an entry
+// like secret:read would satisfy all three and silently join the set every enabled
+// tenant member receives on top of their roles — the same shape as the credential and
+// location defects those tests were written for, arriving by a route none of them
+// watches.
+//
+// The expectation is spelled out as a LITERAL rather than derived from
+// viewerAuthorities, because a fixture computed from the thing under test cannot catch
+// that thing moving: it would agree with any list at all.
+//
+// Widening is not forbidden, it has to be deliberate. If you are here because this
+// test failed, work out what the new authority lets every member of every tenant do,
+// check whether anything elsewhere is relying on the baseline NOT containing it (the
+// device-credential gate in device-management is the standing example), then edit the
+// literal below and say why in the commit.
+func TestViewerAuthoritiesAreExactlyTheseAuthorities(t *testing.T) {
+	want := []string{
+		"device:read",
+		"event:read",
+		"state:read",
+		"command:read",
+		"alarm:read",
+		"dashboard:read",
+	}
+
+	// Written as strings rather than auth constants on purpose: this asserts the WIRE
+	// values every access token carries, so renaming a constant while keeping its value
+	// is invisible here, and changing a value is not.
+	got := append([]string(nil), viewerAuthorities...)
+	slices.Sort(got)
+	sorted := append([]string(nil), want...)
+	slices.Sort(sorted)
+
+	if !slices.Equal(got, sorted) {
+		t.Errorf("the viewer baseline is %v, want exactly %v.\n"+
+			"Every enabled tenant member receives this list on top of their roles, and the "+
+			"OAuth read-only ceiling is kept equal to it, so a change here changes what every "+
+			"member and every read-only token can do. If the change is intended, update the "+
+			"literal in this test and say why.", got, sorted)
+	}
+}
+
+// A member with NO assigned role can open a dashboard. This is the outcome the
+// baseline change exists for, asserted as an outcome rather than as a list.
+//
+// The two assertions above constrain the baseline's CONTENTS; this one asserts what
+// the contents buy, on the path that actually issues authorities. Both matter,
+// because a list can be correct while nothing reads it — the defect this fixes was
+// exactly that shape from the other direction: dashboard-management gated three
+// queries on an authority the grant path never handed out, so every affordance
+// existed and every call was refused.
+//
+// 🔴 What this does NOT prove: it exercises effectiveAuthorities, which is the OAuth
+// path. issueTenantTokens performs the same union for a console login, written out
+// separately — so this covers one of the two callers, and the shared list is what
+// keeps them equal.
+func TestAMemberWithNoRoleCanOpenADashboard(t *testing.T) {
+	member := effectiveAuthorities(nil, false)
+
+	if !slices.Contains(member, string(auth.DashboardRead)) {
+		t.Errorf("a tenant member with no assigned role holds %v, which does not include %q — "+
+			"dashboard-management gates every dashboard read on it, so the console and the "+
+			"/dash viewer would refuse an ordinary member with nothing to explain why",
+			member, auth.DashboardRead)
+	}
+
+	// The counterweight: the baseline must not have become a way to hand out writes.
+	// Without this, "add whatever makes the dashboard open" passes.
+	if slices.Contains(member, string(auth.DashboardWrite)) {
+		t.Errorf("the baseline grants %q; creating, publishing and deleting dashboards must "+
+			"stay role-gated", auth.DashboardWrite)
+	}
+}

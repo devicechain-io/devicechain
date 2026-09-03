@@ -667,6 +667,13 @@ var viewerAuthorities = []string{
 	string(auth.StateRead),
 	string(auth.CommandRead),
 	string(auth.AlarmRead),
+	// A dashboard is a tenant's own saved arrangement of the data above, so a member
+	// who may read the data may open the view of it. Its absence here was an omission
+	// rather than a decision, and it had a visible cost: dashboard-management gates
+	// every read on dashboard:read, so an ordinary member — and every OAuth read-only
+	// token — opened the console or the /dash viewer and was refused by all three
+	// queries, with no role able to explain why.
+	string(auth.DashboardRead),
 }
 
 // unionStrings returns the de-duplicated union of two string slices, preserving

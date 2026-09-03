@@ -46,7 +46,7 @@ Los widgets se tematizan con propiedades personalizadas de CSS, de modo que una 
 
 Los widgets también pueden portar **acciones** — reconocer o limpiar una alarma, o enviar un comando — que el servidor autoriza contra los propios derechos con alcance de inquilino del solicitante (por ejemplo, una acción que requiere `alarm:write` queda inerte para un visor de solo lectura).
 
-Abrir un panel requiere **`dashboard:read`**, que *no* forma parte de la línea base de solo lectura que recibe todo miembro habilitado de un inquilino — de modo que un miembro sin rol asignado puede ver dispositivos, eventos, estado, comandos y alarmas, pero no puede listar ni abrir un panel hasta que un rol se lo conceda. `dashboard:write` controla crear, actualizar, publicar, revertir y eliminar.
+Abrir un panel requiere **`dashboard:read`**, que posee todo miembro habilitado de un inquilino: forma parte de la línea base de solo lectura, junto con leer dispositivos, eventos, estado, comandos y alarmas. Un panel es una disposición guardada de datos que esas autorizaciones ya alcanzan, así que quien puede leer los datos puede abrir la vista de ellos. `dashboard:write` controla crear, actualizar, publicar, revertir y eliminar, y sigue concediéndose por rol.
 
 ## Fuentes de datos
 
