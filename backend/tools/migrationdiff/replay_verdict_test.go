@@ -49,14 +49,42 @@ func TestExemptionSymptomIsNotMatchedLoosely(t *testing.T) {
 		"a truncated error must not satisfy a longer registered symptom")
 }
 
-// The real registered entry, checked against the real error text this gate produced when
-// it first ran. Without this the symptom string is only ever compared to itself.
-func TestTheLiveExemptionMatchesTheErrorItWasWrittenFor(t *testing.T) {
-	ex, ok := replayExemptionFor("event-management", "20260729000000")
-	require.True(t, ok, "the worked example must still be registered for this test to mean anything")
+// A symptom string, checked against the real error text this gate actually produced.
+// Without this the matcher is only ever compared to strings written for it.
+//
+// 🔴 THIS USED TO READ THE LIVE REGISTRY, AND THE REGISTRY IS NOW EMPTY — which is the
+// point, not a problem. The one entry was event-management's baseline, and that baseline
+// was re-cut to be re-runnable, so the gate reported the exemption as passing and told us
+// to delete it. Rewriting this as a fixture keeps the property the test was protecting
+// (a symptom must match a REAL observed error, not just itself) after its subject stopped
+// existing, rather than deleting the test along with the entry and quietly losing it.
+//
+// The two strings below are the historical ones, verbatim: the entry as it was
+// registered, and the error the gate emitted on its very first run.
+func TestASymptomMatchesTheRealErrorItWasWrittenFor(t *testing.T) {
+	ex := replayExemption{
+		area:    "event-management",
+		id:      "20260729000000",
+		symptom: "collate measurement_events.device_token: ERROR: cannot alter type of a column used by a view or rule",
+		reason:  "frozen pre-GA baseline; a replay dies on ALTER COLUMN ... COLLATE because the continuous aggregate it later creates reads those columns",
+	}
 
 	observed := errors.New("collate measurement_events.device_token: ERROR: cannot alter type of " +
 		"a column used by a view or rule (SQLSTATE 0A000)")
 	assert.Empty(t, exemptionVerdict(ex, observed),
 		"the registered symptom must match the error the gate actually observed")
+}
+
+// And the registry really is empty, asserted rather than assumed.
+//
+// An exemption is a known defect carried on purpose. Zero of them is the state this gate
+// exists to reach, so it is worth failing loudly when one reappears: whoever adds the next
+// entry should have to change this test and say why in the same commit, rather than
+// growing the list quietly.
+func TestNoReplayExemptionsAreRegistered(t *testing.T) {
+	assert.Empty(t, replayExemptions,
+		"a replay exemption is a migration that cannot survive its own replay, carried on "+
+			"purpose. If you are adding one, re-read the comment above the list: after GA a "+
+			"released instance cannot be told to destroy itself, so the pre-GA remedy that "+
+			"justified the last one is not available")
 }
