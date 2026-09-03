@@ -1021,6 +1021,28 @@ jobs:
 
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
 
+      # The egress drift check needs a Go toolchain as well as helm: it compares the
+      # COMPILED deny table against the RENDERED policy, so it runs two small commands
+      # out of backend/core rather than scraping either source file. Reading the sources
+      # is what made the previous version of that check unable to see a template edit.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      # The tenant-egress boundary is written twice — in Go for the paths that have a
+      # dialer, in the chart's NetworkPolicy for the three that do not — and nothing at
+      # compile or render time relates the two. This fails when they drift, which is
+      # otherwise silent and always in the widening direction. --self-test first, so its
+      # green is known to be a green that could have been red: four arms — two tamper the
+      # real chart and render it, one tampers the Go EXTRACTION (not the Go source, which
+      # it does not claim to), and one asserts the two sides are gathered independently,
+      # so a gate comparing the chart with itself cannot pass.
+      - name: egress deny-list drift check
+        run: |
+          hack/check-egress-ranges.sh --self-test
+
       - name: helm lint
         run: helm lint deploy/helm/devicechain
 

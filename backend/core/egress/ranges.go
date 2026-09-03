@@ -150,3 +150,28 @@ func teredoServer(addr netip.Addr) (netip.Addr, bool) {
 	b := addr.As16()
 	return netip.AddrFrom4([4]byte{b[4], b[5], b[6], b[7]}), true
 }
+
+// DeniedPrefixes returns the deny table, in declaration order.
+//
+// It exists for ONE caller: hack/check-egress-ranges.sh, which asserts that the
+// chart's NetworkPolicy refuses the same address space this table does. That gate
+// used to read this FILE with a regex, and reading the source is what made it weak
+// — a prefix moved into another variable, or commented out, still matched, so the
+// Go paths could stop denying an address while the gate stayed green. Handing it
+// the compiled table removes that class.
+//
+// 🔴 Be exact about what it does NOT remove, because the first version of this
+// comment was not: this is the TABLE, not the DECISION. An edit to the guard that
+// stops consulting a row changes what is denied without changing what this returns,
+// and the drift gate cannot see it. TestEveryDeniedPrefixIsRefused is what makes
+// that link total instead of sampled — before it, seven of these rows had no test
+// case at all and a `continue` on any of them was green everywhere.
+//
+// The returned slice is a copy, so a caller cannot edit the boundary.
+func DeniedPrefixes() []netip.Prefix {
+	out := make([]netip.Prefix, 0, len(denied))
+	for _, d := range denied {
+		out = append(out, d.prefix)
+	}
+	return out
+}

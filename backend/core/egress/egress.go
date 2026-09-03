@@ -23,11 +23,18 @@
 // stream engine that exposes no dialer, and one of the three (Kafka) dials a second hop
 // at whatever address the broker advertises.
 //
-// 🔴 Those three are bounded by NOTHING TODAY. The right control for them is a
-// NetworkPolicy at the pod, and no NetworkPolicy exists anywhere in this repository —
-// so this sentence is a statement of what is missing, not of a division of labour. A
-// caller who believes this package covers those paths will be wrong, and so will one who
-// assumes something else does.
+// 🔴 The control for those three is a NetworkPolicy at the pod, which the chart renders
+// — but it is OFF by default (networkPolicy.enabled), so on a default install those three
+// paths are bounded by nothing at all. A caller who believes this package covers them
+// will be wrong, and so will one who assumes the chart does without having turned it on.
+//
+// Two residuals survive even with it on, and they are worth knowing before trusting it:
+// a NetworkPolicy compares prefixes and cannot look inside an IPv6 address that CARRIES
+// an IPv4 one, so on a NAT64 or dual-stack cluster a broker at 64:ff9b::a9fe:a9fe reaches
+// the metadata service through the Bento paths while this package would refuse it. And
+// the policy is a CEILING over this package's allowed-destination configuration: an
+// address permitted here is still dropped by the network unless it is permitted there
+// too.
 package egress
 
 import (

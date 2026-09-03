@@ -198,6 +198,109 @@ For true zero-downtime run `replicas: 2`+ per area (`--set replicas=2` or
 with more than one replica. Tune the strategy via `rollingUpdate.maxUnavailable` /
 `rollingUpdate.maxSurge`.
 
+## Bounding tenant egress (optional)
+
+A tenant configures its own delivery destinations — a webhook URL, an SMTP relay, an MQTT
+or Kafka broker, an SNS topic. DeviceChain refuses a destination that resolves to a
+private, loopback, link-local, carrier-NAT or cloud-metadata address, and it does so at
+the moment the connection is dialled rather than when the URL is saved, because a hostname
+can resolve differently between the two.
+
+That covers the webhook, HTTP-call and SMTP paths. It cannot cover MQTT, Kafka or AWS
+SNS/SQS: those are built inside an embedded stream engine that exposes no place to hook a
+dialer. For Kafka an address check would not be enough even with one — the client dials
+the bootstrap broker and then registers whatever addresses that broker returns in its
+metadata, so the tenant's own broker chooses the second hop. The network layer is the only
+boundary those three have.
+
+`networkPolicy.enabled=true` renders an egress `NetworkPolicy` for `outbound-connectors`
+that permits DNS, the platform's own datastores and services, and the public internet —
+and nothing else.
+
+**It only does anything if your CNI enforces NetworkPolicy.** The object is ordinary
+Kubernetes API and every cluster accepts and stores it, so `kubectl get netpol` shows it
+whether or not anything acts on it. Most production CNIs enforce policy; so does the one
+`kind` installs by default, which means a development cluster is not a safe place to find
+out you got a rule wrong.
+
+**A denied connection hangs; it does not fail.** Traffic a policy drops produces a timeout
+rather than a refusal, so a peer missing from the rules looks like an outage somewhere
+else. The rules enumerate everything the service needs. Three ways to lose one:
+
+1. **Check where your CNI evaluates egress.** The rules reach the datastores and
+   `user-management` with namespace and pod selectors, which match pod addresses. A CNI
+   that evaluates egress *before* kube-proxy's address translation sees a Service
+   ClusterIP instead, matches nothing, and drops it — and the service then never becomes
+   ready. Add your Service CIDR to `networkPolicy.additionalAllowedCidrs` if so.
+2. **Check how DNS reaches your pods.** The rules permit DNS to pods in the namespace
+   named by `networkPolicy.dnsNamespaceSelector`. If you run NodeLocal DNSCache — common
+   on managed clusters — that selector may match nothing, every lookup is dropped, and
+   nothing starts. Which address to permit depends on how the cache is deployed, and the
+   two cases need different answers:
+
+   - **kube-proxy in iptables mode (the usual deployment).** Pods keep the kube-dns
+     Service ClusterIP in `/etc/resolv.conf`; the cache binds that address locally and
+     intercepts the query without translating it, so what your CNI sees is the kube-dns
+     ClusterIP — inside the blocked private ranges, matching no pod. Permit the kube-dns
+     Service ClusterIP as a `/32`.
+   - **IPVS mode, or any cluster where `--cluster-dns` was pointed at the cache.** The
+     resolver really is the node-local link-local address. Permit that.
+
+   To tell which you have, read `/etc/resolv.conf` in any running pod: the `nameserver`
+   there is the address to permit.
+3. **Replacing a namespace selector means clearing the default key, not just setting
+   yours.** The keys hold a label map, and Helm MERGES a map rather than replacing it, so
+   adding your label leaves the shipped one in place and the resulting two-label selector
+   matches neither namespace. That is true of `--set`, `--set-json` and a values file
+   alike — a values file is not the workaround, and an earlier version of this page said
+   it was. Set the default key to `null` in the same values file as your own label:
+
+   ```yaml
+   networkPolicy:
+     infrastructureNamespaceSelector:
+       devicechain.io/component: null    # drop the shipped label
+       my.org/role: datastores           # and select on yours
+   ```
+
+The address space the policy refuses is part of the chart, not a value you set. It has to
+match what the platform refuses in code — a build check compares the rendered policy
+against the compiled deny table and fails if they drift apart — so it is not a per-
+deployment choice. To permit a specific destination use `networkPolicy.additionalAllowedCidrs`
+below; there is deliberately no way to shrink the refused set from values, because doing so
+would silently leave the network permitting what the code refuses.
+
+**Three things the policy does not do**, all worth knowing before relying on it:
+
+- The datastore rule permits the whole namespace on the NATS and PostgreSQL ports, not
+  the two workloads by name. So a second datastore living in that namespace on one of
+  those ports is reachable even though only NATS and PostgreSQL are intended. Narrowing
+  it needs a pod selector per datastore, and a way to express the labels of
+  bring-your-own infrastructure; until then, treat "the platform's datastores" as "that
+  namespace, on those two ports".
+
+- It compares address prefixes, so it cannot look inside an IPv6 address that carries an
+  IPv4 one. On a NAT64 or dual-stack cluster a tenant broker at a translated address
+  reaches what the translated address points at, including a metadata service, on exactly
+  the paths this policy exists to bound. Closing that needs the policy generated from your
+  cluster's own translation prefix.
+- It is a **ceiling** over `instance.config.infrastructure.egress.allowedDestinations`
+  for the paths it covers — two controls in series rather than one. That setting permits
+  specific addresses for the destinations checked in code, and an address permitted there
+  is still dropped by the network unless it is also in `additionalAllowedCidrs`. A dropped
+  connection hangs rather than reporting a refusal, so the delivery retries to its cap
+  instead of failing usefully. Where both apply, put the address in both places.
+
+  🔴 **But note WHICH paths, because an earlier version of this page got it wrong and told
+  you to do this for a mail relay.** The policy selects `outbound-connectors` only, and
+  mail is `notification-management`'s path — so nothing here affects SMTP, and adding a
+  relay address to `additionalAllowedCidrs` does nothing for mail while needlessly opening
+  the tenant connector paths toward it. For a relay the Go guard refuses, the knob is
+  `egress.allowedDestinations` alone.
+
+Prefer single addresses when you widen either boundary: in Kubernetes the smallest CIDR
+that reaches one in-cluster service is often the whole Service range, and granting that
+re-opens every private address for every tenant.
+
 ## What it renders
 
 - A `Namespace` named `instance.id` (toggle with `instance.createNamespace`).
@@ -212,6 +315,9 @@ with more than one replica. Tune the strategy via `rollingUpdate.maxUnavailable`
 - The web console (`frontend.enabled=true`, on by default): a static nginx
   `Deployment` + `Service` serving the Vite/React SPA. Disable for
   headless/ingest-only instances.
+- Optional (`networkPolicy.enabled=true`): an egress `NetworkPolicy` for
+  `outbound-connectors`. Requires a policy-enforcing CNI to do anything; see
+  "Bounding tenant egress" above.
 - Optional (`ingress.enabled=true`): two `Ingress` objects on one host — the API
   ingress routes `https://<host>/api/<area>/graphql` to each enabled area
   (stripping the `/api/<area>` prefix), and the web ingress serves the console at
