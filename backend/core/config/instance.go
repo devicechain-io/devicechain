@@ -368,6 +368,29 @@ type InfrastructureConfiguration struct {
 	ServiceAuth      ServiceAuthConfiguration
 	Secrets          SecretsConfiguration
 	Blob             BlobConfiguration
+	Egress           EgressConfiguration
+}
+
+// EgressConfiguration is the operator's escape hatch for the tenant-egress boundary
+// (ADR-023): the destinations a tenant-configured webhook, httpCall or SMTP relay may
+// reach even though the guard would otherwise refuse them.
+//
+// It exists because the boundary is fail-closed by default and some legitimate
+// deployments live behind it: an in-cluster SMTP relay is the ordinary Kubernetes mail
+// pattern, and a single-operator self-hosted install may point "tenant" webhooks at its
+// own in-cluster services. Without this they break with no recourse, and the failure
+// surfaces only as a log line in one pod.
+//
+// 🔴 The sharp edge, which belongs here because it is not visible from the values file.
+// In Kubernetes the smallest CIDR that reaches one in-cluster relay is often the WHOLE
+// service CIDR — and granting that re-opens every private address for every tenant,
+// which is the entire boundary. Grant /32s. This cannot express a hostname: the check
+// runs on the resolved address at dial time, which is the only place a DNS answer cannot
+// change underneath it, and a name is not available there.
+type EgressConfiguration struct {
+	// AllowedDestinations are CIDR prefixes (IPv4 or IPv6) exempt from the guard's deny
+	// list. Empty — the default — means no exemptions.
+	AllowedDestinations []string
 }
 
 // Generic datastore configuration

@@ -8,11 +8,11 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/smtp"
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/egress"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/rs/zerolog/log"
 )
@@ -22,7 +22,26 @@ import (
 // is the SMTP password (used only when a username is configured). It speaks SMTP
 // directly (net/smtp) rather than through smtp.SendMail so it can honor the context
 // deadline on every step and support implicit TLS as well as STARTTLS.
-type smtpAdapter struct{}
+type smtpAdapter struct {
+	// guard is the tenant-egress boundary this adapter dials through, carrying the
+	// operator's allowed destinations. nil means the fail-closed default with no
+	// allowances — a wiring mistake narrows the boundary, never removes it.
+	guard *egress.Guard
+}
+
+// egressGuard returns the configured guard, or a no-allowance one.
+//
+// 🔴 Judge this on where SMTP CREDENTIALS go, not only on what SSRF reaches. The default
+// security mode is STARTTLS, negotiated after the greeting, and "none" is cleartext — so
+// a channel pointed at an attacker-chosen host hands over the configured username and
+// password. The failure here is credential disclosure, not request forgery, which is why
+// the fallback is a real guard rather than a bare dialer.
+func (a *smtpAdapter) egressGuard() *egress.Guard {
+	if a.guard == nil {
+		return egress.NewGuard(nil)
+	}
+	return a.guard
+}
 
 // smtpConfig is the SMTP channel's connection settings (the channel's non-secret
 // Config JSON). Security selects the transport: "starttls" (default) upgrades a
@@ -122,7 +141,12 @@ func (a *smtpAdapter) Deliver(ctx context.Context, channel *model.NotificationCh
 // hang a dispatch worker (and thus shutdown) against a black-hole endpoint.
 func (a *smtpAdapter) dial(ctx context.Context, cfg *smtpConfig) (*smtp.Client, error) {
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	// The host comes from the channel's Config JSON, so it is tenant-supplied and until
+	// now was dialed with no address check of any kind — an SMTP channel pointed at
+	// 169.254.169.254 was a connection to the instance metadata service. The guard runs
+	// inside the dialer's Control hook, on the address the kernel is about to connect to,
+	// which is the only placement a DNS answer cannot get between.
+	conn, err := a.egressGuard().Dialer().DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("smtp dial %s: %w", addr, err)
 	}

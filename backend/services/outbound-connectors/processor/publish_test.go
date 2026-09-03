@@ -43,7 +43,7 @@ func newPublishTestExecutor(t *testing.T) (*Executor, *model.Api, *capturedSend)
 	api := model.NewApi(&rdb.RdbManager{Database: db}, store)
 
 	cap := &capturedSend{}
-	e := NewExecutor(NewSecretResolver(store), api, 10*time.Second)
+	e := NewExecutor(NewSecretResolver(store), api, loopbackClient(), 10*time.Second)
 	e.send = cap.fn
 	return e, api, cap
 }
@@ -184,7 +184,7 @@ func TestExecutePublishSendFailureRetryable(t *testing.T) {
 // TestExecutePublishNoStoreUnsupported: an executor with no connector store treats publish
 // as terminal unsupported (httpCall-only deployment).
 func TestExecutePublishNoStoreUnsupported(t *testing.T) {
-	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, 10*time.Second)
+	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackClient(), 10*time.Second)
 	res := e.Execute(context.Background(), publishReq("x"))
 	assert.False(t, res.retryable)
 	assert.Equal(t, outcomeUnsupported, res.outcome)

@@ -13,6 +13,7 @@ import (
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/egress"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/rs/zerolog/log"
@@ -54,14 +55,14 @@ type PolicyNotifier struct {
 // bounding a single attempt. tenantDeleted is the ADR-077 lifecycle gate (nil disables
 // the refusal).
 func NewPolicyNotifier(api *model.Api, store secrets.SecretStore, attempts int, timeout time.Duration,
-	tenantDeleted func(string) bool) *PolicyNotifier {
+	tenantDeleted func(string) bool, guard *egress.Guard) *PolicyNotifier {
 	if attempts < 1 {
 		attempts = 1
 	}
 	return &PolicyNotifier{
 		api:           api,
 		store:         store,
-		adapters:      newAdapterRegistry(),
+		adapters:      newAdapterRegistry(guard),
 		attempts:      attempts,
 		timeout:       timeout,
 		TenantDeleted: tenantDeleted,
@@ -149,7 +150,7 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 	}
 
 	rendered := renderNotification(event)
-	delivered := 0
+	delivered, refused, failed := 0, 0, 0
 	for _, d := range deliveries {
 		secret, err := n.resolveChannelSecret(ctx, d.channel.ID)
 		if err != nil {
@@ -164,8 +165,13 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 			continue
 		}
 		d.secret = secret
-		if n.deliverWithRetry(ctx, d, rendered) {
+		switch n.deliverWithRetry(ctx, d, rendered) {
+		case deliveryOK:
 			delivered++
+		case deliveryRefused:
+			refused++
+		default:
+			failed++
 		}
 	}
 
@@ -174,7 +180,21 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 	// this dispatcher's in-line retry). This is double-send-safe precisely because NO
 	// channel succeeded — there is nothing to re-send twice. Once any channel succeeds
 	// we must ack (return nil) so redelivery can't double-send the ones that worked.
+	//
+	// 🔴 Unless every target was REFUSED rather than failed. Redelivery exists to ride
+	// out an endpoint being down; it cannot make a private address public. Returning an
+	// error here would churn the redelivery budget to reach the same refusal and then
+	// dead-letter it as an ordinary exhausted delivery — which tells an operator the
+	// endpoint is unreachable when the truth is that the channel is pointed somewhere
+	// this platform will not go. A mix still redelivers, because the failed ones deserve
+	// the retry the refused ones do not.
 	if delivered == 0 {
+		if failed == 0 && refused > 0 {
+			log.Error().Str("tenant", tenant).Str("alarm", event.AlarmToken).Int("channels", refused).
+				Msg("Every channel for this alarm points at an address outbound traffic is not " +
+					"permitted to reach; acking rather than redelivering, because redelivery cannot change that.")
+			return nil
+		}
 		return fmt.Errorf("all %d channel deliveries failed for alarm %q", len(deliveries), event.AlarmToken)
 	}
 
@@ -297,7 +317,7 @@ func (n *PolicyNotifier) Escalate(ctx context.Context, state *model.Notification
 		return nil
 	}
 	rendered := renderEscalation(state, state.EscalationLevel+1)
-	delivered := 0
+	delivered, refused, failed := 0, 0, 0
 	for _, d := range deliveries {
 		secret, err := n.resolveChannelSecret(ctx, d.channel.ID)
 		if err != nil {
@@ -306,11 +326,24 @@ func (n *PolicyNotifier) Escalate(ctx context.Context, state *model.Notification
 			continue
 		}
 		d.secret = secret
-		if n.deliverWithRetry(ctx, d, rendered) {
+		switch n.deliverWithRetry(ctx, d, rendered) {
+		case deliveryOK:
 			delivered++
+		case deliveryRefused:
+			refused++
+		default:
+			failed++
 		}
 	}
 	if delivered == 0 {
+		// Same reasoning as dispatch: a refusal is not an outage, so redelivering it only
+		// delays the same answer. The tier has already been claimed either way.
+		if failed == 0 && refused > 0 {
+			log.Error().Str("alarm", state.AlarmToken).Int("channels", refused).
+				Msg("Every escalation channel points at an address outbound traffic is not " +
+					"permitted to reach; acking rather than redelivering.")
+			return nil
+		}
 		return fmt.Errorf("all %d escalation deliveries failed for alarm %q after claiming the tier",
 			len(deliveries), state.AlarmToken)
 	}
@@ -411,12 +444,34 @@ func effectiveMaxEscalations(p *model.NotificationPolicy, defaultMax int) int {
 	return defaultMax
 }
 
+// deliveryResult says how one delivery ended.
+//
+// It replaced a bool because "did not deliver" turned out to be two facts with OPPOSITE
+// dispositions, and collapsing them meant the caller could only pick one. A transient
+// failure should be redelivered by the durable consumer; a destination the egress
+// boundary refuses should not, because no amount of redelivery makes an address public.
+// With a bool, refusing a channel still returned "not delivered", the caller still
+// returned an error, and the event still churned the redelivery budget and died as an
+// ordinary exhausted delivery — the exact operator-facing outcome the refusal exists to
+// replace, one layer up from where it was fixed.
+type deliveryResult int
+
+const (
+	// deliveryOK — the adapter accepted it.
+	deliveryOK deliveryResult = iota
+	// deliveryFailed — a transient failure worth redelivering.
+	deliveryFailed
+	// deliveryRefused — the destination is one this platform will not connect to.
+	// Terminal by construction.
+	deliveryRefused
+)
+
 // deliverWithRetry sends one delivery, retrying up to n.attempts with a short linear
-// backoff and bounding each attempt by n.timeout. It returns true on success. The
-// adapter, not the processor, owns retry here (Notifier contract), so a final failure
-// is logged and dropped rather than left for redelivery — a redelivery would resend the
-// whole event and double-send the channels that already succeeded.
-func (n *PolicyNotifier) deliverWithRetry(ctx context.Context, d delivery, rendered *RenderedNotification) bool {
+// backoff and bounding each attempt by n.timeout. The adapter, not the processor, owns
+// retry here (Notifier contract), so a final failure is logged and dropped rather than
+// left for redelivery — a redelivery would resend the whole event and double-send the
+// channels that already succeeded.
+func (n *PolicyNotifier) deliverWithRetry(ctx context.Context, d delivery, rendered *RenderedNotification) deliveryResult {
 	// ADR-077, and this one is the GUARANTEE rather than the disposition.
 	//
 	// dispatch and Escalate both refuse a deleted tenant above, and today they are the
@@ -431,7 +486,9 @@ func (n *PolicyNotifier) deliverWithRetry(ctx context.Context, d delivery, rende
 	if n.tenantDeleted(ctx) {
 		log.Warn().Str("channel", d.channel.Token).
 			Msg("Refusing to deliver a notification for a deleted tenant; this should have been refused upstream.")
-		return false
+		// Refused, not failed: a deleted tenant does not come back, so redelivering this
+		// would churn the budget to reach the same answer.
+		return deliveryRefused
 	}
 
 	adapter := n.adapters[d.channel.ChannelType]
@@ -440,21 +497,31 @@ func (n *PolicyNotifier) deliverWithRetry(ctx context.Context, d delivery, rende
 		err := adapter.Deliver(dctx, d.channel, d.secret, d.recipients, rendered)
 		cancel()
 		if err == nil {
-			return true
+			return deliveryOK
+		}
+		// A destination the egress boundary refused is terminal: retrying cannot make an
+		// address public, so the remaining attempts would be pure delay in front of the
+		// same answer, and the log line an operator eventually reads would say
+		// "exhausted attempts" when the truth is "this channel points somewhere it may
+		// not go". Stop on the first one and say so.
+		if errors.Is(err, egress.ErrBlocked) {
+			log.Error().Err(err).Str("channel", d.channel.Token).Str("type", d.channel.ChannelType).
+				Msg("Notification channel points at an address outbound traffic is not permitted to reach; not retrying.")
+			return deliveryRefused
 		}
 		log.Warn().Err(err).Str("channel", d.channel.Token).Str("type", d.channel.ChannelType).
 			Int("attempt", attempt).Int("attempts", n.attempts).Msg("Notification delivery attempt failed")
 		if attempt < n.attempts {
 			select {
 			case <-ctx.Done():
-				return false
+				return deliveryFailed
 			case <-time.After(time.Duration(attempt) * retryBackoffBase):
 			}
 		}
 	}
 	log.Error().Str("channel", d.channel.Token).Str("type", d.channel.ChannelType).
 		Int("attempts", n.attempts).Msg("Notification permanently dropped for channel after exhausting attempts")
-	return false
+	return deliveryFailed
 }
 
 // resolveChannelSecret returns the channel's delivery secret from the store, keyed

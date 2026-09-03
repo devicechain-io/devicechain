@@ -38,6 +38,14 @@ const (
 	// mean opposite things: a rate shed is a live tenant over quota whose dead-lettered message is
 	// replayable, this is a tenant that will not exist and whose message must never be sent.
 	outcomeTenantDeleted = "tenant_deleted"
+	// outcomeBlocked — the destination resolved to an address a tenant may not reach (a private,
+	// loopback, link-local or cloud-metadata address), so the connection was refused before a byte
+	// was written. Terminal and dead-lettered, never retried: waiting does not make an address
+	// public, so a retry would only burn the redelivery budget and delay the dead-letter that tells
+	// an operator what happened. Counted apart from `invalid` because it means something different
+	// to whoever is looking: an invalid dispatch is malformed, a blocked one is well-formed and
+	// aimed somewhere it must not go.
+	outcomeBlocked = "blocked"
 	// outcomeDeadWriteFailed — the terminal case where the dead-letter WRITE itself failed on the
 	// last delivery the broker will make, so the dispatch could be neither delivered nor durably
 	// dead-lettered: an explicit, alertable LOSS signal (never silently swallowed).
