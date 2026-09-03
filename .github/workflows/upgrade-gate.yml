@@ -414,6 +414,7 @@ jobs:
             --set instance.id=default \
             --set 'enabledFunctionalAreas={user-management,device-management,event-processing,outbound-connectors}' \
             --set networkPolicy.enabled=true \
+            --include-crds \
             | (cd backend/core && go run ./egress/internal/policyranges -policies) \
             | kubectl --context kind-devicechain-upgrade apply --dry-run=server -f -
 

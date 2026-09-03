@@ -52,9 +52,29 @@ import (
 	"io"
 	"net/netip"
 	"os"
+	"strings"
 
 	yaml "go.yaml.in/yaml/v3"
 )
+
+// refuseListWrapper rejects any document whose kind ends in "List".
+//
+// 🔴 A LIST IS NOT A DOCUMENT THIS CHART SHOULD EVER EMIT, AND IT IS A HOLE IF IT DOES.
+// Helm's manifest builder FLATTENS a `kind: List` before applying, so a NetworkPolicy
+// wrapped in one is created by a real `helm install` — verified on a cluster — while a
+// filter that selects on `kind == "NetworkPolicy"` skips the wrapper entirely and reports
+// nothing. That is the third spelling of "a policy added in a new file", after
+// `--show-only` and `crds/`, and the cheapest closure is to refuse the shape rather than
+// to teach every consumer to flatten it.
+func refuseListWrapper(kind string, index int) error {
+	if strings.HasSuffix(kind, "List") {
+		return fmt.Errorf("document %d has kind %q: a List wrapper is refused here, because "+
+			"Helm flattens one before applying, so anything inside it is created by an install "+
+			"while a kind filter reads straight past the wrapper. Emit the objects directly",
+			index, kind)
+	}
+	return nil
+}
 
 type manifest struct {
 	Kind string `yaml:"kind"`
@@ -106,6 +126,7 @@ func runPolicies(in io.Reader, out io.Writer) error {
 
 	dec := yaml.NewDecoder(in)
 	found := 0
+	docIndex := 0
 	for {
 		var doc map[string]any
 		err := dec.Decode(&doc)
@@ -114,6 +135,12 @@ func runPolicies(in io.Reader, out io.Writer) error {
 		}
 		if err != nil {
 			return fmt.Errorf("parse manifest stream: %w", err)
+		}
+		docIndex++
+		if kind, ok := doc["kind"].(string); ok {
+			if err := refuseListWrapper(kind, docIndex); err != nil {
+				return err
+			}
 		}
 		if doc == nil || doc["kind"] != "NetworkPolicy" {
 			continue
@@ -141,6 +168,7 @@ func run(in io.Reader, out io.Writer) error {
 
 	dec := yaml.NewDecoder(in)
 	blocks := 0
+	docIndex := 0
 	for {
 		var m manifest
 		err := dec.Decode(&m)
@@ -149,6 +177,10 @@ func run(in io.Reader, out io.Writer) error {
 		}
 		if err != nil {
 			return fmt.Errorf("parse manifest stream: %w", err)
+		}
+		docIndex++
+		if err := refuseListWrapper(m.Kind, docIndex); err != nil {
+			return err
 		}
 		if m.Kind != "NetworkPolicy" {
 			continue

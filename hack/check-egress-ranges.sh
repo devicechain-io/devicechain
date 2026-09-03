@@ -45,15 +45,25 @@
 # shows up twice in one commit, which is the right number of times for an edit to a
 # security boundary.
 #
-# 🔴 SAY WHAT THE GOLDEN DOES NOT COVER, because the previous two versions of this header
-# each replaced a false coverage claim with a subtler one. A golden pins the value
-# COMBINATIONS it was rendered with. Two are rendered — the defaults, and the defaults plus
-# networkPolicy.additionalAllowedCidrs, which is the template's only values-conditional
-# block and emits nothing without it. Replacing that block's body with an allow-all rule
-# used to pass everything and open every tenant destination the moment an operator set the
-# value. A branch reachable only under some third combination is still pinned by nothing,
-# and the fix for a third branch is a third render in golden_body — not a firmer sentence
-# here.
+# 🔴 SAY WHAT THE GOLDEN DOES NOT COVER. Every previous version of this header replaced a
+# false coverage claim with a subtler one, four rounds running, so this states the shape of
+# the gap rather than claiming a boundary.
+#
+# A GOLDEN PINS A RENDER. Anything that does not appear in the render it was made from is
+# invisible to it, and there are three ways for that to happen:
+#
+#   - a VALUES branch that emits nothing under the rendered values. Two combinations are
+#     rendered (the defaults, and the defaults plus additionalAllowedCidrs). Replacing that
+#     block's body with an allow-all rule used to pass everything.
+#   - a GUARD, which emits nothing when it does not fire. assert_guards feeds each
+#     operator-reachable one the input it exists to refuse and requires the render to fail;
+#     two guards are unreachable from values and are defensive against a template edit.
+#   - a RENDER-CONTEXT branch — lookup, .Capabilities, .Release.Is* — which differs between
+#     `helm template` and `helm install`. assert_no_render_context_branches refuses those
+#     outright, because a gate that renders cannot check them by rendering.
+#
+# A fourth way would need a fourth check. The honest response to finding one is another
+# check here, not a firmer sentence.
 #
 # 🔴 THE LIMIT OF THE SELF-TEST, STATED RATHER THAN GLOSSED. The arms drive the same
 # wiring CI drives, so rot in the extractors, the comparison or the wiring is caught. What
@@ -208,6 +218,71 @@ gather() {
   fi
 }
 
+# assert_guards requires each render-time guard that an OPERATOR CAN TRIP to actually trip.
+#
+# 🔴 THIS EXISTS BECAUSE THE GOLDEN CANNOT SEE A GUARD. A `{{ fail }}` block emits nothing
+# when it does not fire, so under the values the golden is rendered with, every one of them
+# is invisible — deleting the dnsNamespaceSelector guard leaves the gate green, the golden
+# identical and all four self-test arms passing. It is not hypothetical which operator
+# reaches it: the chart README tells you to clear the shipped label key when you replace a
+# namespace selector, and clearing it WITHOUT adding your own is one slip away. That renders
+# `namespaceSelector: {}` on the port-53 rule, which matches every namespace in the cluster.
+#
+# So the guards are checked the only way a guard can be: by feeding it the input it exists
+# to refuse and requiring the render to fail. Two of the five cannot be reached from values
+# at all — the deny lists live in the template body now — so they are defensive against a
+# template edit and are deliberately not listed here.
+# assert_no_render_context_branches refuses template constructs whose value differs between
+# `helm template` and `helm install`.
+#
+# 🔴 THE GOLDEN IS A RENDER, SO ANYTHING THAT RENDERS DIFFERENTLY UNDER INSTALL IS INVISIBLE
+# TO IT. Measured: under `helm template` a chart sees `lookup` returning empty,
+# `.Capabilities.APIVersions` carrying only the built-in list, and `.Release.IsUpgrade`
+# false; under `helm install --dry-run=server` on a real cluster all three change. So a
+# second policy gated on `.Release.IsUpgrade` is absent from every render this gate makes,
+# present on the upgrade the rig performs, and inspected by nothing.
+#
+# This is a LEXICAL check, and that is the right shape only because it is a PROHIBITION
+# rather than a comparison: the claim is "these constructs do not appear in this template",
+# which is a question about the text. It would be the wrong shape for asking what the
+# template MEANS — which is why everything else here parses a render instead.
+assert_no_render_context_branches() {
+  local hits
+  hits="$(grep -nE '\blookup[[:space:]]|\.Capabilities\.|\.Release\.Is' \
+    "$CHART/templates/networkpolicy.yaml" || true)"
+  if [ -n "$hits" ]; then
+    echo "The egress policy template branches on render CONTEXT, which the golden cannot see:" >&2
+    echo "$hits" | sed 's/^/  /' >&2
+    echo >&2
+    echo "lookup, .Capabilities and .Release.Is* all differ between 'helm template' (what this" >&2
+    echo "gate and the CI dry-run render) and 'helm install' (what an operator actually gets)," >&2
+    echo "so a rule behind one of them is pinned by nothing and validated by nothing." >&2
+    return 1
+  fi
+}
+
+assert_guards() {
+  local ok=0
+  _guard_refuses() {
+    local what="$1"; shift
+    if render_chart "$CHART" "$@" >/dev/null 2>&1; then
+      echo "the $what guard did NOT fire: the chart rendered with input it is supposed to" >&2
+      echo "refuse, so an operator making that mistake gets a policy instead of a message." >&2
+      ok=1
+    fi
+  }
+  # An empty selector matches EVERY namespace, so this one is the difference between a DNS
+  # rule and a hole.
+  _guard_refuses "empty dnsNamespaceSelector" \
+    --set 'networkPolicy.dnsNamespaceSelector.kubernetes\.io/metadata\.name=null'
+  _guard_refuses "empty infrastructureNamespaceSelector" \
+    --set 'networkPolicy.infrastructureNamespaceSelector.devicechain\.io/component=null'
+  # With the area absent the policy selects no pods and protects nothing.
+  _guard_refuses "outbound-connectors not enabled" \
+    --set 'enabledFunctionalAreas={user-management,device-management}'
+  return "$ok"
+}
+
 compare() {
   local go_file="$1" chart_file="$2" policy_file="$3"
 
@@ -256,6 +331,13 @@ compare() {
     return 1
   fi
 
+  if ! assert_guards; then
+    return 1
+  fi
+  if ! assert_no_render_context_branches; then
+    return 1
+  fi
+
   local excluded
   excluded="$(go_excluded | tr '\n' ' ')"
   echo "==> egress ranges agree ($n_go prefixes, compared per address family)"
@@ -263,6 +345,8 @@ compare() {
     echo "    not comparable, excluded by address form: ${excluded% }"
   fi
   echo "==> the rendered policy matches the golden ($(grep -c '^---$' "$policy_file") document(s))"
+  echo "==> every operator-reachable render guard still refuses its input, and the template"
+  echo "    branches on no render context the golden could not see"
 }
 
 # A tampered copy of the chart. Copying the real chart and editing the copy means the arms
@@ -373,9 +457,11 @@ self_test() {
   # while the Go table was compared against nothing. The copy now sits at that same
   # relative path, so either variable leads to the tampered chart.
   #
-  # The residual, stated rather than implied: an extractor that hard-codes an absolute path
-  # to the real chart still evades this. That is a deliberate edit visible in a diff, like
-  # the `main` limit in the header — the arms bound accidents, not authorship.
+  # The residual, stated rather than implied, and wider than "an absolute path": ANY path
+  # not read from $ROOT or $CHART at call time evades this — including ones derived from the
+  # script's own variables, like "$(dirname "${BASH_SOURCE[0]}")/../deploy/helm/devicechain"
+  # or "$CORE_MODULE/../../deploy/helm/devicechain". Those are deliberate edits visible in a
+  # diff, like the `main` limit in the header; the arms bound accidents, not authorship.
   local go_real go_tampered
   go_real="$(go_ranges | md5sum)"
   dir="$(tampered_chart '/^    "172.16.0.0\/12"$/d' templates/networkpolicy.yaml)"; record_tamper "$dir"
