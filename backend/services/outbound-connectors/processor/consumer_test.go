@@ -23,6 +23,7 @@ import (
 // nil-safe no-ops.
 func newTestConsumer(dead messaging.MessageWriter, store *fakeSecretStore) *DispatchConsumer {
 	e := NewExecutor(NewSecretResolver(store), nil, 5*time.Second)
+	e.client = loopbackClient()
 	return NewDispatchConsumer(nil, &fakeReader{}, dead, e, nil, 5*time.Second, nil, 1, 1)
 }
 
@@ -30,6 +31,7 @@ func newTestConsumer(dead messaging.MessageWriter, store *fakeSecretStore) *Disp
 // the SD-3 rate gate.
 func newTestConsumerWithRate(dead messaging.MessageWriter, store *fakeSecretStore, rate *core.TenantRateLimiter, waitBudget time.Duration) *DispatchConsumer {
 	e := NewExecutor(NewSecretResolver(store), nil, 5*time.Second)
+	e.client = loopbackClient()
 	return NewDispatchConsumer(nil, &fakeReader{}, dead, e, rate, waitBudget, nil, 1, 1)
 }
 
@@ -41,6 +43,7 @@ func newTestConsumerWithRate(dead messaging.MessageWriter, store *fakeSecretStor
 // `tenantDeleted: tenantDeleted` deletable from NewDispatchConsumer with the whole suite still green.
 func newTestConsumerWithGate(dead messaging.MessageWriter, store *fakeSecretStore, tenantDeleted func(string) bool) *DispatchConsumer {
 	e := NewExecutor(NewSecretResolver(store), nil, 5*time.Second)
+	e.client = loopbackClient()
 	return NewDispatchConsumer(nil, &fakeReader{}, dead, e, nil, 5*time.Second, tenantDeleted, 1, 1)
 }
 
@@ -411,6 +414,7 @@ func TestHandleDeletedTenantIsRefusedBeforeTheRateWait(t *testing.T) {
 	srv, hits := countingServer(t)
 	dead := &fakeWriter{}
 	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, 5*time.Second)
+	e.client = loopbackClient()
 	c := NewDispatchConsumer(nil, &fakeReader{}, dead, e, rl, 40*time.Millisecond,
 		func(string) bool { return true }, 1, 1)
 	ack := &fakeAck{}

@@ -8,11 +8,11 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/smtp"
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/egress"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/rs/zerolog/log"
 )
@@ -120,9 +120,25 @@ func (a *smtpAdapter) Deliver(ctx context.Context, channel *model.NotificationCh
 // connection deadline from the context so every step of the SMTP conversation —
 // including the greeting read inside NewClient, which nothing else bounds — cannot
 // hang a dispatch worker (and thus shutdown) against a black-hole endpoint.
+// smtpEgressGuard refuses a destination a tenant should not be able to reach. It carries
+// no allowances: an operator whose relay is in-cluster needs an explicit escape hatch, and
+// a default that already permits private space is not a boundary anyone can rely on.
+//
+// 🔴 This must be judged on where SMTP CREDENTIALS go, not only on what SSRF reaches. The
+// default security mode is STARTTLS, which is negotiated after the greeting, and `none`
+// sends cleartext — so a channel pointed at an attacker-chosen host hands over the
+// configured username and password, and the failure is a credential disclosure rather than
+// a request forgery.
+var smtpEgressGuard = egress.NewGuard(nil)
+
 func (a *smtpAdapter) dial(ctx context.Context, cfg *smtpConfig) (*smtp.Client, error) {
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	// The host comes from the channel's Config JSON, so it is tenant-supplied and until
+	// now was dialed with no address check of any kind — an SMTP channel pointed at
+	// 169.254.169.254 was a connection to the instance metadata service. The guard runs
+	// inside the dialer's Control hook, on the address the kernel is about to connect to,
+	// which is the only placement a DNS answer cannot get between.
+	conn, err := smtpEgressGuard.Dialer().DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("smtp dial %s: %w", addr, err)
 	}

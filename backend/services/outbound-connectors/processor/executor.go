@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-processing/connectorwire"
+	"github.com/devicechain-io/dc-microservice/egress"
 	"github.com/devicechain-io/dc-microservice/httpsink"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-outbound-connectors/connectorspec"
@@ -135,6 +136,14 @@ func (e *Executor) executeHTTPCall(ctx context.Context, req *connectorwire.Conne
 		IdempotencyKey: req.IdempotencyKey,
 	})
 	if err != nil {
+		// A destination the egress boundary refused is TERMINAL, and separating it here is the whole
+		// point of the sentinel. Left in the transient branch it would be retried to the redelivery
+		// cap and then dead-lettered as an ordinary failure — five attempts at an address that
+		// cannot become public, and an operator reading "dead" when the truth is "you pointed this
+		// at 169.254.169.254".
+		if errors.Is(err, egress.ErrBlocked) {
+			return execOutcome{outcome: outcomeBlocked, retryable: false, err: err}
+		}
 		// A send error or non-2xx is transient (bounded by the redelivery cap): the endpoint may be
 		// briefly down. httpsink already suppresses the response body when a secret is presented, so
 		// this error text cannot leak the credential.

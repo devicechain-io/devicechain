@@ -13,6 +13,7 @@ import (
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/egress"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/rs/zerolog/log"
@@ -441,6 +442,16 @@ func (n *PolicyNotifier) deliverWithRetry(ctx context.Context, d delivery, rende
 		cancel()
 		if err == nil {
 			return true
+		}
+		// A destination the egress boundary refused is terminal: retrying cannot make an
+		// address public, so the remaining attempts would be pure delay in front of the
+		// same answer, and the log line an operator eventually reads would say
+		// "exhausted attempts" when the truth is "this channel points somewhere it may
+		// not go". Stop on the first one and say so.
+		if errors.Is(err, egress.ErrBlocked) {
+			log.Error().Err(err).Str("channel", d.channel.Token).Str("type", d.channel.ChannelType).
+				Msg("Notification channel points at an address outbound traffic is not permitted to reach; not retrying.")
+			return false
 		}
 		log.Warn().Err(err).Str("channel", d.channel.Token).Str("type", d.channel.ChannelType).
 			Int("attempt", attempt).Int("attempts", n.attempts).Msg("Notification delivery attempt failed")
