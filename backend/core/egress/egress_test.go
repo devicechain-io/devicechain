@@ -323,3 +323,49 @@ func TestBlockedErrorCarriesTheResolvedAddress(t *testing.T) {
 	assert.Equal(t, "169.254.169.254", be.Addr.String())
 	assert.Contains(t, be.Error(), "link-local")
 }
+
+// EVERY row of the deny table is actually refused, rather than the sample above.
+//
+// 🔴 THIS EXISTS BECAUSE THE DRIFT GATE COMPARES THE TABLE AND NOT THE DECISION.
+// hack/check-egress-ranges.sh relates `denied` to the chart's NetworkPolicy, so it
+// notices a prefix leaving the table — but a prefix can stay in the table while the
+// guard stops consulting it, and the gate reads exactly the same bytes either way.
+// A review made that concrete: adding `continue` for one row inside the guard's loop
+// left the gate green AND this package's tests green, because TestBlockedAddresses
+// samples. Seven rows had no case at all: 192.88.99.0/24, 64:ff9b:1::/48, 100::/64,
+// 100:0:0:1::/64, 2001:2::/48, 3fff::/20 and 5f00::/16.
+//
+// Sampling was the right shape for that test — its cases carry the REASONS, and a
+// table-driven sweep cannot explain why 100.100.100.200 matters. So this does not
+// replace it; it makes the link total, and the two together mean a prefix cannot be
+// in the table and unenforced.
+//
+// The address tested is the network address of each prefix, which is inside it by
+// construction, so this needs no per-row fixture that could drift from the row.
+func TestEveryDeniedPrefixIsRefused(t *testing.T) {
+	g := NewGuard(nil)
+	prefixes := DeniedPrefixes()
+	if len(prefixes) == 0 {
+		t.Fatal("precondition: the deny table is empty, so this test asserts nothing")
+	}
+	for _, p := range prefixes {
+		addr := p.Masked().Addr()
+		if err := g.CheckAddr(addr); err == nil {
+			t.Errorf("the deny table carries %s but the guard ADMITS %s — the table and the "+
+				"decision have come apart, and the drift gate cannot see that because it "+
+				"reads the table", p, addr)
+		}
+	}
+}
+
+// The counterweight: the sweep above is only meaningful while the guard still admits
+// ordinary public addresses. A guard that refused everything would satisfy it perfectly.
+func TestTheDenySweepIsNotVacuous(t *testing.T) {
+	g := NewGuard(nil)
+	for _, addr := range []string{"1.1.1.1", "8.8.8.8", "93.184.216.34", "2606:4700:4700::1111"} {
+		if err := g.CheckAddr(netip.MustParseAddr(addr)); err != nil {
+			t.Errorf("the guard refuses the ordinary public address %s (%v); "+
+				"TestEveryDeniedPrefixIsRefused would pass for the wrong reason", addr, err)
+		}
+	}
+}

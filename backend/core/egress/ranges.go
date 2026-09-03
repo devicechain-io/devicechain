@@ -158,8 +158,14 @@ func teredoServer(addr netip.Addr) (netip.Addr, bool) {
 // used to read this FILE with a regex, and reading the source is what made it weak
 // — a prefix moved into another variable, or commented out, still matched, so the
 // Go paths could stop denying an address while the gate stayed green. Handing it
-// the compiled table removes the whole class: there is no spelling of a Go edit
-// that changes what is denied without changing what this returns.
+// the compiled table removes that class.
+//
+// 🔴 Be exact about what it does NOT remove, because the first version of this
+// comment was not: this is the TABLE, not the DECISION. An edit to the guard that
+// stops consulting a row changes what is denied without changing what this returns,
+// and the drift gate cannot see it. TestEveryDeniedPrefixIsRefused is what makes
+// that link total instead of sampled — before it, seven of these rows had no test
+// case at all and a `continue` on any of them was green everywhere.
 //
 // The returned slice is a copy, so a caller cannot edit the boundary.
 func DeniedPrefixes() []netip.Prefix {

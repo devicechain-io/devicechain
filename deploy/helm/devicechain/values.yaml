@@ -697,7 +697,7 @@ networkPolicy:
   # on where your CNI evaluates egress relative to kube-proxy's DNAT. Evaluated AFTER
   # (Calico's usual behaviour) the destination is already the pod IP and the selectors
   # match. Evaluated BEFORE, the destination is still the Service ClusterIP, which matches
-  # no pod selector and sits inside the blocked private ranges below — so every database
+  # no pod selector and sits inside the blocked private ranges — so every database
   # and service-token call is dropped, and dropped traffic HANGS rather than failing. The
   # symptom is a pod that never becomes ready, with nothing saying why.
   #

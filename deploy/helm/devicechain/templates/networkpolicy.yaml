@@ -6,13 +6,67 @@
 {{- if not (has "outbound-connectors" $areas) -}}
 {{- fail "networkPolicy.enabled is set, but outbound-connectors is not among the enabled functional areas. The policy exists to bound that one service's tenant-configured broker and cloud egress; with the area absent it would select no pods and quietly protect nothing. Enable the area (profile 'full', or --enable-area outbound-connectors), or set networkPolicy.enabled=false." -}}
 {{- end -}}
-{{- $blockedIPv4 := include "devicechain.egressDeniedIPv4" . | fromYamlArray -}}
-{{- $blockedIPv6 := include "devicechain.egressDeniedIPv6" . | fromYamlArray -}}
+{{/*
+  The address space a tenant destination may not reach.
+
+  🔴 WRITTEN HERE, IN THE BODY OF THIS TEMPLATE, AND BOTH HALVES OF THAT MATTER.
+
+  Not in values, because a Helm list is REPLACED wholesale rather than merged: as
+  `networkPolicy.blockedIPv4Ranges` one plausible `--set` — or the same in a values
+  file, the path the README recommends — rendered a policy whose only exception was
+  the operator's one address, permitting all of 10.0.0.0/8 and the instance metadata
+  service while passing every guard here and satisfying the API server.
+
+  And not in a named template either, which is where they went first. Helm named
+  templates are GLOBAL: a parent chart that defines the same name wins over a
+  subchart's, so a wrapper chart could have restored exactly that widening through a
+  door values.schema.json cannot see and the drift gate never renders. A subchart's
+  template FILE cannot be replaced that way, so the lists live in one.
+
+  🔴 KEEP THESE IN STEP WITH backend/core/egress/ranges.go. hack/check-egress-ranges.sh
+  compares the RENDERED policy against that table as the compiled package reports it,
+  so a change to either side fails CI until the other follows. One prefix is
+  deliberately absent — the IPv4-mapped range — because Kubernetes refuses a mapped
+  address inside an ipBlock and the whole policy is then invalid; the gate derives that
+  exception from the address itself rather than from a list, so nothing here declares it.
+*/}}
+{{- $blockedIPv4 := list
+    "0.0.0.0/8"
+    "10.0.0.0/8"
+    "100.64.0.0/10"
+    "127.0.0.0/8"
+    "169.254.0.0/16"
+    "172.16.0.0/12"
+    "192.0.0.0/24"
+    "192.0.2.0/24"
+    "192.88.99.0/24"
+    "192.168.0.0/16"
+    "198.18.0.0/15"
+    "198.51.100.0/24"
+    "203.0.113.0/24"
+    "224.0.0.0/4"
+    "240.0.0.0/4"
+    "168.63.129.16/32"
+-}}
+{{- $blockedIPv6 := list
+    "::1/128"
+    "::/128"
+    "64:ff9b:1::/48"
+    "100::/64"
+    "100:0:0:1::/64"
+    "2001:2::/48"
+    "2001:db8::/32"
+    "3fff::/20"
+    "5f00::/16"
+    "fc00::/7"
+    "fe80::/10"
+    "ff00::/8"
+-}}
 {{- if not $blockedIPv4 -}}
-{{- fail "The chart's IPv4 egress deny table rendered empty. That list is what the policy refuses; empty renders an ipBlock allowing all of 0.0.0.0/0, so the object would be created, would look like a control, and would permit every private address including the instance metadata service. It is defined in templates/_helpers.tpl as devicechain.egressDeniedIPv4 and is not settable per deployment; if you are seeing this, that template has been edited." -}}
+{{- fail "The chart's IPv4 egress deny table rendered empty. That list is what the policy refuses; empty renders an ipBlock allowing all of 0.0.0.0/0, so the object would be created, would look like a control, and would permit every private address including the instance metadata service. It is written in the body of templates/networkpolicy.yaml and is not settable per deployment; if you are seeing this, that template has been edited." -}}
 {{- end -}}
 {{- if not $blockedIPv6 -}}
-{{- fail "The chart's IPv6 egress deny table rendered empty. That list is what the policy refuses over IPv6; empty renders an ipBlock allowing all of ::/0. It is defined in templates/_helpers.tpl as devicechain.egressDeniedIPv6 and is not settable per deployment; if you are seeing this, that template has been edited." -}}
+{{- fail "The chart's IPv6 egress deny table rendered empty. That list is what the policy refuses over IPv6; empty renders an ipBlock allowing all of ::/0. It is written in the body of templates/networkpolicy.yaml and is not settable per deployment; if you are seeing this, that template has been edited." -}}
 {{- end -}}
 {{- if not $np.dnsNamespaceSelector -}}
 {{- fail "networkPolicy.enabled is set but networkPolicy.dnsNamespaceSelector is empty. An empty selector matches EVERY namespace, so the DNS rule would permit port 53 to anything in the cluster. Set it to the labels on the namespace running your cluster DNS (a stock cluster uses kubernetes.io/metadata.name: kube-system)." -}}
@@ -142,12 +196,12 @@ spec:
     # list is the same address space core/egress refuses in the dialer, so the
     # two boundaries agree rather than each covering a different half.
     #
-    # The lists come from _helpers.tpl, NOT from values: a Helm list is replaced
-    # wholesale rather than merged, so as an operator-supplied value one plausible
-    # `--set` rendered a policy exempting a single address and permitting every
-    # private range, while passing every guard here and satisfying the API server.
+    # The lists are written at the top of this file rather than in values or in a
+    # named template — see the note there for why each of those was wrong.
     # hack/check-egress-ranges.sh compares this RENDERED output against the Go deny
-    # table, so the two halves cannot drift without CI saying so.
+    # table, so the two lists cannot drift apart without CI saying so. It pins the
+    # rest of this object against a golden file, because comparing the prefixes says
+    # nothing about whether the policy around them still enforces anything.
     #
     # Note what this ALSO blocks, deliberately: the cluster's own pod and service
     # CIDRs sit inside these ranges, so a tenant connector pointed at another

@@ -1035,8 +1035,10 @@ jobs:
       # dialer, in the chart's NetworkPolicy for the three that do not — and nothing at
       # compile or render time relates the two. This fails when they drift, which is
       # otherwise silent and always in the widening direction. --self-test first, so its
-      # green is known to be a green that could have been red: three arms, two of them
-      # tampering the real chart and rendering it, one tampering the Go side.
+      # green is known to be a green that could have been red: four arms — two tamper the
+      # real chart and render it, one tampers the Go EXTRACTION (not the Go source, which
+      # it does not claim to), and one asserts the two sides are gathered independently,
+      # so a gate comparing the chart with itself cannot pass.
       - name: egress deny-list drift check
         run: |
           hack/check-egress-ranges.sh --self-test

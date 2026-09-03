@@ -399,6 +399,13 @@ jobs:
       # Rendered into `default` so it needs no namespace of its own, and the dry-run
       # persists nothing. Both arms of this check have been observed: the shipped policy
       # is accepted, and re-adding the mapped prefix reproduces the two errors above.
+      #
+      # 🔴 The WHOLE chart is rendered and the NetworkPolicy documents are selected by
+      # KIND, not with `--show-only templates/networkpolicy.yaml`. That flag was the
+      # original form and it is a blind spot: a policy added in a second template file is
+      # invisible to it, and NetworkPolicies union, so one allow-all policy over the same
+      # pods opens everything. The selector refuses to emit nothing, so an empty render
+      # fails here rather than passing as "no objects to validate".
       - name: The egress NetworkPolicy is valid Kubernetes
         run: |
           set -euo pipefail
@@ -407,7 +414,7 @@ jobs:
             --set instance.id=default \
             --set 'enabledFunctionalAreas={user-management,device-management,event-processing,outbound-connectors}' \
             --set networkPolicy.enabled=true \
-            --show-only templates/networkpolicy.yaml \
+            | (cd backend/core && go run ./egress/internal/policyranges -policies) \
             | kubectl --context kind-devicechain-upgrade apply --dry-run=server -f -
 
       - name: Upgrade, the way the documentation says to

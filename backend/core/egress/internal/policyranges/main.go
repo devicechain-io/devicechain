@@ -19,9 +19,22 @@
 //     counted, and one moved from the v4 list to the v6 list was invisible because
 //     both were merged into a single sorted set.
 //
-// Reading the rendered object with a YAML parser removes both. There is no spelling
-// of a template edit that changes what the policy permits without changing what this
-// prints.
+// Reading the rendered object with a YAML parser removes both, FOR THE PREFIX LISTS.
+//
+// 🔴 BE PRECISE ABOUT WHAT THAT DOES AND DOES NOT COVER, because the first version of
+// this comment was not. It said "there is no spelling of a template edit that changes
+// what the policy permits without changing what this prints", and that was false: this
+// mode reads the `except` lists and NOTHING ELSE. A review found eight edits that leave
+// them identical and change what the policy permits — flipping `policyTypes` to Ingress
+// so every egress rule is inert, a podSelector matching no pods, an empty `namespaceSelector`
+// on the DNS rule, an extra `- {}` rule allowing everything, and a SECOND NetworkPolicy
+// selecting the same pods (policies union, so one allow-all opens everything). All of
+// them are valid Kubernetes, so a server-side dry-run accepts them too.
+//
+// That is what -policies is for: it emits every NetworkPolicy document in the stream so
+// the gate can pin the WHOLE rendered object against a golden file, not just the two
+// lists. The prefix mode relates the chart to the Go table; the golden pins everything
+// else. Neither is sufficient alone.
 //
 // It also VALIDATES, because two of the three defects this whole area has produced
 // were invalid Kubernetes rather than drift, and a client-side dry-run does not catch
@@ -34,6 +47,7 @@ package main
 import (
 	"bufio"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/netip"
@@ -57,10 +71,68 @@ type manifest struct {
 }
 
 func main() {
-	if err := run(os.Stdin, os.Stdout); err != nil {
+	policies := flag.Bool("policies", false,
+		"emit every NetworkPolicy document in the stream verbatim, instead of the except prefixes")
+	flag.Parse()
+
+	emit := run
+	if *policies {
+		emit = runPolicies
+	}
+	if err := emit(os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "policyranges:", err)
 		os.Exit(1)
 	}
+}
+
+// runPolicies re-emits every NetworkPolicy document in the stream, in order, verbatim.
+//
+// Two callers, one output. The gate pins it against a golden file so that ANY change to
+// the rendered policy — a selector, policyTypes, a peer, an added document — is a diff a
+// human has to accept, and CI applies the same bytes to a real API server with
+// --dry-run=server so validity is checked on the whole object rather than a slice of it.
+//
+// 🔴 It must select by KIND from the parsed stream rather than by filename. Both of this
+// gate's previous incarnations rendered with `--show-only templates/networkpolicy.yaml`,
+// which means a policy added in a SECOND template file is invisible to the check, to the
+// dry-run, and to the golden all at once — and a second policy selecting the same pods
+// opens everything, because policies union.
+//
+// The documents are re-marshalled rather than echoed, so the golden is canonical: helm's
+// output formatting cannot make a no-op diff, and key order cannot vary between runs.
+func runPolicies(in io.Reader, out io.Writer) error {
+	w := bufio.NewWriter(out)
+	defer w.Flush()
+
+	dec := yaml.NewDecoder(in)
+	found := 0
+	for {
+		var doc map[string]any
+		err := dec.Decode(&doc)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("parse manifest stream: %w", err)
+		}
+		if doc == nil || doc["kind"] != "NetworkPolicy" {
+			continue
+		}
+		found++
+		body, err := yaml.Marshal(doc)
+		if err != nil {
+			return fmt.Errorf("re-marshal NetworkPolicy document %d: %w", found, err)
+		}
+		if _, err := fmt.Fprintf(w, "---\n%s", body); err != nil {
+			return err
+		}
+	}
+	if found == 0 {
+		return errors.New("the rendered stream contains no NetworkPolicy document; " +
+			"the policy is meant to be enabled for this check, so an empty result would " +
+			"otherwise validate nothing and pass")
+	}
+	return nil
 }
 
 func run(in io.Reader, out io.Writer) error {
@@ -132,7 +204,10 @@ func emit(w io.Writer, cidr string, except []string) error {
 			return fmt.Errorf("except entry %q is not the same address family as its ipBlock cidr %q; "+
 				"Kubernetes requires every except to be a strict subset of the cidr", e, cidr)
 		}
-		if !outer.Contains(inner.Addr()) || inner.Bits() < outer.Bits() {
+		// STRICT subset, so `<=` and not `<`: an except equal to its own cidr denies the
+		// whole allowance and is refused by the API server. The first version of this
+		// line used `<` and let that through.
+		if !outer.Contains(inner.Addr()) || inner.Bits() <= outer.Bits() {
 			return fmt.Errorf("except entry %q is not a strict subset of its ipBlock cidr %q", e, cidr)
 		}
 		family := "v6"
