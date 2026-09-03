@@ -95,13 +95,35 @@ func TestAzureWireserverIsBlockedThoughItIsPublicUnicast(t *testing.T) {
 // someone who does not know that. Each asserts the raw Contains really does fail open, so
 // the normalization is shown to be load-bearing rather than asserted to be.
 func TestZonedIPv6DoesNotEscape(t *testing.T) {
-	zoned := addr(t, "fe80::1").WithZone("eth0")
+	// 🔴 THE FIXTURE IS THE TEST, and the obvious one is worthless. fe80::1%eth0 is
+	// caught by IsLinkLocalUnicast, which ignores zones — so it passes with or without
+	// the normalization, and a mutation removing WithZone("") survives. Mutation testing
+	// found exactly that.
+	//
+	// The address that actually depends on it is one only the PREFIX TABLE refuses.
+	// 2001:db8::1 is in no categorical class, so with a zone attached Contains returns
+	// false, no other check fires, and the guard says yes. Go accepts
+	// http://[2001:db8::1%25eth0]/ and dials [2001:db8::1%eth0]:80.
+	zoned := addr(t, "2001:db8::1").WithZone("eth0")
 
-	require.False(t, netip.MustParsePrefix("fe80::/10").Contains(zoned),
+	require.False(t, netip.MustParsePrefix("2001:db8::/32").Contains(zoned),
 		"precondition: Prefix.Contains fails open on a zoned address — if this ever becomes "+
 			"true, Go changed and this guard's normalization can be revisited")
+	// "Refused only by the table" stated as a property rather than asserted in prose:
+	// every categorical predicate must be false for this address, so the table is the
+	// only thing that can catch it — and the table is the only check a zone defeats.
+	bare := addr(t, "2001:db8::1")
+	require.False(t, bare.IsPrivate() || bare.IsLoopback() || bare.IsLinkLocalUnicast() ||
+		bare.IsMulticast() || bare.IsUnspecified(),
+		"precondition: this fixture must fall into no categorical class")
+	require.ErrorIs(t, NewGuard(nil).CheckAddr(bare), ErrBlocked,
+		"precondition: unzoned, the table refuses it")
 
 	assert.ErrorIs(t, NewGuard(nil).CheckAddr(zoned), ErrBlocked)
+
+	// The categorical case too, so the coverage is not narrowed by the fix — it just no
+	// longer stands in for the case it could not detect.
+	assert.ErrorIs(t, NewGuard(nil).CheckAddr(addr(t, "fe80::1").WithZone("eth0")), ErrBlocked)
 }
 
 func TestIPv4MappedIPv6DoesNotEscape(t *testing.T) {
@@ -154,6 +176,11 @@ func TestTeredoServerAddressIsAlsoChecked(t *testing.T) {
 	var b [16]byte
 	copy(b[:4], []byte{0x20, 0x01, 0x00, 0x00})
 	copy(b[4:8], []byte{169, 254, 169, 254}) // the SERVER is the private one here
+	// Bytes 8-11 are the flags and the obfuscated port. They are given a value on
+	// purpose: left zero, a guard reading the server from the WRONG offset would extract
+	// 0.0.0.0, refuse it, and the test would pass while proving nothing about where the
+	// server address is. Mutation testing found that — an offset of 8 survived.
+	copy(b[8:12], []byte{0x80, 0x00, 0x12, 0x34})
 	public := addr(t, "93.184.216.34").As4()
 	for i, v := range public {
 		b[12+i] = ^v // the client is public, so only the server can refuse this
@@ -231,13 +258,17 @@ func TestTransportDoesNotHonourProxyEnvironment(t *testing.T) {
 	tr := NewGuard(nil).Transport()
 	require.Nil(t, tr.Proxy, "Proxy must be nil explicitly, not left to the default")
 
+	// The comparison that gives the assertion above its meaning: http.DefaultTransport
+	// DOES route through the environment, so "nil" here is a decision this code made
+	// rather than a property of transports in general.
 	req, err := http.NewRequest(http.MethodGet, "http://example.com/x", nil)
 	require.NoError(t, err)
-	if tr.Proxy != nil {
-		u, perr := tr.Proxy(req)
-		require.NoError(t, perr)
-		assert.Nil(t, u, "no request may be routed through an environment proxy")
-	}
+	def, ok := http.DefaultTransport.(*http.Transport)
+	require.True(t, ok)
+	viaEnv, err := def.Proxy(req)
+	require.NoError(t, err)
+	assert.NotNil(t, viaEnv, "precondition: the default transport honours HTTP_PROXY, so "+
+		"inheriting it would have sent every tenant request to the proxy and passed the guard")
 }
 
 // The end-to-end claim: refused BEFORE a byte is written. A real listener is started on

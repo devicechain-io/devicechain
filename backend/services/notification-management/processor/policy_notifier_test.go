@@ -186,7 +186,7 @@ func TestDeliverWithRetry(t *testing.T) {
 	n := testNotifier(map[string]ChannelAdapter{model.ChannelTypeSMTP: fa})
 	n.timeout = 50 * time.Millisecond
 	d := delivery{channel: enabledChannel("smtp-1", model.ChannelTypeSMTP), recipients: []string{"x@x.com"}}
-	if !n.deliverWithRetry(context.Background(), d, &RenderedNotification{}) {
+	if n.deliverWithRetry(context.Background(), d, &RenderedNotification{}) != deliveryOK {
 		t.Fatalf("expected eventual success, calls=%d", fa.calls)
 	}
 	if fa.calls != 3 {
@@ -197,7 +197,7 @@ func TestDeliverWithRetry(t *testing.T) {
 	fa2 := &fakeAdapter{failTimes: 99}
 	n2 := testNotifier(map[string]ChannelAdapter{model.ChannelTypeSMTP: fa2})
 	n2.timeout = 50 * time.Millisecond
-	if n2.deliverWithRetry(context.Background(), d, &RenderedNotification{}) {
+	if n2.deliverWithRetry(context.Background(), d, &RenderedNotification{}) == deliveryOK {
 		t.Fatal("expected failure")
 	}
 	if fa2.calls != 3 {
@@ -475,7 +475,7 @@ func TestDeliverWithRetryRefusesADeletedTenant(t *testing.T) {
 	n := gatedNotifier(map[string]ChannelAdapter{model.ChannelTypeSMTP: fa}, true)
 	d := delivery{channel: enabledChannel("smtp-1", model.ChannelTypeSMTP), recipients: []string{"ops@x.com"}}
 
-	if n.deliverWithRetry(deletedTenantCtx(), d, &RenderedNotification{}) {
+	if n.deliverWithRetry(deletedTenantCtx(), d, &RenderedNotification{}) == deliveryOK {
 		t.Fatal("the funnel must refuse a deleted tenant")
 	}
 	if fa.calls != 0 {
@@ -491,7 +491,7 @@ func TestDeliverWithRetryDeliversForALiveTenant(t *testing.T) {
 	n := gatedNotifier(map[string]ChannelAdapter{model.ChannelTypeSMTP: fa}, false)
 	d := delivery{channel: enabledChannel("smtp-1", model.ChannelTypeSMTP), recipients: []string{"ops@x.com"}}
 
-	if !n.deliverWithRetry(deletedTenantCtx(), d, &RenderedNotification{}) {
+	if n.deliverWithRetry(deletedTenantCtx(), d, &RenderedNotification{}) != deliveryOK {
 		t.Fatal("a live tenant's notification must be delivered")
 	}
 	if fa.calls != 1 {
@@ -507,7 +507,7 @@ func TestAnUnconfiguredGateDelivers(t *testing.T) {
 	n := testNotifier(map[string]ChannelAdapter{model.ChannelTypeSMTP: fa}) // TenantDeleted nil
 	d := delivery{channel: enabledChannel("smtp-1", model.ChannelTypeSMTP), recipients: []string{"ops@x.com"}}
 
-	if !n.deliverWithRetry(deletedTenantCtx(), d, &RenderedNotification{}) {
+	if n.deliverWithRetry(deletedTenantCtx(), d, &RenderedNotification{}) != deliveryOK {
 		t.Fatal("an unconfigured gate must admit (fail open)")
 	}
 	if fa.calls != 1 {
@@ -522,12 +522,12 @@ func TestAnUnconfiguredGateDelivers(t *testing.T) {
 // and with nothing covering that, deleting `TenantDeleted: tenantDeleted` from the
 // constructor would disable the gate in production with this whole file still green.
 func TestTheConstructorWiresTheLifecycleGate(t *testing.T) {
-	n := NewPolicyNotifier(nil, nil, 3, time.Second, func(tenant string) bool { return tenant == "acme" })
+	n := NewPolicyNotifier(nil, nil, 3, time.Second, func(tenant string) bool { return tenant == "acme" }, nil)
 	fa := &fakeAdapter{}
 	n.adapters = map[string]ChannelAdapter{model.ChannelTypeSMTP: fa}
 	d := delivery{channel: enabledChannel("smtp-1", model.ChannelTypeSMTP), recipients: []string{"ops@x.com"}}
 
-	if n.deliverWithRetry(deletedTenantCtx(), d, &RenderedNotification{}) {
+	if n.deliverWithRetry(deletedTenantCtx(), d, &RenderedNotification{}) == deliveryOK {
 		t.Fatal("the gate passed to the constructor must reach the delivery path")
 	}
 	if fa.calls != 0 {

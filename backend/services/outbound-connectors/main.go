@@ -6,10 +6,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/egress"
 	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -146,7 +148,15 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	tenantDeleted := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "outbound-connectors")
 
 	resolver := processor.NewSecretResolver(SecretStore)
-	executor := processor.NewExecutor(resolver, Api, time.Duration(Configuration.SendTimeoutMs)*time.Millisecond)
+	// The tenant-egress boundary, carrying whatever destinations the operator has
+	// explicitly allowed. A malformed CIDR fails startup rather than being skipped: a
+	// silently-dropped allowance would look configured and behave as though it were not.
+	egressGuard, err := egress.FromConfig(Microservice.InstanceConfiguration.Infrastructure.Egress)
+	if err != nil {
+		return err
+	}
+	executor := processor.NewExecutor(resolver, Api, &http.Client{Transport: egressGuard.Transport()},
+		time.Duration(Configuration.SendTimeoutMs)*time.Millisecond)
 	Consumer = processor.NewDispatchConsumer(Microservice, reader, dead, executor,
 		RateLimiter, time.Duration(Configuration.EgressWaitBudgetMs)*time.Millisecond,
 		tenantDeleted, Configuration.MaxConcurrentSends, Configuration.DispatchBacklog)

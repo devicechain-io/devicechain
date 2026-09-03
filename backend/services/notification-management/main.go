@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/egress"
 	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -176,9 +177,17 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// open alarms from this service's own rows on a timer, so a deleted tenant with an
 	// unacknowledged alarm would keep paging until the sweep reached those rows.
 	infra := Microservice.InstanceConfiguration.Infrastructure
+	// The tenant-egress boundary, carrying whatever destinations the operator has
+	// explicitly allowed. A malformed CIDR fails startup rather than being skipped: a
+	// silently-dropped allowance would look configured and behave as though it were not.
+	egressGuard, err := egress.FromConfig(infra.Egress)
+	if err != nil {
+		return err
+	}
 	Notifier = processor.NewPolicyNotifier(Api, secretStore, Configuration.DeliveryAttempts,
 		Configuration.DeliveryTimeout(),
-		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "notification-management"))
+		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "notification-management"),
+		egressGuard)
 
 	// Retention sweep: prune cleared per-alarm state older than the retention window so
 	// the notification state stays bounded (ADR-017 N.C). A negative interval disables

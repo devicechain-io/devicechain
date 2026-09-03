@@ -60,9 +60,21 @@ type Executor struct {
 }
 
 // NewExecutor builds the executor over a secret resolver, the connector store (for publish
-// resolution), and the fallback send timeout. A nil connectors store disables publish execution.
-func NewExecutor(resolver *SecretResolver, connectors *model.Api, defaultTimeout time.Duration) *Executor {
-	return &Executor{secrets: resolver, connectors: connectors, defaultTimeout: defaultTimeout, send: publish.Send}
+// resolution), the HTTP client tenant deliveries go out on, and the fallback send timeout.
+// A nil connectors store disables publish execution.
+//
+// client carries the tenant-egress boundary: production passes one whose transport dials
+// through the configured egress guard. A nil client falls back to httpsink.DefaultClient,
+// whose own guard carries no allowances — so a missed wiring narrows the boundary rather
+// than removing it.
+func NewExecutor(resolver *SecretResolver, connectors *model.Api, client *http.Client, defaultTimeout time.Duration) *Executor {
+	return &Executor{
+		secrets:        resolver,
+		connectors:     connectors,
+		client:         client,
+		defaultTimeout: defaultTimeout,
+		send:           publish.Send,
+	}
 }
 
 // Execute performs the dispatch and classifies the result. The request has already passed

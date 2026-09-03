@@ -270,6 +270,29 @@ instance:
         # form its KEK). DR: losing this key loses every stored secret — back up the
         # rendered instance Secret.
         rootKey: ""
+      egress:
+        # Destinations a TENANT-configured webhook, httpCall action or SMTP relay is
+        # allowed to reach even though the egress boundary would otherwise refuse them
+        # (ADR-023). The boundary refuses private, loopback, link-local, CGNAT and cloud
+        # metadata addresses at the moment the connection is dialled, on the resolved IP
+        # — which is the only place a DNS answer cannot change underneath the check.
+        #
+        # Empty (the default) means no exemptions: fail closed.
+        #
+        # 🔴 Grant /32s. In Kubernetes the smallest CIDR that reaches ONE in-cluster
+        # relay is often the whole Service CIDR, and granting that re-opens every private
+        # address for every tenant — which is the entire boundary. The usual legitimate
+        # need is a single in-cluster SMTP relay, and a single address expresses it.
+        #
+        # This cannot express a hostname. The check runs on the address at dial time and
+        # a name is not available there; that is deliberate, because a name-based check
+        # is exactly what a DNS answer can walk around.
+        #
+        # A malformed entry fails the service at startup rather than being skipped: an
+        # allowance that was silently dropped would read as configured and behave as
+        # though it were not.
+        allowedDestinations: []
+        # - "10.42.0.17/32"   # the in-cluster SMTP relay
       blob:
         # Object/asset-store backend for opaque binaries that do not belong in
         # Postgres (branding logos today; firmware/OTA + exports later, ADR-058).

@@ -128,9 +128,9 @@ func extractV4(addr netip.Addr) (netip.Addr, string, bool) {
 		return netip.AddrFrom4([4]byte{b[2], b[3], b[4], b[5]}), "6to4", true
 	case prefixTeredo.Contains(addr):
 		// RFC 4380 §4: the client's IPv4 address is the trailing 32 bits with every bit
-		// inverted. The server's address is at bytes 4-7 in the clear; it is checked by
-		// the caller checks it separately via teredoServer, since only one address
-		// can be returned here.
+		// inverted. The relay server's address sits at bytes 4-7 in the clear; the caller
+		// checks it separately via teredoServer, since only one address can be returned
+		// from here.
 		return netip.AddrFrom4([4]byte{^b[12], ^b[13], ^b[14], ^b[15]}), "Teredo client", true
 	case prefixV4Compatible.Contains(addr):
 		// The deprecated IPv4-compatible form, and also where ::1 and :: land — both of

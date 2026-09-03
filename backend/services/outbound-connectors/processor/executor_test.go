@@ -17,8 +17,7 @@ import (
 )
 
 func newTestExecutor(store *fakeSecretStore) *Executor {
-	e := NewExecutor(NewSecretResolver(store), nil, 10*time.Second)
-	e.client = loopbackClient()
+	e := NewExecutor(NewSecretResolver(store), nil, loopbackClient(), 10*time.Second)
 	return e
 }
 
