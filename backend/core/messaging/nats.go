@@ -870,6 +870,9 @@ type natsReader struct {
 	// deliverNew, when set, creates the durable at the stream tail (DeliverNewPolicy)
 	// instead of the default DeliverAll — see ReaderWithDeliverNew.
 	deliverNew bool
+	// held, when set, is the leadership-term predicate this reader is gated on: no
+	// message is handed out unless it reports true. See ReaderWithTermGate.
+	held func() bool
 }
 
 // ReaderOption tunes a reader's durable consumer at creation time. Options only
@@ -889,6 +892,67 @@ type ReaderOption func(*natsReader)
 // its ack cursor persists, so a restart still resumes from the last ack, not the tail.
 func ReaderWithDeliverNew() ReaderOption {
 	return func(r *natsReader) { r.deliverNew = true }
+}
+
+// termGatePoll is how often a term-gated reader re-evaluates its predicate while
+// parked. The predicate is a pair of atomic loads, so this is cheap; it is a poll
+// rather than a condition variable because the thing being waited on can become
+// true again on its own — a renewal that lands after a broker blip re-opens the
+// window with no event to signal it.
+const termGatePoll = 50 * time.Millisecond
+
+// ReaderWithTermGate makes this reader consume ONLY while a leadership term is
+// held, evaluating the predicate on every ReadMessage before a message is handed
+// out — including one already sitting in the fetch buffer, which is why the check
+// precedes the pending pop rather than wrapping the Fetch.
+//
+// 🔴 THE PREDICATE IS LATE-BOUND ON PURPOSE. NewReader runs at service start, long
+// before any lease is acquired, so this takes a function rather than a value: the
+// closure reads whatever the caller's term currently is (typically an atomic
+// pointer to a messaging.Holder), and a reader created before the first term still
+// gates correctly on every term after it.
+//
+// 🔴 A CLOSED GATE BLOCKS; IT DOES NOT REPORT EOF. Every DETECT read loop treats
+// io.EOF as "shut down" and returns, so an EOF here would produce a leader that has
+// finished its term build, reports itself live, and reads nothing — a failure with
+// no symptom any liveness signal can see. Parking instead means the reader resumes
+// the moment ownership is re-confirmed, and the loops still unwind normally when
+// the TERM CONTEXT is cancelled, because that is the ctx passed to ReadMessage and
+// it surfaces as EOF at the top of the loop.
+func ReaderWithTermGate(held func() bool) ReaderOption {
+	return func(r *natsReader) { r.held = held }
+}
+
+// BindTerm attaches the pull subscription for a new leadership term. It is the
+// counterpart of UnbindTerm, and the split between them is not cosmetic.
+//
+// bind() unsubscribes and then makes three JetStream API calls, so calling it at
+// term END fails in precisely the outage that ended the term: each call times out,
+// bind returns an error, and the subscription pointer is left referring to a CLOSED
+// subscription. The next term's first Fetch then returns ErrSubscriptionClosed,
+// which ReadMessage maps to io.EOF, which every read loop treats as shutdown — a
+// term that builds cleanly, reports itself leader and live, and reads nothing.
+//
+// Doing the bind at term START instead puts that failure inside the term build,
+// where it is a term-build failure the caller's retry fuse already covers.
+func (r *natsReader) BindTerm() error { return r.bind() }
+
+// UnbindTerm drops the pull subscription at the end of a leadership term.
+//
+// This is what removes the reply-inbox interest, and that is the whole point: the
+// NATS connection is PROCESS-WIDE and survives the term, with an 8 MB reconnect
+// buffer, so a pull request issued just before a disconnect is flushed to the
+// server on reconnect and served — landing messages past the NEW leader's replay
+// head, which is the loss this gate exists to prevent. With the subscription gone
+// the server drops that request for want of interest (measured both ways).
+//
+// Unlike BindTerm this is purely local and succeeds while disconnected, which is
+// why it is safe on the loss path.
+func (r *natsReader) UnbindTerm() error {
+	if old := r.sub.Swap(nil); old != nil {
+		return old.Unsubscribe()
+	}
+	return nil
 }
 
 // consumerConfig is the durable pull-consumer configuration (A4) — explicit-ack so a
@@ -1284,8 +1348,35 @@ func (r *natsReader) ReadMessage(ctx context.Context) (Message, error) {
 				return Message{}, io.EOF
 			}
 		}
+		// Park while this replica does not own the partition (ADR-070). This sits
+		// BEFORE the pending pop deliberately: a term can end with up to a full fetch
+		// batch already buffered here, and handing those out would be exactly the
+		// single-writer violation the lease exists to prevent — the messages were
+		// fetched under our ownership but would be applied, published and acked under
+		// someone else's. Parking rather than returning EOF is explained on
+		// ReaderWithTermGate.
+		if r.held != nil && !r.held() {
+			select {
+			case <-ctx.Done():
+				return Message{}, io.EOF
+			case <-time.After(termGatePoll):
+			}
+			continue
+		}
 		if len(r.pending) == 0 {
-			msgs, err := r.sub.Load().Fetch(fetchBatch, nats.MaxWait(fetchTimeout))
+			sub := r.sub.Load()
+			if sub == nil {
+				// UnbindTerm has run and BindTerm has not yet: we are between terms.
+				// The gate above normally covers this, but the two are set by different
+				// goroutines, so park here too rather than dereferencing nil.
+				select {
+				case <-ctx.Done():
+					return Message{}, io.EOF
+				case <-time.After(termGatePoll):
+				}
+				continue
+			}
+			msgs, err := sub.Fetch(fetchBatch, nats.MaxWait(fetchTimeout))
 			if err != nil {
 				if errors.Is(err, nats.ErrTimeout) {
 					// An empty fetch. A run of them can also mean the consumer was

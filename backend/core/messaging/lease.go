@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/kv"
@@ -322,4 +323,135 @@ func (f *Fence) RejectIfStale(partition string, epoch uint64) error {
 	}
 	f.high[partition] = epoch
 	return nil
+}
+
+// Holder is the single-writer signal a leadership term gates its reads and its
+// writes on. It answers one question — "is this replica still the owner right
+// now?" — and it answers it as an AND of two independent facts:
+//
+//	held = the last KV state we SAW was ours   AND   we are inside the validity window
+//
+// Both halves are load-bearing and neither is sufficient alone.
+//
+// 🔴 THE WATCH ALONE IS FAIL-OPEN, BECAUSE A TTL EXPIRY IS WATCH-SILENT. JetStream
+// KV does not emit an update when an entry ages out; measured, a watch on a 2s-TTL
+// key sat silent for 3.5s past expiry. So with no successor pod to overwrite the
+// key, a watch-only flag stays "mine" forever after the server has already forgotten
+// us — the exact zombie this type exists to stop. The window (last successful Renew
+// + TTL) is what expires on our side.
+//
+// 🔴 THE WINDOW ALONE IS TOO SLOW. It only closes a TTL after the last renewal, and
+// a genuine takeover — a successor that Created the key after our entry expired —
+// is visible on the watch immediately. The flag is what makes a live handover
+// prompt rather than TTL-bounded.
+//
+// FLIPS COME FROM A NON-PUT OR A FOREIGN PUT, NEVER FROM EXPIRY: a Put whose value
+// is not our uuid (a successor took over), a Delete (someone released), or a Purge.
+// Anything else leaves the flag alone and lets the window arbitrate.
+type Holder struct {
+	lease *Lease
+	// mine is the last KV state the watcher SAW for our key: true while the newest
+	// observed value is our own uuid. Written only by the watch goroutine, read by
+	// every gated reader and by the checkpoint path, hence atomic.
+	mine atomic.Bool
+	// lost closes on the first definitive flip. It exists so a term can cancel
+	// PROMPTLY on a takeover rather than waiting for the next KeepAlive tick — the
+	// window end has no such signal (see the type comment) and is converted into a
+	// cancel by KeepAlive instead.
+	lost     chan struct{}
+	lostOnce sync.Once
+}
+
+// Held reports whether this replica owns the partition right now: the last KV state
+// we saw was ours AND we are inside the validity window. It is the predicate every
+// term-gated reader and the checkpoint path evaluate; it never blocks and never
+// performs a round trip, so it is safe to call per message.
+func (h *Holder) Held() bool {
+	return h.mine.Load() && h.lease.stillValid()
+}
+
+// Lost is closed on the first definitive loss the WATCH can see — a foreign Put, a
+// Delete, or a Purge. It is not closed by the validity window elapsing: an expiry
+// emits no watch event at all, so that path is detected by KeepAlive's next tick
+// and reported as ErrNotHolder. A term should select on both.
+func (h *Holder) Lost() <-chan struct{} { return h.lost }
+
+func (h *Holder) markLost() {
+	h.mine.Store(false)
+	h.lostOnce.Do(func() { close(h.lost) })
+}
+
+// WatchHolder starts a KV watch on this lease's key and returns the Holder signal
+// described above. The watch goroutine runs until ctx is cancelled; cancelling it
+// does NOT release the lease (Release does that) and does not make Held report
+// true — a Holder whose watch has stopped keeps its last flag and still ANDs the
+// window, so it decays closed rather than open.
+//
+// A watch that dies is RE-CREATED rather than abandoned, and the flag is NOT
+// downgraded to "window only" for the rest of the term. That matters because a
+// fresh watch cannot reconstruct history: JetStream delivers the current value and
+// then a nil init marker, so a watch restarted after our entry expired sees only
+// the marker and cannot distinguish "expired" from "never existed". Treating that
+// as loss would evict a healthy leader on a broker blip; treating it as ownership
+// would be fail-open. It is neither: the flag holds and the window arbitrates,
+// which is the second reason the AND exists.
+func (lease *Lease) WatchHolder(ctx context.Context) (*Holder, error) {
+	h := &Holder{lease: lease, lost: make(chan struct{})}
+	// Seed from the state at term start: we have just Created (or renewed) the key,
+	// so it is ours until the watch says otherwise. Seeding false would make the
+	// gate block until the watch's first delivery lands, turning every term start
+	// into a round trip that can fail.
+	h.mine.Store(true)
+
+	watcher, err := lease.kv.Watch(lease.key)
+	if err != nil {
+		return nil, err
+	}
+	go h.run(ctx, watcher)
+	return h, nil
+}
+
+// watchRebindBackoff is how long the holder watch waits before re-creating a watcher
+// whose update channel closed. It is short relative to the lease TTL on purpose: the
+// window is what protects correctness while the watch is down, so the only cost of a
+// slow re-create is a late flip, and the only cost of a fast one is a KV request.
+const watchRebindBackoff = time.Second
+
+func (h *Holder) run(ctx context.Context, watcher nats.KeyWatcher) {
+	defer func() { _ = watcher.Stop() }()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case entry, open := <-watcher.Updates():
+			if !open {
+				// The subscription died. Re-create it rather than falling back to the
+				// window for the rest of the term — see WatchHolder for why a restarted
+				// watch cannot be read as loss.
+				_ = watcher.Stop()
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(watchRebindBackoff):
+				}
+				next, err := h.lease.kv.Watch(h.lease.key)
+				if err != nil {
+					continue
+				}
+				watcher = next
+				continue
+			}
+			if entry == nil {
+				// The end-of-initial-values marker, not a state change.
+				continue
+			}
+			if entry.Operation() == nats.KeyValuePut && string(entry.Value()) == h.lease.holder {
+				h.mine.Store(true)
+				continue
+			}
+			// A foreign Put, a Delete or a Purge: someone else owns the partition or
+			// the entry is gone. Definitive.
+			h.markLost()
+		}
+	}
 }
