@@ -174,13 +174,20 @@ func (rdb *RdbManager) ExecuteInitialize(ctx context.Context) error {
 	// The lock covers EVERY DDL statement this service issues at startup, not just the
 	// migration chain: the core-owned audit journal is auto-migrated inside it too. That
 	// table used to be created outside any lock, which left one unguarded concurrent-DDL
-	// path. The racing statement is the CREATE TABLE, not the indexes — gorm's Postgres
-	// driver emits CREATE INDEX IF NOT EXISTS, but AutoMigrate's own table path is
-	// HasTable followed by a plain CREATE TABLE, so two pods arriving together on a
-	// FRESH schema can both see no table and the loser fails startup with
-	// `relation "audit_events" already exists`. Narrow — it needs a first boot and a
-	// tie — and self-healing on restart, but a lock that covers all the DDL but one is
-	// not a serialized migration, it is a smaller race.
+	// path. The widest racing statement is the CREATE TABLE: AutoMigrate's table path is
+	// HasTable followed by a plain CREATE TABLE (no IF NOT EXISTS), so two pods arriving
+	// together on a FRESH schema can both see no table and the loser fails startup with
+	// `relation "audit_events" already exists`.
+	//
+	// The index path is narrower but not safe on its own, and it is worth being precise
+	// because the opposite is the natural reading: gorm's Postgres driver does emit
+	// CREATE INDEX IF NOT EXISTS, and IF NOT EXISTS is NOT a concurrency primitive. Two
+	// sessions can both pass the existence check and the loser still fails on the unique
+	// index over pg_class. It is a second, narrower race — table present, index not yet —
+	// rather than no race.
+	//
+	// Both need a tie and are self-healing on restart. But a lock that covers all the DDL
+	// but one is not a serialized migration, it is a smaller race.
 	if err := rdb.WithAdvisoryLock(ctx, AdvisoryLockKey(mtable), func() error {
 		// The audit journal (ADR-019) is core-owned and migrated here rather than via
 		// each service's migration list, so no per-service wiring is required. It must

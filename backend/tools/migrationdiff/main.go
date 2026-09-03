@@ -187,15 +187,24 @@ func migrateSome(ctx context.Context, areaName string, migrations []*gormigrate.
 		// need several more, so gormigrate blocks acquiring one that never frees.
 		MicroserviceConfig: config.MicroserviceDatastoreConfiguration{},
 	}
-	if err := mgr.ExecuteInitialize(ctx); err != nil {
-		return err
+	err := mgr.ExecuteInitialize(ctx)
+	// Close this area's pool so its connections do not accumulate on the shared server
+	// across all ten areas (the dump uses its own connection via docker exec).
+	//
+	// Deferred rather than run on the success path, because the replay gate made a
+	// FAILING migration an ordinary outcome: a registered known-bad one fails on every
+	// run by design, and a PR that breaks several would leak a pool per attempt. The
+	// pool is small, so this was never going to exhaust anything — but "the cleanup runs
+	// only when nothing went wrong" is backwards, and it was invisible until failure
+	// stopped being exceptional.
+	//
+	// mgr.Database is nil when ExecuteInitialize failed before opening the connection.
+	if mgr.Database != nil {
+		if sqldb, dberr := mgr.Database.DB(); dberr == nil {
+			_ = sqldb.Close()
+		}
 	}
-	// Close this area's pool so its connections do not accumulate on the shared
-	// server across all nine areas (the dump uses its own connection via docker exec).
-	if sqldb, err := mgr.Database.DB(); err == nil {
-		_ = sqldb.Close()
-	}
-	return nil
+	return err
 }
 
 // dumpSchema returns the schema-only pg_dump of one area's Postgres schema, run inside

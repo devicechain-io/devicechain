@@ -90,9 +90,13 @@ func TestEveryExemptionStatesAReason(t *testing.T) {
 		assert.NotEmpty(t, e.id, "an exemption with no id matches nothing")
 		assert.Greater(t, len(e.reason), 40,
 			"exemption %s/%s needs a reason that says what breaks, not a label", e.area, e.id)
-		assert.NotEmpty(t, e.symptom,
-			"exemption %s/%s needs a symptom, or the gate cannot tell 'still broken the way we "+
-				"recorded' from 'broken some new way'", e.area, e.id)
+		// 🔴 A LENGTH FLOOR, not just non-empty. `symptom: "ERROR"` satisfies NotEmpty and
+		// matches essentially any Postgres failure — an entry that would confirm any
+		// breakage as "the known one", which is precisely the registry-that-means-nothing
+		// this design was changed to avoid.
+		assert.Greater(t, len(e.symptom), 30,
+			"exemption %s/%s needs a symptom specific enough to identify ONE statement; a short "+
+				"one matches any failure and confirms every defect as the registered one", e.area, e.id)
 	}
 }
 

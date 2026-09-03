@@ -38,7 +38,7 @@ var replayExemptions = []replayExemption{
 	{
 		area:    "event-management",
 		id:      "20260729000000",
-		symptom: "cannot alter type of a column used by a view or rule",
+		symptom: "collate measurement_events.device_token: ERROR: cannot alter type of a column used by a view or rule",
 		reason: "frozen pre-GA baseline; a replay dies on ALTER COLUMN ... COLLATE because the " +
 			"continuous aggregate it later creates reads those columns (see below)",
 	},
@@ -83,8 +83,14 @@ type replayExemption struct {
 	id   string
 	// symptom is a substring the replay failure must contain. It is what turns this entry
 	// from a skip into an assertion: the gate requires the migration to fail, and to fail
-	// THIS way. Specific enough to identify the defect, short enough to survive a
-	// Postgres error-message reword.
+	// THIS way.
+	//
+	// 🔴 Pin the STATEMENT, not just the database's complaint. "cannot alter type of a
+	// column used by a view or rule" is a generic Postgres message; it would still match
+	// if the failure moved to a different table, a different column, or a gorm AutoMigrate
+	// re-type — and the gate would report "fails as registered" about a defect nobody had
+	// looked at. Including the migration's own prefix ("collate measurement_events.
+	// device_token:") makes the entry describe one statement.
 	symptom string
 	// reason states the defect and its blast radius in one line, in the operator's terms
 	// — not "baseline, frozen", which says nothing about what happens.

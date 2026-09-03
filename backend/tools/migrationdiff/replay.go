@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -130,11 +131,11 @@ func runReplay(ctx context.Context, container, host string, port int, user, pass
 				continue
 			}
 
-			checked++
 			if err != nil {
 				failures++
 				fmt.Printf("REPLAY   %-24s %s is NOT re-runnable:\n%s\n", a.name, id, indent(err.Error()))
 			} else {
+				checked++
 				fmt.Printf("ok       %-24s %s replays cleanly\n", a.name, id)
 			}
 		}
@@ -143,12 +144,18 @@ func runReplay(ctx context.Context, container, host string, port int, user, pass
 	// 🔴 THE NEGATIVE CONTROL. "0 failures" is also what a run that exercised nothing
 	// reports. A gate whose green is indistinguishable from a gate that never ran is not
 	// a gate.
-	if checked == 0 {
+	// 🔑 `checked+failures`, not `checked`. Now that `checked` counts only passes, a run
+	// where every migration FAILED would have checked == 0 — and reporting "we exercised
+	// nothing" over a run that exercised everything and found it all broken would hide
+	// the finding behind a message about the harness.
+	if checked+failures == 0 {
 		return fmt.Errorf("the replay pass exercised 0 non-exempt migrations across %d area(s) "+
 			"(%d exempt), so a clean result means nothing", len(selected), confirmed)
 	}
-	fmt.Printf("replay   %d migration(s) replay cleanly across %d area(s); %d known-bad confirmed still bad\n",
-		checked, len(selected), confirmed)
+	// `checked` counts only the ones that PASSED, so this line cannot claim a migration
+	// replays cleanly one line above the paragraph explaining that it does not.
+	fmt.Printf("replay   %d migration(s) replay cleanly across %d area(s); %d known-bad confirmed still bad; %d failing\n",
+		checked, len(selected), confirmed, failures)
 
 	if failures > 0 {
 		return fmt.Errorf(`%d migration(s) are not individually re-runnable
@@ -183,6 +190,14 @@ Fix the migration if it is one you are adding. A frozen pre-GA baseline cannot b
 // next reader will believe it. An exemption that fails DIFFERENTLY means the defect moved
 // and the registered symptom no longer describes what an operator would see.
 func exemptionVerdict(ex replayExemption, err error) string {
+	// A harness failure is neither "it passed" nor "the defect moved". Say so, rather
+	// than reading a container reset as evidence about a migration.
+	var he *harnessError
+	if errors.As(err, &he) {
+		return fmt.Sprintf("could not be checked — the harness itself failed before the replay "+
+			"was reached:\n%s\n    This says nothing about the registered defect. Fix the harness "+
+			"and re-run.", indent(err.Error()))
+	}
 	if err == nil {
 		return fmt.Sprintf("is registered as NOT re-runnable, but it replayed cleanly.\n"+
 			"    Delete its entry from replayExemptions — an exemption that no longer describes\n"+
@@ -197,6 +212,19 @@ func exemptionVerdict(ex replayExemption, err error) string {
 	return ""
 }
 
+// harnessError marks a failure that is the HARNESS's, not the migration's: a dropped
+// schema, a forward run that never reached the replay, a pg_dump that could not run.
+//
+// 🔴 It exists because exemptionVerdict matches on error TEXT, and without this a
+// container reset mid-dump on the one registered known-bad migration would print "the
+// defect moved — update the entry's symptom and reason". That is an instruction to edit
+// a defect registry in response to an infrastructure outage, and whoever followed it
+// would be writing down a symptom that describes nothing.
+type harnessError struct{ err error }
+
+func (e *harnessError) Error() string { return e.err.Error() }
+func (e *harnessError) Unwrap() error { return e.err }
+
 // replayOne runs one (area, migration) pair: fresh schema, chain prefix, forget the last
 // migration's bookkeeping, run again, and require success plus an unchanged database.
 func replayOne(ctx context.Context, admin *gorm.DB, a area, k int, container, host string, port int, user, password, db string) error {
@@ -204,15 +232,15 @@ func replayOne(ctx context.Context, admin *gorm.DB, a area, k int, container, ho
 	// carrying the effects of the previous iteration's replay, and a failure could no
 	// longer be attributed to one migration.
 	if err := admin.Exec(fmt.Sprintf("DROP SCHEMA IF EXISTS %q CASCADE", a.name)).Error; err != nil {
-		return fmt.Errorf("dropping schema %s: %w", a.name, err)
+		return &harnessError{fmt.Errorf("dropping schema %s: %w", a.name, err)}
 	}
 
 	prefix := a.migrations[:k]
 	if err := migrateSome(ctx, a.name, prefix, host, port, user, password, db); err != nil {
 		// Not a replay failure — the chain does not even build forward. Say which, or
 		// this gate takes the blame for a broken forward migration.
-		return fmt.Errorf("the FIRST run of this prefix failed, so the replay was never reached "+
-			"(a forward-migration defect, not a replay one): %w", err)
+		return &harnessError{fmt.Errorf("the FIRST run of this prefix failed, so the replay was "+
+			"never reached (a forward-migration defect, not a replay one): %w", err)}
 	}
 	before, err := snapshotFor(admin, container, user, db, a.name)
 	if err != nil {
@@ -227,7 +255,7 @@ func replayOne(ctx context.Context, admin *gorm.DB, a area, k int, container, ho
 	id := a.migrations[k-1].ID
 	res := admin.Exec(fmt.Sprintf("DELETE FROM %q.%q WHERE id = ?", a.name, mtable), id)
 	if res.Error != nil {
-		return fmt.Errorf("forgetting %s in %s.%s: %w", id, a.name, mtable, res.Error)
+		return &harnessError{fmt.Errorf("forgetting %s in %s.%s: %w", id, a.name, mtable, res.Error)}
 	}
 	if res.RowsAffected != 1 {
 		return fmt.Errorf("expected to forget exactly 1 bookkeeping row for %s, deleted %d — the "+
@@ -295,15 +323,15 @@ func (s snapshot) diff(other snapshot) error {
 func snapshotFor(admin *gorm.DB, container, user, db, schema string) (snapshot, error) {
 	dump, err := dumpSchema(container, user, db, schema)
 	if err != nil {
-		return snapshot{}, fmt.Errorf("dumping %s schema: %w", schema, err)
+		return snapshot{}, &harnessError{fmt.Errorf("dumping %s schema: %w", schema, err)}
 	}
 	probe, err := probeTimescale(container, user, db, schema)
 	if err != nil {
-		return snapshot{}, fmt.Errorf("probing %s timescale objects: %w", schema, err)
+		return snapshot{}, &harnessError{fmt.Errorf("probing %s timescale objects: %w", schema, err)}
 	}
 	rows, err := rowCounts(admin, schema)
 	if err != nil {
-		return snapshot{}, err
+		return snapshot{}, &harnessError{err}
 	}
 	return snapshot{
 		normalized: normalizeDump(dump + "\n" + probe),
