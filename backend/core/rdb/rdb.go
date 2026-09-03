@@ -161,16 +161,33 @@ func (rdb *RdbManager) ExecuteInitialize(ctx context.Context) error {
 	migrateDB := rdb.Database.WithContext(core.WithSystemContext(ctx))
 	m := gormigrate.New(migrateDB, options, rdb.Migrations)
 
-	// Serialize migrations across concurrently-rolling pods with a Postgres
-	// session-level advisory lock (methodology §10.3). During a rolling update old
-	// and new pods run side by side and each calls Migrate() at startup; without a
-	// lock they would race on DDL. The lock is keyed by this service's migration
-	// table, so different services never block each other — only replicas of the
-	// same service serialize. Whichever pod loses the race waits, then finds the
-	// migrations already recorded by gormigrate and no-ops. (This pairs with the
+	// Serialize this area's schema DDL across concurrently-rolling pods with a
+	// Postgres session-level advisory lock (methodology §10.3). During a rolling
+	// update old and new pods run side by side and each calls Migrate() at startup;
+	// without a lock they would race on DDL. The lock is keyed by this service's
+	// migration table, so different services never block each other — only replicas
+	// of the same service serialize. Whichever pod loses the race waits, then finds
+	// the migrations already recorded by gormigrate and no-ops. (This pairs with the
 	// expand/contract discipline that keeps old and new schema mutually readable
 	// for the rollout window.)
-	if err := rdb.WithAdvisoryLock(ctx, AdvisoryLockKey(mtable), m.Migrate); err != nil {
+	//
+	// The lock covers EVERY DDL statement this service issues at startup, not just
+	// the migration chain: the core-owned audit journal is auto-migrated inside it
+	// too. That table used to be created outside any lock, which left one unguarded
+	// concurrent-DDL path — gorm's AutoMigrate checks for an index and then creates
+	// it, so two pods arriving together could both pass the check and the loser
+	// would fail startup on "relation already exists". A lock that covers all the
+	// DDL but one is not a serialized migration, it is a smaller race.
+	if err := rdb.WithAdvisoryLock(ctx, AdvisoryLockKey(mtable), func() error {
+		// The audit journal (ADR-019) is core-owned and migrated here rather than via
+		// each service's migration list, so no per-service wiring is required. It must
+		// exist BEFORE the chain runs: a baseline that seeds rows fires the audit
+		// callbacks registered in initializePostgres, and those INSERT into it.
+		if err := migrateDB.AutoMigrate(&AuditEvent{}); err != nil {
+			return err
+		}
+		return m.Migrate()
+	}); err != nil {
 		return err
 	}
 

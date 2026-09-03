@@ -10,6 +10,7 @@
 #   hack/migration-diff.sh snapshot   # capture golden schemas from the current chains
 #   hack/migration-diff.sh verify     # assert the chains still reproduce the goldens
 #   hack/migration-diff.sh coverage   # assert the tenant purge accounts for every table
+#   hack/migration-diff.sh replay     # assert every migration is individually re-runnable
 #
 # `verify` is the guard: it fails if a migration changes a schema without the golden
 # being refreshed, and — at the GA migration-squash — it proves a single baseline
@@ -38,8 +39,8 @@ set -euo pipefail
 
 MODE="${1:-verify}"
 case "$MODE" in
-  snapshot | verify | coverage) ;;
-  *) echo "usage: $0 <snapshot|verify|coverage>" >&2; exit 2 ;;
+  snapshot | verify | coverage | replay) ;;
+  *) echo "usage: $0 <snapshot|verify|coverage|replay>" >&2; exit 2 ;;
 esac
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -170,6 +171,20 @@ if [ "$MODE" = "verify" ]; then
   # tree. No -run filter, deliberately: naming the tests here is the same
   # remember-to-add-it coverage a list always turns out to be, and an integration test
   # added tomorrow should run tomorrow.
+  # The REPLAY gate. `verify` compares pg_dump output, which is blind to this property by
+  # construction: gormigrate skips an ID it has already recorded, so running a chain twice
+  # is a no-op that produces an identical dump. Every migrations.go tells the next
+  # maintainer their migration must be individually re-runnable — this is the first thing
+  # that checks. It works in its own database (<db>_replay) because it drops schemas, and
+  # the database above is still being read by the drill below.
+  echo "==> Running migrationdiff (mode=replay)"
+  go run . \
+    -mode replay \
+    -container "$CONTAINER" \
+    -host localhost -port "$HOST_PORT" \
+    -user postgres -password "$PASSWORD" \
+    -db "$DB"
+
   echo "==> Running the tenant-purge drill"
   DC_IT_PGPORT="$HOST_PORT" go test -tags integration -count=1 -timeout 20m ./...
 

@@ -28,13 +28,15 @@ import (
 	"sort"
 	"strings"
 
+	gormigrate "github.com/go-gormigrate/gormigrate/v2"
+
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
 func main() {
-	mode := flag.String("mode", "verify", "snapshot (write goldens) | verify (diff against goldens) | coverage (assert the tenant purge accounts for every table)")
+	mode := flag.String("mode", "verify", "snapshot (write goldens) | verify (diff against goldens) | coverage (assert the tenant purge accounts for every table) | replay (assert every migration is individually re-runnable)")
 	container := flag.String("container", "", "docker container running Postgres/Timescale, for a version-matched pg_dump via 'docker exec' (host pg_dump is often older than the server)")
 	host := flag.String("host", "localhost", "Postgres host the migration chain connects to (TCP)")
 	port := flag.Int("port", 5432, "Postgres port")
@@ -46,7 +48,9 @@ func main() {
 	flag.Parse()
 
 	switch *mode {
-	case "snapshot", "verify":
+	case "snapshot", "verify", "replay":
+		// replay needs the dump too: "it ran twice without erroring" is not the claim —
+		// "the second run changed nothing" is, and only a schema comparison says that.
 		if *container == "" {
 			fatalf("-container is required (the schema dump runs `docker exec <container> pg_dump` for a version-matched dump)")
 		}
@@ -54,7 +58,7 @@ func main() {
 		// coverage reads the catalog over a normal connection and never shells out to
 		// pg_dump, so it needs no container.
 	default:
-		fatalf("-mode must be snapshot, verify or coverage, got %q", *mode)
+		fatalf("-mode must be snapshot, verify, coverage or replay, got %q", *mode)
 	}
 
 	selected, err := selectAreas(*only)
@@ -64,6 +68,13 @@ func main() {
 
 	if *mode == "coverage" {
 		if err := runCoverage(context.Background(), *host, *port, *user, *password, *db, selected, *only != ""); err != nil {
+			fatalf("%v", err)
+		}
+		return
+	}
+
+	if *mode == "replay" {
+		if err := runReplay(context.Background(), *container, *host, *port, *user, *password, *db, selected, *only != ""); err != nil {
 			fatalf("%v", err)
 		}
 		return
@@ -149,9 +160,17 @@ func run(mode, container, host string, port int, user, password, db, goldenDir s
 // real schema, not a lookalike. Constructed as a struct literal (not NewRdbManager) so
 // no lifecycle callbacks are needed; ExecuteInitialize is the migration entrypoint.
 func migrateChain(ctx context.Context, a area, host string, port int, user, password, db string) error {
+	return migrateSome(ctx, a.name, a.migrations, host, port, user, password, db)
+}
+
+// migrateSome is migrateChain over an explicit migration slice, so the replay pass can
+// run a PREFIX of a chain. Splitting it out rather than adding a parameter to
+// migrateChain keeps every existing caller reading as "run this area's chain", which is
+// what they mean; only replay cares that a chain has a middle.
+func migrateSome(ctx context.Context, areaName string, migrations []*gormigrate.Migration, host string, port int, user, password, db string) error {
 	mgr := &rdb.RdbManager{
-		Microservice: &core.Microservice{InstanceId: db, FunctionalArea: a.name},
-		Migrations:   a.migrations,
+		Microservice: &core.Microservice{InstanceId: db, FunctionalArea: areaName},
+		Migrations:   migrations,
 		InstanceConfig: config.DatastoreConfiguration{
 			Type: "timescaledb",
 			Configuration: map[string]interface{}{
