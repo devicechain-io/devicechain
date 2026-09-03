@@ -52,33 +52,51 @@ import (
 	"io"
 	"net/netip"
 	"os"
-	"strings"
 
 	yaml "go.yaml.in/yaml/v3"
 )
 
-// refuseListWrapper rejects any document whose kind ends in "List".
+// refuseListWrapper rejects any document carrying a top-level `items` SEQUENCE.
 //
-// 🔴 A LIST IS NOT A DOCUMENT THIS CHART SHOULD EVER EMIT, AND IT IS A HOLE IF IT DOES.
-// Helm's manifest builder FLATTENS a `kind: List` before applying, so a NetworkPolicy
-// wrapped in one is created by a real `helm install` — verified on a cluster — while a
-// filter that selects on `kind == "NetworkPolicy"` skips the wrapper entirely and reports
-// nothing. That is the third spelling of "a policy added in a new file", after
-// `--show-only` and `crds/`, and the cheapest closure is to refuse the shape rather than
-// to teach every consumer to flatten it.
-func refuseListWrapper(kind string, index int) error {
-	if strings.HasSuffix(kind, "List") {
-		return fmt.Errorf("document %d has kind %q: a List wrapper is refused here, because "+
-			"Helm flattens one before applying, so anything inside it is created by an install "+
-			"while a kind filter reads straight past the wrapper. Emit the objects directly",
-			index, kind)
+// 🔴 A WRAPPED DOCUMENT IS A HOLE, AND THE PREDICATE HAS TO BE THE ONE HELM USES.
+// Helm's manifest builder flattens a wrapper before applying, so a NetworkPolicy inside one
+// is created by a real `helm install` — verified on a cluster — while a filter selecting on
+// `kind == "NetworkPolicy"` reads straight past it.
+//
+// 🔴 THE FIRST VERSION OF THIS FUNCTION TESTED `strings.HasSuffix(kind, "List")`, AND THAT
+// WAS THE SAME MISTAKE ONE LEVEL DOWN. apimachinery's `Unstructured.IsList` asks whether
+// `items` is a sequence; the KIND IS NOT CONSULTED. So `kind: ConfigMap` with an `items:`
+// list containing a NetworkPolicy is flattened and created — reproduced against a real
+// cluster, where `helm get manifest` showed only the ConfigMap and `kubectl get netpol`
+// showed the policy. A kind ending in "List" was a symptom of the shape, not the shape.
+//
+// (`kind: Bundle` looked safe for an unrelated reason: Helm resolves the OUTER document's
+// REST mapping first, so an unknown kind fails there. Any kind the server knows carries the
+// payload.)
+//
+// This chart should never emit a wrapper, so refusing the shape is cheaper than teaching
+// every consumer to flatten it.
+func refuseListWrapper(doc map[string]any, index int) error {
+	items, present := doc["items"]
+	if !present {
+		return nil
 	}
-	return nil
+	if _, isSequence := items.([]any); !isSequence {
+		return nil
+	}
+	kind, _ := doc["kind"].(string)
+	return fmt.Errorf("document %d (kind %q) carries a top-level `items` sequence: a wrapped "+
+		"document is refused here, because Helm flattens one before applying — anything inside "+
+		"it is created by an install while a kind filter reads straight past the wrapper. The "+
+		"kind is deliberately not part of this test: Helm keys on `items`, not on the name. "+
+		"Emit the objects directly", index, kind)
 }
 
 type manifest struct {
 	Kind string `yaml:"kind"`
-	Spec struct {
+	// Items exists only so the wrapper check can see it; see refuseListWrapper.
+	Items []any `yaml:"items"`
+	Spec  struct {
 		Egress []struct {
 			To []struct {
 				IPBlock *struct {
@@ -137,10 +155,8 @@ func runPolicies(in io.Reader, out io.Writer) error {
 			return fmt.Errorf("parse manifest stream: %w", err)
 		}
 		docIndex++
-		if kind, ok := doc["kind"].(string); ok {
-			if err := refuseListWrapper(kind, docIndex); err != nil {
-				return err
-			}
+		if err := refuseListWrapper(doc, docIndex); err != nil {
+			return err
 		}
 		if doc == nil || doc["kind"] != "NetworkPolicy" {
 			continue
@@ -179,8 +195,8 @@ func run(in io.Reader, out io.Writer) error {
 			return fmt.Errorf("parse manifest stream: %w", err)
 		}
 		docIndex++
-		if err := refuseListWrapper(m.Kind, docIndex); err != nil {
-			return err
+		if len(m.Items) > 0 {
+			return refuseListWrapper(map[string]any{"kind": m.Kind, "items": []any{nil}}, docIndex)
 		}
 		if m.Kind != "NetworkPolicy" {
 			continue

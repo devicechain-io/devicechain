@@ -247,9 +247,21 @@ gather() {
 # which is a question about the text. It would be the wrong shape for asking what the
 # template MEANS — which is why everything else here parses a render instead.
 assert_no_render_context_branches() {
-  local hits
-  hits="$(grep -nE '\blookup[[:space:]]|\.Capabilities\.|\.Release\.Is' \
-    "$CHART/templates/networkpolicy.yaml" || true)"
+  local chart_dir="${1:-$CHART}" hits
+  # 🔴 EVERY TEMPLATE, AND BARE WORDS. The first version grepped networkpolicy.yaml with a
+  # pattern requiring `.Release.Is` / `.Capabilities.` / `lookup ` — and the finding it was
+  # written for was "a SECOND policy gated on .Release.IsUpgrade", which lives in a second
+  # FILE. It also missed `{{ with .Release }}{{ if .IsUpgrade }}`, an aliased
+  # `$c := .Capabilities`, `.Release.Revision` (1 on install, >1 on upgrade), and a `lookup`
+  # whose arguments are on the next line. And _helpers.tpl is in scope for a third reason:
+  # the policy `include`s devicechain.areaLabels, so a render-context branch THERE rewrites
+  # the podSelector and the policy selects no pods on every upgrade.
+  #
+  # Bare words over the whole directory have zero false positives today — no template in
+  # this chart uses .Release, .Capabilities or lookup at all — which is what makes the
+  # blunt pattern affordable.
+  hits="$(grep -rnE '\.Release\b|\.Capabilities\b|\blookup\b' \
+    "$chart_dir/templates/" || true)"
   if [ -n "$hits" ]; then
     echo "The egress policy template branches on render CONTEXT, which the golden cannot see:" >&2
     echo "$hits" | sed 's/^/  /' >&2
@@ -262,29 +274,44 @@ assert_no_render_context_branches() {
 }
 
 assert_guards() {
-  local ok=0
+  local chart_dir="${1:-$CHART}" ok=0
+  # 🔴 THE ORACLE IS THE GUARD'S OWN MESSAGE, NOT "THE RENDER FAILED". Those are not the
+  # same claim, and the difference is reachable: `networkPolicy` has
+  # additionalProperties:false in values.schema.json, so a TYPO in this function's own
+  # --set key makes helm reject the values, the render fails, and a "did it fail?" oracle
+  # reports the guard fired — even with the guard deleted. Reproduced. A check whose
+  # oracle is "something went wrong" confirms itself.
   _guard_refuses() {
-    local what="$1"; shift
-    if render_chart "$CHART" "$@" >/dev/null 2>&1; then
+    local what="$1" expect="$2"; shift 2
+    local out
+    if out="$(render_chart "$chart_dir" "$@" 2>&1)"; then
       echo "the $what guard did NOT fire: the chart rendered with input it is supposed to" >&2
       echo "refuse, so an operator making that mistake gets a policy instead of a message." >&2
+      ok=1
+    elif ! printf '%s' "$out" | grep -qF "$expect"; then
+      echo "the render failed for the $what case, but NOT with that guard's message." >&2
+      echo "Expected to find: $expect" >&2
+      printf '%s\n' "$out" | tail -5 | sed 's/^/  /' >&2
+      echo "A guard check whose oracle is merely 'the render failed' passes when the chart" >&2
+      echo "is broken in any unrelated way — including a typo in this check's own --set." >&2
       ok=1
     fi
   }
   # An empty selector matches EVERY namespace, so this one is the difference between a DNS
   # rule and a hole.
-  _guard_refuses "empty dnsNamespaceSelector" \
+  _guard_refuses "empty dnsNamespaceSelector" "networkPolicy.dnsNamespaceSelector is empty" \
     --set 'networkPolicy.dnsNamespaceSelector.kubernetes\.io/metadata\.name=null'
   _guard_refuses "empty infrastructureNamespaceSelector" \
+    "networkPolicy.infrastructureNamespaceSelector is empty" \
     --set 'networkPolicy.infrastructureNamespaceSelector.devicechain\.io/component=null'
   # With the area absent the policy selects no pods and protects nothing.
-  _guard_refuses "outbound-connectors not enabled" \
+  _guard_refuses "outbound-connectors not enabled" "outbound-connectors is not among the enabled" \
     --set 'enabledFunctionalAreas={user-management,device-management}'
   return "$ok"
 }
 
 compare() {
-  local go_file="$1" chart_file="$2" policy_file="$3"
+  local go_file="$1" chart_file="$2" policy_file="$3" chart_dir="${4:-$CHART}"
 
   # 🔴 The negative control. An empty extraction on either side would make the comparison
   # trivially pass, and a diff of two empty files is the quietest green there is — the
@@ -331,10 +358,10 @@ compare() {
     return 1
   fi
 
-  if ! assert_guards; then
+  if ! assert_guards "$chart_dir"; then
     return 1
   fi
-  if ! assert_no_render_context_branches; then
+  if ! assert_no_render_context_branches "$chart_dir"; then
     return 1
   fi
 
@@ -386,7 +413,7 @@ run_against() {
   local chart_dir="$1" drop="${2:-}" g c p
   g="$(mktemp)"; c="$(mktemp)"; p="$(mktemp)"
   local rc=0
-  gather "$g" "$c" "$p" "$chart_dir" "$drop" && compare "$g" "$c" "$p" || rc=$?
+  gather "$g" "$c" "$p" "$chart_dir" "$drop" && compare "$g" "$c" "$p" "$chart_dir" || rc=$?
   rm -f "$g" "$c" "$p"
   return $rc
 }
@@ -472,6 +499,37 @@ self_test() {
     return 1
   fi
   echo "==> self-test: the Go extraction does not move when the chart does"
+
+  # Arm 5: a render GUARD deleted. 🔴 Without this arm, CI's --self-test proved the four
+  # arms above could fail and NOTHING about assert_guards — which is the check standing
+  # between an operator's one-key slip and a port-53 rule matching every namespace.
+  dir="$(tampered_chart '/if not $np.dnsNamespaceSelector/,+2d' templates/networkpolicy.yaml)"; record_tamper "$dir"
+  if render_chart "$dir" --set 'networkPolicy.dnsNamespaceSelector.kubernetes\.io/metadata\.name=null' \
+       >/dev/null 2>&1; then
+    : # the tamper took: the chart now renders input the guard should have refused
+  else
+    echo "SELF-TEST FAILED: deleting the DNS guard did not make that input renderable," >&2
+    echo "so this arm is not exercising what it claims." >&2
+    return 1
+  fi
+  if run_against "$dir" > /dev/null 2>&1; then
+    echo "SELF-TEST FAILED: a deleted render guard was not detected" >&2
+    return 1
+  fi
+  echo "==> self-test: a deleted render guard is detected"
+
+  # Arm 6: a render-context branch introduced in ANOTHER template — which is where the
+  # finding that motivated the tripwire actually lived.
+  dir="$(tampered_chart '1i {{/* {{ if .Release.IsUpgrade }} */}}' templates/_helpers.tpl)"; record_tamper "$dir"
+  if ! grep -q 'Release.IsUpgrade' "$dir/templates/_helpers.tpl"; then
+    echo "SELF-TEST FAILED: the render-context tamper did not take effect" >&2
+    return 1
+  fi
+  if run_against "$dir" > /dev/null 2>&1; then
+    echo "SELF-TEST FAILED: a render-context branch in a second template was not detected" >&2
+    return 1
+  fi
+  echo "==> self-test: a render-context branch in any template is detected"
 }
 
 update_golden() {
