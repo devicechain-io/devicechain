@@ -148,11 +148,11 @@ func TestScopeAllowance(t *testing.T) {
 		scope string
 		want  []string
 	}{
-		{auth.ScopeReadOnly, []string{"device:read", "event:read", "state:read", "command:read", "alarm:read"}},
+		{auth.ScopeReadOnly, []string{"device:read", "event:read", "state:read", "command:read", "alarm:read", "dashboard:read"}},
 		{auth.ScopeLocation, []string{"location:read"}},
 		// The multi-scope request an MCP client actually makes: the union of both
 		// ceilings, deduplicated, with nothing extra.
-		{"read-only location", []string{"device:read", "event:read", "state:read", "command:read", "alarm:read", "location:read"}},
+		{"read-only location", []string{"device:read", "event:read", "state:read", "command:read", "alarm:read", "dashboard:read", "location:read"}},
 		// A repeated scope is not a wider scope.
 		{"location location", []string{"location:read"}},
 	}

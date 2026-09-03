@@ -46,7 +46,7 @@ Widgets are themed with CSS custom properties, so an embedding application contr
 
 Widgets can also carry **actions** — acknowledge or clear an alarm, or send a command — which the server authorizes against the caller's own tenant-scoped rights (for example, an action requiring `alarm:write` is inert for a read-only viewer).
 
-Opening a dashboard at all requires **`dashboard:read`**, which is *not* part of the read-only baseline every enabled tenant member receives — so a member with no assigned role can view devices, events, state, commands, and alarms, but cannot list or open a dashboard until a role grants it. `dashboard:write` gates create, update, publish, rollback, and delete.
+Opening a dashboard requires **`dashboard:read`**, which every enabled tenant member holds: it is part of the read-only baseline, alongside reading devices, events, state, commands, and alarms. A dashboard is a saved arrangement of data those authorities already reach, so a member who can read the data can open the view of it. `dashboard:write` gates create, update, publish, rollback, and delete, and stays role-granted.
 
 ## Datasources
 

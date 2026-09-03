@@ -27,6 +27,7 @@ import (
 // what keeps this list an accurate stand-in for "a read-only user".
 var viewerBaseline = []auth.Authority{
 	auth.DeviceRead, auth.EventRead, auth.StateRead, auth.CommandRead, auth.AlarmRead,
+	auth.DashboardRead,
 }
 
 // credentialTestCtx builds a context carrying a real sqlite-backed device-management

@@ -245,19 +245,22 @@ second acknowledger cannot overwrite the winner.
 
 🔴 **Those per-resolver calls are the sole line of defence.** There is no schema directive and no
 middleware-level authorization — a resolver added without the line is world-readable within the
-tenant. And **no test in dashboard-management reaches an authorization gate**: deleting every
-`Authorize` call from its queries and mutations turns no test red.
+tenant. The QUERIES now have a gate test (`graphql/dashboard_authority_test.go`): a caller holding
+the read-only viewer baseline is admitted, one holding every read authority except `dashboard:read`
+is refused, and an anonymous caller is refused with the unauthenticated sentinel — so removing or
+weakening any of the three query gates turns tests red. **The MUTATIONS remain uncovered**: deleting
+every `Authorize` call from `mutations.go` still turns no test red.
 
 ## 7. Known gaps
 
-1. 🔴 **`dashboard:read` is not in the default tenant-member baseline.** The `viewerAuthorities` list
-   is commented "read access to the domain objects" and omits it — along with `notification:read`,
-   `connector:read` and `audit:read` (`backend/services/user-management/identity/manager.go`). Note
-   the comment used to claim "**all** domain objects", which was already untrue of these four and
-   became untrue of a fifth when device credentials moved behind `device:write`; the wording was
-   corrected rather than the list widened.
-   An ordinary member with no explicitly assigned role cannot list or open a dashboard, and neither
-   can an OAuth read-only-scoped token.
+1. ✅ **FIXED — `dashboard:read` is now in the default tenant-member baseline.** It was omitted
+   from `viewerAuthorities` (`backend/services/user-management/identity/manager.go`), so an ordinary
+   member and every OAuth `read-only` token were refused by all three dashboard queries. The OAuth
+   read-only ceiling moved with it, since the two are kept exactly equal.
+   Still absent, and still deliberate as far as anything records: `notification:read`,
+   `connector:read` and `audit:read`. Note the list's comment used to claim "**all** domain
+   objects", which was already untrue of those and became untrue again when device credentials
+   moved behind `device:write`; the wording was corrected rather than the list widened.
 2. 🔴 **The runtime packages cannot be consumed outside this repo.** All four are version `0.0.1`,
    none is published, three have **no build step at all**, and their entry points are
    `./src/index.ts`. They are consumed through the npm-workspace symlink and transpiled as

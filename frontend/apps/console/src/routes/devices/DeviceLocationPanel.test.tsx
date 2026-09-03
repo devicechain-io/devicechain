@@ -48,7 +48,7 @@ const claimsWith = (authorities: string[]): DecodedClaims => ({
 
 // The read-only viewer baseline the platform actually issues. location:read is
 // deliberately NOT in it, which is exactly why the forbidden state has to exist.
-const VIEWER = ['device:read', 'event:read', 'state:read', 'command:read', 'alarm:read'];
+const VIEWER = ['device:read', 'event:read', 'state:read', 'command:read', 'alarm:read', 'dashboard:read'];
 const VIEWER_PLUS_LOCATION = [...VIEWER, 'location:read'];
 
 const NO_PERMISSION = 'You don’t have permission to view this device’s location.';

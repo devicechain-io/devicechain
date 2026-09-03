@@ -115,10 +115,17 @@ const SuperuserRoleToken = "superuser"
 // within a tenant — seeded for the superuser's scaffold membership.
 const TenantAdminRoleToken = "tenant-admin"
 
-// ViewerRoleToken is the well-known tenant role granting read access to all
-// domain objects. Its authorities mirror the read-only baseline every enabled
-// tenant member receives by default (see identity.viewerAuthorities); it is kept
-// in the catalog so the access is visible/assignable in the admin console.
+// ViewerRoleToken is the well-known tenant role carrying the read-only baseline every
+// enabled tenant member receives by default (see identity.viewerAuthorities). It is kept
+// in the catalog so that access is visible and assignable in the admin console.
+//
+// 🔴 NOT "read access to all domain objects", which is what this said. Several reads are
+// deliberately outside the baseline — location:read most pointedly, so that knowing where
+// a vehicle or a person is can be granted separately — along with notification:read,
+// connector:read and audit:read. Reading a device CREDENTIAL is outside it too, by a
+// different route: those queries are gated on device:write, because for an access token
+// the readable credential id IS the bearer. The list is the definition; this sentence
+// cannot be, which is why it now points at the list instead of restating it.
 const ViewerRoleToken = "viewer"
 
 // Role is a globally-defined, named bundle of authorities. Uniqueness is the
