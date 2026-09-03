@@ -44,9 +44,12 @@ func TestASchemaChangeIsReported(t *testing.T) {
 
 // The Timescale comparison is the one normalize actively defeats: it scrubs the
 // materialization-hypertable number, which is the digit that moves when a continuous
-// aggregate is dropped and recreated — and DROP + CREATE is the recipe the baseline
-// itself prescribes for a re-runnable cagg migration. So this dimension compares the RAW
-// probe, and this test is what proves the raw one is actually being used.
+// aggregate is dropped and recreated — and DROP + CREATE is the obvious way to make a cagg
+// step re-runnable, which is why this dimension compares the RAW probe. The baseline used
+// to do exactly that, and this probe is what caught it: the migration ran twice without
+// erroring while discarding the materialization. It creates only when absent now; the probe
+// stays because the next author will reach for DROP + CREATE too. This test is what proves
+// the raw dimension is actually being used.
 func TestARecreatedContinuousAggregateIsReported(t *testing.T) {
 	const normalized = "CREATE VIEW rollups;" // identical either way once scrubbed
 	before := snap(normalized, "TIMESCALE CONTINUOUS AGGREGATE rollups MATERIALIZATION _materialized_hypertable_7;", nil)

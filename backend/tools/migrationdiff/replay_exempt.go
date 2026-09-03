@@ -11,9 +11,11 @@ import (
 
 // replayExemptions names the migrations that are known NOT to be re-runnable, and why.
 //
-// There is exactly one legitimate reason to be on this list: the migration is a FROZEN
-// pre-GA baseline that is not re-runnable and cannot be edited to become so. CLAUDE.md
-// forbids editing a baseline categorically — its statements are a snapshot of a point in
+// There is one legitimate reason to be on this list: the migration is a FROZEN pre-GA
+// baseline that is not re-runnable and cannot be edited to become so. CLAUDE.md forbids
+// editing a baseline, with one bar an edit can clear — the change must alter
+// re-runnability ONLY, with `verify` and `replay` proving the schema byte-identical, which
+// is how event-management's was re-cut and this list emptied — its statements are a snapshot of a point in
 // time, and rewriting one silently changes what a *fresh* install builds while every
 // existing database applies cleanly and looks healthy. The pre-GA remedy for a
 // half-applied baseline is `dcctl destroy` + `bootstrap`, not a repair migration.
@@ -22,8 +24,8 @@ import (
 // design. A skipped migration is never run, so nothing notices when the defect changes,
 // is fixed, or is joined by a second one. Worse, the obvious staleness check — "does this
 // id still exist?" — cannot fire on the event this entry itself proposes as the remedy: a
-// re-cut baseline KEEPS ITS ID. event-management's was re-cut once already and is still
-// `20260729000000`. A skip would then silence a brand-new baseline that had never been
+// re-cut baseline KEEPS ITS ID. event-management's has been re-cut twice and is still
+// `20260729000000` both times. A skip would then silence a brand-new baseline that had never been
 // replay-tested in its life, while the entry read as current.
 //
 // So each entry names the SYMPTOM, and the gate RUNS the migration and requires it to
@@ -35,49 +37,36 @@ import (
 // A migration you are APPENDING never belongs here. Make it re-runnable instead; the
 // gate's error message lists the causes that are almost always the answer.
 var replayExemptions = []replayExemption{
-	{
-		area:    "event-management",
-		id:      "20260729000000",
-		symptom: "collate measurement_events.device_token: ERROR: cannot alter type of a column used by a view or rule",
-		reason: "frozen pre-GA baseline; a replay dies on ALTER COLUMN ... COLLATE because the " +
-			"continuous aggregate it later creates reads those columns (see below)",
-	},
+	// EMPTY, AND THAT IS THE GOAL STATE RATHER THAN AN OVERSIGHT.
+	//
+	// There was one entry: event-management's frozen pre-GA baseline, which could not
+	// survive its own replay. It re-typed six columns to COLLATE "C" and later built a
+	// continuous aggregate over them, so a replay — which is what gormigrate does when a
+	// migration fails partway, since these run with UseTransaction:false — hit "cannot
+	// alter type of a column used by a view or rule". The operator saw event-management
+	// crash-looping on an error naming a VIEW, with no mention of the wedged migration,
+	// on a schema too half-built to serve, and no forward path but destroy + bootstrap.
+	//
+	// That was acceptable pre-GA and would not have been after: a released instance
+	// cannot be told to destroy itself. So the baseline was re-cut to be re-runnable —
+	// the collation is skipped when already C, the five derived index names are written
+	// out with IF NOT EXISTS, and the aggregate is created only when absent. The
+	// resulting schema is byte-identical, which is why that re-cut needed no golden
+	// update and no instance recreation.
+	//
+	// 🔴 Two things that re-cut taught, worth more than the entry it removed. The fix
+	// everyone reaches for first — "put the collation before the aggregate" — does
+	// nothing: it was already before it, and the problem is that the aggregate SURVIVES
+	// the failed run. And fixing the collation only moved the failure: the migration then
+	// ran twice without erroring while DROPPING AND RECREATING the aggregate, discarding
+	// its materialization. This gate caught that second one because it compares the
+	// schema and the Timescale catalog rather than the exit status.
+	//
+	// If you are about to add an entry here, re-read the paragraph above the type: the
+	// only legitimate reason is a frozen baseline that cannot be edited, and that reason
+	// is now weaker than it was, because one was edited on purpose and it cost nothing.
 }
 
-// The event-management baseline, stated in full, because the one-line reason above is a
-// label and this is the defect.
-//
-// WHAT HAPPENS. The baseline creates the hypertables, re-types six columns to
-// `varchar(128) COLLATE "C"`, creates the indexes, and then creates the
-// measurement_rollups continuous aggregate over those same columns. Run forward on an
-// empty schema that order is fine. Replayed — which is what gormigrate does when the
-// baseline fails partway, since migrations run with UseTransaction:false and nothing is
-// rolled back — the aggregate is already there, and Postgres refuses the re-type with
-// "cannot alter type of a column used by a view or rule" (SQLSTATE 0A000).
-//
-// WHAT AN OPERATOR SEES. event-management crash-looping on an error that names a view,
-// with no mention of the migration that is wedged. Every retry fails identically. The
-// schema is half-built, so the service cannot serve either. There is no forward path:
-// the fix is `dcctl destroy` + `bootstrap`, which is the pre-GA remedy for a baseline and
-// is why this is a registered exemption rather than a release blocker today.
-//
-// WHAT THIS EXEMPTION ALSO HIDES. The baseline creates five indexes with no name
-// (baseline.go:140-145 — deliberately, so their Postgres-derived names match the golden).
-// An unnamed CREATE INDEX does not fail on replay; Postgres finds the derived name taken
-// and silently creates "<name>1". So past the collation failure this baseline would also
-// leave five duplicate indexes — written on every insert, read by nothing. The gate's
-// before/after schema comparison would report those, and cannot, because the replay
-// aborts earlier. Both defects sit in the same frozen file and neither can be fixed
-// without re-cutting it.
-//
-// 🔴 THIS IS A DECISION TO REVISIT BEFORE v1.0.0, not a closed one. Pre-GA, "recreate the
-// instance" is an accepted remedy and the exemption is honest. After GA it is not: a
-// released instance cannot be told to destroy itself, so a baseline that cannot survive
-// its own replay is a permanent trap for whoever hits an infrastructure blip mid-migration.
-// The choice at the cut line is to re-cut this baseline (moving the collation ahead of the
-// aggregate and naming the five indexes) or to ship knowing this.
-
-// replayExemption is one migration known not to be re-runnable, pinned by its symptom.
 type replayExemption struct {
 	area string
 	id   string

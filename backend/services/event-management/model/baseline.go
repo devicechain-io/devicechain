@@ -8,6 +8,7 @@ package model
 // vocabulary, a live validator or a live CONSTANT is a migration whose behaviour changes
 // when those do.
 import (
+	"database/sql"
 	"fmt"
 
 	gormigrate "github.com/go-gormigrate/gormigrate/v2"
@@ -88,8 +89,9 @@ var baselineCollatedColumns = []struct {
 // each cannot run inside a transaction; core/rdb runs migrations with UseTransaction=false so
 // every statement auto-commits. The consequence is that a half-applied run is NEVER rolled
 // back and replays from the top on the next boot, which is why every statement below is
-// individually re-runnable (IF NOT EXISTS, if_not_exists => TRUE, and a leading DROP for the
-// aggregate). Anything appended after this migration must hold the same property.
+// individually re-runnable: IF NOT EXISTS, if_not_exists => TRUE, a collation step that skips
+// what is already collated, and an aggregate created only when absent. Anything appended after
+// this migration must hold the same property.
 //
 // Consequence, and it is deliberate: an EXISTING instance is not migrated onto this baseline,
 // it is recreated (dcctl destroy + bootstrap).
@@ -122,8 +124,43 @@ func NewBaselineSchema() *gormigrate.Migration {
 			}
 
 			// C collation BEFORE the indexes, which inherit it.
+			//
+			// 🔴 SKIPPED WHEN ALREADY C, AND THAT CONDITIONAL IS THE WHOLE REASON THIS
+			// MIGRATION CAN BE RUN TWICE. Migrations run with UseTransaction:false and
+			// replay from the top after a failure, so a baseline that fails partway is
+			// run again over its own half-built schema. This step is where that used to
+			// die: the continuous aggregate created further down SURVIVES the failed
+			// run, and Postgres then refuses to re-type a column a view reads —
+			// "cannot alter type of a column used by a view or rule" (SQLSTATE 0A000).
+			// The operator saw event-management crash-looping on an error naming a
+			// VIEW, with no mention of the migration that was wedged, on a schema too
+			// half-built to serve, and no forward path.
+			//
+			// 🔴 The reason is not "the ALTER is expensive". It was measured: re-typing an
+			// already-C column does NOT rewrite the table (relfilenode is unchanged).
+			// What actually happens is that Postgres REFUSES it — 0A000, against the
+			// aggregate's internal partial view — whenever a view reads the column, which
+			// on a replay it always does. So the skip is what makes the step expressible
+			// at all, and it states what the step means: "ensure C collation", not
+			// "convert now". The conclusion was right before this was measured and the
+			// reason given for it was wrong, which is worth the two lines.
+			//
+			// The resulting schema is byte-identical either way, which is why this
+			// re-cut needs no golden update and no existing instance has to be
+			// recreated: an instance that already applied this id never runs it again,
+			// and one that never applied it builds exactly what it built before.
 			for _, t := range baselineCollatedColumns {
 				for _, col := range t.columns {
+					var collation sql.NullString
+					if err := tx.Raw(
+						`SELECT collation_name FROM information_schema.columns `+
+							`WHERE table_schema = 'event-management' AND table_name = ? AND column_name = ?`,
+						t.table, col).Scan(&collation).Error; err != nil {
+						return fmt.Errorf("read collation of %s.%s: %w", t.table, col, err)
+					}
+					if collation.Valid && collation.String == "C" {
+						continue
+					}
 					if err := tx.Exec(fmt.Sprintf(
 						`ALTER TABLE "event-management".%q ALTER COLUMN %s TYPE varchar(128) COLLATE "C";`,
 						t.table, col)).Error; err != nil {
@@ -132,17 +169,37 @@ func NewBaselineSchema() *gormigrate.Migration {
 				}
 			}
 
-			// 🔴 THE UNNAMED FORM IS DELIBERATE for these four. Postgres derives
-			// `<table>_<columns>_idx` from the column list, which is the name the chain
-			// produced and therefore the name the golden holds. Naming them explicitly here
-			// would create the same indexes under different names — a difference migrationdiff
-			// reports, and one that would otherwise look like a harmless tidy-up.
+			// 🔴 THESE NAMES ARE POSTGRES'S OWN DERIVATION, SPELLED OUT, AND BOTH HALVES
+			// OF THAT MATTER.
+			//
+			// They used to be written unnamed, deliberately, so Postgres would derive
+			// `<table>_<columns>_idx` — the name the pre-baseline chain produced and
+			// therefore the name the golden holds. Naming them differently would have
+			// been a schema difference dressed as a tidy-up.
+			//
+			// But an unnamed CREATE INDEX is not re-runnable, and it does not announce
+			// that: run twice, Postgres does NOT collide, it silently creates
+			// `<name>1` — a duplicate index written on every insert and read by nothing.
+			// Replay is a real path (UseTransaction:false, replay from the top after a
+			// failure), so the unnamed form was a silent cost on exactly the runs that
+			// were already going badly.
+			//
+			// Writing the derived name explicitly with IF NOT EXISTS keeps the schema
+			// byte-identical to the golden AND makes the step re-runnable. The names
+			// below are transcribed from golden/event-management.sql, not guessed; if
+			// you change a column list you must change the name to match what Postgres
+			// would derive, and `hack/migration-diff.sh verify` is what catches you.
 			for _, stmt := range []string{
-				`CREATE INDEX ON "event-management"."events" (device_token, occurred_time DESC);`,
-				`CREATE INDEX ON "event-management"."events" (tenant_id, occurred_time DESC);`,
-				`CREATE INDEX ON "event-management"."location_events" (tenant_id, occurred_time DESC);`,
-				`CREATE INDEX ON "event-management"."measurement_events" (tenant_id, occurred_time DESC);`,
-				`CREATE INDEX ON "event-management"."alert_events" (tenant_id, occurred_time DESC);`,
+				`CREATE INDEX IF NOT EXISTS events_device_token_occurred_time_idx ` +
+					`ON "event-management"."events" (device_token, occurred_time DESC);`,
+				`CREATE INDEX IF NOT EXISTS events_tenant_id_occurred_time_idx ` +
+					`ON "event-management"."events" (tenant_id, occurred_time DESC);`,
+				`CREATE INDEX IF NOT EXISTS location_events_tenant_id_occurred_time_idx ` +
+					`ON "event-management"."location_events" (tenant_id, occurred_time DESC);`,
+				`CREATE INDEX IF NOT EXISTS measurement_events_tenant_id_occurred_time_idx ` +
+					`ON "event-management"."measurement_events" (tenant_id, occurred_time DESC);`,
+				`CREATE INDEX IF NOT EXISTS alert_events_tenant_id_occurred_time_idx ` +
+					`ON "event-management"."alert_events" (tenant_id, occurred_time DESC);`,
 			} {
 				if err := tx.Exec(stmt).Error; err != nil {
 					return err
@@ -234,15 +291,36 @@ func NewBaselineSchema() *gormigrate.Migration {
 // It stores sum/min/max/count and NOT avg, because only those roll up correctly to a coarser
 // interval; avg is derived as sum/count at read time.
 //
-// The leading DROP makes a re-run after a partial failure self-healing, which matters precisely
-// because none of this DDL is transactional (see NewBaselineSchema). gormigrate records this
-// migration's id only on full success, so the DROP can never run against an already-committed
-// production aggregate.
+// 🔴 IT CREATES THE AGGREGATE ONLY IF IT IS ABSENT, AND THAT REPLACED A LEADING DROP.
+//
+// The DROP was there to make a re-run after a partial failure self-healing, on the reasoning that
+// gormigrate records this migration's id only on full success, so it could never run against an
+// already-committed production aggregate. That reasoning is correct and it was still the wrong
+// mechanism: a replay then DROPPED and RECREATED the aggregate, which discards its materialization
+// and re-runs a full refresh. The replay gate sees it as what it is — the migration ran twice and
+// changed a Timescale object, `_materialized_hypertable_7` becoming `_8`.
+//
+// Skipping when present is self-healing in the same way and identical on replay. The three steps
+// after the create are already idempotent by construction: SET materialized_only is a plain ALTER,
+// refresh_continuous_aggregate recomputes, and the policy carries if_not_exists. So a partial run
+// that got as far as the view still has each of them applied on the way through.
+//
+// The shape is not re-checked, and that is deliberate rather than an omission: an aggregate at this
+// name can only have been created by this function, in this frozen migration, so "it exists" and
+// "it has the right shape" are the same statement. A later change to the shape is a NEW migration
+// with its own id, which is where that question belongs.
 func createMeasurementRollups(tx *gorm.DB, view string) error {
 	bucket := fmt.Sprintf("INTERVAL '%d seconds'", baselineRollupBucketSeconds)
 
-	if err := tx.Exec(`DROP MATERIALIZED VIEW IF EXISTS ` + view + `;`).Error; err != nil {
-		return err
+	var existing int64
+	if err := tx.Raw(
+		`SELECT count(*) FROM timescaledb_information.continuous_aggregates ` +
+			`WHERE view_schema = 'event-management' AND view_name = 'measurement_rollups'`).
+		Scan(&existing).Error; err != nil {
+		return fmt.Errorf("look for an existing measurement_rollups aggregate: %w", err)
+	}
+	if existing > 0 {
+		return ensureRollupSettings(tx, view, bucket)
 	}
 
 	// WITH NO DATA is the portable form — WITH DATA is rejected for continuous aggregates —
@@ -265,6 +343,35 @@ func createMeasurementRollups(tx *gorm.DB, view string) error {
 		return err
 	}
 
+	return ensureRollupSettings(tx, view, bucket)
+}
+
+// ensureRollupSettings applies the three re-runnable steps that follow the aggregate's creation.
+//
+// They are split out so the create-if-absent path above and the fresh path run exactly the same
+// statements. Inlining them twice is how the two paths drift, and a replay that skipped one of
+// these would leave an aggregate that reads correctly and never materializes.
+//
+// 🔴 "Re-runnable" is not "free", and it is not concurrency-safe.
+//
+// The refresh recomputes every range INVALIDATED since the last one, and Timescale coalesces
+// scattered invalidations into a single span — so with nothing invalidated it is a no-op
+// (measured: 17ms, "already up-to-date"), while a live store taking late writes across the
+// window can pay the full history (~90s per 300k rows, measured). And it ERRORS rather than
+// waits if it meets the policy job's own refresh, which the policy schedules for the next
+// scheduler pass on creation (SQLSTATE 55P03, reproduced).
+//
+// 🔴 An earlier version of this comment said the refresh recomputes "whether or not the
+// aggregate is already materialized, the same cost as the first run". That was measured false —
+// and it is the same defect as the collation reason two blocks up: a conclusion that holds,
+// defended by a mechanism nobody checked. The conclusion below is unchanged.
+//
+// Harmless HERE, for a reason that is a property of THIS migration rather than of the recipe: a
+// baseline replays over a schema with no rows, so nothing is invalidated and the collision
+// window is empty, and a collision would self-heal on the next replay anyway. 🔴 Do NOT copy
+// this shape into a migration that runs against a LIVE aggregate — late writes there make the
+// refresh cost the full history on every replay, against its own policy job.
+func ensureRollupSettings(tx *gorm.DB, view, bucket string) error {
 	// Real-time aggregation: union the un-materialized leading edge from the raw hypertable at
 	// query time, so a dashboard is not blind up to the refresh lag.
 	//
