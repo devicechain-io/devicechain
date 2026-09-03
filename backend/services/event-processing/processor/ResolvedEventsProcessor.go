@@ -149,6 +149,20 @@ type ResolvedEventsProcessor struct {
 	Replay               ReplayOpener
 	Store                *model.SnapshotStore
 
+	// Lease makes this replica a LEASED SINGLE WRITER (ADR-070): it fetches, acks,
+	// checkpoints and publishes only inside a held leadership term, and stands by
+	// otherwise. Nil disables leadership entirely and the processor behaves exactly
+	// as it did before — one process, one writer by deployment convention — which is
+	// the scaffold and unit-test path.
+	Lease *messaging.DistributedLease
+
+	// Gate is the object the term-gated readers hold and this processor publishes
+	// each term's ownership signal into. It exists as a separate object purely for
+	// ORDERING: the readers are constructed before the processor is, so they cannot
+	// close over it, and a gate they share instead lets the wiring stay a single pass
+	// with no globals read across goroutines. Required whenever Lease is set.
+	Gate *TermGate
+
 	// RuleUpdatesReader is the durable consumer of device-management's published-rule fact
 	// stream (ADR-051 slice 4b-3). When set, a goroutine drains it, persists each fact's rules
 	// to the durable projection (RuleStore) and marshals the compiled rules onto the
@@ -402,9 +416,29 @@ type ResolvedEventsProcessor struct {
 
 	// Shutdown coordination (A5): procCancel stops the loop and the pump; readerWG
 	// lets ExecuteStop wait for the loop to exit before the reader is torn down.
+	//
+	// 🔴 THESE ARE RE-MINTED PER LEADERSHIP TERM (ADR-070), so they are read through
+	// pctx()/pcancel() under procMu rather than directly. The loops that select on
+	// them all belong to one term and are relaunched by the next; the tenant-purge
+	// responder, however, reads from its own goroutine at any time, so a plain field
+	// re-assignment here would be a data race with it. Tests that drive the processor
+	// without a lease still assign the fields directly during single-threaded setup.
+	procMu     sync.RWMutex
 	procCtx    context.Context
 	procCancel context.CancelFunc
 	readerWG   sync.WaitGroup
+
+	// supCtx bounds the PROCESS, not a term: it is minted once in ExecuteInitialize
+	// and every term context descends from it, so cancelling it ends leadership for
+	// good. Do not confuse it with procCtx — cancelling procCtx ends one term and the
+	// supervisor immediately starts trying for another.
+	supCtx    context.Context
+	supCancel context.CancelFunc
+	supWG     sync.WaitGroup
+	// termBuildFailures counts CONSECUTIVE failed term builds, and only those. It is
+	// touched solely by the supervisor goroutine. See maxConsecutiveTermBuildFailures
+	// for why Acquire failures must never reach it.
+	termBuildFailures int
 
 	lifecycle core.LifecycleManager
 }
@@ -541,7 +575,8 @@ func (rp *ResolvedEventsProcessor) Initialize(ctx context.Context) error {
 
 // ExecuteInitialize sets up the cancelable loop context.
 func (rp *ResolvedEventsProcessor) ExecuteInitialize(ctx context.Context) error {
-	rp.procCtx, rp.procCancel = context.WithCancel(ctx)
+	rp.supCtx, rp.supCancel = context.WithCancel(ctx)
+	rp.newTermContext()
 	return nil
 }
 
@@ -550,13 +585,87 @@ func (rp *ResolvedEventsProcessor) Start(ctx context.Context) error {
 	return rp.lifecycle.Start(ctx)
 }
 
-// ExecuteStart restores the engine from the last committed snapshot, replays the
-// stream in order up to the head, then launches the live loop. A store or replay
-// error aborts startup (fail-closed) rather than silently starting from a stale or
-// partial state and re-deriving false/missed detections.
+// ExecuteStart brings DETECT up.
+//
+// Without a lease it does exactly what it always did: build one term on this
+// process and run it until shutdown (the scaffold and unit-test path, where single
+// writership is a deployment convention rather than something enforced).
+//
+// With a lease it BLOCKS until this replica wins the partition and its first term
+// is live, then hands off to the supervisor for every term after that. Blocking is
+// deliberate — see runTerms for why a Ready standby cannot land before the
+// tenant-purge responder is term-scoped, and why this costs nothing on the deploy
+// shape event-processing actually uses.
 func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
+	// A lease with no gate would take the partition and then consume ungoverned —
+	// the fail-open shape this whole change exists to remove, arrived at by a wiring
+	// slip rather than a design one. Refuse to start instead: leadershipEnabled() is
+	// an AND of the two, so without this the processor would quietly run as if no
+	// lease had been configured at all.
+	if rp.Lease != nil && rp.Gate == nil {
+		return fmt.Errorf("event-processing: DETECT was given a partition lease but no TermGate, so its readers " +
+			"would consume without checking ownership; set both or neither")
+	}
+	if !rp.leadershipEnabled() {
+		return rp.buildTerm(ctx)
+	}
+	handle, err := rp.beginTermWithRetry()
+	if err != nil {
+		return err
+	}
+	rp.supWG.Add(1)
+	go func() {
+		defer rp.supWG.Done()
+		rp.awaitTermEnd(handle)
+		rp.runTerms()
+	}()
+	return nil
+}
+
+// buildTerm restores the engine from the last committed snapshot, replays the
+// stream in order up to the head, then launches the live loop and the fact
+// consumers. A store or replay error aborts the build (fail-closed) rather than
+// silently starting from a stale or partial state and re-deriving false/missed
+// detections.
+//
+// 🔴 IT RUNS ONCE PER LEADERSHIP TERM, NOT ONCE PER PROCESS, and everything it
+// touches has to be re-entrant. resetForTerm below is that contract; read it before
+// adding state to this type.
+func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
+	rp.resetForTerm()
+	// Attach the durables for this term. Doing it here rather than at the END of the
+	// previous term is what keeps a bind failure visible: see bindTermReaders.
+	if rp.leadershipEnabled() {
+		if err := rp.bindTermReaders(); err != nil {
+			return fmt.Errorf("event-processing: could not bind DETECT durables for this leadership term: %w", err)
+		}
+	}
 	if err := rp.restore(ctx); err != nil {
 		return err
+	}
+	// 🔴 RECONCILE THE REGISTRY HERE, BEFORE CATCH-UP AND REPLAY, AND AGAIN AFTER.
+	//
+	// The registry is loaded once at process start, and a standby's rule consumer is
+	// gated for the whole of its standby, so on a term after the first it is as stale
+	// as the standby was long. restore builds the engine from it, and replay evaluates
+	// against it — so without this the term's whole replay window would be judged by a
+	// rule set that predates the term.
+	//
+	// It CANNOT run before restore (the engine is nil and this drives UpsertRule /
+	// RemoveRule on it), and it must not be a swap of the registry POINTER: the
+	// registry is shared with the publisher and with main's global, so a fresh one
+	// would leave the publisher reading the old. reconcileRegistry is a diff in place,
+	// which is why this is a REORDER rather than a reload.
+	//
+	// detectcore.Restore keys state by rule id regardless of which rules are in the
+	// set, so restoring against a stale registry loses no state and this binds what it
+	// missed. That makes the term's contract STRICTER than the process's used to be,
+	// which explicitly accepted that a rule added mid-window missed its share of
+	// replay.
+	if rp.leadershipEnabled() {
+		if err := rp.reconcileRegistry(ctx); err != nil {
+			return err
+		}
 	}
 	// Catch the MEMBERSHIP fact projections (roster, entity-deleted, published-rule) up to head FIRST,
 	// before the views build and replay runs, so the absence gate reads CURRENT membership. A device
@@ -794,10 +903,10 @@ func (rp *ResolvedEventsProcessor) drainFactToHead(reader messaging.MessageReade
 	}
 	applied := 0
 	for {
-		if rp.procCtx.Err() != nil {
-			return rp.procCtx.Err() // shutdown during catch-up
+		if rp.pctx().Err() != nil {
+			return rp.pctx().Err() // shutdown during catch-up
 		}
-		pctx, cancel := context.WithTimeout(rp.procCtx, backlogProbeTimeout)
+		pctx, cancel := context.WithTimeout(rp.pctx(), backlogProbeTimeout)
 		pending, ackPending, err := bl.Backlog(pctx)
 		cancel()
 		if err != nil {
@@ -813,12 +922,12 @@ func (rp *ResolvedEventsProcessor) drainFactToHead(reader messaging.MessageReade
 		// each), bounding each read so it cannot block forever.
 		read := 0
 		for {
-			rctx, rcancel := context.WithTimeout(rp.procCtx, factCatchUpReadTimeout)
+			rctx, rcancel := context.WithTimeout(rp.pctx(), factCatchUpReadTimeout)
 			msg, rerr := reader.ReadMessage(rctx)
 			rcancel()
 			if rerr != nil {
-				if rp.procCtx.Err() != nil {
-					return rp.procCtx.Err() // real shutdown, not the bounded read timeout
+				if rp.pctx().Err() != nil {
+					return rp.pctx().Err() // real shutdown, not the bounded read timeout
 				}
 				if !errors.Is(rerr, io.EOF) {
 					// A genuine read error (not the bounded-read deadline): fail closed.
@@ -827,7 +936,7 @@ func (rp *ResolvedEventsProcessor) drainFactToHead(reader messaging.MessageReade
 				break // bounded read yielded nothing available right now
 			}
 			if !handle(msg) {
-				return rp.procCtx.Err() // shutdown mid-persist
+				return rp.pctx().Err() // shutdown mid-persist
 			}
 			applied++
 			read++
@@ -1174,7 +1283,7 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 		rp.dirty = false
 		// Clear the stale row (the deliberate backward move Save's monotonic guard
 		// refuses); live consumption then writes a fresh checkpoint from sequence 1.
-		if err := rp.Store.Reset(rp.procCtx, rp.cfg.PartitionId); err != nil {
+		if err := rp.Store.Reset(rp.pctx(), rp.cfg.PartitionId); err != nil {
 			return fmt.Errorf("reset stale snapshot for partition %q: %w", rp.cfg.PartitionId, err)
 		}
 		return nil
@@ -1182,7 +1291,7 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 
 	replayed := 0
 	for {
-		msg, err := reader.Read(rp.procCtx)
+		msg, err := reader.Read(rp.pctx())
 		if errors.Is(err, io.EOF) {
 			break
 		}
@@ -1195,11 +1304,11 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 			replayed++
 		}
 		if replayed >= rp.cfg.CheckpointEvents {
-			rp.checkpoint(rp.procCtx)
+			rp.checkpoint(rp.pctx())
 			replayed = 0
 		}
 	}
-	rp.checkpoint(rp.procCtx) // commit the final replay position
+	rp.checkpoint(rp.pctx()) // commit the final replay position
 	if head >= startSeq {
 		log.Info().Uint64("fromSeq", startSeq).Uint64("toHead", head).Uint64("lastSeq", rp.engine.LastSeq()).
 			Msg("Replayed DETECT engine to stream head; starting live consumption.")
@@ -1218,7 +1327,7 @@ func (rp *ResolvedEventsProcessor) run() {
 	pumpDone := make(chan struct{})
 	go rp.readPump(items, pumpDone)
 	// Always cancel and join the pump on the way out (including a panic unwind).
-	defer func() { rp.procCancel(); <-pumpDone }()
+	defer func() { rp.pcancel(); <-pumpDone }()
 
 	ticker := time.NewTicker(rp.cfg.TickInterval)
 	defer ticker.Stop()
@@ -1237,7 +1346,7 @@ func (rp *ResolvedEventsProcessor) run() {
 			liveItems = nil
 		}
 		select {
-		case <-rp.procCtx.Done():
+		case <-rp.pctx().Done():
 			rp.finalCheckpoint()
 			return
 		case upd := <-rp.ruleUpdates:
@@ -1299,7 +1408,7 @@ func (rp *ResolvedEventsProcessor) run() {
 			// Flush by buffered-ack count (bounds in-flight acks regardless of whether
 			// messages advanced the engine, were duplicates, or were poison).
 			if len(rp.pendingAcks) >= rp.cfg.CheckpointEvents {
-				rp.checkpoint(rp.procCtx)
+				rp.checkpoint(rp.pctx())
 			}
 		case <-ticker.C:
 			// Read the clock through cfg.Clock (not the ticker's wall-clock value) so every
@@ -1310,9 +1419,9 @@ func (rp *ResolvedEventsProcessor) run() {
 			// checkpoint. idleAdvance itself commits (and delivers) whenever it moved state, so
 			// the interval checkpoint below only handles the case idle-advance did not: buffered
 			// acks/detections from live messages, or a suppressed (not-caught-up) advance.
-			rp.idleAdvance(rp.procCtx, now)
+			rp.idleAdvance(rp.pctx(), now)
 			if (rp.dirty || len(rp.pendingAcks) > 0 || len(rp.pendingDets) > 0) && now.Sub(rp.lastCheckpoint) >= rp.cfg.CheckpointInterval {
-				rp.checkpoint(rp.procCtx)
+				rp.checkpoint(rp.pctx())
 			}
 			// Per-tenant state-budget accounting (ADR-023 amendment, slice 6c), sampled on the ticker
 			// on its own cadence — NOT from checkpoint(), whose every call site is activity-gated
@@ -1329,7 +1438,7 @@ func (rp *ResolvedEventsProcessor) run() {
 			// falling-behind signal, so it must keep refreshing on a quiet-but-backlogged stream —
 			// hence its own timer, not a ride on the activity-gated checkpoint().
 			if now.Sub(rp.lastLagSample) >= rp.cfg.CheckpointInterval {
-				rp.sampleConsumerLag(rp.procCtx)
+				rp.sampleConsumerLag(rp.pctx())
 				rp.lastLagSample = now
 			}
 			// Retry any recheck a transient store error deferred (bounded, idempotent) — dynamic-threshold
@@ -1359,10 +1468,10 @@ func (rp *ResolvedEventsProcessor) run() {
 func (rp *ResolvedEventsProcessor) readPump(items chan<- readItem, done chan<- struct{}) {
 	defer close(done)
 	for {
-		msg, err := rp.ResolvedEventsReader.ReadMessage(rp.procCtx)
+		msg, err := rp.ResolvedEventsReader.ReadMessage(rp.pctx())
 		select {
 		case items <- readItem{msg: msg, err: err}:
-		case <-rp.procCtx.Done():
+		case <-rp.pctx().Done():
 			return
 		}
 		if errors.Is(err, io.EOF) {
@@ -1375,7 +1484,7 @@ func (rp *ResolvedEventsProcessor) readPump(items chan<- readItem, done chan<- s
 			// self-heal does not cover) cannot hot-spin the CPU and flood logs.
 			select {
 			case <-time.After(readErrorBackoff):
-			case <-rp.procCtx.Done():
+			case <-rp.pctx().Done():
 				return
 			}
 		}
@@ -1407,7 +1516,7 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 		log.Warn().Str("subject", msg.Subject).Msg("Dropping resolved event with no stream sequence (unreadable metadata).")
 		return false
 	}
-	_, tenant, ok := messaging.TenantContextFromSubject(rp.procCtx, msg.Subject)
+	_, tenant, ok := messaging.TenantContextFromSubject(rp.pctx(), msg.Subject)
 	if !ok {
 		log.Warn().Str("correlation", msg.CorrelationID()).
 			Msgf("Dropping resolved event with no parseable tenant in subject %q", msg.Subject)
@@ -1657,9 +1766,7 @@ func (rp *ResolvedEventsProcessor) detectStaleOwner(ctx context.Context) bool {
 			Uint64("appliedSeq", rp.engine.LastSeq()).
 			Msg("Idle-advance fenced: another writer owns a higher checkpoint (split brain); halting this writer.")
 		rp.stale = true
-		if rp.procCancel != nil {
-			rp.procCancel()
-		}
+		rp.pcancel()
 		return true
 	}
 	return false
@@ -1736,7 +1843,7 @@ func (rp *ResolvedEventsProcessor) applyArmRecheck(au armUpdate) {
 	if rp.armer == nil || rp.RosterStore == nil {
 		return
 	}
-	rctx, cancel := context.WithTimeout(rp.procCtx, loopReadTimeout)
+	rctx, cancel := context.WithTimeout(rp.pctx(), loopReadTimeout)
 	row, live, err := rp.RosterStore.Load(rctx, au.tenant, au.deviceToken)
 	cancel()
 	if err != nil {
@@ -1801,7 +1908,7 @@ func (rp *ResolvedEventsProcessor) applyAttrRecheck(at attrUpdate) {
 	if rp.attrView == nil || rp.AttributeStore == nil {
 		return
 	}
-	rctx, cancel := context.WithTimeout(rp.procCtx, loopReadTimeout)
+	rctx, cancel := context.WithTimeout(rp.pctx(), loopReadTimeout)
 	rows, err := rp.AttributeStore.LoadDevice(rctx, at.tenant, at.deviceToken)
 	cancel()
 	if err != nil {
@@ -1864,7 +1971,7 @@ func (rp *ResolvedEventsProcessor) retryAttrRechecks(deadline time.Time) {
 func (rp *ResolvedEventsProcessor) runRuleConsumer() {
 	defer rp.readerWG.Done()
 	for {
-		msg, err := rp.RuleUpdatesReader.ReadMessage(rp.procCtx)
+		msg, err := rp.RuleUpdatesReader.ReadMessage(rp.pctx())
 		if errors.Is(err, io.EOF) {
 			return
 		}
@@ -1872,7 +1979,7 @@ func (rp *ResolvedEventsProcessor) runRuleConsumer() {
 			rp.RuleUpdatesReader.HandleResponse(err)
 			select {
 			case <-time.After(readErrorBackoff):
-			case <-rp.procCtx.Done():
+			case <-rp.pctx().Done():
 				return
 			}
 			continue
@@ -1891,7 +1998,7 @@ func (rp *ResolvedEventsProcessor) runRuleConsumer() {
 // persisted projections afterward, so the loop signal (and its active-version re-read) is unneeded and
 // the loop is not running yet. It returns false only on a shutdown mid-persist/-send.
 func (rp *ResolvedEventsProcessor) handleRuleFact(msg messaging.Message, signal bool) bool {
-	tenant, ev, ok := decodePublishedRuleFact(rp.procCtx, msg)
+	tenant, ev, ok := decodePublishedRuleFact(rp.pctx(), msg)
 	if !ok {
 		// Unparseable/poison: redelivery cannot fix it. Ack to stop it redelivering forever.
 		rp.ackRuleFact(msg)
@@ -1904,7 +2011,7 @@ func (rp *ResolvedEventsProcessor) handleRuleFact(msg messaging.Message, signal 
 	if rp.RuleStore != nil {
 		rows := factRuleRows(tenant, ev)
 		if !rp.persistBeforeAck("published rules "+tenant+"/"+ev.ProfileVersionToken,
-			func() error { return rp.RuleStore.Upsert(rp.procCtx, rows) }) {
+			func() error { return rp.RuleStore.Upsert(rp.pctx(), rows) }) {
 			return false // shutdown mid-retry: leave unacked; the rows redeliver next start
 		}
 	}
@@ -1919,7 +2026,7 @@ func (rp *ResolvedEventsProcessor) handleRuleFact(msg messaging.Message, signal 
 	if rp.ProfileActiveStore != nil {
 		if active, ok := profileActiveFromFact(tenant, ev); ok {
 			if !rp.persistBeforeAck("profile-active "+active.Tenant+"/"+active.ProfileToken,
-				func() error { return rp.ProfileActiveStore.Upsert(rp.procCtx, active) }) {
+				func() error { return rp.ProfileActiveStore.Upsert(rp.pctx(), active) }) {
 				return false // shutdown mid-retry: leave unacked; redelivers next start
 			}
 			// Re-read the AUTHORITATIVE active version for the armer: the upsert is monotonic on
@@ -1932,7 +2039,7 @@ func (rp *ResolvedEventsProcessor) handleRuleFact(msg messaging.Message, signal 
 				var found bool
 				if !rp.persistBeforeAck("profile-active-load "+active.Tenant+"/"+active.ProfileToken,
 					func() (err error) {
-						row, found, err = rp.ProfileActiveStore.Load(rp.procCtx, active.Tenant, active.ProfileToken)
+						row, found, err = rp.ProfileActiveStore.Load(rp.pctx(), active.Tenant, active.ProfileToken)
 						return err
 					}) {
 					return false // shutdown mid-retry: leave unacked; reconcile rebuilds arming next start
@@ -1960,7 +2067,7 @@ func (rp *ResolvedEventsProcessor) handleRuleFact(msg messaging.Message, signal 
 		if len(rules) > 0 || activeEntry != nil {
 			select {
 			case rp.ruleUpdates <- ruleUpdate{upserts: rules, active: activeEntry}:
-			case <-rp.procCtx.Done():
+			case <-rp.pctx().Done():
 				return false // shutdown before hand-off: leave unacked; the persisted rows rebuild it
 			}
 		}
@@ -2011,6 +2118,29 @@ func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) bool {
 	if rp.stale {
 		return false // a split-brain-losing writer: no publish, no commit, no ack (see stale)
 	}
+	// 🔴 THE OWNERSHIP CHECK GOES HERE, AND HERE IS NOT THE EXIT PATH.
+	//
+	// checkpoint() has seven callers and six of them are not shutdown: the batch-count
+	// flush, the loop ticker, idleAdvance, applyTenantPurge, and twice during REPLAY.
+	// Every one of them publishes derived events, Saves the snapshot and acks. So one
+	// check here covers all of them, including a lease lost mid-replay.
+	//
+	// It also closes the window this design's time bound would otherwise have to
+	// cover. Between a lease window ending and the term actually cancelling, the
+	// reader gate has already stopped new messages — but whatever is ALREADY in
+	// pendingAcks, pendingDets and dirty would be flushed by the next ticker
+	// checkpoint, which is a Save outside the term. This removes that from the bound
+	// entirely, leaving it to cover only the fact consumers' single in-flight persist.
+	//
+	// finalCheckpoint is deliberately NOT exempted: it runs on a fresh background
+	// context so a term cancel cannot stop it, and the LOSS path runs it too. This is
+	// therefore the loss path's publish guard, not a graceful-shutdown nicety — which
+	// is also why endTerm flushes BEFORE releasing the lease rather than after.
+	if rp.leadershipEnabled() && !rp.heldNow() {
+		log.Warn().Str("partition", rp.cfg.PartitionId).
+			Msg("DETECT refused a checkpoint because this replica no longer holds the partition; the messages stay unacked and redeliver to the leader")
+		return false
+	}
 	// Deliver-before-checkpoint: hand off every buffered detection first. If any fails
 	// (retryable broker error), defer the entire checkpoint so the producing messages stay
 	// unacked and a replay re-derives/re-emits.
@@ -2042,9 +2172,17 @@ func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) bool {
 				log.Error().Err(err).Str("partition", rp.cfg.PartitionId).
 					Msg("DETECT checkpoint refused as stale (split-brain); halting this writer.")
 				rp.stale = true
-				if rp.procCancel != nil {
-					rp.procCancel()
+				// 🔴 STALE IS PERMANENT FOR THIS PROCESS, SO IT MUST END LEADERSHIP AND NOT
+				// JUST THE TERM. The flag is never cleared — a writer another has passed has
+				// no legitimate future — so a supervisor that merely lost the term would
+				// re-acquire the partition and run a term whose every checkpoint is refused
+				// before it starts: leader, live, and committing nothing, which is a worse
+				// state than not holding the partition at all. Ending the supervisor drops
+				// both gauges, so the leaderless alert fires and the pod is replaced.
+				if rp.leadershipEnabled() && rp.supCancel != nil {
+					rp.supCancel()
 				}
+				rp.pcancel()
 				return false
 			}
 			log.Error().Err(err).Msg("Failed to commit DETECT snapshot; messages remain unacked and will redeliver")
@@ -2299,10 +2437,22 @@ func (rp *ResolvedEventsProcessor) Stop(ctx context.Context) error {
 
 // ExecuteStop stops the loop and waits for it to exit (flushing a final checkpoint)
 // before the reader is torn down (A5).
+//
+// On the leased path it ends LEADERSHIP first, and the order matters: cancelling the
+// supervisor context stops the loop, the pump and the renewer through the term
+// context that descends from it, and then joining the supervisor waits for endTerm
+// to flush the final checkpoint and release the partition. Cancelling only the term
+// would send the supervisor straight back into acquireWithBackoff on a process that
+// is shutting down.
 func (rp *ResolvedEventsProcessor) ExecuteStop(context.Context) error {
-	if rp.procCancel != nil {
-		rp.procCancel()
+	if rp.leadershipEnabled() {
+		if rp.supCancel != nil {
+			rp.supCancel()
+		}
+		rp.supWG.Wait()
+		return nil
 	}
+	rp.pcancel()
 	rp.readerWG.Wait()
 	return nil
 }

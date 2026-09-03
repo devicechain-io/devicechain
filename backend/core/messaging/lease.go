@@ -29,6 +29,16 @@ const leaseBucket = kv.BucketLeases
 // a processing-loop stall clearing a batch does not starve renewal — the TTL only
 // has to survive a GC pause or a brief NATS blip, which this comfortably does,
 // with a renewal interval of <= TTL/3 (~10s).
+//
+// 🔴 THAT LAST SENTENCE IS LOAD-BEARING FOR DETECT IN A WAY IT IS NOT FOR THE OTHERS.
+// A blip longer than this window now ends DETECT's leadership term and rebuilds it —
+// a snapshot restore, three view builds and a full replay — where the NATS client
+// would previously have ridden the outage out transparently and the durable position
+// (which is server-side) would have needed nothing replayed. A 30s broker failover is
+// exactly the event the messaging HA rig exercises. Raising this TTL widens the
+// handover window a fresh leader must wait out before it reads any state; lowering it
+// makes an ordinary blip a rebuild. Neither is free, and both move every Class-3
+// operator at once, since the bucket carries one TTL.
 const DefaultLeaseTTL = 30 * time.Second
 
 var (

@@ -58,9 +58,13 @@ spec:
   Recreate governs ROLLOUTS ONLY. An eviction / node drain / manual pod delete is handled by
   the ReplicaSet, which schedules the replacement IMMEDIATELY while the old pod is still
   Terminating — so those paths CAN briefly run two engines. That residual overlap is covered
-  at the app layer, not here: the engine's snapshot Save is monotonic and detectStaleOwner
-  halts a writer whose checkpoint another has passed (ResolvedEventsProcessor). Both fences
-  are load-bearing — do not remove them assuming Recreate makes single-writer airtight.
+  at the app layer, not here: DETECT takes a PARTITION LEASE and consults it on every message
+  and every checkpoint, so the pod that lost the partition stops fetching, acking and
+  publishing rather than racing the winner (ADR-070). The engine's monotonic snapshot Save and
+  detectStaleOwner remain as the backstop beneath it. All three are load-bearing — do not
+  remove them assuming Recreate makes single-writer airtight, and note that the lease is what
+  covers the case the other two cannot see: an old pod's already-fetched batch redelivering
+  after AckWait to a leader that has replayed past it.
 
   Such an area MUST also stay at replicas:1 (a Recreate with 2 replicas runs 2 PERMANENT
   writers — strictly worse than a rolling overlap); the guard below fails the render if not.

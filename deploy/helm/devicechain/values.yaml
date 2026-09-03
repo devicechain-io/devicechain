@@ -960,16 +960,30 @@ functionalAreas:
     # So this area deploys with strategy Recreate (during a ROLLOUT all old pods stop before
     # any new pod starts — no old+new overlap that a rolling update would otherwise cause) and
     # stays at replicas:1. Recreate covers rollouts only; an eviction / node drain still briefly
-    # runs two engines (the ReplicaSet replaces a deleted pod immediately), which the app-level
-    # fence handles (monotonic snapshot Save + detectStaleOwner). Do NOT raise replicas past 1
-    # (a Recreate with 2 replicas runs 2 permanent writers; the template fails the render) until
-    # the intra-Instance tenant-sharded DETECT fleet lands (post-GA, ADR-052).
+    # runs two pods (the ReplicaSet replaces a deleted pod immediately). Do NOT raise replicas
+    # past 1 (a Recreate with 2 replicas runs 2 permanent writers; the template fails the render)
+    # until the intra-Instance tenant-sharded DETECT fleet lands (post-GA, ADR-052).
+    #
+    # THAT EVICTION OVERLAP IS NOW HANDLED BY A PARTITION LEASE, not by the app-level fence
+    # (ADR-070). The engine takes a lease before it reads any state and consults it on every
+    # message and every checkpoint, so a pod that has lost the partition stops fetching, stops
+    # acking and stops publishing. The monotonic snapshot Save and detectStaleOwner are still
+    # there and still load-bearing, but they are now the BACKSTOP rather than the handler: what
+    # they could never cover is an old pod's already-fetched batch redelivering after AckWait
+    # (60s) to a new leader that has replayed past it, which acks it away unapplied.
+    #
+    # Consequence to know about: a NATS outage longer than the lease TTL (30s) now ends the
+    # term and rebuilds it, where before the client rode the outage out transparently. A
+    # rebuild costs a snapshot restore, three view builds and a replay; the logs say which
+    # happened. This is the trade for the overlap being closed.
     #
     # Operational note: during a Recreate rollout the event-processing Service has no ready
     # endpoint (old-pod stop + new-pod snapshot replay + startupProbe). Publishing a device
     # profile that has ENABLED detection rules calls event-processing's validateDetectionRules
     # synchronously and fails CLOSED on transport error (ADR-044 sync gate), so such publishes
-    # error for the rollout window — expected; retry after the new pod is Ready.
+    # error for the rollout window — expected; retry after the new pod is Ready. On an eviction
+    # OVERLAP the new pod additionally waits for the old pod's lease to expire before it starts
+    # its own term, which is bounded by the TTL and fits inside the startup probe's budget.
     replicas: 1
     strategy: Recreate
     # checkpointEvents: 1000          # ADR-051: max applied events between snapshot
