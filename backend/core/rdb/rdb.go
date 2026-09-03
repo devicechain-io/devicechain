@@ -161,16 +161,43 @@ func (rdb *RdbManager) ExecuteInitialize(ctx context.Context) error {
 	migrateDB := rdb.Database.WithContext(core.WithSystemContext(ctx))
 	m := gormigrate.New(migrateDB, options, rdb.Migrations)
 
-	// Serialize migrations across concurrently-rolling pods with a Postgres
-	// session-level advisory lock (methodology §10.3). During a rolling update old
-	// and new pods run side by side and each calls Migrate() at startup; without a
-	// lock they would race on DDL. The lock is keyed by this service's migration
-	// table, so different services never block each other — only replicas of the
-	// same service serialize. Whichever pod loses the race waits, then finds the
-	// migrations already recorded by gormigrate and no-ops. (This pairs with the
+	// Serialize this area's schema DDL across concurrently-rolling pods with a
+	// Postgres session-level advisory lock (methodology §10.3). During a rolling
+	// update old and new pods run side by side and each calls Migrate() at startup;
+	// without a lock they would race on DDL. The lock is keyed by this service's
+	// migration table, so different services never block each other — only replicas
+	// of the same service serialize. Whichever pod loses the race waits, then finds
+	// the migrations already recorded by gormigrate and no-ops. (This pairs with the
 	// expand/contract discipline that keeps old and new schema mutually readable
 	// for the rollout window.)
-	if err := rdb.WithAdvisoryLock(ctx, AdvisoryLockKey(mtable), m.Migrate); err != nil {
+	//
+	// The lock covers EVERY DDL statement this service issues at startup, not just the
+	// migration chain: the core-owned audit journal is auto-migrated inside it too. That
+	// table used to be created outside any lock, which left one unguarded concurrent-DDL
+	// path. The widest racing statement is the CREATE TABLE: AutoMigrate's table path is
+	// HasTable followed by a plain CREATE TABLE (no IF NOT EXISTS), so two pods arriving
+	// together on a FRESH schema can both see no table and the loser fails startup with
+	// `relation "audit_events" already exists`.
+	//
+	// The index path is narrower but not safe on its own, and it is worth being precise
+	// because the opposite is the natural reading: gorm's Postgres driver does emit
+	// CREATE INDEX IF NOT EXISTS, and IF NOT EXISTS is NOT a concurrency primitive. Two
+	// sessions can both pass the existence check and the loser still fails on the unique
+	// index over pg_class. It is a second, narrower race — table present, index not yet —
+	// rather than no race.
+	//
+	// Both need a tie and are self-healing on restart. But a lock that covers all the DDL
+	// but one is not a serialized migration, it is a smaller race.
+	if err := rdb.WithAdvisoryLock(ctx, AdvisoryLockKey(mtable), func() error {
+		// The audit journal (ADR-019) is core-owned and migrated here rather than via
+		// each service's migration list, so no per-service wiring is required. It must
+		// exist BEFORE the chain runs: a baseline that seeds rows fires the audit
+		// callbacks registered in initializePostgres, and those INSERT into it.
+		if err := migrateDB.AutoMigrate(&AuditEvent{}); err != nil {
+			return err
+		}
+		return m.Migrate()
+	}); err != nil {
 		return err
 	}
 

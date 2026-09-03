@@ -133,6 +133,48 @@ cd deploy/opentofu && tofu fmt -check -recursive && tofu init -backend=false && 
 See [CLAUDE.md](CLAUDE.md) for the fuller repository guide (repository layout and
 conventions).
 
+## Changing the database schema
+
+Four rules, and CI enforces three of them. They exist because DeviceChain services roll
+one pod at a time against a database that is not versioned with them.
+
+**1. Append a migration; never edit one that exists.** That includes the frozen baseline
+each area starts from. A migration is a snapshot of a moment, not a description of the
+current schema. Editing one silently changes what a *fresh* install builds while every
+existing database applies cleanly and looks healthy — so the failure appears on someone
+else's machine, weeks later, as `column already exists`.
+
+**2. A migration declares its own structs.** Never point a migration at a live model.
+The model is the current incarnation of the type; the migration is what the schema looked
+like the day it was written. Wire the two together and every future model change quietly
+rewrites history. Seeds count: insert through the snapshot type, with literal values.
+
+**3. A migration must be individually re-runnable.** Migrations run outside a transaction
+— TimescaleDB forbids DDL inside one — so a migration that fails partway is *not* rolled
+back, and it replays from the top on the next boot. If the second run fails, the service
+crash-loops on a half-built schema with no way forward.
+
+In practice: `IF NOT EXISTS` on every `CREATE` and `ADD COLUMN`, `ON CONFLICT` on every
+seed, and **name your indexes** — an unnamed `CREATE INDEX` does not fail on a replay, it
+quietly creates a second index under a derived name, written on every insert and read by
+nothing. `hack/migration-diff.sh replay` checks all of this, in CI, on every PR.
+
+**4. Old and new schema must be readable by both old and new pods.** During a rolling
+update the two run side by side against one database, so a change that only the new code
+can read takes the old pods down while they are still serving. Expand first, contract
+later: add the new column, ship code that writes both and reads either, and only remove
+the old one in a *later* release once nothing reads it. A rename is a drop plus an add,
+so it needs the same two steps.
+
+The schema gates need Docker and take a few minutes, so they are not in the per-module
+loop above:
+
+```bash
+hack/migration-diff.sh verify     # schemas still match their goldens; also runs the
+                                  # replay and tenant-coverage gates and the purge drill
+hack/migration-diff.sh snapshot   # refresh the goldens after an intended schema change
+```
+
 ## Commit & PR conventions
 
 - Use clear, imperative commit subjects; conventional-commit prefixes

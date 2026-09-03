@@ -248,13 +248,21 @@ func (rdb *RdbManager) initializePostgres(ctx context.Context) error {
 		return err
 	}
 
-	// Register the audit-journal callbacks and ensure the journal table exists, so
-	// every entity mutation in this service is recorded by construction (ADR-019).
-	// The table is core-owned and auto-migrated here rather than via each service's
-	// migration list, so no per-service wiring is required.
-	if err := rdb.Database.AutoMigrate(&AuditEvent{}); err != nil {
-		return err
-	}
+	// Register the audit-journal callbacks so every entity mutation in this service
+	// is recorded by construction (ADR-019).
+	//
+	// Registering the writer before its table exists is deliberate and safe, but the
+	// reason is not "nothing writes a row until a seed does" — every chain writes one
+	// even with no seeds, because gormigrate records each applied migration with an
+	// ordinary gorm Create, which fires these callbacks and INSERTs into the journal.
+	// The invariant that actually holds is narrower and stronger: no gorm
+	// Create/Update/Delete runs between this line and the AutoMigrate in
+	// ExecuteInitialize. What is in that gap is applyPoolSizing, gormigrate.New, and a
+	// raw pg_advisory_lock — no row operations at all.
+	//
+	// The table is created there rather than here because it is DDL, and every DDL
+	// statement this service issues must be serialized behind the migration advisory
+	// lock — see ExecuteInitialize.
 	if err := RegisterAuditJournal(rdb.Database); err != nil {
 		return err
 	}
