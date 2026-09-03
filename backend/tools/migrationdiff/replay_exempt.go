@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// replayExemptions names the migrations the replay gate does NOT check, and why.
+// replayExemptions names the migrations that are known NOT to be re-runnable, and why.
 //
 // There is exactly one legitimate reason to be on this list: the migration is a FROZEN
 // pre-GA baseline that is not re-runnable and cannot be edited to become so. CLAUDE.md
@@ -18,16 +18,27 @@ import (
 // existing database applies cleanly and looks healthy. The pre-GA remedy for a
 // half-applied baseline is `dcctl destroy` + `bootstrap`, not a repair migration.
 //
-// 🔴 An exemption is a KNOWN DEFECT with a stated reason, not an absolution. Each entry
-// says what breaks and what the operator sees, so that "it is exempt" never quietly
-// becomes "it is fine".
+// 🔴 AN EXEMPTION IS AN EXPECTED FAILURE, NOT A SKIP, and that distinction is the whole
+// design. A skipped migration is never run, so nothing notices when the defect changes,
+// is fixed, or is joined by a second one. Worse, the obvious staleness check — "does this
+// id still exist?" — cannot fire on the event this entry itself proposes as the remedy: a
+// re-cut baseline KEEPS ITS ID. event-management's was re-cut once already and is still
+// `20260729000000`. A skip would then silence a brand-new baseline that had never been
+// replay-tested in its life, while the entry read as current.
+//
+// So each entry names the SYMPTOM, and the gate RUNS the migration and requires it to
+// fail with that symptom. An exemption that starts passing is itself a failure ("delete
+// this entry"); an exemption that fails differently is a failure ("the defect moved").
+// It is a pinned known-defect test, which is the only kind of exception that keeps
+// telling the truth after the thing it excused has changed.
 //
 // A migration you are APPENDING never belongs here. Make it re-runnable instead; the
 // gate's error message lists the causes that are almost always the answer.
 var replayExemptions = []replayExemption{
 	{
-		area: "event-management",
-		id:   "20260729000000",
+		area:    "event-management",
+		id:      "20260729000000",
+		symptom: "cannot alter type of a column used by a view or rule",
 		reason: "frozen pre-GA baseline; a replay dies on ALTER COLUMN ... COLLATE because the " +
 			"continuous aggregate it later creates reads those columns (see below)",
 	},
@@ -66,32 +77,39 @@ var replayExemptions = []replayExemption{
 // The choice at the cut line is to re-cut this baseline (moving the collation ahead of the
 // aggregate and naming the five indexes) or to ship knowing this.
 
-// replayExemption is one registered non-re-runnable migration.
+// replayExemption is one migration known not to be re-runnable, pinned by its symptom.
 type replayExemption struct {
 	area string
 	id   string
-	// reason states the defect and its blast radius in one line, in the operator's
-	// terms — not "baseline, frozen", which says nothing about what happens.
+	// symptom is a substring the replay failure must contain. It is what turns this entry
+	// from a skip into an assertion: the gate requires the migration to fail, and to fail
+	// THIS way. Specific enough to identify the defect, short enough to survive a
+	// Postgres error-message reword.
+	symptom string
+	// reason states the defect and its blast radius in one line, in the operator's terms
+	// — not "baseline, frozen", which says nothing about what happens.
 	reason string
 }
 
-func replayExemptionFor(area, id string) (string, bool) {
+func replayExemptionFor(area, id string) (replayExemption, bool) {
 	for _, e := range replayExemptions {
 		if e.area == area && e.id == id {
-			return e.reason, true
+			return e, true
 		}
 	}
-	return "", false
+	return replayExemption{}, false
 }
 
-// assertExemptionsResolve fails when an exemption names a migration that no longer
-// exists in any chain.
+// assertExemptionsResolve fails when an exemption names a migration that no longer exists
+// in any chain.
 //
-// 🔴 This is the same shape as assertGoldensCovered, and it is here for the same reason:
-// a stale entry is invisible. It silences nothing, breaks nothing, and reports nothing —
-// it just sits there implying a defect that was fixed or a baseline that was re-cut, and
-// the next reader takes it for current. A registry of exceptions has to be checked
-// against the thing it makes exceptions to, or it decays into folklore.
+// 🔴 The same shape as assertGoldensCovered, and here for the same reason: a stale entry
+// is invisible. It silences nothing, breaks nothing, and reports nothing — it just sits
+// there implying a defect that was fixed, and the next reader takes it for current.
+//
+// This is NOT the main staleness guard, and on its own it would be a weak one. It catches
+// a renamed or deleted id; the expected-failure run in runReplay catches the much likelier
+// case of an entry that is simply no longer true.
 func assertExemptionsResolve(all []area) error {
 	live := map[string]bool{}
 	for _, a := range all {
@@ -110,7 +128,7 @@ func assertExemptionsResolve(all []area) error {
 	}
 	sort.Strings(stale)
 	return fmt.Errorf("replay exemption(s) naming a migration that is not in any chain: %s\n"+
-		"The migration was renamed, removed, or its baseline re-cut. Delete the exemption, or "+
-		"correct the id — an exemption nothing matches quietly outlives the defect it excused.",
+		"The migration was renamed or removed. Delete the exemption, or correct the id — an "+
+		"exemption nothing matches quietly outlives the defect it excused.",
 		strings.Join(stale, ", "))
 }

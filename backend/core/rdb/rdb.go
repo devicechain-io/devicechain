@@ -171,13 +171,16 @@ func (rdb *RdbManager) ExecuteInitialize(ctx context.Context) error {
 	// expand/contract discipline that keeps old and new schema mutually readable
 	// for the rollout window.)
 	//
-	// The lock covers EVERY DDL statement this service issues at startup, not just
-	// the migration chain: the core-owned audit journal is auto-migrated inside it
-	// too. That table used to be created outside any lock, which left one unguarded
-	// concurrent-DDL path — gorm's AutoMigrate checks for an index and then creates
-	// it, so two pods arriving together could both pass the check and the loser
-	// would fail startup on "relation already exists". A lock that covers all the
-	// DDL but one is not a serialized migration, it is a smaller race.
+	// The lock covers EVERY DDL statement this service issues at startup, not just the
+	// migration chain: the core-owned audit journal is auto-migrated inside it too. That
+	// table used to be created outside any lock, which left one unguarded concurrent-DDL
+	// path. The racing statement is the CREATE TABLE, not the indexes — gorm's Postgres
+	// driver emits CREATE INDEX IF NOT EXISTS, but AutoMigrate's own table path is
+	// HasTable followed by a plain CREATE TABLE, so two pods arriving together on a
+	// FRESH schema can both see no table and the loser fails startup with
+	// `relation "audit_events" already exists`. Narrow — it needs a first boot and a
+	// tie — and self-healing on restart, but a lock that covers all the DDL but one is
+	// not a serialized migration, it is a smaller race.
 	if err := rdb.WithAdvisoryLock(ctx, AdvisoryLockKey(mtable), func() error {
 		// The audit journal (ADR-019) is core-owned and migrated here rather than via
 		// each service's migration list, so no per-service wiring is required. It must

@@ -34,7 +34,7 @@ func TestStaleReplayExemptionIsRejected(t *testing.T) {
 	t.Cleanup(func() { replayExemptions = restore })
 
 	replayExemptions = []replayExemption{
-		{area: "event-management", id: "19990101000000", reason: "a migration that never existed"},
+		{area: "event-management", id: "19990101000000", symptom: "x", reason: "a migration that never existed"},
 	}
 	err := assertExemptionsResolve(areas)
 	require.Error(t, err)
@@ -50,12 +50,12 @@ func TestExemptionMatchesOnBothAreaAndId(t *testing.T) {
 	t.Cleanup(func() { replayExemptions = restore })
 
 	replayExemptions = []replayExemption{
-		{area: "event-management", id: "20260729000000", reason: "the registered one"},
+		{area: "event-management", id: "20260729000000", symptom: "x", reason: "the registered one"},
 	}
 
-	reason, ok := replayExemptionFor("event-management", "20260729000000")
+	got, ok := replayExemptionFor("event-management", "20260729000000")
 	require.True(t, ok)
-	assert.Equal(t, "the registered one", reason)
+	assert.Equal(t, "the registered one", got.reason)
 
 	_, ok = replayExemptionFor("device-management", "20260729000000")
 	assert.False(t, ok, "an exemption must not carry across areas that share a migration id")
@@ -90,6 +90,9 @@ func TestEveryExemptionStatesAReason(t *testing.T) {
 		assert.NotEmpty(t, e.id, "an exemption with no id matches nothing")
 		assert.Greater(t, len(e.reason), 40,
 			"exemption %s/%s needs a reason that says what breaks, not a label", e.area, e.id)
+		assert.NotEmpty(t, e.symptom,
+			"exemption %s/%s needs a symptom, or the gate cannot tell 'still broken the way we "+
+				"recorded' from 'broken some new way'", e.area, e.id)
 	}
 }
 
@@ -102,7 +105,7 @@ func TestExemptionsResolveIsNotFooledByACrossedPair(t *testing.T) {
 
 	// Both halves exist; the pair does not.
 	replayExemptions = []replayExemption{
-		{area: "ai-inference", id: "20260809000000", reason: "event-management's id on ai-inference"},
+		{area: "ai-inference", id: "20260809000000", symptom: "x", reason: "event-management's id on ai-inference"},
 	}
 	require.NotNil(t, findMigration("event-management", "20260809000000"),
 		"precondition: the id must be real in the other area")

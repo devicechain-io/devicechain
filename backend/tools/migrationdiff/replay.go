@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"gorm.io/gorm"
@@ -18,13 +19,16 @@ import (
 //
 // # The rule it enforces
 //
-// Migrations run with UseTransaction:false — Timescale forbids DDL in a transaction —
-// so a migration that fails partway is never rolled back, and gormigrate replays it
-// from the top on the next boot. Every service's migrations.go says so in as many
-// words: "Anything appended must be individually re-runnable." Until now nothing
-// checked it. gormigrate skips IDs it has already recorded, so simply running a chain
-// twice is a no-op that proves nothing, and `verify` — which compares pg_dump output —
-// cannot see the property at all.
+// Migrations run with UseTransaction:false, so a migration that fails partway is never
+// rolled back and gormigrate replays it from the top on the next boot. (The reason for
+// that setting is narrower than it is usually stated: it is not that Timescale forbids
+// DDL in a transaction generally — create_hypertable and the policy calls are fine — but
+// that CREATE MATERIALIZED VIEW ... timescaledb.continuous and
+// refresh_continuous_aggregate refuse a transaction block outright.) Every service's
+// migrations.go tells the next maintainer their migration must be individually
+// re-runnable. Until now nothing checked it. gormigrate skips an ID it has already
+// recorded, so simply running a chain twice is a no-op that proves nothing, and `verify`
+// — which compares pg_dump output — cannot see the property at all.
 //
 // # What it actually simulates
 //
@@ -39,29 +43,40 @@ import (
 // partially-applied M replays cleanly. It IS proof against the class that actually
 // bites: a statement that is not idempotent against its own output.
 //
-// The worked example is the one this gate found on its first run, and it is worth
-// knowing because it is not the one anybody predicts. event-management's baseline runs
+// The worked example is the one this gate found on its first run, and it is worth knowing
+// because it is not the one anybody predicts. event-management's baseline runs
 // `ALTER TABLE ... ALTER COLUMN ... TYPE varchar(128) COLLATE "C"` and then, further
 // down, creates a continuous aggregate over those columns. Forward that is fine. On
 // replay the aggregate already exists, and Postgres refuses: "cannot alter type of a
 // column used by a view or rule". The pod then crash-loops on a message that names a
 // view, pointing away from the migration that is actually stuck.
 //
-// # Why the schema is compared before and after
+// # Why success is not the only thing checked
 //
 // "It ran twice without erroring" is a weaker claim than it looks, and here is the
 // concrete reason rather than a general one. An UNNAMED `CREATE INDEX` does not fail on
 // replay — Postgres derives the index name from the column list, finds it taken, and
 // quietly picks the next one: `events_tenant_id_occurred_time_idx1`. The migration exits
 // 0 and the database now carries a duplicate index that is written on every insert and
-// chosen by nothing. Exit status cannot see that; a schema comparison can.
+// chosen by nothing. Exit status cannot see that. So each replay is bracketed by three
+// comparisons, and all three must come back identical:
 //
-// So each replay is bracketed by a schema snapshot and the two must be identical. A
-// migration that changes the database by running a second time is not idempotent,
-// whatever its exit status said.
+//   - the normalized schema dump, which catches structural change;
+//   - the RAW Timescale catalog probe, unnormalized — because normalize scrubs the
+//     materialization-hypertable number, which is exactly the digit that moves when a
+//     continuous aggregate is dropped and recreated. The re-runnable recipe the baseline
+//     itself prescribes for a cagg is DROP + CREATE, so a migration written by the book
+//     would silently discard a materialization on every replay and the normalized dump
+//     would report it clean;
+//   - the per-table row counts, which catch a seed with no ON CONFLICT clause on a table
+//     whose surrogate key lets the duplicate through. Rows are this harness's documented
+//     blind spot everywhere else, since pg_dump --schema-only carries none.
 //
-// The pass runs in its OWN database (<db>_replay) because it drops schemas repeatedly,
-// and the `verify` database is afterwards read by the coverage gate and the purge drill.
+// The pass runs in its OWN database (<db>_replay). Nothing downstream currently reads the
+// verify database after this point, so that is defensive rather than load-bearing — but
+// this pass drops and rebuilds schemas repeatedly, which destroys the very artefact
+// `verify` just finished asserting against the goldens, and a check added after it would
+// then be silently running against a rebuilt database.
 func runReplay(ctx context.Context, container, host string, port int, user, password, db string, selected []area, filtered bool) error {
 	// A filtered run exercises a subset and reports the same "ok" as a full one. The
 	// coverage gate refuses a filter for the same reason; so does this.
@@ -70,10 +85,22 @@ func runReplay(ctx context.Context, container, host string, port int, user, pass
 			"never exercised as clean")
 	}
 
-	// Before anything runs: an exemption that matches no live migration is a claim
-	// about a defect that may no longer exist. Check the registry against the chains.
+	// An exemption that matches no live migration is a claim about a defect that may no
+	// longer exist. Check the registry against the chains before anything runs.
 	if err := assertExemptionsResolve(areas); err != nil {
 		return err
+	}
+
+	// 🔴 PER-AREA VACUITY. The global "did anything run" check at the bottom is not
+	// enough: one area whose chain resolved to a nil slice contributes nothing, prints
+	// nothing, and is still counted in "across N areas" — so the run stays green while
+	// that area is silently unexamined. An area with no migrations is a registry defect,
+	// not a quiet pass.
+	for _, a := range selected {
+		if len(a.migrations) == 0 {
+			return fmt.Errorf("area %q has an empty migration chain, so this run would report it "+
+				"as clean without examining anything — check registry.go", a.name)
+		}
 	}
 
 	replayDB := db + "_replay"
@@ -86,36 +113,42 @@ func runReplay(ctx context.Context, container, host string, port int, user, pass
 	}
 	defer closeDatabase(admin)
 
-	checked, exempted, failures := 0, 0, 0
+	checked, confirmed, failures := 0, 0, 0
 	for _, a := range selected {
 		for k := 1; k <= len(a.migrations); k++ {
 			id := a.migrations[k-1].ID
-			if reason, ok := replayExemptionFor(a.name, id); ok {
-				fmt.Printf("exempt   %-24s %s — %s\n", a.name, id, reason)
-				exempted++
+			err := replayOne(ctx, admin, a, k, container, host, port, user, password, replayDB)
+
+			if ex, isExempt := replayExemptionFor(a.name, id); isExempt {
+				if msg := exemptionVerdict(ex, err); msg != "" {
+					failures++
+					fmt.Printf("REPLAY   %-24s %s %s\n", a.name, id, msg)
+				} else {
+					confirmed++
+					fmt.Printf("exempt   %-24s %s fails as registered — %s\n", a.name, id, ex.reason)
+				}
 				continue
 			}
-			if err := replayOne(ctx, admin, a, k, container, host, port, user, password, replayDB); err != nil {
+
+			checked++
+			if err != nil {
 				failures++
 				fmt.Printf("REPLAY   %-24s %s is NOT re-runnable:\n%s\n", a.name, id, indent(err.Error()))
 			} else {
 				fmt.Printf("ok       %-24s %s replays cleanly\n", a.name, id)
 			}
-			checked++
 		}
 	}
 
 	// 🔴 THE NEGATIVE CONTROL. "0 failures" is also what a run that exercised nothing
-	// reports — an empty registry, a chain that resolved to a nil slice, an exemption
-	// list that grew to cover everything. A gate whose green is indistinguishable from
-	// a gate that never ran is not a gate.
+	// reports. A gate whose green is indistinguishable from a gate that never ran is not
+	// a gate.
 	if checked == 0 {
-		return fmt.Errorf("the replay pass exercised 0 migrations across %d area(s) (%d exempt), so "+
-			"a clean result means nothing — check registry.go still lists the chains",
-			len(selected), exempted)
+		return fmt.Errorf("the replay pass exercised 0 non-exempt migrations across %d area(s) "+
+			"(%d exempt), so a clean result means nothing", len(selected), confirmed)
 	}
-	fmt.Printf("replay   %d migration(s) exercised across %d area(s), %d exempt\n",
-		checked, len(selected), exempted)
+	fmt.Printf("replay   %d migration(s) replay cleanly across %d area(s); %d known-bad confirmed still bad\n",
+		checked, len(selected), confirmed)
 
 	if failures > 0 {
 		return fmt.Errorf(`%d migration(s) are not individually re-runnable
@@ -131,9 +164,10 @@ The usual causes:
   - a seed INSERT with no ON CONFLICT clause
   - raw DDL where a gorm AutoMigrate call would have been idempotent for free
 
-And one that reports as a schema DIFFERENCE rather than an error, because it does not
-fail: an UNNAMED CREATE INDEX. Postgres derives the name, finds it taken, and silently
-creates "<name>1" — leaving a duplicate index nothing will ever use. Name your indexes.
+And two that report as a DIFFERENCE rather than an error, because they do not fail:
+  - an UNNAMED CREATE INDEX. Postgres derives the name, finds it taken, and silently
+    creates "<name>1" — a duplicate index nothing will ever use. Name your indexes.
+  - a continuous aggregate dropped and recreated, which discards its materialization.
 
 Fix the migration if it is one you are adding. A frozen pre-GA baseline cannot be edited
 (see CLAUDE.md), so register it in replayExemptions with the reason instead`, failures)
@@ -141,8 +175,30 @@ Fix the migration if it is one you are adding. A frozen pre-GA baseline cannot b
 	return nil
 }
 
+// exemptionVerdict judges a registered known-bad migration's replay result, returning ""
+// when it failed exactly as registered and a message otherwise.
+//
+// Both non-empty verdicts are failures on purpose. An exemption that starts PASSING is
+// not good news to be swallowed — it means the entry is now a lie about the code, and the
+// next reader will believe it. An exemption that fails DIFFERENTLY means the defect moved
+// and the registered symptom no longer describes what an operator would see.
+func exemptionVerdict(ex replayExemption, err error) string {
+	if err == nil {
+		return fmt.Sprintf("is registered as NOT re-runnable, but it replayed cleanly.\n"+
+			"    Delete its entry from replayExemptions — an exemption that no longer describes\n"+
+			"    the code is worse than no exemption, because it is believed.\n"+
+			"    Registered reason: %s", ex.reason)
+	}
+	if !strings.Contains(err.Error(), ex.symptom) {
+		return fmt.Sprintf("is registered as failing with %q, but it failed differently:\n%s\n"+
+			"    The defect moved. Update the entry's symptom and reason, or remove it if the\n"+
+			"    original defect is gone and this is a new one to fix.", ex.symptom, indent(err.Error()))
+	}
+	return ""
+}
+
 // replayOne runs one (area, migration) pair: fresh schema, chain prefix, forget the last
-// migration's bookkeeping, run again, and require both success and an unchanged schema.
+// migration's bookkeeping, run again, and require success plus an unchanged database.
 func replayOne(ctx context.Context, admin *gorm.DB, a area, k int, container, host string, port int, user, password, db string) error {
 	// Fresh every time. Without this, migration k+1 would replay onto a schema already
 	// carrying the effects of the previous iteration's replay, and a failure could no
@@ -158,7 +214,7 @@ func replayOne(ctx context.Context, admin *gorm.DB, a area, k int, container, ho
 		return fmt.Errorf("the FIRST run of this prefix failed, so the replay was never reached "+
 			"(a forward-migration defect, not a replay one): %w", err)
 	}
-	before, err := snapshotFor(container, user, db, a.name)
+	before, err := snapshotFor(admin, container, user, db, a.name)
 	if err != nil {
 		return err
 	}
@@ -181,44 +237,137 @@ func replayOne(ctx context.Context, admin *gorm.DB, a area, k int, container, ho
 	if err := migrateSome(ctx, a.name, prefix, host, port, user, password, db); err != nil {
 		return err
 	}
-	after, err := snapshotFor(container, user, db, a.name)
+	after, err := snapshotFor(admin, container, user, db, a.name)
 	if err != nil {
 		return err
 	}
-	if diff := statementDiff(splitNormalized(before), splitNormalized(after)); diff != "" {
-		return fmt.Errorf("it ran a second time without erroring, but CHANGED the schema — "+
-			"re-running a migration must be a no-op:\n%s", indent(diff))
+	return before.diff(after)
+}
+
+// snapshot is everything compared across a replay: the normalized schema text, the raw
+// Timescale catalog probe, and the per-table row counts.
+type snapshot struct {
+	normalized string
+	rawProbe   string
+	rows       map[string]int64
+}
+
+// diff reports the first difference between two snapshots of the same database, or "" if
+// they are identical.
+func (s snapshot) diff(other snapshot) error {
+	if d := statementDiff(splitNormalized(s.normalized), splitNormalized(other.normalized)); d != "" {
+		return fmt.Errorf("it ran a second time without erroring, but CHANGED THE SCHEMA — "+
+			"re-running a migration must be a no-op:\n%s", indent(d))
+	}
+	// Compared RAW, not normalized. normalizeDump scrubs the materialization-hypertable
+	// number out of the probe, which is correct for `verify` (the chain and the baseline
+	// legitimately number them differently) and exactly wrong here: this compares two
+	// probes of the SAME database seconds apart, where that number moves only if
+	// something dropped and recreated the object.
+	if s.rawProbe != other.rawProbe {
+		return fmt.Errorf("it ran a second time without erroring, but CHANGED A TIMESCALE OBJECT "+
+			"— a continuous aggregate or hypertable was recreated, which discards its\n"+
+			"materialization and re-runs a full refresh on every replay:\n  before: %s\n  after:  %s",
+			s.rawProbe, other.rawProbe)
+	}
+	var changed []string
+	for table, was := range s.rows {
+		if now, ok := other.rows[table]; !ok {
+			changed = append(changed, fmt.Sprintf("%s: table disappeared (had %d rows)", table, was))
+		} else if now != was {
+			changed = append(changed, fmt.Sprintf("%s: %d rows -> %d rows", table, was, now))
+		}
+	}
+	for table := range other.rows {
+		if _, ok := s.rows[table]; !ok {
+			changed = append(changed, fmt.Sprintf("%s: table appeared", table))
+		}
+	}
+	if len(changed) > 0 {
+		sort.Strings(changed)
+		return fmt.Errorf("it ran a second time without erroring, but CHANGED ROWS — a seed "+
+			"needs an ON CONFLICT clause to survive a replay:\n%s", indent(strings.Join(changed, "\n")))
 	}
 	return nil
 }
 
-// snapshotFor returns the normalized schema of one area, dump plus Timescale catalog
-// probe — the same pair `verify` compares against a golden, so a replay that disturbs a
-// hypertable or a continuous aggregate is visible here too.
-func snapshotFor(container, user, db, schema string) (string, error) {
+// snapshotFor captures one area's comparable state.
+func snapshotFor(admin *gorm.DB, container, user, db, schema string) (snapshot, error) {
 	dump, err := dumpSchema(container, user, db, schema)
 	if err != nil {
-		return "", fmt.Errorf("dumping %s schema: %w", schema, err)
+		return snapshot{}, fmt.Errorf("dumping %s schema: %w", schema, err)
 	}
 	probe, err := probeTimescale(container, user, db, schema)
 	if err != nil {
-		return "", fmt.Errorf("probing %s timescale objects: %w", schema, err)
+		return snapshot{}, fmt.Errorf("probing %s timescale objects: %w", schema, err)
 	}
-	return normalizeDump(dump + "\n" + probe), nil
+	rows, err := rowCounts(admin, schema)
+	if err != nil {
+		return snapshot{}, err
+	}
+	return snapshot{
+		normalized: normalizeDump(dump + "\n" + probe),
+		rawProbe:   probe,
+		rows:       rows,
+	}, nil
 }
 
-// ensureDatabase creates the replay database if it is absent. The RdbManager would
-// create it on its first ExecuteInitialize, but the admin connection that drops schemas
-// has to exist BEFORE the first area runs — and the first iteration is precisely the one
-// whose schema most needs to start clean, since an earlier invocation of this tool will
-// have left one behind.
+// rowCounts returns a live count for every base table in the schema.
+//
+// Two tables are excluded, and the reasons are different:
+//
+//   - the area's gormigrate bookkeeping table, because the replay deletes a row from it
+//     and the re-run puts it back. It nets to zero today, but a count that is only
+//     correct by arithmetic coincidence is not a check worth failing on.
+//   - audit_events, because gormigrate's own INSERT of that bookkeeping row is an
+//     ordinary gorm Create and therefore fires the audit callbacks. A replay writes one
+//     more audit row BY DESIGN. Excluding it is not hiding a defect: nothing in a
+//     migration writes to it deliberately, and its growth here is a record of this
+//     harness's own action.
+func rowCounts(admin *gorm.DB, schema string) (map[string]int64, error) {
+	// query_to_xml runs a count per table inside one statement, so this is one round trip
+	// rather than one per table and needs no dynamic SQL assembled in Go.
+	const q = `
+SELECT t.table_name,
+       (xpath('/row/cnt/text()',
+              query_to_xml(format('SELECT count(*) AS cnt FROM %I.%I', t.table_schema, t.table_name),
+                           false, true, '')))[1]::text::bigint AS n
+  FROM information_schema.tables t
+ WHERE t.table_schema = ? AND t.table_type = 'BASE TABLE'`
+
+	var out []struct {
+		TableName string
+		N         int64
+	}
+	if err := admin.Raw(q, schema).Scan(&out).Error; err != nil {
+		return nil, fmt.Errorf("counting rows in %s: %w", schema, err)
+	}
+	skip := map[string]bool{
+		rdb.MigrationTableName(schema): true,
+		"audit_events":                 true,
+	}
+	counts := make(map[string]int64, len(out))
+	for _, r := range out {
+		if skip[r.TableName] {
+			continue
+		}
+		counts[r.TableName] = r.N
+	}
+	return counts, nil
+}
+
+// ensureDatabase creates the replay database if it is absent. The RdbManager would create
+// it on its first ExecuteInitialize, but the admin connection that drops schemas has to
+// exist BEFORE the first area runs — and the first iteration is precisely the one whose
+// schema most needs to start clean, since an earlier invocation of this tool will have
+// left one behind.
 func ensureDatabase(ctx context.Context, host string, port int, user, password, name string) error {
 	// Retried, because this is the FIRST connection the replay pass makes and it lands
 	// while the container is still settling: the postgres entrypoint starts a temporary
 	// server for its init scripts and then restarts it, so a connection accepted a moment
 	// earlier is reset. Every other mode reaches the database through the RdbManager,
-	// which retries for exactly this reason (core.RetryInfraConnect); reaching it
-	// directly meant re-earning that lesson.
+	// which retries for exactly this reason; reaching it directly meant re-earning that
+	// lesson.
 	var root *gorm.DB
 	if err := core.RetryInfraConnect(ctx, "postgres", func(context.Context) error {
 		var oerr error

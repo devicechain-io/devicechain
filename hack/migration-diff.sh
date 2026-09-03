@@ -156,6 +156,25 @@ if [ "$MODE" = "verify" ]; then
     -user postgres -password "$PASSWORD" \
     -db "$DB"
 
+  # The REPLAY gate. `verify` compares pg_dump output, which is blind to this property by
+  # construction: gormigrate skips an ID it has already recorded, so running a chain twice
+  # is a no-op that produces an identical dump. Every migrations.go tells the next
+  # maintainer their migration must be individually re-runnable — this is the first thing
+  # that checks.
+  #
+  # It works in its own database (<db>_replay) because it repeatedly DROPs and rebuilds
+  # schemas, which would destroy the artefact `verify` above just finished asserting
+  # against the goldens. Nothing after this point reads that database today — the drill
+  # builds its own — so the separation is defensive: it is what keeps a check ADDED after
+  # this one from silently running against a rebuilt schema.
+  echo "==> Running migrationdiff (mode=replay)"
+  go run . \
+    -mode replay \
+    -container "$CONTAINER" \
+    -host localhost -port "$HOST_PORT" \
+    -user postgres -password "$PASSWORD" \
+    -db "$DB"
+
   # The purge DRILL, which is a different claim from the coverage gate above and the only
   # one that touches a row. Coverage proves every table is accounted for; this proves a
   # sweep of the real foreign-key graph erases one tenant and leaves another intact — and
@@ -171,20 +190,6 @@ if [ "$MODE" = "verify" ]; then
   # tree. No -run filter, deliberately: naming the tests here is the same
   # remember-to-add-it coverage a list always turns out to be, and an integration test
   # added tomorrow should run tomorrow.
-  # The REPLAY gate. `verify` compares pg_dump output, which is blind to this property by
-  # construction: gormigrate skips an ID it has already recorded, so running a chain twice
-  # is a no-op that produces an identical dump. Every migrations.go tells the next
-  # maintainer their migration must be individually re-runnable — this is the first thing
-  # that checks. It works in its own database (<db>_replay) because it drops schemas, and
-  # the database above is still being read by the drill below.
-  echo "==> Running migrationdiff (mode=replay)"
-  go run . \
-    -mode replay \
-    -container "$CONTAINER" \
-    -host localhost -port "$HOST_PORT" \
-    -user postgres -password "$PASSWORD" \
-    -db "$DB"
-
   echo "==> Running the tenant-purge drill"
   DC_IT_PGPORT="$HOST_PORT" go test -tags integration -count=1 -timeout 20m ./...
 
