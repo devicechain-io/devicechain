@@ -161,9 +161,7 @@
           "type": "object",
           "additionalProperties": { "type": "string" }
         },
-        "additionalAllowedCidrs": { "type": "array", "items": { "type": "string" } },
-        "blockedIPv4Ranges": { "type": "array", "items": { "type": "string" } },
-        "blockedIPv6Ranges": { "type": "array", "items": { "type": "string" } }
+        "additionalAllowedCidrs": { "type": "array", "items": { "type": "string" } }
       },
       "additionalProperties": false
     },

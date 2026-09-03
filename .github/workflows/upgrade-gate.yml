@@ -385,6 +385,31 @@ jobs:
       - name: Install the baseline and seed one of every entity
         run: hack/upgrade-rig.sh up
 
+      # The egress NetworkPolicy is API-VALIDATED here, because this job already has
+      # the one thing that can do it: a real API server.
+      #
+      # 🔴 A CLIENT-side dry-run is worthless for this class. It accepted every invalid
+      # form we tried -- an IPv4-mapped prefix, a bare address where a CIDR belongs, an
+      # IPv4 prefix inside the ::/0 block -- all three of which the API server refuses.
+      # And an invalid prefix makes the WHOLE policy invalid, so `helm install` fails
+      # outright and the feature cannot be enabled anywhere. That shipped once: nothing
+      # caught it, because `helm lint` does not execute the body of a false `if` and no
+      # job rendered this template enabled.
+      #
+      # Rendered into `default` so it needs no namespace of its own, and the dry-run
+      # persists nothing. Both arms of this check have been observed: the shipped policy
+      # is accepted, and re-adding the mapped prefix reproduces the two errors above.
+      - name: The egress NetworkPolicy is valid Kubernetes
+        run: |
+          set -euo pipefail
+          helm template deploy/helm/devicechain \
+            --set "instance.config.infrastructure.secrets.rootKey=$(openssl rand -base64 32)" \
+            --set instance.id=default \
+            --set 'enabledFunctionalAreas={user-management,device-management,event-processing,outbound-connectors}' \
+            --set networkPolicy.enabled=true \
+            --show-only templates/networkpolicy.yaml \
+            | kubectl --context kind-devicechain-upgrade apply --dry-run=server -f -
+
       - name: Upgrade, the way the documentation says to
         run: hack/upgrade-rig.sh upgrade
 

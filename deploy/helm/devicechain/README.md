@@ -234,34 +234,72 @@ else. The rules enumerate everything the service needs. Three ways to lose one:
    ready. Add your Service CIDR to `networkPolicy.additionalAllowedCidrs` if so.
 2. **Check how DNS reaches your pods.** The rules permit DNS to pods in the namespace
    named by `networkPolicy.dnsNamespaceSelector`. If you run NodeLocal DNSCache — common
-   on managed clusters — the resolver is a link-local address on a host-network DaemonSet,
-   which no pod selector matches and which the blocked ranges below cover. Every lookup is
-   then dropped and nothing starts. Add the cache address to `additionalAllowedCidrs`.
-3. **Setting the namespace selectors needs a values file, not `--set`.** The keys hold a
-   label map that is merged, not replaced, so `--set` adds a label to the default one and
-   the resulting selector matches neither namespace.
+   on managed clusters — that selector may match nothing, every lookup is dropped, and
+   nothing starts. Which address to permit depends on how the cache is deployed, and the
+   two cases need different answers:
 
-`networkPolicy.blockedIPv4Ranges` / `blockedIPv6Ranges` are the address space the policy
-refuses. They are pre-populated to match what the platform refuses in code, and a build
-check fails if the two drift apart.
+   - **kube-proxy in iptables mode (the usual deployment).** Pods keep the kube-dns
+     Service ClusterIP in `/etc/resolv.conf`; the cache binds that address locally and
+     intercepts the query without translating it, so what your CNI sees is the kube-dns
+     ClusterIP — inside the blocked private ranges, matching no pod. Permit the kube-dns
+     Service ClusterIP as a `/32`.
+   - **IPVS mode, or any cluster where `--cluster-dns` was pointed at the cache.** The
+     resolver really is the node-local link-local address. Permit that.
 
-**Two things the policy cannot do**, both worth knowing before relying on it:
+   To tell which you have, read `/etc/resolv.conf` in any running pod: the `nameserver`
+   there is the address to permit.
+3. **Replacing a namespace selector means clearing the default key, not just setting
+   yours.** The keys hold a label map, and Helm MERGES a map rather than replacing it, so
+   adding your label leaves the shipped one in place and the resulting two-label selector
+   matches neither namespace. That is true of `--set`, `--set-json` and a values file
+   alike — a values file is not the workaround, and an earlier version of this page said
+   it was. Set the default key to `null` in the same values file as your own label:
+
+   ```yaml
+   networkPolicy:
+     infrastructureNamespaceSelector:
+       devicechain.io/component: null    # drop the shipped label
+       my.org/role: datastores           # and select on yours
+   ```
+
+The address space the policy refuses is part of the chart, not a value you set. It has to
+match what the platform refuses in code — a build check compares the rendered policy
+against the compiled deny table and fails if they drift apart — so it is not a per-
+deployment choice. To permit a specific destination use `networkPolicy.additionalAllowedCidrs`
+below; there is deliberately no way to shrink the refused set from values, because doing so
+would silently leave the network permitting what the code refuses.
+
+**Three things the policy does not do**, all worth knowing before relying on it:
+
+- The datastore rule permits the whole namespace on the NATS and PostgreSQL ports, not
+  the two workloads by name. So a second datastore living in that namespace on one of
+  those ports is reachable even though only NATS and PostgreSQL are intended. Narrowing
+  it needs a pod selector per datastore, and a way to express the labels of
+  bring-your-own infrastructure; until then, treat "the platform's datastores" as "that
+  namespace, on those two ports".
 
 - It compares address prefixes, so it cannot look inside an IPv6 address that carries an
   IPv4 one. On a NAT64 or dual-stack cluster a tenant broker at a translated address
   reaches what the translated address points at, including a metadata service, on exactly
   the paths this policy exists to bound. Closing that needs the policy generated from your
   cluster's own translation prefix.
-- It is a **ceiling** over `instance.config.infrastructure.egress.allowedDestinations`,
-  not a separate control. That setting permits specific addresses for the paths checked in
-  code — an in-cluster mail relay, most commonly — but an address permitted there is still
-  dropped by the network unless it is also in `additionalAllowedCidrs`. And a dropped
+- It is a **ceiling** over `instance.config.infrastructure.egress.allowedDestinations`
+  for the paths it covers — two controls in series rather than one. That setting permits
+  specific addresses for the destinations checked in code, and an address permitted there
+  is still dropped by the network unless it is also in `additionalAllowedCidrs`. A dropped
   connection hangs rather than reporting a refusal, so the delivery retries to its cap
-  instead of failing usefully. Put such an address in both places.
+  instead of failing usefully. Where both apply, put the address in both places.
 
-Prefer single addresses in either list: in Kubernetes the smallest CIDR that reaches one
-in-cluster service is often the whole Service range, and granting that re-opens every
-private address for every tenant.
+  🔴 **But note WHICH paths, because an earlier version of this page got it wrong and told
+  you to do this for a mail relay.** The policy selects `outbound-connectors` only, and
+  mail is `notification-management`'s path — so nothing here affects SMTP, and adding a
+  relay address to `additionalAllowedCidrs` does nothing for mail while needlessly opening
+  the tenant connector paths toward it. For a relay the Go guard refuses, the knob is
+  `egress.allowedDestinations` alone.
+
+Prefer single addresses when you widen either boundary: in Kubernetes the smallest CIDR
+that reaches one in-cluster service is often the whole Service range, and granting that
+re-opens every private address for every tenant.
 
 ## What it renders
 

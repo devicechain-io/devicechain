@@ -634,10 +634,6 @@ serviceAccount:
   name: ""
   automountToken: false
 
-# E7: PodDisruptionBudget per enabled area so a node drain cannot evict every
-# replica at once. Only emitted for areas with replicas > 1 (a PDB on a single
-# replica would block voluntary drains). Set exactly one of minAvailable /
-# maxUnavailable.
 # NetworkPolicy for the tenant-egress paths a Go dialer cannot reach.
 #
 # Three of the six outbound paths — MQTT, Kafka and AWS SNS/SQS — are built inside an
@@ -672,22 +668,27 @@ networkPolicy:
   # a stock cluster.
   dnsNamespaceSelector:
     kubernetes.io/metadata.name: kube-system
-  # The address space a tenant destination may not reach, as `except` entries under a
-  # 0.0.0.0/0/::0 allowance — so the policy permits the public internet and nothing else.
+  # 🔴 THE DENY LIST IS NOT HERE, AND THAT IS DELIBERATE.
   #
-  # 🔴 These MUST match the Go guard's deny table (backend/core/egress/ranges.go), and
-  # hack/check-egress-ranges.sh fails the build when they drift. The two halves of one
-  # boundary written in two languages, with nothing at compile or render time relating
-  # them, is exactly the pair that goes quietly out of step.
+  # The address space a tenant destination may not reach is defined in
+  # templates/_helpers.tpl (devicechain.egressDeniedIPv4 / …IPv6) and rendered as the
+  # `except` entries of two wide ipBlocks, so the policy permits the public internet and
+  # nothing else. It used to be `blockedIPv4Ranges` / `blockedIPv6Ranges` right here, and
+  # that was a defect: Helm REPLACES a list rather than merging it, so one plausible
+  # override — `--set networkPolicy.blockedIPv4Ranges={1.2.3.4/32}`, or the same in a
+  # values file — rendered a policy whose only exception was that one address. It passed
+  # every render-time guard, the API server accepted it, and it permitted all of
+  # 10.0.0.0/8 including the instance metadata service, while still looking like a
+  # control. Setting either key now fails schema validation rather than quietly widening
+  # the boundary.
   #
-  # One prefix the Go table carries is deliberately ABSENT here, and the check knows it:
-  # ::ffff:0:0/96. Kubernetes rejects an IPv4-mapped address in an ipBlock outright, and
-  # would reject it anyway as "not a strict subset of ::/0" — Go's net.IPNet.Contains
-  # collapses a v4-mapped address to four bytes, so ::/0 does not contain it. Including
-  # it makes the whole policy invalid and the release fails to install. It has no
-  # on-the-wire meaning either: a v4-mapped address is not a thing that appears on a
-  # packet, and the Go table carries it only as belt-and-braces behind an unmap that has
-  # already run.
+  # That list must agree with the Go guard's deny table (backend/core/egress/ranges.go),
+  # and hack/check-egress-ranges.sh fails the build when they drift — it compares the
+  # RENDERED policy against the compiled Go table. Two halves of one boundary written in
+  # two languages, with nothing at compile or render time relating them, is exactly the
+  # pair that goes quietly out of step. To permit a specific destination, use
+  # additionalAllowedCidrs below; to narrow the boundary, change both halves in one commit
+  # and let the gate prove they still agree.
   # Extra destinations to permit, as CIDRs. Two reasons you may need this, and the first
   # one is the likeliest way this policy breaks a cluster:
   #
@@ -705,41 +706,22 @@ networkPolicy:
   # at any in-cluster Service is admitted too. It is the same trade as the Go guard's
   # allowed destinations, and the same advice — narrow it if you can.
   #
-  # The second reason is an off-cluster dependency on a private address, such as a
-  # corporate SMTP relay or a broker on a peered VPC.
+  # The second reason is an off-cluster dependency on a private address: a tenant's MQTT
+  # or Kafka broker, or a webhook endpoint, on a peered VPC.
+  #
+  # 🔴 NOT a mail relay, though an earlier version of this comment said so. SMTP is
+  # notification-management's path, and this policy selects only outbound-connectors, so
+  # nothing here affects mail. An in-cluster or peered relay that the Go guard would
+  # refuse is permitted with instance.config.infrastructure.egress.allowedDestinations,
+  # which is the knob for that; adding it here would do nothing for mail and would open
+  # outbound-connectors' tenant paths toward the relay for no reason.
   additionalAllowedCidrs: []
   # - "10.96.0.0/12"    # the Service CIDR, if your CNI evaluates egress pre-DNAT
-  blockedIPv4Ranges:
-    - "0.0.0.0/8"
-    - "10.0.0.0/8"
-    - "100.64.0.0/10"
-    - "127.0.0.0/8"
-    - "169.254.0.0/16"
-    - "172.16.0.0/12"
-    - "192.0.0.0/24"
-    - "192.0.2.0/24"
-    - "192.88.99.0/24"
-    - "192.168.0.0/16"
-    - "198.18.0.0/15"
-    - "198.51.100.0/24"
-    - "203.0.113.0/24"
-    - "224.0.0.0/4"
-    - "240.0.0.0/4"
-    - "168.63.129.16/32"
-  blockedIPv6Ranges:
-    - "::1/128"
-    - "::/128"
-    - "64:ff9b:1::/48"
-    - "100::/64"
-    - "100:0:0:1::/64"
-    - "2001:2::/48"
-    - "2001:db8::/32"
-    - "3fff::/20"
-    - "5f00::/16"
-    - "fc00::/7"
-    - "fe80::/10"
-    - "ff00::/8"
 
+# E7: PodDisruptionBudget per enabled area so a node drain cannot evict every
+# replica at once. Only emitted for areas with replicas > 1 (a PDB on a single
+# replica would block voluntary drains). Set exactly one of minAvailable /
+# maxUnavailable.
 podDisruptionBudget:
   enabled: true
   minAvailable: ""

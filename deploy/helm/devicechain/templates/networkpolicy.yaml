@@ -6,11 +6,13 @@
 {{- if not (has "outbound-connectors" $areas) -}}
 {{- fail "networkPolicy.enabled is set, but outbound-connectors is not among the enabled functional areas. The policy exists to bound that one service's tenant-configured broker and cloud egress; with the area absent it would select no pods and quietly protect nothing. Enable the area (profile 'full', or --enable-area outbound-connectors), or set networkPolicy.enabled=false." -}}
 {{- end -}}
-{{- if not $np.blockedIPv4Ranges -}}
-{{- fail "networkPolicy.enabled is set but networkPolicy.blockedIPv4Ranges is empty. That list is what the policy refuses; empty renders an ipBlock allowing all of 0.0.0.0/0, so the object would be created, would look like a control, and would permit every private address including the instance metadata service. Restore the default list, or set networkPolicy.enabled=false." -}}
+{{- $blockedIPv4 := include "devicechain.egressDeniedIPv4" . | fromYamlArray -}}
+{{- $blockedIPv6 := include "devicechain.egressDeniedIPv6" . | fromYamlArray -}}
+{{- if not $blockedIPv4 -}}
+{{- fail "The chart's IPv4 egress deny table rendered empty. That list is what the policy refuses; empty renders an ipBlock allowing all of 0.0.0.0/0, so the object would be created, would look like a control, and would permit every private address including the instance metadata service. It is defined in templates/_helpers.tpl as devicechain.egressDeniedIPv4 and is not settable per deployment; if you are seeing this, that template has been edited." -}}
 {{- end -}}
-{{- if not $np.blockedIPv6Ranges -}}
-{{- fail "networkPolicy.enabled is set but networkPolicy.blockedIPv6Ranges is empty. That list is what the policy refuses over IPv6; empty renders an ipBlock allowing all of ::/0. Restore the default list, or set networkPolicy.enabled=false." -}}
+{{- if not $blockedIPv6 -}}
+{{- fail "The chart's IPv6 egress deny table rendered empty. That list is what the policy refuses over IPv6; empty renders an ipBlock allowing all of ::/0. It is defined in templates/_helpers.tpl as devicechain.egressDeniedIPv6 and is not settable per deployment; if you are seeing this, that template has been edited." -}}
 {{- end -}}
 {{- if not $np.dnsNamespaceSelector -}}
 {{- fail "networkPolicy.enabled is set but networkPolicy.dnsNamespaceSelector is empty. An empty selector matches EVERY namespace, so the DNS rule would permit port 53 to anything in the cluster. Set it to the labels on the namespace running your cluster DNS (a stock cluster uses kubernetes.io/metadata.name: kube-system)." -}}
@@ -48,12 +50,24 @@
 # An earlier version of this file said the opposite, and every consequence
 # below was written backwards as a result.
 #
-# What HAS been validated, and how: this policy is accepted by a real API
-# server (kubectl apply --dry-run=server), and the version before it was
+# What HAS been validated, and how. Validity: this policy is accepted by a real
+# API server (kubectl apply --dry-run=server), and the version before it was
 # rejected — an IPv4-mapped prefix in the v6 except list made the whole object
-# invalid, so enabling the feature failed the Helm release outright. What has
-# NOT been validated is behaviour: no test here connects through an enforcing
-# CNI to prove the peers below are sufficient. That belongs in a rig.
+# invalid, so enabling the feature failed the Helm release outright. A
+# CLIENT-side dry-run does not catch that class; it accepts all three invalid
+# forms we tried. So CI does the server-side one, on the kind cluster the
+# upgrade gate already stands up.
+#
+# Behaviour: exercised on a kindnet-enforcing cluster with this policy applied.
+# Every peer below stayed reachable (DNS in-cluster and external, NATS, Postgres,
+# user-management by name and by ClusterIP, the public internet), the metadata
+# addresses were dropped (169.254.169.254, Azure 168.63.129.16, Alibaba
+# 100.100.100.200), and a rollout of the real deployment under the policy came up
+# Ready with JWKS fetched. What that run ALSO found is recorded in the chart
+# README: the infrastructure rule is namespace-wide on these two ports, so a
+# second datastore in that namespace is reachable even though the intent excludes
+# it. Narrowing it needs a pod selector per datastore and a values contract for
+# bring-your-own infrastructure, which is not in this change.
 #
 # 🔴 A WRONG RULE HANGS RATHER THAN FAILS. Traffic denied by a policy is
 # dropped, not refused, so a missing peer below shows up as a dispatch that
@@ -128,6 +142,13 @@ spec:
     # list is the same address space core/egress refuses in the dialer, so the
     # two boundaries agree rather than each covering a different half.
     #
+    # The lists come from _helpers.tpl, NOT from values: a Helm list is replaced
+    # wholesale rather than merged, so as an operator-supplied value one plausible
+    # `--set` rendered a policy exempting a single address and permitting every
+    # private range, while passing every guard here and satisfying the API server.
+    # hack/check-egress-ranges.sh compares this RENDERED output against the Go deny
+    # table, so the two halves cannot drift without CI saying so.
+    #
     # Note what this ALSO blocks, deliberately: the cluster's own pod and service
     # CIDRs sit inside these ranges, so a tenant connector pointed at another
     # service in this cluster is dropped here even though the rules above permit
@@ -137,13 +158,13 @@ spec:
         - ipBlock:
             cidr: 0.0.0.0/0
             except:
-              {{- range $np.blockedIPv4Ranges }}
+              {{- range $blockedIPv4 }}
               - {{ . | quote }}
               {{- end }}
         - ipBlock:
             cidr: ::/0
             except:
-              {{- range $np.blockedIPv6Ranges }}
+              {{- range $blockedIPv6 }}
               - {{ . | quote }}
               {{- end }}
 {{- end }}
