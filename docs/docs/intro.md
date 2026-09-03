@@ -18,7 +18,7 @@ It is a ground-up rebuild of the SiteWhere platform that keeps the proven domain
 - **A lean, fully open-source stack** — NATS JetStream is the entire messaging / MQTT / KV backbone, native JWT handles auth, TimescaleDB is the single data store, and OpenTofu provisions infrastructure. Two dependencies to run locally: **NATS + TimescaleDB**.
 - **A uniform relationship model** — device context is a typed relationship graph rather than rigid assignments, so new entity types compose without schema churn.
 - **Embeddable, versioned dashboards** — a canvas-first layout (layering, background images, per-breakpoint responsive) with built-in Apache ECharts widgets, live subscriptions, draft/publish/rollback versioning, and a runtime binding model (one definition + a host manifest → live on any device). Shipped as npm packages so any app can embed the viewer.
-- **Self-hosted and unmetered** — Apache-2.0 with no open-core split and no per-device pricing. The device inventory, twin state, command delivery, dashboards, multi-tenancy, high availability, and SSO are part of the open platform, not a paid tier — run it inside your own environment with full data ownership.
+- **Self-hosted and unmetered** — Apache-2.0 with no open-core split and no per-device pricing. The device inventory, twin state, command delivery, dashboards, multi-tenancy, high availability, and the OAuth 2.1 authorization server are part of the open platform, not a paid tier — run it inside your own environment with full data ownership.
 
 ## How the platform is organized
 
