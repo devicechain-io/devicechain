@@ -21,8 +21,13 @@
 // see a protocol that redirects, re-resolves, or hands back a second address to connect
 // to. Three of DeviceChain's six outbound paths build their client inside an embedded
 // stream engine that exposes no dialer, and one of the three (Kafka) dials a second hop
-// at whatever address the broker advertises. Those are bounded by a NetworkPolicy at the
-// pod, not here. A caller who believes this package covers them will be wrong.
+// at whatever address the broker advertises.
+//
+// 🔴 Those three are bounded by NOTHING TODAY. The right control for them is a
+// NetworkPolicy at the pod, and no NetworkPolicy exists anywhere in this repository —
+// so this sentence is a statement of what is missing, not of a division of labour. A
+// caller who believes this package covers those paths will be wrong, and so will one who
+// assumes something else does.
 package egress
 
 import (
