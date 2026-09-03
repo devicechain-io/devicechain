@@ -23,9 +23,11 @@ import (
 //
 // This test joins them. Every tool the catalog exposes must name the authority its
 // downstream resolver gates on, and that authority must be reachable through some
-// scope the AS will grant. A new read tool over dashboards, notifications, connectors
-// or the audit journal — every one of which is gated on an authority NO scope admits
-// today — now fails here instead of shipping as a tool that refuses every caller.
+// scope the AS will grant. A new read tool over notifications, connectors or the audit
+// journal — each gated on an authority NO scope admits today — now fails here instead of
+// shipping as a tool that refuses every caller. (Dashboards used to be on that list and
+// are not any more: dashboard:read joined the viewer baseline, and the read-only ceiling
+// is kept equal to it, so a dashboard tool would now be reachable.)
 //
 // 🔴 The map is hand-written on purpose and cannot be derived: the gate is an
 // auth.Authorize call in another module's resolver, not anything this module can

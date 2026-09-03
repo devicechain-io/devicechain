@@ -194,3 +194,50 @@ func TestAMemberWithNoRoleCanOpenADashboard(t *testing.T) {
 			"stay role-gated", auth.DashboardWrite)
 	}
 }
+
+// The CONSOLE login path unions the baseline onto a member's token.
+//
+// 🔴 THIS COVERS THE CALLER THE OTHER TESTS DO NOT, AND A REVIEW SHOWED WHY THAT MATTERS:
+// replacing the union in issueTenantTokens with a no-op left the entire user-management
+// module green. Every console login and every /dash sign-in goes through that function,
+// so a member would have carried NO baseline at all and nothing would have said so. The
+// other tests in this file, and TestEffectiveAuthorities, exercise effectiveAuthorities —
+// the OAuth path — which performs the same union in its own copy of the line.
+//
+// A shared list keeps the two callers' CONTENTS equal. It does not make either of them
+// perform the union, and a comment claiming otherwise (this test replaced one) asserts an
+// invariant nothing enforces. So this asserts the minted token itself, decoded, rather
+// than an intermediate value.
+func TestTheConsoleLoginPathUnionsTheViewerBaseline(t *testing.T) {
+	e := newMintTestEnv(t)
+
+	// A member with no roles and no authorities of their own: the population this whole
+	// baseline exists for.
+	pair, err := e.m.issueTenantTokens("acme", "someone@acme.example", nil, nil, false)
+	if err != nil {
+		t.Fatalf("issueTenantTokens: %v", err)
+	}
+	claims, err := e.validator.Validate(pair.AccessToken)
+	if err != nil {
+		t.Fatalf("the minted access token does not validate: %v", err)
+	}
+
+	for _, want := range viewerAuthorities {
+		if !slices.Contains(claims.Authorities, want) {
+			t.Errorf("a console login for a roleless member minted a token carrying %v, "+
+				"which omits the baseline authority %q — the console path is not unioning "+
+				"the viewer baseline", claims.Authorities, want)
+		}
+	}
+
+	// And the counterweight, so "grant everything" would not satisfy this: the baseline
+	// is a floor for a roleless member, not a licence.
+	if slices.Contains(claims.Authorities, string(auth.AuthorityAll)) {
+		t.Errorf("a roleless member's token carries the super-authority %q", auth.AuthorityAll)
+	}
+	for _, a := range claims.Authorities {
+		if !strings.HasSuffix(a, ":read") {
+			t.Errorf("a roleless member's token carries %q, which is not a read authority", a)
+		}
+	}
+}

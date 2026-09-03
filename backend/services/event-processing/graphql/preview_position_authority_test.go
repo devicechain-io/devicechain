@@ -33,7 +33,8 @@ func TestAFencePreviewIsRefusedWithoutThePositionAuthority(t *testing.T) {
 
 	// The full read-only viewer baseline, spelled out: this is exactly what an enabled member
 	// holds before anyone grants them a role, and it is the population the gate must exclude.
-	viewer := previewCtx(auth.DeviceRead, auth.EventRead, auth.StateRead, auth.CommandRead, auth.AlarmRead)
+	viewer := previewCtx(auth.DeviceRead, auth.EventRead, auth.StateRead, auth.CommandRead,
+		auth.AlarmRead, auth.DashboardRead)
 
 	res, err := r.PreviewRule(viewer, previewInput(fenceDraft,
 		"2026-08-01T00:00:00Z", "2026-08-02T00:00:00Z"))
