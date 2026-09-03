@@ -1,0 +1,130 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $root := . -}}
+{{- $np := .Values.networkPolicy -}}
+{{- $infra := $root.Values.instance.config.infrastructure -}}
+{{- $areas := splitList "," (include "devicechain.enabledAreas" .) -}}
+{{- if not (has "outbound-connectors" $areas) -}}
+{{- fail "networkPolicy.enabled is set, but outbound-connectors is not among the enabled functional areas. The policy exists to bound that one service's tenant-configured broker and cloud egress; with the area absent it would select no pods and quietly protect nothing. Enable the area (profile 'full', or --enable-area outbound-connectors), or set networkPolicy.enabled=false." -}}
+{{- end -}}
+{{- if not $np.infrastructureNamespaceSelector -}}
+{{- fail "networkPolicy.enabled is set but networkPolicy.infrastructureNamespaceSelector is empty. That selector is how outbound-connectors is allowed to reach NATS and PostgreSQL; with it empty the policy would deny both, and a denied connection in Kubernetes BLACKHOLES rather than refusing — the service would hang on every dispatch instead of failing, and its readiness would not tell you why. Set it to the labels on the namespace holding your NATS and PostgreSQL (the OpenTofu-created one carries devicechain.io/component: infrastructure)." -}}
+{{- end -}}
+# ---------------------------------------------------------------------------
+# Egress boundary for outbound-connectors (ADR-060, ADR-023).
+#
+# WHY THIS EXISTS AND WHY IT IS SEPARATE FROM THE GO GUARD.
+#
+# Tenant-configured destinations reaching a private address are refused in
+# core/egress, inside the dialer's Control hook, for the two HTTP paths and
+# SMTP. That covers three of the six egress paths. The other three — MQTT,
+# Kafka and AWS SNS/SQS — are built inside embedded Bento from YAML, and
+# Bento's StreamBuilder exposes no dialer to hook. paho, sarama and the AWS
+# SDK each have a dialer seam; Bento sets none of them.
+#
+# And for two of the three, no address check would suffice even with a dialer:
+# sarama dials the bootstrap broker and then dials whatever address
+# `advertised.listeners` returns on the second hop, and the AWS client follows
+# redirects. Only the network layer sees those.
+#
+# 🔴 WHAT THIS CANNOT DO, STATED HERE BECAUSE IT DECIDES WHETHER TO ENABLE IT.
+#
+# A NetworkPolicy is an API object that any cluster accepts and only a
+# policy-enforcing CNI honours. `kubectl get netpol` will show this whether or
+# not anything acts on it. The clusters this repository creates run kind's
+# default CNI (kindnetd), which does NOT enforce NetworkPolicy — so on a local
+# bring-up and in every validation rig here, this object is inert. It cannot
+# block a tenant broker, and equally it cannot break the service. Confirm your
+# CNI enforces policy before treating this as a control.
+#
+# 🔴 A WRONG RULE HANGS RATHER THAN FAILS. Traffic denied by a policy is
+# dropped, not refused, so a missing peer below shows up as a dispatch that
+# times out — and for the JWKS peer in particular, as a pod that never becomes
+# ready and does not say why. Every peer this service needs is enumerated
+# below; if you narrow them, narrow them knowing that.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $root.Values.instance.id }}-outbound-connectors-egress
+  namespace: {{ $root.Values.instance.id }}
+  labels:
+    {{- include "devicechain.areaLabels" (dict "root" $root "area" "outbound-connectors") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "devicechain.areaLabels" (dict "root" $root "area" "outbound-connectors") | nindent 6 }}
+  # Egress only. This deliberately states no Ingress rules: adding policyTypes
+  # Ingress with no rules would deny the Prometheus scrape and the API route,
+  # which is a different decision from the one this object is making.
+  policyTypes:
+    - Egress
+  egress:
+    # DNS. Every peer below is a name, so this is load-bearing for all of them —
+    # and it is the rule most often forgotten, because a cluster without it fails
+    # in a way that looks like every dependency is down at once.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $np.dnsNamespaceSelector | nindent 14 }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # NATS and PostgreSQL. Ports come from the instance config rather than being
+    # written here, so a port change in one place cannot leave the policy behind.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $np.infrastructureNamespaceSelector | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ $infra.nats.port }}
+        - protocol: TCP
+          port: {{ $root.Values.instance.config.persistence.rdb.configuration.port }}
+
+    # user-management, in this same namespace: the service-token mint, the
+    # governance GraphQL read, and JWKS. All three ride one port.
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "devicechain.areaLabels" (dict "root" $root "area" "user-management") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ $root.Values.service.port }}
+
+    {{- with $np.additionalAllowedCidrs }}
+    # Operator-declared exceptions. Most often the Service CIDR, for a CNI that evaluates
+    # egress before kube-proxy's DNAT and therefore sees a ClusterIP where the selectors
+    # above expect a pod address.
+    - to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+    {{- end }}
+
+    # Tenant destinations: the public internet, and nothing else. The `except`
+    # list is the same address space core/egress refuses in the dialer, so the
+    # two boundaries agree rather than each covering a different half.
+    #
+    # Note what this ALSO blocks, deliberately: the cluster's own pod and service
+    # CIDRs sit inside these ranges, so a tenant connector pointed at another
+    # service in this cluster is dropped here even though the rules above permit
+    # the three peers this service legitimately talks to. That asymmetry is the
+    # entire point.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- range $np.blockedIPv4Ranges }}
+              - {{ . | quote }}
+              {{- end }}
+        - ipBlock:
+            cidr: ::/0
+            except:
+              {{- range $np.blockedIPv6Ranges }}
+              - {{ . | quote }}
+              {{- end }}
+{{- end }}

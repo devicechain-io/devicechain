@@ -198,6 +198,51 @@ For true zero-downtime run `replicas: 2`+ per area (`--set replicas=2` or
 with more than one replica. Tune the strategy via `rollingUpdate.maxUnavailable` /
 `rollingUpdate.maxSurge`.
 
+## Bounding tenant egress (optional)
+
+A tenant configures its own delivery destinations — a webhook URL, an SMTP relay, an MQTT
+or Kafka broker, an SNS topic. DeviceChain refuses a destination that resolves to a
+private, loopback, link-local, carrier-NAT or cloud-metadata address, and it does so at
+the moment the connection is dialled rather than when the URL is saved, because a hostname
+can resolve differently between the two.
+
+That covers the webhook, HTTP-call and SMTP paths. It cannot cover MQTT, Kafka or AWS
+SNS/SQS: those are built inside an embedded stream engine that exposes no place to hook a
+dialer, and for two of them an address check would not be enough anyway — a Kafka client
+dials the bootstrap broker and then dials whatever address that broker advertises, and the
+AWS client follows redirects. The network layer is the only boundary those three have.
+
+`networkPolicy.enabled=true` renders an egress `NetworkPolicy` for `outbound-connectors`
+that permits DNS, the platform's own datastores and services, and the public internet —
+and nothing else.
+
+**Before you enable it, three things.**
+
+1. **It only does anything if your CNI enforces NetworkPolicy.** The object is ordinary
+   Kubernetes API and every cluster accepts and stores it, so `kubectl get netpol` shows
+   it whether or not anything acts on it. Several common development CNIs — including the
+   one `kind` installs by default — do not implement policy. On those this is inert: it
+   will not block a tenant broker, and equally it will not break anything.
+2. **A denied connection hangs; it does not fail.** Traffic a policy drops produces a
+   timeout rather than a refusal, so a peer missing from the rules looks like an outage
+   somewhere else. The rules enumerate everything the service needs, and the most likely
+   way to lose one is the next point.
+3. **Check where your CNI evaluates egress.** The rules reach the datastores and
+   `user-management` with namespace and pod selectors, which match pod addresses. If your
+   CNI evaluates egress *before* kube-proxy's address translation it sees a Service
+   ClusterIP instead, matches nothing, and drops it — and the service then never becomes
+   ready. Add your Service CIDR to `networkPolicy.additionalAllowedCidrs` if so.
+
+`networkPolicy.blockedIPv4Ranges` / `blockedIPv6Ranges` are the address space the policy
+refuses. They are pre-populated to match what the platform refuses in code, and a build
+check fails if the two ever drift apart.
+
+Independently of the policy, `instance.config.infrastructure.egress.allowedDestinations`
+lets you permit specific addresses for the paths that *are* checked in code — an
+in-cluster mail relay, most commonly. Prefer single addresses: in Kubernetes the smallest
+CIDR that reaches one in-cluster service is often the whole Service range, and granting
+that re-opens every private address for every tenant.
+
 ## What it renders
 
 - A `Namespace` named `instance.id` (toggle with `instance.createNamespace`).
@@ -212,6 +257,9 @@ with more than one replica. Tune the strategy via `rollingUpdate.maxUnavailable`
 - The web console (`frontend.enabled=true`, on by default): a static nginx
   `Deployment` + `Service` serving the Vite/React SPA. Disable for
   headless/ingest-only instances.
+- Optional (`networkPolicy.enabled=true`): an egress `NetworkPolicy` for
+  `outbound-connectors`. Requires a policy-enforcing CNI to do anything; see
+  "Bounding tenant egress" above.
 - Optional (`ingress.enabled=true`): two `Ingress` objects on one host — the API
   ingress routes `https://<host>/api/<area>/graphql` to each enabled area
   (stripping the `/api/<area>` prefix), and the web ingress serves the console at

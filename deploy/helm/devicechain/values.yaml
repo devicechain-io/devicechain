@@ -638,6 +638,99 @@ serviceAccount:
 # replica at once. Only emitted for areas with replicas > 1 (a PDB on a single
 # replica would block voluntary drains). Set exactly one of minAvailable /
 # maxUnavailable.
+# NetworkPolicy for the tenant-egress paths a Go dialer cannot reach.
+#
+# Three of the six outbound paths — MQTT, Kafka and AWS SNS/SQS — are built inside an
+# embedded stream engine that exposes no dialer, so the address check that guards the two
+# HTTP paths and SMTP cannot be applied to them. And for two of the three, no address
+# check would suffice even with a dialer: a Kafka client dials the bootstrap broker and
+# then dials whatever address that broker advertises, and the AWS client follows
+# redirects. Only the network layer sees those.
+#
+# 🔴 OFF BY DEFAULT, AND READ THIS BEFORE TURNING IT ON.
+#
+# A NetworkPolicy is an ordinary API object that every cluster accepts and only a
+# policy-enforcing CNI acts on. `kubectl get netpol` shows it either way. If your CNI does
+# not enforce policy, this object is inert — it will not block a tenant broker, and it
+# will not break the service. Check your CNI before treating it as a control.
+#
+# 🔴 A wrong rule HANGS rather than failing. Traffic a policy denies is dropped, not
+# refused, so a peer missing from the lists below shows up as dispatches that time out —
+# and, for the user-management peer, as a pod that never becomes ready and does not say
+# why. The defaults enumerate everything outbound-connectors needs.
+networkPolicy:
+  enabled: false
+  # Labels selecting the namespace that holds NATS and PostgreSQL. The OpenTofu-created
+  # infrastructure namespace carries the pair below. If you brought your own, set this to
+  # whatever labels your namespace actually has — an empty selector is refused at render
+  # time rather than silently denying the database.
+  infrastructureNamespaceSelector:
+    devicechain.io/component: infrastructure
+  # Labels selecting the namespace that serves cluster DNS. Kubernetes 1.21+ labels every
+  # namespace with kubernetes.io/metadata.name automatically, so this needs no changes on
+  # a stock cluster.
+  dnsNamespaceSelector:
+    kubernetes.io/metadata.name: kube-system
+  # The address space a tenant destination may not reach, as `except` entries under a
+  # 0.0.0.0/0/::0 allowance — so the policy permits the public internet and nothing else.
+  #
+  # 🔴 These MUST match the Go guard's deny table (backend/core/egress/ranges.go), and
+  # hack/check-egress-ranges.sh fails the build when they drift. The two halves of one
+  # boundary written in two languages, with nothing at compile or render time relating
+  # them, is exactly the pair that goes quietly out of step.
+  # Extra destinations to permit, as CIDRs. Two reasons you may need this, and the first
+  # one is the likeliest way this policy breaks a cluster:
+  #
+  # 🔴 SERVICE ClusterIPs. This policy reaches NATS, PostgreSQL and user-management with
+  # namespace and pod selectors, which match POD addresses. Whether that is enough depends
+  # on where your CNI evaluates egress relative to kube-proxy's DNAT. Evaluated AFTER
+  # (Calico's usual behaviour) the destination is already the pod IP and the selectors
+  # match. Evaluated BEFORE, the destination is still the Service ClusterIP, which matches
+  # no pod selector and sits inside the blocked private ranges below — so every database
+  # and service-token call is dropped, and dropped traffic HANGS rather than failing. The
+  # symptom is a pod that never becomes ready, with nothing saying why.
+  #
+  # If that is your CNI, add your Service CIDR here (kubeadm's default is 10.96.0.0/12).
+  # Note what that costs: it permits the whole Service CIDR, so a tenant connector aimed
+  # at any in-cluster Service is admitted too. It is the same trade as the Go guard's
+  # allowed destinations, and the same advice — narrow it if you can.
+  #
+  # The second reason is an off-cluster dependency on a private address, such as a
+  # corporate SMTP relay or a broker on a peered VPC.
+  additionalAllowedCidrs: []
+  # - "10.96.0.0/12"    # the Service CIDR, if your CNI evaluates egress pre-DNAT
+  blockedIPv4Ranges:
+    - "0.0.0.0/8"
+    - "10.0.0.0/8"
+    - "100.64.0.0/10"
+    - "127.0.0.0/8"
+    - "169.254.0.0/16"
+    - "172.16.0.0/12"
+    - "192.0.0.0/24"
+    - "192.0.2.0/24"
+    - "192.88.99.0/24"
+    - "192.168.0.0/16"
+    - "198.18.0.0/15"
+    - "198.51.100.0/24"
+    - "203.0.113.0/24"
+    - "224.0.0.0/4"
+    - "240.0.0.0/4"
+    - "168.63.129.16/32"
+  blockedIPv6Ranges:
+    - "::1/128"
+    - "::/128"
+    - "::ffff:0:0/96"
+    - "64:ff9b:1::/48"
+    - "100::/64"
+    - "100:0:0:1::/64"
+    - "2001:2::/48"
+    - "2001:db8::/32"
+    - "3fff::/20"
+    - "5f00::/16"
+    - "fc00::/7"
+    - "fe80::/10"
+    - "ff00::/8"
+
 podDisruptionBudget:
   enabled: true
   minAvailable: ""

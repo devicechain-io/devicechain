@@ -149,6 +149,24 @@
         "automountToken": { "type": "boolean" }
       }
     },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "infrastructureNamespaceSelector": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "dnsNamespaceSelector": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "additionalAllowedCidrs": { "type": "array", "items": { "type": "string" } },
+        "blockedIPv4Ranges": { "type": "array", "items": { "type": "string" } },
+        "blockedIPv6Ranges": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
     "podDisruptionBudget": {
       "type": "object",
       "properties": {

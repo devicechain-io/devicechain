@@ -23,11 +23,14 @@
 // stream engine that exposes no dialer, and one of the three (Kafka) dials a second hop
 // at whatever address the broker advertises.
 //
-// 🔴 Those three are bounded by NOTHING TODAY. The right control for them is a
-// NetworkPolicy at the pod, and no NetworkPolicy exists anywhere in this repository —
-// so this sentence is a statement of what is missing, not of a division of labour. A
-// caller who believes this package covers those paths will be wrong, and so will one who
-// assumes something else does.
+// 🔴 The control for those three is a NetworkPolicy at the pod, which the chart now
+// renders — but read what that does and does not buy before treating this as a division
+// of labour. It is OFF by default (networkPolicy.enabled), and a NetworkPolicy is
+// honoured only by a CNI that implements policy; the clusters this repository creates run
+// one that does not. So on a default install, and on every rig here, those three paths
+// are bounded by nothing at all. A caller who believes this package covers them will be
+// wrong, and so will one who assumes the chart does without having enabled it on a
+// cluster that enforces it.
 package egress
 
 import (

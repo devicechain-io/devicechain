@@ -1021,6 +1021,15 @@ jobs:
 
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
 
+      # The tenant-egress boundary is written twice — in Go for the paths that have a
+      # dialer, in the chart's NetworkPolicy for the three that do not — and nothing at
+      # compile or render time relates the two. This fails when they drift, which is
+      # otherwise silent and always in the widening direction. --self-test first, so its
+      # green is known to be a green that could have been red.
+      - name: egress deny-list drift check
+        run: |
+          hack/check-egress-ranges.sh --self-test
+
       - name: helm lint
         run: helm lint deploy/helm/devicechain
 
