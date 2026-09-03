@@ -340,8 +340,16 @@ func TestBlockedErrorCarriesTheResolvedAddress(t *testing.T) {
 // replace it; it makes the link total, and the two together mean a prefix cannot be
 // in the table and unenforced.
 //
-// The address tested is the network address of each prefix, which is inside it by
-// construction, so this needs no per-row fixture that could drift from the row.
+// The addresses tested are derived from each prefix, so this needs no per-row fixture
+// that could drift from the row.
+//
+// 🔴 TWO ADDRESSES PER ROW, AND THE SECOND ONE IS WHY THIS TEST WORKS. The network
+// address alone is not enough: for 0.0.0.0/8 it is 0.0.0.0, which the categorical
+// IsUnspecified() check refuses BEFORE the table is consulted — so deleting that row from
+// the guard's loop left this sweep green while 0.1.2.3 became reachable. Thirteen of the
+// probes are shadowed by a categorical check that way; for twelve of them the categorical
+// check covers the whole prefix and skipping the row is harmless, and 0.0.0.0/8 was the
+// one where it is not. The second address is outside every such shadow.
 func TestEveryDeniedPrefixIsRefused(t *testing.T) {
 	g := NewGuard(nil)
 	prefixes := DeniedPrefixes()
@@ -349,11 +357,19 @@ func TestEveryDeniedPrefixIsRefused(t *testing.T) {
 		t.Fatal("precondition: the deny table is empty, so this test asserts nothing")
 	}
 	for _, p := range prefixes {
-		addr := p.Masked().Addr()
-		if err := g.CheckAddr(addr); err == nil {
-			t.Errorf("the deny table carries %s but the guard ADMITS %s — the table and the "+
-				"decision have come apart, and the drift gate cannot see that because it "+
-				"reads the table", p, addr)
+		masked := p.Masked()
+		probes := []netip.Addr{masked.Addr()}
+		// A single-address prefix has no second member; anything else does, and
+		// Next() of the network address is inside the prefix by construction.
+		if masked.Bits() < masked.Addr().BitLen() {
+			probes = append(probes, masked.Addr().Next())
+		}
+		for _, addr := range probes {
+			if err := g.CheckAddr(addr); err == nil {
+				t.Errorf("the deny table carries %s but the guard ADMITS %s — the table and the "+
+					"decision have come apart, and the drift gate cannot see that because it "+
+					"reads the table", p, addr)
+			}
 		}
 	}
 }

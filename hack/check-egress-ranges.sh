@@ -32,16 +32,28 @@
 # tidy-up. A podSelector matching no pods protects nothing. An empty namespaceSelector on
 # the DNS rule opens port 53 to the cluster. An extra `- {}` rule allows everything. A
 # SECOND NetworkPolicy selecting the same pods opens everything, because policies union —
-# and if it lives in a second template file, `--show-only` hid it from the gate, from the
-# server-side dry-run, and from the profile-workloads check simultaneously. Every one of
+# and if it lives in a second template file, `--show-only` hid it from both the gate and
+# the server-side dry-run. (An earlier version of this note added the profile-workloads
+# check to that list; it never used --show-only and only ever pinned Deployment names, so
+# it was never looking.) Every one of
 # those renders 28 agreeing prefixes, and every one is valid Kubernetes, so a dry-run
 # accepts them too.
 #
-# Hence the golden: the prefixes are compared BY VALUE against Go, and everything else is
-# pinned so that changing it is a diff a human accepts on purpose. The golden holds the
-# prefixes as well. That is deliberate duplication — it means a deny-table change shows up
-# twice in one commit, which is the right number of times for an edit to a security
-# boundary.
+# Hence the golden: the prefixes are compared BY VALUE against Go, and the rest of the
+# object is pinned so that changing it is a diff a human accepts on purpose. The golden
+# holds the prefixes as well. That is deliberate duplication — it means a deny-table change
+# shows up twice in one commit, which is the right number of times for an edit to a
+# security boundary.
+#
+# 🔴 SAY WHAT THE GOLDEN DOES NOT COVER, because the previous two versions of this header
+# each replaced a false coverage claim with a subtler one. A golden pins the value
+# COMBINATIONS it was rendered with. Two are rendered — the defaults, and the defaults plus
+# networkPolicy.additionalAllowedCidrs, which is the template's only values-conditional
+# block and emits nothing without it. Replacing that block's body with an allow-all rule
+# used to pass everything and open every tenant destination the moment an operator set the
+# value. A branch reachable only under some third combination is still pinned by nothing,
+# and the fix for a third branch is a third render in golden_body — not a firmer sentence
+# here.
 #
 # 🔴 THE LIMIT OF THE SELF-TEST, STATED RATHER THAN GLOSSED. The arms drive the same
 # wiring CI drives, so rot in the extractors, the comparison or the wiring is caught. What
@@ -69,18 +81,29 @@ GOLDEN="$ROOT/hack/testdata/egress-networkpolicy.yaml"
 # value of its own.
 AREAS='{user-management,device-management,event-processing,outbound-connectors}'
 
-# Render the WHOLE chart with the policy enabled.
+# Render the WHOLE chart with the policy enabled, plus any extra --set arguments.
 #
 # 🔴 NOT `--show-only templates/networkpolicy.yaml`. That flag is why a policy added in a
 # second template file was invisible to every instrument at once. The documents are
 # selected by KIND, from the parsed stream, downstream of here.
+#
+# 🔴 `--include-crds` is not decoration either. `helm install` applies everything in a
+# chart's `crds/` directory and does NOT check what kind those files declare, while
+# `helm template` skips the directory entirely unless asked. So a NetworkPolicy dropped
+# into `crds/` would be created by a real install, survive `helm uninstall`, and be
+# invisible here — the same "a policy added in a new file" hole in a different spelling.
+# Verified on a real cluster. The chart has no `crds/` today; this keeps it that way by
+# making one visible rather than by trusting that nobody adds it.
 render_chart() {
   local chart_dir="$1" key
   key="$(openssl rand -base64 32)"
+  shift
   helm template "$chart_dir" \
+    --include-crds \
     --set "instance.config.infrastructure.secrets.rootKey=$key" \
     --set "enabledFunctionalAreas=$AREAS" \
-    --set networkPolicy.enabled=true
+    --set networkPolicy.enabled=true \
+    "$@"
 }
 
 # The Go side: the deny table as the COMPILED package reports it.
@@ -105,11 +128,13 @@ go_excluded() {
 }
 
 chart_ranges_from() {
-  render_chart "$1" | ( cd "$CORE_MODULE" && go run ./egress/internal/policyranges ) | sort
+  local dir="$1"; shift
+  render_chart "$dir" "$@" | ( cd "$CORE_MODULE" && go run ./egress/internal/policyranges ) | sort
 }
 
 chart_policies_from() {
-  render_chart "$1" | ( cd "$CORE_MODULE" && go run ./egress/internal/policyranges -policies )
+  local dir="$1"; shift
+  render_chart "$dir" "$@" | ( cd "$CORE_MODULE" && go run ./egress/internal/policyranges -policies )
 }
 
 # The golden's exact bytes, header included, for a given chart directory.
@@ -117,6 +142,19 @@ chart_policies_from() {
 # Both --update and the comparison go through this one function, so the file on disk and
 # the file compared against it are produced identically. Writing the header in one place
 # and stripping it in the other is how a golden acquires a diff that is not a change.
+#
+# 🔴 TWO RENDERS, BECAUSE A GOLDEN PINS THE COMBINATION IT WAS RENDERED WITH AND NOTHING
+# ELSE. The template has a values-conditional block — `{{- with $np.additionalAllowedCidrs }}`
+# — and under default values that block emits nothing, so its BODY was pinned by nothing:
+# replacing it with an allow-all rule left the prefixes agreeing, the golden identical and
+# all four self-test arms green, and opened every tenant destination the moment an operator
+# set the value. That block is the operator-facing feature and therefore the one most
+# likely to be edited. The second render sets it to a documentation range so the body is
+# rendered and pinned.
+#
+# The limit that remains, stated rather than implied: this pins TWO combinations. A branch
+# reachable only under some third set of values is still pinned by nothing, and the honest
+# fix for a third branch is a third render here.
 golden_body() {
   echo "# The rendered egress NetworkPolicy. Generated by hack/check-egress-ranges.sh --update."
   echo "#"
@@ -125,7 +163,13 @@ golden_body() {
   echo "# purpose. Comparing the prefix lists says nothing about whether the object enforces"
   echo "# anything at all: policyTypes: [Ingress] leaves the prefixes identical and makes every"
   echo "# egress rule inert."
+  echo "#"
+  echo "# TWO renders: the default values, then the same with networkPolicy.additionalAllowedCidrs"
+  echo "# set, because that block emits nothing by default and would otherwise be pinned by nothing."
+  echo "# ---------------------------------------------------------------- default values"
   chart_policies_from "$1"
+  echo "# ------------------------------------------- with additionalAllowedCidrs set"
+  chart_policies_from "$1" --set "networkPolicy.additionalAllowedCidrs={198.51.100.0/24}"
 }
 
 # gather writes the three extractions to the files named by $1 (Go table), $2 (rendered
@@ -224,13 +268,28 @@ compare() {
 # A tampered copy of the chart. Copying the real chart and editing the copy means the arms
 # below exercise the real render path — the template, the parser and the comparison —
 # rather than a substituted function that only proves diff works.
+# 🔴 The caller records the directory, not this function. It is always invoked as
+# `dir="$(tampered_chart …)"`, and a command substitution is a SUBSHELL — an array
+# appended to in here is appended to a copy that dies with it, so the cleanup list stayed
+# empty on every run and each self-test leaked three chart copies. The previous version of
+# this file had that bug AND a comment confidently diagnosing a different one.
+# 🔴 The copy is laid out at its REAL repo-relative path — $dir/deploy/helm/devicechain —
+# rather than at $dir/chart, so that pointing either $ROOT or $CHART at the fake tree finds
+# the tampered chart. Arm 4 needs both: an extractor that went circular by re-rendering
+# "$ROOT/deploy/helm/devicechain" ignores $CHART entirely, and with a $dir/chart layout it
+# would have kept reading the real chart and passed.
 tampered_chart() {
   local sed_expr="$1" file="$2" dir
   dir="$(mktemp -d)"
-  TAMPER_DIRS+=("$dir")
-  cp -r "$CHART" "$dir/chart"
-  sed -i "$sed_expr" "$dir/chart/$file"
-  echo "$dir/chart"
+  mkdir -p "$dir/deploy/helm"
+  cp -r "$CHART" "$dir/deploy/helm/devicechain"
+  sed -i "$sed_expr" "$dir/deploy/helm/devicechain/$file"
+  echo "$dir/deploy/helm/devicechain"
+}
+
+# record_tamper appends to the cleanup list from the CALLER's shell.
+record_tamper() {
+  TAMPER_DIRS+=("${1%/deploy/helm/devicechain}")
 }
 
 # run_against performs the whole check against a chart directory, exactly as CI does.
@@ -256,9 +315,10 @@ cleanup_tampered() {
   done
   # 🔴 Explicit, and not belt-and-braces. On an EMPTY array "${a[@]:-}" expands to one
   # empty string, so the loop runs once, `[ -n "" ]` is false, and the function returns 1
-  # — which, from a RETURN trap, became the status of the whole self-test. Every arm
+  # — which, from a RETURN trap, became the status of the whole self-test: every arm
   # printed and passed and the script still exited 1. Same shape as the sweep loop whose
-  # status is its last echo.
+  # status is its last echo. (The array being empty was a second bug, in tampered_chart;
+  # this guard is still right, because a run with no tampering has nothing to clean.)
   return 0
 }
 
@@ -267,7 +327,7 @@ self_test() {
   trap cleanup_tampered RETURN
 
   # Arm 1: one prefix removed from the chart's deny table. The everyday drift.
-  dir="$(tampered_chart '/^    "172.16.0.0\/12"$/d' templates/networkpolicy.yaml)"
+  dir="$(tampered_chart '/^    "172.16.0.0\/12"$/d' templates/networkpolicy.yaml)"; record_tamper "$dir"
   if chart_ranges_from "$dir" 2>/dev/null | grep -qxF 'v4 172.16.0.0/12'; then
     echo "SELF-TEST FAILED: the tamper did not take effect, so nothing was proven" >&2
     return 1
@@ -281,7 +341,7 @@ self_test() {
   # Arm 2: the policy still refuses the same addresses, and stops enforcing anything.
   # 🔴 THIS IS THE ARM THE PREVIOUS GATE COULD NOT HAVE HAD. Flipping policyTypes leaves
   # the prefixes identical and makes every egress rule inert; only the golden sees it.
-  dir="$(tampered_chart 's/^    - Egress$/    - Ingress/' templates/networkpolicy.yaml)"
+  dir="$(tampered_chart 's/^    - Egress$/    - Ingress/' templates/networkpolicy.yaml)"; record_tamper "$dir"
   if ! chart_policies_from "$dir" 2>/dev/null | grep -q 'Ingress'; then
     echo "SELF-TEST FAILED: the policyTypes tamper did not take effect, so nothing was proven" >&2
     return 1
@@ -306,10 +366,20 @@ self_test() {
   # Arm 4: INDEPENDENCE. Arm 3 proves compare() notices a one-sided difference; it does
   # not prove the two sides are gathered independently. If go_ranges were derived from the
   # chart, every arm above still passes and the gate compares the chart with itself.
+  #
+  # 🔴 BOTH PATH VARIABLES ARE TAMPERED, and that is the correction of a real miss. An
+  # earlier version pointed only $CHART at the fake tree, so an extractor that had gone
+  # circular by rendering "$ROOT/deploy/helm/devicechain" ignored it and passed every arm
+  # while the Go table was compared against nothing. The copy now sits at that same
+  # relative path, so either variable leads to the tampered chart.
+  #
+  # The residual, stated rather than implied: an extractor that hard-codes an absolute path
+  # to the real chart still evades this. That is a deliberate edit visible in a diff, like
+  # the `main` limit in the header — the arms bound accidents, not authorship.
   local go_real go_tampered
   go_real="$(go_ranges | md5sum)"
-  dir="$(tampered_chart '/^    "172.16.0.0\/12"$/d' templates/networkpolicy.yaml)"
-  go_tampered="$(CHART="$dir" go_ranges | md5sum)"
+  dir="$(tampered_chart '/^    "172.16.0.0\/12"$/d' templates/networkpolicy.yaml)"; record_tamper "$dir"
+  go_tampered="$(ROOT="${dir%/deploy/helm/devicechain}" CHART="$dir" go_ranges | md5sum)"
   if [ "$go_real" != "$go_tampered" ]; then
     echo "SELF-TEST FAILED: the Go extraction CHANGED when only the chart was tampered," >&2
     echo "so the two sides are not independent and the comparison is circular." >&2

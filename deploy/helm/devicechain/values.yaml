@@ -670,10 +670,11 @@ networkPolicy:
     kubernetes.io/metadata.name: kube-system
   # 🔴 THE DENY LIST IS NOT HERE, AND THAT IS DELIBERATE.
   #
-  # The address space a tenant destination may not reach is defined in
-  # templates/_helpers.tpl (devicechain.egressDeniedIPv4 / …IPv6) and rendered as the
-  # `except` entries of two wide ipBlocks, so the policy permits the public internet and
-  # nothing else. It used to be `blockedIPv4Ranges` / `blockedIPv6Ranges` right here, and
+  # The address space a tenant destination may not reach is written in the body of
+  # templates/networkpolicy.yaml and rendered as the `except` entries of two wide
+  # ipBlocks, so the policy permits the public internet and nothing else. (It lived
+  # briefly in a named template in _helpers.tpl; a parent chart can override one of
+  # those, which would have restored the very widening this move exists to prevent.) It used to be `blockedIPv4Ranges` / `blockedIPv6Ranges` right here, and
   # that was a defect: Helm REPLACES a list rather than merging it, so one plausible
   # override — `--set networkPolicy.blockedIPv4Ranges={1.2.3.4/32}`, or the same in a
   # values file — rendered a policy whose only exception was that one address. It passed
