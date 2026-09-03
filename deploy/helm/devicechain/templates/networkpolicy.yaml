@@ -23,6 +23,14 @@
   door values.schema.json cannot see and the drift gate never renders. A subchart's
   template FILE cannot be replaced that way, so the lists live in one.
 
+  🔴 THE SELECTORS ARE STILL `include`s, AND THAT IS A RESIDUAL RATHER THAN AN OVERSIGHT.
+  devicechain.areaLabels is a named template, so a parent chart can redefine it and rewrite
+  both the podSelector and the user-management peer of this policy. It is not inlined the way
+  the lists are because the Deployment uses the same helper, so an override moves the workload
+  labels and the policy's selectors together and they still match. That makes it operator
+  authorship rather than a slip — but it is a fourth way this object can differ from what the
+  drift gate rendered, and the gate renders the chart standalone, so it cannot see it.
+
   🔴 KEEP THESE IN STEP WITH backend/core/egress/ranges.go. hack/check-egress-ranges.sh
   compares the RENDERED policy against that table as the compiled package reports it,
   so a change to either side fails CI until the other follows. One prefix is
