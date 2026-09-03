@@ -18,30 +18,98 @@
 #   hack/check-egress-ranges.sh              # compare, fail on drift
 #   hack/check-egress-ranges.sh --self-test  # prove the comparison can fail
 #
-# 🔴 What this does NOT check: whether either list is CORRECT, or whether the policy is
-# enforced at all. A NetworkPolicy is honoured only by a policy-enforcing CNI, and the
-# clusters this repo creates run kindnetd, which is not one. This asserts the two lists
-# agree, which is the property no other check can see.
+# 🔴 What this does NOT check: whether either list is CORRECT, whether the rendered policy
+# is valid Kubernetes, or whether it behaves as intended on a cluster. It asserts the two
+# lists agree, which is the property no other check can see. Validity and behaviour need a
+# server-side dry-run and a cluster that enforces policy — a local kind cluster is one,
+# since kindnetd has shipped kube-network-policies since kind v0.24.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GO_SRC="$ROOT/backend/core/egress/ranges.go"
 VALUES="$ROOT/deploy/helm/devicechain/values.yaml"
 
-# The Go side: every prefix in the `denied` table. Anchored on the exact literal form the
-# table uses, so a prefix declared some other way (the embedding-form vars below the
-# table, for instance) is not swept in by accident.
+# 🔴 GO-ONLY PREFIXES. One entry in the Go table must NOT appear in the chart, so a
+# literal diff would fail forever. It is declared here with its reason rather than
+# filtered quietly, because an exception nobody can see is how a check stops meaning
+# anything.
+#
+#   ::ffff:0:0/96 — Kubernetes rejects an IPv4-mapped address in an ipBlock, and would
+#   reject it anyway as "not a strict subset of ::/0": Go's net.IPNet.Contains collapses
+#   a v4-mapped address to four bytes, so ::/0 does not contain it (verified directly).
+#   Including it makes the whole NetworkPolicy invalid and the Helm release fails to
+#   install. It has no on-the-wire meaning either — a v4-mapped address never appears on
+#   a packet, and the Go table carries it only as belt-and-braces behind an unmap that
+#   has already run.
+#
+#   ::/96, 64:ff9b::/96, 2002::/16, 2001::/32 — the four IPv6 forms that CARRY an IPv4
+#   address. Go does not deny these; it extracts the address inside and judges THAT, so a
+#   NAT64 or 6to4 wrapper around a public host is allowed and one around 169.254.169.254
+#   is not. A NetworkPolicy cannot express "look inside": ipBlock compares prefixes.
+#
+#   🔴 So this is a REAL RESIDUAL, not a bookkeeping detail. On a dual-stack or NAT64
+#   cluster, a tenant Kafka or MQTT broker at 64:ff9b::a9fe:a9fe reaches the metadata
+#   service through the Bento paths, because the policy sees an ordinary global-unicast
+#   v6 address. Denying the four prefixes outright is NOT the fix — on a NAT64-only
+#   cluster 64:ff9b::/96 is how everything is reached, so that would deny all egress.
+#   Closing it properly needs the policy to be generated per-cluster from its actual
+#   NAT64 prefix, or those paths to gain a dialer. Neither is in this change.
+GO_ONLY='::ffff:0:0/96
+::/96
+64:ff9b::/96
+2002::/16
+2001::/32'
+
+# The Go side: every prefix in the `denied` table, minus the declared Go-only set.
+#
+# 🔴 It anchors on the literal form that table uses, and that is a real weakness worth
+# knowing rather than hiding: a prefix added in some other form — a keyed struct literal,
+# a second table — is invisible here, and the floor below cannot see one missing line. If
+# you change how the table is written, change this with it.
 go_ranges() {
-  grep -oE '\{netip\.MustParsePrefix\("[^"]+"\),' "$GO_SRC" \
-    | sed -E 's/.*MustParsePrefix\("([^"]+)"\),/\1/' | sort -u
+  grep -oE 'netip\.MustParsePrefix\("[^"]+"\)' "$GO_SRC" \
+    | sed -E 's/.*MustParsePrefix\("([^"]+)"\)/\1/' \
+    | grep -vxF -f <(printf '%s\n' "$GO_ONLY") | sort -u
 }
 
 # The chart side: the two blocked-range lists under networkPolicy.
+#
+# Each list is opened by its own key and closed by the next key at the SAME indentation,
+# so the extraction does not depend on what happens to sit below it. The previous version
+# used awk range patterns whose end condition never matched, so both ranges ran to the end
+# of an unrelated block and worked only by accident of what was in between.
 chart_ranges() {
   awk '
-    /^  blockedIPv4Ranges:/ , /^  [a-zA-Z]+:[^ ]*$/ { print }
-    /^  blockedIPv6Ranges:/ , /^  [a-zA-Z]+:[^ ]*$/ { print }
+    /^  blockedIPv4Ranges:$/ { inlist = 1; next }
+    /^  blockedIPv6Ranges:$/ { inlist = 1; next }
+    /^  [^ ]/                { inlist = 0 }
+    inlist && /^    - "/     { print }
   ' "$VALUES" | grep -oE '"[0-9a-fA-F:.]+/[0-9]+"' | tr -d '"' | sort -u
+}
+
+# 🔴 A prefix Kubernetes will not accept makes the WHOLE policy invalid, so the release
+# fails to install and the feature cannot be turned on at all. That happened: an
+# IPv4-mapped prefix in the v6 list was rejected twice over — "must not have an
+# IPv4-mapped IPv6 address", and "must be a strict subset of ::/0", because Go's
+# net.IPNet.Contains collapses a v4-mapped address to four bytes so ::/0 does not contain
+# it.
+#
+# Nothing caught it: helm lint does not execute the body of a false `if`, no CI job renders
+# this template enabled, and rendering would not have been enough anyway — it takes API
+# validation. This checks the one class cheaply and without a cluster. The real proof is a
+# server-side dry-run, which is what found it.
+assert_no_mapped() {
+  local bad
+  bad="$(chart_ranges | grep -iE '^::ffff:' || true)"
+  if [ -n "$bad" ]; then
+    echo "The NetworkPolicy's blocked ranges contain an IPv4-mapped IPv6 prefix:" >&2
+    echo "$bad" | sed 's/^/  /' >&2
+    echo >&2
+    echo "Kubernetes rejects these in an ipBlock, and the whole policy is then invalid —" >&2
+    echo "so enabling networkPolicy fails the Helm release rather than degrading. A" >&2
+    echo "v4-mapped address never appears on the wire; it belongs in the Go table only." >&2
+    return 1
+  fi
 }
 
 compare() {
@@ -63,8 +131,10 @@ compare() {
     return 2
   fi
 
+  assert_no_mapped || return 1
+
   if diff -u "$go_file" "$chart_file" > /dev/null; then
-    echo "==> egress ranges agree ($n_go prefixes)"
+    echo "==> egress ranges agree ($n_go prefixes), and none is a form Kubernetes refuses"
     return 0
   fi
 

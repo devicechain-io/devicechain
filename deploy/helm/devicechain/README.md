@@ -208,40 +208,60 @@ can resolve differently between the two.
 
 That covers the webhook, HTTP-call and SMTP paths. It cannot cover MQTT, Kafka or AWS
 SNS/SQS: those are built inside an embedded stream engine that exposes no place to hook a
-dialer, and for two of them an address check would not be enough anyway — a Kafka client
-dials the bootstrap broker and then dials whatever address that broker advertises, and the
-AWS client follows redirects. The network layer is the only boundary those three have.
+dialer. For Kafka an address check would not be enough even with one — the client dials
+the bootstrap broker and then registers whatever addresses that broker returns in its
+metadata, so the tenant's own broker chooses the second hop. The network layer is the only
+boundary those three have.
 
 `networkPolicy.enabled=true` renders an egress `NetworkPolicy` for `outbound-connectors`
 that permits DNS, the platform's own datastores and services, and the public internet —
 and nothing else.
 
-**Before you enable it, three things.**
+**It only does anything if your CNI enforces NetworkPolicy.** The object is ordinary
+Kubernetes API and every cluster accepts and stores it, so `kubectl get netpol` shows it
+whether or not anything acts on it. Most production CNIs enforce policy; so does the one
+`kind` installs by default, which means a development cluster is not a safe place to find
+out you got a rule wrong.
 
-1. **It only does anything if your CNI enforces NetworkPolicy.** The object is ordinary
-   Kubernetes API and every cluster accepts and stores it, so `kubectl get netpol` shows
-   it whether or not anything acts on it. Several common development CNIs — including the
-   one `kind` installs by default — do not implement policy. On those this is inert: it
-   will not block a tenant broker, and equally it will not break anything.
-2. **A denied connection hangs; it does not fail.** Traffic a policy drops produces a
-   timeout rather than a refusal, so a peer missing from the rules looks like an outage
-   somewhere else. The rules enumerate everything the service needs, and the most likely
-   way to lose one is the next point.
-3. **Check where your CNI evaluates egress.** The rules reach the datastores and
-   `user-management` with namespace and pod selectors, which match pod addresses. If your
-   CNI evaluates egress *before* kube-proxy's address translation it sees a Service
+**A denied connection hangs; it does not fail.** Traffic a policy drops produces a timeout
+rather than a refusal, so a peer missing from the rules looks like an outage somewhere
+else. The rules enumerate everything the service needs. Three ways to lose one:
+
+1. **Check where your CNI evaluates egress.** The rules reach the datastores and
+   `user-management` with namespace and pod selectors, which match pod addresses. A CNI
+   that evaluates egress *before* kube-proxy's address translation sees a Service
    ClusterIP instead, matches nothing, and drops it — and the service then never becomes
    ready. Add your Service CIDR to `networkPolicy.additionalAllowedCidrs` if so.
+2. **Check how DNS reaches your pods.** The rules permit DNS to pods in the namespace
+   named by `networkPolicy.dnsNamespaceSelector`. If you run NodeLocal DNSCache — common
+   on managed clusters — the resolver is a link-local address on a host-network DaemonSet,
+   which no pod selector matches and which the blocked ranges below cover. Every lookup is
+   then dropped and nothing starts. Add the cache address to `additionalAllowedCidrs`.
+3. **Setting the namespace selectors needs a values file, not `--set`.** The keys hold a
+   label map that is merged, not replaced, so `--set` adds a label to the default one and
+   the resulting selector matches neither namespace.
 
 `networkPolicy.blockedIPv4Ranges` / `blockedIPv6Ranges` are the address space the policy
 refuses. They are pre-populated to match what the platform refuses in code, and a build
-check fails if the two ever drift apart.
+check fails if the two drift apart.
 
-Independently of the policy, `instance.config.infrastructure.egress.allowedDestinations`
-lets you permit specific addresses for the paths that *are* checked in code — an
-in-cluster mail relay, most commonly. Prefer single addresses: in Kubernetes the smallest
-CIDR that reaches one in-cluster service is often the whole Service range, and granting
-that re-opens every private address for every tenant.
+**Two things the policy cannot do**, both worth knowing before relying on it:
+
+- It compares address prefixes, so it cannot look inside an IPv6 address that carries an
+  IPv4 one. On a NAT64 or dual-stack cluster a tenant broker at a translated address
+  reaches what the translated address points at, including a metadata service, on exactly
+  the paths this policy exists to bound. Closing that needs the policy generated from your
+  cluster's own translation prefix.
+- It is a **ceiling** over `instance.config.infrastructure.egress.allowedDestinations`,
+  not a separate control. That setting permits specific addresses for the paths checked in
+  code — an in-cluster mail relay, most commonly — but an address permitted there is still
+  dropped by the network unless it is also in `additionalAllowedCidrs`. And a dropped
+  connection hangs rather than reporting a refusal, so the delivery retries to its cap
+  instead of failing usefully. Put such an address in both places.
+
+Prefer single addresses in either list: in Kubernetes the smallest CIDR that reaches one
+in-cluster service is often the whole Service range, and granting that re-opens every
+private address for every tenant.
 
 ## What it renders
 

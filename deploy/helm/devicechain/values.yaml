@@ -642,17 +642,18 @@ serviceAccount:
 #
 # Three of the six outbound paths — MQTT, Kafka and AWS SNS/SQS — are built inside an
 # embedded stream engine that exposes no dialer, so the address check that guards the two
-# HTTP paths and SMTP cannot be applied to them. And for two of the three, no address
-# check would suffice even with a dialer: a Kafka client dials the bootstrap broker and
-# then dials whatever address that broker advertises, and the AWS client follows
-# redirects. Only the network layer sees those.
+# HTTP paths and SMTP cannot be applied to them. And for Kafka no address check would
+# suffice even with a dialer: the client dials the bootstrap broker and then registers
+# whatever addresses that broker returns in its metadata, so the tenant's own broker picks
+# the second hop. Only the network layer sees that.
 #
 # 🔴 OFF BY DEFAULT, AND READ THIS BEFORE TURNING IT ON.
 #
 # A NetworkPolicy is an ordinary API object that every cluster accepts and only a
-# policy-enforcing CNI acts on. `kubectl get netpol` shows it either way. If your CNI does
-# not enforce policy, this object is inert — it will not block a tenant broker, and it
-# will not break the service. Check your CNI before treating it as a control.
+# policy-enforcing CNI acts on; `kubectl get netpol` shows it either way. Check yours
+# before treating this as a control — and note that a local kind cluster DOES enforce it
+# (kindnetd has shipped kube-network-policies since kind v0.24), so this is not a
+# production-only concern and a wrong rule will break your development cluster too.
 #
 # 🔴 A wrong rule HANGS rather than failing. Traffic a policy denies is dropped, not
 # refused, so a peer missing from the lists below shows up as dispatches that time out —
@@ -678,6 +679,15 @@ networkPolicy:
   # hack/check-egress-ranges.sh fails the build when they drift. The two halves of one
   # boundary written in two languages, with nothing at compile or render time relating
   # them, is exactly the pair that goes quietly out of step.
+  #
+  # One prefix the Go table carries is deliberately ABSENT here, and the check knows it:
+  # ::ffff:0:0/96. Kubernetes rejects an IPv4-mapped address in an ipBlock outright, and
+  # would reject it anyway as "not a strict subset of ::/0" — Go's net.IPNet.Contains
+  # collapses a v4-mapped address to four bytes, so ::/0 does not contain it. Including
+  # it makes the whole policy invalid and the release fails to install. It has no
+  # on-the-wire meaning either: a v4-mapped address is not a thing that appears on a
+  # packet, and the Go table carries it only as belt-and-braces behind an unmap that has
+  # already run.
   # Extra destinations to permit, as CIDRs. Two reasons you may need this, and the first
   # one is the likeliest way this policy breaks a cluster:
   #
@@ -719,7 +729,6 @@ networkPolicy:
   blockedIPv6Ranges:
     - "::1/128"
     - "::/128"
-    - "::ffff:0:0/96"
     - "64:ff9b:1::/48"
     - "100::/64"
     - "100:0:0:1::/64"

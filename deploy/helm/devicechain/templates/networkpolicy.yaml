@@ -6,6 +6,15 @@
 {{- if not (has "outbound-connectors" $areas) -}}
 {{- fail "networkPolicy.enabled is set, but outbound-connectors is not among the enabled functional areas. The policy exists to bound that one service's tenant-configured broker and cloud egress; with the area absent it would select no pods and quietly protect nothing. Enable the area (profile 'full', or --enable-area outbound-connectors), or set networkPolicy.enabled=false." -}}
 {{- end -}}
+{{- if not $np.blockedIPv4Ranges -}}
+{{- fail "networkPolicy.enabled is set but networkPolicy.blockedIPv4Ranges is empty. That list is what the policy refuses; empty renders an ipBlock allowing all of 0.0.0.0/0, so the object would be created, would look like a control, and would permit every private address including the instance metadata service. Restore the default list, or set networkPolicy.enabled=false." -}}
+{{- end -}}
+{{- if not $np.blockedIPv6Ranges -}}
+{{- fail "networkPolicy.enabled is set but networkPolicy.blockedIPv6Ranges is empty. That list is what the policy refuses over IPv6; empty renders an ipBlock allowing all of ::/0. Restore the default list, or set networkPolicy.enabled=false." -}}
+{{- end -}}
+{{- if not $np.dnsNamespaceSelector -}}
+{{- fail "networkPolicy.enabled is set but networkPolicy.dnsNamespaceSelector is empty. An empty selector matches EVERY namespace, so the DNS rule would permit port 53 to anything in the cluster. Set it to the labels on the namespace running your cluster DNS (a stock cluster uses kubernetes.io/metadata.name: kube-system)." -}}
+{{- end -}}
 {{- if not $np.infrastructureNamespaceSelector -}}
 {{- fail "networkPolicy.enabled is set but networkPolicy.infrastructureNamespaceSelector is empty. That selector is how outbound-connectors is allowed to reach NATS and PostgreSQL; with it empty the policy would deny both, and a denied connection in Kubernetes BLACKHOLES rather than refusing — the service would hang on every dispatch instead of failing, and its readiness would not tell you why. Set it to the labels on the namespace holding your NATS and PostgreSQL (the OpenTofu-created one carries devicechain.io/component: infrastructure)." -}}
 {{- end -}}
@@ -21,20 +30,30 @@
 # Bento's StreamBuilder exposes no dialer to hook. paho, sarama and the AWS
 # SDK each have a dialer seam; Bento sets none of them.
 #
-# And for two of the three, no address check would suffice even with a dialer:
-# sarama dials the bootstrap broker and then dials whatever address
-# `advertised.listeners` returns on the second hop, and the AWS client follows
-# redirects. Only the network layer sees those.
+# And for Kafka no address check would suffice even with a dialer: sarama dials
+# the bootstrap broker and then registers whatever addresses that broker returns
+# in its metadata response, so the tenant's own broker chooses the second hop.
+# Only the network layer sees that one.
 #
-# 🔴 WHAT THIS CANNOT DO, STATED HERE BECAUSE IT DECIDES WHETHER TO ENABLE IT.
+# 🔴 IT ONLY DOES ANYTHING IF YOUR CNI ENFORCES POLICY — AND ON A LOCAL KIND
+# CLUSTER IT DOES.
 #
-# A NetworkPolicy is an API object that any cluster accepts and only a
-# policy-enforcing CNI honours. `kubectl get netpol` will show this whether or
-# not anything acts on it. The clusters this repository creates run kind's
-# default CNI (kindnetd), which does NOT enforce NetworkPolicy — so on a local
-# bring-up and in every validation rig here, this object is inert. It cannot
-# block a tenant broker, and equally it cannot break the service. Confirm your
-# CNI enforces policy before treating this as a control.
+# A NetworkPolicy is an API object every cluster accepts and only a
+# policy-enforcing CNI acts on; `kubectl get netpol` shows it either way. kind's
+# default CNI enforces it: kindnetd has shipped kube-network-policies since kind
+# v0.24, and a bring-up here has `table inet kindnet-network-policies` in its
+# nftables. So this is NOT inert on a developer's cluster — a peer missing from
+# the rules below will blackhole there exactly as it would in production.
+#
+# An earlier version of this file said the opposite, and every consequence
+# below was written backwards as a result.
+#
+# What HAS been validated, and how: this policy is accepted by a real API
+# server (kubectl apply --dry-run=server), and the version before it was
+# rejected — an IPv4-mapped prefix in the v6 except list made the whole object
+# invalid, so enabling the feature failed the Helm release outright. What has
+# NOT been validated is behaviour: no test here connects through an enforcing
+# CNI to prove the peers below are sufficient. That belongs in a rig.
 #
 # 🔴 A WRONG RULE HANGS RATHER THAN FAILS. Traffic denied by a policy is
 # dropped, not refused, so a missing peer below shows up as a dispatch that
