@@ -175,8 +175,9 @@ func TestViewerAuthoritiesAreExactlyTheseAuthorities(t *testing.T) {
 //
 // 🔴 What this does NOT prove: it exercises effectiveAuthorities, which is the OAuth
 // path. issueTenantTokens performs the same union for a console login, written out
-// separately — so this covers one of the two callers, and the shared list is what
-// keeps them equal.
+// separately — and that second caller has its own test,
+// TestTheConsoleLoginPathUnionsTheViewerBaseline, because a shared list keeps the two
+// callers' contents equal without making either of them perform the union.
 func TestAMemberWithNoRoleCanOpenADashboard(t *testing.T) {
 	member := effectiveAuthorities(nil, false)
 
@@ -205,9 +206,8 @@ func TestAMemberWithNoRoleCanOpenADashboard(t *testing.T) {
 // the OAuth path — which performs the same union in its own copy of the line.
 //
 // A shared list keeps the two callers' CONTENTS equal. It does not make either of them
-// perform the union, and a comment claiming otherwise (this test replaced one) asserts an
-// invariant nothing enforces. So this asserts the minted token itself, decoded, rather
-// than an intermediate value.
+// perform the union — that is an invariant a comment cannot enforce — so this asserts the
+// minted token itself, decoded, rather than an intermediate value.
 func TestTheConsoleLoginPathUnionsTheViewerBaseline(t *testing.T) {
 	e := newMintTestEnv(t)
 
@@ -239,5 +239,28 @@ func TestTheConsoleLoginPathUnionsTheViewerBaseline(t *testing.T) {
 		if !strings.HasSuffix(a, ":read") {
 			t.Errorf("a roleless member's token carries %q, which is not a read authority", a)
 		}
+	}
+
+	// 🔴 A UNION HAS TWO SIDES, AND THE ROLELESS MEMBER ABOVE ONLY TESTS ONE OF THEM.
+	// Everything so far would pass if issueTenantTokens threw the member's own authorities
+	// away and returned the baseline alone — `unionStrings(nil, viewerAuthorities)` — which
+	// leaves this whole module green and would silently strip every write capability from
+	// every role-holding member's console session. So mint again for a member who HOLDS
+	// something, and require it to survive beside the baseline.
+	withRole, err := e.m.issueTenantTokens("acme", "someone@acme.example",
+		[]string{"operator"}, []string{string(auth.DeviceWrite)}, false)
+	if err != nil {
+		t.Fatalf("issueTenantTokens for a member with a role: %v", err)
+	}
+	roleClaims, err := e.validator.Validate(withRole.AccessToken)
+	if err != nil {
+		t.Fatalf("the minted access token does not validate: %v", err)
+	}
+	if !slices.Contains(roleClaims.Authorities, string(auth.DeviceWrite)) {
+		t.Errorf("a member holding %q was minted %v, which drops it — the union replaced the "+
+			"member's own authorities instead of adding to them", auth.DeviceWrite, roleClaims.Authorities)
+	}
+	if !slices.Contains(roleClaims.Authorities, string(auth.DashboardRead)) {
+		t.Errorf("a member holding a role was minted %v, which omits the baseline", roleClaims.Authorities)
 	}
 }

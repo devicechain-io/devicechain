@@ -657,10 +657,15 @@ func (m *Manager) resolveTenantGrant(ctx context.Context, tenant string, mem *ia
 // holds only while this list stays free of write authorities —
 // TestViewerAuthoritiesAreReadOnly enforces it.
 //
-// This one list is the single source
-// of truth — it both backs the token-issuance grant (issueTenantTokens) and
-// seeds the built-in `viewer` role (re-synced from it on every startup, see
-// seed), so the access is visible in the admin catalog and can't drift.
+// This one list is the single source of truth: it backs the token-issuance grant
+// (issueTenantTokens) and seeds the built-in `viewer` role, which EnsureRole re-syncs
+// from it on every startup so the access is visible in the admin catalog.
+//
+// 🔴 "Can't drift" is what this comment used to say, and nothing enforces it. Seeding the
+// role from a truncated copy of this list leaves every test in this module green — the
+// tokens carry the baseline regardless, so only the admin catalog would lie about what a
+// viewer holds. Stated rather than asserted because it is a display defect, not an access
+// one; if that changes, it needs a test, not a firmer sentence.
 var viewerAuthorities = []string{
 	string(auth.DeviceRead),
 	string(auth.EventRead),

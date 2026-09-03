@@ -101,8 +101,13 @@ func TestDashboardQueriesAdmitTheViewerBaseline(t *testing.T) {
 	})
 
 	// And the whole path, not just the gate: a real dashboard read back by a caller who
-	// holds nothing but the baseline. Without this the test above would be satisfied by a
-	// resolver that always errored for some other reason.
+	// holds nothing but the baseline.
+	//
+	// What this adds is narrow, so it is worth saying exactly: it shows `dashboard` really
+	// answers for a baseline-only caller, rather than clearing the gate and then failing
+	// for some unrelated reason. It does NOT exercise the gate — with the gates removed it
+	// passes — and the other two queries have no happy-path assertion of their own. The
+	// test below is what makes a missing gate fail.
 	r := &SchemaResolver{}
 	name := "Ops overview"
 	if _, err := r.GetApi(ctx).CreateDashboard(ctx, &model.DashboardCreateRequest{
@@ -135,12 +140,21 @@ func TestDashboardQueriesRefuseACallerWithoutTheAuthority(t *testing.T) {
 	})
 }
 
-// And an unauthenticated caller, distinguishable from one who authenticated but lacks
-// the authority.
+// An unauthenticated caller is refused, and refused DISTINGUISHABLY from one who
+// authenticated but lacks the authority.
+//
+// 🔴 `err != nil` is not enough, and a review proved it: with only the DashboardVersions
+// gate removed, an anonymous caller reaches the query path and comes back with
+// gorm.ErrRecordNotFound — non-nil, so the weaker assertion stayed green while the gate
+// was gone. The same "a not-found is the query path replying" that makes the admit test
+// sound makes this one vacuous, in the opposite direction. Asserting the specific
+// sentinel is what closes it, as device-state's location test already does.
 func TestDashboardQueriesRefuseAnAnonymousCaller(t *testing.T) {
 	callAllThree(t, dashboardTestCtx(t), func(name string, err error) {
-		if err == nil {
-			t.Errorf("%s admitted a caller with no claims at all", name)
+		if !errors.Is(err, auth.ErrUnauthenticated) {
+			t.Errorf("%s answered %v for a caller with no claims at all, want %v — an "+
+				"unauthenticated caller must be refused, and refused distinguishably from "+
+				"one who authenticated and lacks the authority", name, err, auth.ErrUnauthenticated)
 		}
 	})
 }
