@@ -222,11 +222,20 @@ cd deploy/opentofu && tofu fmt -check -recursive && tofu init -backend=false && 
      crash-loop with `destroy` + `bootstrap` as the remedy and after GA would have meant a
      permanent trap — a released instance cannot be told to destroy itself. It was re-cut (#874),
      and what made that legitimate is that the edit changed **re-runnability only**: `verify` and
-     `replay` together proved the resulting schema **byte-identical** on both Postgres majors, so
-     no golden moved and no instance needed recreating. That is the bar for the next one. An edit
-     that changes what a fresh install BUILDS is still the thing this rule exists to prevent,
-     because it is silently rewritten for new installs while every existing database looks
-     healthy — prove the schema does not move, or append instead.
+     `replay` together proved the resulting schema **byte-identical** on both Postgres majors
+     (normalized-identical, in this harness's sense), so no golden moved and no instance needed
+     recreating. That is the bar for the next one. An edit that changes what a fresh install
+     BUILDS is still the thing this rule exists to prevent, because it is silently rewritten for
+     new installs while every existing database looks healthy — prove the schema does not move, or
+     append instead.
+
+     🔴 **The bar is DDL-ONLY, and that restriction is not a formality.** `verify` compares
+     `pg_dump --schema-only`, so it **captures no ROWS** — the blind spot documented two
+     paragraphs below. A migration that SEEDS can therefore have its literals edited, pass
+     `verify` and `replay` cleanly, and still change what a fresh install ends up holding. If the
+     migration writes rows, the bar is not met by those two gates alone: it also needs its seed
+     test to show the values did not move (`user-management/schema/baseline_seed_test.go` is the
+     worked example), or it appends.
 
   `hack/migration-diff.sh verify` is the ONLY thing that exercises the migrations at all (the unit
   tests AutoMigrate live structs on SQLite and never run a chain). It runs in CI, on both supported

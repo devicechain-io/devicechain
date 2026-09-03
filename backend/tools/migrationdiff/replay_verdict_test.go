@@ -63,8 +63,12 @@ func TestExemptionSymptomIsNotMatchedLoosely(t *testing.T) {
 // assertion as TestExemptionThatFailsAsRegisteredPasses above, with historical data: it
 // pins the matcher's behaviour against a real error text, and it can no longer catch a
 // registered symptom drifting away from reality, because there is no registered symptom.
-// It is kept for the recorded error text, not because it still does the harder job. The
-// harder job comes back the moment an entry does.
+// It is kept for the SHAPE of the recorded symptom rather than for the error text alone —
+// the text itself already sits verbatim in TestExemptionThatFailsAsRegisteredPasses above.
+// What is only here is a symptom written the way the field's own documentation prescribes,
+// statement-prefixed, matched against the full error a real run produced. The harder job —
+// catching a registered symptom drifting away from reality — comes back the moment an entry
+// does.
 func TestASymptomMatchesTheRealErrorItWasWrittenFor(t *testing.T) {
 	ex := replayExemption{
 		area:    "event-management",

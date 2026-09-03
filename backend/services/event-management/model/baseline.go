@@ -352,17 +352,25 @@ func createMeasurementRollups(tx *gorm.DB, view string) error {
 // statements. Inlining them twice is how the two paths drift, and a replay that skipped one of
 // these would leave an aggregate that reads correctly and never materializes.
 //
-// 🔴 "Re-runnable" is not "free", and it is not concurrency-safe. The full refresh recomputes
-// whether or not the aggregate is already materialized — measured at ~75s over 300k rows, the
-// same cost as the first run — and it ERRORS rather than waits if it meets the policy job's own
-// refresh, which the policy schedules immediately on creation (SQLSTATE 55P03, reproduced).
+// 🔴 "Re-runnable" is not "free", and it is not concurrency-safe.
 //
-// That is harmless HERE and the reason is worth stating, because it is a property of this
-// migration rather than of the recipe: a baseline replays over a schema with no rows, so the
-// refresh is instant and the collision window is empty, and a collision would self-heal on the
-// next replay anyway. 🔴 Do NOT copy this shape into a migration that runs against a LIVE
-// aggregate. There it would recompute the whole history on every replay and crash-loop against
-// its own policy job.
+// The refresh recomputes every range INVALIDATED since the last one, and Timescale coalesces
+// scattered invalidations into a single span — so with nothing invalidated it is a no-op
+// (measured: 17ms, "already up-to-date"), while a live store taking late writes across the
+// window can pay the full history (~90s per 300k rows, measured). And it ERRORS rather than
+// waits if it meets the policy job's own refresh, which the policy schedules for the next
+// scheduler pass on creation (SQLSTATE 55P03, reproduced).
+//
+// 🔴 An earlier version of this comment said the refresh recomputes "whether or not the
+// aggregate is already materialized, the same cost as the first run". That was measured false —
+// and it is the same defect as the collation reason two blocks up: a conclusion that holds,
+// defended by a mechanism nobody checked. The conclusion below is unchanged.
+//
+// Harmless HERE, for a reason that is a property of THIS migration rather than of the recipe: a
+// baseline replays over a schema with no rows, so nothing is invalidated and the collision
+// window is empty, and a collision would self-heal on the next replay anyway. 🔴 Do NOT copy
+// this shape into a migration that runs against a LIVE aggregate — late writes there make the
+// refresh cost the full history on every replay, against its own policy job.
 func ensureRollupSettings(tx *gorm.DB, view, bucket string) error {
 	// Real-time aggregation: union the un-materialized leading edge from the raw hypertable at
 	// query time, so a dashboard is not blind up to the refresh lag.

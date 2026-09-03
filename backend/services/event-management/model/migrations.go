@@ -35,6 +35,14 @@ import (
 // (dcctl destroy + bootstrap), not upgraded. That includes v0.9.x. Do not read this as licence to
 // re-cut the baseline again — it was justified by a defect that made stored data wrong, on a
 // schema no released instance can carry forward, and the next schema change appends.
+//
+// 🔴 IT HAS SINCE BEEN RE-CUT A SECOND TIME, ON A DIFFERENT AND NARROWER BASIS, and this record
+// says so rather than leaving the count wrong. That one (PR #874) made the baseline survive its
+// own replay — the collation skip, the derived index names, and create-if-absent for the
+// aggregate — and changed RE-RUNNABILITY ONLY: verify and replay proved the schema
+// byte-identical on both Postgres majors, so no golden moved and no instance was recreated. The
+// paragraph above is about a re-cut that CHANGES what a fresh install builds, and that one still
+// costs a recreate and still needs a defect of that size to justify it. See CLAUDE.md.
 var (
 	Migrations = []*gormigrate.Migration{
 		NewBaselineSchema(),

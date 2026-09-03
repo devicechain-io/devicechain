@@ -24,8 +24,8 @@ import (
 // design. A skipped migration is never run, so nothing notices when the defect changes,
 // is fixed, or is joined by a second one. Worse, the obvious staleness check — "does this
 // id still exist?" — cannot fire on the event this entry itself proposes as the remedy: a
-// re-cut baseline KEEPS ITS ID. event-management's was re-cut once already and is still
-// `20260729000000`. A skip would then silence a brand-new baseline that had never been
+// re-cut baseline KEEPS ITS ID. event-management's has been re-cut twice and is still
+// `20260729000000` both times. A skip would then silence a brand-new baseline that had never been
 // replay-tested in its life, while the entry read as current.
 //
 // So each entry names the SYMPTOM, and the gate RUNS the migration and requires it to

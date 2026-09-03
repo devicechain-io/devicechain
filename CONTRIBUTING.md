@@ -144,6 +144,12 @@ current schema. Editing one silently changes what a *fresh* install builds while
 existing database applies cleanly and looks healthy — so the failure appears on someone
 else's machine, weeks later, as `column already exists`.
 
+There is one maintainer exception, mentioned so this page and the maintainer guide do not
+disagree rather than because you should reach for it: a change that alters a migration's
+**re-runnability alone**, and can prove with the schema gates that what a fresh install
+builds does not move, is not the thing this rule exists to prevent. It has been used once.
+If you are contributing, append.
+
 **2. A migration declares its own structs.** Never point a migration at a live model.
 The model is the current incarnation of the type; the migration is what the schema looked
 like the day it was written. Wire the two together and every future model change quietly
