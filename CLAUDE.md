@@ -217,6 +217,17 @@ cd deploy/opentofu && tofu fmt -check -recursive && tofu init -backend=false && 
      failure. Consequence, deliberate and pre-GA only: an existing instance is **recreated**
      (`dcctl destroy` + `bootstrap`), not migrated onto a baseline.
 
+     🔴 **ONE baseline has been edited on purpose, and the bar it cleared is the rule, not the
+     exception.** event-management's could not survive its own replay, which pre-GA meant a
+     crash-loop with `destroy` + `bootstrap` as the remedy and after GA would have meant a
+     permanent trap — a released instance cannot be told to destroy itself. It was re-cut (#874),
+     and what made that legitimate is that the edit changed **re-runnability only**: `verify` and
+     `replay` together proved the resulting schema **byte-identical** on both Postgres majors, so
+     no golden moved and no instance needed recreating. That is the bar for the next one. An edit
+     that changes what a fresh install BUILDS is still the thing this rule exists to prevent,
+     because it is silently rewritten for new installs while every existing database looks
+     healthy — prove the schema does not move, or append instead.
+
   `hack/migration-diff.sh verify` is the ONLY thing that exercises the migrations at all (the unit
   tests AutoMigrate live structs on SQLite and never run a chain). It runs in CI, on both supported
   Postgres majors. 🔴 **Know its one blind spot: it compares `pg_dump --schema-only`, so it captures no

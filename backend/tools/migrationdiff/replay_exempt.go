@@ -11,9 +11,11 @@ import (
 
 // replayExemptions names the migrations that are known NOT to be re-runnable, and why.
 //
-// There is exactly one legitimate reason to be on this list: the migration is a FROZEN
-// pre-GA baseline that is not re-runnable and cannot be edited to become so. CLAUDE.md
-// forbids editing a baseline categorically — its statements are a snapshot of a point in
+// There is one legitimate reason to be on this list: the migration is a FROZEN pre-GA
+// baseline that is not re-runnable and cannot be edited to become so. CLAUDE.md forbids
+// editing a baseline, with one bar an edit can clear — the change must alter
+// re-runnability ONLY, with `verify` and `replay` proving the schema byte-identical, which
+// is how event-management's was re-cut and this list emptied — its statements are a snapshot of a point in
 // time, and rewriting one silently changes what a *fresh* install builds while every
 // existing database applies cleanly and looks healthy. The pre-GA remedy for a
 // half-applied baseline is `dcctl destroy` + `bootstrap`, not a repair migration.

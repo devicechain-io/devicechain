@@ -55,12 +55,16 @@ func TestExemptionSymptomIsNotMatchedLoosely(t *testing.T) {
 // 🔴 THIS USED TO READ THE LIVE REGISTRY, AND THE REGISTRY IS NOW EMPTY — which is the
 // point, not a problem. The one entry was event-management's baseline, and that baseline
 // was re-cut to be re-runnable, so the gate reported the exemption as passing and told us
-// to delete it. Rewriting this as a fixture keeps the property the test was protecting
-// (a symptom must match a REAL observed error, not just itself) after its subject stopped
-// existing, rather than deleting the test along with the entry and quietly losing it.
+// to delete it.
 //
-// The two strings below are the historical ones, verbatim: the entry as it was
-// registered, and the error the gate emitted on its very first run.
+// 🔴 BE HONEST ABOUT WHAT IS LEFT. While the registry was live this compared a string
+// somebody had WRITTEN against a string Postgres had EMITTED, and only the second was
+// outside the author's control. With both now literals in this function it is the same
+// assertion as TestExemptionThatFailsAsRegisteredPasses above, with historical data: it
+// pins the matcher's behaviour against a real error text, and it can no longer catch a
+// registered symptom drifting away from reality, because there is no registered symptom.
+// It is kept for the recorded error text, not because it still does the harder job. The
+// harder job comes back the moment an entry does.
 func TestASymptomMatchesTheRealErrorItWasWrittenFor(t *testing.T) {
 	ex := replayExemption{
 		area:    "event-management",

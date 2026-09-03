@@ -65,10 +65,12 @@ import (
 //   - the normalized schema dump, which catches structural change;
 //   - the RAW Timescale catalog probe, unnormalized — because normalize scrubs the
 //     materialization-hypertable number, which is exactly the digit that moves when a
-//     continuous aggregate is dropped and recreated. The re-runnable recipe the baseline
-//     itself prescribes for a cagg is DROP + CREATE, so a migration written by the book
-//     would silently discard a materialization on every replay and the normalized dump
-//     would report it clean;
+//     continuous aggregate is dropped and recreated. DROP + CREATE is the obvious way to
+//     make a cagg step re-runnable, and it is the one the baseline used until this probe
+//     caught it: the migration ran twice without erroring while discarding the
+//     materialization, and the normalized dump reported it clean. The baseline creates
+//     only when absent now, which is why this probe has to keep watching — the next
+//     author will reach for DROP + CREATE too;
 //   - the per-table row counts, which catch a seed with no ON CONFLICT clause on a table
 //     whose surrogate key lets the duplicate through. Rows are this harness's documented
 //     blind spot everywhere else, since pg_dump --schema-only carries none.
@@ -176,8 +178,14 @@ And two that report as a DIFFERENCE rather than an error, because they do not fa
     creates "<name>1" — a duplicate index nothing will ever use. Name your indexes.
   - a continuous aggregate dropped and recreated, which discards its materialization.
 
-Fix the migration if it is one you are adding. A frozen pre-GA baseline cannot be edited
-(see CLAUDE.md), so register it in replayExemptions with the reason instead`, failures)
+Fix the migration if it is one you are adding.
+
+If it is a frozen baseline, the answer is no longer automatically an exemption. One was
+re-cut on purpose (event-management's, PR #874) once verify and replay together proved the
+result byte-identical, which made the exemption unnecessary and cost no instance a recreate.
+That is the bar: prove the schema does not move, and the edit is not the thing CLAUDE.md's
+rule exists to prevent. TestNoReplayExemptionsAreRegistered will fail a new entry, so adding
+one is a deliberate change to that test with the reason in the commit`, failures)
 	}
 	return nil
 }

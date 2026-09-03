@@ -89,8 +89,9 @@ var baselineCollatedColumns = []struct {
 // each cannot run inside a transaction; core/rdb runs migrations with UseTransaction=false so
 // every statement auto-commits. The consequence is that a half-applied run is NEVER rolled
 // back and replays from the top on the next boot, which is why every statement below is
-// individually re-runnable (IF NOT EXISTS, if_not_exists => TRUE, and a leading DROP for the
-// aggregate). Anything appended after this migration must hold the same property.
+// individually re-runnable: IF NOT EXISTS, if_not_exists => TRUE, a collation step that skips
+// what is already collated, and an aggregate created only when absent. Anything appended after
+// this migration must hold the same property.
 //
 // Consequence, and it is deliberate: an EXISTING instance is not migrated onto this baseline,
 // it is recreated (dcctl destroy + bootstrap).
@@ -135,10 +136,14 @@ func NewBaselineSchema() *gormigrate.Migration {
 			// VIEW, with no mention of the migration that was wedged, on a schema too
 			// half-built to serve, and no forward path.
 			//
-			// Re-typing a column that is already varchar(128) COLLATE "C" is a no-op
-			// with a side effect — it rewrites the table and invalidates dependents —
-			// so skipping it is not merely cheaper, it is the correct statement of what
-			// this step means: "ensure C collation", not "convert now".
+			// 🔴 The reason is not "the ALTER is expensive". It was measured: re-typing an
+			// already-C column does NOT rewrite the table (relfilenode is unchanged).
+			// What actually happens is that Postgres REFUSES it — 0A000, against the
+			// aggregate's internal partial view — whenever a view reads the column, which
+			// on a replay it always does. So the skip is what makes the step expressible
+			// at all, and it states what the step means: "ensure C collation", not
+			// "convert now". The conclusion was right before this was measured and the
+			// reason given for it was wrong, which is worth the two lines.
 			//
 			// The resulting schema is byte-identical either way, which is why this
 			// re-cut needs no golden update and no existing instance has to be
@@ -341,11 +346,23 @@ func createMeasurementRollups(tx *gorm.DB, view string) error {
 	return ensureRollupSettings(tx, view, bucket)
 }
 
-// ensureRollupSettings applies the three idempotent steps that follow the aggregate's creation.
+// ensureRollupSettings applies the three re-runnable steps that follow the aggregate's creation.
 //
 // They are split out so the create-if-absent path above and the fresh path run exactly the same
 // statements. Inlining them twice is how the two paths drift, and a replay that skipped one of
 // these would leave an aggregate that reads correctly and never materializes.
+//
+// 🔴 "Re-runnable" is not "free", and it is not concurrency-safe. The full refresh recomputes
+// whether or not the aggregate is already materialized — measured at ~75s over 300k rows, the
+// same cost as the first run — and it ERRORS rather than waits if it meets the policy job's own
+// refresh, which the policy schedules immediately on creation (SQLSTATE 55P03, reproduced).
+//
+// That is harmless HERE and the reason is worth stating, because it is a property of this
+// migration rather than of the recipe: a baseline replays over a schema with no rows, so the
+// refresh is instant and the collision window is empty, and a collision would self-heal on the
+// next replay anyway. 🔴 Do NOT copy this shape into a migration that runs against a LIVE
+// aggregate. There it would recompute the whole history on every replay and crash-loop against
+// its own policy job.
 func ensureRollupSettings(tx *gorm.DB, view, bucket string) error {
 	// Real-time aggregation: union the un-materialized leading edge from the raw hypertable at
 	// query time, so a dashboard is not blind up to the refresh lag.
