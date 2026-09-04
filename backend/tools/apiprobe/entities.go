@@ -290,7 +290,7 @@ var entities = []entity{
 				"name":               "Reboot",
 				"description":        "The command the probe later enqueues.",
 				// 🔴 NOT a JSON Schema. parameterSchema is an ORDERED
-				// []CommandParameter (ADR-043), and the field's GraphQL type is
+				// []ParameterSpec (ADR-043), and the field's GraphQL type is
 				// String — so a JSON-Schema document is accepted by the schema,
 				// by every document check here, and by nothing on a cluster. The
 				// bounds are carried deliberately: they make the stored jsonb a
@@ -704,10 +704,20 @@ var entities = []entity{
 		Mutation: "createAssetType",
 		Input:    "AssetTypeCreateRequest!",
 		Read:     "assetTypesByToken",
-		Fields:   "token name description imageUrl icon backgroundColor foregroundColor borderColor metadata",
+		Fields: "token name description imageUrl icon backgroundColor foregroundColor borderColor " +
+			"metadata propertySchema",
 		Vars: func(s *state) map[string]any {
-			return map[string]any{"req": brandedType(s.tok("asset-type"), "apiprobe asset type",
-				"Parent of the probe asset.", meta("asset-type"))}
+			req := brandedType(s.tok("asset-type"), "apiprobe asset type",
+				"Parent of the probe asset.", meta("asset-type"))
+			// The DRAFT property contract. It is seeded here rather than left null because
+			// publishAssetType refuses a type that has none, so without it the publish that
+			// fills asset_type_versions could not run at all.
+			//
+			// activeVersion is deliberately NOT in the selection above, for the same reason
+			// the profile's is not: the publish phase advances it AFTER this entity is
+			// recorded, so comparing it at verify would report a healthy run as MISMATCH.
+			req["propertySchema"] = probeAssetPropertySchema
+			return map[string]any{"req": req}
 		},
 		Record: record("assetType"),
 	},
@@ -1007,6 +1017,15 @@ var entities = []entity{
 	},
 }
 
+// probeAssetPropertySchema is the asset-type property contract the probe declares,
+// publishes, and then fills on an asset. One optional STRING and one bounded INT: an
+// optional pair, so the asset created BEFORE the publish (which therefore carries no
+// properties at all) is not retroactively made non-conformant by it — a required
+// property would refuse that asset's every later write, including the ones a future
+// tamper case might make.
+const probeAssetPropertySchema = `[{"name":"vendor","dataType":"STRING"},` +
+	`{"name":"psi","dataType":"INT","minValue":0,"maxValue":300}]`
+
 // brandedType builds the create input the three branded parent types share
 // (asset/customer/area type). They take an identical field set, and writing it
 // out three times invites the drift where one of them quietly stops exercising a
@@ -1115,7 +1134,7 @@ const tenantCreateMutations = 26
 // TestThePublishDenominatorMatchesTheSchemas. Separate from the count above because
 // they are separate claims: a table can cover every create and no publish, which is
 // exactly the state this constant was added to end.
-const tenantPublishMutations = 4
+const tenantPublishMutations = 5
 
 // printCoverage prints the tool's coverage CLAIM. Given a baseline it also
 // prints what a seed against that release would SKIP — so the drill's real

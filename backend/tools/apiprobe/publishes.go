@@ -144,6 +144,19 @@ var publishes = []publishOp{
 		Fields:   publishVersionFields,
 	},
 	{
+		// propertySchema is the contract FROZEN at publish — the whole point of the
+		// version, and the thing an asset is validated against — so it is compared, not
+		// just the envelope around it. It is also the one version type that exposes its
+		// frozen document at all: a device profile's snapshot is deliberately hidden, so
+		// there is nothing there for this table to compare.
+		Name:     "asset-type-version",
+		Area:     "device-management",
+		Mutation: "publishAssetType",
+		Read:     "assetTypeVersions",
+		Of:       "asset-type",
+		Fields:   publishVersionFields + " propertySchema",
+	},
+	{
 		// `type` is the connector type frozen at publish, which is a different claim
 		// from the live connector's type and is what a rollback would restore.
 		Name:     "connector-version",
@@ -175,6 +188,35 @@ var publishesNotCovered = map[string]string{}
 // afterPublish is the third phase: entities that cannot be created until something has
 // been published, because they reference a published VERSION NUMBER.
 var afterPublish = []entity{
+	{
+		// Depends on: asset-type, asset-type-version.
+		//
+		// A second asset under the probe's asset type, this one CARRYING PROPERTIES —
+		// which is only possible after the type is published, since an asset of a type
+		// with no published contract may carry none. That is the whole reason this entry
+		// is in this phase rather than beside `asset` in the main table.
+		//
+		// The `asset` row next door stays property-less on purpose: the two together are
+		// the pair of states an asset can be in under a published contract, and covering
+		// only the filled one would leave the empty one — the state every asset that
+		// predates a publish is in — unexercised.
+		Name:     "asset-with-properties",
+		Area:     "device-management",
+		Mutation: "createAsset",
+		Input:    "AssetCreateRequest!",
+		Read:     "assetsByToken",
+		Fields:   "token name description metadata properties assetType{token}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"token":          s.tok("asset-with-properties"),
+				"name":           "apiprobe asset with properties",
+				"description":    "Fills the published property contract of the probe asset type.",
+				"assetTypeToken": s.tokens["assetType"],
+				"metadata":       meta("asset-with-properties"),
+				"properties":     `{"vendor":"apiprobe","psi":42}`,
+			}}
+		},
+	},
 	{
 		// Depends on: device-profile, entity-group-dynamic, entity-group-version.
 		//

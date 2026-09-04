@@ -7,6 +7,8 @@ import { graphql } from '@/gql/device-management';
 import type {
   AssetsQuery,
   AssetTypesQuery,
+  AssetTypeVersionsQuery,
+  ActiveAssetTypeVersionQuery,
   AssetTypeCreateRequest,
   AssetCreateRequest,
   AssetTypeUpdateRequest,
@@ -52,6 +54,7 @@ const ASSETS = graphql(`
         name
         description
         metadata
+        properties
         createdAt
         assetType {
           id
@@ -93,6 +96,7 @@ const ASSET_BY_TOKEN = graphql(`
       name
       description
       metadata
+      properties
       createdAt
       assetType {
         id
@@ -120,6 +124,7 @@ const CREATE_ASSET = graphql(`
       name
       description
       metadata
+      properties
       createdAt
       assetType {
         id
@@ -147,6 +152,7 @@ const UPDATE_ASSET = graphql(`
       name
       description
       metadata
+      properties
       createdAt
       assetType {
         id
@@ -205,6 +211,8 @@ const ASSET_TYPES = graphql(`
         borderColor
         imageUrl
         metadata
+        propertySchema
+        activeVersion
         createdAt
       }
       pagination {
@@ -244,6 +252,8 @@ const ASSET_TYPE_BY_TOKEN = graphql(`
       borderColor
       imageUrl
       metadata
+      propertySchema
+      activeVersion
       createdAt
     }
   }
@@ -267,6 +277,8 @@ const CREATE_ASSET_TYPE = graphql(`
       borderColor
       imageUrl
       metadata
+      propertySchema
+      activeVersion
       createdAt
     }
   }
@@ -290,6 +302,8 @@ const UPDATE_ASSET_TYPE = graphql(`
       borderColor
       imageUrl
       metadata
+      propertySchema
+      activeVersion
       createdAt
     }
   }
@@ -440,4 +454,83 @@ const CLEAR_ASSET_PARENT = graphql(`
 export async function clearAssetParent(childToken: string): Promise<boolean> {
   const data = await gql('device-management', CLEAR_ASSET_PARENT, { childToken });
   return data.clearAssetParent;
+}
+
+// ── Asset-type property contract versions ─────────────────────────────────
+//
+// An asset type's property schema is a versioned tenant resource: the schema on the
+// type is the DRAFT, publishing freezes it, and an asset is validated against the
+// type's ACTIVE published version. These four operations are the console's half of
+// that — the same draft/publish/rollback shape a device profile and a dashboard have.
+
+export type AssetTypeVersion = AssetTypeVersionsQuery['assetTypeVersions'][number];
+
+const ASSET_TYPE_VERSIONS = graphql(`
+  query AssetTypeVersions($token: String!) {
+    assetTypeVersions(token: $token) {
+      version
+      label
+      description
+      publishedAt
+      publishedBy
+      propertySchema
+    }
+  }
+`);
+
+export async function listAssetTypeVersions(token: string): Promise<AssetTypeVersion[]> {
+  const data = await gql('device-management', ASSET_TYPE_VERSIONS, { token });
+  return data.assetTypeVersions;
+}
+
+const ACTIVE_ASSET_TYPE_VERSION = graphql(`
+  query ActiveAssetTypeVersion($token: String!) {
+    activeAssetTypeVersion(token: $token) {
+      version
+      label
+      publishedAt
+      propertySchema
+    }
+  }
+`);
+
+// The contract an asset of this type is validated against right now, or null when the
+// type has never been published. It is read from its own door rather than picked out
+// of the version list by matching AssetType.activeVersion, which would put a second
+// implementation of "which one is active" in the client.
+export async function getActiveAssetTypeVersion(
+  token: string,
+): Promise<ActiveAssetTypeVersionQuery['activeAssetTypeVersion']> {
+  const data = await gql('device-management', ACTIVE_ASSET_TYPE_VERSION, { token });
+  return data.activeAssetTypeVersion;
+}
+
+const PUBLISH_ASSET_TYPE = graphql(`
+  mutation PublishAssetType($token: String!, $label: String, $description: String) {
+    publishAssetType(token: $token, label: $label, description: $description) {
+      version
+    }
+  }
+`);
+
+export async function publishAssetType(
+  token: string,
+  label?: string,
+  description?: string,
+): Promise<number> {
+  const data = await gql('device-management', PUBLISH_ASSET_TYPE, { token, label, description });
+  return data.publishAssetType.version;
+}
+
+const ROLLBACK_ASSET_TYPE = graphql(`
+  mutation RollbackAssetType($token: String!, $version: Int!) {
+    rollbackAssetType(token: $token, version: $version) {
+      token
+      activeVersion
+    }
+  }
+`);
+
+export async function rollbackAssetType(token: string, version: number): Promise<void> {
+  await gql('device-management', ROLLBACK_ASSET_TYPE, { token, version });
 }

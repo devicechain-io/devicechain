@@ -1,6 +1,7 @@
 ALTER SEQUENCE "device-management".alarms_id_seq OWNED BY "device-management".alarms.id;
 ALTER SEQUENCE "device-management".area_types_id_seq OWNED BY "device-management".area_types.id;
 ALTER SEQUENCE "device-management".areas_id_seq OWNED BY "device-management".areas.id;
+ALTER SEQUENCE "device-management".asset_type_versions_id_seq OWNED BY "device-management".asset_type_versions.id;
 ALTER SEQUENCE "device-management".asset_types_id_seq OWNED BY "device-management".asset_types.id;
 ALTER SEQUENCE "device-management".assets_id_seq OWNED BY "device-management".assets.id;
 ALTER SEQUENCE "device-management".audit_events_id_seq OWNED BY "device-management".audit_events.id;
@@ -40,6 +41,11 @@ ALTER TABLE ONLY "device-management".areas
 ALTER TABLE ONLY "device-management".areas
  ADD CONSTRAINT areas_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".areas ALTER COLUMN id SET DEFAULT nextval('"device-management".areas_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".asset_type_versions
+ ADD CONSTRAINT "fk_device-management_asset_type_versions_asset_type" FOREIGN KEY (asset_type_id) REFERENCES "device-management".asset_types(id);
+ALTER TABLE ONLY "device-management".asset_type_versions
+ ADD CONSTRAINT asset_type_versions_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".asset_type_versions ALTER COLUMN id SET DEFAULT nextval('"device-management".asset_type_versions_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".asset_types
  ADD CONSTRAINT asset_types_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".asset_types ALTER COLUMN id SET DEFAULT nextval('"device-management".asset_types_id_seq'::regclass);
@@ -151,6 +157,8 @@ CREATE INDEX "idx_device-management_area_types_token" ON "device-management".are
 CREATE INDEX "idx_device-management_areas_deleted_at" ON "device-management".areas USING btree (deleted_at);
 CREATE INDEX "idx_device-management_areas_tenant_id" ON "device-management".areas USING btree (tenant_id);
 CREATE INDEX "idx_device-management_areas_token" ON "device-management".areas USING btree (token);
+CREATE INDEX "idx_device-management_asset_type_versions_deleted_at" ON "device-management".asset_type_versions USING btree (deleted_at);
+CREATE INDEX "idx_device-management_asset_type_versions_tenant_id" ON "device-management".asset_type_versions USING btree (tenant_id);
 CREATE INDEX "idx_device-management_asset_types_deleted_at" ON "device-management".asset_types USING btree (deleted_at);
 CREATE INDEX "idx_device-management_asset_types_tenant_id" ON "device-management".asset_types USING btree (tenant_id);
 CREATE INDEX "idx_device-management_asset_types_token" ON "device-management".asset_types USING btree (token);
@@ -264,6 +272,12 @@ CREATE SEQUENCE "device-management".area_types_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "device-management".areas_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".asset_type_versions_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -489,6 +503,19 @@ CREATE TABLE "device-management".areas (
  metadata jsonb,
  area_type_id bigint
 );
+CREATE TABLE "device-management".asset_type_versions (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ deleted_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ asset_type_id bigint NOT NULL,
+ version integer NOT NULL,
+ label character varying(128),
+ description character varying(1024),
+ property_schema jsonb NOT NULL,
+ published_by character varying(256)
+);
 CREATE TABLE "device-management".asset_types (
  id bigint NOT NULL,
  created_at timestamp with time zone,
@@ -503,7 +530,9 @@ CREATE TABLE "device-management".asset_types (
  background_color character varying(32),
  foreground_color character varying(32),
  border_color character varying(32),
- metadata jsonb
+ metadata jsonb,
+ property_schema jsonb,
+ active_version integer
 );
 CREATE TABLE "device-management".assets (
  id bigint NOT NULL,
@@ -515,7 +544,8 @@ CREATE TABLE "device-management".assets (
  name character varying(128),
  description character varying(1024),
  metadata jsonb,
- asset_type_id bigint
+ asset_type_id bigint,
+ properties jsonb
 );
 CREATE TABLE "device-management".audit_events (
  id bigint NOT NULL,
@@ -901,6 +931,7 @@ CREATE UNIQUE INDEX uix_alarm_originator_key ON "device-management".alarms USING
 CREATE UNIQUE INDEX uix_alarms_tenant_token ON "device-management".alarms USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_area_types_tenant_token ON "device-management".area_types USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_areas_tenant_token ON "device-management".areas USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_asset_type_versions_type_version ON "device-management".asset_type_versions USING btree (asset_type_id, version);
 CREATE UNIQUE INDEX uix_asset_types_tenant_token ON "device-management".asset_types USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_assets_tenant_token ON "device-management".assets USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_command_definitions_tenant_profile_key ON "device-management".command_definitions USING btree (tenant_id, device_profile_id, command_key) WHERE (deleted_at IS NULL);

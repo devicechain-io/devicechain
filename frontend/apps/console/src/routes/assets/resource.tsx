@@ -6,6 +6,7 @@ import { TypeCapsule, appearanceOf } from '@/components/TypeCapsule';
 import { EntityAttributesPanel } from '@/components/EntityAttributesPanel';
 import { AssetHierarchyPanel } from '@/routes/assets/AssetHierarchyPanel';
 import { AssetDevicesPanel } from '@/routes/assets/AssetDevicesPanel';
+import { AssetPropertiesPanel } from '@/routes/assets/AssetPropertiesPanel';
 import {
   listAssets,
   getAsset,
@@ -91,6 +92,15 @@ export const assetResource: RegistryResource<Asset> = {
       value: 'hierarchy',
       label: 'entities:assetHierarchyTab',
       render: (a) => <AssetHierarchyPanel assetToken={a.token} />,
+    },
+    // The values filling the contract this asset's TYPE publishes. Separate from the
+    // facets tab next door on purpose: a facet value is a free-form classification
+    // anyone can add to any entity, a property is a value the type says this asset
+    // must carry, in the shape the type says.
+    {
+      value: 'properties',
+      label: 'entities:assetPropertiesTab',
+      render: (a, reload) => <AssetPropertiesPanel asset={a} onSaved={reload} />,
     },
     // The reverse of the device's assignment panel: what is measuring this asset.
     // Until this existed, assignment could only be seen from the device side.

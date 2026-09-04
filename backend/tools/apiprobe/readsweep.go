@@ -516,6 +516,8 @@ var sweepTokenArgs = map[string]string{
 	"device-management.assetParent.token":                    "asset",
 	"device-management.assetAncestors.token":                 "asset",
 	"device-management.deviceProfileVersions.token":          "device-profile",
+	"device-management.assetTypeVersions.token":              "asset-type",
+	"device-management.activeAssetTypeVersion.token":         "asset-type",
 	"device-management.entityGroupVersions.token":            "entity-group",
 	"device-management.resolveDeviceGroupTargets.groupToken": "entity-group",
 	"dashboard-management.dashboardVersions.token":           "dashboard",

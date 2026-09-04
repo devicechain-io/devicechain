@@ -1295,6 +1295,33 @@ type AssetType implements Model & TokenReference & NamedEntity & BrandedEntity &
     foregroundColor: String
     borderColor: String
     metadata: String
+    # The DRAFT property contract for assets of this type: a JSON array of typed
+    # field descriptors, in declaration order, or null when the type declares none.
+    # It is the same descriptor shape a command definition uses for its parameters.
+    # Editing it changes nothing an asset is validated against until the type is
+    # published.
+    propertySchema: String
+    # The published version assets of this type are validated against, or null when
+    # the type has never been published. An asset of an unpublished type may carry
+    # no properties at all.
+    activeVersion: Int
+}
+
+# An immutable published snapshot of an asset type's property contract. Assets are
+# validated against the type's ACTIVE version, never against its draft, so
+# publishing is what makes a contract binding. History is append-only; a rollback
+# re-points the active version without deleting anything.
+type AssetTypeVersion {
+    version: Int!
+    label: String
+    description: String
+    publishedAt: String!
+    publishedBy: String
+    # The frozen property contract this version publishes, in the same JSON form as
+    # AssetType.propertySchema. Unlike a device profile version's snapshot this IS
+    # exposed: an author needs to see what a version froze in order to decide whether
+    # to roll back to it.
+    propertySchema: String!
 }
 
 # Data required to create an asset type.
@@ -1308,6 +1335,12 @@ input AssetTypeCreateRequest {
     foregroundColor: String
     borderColor: String
     metadata: String
+    # The draft property contract (see AssetType.propertySchema). Rejected if it is
+    # not a JSON array of descriptors, if it carries a key no descriptor declares
+    # (so a typo'd "maximum" is refused rather than dropped), or if it declares a
+    # contract nothing could satisfy — a duplicate name, an unknown data type, a
+    # default outside its own enum.
+    propertySchema: String
 }
 
 # A PARTIAL update to an asset type: omit a field to leave it alone, send null to
@@ -1329,6 +1362,10 @@ input AssetTypeUpdateRequest {
     foregroundColor: String
     borderColor: String
     metadata: String
+    # Replaces the draft property contract wholesale; null withdraws it. Omit to
+    # leave the stored draft alone. It is validated the same way as on create, and a
+    # rejection writes nothing at all.
+    propertySchema: String
 }
 
 # Criteria used when searching for asset types.
@@ -1354,6 +1391,9 @@ type Asset implements Model & TokenReference & NamedEntity & MetadataEntity & En
     description: String
     assetType: AssetType!
     metadata: String
+    # The asset's property document: a JSON object whose keys are the properties its
+    # type's published contract declares. Null when the asset carries none.
+    properties: String
 }
 
 # Data required to create an asset.
@@ -1363,6 +1403,12 @@ input AssetCreateRequest {
     description: String
     assetTypeToken: String!
     metadata: String
+    # The asset's property document, validated against the asset type's ACTIVE
+    # PUBLISHED contract before anything is written. Refused when the type has no
+    # published contract, when a key is not declared, when a value does not fit its
+    # declared type/bounds/allowed values, or when a required property is missing —
+    # and the refusal is total, so no asset is created.
+    properties: String
 }
 
 # A PARTIAL update to an asset: omit a field to leave it alone, send null to clear
@@ -1381,6 +1427,12 @@ input AssetUpdateRequest {
     # token is refused too, and the refusal is total — nothing is written.
     assetTypeToken: String
     metadata: String
+    # Replaces the asset's property document wholesale; null clears it. Omit to keep
+    # what is stored — but note that omitting it does NOT skip the check: a retype
+    # re-validates the properties the asset already carries against the contract of
+    # the type it is moving to, so an asset can never be left describing itself in a
+    # vocabulary its type does not declare.
+    properties: String
 }
 
 # Criteria used when searching for assets.
@@ -1972,6 +2024,11 @@ type Query {
     assetsByToken(tokens: [String!]!): [Asset!]!
     # List assets that meet criteria.
     assets(criteria: AssetSearchCriteria!): AssetSearchResults!
+    # An asset type's published property-contract versions, newest first.
+    assetTypeVersions(token: String!): [AssetTypeVersion!]!
+    # The version an asset of this type is currently validated against, or null when
+    # the type has never been published.
+    activeAssetTypeVersion(token: String!): AssetTypeVersion
 
     # Find customer types by unique id.
     customerTypesById(ids: [ID!]!): [CustomerType!]!
@@ -2169,8 +2226,16 @@ type Mutation {
     createAssetType(request: AssetTypeCreateRequest): AssetType!
     # Update an existing asset type.
     updateAssetType(token: String!, request: AssetTypeUpdateRequest!): AssetType!
-    # Delete an asset type. Refused while any asset references it.
+    # Delete an asset type. Refused while any asset references it; its published
+    # version history goes with it.
     deleteAssetType(token: String!): Boolean!
+    # Freeze an asset type's draft property contract into a new immutable version and
+    # make it the one its assets are validated against. Refused when the type has no
+    # draft contract to freeze.
+    publishAssetType(token: String!, label: String, description: String): AssetTypeVersion!
+    # Re-point an asset type's active version at an earlier published one. The draft
+    # is untouched and nothing is deleted, so it can be rolled forward again.
+    rollbackAssetType(token: String!, version: Int!): AssetType!
     # Create a new asset.
     createAsset(request: AssetCreateRequest): Asset!
     # Update an existing asset.

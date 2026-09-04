@@ -145,7 +145,7 @@ func TestValidateCommandEnqueue(t *testing.T) {
 	t.Run("payload is validated against the declared schema", func(t *testing.T) {
 		api := newEnqueueTestApi(t)
 		seedDeviceWithCommands(t, api, ctx, "dev-typed", []*CommandDefinition{
-			defWithSchema(t, "drive", []CommandParameter{
+			defWithSchema(t, "drive", []ParameterSpec{
 				{Name: "speed", DataType: MetricInt, Required: true, MinValue: f64(0), MaxValue: f64(100)},
 				{Name: "gear", DataType: MetricString, Enum: []string{"low", "high"}},
 			}),
@@ -182,7 +182,7 @@ func TestValidateCommandEnqueue(t *testing.T) {
 	t.Run("absent payload still fails a required parameter", func(t *testing.T) {
 		api := newEnqueueTestApi(t)
 		seedDeviceWithCommands(t, api, ctx, "dev-req", []*CommandDefinition{
-			defWithSchema(t, "drive", []CommandParameter{
+			defWithSchema(t, "drive", []ParameterSpec{
 				{Name: "speed", DataType: MetricInt, Required: true},
 			}),
 		})
@@ -210,7 +210,7 @@ func TestValidateCommandEnqueue(t *testing.T) {
 		if err != nil {
 			t.Fatalf("load profile: %v", err)
 		}
-		draft := defWithSchema(t, "drive", []CommandParameter{
+		draft := defWithSchema(t, "drive", []ParameterSpec{
 			{Name: "speed", DataType: MetricInt, Required: true},
 		})
 		draft.DeviceProfileId = profile.ID

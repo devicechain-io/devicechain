@@ -113,6 +113,13 @@ func readBranded(named *namedBrandedRow) map[string]string {
 	}
 }
 
+// seededPropertySchema is the draft property contract the asset-type family seeds,
+// and the asset family publishes on both of its types. One STRING property with no
+// constraints, so it can be filled, replaced and cleared without any of the harness's
+// states colliding with a required-ness or bounds refusal — those are covered by
+// their own tests, not by this one.
+const seededPropertySchema = `[{"name":"vendor","dataType":"STRING"}]`
+
 func assetTypeFamily() partialUpdateFamily {
 	return partialUpdateFamily{
 		name:    "assetType",
@@ -124,6 +131,7 @@ func assetTypeFamily() partialUpdateFamily {
 				ImageUrl: strp(brandedSeed.ImageUrl), Icon: strp(brandedSeed.Icon),
 				BackgroundColor: strp(brandedSeed.Bg), ForegroundColor: strp(brandedSeed.Fg),
 				BorderColor: strp(brandedSeed.Border), Metadata: strp(brandedSeed.Metadata),
+				PropertySchema: strp(seededPropertySchema),
 			}); err != nil {
 				t.Fatalf("seed asset type: %v", err)
 			}
@@ -131,14 +139,16 @@ func assetTypeFamily() partialUpdateFamily {
 		read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
 			rows, err := api.AssetTypesByToken(ctx, []string{"at-1"})
 			e := requireOne(t, "asset type", rows, err)
-			return readBranded(&namedBrandedRow{e.NamedEntity, e.BrandedEntity, e.Metadata})
+			got := readBranded(&namedBrandedRow{e.NamedEntity, e.BrandedEntity, e.Metadata})
+			got["propertySchema"] = jsonStr(e.PropertySchema)
+			return got
 		},
 		newRequest: func() any { return new(AssetTypeUpdateRequest) },
 		update: func(api *Api, ctx context.Context, token string, req any) error {
 			_, err := api.UpdateAssetType(ctx, token, req.(*AssetTypeUpdateRequest))
 			return err
 		},
-		fields: brandedFields(
+		fields: append(brandedFields(
 			func(r *AssetTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Name },
 			func(r *AssetTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Description },
 			func(r *AssetTypeUpdateRequest) *dcgraphql.OptionalString { return &r.ImageUrl },
@@ -147,6 +157,14 @@ func assetTypeFamily() partialUpdateFamily {
 			func(r *AssetTypeUpdateRequest) *dcgraphql.OptionalString { return &r.ForegroundColor },
 			func(r *AssetTypeUpdateRequest) *dcgraphql.OptionalString { return &r.BorderColor },
 			func(r *AssetTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata },
+		),
+			// The draft contract behaves like every other optional document column:
+			// omitted keeps it, null withdraws it, a value replaces it wholesale. It is
+			// listed here rather than folded into brandedFields because only asset types
+			// have one.
+			optionalStringField("propertySchema", seededPropertySchema,
+				`[{"name":"vendor","dataType":"STRING"},{"name":"stages","dataType":"INT"}]`,
+				func(r *AssetTypeUpdateRequest) *dcgraphql.OptionalString { return &r.PropertySchema }),
 		),
 	}
 }
@@ -258,17 +276,27 @@ func assetFamily() partialUpdateFamily {
 	return partialUpdateFamily{
 		name:    "asset",
 		token:   "a-1",
-		migrate: []any{&AssetType{}, &Asset{}},
+		migrate: []any{&AssetType{}, &Asset{}, &AssetTypeVersion{}},
 		seed: func(t *testing.T, api *Api, ctx context.Context) {
+			// BOTH types declare AND PUBLISH the same contract. Publishing is what makes
+			// properties settable at all, and giving both types the same one is what lets
+			// the retype field move the asset between them without its already-stored
+			// properties becoming undeclared in the destination — that refusal is real and
+			// has its own test; here it would only be a fixture fighting the harness.
 			for _, tok := range []string{seededTypeToken, otherTypeToken} {
-				if _, err := api.CreateAssetType(ctx, &AssetTypeCreateRequest{Token: tok}); err != nil {
+				if _, err := api.CreateAssetType(ctx, &AssetTypeCreateRequest{
+					Token: tok, PropertySchema: strp(seededPropertySchema),
+				}); err != nil {
 					t.Fatalf("seed asset type %q: %v", tok, err)
+				}
+				if _, err := api.PublishAssetType(ctx, tok, nil, nil, "harness"); err != nil {
+					t.Fatalf("publish asset type %q: %v", tok, err)
 				}
 			}
 			if _, err := api.CreateAsset(ctx, &AssetCreateRequest{
 				Token: "a-1", AssetTypeToken: seededTypeToken,
 				Name: strp(memberSeed.Name), Description: strp(memberSeed.Description),
-				Metadata: strp(memberSeed.Metadata),
+				Metadata: strp(memberSeed.Metadata), Properties: strp(seededProperties),
 			}); err != nil {
 				t.Fatalf("seed asset: %v", err)
 			}
@@ -276,22 +304,33 @@ func assetFamily() partialUpdateFamily {
 		read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
 			rows, err := api.AssetsByToken(ctx, []string{"a-1"})
 			e := requireOne(t, "asset", rows, err)
-			return readMember(&namedRow{e.NamedEntity, e.Metadata}, "assetTypeToken",
+			got := readMember(&namedRow{e.NamedEntity, e.Metadata}, "assetTypeToken",
 				refTokenOf(t, e.AssetType == nil, func() string { return e.AssetType.Token }))
+			got["properties"] = jsonStr(e.Properties)
+			return got
 		},
 		newRequest: func() any { return new(AssetUpdateRequest) },
 		update: func(api *Api, ctx context.Context, token string, req any) error {
 			_, err := api.UpdateAsset(ctx, token, req.(*AssetUpdateRequest))
 			return err
 		},
-		fields: memberFields("assetTypeToken",
+		fields: append(memberFields("assetTypeToken",
 			func(r *AssetUpdateRequest) *dcgraphql.OptionalString { return &r.Name },
 			func(r *AssetUpdateRequest) *dcgraphql.OptionalString { return &r.Description },
 			func(r *AssetUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata },
 			func(r *AssetUpdateRequest) *dcgraphql.OptionalString { return &r.AssetTypeToken },
 		),
+			// The property document is nullable — clearing it is how an asset stops
+			// carrying properties — so it takes the honoured-null path, not the refused
+			// one its assetTypeToken neighbour takes.
+			optionalStringField("properties", seededProperties, `{"vendor":"Northwind"}`,
+				func(r *AssetUpdateRequest) *dcgraphql.OptionalString { return &r.Properties }),
+		),
 	}
 }
+
+// seededProperties fills seededPropertySchema's one declared property.
+const seededProperties = `{"vendor":"Acme"}`
 
 func customerFamily() partialUpdateFamily {
 	return partialUpdateFamily{

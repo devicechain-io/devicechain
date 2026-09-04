@@ -9,37 +9,6 @@ import (
 	"gorm.io/gorm"
 )
 
-// CommandParamKind distinguishes a scalar parameter (a single typed value) from
-// an object parameter (a nested group of parameters). SCALAR is the default when
-// the kind is empty, so a plain typed descriptor need not set it.
-type CommandParamKind string
-
-const (
-	CommandParamScalar CommandParamKind = "SCALAR"
-	CommandParamObject CommandParamKind = "OBJECT"
-)
-
-// CommandParameter is one descriptor in a CommandDefinition's parameter schema
-// (ADR-043). It is the typed contract the console renders as a form field and the
-// delivery path validates an issued payload against. A scalar parameter carries a
-// DataType (reusing the ADR-016 MetricDataType vocabulary) plus optional
-// unit/bounds/enum/default; an object parameter (Kind == OBJECT) nests a child
-// Parameters list, letting a command express structured arguments. The schema is
-// an ordered slice so the console renders parameters in declaration order.
-type CommandParameter struct {
-	Name        string             `json:"name"`
-	Description string             `json:"description,omitempty"`
-	Kind        CommandParamKind   `json:"kind,omitempty"`     // SCALAR (default) | OBJECT
-	DataType    MetricDataType     `json:"dataType,omitempty"` // scalar only; ADR-016 vocabulary
-	Unit        string             `json:"unit,omitempty"`     // scalar only; UCUM code, metadata
-	Required    bool               `json:"required,omitempty"`
-	Default     *string            `json:"default,omitempty"`    // scalar only; console hint, not injected
-	MinValue    *float64           `json:"minValue,omitempty"`   // scalar numeric only
-	MaxValue    *float64           `json:"maxValue,omitempty"`   // scalar numeric only
-	Enum        []string           `json:"enum,omitempty"`       // scalar only; allowed values
-	Parameters  []CommandParameter `json:"parameters,omitempty"` // object only; nested descriptors
-}
-
 // CommandDefinition is a typed command declared on a DeviceProfile (ADR-043/
 // ADR-045). It gives the command vocabulary structure: each
 // definition names a CommandKey the profile's devices accept and carries an
@@ -50,7 +19,7 @@ type CommandParameter struct {
 // model typed rather than the opaque Name+JSON blob it was.
 //
 // The parameter schema is stored as a JSONB document (an ordered
-// []CommandParameter), not decomposed into child rows: it is a nested,
+// []ParameterSpec), not decomposed into child rows: it is a nested,
 // order-bearing contract read and validated as a whole and never queried by inner
 // field, so a relational decomposition (self-referential rows + an ordering
 // column, reassembled on every read) would buy nothing. The command *vocabulary* —
@@ -67,7 +36,7 @@ type CommandDefinition struct {
 	DeviceProfileId uint
 	DeviceProfile   *DeviceProfile
 	CommandKey      string          // the command the profile's devices accept
-	ParameterSchema *datatypes.JSON // ordered []CommandParameter (JSONB); nil = no declared params
+	ParameterSchema *datatypes.JSON // ordered []ParameterSpec (JSONB); nil = no declared params
 }
 
 // DefaultOrder implements rdb.Sortable with the registry default: newest first, token
@@ -79,7 +48,7 @@ func (CommandDefinition) DefaultOrder() string {
 }
 
 // Data required to create a command definition. ParameterSchema is the JSON
-// encoding of an ordered []CommandParameter; it is validated for well-formedness
+// encoding of an ordered []ParameterSpec; it is validated for well-formedness
 // on create/update (see ValidateParameterSchema). A nil or empty schema declares
 // a command that takes no structured arguments.
 type CommandDefinitionCreateRequest struct {

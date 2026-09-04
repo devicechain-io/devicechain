@@ -36,7 +36,7 @@ import (
 // # WHAT THIS CANNOT SEE
 //
 // Validation is about the DOCUMENT, so a value the schema types as `String` is opaque
-// to it. `parameterSchema` is a String carrying an ordered []CommandParameter, and a
+// to it. `parameterSchema` is a String carrying an ordered []ParameterSpec, and a
 // JSON-Schema document in that field validates perfectly and is refused by the
 // platform. Only a live run finds that class; this file narrows what a live run has
 // to be spent on, it does not replace it.

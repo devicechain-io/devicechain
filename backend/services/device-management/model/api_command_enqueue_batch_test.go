@@ -100,10 +100,10 @@ func TestTheBatchGateAgreesWithTheSingleGate(t *testing.T) {
 		{"unknown command key", "dev-strict", []*CommandDefinition{defWithSchema(t, "reboot", nil)}, "self-destruct", ""},
 		{"empty schema accepts anything", "dev-empty", []*CommandDefinition{defWithSchema(t, "reboot", nil)}, "reboot", `{"force":true}`},
 		{"payload violates schema", "dev-typed", []*CommandDefinition{
-			defWithSchema(t, "drive", []CommandParameter{{Name: "speed", DataType: MetricInt, Required: true, MinValue: f64(0), MaxValue: f64(100)}}),
+			defWithSchema(t, "drive", []ParameterSpec{{Name: "speed", DataType: MetricInt, Required: true, MinValue: f64(0), MaxValue: f64(100)}}),
 		}, "drive", `{"speed":500}`},
 		{"payload satisfies schema", "dev-ok", []*CommandDefinition{
-			defWithSchema(t, "drive", []CommandParameter{{Name: "speed", DataType: MetricInt, Required: true, MinValue: f64(0), MaxValue: f64(100)}}),
+			defWithSchema(t, "drive", []ParameterSpec{{Name: "speed", DataType: MetricInt, Required: true, MinValue: f64(0), MaxValue: f64(100)}}),
 		}, "drive", `{"speed":50}`},
 	}
 

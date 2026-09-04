@@ -69,6 +69,7 @@ export type AssetCreateRequest = {
   description?: string | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
+  properties?: string | null | undefined;
   token: string;
 };
 
@@ -87,6 +88,7 @@ export type AssetTypeCreateRequest = {
   imageUrl?: string | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
+  propertySchema?: string | null | undefined;
   token: string;
 };
 
@@ -104,6 +106,7 @@ export type AssetTypeUpdateRequest = {
   imageUrl?: string | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
+  propertySchema?: string | null | undefined;
 };
 
 export type AssetUpdateRequest = {
@@ -111,6 +114,7 @@ export type AssetUpdateRequest = {
   description?: string | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
+  properties?: string | null | undefined;
 };
 
 export type AuditEventSearchCriteria = {
@@ -562,21 +566,21 @@ export type AssetsQueryVariables = Exact<{
 }>;
 
 
-export type AssetsQuery = { assets: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type AssetsQuery = { assets: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type AssetByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type AssetByTokenQuery = { assetsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
+export type AssetByTokenQuery = { assetsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
 
 export type CreateAssetMutationVariables = Exact<{
   request?: AssetCreateRequest | null | undefined;
 }>;
 
 
-export type CreateAssetMutation = { createAsset: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type CreateAssetMutation = { createAsset: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type UpdateAssetMutationVariables = Exact<{
   token: string;
@@ -584,7 +588,7 @@ export type UpdateAssetMutationVariables = Exact<{
 }>;
 
 
-export type UpdateAssetMutation = { updateAsset: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type UpdateAssetMutation = { updateAsset: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type DeleteAssetMutationVariables = Exact<{
   token: string;
@@ -598,21 +602,21 @@ export type AssetTypesQueryVariables = Exact<{
 }>;
 
 
-export type AssetTypesQuery = { assetTypes: { results: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type AssetTypesQuery = { assetTypes: { results: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, propertySchema: string | null, activeVersion: number | null, createdAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type AssetTypeByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type AssetTypeByTokenQuery = { assetTypesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null }> };
+export type AssetTypeByTokenQuery = { assetTypesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, propertySchema: string | null, activeVersion: number | null, createdAt: string | null }> };
 
 export type CreateAssetTypeMutationVariables = Exact<{
   request?: AssetTypeCreateRequest | null | undefined;
 }>;
 
 
-export type CreateAssetTypeMutation = { createAssetType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null } };
+export type CreateAssetTypeMutation = { createAssetType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, propertySchema: string | null, activeVersion: number | null, createdAt: string | null } };
 
 export type UpdateAssetTypeMutationVariables = Exact<{
   token: string;
@@ -620,7 +624,7 @@ export type UpdateAssetTypeMutationVariables = Exact<{
 }>;
 
 
-export type UpdateAssetTypeMutation = { updateAssetType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null } };
+export type UpdateAssetTypeMutation = { updateAssetType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, propertySchema: string | null, activeVersion: number | null, createdAt: string | null } };
 
 export type DeleteAssetTypeMutationVariables = Exact<{
   token: string;
@@ -665,6 +669,37 @@ export type ClearAssetParentMutationVariables = Exact<{
 
 
 export type ClearAssetParentMutation = { clearAssetParent: boolean };
+
+export type AssetTypeVersionsQueryVariables = Exact<{
+  token: string;
+}>;
+
+
+export type AssetTypeVersionsQuery = { assetTypeVersions: Array<{ version: number, label: string | null, description: string | null, publishedAt: string, publishedBy: string | null, propertySchema: string }> };
+
+export type ActiveAssetTypeVersionQueryVariables = Exact<{
+  token: string;
+}>;
+
+
+export type ActiveAssetTypeVersionQuery = { activeAssetTypeVersion: { version: number, label: string | null, publishedAt: string, propertySchema: string } | null };
+
+export type PublishAssetTypeMutationVariables = Exact<{
+  token: string;
+  label?: string | null | undefined;
+  description?: string | null | undefined;
+}>;
+
+
+export type PublishAssetTypeMutation = { publishAssetType: { version: number } };
+
+export type RollbackAssetTypeMutationVariables = Exact<{
+  token: string;
+  version: number;
+}>;
+
+
+export type RollbackAssetTypeMutation = { rollbackAssetType: { token: string, activeVersion: number | null } };
 
 export type AuditEventsQueryVariables = Exact<{
   criteria: AuditEventSearchCriteria;
@@ -1507,6 +1542,7 @@ export const AssetsDocument = new TypedDocumentString(`
       name
       description
       metadata
+      properties
       createdAt
       assetType {
         id
@@ -1534,6 +1570,7 @@ export const AssetByTokenDocument = new TypedDocumentString(`
     name
     description
     metadata
+    properties
     createdAt
     assetType {
       id
@@ -1555,6 +1592,7 @@ export const CreateAssetDocument = new TypedDocumentString(`
     name
     description
     metadata
+    properties
     createdAt
     assetType {
       id
@@ -1576,6 +1614,7 @@ export const UpdateAssetDocument = new TypedDocumentString(`
     name
     description
     metadata
+    properties
     createdAt
     assetType {
       id
@@ -1608,6 +1647,8 @@ export const AssetTypesDocument = new TypedDocumentString(`
       borderColor
       imageUrl
       metadata
+      propertySchema
+      activeVersion
       createdAt
     }
     pagination {
@@ -1631,6 +1672,8 @@ export const AssetTypeByTokenDocument = new TypedDocumentString(`
     borderColor
     imageUrl
     metadata
+    propertySchema
+    activeVersion
     createdAt
   }
 }
@@ -1648,6 +1691,8 @@ export const CreateAssetTypeDocument = new TypedDocumentString(`
     borderColor
     imageUrl
     metadata
+    propertySchema
+    activeVersion
     createdAt
   }
 }
@@ -1665,6 +1710,8 @@ export const UpdateAssetTypeDocument = new TypedDocumentString(`
     borderColor
     imageUrl
     metadata
+    propertySchema
+    activeVersion
     createdAt
   }
 }
@@ -1730,6 +1777,43 @@ export const ClearAssetParentDocument = new TypedDocumentString(`
   clearAssetParent(childToken: $childToken)
 }
     `) as unknown as TypedDocumentString<ClearAssetParentMutation, ClearAssetParentMutationVariables>;
+export const AssetTypeVersionsDocument = new TypedDocumentString(`
+    query AssetTypeVersions($token: String!) {
+  assetTypeVersions(token: $token) {
+    version
+    label
+    description
+    publishedAt
+    publishedBy
+    propertySchema
+  }
+}
+    `) as unknown as TypedDocumentString<AssetTypeVersionsQuery, AssetTypeVersionsQueryVariables>;
+export const ActiveAssetTypeVersionDocument = new TypedDocumentString(`
+    query ActiveAssetTypeVersion($token: String!) {
+  activeAssetTypeVersion(token: $token) {
+    version
+    label
+    publishedAt
+    propertySchema
+  }
+}
+    `) as unknown as TypedDocumentString<ActiveAssetTypeVersionQuery, ActiveAssetTypeVersionQueryVariables>;
+export const PublishAssetTypeDocument = new TypedDocumentString(`
+    mutation PublishAssetType($token: String!, $label: String, $description: String) {
+  publishAssetType(token: $token, label: $label, description: $description) {
+    version
+  }
+}
+    `) as unknown as TypedDocumentString<PublishAssetTypeMutation, PublishAssetTypeMutationVariables>;
+export const RollbackAssetTypeDocument = new TypedDocumentString(`
+    mutation RollbackAssetType($token: String!, $version: Int!) {
+  rollbackAssetType(token: $token, version: $version) {
+    token
+    activeVersion
+  }
+}
+    `) as unknown as TypedDocumentString<RollbackAssetTypeMutation, RollbackAssetTypeMutationVariables>;
 export const AuditEventsDocument = new TypedDocumentString(`
     query AuditEvents($criteria: AuditEventSearchCriteria!) {
   auditEvents(criteria: $criteria) {
