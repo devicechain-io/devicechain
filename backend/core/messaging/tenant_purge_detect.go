@@ -63,18 +63,23 @@ const (
 	// request itself.
 	DetectPurgeWindow = 5 * time.Second
 
-	// detectPurgeQuiesce is how long the gather keeps listening after the first reply THAT
-	// ERASED AND COMMITTED. An error reply does not start it — see the gather loop.
+	// detectPurgeQuiesce is how long the gather keeps listening after the first CLEAN reply
+	// received while NO expected partition is still outstanding. Neither an error reply nor
+	// a clean one arriving while `awaited` is non-empty starts it — see the gather loop for
+	// why each of those is the same bug at a different scale.
 	//
-	// It exists because the full window is the wrong wait once something has answered. With
-	// no expected partitions there is nothing for a reply to satisfy, so without this the
-	// call always runs to the deadline — five seconds per pass, per purging tenant, on the
-	// coordinator's goroutine under the instance-wide advisory lock, on any instance whose
-	// engine has never committed a checkpoint. Every responder on a broker sees the same
-	// request at the same time, so a peer that has not answered within this of the first one
-	// is not merely slower; something is wrong with it. The consequence of guessing short is
-	// bounded and safe: the partition is reported as not having answered, which DEFERS the
-	// purge rather than completing it, and the next pass asks again.
+	// It exists for exactly one shape: the gather has nothing left to satisfy, so without
+	// this the call can only end on the deadline — five seconds per pass, per purging
+	// tenant, on the coordinator's goroutine under the instance-wide advisory lock, on any
+	// instance whose engine has never committed a checkpoint. In that shape every responder
+	// on the broker saw the same request at the same time and none of them owes us a
+	// specific answer, so a peer that has not spoken within this of the first is not merely
+	// slower; something is wrong with it. The consequence of guessing short is bounded and
+	// safe: the partition is reported as not having answered, which DEFERS the purge rather
+	// than completing it, and the next pass asks again.
+	//
+	// It MUST stay well under DetectPurgeWindow, or it stops being a shortcut and the two
+	// waits collapse into one. Asserted in the tests rather than left to a reader.
 	detectPurgeQuiesce = 300 * time.Millisecond
 )
 
@@ -259,9 +264,10 @@ func PurgeTenantDetect(ctx context.Context, nc *nats.Conn, instanceId, tenant st
 				return res, nil // the last partition we were waiting on has committed
 			}
 		}
-		if reply.Error == "" && gather == ctx {
-			// First reply THAT DID THE WORK: something is alive and answering, so drop from
-			// the full window to the straggler window. Derived from ctx rather than the
+		if reply.Error == "" && len(awaited) == 0 && gather == ctx {
+			// First clean reply WITH NOTHING STILL EXPECTED: something is alive and
+			// answering and no partition we know holds durable state is outstanding, so drop
+			// from the full window to the straggler window. Derived from ctx rather than the
 			// caller's context, so it can only ever shorten the wait — never outlive
 			// DetectPurgeWindow, and still cancelled the moment the caller is.
 			//
@@ -278,10 +284,28 @@ func PurgeTenantDetect(ctx context.Context, nc *nats.Conn, instanceId, tenant st
 			// standby than under the split brain, because a standby is the NORMAL posture
 			// rather than a fault.
 			//
+			// 🔴 NOR MAY A CLEAN REPLY FROM ONE PARTITION START IT WHILE ANOTHER IS STILL
+			// EXPECTED, which is the same bug one level out and the one a fleet reaches
+			// rather than a rollout. A partition holding nothing of this tenant sweeps
+			// nothing, never sets dirty, never commits, and answers in under a millisecond;
+			// a partition holding its windows does the full sweep plus a database commit.
+			// Both are clean, and the first is systematically faster — so keyed on "a clean
+			// reply" alone, the empty partition would hand the busy one 300ms, every pass,
+			// for as long as that tenant is being purged. The `awaited` set is exactly the
+			// partitions known to hold durable state, so while it is non-empty there is a
+			// specific outstanding answer to wait for and no heuristic should displace the
+			// window. When it empties, the loop above has already returned.
+			//
+			// This is UNREACHABLE TODAY — GA runs one partition per instance — and it is
+			// written now because the sharded fleet is what makes it live, and by then the
+			// symptom (a purge that defers forever, on a ledger nothing re-checks) looks
+			// nothing like this line.
+			//
 			// The cost of not starting it is bounded and lands where it should: a pass in
-			// which NOTHING answered cleanly waits out the full DetectPurgeWindow. That is
-			// the case where something really is wrong, and the wait buys the one thing
-			// worth waiting for — the chance that the replica doing the work still answers.
+			// which nothing answered cleanly, or in which an expected partition is still
+			// outstanding, waits out the full DetectPurgeWindow. Those are the cases where
+			// something really is wrong, and the wait buys the one thing worth waiting for —
+			// the chance that the replica doing the work still answers.
 			quiesced, cancelQuiesce := context.WithTimeout(ctx, detectPurgeQuiesce)
 			defer cancelQuiesce()
 			gather = quiesced

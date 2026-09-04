@@ -40,9 +40,9 @@ window plus one renewal interval (about ten seconds), because a leader that has 
 evicts itself only when its next renewal notices, and then still has to unwind its broker or DTLS
 state. It is bounded, not eliminated, and **nothing fences a stale leader's writes on these two
 paths** — the lease's epoch is carried but no ingest path rejects on it. The chart also refuses to
-render either area at more than one replica **alongside its default `Recreate` strategy** — but
-`strategy` is an overridable per-area value, so overriding it to `RollingUpdate` defeats that guard
-and the area will render at any replica count. Do not.
+render either area at more than one replica, and that refusal is keyed on **the area itself**, not on
+the rollout strategy it happens to be configured with: overriding `strategy` to `RollingUpdate` does
+not get past it.
 
 :::warning Neither ingest service gets a pod disruption budget
 The chart skips a disruption budget for any area running a single replica, because a budget demanding

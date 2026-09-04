@@ -382,6 +382,17 @@ func TestAGatherWithNoExpectedPartitionsStillEndsPromptly(t *testing.T) {
 // DetectPurgeWindow: the only way to collect that reply is to have kept the full window
 // open, which is exactly the property under test.
 func TestAFailedReplyDoesNotShortenTheGather(t *testing.T) {
+	// 🔴 THE PREMISE, ASSERTED RATHER THAN ASSUMED. The slow responder below answers at
+	// 2×detectPurgeQuiesce, and that delay only distinguishes the two behaviours while it
+	// still fits inside DetectPurgeWindow. Raise the quiescence constant past half the
+	// window and this test fails — correctly, but with a message blaming the quiescence
+	// window for dropping a reply the gather never had time to hear, which sends the next
+	// reader after the wrong thing. Fail here instead, saying what actually moved.
+	require.Lessf(t, 2*detectPurgeQuiesce, DetectPurgeWindow, "detectPurgeQuiesce (%s) has "+
+		"grown past half of DetectPurgeWindow (%s), so this test's slow reply no longer "+
+		"fits inside the gather at all and it can no longer tell the two behaviours apart. "+
+		"Re-derive the delay below, do not just widen it", detectPurgeQuiesce, DetectPurgeWindow)
+
 	nc := detectRig(t)
 	// The warm standby: instant, and it erased nothing.
 	respondAs(t, nc, DetectPurgeReply{PartitionId: "p1",
@@ -432,4 +443,56 @@ func TestACleanReplyStillShortensTheGather(t *testing.T) {
 	assert.Lessf(t, elapsed, DetectPurgeWindow/2, "a gather whose first reply erased and "+
 		"committed took %s — the quiescence window is gone, and the coordinator now pays the "+
 		"full %s on every pass", elapsed, DetectPurgeWindow)
+}
+
+// TestACleanReplyDoesNotShortenTheGatherWhileAPartitionIsStillExpected is the same failure
+// as TestAFailedReplyDoesNotShortenTheGather, one level out — and it is the one a FLEET
+// reaches rather than a rollout.
+//
+// 🔴 TWO CLEAN REPLIES ARE NOT INTERCHANGEABLE, AND THE FAST ONE IS AGAIN THE ONE THAT DID
+// NOTHING. A partition holding nothing of this tenant sweeps nothing, never sets dirty,
+// never commits and answers in under a millisecond. A partition holding its open windows
+// does the whole sweep plus a snapshot serialization and a database commit. Both answer
+// cleanly, and the empty one is systematically first — so a quiescence clock keyed on "a
+// clean reply" hands the busy partition 300ms, deterministically, on every pass for as long
+// as that tenant is being purged. Missing it defers the purge with a sentence about the
+// partition still holding state it had just erased: the same self-repeating deferral, on a
+// ledger nothing re-checks.
+//
+// The `awaited` set is the partitions the caller KNOWS hold durable state, so while it is
+// non-empty there is a specific outstanding answer and no heuristic should displace the full
+// window. Both partitions here are expected, which is what makes p1's reply not a licence to
+// stop listening for p2's.
+//
+// 🔴 THIS IS UNREACHABLE ON GA, and that is stated so nobody reads a passing run as evidence
+// about production: one instance runs one `singleton` partition, so a second expected
+// partition cannot exist yet. It is pinned now because the sharded fleet is what makes it
+// live, and by then the symptom looks nothing like the line that causes it.
+func TestACleanReplyDoesNotShortenTheGatherWhileAPartitionIsStillExpected(t *testing.T) {
+	require.Lessf(t, 2*detectPurgeQuiesce, DetectPurgeWindow, "detectPurgeQuiesce (%s) has "+
+		"grown past half of DetectPurgeWindow (%s), so the slow partition below no longer "+
+		"fits inside the gather at all", detectPurgeQuiesce, DetectPurgeWindow)
+
+	nc := detectRig(t)
+	// p1 holds nothing of this tenant: an instant, clean, zero-eviction answer.
+	respondAs(t, nc, DetectPurgeReply{PartitionId: "p1", Evicted: 0})
+	// p2 holds the tenant: it sweeps and commits, so it answers later.
+	respondAsAfter(t, nc, 2*detectPurgeQuiesce, DetectPurgeReply{PartitionId: "p2", Evicted: 12})
+
+	// BOTH are expected — both have committed a checkpoint, which is what puts a partition
+	// in this set.
+	res, err := PurgeTenantDetect(context.Background(), nc, detectInstance, "acme",
+		[]string{"p1", "p2"})
+	require.NoError(t, err)
+
+	var heard []string
+	for _, r := range res.Replies {
+		if r.Error == "" {
+			heard = append(heard, r.PartitionId)
+		}
+	}
+	assert.Containsf(t, heard, "p2", "p1's instant empty answer collapsed the gather to the "+
+		"%s quiescence window, so the partition that actually held the tenant — and evicted "+
+		"and committed it — was never heard. The caller then records that partition as still "+
+		"holding this tenant's detection windows: %+v", detectPurgeQuiesce, res.Replies)
 }
