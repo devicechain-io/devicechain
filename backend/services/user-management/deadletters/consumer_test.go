@@ -25,21 +25,31 @@ func (r *recordingAck) Ack() error { r.acks++; return nil }
 func testConsumer(t *testing.T, s *Store) *Consumer {
 	t.Helper()
 	c := &Consumer{
-		store:      s,
-		stored:     prometheus.NewCounter(prometheus.CounterOpts{Name: "stored_total"}),
-		unstorable: prometheus.NewCounter(prometheus.CounterOpts{Name: "unstorable_total"}),
+		store: s,
+		// Short, so the retry branch is reachable in a test. The production values are
+		// the constants NewConsumer defaults to.
+		retryBudget:   150 * time.Millisecond,
+		retryInterval: 20 * time.Millisecond,
+		stored:        prometheus.NewCounter(prometheus.CounterOpts{Name: "stored_total"}),
+		unstorable:    prometheus.NewCounter(prometheus.CounterOpts{Name: "unstorable_total"}),
+		unstored:      prometheus.NewCounter(prometheus.CounterOpts{Name: "unstored_total"}),
 	}
 	c.procCtx, c.procCancel = context.WithCancel(context.Background())
 	t.Cleanup(c.procCancel)
 	return c
 }
 
-func letterMsg(t *testing.T, subject string, e deadletter.Envelope, seq uint64,
+// letterMsg builds a consumed dead letter.
+//
+// 🔴 numDelivered IS A PARAMETER AND IS USED. The first version of this helper took one
+// and then hard-coded 1, which made the at-the-cap branch — the one where a letter is
+// LOST — unreachable by any test in this file while the tests naming it passed.
+func letterMsg(t *testing.T, subject string, e deadletter.Envelope, numDelivered int,
 	ack messaging.Acknowledger) messaging.Message {
 	t.Helper()
 	b, err := deadletter.Marshal(e)
 	require.NoError(t, err)
-	return messaging.NewConsumedMessage(subject, b, 1, nil, ack)
+	return messaging.NewConsumedMessage(subject, b, numDelivered, nil, ack)
 }
 
 func counterOf(t *testing.T, c prometheus.Counter) float64 {
@@ -94,11 +104,9 @@ func TestAnUnintelligibleLetterIsAckedAndCounted(t *testing.T) {
 	}
 }
 
-// 🔴 A LETTER THAT COULD NOT BE STORED IS LEFT UNACKED, and this consumer is the one place
-// in the platform where that is right. Everywhere else giving up at the cap is safe
-// BECAUSE the giving-up is recorded; this is where the recording happens, so a give-up
-// here is the failure with nothing behind it.
-func TestALetterThatCannotBeStoredIsLeftUnacked(t *testing.T) {
+// 🔴 BELOW THE CAP A LETTER THAT COULD NOT BE STORED IS LEFT UNACKED, which buys the next
+// delivery attempt. Acking here would throw away an attempt that is still available.
+func TestALetterThatCannotBeStoredIsLeftUnackedBelowTheCap(t *testing.T) {
 	s := testStore(t)
 	// Drop the table out from under it: the store then fails the way a database that is
 	// away fails, which is the case this disposition exists for.
@@ -107,13 +115,35 @@ func TestALetterThatCannotBeStoredIsLeftUnacked(t *testing.T) {
 	ack := &recordingAck{}
 
 	c.handle(letterMsg(t, "inst.acme.dead-letters",
-		envelope(deadletter.KindNotification, "a", time.Now().UTC()), 0, ack))
+		envelope(deadletter.KindNotification, "a", time.Now().UTC()), 1, ack))
 
 	assert.Equal(t, 0, ack.acks,
-		"a letter that could not be stored was acked, so the record of a failure is gone")
+		"a letter that could not be stored was acked, throwing away an attempt it still had")
 	assert.Equal(t, float64(0), counterOf(t, c.stored))
+	assert.Equal(t, float64(0), counterOf(t, c.unstored))
 	assert.Equal(t, float64(0), counterOf(t, c.unstorable),
 		"a storage failure is not the same as an unintelligible message and must not be counted as one")
+}
+
+// 🔴 AT THE CAP IT IS A LOSS, AND MUST BE COUNTED AS ONE. Every reader gets MaxDeliver =
+// 5 — it is pinned in the shared consumer config and is not a per-reader option — so after
+// the fifth attempt no redelivery follows. Leaving it unacked there would not buy another
+// attempt; it would leave the message dangling while the failure it recorded quietly
+// stopped being recorded anywhere.
+func TestALetterThatCannotBeStoredAtTheCapIsCountedAsLost(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, s.db(context.Background()).Migrator().DropTable(&DeadLetter{}))
+	c := testConsumer(t, s)
+	ack := &recordingAck{}
+
+	c.handle(letterMsg(t, "inst.acme.dead-letters",
+		envelope(deadletter.KindNotification, "a", time.Now().UTC()), messaging.MaxDeliver, ack))
+
+	assert.Equal(t, float64(1), counterOf(t, c.unstored),
+		"a letter lost on its final attempt was not counted; nothing records that failure now")
+	assert.Equal(t, 1, ack.acks, "no redelivery follows, so the message must not be left dangling")
+	assert.Equal(t, float64(0), counterOf(t, c.unstorable),
+		"a store outage is not a malformed message")
 }
 
 // The counterweight for the test above: a storable letter IS acked. Without it a consumer
@@ -123,8 +153,61 @@ func TestAStorableLetterIsAcked(t *testing.T) {
 	c := testConsumer(t, s)
 	ack := &recordingAck{}
 	c.handle(letterMsg(t, "inst.acme.dead-letters",
-		envelope(deadletter.KindNotification, "a", time.Now().UTC()), 0, ack))
+		envelope(deadletter.KindNotification, "a", time.Now().UTC()), 1, ack))
 	assert.Equal(t, 1, ack.acks)
+}
+
+// 🔑 A BLIP COSTS NO DELIVERY ATTEMPTS. There are five and they cannot be extended, so
+// riding out a brief store failure in process is what makes the common case fully covered
+// rather than eating a fifth of the budget.
+func TestAStoreThatRecoversCostsNoDeliveryAttempt(t *testing.T) {
+	s := testStore(t)
+	c := testConsumer(t, s)
+	ack := &recordingAck{}
+
+	// The table is missing on the first attempt and present on the next.
+	require.NoError(t, s.db(context.Background()).Migrator().DropTable(&DeadLetter{}))
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		_ = s.db(context.Background()).AutoMigrate(&DeadLetter{})
+	}()
+
+	done := make(chan struct{})
+	go func() {
+		c.handle(letterMsg(t, "inst.acme.dead-letters",
+			envelope(deadletter.KindNotification, "a", time.Now().UTC()), 1, ack))
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the in-process retry never returned")
+	}
+
+	assert.Equal(t, float64(1), counterOf(t, c.stored),
+		"a store that came back within the window was not retried in process")
+	assert.Equal(t, 1, ack.acks)
+}
+
+// And the retry is BOUNDED: a store that never comes back must not hold the consumer past
+// the point the broker would redeliver anyway.
+func TestTheInProcessRetryIsBoundedByShutdown(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, s.db(context.Background()).Migrator().DropTable(&DeadLetter{}))
+	c := testConsumer(t, s)
+	c.procCancel()
+
+	done := make(chan struct{})
+	go func() {
+		c.handle(letterMsg(t, "inst.acme.dead-letters",
+			envelope(deadletter.KindNotification, "a", time.Now().UTC()), 1, &recordingAck{}))
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a cancelled consumer kept retrying a store that will never answer")
+	}
 }
 
 func TestTheSweeperPrunesOnItsWindow(t *testing.T) {

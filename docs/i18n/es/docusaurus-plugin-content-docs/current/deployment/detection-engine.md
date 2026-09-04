@@ -395,7 +395,8 @@ exigiría recorrerlo entero en cada punto de control.
 | `DetectWatermarkLagHigh` | El sentido del tiempo del evento del motor se está quedando atrás respecto al tiempo real. |
 | `DetectFanoutEvalErrors` | Una o más reglas publicadas están fallando al evaluarse. Vea la advertencia de arriba. |
 | `ReactPoisonDropping` | No se están despachando acciones tras agotar sus reintentos: las alarmas y los comandos no están ocurriendo. Las detecciones se envían a la cola de mensajes no entregados para que pueda ver cuáles, pero nada las reprocesa. Trátelo como urgente. |
-| `DeadLetterWriteLost` | Algo se abandonó **y** no se pudo registrar. Es el único caso aquí que no deja ninguna evidencia; revise el bróker. |
+| `DeadLetterWriteLost` | Algo se abandonó **y** no se pudo escribir en el flujo de mensajes no entregados. Revise el bróker. |
+| `DeadLetterStoreLosing` | Los mensajes llegaron al flujo pero no se pudieron escribir en el almacén, así que caducarán sin quedar registrados. Revise la base de datos del operador. |
 | `ReactConnectorEgressShedding` | El despacho de salida supera el límite de tasa del inquilino y se está descartando. |
 | `DetectTenantOverStateBudget` | Un inquilino ha superado un techo que no se aplica: su número de reglas, sus ventanas y temporizadores vivos, o las lecturas que retienen sus ventanas abiertas. |
 

@@ -358,7 +358,8 @@ total, because attributing it to a tenant would mean walking the whole heap on e
 | `DetectWatermarkLagHigh` | The engine's sense of event time is falling behind real time. |
 | `DetectFanoutEvalErrors` | One or more published rules are failing to evaluate. See the caution above. |
 | `ReactPoisonDropping` | Actions are not being dispatched after exhausting their retries — alarms and commands are not happening. The detections are dead-lettered so you can see which, but nothing replays them. Treat as urgent. |
-| `DeadLetterWriteLost` | Something was given up on **and** could not be recorded. This is the only case here that leaves no evidence at all; look at the broker. |
+| `DeadLetterWriteLost` | Something was given up on **and** could not be written to the dead-letter stream. Look at the broker. |
+| `DeadLetterStoreLosing` | Dead letters reached the stream but could not be written to the store, so they will age out of it unrecorded. Look at the operator database. |
 | `ReactConnectorEgressShedding` | Outbound dispatch is over the tenant's rate limit and is being shed. |
 | `DetectTenantOverStateBudget` | A tenant is over a ceiling that is not enforced — its rule count, its live windows and timers, or the readings its open windows retain. |
 
