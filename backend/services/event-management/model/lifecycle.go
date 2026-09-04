@@ -64,27 +64,65 @@ func setChunkIntervalStmt(table string) string {
 
 // compressSegmentBy is the compress_segmentby column list for one hypertable.
 //
-// WHAT SEGMENTBY BUYS AND WHAT IT COSTS. In a compressed chunk a segmentby column
-// stays a PLAIN, indexed column on the compressed row; every other column is packed
-// inside the compressed blob. So a predicate on a segmentby column selects which
-// batches to decompress, and a predicate on any other column can only be applied
-// AFTER decompressing. Segmenting by tenant_id alone therefore made every read
+// WHAT SEGMENTBY BUYS. In a compressed chunk a segmentby column stays a PLAIN,
+// indexed column on the compressed row; every other column is packed inside the
+// compressed blob. So a predicate on a segmentby column selects which batches to
+// decompress, and a predicate on any other column can only be applied AFTER
+// decompressing. Segmenting by tenant_id alone therefore makes a device-scoped read
 // decompress the whole tenant's chunk and then discard all but one device's rows —
 // read amplification that grows with the fleet, on exactly the query the product is
-// for ("this device, this window"). The cost of widening is compression ratio: rows
-// are packed into batches of up to 1000 WITHIN a segment, so a segment holding far
-// fewer rows than that per chunk compresses worse. Per-device segmentation is
-// Timescale's own canonical shape for device telemetry, and the chunk interval
-// (DataLifecyclePolicy.ChunkIntervalHours) is the lever if a deployment's devices
-// report too sparsely for it.
+// for ("this device, this window").
 //
-// 🔴 tenant_id LEADS EVERY LIST, AND THAT IS LOAD-BEARING RATHER THAN TIDY. The
-// tenant-erasure cost measurement (ADR-077, tenant_purge_cost_test.go) rests on
-// `DELETE ... WHERE tenant_id` matching WHOLE compressed rows, which holds only while
-// tenant_id is a segmentby column — a predicate over segmentby columns alone never
-// has to decompress. Widening a list keeps that property; DROPPING tenant_id from one
-// would silently turn the cheap case into the worst one and reopen the
-// schema-per-tenant alternative ADR-077 rejected on exactly that evidence.
+// 🔴 WHAT IT COSTS IS NOT "COMPRESSES SOMEWHAT WORSE". BELOW A THRESHOLD IT IS NET
+// EXPANSION, AND THE MEASURED CURVE IS HERE SO THE NEXT PERSON CHOOSING A KEY HAS THE
+// NUMBER RATHER THAN THE INTUITION. Rows are packed into batches of up to 1000 WITHIN
+// a segment and every segment pays its own per-row overhead, so a segment holding a
+// handful of rows per chunk spends more on overhead than it saves on packing.
+// Measured on TimescaleDB 2.28.3 — 10k devices, one tenant, one 24h chunk (the
+// DataLifecyclePolicy.ChunkIntervalHours default), identical rows under both layouts:
+//
+//	rows/device/chunk   'tenant_id'   'tenant_id, device_token'
+//	                1        3.38×      0.33×  <- compression TRIPLES the size
+//	                4        3.82×      0.93×  <- still net expansion
+//	               12        3.91×      2.04×
+//	               24        3.94×      3.21×
+//	               96        3.97×      4.15×
+//	             1440        3.99×      5.08×
+//
+// Break-even is around 60–90 rows per device per chunk. Below it the engine says so
+// itself — `WARNING: poor compression ratio detected for chunk ... 0.34 ... HINT:
+// Changing compression settings can improve compression rate` — and then compresses
+// anyway, because the compression policy fires unattended at 7 days on every chunk.
+// At 100k devices × 1 row/chunk that is 13.4 MB of data stored as 39.6 MB.
+//
+// 🔴 SO THE PRINCIPLE GOVERNING THIS MAP IS AN ASYMMETRY, NOT A PREFERENCE FOR ONE
+// KEY: A READ THAT IS SLOWER IS VISIBLE AND TUNABLE; STORAGE THAT SILENTLY GROWS
+// UNDER THE NAME "COMPRESSION" IS NEITHER. A slow read shows up in a query timing and
+// the operator can act on it. An expanding disk surfaces as nothing until it is full,
+// the direction of the failure is the opposite of what the word "compression"
+// promises, and the operator's only lever is instance-wide (the chunk interval).
+// Where a table is plausibly below break-even, prefer the tenant-only key even though
+// the device-keyed one would read faster.
+//
+// 🔴 tenant_id IS PRESENT IN EVERY LIST, AND PRESENCE — NOT POSITION — IS WHAT THE
+// ERASURE MEASUREMENT RESTS ON. The tenant-erasure cost measurement (ADR-077,
+// tenant_purge_cost_test.go) rests on `DELETE ... WHERE tenant_id` matching WHOLE
+// compressed rows, which holds while tenant_id is A segmentby column: a predicate
+// over segmentby columns alone never has to decompress, and it does not have to name
+// all of them. Measured rather than reasoned — with segmentby 'device_token,
+// tenant_id' (tenant SECOND) a delete of 20k compressed rows still reports `Batches
+// scanned: 10000, Batches deleted: 10000` and decompresses nothing, exactly as with
+// tenant first. DROPPING tenant_id out of a list is therefore the change that would
+// silently turn the cheap case into the worst one and reopen the schema-per-tenant
+// alternative ADR-077 rejected on exactly that evidence.
+//
+// tenant_id nevertheless LEADS every list, for a second and narrower reason.
+// Timescale auto-creates a btree on the compressed chunk over the segmentby columns
+// followed by the orderby metadata — (tenant_id, device_token, _ts_meta_...) — and a
+// btree serves only a predicate over a PREFIX of its columns. Every read here is
+// tenant-scoped and not all of them are device-scoped, so leading with tenant_id is
+// what keeps that index usable by the tenant-only reads too.
+// TestTenantIdLeadsEverySegmentBy pins the order for that reason.
 //
 // 🔴 A SEGMENTBY COLUMN MUST NOT ALSO APPEAR IN compress_orderby. Measured on
 // TimescaleDB 2.28.3, not inferred: the ALTER fails with `cannot use column
@@ -92,18 +130,20 @@ func setChunkIntervalStmt(table string) string {
 // alone, which appears in no list below, and TestSegmentByNeverCollidesWithOrderBy
 // pins that it never starts to.
 //
-// A table absent from this map falls back to tenant_id, the setting every hypertable
-// carried before the map existed: never wrong, merely not widened.
-// TestEverySegmentByIsDeclared makes a newly governed hypertable fail a test rather
-// than quietly inherit the fallback.
+// Every governed hypertable is listed, INCLUDING the ones whose answer equals the
+// tenant-only fallback, because a listed table has had its key decided and an absent
+// one has merely inherited it. TestEverySegmentByIsDeclared makes a newly governed
+// hypertable fail a test rather than quietly inherit the fallback.
 var compressSegmentBy = map[string]string{
-	// The base events table and two of the three payload hypertables are read through
-	// commonEventFilters, whose only non-time predicate is device_token (event_type is
-	// a coarse IN-list, too low-cardinality to be worth a segment of its own). events
-	// additionally carries an index leading with exactly these two columns.
+	// SAMPLED STREAMS — segmented per device. These are the tables a reporting device
+	// writes to repeatedly: a device emitting telemetry at all clears the break-even
+	// above at any interval a real deployment uses (a 24h chunk needs one row every
+	// ~20 minutes). They are read through commonEventFilters, whose only non-time
+	// predicate is device_token (event_type is a coarse IN-list, too low-cardinality
+	// to be worth a segment of its own). events additionally carries an index leading
+	// with exactly these two columns.
 	"events":          "tenant_id, device_token",
 	"location_events": "tenant_id, device_token",
-	"alert_events":    "tenant_id, device_token",
 	// measurement_events is read both directly and, for bucketed aggregation, on the
 	// (tenant_id, device_token, name, occurred_time DESC) index; the
 	// measurement_rollups continuous aggregate groups by the same device key. `name`
@@ -111,19 +151,38 @@ var compressSegmentBy = map[string]string{
 	// metric vocabulary, and it is a predicate only on the aggregation path, which
 	// reads the rollup rather than the raw hypertable whenever it can.
 	"measurement_events": "tenant_id, device_token",
-	// state_change_events has NO reader today — it is the write-only presence history.
-	// Its one declared index is (tenant_id, device_token, occurred_time DESC), i.e.
-	// the presence-timeline read it was built for, so it is segmented for that rather
-	// than left on the fallback: the rows being written now are the ones that reader
-	// will eventually have to decompress, and by then the setting is frozen.
-	"state_change_events": "tenant_id, device_token",
+
+	// 🔴 SPARSE BY NATURE — tenant-only, DELIBERATELY DIFFERENT FROM THE THREE ABOVE,
+	// and the reason is the table's own semantics rather than any fleet size. An
+	// alert and a presence transition are events that BY DEFINITION do not occur
+	// continuously: a device that alerts or flips presence 60–90 times a day is a
+	// device in trouble, not a device working normally. So these tables sit below the
+	// break-even for essentially every realistic deployment, where the per-device key
+	// would not compress them less well — it would grow them.
+	//
+	// What that costs, stated rather than glossed: alert_events IS read by device
+	// (through commonEventFilters), so this key gives up the batch selectivity there
+	// and accepts the read amplification, on the asymmetry above. state_change_events
+	// gives up nothing today — it has NO reader at all, being the write-only presence
+	// history; its (tenant_id, device_token, occurred_time DESC) index anticipates a
+	// presence-timeline reader that does not exist yet, and when it arrives THAT is
+	// the moment to re-measure this table's write density rather than assume it.
+	//
+	// Do NOT "make these consistent" with the three above without a measurement that
+	// moves the curve; TestSparseTablesAreNotSegmentedPerDevice is what such an edit
+	// has to argue with.
+	"alert_events":        "tenant_id",
+	"state_change_events": "tenant_id",
+
 	// 🔴 event_anchors is the one table NOT keyed by device, and segmenting it by
 	// device_token would have been the wrong answer reached by pattern-matching. Its
 	// reason to exist is the anchor lookup — "every event anchored to this customer /
 	// area / asset" — which filters (anchor_type, anchor_token) and projects event_id.
 	// device_token is on the table but is read only by the periodic reconciliation
-	// sweep's `SELECT DISTINCT device_token`; that sweep now decompresses where the
-	// user-facing lookup no longer does, which is the trade taken deliberately.
+	// sweep's `SELECT DISTINCT device_token`, which decompresses to answer it — as it
+	// did under the tenant-only key too, since device_token was no more a segmentby
+	// column then than it is now. This key changes what the anchor LOOKUP costs; it
+	// leaves that sweep exactly where it was.
 	"event_anchors": "tenant_id, anchor_type, anchor_token",
 }
 
