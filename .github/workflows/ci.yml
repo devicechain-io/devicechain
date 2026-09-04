@@ -668,6 +668,18 @@ jobs:
           REQUIRE_LIVENESS: '1'
         run: hack/check-ko-base-pin.sh
 
+      # Every setup-go must take its version from go.work, not a module go.mod.
+      # setup-go pins GOTOOLCHAIN=local, so a module's LANGUAGE floor (routinely
+      # lower than the workspace's) installs a toolchain that `go build` inside
+      # the workspace then refuses. ko-base-image.yml was the one workflow of
+      # nineteen doing that, and it failed silently every week for three weeks
+      # because its only consumer is the 40-day liveness window above.
+      - name: go-version source guard self-test
+        run: hack/check-go-version-source.sh --self-test
+
+      - name: every setup-go takes its version from go.work
+        run: hack/check-go-version-source.sh
+
       # The default basemap is the OpenStreetMap standard tile layer, whose usage
       # policy needs a Referer from browser clients. Adding a restrictive
       # Referrer-Policy is a one-line hardening that breaks nothing HERE and
