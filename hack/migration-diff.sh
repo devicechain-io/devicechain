@@ -35,6 +35,25 @@
 # goldens in a second pass (MDIFF_LAUNCH=operand) — that second pass is what pins the
 # claim that both majors produce identical schema. Override with MDIFF_IMAGE to check
 # another one.
+#
+# 🔴 A GOLDEN AND THE DIFFER THAT CAPTURED IT ARE ONE ARTIFACT. RE-SNAPSHOT AGAINST THE
+# TREE YOU WILL COMMIT, NOT THE ONE YOU STARTED FROM.
+#
+# The pinned image above is only half of what a golden depends on: the other half is
+# backend/tools/migrationdiff itself — its pg_dump flags and its normalizeDump. A
+# sibling PR that changes either produces a differently-shaped dump from the same
+# database, so a golden captured before you rebased onto it can be wrong under the
+# differ that CI will actually run, and the failure arrives as a schema diff that
+# looks like your migration's fault.
+#
+# This is not hypothetical: #893 changed the differ's dump flags and normalization
+# while #894 was re-snapshotting for a new table. The golden had to be captured
+# twice — once, then again after the rebase — and only the second capture was
+# checked by the instrument CI uses.
+#
+# So: rebase FIRST, snapshot SECOND, and if main moves under you again, re-run
+# `verify` before pushing. Verify is cheap and it is the only thing that can tell
+# you the artifact and the instrument still agree.
 set -euo pipefail
 
 MODE="${1:-verify}"

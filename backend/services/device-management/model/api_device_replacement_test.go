@@ -34,6 +34,20 @@ import (
 // cannot express a partial unique index, so without this the sqlite fixture would
 // admit two live credentials sharing (tenant, type, id) — which production refuses,
 // and which one of these tests depends on it refusing.
+//
+// 🔴 EVERY CONSTRAINT THIS FIXTURE TURNS ON WAS A MEASUREMENT, NOT A FORMALITY, AND
+// THE COUNT IS THE ARGUMENT. Enabling foreign keys below immediately failed TWO
+// seeds in this very file that had been writing dangling references (a bare
+// Create(&Asset{}) leaving asset_type_id = 0), and broke FIVE pre-existing tests in
+// api_delete_emit_test.go and api_group_scoping_test.go whose fixtures lacked a
+// table the cascade touches. Every one of those was a real defect the permissive
+// fixture had been hiding — including the missing device_replacements cascade,
+// which made any replaced device permanently undeletable on Postgres.
+//
+// The rest of this package still runs with foreign keys OFF and without the token
+// grammar. That is a standing gap, not a settled decision: each fixture that opts in
+// is likely to surface more of the same, and the honest expectation is that it will
+// cost a few test fixes each time rather than none.
 func replacementTestApi(t *testing.T) (*Api, context.Context) {
 	t.Helper()
 
