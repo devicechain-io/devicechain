@@ -95,18 +95,52 @@ jobs:
           echo "services=$services" >> "$GITHUB_OUTPUT"
           echo "Services: $services"
 
+      # The toolchain is needed for `go list -m` below and for nothing else in this
+      # job, so the build cache is off: this job compiles nothing, and setup-go's
+      # cache step would demand a resolvable cache-dependency-path for a job that has
+      # no dependencies to restore.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: false
+
       - name: Discover Go modules
         id: mod
         run: |
-          # Full set of Go module dirs = non-service modules + discovered services.
-          # Derived by finding every dir that holds a go.mod under the known roots.
-          modules="$(
-            for d in backend/cli backend/core backend/k8s backend/edge/*/ backend/services/*/ backend/sims/*/ backend/tools/*/; do
-              [ -f "${d%/}/go.mod" ] && echo "${d%/}"
-            done | jq -R . | jq -s -c .
-          )"
+          # 🔴 DERIVED FROM go.work, NOT FROM A GLOB OF DIRECTORY NAMES. The glob this
+          # replaced was backend/{cli,core,k8s,edge/*,services/*,sims/*,tools/*}, which
+          # is a hand-maintained restatement of the workspace that nothing kept in step
+          # with it — and it had already drifted: `deploy` (deploy/assets.go, the module
+          # that embeds the chart and the OpenTofu tree into dcctl) is a workspace member
+          # that matched no pattern, so NO job in this workflow built, vetted, tested or
+          # scanned it. The failure is silent in the worst way: the matrix simply has one
+          # fewer entry, every job it does run is green, and nothing anywhere says a
+          # module went unexamined.
+          #
+          # `go list -m` reads go.work, so a module is covered the moment it joins the
+          # workspace rather than the moment somebody remembers this list. It is the same
+          # derivation the codeql workflow and the full-sweep in CLAUDE.md already use,
+          # which is why those two DID cover deploy while this workflow did not.
+          modules="$(go list -m -f '{{.Dir}}' | sed "s|^${PWD}/||" | jq -R . | jq -s -c .)"
+
+          # 🔴 THE GUARD, because the failure mode of a DERIVED matrix is different from
+          # the failure mode of a hard-coded one. An empty or truncated list does not
+          # fail: `strategy.matrix` over zero entries runs zero jobs, every one of them
+          # "succeeds" by not existing, and the `go` job reports green having compiled
+          # nothing at all. So the count is cross-checked against a SECOND, independent
+          # reader of the same file — a plain awk over go.work's `use` block, which needs
+          # no toolchain and shares no code with the go command. Two readers disagreeing
+          # is the only cheap signal that one of them silently dropped something.
+          want="$(awk '/^use[[:space:]]*\(/{u=1;next} u&&/^\)/{u=0;next} u&&NF&&$0!~/^[[:space:]]*\/\//{n++} END{print n+0}' go.work)"
+          got="$(echo "$modules" | jq 'length')"
+          if [ "$want" -eq 0 ] || [ "$got" -ne "$want" ]; then
+            echo "::error::module discovery disagrees with go.work: go list -m gave $got, go.work declares $want."
+            echo "$modules" | jq -r '.[]'
+            exit 1
+          fi
+
           echo "modules=$modules" >> "$GITHUB_OUTPUT"
-          echo "Modules: $modules"
+          echo "Modules ($got): $modules"
 
       - name: Build image-smoke module list
         id: smoke
@@ -152,7 +186,21 @@ jobs:
           # race, so its build cache was almost never persisted and it recompiled Bento
           # cold on nearly every run. A per-module key gives each entry its own cache to
           # restore from.
-          cache-dependency-path: ${{ matrix.module }}/go.sum
+          #
+          # 🔴 go.mod IS LISTED FIRST BECAUSE NOT EVERY WORKSPACE MODULE HAS A go.sum,
+          # AND THE MISSING-FILE CASE IS A HARD ERROR RATHER THAN A SHRUG. `deploy`
+          # requires nothing at all — a three-line go.mod and no go.sum, because there
+          # are no hashes to record — so with go.sum alone the pattern set resolves to
+          # zero files. setup-go does not quietly skip the cache there: its
+          # cache-restore path throws `Some specified paths were not resolved, unable to
+          # cache dependencies.` when hashFiles comes back empty, which fails the step
+          # and takes the whole matrix entry with it. (Read out of setup-go's source
+          # rather than guessed.) Every module has a go.mod by definition, so listing it
+          # makes the set always resolve; the two are hashed together so the key stays
+          # per-module, and go.mod moving is precisely when dependencies changed anyway.
+          cache-dependency-path: |
+            ${{ matrix.module }}/go.mod
+            ${{ matrix.module }}/go.sum
 
       - name: gofmt
         working-directory: ${{ matrix.module }}
@@ -292,12 +340,17 @@ jobs:
       # with no change to this repo. That is the point of it — a newly published
       # advisory against a dependency we already ship is exactly the news we want.
       #
-      # COVERAGE GAP, stated rather than left to be inferred from a green run: this
-      # rides the discover matrix, which globs backend/{cli,core,k8s,edge/*,
-      # services/*,sims/*,tools/*} — 21 modules. `deploy` is the 22nd workspace
-      # module (deploy/assets.go) and no CI job builds, vets or tests it, so it is
-      # not scanned here either. The codeql workflow DOES cover it, because that one
-      # builds from `go list -m` and so follows go.work rather than a glob.
+      # COVERAGE, stated rather than left to be inferred from a green run: this rides
+      # the discover matrix, which is now derived from go.work, so every workspace
+      # module is scanned — including `deploy`, which the previous directory glob
+      # missed entirely.
+      #
+      # 🔴 SCANNING `deploy` BUYS NOTHING ON THE VULNERABILITY SIDE, AND SAYING SO IS
+      # THE POINT. Its go.mod requires nothing, so govulncheck has no dependency graph
+      # to resolve and its green result is vacuous by construction — it is not evidence
+      # that the module is clean, only that there was nothing to be dirty. What adding
+      # deploy to the matrix genuinely buys is build, vet and test coverage. Do not
+      # read this step's green on that module as scanning coverage that was gained.
       - name: govulncheck (reachable vulnerabilities)
         run: hack/govulncheck.sh "${{ matrix.module }}"
 
@@ -584,6 +637,32 @@ jobs:
           -ignore '**/bin/**' -ignore '**/obj/**'
           -ignore '**/migrationdiff/golden/*.sql'
           -f hack/license-header.txt backend sdks
+
+      # The step above proves every SOURCE FILE says Apache-2.0. Nothing proved that
+      # the ECOSYSTEM agrees — GitHub runs its own detector over LICENSE and publishes
+      # one value from it, and that value is what the `license:` search filter, the repo
+      # sidebar and every downstream SBOM actually read. A LICENSE it cannot match
+      # yields NOASSERTION: the project drops out of license search and records as
+      # unlicensed, with the file sitting in the tree looking correct and no header
+      # check anywhere going red. A comparable project in this space is in exactly that
+      # state today. See hack/check-detected-license.sh for why this asks GitHub rather
+      # than running a detector locally, and what that costs.
+      #
+      # Self-test first, as with every guard here. A network check whose only evidence
+      # is "it was green today" has never been shown to fail, and this one's failure
+      # modes are mostly ABSENCES — a 404, an outage, a rate-limit HTML body — each of
+      # which reads exactly like a clean answer if the status is not checked apart from
+      # the body.
+      - name: detected-license guard self-test
+        run: hack/check-detected-license.sh --self-test
+
+      - name: GitHub still detects this repository as Apache-2.0
+        env:
+          # Read-only; the workflow's top-level `contents: read` is all the license
+          # endpoint needs. Passed explicitly so the request is authenticated and rides
+          # the per-repo rate limit rather than the shared anonymous one.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: hack/check-detected-license.sh
 
   # ---------------------------------------------------------------------------
   # Workflow hygiene: the CI configuration is itself un-gated code.
