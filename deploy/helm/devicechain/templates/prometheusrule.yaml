@@ -18,6 +18,29 @@ spec:
   groups:
     - name: devicechain.event-processing
       rules:
+        - alert: DetectHasNoLeader
+          expr: |
+            max(devicechain_eventprocessing_detect_is_leader{namespace="{{ $ns }}"}) == 0
+            or absent(devicechain_eventprocessing_detect_is_leader{namespace="{{ $ns }}"})
+          for: 2m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "No replica holds the DETECT partition"
+            description: "Nothing has owned the DETECT partition for 2m, so no detection rule is being evaluated for any tenant. The absent() half is not optional: a pod in CrashLoopBackOff publishes no series at all, so a rule written only against the value would go quiet at exactly the moment it should fire."
+        - alert: DetectLeaderIsNotConsuming
+          expr: |
+            max(devicechain_eventprocessing_detect_is_leader{namespace="{{ $ns }}"}) == 1
+            and max(devicechain_eventprocessing_detect_live{namespace="{{ $ns }}"}) == 0
+            and max(increase(devicechain_eventprocessing_detect_checkpoints_total{namespace="{{ $ns }}"}[10m])) == 0
+          for: 10m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "A DETECT leader is holding the partition without consuming"
+            description: "A replica owns the partition but is not inside a live term and has committed nothing for 10m — it is stuck building a term, which holds the partition against every standby while detecting nothing. The checkpoint term is what keeps this quiet during a long replay, which checkpoints as it goes."
         - alert: DetectConsumerBacklogHigh
           expr: max(devicechain_eventprocessing_detect_consumer_pending{namespace="{{ $ns }}"}) > 50000
           for: 10m

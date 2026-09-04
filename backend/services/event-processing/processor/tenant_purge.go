@@ -92,7 +92,7 @@ func (rp *ResolvedEventsProcessor) EvictTenant(ctx context.Context, tenant strin
 	case rp.tenantPurges <- req:
 	case <-ctx.Done():
 		return 0, fmt.Errorf("the DETECT loop did not accept the eviction of %q: %w", tenant, ctx.Err())
-	case <-rp.procCtx.Done():
+	case <-rp.pctx().Done():
 		return 0, fmt.Errorf("the DETECT loop is shutting down, so %q was not evicted", tenant)
 	}
 	select {
@@ -100,7 +100,7 @@ func (rp *ResolvedEventsProcessor) EvictTenant(ctx context.Context, tenant strin
 		return res.evicted, res.err
 	case <-ctx.Done():
 		return 0, fmt.Errorf("the DETECT loop did not answer the eviction of %q: %w", tenant, ctx.Err())
-	case <-rp.procCtx.Done():
+	case <-rp.pctx().Done():
 		return 0, fmt.Errorf("the DETECT loop shut down mid-eviction of %q", tenant)
 	}
 }
@@ -202,7 +202,7 @@ func (rp *ResolvedEventsProcessor) applyTenantPurge(tenant string) tenantPurgeRe
 	if !rp.dirty {
 		return tenantPurgeResult{evicted: n}
 	}
-	if !rp.checkpoint(rp.procCtx) {
+	if !rp.checkpoint(rp.pctx()) {
 		return tenantPurgeResult{evicted: n, err: errors.New("the DETECT engine could not " +
 			"commit a checkpoint, so it cannot establish that its durable snapshot is free of " +
 			"this tenant — anything evicted from memory would be restored by a restart")}

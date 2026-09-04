@@ -34,7 +34,7 @@ func (rp *ResolvedEventsProcessor) signalArmRecheck(tenant, deviceToken string) 
 	select {
 	case rp.armUpdates <- armUpdate{tenant: tenant, deviceToken: deviceToken}:
 		return true
-	case <-rp.procCtx.Done():
+	case <-rp.pctx().Done():
 		return false
 	}
 }
@@ -73,7 +73,7 @@ func (rp *ResolvedEventsProcessor) persistBeforeAck(desc string, op func() error
 		log.Error().Str("what", desc).Msg("Failed to persist a fact projection; retrying (fact stays unacked).")
 		select {
 		case <-time.After(backoff):
-		case <-rp.procCtx.Done():
+		case <-rp.pctx().Done():
 			return false
 		}
 		if backoff *= 2; backoff > maxRulePersistBackoff {
@@ -94,7 +94,7 @@ func (rp *ResolvedEventsProcessor) persistBeforeAck(desc string, op func() error
 func (rp *ResolvedEventsProcessor) runRosterConsumer() {
 	defer rp.readerWG.Done()
 	for {
-		msg, err := rp.RosterReader.ReadMessage(rp.procCtx)
+		msg, err := rp.RosterReader.ReadMessage(rp.pctx())
 		if errors.Is(err, io.EOF) {
 			return
 		}
@@ -102,7 +102,7 @@ func (rp *ResolvedEventsProcessor) runRosterConsumer() {
 			rp.RosterReader.HandleResponse(err)
 			select {
 			case <-time.After(readErrorBackoff):
-			case <-rp.procCtx.Done():
+			case <-rp.pctx().Done():
 				return
 			}
 			continue
@@ -144,7 +144,7 @@ func (rp *ResolvedEventsProcessor) handleRosterFact(msg messaging.Message, signa
 			ExpectedSince: ev.ExpectedSince,
 		}
 		if !rp.persistBeforeAck("device-roster "+tenant+"/"+ev.DeviceToken,
-			func() error { return rp.RosterStore.Upsert(rp.procCtx, roster) }) {
+			func() error { return rp.RosterStore.Upsert(rp.pctx(), roster) }) {
 			return false // shutdown mid-retry: leave unacked; the row redelivers next start
 		}
 		if signal && !rp.signalArmRecheck(tenant, ev.DeviceToken) {
@@ -165,7 +165,7 @@ func (rp *ResolvedEventsProcessor) handleRosterFact(msg messaging.Message, signa
 func (rp *ResolvedEventsProcessor) runEntityDeletedConsumer() {
 	defer rp.readerWG.Done()
 	for {
-		msg, err := rp.EntityDeletedReader.ReadMessage(rp.procCtx)
+		msg, err := rp.EntityDeletedReader.ReadMessage(rp.pctx())
 		if errors.Is(err, io.EOF) {
 			return
 		}
@@ -173,7 +173,7 @@ func (rp *ResolvedEventsProcessor) runEntityDeletedConsumer() {
 			rp.EntityDeletedReader.HandleResponse(err)
 			select {
 			case <-time.After(readErrorBackoff):
-			case <-rp.procCtx.Done():
+			case <-rp.pctx().Done():
 				return
 			}
 			continue
@@ -211,7 +211,7 @@ func (rp *ResolvedEventsProcessor) handleEntityDeletedFact(msg messaging.Message
 			deletedTime := ev.DeletedTime
 			if rp.RosterStore != nil {
 				if !rp.persistBeforeAck("roster-delete "+tenant+"/"+ev.EntityToken,
-					func() error { return rp.RosterStore.Delete(rp.procCtx, tenant, ev.EntityToken, deletedTime) }) {
+					func() error { return rp.RosterStore.Delete(rp.pctx(), tenant, ev.EntityToken, deletedTime) }) {
 					return false // shutdown mid-retry: leave unacked; the deletion redelivers next start
 				}
 				// Signal the loop to re-check membership: it re-reads the projection (a tombstone
@@ -231,7 +231,7 @@ func (rp *ResolvedEventsProcessor) handleEntityDeletedFact(msg messaging.Message
 			// monotonic guard rejected leaves live rows and the re-read keeps the value.
 			if rp.AttributeStore != nil {
 				if !rp.persistBeforeAck("attribute-purge "+tenant+"/"+ev.EntityToken,
-					func() error { return rp.AttributeStore.PurgeDevice(rp.procCtx, tenant, ev.EntityToken, deletedTime) }) {
+					func() error { return rp.AttributeStore.PurgeDevice(rp.pctx(), tenant, ev.EntityToken, deletedTime) }) {
 					return false // shutdown mid-retry: leave unacked; the purge redelivers next start
 				}
 				if signal && !rp.signalAttrRecheck(tenant, ev.EntityToken) {
@@ -256,7 +256,7 @@ func (rp *ResolvedEventsProcessor) ackFact(msg messaging.Message, kind string) {
 // subject) and payload. ok is false when the message is unusable (no parseable tenant, or an
 // unmarshalable payload) — dropped, not fatal. The tenant travels on the subject, never the payload.
 func decodeRosterFact(rp *ResolvedEventsProcessor, msg messaging.Message) (string, *dmmodel.DeviceRosterEvent, bool) {
-	_, tenant, ok := messaging.TenantContextFromSubject(rp.procCtx, msg.Subject)
+	_, tenant, ok := messaging.TenantContextFromSubject(rp.pctx(), msg.Subject)
 	if !ok {
 		log.Warn().Str("correlation", msg.CorrelationID()).
 			Msgf("Dropping device-roster fact with no parseable tenant in subject %q", msg.Subject)
@@ -274,7 +274,7 @@ func decodeRosterFact(rp *ResolvedEventsProcessor, msg messaging.Message) (strin
 // decodeEntityDeletedFact unmarshals one entity-deleted fact into its owning tenant and payload,
 // with the same drop-not-fatal contract as decodeRosterFact.
 func decodeEntityDeletedFact(rp *ResolvedEventsProcessor, msg messaging.Message) (string, *dmmodel.EntityDeletedEvent, bool) {
-	_, tenant, ok := messaging.TenantContextFromSubject(rp.procCtx, msg.Subject)
+	_, tenant, ok := messaging.TenantContextFromSubject(rp.pctx(), msg.Subject)
 	if !ok {
 		log.Warn().Str("correlation", msg.CorrelationID()).
 			Msgf("Dropping entity-deleted fact with no parseable tenant in subject %q", msg.Subject)

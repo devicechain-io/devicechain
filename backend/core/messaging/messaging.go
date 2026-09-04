@@ -251,6 +251,20 @@ type MessageReader interface {
 	HandleResponse(err error)
 }
 
+// TermBoundReader is implemented by a reader whose SUBSCRIPTION belongs to a
+// leadership term rather than to the process. A Class-3 operator binds its readers
+// when a term starts and unbinds them when it ends, which is what stops a pull
+// request issued under the old term from being served after a successor has taken
+// over: the NATS connection is process-wide and buffers across a reconnect, so the
+// reply inbox is the only thing that can withhold consent.
+//
+// The two halves are deliberately asymmetric — see BindTerm and UnbindTerm on the
+// NATS implementation for why the bind belongs at term START and never at term end.
+type TermBoundReader interface {
+	BindTerm() error
+	UnbindTerm() error
+}
+
 // ReplayReader is a bounded, strictly-ordered read of a stream from a start
 // sequence up to the head captured when it was opened. Read returns each message in
 // ascending stream-sequence order and then io.EOF once the head has been delivered.

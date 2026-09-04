@@ -39,7 +39,7 @@ func (rp *ResolvedEventsProcessor) signalFenceSet(tenant string, set *geofence.F
 	select {
 	case rp.fenceUpdates <- fenceUpdate{tenant: tenant, set: set}:
 		return true
-	case <-rp.procCtx.Done():
+	case <-rp.pctx().Done():
 		return false
 	}
 }
@@ -89,7 +89,7 @@ func (rp *ResolvedEventsProcessor) seedFencesForPublishedRules(rules []runtime.S
 	if tenant == "" {
 		return true
 	}
-	set, err := rp.FenceSets.CurrentFenceSet(rp.procCtx, tenant)
+	set, err := rp.FenceSets.CurrentFenceSet(rp.pctx(), tenant)
 	if err != nil {
 		log.Error().Err(err).Str("tenant", tenant).
 			Msg("Unable to seed the DETECT geofence projection for a newly published fence rule; its containment calls report unresolvable until a fence edit.")
@@ -162,7 +162,7 @@ func (rp *ResolvedEventsProcessor) runFenceReconcile(tenants []string) {
 
 	reseeded := 0
 	for _, tenant := range tenants {
-		set, err := rp.FenceSets.CurrentFenceSet(rp.procCtx, tenant)
+		set, err := rp.FenceSets.CurrentFenceSet(rp.pctx(), tenant)
 		if err != nil {
 			log.Error().Err(err).Str("tenant", tenant).
 				Msg("Unable to re-seed the DETECT geofence projection for a tenant; its containment calls report unresolvable until the next sweep.")
@@ -206,7 +206,7 @@ func (rp *ResolvedEventsProcessor) runFenceSetConsumer() {
 // onto the field it was always given.
 func (rp *ResolvedEventsProcessor) drainFenceSetStream() {
 	for {
-		msg, err := rp.FenceSetReader.ReadMessage(rp.procCtx)
+		msg, err := rp.FenceSetReader.ReadMessage(rp.pctx())
 		if errors.Is(err, io.EOF) {
 			return
 		}
@@ -214,7 +214,7 @@ func (rp *ResolvedEventsProcessor) drainFenceSetStream() {
 			rp.FenceSetReader.HandleResponse(err)
 			select {
 			case <-time.After(readErrorBackoff):
-			case <-rp.procCtx.Done():
+			case <-rp.pctx().Done():
 				return
 			}
 			continue
@@ -280,7 +280,7 @@ func (rp *ResolvedEventsProcessor) resolveFenceManifest(tenant string, manifest 
 	if rp.FenceManifests == nil {
 		return nil, errNoFenceSetArchive
 	}
-	set, err := rp.FenceManifests.ResolveManifest(rp.procCtx, tenant, manifest)
+	set, err := rp.FenceManifests.ResolveManifest(rp.pctx(), tenant, manifest)
 	if err != nil {
 		return nil, err
 	}
@@ -319,7 +319,7 @@ var errFenceSetArchiveEmpty = errors.New("the fence-set archive returned no set 
 // travels on the subject, never the payload — which is what makes one tenant's fences unreachable
 // through another tenant's projection entry however the payload is shaped.
 func decodeFenceSetFact(rp *ResolvedEventsProcessor, msg messaging.Message) (string, *dmmodel.GeoFenceSetManifest, bool) {
-	_, tenant, ok := messaging.TenantContextFromSubject(rp.procCtx, msg.Subject)
+	_, tenant, ok := messaging.TenantContextFromSubject(rp.pctx(), msg.Subject)
 	if !ok {
 		log.Warn().Str("correlation", msg.CorrelationID()).
 			Msgf("Dropping geofence-set fact with no parseable tenant in subject %q", msg.Subject)

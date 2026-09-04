@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -331,7 +332,37 @@ func shutdownDrainDelay() time.Duration {
 }
 
 // Issue stop and terminate commands to microservice
-func (ms *Microservice) ShutDownNow() {
+//
+// It reports an ORDERLY stop (exit 0). A component that has decided the process is
+// no longer fit to run must call FailNow instead.
+func (ms *Microservice) ShutDownNow() { ms.shutDown(nil) }
+
+// FailNow tears the process down exactly as ShutDownNow does and then exits NON-ZERO.
+//
+// 🔴 IT EXISTS BECAUSE A COMPONENT THAT FAILS AFTER STARTUP HAD NO WAY TO SAY SO. A
+// failure during InitializeAndStart is returned, reported and exits 1; a failure a
+// minute later had only ShutDownNow, which reports an orderly stop. So a component
+// that had irrecoverably stopped doing its job could either keep a Ready pod alive
+// doing nothing, or exit 0 — indistinguishable from a rollout. DETECT losing its
+// leadership supervisor is the first real instance: with replicas:1 nothing else
+// takes the partition, so the pod must go away and be replaced rather than sit there.
+//
+// The distinction is worth being exact about, because the restartPolicy makes the
+// pod come back either way: what a non-zero status buys is REPORTING. Exit 0 looks
+// like an orderly stop to `kubectl get pods`, to a container-exit alert and to anyone
+// reading the event stream; exit 1 does not.
+//
+// err must be non-nil. A nil here would silently become an orderly stop, which is the
+// one thing a caller reaching for this method does not want.
+func (ms *Microservice) FailNow(err error) {
+	if err == nil {
+		err = errors.New("core: a component ended the process without saying why")
+	}
+	log.Error().Err(err).Msg("A component has declared this process unfit to continue; shutting down with a non-zero status.")
+	ms.shutDown(err)
+}
+
+func (ms *Microservice) shutDown(fatal error) {
 	// 🔴 A service that never finished starting has nothing to tear down and MUST NOT
 	// try. The lifecycle's own state guards do not stop it: a stop from Initialized is
 	// permitted, deliberately and for reasons lifecycle.go sets out, and Initialized is
@@ -374,7 +405,9 @@ func (ms *Microservice) ShutDownNow() {
 		// and no reason to sleep the window before exiting.
 		log.Warn().Msg("Asked to shut down before startup completed; nothing to tear down.")
 		ms.cancel()
-		ms.finished(nil)
+		// nil for a signal-driven stop, which is not this process's verdict on itself;
+		// non-nil when a component called FailNow, which is.
+		ms.finished(fatal)
 		return
 	case phaseStopping:
 		// A shutdown is already running. Teardown is not idempotent, and the outcome
@@ -423,7 +456,9 @@ func (ms *Microservice) ShutDownNow() {
 		return
 	}
 
-	ms.finished(nil)
+	// A clean teardown does not make a FailNow orderly: the reason the process is
+	// going away is the caller's error, not how well it packed up.
+	ms.finished(fatal)
 }
 
 // Wait for microservice to shut down, returning how it ended.

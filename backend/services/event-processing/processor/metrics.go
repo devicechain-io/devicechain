@@ -32,6 +32,8 @@ type detectMetrics struct {
 	snapshotBytes       prometheus.Gauge
 	watermarkLagSeconds prometheus.Gauge
 	restoreSeconds      prometheus.Gauge
+	isLeader            prometheus.Gauge
+	detectLive          prometheus.Gauge
 
 	// Slice-8 consumer-lag gauges (ADR-051 observability thread; the operations board's #1
 	// "falling behind" signal). These exist because the derived-at-the-dashboard alternative does
@@ -109,6 +111,13 @@ func newDetectMetrics(ms *core.Microservice) *detectMetrics {
 		snapshotBytes:       ms.NewGauge("detect_snapshot_bytes", "Serialized size of the last DETECT snapshot payload.", nil),
 		watermarkLagSeconds: ms.NewGauge("detect_watermark_lag_seconds", "Wall-clock time minus the engine watermark at the last checkpoint.", nil),
 		restoreSeconds:      ms.NewGauge("detect_restore_seconds", "Time to restore engine state from the snapshot store at startup.", nil),
+		// Leadership (ADR-070). Two gauges rather than one, because the interesting
+		// failure is a pod that HAS the partition and is not detecting on it: a term
+		// build runs a snapshot restore, three view builds and a full replay, and a
+		// single "am I the leader" series cannot tell that apart from a healthy leader.
+		// isLeader goes up at ACQUIRE so a long build does not read as leaderless.
+		isLeader:   ms.NewGauge("detect_is_leader", "1 while this replica holds the DETECT partition lease, from acquisition rather than from the end of the term build.", nil),
+		detectLive: ms.NewGauge("detect_live", "1 while this replica is consuming inside a held leadership term; 0 while standing by OR while building a term it has already acquired.", nil),
 
 		consumerPending:    ms.NewGauge("detect_consumer_pending", "Undelivered messages waiting on the resolved-events durable consumer (the primary DETECT lag signal).", nil),
 		consumerAckPending: ms.NewGauge("detect_consumer_ack_pending", "Delivered-but-unacked messages on the resolved-events durable consumer (in-flight work).", nil),
@@ -479,4 +488,25 @@ func (m *fenceGeometryMetrics) recordFenceGeometryCache(hits, misses, evictions 
 		m.fenceGeometryCacheEvictions.Add(float64(evictions))
 	}
 	m.fenceGeometryCacheVertices.Set(float64(vertices))
+}
+
+// setLeader publishes whether this replica holds the DETECT partition lease. It is
+// raised at ACQUIRE, not at the end of the term build: a build can take a snapshot
+// restore plus a full replay, and a leaderless alert firing through all of it would
+// be indistinguishable from a real outage.
+func (m *detectMetrics) setLeader(leader bool) { m.isLeader.Set(boolGauge(leader)) }
+
+// setDetectLive publishes whether this replica is actually CONSUMING. Paired with
+// setLeader it names the one state neither gauge can express alone — leader, but
+// wedged in a term build — which is otherwise a silent stall on a pod whose every
+// health signal is green. The chart's DetectLeaderIsNotConsuming rule is the pair's
+// consumer, and it ANDs a checkpoint term so a long replay (which checkpoints as it
+// goes) does not trip it.
+func (m *detectMetrics) setDetectLive(live bool) { m.detectLive.Set(boolGauge(live)) }
+
+func boolGauge(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
 }
