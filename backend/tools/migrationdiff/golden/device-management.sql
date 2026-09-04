@@ -13,6 +13,7 @@ ALTER SEQUENCE "device-management".device_claims_id_seq OWNED BY "device-managem
 ALTER SEQUENCE "device-management".device_credentials_id_seq OWNED BY "device-management".device_credentials.id;
 ALTER SEQUENCE "device-management".device_profile_versions_id_seq OWNED BY "device-management".device_profile_versions.id;
 ALTER SEQUENCE "device-management".device_profiles_id_seq OWNED BY "device-management".device_profiles.id;
+ALTER SEQUENCE "device-management".device_replacements_id_seq OWNED BY "device-management".device_replacements.id;
 ALTER SEQUENCE "device-management".device_types_id_seq OWNED BY "device-management".device_types.id;
 ALTER SEQUENCE "device-management".devices_id_seq OWNED BY "device-management".devices.id;
 ALTER SEQUENCE "device-management".entity_attributes_id_seq OWNED BY "device-management".entity_attributes.id;
@@ -83,6 +84,11 @@ ALTER TABLE ONLY "device-management".device_profile_versions ALTER COLUMN id SET
 ALTER TABLE ONLY "device-management".device_profiles
  ADD CONSTRAINT device_profiles_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".device_profiles ALTER COLUMN id SET DEFAULT nextval('"device-management".device_profiles_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".device_replacements
+ ADD CONSTRAINT "fk_device-management_device_replacements_device" FOREIGN KEY (device_id) REFERENCES "device-management".devices(id);
+ALTER TABLE ONLY "device-management".device_replacements
+ ADD CONSTRAINT device_replacements_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".device_replacements ALTER COLUMN id SET DEFAULT nextval('"device-management".device_replacements_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".device_types
  ADD CONSTRAINT device_types_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".device_types ALTER COLUMN id SET DEFAULT nextval('"device-management".device_types_id_seq'::regclass);
@@ -179,6 +185,10 @@ CREATE INDEX "idx_device-management_device_profiles_category" ON "device-managem
 CREATE INDEX "idx_device-management_device_profiles_deleted_at" ON "device-management".device_profiles USING btree (deleted_at);
 CREATE INDEX "idx_device-management_device_profiles_tenant_id" ON "device-management".device_profiles USING btree (tenant_id);
 CREATE INDEX "idx_device-management_device_profiles_token" ON "device-management".device_profiles USING btree (token);
+CREATE INDEX "idx_device-management_device_replacements_deleted_at" ON "device-management".device_replacements USING btree (deleted_at);
+CREATE INDEX "idx_device-management_device_replacements_device_id" ON "device-management".device_replacements USING btree (device_id);
+CREATE INDEX "idx_device-management_device_replacements_occurred_time" ON "device-management".device_replacements USING btree (occurred_time);
+CREATE INDEX "idx_device-management_device_replacements_tenant_id" ON "device-management".device_replacements USING btree (tenant_id);
 CREATE INDEX "idx_device-management_device_types_deleted_at" ON "device-management".device_types USING btree (deleted_at);
 CREATE INDEX "idx_device-management_device_types_manufacturer" ON "device-management".device_types USING btree (manufacturer);
 CREATE INDEX "idx_device-management_device_types_model_name" ON "device-management".device_types USING btree (model);
@@ -326,6 +336,12 @@ CREATE SEQUENCE "device-management".device_profile_versions_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "device-management".device_profiles_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".device_replacements_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -641,6 +657,21 @@ CREATE TABLE "device-management".device_profiles (
  provenance character varying(256),
  active_version integer,
  location_declaration jsonb
+);
+CREATE TABLE "device-management".device_replacements (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ deleted_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ device_id bigint NOT NULL,
+ occurred_time timestamp with time zone NOT NULL,
+ actor character varying(256),
+ reason character varying(1024),
+ unit_identifier character varying(256),
+ retired_credential_tokens jsonb NOT NULL,
+ new_credential_token character varying(128) NOT NULL,
+ new_credential_type character varying(32) NOT NULL
 );
 CREATE TABLE "device-management".device_types (
  id bigint NOT NULL,
