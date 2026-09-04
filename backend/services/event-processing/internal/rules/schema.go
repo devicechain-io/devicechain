@@ -224,7 +224,30 @@ type RaiseAlarmAction struct {
 	// of the same rule escalate ONE alarm in place rather than spawning duplicates. Empty ⇒ the
 	// dispatcher defaults it to the rule's token, so a rule that omits it still keys stably. When
 	// set it must satisfy the ADR-042 token grammar.
+	//
+	// It is a LITERAL, never a template: a key an author already published renders to itself
+	// because nothing renders it. A per-device key is AlarmKeyTemplate's job, on its own field, so
+	// that stays true.
 	AlarmKey string `json:"alarmKey,omitempty"`
+	// AlarmKeyTemplate renders the alarm key per detection instead of stating it literally — a CEL
+	// expression evaluating to the key STRING (see alarmkey.go). Mutually exclusive with AlarmKey:
+	// declaring both is a publish error, because there would be no rule for which one wins.
+	//
+	// Its vocabulary is `series` (the device token) ALONE — deliberately narrower than a guard's or
+	// a payload template's. The alarm key is what pairs a raiseAlarm's rising edge with its falling
+	// edge, so it MUST render identically on both; `value` is not edge-stable and a key built from
+	// it would strand the alarm ACTIVE forever. alarmkey.go carries the full reasoning.
+	//
+	// It is cost-gated at publish (CompileAlarmKeyTemplate) exactly like a guard or a payload
+	// template, and the RENDERED key is re-checked against the ADR-042 token grammar at dispatch —
+	// the one check publish cannot do, because the output depends on the device.
+	//
+	// NOT a grouping change. An alarm is already keyed on (originator, alarmKey) with the
+	// originator being the device, so two devices firing one static-keyed rule ALREADY hold two
+	// separate alarms; this does not un-merge anything. What it buys is a key that identifies
+	// itself wherever the key travels without its originator — an alarm-key search filter, a
+	// notification body, a webhook deduping on the key alone.
+	AlarmKeyTemplate string `json:"alarmKeyTemplate,omitempty"`
 }
 
 // SendCommandAction enqueues a command to the detection's device (ADR-043). The device is the
