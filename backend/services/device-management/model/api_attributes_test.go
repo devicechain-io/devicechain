@@ -8,23 +8,38 @@ import (
 )
 
 // normalizeAttributeValue enforces the facet-selector storage-form invariant (ADR-061 G3
-// §3.4) by COERCION (the write contract does not reject): non-numeric text under a numeric
-// type is coerced to unset (nil) so the ea.value::numeric cast is always safe, a boolean is
-// canonicalized to 'true'/'false' (an unparseable one → nil), and STRING/JSON stay verbatim.
+// §3.4) by REFUSING a present value its declared type cannot hold: the ea.value::numeric cast
+// is always safe because a LONG/DOUBLE row can only exist if its text parsed, a boolean is
+// canonicalized to 'true'/'false', and STRING/JSON stay verbatim.
+//
+// 🔴 IT USED TO COERCE THESE TO UNSET, which was a successful write that stored nothing —
+// the caller was told "saved" and the facet it was authoring matched nothing. The two range
+// cases below are the ones no client-side pattern can catch, because they are well-formed
+// text that the PARSER rejects (or silently rounds), not malformed text.
 func TestNormalizeAttributeValue(t *testing.T) {
 	strp := func(s string) *string { return &s }
 
-	// Non-numeric text under a numeric type, and a bad boolean, coerce to unset (nil).
+	// A present value its type cannot hold is refused, not stored as unset.
 	for _, bad := range []struct {
-		vt, v string
+		vt, v, why string
 	}{
-		{string(AttributeValueLong), "abc"},
-		{string(AttributeValueDouble), "1.2.3"},
-		{string(AttributeValueDouble), "NaN"},
-		{string(AttributeValueBoolean), "maybe"},
+		{string(AttributeValueLong), "abc", "not a number at all"},
+		{string(AttributeValueDouble), "1.2.3", "not a number at all"},
+		{string(AttributeValueDouble), "NaN", "not finite"},
+		{string(AttributeValueBoolean), "maybe", "not a boolean"},
+		// 🔑 Both of these match any reasonable client-side numeric pattern.
+		{string(AttributeValueDouble), "1e400", "overflows float64 to +Inf"},
+		{string(AttributeValueLong), "12345678901234567890", "overflows int64; the float " +
+			"path would have stored 12345678901234567168, a different number"},
+		{string(AttributeValueLong), "3.5", "not a whole number"},
 	} {
-		if got := normalizeAttributeValue(bad.vt, strp(bad.v)); got != nil {
-			t.Errorf("normalizeAttributeValue(%s, %q) = %q, want nil (coerced to unset)", bad.vt, bad.v, *got)
+		got, err := normalizeAttributeValue(bad.vt, strp(bad.v))
+		if err == nil {
+			t.Errorf("normalizeAttributeValue(%s, %q) = %v with no error; want refused (%s)",
+				bad.vt, bad.v, got, bad.why)
+		}
+		if got != nil {
+			t.Errorf("normalizeAttributeValue(%s, %q) returned a value alongside its refusal", bad.vt, bad.v)
 		}
 	}
 
@@ -33,9 +48,9 @@ func TestNormalizeAttributeValue(t *testing.T) {
 		{"true", "true"}, {"True", "true"}, {"1", "true"},
 		{"false", "false"}, {"FALSE", "false"}, {"0", "false"},
 	} {
-		got := normalizeAttributeValue(string(AttributeValueBoolean), strp(c.in))
-		if got == nil || *got != c.want {
-			t.Errorf("normalizeAttributeValue(BOOLEAN, %q) = %v; want %q", c.in, got, c.want)
+		got, err := normalizeAttributeValue(string(AttributeValueBoolean), strp(c.in))
+		if err != nil || got == nil || *got != c.want {
+			t.Errorf("normalizeAttributeValue(BOOLEAN, %q) = %v, %v; want %q", c.in, got, err, c.want)
 		}
 	}
 
@@ -47,16 +62,20 @@ func TestNormalizeAttributeValue(t *testing.T) {
 		{string(AttributeValueDouble), "72.50", "72.5"},                            // trailing zero trimmed
 		{string(AttributeValueLong), "3000", "3000"},                               // integer verbatim
 		{string(AttributeValueLong), "9223372036854775807", "9223372036854775807"}, // int64 precision kept
+		{string(AttributeValueLong), "3.0", "3"},                                   // integral spelling still accepted
 	} {
-		if got := normalizeAttributeValue(c.vt, strp(c.in)); got == nil || *got != c.want {
-			t.Errorf("normalizeAttributeValue(%s, %q) = %v; want %q", c.vt, c.in, got, c.want)
+		got, err := normalizeAttributeValue(c.vt, strp(c.in))
+		if err != nil || got == nil || *got != c.want {
+			t.Errorf("normalizeAttributeValue(%s, %q) = %v, %v; want %q", c.vt, c.in, got, err, c.want)
 		}
 	}
-	if got := normalizeAttributeValue(string(AttributeValueDouble), nil); got != nil {
-		t.Errorf("nil numeric value should stay nil: got %v", got)
+	// 🔴 A NIL VALUE STAYS LEGAL. Clearing a numeric attribute is a different act from
+	// writing text that does not parse, and it is how the removal fact is still emitted.
+	if got, err := normalizeAttributeValue(string(AttributeValueDouble), nil); got != nil || err != nil {
+		t.Errorf("nil numeric value should stay nil and be accepted: got %v, %v", got, err)
 	}
-	if got := normalizeAttributeValue(string(AttributeValueString), strp("arid")); got == nil || *got != "arid" {
-		t.Errorf("STRING verbatim: got %v", got)
+	if got, err := normalizeAttributeValue(string(AttributeValueString), strp("arid")); err != nil || got == nil || *got != "arid" {
+		t.Errorf("STRING verbatim: got %v, %v", got, err)
 	}
 }
 

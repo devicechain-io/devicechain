@@ -235,7 +235,8 @@ func (lc *lowerCtx) valueNumericCompare(sqlOp string, lit celast.Expr) (string, 
 // (it may evaluate value::numeric on a STRING row holding non-numeric text for the same key
 // and error at query time). A CASE guarantees the un-taken arm is not evaluated, on both
 // Postgres and sqlite. The single `?` binds the numeric literal. (SetEntityAttribute also
-// coerces any LONG/DOUBLE write to castable-or-NULL text, §3.4, so the taken arm is safe.)
+// REFUSES any LONG/DOUBLE write whose text does not parse, §3.4, so a numeric-typed row can
+// only ever hold castable text or NULL and the taken arm is safe.)
 func (lc *lowerCtx) numericCase(op string) string {
 	return "CASE WHEN ea.value_type IN ('LONG','DOUBLE') THEN " +
 		lc.p.NumericCast("ea.value") + " " + op + " ? ELSE FALSE END"

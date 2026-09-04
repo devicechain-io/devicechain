@@ -160,10 +160,45 @@ func TestSetAttribute_NonNumericTypeEmitsRemoval(t *testing.T) {
 
 // A numeric type whose value text does not parse also emits a removal (fail-closed: no
 // stale number survives).
-func TestSetAttribute_UnparseableNumberEmitsRemoval(t *testing.T) {
+func TestSetAttribute_UnparseableNumberIsRefused(t *testing.T) {
 	api, cap, ctx := newAttrEmitTestApi(t)
-	setAttr(t, api, ctx, string(AttributeScopeShared), "maxTemp", string(AttributeValueDouble), "not-a-number")
+	setAttr(t, api, ctx, string(AttributeScopeShared), "maxTemp", string(AttributeValueDouble), "72.5")
+	cap.events = nil
 
+	_, err := api.SetEntityAttribute(ctx, &EntityAttributeSetRequest{
+		EntityType: entity.TypeDevice.String(), Entity: "d1",
+		Scope: string(AttributeScopeShared), AttrKey: "maxTemp",
+		ValueType: string(AttributeValueDouble), Value: strp("not-a-number"),
+	})
+	assert.Error(t, err, "a present DOUBLE that does not parse is refused, not stored as unset")
+	assert.Empty(t, cap.events, "a refused write emits nothing")
+
+	// 🔑 THIS SERVES THE OLD TEST'S STATED PURPOSE MORE STRONGLY, NOT LESS. It used to check
+	// that an unparseable write emitted a REMOVAL so "no stale number survives in the
+	// projection" — but that discarded a good value on the strength of a bad write nobody
+	// was told about. Under refusal the previous value stands, in the row and in the
+	// projection, and the caller learns its write did not happen.
+	found, err := api.EntityAttributesByEntity(ctx, entity.TypeDevice.String(), 1, nil)
+	assert.NoError(t, err)
+	if assert.Len(t, found, 1) {
+		assert.Equal(t, "72.5", found[0].Value.String, "the refused write left the good value alone")
+	}
+}
+
+// Clearing a numeric attribute — a nil value, not unparseable text — is still legal and
+// still emits the removal. The refusal above is about text that does not parse; this is the
+// caller saying "there is no value", which is a different act and must stay available.
+func TestSetAttribute_NilNumericStillEmitsRemoval(t *testing.T) {
+	api, cap, ctx := newAttrEmitTestApi(t)
+	setAttr(t, api, ctx, string(AttributeScopeShared), "maxTemp", string(AttributeValueDouble), "72.5")
+	cap.events = nil
+
+	_, err := api.SetEntityAttribute(ctx, &EntityAttributeSetRequest{
+		EntityType: entity.TypeDevice.String(), Entity: "d1",
+		Scope: string(AttributeScopeShared), AttrKey: "maxTemp",
+		ValueType: string(AttributeValueDouble), Value: nil,
+	})
+	assert.NoError(t, err)
 	if assert.Len(t, cap.events, 1) {
 		assert.True(t, cap.events[0].Removed)
 	}
