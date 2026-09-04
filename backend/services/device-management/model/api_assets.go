@@ -17,6 +17,13 @@ func (api *Api) CreateAssetType(ctx context.Context, request *AssetTypeCreateReq
 	if err != nil {
 		return nil, err
 	}
+	// The draft property contract is checked before the row exists, so a malformed
+	// schema never reaches storage. ActiveVersion is left null: a draft binds nothing
+	// until PublishAssetType freezes it.
+	propertySchema, err := validateAssetPropertySchemaInput(request.PropertySchema)
+	if err != nil {
+		return nil, err
+	}
 	created := &AssetType{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -35,6 +42,7 @@ func (api *Api) CreateAssetType(ctx context.Context, request *AssetTypeCreateReq
 		MetadataEntity: rdb.MetadataEntity{
 			Metadata: metadataJSON,
 		},
+		PropertySchema: propertySchema,
 	}
 	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
@@ -79,7 +87,22 @@ func (api *Api) UpdateAssetType(ctx context.Context, token string,
 	}
 	found.Metadata = metadataJSON
 
-	result := api.RDB.DB(ctx).Save(found)
+	// MetadataStr is the generic *datatypes.JSON -> *string projection; it is named for
+	// its first caller, not for metadata specifically.
+	schemaInput := request.PropertySchema.ApplyTo(dcgraphql.MetadataStr(found.PropertySchema))
+	propertySchema, err := validateAssetPropertySchemaInput(schemaInput)
+	if err != nil {
+		return nil, err
+	}
+	found.PropertySchema = propertySchema
+
+	// Omit active_version: a draft edit must never write the version pointer back.
+	// `found` was loaded before this Save, so writing it whole would let an edit racing
+	// a concurrent PublishAssetType/RollbackAssetType silently revert the active
+	// pointer — the version every asset of this type is validated against — to its
+	// stale value. This is the third instance of the identical latent bug, after
+	// DeviceProfile and EntityGroup; the pointer is moved by publish/rollback only.
+	result := api.RDB.DB(ctx).Omit("ActiveVersion").Save(found)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -131,6 +154,20 @@ func (api *Api) CreateAsset(ctx context.Context, request *AssetCreateRequest) (*
 	if err != nil {
 		return nil, err
 	}
+	propertiesJSON, err := rdb.JSONInputOf("properties", request.Properties)
+	if err != nil {
+		return nil, err
+	}
+	// The literal `null` means the same thing as no document; store it that way so
+	// the column has one representation of "carries none".
+	propertiesJSON = jsonNullToNil(propertiesJSON)
+	// The property document is checked against the type's ACTIVE PUBLISHED contract
+	// before anything is written, so a create either stores a conformant asset or
+	// stores nothing. A type declaring a required property therefore cannot have an
+	// asset created under it without that property.
+	if err := api.validateAssetProperties(ctx, matches[0], propertiesJSON); err != nil {
+		return nil, err
+	}
 	created := &Asset{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -142,7 +179,8 @@ func (api *Api) CreateAsset(ctx context.Context, request *AssetCreateRequest) (*
 		MetadataEntity: rdb.MetadataEntity{
 			Metadata: metadataJSON,
 		},
-		AssetType: matches[0],
+		AssetType:  matches[0],
+		Properties: propertiesJSON,
 	}
 	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
@@ -201,6 +239,43 @@ func (api *Api) UpdateAsset(ctx context.Context, token string, request *AssetUpd
 		return nil, err
 	}
 	updated.Metadata = metadataJSON
+
+	propertiesJSON, err := rdb.JSONInputOf("properties",
+		request.Properties.ApplyTo(dcgraphql.MetadataStr(updated.Properties)))
+	if err != nil {
+		return nil, err
+	}
+	propertiesJSON = jsonNullToNil(propertiesJSON)
+	// Validate the RESULTING pair whenever either half MOVES — the document was sent,
+	// or the type was re-pointed — and not otherwise.
+	//
+	// 🔴 THE `|| retype` IS THE POINT, and so is the absence of a third case. A retype
+	// re-points the contract while leaving the document alone, so checking only what
+	// the caller mentioned would let it strand an asset carrying properties its new
+	// type never declared. But an update that moves NEITHER half must not run the gate
+	// at all, and an earlier version of this ran it unconditionally.
+	//
+	// That was a trap rather than a stricter rule. Conformance is enforced when a
+	// document is WRITTEN, against the version active at that moment; a rollback then
+	// deliberately leaves stored documents that no longer satisfy the contract, which
+	// RollbackAssetType says in as many words. Re-checking on every write turned that
+	// documented state into an embargo: after rolling back from a contract that added
+	// `serial` to one declaring only `vendor`, RENAMING an asset that had filled
+	// `serial` was refused with `unknown property "serial"`. Worse, once assets
+	// diverge — some filled the new property, some did not — NO version unblocks
+	// everyone, so whichever the operator rolls to strands the other set on any write.
+	//
+	// And it bought no invariant for that cost. The stored non-conformance exists
+	// either way; refusing an unrelated rename does not remove it, it only makes the
+	// asset uneditable. Required-ness is still honestly enforced where it means
+	// something: at document-write time, where an absent document is validated as `{}`
+	// and a declared default does not satisfy a required field.
+	if request.Properties.Set || retype {
+		if err := api.validateAssetProperties(ctx, updated.AssetType, propertiesJSON); err != nil {
+			return nil, err
+		}
+	}
+	updated.Properties = propertiesJSON
 
 	result := api.RDB.DB(ctx).Save(updated)
 	if result.Error != nil {

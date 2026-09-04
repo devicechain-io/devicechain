@@ -33,5 +33,6 @@ var (
 		NewGeoFenceGeometryBlobsSchema(),
 		NewGeoFenceSnapshotBackfill(),
 		NewDeviceReplacementsSchema(),
+		NewAssetPropertySchemaSchema(),
 	}
 )

@@ -4,6 +4,8 @@
 import { RegistryTypeForm, tokenColumn, descriptionColumn, createdColumn, type RegistryResource } from '@/components/registry';
 import { TypeCapsule, appearanceOf } from '@/components/TypeCapsule';
 import { TypeAppearanceForm } from '@/components/TypeAppearanceForm';
+import { AssetTypeSchemaPanel } from '@/routes/asset-types/AssetTypeSchemaPanel';
+import { AssetTypeVersionsPanel } from '@/routes/asset-types/AssetTypeVersionsPanel';
 import {
   listAssetTypes,
   getAssetType,
@@ -51,13 +53,41 @@ export const assetTypeResource: RegistryResource<AssetType> = {
       onDone={onDone}
     />
   ),
-  detailExtraLabel: 'common:colAppearance',
-  renderDetailExtra: (at, reload) => (
-    <TypeAppearanceForm
-      entity={at}
-      // The appearance form edits icon and colors, and sends only those.
-      update={(req) => updateAssetType(at.token, req)}
-      onSaved={reload}
-    />
-  ),
+  // Appearance moved from renderDetailExtra into the tab list when the property
+  // contract arrived: detailTabs takes precedence over renderDetailExtra, so leaving
+  // it behind would have made the appearance form silently unreachable.
+  detailTabs: [
+    {
+      value: 'appearance',
+      label: 'common:colAppearance',
+      render: (at, reload) => (
+        <TypeAppearanceForm
+          entity={at}
+          // The appearance form edits icon and colors, and sends only those.
+          update={(req) => updateAssetType(at.token, req)}
+          onSaved={reload}
+        />
+      ),
+    },
+    // The draft property contract. It is a tab rather than a field on the Basic form
+    // because it is not a property of the type the way a name is: it is a document
+    // that has to be PUBLISHED before it means anything, and a field on a save-all
+    // form would suggest otherwise.
+    {
+      value: 'properties',
+      label: 'entities:assetTypePropertiesTab',
+      render: (at, reload) => <AssetTypeSchemaPanel assetType={at} onSaved={reload} />,
+    },
+    {
+      value: 'versions',
+      label: 'entities:assetTypeVersionsTab',
+      render: (at, reload) => (
+        <AssetTypeVersionsPanel
+          assetTypeToken={at.token}
+          activeVersion={at.activeVersion ?? null}
+          onChanged={reload}
+        />
+      ),
+    },
+  ],
 };

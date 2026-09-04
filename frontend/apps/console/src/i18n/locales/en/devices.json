@@ -218,5 +218,8 @@
   "replacedByColumn": "By",
   "replacementReasonColumn": "Reason",
   "newUnitColumn": "New unit",
-  "retiredCredentialsColumn": "Credentials retired"
+  "retiredCredentialsColumn": "Credentials retired",
+  "booleanUnset": "Unset",
+  "booleanTrue": "True",
+  "booleanFalse": "False"
 }

@@ -297,9 +297,45 @@ func (api *Api) DeleteDeviceCredential(ctx context.Context, token string) (bool,
 // --- Assets --------------------------------------------------------------------
 
 // DeleteAssetType deletes an asset type. Refused while any asset references it.
+//
+// The type's published version history (ADR-072) goes WITH it, in the same
+// transaction. asset_type_versions carries a foreign key to asset_types, so without
+// this an asset type that has ever been published could not be deleted at all:
+// Postgres refuses the parent delete with a raw constraint error, which reaches the
+// caller as a database fault rather than as ErrEntityInUse — the identical shape as
+// the device-replacement journal, and invisible in a fixture running sqlite with
+// foreign keys off. assetPropertyTestApi turns them on for exactly that reason.
+//
+// The versions do not hold the type back the way an asset does. A version is a
+// record ABOUT this type, addressed only through it, so there is nothing for it to
+// outlive; an ASSET is an independent entity that would be left describing a type
+// that no longer exists, which is why that one is still a refusal.
 func (api *Api) DeleteAssetType(ctx context.Context, token string) (bool, error) {
-	return deleteParentType(ctx, api, (*Api).AssetTypesByToken,
-		func(m *AssetType) uint { return m.ID }, &AssetType{}, token, &Asset{}, "asset_type_id")
+	matches, err := api.AssetTypesByToken(ctx, []string{token})
+	if err != nil {
+		return false, err
+	}
+	if len(matches) == 0 {
+		return false, nil
+	}
+	at := matches[0]
+	n, err := api.countReferencing(ctx, &Asset{}, "asset_type_id", at.ID)
+	if err != nil {
+		return false, err
+	}
+	if n > 0 {
+		return false, fmt.Errorf("%w: %d asset(s) reference asset type %q", ErrEntityInUse, n, token)
+	}
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := deleteAssetTypeVersions(tx, at.ID); err != nil {
+			return err
+		}
+		return tx.Unscoped().Where("token = ?", token).Delete(&AssetType{}).Error
+	})
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // DeleteAsset deletes an asset and its relationship edges.

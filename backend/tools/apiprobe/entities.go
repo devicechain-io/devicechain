@@ -74,6 +74,25 @@ type entity struct {
 	// already depends on.
 	ReadVars map[string]any
 
+	// Requires names TYPE.FIELD pairs the baseline must declare for this row to be
+	// seedable — the FIELD-level check `supports` otherwise refuses to make.
+	//
+	// 🔑 IT IS OPT-IN PER ROW, WHICH IS WHAT MAKES IT SAFE. baseline.go's header
+	// explains why field-checking every row would be a fail-open dressed as caution:
+	// a later release adding one field to a covered type would silently skip the
+	// WHOLE entity, trading that field for the loss of every other field on the row,
+	// in a tool whose job is to notice loss. Naming the requirement here inverts
+	// that: a row is skipped only for the field it was WRITTEN for, and a row that
+	// names none is matched by name exactly as before.
+	//
+	// The rule for using it: a row that carries a Requires must be a LEAF — no
+	// Record, and nothing may read its token out of the state — because a skipped
+	// row that others depend on is refused rather than skipped, which turns the
+	// escape hatch back into a hard failure. Dependents derive its token with
+	// state.tok and carry the SAME Requires, so a dependent can never outlive the
+	// row it needs.
+	Requires []string
+
 	// ReadArg overrides the argument name of a Single read. Empty means "token";
 	// deviceClaim is keyed by `deviceToken`.
 	ReadArg string
@@ -290,7 +309,7 @@ var entities = []entity{
 				"name":               "Reboot",
 				"description":        "The command the probe later enqueues.",
 				// 🔴 NOT a JSON Schema. parameterSchema is an ORDERED
-				// []CommandParameter (ADR-043), and the field's GraphQL type is
+				// []ParameterSpec (ADR-043), and the field's GraphQL type is
 				// String — so a JSON-Schema document is accepted by the schema,
 				// by every document check here, and by nothing on a cluster. The
 				// bounds are carried deliberately: they make the stored jsonb a
@@ -712,6 +731,40 @@ var entities = []entity{
 		Record: record("assetType"),
 	},
 	{
+		// Depends on: nothing. A SECOND asset type, carrying a draft property contract —
+		// the thing publishAssetType freezes and every asset property is checked against.
+		//
+		// 🔴 IT IS ITS OWN ROW RATHER THAN A FIELD ON THE ONE ABOVE, and that is the
+		// whole point of Requires. `supports` matches mutation, read and input by NAME
+		// only, deliberately: field-checking a shared row would trade one new field for
+		// the silent loss of every other field on it. So the schema-bearing create is
+		// SPLIT OUT, where skipping it costs exactly itself. The row above keeps seeding
+		// against every baseline; this one appears from the release that can express it.
+		//
+		// It deliberately does NOT Record. A recorded row cannot be skipped at all (plan
+		// refuses it, because dependents would send an empty token), and the two rows
+		// that reference this one derive its token with state.tok instead — a pure
+		// function of the name, so it is the same string whether or not this row ran.
+		//
+		// activeVersion is NOT in the selection, for the same reason the profile's is
+		// not: the publish phase advances it AFTER this row is recorded, so comparing it
+		// at verify would report a healthy run as MISMATCH.
+		Name:     "asset-type-schema",
+		Area:     "device-management",
+		Mutation: "createAssetType",
+		Input:    "AssetTypeCreateRequest!",
+		Read:     "assetTypesByToken",
+		Requires: []string{"AssetTypeCreateRequest.propertySchema"},
+		Fields: "token name description imageUrl icon backgroundColor foregroundColor borderColor " +
+			"metadata propertySchema",
+		Vars: func(s *state) map[string]any {
+			req := brandedType(s.tok("asset-type-schema"), "apiprobe asset type with a contract",
+				"Declares what its assets carry.", meta("asset-type-schema"))
+			req["propertySchema"] = probeAssetPropertySchema
+			return map[string]any{"req": req}
+		},
+	},
+	{
 		// Depends on: asset-type.
 		Name:     "asset",
 		Area:     "device-management",
@@ -1007,6 +1060,15 @@ var entities = []entity{
 	},
 }
 
+// probeAssetPropertySchema is the asset-type property contract the probe declares,
+// publishes, and then fills on an asset. One optional STRING and one bounded INT: an
+// optional pair, so the asset created BEFORE the publish (which therefore carries no
+// properties at all) is not retroactively made non-conformant by it — a required
+// property would refuse that asset's every later write, including the ones a future
+// tamper case might make.
+const probeAssetPropertySchema = `[{"name":"vendor","dataType":"STRING"},` +
+	`{"name":"psi","dataType":"INT","minValue":0,"maxValue":300}]`
+
 // brandedType builds the create input the three branded parent types share
 // (asset/customer/area type). They take an identical field set, and writing it
 // out three times invites the drift where one of them quietly stops exercising a
@@ -1115,7 +1177,7 @@ const tenantCreateMutations = 26
 // TestThePublishDenominatorMatchesTheSchemas. Separate from the count above because
 // they are separate claims: a table can cover every create and no publish, which is
 // exactly the state this constant was added to end.
-const tenantPublishMutations = 4
+const tenantPublishMutations = 5
 
 // printCoverage prints the tool's coverage CLAIM. Given a baseline it also
 // prints what a seed against that release would SKIP — so the drill's real

@@ -339,7 +339,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// must produce NO series rather than a zero. See rdb.StorageGrowthCollector.
 	prometheus.MustRegister(rdb.NewStorageGrowthCollector(Microservice, RdbManager.Database,
 		&model.GeoFenceSetVersion{}, &model.GeoFenceGeometryBlob{},
-		&model.DeviceProfileVersion{}, &model.EntityGroupVersion{}))
+		&model.DeviceProfileVersion{}, &model.EntityGroupVersion{}, &model.AssetTypeVersion{}))
 
 	// Wire the detection-rule validator (ADR-044 sync gate) so profile publish compiles
 	// its draft rules against event-processing and fails closed on an uncompilable one.

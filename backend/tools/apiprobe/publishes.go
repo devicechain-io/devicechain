@@ -51,6 +51,10 @@ type publishOp struct {
 	// Mutation is the publish field, Read the versions query.
 	Mutation string
 	Read     string
+	// Requires is passed straight through to the rendered entity: a publish whose
+	// TARGET row is field-gated has to be gated on the same field, or it publishes a
+	// token nothing created. See entity.Requires.
+	Requires []string
 	// Of is the NAME of the entity being published. Its token is derived with the same
 	// state.tok helper the parent used, rather than read out of the recorded state:
 	// only some entries Record themselves, and a publish that depended on that would
@@ -74,6 +78,7 @@ func (p publishOp) entity() entity {
 		Mutation: p.Mutation,
 		Read:     p.Read,
 		Fields:   p.Fields,
+		Requires: p.Requires,
 		Publish:  true,
 		Vars: func(s *state) map[string]any {
 			return map[string]any{
@@ -144,6 +149,22 @@ var publishes = []publishOp{
 		Fields:   publishVersionFields,
 	},
 	{
+		// propertySchema is the contract FROZEN at publish — the whole point of the
+		// version, and the thing an asset is validated against — so it is compared, not
+		// just the envelope around it. It is also the one version type that exposes its
+		// frozen document at all: a device profile's snapshot is deliberately hidden, so
+		// there is nothing there for this table to compare.
+		Name:     "asset-type-version",
+		Area:     "device-management",
+		Mutation: "publishAssetType",
+		Read:     "assetTypeVersions",
+		// The SCHEMA-BEARING type, not the plain one: publishAssetType refuses a type
+		// with no draft contract, so publishing `asset-type` would fail on every run.
+		Of:       "asset-type-schema",
+		Requires: []string{"AssetTypeCreateRequest.propertySchema"},
+		Fields:   publishVersionFields + " propertySchema",
+	},
+	{
 		// `type` is the connector type frozen at publish, which is a different claim
 		// from the live connector's type and is what a rollback would restore.
 		Name:     "connector-version",
@@ -175,6 +196,46 @@ var publishesNotCovered = map[string]string{}
 // afterPublish is the third phase: entities that cannot be created until something has
 // been published, because they reference a published VERSION NUMBER.
 var afterPublish = []entity{
+	{
+		// Depends on: asset-type-schema, asset-type-version.
+		//
+		// An asset under the SCHEMA-BEARING type, carrying properties — which is only
+		// possible after that type is published, since an asset of a type with no
+		// published contract may carry none. That is the whole reason this entry is in
+		// this phase rather than beside `asset` in the main table.
+		//
+		// The `asset` row next door stays property-less on purpose: the two together are
+		// the pair of states an asset can be in, and covering only the filled one would
+		// leave the empty one — the state every asset that predates a publish is in —
+		// unexercised.
+		//
+		// 🔴 IT REQUIRES BOTH FIELDS, not just its own. `properties` is what this row
+		// sends; `propertySchema` is what the type it hangs off needs in order to exist
+		// at all. Gating on one of them would let this row outlive its dependency the
+		// day a release ships one without the other — and the failure would be a
+		// REFUSED create naming THIS row, several steps after the decision that caused
+		// it. The two shipped together; the gate says so rather than assuming it.
+		Name:     "asset-with-properties",
+		Area:     "device-management",
+		Mutation: "createAsset",
+		Input:    "AssetCreateRequest!",
+		Read:     "assetsByToken",
+		Requires: []string{"AssetCreateRequest.properties", "AssetTypeCreateRequest.propertySchema"},
+		Fields:   "token name description metadata properties assetType{token}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"token":       s.tok("asset-with-properties"),
+				"name":        "apiprobe asset with properties",
+				"description": "Fills the published property contract of the probe asset type.",
+				// state.tok, not the recorded state: asset-type-schema is a skippable leaf
+				// and deliberately records nothing, so its token is derived the same way the
+				// publish op derives it.
+				"assetTypeToken": s.tok("asset-type-schema"),
+				"metadata":       meta("asset-with-properties"),
+				"properties":     `{"vendor":"apiprobe","psi":42}`,
+			}}
+		},
+	},
 	{
 		// Depends on: device-profile, entity-group-dynamic, entity-group-version.
 		//
