@@ -29,6 +29,7 @@ const config: CodegenConfig = {
         'src/lib/api/entity-attributes.ts',
         'src/lib/api/browse.ts',
         'src/lib/api/geofences.ts',
+        'src/lib/api/replacements.ts',
       ],
       preset: 'client',
       presetConfig: { fragmentMasking: false },

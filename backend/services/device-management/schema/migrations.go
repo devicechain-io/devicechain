@@ -32,5 +32,6 @@ var (
 		NewListOrderIndexesSchema(),
 		NewGeoFenceGeometryBlobsSchema(),
 		NewGeoFenceSnapshotBackfill(),
+		NewDeviceReplacementsSchema(),
 	}
 )

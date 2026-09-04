@@ -105,12 +105,34 @@ func (api *Api) CreateEntityRelationship(ctx context.Context,
 	if err != nil {
 		return nil, fmt.Errorf("target: %w", err)
 	}
-	rtmatches, err := api.EntityRelationshipTypesByToken(ctx, []string{request.RelationshipType})
+	// A reserved type is auto-provisioned on first use, exactly as the bulk path
+	// does it. Without this a caller naming "contains" (or "member", or "assigned")
+	// before anything else in the tenant had used it got ErrRecordNotFound for a
+	// type the platform owns and would have created for them.
+	reserved, err := api.ensureReservedTypeByToken(ctx, request.RelationshipType)
 	if err != nil {
 		return nil, err
 	}
+	rtmatches := []*EntityRelationshipType{}
+	if reserved != nil {
+		rtmatches = append(rtmatches, reserved)
+	} else {
+		rtmatches, err = api.EntityRelationshipTypesByToken(ctx, []string{request.RelationshipType})
+		if err != nil {
+			return nil, err
+		}
+	}
 	if len(rtmatches) == 0 {
 		return nil, gorm.ErrRecordNotFound
+	}
+
+	// The asset hierarchy's structural contract (ADR-072) is enforced HERE as well
+	// as in SetAssetParent, because this generic mutation can create a "contains"
+	// edge directly. An invariant checked only in the convenience door is an
+	// invariant with a public bypass. No-op for every other relationship type.
+	if err := api.admitContainmentEdge(api.RDB.DB(ctx), request.RelationshipType,
+		request.SourceType, sourceId, request.TargetType, targetId); err != nil {
+		return nil, err
 	}
 
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)

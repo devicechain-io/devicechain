@@ -327,3 +327,117 @@ export const createAssetGroup = (request: GroupFormRequest) =>
 export const updateAssetGroup = (token: string, request: Required<GroupFormRequest>) =>
   updateEntityGroup(token, { ...request, memberType: 'asset' });
 export const deleteAssetGroup = deleteEntityGroup;
+
+// ── Asset hierarchy (parent/child over the relationship graph) ──────────────
+// The hierarchy is not a column on Asset: it is an edge of the reserved
+// "contains" relationship type, which the backend auto-provisions per tenant.
+// These operations are the whole of the console's dealings with it — nothing here
+// hand-builds a containment edge, so the structural contract the server enforces
+// (one parent, no cycle, both ends assets, bounded depth) is the only thing
+// shaping the tree.
+
+const ASSET_PARENT = graphql(`
+  query AssetParent($token: String!) {
+    assetParent(token: $token) {
+      id
+      token
+      name
+    }
+  }
+`);
+
+// The asset directly above this one, or null when it is a root. A root is the
+// normal state for most assets, so null here is an answer and not a failure.
+export async function getAssetParent(token: string) {
+  const data = await gql('device-management', ASSET_PARENT, { token });
+  return data.assetParent ?? null;
+}
+
+const ASSET_ANCESTORS = graphql(`
+  query AssetAncestors($token: String!) {
+    assetAncestors(token: $token) {
+      id
+      token
+      name
+    }
+  }
+`);
+
+// The path to the root, NEAREST ANCESTOR FIRST — the order a breadcrumb is built
+// from. It is not reversed here, so the array matches what the server documents;
+// the panel that renders root-first reverses a copy.
+export async function listAssetAncestors(token: string) {
+  const data = await gql('device-management', ASSET_ANCESTORS, { token });
+  return data.assetAncestors;
+}
+
+const ASSET_CHILDREN = graphql(`
+  query AssetChildren($parentToken: String, $pagination: PaginationInput!) {
+    assetChildren(parentToken: $parentToken, pagination: $pagination) {
+      results {
+        id
+        token
+        name
+        assetType {
+          id
+          token
+          name
+          icon
+          backgroundColor
+          foregroundColor
+          borderColor
+        }
+      }
+      pagination {
+        pageStart
+        pageEnd
+        totalRecords
+      }
+    }
+  }
+`);
+
+// A page of the assets directly below a parent, or the tree's ROOTS when
+// parentToken is null. One call for both, because a tree browser asks the same
+// question at every level.
+export async function listAssetChildren(
+  parentToken: string | null,
+  pagination: { pageNumber: number; pageSize: number },
+) {
+  const data = await gql('device-management', ASSET_CHILDREN, {
+    parentToken: parentToken ?? undefined,
+    pagination,
+  });
+  return data.assetChildren;
+}
+
+const SET_ASSET_PARENT = graphql(`
+  mutation SetAssetParent($childToken: String!, $parentToken: String!) {
+    setAssetParent(childToken: $childToken, parentToken: $parentToken) {
+      id
+      token
+    }
+  }
+`);
+
+// Place an asset under a parent, replacing whatever parent it had. The server
+// refuses a self-parent, a cycle and an over-deep tree; the caller surfaces the
+// message rather than pre-checking, so the console and the API can never disagree
+// about what is legal.
+export async function setAssetParent(childToken: string, parentToken: string) {
+  const data = await gql('device-management', SET_ASSET_PARENT, { childToken, parentToken });
+  return data.setAssetParent;
+}
+
+const CLEAR_ASSET_PARENT = graphql(`
+  mutation ClearAssetParent($childToken: String!) {
+    clearAssetParent(childToken: $childToken)
+  }
+`);
+
+// Detach an asset from its parent, making it a root. Its own children travel with
+// it — this moves one edge, not a subtree.
+export async function clearAssetParent(childToken: string): Promise<boolean> {
+  const data = await gql('device-management', CLEAR_ASSET_PARENT, { childToken });
+  return data.clearAssetParent;
+}
