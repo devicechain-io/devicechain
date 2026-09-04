@@ -124,6 +124,15 @@ spec:
           annotations:
             summary: "REACT is giving up on un-dispatchable derived events"
             description: "Derived events are hitting the redelivery cap — raised alarms and dispatched commands are not reaching their sinks. A REACT sink (alarm/command) is likely down. The events are dead-lettered rather than lost, so they can be inspected; nothing replays them, so the alarms and commands they carried still did not happen."
+        - alert: DeadLetterStoreLosing
+          expr: sum(rate(devicechain_usermanagement_dead_letters_unstored_total{namespace="{{ $ns }}"}[5m])) or vector(0) > 0
+          for: 5m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "the dead-letter store is losing records"
+            description: "Dead letters reached their final delivery attempt without being written to the store, so failures the platform recorded once are now recorded nowhere. The store's database is the thing to look at — the consumer rides out a blip in process and spends every delivery attempt before giving up, so this means an outage of minutes, not seconds. Look also at the consumer's backlog: what is lost here is a subset of what is late."
         - alert: DeadLetterWriteLost
           # 🔴 EVERY TERM IS `or vector(0)`, AND WITHOUT IT THIS ALERT CANNOT FIRE WHEN IT
           # MATTERS MOST. sum() over no series is the EMPTY vector, and empty + x is empty

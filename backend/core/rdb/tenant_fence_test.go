@@ -11,6 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
 
@@ -328,5 +329,46 @@ func TestDestTenantsReadsEveryShapeAStatementCanCarry(t *testing.T) {
 				t.Fatalf("destTenants(%s) = %v, want %d value(s)", name, got, tc.want)
 			}
 		})
+	}
+}
+
+// evidence is a model that RECORDS something rather than being something — the shape the
+// dead-letter store has.
+type evidence struct {
+	ID uint `gorm:"primaryKey"`
+	TenantScoped
+	Note string
+}
+
+func (evidence) FenceExempt() bool { return true }
+
+// 🔴 A RECORD OF A FAILURE MUST NOT BE FENCED. Deleting a tenant refuses its upstream
+// writes; those consumers then dead-letter, and the letter's own row would be refused too —
+// deleting the evidence that a tenant's last alarms went nowhere, and reporting it to an
+// operator as a database outage.
+func TestAModelThatOptsOutOfTheFenceIsNotRefused(t *testing.T) {
+	db := newFenceDB(t)
+	require.NoError(t, db.AutoMigrate(&evidence{}))
+	plant(t, db, "acme")
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	if err := db.WithContext(ctx).Create(&evidence{Note: "nobody was paged"}).Error; err != nil {
+		t.Fatalf("a record of a failure was refused behind the fence: %v", err)
+	}
+}
+
+// The counterweight: opting out is a PROPERTY OF THE MODEL, not a hole. An ordinary
+// tenant-scoped model beside it is still refused.
+func TestOptingOutDoesNotOpenTheFenceForEverythingElse(t *testing.T) {
+	db := newFenceDB(t)
+	require.NoError(t, db.AutoMigrate(&evidence{}))
+	plant(t, db, "acme")
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	if err := db.WithContext(ctx).Create(&evidence{Note: "ok"}).Error; err != nil {
+		t.Fatalf("premise lost: %v", err)
+	}
+	if err := db.WithContext(ctx).Create(&widget{Name: "resurrected"}).Error; !errors.Is(err, ErrTenantPurged) {
+		t.Fatalf("an ordinary model was admitted alongside an exempt one: %v", err)
 	}
 }

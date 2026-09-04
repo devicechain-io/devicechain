@@ -30,7 +30,7 @@ func newTestService(t *testing.T) *Service {
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, rdb.RegisterTokenGrammar(db))
 	require.NoError(t, db.AutoMigrate(&iam.TenantTier{}, &iam.Tenant{}))
-	return NewService(iam.NewStore(&rdb.RdbManager{Database: db}), testSettle, testTokenHold)
+	return NewService(iam.NewStore(&rdb.RdbManager{Database: db}), testSettle, testTokenHold, nil)
 }
 
 // seedTiers installs the gold/silver/bronze vocabulary the migration seeds.

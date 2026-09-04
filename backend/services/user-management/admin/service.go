@@ -18,7 +18,9 @@ import (
 	"context"
 	"time"
 
+	"errors"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-user-management/deadletters"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/devicechain-io/dc-user-management/purge"
 )
@@ -39,13 +41,47 @@ type Service struct {
 	// not. The zero value is honest about not knowing: see TenantDeletionProgress.
 	settle    time.Duration
 	tokenHold time.Duration
+
+	// dead is the ADR-024 store.
+	//
+	// 🔴 A NIL ONE IS AN ERROR, NOT AN EMPTY PAGE, and the first version of this had it
+	// the other way round. Tolerating nil meant a service wired without a store answered
+	// "no dead letters — nothing has been given up on" to every query, forever, while the
+	// table filled — and that is exactly what happened: the store was created AFTER the
+	// admin handler captured it. The fail-open did not soften a defect, it concealed one.
+	dead *deadletters.Store
 }
 
 // NewService builds the admin Service over the iam store, carrying the purge coordinator's
 // two windows so deletion progress can be reported from the same values it decides on.
-func NewService(store *iam.Store, settle, tokenHold time.Duration) *Service {
-	return &Service{iam: store, settle: settle, tokenHold: tokenHold}
+func NewService(store *iam.Store, settle, tokenHold time.Duration,
+	dead *deadletters.Store) *Service {
+	return &Service{iam: store, settle: settle, tokenHold: tokenHold, dead: dead}
 }
+
+// DeadLetters returns a page of work the platform gave up on (ADR-024).
+func (s *Service) DeadLetters(ctx context.Context,
+	criteria deadletters.SearchCriteria) (*deadletters.SearchResults, error) {
+	if s.dead == nil {
+		return nil, errNoDeadLetterStore
+	}
+	return s.dead.List(ctx, criteria)
+}
+
+// DeadLetter returns one record, or (nil, nil) when there is none.
+func (s *Service) DeadLetter(ctx context.Context, id uint) (*deadletters.DeadLetter, error) {
+	if s.dead == nil {
+		return nil, errNoDeadLetterStore
+	}
+	return s.dead.ByID(ctx, id)
+}
+
+// errNoDeadLetterStore is what a caller gets from a service that was built without one.
+// It names the wiring rather than the symptom, because the symptom — an empty list — is
+// indistinguishable from the good news it would otherwise be mistaken for.
+var errNoDeadLetterStore = errors.New(
+	"this service has no dead-letter store wired, so it cannot say what has been given " +
+		"up on; an empty answer here would be a claim it is not entitled to make")
 
 // ListIdentities returns the full identity directory (system roles + memberships
 // preloaded) for the admin console.

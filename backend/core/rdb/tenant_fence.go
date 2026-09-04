@@ -139,10 +139,7 @@ func tenantFenceCheck(db *gorm.DB) {
 	if db.Error != nil {
 		return
 	}
-	// The audit journal is excluded — see RegisterTenantFence. Matched on the gorm schema
-	// name, the same handle the journal's own recursion guard uses, so the two cannot
-	// drift onto different notions of "this is an audit row".
-	if db.Statement.Schema != nil && db.Statement.Schema.Name == auditSchemaName {
+	if fenceExempt(db) {
 		return
 	}
 	tokens := statementTenants(db)
@@ -174,6 +171,47 @@ func tenantFenceCheck(db *gorm.DB) {
 		// refusing costs nothing that was going to work.
 		_ = db.AddError(fmt.Errorf("reading the erasure fence: %w", err))
 	}
+}
+
+// FenceExempt is implemented by a model whose writes RECORD something rather than being
+// something, so the erasure fence must not refuse them.
+//
+// 🔴 THE BAR IS "CANNOT RESURRECT", NOT "IS INCONVENIENT TO FENCE". A model qualifies only
+// if writing it for a purged tenant adds nothing that could be inherited by a successor at
+// that token: a record OF a failure, not a row the platform would go on to act on. Two
+// implement it, and both are core-owned:
+//
+//   - the audit journal, whose row is written AFTER the mutation it describes has already
+//     committed (gorm sorts its After hook past the commit callback), so fencing it hands
+//     the sweeper a refusal for rows it has already deleted;
+//   - the dead-letter store, whose row says work did NOT happen. Refusing it during a purge
+//     would delete the evidence that a tenant's last alarms went nowhere, and would report
+//     the refusal as a database outage.
+//
+// Both are swept by the ordinary tenant purge like any other tenant-bearing table, so
+// exempting them from the FENCE does not exempt them from the erasure.
+type FenceExempt interface {
+	FenceExempt() bool
+}
+
+// fenceExempt reports whether this statement's model opts out of the fence.
+func fenceExempt(db *gorm.DB) bool {
+	if db.Statement.Schema == nil {
+		return false
+	}
+	// The audit journal is matched on the gorm schema NAME as well, the same handle its
+	// own recursion guard uses, because its rows are written through a bare model that
+	// never reaches an interface check on some paths.
+	if db.Statement.Schema.Name == auditSchemaName {
+		return true
+	}
+	if m, ok := db.Statement.Model.(FenceExempt); ok {
+		return m.FenceExempt()
+	}
+	if d, ok := db.Statement.Dest.(FenceExempt); ok {
+		return d.FenceExempt()
+	}
+	return false
 }
 
 // statementTenants returns every tenant token this statement could write a row for.

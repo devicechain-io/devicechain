@@ -419,6 +419,64 @@ type AdminAuditEventSearchResults {
     pagination: SearchResultsPagination!
 }
 
+# One piece of work a consumer accepted and then gave up on.
+#
+# It is a RECORD, not a queue: nothing re-runs a dead letter. The record exists so a
+# failure is visible and diagnosable rather than silent, and the consequences of the
+# failure itself stand either way — an alarm that was not raised was not raised.
+#
+# It is served here, on the operator plane, rather than to the tenant it belongs to.
+# `detail` is the underlying error, and for an egress failure that can carry the status
+# and address of a destination the caller chose — which on a tenant-readable surface would
+# hand back an oracle. An operator asking about a tenant's failures is not that caller.
+type DeadLetter {
+    id: ID!
+    # The tenant whose work this was.
+    tenant: String!
+    # When the platform gave up, RFC3339.
+    occurredTime: String!
+    # What was given up on: detection-action, notification, or command-response.
+    kind: String!
+    # Why: exhausted (retried to the cap) or unprocessable (accepted, then found to be
+    # something this consumer can never complete).
+    reason: String!
+    # The functional area that gave up.
+    source: String!
+    # A fixed sentence describing the failure class, safe to show anywhere.
+    summary: String!
+    # The underlying error. Null when there is nothing to add.
+    detail: String
+    # How many delivery attempts were made before giving up.
+    attempts: Int!
+    # Where the original message was, while its own stream still holds it.
+    subject: String
+    sequence: String
+    # The inbound correlation id, for joining to logs.
+    correlation: String
+    # What identifies the failed work within its kind — a rule id, an alarm token, a
+    # command token.
+    reference: String
+}
+
+# Criteria for a dead-letter query. All filters are optional except pagination; tenant,
+# kind and source are exact matches.
+input DeadLetterSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    tenant: String
+    kind: String
+    source: String
+    # Bound the occurred time, RFC3339. Both ends optional.
+    since: String
+    until: String
+}
+
+# A page of dead letters, newest first.
+type DeadLetterSearchResults {
+    results: [DeadLetter!]!
+    pagination: SearchResultsPagination!
+}
+
 # A registered OAuth 2.1 client (ADR-047): the allowlist entry the Authorization
 # Server validates the authorization-code flow against. redirectUris is the
 # exact-match allowlist; scopes is the set the client may request. hasSecret tells
@@ -600,6 +658,14 @@ type Query {
     # most one can be in flight at a time. A historical one must name its epoch: the token is
     # reusable, so token alone does not identify a deletion. Null when there is no such
     # record.
+    # Work the platform accepted and gave up on, newest first. Instance-wide: the
+    # question an operator asks here is "what has been failing", which is not a
+    # per-tenant question even though every answer names a tenant.
+    deadLetters(criteria: DeadLetterSearchCriteria!): DeadLetterSearchResults!
+
+    # One dead letter by id, or null.
+    deadLetter(id: ID!): DeadLetter
+
     tenantDeletion(token: String!, epoch: String): TenantDeletion
     # Deletion records newest cut first (requires tenant:read). Instance-wide and
     # cross-tenant, because a record outlives the tenant it describes — there is no tenant to

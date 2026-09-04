@@ -1,4 +1,5 @@
 ALTER SEQUENCE "user-management".audit_events_id_seq OWNED BY "user-management".audit_events.id;
+ALTER SEQUENCE "user-management".dead_letters_id_seq OWNED BY "user-management".dead_letters.id;
 ALTER SEQUENCE "user-management".iam_identities_id_seq OWNED BY "user-management".iam_identities.id;
 ALTER SEQUENCE "user-management".iam_memberships_id_seq OWNED BY "user-management".iam_memberships.id;
 ALTER SEQUENCE "user-management".iam_oauth_clients_id_seq OWNED BY "user-management".iam_oauth_clients.id;
@@ -11,6 +12,9 @@ ALTER SEQUENCE "user-management".signing_keys_id_seq OWNED BY "user-management".
 ALTER TABLE ONLY "user-management".audit_events
  ADD CONSTRAINT audit_events_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "user-management".audit_events ALTER COLUMN id SET DEFAULT nextval('"user-management".audit_events_id_seq'::regclass);
+ALTER TABLE ONLY "user-management".dead_letters
+ ADD CONSTRAINT dead_letters_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "user-management".dead_letters ALTER COLUMN id SET DEFAULT nextval('"user-management".dead_letters_id_seq'::regclass);
 ALTER TABLE ONLY "user-management".iam_identities
  ADD CONSTRAINT iam_identities_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "user-management".iam_identities ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_identities_id_seq'::regclass);
@@ -66,6 +70,9 @@ CREATE INDEX "idx_user-management_signing_keys_active" ON "user-management".sign
 CREATE INDEX "idx_user-management_signing_keys_deleted_at" ON "user-management".signing_keys USING btree (deleted_at);
 CREATE INDEX "idx_user-management_signing_keys_retired_at" ON "user-management".signing_keys USING btree (retired_at);
 CREATE INDEX idx_audit_tenant_time ON "user-management".audit_events USING btree (tenant_id, occurred_time DESC);
+CREATE INDEX idx_dead_letters_kind_time ON "user-management".dead_letters USING btree (kind, occurred_time DESC);
+CREATE INDEX idx_dead_letters_tenant_time ON "user-management".dead_letters USING btree (tenant_id, occurred_time DESC);
+CREATE INDEX idx_dead_letters_time ON "user-management".dead_letters USING btree (occurred_time DESC);
 CREATE INDEX idx_iam_identities_deleted_at ON "user-management".iam_identities USING btree (deleted_at);
 CREATE INDEX idx_iam_memberships_deleted_at ON "user-management".iam_memberships USING btree (deleted_at);
 CREATE INDEX idx_iam_oauth_clients_deleted_at ON "user-management".iam_oauth_clients USING btree (deleted_at);
@@ -77,6 +84,12 @@ CREATE INDEX idx_iam_tenants_purge_state ON "user-management".iam_tenants USING 
 CREATE INDEX idx_iam_tenants_tier_id ON "user-management".iam_tenants USING btree (tier_id);
 CREATE SCHEMA "user-management";
 CREATE SEQUENCE "user-management".audit_events_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "user-management".dead_letters_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -147,6 +160,26 @@ CREATE TABLE "user-management".audit_events (
  entity_pk text,
  entity_label text,
  rows_affected bigint
+);
+CREATE TABLE "user-management".dead_letters (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ occurred_time timestamp with time zone NOT NULL,
+ kind character varying(64) NOT NULL,
+ reason character varying(32) NOT NULL,
+ source character varying(64) NOT NULL,
+ summary text NOT NULL,
+ detail text,
+ attempts bigint,
+ subject character varying(512),
+ sequence bigint,
+ correlation character varying(128),
+ reference character varying(256),
+ stream_seq bigint NOT NULL,
+ append_time timestamp with time zone NOT NULL,
+ payload bytea
 );
 CREATE TABLE "user-management".iam_identities (
  id bigint NOT NULL,
@@ -298,6 +331,7 @@ CREATE TABLE "user-management".system_settings (
 CREATE TABLE "user-management".user_management_migrations (
  id character varying(255) NOT NULL
 );
+CREATE UNIQUE INDEX idx_dead_letters_stream_seq ON "user-management".dead_letters USING btree (stream_seq, append_time);
 CREATE UNIQUE INDEX idx_iam_identities_email ON "user-management".iam_identities USING btree (email);
 CREATE UNIQUE INDEX idx_iam_membership_identity_tenant ON "user-management".iam_memberships USING btree (identity_id, tenant_id);
 CREATE UNIQUE INDEX idx_iam_oauth_clients_client_id ON "user-management".iam_oauth_clients USING btree (client_id);

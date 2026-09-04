@@ -104,6 +104,18 @@ haberse limpiado. Trate un mensaje de esta cola como algo que investigar, no com
 vaciará por sí solo.
 :::
 
+Consúltelos con `dcctl dead-letters list`, que se autentica como una identidad de operador:
+
+```bash
+dcctl dead-letters list --server <host> --email <usted> --password <secreto> \
+  --tenant acme --since 2026-09-04T00:00:00Z
+```
+
+También están en el endpoint GraphQL de administración de la instancia como `deadLetters`,
+protegido por la misma autoridad que el diario de auditoría. Los registros se conservan 30 días
+de forma predeterminada —más que el flujo de mensajes subyacente, que es la razón de
+almacenarlos— y la retención es configurable por despliegue.
+
 La alerta `ReactPoisonDropping` existe exactamente para ese caso y debe tratarse como urgente.
 
 :::caution Una acción que falla se lleva por delante a las que van después
@@ -384,7 +396,8 @@ exigiría recorrerlo entero en cada punto de control.
 | `DetectWatermarkLagHigh` | El sentido del tiempo del evento del motor se está quedando atrás respecto al tiempo real. |
 | `DetectFanoutEvalErrors` | Una o más reglas publicadas están fallando al evaluarse. Vea la advertencia de arriba. |
 | `ReactPoisonDropping` | No se están despachando acciones tras agotar sus reintentos: las alarmas y los comandos no están ocurriendo. Las detecciones se envían a la cola de mensajes no entregados para que pueda ver cuáles, pero nada las reprocesa. Trátelo como urgente. |
-| `DeadLetterWriteLost` | Algo se abandonó **y** no se pudo registrar. Es el único caso aquí que no deja ninguna evidencia; revise el bróker. |
+| `DeadLetterWriteLost` | Algo se abandonó **y** no se pudo escribir en el flujo de mensajes no entregados. Revise el bróker. |
+| `DeadLetterStoreLosing` | Los mensajes llegaron al flujo pero no se pudieron escribir en el almacén, así que caducarán sin quedar registrados. Revise la base de datos del operador. |
 | `ReactConnectorEgressShedding` | El despacho de salida supera el límite de tasa del inquilino y se está descartando. |
 | `DetectTenantOverStateBudget` | Un inquilino ha superado un techo que no se aplica: su número de reglas, sus ventanas y temporizadores vivos, o las lecturas que retienen sus ventanas abiertas. |
 
