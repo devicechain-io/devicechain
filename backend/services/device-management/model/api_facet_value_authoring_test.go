@@ -229,6 +229,42 @@ func TestFacetValueTypeIsPartOfTheMatch(t *testing.T) {
 		"presence ignores the value type, so it can never be the check that catches this")
 }
 
+// 🔴 A FACET'S DECLARED TYPE CAN BE CHANGED, AND THE VALUES ALREADY AUTHORED DO NOT MOVE
+// WITH IT. SetFacetKey upserts on (memberType, key), so re-declaring `climate` as STRING
+// after values were authored under JSON leaves every one of those rows stranded: still
+// stored, still readable, still shown in the panel — and no longer matched by the axis
+// they belong to. The registry is a lens over the attribute store, never a constraint on
+// it, so nothing rewrites them and nothing warns.
+//
+// 🔑 THIS CASE WAS ADDED BECAUSE A MUTANT SURVIVED. Deleting the `ea.value_type = 'STRING'`
+// gate from the string-equality lowering left every test in this file green — the suite
+// had no entity carrying the same key and the same text under a DIFFERENT non-numeric
+// type, so there was nothing for the gate to exclude. That is a missing input class, not
+// a missing assertion, and re-declaring a facet's type is how a real tenant produces it.
+func TestRedeclaringAFacetTypeStrandsTheValuesAlreadyAuthored(t *testing.T) {
+	api, ctx := newFacetAuthoringTestApi(t)
+	newDevice(t, api, ctx, "d-legacy")
+	newDevice(t, api, ctx, "d-current")
+
+	// Authored while the axis was declared JSON.
+	declareFacet(t, api, ctx, "climate", string(AttributeValueJson))
+	authorValue(t, api, ctx, "d-legacy", consoleFacetScope, "climate",
+		string(AttributeValueJson), "arid")
+
+	// The tenant re-declares the axis as STRING; the upsert rewrites the DECLARATION only.
+	redeclared := declareFacet(t, api, ctx, "climate", string(AttributeValueString))
+	assert.Equal(t, string(AttributeValueString), redeclared.ValueType)
+	authorValue(t, api, ctx, "d-current", consoleFacetScope, "climate",
+		redeclared.ValueType, "arid")
+
+	assert.Equal(t, []string{"d-current"}, browseMatches(t, api, ctx, authoredSelector),
+		"the row authored under the OLD declared type is stranded, not silently migrated")
+	// Both are still on the axis by presence — which is exactly why the stranding is
+	// invisible without composing a value comparison.
+	assert.ElementsMatch(t, []string{"d-legacy", "d-current"},
+		browseMatches(t, api, ctx, `"climate" in attr`))
+}
+
 // The scope mistake is not visible from the read side either: the attribute is right there
 // when you ask for it, which is why "I set it and I can see it" and "Browse says 0" are both
 // true at once. The panel shows non-facet-scope rows read-only for exactly this reason.
