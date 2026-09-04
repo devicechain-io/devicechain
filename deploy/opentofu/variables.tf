@@ -860,6 +860,64 @@ variable "timescale_password" {
   sensitive   = true
 }
 
+variable "timescale_analytics_readers" {
+  description = <<-EOT
+    Read-only SQL/BI login roles on the event store -- the roles a Metabase,
+    Grafana or Power BI connection authenticates as.
+
+    Telemetry already lives in a Postgres-speaking database with continuous
+    aggregates, so a BI tool needs no export and no second store. What it needs is
+    a role that is safe to hand out, and this is where one is declared.
+
+    🔴 THE ROLE NAME CARRIES THE TENANT, AND IT IS THE ONLY THING THAT DOES. A
+    role named `analytics_acme` reads tenant `acme`; the read surface derives that
+    from the connected role's own identity, which a client cannot change. Get the
+    name wrong and the role reads a different tenant's telemetry, or -- if no
+    tenant matches -- nothing at all. There is no second place to correct it.
+
+    Each entry:
+      name              must be `analytics_<tenant id>`
+      connection_limit   REQUIRED, above 0. These sessions come out of the same
+                         max_connections event-management's pool draws on, so an
+                         unlimited role can stall ingest without failing loudly.
+      password_secret    a kubernetes.io/basic-auth Secret in the platform
+                         namespace, holding `username` and `password`. YOU create
+                         it; CloudNativePG reconciles the role to match. The
+                         password is deliberately not a variable here -- putting
+                         it in this file would put it in OpenTofu state.
+
+    Nothing further is needed: the role is a member of the reader group, which the
+    event store grants the read surface to on every boot.
+  EOT
+  type = list(object({
+    name             = string
+    connection_limit = number
+    password_secret  = optional(string, "")
+  }))
+  default = []
+
+  validation {
+    condition     = alltrue([for r in var.timescale_analytics_readers : startswith(r.name, "analytics_") && length(r.name) > length("analytics_")])
+    error_message = "Every analytics reader must be named analytics_<tenant id>; the read surface derives the tenant from the role name and a role outside that convention reads nothing."
+  }
+}
+
+variable "timescale_analytics_reserved_connections" {
+  description = <<-EOT
+    Connections the platform itself must still be able to open on the event store
+    after every analytics reader has taken its limit.
+
+    Sized from the pools that actually exist rather than from a round number:
+    event-management is the only service holding a pool against this store, capped
+    at 20 (backend/core/rdb defaultMaxOpenConnections), and a RollingUpdate has two
+    of its pods alive at once. 40 is that, and it is what a render-time check keeps
+    available. Raise it before scaling event-management out, or the shortfall lands
+    on whichever connection is opened last -- normally the application's.
+  EOT
+  type        = number
+  default     = 40
+}
+
 variable "timescale_storage" {
   description = "PersistentVolume size for the event store, PER INSTANCE. 🔴 This is spec.storage.size on the CloudNativePG Cluster, so the cluster-wide total is this times timescale_instances — three times this under --ha. It sized a single StatefulSet before A2.4."
   type        = string

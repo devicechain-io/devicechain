@@ -240,6 +240,19 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
+	// Converge the read-only SQL/BI surface — its tenant-filtered views and the
+	// privileges over them. It runs here rather than only in a migration for two
+	// reasons: the reader group role is created by the database cluster
+	// asynchronously, so a pod can reach the database before the role exists (a
+	// migration would record that one failure as done and leave a surface nobody can
+	// read); and the views themselves carry the tenant boundary, which should not be
+	// something a database can lose permanently between schema changes. See
+	// model/analytics.go. A returned error means the boundary could not be put back,
+	// which is not a state to serve from.
+	if err := model.ReconcileAnalyticsSurface(ctx, RdbManager); err != nil {
+		return err
+	}
+
 	err = GraphQLManager.Start(ctx)
 	if err != nil {
 		return err

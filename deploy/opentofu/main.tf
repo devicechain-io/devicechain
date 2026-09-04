@@ -689,6 +689,34 @@ module "cnpg_tsdb" {
 
   instances = var.timescale_instances != 0 ? var.timescale_instances : (var.ha ? 3 : 1)
 
+  # The read-only SQL/BI surface's roles.
+  #
+  # The GROUP role is unconditional and the per-tenant readers are not, which is
+  # the whole shape of "shipped, not sold": the surface exists on every install,
+  # and it has no readers until an operator names one. The group is NOLOGIN and
+  # holds nothing but SELECT on the analytics views, so an install with no readers
+  # carries a role that can neither connect nor be connected through.
+  #
+  # 🔴 It is declared even with no readers ON PURPOSE. event-management grants the
+  # surface to this role at boot; without the role there is nothing to grant to,
+  # and adding the first reader would then need a restart of event-management as
+  # well as an apply. Declared always, adding a reader is one apply.
+  extra_roles = concat(
+    [{
+      name     = "analytics_reader"
+      login    = false
+      in_roles = []
+    }],
+    [for r in var.timescale_analytics_readers : {
+      name                 = r.name
+      login                = true
+      connection_limit     = r.connection_limit
+      password_secret_name = r.password_secret
+      in_roles             = ["analytics_reader"]
+    }]
+  )
+  reserved_application_connections = var.timescale_analytics_reserved_connections
+
   # 🔑 NO max_connections OVERRIDE HERE — the relational store carries one and this
   # store deliberately does not. (This block DOES set `parameters`, further down,
   # for timescaledb.telemetry_level; add to that map rather than starting a second

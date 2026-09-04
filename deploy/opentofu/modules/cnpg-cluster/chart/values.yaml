@@ -132,6 +132,30 @@ bootstrap:
   # subsequently creates. Empty for a plain relational store.
   postInitTemplateSQL: []
 
+# CNPG-managed roles beyond the application owner.
+#
+# This is how a read-only SQL/BI role reaches the event store: declared here, so
+# CloudNativePG creates it and keeps its password in step with a Kubernetes Secret
+# the operator owns. Nothing in the platform mints or reads that password -- the
+# application role holds no CREATEROLE, deliberately, so a compromised pod cannot
+# manufacture a login of its own.
+#
+# Each entry:
+#   name                 the PostgreSQL role name
+#   ensure               "present" (default) or "absent"
+#   login                false (default) for a group role, true for a login role
+#   connectionLimit      REQUIRED for a login role; -1 (unlimited) is refused
+#   passwordSecretName   a kubernetes.io/basic-auth Secret in this namespace;
+#                        omitted means the role is created with no password
+#   inRoles              role memberships, e.g. the read surface's group role
+extraRoles: []
+
+# Connections the platform itself must still be able to open after every login
+# role above has taken its CONNECTION LIMIT. Checked at render against
+# max_connections less the superuser reserve. 0 disables the headroom check but
+# not the refusal of an unlimited role.
+reservedApplicationConnections: 0
+
 # Postgres GUCs (spec.postgresql.parameters).
 parameters: {}
 

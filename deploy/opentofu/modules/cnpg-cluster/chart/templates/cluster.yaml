@@ -87,6 +87,59 @@ webhook will keep catching it somewhere else.
 {{- end -}}
 
 {{- /*
+THE CONNECTION BUDGET, enforced at render rather than discovered at 3am.
+
+`extraRoles` exists for one thing today: the read-only SQL/BI roles a BI tool
+connects as. Those connections come out of the SAME max_connections as the
+platform's own pools, so an analytics consumer really can starve ingest -- not by
+running an expensive query, but by opening sessions until event-management's pool
+cannot refill. That failure is silent in the worst way: pools open lazily, the
+Cluster keeps reporting Ready, and the exporter's metrics vanish along with the
+application's.
+
+So every login role declared here must carry a CONNECTION LIMIT, and the sum of
+them plus the platform's own reservation has to fit. Two rules, both deliberate:
+
+  - A MISSING OR UNLIMITED LIMIT IS REFUSED, never read as "no limit needed".
+    CONNECTION LIMIT -1 is PostgreSQL's unlimited, and it is also what an omitted
+    field renders as -- so the ungoverned case is exactly the one that arrives by
+    forgetting, which is why it is a render error instead of a default.
+  - The budget is checked against `max_connections` MINUS the superuser reserve,
+    because those slots are not available to anybody else. The reserve is
+    Postgres's own default of 3 unless the caller overrides it.
+
+reservedApplicationConnections is what the platform needs left over. The caller
+sets it from its own pool arithmetic; 0 disables the headroom half of the check
+but not the unlimited-role half.
+*/ -}}
+{{- $maxConnections := 100 -}}
+{{- if .Values.parameters -}}
+  {{- if .Values.parameters.max_connections -}}
+    {{- $maxConnections = .Values.parameters.max_connections | int -}}
+  {{- end -}}
+{{- end -}}
+{{- $superuserReserved := 3 -}}
+{{- if .Values.parameters -}}
+  {{- if .Values.parameters.superuser_reserved_connections -}}
+    {{- $superuserReserved = .Values.parameters.superuser_reserved_connections | int -}}
+  {{- end -}}
+{{- end -}}
+{{- $extraTotal := 0 -}}
+{{- range $role := .Values.extraRoles -}}
+  {{- if $role.login -}}
+    {{- if or (not (hasKey $role "connectionLimit")) (lt ($role.connectionLimit | int) 0) -}}
+      {{- fail (printf "cnpg-cluster %q: login role %q declares no connection limit, so it may open as many sessions as it likes against the same pool the platform uses. An analytics consumer that exhausts it does not fail loudly -- the application's pools simply stop refilling while the database keeps reporting healthy. Give it a connectionLimit." $name $role.name) -}}
+    {{- end -}}
+    {{- $extraTotal = add $extraTotal ($role.connectionLimit | int) -}}
+  {{- end -}}
+{{- end -}}
+{{- $usable := sub $maxConnections $superuserReserved -}}
+{{- $needed := add $extraTotal (.Values.reservedApplicationConnections | int) -}}
+{{- if gt $needed $usable -}}
+  {{- fail (printf "cnpg-cluster %q: the extra roles ask for %d connections and the platform reserves %d, which is %d against %d usable (max_connections %d less %d reserved for the superuser). Lower a role's connectionLimit or raise max_connections -- committing more than the server has means the shortfall lands on whichever connection is opened last, which is normally the application's." $name $extraTotal (.Values.reservedApplicationConnections | int) $needed $usable $maxConnections $superuserReserved) -}}
+{{- end -}}
+
+{{- /*
 The instance-count invariant, enforced rather than documented.
 
 Synchronous replication with `number: N` needs N standbys present to accept a
@@ -450,6 +503,24 @@ spec:
           # access. This role already owns every database in the instance, so
           # it widens observability rather than authority.
           - pg_monitor
+      {{- range $role := .Values.extraRoles }}
+      - name: {{ required "cnpg-cluster: every extraRoles entry needs a name" $role.name }}
+        ensure: {{ $role.ensure | default "present" }}
+        login: {{ $role.login | default false }}
+        {{- if $role.login }}
+        connectionLimit: {{ $role.connectionLimit }}
+        {{- if $role.passwordSecretName }}
+        passwordSecret:
+          name: {{ $role.passwordSecretName }}
+        {{- else }}
+        disablePassword: true
+        {{- end }}
+        {{- end }}
+        {{- with $role.inRoles }}
+        inRoles:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      {{- end }}
     services:
       additional:
         # The DNS contract (§2). Services reach this store at a name baked into

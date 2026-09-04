@@ -49,6 +49,30 @@ import (
 // fresh instance id, so tests never share a database.
 func newPostgresApi(t *testing.T, instance string) *Api {
 	t.Helper()
+	mgr := newPostgresManager(t, instance)
+
+	// 🔴 Start from empty, EVERY run. The instance id is fixed, so a server that has run
+	// these tests before still holds their rows — and because the payload tables carry no
+	// unique constraint, a second run appends rather than colliding. That produced a test
+	// which passed exactly once per container and then failed with counts that looked like
+	// a regression in the code under test. A test whose result depends on how many times it
+	// has been run before is worse than no test: it reports on the server's history.
+	sys := mgr.Database.WithContext(core.WithSystemContext(context.Background()))
+	for _, table := range []string{
+		"events", "location_events", "measurement_events",
+		"alert_events", "event_anchors", "state_change_events",
+	} {
+		require.NoErrorf(t, sys.Exec(
+			fmt.Sprintf(`TRUNCATE TABLE "event-management".%q`, table)).Error,
+			"truncate %s before the run", table)
+	}
+	return NewApi(mgr)
+}
+
+// newPostgresManager runs the real chain and returns the manager itself, for tests whose
+// subject is the storage layer rather than the Api over it.
+func newPostgresManager(t *testing.T, instance string) *rdb.RdbManager {
+	t.Helper()
 	port, err := strconv.Atoi(envOr("DC_IT_PGPORT", "5432"))
 	require.NoError(t, err, "DC_IT_PGPORT must be numeric")
 
@@ -72,23 +96,7 @@ func newPostgresApi(t *testing.T, instance string) *Api {
 			_ = sqldb.Close()
 		}
 	})
-
-	// 🔴 Start from empty, EVERY run. The instance id is fixed, so a server that has run
-	// these tests before still holds their rows — and because the payload tables carry no
-	// unique constraint, a second run appends rather than colliding. That produced a test
-	// which passed exactly once per container and then failed with counts that looked like
-	// a regression in the code under test. A test whose result depends on how many times it
-	// has been run before is worse than no test: it reports on the server's history.
-	sys := mgr.Database.WithContext(core.WithSystemContext(context.Background()))
-	for _, table := range []string{
-		"events", "location_events", "measurement_events",
-		"alert_events", "event_anchors", "state_change_events",
-	} {
-		require.NoErrorf(t, sys.Exec(
-			fmt.Sprintf(`TRUNCATE TABLE "event-management".%q`, table)).Error,
-			"truncate %s before the run", table)
-	}
-	return NewApi(mgr)
+	return mgr
 }
 
 func envOr(key, fallback string) string {

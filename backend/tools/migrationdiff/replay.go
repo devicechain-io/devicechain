@@ -239,8 +239,14 @@ func replayOne(ctx context.Context, admin *gorm.DB, a area, k int, container, ho
 	// Fresh every time. Without this, migration k+1 would replay onto a schema already
 	// carrying the effects of the previous iteration's replay, and a failure could no
 	// longer be attributed to one migration.
-	if err := admin.Exec(fmt.Sprintf("DROP SCHEMA IF EXISTS %q CASCADE", a.name)).Error; err != nil {
-		return &harnessError{fmt.Errorf("dropping schema %s: %w", a.name, err)}
+	//
+	// Every schema the chain builds, not just the area's own: an object left behind in
+	// an extra schema would carry into the next iteration and show up in a snapshot as
+	// state no migration in that prefix created.
+	for _, s := range a.schemas() {
+		if err := admin.Exec(fmt.Sprintf("DROP SCHEMA IF EXISTS %q CASCADE", s)).Error; err != nil {
+			return &harnessError{fmt.Errorf("dropping schema %s: %w", s, err)}
+		}
 	}
 
 	prefix := a.migrations[:k]
@@ -250,7 +256,7 @@ func replayOne(ctx context.Context, admin *gorm.DB, a area, k int, container, ho
 		return &harnessError{fmt.Errorf("the FIRST run of this prefix failed, so the replay was "+
 			"never reached (a forward-migration defect, not a replay one): %w", err)}
 	}
-	before, err := snapshotFor(admin, container, user, db, a.name)
+	before, err := snapshotFor(admin, container, user, db, a)
 	if err != nil {
 		return err
 	}
@@ -273,7 +279,7 @@ func replayOne(ctx context.Context, admin *gorm.DB, a area, k int, container, ho
 	if err := migrateSome(ctx, a.name, prefix, host, port, user, password, db); err != nil {
 		return err
 	}
-	after, err := snapshotFor(admin, container, user, db, a.name)
+	after, err := snapshotFor(admin, container, user, db, a)
 	if err != nil {
 		return err
 	}
@@ -327,9 +333,16 @@ func (s snapshot) diff(other snapshot) error {
 	return nil
 }
 
-// snapshotFor captures one area's comparable state.
-func snapshotFor(admin *gorm.DB, container, user, db, schema string) (snapshot, error) {
-	dump, err := dumpSchema(container, user, db, schema)
+// snapshotFor captures one area's comparable state, across every schema its chain
+// builds — the area's own plus any extras (registry.go). A migration whose only effect
+// is in an extra schema would otherwise replay "cleanly" no matter what it did there.
+//
+// The Timescale probe and the row counts stay on the area schema alone: hypertables and
+// tenant-bearing tables live there by construction, and an extra schema is a projection
+// over them rather than a second store.
+func snapshotFor(admin *gorm.DB, container, user, db string, a area) (snapshot, error) {
+	schema := a.name
+	dump, err := dumpSchema(container, user, db, a.schemas()...)
 	if err != nil {
 		return snapshot{}, &harnessError{fmt.Errorf("dumping %s schema: %w", schema, err)}
 	}
