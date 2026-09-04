@@ -519,3 +519,39 @@ func TestPartialUpdate_EveryRequestFieldIsDeclared(t *testing.T) {
 		})
 	}
 }
+
+// 🔴 THE FIXTURE MUST BE NO MORE PERMISSIVE THAN PRODUCTION, and this is what says so.
+//
+// newPartialUpdateApi registers the token-grammar callback because production does.
+// It used not to, and that is not a tidiness point: a harness weaker than the world
+// it certifies passes things the real system refuses, so a defect can be green here
+// and broken live. It let a whitespace-only profile token through.
+//
+// Without this test the registration is UNOBSERVED — a mutant deleting the call
+// survived the entire suite, because every fixture token in this package is already
+// grammar-conforming and nothing ever asked the callback to do anything. Asking it
+// directly is the only way the fixture's strictness is pinned rather than assumed.
+func TestPartialUpdateFixtureIsAsStrictAsProduction(t *testing.T) {
+	api := newPartialUpdateApi(t, &EntityGroup{})
+	ctx := partialUpdateCtx()
+
+	for _, bad := range []string{"not a token", "-leading-hyphen", "trailing space "} {
+		t.Run(bad, func(t *testing.T) {
+			if _, err := api.CreateEntityGroup(ctx, &EntityGroupCreateRequest{
+				Token: bad, MemberType: "device",
+			}); err == nil {
+				t.Fatalf("the fixture accepted the token %q, which production refuses — every "+
+					"assertion in this file is then being made against a weaker world than the "+
+					"one it certifies", bad)
+			}
+		})
+	}
+
+	// The counterweight: strictness bought by refusing everything would be worthless,
+	// and would make every other test in this file fail for the wrong reason.
+	if _, err := api.CreateEntityGroup(ctx, &EntityGroupCreateRequest{
+		Token: "a-valid_token1", MemberType: "device",
+	}); err != nil {
+		t.Fatalf("the fixture refused a grammar-conforming token: %v", err)
+	}
+}
